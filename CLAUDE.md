@@ -89,6 +89,11 @@ states instead of sending those users through Monerium provisioning; add-money
 and send controls remain unavailable until approved. Approval must still come
 from the configured provider/operator path; the local
 `/api/users/:id/kyc/mock-review` route remains dev-only self-approval.
+Existing-Monerium split STARTED (July 2026): pending users now choose between
+connecting an existing Monerium account and starting the normal identity review
+path (`POST /api/users/:id/funding-onboarding-path`). Continue from
+HANDOFF-MONERIUM-CONNECT.md; the OAuth/user-token Monerium integration is not
+finished yet.
 FP3 DONE (July 2026): failures auto-compensate (escrow release + vault
 re-credit at current rates, itemized deductions, REFUNDED state), startup +
 5-min sweep recovers stranded transfers; FORCE_FAIL_STEP test hook,

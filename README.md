@@ -51,8 +51,10 @@ Running this repo with sandbox credentials, today:
   starts users as `pending`; IBAN issuance, deposits, device binding, quotes,
   and transfers fail closed until a review approves the account. The app shows
   pending/rejected/manual-review states instead of provisioning forever. The
-  included mock review endpoint is for local tests only, not a regulated
-  provider.
+  pending screen now splits users between connecting an existing Monerium
+  account and the normal identity-review path. The included mock review
+  endpoint is for local tests only, not a regulated provider, and the
+  existing-Monerium OAuth connection is still in progress.
 
 ## What's simulated
 
@@ -139,6 +141,10 @@ meant to be read in one sitting.
   seam with a real KYC provider before issuing IBANs or allowing payments.
   Pending or rejected accounts are visible in the UI, but the approval decision
   must still come from a provider/operator path, not the user's own session.
+- Existing Monerium users need a per-user OAuth connection before they can skip
+  duplicate KYC. The repo has the path-selection seam; see
+  [HANDOFF-MONERIUM-CONNECT.md](HANDOFF-MONERIUM-CONNECT.md) for the remaining
+  OAuth and IBAN-linking work.
 - Monerium webhooks verify the documented `webhook-signature` HMAC when
   `MONERIUM_WEBHOOK_SECRET=whsec_...` is set; leave it unset only for local
   sandbox polling or stubbed tests.

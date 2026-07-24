@@ -11,7 +11,8 @@ export interface User {
   country: string;
   kycStatus: KycStatus;
   kyc?: {
-    provider: "mock" | "manual";
+    provider: "mock" | "manual" | "monerium";
+    onboardingPath?: "existing_monerium" | "new_monerium";
     applicantId?: string;
     checkedAt?: string;
     reason?: string;
