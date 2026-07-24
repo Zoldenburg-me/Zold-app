@@ -266,6 +266,43 @@ app.get(
   }),
 );
 
+app.post(
+  "/api/users/:id/funding-onboarding-path",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (user.kycStatus === "approved") {
+      return res.status(409).json({ error: "account is already approved" });
+    }
+    const path = req.body?.path;
+    if (!["existing_monerium", "new_monerium"].includes(path)) {
+      return res.status(400).json({ error: "path must be existing_monerium or new_monerium" });
+    }
+    const updated = store.updateUser(user.id, {
+      kyc: {
+        ...user.kyc,
+        provider: path === "existing_monerium" ? "monerium" : "manual",
+        onboardingPath: path,
+        reason:
+          path === "existing_monerium"
+            ? "existing Monerium account selected; OAuth connection pending"
+            : "standard identity review selected",
+      },
+      funding: {
+        ...(user.funding ?? { mode: sandbox ? "sandbox" : "mock", status: "kyc_pending" as const }),
+        status: "kyc_pending" as const,
+        detail:
+          path === "existing_monerium"
+            ? "connect existing Monerium account"
+            : "identity review required",
+      },
+    });
+    const balanceEur = await vaultBalance(updated.address).catch(() => 0);
+    res.json({ ...publicUser(updated), balanceEur });
+  }),
+);
+
 /**
  * Apply a KYC decision. Shared by the operator seam and the local mock-review
  * endpoint so the two cannot drift — the authorization differs, the effect on
@@ -274,7 +311,7 @@ app.get(
 async function applyKycDecision(
   user: User,
   decision: "approved" | "rejected" | "manual_review",
-  provider: "mock" | "manual",
+  provider: "mock" | "manual" | "monerium",
   reason?: string,
 ) {
   const updated = store.updateUser(user.id, {

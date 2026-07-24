@@ -116,6 +116,13 @@ try {
   assert.equal(user.funding.status, "kyc_pending");
   const kyc = await api(`/api/users/${user.id}/kyc`);
   assert.equal(kyc.kycStatus, "pending");
+  const moneriumPath = await api(`/api/users/${user.id}/funding-onboarding-path`, { path: "existing_monerium" });
+  assert.equal(moneriumPath.kyc.onboardingPath, "existing_monerium");
+  assert.equal(moneriumPath.kyc.provider, "monerium");
+  assert.equal(moneriumPath.funding.status, "kyc_pending");
+  const normalPath = await api(`/api/users/${user.id}/funding-onboarding-path`, { path: "new_monerium" });
+  assert.equal(normalPath.kyc.onboardingPath, "new_monerium");
+  assert.equal(normalPath.kyc.provider, "manual");
   await expectStatus(`/api/users/${user.id}/authorizer`, 409, { address: newDevice().address });
   await expectStatus("/api/quotes", 409, { userId: user.id, sendEur: 25, rail: "cash" });
   await expectStatus("/api/simulate/sepa-deposit", 404, { iban: "IS140159260007545510730339", amountEur: 10 });

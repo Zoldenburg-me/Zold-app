@@ -423,6 +423,10 @@
     <div class="prov-card">
       <h1 id="kyc-title">Identity review</h1>
       <div class="sub" id="kyc-sub">Your account is created. Funding and transfers unlock after approval.</div>
+      <div id="kyc-choice">
+        <button class="wide" id="btn-monerium-existing">I already have Monerium</button>
+        <button class="ghost wide" id="btn-monerium-new">I need identity review</button>
+      </div>
       <div class="kyc-status">
         <div class="ks" id="kyc-label">PENDING</div>
         <div class="kt" id="kyc-main">Review in progress</div>
@@ -615,12 +619,17 @@ let sessionToken = localStorage.getItem("zoll-session") || null;
 
 const fmt = (n, dp = 2) => Number(n).toLocaleString("en", { minimumFractionDigits: dp, maximumFractionDigits: dp });
 const kycApproved = (u = user) => (u?.kycStatus || "approved") === "approved";
-const kycCopy = (status = "pending") => ({
+const kycCopy = (status = "pending", u = user) => {
+  if (u?.kyc?.onboardingPath === "existing_monerium") {
+    return ["MONERIUM", "Connect your existing account", "Funding unlocks after your Monerium profile is connected and approved."];
+  }
+  return ({
   pending: ["PENDING", "Review in progress", "Your IBAN, deposits, device key, quotes, and transfers are paused until approval."],
   manual_review: ["MANUAL REVIEW", "Additional review needed", "A reviewer needs to approve this account before funding and transfers unlock."],
   rejected: ["REJECTED", "Review not approved", "Funding and transfers are disabled for this account."],
   approved: ["APPROVED", "Account approved", "Funding and transfers are available."],
 }[status] || ["REVIEW", `KYC ${status}`, "Funding and transfers are paused until approval."]);
+};
 
 async function api(path, body) {
   const headers = {};
@@ -649,7 +658,7 @@ function renderUser(u) {
   $("address").textContent = u.address;
   const chip = $("fund-chip");
   if (!kycApproved(u)) {
-    $("iban").textContent = kycCopy(u.kycStatus)[2];
+    $("iban").textContent = kycCopy(u.kycStatus, u)[2];
     chip.textContent = "KYC"; chip.className = u.kycStatus === "rejected" ? "chip err" : "chip review";
   } else if (u.iban) {
     $("iban").textContent = u.iban;
@@ -666,7 +675,7 @@ function renderUser(u) {
 function renderKycState(u = user) {
   if (!u) return;
   const blocked = !kycApproved(u);
-  const [label, main, detail] = kycCopy(u.kycStatus);
+  const [label, main, detail] = kycCopy(u.kycStatus, u);
   for (const [id, value] of [
     ["kyc-label", label], ["kyc-main", main], ["kyc-detail", detail],
     ["dash-kyc-label", label], ["dash-kyc-main", main], ["dash-kyc-detail", detail],
@@ -674,6 +683,8 @@ function renderKycState(u = user) {
     const el = $(id);
     if (el) el.textContent = value;
   }
+  const needsChoice = blocked && u.kycStatus === "pending" && !u.kyc?.onboardingPath;
+  $("kyc-choice")?.classList.toggle("hidden", !needsChoice);
   $("kyc-card")?.classList.toggle("hidden", !blocked);
   $("btn-deposit").disabled = blocked;
   $("btn-send").disabled = blocked;
@@ -728,6 +739,14 @@ async function refreshKycStatus({ continueWhenApproved = false } = {}) {
       }
       return enterProvisioning(user.name || pendingInfo?.name || "Account");
     }
+  } catch (e) { showErr("kyc-err", e); }
+}
+
+async function chooseFundingPath(path) {
+  clearErr("kyc-err");
+  try {
+    const updated = await api(`/api/users/${user.id}/funding-onboarding-path`, { path });
+    renderUser(updated);
   } catch (e) { showErr("kyc-err", e); }
 }
 
@@ -886,6 +905,8 @@ $("btn-passkey").onclick = () => {
   createAccount(true);
 };
 $("btn-skippk").onclick = () => createAccount(false);
+$("btn-monerium-existing").onclick = () => chooseFundingPath("existing_monerium");
+$("btn-monerium-new").onclick = () => chooseFundingPath("new_monerium");
 $("btn-kyc-refresh").onclick = () => refreshKycStatus({ continueWhenApproved: true });
 $("btn-dash-kyc-refresh").onclick = async () => {
   await refresh();
