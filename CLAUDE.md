@@ -36,10 +36,18 @@
   real SEP-24 withdrawals, now carrying a validated asset amount (USDC/SRT,
   NOT the recipient's KES — the anchor does its own FX). testanchor caps
   withdrawals at 10 units, so corridor-sized transfers are refused there by
-  design; npm run anchor:test proves the guards live. Still NOT done: we
-  never send the asset on-ledger to the anchor's account with its memo, so
-  a real withdrawal stays at pending_user_transfer_start and no cash moves.
-  CCTP is still not wired into the pipeline (scripts/cctp-dryrun.ts only).
+  design; npm run anchor:test proves the guards live. On-ledger SEP-24
+  payment IS implemented now (PR #18: sendSep24WithdrawalPayment sends the
+  asset to the anchor's account with its memo, persists the payment hash
+  before polling, marks PAID only on anchor completion; driven by POST
+  /api/transfers/:id/authorize's sibling /refresh-payout). NOT proven
+  end-to-end: no funded treasury holding the anchor asset has run it, so no
+  real cash has moved; and nothing sweeps PAYOUT_FUNDING_PENDING/FUNDED in
+  the background — a client must poll /refresh-payout.
+  CCTP IS wired into executeTransfer (PR #26): it records the burn/mint plan
+  per transfer; dry-run (default) keeps the local mock escrow so the
+  no-credential demo completes, CCTP_LIVE=1 submits the real Base Sepolia
+  burn. Never executed live.
 - CCTP: dry-run by default; CCTP_LIVE=1 + funded CCTP_BURNER_KEY executes
   (faucet.circle.com for testnet USDC). Stellar CCTP domain is 27; mint
   recipient AND destinationCaller must be the CctpForwarder.
