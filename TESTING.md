@@ -45,8 +45,11 @@ npm run dev              # then open http://localhost:3000
 
 KYC-gated mode: start the API with `KYC_AUTO_APPROVE=0`. A new account should
 land on the Identity review screen instead of the provisioning spinner. The
-dashboard can still be opened, but add-money and send controls stay unavailable
-until the account becomes `approved`.
+screen asks whether the user already has a Monerium account. Choosing the
+existing-account path records that branch for the upcoming OAuth build; choosing
+the new-account path continues the normal identity-review state. The dashboard
+can still be opened, but add-money and send controls stay unavailable until the
+account becomes `approved`.
 
 ## Level 2 — real sandboxes (optional, ~20 min setup)
 
