@@ -11,12 +11,12 @@ npm run compile
 ## Level 0 — automated checks (5 min, no accounts needed)
 
 ```sh
-npm run test:contracts   # 17 Solidity tests: vault caps/roles/replay, FX access/slippage, escrow
+npm run test:contracts   # 38 Solidity tests: vault caps/roles/replay + FP4 auth, FX access/slippage, escrow, AdminTimelock governance
 npm run e2e              # full corridor 3x: cash pickup, SEPA exit, UPI scan-and-pay
 npm run audit:deps       # npm advisory scan
 ```
 
-Both must end green (`17 tests passed`, `E2E PASSED`). The e2e boots its own
+Both must end green (`38 tests passed`, `E2E PASSED`). The e2e boots its own
 chain + API, so stop `npm run dev` first if it's running (it will tell you).
 
 ## Level 1 — the app in mock mode (10 min, no accounts needed)
