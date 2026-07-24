@@ -77,7 +77,7 @@ You need Node 22 or newer. Nothing else.
 ```sh
 npm install
 npm run compile        # build the contracts
-npm run test:contracts # 17 tests against a throwaway chain
+npm run test:contracts # 38 tests against a throwaway chain
 npm run e2e            # one script: deposit, then all three payout rails
 npm run dev            # chain + contracts + API + UI on localhost:3000
 ```
