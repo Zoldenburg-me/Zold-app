@@ -388,6 +388,7 @@ export async function executeTransfer(
         anchorAmount: pickup.anchorAmount,
         anchorAsset: pickup.anchorAsset,
         anchorPaymentHash: pickup.anchorPaymentHash,
+        anchorMemo: pickup.anchorMemo,
         anchorAmountIn: pickup.anchorAmountIn,
         anchorReferenceNumber: pickup.anchorReferenceNumber,
         moreInfoUrl: pickup.moreInfoUrl,
