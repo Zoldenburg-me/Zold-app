@@ -97,11 +97,17 @@ states instead of sending those users through Monerium provisioning; add-money
 and send controls remain unavailable until approved. Approval must still come
 from the configured provider/operator path; the local
 `/api/users/:id/kyc/mock-review` route remains dev-only self-approval.
-Existing-Monerium split STARTED (July 2026): pending users now choose between
-connecting an existing Monerium account and starting the normal identity review
-path (`POST /api/users/:id/funding-onboarding-path`). Continue from
-HANDOFF-MONERIUM-CONNECT.md; the OAuth/user-token Monerium integration is not
-finished yet.
+Existing-Monerium connect DONE in code (July 2026, OpenClaw ba7c0c2 + test in
+PR #41): pending users choose between connecting an existing Monerium account
+and the normal identity review path. The connect flow is Authorization Code +
+PKCE (S256) across five endpoints — connect/start, oauth/callback, accounts,
+activate, DELETE connect. Per-user tokens are AES-256-GCM encrypted at rest
+(MONERIUM_TOKEN_ENCRYPTION_KEY, required — start 503s without it) and stripped
+from every API response. activate deploys/links the app Safe and requests a NEW
+app IBAN; it never moves the user's existing one. npm run monerium:oauth:test
+drives the loop against a stub that verifies the PKCE itself (12 checks).
+UNPROVEN: nobody has connected a real Monerium account — needs the OAuth app
+registered with a matching MONERIUM_REDIRECT_URI and one browser run.
 FP3 DONE (July 2026): failures auto-compensate (escrow release + vault
 re-credit at current rates, itemized deductions, REFUNDED state), startup +
 5-min sweep recovers stranded transfers; FORCE_FAIL_STEP test hook,
