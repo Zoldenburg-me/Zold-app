@@ -53,32 +53,28 @@ to. Monerium linking and redeem orders still sign server-side with it.
 - **Done when:** `db.json` holds no private key; a live send signs the Monerium
   redeem via the passkey-owned Safe; wrong-key still rejected on-chain.
 
-### 3. Stop the FP3 refund path from minting  · OPENCLAW (waits on #1)
+### 3. Stop the FP3 refund path from minting  · GUARD DONE, float waits on #1
 `compensateTransfer` → `simulateSepaDeposit` → `MockToken.mint`. It works only
 because EURe is a mock you own. **With real EURe you cannot mint, so a failed
 transfer would debit the user and never refund them** — silent, and only on a
-real chain. Nobody has flagged this in the code.
+real chain.
 
-- The real fix (refund from a treasury float) depends on treasury mechanics that
-  don't exist until #1. But a **guard is cheap now**: fail closed / route to
-  MANUAL_REVIEW when a refund would mint on a non-local chain, mirroring the
-  hardhat-key guard. Do the guard before Amoy, the float after.
-- **Done when:** on a non-local chain a compensating refund never calls mint;
-  either it moves real value from a float or it parks in MANUAL_REVIEW.
+- **Guard shipped** (OpenClaw `ba7c0c2`): on a non-local RPC, compensation now
+  refuses to mint and parks the transfer in `MANUAL_REVIEW` with a reason.
+  `npm run refund:guard:test` proves it.
+- **Still owed:** the real fix — refunding from a treasury float — which needs
+  treasury mechanics that don't exist until #1. Until then a failed transfer on
+  a public chain needs a human.
 
-### 4. Background driver for anchor payouts  · OPENCLAW
-`PAYOUT_FUNDING_PENDING` (anchor waiting for our on-ledger payment, we haven't
-sent it) and `PAYOUT_FUNDED` (we paid, anchor hasn't confirmed) are advanced
-**only** by a client POSTing `/refresh-payout`. Close the tab and a funded
-payout stalls forever. The FP3 sweep covers `DEBITED/SWAPPED/BRIDGED`, not these.
+### 4. Background driver for anchor payouts  · DONE
+`PAYOUT_FUNDING_PENDING` and `PAYOUT_FUNDED` used to advance **only** when a
+client POSTed `/refresh-payout` — close the tab and a funded payout stalled
+forever.
 
-- Add a background sweep (like the FP3 sweep and Monerium poller) that runs
-  anchor-backed transfers in those states through `refreshPayout`. It also lets
-  `/refresh-payout` return immediately instead of blocking ~60s in the handler.
-- **Done when:** a funded anchor payout reaches PAID with no client polling; a
-  test drives a transfer to PAYOUT_FUNDED and asserts the sweep completes it.
-
----
+- **Shipped** (OpenClaw `ba7c0c2`): `sweepAnchorPayouts` runs those states
+  through `refreshPayout` at startup and every 30s.
+  `npm run anchor:sweep:test` drives a transfer to `PAYOUT_FUNDED` and asserts
+  the sweep closes it to PAID with no client polling.
 
 ## P2 — needed to actually move money end to end
 
@@ -95,13 +91,20 @@ CCTP wiring) but has never been exercised with funds.
 - **Done when:** a small transfer runs debit → swap → live CCTP burn/attest/mint
   → SEP-24 on-ledger payment → anchor `completed`, with real value at each hop.
 
-### 6. Finish the Monerium OAuth connect  · OPENCLAW
-WIP already on main (`568b180`, not via a PR — worth noting it bypassed the
-merge gate). The path-selection seam exists; the OAuth + IBAN-linking does not.
-Full spec is in `HANDOFF-MONERIUM-CONNECT.md`. Authorization Code + PKCE,
-refresh tokens encrypted server-side, never returned to the browser.
+### 6. Monerium OAuth connect  · CODE DONE · needs OWNER registration
+Implemented in `ba7c0c2` to the `HANDOFF-MONERIUM-CONNECT.md` spec: five
+endpoints, Authorization Code + PKCE (S256), per-user tokens AES-256-GCM
+encrypted at rest and never returned to the browser, `activate` links the app
+Safe and requests a **new** app IBAN rather than moving the user's existing one.
+`npm run monerium:oauth:test` (12 checks) drives the whole loop against a stub
+that verifies the PKCE itself.
 
----
+- **Prereq (owner):** register the OAuth app with Monerium, set
+  `MONERIUM_REDIRECT_URI` to exactly match that registration, set
+  `MONERIUM_TOKEN_ENCRYPTION_KEY`, then connect one real account in a browser.
+- **Done when:** a real Monerium user connects, activates, and funds via the
+  app IBAN. Nothing yet proves Monerium's authorize page accepts our
+  client_id/redirect_uri.
 
 ## P3 — operational hardening before the URL is public
 
@@ -127,16 +130,20 @@ the embedded pane. Do this before anyone funds a real account.
 
 ## Suggested order
 
-1 → (3-guard, in parallel, cheap) → 7 (owner, 5 min) → 2 → 4 → 5 → 3-float → 6 → 8.
+7 (owner, 5 min) → 6-registration (owner) → 1 → 2 → 5 → 3-float → 8.
 
-Reasoning: #1 unblocks everything and is owner-gated, so start it first. The #3
-*guard* and #7 are near-free and remove silent-failure and account-bricking risk
-before real funds appear. #2 is the biggest custody win and the longest job. #5
-is the payoff — the first time the corridor moves real value.
+Reasoning: #4 and #3's guard have since shipped, so what's left starts with the
+two cheapest owner actions — the 5-minute PRF check (it can brick funded
+accounts, so do it before funds exist) and registering the Monerium OAuth app,
+which turns finished code into a proven flow. Then #1, which unblocks
+everything, then #2 (biggest custody win, longest job). #5 is the payoff — the
+first time the corridor moves real value.
 
 ## What is NOT on this list (already done, this session)
 Vault authorization (FP4 spend), browser-signed payments + PRF wrapping, payout
 destination binding, AdminTimelock governance + guardian pause, Monerium webhook
 (real HMAC + retry-safe dedupe + replay window), the ledger reconciler, correct
-anchor withdrawal amounts + payment safety, and a production KYC operator seam.
+anchor withdrawal amounts + payment safety, a production KYC operator seam, the
+anchor payout sweep, the non-local refund-mint guard, the Monerium OAuth connect
+flow, and a UI that no longer shows a refunded transfer as a pending pickup.
 All merged, all with tests in `npm run check`.
