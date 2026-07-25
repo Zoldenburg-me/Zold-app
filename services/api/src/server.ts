@@ -11,7 +11,7 @@ import {
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { API_HOST, API_PORT, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
 import { issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
 import { initStore, store, type User } from "./store.js";
 import { createQuote, isExpired } from "./fx.js";
@@ -33,6 +33,9 @@ import {
   sweepStrandedTransfers,
 } from "./orchestrator.js";
 import { isValidVpa } from "./adapters/upi.js";
+import { senderProfileToSep9 } from "./adapters/moneygram.js";
+import { toAlpha3 } from "./stellar/sep9.js";
+import { getTreasury, missingRequiredFields, sep10Auth, sep12CustomerFields } from "./stellar/anchor.js";
 import { formatReport, reconcile } from "./reconcile.js";
 import {
   addrs,
@@ -354,6 +357,108 @@ app.get(
     }
     const balanceEur = await vaultBalance(user.address);
     res.json({ ...publicUser(user), balanceEur });
+  }),
+);
+
+/**
+ * Travel Rule originator data — who is sending the money.
+ *
+ * The cash rail hands money to a stranger at a counter, and the anchor's
+ * licence obliges it to know who funded that. MoneyGram requires these as
+ * SEP-9 fields; without them a SEP-12 customer sits at NEEDS_INFO and the
+ * withdrawal can never complete.
+ *
+ * Deliberately text-only: no document images. Those belong with a KYC
+ * provider, and this store is plaintext JSON on disk.
+ */
+app.post(
+  "/api/users/:id/sender-profile",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const b = req.body ?? {};
+    const str = (v: any) => (typeof v === "string" && v.trim() !== "" ? v.trim() : undefined);
+    const firstName = str(b.firstName);
+    const lastName = str(b.lastName);
+    if (!firstName || !lastName) {
+      return res.status(400).json({ error: "firstName and lastName are required" });
+    }
+    const birthDate = str(b.birthDate);
+    if (birthDate && !/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) {
+      return res.status(400).json({ error: "birthDate must be ISO yyyy-mm-dd" });
+    }
+    const idType = str(b.idType);
+    if (idType && !["passport", "drivers_license", "id_card"].includes(idType)) {
+      return res.status(400).json({ error: "idType must be passport, drivers_license or id_card" });
+    }
+    // SEP-9 country codes are ISO 3166-1 alpha-3 ("DEU", "USA"). Accept
+    // either form from callers and normalise; reject what we cannot map
+    // rather than storing a code the anchor would misread.
+    const rawCc = str(b.addressCountryCode) ?? user.country;
+    const addressCountryCode = toAlpha3(rawCc);
+    if (rawCc && !addressCountryCode) {
+      return res.status(400).json({
+        error: `unrecognised country code "${rawCc}" — use an ISO 3166-1 alpha-2 or alpha-3 code`,
+      });
+    }
+    const idCountryCode = toAlpha3(str(b.idCountryCode));
+    // ISO 3166-2, e.g. "US-MN"; MoneyGram only uses it for USA/CAN/MEX.
+    const stateOrProvince = str(b.stateOrProvince);
+    if (stateOrProvince && !/^[A-Za-z]{2}-[A-Za-z0-9]{1,3}$/.test(stateOrProvince)) {
+      return res.status(400).json({
+        error: 'stateOrProvince must be ISO 3166-2, for example "US-MN"',
+      });
+    }
+    const updated = store.updateUser(user.id, {
+      senderProfile: {
+        firstName,
+        lastName,
+        birthDate,
+        address: str(b.address),
+        city: str(b.city),
+        postalCode: str(b.postalCode),
+        stateOrProvince,
+        addressCountryCode,
+        idType: idType as any,
+        idNumber: str(b.idNumber),
+        idCountryCode,
+        mobileNumber: str(b.mobileNumber),
+        emailAddress: str(b.emailAddress) ?? user.email,
+        occupation: str(b.occupation),
+        updatedAt: new Date().toISOString(),
+      },
+    });
+    res.json(publicUser(updated));
+  }),
+);
+
+/**
+ * What the configured anchor still wants before it will pay out cash. Lets the
+ * app ask up front instead of discovering it when a transfer is mid-flight.
+ */
+app.get(
+  "/api/users/:id/sender-profile/requirements",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!anchorModeEnabled()) {
+      return res.json({ anchor: null, missing: [], detail: "no anchor configured; cash payouts are mocked" });
+    }
+    const treasury = await getTreasury();
+    const jwt = await sep10Auth(STELLAR.anchorDomain, treasury);
+    const declared = await sep12CustomerFields(STELLAR.anchorDomain, jwt, treasury.publicKey());
+    const missing = missingRequiredFields(declared.fields, senderProfileToSep9(user));
+    res.json({
+      anchor: STELLAR.anchorDomain,
+      customerStatus: declared.status,
+      required: Object.entries(declared.fields)
+        .filter(([, f]) => f.optional !== true)
+        .map(([name]) => name),
+      missing,
+      ready: missing.length === 0,
+    });
   }),
 );
 
