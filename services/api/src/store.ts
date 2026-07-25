@@ -178,6 +178,9 @@ export interface Transfer {
     anchorAmount?: number;
     anchorAsset?: string;
     anchorPaymentHash?: string;
+    /** SEP-10 memo used when the anchor withdrawal was created. Reused on
+     *  refresh/funding so custodial anchors keep the same per-user context. */
+    anchorMemo?: string;
     anchorAmountIn?: string;
     anchorReferenceNumber?: string;
     moreInfoUrl?: string;
