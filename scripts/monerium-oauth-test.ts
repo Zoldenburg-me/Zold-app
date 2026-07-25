@@ -71,7 +71,7 @@ const stub = createServer((req, res) => {
     res.end(JSON.stringify(body));
   };
   const url = req.url ?? "";
-  const auth = req.header?.("authorization") ?? (req.headers.authorization as string | undefined);
+  const auth = req.headers.authorization;
   if (auth?.startsWith("Bearer ")) seen.bearerTokens.push(auth.slice(7));
 
   let raw = "";

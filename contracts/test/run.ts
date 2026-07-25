@@ -22,13 +22,13 @@ const pk = {
 } as const;
 
 const pub = createPublicClient({ chain: hardhat, transport: http(RPC) });
+const ramp2Key = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6" as const;
 const wallets = {
   deployer: createWalletClient({ account: privateKeyToAccount(pk.deployer), chain: hardhat, transport: http(RPC) }),
   orch: createWalletClient({ account: privateKeyToAccount(pk.orch), chain: hardhat, transport: http(RPC) }),
   ramp: createWalletClient({ account: privateKeyToAccount(pk.ramp), chain: hardhat, transport: http(RPC) }),
+  ramp2: createWalletClient({ account: privateKeyToAccount(ramp2Key), chain: hardhat, transport: http(RPC) }),
 };
-const ramp2Key = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6" as const;
-wallets.ramp2 = createWalletClient({ account: privateKeyToAccount(ramp2Key), chain: hardhat, transport: http(RPC) });
 const orchAddr = wallets.orch.account.address;
 const rampAddr = wallets.ramp.account.address;
 // The user's device key: it authorizes debits and never exists server-side.

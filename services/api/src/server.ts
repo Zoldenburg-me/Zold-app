@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { anchorModeEnabled, API_HOST, API_PORT, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
 import { issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
-import { initStore, store, type User } from "./store.js";
+import { initStore, store, type Transfer, type User } from "./store.js";
 import { createQuote, isExpired } from "./fx.js";
 import { issueIban, simulateSepaDeposit } from "./adapters/monerium.js";
 import {
@@ -628,6 +628,7 @@ app.post(
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
     if (!user.privateKey) return res.status(409).json({ error: "user has no wallet key for address linking" });
+    const privateKey = user.privateKey;
     const accessToken = await moneriumAccessToken(user);
     const profileId = typeof req.body?.profileId === "string" ? req.body.profileId : user.monerium?.profileId;
 
@@ -635,13 +636,13 @@ app.post(
       store.updateUser(user.id, {
         funding: { mode: "sandbox", status: "provisioning", detail: "deploying smart wallet for Monerium" },
       });
-      const opHash = await deploySmartAccount(user.privateKey);
+      const opHash = await deploySmartAccount(privateKey);
       user = store.updateUser(user.id, {
         wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
       });
     }
 
-    const signature = await signMessageAsSafe(user.privateKey, user.address, LINK_MESSAGE);
+    const signature = await signMessageAsSafe(privateKey, user.address, LINK_MESSAGE);
     await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/addresses", {
       address: user.address,
       signature,
@@ -989,7 +990,7 @@ app.post(
       return res.status(400).json({ error: `insufficient balance (€${balance.toFixed(2)})` });
     }
 
-    const transfer = {
+    const transfer: Transfer = {
       id: randomUUID(),
       userId: user.id,
       quoteId: quote.id,

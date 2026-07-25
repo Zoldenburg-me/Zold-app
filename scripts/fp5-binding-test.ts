@@ -78,7 +78,7 @@ try {
   const salt = keccak256(toHex("fp5-rate-move"));
   const opId = await pub.readContract({ address: timelock, abi: tlAbi, functionName: "operationId", args: [swapper, 0n, setRate, salt] });
   const send = async (w: typeof dep, fn: "queue" | "confirm" | "execute", args: any[]) => {
-    const { request } = await pub.simulateContract({ account: w.account, address: timelock, abi: tlAbi, functionName: fn, args });
+    const { request } = await pub.simulateContract({ account: w.account, address: timelock, abi: tlAbi, functionName: fn as any, args: args as any });
     await pub.waitForTransactionReceipt({ hash: await w.writeContract(request) });
   };
   await send(dep, "queue", [swapper, 0n, setRate, salt]);

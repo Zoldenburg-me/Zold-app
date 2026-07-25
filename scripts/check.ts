@@ -10,6 +10,7 @@ import { createServer } from "node:net";
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const scripts = [
+  "typecheck",
   "compile",
   "test:contracts",
   "webauthn:selftest",
