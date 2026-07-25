@@ -593,6 +593,10 @@
             <div class="pt">Cash collected</div>
             <div class="pd" id="paid-note"></div>
           </div>
+          <div class="pickup hidden" id="refund-box" style="border-color:rgba(245,109,109,.45);background:rgba(245,109,109,.06)">
+            <div class="pt" id="refund-title" style="color:var(--red)">Payout couldn't be completed</div>
+            <div class="pd" id="refund-note"></div>
+          </div>
           <button class="ghost wide hidden" id="btn-again">Send another transfer</button>
         </div>
       </div>
@@ -1190,6 +1194,36 @@ function playTimeline(t, { onDone } = {}) {
   });
 }
 
+/* A transfer that failed, refunded, or landed in manual review must never be
+   shown as a pending pickup — the recipient is NOT getting the money. */
+const isTerminalFailure = (t) => ["REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
+
+function revealRefund(t) {
+  $("refund-box").classList.remove("hidden");
+  const reason = (t.error || "").replace(/^.*?:\s*/, "").split(" (set ")[0] || "the payout could not be completed";
+  if (t.state === "REFUNDED") {
+    const amt = t.refund ? fmt(t.refund.amountEur) : fmt(t.sendEur);
+    $("refund-title").textContent = "Refunded — nothing was sent";
+    $("refund-title").style.color = "var(--muted)";
+    $("refund-note").innerHTML =
+      `€${amt} is back in your account.<br><span style="color:var(--muted)">Why: ${reason}</span>` +
+      (t.refund && t.refund.deductions && t.refund.deductions !== "none"
+        ? `<br><span style="color:var(--muted)">Deductions: ${t.refund.deductions}</span>` : "");
+  } else if (t.state === "MANUAL_REVIEW") {
+    $("refund-title").textContent = "Under review";
+    $("refund-title").style.color = "var(--amber)";
+    $("refund-note").innerHTML =
+      `This transfer needs manual review before it settles — a payment may already be in flight, so it was not auto-refunded.` +
+      `<br><span style="color:var(--muted)">${reason}</span>`;
+  } else {
+    $("refund-title").textContent = "Payout failed";
+    $("refund-title").style.color = "var(--red)";
+    $("refund-note").innerHTML = `<span style="color:var(--muted)">${reason}</span>`;
+  }
+  $("btn-again").classList.remove("hidden");
+  $("refund-box").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
 function revealPickup(t) {
   const p = t.pickup || {};
   $("pickup-box").classList.remove("hidden");
@@ -1288,25 +1322,27 @@ async function pollSepaTransfer(id) {
     // 3. Submit: the server can only carry this signature to the vault.
     const t = await api(`/api/transfers/${created.id}/authorize`, { signature });
     transfer = t;
-    if (t.state === "FAILED") throw new Error(t.error || "transfer failed");
     $("step-quote").classList.add("hidden");
     $("step-progress").classList.remove("hidden");
-    if (t.rail === "sepa") {
-      playTimeline(t, { onDone: () => {
+    // The timeline still animates every step it took — including the refund
+    // legs — but the outcome panel must match the real terminal state, not
+    // assume the rail succeeded. A fail-closed anchor payout comes back
+    // REFUNDED, not FAILED, and must not read as a pending pickup.
+    playTimeline(t, { onDone: () => {
+      if (isTerminalFailure(t)) { revealRefund(t); return; }
+      if (t.rail === "sepa") {
         renderSepaResult(t);
         if (t.state === "PAYOUT_SUBMITTED") pollSepaTransfer(t.id);
-      } });
-    } else if (t.rail === "upi") {
-      playTimeline(t, { onDone: () => {
+      } else if (t.rail === "upi") {
         $("upi-box").classList.remove("hidden");
         $("upi-utr").textContent = `UTR ${(t.upi || {}).utr || ""}`;
         $("upi-note").textContent =
           `Paid ₹${fmt(t.receiveInr)} to ${t.recipientName} · you paid €${fmt(t.sendEur)}`;
         $("btn-again").classList.remove("hidden");
-      } });
-    } else {
-      playTimeline(t, { onDone: () => revealPickup(t) });
-    }
+      } else {
+        revealPickup(t);
+      }
+    } });
     refresh();
     addHistory(t);
   } catch (e) { showErr("send-err", e); }
@@ -1352,6 +1388,7 @@ $("btn-again").onclick = () => {
   $("pickup-box").classList.add("hidden");
   $("sepa-box").classList.add("hidden");
   $("upi-box").classList.add("hidden");
+  $("refund-box").classList.add("hidden");
   $("step-quote").classList.remove("hidden");
   showSendStep("dest");
 };
