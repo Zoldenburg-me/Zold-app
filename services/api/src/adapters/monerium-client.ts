@@ -150,4 +150,82 @@ export class MoneriumClient {
   }
 }
 
+export interface MoneriumTokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  token_type?: string;
+  scope?: string;
+}
+
+export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+}): Promise<MoneriumTokenResponse> {
+  const res = await fetch(`${cfg.baseUrl}/auth/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret,
+      grant_type: "authorization_code",
+      code: params.code,
+      code_verifier: params.codeVerifier,
+      redirect_uri: params.redirectUri,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Monerium OAuth code exchange failed (${res.status}): ${await res.text()}`);
+  }
+  return (await res.json()) as MoneriumTokenResponse;
+}
+
+export async function refreshAuthorizationToken(
+  cfg: MoneriumConfig,
+  refreshToken: string,
+): Promise<MoneriumTokenResponse> {
+  const res = await fetch(`${cfg.baseUrl}/auth/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Monerium OAuth refresh failed (${res.status}): ${await res.text()}`);
+  }
+  return (await res.json()) as MoneriumTokenResponse;
+}
+
+
+export async function moneriumBearerRequest<T>(
+  baseUrl: string,
+  accessToken: string,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: "application/vnd.monerium.api-v2+json",
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new MoneriumApiError(
+      `Monerium ${method} ${path} failed (${res.status}): ${text}`,
+      res.status,
+    );
+  }
+  return (text ? JSON.parse(text) : {}) as T;
+}
+
 export const LINK_MESSAGE = "I hereby declare that I am the address owner.";

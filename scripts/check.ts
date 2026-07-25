@@ -23,6 +23,8 @@ const scripts = [
   "reconcile:test",
   "anchor:test",
   "anchor:safety",
+  "anchor:sweep:test",
+  "refund:guard:test",
   "cctp:dryrun",
   "e2e",
 ];
