@@ -17,6 +17,37 @@ export interface User {
     checkedAt?: string;
     reason?: string;
   };
+  /**
+   * FATF Travel Rule originator data — who is sending the money.
+   *
+   * A cash pickup is a money transmission: the anchor pays a stranger at a
+   * counter and its licence obliges it to know who funded that. MoneyGram's
+   * anchor requires these as SEP-9 fields before a withdrawal can complete;
+   * without them a SEP-12 customer sits at NEEDS_INFO.
+   *
+   * PII WARNING: this store is plaintext JSON on disk (see `db.json`), so a
+   * real deployment must move these into whatever holds the KYC record —
+   * ideally the provider keeps them and this app holds only a reference.
+   * Document images are deliberately NOT accepted here; they belong with the
+   * KYC provider, not in this file.
+   */
+  senderProfile?: {
+    firstName: string;
+    lastName: string;
+    birthDate?: string; // ISO yyyy-mm-dd
+    address?: string;
+    city?: string;
+    postalCode?: string;
+    stateOrProvince?: string;
+    addressCountryCode?: string; // ISO 3166-1 alpha-2
+    idType?: "passport" | "drivers_license" | "id_card";
+    idNumber?: string;
+    idCountryCode?: string;
+    mobileNumber?: string;
+    emailAddress?: string;
+    occupation?: string;
+    updatedAt?: string;
+  };
   iban: string; // funding IBAN — mock-issued, or real from Monerium sandbox
   /** Candide Safe smart-account address — the user's identity everywhere:
    *  the RemitVault ledger and the address Monerium attaches the IBAN to. */
