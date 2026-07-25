@@ -31,7 +31,8 @@
     "anchor:safety": "tsx scripts/anchor-safety-test.ts",
     "anchor:sweep:test": "tsx scripts/anchor-sweep-test.ts",
     "refund:guard:test": "tsx scripts/refund-guard-test.ts",
-    "kyc:operator:test": "tsx scripts/kyc-operator-test.ts"
+    "kyc:operator:test": "tsx scripts/kyc-operator-test.ts",
+    "travelrule:test": "MG_ANCHOR_DOMAIN=testanchor.stellar.org tsx scripts/travel-rule-test.ts"
   },
   "devDependencies": {
     "hardhat": "^2.26.0",

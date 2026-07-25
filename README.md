@@ -47,6 +47,13 @@ Running this repo with sandbox credentials, today:
   attestation polling, and Stellar `mint_and_forward`.
 - **Passkeys**: onboarding registers a WebAuthn credential and returning
   users sign in with it.
+- **Travel Rule data**: cash pickup is a money transmission, so the anchor is
+  told who is sending — name, date of birth, address and identity document,
+  mapped to SEP-9 fields and sent over SEP-12 before the withdrawal opens. If
+  the anchor requires something the sender profile lacks, the payout is refused
+  with the missing fields named rather than opening a session that can never
+  complete. Each user gets a distinct SEP-12 customer via a derived memo, so one
+  user's identity is never attributed to another's payout.
 - **KYC gate**: local demos auto-approve by default, but `KYC_AUTO_APPROVE=0`
   starts users as `pending`; IBAN issuance, deposits, device binding, quotes,
   and transfers fail closed until a review approves the account. The app shows
@@ -66,6 +73,10 @@ Running this repo with sandbox credentials, today:
 - The UPI partner and the MoneyGram payout (in mock mode) return generated
   reference numbers. The shapes match the real APIs so swapping in a
   licensed partner is adapter work.
+- Sender identity data (date of birth, address, ID number) is stored in
+  `data/db.json` in plaintext, next to the Safe keys. A real deployment must
+  leave it with the KYC provider and keep only a reference here. Document
+  images are refused outright rather than stored.
 - Users' Safe owner keys live in `data/db.json`. Custodial, plainly.
   The passkey is an auth factor today; making it the Safe's owner is the
   planned fix.
