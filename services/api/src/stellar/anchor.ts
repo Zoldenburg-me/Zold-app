@@ -133,6 +133,15 @@ function jwtExpiry(token: string): number {
 export interface Sep10AuthOptions {
   /** SEP-10 custodial auth memo. Must be a positive integer string. */
   memo?: string;
+  /**
+   * Send `home_domain` on the challenge request.
+   *
+   * MoneyGram's custodial flow says NOT to: a custodial wallet authenticates
+   * with its registered key plus a per-user memo, and passing home_domain is
+   * the non-custodial shape. Defaults to omitting it whenever a memo is set,
+   * which is exactly the custodial case. Stellar's test anchor accepts either.
+   */
+  sendHomeDomain?: boolean;
   /** Optional wallet/client domain for SEP-10 client attribution. */
   clientDomain?: string;
   /** Secret for that client domain's SIGNING_KEY, when client attribution is required. */
@@ -193,7 +202,9 @@ async function sep10Exchange(homeDomain: string, keypair: Keypair, options: Sep1
   if (!info.signingKey) throw new Error(`${homeDomain} toml missing SIGNING_KEY`);
   const url = new URL(info.webAuthEndpoint);
   url.searchParams.set("account", keypair.publicKey());
-  url.searchParams.set("home_domain", homeDomain);
+  // Custodial (memo present) omits home_domain unless explicitly asked for.
+  const sendHomeDomain = options.sendHomeDomain ?? !options.memo;
+  if (sendHomeDomain) url.searchParams.set("home_domain", homeDomain);
   if (options.memo) url.searchParams.set("memo", options.memo);
   if (options.clientDomain) url.searchParams.set("client_domain", options.clientDomain);
   const chRes = await fetch(url);
@@ -366,12 +377,23 @@ export async function sep24InitiateWithdraw(
   assetCode: string,
   account: string,
   amount?: string,
+  /**
+   * SEP-9 customer fields. MoneyGram reads them here, in the interactive POST
+   * body — not over SEP-12 — so a withdrawal that omits them makes the user
+   * re-enter everything in the webview. Anchors ignore fields they don't know.
+   */
+  sep9Fields?: Record<string, string>,
 ): Promise<Sep24Withdrawal> {
   const info = await fetchAnchorInfo(homeDomain);
   const res = await fetch(`${info.transferServerSep24}/transactions/withdraw/interactive`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${jwt}` },
-    body: JSON.stringify({ asset_code: assetCode, account, ...(amount ? { amount } : {}) }),
+    body: JSON.stringify({
+      asset_code: assetCode,
+      account,
+      ...(amount ? { amount } : {}),
+      ...(sep9Fields ?? {}),
+    }),
   });
   if (!res.ok) throw new Error(`SEP-24 withdraw failed (${res.status}): ${await res.text()}`);
   const data = (await res.json()) as { id: string; url: string; type: string };

@@ -63,6 +63,22 @@
   all share one customer record and we would transmit the WRONG person's
   identity. npm run travelrule:test proves the isolation live (user A ACCEPTED,
   user B still NEEDS_INFO).
+  MONEYGRAM'S SHAPE DIFFERS FROM TESTANCHOR — checked against their docs, not
+  inferred: (a) MoneyGram reads SEP-9 from the SEP-24 interactive POST body,
+  testanchor wants SEP-12 PUT /customer, so we do both; (b) country codes are
+  ISO alpha-3 ("DEU"), not the alpha-2 the app stores — see stellar/sep9.ts,
+  which omits rather than guesses an unmappable code; (c) MoneyGram documents
+  exactly 9 fields and does NOT want id_type/id_number/email_address/
+  occupation, so the SEP-24 body sends only its subset; (d) state_or_province
+  is ISO-3166-2 and only for USA/CAN/MEX; (e) custodial SEP-10 must NOT send
+  home_domain (we omit it whenever a memo is set — the custodial case).
+  Their reference number is external_transaction_id at
+  pending_user_transfer_complete, and funds go to withdraw_anchor_account with
+  withdraw_memo as an id memo at pending_user_transfer_start — both already
+  matched. Divergence we keep deliberately: MoneyGram says use amount_in
+  as-is; resolvePaymentAmount still refuses an amount_in ABOVE what we
+  authorised. Their bridging page recommends Allbridge/Bridge.xyz and never
+  mentions CCTP.
   PII: senderProfile lands in plaintext db.json alongside private keys — a real
   deployment must keep it with the KYC provider and store only a reference.
 - CCTP: dry-run by default; CCTP_LIVE=1 + funded CCTP_BURNER_KEY executes

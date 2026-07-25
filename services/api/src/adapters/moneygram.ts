@@ -10,6 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { STELLAR, anchorModeEnabled } from "../config.js";
 import type { User } from "../store.js";
 import {
+  fetchAnchorInfo,
   getTreasury,
   missingRequiredFields,
   sep10Auth,
@@ -20,6 +21,7 @@ import {
   sendSep24WithdrawalPayment,
   sep24WithdrawLimits,
 } from "../stellar/anchor.js";
+import { moneygramSep9, toAlpha3 } from "../stellar/sep9.js";
 
 export interface CashPickup {
   referenceCode: string;
@@ -102,10 +104,13 @@ export function senderProfileToSep9(user: User): Record<string, string | undefin
     city: p.city,
     postal_code: p.postalCode,
     state_or_province: p.stateOrProvince,
-    address_country_code: p.addressCountryCode ?? user.country,
+    // SEP-9 (and MoneyGram explicitly) want alpha-3: "USA", "DEU". The rest of
+    // the app stores alpha-2, so convert — and omit rather than guess if the
+    // code is one we cannot map.
+    address_country_code: toAlpha3(p.addressCountryCode ?? user.country),
     id_type: p.idType,
     id_number: p.idNumber,
-    id_country_code: p.idCountryCode,
+    id_country_code: toAlpha3(p.idCountryCode),
     mobile_number: p.mobileNumber,
     email_address: p.emailAddress ?? user.email,
     occupation: p.occupation,
@@ -142,13 +147,18 @@ export async function submitSenderProfile(
   account: string,
   user: User,
   memo = senderMemo(user),
-): Promise<{ status?: string; missing: string[] }> {
+): Promise<{ status?: string; missing: string[]; channel: "sep12" | "sep24" }> {
   const supplied = senderProfileToSep9(user);
+  // Not every anchor takes customer data over SEP-12 — MoneyGram takes it in
+  // the SEP-24 body instead. When there is no KYC server, there is nothing to
+  // pre-submit, and the SEP-24 path carries the fields.
+  const info = await fetchAnchorInfo(homeDomain);
+  if (!info.kycServer) return { missing: [], channel: "sep24" };
   const declared = await sep12CustomerFields(homeDomain, jwt, account, "sep24-customer", memo);
   const missing = missingRequiredFields(declared.fields, supplied);
-  if (missing.length) return { status: declared.status, missing };
+  if (missing.length) return { status: declared.status, missing, channel: "sep12" };
   const put = await sep12PutCustomer(homeDomain, jwt, account, supplied, "sep24-customer", memo);
-  return { status: put.status, missing: [] };
+  return { status: put.status, missing: [], channel: "sep12" };
 }
 
 export async function createCashPickupViaAnchor(
@@ -205,12 +215,17 @@ export async function createCashPickupViaAnchor(
     }
   }
 
+  // MoneyGram reads customer info from the interactive POST body (SEP-12 above
+  // is what Stellar's test anchor uses). Send its documented subset so the
+  // webview arrives pre-filled instead of asking the user to retype it.
+  const sep9 = args.sender ? moneygramSep9(senderProfileToSep9(args.sender)) : undefined;
   const wd = await sep24InitiateWithdraw(
     domain,
     jwt,
     asset,
     treasury.publicKey(),
     String(args.amountAsset),
+    sep9,
   );
   const pickup: CashPickup = {
     referenceCode: wd.id.replace(/-/g, "").slice(0, 8).toUpperCase(),
