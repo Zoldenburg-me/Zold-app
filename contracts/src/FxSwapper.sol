@@ -7,9 +7,9 @@ interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
 }
 
-/// @title FxSwapper — swaps tokenIn for tokenOut against its own inventory at
-/// an owner-set rate. Stands in for a DEX aggregator route (Uniswap/Aerodrome
-/// on Base) in the MVP; the interface is what the orchestrator codes against.
+/// @title FxSwapper — swaps EURe and USDC against its own inventory at an
+/// owner-set rate. Stands in for a DEX aggregator route (Uniswap/Aerodrome on
+/// Base) in the MVP; the interface is what the orchestrator codes against.
 contract FxSwapper {
     IERC20 public immutable tokenIn; // EURe (18 decimals)
     IERC20 public immutable tokenOut; // USDC (6 decimals)
@@ -93,6 +93,10 @@ contract FxSwapper {
         return (amountIn * rate) / 1e18;
     }
 
+    function quoteReverseOut(uint256 amountIn) public view returns (uint256) {
+        return (amountIn * 1e18) / rate;
+    }
+
     /// Pulls `amountIn` of tokenIn from the caller, pays out tokenOut to `to`.
     /// Reverts if the output is below `minOut` (slippage guard).
     function swapExactIn(uint256 amountIn, uint256 minOut, address to)
@@ -106,6 +110,22 @@ contract FxSwapper {
         require(tokenOut.balanceOf(address(this)) >= amountOut, "no inventory");
         require(tokenIn.transferFrom(msg.sender, address(this), amountIn), "pull failed");
         require(tokenOut.transfer(to, amountOut), "payout failed");
+        emit Swapped(msg.sender, amountIn, amountOut, to);
+    }
+
+    /// Pulls tokenOut from the caller, pays tokenIn back to `to`.
+    /// Example: USDC -> EURe using the inverse of `rate`.
+    function swapReverseExactIn(uint256 amountIn, uint256 minOut, address to)
+        external
+        onlyTrader
+        notPaused
+        returns (uint256 amountOut)
+    {
+        amountOut = quoteReverseOut(amountIn);
+        require(amountOut >= minOut, "slippage");
+        require(tokenIn.balanceOf(address(this)) >= amountOut, "no inventory");
+        require(tokenOut.transferFrom(msg.sender, address(this), amountIn), "pull failed");
+        require(tokenIn.transfer(to, amountOut), "payout failed");
         emit Swapped(msg.sender, amountIn, amountOut, to);
     }
 

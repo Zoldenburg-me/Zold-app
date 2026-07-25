@@ -66,6 +66,7 @@ const DAILY_CAP_EUR = parseUnits("2500", 18);
 const TIMELOCK_DELAY = BigInt(process.env.TIMELOCK_DELAY_SECONDS ?? 60);
 const TIMELOCK_THRESHOLD = Number(process.env.TIMELOCK_THRESHOLD ?? 2);
 const EURUSD_RATE = 1_080_000n; // 1 EURe (1e18) -> 1.08 USDC (6dp)
+const SWAP_INVENTORY_EURE = parseUnits("1000000", 18);
 const SWAP_INVENTORY_USDC = parseUnits("1000000", 6);
 
 async function main() {
@@ -91,6 +92,7 @@ async function main() {
   await call(vault, "RemitVault", "setOrchestrator", [orchestratorAddr, true]);
   await call(swapper, "FxSwapper", "setTrader", [orchestratorAddr, true]);
   await call(bridge, "BridgeEscrow", "setOrchestrator", [orchestratorAddr, true]);
+  await call(eure, "MockToken", "mint", [swapper, SWAP_INVENTORY_EURE]);
   await call(usdc, "MockToken", "mint", [swapper, SWAP_INVENTORY_USDC]);
 
   // A guardian can halt the system instantly without waiting out the timelock.
@@ -106,7 +108,7 @@ async function main() {
   const out = { eure, usdc, vault, swapper, bridge, timelock };
   writeFileSync(path.join(ROOT, "deployments.json"), JSON.stringify(out, null, 2));
   console.log(
-    `\nroles wired, swapper seeded with 1,000,000 USDC` +
+    `\nroles wired, swapper seeded with 1,000,000 EURe and 1,000,000 USDC` +
       `\nadmin ownership -> AdminTimelock ${timelock} (${TIMELOCK_THRESHOLD}-of-${timelockOwners.length}, ${TIMELOCK_DELAY}s delay)`,
   );
   console.log("wrote deployments.json");
