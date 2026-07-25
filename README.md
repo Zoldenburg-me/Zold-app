@@ -51,10 +51,17 @@ Running this repo with sandbox credentials, today:
   starts users as `pending`; IBAN issuance, deposits, device binding, quotes,
   and transfers fail closed until a review approves the account. The app shows
   pending/rejected/manual-review states instead of provisioning forever. The
-  pending screen now splits users between connecting an existing Monerium
-  account and the normal identity-review path. The included mock review
-  endpoint is for local tests only, not a regulated provider, and the
-  existing-Monerium OAuth connection is still in progress.
+  pending screen splits users between connecting an existing Monerium account
+  and the normal identity-review path. The included mock review endpoint is for
+  local tests only, not a regulated provider.
+- **Existing Monerium accounts**: a user who already banks with Monerium can
+  connect that account (OAuth Authorization Code + PKCE) instead of repeating
+  KYC. Their tokens are encrypted at rest and never reach the browser; the app
+  links its own Safe and requests a *new* app IBAN rather than moving theirs.
+  `npm run monerium:oauth:test` drives the whole loop against a stub that
+  verifies the PKCE itself. Unproven until someone connects a real Monerium
+  account in a browser: that Monerium's authorize page accepts our registered
+  client_id/redirect_uri.
 
 ## What's simulated
 
