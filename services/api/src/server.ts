@@ -34,6 +34,7 @@ import {
 } from "./orchestrator.js";
 import { isValidVpa } from "./adapters/upi.js";
 import { senderProfileToSep9 } from "./adapters/moneygram.js";
+import { toAlpha3 } from "./stellar/sep9.js";
 import { getTreasury, missingRequiredFields, sep10Auth, sep12CustomerFields } from "./stellar/anchor.js";
 import { formatReport, reconcile } from "./reconcile.js";
 import {
@@ -391,7 +392,24 @@ app.post(
     if (idType && !["passport", "drivers_license", "id_card"].includes(idType)) {
       return res.status(400).json({ error: "idType must be passport, drivers_license or id_card" });
     }
-    const cc = (v?: string) => (v && /^[A-Za-z]{2}$/.test(v) ? v.toUpperCase() : undefined);
+    // SEP-9 country codes are ISO 3166-1 alpha-3 ("DEU", "USA"). Accept
+    // either form from callers and normalise; reject what we cannot map
+    // rather than storing a code the anchor would misread.
+    const rawCc = str(b.addressCountryCode) ?? user.country;
+    const addressCountryCode = toAlpha3(rawCc);
+    if (rawCc && !addressCountryCode) {
+      return res.status(400).json({
+        error: `unrecognised country code "${rawCc}" — use an ISO 3166-1 alpha-2 or alpha-3 code`,
+      });
+    }
+    const idCountryCode = toAlpha3(str(b.idCountryCode));
+    // ISO 3166-2, e.g. "US-MN"; MoneyGram only uses it for USA/CAN/MEX.
+    const stateOrProvince = str(b.stateOrProvince);
+    if (stateOrProvince && !/^[A-Za-z]{2}-[A-Za-z0-9]{1,3}$/.test(stateOrProvince)) {
+      return res.status(400).json({
+        error: 'stateOrProvince must be ISO 3166-2, for example "US-MN"',
+      });
+    }
     const updated = store.updateUser(user.id, {
       senderProfile: {
         firstName,
@@ -400,11 +418,11 @@ app.post(
         address: str(b.address),
         city: str(b.city),
         postalCode: str(b.postalCode),
-        stateOrProvince: str(b.stateOrProvince),
-        addressCountryCode: cc(str(b.addressCountryCode)) ?? cc(user.country),
+        stateOrProvince,
+        addressCountryCode,
         idType: idType as any,
         idNumber: str(b.idNumber),
-        idCountryCode: cc(str(b.idCountryCode)),
+        idCountryCode,
         mobileNumber: str(b.mobileNumber),
         emailAddress: str(b.emailAddress) ?? user.email,
         occupation: str(b.occupation),

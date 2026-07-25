@@ -23,6 +23,7 @@ import {
   sep12PutCustomer,
 } from "../services/api/src/stellar/anchor.js";
 import { senderMemo, senderProfileToSep9, submitSenderProfile } from "../services/api/src/adapters/moneygram.js";
+import { MONEYGRAM_SEP9_FIELDS, moneygramSep9, toAlpha3 } from "../services/api/src/stellar/sep9.js";
 import type { User } from "../services/api/src/store.js";
 
 const domain = STELLAR.anchorDomain || "testanchor.stellar.org";
@@ -120,11 +121,12 @@ await t("our stored profile maps onto SEP-9 field names the anchor knows", async
   assert.equal(mapped.id_number, "X1234567");
 });
 
-await t("country falls back to the account country when not given explicitly", async () => {
+await t("country falls back to the account country, converted to alpha-3", async () => {
   const mapped = senderProfileToSep9(
     baseUser({ country: "FR", senderProfile: { firstName: "A", lastName: "B" } } as any),
   );
-  assert.equal(mapped.address_country_code, "FR");
+  // The account stores alpha-2; SEP-9 transmits alpha-3.
+  assert.equal(mapped.address_country_code, "FRA");
 });
 
 await t("no document images are ever mapped for transmission", async () => {
@@ -170,6 +172,57 @@ await t("each user is a SEPARATE customer at the anchor (memo isolation)", async
 await t("the derived memo is a valid SEP-10 positive integer and is stable", async () => {
   assert.match(memo, /^[1-9]\d*$/);
   assert.equal(senderMemo(baseUser()), memo, "memo must be stable for the same user");
+});
+
+
+console.log("MoneyGram's documented shape (docs differ from this test anchor):");
+await t("country codes are ISO alpha-3, as SEP-9 and MoneyGram specify", async () => {
+  // The app stores alpha-2 for a user's country; SEP-9 wants alpha-3.
+  assert.equal(toAlpha3("DE"), "DEU");
+  assert.equal(toAlpha3("US"), "USA");
+  assert.equal(toAlpha3("KEN"), "KEN", "an alpha-3 code should pass through");
+  const mapped = senderProfileToSep9(baseUser({ senderProfile: fullProfile } as any));
+  assert.equal(mapped.address_country_code, "DEU", "must not send the alpha-2 form");
+});
+
+await t("an unmappable country is omitted, never guessed", async () => {
+  assert.equal(toAlpha3("XX"), undefined);
+  const mapped = senderProfileToSep9(
+    baseUser({ country: "XX", senderProfile: { firstName: "A", lastName: "B" } } as any),
+  );
+  assert.equal(mapped.address_country_code, undefined,
+    "a country we cannot map must be omitted — a wrong one is worse than none");
+});
+
+await t("the MoneyGram body carries only its nine documented fields", async () => {
+  const body = moneygramSep9(senderProfileToSep9(baseUser({ senderProfile: fullProfile } as any)));
+  for (const k of Object.keys(body)) {
+    assert.ok(
+      (MONEYGRAM_SEP9_FIELDS as readonly string[]).includes(k),
+      `"${k}" is not a field MoneyGram documents`,
+    );
+  }
+  // These are real SEP-9 names that MoneyGram does not list — including the
+  // identity-document fields, which it never asks us to transmit.
+  for (const k of ["email_address", "id_type", "id_number", "id_country_code", "occupation"]) {
+    assert.equal(body[k], undefined, `${k} must not go in the MoneyGram body`);
+  }
+  assert.equal(body.first_name, "Amina");
+});
+
+await t("state_or_province is dropped outside USA/CAN/MEX", async () => {
+  const german = moneygramSep9({ address_country_code: "DEU", state_or_province: "DE-BE" });
+  assert.equal(german.state_or_province, undefined, "Germany has no ISO-3166-2 field at MoneyGram");
+  const american = moneygramSep9({ address_country_code: "USA", state_or_province: "US-MN" });
+  assert.equal(american.state_or_province, "US-MN");
+});
+
+await t("custodial auth omits home_domain, as MoneyGram requires", async () => {
+  // Both shapes must still authenticate against a real anchor.
+  const custodial = await sep10Auth(domain, treasury, { memo });
+  assert.equal(custodial.split(".").length, 3, "custodial auth (no home_domain) should work");
+  const nonCustodial = await sep10Auth(domain, treasury, { sendHomeDomain: true });
+  assert.equal(nonCustodial.split(".").length, 3, "non-custodial auth (home_domain) should work");
 });
 
 console.log(`\nTRAVEL RULE TEST PASSED — ${pass}/${pass}: sender data is required, mapped and transmitted`);
