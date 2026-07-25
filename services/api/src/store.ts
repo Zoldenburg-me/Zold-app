@@ -165,6 +165,22 @@ export interface Transfer {
     authorizedAt?: string;
   };
   txs: { step: string; hash: string }[];
+  /** Internal JIT liquidity execution details. This records how value moved
+   *  into the settlement asset for the payout rail; it is not a swap product. */
+  liquidity?: {
+    provider: "fx-swapper" | "rfq";
+    side: "EURE_TO_USDC" | "USDC_TO_EURE";
+    quoteId: string;
+    tokenIn: "EURe" | "USDC";
+    tokenOut: "EURe" | "USDC";
+    amountIn: string;
+    expectedOut: string;
+    minOut: string;
+    rate: string;
+    expiresAt: string;
+    executedAt?: string;
+    txHash?: string;
+  };
   pickup?: {
     referenceCode: string;
     provider: string;

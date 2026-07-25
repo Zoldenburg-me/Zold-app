@@ -18,6 +18,12 @@ import { redeemToIban } from "./adapters/monerium-sandbox.js";
 import { simulateSepaDeposit } from "./adapters/monerium.js";
 import { bridgeUsdcToStellar, CctpBridgeError, type CctpPlan } from "./bridge/cctp.js";
 import {
+  executeTransferLiquidity,
+  liquidityAmountOutUnits,
+  prepareTransferLiquidity,
+  serializeExecution,
+} from "./liquidity.js";
+import {
   abis,
   addrs,
   destinationCommitment,
@@ -38,8 +44,6 @@ import {
 } from "./adapters/moneygram.js";
 import { anchorModeEnabled, CCTP, SECURITY, STELLAR } from "./config.js";
 import { creditVpa } from "./adapters/upi.js";
-
-const MAX_SLIPPAGE_BPS = 30n;
 
 /**
  * FP4: the user's device signature over this payment's exact terms. The
@@ -179,7 +183,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   let recoveredFrom: string;
   let deductions = "none";
   const fee = t.rail === "upi" ? FX.UPI_FIXED_FEE_EUR : FX.FIXED_FEE_EUR;
-  if (!steps.has("swapper.swapExactIn")) {
+  if (!steps.has("liquidity.fx-swapper.eure-usdc") && !steps.has("swapper.swapExactIn")) {
     // Still holding the debited EURe in full.
     refundEur = t.sendEur;
     recoveredFrom = "debited EURe";
@@ -285,33 +289,19 @@ export async function executeTransfer(
 
     // 2. Swap the convertible portion (send - fixed fee) EURe -> USDC.
     //    The fixed fee stays at the orchestrator address as revenue.
-    const convertibleWei = eur.toWei(transfer.sendEur - FX.FIXED_FEE_EUR);
     await assertQuoteRateBinding(transfer);
-    const expectedOut = (await publicClient.readContract({
-      address: a.swapper,
-      abi: abis.FxSwapper,
-      functionName: "quoteOut",
-      args: [convertibleWei],
-    })) as bigint;
-    const minOut = (expectedOut * (10_000n - MAX_SLIPPAGE_BPS)) / 10_000n;
-
-    const approveSwapHash = await writeAndWait(orchestratorWallet, {
-      address: a.eure,
-      abi: abis.MockToken,
-      functionName: "approve",
-      args: [a.swapper, convertibleWei],
+    const liquidityPlan = await prepareTransferLiquidity(transfer);
+    store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
+    const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
+    txs.push(...liquidity.txs);
+    const expectedOut = liquidity.amountOut;
+    const usdcOut = liquidityAmountOutUnits(liquidity.quote);
+    store.updateTransfer(transfer.id, {
+      state: "SWAPPED",
+      txs,
+      usdcOut,
+      liquidity: serializeExecution(liquidity),
     });
-    txs.push({ step: "eure.approve(swapper)", hash: approveSwapHash });
-
-    const swapHash = await writeAndWait(orchestratorWallet, {
-      address: a.swapper,
-      abi: abis.FxSwapper,
-      functionName: "swapExactIn",
-      args: [convertibleWei, minOut, orchestratorAddress],
-    });
-    txs.push({ step: "swapper.swapExactIn", hash: swapHash });
-    const usdcOut = usd.fromUnits(expectedOut);
-    store.updateTransfer(transfer.id, { state: "SWAPPED", txs, usdcOut });
 
     // 3. Bridge USDC toward Stellar. In dry-run mode we record the exact CCTP
     //    burn/mint plan and keep the local escrow leg so the no-credential demo
@@ -434,32 +424,17 @@ export async function executeUpiTransfer(
 
     // Swap the convertible portion to USDC — the settlement asset we net
     // against the partner's INR float.
-    const convertibleWei = eur.toWei(transfer.sendEur - FX.UPI_FIXED_FEE_EUR);
     await assertQuoteRateBinding(transfer);
-    const expectedOut = (await publicClient.readContract({
-      address: a.swapper,
-      abi: abis.FxSwapper,
-      functionName: "quoteOut",
-      args: [convertibleWei],
-    })) as bigint;
-    const minOut = (expectedOut * (10_000n - MAX_SLIPPAGE_BPS)) / 10_000n;
-
-    const approveHash = await writeAndWait(orchestratorWallet, {
-      address: a.eure,
-      abi: abis.MockToken,
-      functionName: "approve",
-      args: [a.swapper, convertibleWei],
+    const liquidityPlan = await prepareTransferLiquidity(transfer);
+    store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
+    const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
+    txs.push(...liquidity.txs);
+    store.updateTransfer(transfer.id, {
+      state: "SWAPPED",
+      txs,
+      usdcOut: liquidityAmountOutUnits(liquidity.quote),
+      liquidity: serializeExecution(liquidity),
     });
-    txs.push({ step: "eure.approve(swapper)", hash: approveHash });
-
-    const swapHash = await writeAndWait(orchestratorWallet, {
-      address: a.swapper,
-      abi: abis.FxSwapper,
-      functionName: "swapExactIn",
-      args: [convertibleWei, minOut, orchestratorAddress],
-    });
-    txs.push({ step: "swapper.swapExactIn", hash: swapHash });
-    store.updateTransfer(transfer.id, { state: "SWAPPED", txs, usdcOut: usd.fromUnits(expectedOut) });
 
     // Partner credits the VPA from its INR float — instant on real UPI too.
     const credit = creditVpa(transfer.id, transfer.recipientVpa!, transfer.receiveInr!);
