@@ -359,6 +359,7 @@ export async function executeTransfer(
           payoutKes: transfer.receiveKes,
           recipientName: transfer.recipientName,
           recipientPhone: transfer.recipientPhone ?? "",
+          sender: user,
         });
       } catch (err: any) {
         // Fail closed: a failed real payout must not masquerade as success.

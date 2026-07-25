@@ -53,6 +53,7 @@ export interface AnchorInfo {
   webAuthEndpoint: string;
   transferServerSep24: string;
   signingKey?: string;
+  kycServer?: string;
   toml: string;
 }
 
@@ -66,7 +67,13 @@ export async function fetchAnchorInfo(homeDomain: string): Promise<AnchorInfo> {
   if (!webAuthEndpoint || !transferServerSep24) {
     throw new Error(`${homeDomain} toml missing WEB_AUTH_ENDPOINT / TRANSFER_SERVER_SEP0024`);
   }
-  return { webAuthEndpoint, transferServerSep24, signingKey: get("SIGNING_KEY"), toml };
+  return {
+    webAuthEndpoint,
+    transferServerSep24,
+    signingKey: get("SIGNING_KEY"),
+    kycServer: get("KYC_SERVER"),
+    toml,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +232,123 @@ async function sep10Exchange(homeDomain: string, keypair: Keypair, options: Sep1
   if (!tokRes.ok) throw new Error(`SEP-10 token failed (${tokRes.status}): ${await tokRes.text()}`);
   const { token } = (await tokRes.json()) as { token: string };
   return token;
+}
+
+// ---------------------------------------------------------------------------
+// SEP-12: the KYC / Travel Rule fields the anchor needs about the *sender*
+//
+// A cash pickup is a money transmission. The anchor pays cash to a person at a
+// counter, and its own licence obliges it to know who sent it — the FATF
+// Travel Rule originator set (name, date of birth, address, an identity
+// document). MoneyGram's production anchor requires these; testanchor declares
+// the same SEP-9 catalogue but marks everything optional, which is exactly the
+// trap: code that works against the test anchor can be missing every field
+// production will demand.
+//
+// So we ask the anchor what it wants (`sep12CustomerFields`), refuse early if
+// we cannot supply it, and PUT it before opening the withdrawal.
+
+/** A SEP-9 field the anchor has declared. */
+export interface Sep12Field {
+  type?: string;
+  description?: string;
+  optional?: boolean;
+  choices?: string[];
+}
+
+export interface Sep12CustomerStatus {
+  id?: string;
+  status?: string;
+  /** Everything the anchor will accept, keyed by SEP-9 field name. */
+  fields: Record<string, Sep12Field>;
+  /** What it says is still missing for this customer. */
+  providedFields: Record<string, Sep12Field>;
+}
+
+function kycServerOf(info: AnchorInfo, homeDomain: string): string {
+  if (!info.kycServer) {
+    throw new Error(`${homeDomain} publishes no KYC_SERVER, so SEP-12 customer data cannot be sent`);
+  }
+  return info.kycServer;
+}
+
+/** Ask the anchor which SEP-9 fields it wants for this account. */
+export async function sep12CustomerFields(
+  homeDomain: string,
+  jwt: string,
+  account: string,
+  type = "sep24-customer",
+  memo?: string,
+): Promise<Sep12CustomerStatus> {
+  const info = await fetchAnchorInfo(homeDomain);
+  const url = new URL(`${kycServerOf(info, homeDomain)}/customer`);
+  url.searchParams.set("account", account);
+  if (type) url.searchParams.set("type", type);
+  // Custodial wallets share one Stellar account, so the memo is what makes
+  // each user a distinct customer at the anchor. Without it every user would
+  // inherit whoever's KYC was submitted first.
+  if (memo) {
+    url.searchParams.set("memo", memo);
+    url.searchParams.set("memo_type", "id");
+  }
+  const res = await fetch(url, { headers: { authorization: `Bearer ${jwt}` } });
+  if (!res.ok) throw new Error(`SEP-12 GET /customer failed (${res.status}): ${await res.text()}`);
+  const data = (await res.json()) as any;
+  return {
+    id: data.id,
+    status: data.status,
+    fields: data.fields ?? {},
+    providedFields: data.provided_fields ?? {},
+  };
+}
+
+/**
+ * Which of the anchor's REQUIRED fields we cannot supply.
+ *
+ * Returned rather than thrown so the caller can decide: refusing to open a
+ * withdrawal is right at payout time, but the same answer is useful for
+ * telling a user up front what their profile is missing.
+ */
+export function missingRequiredFields(
+  declared: Record<string, Sep12Field>,
+  supplied: Record<string, string | undefined>,
+): string[] {
+  return Object.entries(declared)
+    .filter(([name, spec]) => spec.optional !== true && !supplied[name])
+    .map(([name]) => name);
+}
+
+/**
+ * Send the customer's SEP-9 fields. Binary fields (photo ID, proof of
+ * residence) would need multipart; we deliberately send only the text set —
+ * document images belong with a KYC provider, not in this app's store.
+ */
+export async function sep12PutCustomer(
+  homeDomain: string,
+  jwt: string,
+  account: string,
+  fields: Record<string, string | undefined>,
+  type = "sep24-customer",
+  memo?: string,
+): Promise<{ id?: string; status?: string }> {
+  const info = await fetchAnchorInfo(homeDomain);
+  const body: Record<string, string> = { account };
+  if (type) body.type = type;
+  if (memo) {
+    body.memo = memo;
+    body.memo_type = "id";
+  }
+  for (const [k, v] of Object.entries(fields)) {
+    if (typeof v === "string" && v.trim() !== "") body[k] = v.trim();
+  }
+  const res = await fetch(`${kycServerOf(info, homeDomain)}/customer`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", authorization: `Bearer ${jwt}` },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`SEP-12 PUT /customer failed (${res.status}): ${await res.text()}`);
+  const data = (await res.json().catch(() => ({}))) as any;
+  return { id: data.id, status: data.status };
 }
 
 // ---------------------------------------------------------------------------

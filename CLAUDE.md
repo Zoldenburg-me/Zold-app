@@ -48,6 +48,23 @@
   per transfer; dry-run (default) keeps the local mock escrow so the
   no-credential demo completes, CCTP_LIVE=1 submits the real Base Sepolia
   burn. Never executed live.
+- Travel Rule / SEP-12 (July 2026): a cash pickup is a money transmission, so
+  the anchor needs the FATF originator set about the SENDER. We used to send
+  none of it — the SEP-24 withdrawal carried only asset/account/amount and the
+  anchor's SEP-12 customer sat at NEEDS_INFO, so a real withdrawal could never
+  complete. Now: `user.senderProfile` holds the text fields (no document
+  images — those belong with a KYC provider), `senderProfileToSep9` maps them
+  to SEP-9 names, and `submitSenderProfile` PUTs them before the withdrawal is
+  opened, REFUSING early and naming the gaps if the anchor requires something
+  we lack. The required list is the anchor's own and is per-customer state, so
+  it adapts from testanchor's 3 fields to MoneyGram's larger set.
+  CRITICAL: one treasury account serves every user, so each user needs a
+  distinct SEP-10/SEP-12 memo (`senderMemo`, derived from the user id) or they
+  all share one customer record and we would transmit the WRONG person's
+  identity. npm run travelrule:test proves the isolation live (user A ACCEPTED,
+  user B still NEEDS_INFO).
+  PII: senderProfile lands in plaintext db.json alongside private keys — a real
+  deployment must keep it with the KYC provider and store only a reference.
 - CCTP: dry-run by default; CCTP_LIVE=1 + funded CCTP_BURNER_KEY executes
   (faucet.circle.com for testnet USDC). Stellar CCTP domain is 27; mint
   recipient AND destinationCaller must be the CctpForwarder.
