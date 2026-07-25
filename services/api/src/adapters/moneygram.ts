@@ -8,7 +8,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { STELLAR, anchorModeEnabled } from "../config.js";
-import type { User } from "../store.js";
+import { store, type User } from "../store.js";
 import {
   fetchAnchorInfo,
   getTreasury,
@@ -38,6 +38,8 @@ export interface CashPickup {
   anchorAmount?: number;
   anchorAsset?: string;
   anchorPaymentHash?: string;
+  /** SEP-10 memo that isolates this sender at custodial anchors. */
+  anchorMemo?: string;
   /** What the anchor reports it expects (display only — never the amount we
    *  send; see resolvePaymentAmount). */
   anchorAmountIn?: string;
@@ -77,6 +79,18 @@ export function completePickup(transferId: string): CashPickup | undefined {
   const p = pickups.get(transferId);
   if (p) p.status = "PAID";
   return p;
+}
+
+/** Return the memo this pickup must use for every SEP-10 call. Stored pickups
+ *  from before this field existed can recover it from the transfer's user. */
+export function anchorMemoForPickup(
+  transferId: string,
+  pickup?: Pick<CashPickup, "anchorMemo">,
+): string | undefined {
+  if (pickup?.anchorMemo) return pickup.anchorMemo;
+  const transfer = store.findTransfer(transferId);
+  const user = transfer ? store.findUser(transfer.userId) : undefined;
+  return user ? senderMemo(user) : undefined;
 }
 
 /**
@@ -238,6 +252,7 @@ export async function createCashPickupViaAnchor(
     anchorTransactionId: wd.id,
     anchorAmount: args.amountAsset,
     anchorAsset: asset,
+    anchorMemo: memo,
     anchorStatus: wd.status,
   };
   pickups.set(transferId, pickup);
@@ -259,9 +274,14 @@ export async function refreshAnchorPickup(
 ): Promise<CashPickup | undefined> {
   const pickup = pickups.get(transferId) ?? existing;
   if (!pickup?.anchorTransactionId || !anchorModeEnabled()) return undefined;
+  pickup.anchorMemo = anchorMemoForPickup(transferId, pickup);
   pickups.set(transferId, pickup);
   const treasury = await getTreasury();
-  const jwt = await sep10Auth(STELLAR.anchorDomain, treasury);
+  const jwt = await sep10Auth(
+    STELLAR.anchorDomain,
+    treasury,
+    pickup.anchorMemo ? { memo: pickup.anchorMemo } : undefined,
+  );
   const status = await sep24GetTransaction(STELLAR.anchorDomain, jwt, pickup.anchorTransactionId);
   pickup.anchorStatus = status.status;
   // Record what the anchor says, but never let it overwrite the amount we
@@ -305,7 +325,12 @@ export async function fundAndRefreshAnchorPickup(
   }
 
   const treasury = await getTreasury();
-  const jwt = await sep10Auth(STELLAR.anchorDomain, treasury);
+  pickup.anchorMemo = anchorMemoForPickup(transferId, pickup);
+  const jwt = await sep10Auth(
+    STELLAR.anchorDomain,
+    treasury,
+    pickup.anchorMemo ? { memo: pickup.anchorMemo } : undefined,
+  );
   if (!pickup.anchorPaymentHash) {
     try {
       const sent = await sendSep24WithdrawalPayment(
