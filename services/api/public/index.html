@@ -750,6 +750,16 @@ async function chooseFundingPath(path) {
   } catch (e) { showErr("kyc-err", e); }
 }
 
+async function startMoneriumConnect() {
+  clearErr("kyc-err");
+  try {
+    const updated = await api(`/api/users/${user.id}/funding-onboarding-path`, { path: "existing_monerium" });
+    renderUser(updated);
+    const connect = await api(`/api/users/${user.id}/monerium/connect/start`, {});
+    location.href = connect.redirectUrl;
+  } catch (e) { showErr("kyc-err", e); }
+}
+
 function enterProvisioning(name) {
   $("onboard").style.display = "none";
   $("provisioning").style.display = "grid";
@@ -905,7 +915,7 @@ $("btn-passkey").onclick = () => {
   createAccount(true);
 };
 $("btn-skippk").onclick = () => createAccount(false);
-$("btn-monerium-existing").onclick = () => chooseFundingPath("existing_monerium");
+$("btn-monerium-existing").onclick = () => startMoneriumConnect();
 $("btn-monerium-new").onclick = () => chooseFundingPath("new_monerium");
 $("btn-kyc-refresh").onclick = () => refreshKycStatus({ continueWhenApproved: true });
 $("btn-dash-kyc-refresh").onclick = async () => {

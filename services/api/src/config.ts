@@ -37,6 +37,13 @@ export const MONERIUM = {
   // How often to poll for incoming EURe issue orders (webhooks need a public
   // URL; polling works for local dev).
   pollMs: Number(process.env.MONERIUM_POLL_MS ?? 15_000),
+  // User-owned account connect (Authorization Code + PKCE). Redirect URI must
+  // exactly match the OAuth app registration.
+  authUrl: process.env.MONERIUM_AUTH_URL ?? `${process.env.MONERIUM_BASE_URL ?? "https://api.monerium.dev"}/auth`,
+  redirectUri:
+    process.env.MONERIUM_REDIRECT_URI ??
+    `http://${API_HOST}:${API_PORT}/api/monerium/oauth/callback`,
+  tokenEncryptionKey: process.env.MONERIUM_TOKEN_ENCRYPTION_KEY ?? "",
 };
 
 export const moneriumSandboxEnabled = () =>
