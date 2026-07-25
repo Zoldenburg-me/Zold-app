@@ -31,8 +31,18 @@ The split-flow build has started:
 - `scripts/kyc-test.ts` checks the path endpoint.
 - `scripts/kyc-ui-test.ts` checks the new UI markers.
 
-This is not yet a complete Monerium OAuth integration. It is the product/API
-seam for the next agent to continue from.
+**Update (July 2026): the OAuth build step below is now implemented** in
+`ba7c0c2`, with `npm run monerium:oauth:test` covering the loop against a stub
+that enforces PKCE (12 checks: challenge/verifier pair, single-use state,
+tokens encrypted at rest and absent from API responses, app IBAN issued rather
+than the user's existing one moved, disconnect clears tokens).
+
+What remains is not code: register the OAuth app with Monerium, set
+`MONERIUM_REDIRECT_URI` to match that registration exactly, set
+`MONERIUM_TOKEN_ENCRYPTION_KEY`, and connect one real account in a browser.
+Until that happens nothing proves Monerium's authorize page accepts our
+client_id/redirect_uri, or that its real token response matches the shape the
+stub returns.
 
 ## Next Build Step
 
