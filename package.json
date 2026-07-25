@@ -10,6 +10,7 @@
     "compile": "hardhat compile",
     "deploy": "tsx scripts/deploy.ts",
     "api": "tsx services/api/src/server.ts",
+    "typecheck": "tsc --noEmit",
     "test:contracts": "tsx contracts/test/run.ts",
     "monerium:check": "tsx scripts/monerium-check.ts",
     "stellar:check": "tsx scripts/stellar-check.ts",
@@ -36,6 +37,8 @@
     "travelrule:test": "MG_ANCHOR_DOMAIN=testanchor.stellar.org tsx scripts/travel-rule-test.ts"
   },
   "devDependencies": {
+    "@types/express": "^4.17.25",
+    "@types/node": "^22.20.1",
     "hardhat": "^2.26.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"

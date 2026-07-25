@@ -73,6 +73,7 @@ export async function provisionFunding(user: User): Promise<User> {
   const api = getClient();
   try {
     if (!user.privateKey) throw new Error("user has no wallet key to sign with");
+    const privateKey = user.privateKey;
 
     // 1. The Safe must exist on-chain for Monerium's EIP-1271 signature
     //    check — deploy it gaslessly via Candide if it isn't there yet.
@@ -80,7 +81,7 @@ export async function provisionFunding(user: User): Promise<User> {
       store.updateUser(user.id, {
         funding: { mode: "sandbox", status: "provisioning", detail: "deploying smart wallet (Sepolia, gasless)" },
       });
-      const opHash = await deploySmartAccount(user.privateKey);
+      const opHash = await deploySmartAccount(privateKey);
       user = store.updateUser(user.id, {
         wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
         funding: { mode: "sandbox", status: "provisioning", detail: "linking wallet to Monerium" },
@@ -88,7 +89,7 @@ export async function provisionFunding(user: User): Promise<User> {
     }
 
     // 2. Safe-style signature over the ownership declaration (EIP-1271).
-    const signature = await signMessageAsSafe(user.privateKey, user.address, LINK_MESSAGE);
+    const signature = await signMessageAsSafe(privateKey, user.address, LINK_MESSAGE);
 
     const profileId = await resolveProfileId(user);
     await api.linkAddress({
