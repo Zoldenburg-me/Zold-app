@@ -26,6 +26,7 @@ const scripts = [
   "anchor:test",
   "anchor:safety",
   "travelrule:test",
+  "trustline:test",
   "anchor:sweep:test",
   "refund:guard:test",
   "cctp:dryrun",
