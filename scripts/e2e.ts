@@ -181,6 +181,13 @@ try {
   assert.equal(transfer.state, "PAYOUT_READY", `transfer state: ${transfer.state} ${transfer.error ?? ""}`);
   assert.ok(transfer.pickup.referenceCode.length === 8, "pickup reference issued");
   assert.ok(transfer.txs.some((tx: any) => tx.step === "cctp.dry-run.plan"), "cash rail records a CCTP dry-run plan");
+  assert.equal(transfer.liquidity.provider, "fx-swapper", "cash rail records internal JIT liquidity provider");
+  assert.equal(transfer.liquidity.side, "EURE_TO_USDC", "cash rail routes EUR value through USDC");
+  assert.equal(Number(transfer.liquidity.expectedOut), Math.round(transfer.usdcOut * 1e6), "liquidity output matches USDC leg");
+  assert.ok(
+    transfer.txs.some((tx: any) => tx.step === "liquidity.fx-swapper.eure-usdc"),
+    "cash rail executes through the liquidity layer",
+  );
   assert.ok(transfer.txs.some((tx: any) => tx.step === "cctp.mint.prepared"), "cash rail records prepared Stellar mint");
   assert.ok(transfer.txs.some((tx: any) => tx.step === "bridge.lockForPayout"), "dry-run keeps local escrow for demo completion");
   await expectApiStatus("/api/transfers", 409, {
@@ -223,6 +230,8 @@ try {
   });
   assert.equal(upiTransfer.state, "PAID", `upi state: ${upiTransfer.state} ${upiTransfer.error ?? ""}`);
   assert.match(upiTransfer.upi.utr, /^\d{12}$/, "12-digit UTR issued");
+  assert.equal(upiTransfer.liquidity.provider, "fx-swapper", "upi rail records internal JIT liquidity provider");
+  assert.equal(upiTransfer.liquidity.tokenOut, "USDC", "upi rail settles through USDC");
   assert.equal(upiTransfer.txs.length, 3, "upi rail: debit + approve + swap txs");
   const final = await api(`/api/users/${user.id}`);
   assert.equal(final.balanceEur, Math.round((110 - upiQuote.sendEur) * 100) / 100, "balance after upi payment");
