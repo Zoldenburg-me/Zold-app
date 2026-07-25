@@ -172,6 +172,7 @@ async function main() {
   await write("deployer", swapper, "setTrader", [orchAddr, true]);
   await write("deployer", bridge, "setOrchestrator", [orchAddr, true]);
   await write("deployer", usdc, "mint", [swapper.address, U("1000000")]);
+  await write("deployer", eure, "mint", [swapper.address, E("1000000")]);
 
   console.log("RemitVault:");
   await t("uncovered credit reverts", () =>
@@ -506,10 +507,22 @@ async function main() {
     assert.equal(await read(swapper, "quoteOut", [E("100")]), U("108"));
   });
 
+  await t("reverse quote math: 108 USDC -> 100 EURe", async () => {
+    assert.equal(await read(swapper, "quoteReverseOut", [U("108")]), E("100"));
+  });
+
   await t("swap pays out at rate", async () => {
     await write("orch", eure, "approve", [swapper.address, E("100")]);
     await write("orch", swapper, "swapExactIn", [E("100"), U("108"), orchAddr]);
     assert.equal(await read(usdc, "balanceOf", [orchAddr]), U("108"));
+  });
+
+  await t("reverse swap pays out at inverse rate", async () => {
+    const before = (await read(eure, "balanceOf", [orchAddr])) as bigint;
+    await write("deployer", usdc, "mint", [orchAddr, U("108")]);
+    await write("orch", usdc, "approve", [swapper.address, U("108")]);
+    await write("orch", swapper, "swapReverseExactIn", [U("108"), E("100"), orchAddr]);
+    assert.equal(await read(eure, "balanceOf", [orchAddr]), before + E("100"));
   });
 
   await t("non-trader cannot swap inventory", () =>
@@ -535,6 +548,14 @@ async function main() {
       write("orch", swapper, "swapExactIn", [E("1"), U("2"), orchAddr]),
       "slippage",
       "minOut above quote",
+    );
+  });
+
+  await t("reverse slippage guard reverts", async () => {
+    await expectRevert(
+      write("orch", swapper, "swapReverseExactIn", [U("1"), E("1"), orchAddr]),
+      "slippage",
+      "reverse minOut above quote",
     );
   });
 
