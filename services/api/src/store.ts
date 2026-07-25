@@ -48,6 +48,24 @@ export interface User {
     moneriumProfileId?: string;
     detail?: string;
   };
+  /** Per-user Monerium OAuth connect state. Tokens are encrypted at rest and
+   *  never returned by the API. */
+  moneriumConnect?: {
+    state: string;
+    codeVerifier: string;
+    redirectUri: string;
+    createdAt: string;
+  };
+  monerium?: {
+    connectedAt: string;
+    profileId?: string;
+    accessTokenEnc?: string;
+    refreshTokenEnc?: string;
+    expiresAt?: string;
+    profiles?: any[];
+    ibans?: any[];
+    addresses?: any[];
+  };
   createdAt: string;
 }
 

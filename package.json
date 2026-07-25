@@ -29,6 +29,8 @@
     "reconcile:test": "tsx scripts/reconcile-test.ts",
     "anchor:test": "MG_ANCHOR_DOMAIN=testanchor.stellar.org MG_ANCHOR_ASSET=native tsx scripts/anchor-test.ts",
     "anchor:safety": "tsx scripts/anchor-safety-test.ts",
+    "anchor:sweep:test": "tsx scripts/anchor-sweep-test.ts",
+    "refund:guard:test": "tsx scripts/refund-guard-test.ts",
     "kyc:operator:test": "tsx scripts/kyc-operator-test.ts"
   },
   "devDependencies": {

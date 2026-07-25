@@ -10,7 +10,7 @@
  * marked FAILED; the BridgeEscrow.release() refund path is wired but manual
  * in the MVP.
  */
-import { FX, moneriumSandboxEnabled } from "./config.js";
+import { FX, moneriumSandboxEnabled, USING_LOCAL_RPC } from "./config.js";
 import { Keypair } from "@stellar/stellar-sdk";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
@@ -199,6 +199,15 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     if (lost > 0) deductions = `€${lost.toFixed(2)} conversion round-trip at current rate`;
   }
 
+  if (!USING_LOCAL_RPC) {
+    return store.updateTransfer(id, {
+      state: "MANUAL_REVIEW",
+      error:
+        "automatic refund requires minting mock EURe; refusing on non-local RPC until a treasury-funded refund path exists",
+      txs,
+    });
+  }
+
   const { creditHash } = await simulateSepaDeposit(user.address, refundEur, `refund-${t.id}`);
   txs.push({ step: "vault.refundCredit", hash: creditHash });
   console.log(`FP3: refunded €${refundEur} to ${user.name} for transfer ${t.id} (${recoveredFrom})`);
@@ -229,6 +238,23 @@ export async function sweepStrandedTransfers(): Promise<number> {
       }
     } catch (e: any) {
       console.error(`sweep: compensation failed for ${t.id}: ${e?.message ?? e}`);
+    }
+  }
+  return n;
+}
+
+/** Drive anchor-backed payouts that no browser is polling anymore. */
+export async function sweepAnchorPayouts(): Promise<number> {
+  let n = 0;
+  for (const t of [...store.transfers]) {
+    try {
+      if (["PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED"].includes(t.state)) {
+        const before = t.updatedAt;
+        const updated = await refreshPayout(t);
+        if (updated.updatedAt !== before) n++;
+      }
+    } catch (e: any) {
+      console.error(`sweep: anchor payout refresh failed for ${t.id}: ${e?.message ?? e}`);
     }
   }
   return n;
@@ -550,17 +576,23 @@ export async function settlePickup(transfer: Transfer): Promise<Transfer> {
 
 /** Refresh an anchor-backed cash payout. If the anchor has supplied payment
  * instructions, fund it on-ledger and mark PAID only after anchor completion. */
-export async function refreshPayout(transfer: Transfer): Promise<Transfer> {
+export async function refreshPayout(
+  transfer: Transfer,
+  opts: { pollMs?: number; timeoutMs?: number } = {},
+): Promise<Transfer> {
   if (!["PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED", "PAYOUT_READY"].includes(transfer.state)) {
     return transfer;
+  }
+  if (transfer.state === "PAYOUT_FUNDED" && transfer.pickup?.status === "PAID") {
+    return settlePickup(transfer);
   }
   if (!transfer.pickup?.anchorTransactionId) return transfer;
   try {
     const pickup = await fundAndRefreshAnchorPickup(
       transfer.id,
       transfer.pickup as any,
-      undefined,
-      undefined,
+      opts.pollMs,
+      opts.timeoutMs,
       // Persist the payment hash the moment it exists. Without this, a crash
       // during the poll loop below loses the record and the next call pays
       // the anchor a second time.

@@ -120,6 +120,7 @@ try {
   assert.equal(moneriumPath.kyc.onboardingPath, "existing_monerium");
   assert.equal(moneriumPath.kyc.provider, "monerium");
   assert.equal(moneriumPath.funding.status, "kyc_pending");
+  await expectStatus(`/api/users/${user.id}/monerium/connect/start`, 503, {});
   const normalPath = await api(`/api/users/${user.id}/funding-onboarding-path`, { path: "new_monerium" });
   assert.equal(normalPath.kyc.onboardingPath, "new_monerium");
   assert.equal(normalPath.kyc.provider, "manual");

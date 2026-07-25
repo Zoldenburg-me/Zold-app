@@ -1,9 +1,17 @@
 import express from "express";
 import path from "node:path";
-import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { API_HOST, API_PORT, FX, KYC, moneriumSandboxEnabled, SECURITY } from "./config.js";
+import { API_HOST, API_PORT, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY } from "./config.js";
 import { issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
 import { initStore, store, type User } from "./store.js";
 import { createQuote, isExpired } from "./fx.js";
@@ -21,6 +29,7 @@ import {
   executeUpiTransfer,
   refreshPayout,
   settlePickup,
+  sweepAnchorPayouts,
   sweepStrandedTransfers,
 } from "./orchestrator.js";
 import { isValidVpa } from "./adapters/upi.js";
@@ -38,6 +47,13 @@ import {
   vaultBalance,
 } from "./chain.js";
 import { smartAccountFor } from "./wallet/candide.js";
+import {
+  exchangeAuthorizationCode,
+  LINK_MESSAGE,
+  moneriumBearerRequest,
+  refreshAuthorizationToken,
+} from "./adapters/monerium-client.js";
+import { deploySmartAccount, isDeployed, signMessageAsSafe } from "./wallet/candide.js";
 
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
@@ -113,8 +129,21 @@ app.get(
 
 const sandbox = moneriumSandboxEnabled();
 
-/** Never send wallet keys to the client. */
-const publicUser = ({ privateKey, ...u }: User & { [k: string]: any }) => u;
+/** Never send wallet keys, OAuth state, or encrypted tokens to the client. */
+const publicUser = ({ privateKey, moneriumConnect, monerium, ...u }: User & { [k: string]: any }) => ({
+  ...u,
+  ...(monerium
+    ? {
+        monerium: {
+          connectedAt: monerium.connectedAt,
+          profileId: monerium.profileId,
+          profiles: monerium.profiles,
+          ibans: monerium.ibans,
+          addresses: monerium.addresses,
+        },
+      }
+    : {}),
+});
 const withSession = (user: User) => ({ ...publicUser(user), sessionToken: issueSession(user.id) });
 
 function tokenHash(token: string) {
@@ -128,6 +157,84 @@ function issueSession(userId: string) {
   const expiresAt = new Date(nowMs + SECURITY.sessionTtlMs).toISOString();
   store.addSession({ id: randomUUID(), userId, tokenHash: tokenHash(token), createdAt: now, lastUsedAt: now, expiresAt });
   return token;
+}
+
+function base64url(buf: Buffer) {
+  return buf.toString("base64url");
+}
+
+function pkceChallenge(verifier: string) {
+  return base64url(createHash("sha256").update(verifier).digest());
+}
+
+function moneriumTokenKey(): Buffer {
+  if (!MONERIUM.tokenEncryptionKey) {
+    throw new Error("MONERIUM_TOKEN_ENCRYPTION_KEY is required before connecting user Monerium accounts");
+  }
+  return createHash("sha256").update(MONERIUM.tokenEncryptionKey).digest();
+}
+
+function encryptToken(value: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", moneriumTokenKey(), iv);
+  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return [base64url(iv), base64url(cipher.getAuthTag()), base64url(ciphertext)].join(".");
+}
+
+function decryptToken(value: string): string {
+  const [iv64, tag64, ciphertext64] = value.split(".");
+  const decipher = createDecipheriv("aes-256-gcm", moneriumTokenKey(), Buffer.from(iv64, "base64url"));
+  decipher.setAuthTag(Buffer.from(tag64, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(ciphertext64, "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
+}
+
+async function moneriumAccessToken(user: User): Promise<string> {
+  if (!user.monerium?.accessTokenEnc) throw new Error("Monerium account is not connected");
+  if (
+    user.monerium.refreshTokenEnc &&
+    user.monerium.expiresAt &&
+    Date.now() > Date.parse(user.monerium.expiresAt) - 60_000
+  ) {
+    const refreshed = await refreshAuthorizationToken(
+      {
+        baseUrl: MONERIUM.baseUrl,
+        clientId: MONERIUM.clientId,
+        clientSecret: MONERIUM.clientSecret,
+      },
+      decryptToken(user.monerium.refreshTokenEnc),
+    );
+    const next = store.updateUser(user.id, {
+      monerium: {
+        ...user.monerium,
+        accessTokenEnc: encryptToken(refreshed.access_token),
+        refreshTokenEnc: refreshed.refresh_token
+          ? encryptToken(refreshed.refresh_token)
+          : user.monerium.refreshTokenEnc,
+        expiresAt: refreshed.expires_in
+          ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
+          : user.monerium.expiresAt,
+      },
+    });
+    return decryptToken(next.monerium!.accessTokenEnc!);
+  }
+  return decryptToken(user.monerium.accessTokenEnc);
+}
+
+async function readMoneriumAccountSnapshot(user: User, accessToken?: string) {
+  accessToken ??= await moneriumAccessToken(user);
+  const [context, profileRes, ibanRes, addressRes] = await Promise.all([
+    moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", "/auth/context"),
+    moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", "/profiles"),
+    moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", "/ibans"),
+    moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", "/addresses"),
+  ]);
+  const profiles = Array.isArray(profileRes) ? profileRes : (profileRes?.profiles ?? []);
+  const ibans = Array.isArray(ibanRes) ? ibanRes : (ibanRes?.ibans ?? []);
+  const addresses = Array.isArray(addressRes) ? addressRes : (addressRes?.addresses ?? []);
+  return { context, profiles, ibans, addresses };
 }
 
 function bearerToken(req: express.Request): string | undefined {
@@ -300,6 +407,184 @@ app.post(
     });
     const balanceEur = await vaultBalance(updated.address).catch(() => 0);
     res.json({ ...publicUser(updated), balanceEur });
+  }),
+);
+
+app.post(
+  "/api/users/:id/monerium/connect/start",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!MONERIUM.clientId || !MONERIUM.clientSecret) {
+      return res.status(503).json({ error: "Monerium OAuth client is not configured" });
+    }
+    if (!MONERIUM.tokenEncryptionKey) {
+      return res.status(503).json({ error: "Monerium token encryption key is not configured" });
+    }
+    const state = randomBytes(24).toString("base64url");
+    const codeVerifier = randomBytes(48).toString("base64url");
+    const redirectUri = MONERIUM.redirectUri;
+    store.updateUser(user.id, {
+      kyc: { ...user.kyc, provider: "monerium", onboardingPath: "existing_monerium" },
+      funding: {
+        ...(user.funding ?? { mode: "sandbox", status: "kyc_pending" as const }),
+        status: "kyc_pending" as const,
+        detail: "connect existing Monerium account",
+      },
+      moneriumConnect: {
+        state,
+        codeVerifier,
+        redirectUri,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: MONERIUM.clientId,
+      redirect_uri: redirectUri,
+      state,
+      code_challenge: pkceChallenge(codeVerifier),
+      code_challenge_method: "S256",
+    });
+    res.status(201).json({ redirectUrl: `${MONERIUM.authUrl}?${params}` });
+  }),
+);
+
+app.get(
+  "/api/monerium/oauth/callback",
+  wrap(async (req, res) => {
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const code = typeof req.query.code === "string" ? req.query.code : "";
+    if (!state || !code) return res.status(400).json({ error: "state and code required" });
+    const user = store.users.find((u) => u.moneriumConnect?.state === state);
+    if (!user?.moneriumConnect) return res.status(400).json({ error: "unknown or expired OAuth state" });
+    if (Date.now() - Date.parse(user.moneriumConnect.createdAt) > 10 * 60_000) {
+      store.updateUser(user.id, { moneriumConnect: undefined });
+      return res.status(410).json({ error: "OAuth state expired; start Monerium connect again" });
+    }
+
+    const token = await exchangeAuthorizationCode(
+      {
+        baseUrl: MONERIUM.baseUrl,
+        clientId: MONERIUM.clientId,
+        clientSecret: MONERIUM.clientSecret,
+      },
+      {
+        code,
+        codeVerifier: user.moneriumConnect.codeVerifier,
+        redirectUri: user.moneriumConnect.redirectUri,
+      },
+    );
+    const snapshot = await readMoneriumAccountSnapshot(user, token.access_token);
+    const firstProfile = snapshot.profiles[0];
+    store.updateUser(user.id, {
+      moneriumConnect: undefined,
+      monerium: {
+        connectedAt: new Date().toISOString(),
+        profileId: firstProfile?.id,
+        accessTokenEnc: encryptToken(token.access_token),
+        refreshTokenEnc: token.refresh_token ? encryptToken(token.refresh_token) : undefined,
+        expiresAt: token.expires_in
+          ? new Date(Date.now() + token.expires_in * 1000).toISOString()
+          : undefined,
+        profiles: snapshot.profiles,
+        ibans: snapshot.ibans,
+        addresses: snapshot.addresses,
+      },
+      funding: {
+        ...(user.funding ?? { mode: "sandbox", status: "kyc_pending" as const }),
+        status: "kyc_pending" as const,
+        detail: "select a Monerium profile and activate an app IBAN",
+      },
+    });
+    res.redirect("/?monerium=connected");
+  }),
+);
+
+app.get(
+  "/api/users/:id/monerium/accounts",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const snapshot = await readMoneriumAccountSnapshot(user);
+    const updated = store.updateUser(user.id, {
+      monerium: { ...user.monerium!, ...snapshot },
+    });
+    res.json(publicUser(updated).monerium);
+  }),
+);
+
+app.post(
+  "/api/users/:id/monerium/activate",
+  wrap(async (req, res) => {
+    let user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!user.privateKey) return res.status(409).json({ error: "user has no wallet key for address linking" });
+    const accessToken = await moneriumAccessToken(user);
+    const profileId = typeof req.body?.profileId === "string" ? req.body.profileId : user.monerium?.profileId;
+
+    if (!(await isDeployed(user.address))) {
+      store.updateUser(user.id, {
+        funding: { mode: "sandbox", status: "provisioning", detail: "deploying smart wallet for Monerium" },
+      });
+      const opHash = await deploySmartAccount(user.privateKey);
+      user = store.updateUser(user.id, {
+        wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
+      });
+    }
+
+    const signature = await signMessageAsSafe(user.privateKey, user.address, LINK_MESSAGE);
+    await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/addresses", {
+      address: user.address,
+      signature,
+      chain: MONERIUM.chain,
+      message: LINK_MESSAGE,
+      ...(profileId ? { profile: profileId } : {}),
+    });
+    await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/ibans", {
+      address: user.address,
+      chain: MONERIUM.chain,
+    });
+    const snapshot = await readMoneriumAccountSnapshot(user, accessToken);
+    const iban = snapshot.ibans.find(
+      (i: any) => String(i.address ?? "").toLowerCase() === user.address.toLowerCase() && i.iban,
+    )?.iban;
+    const updated = store.updateUser(user.id, {
+      iban: iban ?? "",
+      kycStatus: iban ? "approved" : user.kycStatus,
+      kyc: {
+        provider: "monerium",
+        onboardingPath: "existing_monerium",
+        checkedAt: iban ? new Date().toISOString() : undefined,
+      },
+      funding: {
+        mode: "sandbox",
+        status: iban ? "active" : "iban_pending",
+        moneriumProfileId: profileId,
+        detail: iban ? undefined : "Monerium IBAN requested; waiting for activation",
+      },
+      monerium: { ...user.monerium!, profileId, ...snapshot },
+    });
+    const balanceEur = await vaultBalance(updated.address).catch(() => 0);
+    res.json({ ...publicUser(updated), balanceEur });
+  }),
+);
+
+app.delete(
+  "/api/users/:id/monerium/connect",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const updated = store.updateUser(user.id, {
+      moneriumConnect: undefined,
+      monerium: undefined,
+      funding: { ...(user.funding ?? { mode: "sandbox", status: "kyc_pending" as const }), status: "kyc_pending" as const },
+    });
+    res.json(publicUser(updated));
   }),
 );
 
@@ -674,7 +959,7 @@ app.post(
     const t = store.findTransfer(req.params.id);
     if (!t) return res.status(404).json({ error: "transfer not found" });
     if (!requireUserSession(req, res, t.userId)) return;
-    res.json(await refreshPayout(t));
+    res.json(await refreshPayout(t, { timeoutMs: 0 }));
   }),
 );
 
@@ -851,6 +1136,16 @@ sweepStrandedTransfers()
   .then((n) => n && console.log(`FP3 sweep: compensated ${n} stranded transfer(s)`))
   .catch((e) => console.error(`FP3 sweep failed: ${e?.message ?? e}`));
 setInterval(() => sweepStrandedTransfers().catch(() => {}), 5 * 60_000).unref();
+sweepAnchorPayouts()
+  .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
+  .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`));
+setInterval(
+  () =>
+    sweepAnchorPayouts()
+      .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
+      .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`)),
+  30_000,
+).unref();
 
 // Reconciler: log-only, never repairs. Drift between Monerium's ledger and
 // the local vault should be loud rather than discovered later by a user
