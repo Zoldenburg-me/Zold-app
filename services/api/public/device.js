@@ -54,9 +54,14 @@ const concat = (...arrs) => {
  * the recipient the user actually entered. Signing only proceeds when this
  * matches the server's — so a server that swapped the IBAN/VPA/phone in the
  * signed terms is caught here, before the passkey ever unlocks the key.
+ * Covers the recipient NAME as well as the account identifier: on the cash rail
+ * the name is what the anchor is told and what the collector presents with ID,
+ * so leaving it out left the field that decides who gets the money unsigned.
+ *
  * Must stay byte-identical to destinationCommitment() in chain.ts.
  */
 export function destinationCommitment(rail, target) {
+  const name = (target.name ?? "").trim().replace(/\s+/g, " ").toUpperCase();
   let preimage;
   if (rail === "sepa") {
     preimage = `sepa|iban=${(target.iban ?? "").replace(/\s/g, "").toUpperCase()}`;
@@ -65,7 +70,7 @@ export function destinationCommitment(rail, target) {
   } else {
     preimage = `cash|phone=${(target.phone ?? "").trim()}`;
   }
-  return bytesToHex(keccak_256(new TextEncoder().encode(preimage)));
+  return bytesToHex(keccak_256(new TextEncoder().encode(`${preimage}|name=${name}`)));
 }
 
 /* ---------- EIP-712 ---------- */
