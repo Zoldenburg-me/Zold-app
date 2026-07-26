@@ -124,7 +124,15 @@ export class MoneriumClient {
   }
 
   getOrder(orderId: string) {
-    return this.request<MoneriumOrder>("GET", `/orders/${orderId}`);
+    // This id reaches us from a webhook body and lands in a request path on an
+    // authenticated connection, so its shape is checked rather than trusted:
+    // `../`, `?` and `#` would retarget the call somewhere else in Monerium's
+    // API. Rejected as a 4xx so the caller treats it as a settled "no such
+    // order" rather than a transient failure to retry.
+    if (!/^[A-Za-z0-9._~-]{1,128}$/.test(orderId)) {
+      throw new MoneriumApiError(`malformed Monerium order id: ${orderId.slice(0, 40)}`, 400);
+    }
+    return this.request<MoneriumOrder>("GET", `/orders/${encodeURIComponent(orderId)}`);
   }
 
   /**

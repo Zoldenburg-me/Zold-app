@@ -217,6 +217,51 @@ can un-pause). deploy.ts transfers ownership after wiring roles;
 TIMELOCK_DELAY_SECONDS / TIMELOCK_THRESHOLD configure it. Still open:
 tiered/KYC-risk caps (vs global daily cap), Bebop executable quotes to
 replace the mock rate.
+Hardening pass (July 2026, branch claude/code-vulnerability-review-drgsst):
+- AUTHORIZE RACE — was a real double-spend. Everything in
+  POST /api/transfers/:id/authorize up to the first `await` runs synchronously,
+  so two parallel submissions of ONE device signature both cleared the
+  `state === "CREATED"` check. The vault rejected the loser's duplicate
+  transferId, that revert took the FP3 path, and compensation re-credited the
+  sender (local RPC) while the winner completed the payout — the shared txs
+  array already held the winner's `vault.debit`. Now store.claimAuthorization()
+  claims the submission synchronously (nothing yields between read and write),
+  and failAndCompensate never refunds a "duplicate transfer" revert — that is
+  MANUAL_REVIEW. npm run authorize:test.
+- Dev-only defaults stopped keying off the API host alone: LOOKS_LOCAL = loopback
+  API + local RPC + chain 31337. A reverse proxy to 127.0.0.1:3000 passed the old
+  test, so a hosted deploy that forgot NODE_ENV=production served simulated SEPA
+  deposits, self-serve KYC approval and internal error text. The simulate routes
+  additionally require a loopback socket with no forwarding headers.
+- The API can hold real operator keys at last: ORCHESTRATOR_KEY / RAMP_KEY /
+  DEPLOYER_KEY (DEPLOY_*_KEY accepted too). Only deploy.ts read keys from the env
+  before, so the Amoy path meant hardhat's published keys holding ramp +
+  orchestrator — and the ramp role can bind a payment authorizer to any account
+  that has not bound one yet, so anyone could claim a new user's account and
+  spend it. FP4 was worth nothing in that configuration.
+- Passkey re-registration now needs a step-up from the CURRENT credential (a
+  stolen session token was otherwise permanent account access, silently
+  replacing the real passkey); WebAuthn challenges are bound to the account; a
+  step-up must carry the UV flag, and the client asks for
+  userVerification: "required". npm run webauthn:selftest is 9/9.
+- destinationCommitment covers the recipient NAME as well as the account
+  identifier — on the cash rail the name is the payout identity. chain.ts and
+  public/device.js in lockstep; this invalidates signatures issued before it.
+- Monerium order ids are shape-checked and encoded before they land in the
+  request path (they arrive in a webhook body, unauthenticated when no
+  MONERIUM_WEBHOOK_SECRET is set).
+- Smaller: per-credential rate bucket on passkey login, TRUSTED_PROXY_HOPS so
+  limits key on the real client IP instead of one shared proxy address, session
+  pruning + throttled lastUsedAt writes (the store was re-serialised on every
+  authenticated request), AdminTimelock.execute counts only CURRENT owners'
+  confirmations, and the UI escapes recipient/partner strings and refuses
+  non-http(s) anchor links.
+NOT verified in that pass: no solc in the review sandbox, so npm run compile,
+test:contracts and e2e did not run — typecheck, webauthn:selftest and
+authorize:test did. Still open from the same review: KYC approval via a
+connected Monerium account is delegated trust with no identity match (now at
+least auditable via kyc.applicantId), and db.json still holds privateKey +
+senderProfile PII in plaintext.
 Launch gate: local demos fine; NOT safe hosted, with real funds, or claiming
 payout finality until FP1-FP4 done.
 

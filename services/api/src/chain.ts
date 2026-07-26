@@ -119,17 +119,25 @@ export async function writeAndWait(
  * that later swaps the recipient produces a payout whose recomputed commitment
  * no longer matches what the user signed, and the vault debit reverts.
  *
+ * The recipient NAME is part of it, not just the account identifier. On the cash
+ * rail the name is the payout identity — it is what the anchor is told and what
+ * the person presents with ID at the counter — so a commitment over the phone
+ * number alone left the one field that decides who collects the money outside
+ * what the device signed.
+ *
  * The preimage is canonical per rail so the browser, the API, and the
  * orchestrator all derive the identical value from the same recipient:
- *   cash → "cash|phone=<phone>"           (trimmed)
- *   sepa → "sepa|iban=<IBAN>"             (whitespace-stripped, upper-cased)
- *   upi  → "upi|vpa=<vpa>"                (trimmed, lower-cased)
+ *   cash → "cash|phone=<phone>|name=<NAME>"  (phone trimmed)
+ *   sepa → "sepa|iban=<IBAN>|name=<NAME>"    (whitespace-stripped, upper-cased)
+ *   upi  → "upi|vpa=<vpa>|name=<NAME>"       (vpa trimmed, lower-cased)
+ * where <NAME> is trimmed, inner whitespace collapsed, upper-cased.
  * Keep this in lockstep with destinationCommitment() in public/device.js.
  */
 export function destinationCommitment(
   rail: PayoutRail,
-  target: { phone?: string; iban?: string; vpa?: string },
+  target: { phone?: string; iban?: string; vpa?: string; name?: string },
 ): `0x${string}` {
+  const name = (target.name ?? "").trim().replace(/\s+/g, " ").toUpperCase();
   let preimage: string;
   if (rail === "sepa") {
     preimage = `sepa|iban=${(target.iban ?? "").replace(/\s/g, "").toUpperCase()}`;
@@ -138,7 +146,7 @@ export function destinationCommitment(
   } else {
     preimage = `cash|phone=${(target.phone ?? "").trim()}`;
   }
-  return keccak256(toHex(preimage));
+  return keccak256(toHex(`${preimage}|name=${name}`));
 }
 
 /**
