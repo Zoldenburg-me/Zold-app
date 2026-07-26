@@ -337,10 +337,10 @@
         <table class="ptable">
           <thead><tr><th scope="col">€100 to Nairobi</th><th scope="col">Amount</th></tr></thead>
           <tbody>
-            <tr><td>Real exchange rate, EUR → KES</td><td>139.8600</td></tr>
-            <tr><td>Our margin, 0.50%</td><td>−0.6993</td></tr>
+            <tr><td>Real exchange rate, EUR → KES</td><td id="p-mid">—</td></tr>
+            <tr><td>Our margin, 0.50%</td><td id="p-margin">—</td></tr>
             <tr><td>Fee</td><td>€0.99</td></tr>
-            <tr><td>Joseph collects</td><td>KES 13,778.30</td></tr>
+            <tr><td>Joseph collects</td><td id="p-out">—</td></tr>
           </tbody>
         </table>
       </div>
@@ -445,7 +445,12 @@
 
 <script>
   (function () {
-    var MID = { cash: 1.08 * 129.5, sepa: 1, upi: 1.08 * 87.2 };
+    /* Placeholder only — replaced by the live mid from /api/rates as soon as
+       it answers. These used to BE the rates, hardcoded, under a heading that
+       said "Real exchange rate"; by July 2026 the EUR->INR one was 14% off the
+       market. Until the fetch lands the figures are labelled indicative. */
+    var MID = { cash: 147.53, sepa: 1, upi: 109.87 };
+    var LIVE = false;
     var FEE = { cash: 0.99, sepa: 0.99, upi: 0.29 };
     var CUR = { cash: "KES", sepa: "EUR", upi: "INR" };
     var WHO = { cash: "Joseph collects", sepa: "Elena receives", upi: "The shop is paid" };
@@ -472,11 +477,20 @@
         $("r-spread").textContent = "− 0.00";
         $("r-rate").textContent = "1.0000";
       } else {
-        $("r-mid").textContent = "1 EUR = " + fmt(mid, 4) + " " + CUR[rail];
+        $("r-mid").textContent = "1 EUR = " + fmt(mid, 4) + " " + CUR[rail]
+          + (LIVE ? "" : " (indicative)");
         $("r-spread").textContent = "− " + fmt(mid * SPREAD, 4);
         $("r-rate").textContent = fmt(allIn, 4);
       }
       $("r-fee").textContent = "€" + fee.toFixed(2);
+      /* The worked example lower down quotes the same numbers rather than its
+         own frozen copy — it used to hardcode 139.8600 / KES 13,778.30. */
+      if ($("p-mid")) {
+        var pMid = MID.cash * (1 + drift);
+        $("p-mid").textContent = fmt(pMid, 4) + (LIVE ? "" : " (indicative)");
+        $("p-margin").textContent = "−" + fmt(pMid * SPREAD, 4);
+        $("p-out").textContent = "KES " + fmt((100 - FEE.cash) * pMid * (1 - SPREAD), 2);
+      }
       $("r-outlabel").textContent = WHO[rail];
       $("r-out").textContent = CUR[rail] + " " + fmt(out, 2);
       $("to-label").textContent = TO[rail];
@@ -501,6 +515,23 @@
     }
 
     render();
+
+    /* Replace the placeholders with the same mid the quote engine uses. If it
+       cannot be reached the figures simply stay marked "indicative" — a page
+       that silently shows a made-up rate under the words "Real exchange rate"
+       is the bug this whole endpoint exists to stop. */
+    fetch("/api/rates")
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error(String(r.status))); })
+      .then(function (d) {
+        if (!d || !d.eur || !d.eur.KES || !d.eur.INR) return;
+        MID.cash = d.eur.KES;
+        MID.upi = d.eur.INR;
+        LIVE = true;
+        var stamp = $("rate-asof");
+        if (stamp && d.asOf) stamp.textContent = "mid-market, " + d.asOf;
+        render();
+      })
+      .catch(function () { /* keep the indicative label */ });
   })();
 </script>
 

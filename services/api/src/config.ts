@@ -320,12 +320,30 @@ export function loadAbi(contract: string): any[] {
   return JSON.parse(readFileSync(p, "utf8")).abi;
 }
 
+// Live mid-rate feed. Defaults to a free, key-less provider that publishes all
+// three currencies we need against EUR. See rates.ts for why there is no stale
+// fallback.
+export const RATES = {
+  URL: process.env.TRANSF_RATES_URL ?? "https://open.er-api.com/v6/latest/EUR",
+  TTL_MS: Number(process.env.TRANSF_RATES_TTL_MS ?? 10 * 60 * 1000),
+  TIMEOUT_MS: Number(process.env.TRANSF_RATES_TIMEOUT_MS ?? 8_000),
+};
+
 // FX configuration for the launch corridor (EUR -> KES cash pickup).
-// Mid rates are a mock oracle; in production: Chainlink/Pyth FX feeds.
+//
+// The mid rates are NOT here any more — they come from rates.ts, because the
+// constants that used to live here (EURUSD 1.08, USDINR 87.2, USDKES 129.5)
+// silently went 5-14% stale while the receipt claimed a 0.50% margin over "the
+// real exchange rate". What stays here is our own pricing, which is genuinely
+// ours to set.
+//
+// EUR->USD is deliberately absent too: that leg is whatever the on-chain
+// swapper will really execute at, read from the chain in fx.ts. It used to be
+// hardcoded as 1.08 in THREE places (here twice, plus deploy.ts) with nothing
+// keeping them equal, and FP5's binding check compared only two of them — so
+// editing the quote's copy alone would have promised a rate the swap could not
+// deliver, silently.
 export const FX = {
-  EURUSD_MID: 1.08,
-  USDKES_MID: 129.5,
-  USDINR_MID: 87.2,
   SPREAD_BPS: 50, // our FX spread
   FIXED_FEE_EUR: 0.99,
   // UPI is a point-of-sale rail — small fixed fee, same spread.
@@ -335,6 +353,4 @@ export const FX = {
   // FP5: max on-chain rate drift between quote and execution before the
   // transfer is rejected and refunded (bps).
   QUOTE_BINDING_BPS: 50,
-  // Swapper rate (tokenOut 6dp per 1e18 tokenIn) the quote assumes.
-  swapRate: () => Math.round(1.08 * 1e6),
 };
