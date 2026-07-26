@@ -622,6 +622,19 @@ const deviceLib = new Promise((resolve) => { window.__deviceLibReady = resolve; 
 let sessionToken = localStorage.getItem("zoll-session") || null;
 
 const fmt = (n, dp = 2) => Number(n).toLocaleString("en", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+/* Anything that reaches an innerHTML template goes through this first. Some of
+   it is typed by the user (recipient names), and some arrives from a payout
+   partner (anchor error text, anchor URLs) — neither is markup. */
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/* Only ever render a link the partner gave us if it is really a web URL —
+   "javascript:" in an href is a script, not a destination. */
+const safeUrl = (u) => {
+  try {
+    const parsed = new URL(String(u), location.origin);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
+  } catch { return null; }
+};
 const kycApproved = (u = user) => (u?.kycStatus || "approved") === "approved";
 const kycCopy = (status = "pending", u = user) => {
   if (u?.kyc?.onboardingPath === "existing_monerium") {
@@ -867,7 +880,9 @@ async function passkeyStepUp() {
     publicKey: {
       challenge: b64urlToBytes(challenge),
       allowCredentials: [{ type: "public-key", id: b64urlToBytes(credId()) }],
-      userVerification: "preferred",
+      // A step-up gates binding a spending key: the server now requires the UV
+      // flag, so ask the authenticator to actually verify the human.
+      userVerification: "required",
       timeout: 60000,
     },
   });
@@ -1181,8 +1196,8 @@ function stepEl(title, detail, icon) {
   const el = document.createElement("div");
   el.className = "tstep";
   el.innerHTML = `
-    <div class="rail2"><div class="node">${icon}</div><div class="line"></div></div>
-    <div class="body"><div class="t">${title}</div><div class="d">${detail}</div></div>`;
+    <div class="rail2"><div class="node">${esc(icon)}</div><div class="line"></div></div>
+    <div class="body"><div class="t">${esc(title)}</div><div class="d">${esc(detail)}</div></div>`;
   return el;
 }
 
@@ -1227,19 +1242,19 @@ function revealRefund(t) {
     $("refund-title").textContent = "Refunded — nothing was sent";
     $("refund-title").style.color = "var(--muted)";
     $("refund-note").innerHTML =
-      `€${amt} is back in your account.<br><span style="color:var(--muted)">Why: ${reason}</span>` +
+      `€${esc(amt)} is back in your account.<br><span style="color:var(--muted)">Why: ${esc(reason)}</span>` +
       (t.refund && t.refund.deductions && t.refund.deductions !== "none"
-        ? `<br><span style="color:var(--muted)">Deductions: ${t.refund.deductions}</span>` : "");
+        ? `<br><span style="color:var(--muted)">Deductions: ${esc(t.refund.deductions)}</span>` : "");
   } else if (t.state === "MANUAL_REVIEW") {
     $("refund-title").textContent = "Under review";
     $("refund-title").style.color = "var(--amber)";
     $("refund-note").innerHTML =
       `This transfer needs manual review before it settles — a payment may already be in flight, so it was not auto-refunded.` +
-      `<br><span style="color:var(--muted)">${reason}</span>`;
+      `<br><span style="color:var(--muted)">${esc(reason)}</span>`;
   } else {
     $("refund-title").textContent = "Payout failed";
     $("refund-title").style.color = "var(--red)";
-    $("refund-note").innerHTML = `<span style="color:var(--muted)">${reason}</span>`;
+    $("refund-note").innerHTML = `<span style="color:var(--muted)">${esc(reason)}</span>`;
   }
   $("btn-again").classList.remove("hidden");
   $("refund-box").scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -1256,13 +1271,15 @@ function revealPickup(t) {
   if (t.state === "PAYOUT_FUNDED") note = `${t.recipientName}'s payout is funded and waiting for MoneyGram confirmation · gets `;
   $("p-note-text").textContent = note;
   $("p-links").innerHTML = "";
-  if (p.interactiveUrl) {
+  const anchorPage = safeUrl(p.interactiveUrl);
+  if (anchorPage) {
     $("p-links").insertAdjacentHTML("beforeend",
-      ` · <a href="${p.interactiveUrl}" target="_blank" rel="noreferrer" style="color:var(--amber)">anchor page ↗</a>`);
+      ` · <a href="${esc(anchorPage)}" target="_blank" rel="noreferrer" style="color:var(--amber)">anchor page ↗</a>`);
   }
-  if (p.moreInfoUrl) {
+  const moreInfo = safeUrl(p.moreInfoUrl);
+  if (moreInfo) {
     $("p-links").insertAdjacentHTML("beforeend",
-      ` · <a href="${p.moreInfoUrl}" target="_blank" rel="noreferrer" style="color:var(--amber)">details ↗</a>`);
+      ` · <a href="${esc(moreInfo)}" target="_blank" rel="noreferrer" style="color:var(--amber)">details ↗</a>`);
   }
   $("btn-refresh-payout").classList.toggle("hidden", !p.anchorTransactionId);
   $("btn-pickup").classList.toggle("hidden", !!p.anchorTransactionId);
@@ -1334,6 +1351,7 @@ async function pollSepaTransfer(id) {
       phone: recipient.recipientPhone,
       iban: recipient.recipientIban,
       vpa: recipient.recipientVpa,
+      name: recipient.recipientName,
     });
     if (created.authorization.typedData.message.destination.toLowerCase() !== expectedDestination.toLowerCase()) {
       throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
@@ -1421,10 +1439,10 @@ function histRow(t) {
   const sepa = t.rail === "sepa";
   const upi = t.rail === "upi";
   const sub = upi
-    ? `${t.recipientVpa || ""} · ₹${fmt(t.receiveInr)}${t.upi ? ` · UTR ${t.upi.utr}` : ""}`
+    ? `${esc(t.recipientVpa || "")} · ₹${fmt(t.receiveInr)}${t.upi ? ` · UTR ${esc(t.upi.utr)}` : ""}`
     : sepa
-      ? `${(t.recipientIban || "").slice(0, 9)}… · €${fmt(t.receiveEur)}`
-      : `ref ${t.pickup ? t.pickup.referenceCode : "—"} · KES ${fmt(t.receiveKes)}`;
+      ? `${esc((t.recipientIban || "").slice(0, 9))}… · €${fmt(t.receiveEur)}`
+      : `ref ${esc(t.pickup ? t.pickup.referenceCode : "—")} · KES ${fmt(t.receiveKes)}`;
   const status = paid ? "PAID" : t.state === "REFUNDED" ? "REFUNDED" : t.state === "FAILED" ? "FAILED"
     : t.state === "PAYOUT_DETAILS_PENDING" ? "DETAILS PENDING"
     : t.state === "PAYOUT_FUNDING_PENDING" ? "FUNDING PENDING"
@@ -1435,7 +1453,7 @@ function histRow(t) {
   return `
     <div class="hic">${upi ? "🇮🇳" : sepa ? "🏦" : "🇰🇪"}</div>
     <div class="hmain">
-      <div class="hn">${t.recipientName}</div>
+      <div class="hn">${esc(t.recipientName)}</div>
       <div class="hs">${sub}</div>
     </div>
     <div>
