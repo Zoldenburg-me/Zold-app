@@ -26,6 +26,7 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { CCTP, STELLAR } from "../config.js";
+import { anchorPayoutReadiness } from "../stellar/anchor.js";
 
 const TOKEN_MESSENGER_ABI = [
   {
@@ -144,6 +145,23 @@ export async function bridgeUsdcToStellar(
 
   if (plan.mode !== "live") return plan;
   if (!CCTP.burnerKey) throw new Error("CCTP_LIVE=1 requires CCTP_BURNER_KEY");
+
+  // Pre-flight before the irreversible step. A burn destroys USDC on the
+  // source chain; if the Stellar recipient has no trustline for the asset the
+  // mint cannot land and the money is simply gone. Stellar will not create the
+  // trustline for us, so refusing here is the only safe answer.
+  if (STELLAR.anchorDomain) {
+    const readiness = await anchorPayoutReadiness(
+      STELLAR.anchorDomain,
+      STELLAR.anchorAsset,
+      recipientStellar,
+    );
+    if (!readiness.ready) {
+      throw new Error(
+        `refusing to burn USDC: the Stellar recipient cannot receive it — ${readiness.problems.join("; ")}`,
+      );
+    }
+  }
   if (!STELLAR.treasurySecret) throw new Error("CCTP_LIVE=1 requires STELLAR_TREASURY_SECRET to submit mint_and_forward");
 
   // ---- live execution (legs 1 + 2) ----
