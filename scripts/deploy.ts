@@ -1,31 +1,76 @@
 /**
- * Deploys the contract set to the local chain, wires roles, seeds FX
- * inventory, and writes deployments.json for the API.
+ * Deploys the contract set, wires roles, seeds FX inventory, and records the
+ * addresses under this chain's id in deployments.json.
+ *
+ * Chain comes from TRANSF_CHAIN_ID (default 31337 = hardhat). Real keys come
+ * from the environment; the hardhat defaults are refused on any non-local RPC
+ * unless explicitly overridden, so a testnet deploy needs real funded keys.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPublicClient, createWalletClient, http, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { hardhat } from "viem/chains";
+import { defineChain } from "viem";
+import { hardhat, polygon, polygonAmoy } from "viem/chains";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
+const CHAIN_ID = Number(process.env.TRANSF_CHAIN_ID ?? 31337);
+
+const chain = (() => {
+  switch (CHAIN_ID) {
+    case hardhat.id: return hardhat;
+    case polygonAmoy.id: return polygonAmoy;
+    case polygon.id: return polygon;
+    default:
+      return defineChain({
+        id: CHAIN_ID,
+        name: `chain-${CHAIN_ID}`,
+        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+        rpcUrls: { default: { http: [RPC_URL] } },
+      });
+  }
+})();
 
 if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/)/.test(RPC_URL) && process.env.ALLOW_DEV_KEYS_ON_EXTERNAL_RPC !== "1") {
   throw new Error("refusing to deploy hardhat development keys to a non-local RPC");
 }
 
-const KEYS = {
+/** Hardhat's well-known accounts — fine locally, never off it. */
+const DEV_KEYS = {
   deployer: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
   orchestrator: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
   ramp: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
 } as const;
 
-const publicClient = createPublicClient({ chain: hardhat, transport: http(RPC_URL) });
+function key(name: "deployer" | "orchestrator" | "ramp"): `0x${string}` {
+  const fromEnv = process.env[`DEPLOY_${name.toUpperCase()}_KEY`];
+  if (fromEnv) {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(fromEnv)) {
+      throw new Error(`DEPLOY_${name.toUpperCase()}_KEY is not a 32-byte hex private key`);
+    }
+    return fromEnv as `0x${string}`;
+  }
+  if (CHAIN_ID !== hardhat.id) {
+    throw new Error(
+      `deploying to chain ${CHAIN_ID} needs a real DEPLOY_${name.toUpperCase()}_KEY — ` +
+        `the hardhat development keys are public and must not hold funds`,
+    );
+  }
+  return DEV_KEYS[name];
+}
+
+const KEYS = {
+  deployer: key("deployer"),
+  orchestrator: key("orchestrator"),
+  ramp: key("ramp"),
+} as const;
+
+const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
 const deployer = createWalletClient({
   account: privateKeyToAccount(KEYS.deployer),
-  chain: hardhat,
+  chain,
   transport: http(RPC_URL),
 });
 const orchestratorAddr = privateKeyToAccount(KEYS.orchestrator).address;
@@ -70,6 +115,14 @@ const SWAP_INVENTORY_EURE = parseUnits("1000000", 18);
 const SWAP_INVENTORY_USDC = parseUnits("1000000", 6);
 
 async function main() {
+  // Deploying to the wrong chain wastes gas and produces addresses the API will
+  // silently use with a mismatched EIP-712 domain. Check before spending.
+  const actual = await publicClient.getChainId();
+  if (actual !== CHAIN_ID) {
+    throw new Error(`RPC at ${RPC_URL} is chain ${actual}, but TRANSF_CHAIN_ID is ${CHAIN_ID}`);
+  }
+  console.log(`deploying to chain ${CHAIN_ID} via ${RPC_URL}`);
+
   const eure = await deploy("MockToken", ["Monerium EUR emoney (mock)", "EURe", 18]);
   const usdc = await deploy("MockToken", ["USD Coin (mock)", "USDC", 6]);
   const vault = await deploy("RemitVault", [eure, DAILY_CAP_EUR]);
@@ -106,12 +159,22 @@ async function main() {
   await call(bridge, "BridgeEscrow", "transferOwnership", [timelock]);
 
   const out = { eure, usdc, vault, swapper, bridge, timelock };
-  writeFileSync(path.join(ROOT, "deployments.json"), JSON.stringify(out, null, 2));
+  const file = path.join(ROOT, "deployments.json");
+  let all: Record<string, unknown> = {};
+  try {
+    const existing = JSON.parse(readFileSync(file, "utf8"));
+    // Migrate a legacy flat file into its chain slot rather than dropping it.
+    all = typeof existing.vault === "string" ? { "31337": existing } : existing;
+  } catch {
+    all = {};
+  }
+  all[String(CHAIN_ID)] = out;
+  writeFileSync(file, JSON.stringify(all, null, 2) + "\n");
   console.log(
     `\nroles wired, swapper seeded with 1,000,000 EURe and 1,000,000 USDC` +
       `\nadmin ownership -> AdminTimelock ${timelock} (${TIMELOCK_THRESHOLD}-of-${timelockOwners.length}, ${TIMELOCK_DELAY}s delay)`,
   );
-  console.log("wrote deployments.json");
+  console.log(`wrote deployments.json entry for chain ${CHAIN_ID}`);
 }
 
 main().catch((e) => {
