@@ -1,5 +1,5 @@
-/** Minimal Hardhat config — used only for compiling and the local dev chain. */
-module.exports = {
+/** Minimal Hardhat config, used only for compiling and the local dev chain. */
+export default {
   solidity: {
     version: "0.8.24",
     settings: { optimizer: { enabled: true, runs: 200 } },
@@ -10,6 +10,6 @@ module.exports = {
     cache: "./contracts/cache",
   },
   networks: {
-    hardhat: { chainId: 31337 },
+    hardhat: { type: "edr-simulated", chainId: 31337 },
   },
 };
