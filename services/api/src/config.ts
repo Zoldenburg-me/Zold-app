@@ -320,6 +320,31 @@ export function loadAbi(contract: string): any[] {
   return JSON.parse(readFileSync(p, "utf8")).abi;
 }
 
+/**
+ * Where the EURe<->USDC leg gets its liquidity.
+ *
+ * "fx-swapper" is the local mock: our own inventory at an owner-set rate, fine
+ * for demos and the only thing that works on hardhat. "rfq" is just-in-time
+ * liquidity from a market maker (Bebop), where the price is an executable
+ * quote rather than a number we chose — which is the point, because a rate you
+ * cannot actually trade at is a promise you cannot keep.
+ *
+ * BEBOP_API_KEY is optional: Bebop's public RFQ endpoint works without one,
+ * but a partner key gets better pricing and higher rate limits.
+ */
+export const LIQUIDITY = {
+  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq",
+  // Bebop's chain slug, e.g. "polygon", "base", "ethereum".
+  BEBOP_CHAIN: process.env.BEBOP_CHAIN ?? "polygon",
+  BEBOP_BASE_URL: process.env.BEBOP_BASE_URL ?? "https://api.bebop.xyz",
+  BEBOP_API_KEY: process.env.BEBOP_API_KEY ?? "",
+  BEBOP_TIMEOUT_MS: Number(process.env.BEBOP_TIMEOUT_MS ?? 8_000),
+  /** Nominal EURe size used to probe an indicative rate for receipts. */
+  PROBE_EUR: Number(process.env.LIQUIDITY_PROBE_EUR ?? 100),
+  /** How long an indicative (display-only) rate may be reused. */
+  INDICATIVE_TTL_MS: Number(process.env.LIQUIDITY_INDICATIVE_TTL_MS ?? 60_000),
+};
+
 // Live mid-rate feed. Defaults to a free, key-less provider that publishes all
 // three currencies we need against EUR. See rates.ts for why there is no stale
 // fallback.

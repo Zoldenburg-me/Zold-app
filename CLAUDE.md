@@ -164,6 +164,28 @@
   countries return fxRateEstimated:true and cannot lock), so our KES figure is
   an estimate of THEIR pricing — the authoritative number should come from
   their Quote API once we are a real partner.
+- JIT liquidity seam (July 2026): LIQUIDITY_PROVIDER picks who fills the
+  EURe->USDC leg — `fx-swapper` (our own inventory, owner-set rate, the only
+  option on hardhat) or `rfq` (just-in-time from a market maker via Bebop's
+  PMM RFQ API, built against their documented v3 shape:
+  GET /pmm/{chain}/v3/quote -> buyTokens[addr].{amount,minimumAmount}, expiry,
+  and with gasless=false a ready `tx` we submit). The RFQ path is fail-closed
+  everywhere: maker down / declining / slow / wrong token all REFUSE rather
+  than fall back to our own book, which would price real transfers off a rate
+  we chose while reporting a maker set it.
+  Two rates, deliberately: quote() is firm and per-amount; indicativeRate() is
+  cheap and cached (LIQUIDITY_INDICATIVE_TTL_MS) for receipts, so typing in the
+  amount box is not a quote storm.
+  THE COUPLING THIS FIXED: fx.ts and FP5's assertQuoteRateBinding both read the
+  FxSwapper contract directly, so a deployment switched to RFQ would have kept
+  quoting — and binding against — the local mock's rate. Both now ask
+  liquidityProvider(). liquidity.rfq (maker quote id + tx) is persisted on the
+  transfer because prepare and execute are separate steps; re-quoting at
+  execution would settle at a price the user never saw.
+  npm run jit:test (14 checks, stub Bebop, no chain needed).
+  UNPROVEN: never run against real Bebop — needs a supported chain (not
+  hardhat), real token addresses and one live quote. The execute() path in
+  particular has only been exercised through its guard branches.
 - Known TODOs marked in code: per-transfer FX hedging. (Both earlier items
   are done: passkey assertion verification shipped with FP2, and the
   Monerium webhook no longer trusts its request body — see below.)

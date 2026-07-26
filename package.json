@@ -38,7 +38,8 @@
     "travelrule:test": "MG_ANCHOR_DOMAIN=testanchor.stellar.org tsx scripts/travel-rule-test.ts",
     "stellar:setup": "tsx scripts/stellar-setup.ts",
     "trustline:test": "tsx scripts/trustline-test.ts",
-    "fx:test": "tsx scripts/fx-rates-test.ts"
+    "fx:test": "tsx scripts/fx-rates-test.ts",
+    "jit:test": "tsx scripts/jit-liquidity-test.ts"
   },
   "devDependencies": {
     "@types/express": "^4.17.25",
