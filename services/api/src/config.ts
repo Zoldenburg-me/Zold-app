@@ -35,6 +35,19 @@ export const IS_LOCAL_CHAIN = CHAIN_ID === 31337;
 export const USING_LOCAL_API_HOST = API_HOST === "127.0.0.1" || API_HOST === "localhost" || API_HOST === "::1";
 
 /**
+ * Does this process actually look like a developer laptop?
+ *
+ * A loopback bind alone does NOT mean local: the standard hosted shape is a
+ * reverse proxy on :443 forwarding to 127.0.0.1:3000, so `API_HOST` says
+ * nothing about who can reach the port. Anything that relaxes a control for
+ * "local dev" — simulated deposits, auto-KYC, internal error text — has to see
+ * the whole picture agree: loopback API, local RPC, and the hardhat chain id.
+ * A hosted deploy pointed at a testnet then cannot inherit a dev-only default
+ * by forgetting to set NODE_ENV.
+ */
+export const LOOKS_LOCAL = USING_LOCAL_API_HOST && USING_LOCAL_RPC && IS_LOCAL_CHAIN;
+
+/**
  * Monerium integration. Mock mode by default; sandbox mode activates when
  * client credentials are present (create an app at https://monerium.dev,
  * sandbox environment, and put the credentials in .env).
@@ -72,7 +85,7 @@ export const moneriumSandboxEnabled = () =>
 export const KYC = {
   autoApprove:
     process.env.KYC_AUTO_APPROVE === "1" ||
-    (process.env.KYC_AUTO_APPROVE !== "0" && process.env.NODE_ENV !== "production"),
+    (process.env.KYC_AUTO_APPROVE !== "0" && process.env.NODE_ENV !== "production" && LOOKS_LOCAL),
   /**
    * Shared secret an operator (or a KYC provider's webhook) presents to record
    * a decision. This is the ONLY approval path that survives production: the
@@ -143,10 +156,23 @@ export const anchorModeEnabled = () => Boolean(STELLAR.anchorDomain);
 
 /** FP1/FP2 security posture (red-team fixes). */
 export const SECURITY = {
-  /** Simulation endpoints (mock SEPA deposit, pickup) are dev-only unless
-   *  explicitly re-enabled. */
+  /** Simulation endpoints (mock SEPA deposit, pickup, self-serve KYC review)
+   *  are dev-only unless explicitly re-enabled. Gated on LOOKS_LOCAL rather
+   *  than the API host alone: behind a reverse proxy the old test passed, which
+   *  handed a hosted deploy free EURe and self-approved KYC. */
   allowSimulation:
-    process.env.ALLOW_SIMULATION === "1" || (process.env.NODE_ENV !== "production" && USING_LOCAL_API_HOST),
+    process.env.ALLOW_SIMULATION === "1" || (process.env.NODE_ENV !== "production" && LOOKS_LOCAL),
+  /**
+   * How many reverse proxies sit in front of this process.
+   *
+   * Rate limits key on the client address, and with no proxy configured Express
+   * reports the socket peer — which behind nginx is the proxy itself, so every
+   * caller shares one bucket and a single client can exhaust the limit for
+   * everybody. Set this to the real hop count so the client IP is taken from
+   * the right position in X-Forwarded-For; leaving it 0 keeps the socket peer,
+   * which is correct only when nothing is in front.
+   */
+  trustedProxyHops: Math.max(0, Number(process.env.TRUSTED_PROXY_HOPS ?? 0)),
   /** When a real rail (anchor / Monerium sandbox) fails, fall back to a
    *  simulated payout only if explicitly allowed — otherwise fail closed. */
   allowMockFallback: process.env.ALLOW_MOCK_FALLBACK === "1",
@@ -172,8 +198,9 @@ export const SECURITY = {
   jsonBodyLimit: process.env.JSON_BODY_LIMIT ?? "64kb",
   /** Opaque bearer session lifetime. Default: 24 hours. */
   sessionTtlMs: Number(process.env.SESSION_TTL_MS ?? 24 * 60 * 60 * 1000),
-  /** Keep provider/chain internals out of production API responses. */
-  exposeInternalErrors: process.env.NODE_ENV !== "production",
+  /** Keep provider/chain internals out of hosted API responses — same
+   *  local-only test as the simulation switch, for the same reason. */
+  exposeInternalErrors: process.env.NODE_ENV !== "production" && LOOKS_LOCAL,
 };
 
 if (process.env.NODE_ENV === "production" && moneriumSandboxEnabled() && !SECURITY.moneriumWebhookSecret) {
@@ -182,16 +209,51 @@ if (process.env.NODE_ENV === "production" && moneriumSandboxEnabled() && !SECURI
   );
 }
 
-// Hardhat's well-known dev accounts. On testnet/mainnet these come from a KMS.
-export const KEYS = {
+// Hardhat's well-known dev accounts — public knowledge, fine on 31337 only.
+const DEV_KEYS = {
   deployer: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
   orchestrator: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
   ramp: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
 } as const;
 
-if (!USING_LOCAL_RPC && process.env.ALLOW_DEV_KEYS_ON_EXTERNAL_RPC !== "1") {
-  throw new Error("refusing to use hardhat development keys with a non-local RPC");
+/**
+ * The keys this server signs with, from the environment.
+ *
+ * deploy.ts has always been able to take real keys (DEPLOY_*_KEY) while the
+ * server could not, so the only way to run against a testnet was to let the
+ * hardhat development keys hold the privileged roles. That is not a smaller
+ * version of the same risk: the ramp role may bind a payment authorizer to any
+ * account that has not bound one yet (RemitVault.setAuthorizer), and the
+ * orchestrator role submits debits — with published keys in both, anyone can
+ * claim a new user's account before the user's own device does and spend its
+ * balance. FP4 buys nothing in that configuration.
+ *
+ * Accepts ORCHESTRATOR_KEY / RAMP_KEY / DEPLOYER_KEY, falling back to the
+ * DEPLOY_*_KEY names so one .env serves both the deploy and the server.
+ */
+function operatorKey(role: "deployer" | "orchestrator" | "ramp"): `0x${string}` {
+  const upper = role.toUpperCase();
+  const fromEnv = process.env[`${upper}_KEY`] ?? process.env[`DEPLOY_${upper}_KEY`];
+  if (fromEnv) {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(fromEnv)) {
+      throw new Error(`${upper}_KEY is not a 32-byte hex private key`);
+    }
+    return fromEnv as `0x${string}`;
+  }
+  if (!USING_LOCAL_RPC && process.env.ALLOW_DEV_KEYS_ON_EXTERNAL_RPC !== "1") {
+    throw new Error(
+      `refusing to hold the ${role} role with hardhat's public development key on ${RPC_URL} — ` +
+        `set ${upper}_KEY (or DEPLOY_${upper}_KEY) to a key this deployment actually controls`,
+    );
+  }
+  return DEV_KEYS[role];
 }
+
+export const KEYS = {
+  deployer: operatorKey("deployer"),
+  orchestrator: operatorKey("orchestrator"),
+  ramp: operatorKey("ramp"),
+} as const;
 
 export interface Deployments {
   eure: `0x${string}`;

@@ -94,15 +94,33 @@ assert.equal(reg.key.alg, "ES256");
 console.log("1. registration verifies, COSE key extracted");
 
 // 2. good assertion
-const login = async (count: number, tamper = false, challenge?: string, purpose: "login" | "step_up" = "login") => {
-  const ch = challenge ?? issueChallenge(purpose);
+const login = async (
+  count: number,
+  tamper = false,
+  challenge?: string,
+  purpose: "login" | "step_up" = "login",
+  opts: { flags?: number; binding?: string } = {},
+) => {
+  const ch = challenge ?? issueChallenge(purpose, opts.binding);
   const cdj = clientData("webauthn.get", ch);
-  const ad = authDataBytes(0x01, count);
+  // UP only for login; a step-up must also carry UV (0x04), which is what the
+  // verifier requires for anything that binds a key or moves money.
+  const ad = authDataBytes(opts.flags ?? (purpose === "step_up" ? 0x05 : 0x01), count);
   const data = Buffer.concat([ad, sha256(b64urlToBuf(cdj))]);
   const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, data));
   const der = rawToDer(raw);
   if (tamper) der[der.length - 1] ^= 0xff;
-  return verifyAssertion(bufToB64url(ad), cdj, bufToB64url(der), reg.key, reg.signCount, RP_ID, [ORIGIN], purpose);
+  return verifyAssertion(
+    bufToB64url(ad),
+    cdj,
+    bufToB64url(der),
+    reg.key,
+    reg.signCount,
+    RP_ID,
+    [ORIGIN],
+    purpose,
+    opts.binding,
+  );
 };
 const ok = await login(1);
 assert.equal(ok.signCount, 1);
@@ -152,4 +170,27 @@ console.log("4. unknown challenge rejected");
   console.log("7. step-up assertions require a step-up challenge");
 }
 
-console.log("\nWEBAUTHN SELF-TEST PASSED — 7/7");
+// 8. a step-up without user verification is not a step-up
+{
+  await assert.rejects(
+    () => login(12, false, undefined, "step_up", { flags: 0x01 }),
+    /user verification required/,
+  );
+  const ok = await login(13, false, undefined, "step_up");
+  assert.equal(ok.signCount, 13);
+  console.log("8. step-up requires the user-verification flag");
+}
+
+// 9. a challenge bound to one account cannot be spent on another's step-up
+{
+  const forAccountA = issueChallenge("step_up", "user-a");
+  await assert.rejects(
+    () => login(14, false, forAccountA, "step_up", { binding: "user-b" }),
+    /unknown or expired challenge/,
+  );
+  const ok = await login(15, false, issueChallenge("step_up", "user-a"), "step_up", { binding: "user-a" });
+  assert.equal(ok.signCount, 15);
+  console.log("9. step-up challenges are bound to their account");
+}
+
+console.log("\nWEBAUTHN SELF-TEST PASSED — 9/9");
