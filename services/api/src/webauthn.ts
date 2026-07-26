@@ -130,15 +130,17 @@ async function importKey(k: StoredKey) {
 // ---------------------------------------------------------------------------
 // challenges (in-memory, single-use, 5 min TTL)
 
-const challenges = new Map<string, { purpose: "register" | "login"; exp: number }>();
+export type ChallengePurpose = "register" | "login" | "step_up";
 
-export function issueChallenge(purpose: "register" | "login"): string {
+const challenges = new Map<string, { purpose: ChallengePurpose; exp: number }>();
+
+export function issueChallenge(purpose: ChallengePurpose): string {
   const c = randomBytes(32).toString("base64url");
   challenges.set(c, { purpose, exp: Date.now() + 5 * 60_000 });
   return c;
 }
 
-function consumeChallenge(c: string, purpose: "register" | "login"): boolean {
+function consumeChallenge(c: string, purpose: ChallengePurpose): boolean {
   const e = challenges.get(c);
   challenges.delete(c);
   for (const [k, v] of challenges) if (v.exp < Date.now()) challenges.delete(k);
@@ -148,7 +150,7 @@ function consumeChallenge(c: string, purpose: "register" | "login"): boolean {
 // ---------------------------------------------------------------------------
 // ceremonies
 
-function checkClientData(clientDataJSON: Buffer, expectedType: string, origins: string[], purpose: "register" | "login") {
+function checkClientData(clientDataJSON: Buffer, expectedType: string, origins: string[], purpose: ChallengePurpose) {
   const cd = JSON.parse(clientDataJSON.toString("utf8"));
   if (cd.type !== expectedType) throw new Error(`webauthn: unexpected type ${cd.type}`);
   if (!consumeChallenge(cd.challenge, purpose)) throw new Error("webauthn: unknown or expired challenge");
@@ -181,9 +183,10 @@ export async function verifyAssertion(
   storedCount: number,
   rpId: string,
   origins: string[],
+  purpose: ChallengePurpose = "login",
 ): Promise<{ signCount: number }> {
   const clientDataJSON = b64urlToBuf(clientDataJSONB64);
-  checkClientData(clientDataJSON, "webauthn.get", origins, "login");
+  checkClientData(clientDataJSON, "webauthn.get", origins, purpose);
   const authData = b64urlToBuf(authenticatorDataB64);
   const parsed = parseAuthData(authData);
   if (!parsed.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");

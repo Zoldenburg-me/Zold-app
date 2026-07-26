@@ -828,7 +828,12 @@ app.delete(
 app.post(
   "/api/webauthn/challenge",
   wrap(async (req, res) => {
-    const purpose = req.body?.purpose === "register" ? "register" : "login";
+    const purpose =
+      req.body?.purpose === "register"
+        ? "register"
+        : req.body?.purpose === "step_up"
+          ? "step_up"
+          : "login";
     res.json({ challenge: issueChallenge(purpose), rpId: SECURITY.rpId });
   }),
 );
@@ -898,6 +903,41 @@ app.post(
     res.json({ ...withSession(user), balanceEur });
   }),
 );
+
+async function verifyPasskeyStepUp(user: User, body: any, res: express.Response): Promise<boolean> {
+  if (!user.passkey?.publicKey) {
+    if (SECURITY.allowSimulation) return true;
+    res.status(409).json({ error: "a verified passkey is required before binding a spending key" });
+    return false;
+  }
+  const stepUp = body?.stepUp ?? {};
+  const { credentialId, authenticatorData, clientDataJSON, signature } = stepUp;
+  if (!credentialId || !authenticatorData || !clientDataJSON || !signature) {
+    res.status(401).json({ error: "fresh passkey approval required before binding a spending key" });
+    return false;
+  }
+  if (credentialId !== user.passkey.credentialId) {
+    res.status(403).json({ error: "passkey credential does not match this account" });
+    return false;
+  }
+  try {
+    const { signCount } = await verifyAssertion(
+      authenticatorData,
+      clientDataJSON,
+      signature,
+      user.passkey.publicKey,
+      user.passkey.signCount ?? 0,
+      user.passkey.rpId ?? SECURITY.rpId,
+      SECURITY.origins,
+      "step_up",
+    );
+    store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+    return true;
+  } catch (err: any) {
+    res.status(401).json({ error: String(err?.message ?? err) });
+    return false;
+  }
+}
 
 // --- Funding (mock Monerium SEPA webhook) -----------------------------------
 
@@ -1095,6 +1135,7 @@ app.post(
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
     if (!requireKycApproved(user, res)) return;
+    if (!(await verifyPasskeyStepUp(user, req.body, res))) return;
     const address = req.body?.address;
     if (typeof address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
       return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
