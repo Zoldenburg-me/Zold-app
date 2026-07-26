@@ -1395,5 +1395,5 @@ if (sandbox) {
   console.log("monerium: mock mode (set MONERIUM_CLIENT_ID/SECRET in .env for sandbox)");
 }
 app.listen(API_PORT, API_HOST, () => {
-  console.log(`Zoll API listening on http://${API_HOST}:${API_PORT}`);
+  console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
 });

@@ -1,16 +1,26 @@
-# Zoll — notes for Claude sessions
+# Zold — notes for Claude sessions
 
 ## Naming (decided July 2026)
 - **Zoldenburg** = the company / infra brand (B2B, legal, footer). Old-Swiss-
   bank gravitas.
-- **Zoll** = the consumer app name (short, corridor-speakable; also German for
-  "customs/toll" — the fee at a border, apt for cross-border money).
+- **Zold** = the consumer app name (short, corridor-speakable; reads as "gold"
+  with a Z, and carries the Zoldenburg stem). Renamed from **Zoll** July 2026 —
+  Zoll is German for "customs/toll", which named the fee at the border rather
+  than the account, and the new positioning is an account, not a remittance fee.
 - **Narwhal** = mascot (favicon + empty states). No narwhal emoji exists; UI
   uses 🦄 as stand-in.
 - Repo dir on disk is still `transF` (do NOT rewrite absolute paths in
-  .claude/launch.json). GitHub repo rename to `zoll`/`zoldenburg` is pending
-  (redirects old URLs; cheap). Code/docs/package name already say Zoll.
-- TODO before public: domain + trademark clearance for "Zoll" in fintech.
+  .claude/launch.json). GitHub repo rename to `zold`/`zoldenburg` is pending
+  (redirects old URLs; cheap). Code/docs/package name already say Zold.
+- TWO STRINGS KEEP THE OLD SPELLING ON PURPOSE, do not "finish" the rename:
+  `PRF_SALT = "zoll/device-key/v1"` in public/device.js is an INPUT to the key
+  derivation, so a new spelling derives a different AES key and every wrapped
+  device key on a user's authenticator becomes undecryptable. The
+  `zoll-device-key` / `zoll-session` localStorage slots are read once and
+  migrated forward (LEGACY_KEY_SLOT); the device key is bound on-chain via
+  authorizerOf and only the CURRENT authorizer can rotate it, so dropping the
+  slot would leave an account permanently unable to spend.
+- TODO before public: domain + trademark clearance for "Zold" in fintech.
 
 ## Environment
 - Node lives in-project (machine has no system Node):
@@ -119,7 +129,9 @@
   (verified name), and MG_ANCHOR_ASSET=USDC (issue #53).
 
 ## Current state (July 2026)
-- Repo: github.com/tonyzil/Zoll (private). PR #1 open:
+- Repo: github.com/tonyzil/transF (private). The GitHub rename never
+  happened — pushing to .../Zoll.git returns "Repository not found", so
+  `transF` is the live remote, not just the directory name. PR #1 open:
   feat/passkey-onboarding-destination-send (passkey onboarding wizard,
   destination-first send flow, README rewrite).
 - Working: three payout rails (KES cash / SEPA / UPI), Candide Safe
