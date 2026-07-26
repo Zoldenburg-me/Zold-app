@@ -8,16 +8,57 @@ import {
   formatUnits,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { hardhat } from "viem/chains";
-import { KEYS, RPC_URL, loadAbi, loadDeployments, type Deployments } from "./config.js";
+import { defineChain } from "viem";
+import { hardhat, polygon, polygonAmoy } from "viem/chains";
+import { CHAIN_ID, KEYS, RPC_URL, loadAbi, loadDeployments, type Deployments } from "./config.js";
 import type { PayoutRail } from "./store.js";
 
-export const publicClient = createPublicClient({ chain: hardhat, transport: http(RPC_URL) });
+/**
+ * The viem chain we talk to, resolved from TRANSF_CHAIN_ID.
+ *
+ * Known ids use viem's own definitions so fee/explorer metadata is right;
+ * anything else is synthesised from the id and RPC rather than refused, so a
+ * new testnet needs an env var rather than a code change.
+ */
+export const chain = (() => {
+  switch (CHAIN_ID) {
+    case hardhat.id: return hardhat;
+    case polygonAmoy.id: return polygonAmoy;
+    case polygon.id: return polygon;
+    default:
+      return defineChain({
+        id: CHAIN_ID,
+        name: `chain-${CHAIN_ID}`,
+        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+        rpcUrls: { default: { http: [RPC_URL] } },
+      });
+  }
+})();
+
+/**
+ * Refuse to run against an RPC that is not the chain we were told to expect.
+ *
+ * Silent mismatch is the expensive failure: the EIP-712 domain would carry one
+ * chain id while the vault computes another from block.chainid, and every
+ * device signature would be rejected as "bad authorization" — an error that
+ * points at the signing code rather than at the misconfiguration.
+ */
+export async function assertChainMatches(): Promise<void> {
+  const actual = await publicClient.getChainId();
+  if (actual !== CHAIN_ID) {
+    throw new Error(
+      `RPC at ${RPC_URL} reports chain ${actual}, but TRANSF_CHAIN_ID is ${CHAIN_ID}. ` +
+        `Signatures would be built for the wrong chain and every debit would revert.`,
+    );
+  }
+}
+
+export const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
 
 function wallet(key: `0x${string}`) {
   return createWalletClient({
     account: privateKeyToAccount(key),
-    chain: hardhat,
+    chain,
     transport: http(RPC_URL),
   });
 }
@@ -117,7 +158,8 @@ export function paymentAuthorizationTypedData(args: {
     domain: {
       name: "RemitVault",
       version: "1",
-      chainId: hardhat.id,
+      // Must match what RemitVault computed from block.chainid at deploy time.
+      chainId: CHAIN_ID,
       verifyingContract: addrs().vault,
     },
     types: {
