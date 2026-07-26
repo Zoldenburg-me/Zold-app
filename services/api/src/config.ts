@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +17,21 @@ export const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
 export const API_HOST = process.env.TRANSF_API_HOST ?? "127.0.0.1";
 
 export const USING_LOCAL_RPC = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/)/.test(RPC_URL);
+
+/**
+ * Which chain we settle on.
+ *
+ * This used to be `hardhat` everywhere, hardcoded. That matters more than it
+ * looks: RemitVault builds its EIP-712 domain from `block.chainid`, so a
+ * server signing against 31337 while the contract lives on 80002 produces
+ * signatures the vault rejects — every debit reverts with "bad authorization"
+ * and the error points at the signing code, which is innocent. Deriving the id
+ * from one place removes that whole class of confusion.
+ *
+ * 31337 = hardhat (default), 80002 = Polygon Amoy, 137 = Polygon mainnet.
+ */
+export const CHAIN_ID = Number(process.env.TRANSF_CHAIN_ID ?? 31337);
+export const IS_LOCAL_CHAIN = CHAIN_ID === 31337;
 export const USING_LOCAL_API_HOST = API_HOST === "127.0.0.1" || API_HOST === "localhost" || API_HOST === "::1";
 
 /**
@@ -179,9 +194,50 @@ export interface Deployments {
   bridge: `0x${string}`;
 }
 
-export function loadDeployments(): Deployments {
+/**
+ * Contract addresses, keyed by chain id.
+ *
+ * A single flat set meant deploying to a testnet overwrote the local one, so
+ * `npm run dev` and a testnet stack could not coexist — and worse, a stale
+ * file would silently point the app at addresses on the wrong chain. Legacy
+ * flat files are still read, treated as the local chain.
+ */
+export function loadDeployments(chainId: number = CHAIN_ID): Deployments {
   const p = path.join(ROOT, "deployments.json");
-  return JSON.parse(readFileSync(p, "utf8"));
+  const raw = JSON.parse(readFileSync(p, "utf8"));
+  // Legacy shape: addresses at the top level, from before this was per-chain.
+  if (typeof raw.vault === "string") {
+    if (chainId !== 31337) {
+      throw new Error(
+        `deployments.json is in the old single-chain format and has no entry for chain ${chainId} — ` +
+          `re-run the deploy for this chain`,
+      );
+    }
+    return raw as Deployments;
+  }
+  const forChain = raw[String(chainId)];
+  if (!forChain) {
+    throw new Error(
+      `deployments.json has no addresses for chain ${chainId} (has: ${Object.keys(raw).join(", ") || "none"}) — ` +
+        `run the deploy against that chain first`,
+    );
+  }
+  return forChain as Deployments;
+}
+
+/** Merge a fresh deployment into the per-chain file, leaving other chains alone. */
+export function saveDeployments(chainId: number, addresses: Deployments) {
+  const p = path.join(ROOT, "deployments.json");
+  let raw: Record<string, unknown> = {};
+  try {
+    const existing = JSON.parse(readFileSync(p, "utf8"));
+    // Migrate a legacy flat file into its chain slot rather than dropping it.
+    raw = typeof existing.vault === "string" ? { "31337": existing } : existing;
+  } catch {
+    raw = {};
+  }
+  raw[String(chainId)] = addresses;
+  writeFileSync(p, JSON.stringify(raw, null, 2) + "\n");
 }
 
 export function loadAbi(contract: string): any[] {

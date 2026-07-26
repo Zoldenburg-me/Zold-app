@@ -9,6 +9,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadDeployments } from "../services/api/src/config.js";
 import { createPublicClient, createWalletClient, encodeFunctionData, http, keccak256, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
@@ -62,7 +63,7 @@ try {
   // rate, so this both moves the rate and exercises the governance path.
   const dep = createWalletClient({ account: privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"), chain: hardhat, transport: http(RPC) });
   const second = createWalletClient({ account: privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"), chain: hardhat, transport: http(RPC) });
-  const { swapper, timelock } = JSON.parse(readFileSync(path.join(ROOT, "deployments.json"), "utf8"));
+  const { swapper, timelock } = loadDeployments();
   assert.ok(timelock, "deployments.json should record the AdminTimelock address");
   const setRate = encodeFunctionData({
     abi: [{ type: "function", name: "setRate", stateMutability: "nonpayable", inputs: [{ name: "_rate", type: "uint256" }], outputs: [] }] as const,

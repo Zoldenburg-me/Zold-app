@@ -209,7 +209,12 @@ try {
       chain: hardhat,
       transport: http(RPC_URL),
     });
-    const { eure, vault } = JSON.parse(readFileSync(path.join(ROOT, "deployments.json"), "utf8"));
+    // Imported here, not at the top: config.ts reads the environment at import
+    // time, and the stub's MONERIUM_* is only set further down. A top-level
+    // import freezes them as empty and the reconciler then sees no Monerium
+    // orders at all — every mirrored deposit looks PHANTOM.
+    const { loadDeployments } = await import("../services/api/src/config.js");
+    const { eure, vault } = loadDeployments();
     await dep.writeContract({
       address: eure,
       abi: [{ type: "function", name: "burn", stateMutability: "nonpayable",
