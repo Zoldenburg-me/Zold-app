@@ -434,6 +434,175 @@ export async function sep24GetTransaction(
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// Trustlines and reserves
+//
+// Stellar will not let an account receive an asset it does not trust, so a
+// CCTP mint or an anchor refund lands nowhere without a trustline first. Each
+// trustline also locks 0.5 XLM of reserve (base reserve, read live below), and
+// the account itself needs 2 base reserves, so an account holding one asset
+// needs ~1.5 XLM locked plus fees.
+//
+// MoneyGram's own guide is the same three steps: fund the account with XLM,
+// add the USDC trustline, then acquire USDC.
+
+/** 1 XLM in stroops. */
+const STROOPS = 10_000_000;
+
+export interface AccountReserves {
+  balanceXlm: number;
+  /** Locked by the account plus its entries — cannot be spent. */
+  minimumXlm: number;
+  spendableXlm: number;
+  subentries: number;
+}
+
+/** Live base reserve, rather than a hardcoded 0.5 that a protocol change breaks. */
+export async function baseReserveXlm(): Promise<number> {
+  const res = await fetch(`${STELLAR.horizon}/ledgers?order=desc&limit=1`);
+  if (!res.ok) throw new Error(`Horizon ledgers failed (${res.status})`);
+  const rec = (await res.json()) as any;
+  const stroops = rec?._embedded?.records?.[0]?.base_reserve_in_stroops;
+  return typeof stroops === "number" ? stroops / STROOPS : 0.5;
+}
+
+/** Does `account` already trust `asset`, and can it hold more of it? */
+export async function hasTrustline(account: string, asset: Asset): Promise<boolean> {
+  if (asset.isNative()) return true;
+  const server = new Horizon.Server(STELLAR.horizon);
+  const loaded = await server.loadAccount(account);
+  return loaded.balances.some(
+    (b: any) =>
+      b.asset_code === asset.getCode() && b.asset_issuer === asset.getIssuer(),
+  );
+}
+
+/** What the account holds, and how much of it is locked as reserve. */
+export async function accountReserves(account: string): Promise<AccountReserves> {
+  const server = new Horizon.Server(STELLAR.horizon);
+  const loaded = await server.loadAccount(account);
+  const native = loaded.balances.find((b: any) => b.asset_type === "native") as any;
+  const balanceXlm = Number(native?.balance ?? 0);
+  const base = await baseReserveXlm();
+  const subentries = (loaded as any).subentry_count ?? 0;
+  const minimumXlm = (2 + subentries) * base;
+  return {
+    balanceXlm,
+    minimumXlm,
+    spendableXlm: Math.max(0, balanceXlm - minimumXlm),
+    subentries,
+  };
+}
+
+/**
+ * Establish a trustline if it is missing. Returns what happened, so a caller
+ * can report "already trusted" differently from "just created".
+ *
+ * Refuses rather than submitting a transaction that would fail when the
+ * account cannot cover the extra reserve — the error names the shortfall.
+ */
+export async function ensureTrustline(
+  keypair: Keypair,
+  asset: Asset,
+): Promise<{ created: boolean; hash?: string; reserves: AccountReserves }> {
+  if (asset.isNative()) {
+    return { created: false, reserves: await accountReserves(keypair.publicKey()) };
+  }
+  if (await hasTrustline(keypair.publicKey(), asset)) {
+    return { created: false, reserves: await accountReserves(keypair.publicKey()) };
+  }
+
+  const base = await baseReserveXlm();
+  const before = await accountReserves(keypair.publicKey());
+  if (before.spendableXlm < base) {
+    throw new Error(
+      `${keypair.publicKey()} cannot afford a ${asset.getCode()} trustline: ` +
+        `needs ${base} XLM of reserve but only ${before.spendableXlm.toFixed(4)} XLM is spendable ` +
+        `(balance ${before.balanceXlm}, ${before.minimumXlm} locked)`,
+    );
+  }
+
+  const server = new Horizon.Server(STELLAR.horizon);
+  const account = await server.loadAccount(keypair.publicKey());
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: STELLAR.networkPassphrase || Networks.TESTNET,
+  })
+    .addOperation(Operation.changeTrust({ asset }))
+    .setTimeout(180)
+    .build();
+  tx.sign(keypair);
+  const submitted = await server.submitTransaction(tx);
+  return {
+    created: true,
+    hash: submitted.hash,
+    reserves: await accountReserves(keypair.publicKey()),
+  };
+}
+
+/**
+ * Drop a trustline, returning its reserve. Only succeeds on a zero balance,
+ * which Stellar enforces — you cannot abandon an asset you still hold.
+ */
+export async function removeTrustline(keypair: Keypair, asset: Asset): Promise<boolean> {
+  if (asset.isNative()) return false;
+  if (!(await hasTrustline(keypair.publicKey(), asset))) return false;
+  const server = new Horizon.Server(STELLAR.horizon);
+  const account = await server.loadAccount(keypair.publicKey());
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: STELLAR.networkPassphrase || Networks.TESTNET,
+  })
+    .addOperation(Operation.changeTrust({ asset, limit: "0" }))
+    .setTimeout(180)
+    .build();
+  tx.sign(keypair);
+  await server.submitTransaction(tx);
+  return true;
+}
+
+/**
+ * Can this account actually receive the anchor's asset right now?
+ *
+ * Meant as a pre-flight: a CCTP burn that mints to an account with no
+ * trustline destroys USDC on the source chain and delivers nothing, so the
+ * cheap check belongs before the irreversible step.
+ */
+export async function anchorPayoutReadiness(
+  homeDomain: string,
+  assetCode: string,
+  account: string,
+): Promise<{ ready: boolean; asset: string; issuer?: string; problems: string[] }> {
+  const problems: string[] = [];
+  const asset = await stellarAssetForAnchor(homeDomain, assetCode);
+  let reserves: AccountReserves | undefined;
+  try {
+    reserves = await accountReserves(account);
+  } catch {
+    problems.push(`${account} does not exist on this network — fund it with XLM first`);
+  }
+  if (reserves) {
+    if (!(await hasTrustline(account, asset))) {
+      problems.push(
+        `${account} has no ${asset.getCode()} trustline, so it cannot receive the anchor's asset`,
+      );
+    }
+    const base = await baseReserveXlm().catch(() => 0.5);
+    if (reserves.spendableXlm < base) {
+      problems.push(
+        `${account} has only ${reserves.spendableXlm.toFixed(4)} XLM spendable — too little for reserves and fees`,
+      );
+    }
+  }
+  return {
+    ready: problems.length === 0,
+    asset: asset.isNative() ? "native" : asset.getCode(),
+    issuer: asset.isNative() ? undefined : asset.getIssuer(),
+    problems,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // SEP-24 on-ledger payment: send the withdrawn asset to the anchor account.
 

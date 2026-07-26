@@ -81,6 +81,22 @@
   mentions CCTP.
   PII: senderProfile lands in plaintext db.json alongside private keys — a real
   deployment must keep it with the KYC provider and store only a reference.
+- Stellar trustlines/gas (July 2026): Stellar refuses to deliver an asset an
+  account does not trust, and the repo had NO changeTrust anywhere — so a live
+  CCTP burn would have destroyed USDC on Base and minted nothing, and an anchor
+  refund had nowhere to land. Verified against MoneyGram's real anchor:
+  extmgxanchor.moneygram.com publishes USDC issued by
+  GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5, whose Horizon
+  home_domain is centre.io — i.e. Circle's testnet USDC, the same asset CCTP
+  mints, so the ASSET is compatible even though MoneyGram's bridging page only
+  names Allbridge/Bridge.xyz. ensureTrustline/hasTrustline/accountReserves/
+  anchorPayoutReadiness live in stellar/anchor.ts; base reserve is read from
+  Horizon (0.5 XLM today) rather than hardcoded, and each trustline locks one.
+  bridgeUsdcToStellar now REFUSES to burn when the Stellar recipient cannot
+  receive the asset. `npm run stellar:setup [-- --fix]` is the operator step
+  (MoneyGram's own guide: fund with XLM, add the trustline, acquire the asset);
+  npm run trustline:test covers it live. NOTE MG_ANCHOR_ASSET still defaults to
+  SRT (testanchor's token) — MoneyGram needs USDC.
 - CCTP: dry-run by default; CCTP_LIVE=1 + funded CCTP_BURNER_KEY executes
   (faucet.circle.com for testnet USDC). Stellar CCTP domain is 27; mint
   recipient AND destinationCaller must be the CctpForwarder.

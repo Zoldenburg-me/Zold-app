@@ -34,7 +34,9 @@
     "refund:guard:test": "tsx scripts/refund-guard-test.ts",
     "kyc:operator:test": "tsx scripts/kyc-operator-test.ts",
     "monerium:oauth:test": "tsx scripts/monerium-oauth-test.ts",
-    "travelrule:test": "MG_ANCHOR_DOMAIN=testanchor.stellar.org tsx scripts/travel-rule-test.ts"
+    "travelrule:test": "MG_ANCHOR_DOMAIN=testanchor.stellar.org tsx scripts/travel-rule-test.ts",
+    "stellar:setup": "tsx scripts/stellar-setup.ts",
+    "trustline:test": "tsx scripts/trustline-test.ts"
   },
   "devDependencies": {
     "@types/express": "^4.17.25",
