@@ -62,6 +62,7 @@ const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
 app.use(express.json({
+  limit: SECURITY.jsonBodyLimit,
   verify: (req, _res, buf) => {
     (req as any).rawBody = buf;
   },
@@ -133,8 +134,17 @@ app.get(
 const sandbox = moneriumSandboxEnabled();
 
 /** Never send wallet keys, OAuth state, or encrypted tokens to the client. */
-const publicUser = ({ privateKey, moneriumConnect, monerium, ...u }: User & { [k: string]: any }) => ({
+const publicUser = ({ privateKey, moneriumConnect, monerium, passkey, ...u }: User & { [k: string]: any }) => ({
   ...u,
+  ...(passkey
+    ? {
+        passkey: {
+          credentialId: passkey.credentialId,
+          rpId: passkey.rpId,
+          createdAt: passkey.createdAt,
+        },
+      }
+    : {}),
   ...(monerium
     ? {
         monerium: {

@@ -39,7 +39,7 @@
   "devDependencies": {
     "@types/express": "^4.17.25",
     "@types/node": "^22.20.1",
-    "hardhat": "^2.26.0",
+    "hardhat": "^3.11.1",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"
   },
@@ -48,5 +48,8 @@
     "abstractionkit": "^0.4.0",
     "express": "^4.19.0",
     "viem": "^2.21.0"
+  },
+  "overrides": {
+    "adm-zip": "0.6.0"
   }
 }
