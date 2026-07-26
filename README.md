@@ -1,6 +1,6 @@
-![Zoll](assets/readme-banner.png)
+![Zold](assets/readme-banner.png)
 
-# Zoll
+# Zold
 
 A remittance app that settles on stablecoin rails. Built by **Zoldenburg**,
 the cross-border payments infrastructure underneath it. 🦄

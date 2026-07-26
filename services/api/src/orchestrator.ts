@@ -502,7 +502,7 @@ export async function executeSepaTransfer(
 
     if (moneriumSandboxEnabled()) {
       try {
-        const order = await redeemToIban(user, payoutEur, counterpart, `Zoll ${transfer.id}`);
+        const order = await redeemToIban(user, payoutEur, counterpart, `Zold ${transfer.id}`);
         return store.updateTransfer(transfer.id, {
           state: "PAYOUT_SUBMITTED",
           sepa: {
