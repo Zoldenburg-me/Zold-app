@@ -94,15 +94,15 @@ assert.equal(reg.key.alg, "ES256");
 console.log("1. registration verifies, COSE key extracted");
 
 // 2. good assertion
-const login = async (count: number, tamper = false, challenge?: string) => {
-  const ch = challenge ?? issueChallenge("login");
+const login = async (count: number, tamper = false, challenge?: string, purpose: "login" | "step_up" = "login") => {
+  const ch = challenge ?? issueChallenge(purpose);
   const cdj = clientData("webauthn.get", ch);
   const ad = authDataBytes(0x01, count);
   const data = Buffer.concat([ad, sha256(b64urlToBuf(cdj))]);
   const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, data));
   const der = rawToDer(raw);
   if (tamper) der[der.length - 1] ^= 0xff;
-  return verifyAssertion(bufToB64url(ad), cdj, bufToB64url(der), reg.key, reg.signCount, RP_ID, [ORIGIN]);
+  return verifyAssertion(bufToB64url(ad), cdj, bufToB64url(der), reg.key, reg.signCount, RP_ID, [ORIGIN], purpose);
 };
 const ok = await login(1);
 assert.equal(ok.signCount, 1);
@@ -144,4 +144,12 @@ console.log("4. unknown challenge rejected");
   console.log("6. foreign origin rejected");
 }
 
-console.log("\nWEBAUTHN SELF-TEST PASSED — 6/6");
+// 7. step-up assertion uses its own challenge purpose
+{
+  const ok = await login(10, false, undefined, "step_up");
+  assert.equal(ok.signCount, 10);
+  await assert.rejects(() => login(11, false, issueChallenge("step_up")), /unknown or expired challenge/);
+  console.log("7. step-up assertions require a step-up challenge");
+}
+
+console.log("\nWEBAUTHN SELF-TEST PASSED — 7/7");
