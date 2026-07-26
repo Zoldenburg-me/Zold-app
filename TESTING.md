@@ -1,4 +1,4 @@
-# Testing Zoll end to end
+# Testing Zold end to end
 
 Everything below runs on macOS/Linux with **Node.js ≥ 22** and free ports
 `3000`, `8545`, `8546`. No other system dependencies.

@@ -1,4 +1,4 @@
-# Zoll — On-Chain Remittance Platform: Architecture
+# Zold — On-Chain Remittance Platform: Architecture
 
 Status: Draft v0.2 (2026-07-26)
 

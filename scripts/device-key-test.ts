@@ -95,7 +95,7 @@ await t("signature recovers to the device address", async () => {
 });
 
 await t("address derivation matches viem for the same key", async () => {
-  const blob = JSON.parse(slots.get("zoll-device-key")!);
+  const blob = JSON.parse(slots.get("zold-device-key")!);
   assert.equal(privateKeyToAccount(blob.key).address.toLowerCase(), (await dev.deviceAddress(null)).toLowerCase());
 });
 
@@ -132,7 +132,7 @@ await t("each wrap uses a fresh IV", async () => {
 
 await t("a PRF-wrapped key refuses to sign without the passkey", async () => {
   const priv = `0x${"11".repeat(32)}`;
-  slots.set("zoll-device-key", JSON.stringify({
+  slots.set("zold-device-key", JSON.stringify({
     ...(await dev.wrapKey(priv, PRF_SECRET)),
     address: privateKeyToAccount(priv as `0x${string}`).address.toLowerCase(),
   }));
