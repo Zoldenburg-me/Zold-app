@@ -101,6 +101,23 @@
   (faucet.circle.com for testnet USDC). Stellar CCTP domain is 27; mint
   recipient AND destinationCaller must be the CctpForwarder.
 
+## Testnet plumbing (July 2026)
+- TRANSF_CHAIN_ID selects the chain (31337 hardhat default, 80002 Amoy, 137
+  Polygon); services/api/src/chain.ts resolves the viem chain from it and
+  synthesises one for unknown ids. NOTHING is pinned to hardhat any more.
+- THE BUG THIS FIXED: the EIP-712 domain hardcoded hardhat.id while RemitVault
+  builds its DOMAIN_SEPARATOR from block.chainid. On any other chain every
+  device signature would be rejected as "bad authorization" — an error pointing
+  at the innocent signing code. assertChainMatches() now runs at server start
+  and in deploy.ts, and refuses when the RPC disagrees with TRANSF_CHAIN_ID.
+- deployments.json is keyed by chain id; legacy flat files are read as 31337
+  and migrated on the next deploy, so a testnet deploy no longer overwrites the
+  local one. loadDeployments(chainId) / saveDeployments(chainId, addrs).
+- deploy.ts takes DEPLOY_{DEPLOYER,ORCHESTRATOR,RAMP}_KEY from the env and
+  REFUSES to use the hardhat defaults on any chain but 31337.
+- Still owner-supplied before Amoy: an RPC, three funded keys, MONERIUM_CHAIN=amoy
+  (verified name), and MG_ANCHOR_ASSET=USDC (issue #53).
+
 ## Current state (July 2026)
 - Repo: github.com/tonyzil/Zoll (private). PR #1 open:
   feat/passkey-onboarding-destination-send (passkey onboarding wizard,
