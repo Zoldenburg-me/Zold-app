@@ -27,8 +27,22 @@
 import { keccak_256 } from "./vendor/hashes/sha3.js";
 import * as secp from "./vendor/secp256k1.js";
 
-const KEY_SLOT = "zoll-device-key";
-/** Fixed PRF input: same salt must yield the same wrapping key every time. */
+const KEY_SLOT = "zold-device-key";
+/** The slot this used to live in, before the Zoll -> Zold rename. The device
+ *  key is bound on-chain via authorizerOf and only the CURRENT authorizer can
+ *  rotate it, so losing this slot would leave an account permanently unable to
+ *  spend. Read the old name once and carry it forward. */
+const LEGACY_KEY_SLOT = "zoll-device-key";
+/**
+ * Fixed PRF input: same salt must yield the same wrapping key every time.
+ *
+ * DO NOT rename this string. It is not a label — it is an input to the key
+ * derivation, so changing it derives a different AES key and every device key
+ * already wrapped on a user's authenticator becomes undecryptable. It keeps the
+ * old spelling through the Zoll -> Zold rename for exactly that reason; a new
+ * spelling would need a versioned migration that unwraps with the old salt
+ * first, not a search-and-replace.
+ */
 const PRF_SALT = new TextEncoder().encode("zoll/device-key/v1");
 
 const bytesToHex = (b) => "0x" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
@@ -172,7 +186,15 @@ export async function unwrapKey(blob, secret) {
 /* ---------- key lifecycle ---------- */
 
 const readSlot = () => {
-  const raw = localStorage.getItem(KEY_SLOT);
+  let raw = localStorage.getItem(KEY_SLOT);
+  if (!raw) {
+    const legacy = localStorage.getItem(LEGACY_KEY_SLOT);
+    if (legacy) {
+      localStorage.setItem(KEY_SLOT, legacy);
+      localStorage.removeItem(LEGACY_KEY_SLOT);
+      raw = legacy;
+    }
+  }
   if (!raw) return null;
   if (raw.startsWith("0x")) return { v: 1, protection: "none", key: raw }; // pre-PRF format
   try { return JSON.parse(raw); } catch { return null; }
