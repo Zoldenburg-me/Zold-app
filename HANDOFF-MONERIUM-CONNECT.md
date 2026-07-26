@@ -5,7 +5,7 @@
 The onboarding flow is split after the user has an app account, passkey/device
 setup, and a Candide Safe address:
 
-1. Create the Zoll account and local wallet shell.
+1. Create the Zold account and local wallet shell.
 2. Keep funding, quotes, deposits, sends, and device binding locked until the
    funding/KYC path is resolved.
 3. Ask whether the user already has a Monerium account.
