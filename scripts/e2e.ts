@@ -12,6 +12,23 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { newDevice, registerDevice, signTerms } from "./device.js";
 
+/**
+ * Pin FX for the run, before anything spawns — the deploy and the API inherit
+ * this env.
+ *
+ * Quotes now come from a live rate feed, so an end-to-end test that asserts a
+ * KES figure would otherwise be asserting today's market and would break every
+ * morning for no reason (and fail entirely offline). Pinning keeps the test
+ * about the corridor working, not about what the euro did overnight.
+ *
+ * These two must be pinned TOGETHER: RATES supplies the USD->fiat legs while
+ * DEPLOY_EURUSD_RATE seeds the swapper's EUR->USD, which is the rate the quote
+ * engine reads back off the chain.
+ */
+const PIN = { USD: 1.1379, INR: 109.87, KES: 147.53 };
+process.env.TRANSF_RATES_FIXED ??= JSON.stringify(PIN);
+process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(PIN.USD * 1e6));
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
 const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
@@ -168,9 +185,14 @@ try {
   console.log("5/7 quoting €100 EUR->KES…");
   const quote = await api("/api/quotes", { userId: user.id, sendEur: 100 });
   assert.ok(quote.receiveKes > 0, "quote has a KES amount");
-  // sanity: ~ (100 - 0.99) * 1.08 * 129.5 * (1 - 0.005)
-  const expected = (100 - 0.99) * 1.08 * 129.5 * (1 - 0.005);
+  // Derived from the pinned rates above, not from hardcoded constants: the
+  // EUR->USD leg is the swapper's rate and the USD->KES leg is the feed's.
+  const expected = (100 - 0.99) * PIN.USD * (PIN.KES / PIN.USD) * (1 - 0.005);
   assert.ok(Math.abs(quote.receiveKes - expected) < 1, `quote ${quote.receiveKes} ≈ ${expected}`);
+  // The receipt must quote the market mid, not our own all-in rate — that
+  // conflation is what let a 14% stale rate sit behind a "0.50% margin" label.
+  assert.ok(quote.midRate > quote.fxRate, "mid should sit above the all-in rate");
+  assert.equal(quote.marginBps, 50, "margin is measured against the live mid");
 
   console.log("6/7 executing transfer…");
   const { result: transfer } = await sendTransfer({
@@ -221,8 +243,8 @@ try {
 
   console.log("9/9 UPI payment of ₹2000 (scan-and-pay)…");
   const upiQuote = await api("/api/quotes", { userId: user.id, rail: "upi", receiveInr: 2000 });
-  // sendEur ≈ 2000 / (1.08 * 87.2 * 0.995) + 0.29
-  const expectedEur = 2000 / (1.08 * 87.2 * (1 - 0.005)) + 0.29;
+  // Same pinned legs as the cash rail: swapper EUR->USD, feed USD->INR.
+  const expectedEur = 2000 / (PIN.USD * (PIN.INR / PIN.USD) * (1 - 0.005)) + 0.29;
   assert.ok(Math.abs(upiQuote.sendEur - expectedEur) < 0.02, `upi quote ${upiQuote.sendEur} ≈ ${expectedEur}`);
   const { result: upiTransfer } = await sendTransfer({
     quoteId: upiQuote.id,
