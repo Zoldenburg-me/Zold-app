@@ -90,6 +90,35 @@ app.use((req, res, next) => {
   next();
 });
 
+// Where the client address comes from. Default 0 = the socket peer, correct
+// only with nothing in front; behind a proxy that address is the proxy, so every
+// caller shares one bucket and one client can rate-limit the whole service.
+app.set("trust proxy", SECURITY.trustedProxyHops);
+
+/**
+ * Is this request from the loopback interface, with nothing claiming to have
+ * forwarded it? Simulation endpoints mint balances and self-approve KYC, so they
+ * get this check on top of the config switch: a misconfigured
+ * ALLOW_SIMULATION on a hosted box still cannot be reached from outside.
+ */
+function isLocalRequest(req: express.Request): boolean {
+  if (req.header("x-forwarded-for") || req.header("forwarded")) return false;
+  const ip = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
+  return ip === "127.0.0.1" || ip === "::1";
+}
+
+function requireSimulationAllowed(req: express.Request, res: express.Response): boolean {
+  if (!SECURITY.allowSimulation) {
+    res.status(403).json({ error: "simulation endpoints are disabled in production" });
+    return false;
+  }
+  if (!isLocalRequest(req)) {
+    res.status(403).json({ error: "simulation endpoints are reachable from localhost only" });
+    return false;
+  }
+  return true;
+}
+
 const hits = new Map<string, { n: number; reset: number }>();
 function rateLimit(key: string, perMin: number): boolean {
   const now = Date.now();
@@ -676,6 +705,14 @@ app.post(
         provider: "monerium",
         onboardingPath: "existing_monerium",
         checkedAt: iban ? new Date().toISOString() : undefined,
+        // Record which Monerium profile this approval rests on. The approval is
+        // delegated trust — nothing here checks that the connected profile is
+        // the same person as the local account — so at minimum it must be
+        // auditable after the fact.
+        applicantId: profileId,
+        reason: iban
+          ? `approved via connected Monerium profile ${profileId ?? "(unnamed)"}`
+          : user.kyc?.reason,
       },
       funding: {
         mode: "sandbox",
@@ -796,7 +833,7 @@ app.post(
 app.post(
   "/api/users/:id/kyc/mock-review",
   wrap(async (req, res) => {
-    if (!SECURITY.allowSimulation) {
+    if (!SECURITY.allowSimulation || !isLocalRequest(req)) {
       return res.status(403).json({
         error: "mock KYC review is disabled in production — use POST /api/kyc/review with an operator token",
       });
@@ -834,7 +871,16 @@ app.post(
         : req.body?.purpose === "step_up"
           ? "step_up"
           : "login";
-    res.json({ challenge: issueChallenge(purpose), rpId: SECURITY.rpId });
+    // register and step_up act on a known account, so the challenge is bound to
+    // it: an assertion collected for one account can no longer be spent on
+    // another's step-up. Login is unbound by necessity — there is no session yet.
+    let binding: string | undefined;
+    if (purpose !== "login") {
+      const session = requireSession(req, res);
+      if (!session) return;
+      binding = session.userId;
+    }
+    res.json({ challenge: issueChallenge(purpose, binding), rpId: SECURITY.rpId });
   }),
 );
 
@@ -851,9 +897,15 @@ app.post(
     if (store.findUserByCredential(credentialId)) {
       return res.status(409).json({ error: "credential already registered" });
     }
+    // Replacing the account's authenticator is an account-takeover path if a
+    // bearer token is enough for it: a stolen 24h session would become permanent
+    // access, and the real passkey would be silently discarded. The current
+    // authenticator has to approve its own replacement. First registration (no
+    // verified passkey yet) is unaffected.
+    if (user.passkey?.publicKey && !(await verifyPasskeyStepUp(user, req.body, res))) return;
     let reg;
     try {
-      reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins);
+      reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, user.id);
     } catch (err: any) {
       return res.status(400).json({ error: String(err?.message ?? err) });
     }
@@ -880,6 +932,11 @@ app.post(
     const { credentialId, authenticatorData, clientDataJSON, signature } = req.body ?? {};
     if (!credentialId || !authenticatorData || !clientDataJSON || !signature) {
       return res.status(400).json({ error: "credentialId, authenticatorData, clientDataJSON and signature required" });
+    }
+    // Also limit per credential: the per-IP bucket does nothing against attempts
+    // spread across many sources at one account.
+    if (!rateLimit(`c:${tokenHash(String(credentialId))}`, SECURITY.authRateLimitPerMin)) {
+      return res.status(429).json({ error: "rate limited — slow down" });
     }
     const user = store.findUserByCredential(credentialId);
     if (!user?.passkey?.publicKey) {
@@ -930,6 +987,7 @@ async function verifyPasskeyStepUp(user: User, body: any, res: express.Response)
       user.passkey.rpId ?? SECURITY.rpId,
       SECURITY.origins,
       "step_up",
+      user.id,
     );
     store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
     return true;
@@ -944,9 +1002,7 @@ async function verifyPasskeyStepUp(user: User, body: any, res: express.Response)
 app.post(
   "/api/simulate/sepa-deposit",
   wrap(async (req, res) => {
-    if (!SECURITY.allowSimulation) {
-      return res.status(403).json({ error: "simulation endpoints are disabled in production" });
-    }
+    if (!requireSimulationAllowed(req, res)) return;
     if (sandbox) {
       return res.status(400).json({
         error:
@@ -1079,6 +1135,7 @@ app.post(
       phone: transfer.recipientPhone,
       iban: transfer.recipientIban,
       vpa: transfer.recipientVpa,
+      name: transfer.recipientName,
     });
     transfer.auth = { to: orchestratorAddress, amountWei: amountWei.toString(), destination, deadline };
     store.addTransfer(transfer);
@@ -1180,9 +1237,14 @@ app.post(
     }
     const user = store.findUser(transfer.userId)!;
     if (!requireKycApproved(user, res)) return;
-    store.updateTransfer(transfer.id, {
-      auth: { ...transfer.auth, authorizedAt: new Date().toISOString() },
-    });
+    // Claim the authorization before anything awaits. Two parallel submissions
+    // of the same signature both used to clear the CREATED check above, both
+    // submitted `debit`, and the one the vault rejected as a duplicate took the
+    // compensation path — re-crediting the sender while the other completed the
+    // payout. The claim is atomic because nothing yields between here and it.
+    if (!store.claimAuthorization(transfer.id)) {
+      return res.status(409).json({ error: "authorization already submitted for this transfer" });
+    }
     const auth = { deadline: transfer.auth.deadline, signature: signature as `0x${string}` };
     const result =
       transfer.rail === "sepa"
@@ -1271,9 +1333,7 @@ app.post(
 app.post(
   "/api/simulate/pickup",
   wrap(async (req, res) => {
-    if (!SECURITY.allowSimulation) {
-      return res.status(403).json({ error: "simulation endpoints are disabled in production" });
-    }
+    if (!requireSimulationAllowed(req, res)) return;
     const t = store.findTransfer(req.body?.transferId);
     if (!t) return res.status(404).json({ error: "transfer not found" });
     if (!requireUserSession(req, res, t.userId)) return;

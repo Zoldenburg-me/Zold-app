@@ -95,6 +95,7 @@ function transferDestination(transfer: Transfer): `0x${string}` {
     phone: transfer.recipientPhone,
     iban: transfer.recipientIban,
     vpa: transfer.recipientVpa,
+    name: transfer.recipientName,
   });
 }
 
@@ -130,11 +131,24 @@ function cashPayoutState(pickup: NonNullable<Transfer["pickup"]>): TransferState
  * (conversion round-trips at the prevailing rate) are itemized, uRamp-style.
  */
 async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Promise<Transfer> {
+  const message = String(err?.shortMessage ?? err?.message ?? err);
   const failed = store.updateTransfer(id, {
     state: "FAILED",
-    error: String(err?.shortMessage ?? err?.message ?? err),
+    error: message,
     txs,
   });
+  // The vault refused this debit because this transferId was already debited —
+  // another submission of the same authorization got there first. A refund here
+  // would hand back money whose payout is in flight, so this is review-only.
+  // (The API now claims an authorization before it can be submitted twice; this
+  // is the backstop for any other route to the same revert.)
+  if (/duplicate transfer/i.test(message)) {
+    return store.updateTransfer(id, {
+      state: "MANUAL_REVIEW",
+      error: `${message}; this transfer was already debited once, so no automatic refund`,
+      txs,
+    });
+  }
   if (txs.some((x) => x.step === "cctp.burn")) {
     return store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
