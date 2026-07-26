@@ -39,6 +39,7 @@ import { getTreasury, missingRequiredFields, sep10Auth, sep12CustomerFields } fr
 import { formatReport, reconcile } from "./reconcile.js";
 import {
   addrs,
+  assertChainMatches,
   destinationCommitment,
   eur,
   orchestratorAddress,
@@ -1236,6 +1237,12 @@ app.use(((err, _req, res, _next) => {
 }) as express.ErrorRequestHandler);
 
 initStore();
+// Fail fast on a chain mismatch: signatures built for the wrong chain id are
+// rejected by the vault as "bad authorization", which reads like a signing bug.
+assertChainMatches().catch((e) => {
+  console.error(String(e?.message ?? e));
+  process.exit(1);
+});
 // FP3: compensate anything stranded by a crash or failed payout, then keep
 // sweeping in the background.
 sweepStrandedTransfers()
