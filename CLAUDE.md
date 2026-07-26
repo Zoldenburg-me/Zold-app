@@ -129,7 +129,9 @@
   (verified name), and MG_ANCHOR_ASSET=USDC (issue #53).
 
 ## Current state (July 2026)
-- Repo: github.com/tonyzil/Zoll (private; rename to Zold pending). PR #1 open:
+- Repo: github.com/tonyzil/transF (private). The GitHub rename never
+  happened — pushing to .../Zoll.git returns "Repository not found", so
+  `transF` is the live remote, not just the directory name. PR #1 open:
   feat/passkey-onboarding-destination-send (passkey onboarding wizard,
   destination-first send flow, README rewrite).
 - Working: three payout rails (KES cash / SEPA / UPI), Candide Safe
