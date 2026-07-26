@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { FX } from "./config.js";
 import { store, type Quote } from "./store.js";
 import { eurPer, usdPer } from "./rates.js";
-import { swapperRate } from "./chain.js";
+import { liquidityProvider } from "./liquidity.js";
 
 import type { PayoutRail } from "./store.js";
 
@@ -38,9 +38,12 @@ export interface QuoteRequest {
 
 /** Legs of a corridor quote, resolved from the chain + the live feed. */
 async function corridorRates(fiat: "KES" | "INR") {
-  // Executable EUR->USD: the swapper's own rate, so the quote cannot promise a
-  // rate the swap will not honour. FP5 re-checks this at execution time.
-  const { rate, raw } = await swapperRate();
+  // Executable EUR->USD, asked of whichever liquidity source will actually
+  // fill the swap — the local swapper or a market maker over RFQ. Reading the
+  // swapper contract directly here would keep quoting the mock's price after a
+  // deployment switched to RFQ, which looks completely healthy while being
+  // wrong. FP5 re-checks the rate against the same provider at execution.
+  const { rate, raw } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
   const usdFiat = await usdPer(fiat); // live: what a partner settles at
   const marketMid = await eurPer(fiat); // live: true EUR->fiat mid, reference only
   const allIn = rate * usdFiat * (1 - FX.SPREAD_BPS / 10_000);
