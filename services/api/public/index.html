@@ -860,6 +860,25 @@ async function registerPasskey(u) {
 /* The passkey credential this browser wraps the device key with. */
 const credId = () => user?.passkey?.credentialId || null;
 
+async function passkeyStepUp() {
+  if (!credId()) return null;
+  const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up" });
+  const cred = await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(challenge),
+      allowCredentials: [{ type: "public-key", id: b64urlToBytes(credId()) }],
+      userVerification: "preferred",
+      timeout: 60000,
+    },
+  });
+  return {
+    credentialId: cred.id,
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  };
+}
+
 /* FP4: mint the device key and bind it as the account's payment authorizer.
    Runs after passkey registration so the key can be wrapped with the
    authenticator's PRF secret; the vault takes the first binding and refuses
@@ -869,7 +888,7 @@ async function registerDeviceKey(u) {
   const { address, protection } = dev.keyStatus().present
     ? { address: await dev.deviceAddress(credId()), protection: dev.keyStatus().protection }
     : await dev.createKey(credId());
-  const updated = await api(`/api/users/${u.id}/authorizer`, { address });
+  const updated = await api(`/api/users/${u.id}/authorizer`, { address, stepUp: await passkeyStepUp() });
   if (updated.authorizerAddress) user = { ...user, authorizerAddress: updated.authorizerAddress };
   if (protection !== "prf") {
     console.warn("device key stored unprotected — this authenticator has no PRF support");
