@@ -110,7 +110,24 @@ const DAILY_CAP_EUR = parseUnits("2500", 18);
 // env and the owners are hardware/multisig keys held by different people.
 const TIMELOCK_DELAY = BigInt(process.env.TIMELOCK_DELAY_SECONDS ?? 60);
 const TIMELOCK_THRESHOLD = Number(process.env.TIMELOCK_THRESHOLD ?? 2);
-const EURUSD_RATE = 1_080_000n; // 1 EURe (1e18) -> 1.08 USDC (6dp)
+/**
+ * Seed the swapper at the live EUR/USD mid rather than a constant.
+ *
+ * This was hardcoded 1_080_000 (1.08) and by July 2026 the real rate was
+ * 1.1379, so every fresh deploy was born ~5% stale — and because the quote
+ * engine now reads its EUR leg from this contract, a stale seed prices every
+ * corridor. DEPLOY_EURUSD_RATE pins it for a reproducible/offline deploy.
+ *
+ * Note the swapper's owner becomes the AdminTimelock below, so changing this
+ * afterwards is a governed action, not a redeploy.
+ */
+async function eurUsdSeed(): Promise<bigint> {
+  const pinned = process.env.DEPLOY_EURUSD_RATE;
+  if (pinned) return BigInt(pinned);
+  const { eurPer } = await import("../services/api/src/rates.js");
+  const rate = await eurPer("USD");
+  return BigInt(Math.round(rate * 1e6));
+}
 const SWAP_INVENTORY_EURE = parseUnits("1000000", 18);
 const SWAP_INVENTORY_USDC = parseUnits("1000000", 6);
 
@@ -126,7 +143,9 @@ async function main() {
   const eure = await deploy("MockToken", ["Monerium EUR emoney (mock)", "EURe", 18]);
   const usdc = await deploy("MockToken", ["USD Coin (mock)", "USDC", 6]);
   const vault = await deploy("RemitVault", [eure, DAILY_CAP_EUR]);
-  const swapper = await deploy("FxSwapper", [eure, usdc, EURUSD_RATE]);
+  const eurUsdRate = await eurUsdSeed();
+  console.log(`swapper seeded at EUR/USD ${(Number(eurUsdRate) / 1e6).toFixed(4)}`);
+  const swapper = await deploy("FxSwapper", [eure, usdc, eurUsdRate]);
   const bridge = await deploy("BridgeEscrow", [usdc]);
 
   // Hardhat accounts #0/#1/#2 stand in for three separate signers.

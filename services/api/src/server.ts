@@ -159,6 +159,29 @@ app.get(
   }),
 );
 
+/**
+ * Public mid rates, so the marketing page can show the same number the product
+ * would quote instead of baking its own constants in.
+ *
+ * The landing page used to hardcode `1.08 * 129.5` and print "Real exchange
+ * rate" above it — the same lie as the quote engine's, in the shop window. No
+ * auth: this is a public reference rate, not per-user pricing, and it carries
+ * no spread or fee.
+ */
+app.get(
+  "/api/rates",
+  wrap(async (_req, res) => {
+    const { midRates } = await import("./rates.js");
+    try {
+      const r = await midRates();
+      res.json({ eur: r.eur, asOf: r.asOf, provider: r.provider });
+    } catch (e: any) {
+      // Say so rather than serving a number nobody can stand behind.
+      res.status(503).json({ error: e?.message ?? "rates unavailable" });
+    }
+  }),
+);
+
 // --- Users ------------------------------------------------------------------
 
 const sandbox = moneriumSandboxEnabled();
@@ -1042,7 +1065,7 @@ app.post(
       if (!(inr > 0) && !(eur > 0)) {
         return res.status(400).json({ error: "receiveInr or sendEur required for upi" });
       }
-      const quote = createQuote(userId, {
+      const quote = await createQuote(userId, {
         rail,
         receiveInr: inr > 0 ? inr : undefined,
         sendEur: eur > 0 ? eur : undefined,
@@ -1059,7 +1082,7 @@ app.post(
     if (amount > FX.DAILY_CAP_EUR) {
       return res.status(400).json({ error: `amount exceeds daily cap of €${FX.DAILY_CAP_EUR}` });
     }
-    res.status(201).json(createQuote(userId, { rail, sendEur: amount }));
+    res.status(201).json(await createQuote(userId, { rail, sendEur: amount }));
   }),
 );
 

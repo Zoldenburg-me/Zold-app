@@ -146,6 +146,24 @@
   `npm run reconcile:test` (6 checks) proves each drift class is caught.
   This is ARCHITECTURE.md §6's reconciler, and it goes away when the mirror
   seam does (Polygon: EURe native, no local mirror).
+- FX rates are LIVE (July 2026): services/api/src/rates.ts fetches EUR mids
+  (TRANSF_RATES_URL, 10-min cache) and REFUSES to quote rather than serve a
+  stale rate. The EUR->USD leg is read from the on-chain swapper, not a
+  constant, so the quote cannot promise a rate the swap will not honour.
+  THE BUG THIS FIXED: EURUSD 1.08 / USDINR 87.2 / USDKES 129.5 were hardcoded
+  and had gone 5-14% stale (real: 1.1379 / 96.55 / 129.64) while the receipt
+  said "real exchange rate" with a "0.50% margin" — EUR->INR was quoting 14.3%
+  under the market. 1.08 lived in THREE places (config twice + deploy.ts) and
+  FP5's binding check compared only two of them, so fixing one alone would have
+  silently promised a rate the swap could not deliver. midRate is now the live
+  mid, fxRate what we deliver, and marginBps is MEASURED between them.
+  TRANSF_RATES_FIXED pins rates for tests/offline (fail-closed in production
+  unless ALLOW_FIXED_RATES=1); DEPLOY_EURUSD_RATE pins the swapper seed.
+  npm run fx:test (11 checks). NOTE for the cash rail: MoneyGram does the
+  USD->local FX itself (their quote guarantees a rate for 30 min; some
+  countries return fxRateEstimated:true and cannot lock), so our KES figure is
+  an estimate of THEIR pricing — the authoritative number should come from
+  their Quote API once we are a real partner.
 - Known TODOs marked in code: per-transfer FX hedging. (Both earlier items
   are done: passkey assertion verification shipped with FP2, and the
   Monerium webhook no longer trusts its request body — see below.)
