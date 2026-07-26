@@ -122,11 +122,21 @@ contract AdminTimelock {
         emit Cancelled(id, msg.sender);
     }
 
+    /// How many CURRENT owners have confirmed. `op.confirmations` is a running
+    /// tally that keeps counting a confirmation from an owner who has since been
+    /// removed — and removal is exactly what happens to a key believed stolen,
+    /// so a queued operation must not still be carried by that key's vote.
+    function liveConfirmations(bytes32 id) public view returns (uint8 n) {
+        for (uint256 i = 0; i < owners.length; i++) {
+            if (confirmedBy[id][owners[i]]) n++;
+        }
+    }
+
     function execute(bytes32 id) external payable onlyOwner returns (bytes memory) {
         Operation storage op = operations[id];
         require(op.eta != 0, "unknown operation");
         require(!op.executed && !op.cancelled, "operation closed");
-        require(op.confirmations >= threshold, "not enough confirmations");
+        require(liveConfirmations(id) >= threshold, "not enough confirmations");
         require(block.timestamp >= op.eta, "timelock not elapsed");
         op.executed = true;
         (bool ok, bytes memory ret) = op.target.call{value: op.value}(op.data);

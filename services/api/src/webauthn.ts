@@ -132,28 +132,55 @@ async function importKey(k: StoredKey) {
 
 export type ChallengePurpose = "register" | "login" | "step_up";
 
-const challenges = new Map<string, { purpose: ChallengePurpose; exp: number }>();
+const challenges = new Map<string, { purpose: ChallengePurpose; binding?: string; exp: number }>();
+const CHALLENGE_TTL_MS = 5 * 60_000;
 
-export function issueChallenge(purpose: ChallengePurpose): string {
+function pruneChallenges(now = Date.now()) {
+  for (const [k, v] of challenges) if (v.exp < now) challenges.delete(k);
+}
+
+/**
+ * Issue a single-use challenge.
+ *
+ * `binding` names the account (and, where it matters, the action) the ceremony
+ * is for. Without it every step-up challenge was interchangeable: any caller
+ * could mint one, and an assertion collected in one context satisfied any other
+ * step-up-gated action on the account — the ceremony proved possession of the
+ * authenticator but said nothing about what was being approved.
+ *
+ * Login cannot be bound: the caller has no session yet, and the assertion's own
+ * signature is what identifies the account.
+ */
+export function issueChallenge(purpose: ChallengePurpose, binding?: string): string {
+  pruneChallenges();
   const c = randomBytes(32).toString("base64url");
-  challenges.set(c, { purpose, exp: Date.now() + 5 * 60_000 });
+  challenges.set(c, { purpose, binding, exp: Date.now() + CHALLENGE_TTL_MS });
   return c;
 }
 
-function consumeChallenge(c: string, purpose: ChallengePurpose): boolean {
+function consumeChallenge(c: string, purpose: ChallengePurpose, binding?: string): boolean {
   const e = challenges.get(c);
   challenges.delete(c);
-  for (const [k, v] of challenges) if (v.exp < Date.now()) challenges.delete(k);
-  return !!e && e.purpose === purpose && e.exp >= Date.now();
+  pruneChallenges();
+  if (!e || e.purpose !== purpose || e.exp < Date.now()) return false;
+  return (e.binding ?? undefined) === (binding ?? undefined);
 }
 
 // ---------------------------------------------------------------------------
 // ceremonies
 
-function checkClientData(clientDataJSON: Buffer, expectedType: string, origins: string[], purpose: ChallengePurpose) {
+function checkClientData(
+  clientDataJSON: Buffer,
+  expectedType: string,
+  origins: string[],
+  purpose: ChallengePurpose,
+  binding?: string,
+) {
   const cd = JSON.parse(clientDataJSON.toString("utf8"));
   if (cd.type !== expectedType) throw new Error(`webauthn: unexpected type ${cd.type}`);
-  if (!consumeChallenge(cd.challenge, purpose)) throw new Error("webauthn: unknown or expired challenge");
+  if (!consumeChallenge(cd.challenge, purpose, binding)) {
+    throw new Error("webauthn: unknown or expired challenge");
+  }
   if (!origins.includes(cd.origin)) throw new Error(`webauthn: origin ${cd.origin} not allowed`);
 }
 
@@ -164,9 +191,10 @@ export function verifyRegistration(
   clientDataJSONB64: string,
   rpId: string,
   origins: string[],
+  binding?: string,
 ): RegistrationResult {
   const clientDataJSON = b64urlToBuf(clientDataJSONB64);
-  checkClientData(clientDataJSON, "webauthn.create", origins, "register");
+  checkClientData(clientDataJSON, "webauthn.create", origins, "register", binding);
   const att = cborDecode(b64urlToBuf(attestationObjectB64)).value as Map<string, any>;
   const authData = parseAuthData(Buffer.from(att.get("authData")));
   if (!authData.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");
@@ -184,13 +212,21 @@ export async function verifyAssertion(
   rpId: string,
   origins: string[],
   purpose: ChallengePurpose = "login",
+  binding?: string,
 ): Promise<{ signCount: number }> {
   const clientDataJSON = b64urlToBuf(clientDataJSONB64);
-  checkClientData(clientDataJSON, "webauthn.get", origins, purpose);
+  checkClientData(clientDataJSON, "webauthn.get", origins, purpose, binding);
   const authData = b64urlToBuf(authenticatorDataB64);
   const parsed = parseAuthData(authData);
   if (!parsed.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");
   if (!(parsed.flags & 0x01)) throw new Error("webauthn: user presence not asserted");
+  // A step-up gates a money-moving or key-binding action, so presence (someone
+  // touched the key) is not enough — require that the authenticator actually
+  // verified the human (UV flag). Otherwise "Face ID approved this payment" is a
+  // claim the server never checked.
+  if (purpose === "step_up" && !(parsed.flags & 0x04)) {
+    throw new Error("webauthn: user verification required for this action");
+  }
   if (storedCount > 0 && parsed.signCount > 0 && parsed.signCount <= storedCount) {
     throw new Error("webauthn: sign counter did not advance (possible clone)");
   }

@@ -261,9 +261,24 @@ export function initStore() {
     db.processedMoneriumWebhooks ??= [];
     for (const q of db.quotes) q.status ??= "OPEN";
     for (const s of db.sessions) s.expiresAt ??= new Date(Date.parse(s.createdAt) + 24 * 60 * 60 * 1000).toISOString();
+    pruneSessions();
+    persist();
   } else {
     persist();
   }
+}
+
+/**
+ * Drop sessions that can no longer authenticate anything. They were kept
+ * forever, so every request paid for them twice: a linear scan to find the live
+ * one, and a full re-serialisation of the file on write.
+ */
+function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
+  const cutoff = Date.now() - retainMs;
+  db.sessions = db.sessions.filter((s) => {
+    const dead = s.revokedAt ? Date.parse(s.revokedAt) : Date.parse(s.expiresAt);
+    return !(Number.isFinite(dead) && dead < cutoff);
+  });
 }
 
 function persist() {
@@ -343,6 +358,28 @@ export const store = {
     db.transfers.push(t);
     persist();
   },
+  /**
+   * Claim the one and only authorization submission for a transfer.
+   *
+   * Deliberately synchronous: an Express handler runs uninterrupted until its
+   * first `await`, so claiming here — before any chain call — is what makes two
+   * concurrent submissions of the same device signature impossible. Without it
+   * both passed the `state === "CREATED"` check, both submitted `debit`, and the
+   * loser's "duplicate transfer" revert drove the compensation path: the vault
+   * re-credited the sender while the winner was still completing the payout.
+   *
+   * Returns false when the transfer is not awaiting authorization, has no terms,
+   * or has already been claimed.
+   */
+  claimAuthorization(id: string) {
+    const t = db.transfers.find((x) => x.id === id);
+    if (!t || t.state !== "CREATED" || !t.auth || t.auth.authorizedAt) return false;
+    const now = new Date().toISOString();
+    t.auth.authorizedAt = now;
+    t.updatedAt = now;
+    persist();
+    return true;
+  },
   updateTransfer(id: string, patch: Partial<Transfer>) {
     const t = db.transfers.find((x) => x.id === id);
     if (!t) throw new Error(`unknown transfer ${id}`);
@@ -351,6 +388,7 @@ export const store = {
     return t;
   },
   addSession(s: Session) {
+    pruneSessions();
     db.sessions.push(s);
     persist();
   },
@@ -367,7 +405,13 @@ export const store = {
   touchSession(id: string) {
     const s = db.sessions.find((x) => x.id === id);
     if (!s) throw new Error(`unknown session ${id}`);
-    s.lastUsedAt = new Date().toISOString();
+    // lastUsedAt is telemetry, not a security control. Writing it on every
+    // authenticated request re-serialised the entire store per call, which grows
+    // with the number of users and transfers — a self-amplifying cost. Minute
+    // granularity is enough to see an idle session.
+    const now = Date.now();
+    if (now - Date.parse(s.lastUsedAt) < 60_000) return s;
+    s.lastUsedAt = new Date(now).toISOString();
     persist();
     return s;
   },
