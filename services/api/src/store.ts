@@ -187,6 +187,11 @@ export interface Transfer {
     minOut: string;
     rate: string;
     expiresAt: string;
+    /** RFQ only: the maker's quote id and the tx it wants submitted. Persisted
+     *  because the plan is prepared and executed in separate steps — a quote
+     *  that lost its tx cannot be replayed, and re-quoting at execution time
+     *  would settle at a price the user never agreed to. */
+    rfq?: { quoteId: string; tx: { to?: string; data?: string; value?: string } | null };
     executedAt?: string;
     txHash?: string;
   };
