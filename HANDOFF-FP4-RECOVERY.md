@@ -9,6 +9,14 @@ Everything below marked VERIFIED was checked against a live chain, a live API,
 or the deployed bytecode — not inferred from docs. Everything marked PLAN is
 not built.
 
+**Update, 27 July 2026:** a live Base Sepolia Monerium sandbox issue minted
+EURe directly to a user's Safe. That confirmed the custody model: the Safe is
+where user funds arrive. The remaining vault problem is that the transfer
+executor still starts from `RemitVault.debit`. Today the poller can try to move
+Safe-held EURe into the vault with the server-held Safe owner key before
+crediting the ledger. That is transitional: it proves the old executor, but it
+keeps the server in the custody path and fails permanently if that key is lost.
+
 ---
 
 ## 1. Where things actually stand
@@ -46,6 +54,14 @@ There are **three separate keys** today, and the passkey has the least power:
 The only piece of the recovery plan that IS built: provisioning refuses to
 issue an IBAN without a passkey (`passkeyRequiredBeforeFunding` in
 `services/api/src/server.ts`, gated on `allowSimulation`).
+
+The current balance API exposes this split explicitly:
+
+| Field | Meaning |
+|---|---|
+| `safeBalanceEur` | Real EURe held directly by the user's Safe |
+| `vaultBalanceEur` | `RemitVault.balanceOf(userSafe)` ledger balance |
+| `balanceEur` | Primary spendable balance for the current executor: the vault ledger |
 
 ---
 
@@ -86,6 +102,23 @@ Replace the server-generated EOA with a WebAuthn signer.
 **Verify:** deploy a Safe whose only owner is a passkey, then have it produce a
 signature that `RemitVault._isValidSignature` accepts. If that round-trip works,
 step 3 is safe.
+
+### Step 1.5 — make Safe-held EURe spendable without vault custody
+
+Do this before pushing more live Monerium flow testing. Deposits arrive in the
+Safe, not the vault. A transfer must therefore consume the Safe's EURe directly:
+
+- For SEPA, collect the Monerium redeem signature while the user is present and
+  submit the Safe operation that lets Monerium burn from the Safe.
+- For FX/cash/UPI, collect an exact Safe approval or transfer for the quoted
+  EURe amount, recipient commitment, rail, deadline, fee/spread ceiling, and
+  refund terms.
+- Keep `RemitVault` only as a policy/replay/cap module if it still adds value,
+  or replace it with a smaller `SpendPolicy` contract. Do not require users to
+  pre-deposit Safe funds into the vault as the production custody path.
+
+Temporary compatibility is acceptable for local mock demos, where deposits are
+still mirrored into `RemitVault`.
 
 ### Step 2 — add the co-signer, threshold 2
 
