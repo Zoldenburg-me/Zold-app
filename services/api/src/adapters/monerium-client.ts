@@ -119,8 +119,18 @@ export class MoneriumClient {
     return this.request<{ ibans: any[] }>("GET", "/ibans");
   }
 
-  orders() {
-    return this.request<{ orders: MoneriumOrder[] } | MoneriumOrder[]>("GET", "/orders");
+  /**
+   * Orders, optionally scoped to one profile.
+   *
+   * WITHOUT a profile this returns only the app's DEFAULT profile's orders —
+   * not every order the app can see. Since we create a profile per user, an
+   * unscoped call cannot see a single customer deposit: the euros arrive
+   * on-chain, Monerium marks the order processed, and we credit nothing.
+   * Always pass the profile you care about.
+   */
+  orders(profileId?: string) {
+    const q = profileId ? `?profile=${encodeURIComponent(profileId)}` : "";
+    return this.request<{ orders: MoneriumOrder[] } | MoneriumOrder[]>("GET", `/orders${q}`);
   }
 
   getOrder(orderId: string) {

@@ -275,12 +275,41 @@ export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
   return (await mirrorOrder(order)) ? "mirrored" : "ignored";
 }
 
-/** Every processed `issue` order Monerium knows about — the reconciler's
- *  view of what should have been credited locally. */
+/**
+ * Every profile we have issued an account on, plus the app's default.
+ *
+ * We create a profile per user, and Monerium scopes /orders to one profile at
+ * a time — so "all our orders" means asking once per profile. Derived from our
+ * own users rather than from Monerium's profile list: that list holds 50+
+ * abandoned shells from earlier runs, and polling each one every cycle would
+ * be pointless traffic.
+ */
+function ourProfileIds(): (string | undefined)[] {
+  const ids = new Set<string>();
+  for (const u of store.users) {
+    const id = u.funding?.moneriumProfileId;
+    if (id) ids.add(id);
+  }
+  // `undefined` = the default profile, which is where a deployment without
+  // per-user profiles (MONERIUM_PROFILE_ID unset on a non-whitelabel plan)
+  // puts everything.
+  return [undefined, ...ids];
+}
+
+/** Every processed `issue` order across our profiles — the reconciler's view
+ *  of what should have been credited locally. */
 export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
-  return orderList(await getClient().orders()).filter(
-    (o) => o.kind === "issue" && isProcessed(o),
-  );
+  const seen = new Map<string, MoneriumOrder>();
+  for (const profile of ourProfileIds()) {
+    let list: MoneriumOrder[] = [];
+    try {
+      list = orderList(await getClient().orders(profile));
+    } catch {
+      continue; // a dead profile must not blind us to the others
+    }
+    for (const o of list) if (o.kind === "issue" && isProcessed(o)) seen.set(o.id, o);
+  }
+  return [...seen.values()];
 }
 
 /**
@@ -288,10 +317,20 @@ export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
  * Returns the number of deposits credited.
  */
 export async function pollDepositsOnce(): Promise<number> {
-  const res = await getClient().orders();
   let credited = 0;
-  for (const order of orderList(res)) {
-    if (await mirrorOrder(order)) credited++;
+  // Once per profile. An unscoped call returns ONLY the default profile's
+  // orders, so with a profile per user this loop is the difference between
+  // seeing every customer deposit and seeing none of them.
+  for (const profile of ourProfileIds()) {
+    let list: MoneriumOrder[] = [];
+    try {
+      list = orderList(await getClient().orders(profile));
+    } catch {
+      continue;
+    }
+    for (const order of list) {
+      if (await mirrorOrder(order)) credited++;
+    }
   }
   return credited;
 }
