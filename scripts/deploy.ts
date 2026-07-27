@@ -140,7 +140,34 @@ async function main() {
   }
   console.log(`deploying to chain ${CHAIN_ID} via ${RPC_URL}`);
 
-  const eure = await deploy("MockToken", ["Monerium EUR emoney (mock)", "EURe", 18]);
+  /**
+   * On a chain where Monerium really issues EURe, use THEIR token.
+   *
+   * Deploying our own MockToken there would be worse than pointless: a deposit
+   * mints Monerium's real EURe into the user's Safe, so a vault backed by our
+   * token is backed by something no deposit can produce — and both tokens
+   * would sit on the same chain calling themselves EURe. The mock exists so
+   * that a hardhat node can have EURe at all, not as a stand-in for the real
+   * one where the real one is available.
+   */
+  const { moneriumEure } = await import("../services/api/src/adapters/monerium-tokens.js");
+  const { MONERIUM } = await import("../services/api/src/config.js");
+  const real = await moneriumEure(MONERIUM.baseUrl, CHAIN_ID);
+  let eure: `0x${string}`;
+  if (real) {
+    eure = real.address;
+    console.log(`EURe   ${eure}  (Monerium's own on ${real.chain} — not deployed by us)`);
+  } else if (CHAIN_ID === hardhat.id) {
+    eure = await deploy("MockToken", ["Monerium EUR emoney (mock)", "EURe", 18]);
+  } else {
+    // Refuse rather than quietly minting a token nobody can deposit into.
+    const { moneriumEvmChains } = await import("../services/api/src/adapters/monerium-tokens.js");
+    const chains = await moneriumEvmChains(MONERIUM.baseUrl).catch(() => []);
+    throw new Error(
+      `chain ${CHAIN_ID} is not local, and Monerium issues no EURe there, so deposits ` +
+        `could never arrive. Monerium issues on: ${chains.join(", ") || "(could not reach Monerium)"}`,
+    );
+  }
   const usdc = await deploy("MockToken", ["USD Coin (mock)", "USDC", 6]);
   const vault = await deploy("RemitVault", [eure, DAILY_CAP_EUR]);
   const eurUsdRate = await eurUsdSeed();

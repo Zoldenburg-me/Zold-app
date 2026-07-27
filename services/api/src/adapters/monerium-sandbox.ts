@@ -229,7 +229,16 @@ async function mirrorOrder(order: MoneriumOrder): Promise<boolean> {
   if (!user) return false;
   const amount = Number(order.amount);
   if (!(amount > 0)) return false;
-  await simulateSepaDeposit(user.address, amount, `monerium:${order.id}`);
+  // Native EURe (Amoy, Sepolia, …): the euros already exist in the user's
+  // Safe, so they are moved into the vault. Only a local chain mints.
+  const { moneriumEure } = await import("./monerium-tokens.js");
+  const { CHAIN_ID } = await import("../config.js");
+  if (await moneriumEure(MONERIUM.baseUrl, CHAIN_ID)) {
+    const { creditDepositFromSafe } = await import("./monerium.js");
+    await creditDepositFromSafe(user, amount, `monerium:${order.id}`);
+  } else {
+    await simulateSepaDeposit(user.address, amount, `monerium:${order.id}`);
+  }
   store.markOrderProcessed(order.id);
   console.log(`monerium: mirrored issue order ${order.id} (€${amount}) for ${user.name}`);
   return true;
