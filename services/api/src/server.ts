@@ -832,6 +832,19 @@ function readDecision(body: any, res: express.Response): "approved" | "rejected"
   return decision;
 }
 
+function safeFundedEurToday(userId: string, now = new Date()): number {
+  const day = now.toISOString().slice(0, 10);
+  return store.transfers
+    .filter(
+      (t) =>
+        t.userId === userId &&
+        t.fundingSource === "safe" &&
+        t.createdAt.slice(0, 10) === day &&
+        !["FAILED", "REFUNDED"].includes(t.state),
+    )
+    .reduce((sum, t) => sum + t.sendEur, 0);
+}
+
 /**
  * Operator authentication. Deliberately NOT a user session: a user must never
  * be able to approve their own KYC, which is exactly what the session-scoped
@@ -1146,9 +1159,45 @@ app.post(
     }
     const user = store.findUser(quote.userId)!;
     if (!requireKycApproved(user, res)) return;
-    const balance = await vaultBalance(user.address);
-    if (balance < quote.sendEur) {
-      return res.status(400).json({ error: `insufficient balance (€${balance.toFixed(2)})` });
+    const balances = await accountBalances(user.address);
+    let fundingSource: Transfer["fundingSource"] = "vault";
+    if (balances.vaultBalanceEur < quote.sendEur) {
+      if (balances.safeBalanceEur >= quote.sendEur && quote.rail === "sepa") {
+        fundingSource = "safe";
+      } else if (balances.safeBalanceEur >= quote.sendEur) {
+        return res.status(409).json({
+          error:
+            "funds are in the Safe, but Safe-funded cash/UPI execution is not implemented yet; " +
+            "use a SEPA payout or wait for the Safe-funded FX path",
+          safeBalanceEur: balances.safeBalanceEur,
+          vaultBalanceEur: balances.vaultBalanceEur,
+        });
+      } else {
+        return res.status(400).json({
+          error:
+            `insufficient balance (safe €${balances.safeBalanceEur.toFixed(2)}, ` +
+            `vault €${balances.vaultBalanceEur.toFixed(2)})`,
+        });
+      }
+    }
+    if (fundingSource === "safe" && !user.privateKey) {
+      return res.status(409).json({
+        error:
+          "funds are in the Safe, but this legacy account has no Safe owner key in the API store; " +
+          "create a new passkey/Safe account or recover the Safe before this transfer can execute",
+        safeBalanceEur: balances.safeBalanceEur,
+        vaultBalanceEur: balances.vaultBalanceEur,
+      });
+    }
+    if (fundingSource === "safe") {
+      const spentToday = safeFundedEurToday(user.id);
+      if (spentToday + quote.sendEur > FX.DAILY_CAP_EUR) {
+        return res.status(400).json({
+          error:
+            `amount exceeds daily cap of €${FX.DAILY_CAP_EUR} ` +
+            `(already reserved €${spentToday.toFixed(2)} from Safe today)`,
+        });
+      }
     }
 
     const transfer: Transfer = {
@@ -1165,6 +1214,7 @@ app.post(
       receiveKes: quote.receiveKes,
       receiveEur: quote.receiveEur,
       receiveInr: quote.receiveInr,
+      fundingSource,
       txs: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

@@ -16,6 +16,9 @@ executor still starts from `RemitVault.debit`. Today the poller can try to move
 Safe-held EURe into the vault with the server-held Safe owner key before
 crediting the ledger. That is transitional: it proves the old executor, but it
 keeps the server in the custody path and fails permanently if that key is lost.
+The newer SEPA transfer-creation path records `fundingSource = "vault" | "safe"`
+so Safe-held EURe is no longer hidden behind a misleading "insufficient vault
+balance" error. Safe-funded FX for cash/UPI is still a separate step.
 
 ---
 
@@ -119,6 +122,11 @@ Safe, not the vault. A transfer must therefore consume the Safe's EURe directly:
 
 Temporary compatibility is acceptable for local mock demos, where deposits are
 still mirrored into `RemitVault`.
+
+The transitional SEPA implementation may use `fundingSource: "safe"` and verify
+the same device authorization off-chain before collecting the fee and redeeming
+from the Safe. Treat that as a bridge only: it is not equivalent to on-chain
+policy enforcement while the server still holds `user.privateKey`.
 
 ### Step 2 — add the co-signer, threshold 2
 
