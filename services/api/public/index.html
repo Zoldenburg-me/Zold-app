@@ -492,6 +492,14 @@
           </svg>
         </div>
         <div class="detail">
+          <span class="k">SAFE EURe</span>
+          <span class="v" id="safe-balance">€0.00</span>
+        </div>
+        <div class="detail">
+          <span class="k">VAULT LEDGER</span>
+          <span class="v" id="vault-balance">€0.00</span>
+        </div>
+        <div class="detail">
           <span class="k">IBAN</span>
           <span class="v" id="iban">—</span>
           <button class="copybtn" data-copy="iban">copy</button>
@@ -688,6 +696,8 @@ function renderUser(u) {
   user = u;
   renderKycState(u);
   $("balance").innerHTML = `<span class="cur">€</span>${fmt(u.balanceEur ?? 0)}`;
+  $("safe-balance").textContent = `€${fmt(u.safeBalanceEur ?? 0)}`;
+  $("vault-balance").textContent = `€${fmt(u.vaultBalanceEur ?? 0)}`;
   $("address").textContent = u.address;
   const chip = $("fund-chip");
   if (!kycApproved(u)) {
@@ -932,6 +942,8 @@ async function createAccount(withPasskey) {
   try {
     const u = await api("/api/users", pendingInfo);
     u.balanceEur = 0;
+    u.safeBalanceEur = 0;
+    u.vaultBalanceEur = 0;
     user = u;
     renderUser(u);
     if (withPasskey) {

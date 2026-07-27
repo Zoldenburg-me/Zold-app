@@ -45,7 +45,8 @@ for (const [label, fn] of [
 }
 
 console.log(
-  "\nAll good. Start the stack (npm run dev), create a user in the UI, then make a\n" +
-    "simulated SEPA transfer to its IBAN from the Monerium sandbox portal — the\n" +
-    "deposit poller mirrors it into the vault automatically.",
+  "\nAll good. Start the stack, create a user in the UI, then make a simulated\n" +
+    "SEPA transfer to its IBAN from the Monerium sandbox portal. On non-local\n" +
+    "chains the API reports both Safe and vault balances; local dev still\n" +
+    "mirrors deposits into the mock vault.",
 );
