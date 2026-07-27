@@ -48,7 +48,7 @@ try {
   const pub = createPublicClient({ chain: hardhat, transport: http(RPC) });
   { const s = Date.now(); while (Date.now() - s < 30_000) { try { await pub.getBlockNumber(); break; } catch { await new Promise(r => setTimeout(r, 300)); } } }
   assert.equal(spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit", env: { ...ENV, TIMELOCK_DELAY_SECONDS: "0" } }).status, 0);
-  rmSync(path.join(ROOT, "data/db.json"), { force: true });
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"]);
   { const s = Date.now(); while (Date.now() - s < 30_000) { try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {} await new Promise(r => setTimeout(r, 300)); } }
 
