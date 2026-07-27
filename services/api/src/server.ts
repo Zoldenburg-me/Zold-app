@@ -58,6 +58,16 @@ import {
   refreshAuthorizationToken,
 } from "./adapters/monerium-client.js";
 import { deploySmartAccount, isDeployed, signMessageAsSafe } from "./wallet/candide.js";
+import {
+  attachTransfer,
+  createIntent,
+  exchangeCode,
+  isIntentExpired,
+  redirectAllowed,
+  seedDemoMerchant,
+  statusByToken,
+  statusView,
+} from "./checkout.js";
 
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
@@ -1200,6 +1210,106 @@ app.post(
   }),
 );
 
+// --- "Pay with Zold" checkout (merchant OAuth handoff) ----------------------
+
+// Merchant handoff: validate the client + redirect_uri, create a payment
+// intent, and send the user to our checkout UI. Returns JSON to API callers
+// (tests/SPAs), redirects a browser.
+app.get(
+  "/api/checkout/authorize",
+  wrap(async (req, res) => {
+    const q = req.query as Record<string, string>;
+    const merchant = q.client_id ? store.findMerchantByClientId(q.client_id) : undefined;
+    if (!merchant) return res.status(400).json({ error: "unknown client_id" });
+    if (!q.redirect_uri || !redirectAllowed(merchant, q.redirect_uri)) {
+      return res.status(400).json({ error: "redirect_uri not allowed for this client" });
+    }
+    const amountEur = Number(q.amount);
+    if (!(amountEur > 0)) return res.status(400).json({ error: "positive amount required" });
+    if (!q.code_challenge || (q.code_challenge_method ?? "S256") !== "S256") {
+      return res.status(400).json({ error: "S256 code_challenge required" });
+    }
+    const intent = createIntent(merchant, {
+      amountEur,
+      reference: q.reference ?? "",
+      redirectUri: q.redirect_uri,
+      state: q.state ?? "",
+      codeChallenge: q.code_challenge,
+    });
+    const checkoutUrl = `/checkout?intent=${intent.id}`;
+    if ((req.header("accept") ?? "").includes("application/json")) {
+      return res.status(201).json({ intentId: intent.id, checkoutUrl, merchant: merchant.name, amountEur });
+    }
+    res.redirect(checkoutUrl);
+  }),
+);
+
+// Public-facing intent info for the checkout UI (no secrets): who is being
+// paid and how much. No auth — it's a redirect target the user just landed on.
+app.get(
+  "/api/checkout/intents/:id",
+  wrap(async (req, res) => {
+    const intent = store.findPaymentIntent(req.params.id);
+    if (!intent) return res.status(404).json({ error: "unknown checkout" });
+    const merchant = store.findMerchant(intent.merchantId);
+    res.json({
+      ...statusView(intent),
+      merchant: merchant?.name,
+      merchantIban: merchant?.ibanTarget,
+      expired: isIntentExpired(intent),
+    });
+  }),
+);
+
+// The user (signed in, KYC-approved) links the transfer they just authorized
+// into the merchant's IBAN, minting the one-time code and the redirect back.
+app.post(
+  "/api/checkout/intents/:id/attach",
+  wrap(async (req, res) => {
+    const intent = store.findPaymentIntent(req.params.id);
+    if (!intent) return res.status(404).json({ error: "unknown checkout" });
+    const transfer = store.findTransfer(req.body?.transferId);
+    if (!transfer) return res.status(404).json({ error: "transfer not found" });
+    if (!requireUserSession(req, res, transfer.userId)) return;
+    try {
+      res.json(attachTransfer(intent, transfer.userId, transfer));
+    } catch (e: any) {
+      res.status(400).json({ error: String(e?.message ?? e) });
+    }
+  }),
+);
+
+// Merchant confidential token exchange: code + PKCE verifier + client secret
+// → status + a bearer for polling. Burns the code.
+app.post(
+  "/api/checkout/token",
+  wrap(async (req, res) => {
+    const { client_id, client_secret, code, code_verifier } = req.body ?? {};
+    if (!client_id || !client_secret || !code || !code_verifier) {
+      return res.status(400).json({ error: "client_id, client_secret, code and code_verifier required" });
+    }
+    try {
+      res.json(exchangeCode(client_id, client_secret, code, code_verifier));
+    } catch (e: any) {
+      res.status(400).json({ error: String(e?.message ?? e) });
+    }
+  }),
+);
+
+// Merchant status polling with the exchange bearer.
+app.get(
+  "/api/checkout/status/:id",
+  wrap(async (req, res) => {
+    const tok = bearerToken(req);
+    if (!tok) return res.status(401).json({ error: "authorization required" });
+    try {
+      res.json(statusByToken(req.params.id, tok));
+    } catch (e: any) {
+      res.status(404).json({ error: String(e?.message ?? e) });
+    }
+  }),
+);
+
 // Monerium webhook receiver (production path; polling covers local dev).
 /**
  * FP4: register the device key that may authorize debits from this account.
@@ -1371,6 +1481,9 @@ app.use(((err, _req, res, _next) => {
 }) as express.ErrorRequestHandler);
 
 initStore();
+// "Pay with Zold": seed a demo merchant only where simulation is allowed
+// (local/demo) so the checkout flow is exercisable without a real partner.
+if (SECURITY.allowSimulation) seedDemoMerchant(process.env.CHECKOUT_DEMO_IBAN);
 // Fail fast on a chain mismatch: signatures built for the wrong chain id are
 // rejected by the vault as "bad authorization", which reads like a signing bug.
 assertChainMatches().catch((e) => {
