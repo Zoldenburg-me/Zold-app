@@ -3,6 +3,8 @@
  * EURe as a "refund". It must park the transfer for manual review until a
  * treasury-funded refund path exists.
  */
+// Must be first: pins chain, keys and a throwaway database.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import path from "node:path";
@@ -12,7 +14,7 @@ process.env.TRANSF_RPC_URL = "https://polygon-amoy.example.invalid";
 process.env.ALLOW_DEV_KEYS_ON_EXTERNAL_RPC = "1";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-rmSync(path.join(ROOT, "data/db.json"), { force: true });
+rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { compensateTransfer } = await import("../services/api/src/orchestrator.js");

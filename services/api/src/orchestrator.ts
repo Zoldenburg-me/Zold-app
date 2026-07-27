@@ -31,6 +31,7 @@ import {
   eur,
   usd,
   orchestratorAddress,
+  forwardEureForRedeem,
   orchestratorWallet,
   publicClient,
   transferIdHash,
@@ -218,10 +219,21 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   }
 
   if (!USING_LOCAL_RPC) {
+    // Whoever picks this up needs to know where the euros physically are. On
+    // the SEPA rail we may already have forwarded the payout into the user's
+    // own Safe for the redeem to burn — if the redeem then failed, that money
+    // is with the user, and re-crediting the vault as well would pay them
+    // twice. Say so here rather than leaving it to be rediscovered.
+    const forwarded = txs.find((x) => x.step === "eure.transfer(user-safe)");
     return store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error:
-        "automatic refund requires minting mock EURe; refusing on non-local RPC until a treasury-funded refund path exists",
+        "automatic refund requires minting EURe, which we cannot do off a local chain; " +
+        "refusing on non-local RPC until a treasury-funded refund path exists" +
+        (forwarded
+          ? `. NOTE: €${refundEur} was already forwarded to the user's Safe for the redeem ` +
+            `(tx ${forwarded.hash}) — check whether the redeem burned it before refunding anything`
+          : ""),
       txs,
     });
   }
@@ -502,6 +514,24 @@ export async function executeSepaTransfer(
 
     if (moneriumSandboxEnabled()) {
       try {
+        /**
+         * On a chain where the vault holds Monerium's real EURe, the euros are
+         * now sitting with the orchestrator (that is where debit sent them),
+         * but a redeem burns from the user's OWN Safe — Monerium proves
+         * ownership by asking the Safe to sign (EIP-1271). So the payout
+         * amount has to be forwarded to the Safe before the redeem, or
+         * Monerium has nothing to burn and the order fails.
+         *
+         * Only `payoutEur` moves, not the whole debit: the difference is our
+         * fee, and it stays with the orchestrator. Sending the full amount
+         * would hand the fee to the user and we would never collect it.
+         *
+         * On a local chain the vault holds a mock EURe that Monerium has
+         * never heard of, so there is nothing to forward.
+         */
+        const forwardHash = await forwardEureForRedeem(user.address, payoutEur);
+        if (forwardHash) txs.push({ step: "eure.transfer(user-safe)", hash: forwardHash });
+
         const order = await redeemToIban(user, payoutEur, counterpart, `Zold ${transfer.id}`);
         return store.updateTransfer(transfer.id, {
           state: "PAYOUT_SUBMITTED",

@@ -15,6 +15,23 @@ import { defineChain } from "viem";
 import { hardhat, polygon, polygonAmoy } from "viem/chains";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * Load .env before anything reads process.env.
+ *
+ * This script used to read the environment directly while only the API loaded
+ * .env, so a chain and RPC configured there were silently ignored here: you
+ * could set TRANSF_CHAIN_ID=84532, run the deploy, and have it go to the local
+ * hardhat default instead — the one outcome that looks like success while
+ * being completely wrong. config.js does this too, but it is imported lazily
+ * further down, which is far too late.
+ */
+try {
+  process.loadEnvFile(path.join(ROOT, ".env"));
+} catch {
+  // no .env — shell environment or defaults
+}
+
 const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
 const CHAIN_ID = Number(process.env.TRANSF_CHAIN_ID ?? 31337);
 
@@ -33,9 +50,7 @@ const chain = (() => {
   }
 })();
 
-if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/)/.test(RPC_URL) && process.env.ALLOW_DEV_KEYS_ON_EXTERNAL_RPC !== "1") {
-  throw new Error("refusing to deploy hardhat development keys to a non-local RPC");
-}
+const LOCAL_RPC = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/)/.test(RPC_URL);
 
 /** Hardhat's well-known accounts — fine locally, never off it. */
 const DEV_KEYS = {
@@ -66,6 +81,29 @@ const KEYS = {
   orchestrator: key("orchestrator"),
   ramp: key("ramp"),
 } as const;
+
+/**
+ * Never put hardhat's published keys on a chain anyone else can reach.
+ *
+ * Checked against the keys we actually resolved, not against the RPC alone.
+ * The old form refused every non-local RPC outright, so a deployment with
+ * three real keys was blocked, and the documented way past it
+ * (ALLOW_DEV_KEYS_ON_EXTERNAL_RPC=1) would also have waved through the real
+ * dev keys — the exact thing being guarded against.
+ */
+if (!LOCAL_RPC) {
+  const dev = Object.values(DEV_KEYS).map((k) => k.toLowerCase());
+  const offenders = (Object.keys(KEYS) as (keyof typeof KEYS)[]).filter((r) =>
+    dev.includes(KEYS[r].toLowerCase()),
+  );
+  if (offenders.length && process.env.ALLOW_DEV_KEYS_ON_EXTERNAL_RPC !== "1") {
+    throw new Error(
+      `refusing to deploy hardhat development keys to a non-local RPC: ${offenders.join(", ")} ` +
+        `${offenders.length > 1 ? "are" : "is"} a published key anyone can spend from. ` +
+        `Set DEPLOY_${offenders[0].toUpperCase()}_KEY to a key you control.`,
+    );
+  }
+}
 
 const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
 const deployer = createWalletClient({
@@ -140,7 +178,34 @@ async function main() {
   }
   console.log(`deploying to chain ${CHAIN_ID} via ${RPC_URL}`);
 
-  const eure = await deploy("MockToken", ["Monerium EUR emoney (mock)", "EURe", 18]);
+  /**
+   * On a chain where Monerium really issues EURe, use THEIR token.
+   *
+   * Deploying our own MockToken there would be worse than pointless: a deposit
+   * mints Monerium's real EURe into the user's Safe, so a vault backed by our
+   * token is backed by something no deposit can produce — and both tokens
+   * would sit on the same chain calling themselves EURe. The mock exists so
+   * that a hardhat node can have EURe at all, not as a stand-in for the real
+   * one where the real one is available.
+   */
+  const { moneriumEure } = await import("../services/api/src/adapters/monerium-tokens.js");
+  const { MONERIUM } = await import("../services/api/src/config.js");
+  const real = await moneriumEure(MONERIUM.baseUrl, CHAIN_ID);
+  let eure: `0x${string}`;
+  if (real) {
+    eure = real.address;
+    console.log(`EURe   ${eure}  (Monerium's own on ${real.chain} — not deployed by us)`);
+  } else if (CHAIN_ID === hardhat.id) {
+    eure = await deploy("MockToken", ["Monerium EUR emoney (mock)", "EURe", 18]);
+  } else {
+    // Refuse rather than quietly minting a token nobody can deposit into.
+    const { moneriumEvmChains } = await import("../services/api/src/adapters/monerium-tokens.js");
+    const chains = await moneriumEvmChains(MONERIUM.baseUrl).catch(() => []);
+    throw new Error(
+      `chain ${CHAIN_ID} is not local, and Monerium issues no EURe there, so deposits ` +
+        `could never arrive. Monerium issues on: ${chains.join(", ") || "(could not reach Monerium)"}`,
+    );
+  }
   const usdc = await deploy("MockToken", ["USD Coin (mock)", "USDC", 6]);
   const vault = await deploy("RemitVault", [eure, DAILY_CAP_EUR]);
   const eurUsdRate = await eurUsdSeed();
@@ -164,7 +229,23 @@ async function main() {
   await call(vault, "RemitVault", "setOrchestrator", [orchestratorAddr, true]);
   await call(swapper, "FxSwapper", "setTrader", [orchestratorAddr, true]);
   await call(bridge, "BridgeEscrow", "setOrchestrator", [orchestratorAddr, true]);
-  await call(eure, "MockToken", "mint", [swapper, SWAP_INVENTORY_EURE]);
+  /**
+   * Seed the swapper's inventory.
+   *
+   * USDC here is our own mock, so it can be minted. EURe cannot be when it is
+   * Monerium's — we are not its owner, and the mint reverts. That only starves
+   * the USDC->EURe direction, which is the refund/compensation path; the
+   * outbound EUR->USDC leg every transfer uses needs USDC inventory, which we
+   * do have. Funding the reverse side means sending real EURe to the swapper.
+   */
+  if (real) {
+    console.log(
+      `EURe inventory   skipped — ${eure} is Monerium's token and cannot be minted.\n` +
+        `                 USDC->EURe swaps (refunds) have no inventory until it is funded.`,
+    );
+  } else {
+    await call(eure, "MockToken", "mint", [swapper, SWAP_INVENTORY_EURE]);
+  }
   await call(usdc, "MockToken", "mint", [swapper, SWAP_INVENTORY_USDC]);
 
   // A guardian can halt the system instantly without waiting out the timelock.
@@ -190,7 +271,7 @@ async function main() {
   all[String(CHAIN_ID)] = out;
   writeFileSync(file, JSON.stringify(all, null, 2) + "\n");
   console.log(
-    `\nroles wired, swapper seeded with 1,000,000 EURe and 1,000,000 USDC` +
+    `\nroles wired, swapper seeded with ${real ? "0" : "1,000,000"} EURe and 1,000,000 USDC` +
       `\nadmin ownership -> AdminTimelock ${timelock} (${TIMELOCK_THRESHOLD}-of-${timelockOwners.length}, ${TIMELOCK_DELAY}s delay)`,
   );
   console.log(`wrote deployments.json entry for chain ${CHAIN_ID}`);

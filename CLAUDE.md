@@ -317,6 +317,113 @@ senderProfile PII in plaintext.
 Launch gate: local demos fine; NOT safe hosted, with real funds, or claiming
 payout finality until FP1-FP4 done.
 
+## Liquidity venues — tested, not assumed (July 2026)
+
+The problem: we cannot carry a treasury. The FxSwapper model holds inventory we
+fund, which does not scale past a demo. Liquidity has to come from someone else
+at execution time.
+
+TESTED AGAINST THE REAL APIS, not docs:
+
+**Bebop — does NOT work for us.**
+ - `TokenNotSupported` for EURe on base, polygon and gnosis, using Monerium's
+   own production addresses (0xbf6e2966…, 0xE0aEa583…, 0x420CA0f9…).
+ - No testnet at all: /pmm/base-sepolia/... is a 404. So the RFQ path can
+   never be exercised on a testnet, only with real money on a mainnet.
+ - The adapter itself is CORRECT: a real mainnet quote for a supported pair
+   (USDC->WETH on Base) parses cleanly through RfqLiquidityProvider — every
+   field it reads is present. Keep it; the counterparty is the problem, not
+   the code.
+ - Found while doing that: Bebop returns `approvalTarget` SEPARATELY from
+   `tx.to`. They are the same contract today, so approving tx.to worked by
+   luck. Now fixed to approve what the maker names — otherwise a move to a
+   separate settlement contract or Permit2 would break every swap silently.
+
+**CoW Protocol — works, and is the likely answer.**
+ - Quotes EURe->USDC on Gnosis at essentially the mid: 100 EURe -> 113.83 USDC
+   (1.1383) against a live EUR/USD of ~1.1379.
+ - Intent-based: you sign an order, solvers compete to fill it. No inventory on
+   either side, which is the whole point.
+ - `signingScheme: eip1271` — a Safe can sign the order itself. Same shape as
+   the FP4 recovery plan, and the same combination Safe Foundation used in
+   their consumer build.
+ - RATE LIMITED, hard. Two quotes seconds apart returned 429 pointing at their
+   Discord for a custom limit. indicativeRate() is cached for exactly this
+   reason; the 60s default may still be too aggressive with real users, and a
+   negotiated limit is worth asking for before this is production liquidity.
+ - CowLiquidityProvider is wired for QUOTING ONLY. execute() refuses on
+   purpose: placing an order needs an EIP-712 signature over CoW's order
+   struct, and a decision about who signs — the user's Safe with the user
+   present, or the orchestrator. Half-working execution would be worse than
+   none.
+
+CONSEQUENCE FOR THE CHAIN DECISION: EURe's deepest liquidity is on GNOSIS, and
+Monerium is Gnosis-native. Base Sepolia was chosen for testing because gas is
+~9,000x cheaper than Amoy, which was right for testing and says nothing about
+production. If CoW-on-Gnosis is the liquidity route, Gnosis is the natural
+production chain — not Base, not Polygon. Decide it deliberately.
+
+## FP4 completion — recovery (decided July 2026, 2-of-2)
+
+THE BLOCKER: losing the browser device key permanently bricks an account.
+`RemitVault.setAuthorizer` only lets the CURRENT authorizer rotate, and the
+key lives in localStorage. No passkey, no support path, no ramp override
+recovers it. Demonstrated live: the "Base Proof" account on Base Sepolia has
+EUR 121 credited and can never spend it. Safe Foundation's own consumer
+research (built-tested-shelved, July 2026) found users will not fund an
+account without credible, *rehearsable* recovery — so this gates launch, not
+polish.
+
+THE FIX, in this order (the order is not optional):
+ 0. Refuse to issue an IBAN until a passkey exists. An IBAN is the point of
+    no return — after it, money can arrive. DONE (passkeyRequiredBeforeFunding,
+    gated on allowSimulation so e2e/local demos still run).
+ 1. Passkey becomes a Safe owner (abstractionkit `fromSafeWebauthn`),
+    replacing the server-held user.privateKey.
+ 2. Add the co-signer as a second owner, threshold 2. 2-of-2 for now —
+    Privy/Turnkey cost money, so the third (social-login) signer is deferred.
+    The server signs every payment and can never act alone.
+ 3. setAuthorizer(safe, safe). `_isValidSignature` already accepts EIP-1271,
+    so NO CONTRACT CHANGE. After this authorizerOf never changes again.
+ 4. Install Candide's SocialRecoveryModule with guardians. With only 2-of-2
+    there is no spare signer, so guardians are REQUIRED, not optional.
+ 5. Delete user.privateKey — the last server-held key, currently plaintext in
+    db.json next to senderProfile PII.
+
+WHY THE ORDER: steps 1-2 must precede 3. Pointing authorizerOf at the Safe
+while the server still owns it would hand the database spending power over
+every balance. The device key is the only thing preventing that today.
+
+VERIFIED, so nobody re-litigates it:
+ - RIP-7212 (P256 precompile) is LIVE on Base Sepolia AND Base mainnet —
+   tested with a real generated signature. Passkey-owned Safes need no
+   verifier contract.
+ - abstractionkit 0.4.0 (already a dependency) exports SocialRecoveryModule,
+   SocialRecoveryModuleGracePeriodSelector, fromSafeWebauthn,
+   webauthnSignatureFromAssertion, WebauthnDummySignerSignaturePair.
+ - RemitVault._isValidSignature staticcalls isValidSignature for contract
+   signers — the hook is already there.
+
+WRINKLE TO DESIGN IN FROM THE START: redeemToIban signs as the Safe to burn
+EURe, and runs asynchronously after the user has gone. A passkey-owned Safe
+cannot be signed by the server alone. Collect BOTH signatures at send time —
+the vault authorization and the Monerium redeem message. Both are fully
+determined when the user approves (amount + IBAN), so nothing is signed blind.
+
+HARD EDGE: only the current authorizer can rotate, so accounts that still
+hold their device key can migrate themselves; ones that lost it never can.
+This fixes the future, not the past.
+
+BACKSTOP, NOT A PRODUCT: EURe is e-money, so Monerium's liability is to the
+identified customer and holders have a redemption right at par — unlike USDC,
+where Circle owes the holder nothing. Monerium also has the technical means
+(EURe is a UUPS proxy they own, with mint(); no burn/recover/forceTransfer
+selector exists in the deployed implementation). So a lost wallet is likely
+recoverable through re-KYC and reissuance. UNCONFIRMED — not in their docs,
+ask them in writing. It does not cover USDC or in-flight transfers, does not
+restore the Safe, and "submit ID and wait" is not a recovery path to put in
+front of someone whose salary is in the account.
+
 ## Roadmap (agreed priority)
 0. Payout partners secured (July 2026): **dLocal** (crypto product:
    stablecoin-funded payouts, 60+ markets — UPI/India, M-Pesa/Kenya, PIX/
@@ -340,6 +447,32 @@ payout finality until FP1-FP4 done.
    WebAuthn Safe owners for FP4). Monerium sandbox chain name = `amoy` (VERIFIED; other aliases rejected).
    Safes keep the same address cross-chain.
 4. Passkey-as-Safe-owner (true non-custodial; today passkey is auth only).
+5. Card rail — **Immersve** (immersve.com, docs.immersve.com). Mastercard
+   PRINCIPAL MEMBER, so they are the issuer rather than a reseller (contrast
+   Gnosis Pay, which routes through Monavate). Three funding protocols:
+   - *Approval-based* (Universal EVM): cardholder spends straight from their
+     own wallet via a standard ERC-20 approval — no deposit, no migration.
+   - *Flexi deposit*: a dedicated cardholder-scoped contract, balance readable
+     on-chain, PERMISSIONLESS withdrawals (the user can always exit).
+   - *Universal deposit*: one shared partner-scoped contract, cheaper gas.
+   Authorisation flow: Mastercard sends the auth, Immersve reads the chain in
+   real time, and on sufficient funds pulls the token, converts to fiat via
+   Circle and settles with Mastercard.
+   Chains: Algorand, Arbitrum, **Base**, BNB, Ethereum, **Polygon**, Sei —
+   both chains we care about are covered.
+   THE CATCH: **USDC/USDT only. No EURe.** Our vault holds EURe, so a card
+   cannot spend the balance directly. Either the user keeps a USDC sleeve, or
+   we convert on demand — which the cash/UPI rails already do (FxSwapper /
+   JIT RFQ), so the machinery exists. Note this puts EUR/USD FX between a
+   user's balance and their card spend; on the RECIPIENT side that question
+   disappears, since they can be paid in USDC and spend it.
+   Also: Immersve runs its own KYC ("Immersve Conducted KYC", recommended for
+   non-custodial), so it is a second identity relationship alongside
+   Monerium's, not a reuse of it.
+   Best fit is the receiving end — a recipient who can spend beats one
+   collecting cash at a counter. Unanswered: issuer of record per region
+   (their site says "regulatory licenses" without naming entities, and our
+   regulator page names entities precisely), and per-region availability.
 Parked deliberately: NEAR Intents (future multi-chain deposits), Metastable
 (EURe↔EURC later), Flexa/AMP (no — wrong market, card program beats it).
 

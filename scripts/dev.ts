@@ -2,10 +2,20 @@
  * One-command local stack: chain -> deploy -> API (with UI at :3000).
  * Run: npm run dev
  */
+// Must be first: pins the chain/keys before config.js reads the environment.
+import "./_local-chain.js";
+/**
+ * The local demo stack gets its own store, not the temp file tests use and
+ * not data/db.json. `npm run dev` resets the database on every start, so
+ * pointing it at the working file meant a dev restart could destroy a real
+ * account — the same way a test run did.
+ */
+process.env.TRANSF_DB_PATH = "data/db.dev.json";
 import { spawn, spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = (name: string) => path.join(ROOT, "node_modules/.bin", name);
@@ -45,7 +55,7 @@ const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
 if (dep.status !== 0) process.exit(1);
 
 // A fresh chain each run means old demo users reference dead chain state.
-rmSync(path.join(ROOT, "data/db.json"), { force: true });
+rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
 console.log(`starting API on :${API_PORT}…`);
 const api = spawn(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
