@@ -317,6 +317,52 @@ senderProfile PII in plaintext.
 Launch gate: local demos fine; NOT safe hosted, with real funds, or claiming
 payout finality until FP1-FP4 done.
 
+## Liquidity venues — tested, not assumed (July 2026)
+
+The problem: we cannot carry a treasury. The FxSwapper model holds inventory we
+fund, which does not scale past a demo. Liquidity has to come from someone else
+at execution time.
+
+TESTED AGAINST THE REAL APIS, not docs:
+
+**Bebop — does NOT work for us.**
+ - `TokenNotSupported` for EURe on base, polygon and gnosis, using Monerium's
+   own production addresses (0xbf6e2966…, 0xE0aEa583…, 0x420CA0f9…).
+ - No testnet at all: /pmm/base-sepolia/... is a 404. So the RFQ path can
+   never be exercised on a testnet, only with real money on a mainnet.
+ - The adapter itself is CORRECT: a real mainnet quote for a supported pair
+   (USDC->WETH on Base) parses cleanly through RfqLiquidityProvider — every
+   field it reads is present. Keep it; the counterparty is the problem, not
+   the code.
+ - Found while doing that: Bebop returns `approvalTarget` SEPARATELY from
+   `tx.to`. They are the same contract today, so approving tx.to worked by
+   luck. Now fixed to approve what the maker names — otherwise a move to a
+   separate settlement contract or Permit2 would break every swap silently.
+
+**CoW Protocol — works, and is the likely answer.**
+ - Quotes EURe->USDC on Gnosis at essentially the mid: 100 EURe -> 113.83 USDC
+   (1.1383) against a live EUR/USD of ~1.1379.
+ - Intent-based: you sign an order, solvers compete to fill it. No inventory on
+   either side, which is the whole point.
+ - `signingScheme: eip1271` — a Safe can sign the order itself. Same shape as
+   the FP4 recovery plan, and the same combination Safe Foundation used in
+   their consumer build.
+ - RATE LIMITED, hard. Two quotes seconds apart returned 429 pointing at their
+   Discord for a custom limit. indicativeRate() is cached for exactly this
+   reason; the 60s default may still be too aggressive with real users, and a
+   negotiated limit is worth asking for before this is production liquidity.
+ - CowLiquidityProvider is wired for QUOTING ONLY. execute() refuses on
+   purpose: placing an order needs an EIP-712 signature over CoW's order
+   struct, and a decision about who signs — the user's Safe with the user
+   present, or the orchestrator. Half-working execution would be worse than
+   none.
+
+CONSEQUENCE FOR THE CHAIN DECISION: EURe's deepest liquidity is on GNOSIS, and
+Monerium is Gnosis-native. Base Sepolia was chosen for testing because gas is
+~9,000x cheaper than Amoy, which was right for testing and says nothing about
+production. If CoW-on-Gnosis is the liquidity route, Gnosis is the natural
+production chain — not Base, not Polygon. Decide it deliberately.
+
 ## FP4 completion — recovery (decided July 2026, 2-of-2)
 
 THE BLOCKER: losing the browser device key permanently bricks an account.

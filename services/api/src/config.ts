@@ -333,7 +333,7 @@ export function loadAbi(contract: string): any[] {
  * but a partner key gets better pricing and higher rate limits.
  */
 export const LIQUIDITY = {
-  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq",
+  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow",
   // Bebop's chain slug, e.g. "polygon", "base", "ethereum".
   BEBOP_CHAIN: process.env.BEBOP_CHAIN ?? "polygon",
   BEBOP_BASE_URL: process.env.BEBOP_BASE_URL ?? "https://api.bebop.xyz",
@@ -343,6 +343,18 @@ export const LIQUIDITY = {
   PROBE_EUR: Number(process.env.LIQUIDITY_PROBE_EUR ?? 100),
   /** How long an indicative (display-only) rate may be reused. */
   INDICATIVE_TTL_MS: Number(process.env.LIQUIDITY_INDICATIVE_TTL_MS ?? 60_000),
+  /**
+   * CoW Protocol. Intent-based rather than RFQ: you sign an order and solvers
+   * compete to fill it, so no inventory is carried on either side — which is
+   * the reason it is here. Unlike Bebop it actually lists EURe, and it accepts
+   * EIP-1271, so a Safe can sign the order itself.
+   *
+   * The API is per-network: "xdai" is Gnosis, where EURe liquidity is deepest
+   * because Monerium is Gnosis-native.
+   */
+  COW_BASE_URL: process.env.COW_BASE_URL ?? "https://api.cow.fi",
+  COW_NETWORK: process.env.COW_NETWORK ?? "xdai",
+  COW_TIMEOUT_MS: Number(process.env.COW_TIMEOUT_MS ?? 15_000),
 };
 
 // Live mid-rate feed. Defaults to a free, key-less provider that publishes all

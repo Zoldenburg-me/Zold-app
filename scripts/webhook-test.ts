@@ -226,8 +226,29 @@ try {
   });
 
   console.log("      restarting API with a webhook secret…");
-  children.at(-1)!.kill();
-  await new Promise((r) => setTimeout(r, 1200));
+  /**
+   * Wait for the old server to actually exit and release the port before
+   * rebinding it. A fixed 1.2s sleep was a guess, and under a full suite run
+   * — where dozens of chains and servers are starting and stopping — it was
+   * routinely too short: the replacement failed to bind, the health poll timed
+   * out 30s later, and the failure looked like a broken product rather than a
+   * race in the test.
+   */
+  const dying = children.at(-1)!;
+  await new Promise<void>((resolve) => {
+    if (dying.exitCode !== null || dying.signalCode !== null) return resolve();
+    dying.once("exit", () => resolve());
+    dying.kill();
+    setTimeout(() => resolve(), 10_000).unref(); // never hang the suite
+  });
+  // The process is gone; now wait for the socket to be free.
+  for (const s = Date.now(); Date.now() - s < 15_000; ) {
+    const stillUp = await fetch(`${API}/api/health`, { signal: AbortSignal.timeout(500) })
+      .then(() => true)
+      .catch(() => false);
+    if (!stillUp) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
     MONERIUM_CLIENT_ID: "stub",
     MONERIUM_CLIENT_SECRET: "stub",

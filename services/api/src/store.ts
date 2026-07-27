@@ -177,7 +177,7 @@ export interface Transfer {
   /** Internal JIT liquidity execution details. This records how value moved
    *  into the settlement asset for the payout rail; it is not a swap product. */
   liquidity?: {
-    provider: "fx-swapper" | "rfq";
+    provider: "fx-swapper" | "rfq" | "cow";
     side: "EURE_TO_USDC" | "USDC_TO_EURE";
     quoteId: string;
     tokenIn: "EURe" | "USDC";
@@ -191,7 +191,7 @@ export interface Transfer {
      *  because the plan is prepared and executed in separate steps — a quote
      *  that lost its tx cannot be replayed, and re-quoting at execution time
      *  would settle at a price the user never agreed to. */
-    rfq?: { quoteId: string; tx: { to?: string; data?: string; value?: string } | null };
+    rfq?: { quoteId: string; tx: { to?: string; data?: string; value?: string } | null; approvalTarget?: string };
     executedAt?: string;
     txHash?: string;
   };
