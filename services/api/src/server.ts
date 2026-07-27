@@ -1236,7 +1236,7 @@ app.get(
       state: q.state ?? "",
       codeChallenge: q.code_challenge,
     });
-    const checkoutUrl = `/checkout?intent=${intent.id}`;
+    const checkoutUrl = `/checkout.html?intent=${intent.id}`;
     if ((req.header("accept") ?? "").includes("application/json")) {
       return res.status(201).json({ intentId: intent.id, checkoutUrl, merchant: merchant.name, amountEur });
     }
