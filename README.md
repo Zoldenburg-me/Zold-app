@@ -82,11 +82,11 @@ Running this repo with sandbox credentials, today:
 - Live Monerium deposits mint real EURe to the user's Safe. The UI shows both
   the Safe balance and the vault ledger balance. The current transfer executor
   selects a funding source per transfer: vault ledger first for local/mock
-  compatibility, otherwise Safe-held EURe for SEPA only. Safe-funded FX for
-  cash/UPI is intentionally deferred. The Safe-funded SEPA path verifies the
-  device authorization before redeeming, but it still relies on the legacy
-  server-held Safe owner key until FP4 custody replaces that key with
-  passkey/co-signer approval.
+  compatibility, otherwise Safe-held EURe when available. Safe-funded SEPA
+  redeems directly from the Safe after collecting the fee; Safe-funded cash/UPI
+  move the exact signed amount to the orchestrator for the existing FX path.
+  These one-time Safe operations still rely on the legacy server-held Safe owner
+  key until FP4 custody replaces that key with passkey/co-signer approval.
 - FX rates come from constants, not an oracle. The swap contract is a
   stand-in for a DEX route.
 - The UPI partner and the MoneyGram payout (in mock mode) return generated
