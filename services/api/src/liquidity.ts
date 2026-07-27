@@ -16,7 +16,7 @@ const MAX_SLIPPAGE_BPS = 30n;
 
 export type LiquiditySide = "EURE_TO_USDC" | "USDC_TO_EURE";
 export type LiquidityToken = "EURe" | "USDC";
-export type LiquidityProviderId = "fx-swapper" | "rfq";
+export type LiquidityProviderId = "fx-swapper" | "rfq" | "cow";
 
 export interface LiquidityQuote {
   provider: LiquidityProviderId;
@@ -30,7 +30,15 @@ export interface LiquidityQuote {
   rate: bigint;
   expiresAt: string;
   /** RFQ only: the maker's quote id and the tx it wants submitted. */
-  rfq?: { quoteId: string; tx: { to?: string; data?: string; value?: string } | null };
+  /** RFQ only: the maker's quote id, the tx it wants submitted, and the
+   *  address that must be approved to pull the sell token. */
+  rfq?: {
+    quoteId: string;
+    tx: { to?: string; data?: string; value?: string } | null;
+    approvalTarget?: string;
+  };
+  /** CoW only: the order the solvers will fill. */
+  cow?: { orderId: string; feeAmount: string; validTo: number; appData: string };
 }
 
 export interface LiquidityExecution {
@@ -216,7 +224,15 @@ class RfqLiquidityProvider implements LiquidityProvider {
       rate: amountIn > 0n ? (expectedOut * 10n ** 18n) / amountIn : 0n,
       expiresAt:
         makerExpiry && Date.parse(makerExpiry) < Date.parse(expiresAt) ? makerExpiry : expiresAt,
-      rfq: { quoteId: String(body.quoteId ?? ""), tx: body.tx ?? null },
+      rfq: {
+        quoteId: String(body.quoteId ?? ""),
+        tx: body.tx ?? null,
+        // Bebop returns this separately from tx.to. They are the same contract
+        // today, so approving tx.to happens to work — and would break silently
+        // the moment they differ (a separate settlement contract, or Permit2
+        // instead of a standard approval). Approve what the maker names.
+        approvalTarget: body.approvalTarget ?? body.tx?.to,
+      },
     };
   }
 
@@ -235,12 +251,15 @@ class RfqLiquidityProvider implements LiquidityProvider {
     }
     const a = addrs();
     const token = quote.side === "EURE_TO_USDC" ? a.eure : a.usdc;
-    // The settlement contract pulls the sell token from the orchestrator.
+    // Approve the address the maker nominated, not the tx target. Bebop
+    // returns approvalTarget separately; the two coincide today, so approving
+    // tx.to works by luck rather than by contract.
+    const spender = (quote.rfq?.approvalTarget ?? tx.to) as `0x${string}`;
     const approveHash = await writeAndWait(orchestratorWallet, {
       address: token,
       abi: abis.MockToken,
       functionName: "approve",
-      args: [tx.to as `0x${string}`, quote.amountIn],
+      args: [spender, quote.amountIn],
     });
     const swapHash = await orchestratorWallet.sendTransaction({
       to: tx.to as `0x${string}`,
@@ -291,6 +310,124 @@ class RfqLiquidityProvider implements LiquidityProvider {
 }
 
 /**
+ * CoW Protocol — intent-based liquidity, no inventory on either side.
+ *
+ * Why this exists alongside the RFQ provider: Bebop does not list EURe (tested
+ * against Monerium's production addresses on Base, Polygon and Gnosis — all
+ * "TokenNotSupported"), and has no testnet at all. CoW does quote EURe, at
+ * essentially the mid rate, on Gnosis where Monerium is native and EURe
+ * liquidity is deepest.
+ *
+ * The model differs from RFQ in a way that matters here. There is no
+ * transaction to submit: you sign an ORDER and solvers compete to fill it. So
+ * `execute` places the order and returns; settlement happens when a solver
+ * picks it up, which is asynchronous and not guaranteed within any deadline.
+ * The signature is EIP-1271, so the user's Safe — or the orchestrator — can
+ * sign without an EOA.
+ *
+ * NOT WIRED FOR EXECUTION YET. quote() is live and correct; execute() refuses,
+ * because placing an order needs an EIP-712 signature over CoW's order struct
+ * and a decision about who signs (the Safe, with the user present, or the
+ * orchestrator). Quoting is useful on its own — it prices the corridor without
+ * committing to anything.
+ */
+class CowLiquidityProvider implements LiquidityProvider {
+  private indicative: { at: number; rate: number; raw: bigint } | null = null;
+
+  private tokens(side: LiquiditySide) {
+    const a = addrs();
+    return side === "EURE_TO_USDC"
+      ? { sell: a.eure, buy: a.usdc, tokenIn: "EURe" as const, tokenOut: "USDC" as const }
+      : { sell: a.usdc, buy: a.eure, tokenIn: "USDC" as const, tokenOut: "EURe" as const };
+  }
+
+  async quote(
+    side: LiquiditySide,
+    amountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+  ): Promise<LiquidityQuote> {
+    const { sell, buy, tokenIn, tokenOut } = this.tokens(side);
+    const url = `${LIQUIDITY.COW_BASE_URL}/${LIQUIDITY.COW_NETWORK}/api/v1/quote`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      signal: AbortSignal.timeout(LIQUIDITY.COW_TIMEOUT_MS),
+      body: JSON.stringify({
+        sellToken: sell,
+        buyToken: buy,
+        from: orchestratorAddress,
+        receiver: orchestratorAddress,
+        sellAmountBeforeFee: amountIn.toString(),
+        kind: "sell",
+        partiallyFillable: false,
+        signingScheme: "eip1271",
+        onchainOrder: false,
+        priceQuality: "optimal",
+      }),
+    });
+    const body: any = await res.json().catch(() => null);
+    if (!res.ok || !body?.quote) {
+      throw new Error(
+        `CoW quote failed (${res.status}): ${JSON.stringify(body?.description ?? body ?? {}).slice(0, 200)}`,
+      );
+    }
+    const q = body.quote;
+    const expectedOut = BigInt(q.buyAmount);
+    // CoW commits to buyAmount for a filled order; the slippage bound is ours.
+    const minOut = (expectedOut * (10_000n - MAX_SLIPPAGE_BPS)) / 10_000n;
+    // validTo is when the order stops being fillable — sooner than our window
+    // means ours is a promise the solver will not keep.
+    const validTo = q.validTo ? new Date(Number(q.validTo) * 1000).toISOString() : null;
+    return {
+      provider: "cow",
+      side,
+      quoteId,
+      tokenIn,
+      tokenOut,
+      amountIn,
+      expectedOut,
+      minOut,
+      // Same 6dp-per-1e18 convention as the swapper.
+      rate: amountIn > 0n ? (expectedOut * 10n ** 18n) / amountIn : 0n,
+      expiresAt: validTo && Date.parse(validTo) < Date.parse(expiresAt) ? validTo : expiresAt,
+      cow: {
+        orderId: String(body.id ?? ""),
+        feeAmount: String(q.feeAmount ?? "0"),
+        validTo: Number(q.validTo ?? 0),
+        appData: String(q.appData ?? ""),
+      },
+    };
+  }
+
+  async execute(): Promise<LiquidityExecution> {
+    throw new Error(
+      "CoW execution is not wired yet: placing an order needs an EIP-712 signature " +
+        "over CoW's order struct, and a decision about who signs it (the user's Safe " +
+        "with the user present, or the orchestrator). Quoting works; use " +
+        "LIQUIDITY_PROVIDER=fx-swapper to settle.",
+    );
+  }
+
+  async indicativeRate(side: LiquiditySide) {
+    const now = Date.now();
+    if (this.indicative && now - this.indicative.at < LIQUIDITY.INDICATIVE_TTL_MS) {
+      return { rate: this.indicative.rate, raw: this.indicative.raw };
+    }
+    const probe = await this.quote(
+      side,
+      eur.toWei(LIQUIDITY.PROBE_EUR),
+      "indicative",
+      new Date(now + LIQUIDITY.INDICATIVE_TTL_MS).toISOString(),
+    );
+    const raw = probe.rate;
+    const rate = Number(raw) / 1e6;
+    this.indicative = { at: now, rate, raw };
+    return { rate, raw };
+  }
+}
+
+/**
  * Which liquidity source this deployment uses.
  *
  * Deliberately explicit: an RFQ provider that silently degrades to our own
@@ -298,9 +435,11 @@ class RfqLiquidityProvider implements LiquidityProvider {
  * that a market maker set it.
  */
 export function liquidityProvider(): LiquidityProvider {
-  return LIQUIDITY.PROVIDER === "rfq"
-    ? new RfqLiquidityProvider()
-    : new FxSwapperLiquidityProvider();
+  switch (LIQUIDITY.PROVIDER) {
+    case "rfq": return new RfqLiquidityProvider();
+    case "cow": return new CowLiquidityProvider();
+    default: return new FxSwapperLiquidityProvider();
+  }
 }
 
 export async function executeTransferLiquidity(transfer: Transfer): Promise<LiquidityExecution> {
