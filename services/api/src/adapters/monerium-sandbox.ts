@@ -7,9 +7,11 @@
  *     link the user's wallet address with a signed ownership declaration, and
  *     request a personal IBAN. IBAN issuance can be async; we poll for it.
  *  2. Deposits: polls Monerium `issue` orders (EURe minted after a SEPA
- *     transfer arrives in sandbox). Each new order for a linked address is
- *     mirrored into the local RemitVault (mint mock EURe + credit), keeping
- *     the settlement chain local while the funding leg is the real sandbox.
+ *     transfer arrives in sandbox). Local demo chains mirror each order into
+ *     RemitVault (mint mock EURe + credit). Non-local Monerium runs expose both
+ *     the Safe's real EURe balance and the vault ledger; the current
+ *     transitional mirror can move Safe-held EURe into the vault using the
+ *     server-held Safe key, but Safe-funded sends are the target path.
  *
  * Webhooks (order.updated / iban.updated) are the production path; polling is
  * used here because local dev has no public URL.
@@ -217,6 +219,8 @@ export type MirrorOutcome = "mirrored" | "duplicate" | "ignored" | "unavailable"
 
 /**
  * Mirror one order that came from Monerium's own API into the local vault.
+ * This is local/mock custody logic; real Monerium deposits mint EURe to the
+ * user's Safe.
  *
  * The caller must have fetched `order` from Monerium — never pass in an
  * object built from a request body. Amount and address are taken from the
