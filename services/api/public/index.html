@@ -637,10 +637,17 @@ const fmt = (n, dp = 2) => Number(n).toLocaleString("en", { minimumFractionDigit
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 /* Only ever render a link the partner gave us if it is really a web URL —
-   "javascript:" in an href is a script, not a destination. */
+   "javascript:" in an href is a script, not a destination.
+
+   Parsed with NO base, so a partner link has to be absolute. Resolving against
+   location.origin instead turned every non-URL into a valid same-origin href:
+   String(undefined) is the literal "undefined", so a missing moreInfoUrl became
+   "<origin>/undefined", the caller's falsy check passed, and a dead "details"
+   link rendered. Anything that is not a non-empty string is not a link. */
 const safeUrl = (u) => {
+  if (typeof u !== "string" || u.trim() === "") return null;
   try {
-    const parsed = new URL(String(u), location.origin);
+    const parsed = new URL(u.trim());
     return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
   } catch { return null; }
 };
