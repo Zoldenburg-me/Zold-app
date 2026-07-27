@@ -95,7 +95,7 @@ try {
   );
 
   console.log("2/3 API in PRODUCTION mode (no ALLOW_SIMULATION)…");
-  rmSync(path.join(ROOT, "data/db.json"), { force: true });
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
     NODE_ENV: "production",
     KYC_OPERATOR_TOKEN: OPERATOR_TOKEN,

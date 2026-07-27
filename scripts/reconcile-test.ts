@@ -138,7 +138,7 @@ try {
   );
 
   console.log("2/3 API in sandbox mode against the stub…");
-  rmSync(path.join(ROOT, "data/db.json"), { force: true });
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   const apiEnv = {
     MONERIUM_CLIENT_ID: "stub",
     MONERIUM_CLIENT_SECRET: "stub",

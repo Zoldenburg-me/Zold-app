@@ -156,7 +156,7 @@ try {
   assert.equal(dep.status, 0, "deploy failed");
 
   console.log("3/7 starting API…");
-  rmSync(path.join(ROOT, "data/db.json"), { force: true });
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   spawnBg(process.execPath, [bin("tsx"), "services/api/src/server.ts"]);
   await waitFor(`${API}/api/health`);
 

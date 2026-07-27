@@ -19,6 +19,9 @@
  * on .env being empty.
  */
 
+import path from "node:path";
+import os from "node:os";
+
 process.env.TRANSF_CHAIN_ID = "31337";
 process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:8545";
 
@@ -41,3 +44,17 @@ for (const [role, key] of Object.entries(DEV_KEYS)) {
 
 // A real Monerium chain name would send provisioning at the wrong network.
 process.env.MONERIUM_CHAIN = "sepolia";
+
+/**
+ * Keep tests away from the working database.
+ *
+ * Every harness resets the store on startup. While that was data/db.json —
+ * the file the running app uses — a test run destroyed live accounts, and on
+ * a real chain that is unrecoverable: the Safe owner key lives in this file,
+ * and RemitVault only lets the CURRENT authorizer rotate. A suite run ate one
+ * such account on Base Sepolia.
+ */
+process.env.TRANSF_DB_PATH ??= path.join(
+  os.tmpdir(),
+  `zold-test-db-${process.pid}.json`,
+);

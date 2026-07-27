@@ -71,7 +71,7 @@ try {
     cwd: ROOT, stdio: "inherit", env: ENV,
   });
   assert.equal(dep.status, 0, "deploy failed");
-  rmSync(path.join(ROOT, "data/db.json"), { force: true });
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"]);
   const start = Date.now();
   while (Date.now() - start < 30_000) {
