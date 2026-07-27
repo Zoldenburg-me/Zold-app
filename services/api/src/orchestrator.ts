@@ -159,6 +159,21 @@ async function debitInputFunds(
   const tid = transferIdHash(transfer.id);
   const sendWei = eur.toWei(transfer.sendEur);
 
+  if (transfer.fundingSource === "safe") {
+    await assertDeviceAuthorization(transfer, user, auth);
+    if (!user.privateKey) throw new Error("user has no wallet key to move Safe-held EURe");
+    const moveHash = await transferTokenFromSafe({
+      ownerKey: user.privateKey,
+      token: a.eure,
+      to: orchestratorAddress,
+      amount: sendWei,
+    });
+    txs.push({ step: "safe.transfer(orchestrator)", hash: moveHash });
+    store.updateTransfer(transfer.id, { state: "DEBITED", txs });
+    failpoint("safe.transfer");
+    return;
+  }
+
   const debitHash = await writeAndWait(orchestratorWallet, {
     address: a.vault,
     abi: abis.RemitVault,
