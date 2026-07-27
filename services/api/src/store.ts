@@ -62,6 +62,20 @@ export interface User {
    *  device itself can rotate it. */
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
+  /**
+   * FP4 custody migration state. `wallet` above is the currently active Safe;
+   * this records the passkey + co-signer Safe that should replace the
+   * server-owned Safe once client-signed UserOps are wired.
+   */
+  passkeySafe?: {
+    address: `0x${string}`;
+    status: "planned" | "active";
+    threshold: 2;
+    cosignerAddress: `0x${string}`;
+    passkeyPublicKey: { x: string; y: string };
+    createdAt: string;
+    legacyAddress?: `0x${string}`;
+  };
   /** WebAuthn credential bound to this account. Public key + counter are
    *  stored from a verified registration; login verifies assertions. */
   passkey?: {
@@ -176,7 +190,8 @@ export interface Transfer {
    * and moves the full send amount to the orchestrator.
    * safe: transitional live-Monerium path. EURe already sits in the user's
    * Safe; the API verifies the same device authorization before using the
-   * legacy Safe owner key to move exactly the signed amount.
+   * legacy Safe owner key to move the one-time amount needed for this rail:
+   * the full send on the FX rails, the fee alone on SEPA.
    */
   fundingSource?: "vault" | "safe";
   /** FP4: the terms the device is asked to authorize. Fixed when the transfer
