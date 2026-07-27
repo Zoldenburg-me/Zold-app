@@ -25,6 +25,7 @@ import {
   startDepositPoller,
 } from "./adapters/monerium-sandbox.js";
 import {
+  dailyCapUsage,
   executeSepaTransfer,
   executeTransfer,
   executeUpiTransfer,
@@ -833,17 +834,25 @@ function readDecision(body: any, res: express.Response): "approved" | "rejected"
   return decision;
 }
 
-function safeFundedEurToday(userId: string, now = new Date()): number {
-  const day = now.toISOString().slice(0, 10);
-  return store.transfers
-    .filter(
-      (t) =>
-        t.userId === userId &&
-        t.fundingSource === "safe" &&
-        t.createdAt.slice(0, 10) === day &&
-        !["FAILED", "REFUNDED"].includes(t.state),
-    )
-    .reduce((sum, t) => sum + t.sendEur, 0);
+/** Refuse a send that would take the account past its daily cap, counting both
+ *  funding sources. The arithmetic lives in dailyCapUsage so it can be tested
+ *  without standing up the HTTP layer. */
+async function assertDailyCap(
+  user: User,
+  sendEur: number,
+  res: express.Response,
+): Promise<boolean> {
+  const { capEur, usedEur, fromVaultEur, fromSafeEur } = await dailyCapUsage(user);
+  if (usedEur + sendEur > capEur) {
+    res.status(400).json({
+      error:
+        `amount exceeds the daily cap of €${capEur.toFixed(2)} ` +
+        `(already used €${usedEur.toFixed(2)} today: €${fromVaultEur.toFixed(2)} from the vault, ` +
+        `€${fromSafeEur.toFixed(2)} from the Safe)`,
+    });
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -1202,16 +1211,7 @@ app.post(
         vaultBalanceEur: balances.vaultBalanceEur,
       });
     }
-    if (fundingSource === "safe") {
-      const spentToday = safeFundedEurToday(user.id);
-      if (spentToday + quote.sendEur > FX.DAILY_CAP_EUR) {
-        return res.status(400).json({
-          error:
-            `amount exceeds daily cap of €${FX.DAILY_CAP_EUR} ` +
-            `(already reserved €${spentToday.toFixed(2)} from Safe today)`,
-        });
-      }
-    }
+    if (!(await assertDailyCap(user, quote.sendEur, res))) return;
 
     const transfer: Transfer = {
       id: randomUUID(),

@@ -330,3 +330,77 @@ export async function forwardEureForRedeem(
     args: [userSafe, amount],
   });
 }
+
+/**
+ * Return EURe the orchestrator is holding to a user's Safe.
+ *
+ * This is the refund leg for a Safe-funded transfer: the euros were taken out
+ * of the user's own Safe, so that is where they go back. Deliberately NOT
+ * gated on the chain issuing native EURe the way forwardEureForRedeem is — a
+ * Safe-funded debit can only have happened where the Safe held the token in
+ * the first place, so the same move is always available in reverse.
+ *
+ * Unlike the vault refund path this mints nothing, which is why it works off a
+ * local chain: it hands back the very tokens that were moved.
+ */
+export async function returnEureToSafe(
+  userSafe: `0x${string}`,
+  amountEur: number,
+): Promise<`0x${string}`> {
+  const amount = eur.toWei(amountEur);
+  const held = (await publicClient.readContract({
+    address: addrs().eure,
+    abi: abis.MockToken,
+    functionName: "balanceOf",
+    args: [orchestratorAddress],
+  })) as bigint;
+  if (held < amount) {
+    throw new Error(
+      `orchestrator holds ${eur.fromWei(held)} EURe but the refund needs ${amountEur} — ` +
+        `refusing a partial refund rather than guessing which transfer it belongs to`,
+    );
+  }
+  return writeAndWait(orchestratorWallet, {
+    address: addrs().eure,
+    abi: abis.MockToken,
+    functionName: "transfer",
+    args: [userSafe, amount],
+  });
+}
+
+/** Has the vault already consumed this transferId? The vault path's replay
+ *  guard is `require(!processedTransfer[transferId])` inside RemitVault.debit;
+ *  the Safe path cannot write that registry but can still read it, so a
+ *  transferId the vault already spent is refused rather than paid twice. */
+export async function vaultProcessedTransfer(transferId: `0x${string}`): Promise<boolean> {
+  return (await publicClient.readContract({
+    address: addrs().vault,
+    abi: abis.RemitVault,
+    functionName: "processedTransfer",
+    args: [transferId],
+  })) as boolean;
+}
+
+/** The vault's own daily-spend accounting for `user`, in EUR: the configured
+ *  cap and what RemitVault.debit has already counted against it today. The
+ *  contract keys the day as `block.timestamp / 1 days`, so this is UTC days
+ *  since the epoch — the same boundary the API's own counter uses. */
+export async function vaultDailySpend(
+  user: `0x${string}`,
+): Promise<{ capEur: number; debitedEur: number }> {
+  const day = BigInt(Math.floor(Date.now() / 86_400_000));
+  const [cap, debited] = (await Promise.all([
+    publicClient.readContract({
+      address: addrs().vault,
+      abi: abis.RemitVault,
+      functionName: "dailyCap",
+    }),
+    publicClient.readContract({
+      address: addrs().vault,
+      abi: abis.RemitVault,
+      functionName: "debitedOnDay",
+      args: [user, day],
+    }),
+  ])) as [bigint, bigint];
+  return { capEur: eur.fromWei(cap), debitedEur: eur.fromWei(debited) };
+}
