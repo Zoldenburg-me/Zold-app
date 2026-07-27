@@ -32,6 +32,11 @@ Running this repo with sandbox credentials, today:
   Sepolia through Candide's bundler. Deployment costs the user nothing;
   gas is sponsored. Monerium verifies ownership via EIP-1271, so the IBAN
   belongs to the contract wallet, not to us.
+  A passkey registration now also records the deterministic 2-of-2
+  passkey/co-signer Safe that will replace the legacy server-owned Safe once
+  client-signed UserOps are wired. With `CANDIDE_COSIGNER_ADDRESS` and
+  `CANDIDE_COSIGNER_KEY` configured, onboarding can deploy that Safe through a
+  passkey-signed, co-signed Candide UserOperation before funding.
 - **Bank payouts**: the exit rail places real Monerium redeem orders —
   EURe is burned and a SEPA transfer goes out. (It needs EURe in the Safe
   to succeed; without it, the order is rejected and the app falls back to a

@@ -102,6 +102,14 @@ Replace the server-generated EOA with a WebAuthn signer.
 - `deploySmartAccount` (`candide.ts:50`) takes an `ownerKey`; a passkey-owned
   Safe has no private key, so this signature changes.
 
+Current branch status: passkey registration can now derive and store the
+deterministic 2-of-2 passkey/co-signer Safe address when
+`CANDIDE_COSIGNER_ADDRESS` is configured. The browser can request and sign a
+deployment UserOperation, and the API co-signs/submits it when
+`CANDIDE_COSIGNER_KEY` is configured. Activation refuses if the legacy Safe or
+vault ledger still holds funds, because that requires a migration rather than a
+blind address switch.
+
 **Verify:** deploy a Safe whose only owner is a passkey, then have it produce a
 signature that `RemitVault._isValidSignature` accepts. If that round-trip works,
 step 3 is safe.
