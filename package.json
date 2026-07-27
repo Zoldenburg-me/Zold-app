@@ -19,6 +19,7 @@
     "e2e": "tsx scripts/e2e.ts",
     "webauthn:selftest": "tsx scripts/webauthn-selftest.ts",
     "fp3:test": "tsx scripts/fp3-test.ts",
+    "safe-funded:test": "tsx scripts/safe-funded-recovery-test.ts",
     "kyc:test": "tsx scripts/kyc-test.ts",
     "kyc:ui:test": "tsx scripts/kyc-ui-test.ts",
     "audit:deps": "npm audit",
