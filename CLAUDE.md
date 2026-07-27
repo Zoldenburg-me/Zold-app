@@ -494,9 +494,41 @@ branch (stale head at merge time; recovered in PR #4). Rules:
 - Honest assessments valued over cheerleading; say what's mocked.
 
 ## Pay with Zold — moved to its own repo (July 2026)
-The merchant checkout / "Pay with Zold" product was extracted to a separate
-repo to keep this consumer app lean. The backend OAuth handoff + existing-user
-checkout that briefly lived here (checkout.ts, checkout.html, checkout-test.ts,
-the /api/checkout/* routes, and store Merchant/PaymentIntent) were REMOVED from
-this repo. Do not rebuild them here — see the checkout-service repo and its
-handoff doc for the new-user onboard-in-flow work.
+The merchant checkout / "Pay with Zold" product was extracted to
+**github.com/tonyzil/pay-with-zold** (private; the directory on disk is
+`zold-checkout`) to keep this consumer app lean. The backend OAuth handoff +
+existing-user checkout that briefly lived here (checkout.ts, checkout.html,
+checkout-test.ts, the /api/checkout/* routes, and store Merchant/PaymentIntent)
+were REMOVED from this repo. Do not rebuild them here.
+That repo OWNS the authorization-server half — merchant registry, payment
+intents, PKCE code exchange — plus the new-user onboard-in-flow (account -> KYC
+-> device key -> funding -> device-signed SEPA -> merchant code). It is a
+CLIENT of this API: an allowlisted proxy, source of truth for nothing but
+merchants and intents. It runs on its own origin because passkeys are
+RP-ID-scoped and the FP4 device key lives in one origin's localStorage, so a
+user onboarded there has both halves in one place.
+WHAT THIS API STILL OWES IT:
+- RP_ID + WEBAUTHN_ORIGINS must cover the checkout origin or every passkey
+  ceremony started there is rejected HERE, which reads like a client bug.
+  Production: RP_ID=zold.app with app.zold.app + checkout.zold.app both listed.
+  Locally: RP_ID=localhost and WEBAUTHN_ORIGINS including localhost:3100.
+- No way for it to see a transfer reach a terminal state. It reads the transfer
+  with the USER's session at attach time, so the intent's status freezes there
+  and the merchant polls after the user has gone — on a real SEPA payout an
+  intent would sit at AUTHORIZED forever. Needs a checkout webhook from here,
+  or a service credential that can read a transfer without a user session.
+  Not visible locally: hardhat settles to PAID before attach.
+- public/device.js keeps ONE key slot per origin, not per user. On a shared
+  browser a second person onboarding binds the FIRST person's key as their
+  authorizer, and either could then spend the other's balance. The checkout
+  refuses rather than sharing a key; the real fix is a per-account slot here.
+- KYC ordering is fixed by us, not by them: /api/users/:id/authorizer calls
+  requireKycApproved, so KYC must precede the device key. Any handoff doc that
+  says otherwise is describing an order the API will refuse.
+Two bugs the deleted checkout.html had are recorded in that repo's README so
+they are not reintroduced: it loaded /device.js with no import map (the
+vendored noble modules import the bare specifiers `crypto` and
+`@noble/hashes/crypto`, so the module never loaded and signing hung), and it
+built the attach URL from `intent.id` where the API returns `intentId` — the
+payment cleared on-chain and the merchant was never told. Neither was visible
+to checkout-test.ts, which drove the backend directly.
