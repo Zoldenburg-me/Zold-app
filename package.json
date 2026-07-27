@@ -2,7 +2,7 @@
   "name": "zold",
   "version": "0.1.0",
   "private": true,
-  "description": "Zoldenburg \u2014 cross-border remittance infrastructure (Zoll app: stablecoin in, local payout rails out)",
+  "description": "Zoldenburg — cross-border remittance infrastructure (Zoll app: stablecoin in, local payout rails out)",
   "type": "module",
   "scripts": {
     "dev": "tsx scripts/dev.ts",
@@ -19,6 +19,7 @@
     "e2e": "tsx scripts/e2e.ts",
     "webauthn:selftest": "tsx scripts/webauthn-selftest.ts",
     "fp3:test": "tsx scripts/fp3-test.ts",
+    "safe-funded:test": "tsx scripts/safe-funded-recovery-test.ts",
     "kyc:test": "tsx scripts/kyc-test.ts",
     "kyc:ui:test": "tsx scripts/kyc-ui-test.ts",
     "audit:deps": "npm audit",
@@ -41,7 +42,8 @@
     "trustline:test": "tsx scripts/trustline-test.ts",
     "fx:test": "tsx scripts/fx-rates-test.ts",
     "jit:test": "tsx scripts/jit-liquidity-test.ts",
-    "eur:proof": "tsx scripts/eur-proof.ts"
+    "eur:proof": "tsx scripts/eur-proof.ts",
+    "sepa:test": "tsx scripts/sepa-reference-test.ts"
   },
   "devDependencies": {
     "@types/express": "^4.17.25",

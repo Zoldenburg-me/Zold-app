@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { anchorModeEnabled, API_HOST, API_PORT, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
+import { SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type Transfer, type User } from "./store.js";
 import { createQuote, isExpired } from "./fx.js";
 import { issueIban, simulateSepaDeposit } from "./adapters/monerium.js";
@@ -24,6 +25,7 @@ import {
   startDepositPoller,
 } from "./adapters/monerium-sandbox.js";
 import {
+  dailyCapUsage,
   executeSepaTransfer,
   executeTransfer,
   executeUpiTransfer,
@@ -875,17 +877,25 @@ function readDecision(body: any, res: express.Response): "approved" | "rejected"
   return decision;
 }
 
-function safeFundedEurToday(userId: string, now = new Date()): number {
-  const day = now.toISOString().slice(0, 10);
-  return store.transfers
-    .filter(
-      (t) =>
-        t.userId === userId &&
-        t.fundingSource === "safe" &&
-        t.createdAt.slice(0, 10) === day &&
-        !["FAILED", "REFUNDED"].includes(t.state),
-    )
-    .reduce((sum, t) => sum + t.sendEur, 0);
+/** Refuse a send that would take the account past its daily cap, counting both
+ *  funding sources. The arithmetic lives in dailyCapUsage so it can be tested
+ *  without standing up the HTTP layer. */
+async function assertDailyCap(
+  user: User,
+  sendEur: number,
+  res: express.Response,
+): Promise<boolean> {
+  const { capEur, usedEur, fromVaultEur, fromSafeEur } = await dailyCapUsage(user);
+  if (usedEur + sendEur > capEur) {
+    res.status(400).json({
+      error:
+        `amount exceeds the daily cap of €${capEur.toFixed(2)} ` +
+        `(already used €${usedEur.toFixed(2)} today: €${fromVaultEur.toFixed(2)} from the vault, ` +
+        `€${fromSafeEur.toFixed(2)} from the Safe)`,
+    });
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -1264,7 +1274,8 @@ app.post(
 app.post(
   "/api/transfers",
   wrap(async (req, res) => {
-    const { quoteId, recipientName, recipientPhone, recipientIban, recipientVpa } = req.body ?? {};
+    const { quoteId, recipientName, recipientPhone, recipientIban, recipientVpa, reference } =
+      req.body ?? {};
     const quote = store.findQuote(quoteId);
     if (!quote) return res.status(404).json({ error: "quote not found" });
     if (!requireUserSession(req, res, quote.userId)) return;
@@ -1287,6 +1298,25 @@ app.post(
     }
     if (quote.rail === "cash" && !recipientPhone) {
       return res.status(400).json({ error: "recipientPhone required for cash pickup" });
+    }
+    // Remittance reference: carried to the payee on the SEPA rail so they can
+    // reconcile the payment against their own records. Refused rather than
+    // truncated past the scheme's 140 characters — the caller is reconciling on
+    // this string, so a silently shortened one is worse than an error.
+    if (reference !== undefined && reference !== null) {
+      if (typeof reference !== "string") {
+        return res.status(400).json({ error: "reference must be a string" });
+      }
+      if (reference.length > SEPA_REMITTANCE_MAX) {
+        return res.status(400).json({
+          error: `reference must be ${SEPA_REMITTANCE_MAX} characters or fewer (SEPA remittance limit)`,
+        });
+      }
+      if (quote.rail !== "sepa") {
+        return res.status(400).json({
+          error: "reference is only carried on the sepa rail",
+        });
+      }
     }
     const user = store.findUser(quote.userId)!;
     if (!requireKycApproved(user, res)) return;
@@ -1312,16 +1342,7 @@ app.post(
         vaultBalanceEur: balances.vaultBalanceEur,
       });
     }
-    if (fundingSource === "safe") {
-      const spentToday = safeFundedEurToday(user.id);
-      if (spentToday + quote.sendEur > FX.DAILY_CAP_EUR) {
-        return res.status(400).json({
-          error:
-            `amount exceeds daily cap of €${FX.DAILY_CAP_EUR} ` +
-            `(already reserved €${spentToday.toFixed(2)} from Safe today)`,
-        });
-      }
-    }
+    if (!(await assertDailyCap(user, quote.sendEur, res))) return;
 
     const transfer: Transfer = {
       id: randomUUID(),
@@ -1332,6 +1353,7 @@ app.post(
       recipientPhone,
       recipientIban,
       recipientVpa,
+      reference: reference || undefined,
       state: "CREATED" as const,
       sendEur: quote.sendEur,
       receiveKes: quote.receiveKes,

@@ -169,6 +169,14 @@ export interface Transfer {
   recipientPhone?: string; // cash rail
   recipientIban?: string; // sepa rail
   recipientVpa?: string; // upi rail (merchant/recipient UPI ID)
+  /**
+   * Payer-supplied remittance reference, carried to the payee on the SEPA
+   * payment so they can reconcile it against their own records. Set by callers
+   * that pay a third party on someone's behalf — the "Pay with Zold" checkout
+   * puts the merchant's own user/transaction handle here. Free text, and it
+   * reaches a bank statement, so it is normalised at send (see sepa.ts).
+   */
+  reference?: string;
   state: TransferState;
   sendEur: number;
   receiveKes: number; // cash rail
@@ -182,7 +190,8 @@ export interface Transfer {
    * and moves the full send amount to the orchestrator.
    * safe: transitional live-Monerium path. EURe already sits in the user's
    * Safe; the API verifies the same device authorization before using the
-   * legacy Safe owner key to move the one-time amount needed for this rail.
+   * legacy Safe owner key to move the one-time amount needed for this rail:
+   * the full send on the FX rails, the fee alone on SEPA.
    */
   fundingSource?: "vault" | "safe";
   /** FP4: the terms the device is asked to authorize. Fixed when the transfer
