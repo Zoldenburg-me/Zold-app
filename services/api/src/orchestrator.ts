@@ -12,6 +12,7 @@
  */
 import { FX, moneriumSandboxEnabled, USING_LOCAL_RPC } from "./config.js";
 import { Keypair } from "@stellar/stellar-sdk";
+import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
@@ -33,10 +34,12 @@ import {
   orchestratorAddress,
   forwardEureForRedeem,
   orchestratorWallet,
+  paymentAuthorizationTypedData,
   publicClient,
   transferIdHash,
   writeAndWait,
 } from "./chain.js";
+import { transferTokenFromSafe } from "./wallet/candide.js";
 import {
   createCashPickup,
   createCashPickupViaAnchor,
@@ -98,6 +101,96 @@ function transferDestination(transfer: Transfer): `0x${string}` {
     vpa: transfer.recipientVpa,
     name: transfer.recipientName,
   });
+}
+
+async function assertDeviceAuthorization(
+  transfer: Transfer,
+  user: User,
+  auth: PaymentAuthorization,
+): Promise<void> {
+  if (!transfer.auth) throw new Error("transfer has no authorization terms");
+  const amountWei = BigInt(transfer.auth.amountWei);
+  if (amountWei !== eur.toWei(transfer.sendEur)) {
+    throw new Error("stored amount no longer matches authorization terms");
+  }
+  if (auth.deadline !== transfer.auth.deadline) {
+    throw new Error("submitted authorization deadline does not match transfer terms");
+  }
+  const destination = transferDestination(transfer);
+  if (destination.toLowerCase() !== transfer.auth.destination.toLowerCase()) {
+    throw new Error("stored payout destination no longer matches authorization terms");
+  }
+  if (Date.now() / 1000 > auth.deadline) throw new Error("authorization expired");
+  const authorizer = await publicClient.readContract({
+    address: addrs().vault,
+    abi: abis.RemitVault,
+    functionName: "authorizerOf",
+    args: [user.address],
+  }) as `0x${string}`;
+  if (authorizer === "0x0000000000000000000000000000000000000000") {
+    throw new Error("no authorizer");
+  }
+  const code = await publicClient.getBytecode({ address: authorizer });
+  if (code && code !== "0x") {
+    throw new Error("Safe-funded transfer needs on-chain policy for contract authorizers");
+  }
+  const ok = await verifyTypedData({
+    address: authorizer,
+    ...paymentAuthorizationTypedData({
+      account: user.address,
+      amountWei,
+      to: orchestratorAddress,
+      transferId: transferIdHash(transfer.id),
+      destination,
+      deadline: auth.deadline,
+    }),
+    signature: auth.signature,
+  } as any);
+  if (!ok) throw new Error("bad authorization");
+}
+
+async function debitInputFunds(
+  transfer: Transfer,
+  user: User,
+  auth: PaymentAuthorization,
+  txs: Transfer["txs"],
+): Promise<void> {
+  const a = addrs();
+  const tid = transferIdHash(transfer.id);
+  const sendWei = eur.toWei(transfer.sendEur);
+
+  if (transfer.fundingSource === "safe") {
+    await assertDeviceAuthorization(transfer, user, auth);
+    if (!user.privateKey) throw new Error("user has no wallet key to move Safe-held EURe");
+    const moveHash = await transferTokenFromSafe({
+      ownerKey: user.privateKey,
+      token: a.eure,
+      to: orchestratorAddress,
+      amount: sendWei,
+    });
+    txs.push({ step: "safe.transfer(orchestrator)", hash: moveHash });
+    store.updateTransfer(transfer.id, { state: "DEBITED", txs });
+    failpoint("safe.transfer");
+    return;
+  }
+
+  const debitHash = await writeAndWait(orchestratorWallet, {
+    address: a.vault,
+    abi: abis.RemitVault,
+    functionName: "debit",
+    args: [
+      user.address,
+      sendWei,
+      orchestratorAddress,
+      tid,
+      transferDestination(transfer),
+      BigInt(auth.deadline),
+      auth.signature,
+    ],
+  });
+  txs.push({ step: "vault.debit", hash: debitHash });
+  store.updateTransfer(transfer.id, { state: "DEBITED", txs });
+  failpoint("vault.debit");
 }
 
 function cctpRecipientStellar(): string {
@@ -300,18 +393,8 @@ export async function executeTransfer(
   const txs = transfer.txs;
 
   try {
-    // 1. Debit the sender's vault balance (full amount incl. fixed fee);
-    //    tokens move to the orchestrator's working address.
-    const sendWei = eur.toWei(transfer.sendEur);
-    const debitHash = await writeAndWait(orchestratorWallet, {
-      address: a.vault,
-      abi: abis.RemitVault,
-      functionName: "debit",
-      args: [user.address, sendWei, orchestratorAddress, tid, transferDestination(transfer), BigInt(auth.deadline), auth.signature],
-    });
-    txs.push({ step: "vault.debit", hash: debitHash });
-    store.updateTransfer(transfer.id, { state: "DEBITED", txs });
-    failpoint("vault.debit");
+    // 1. Move the signed input amount to the orchestrator's working address.
+    await debitInputFunds(transfer, user, auth, txs);
 
     // 2. Swap the convertible portion (send - fixed fee) EURe -> USDC.
     //    The fixed fee stays at the orchestrator address as revenue.
@@ -432,21 +515,10 @@ export async function executeUpiTransfer(
   user: User,
   auth: PaymentAuthorization,
 ): Promise<Transfer> {
-  const a = addrs();
-  const tid = transferIdHash(transfer.id);
   const txs = transfer.txs;
 
   try {
-    const sendWei = eur.toWei(transfer.sendEur);
-    const debitHash = await writeAndWait(orchestratorWallet, {
-      address: a.vault,
-      abi: abis.RemitVault,
-      functionName: "debit",
-      args: [user.address, sendWei, orchestratorAddress, tid, transferDestination(transfer), BigInt(auth.deadline), auth.signature],
-    });
-    txs.push({ step: "vault.debit", hash: debitHash });
-    store.updateTransfer(transfer.id, { state: "DEBITED", txs });
-    failpoint("vault.debit");
+    await debitInputFunds(transfer, user, auth, txs);
 
     // Swap the convertible portion to USDC — the settlement asset we net
     // against the partner's INR float.
@@ -487,21 +559,10 @@ export async function executeSepaTransfer(
   user: User,
   auth: PaymentAuthorization,
 ): Promise<Transfer> {
-  const a = addrs();
-  const tid = transferIdHash(transfer.id);
   const txs = transfer.txs;
 
   try {
-    const sendWei = eur.toWei(transfer.sendEur);
-    const debitHash = await writeAndWait(orchestratorWallet, {
-      address: a.vault,
-      abi: abis.RemitVault,
-      functionName: "debit",
-      args: [user.address, sendWei, orchestratorAddress, tid, transferDestination(transfer), BigInt(auth.deadline), auth.signature],
-    });
-    txs.push({ step: "vault.debit", hash: debitHash });
-    store.updateTransfer(transfer.id, { state: "DEBITED", txs });
-    failpoint("vault.debit");
+    await debitInputFunds(transfer, user, auth, txs);
 
     const payoutEur = transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR;
     const [firstName, ...rest] = transfer.recipientName.trim().split(/\s+/);
