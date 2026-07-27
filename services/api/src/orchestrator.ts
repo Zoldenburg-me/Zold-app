@@ -107,12 +107,38 @@ const failpoint = (step: string) => {
 export const DEBIT_STEP = {
   vault: "vault.debit",
   safe: "safe.transfer(orchestrator)",
+  /** SEPA, Safe-funded: only the fee moves, because the redeem burns the payout
+   *  straight from the Safe. Recovery owes back the fee, not the whole send. */
+  safeFee: "safe.transfer(fee)",
 } as const;
 
 /** Did the input leg move the sender's money? True once any funding source has
  *  committed its debit, which is what makes a failure owe a refund. */
 function inputFundsMoved(txs: Transfer["txs"]): boolean {
-  return txs.some((x) => x.step === DEBIT_STEP.vault || x.step === DEBIT_STEP.safe);
+  return txs.some(
+    (x) =>
+      x.step === DEBIT_STEP.vault ||
+      x.step === DEBIT_STEP.safe ||
+      x.step === DEBIT_STEP.safeFee,
+  );
+}
+
+/**
+ * How much actually left the user's Safe, which is what a refund owes back.
+ *
+ * Not always `sendEur`: the Safe-funded SEPA rail moves only the fee and lets
+ * Monerium burn the payout from the Safe directly, so refunding `sendEur` there
+ * would hand back money that never moved — and would fail anyway, because the
+ * orchestrator is only holding the fee.
+ */
+function safeMovedEur(t: Transfer): number {
+  const steps = new Set(t.txs.map((x) => x.step));
+  if (steps.has(DEBIT_STEP.safe)) return t.sendEur;
+  if (steps.has(DEBIT_STEP.safeFee)) {
+    const payoutEur = t.receiveEur ?? t.sendEur - FX.FIXED_FEE_EUR;
+    return Math.max(0, Math.round((t.sendEur - payoutEur) * 100) / 100);
+  }
+  return 0;
 }
 
 /** EUR this user has committed to Safe-funded transfers today. Counted here
@@ -294,6 +320,45 @@ async function debitInputFunds(
   failpoint("vault.debit");
 }
 
+/**
+ * SEPA, Safe-funded: take only the fee.
+ *
+ * The payout itself is burned straight from the Safe by Monerium's redeem, so
+ * moving the full amount to the orchestrator and forwarding it back would be a
+ * round trip for nothing. Only the fee has to change hands.
+ *
+ * Consequence for recovery: less left the Safe than `sendEur`, so a failure
+ * here owes the FEE back and not the whole transfer — see safeMovedEur.
+ */
+async function debitSafeFundedSepaFee(
+  transfer: Transfer,
+  user: User,
+  auth: PaymentAuthorization,
+  payoutEur: number,
+  txs: Transfer["txs"],
+): Promise<void> {
+  await assertDeviceAuthorization(transfer, user, auth);
+  if (!user.privateKey) throw new Error("user has no wallet key to move Safe-held EURe");
+  if (await vaultProcessedTransfer(transferIdHash(transfer.id))) {
+    throw new Error("duplicate transfer: the vault already debited this transferId");
+  }
+  if (transfer.txs.some((x) => x.step === DEBIT_STEP.safeFee)) {
+    throw new Error("duplicate transfer: this transfer already moved its fee out of the Safe");
+  }
+  const feeEur = Math.max(0, transfer.sendEur - payoutEur);
+  if (feeEur > 0) {
+    const feeHash = await transferTokenFromSafe({
+      ownerKey: user.privateKey,
+      token: addrs().eure,
+      to: orchestratorAddress,
+      amount: eur.toWei(feeEur),
+    });
+    txs.push({ step: DEBIT_STEP.safeFee, hash: feeHash });
+  }
+  store.updateTransfer(transfer.id, { state: "DEBITED", txs });
+  failpoint("safe.transfer.fee");
+}
+
 function cctpRecipientStellar(): string {
   const explicit = process.env.CCTP_STELLAR_RECIPIENT;
   if (explicit) return explicit;
@@ -439,15 +504,27 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
         txs,
       });
     }
-    const refundHash = await returnEureToSafe(user.address, refundEur);
+    // Refund what left the Safe, which on the SEPA rail is the fee alone.
+    const movedEur = safeMovedEur(t);
+    const safeRefundEur = Math.min(refundEur, movedEur);
+    const safeDeductions =
+      movedEur < t.sendEur
+        ? `€${(t.sendEur - movedEur).toFixed(2)} never left the Safe (payout burns from it directly)`
+        : deductions;
+    const refundHash = await returnEureToSafe(user.address, safeRefundEur);
     txs.push({ step: "safe.refundTransfer", hash: refundHash });
     console.log(
-      `FP3: returned €${refundEur} to ${user.name}'s Safe for transfer ${t.id} (Safe-funded)`,
+      `FP3: returned €${safeRefundEur} to ${user.name}'s Safe for transfer ${t.id} (Safe-funded)`,
     );
     return store.updateTransfer(id, {
       state: "REFUNDED",
       txs,
-      refund: { amountEur: refundEur, recoveredFrom: "Safe-funded EURe", deductions, at: now() },
+      refund: {
+        amountEur: safeRefundEur,
+        recoveredFrom: "Safe-funded EURe",
+        deductions: safeDeductions,
+        at: now(),
+      },
     });
   }
 
@@ -688,11 +765,11 @@ export async function executeUpiTransfer(
 /**
  * SEPA (bank payout) rail:
  *   CREATED -> DEBITED -> PAYOUT_SUBMITTED -> PAID
- * Debits the sender's vault on the local chain, then places a real Monerium
- * redeem order (EURe burned from the user's Safe, SEPA out to the recipient
- * IBAN). If the real order is rejected — typically because the Safe holds no
- * EURe on the sandbox chain — the payout falls back to a simulated SEPA leg
- * and records why, so the corridor still demos end to end.
+ * Vault-funded transfers debit RemitVault, forward the payout amount back to
+ * the user's Safe, then place a real Monerium redeem order. Safe-funded
+ * transfers skip the vault and redeem directly from the Safe after collecting
+ * only the fee leg. If the real order is rejected, the payout falls back to a
+ * simulated SEPA leg only when explicitly allowed.
  */
 export async function executeSepaTransfer(
   transfer: Transfer,
@@ -702,8 +779,6 @@ export async function executeSepaTransfer(
   const txs = transfer.txs;
 
   try {
-    await debitInputFunds(transfer, user, auth, txs);
-
     const payoutEur = transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR;
     const [firstName, ...rest] = transfer.recipientName.trim().split(/\s+/);
     const counterpart = {
@@ -713,24 +788,30 @@ export async function executeSepaTransfer(
       country: user.country || "DE",
     };
 
+    if (transfer.fundingSource === "safe") {
+      await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs);
+    } else {
+      await debitInputFunds(transfer, user, auth, txs);
+    }
+
     if (moneriumSandboxEnabled()) {
       try {
         /**
-         * On a chain where the vault holds Monerium's real EURe, the euros are
-         * now sitting with the orchestrator (that is where debit sent them),
-         * but a redeem burns from the user's OWN Safe — Monerium proves
-         * ownership by asking the Safe to sign (EIP-1271). So the payout
-         * amount has to be forwarded to the Safe before the redeem, or
-         * Monerium has nothing to burn and the order fails.
+         * Vault-funded native EURe needs a forward before redeem: debit sends
+         * the euros to the orchestrator, while Monerium burns from the user's
+         * own Safe. Safe-funded SEPA already has the payout amount in the Safe,
+         * so only the fee was moved out above.
          *
-         * Only `payoutEur` moves, not the whole debit: the difference is our
-         * fee, and it stays with the orchestrator. Sending the full amount
-         * would hand the fee to the user and we would never collect it.
+         * Only `payoutEur` is forwarded for vault-funded transfers, not the
+         * whole debit: the difference is our fee, and it stays with the
+         * orchestrator.
          *
          * On a local chain the vault holds a mock EURe that Monerium has
          * never heard of, so there is nothing to forward.
          */
-        const forwardHash = await forwardEureForRedeem(user.address, payoutEur);
+        const forwardHash = transfer.fundingSource === "safe"
+          ? null
+          : await forwardEureForRedeem(user.address, payoutEur);
         if (forwardHash) txs.push({ step: "eure.transfer(user-safe)", hash: forwardHash });
 
         const order = await redeemToIban(

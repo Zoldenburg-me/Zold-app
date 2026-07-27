@@ -102,6 +102,14 @@ Replace the server-generated EOA with a WebAuthn signer.
 - `deploySmartAccount` (`candide.ts:50`) takes an `ownerKey`; a passkey-owned
   Safe has no private key, so this signature changes.
 
+Current branch status: passkey registration can now derive and store the
+deterministic 2-of-2 passkey/co-signer Safe address when
+`CANDIDE_COSIGNER_ADDRESS` is configured. The browser can request and sign a
+deployment UserOperation, and the API co-signs/submits it when
+`CANDIDE_COSIGNER_KEY` is configured. Activation refuses if the legacy Safe or
+vault ledger still holds funds, because that requires a migration rather than a
+blind address switch.
+
 **Verify:** deploy a Safe whose only owner is a passkey, then have it produce a
 signature that `RemitVault._isValidSignature` accepts. If that round-trip works,
 step 3 is safe.
@@ -124,8 +132,8 @@ Temporary compatibility is acceptable for local mock demos, where deposits are
 still mirrored into `RemitVault`.
 
 The transitional implementation may use `fundingSource: "safe"` and verify the
-same device authorization off-chain before moving Safe-held EURe. Treat that as
-a bridge only: it is not equivalent to on-chain policy enforcement while the
+same device authorization off-chain before moving a one-time Safe amount — the
+full send on the FX rails, the fee alone on SEPA. Treat that as a bridge only: it is not equivalent to on-chain policy enforcement while the
 server still holds `user.privateKey`.
 
 What moving off `RemitVault.debit` costs, and where each piece stands:
@@ -135,7 +143,7 @@ What moving off `RemitVault.debit` costs, and where each piece stands:
 | Device signature checked in the contract | Checked by the API (`verifyTypedData`), which also holds the key that moves the money |
 | `debitedOnDay[user][day] + amount <= dailyCap` | `dailyCapUsage` sums the vault's on-chain counter with the API's Safe total against the contract's own `dailyCap` |
 | `require(!processedTransfer[transferId])` | Reads that registry and refuses a transferId the vault already spent, plus refuses a second move for one transfer record — but writes nothing on-chain |
-| Revert on failure leaves nothing to unwind | `compensateTransfer` returns the EURe to the Safe it came from, or sends an already-swapped input to review |
+| Revert on failure leaves nothing to unwind | `compensateTransfer` returns whatever actually left the Safe (see `safeMovedEur`), or sends an already-swapped input to review |
 
 The replay row is the one still short of the guarantee it replaced. Both checks
 read state this API owns, so a restored `db.json` or a second API instance

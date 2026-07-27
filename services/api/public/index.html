@@ -893,6 +893,29 @@ async function registerPasskey(u) {
   }
 }
 
+async function activatePasskeySafe() {
+  if (!user?.id || !credId() || !window.PublicKeyCredential) return;
+  const prepared = await api(`/api/users/${user.id}/passkey-safe/deployment`, {});
+  if (!prepared.challenge) {
+    user = { ...user, ...prepared };
+    return;
+  }
+  const cred = await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(prepared.challenge),
+      allowCredentials: [{ type: "public-key", id: b64urlToBytes(prepared.credentialId) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  });
+  const activated = await api(prepared.submitTo, {
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  });
+  user = { ...user, ...activated };
+}
+
 /* FP4: bind this browser's device key as the account's payment authorizer.
    The vault takes the first binding and refuses re-binding by anyone but the
    device itself, so this can establish but never steal. */
@@ -956,6 +979,11 @@ async function createAccount(withPasskey) {
             setTimeout(() => rej(new Error("no response from your device — is a screen lock set up?")), 30000),
           ),
         ]);
+        try {
+          await activatePasskeySafe();
+        } catch (e) {
+          console.warn("passkey Safe activation deferred:", e.message);
+        }
       } catch (e) {
         showErr("pk-err", new Error(`passkey setup didn't complete (${e.message}) — continuing without it; you can add one later`));
         await new Promise((r) => setTimeout(r, 1600));
