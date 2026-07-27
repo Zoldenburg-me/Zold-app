@@ -155,6 +155,14 @@ export interface Transfer {
   recipientPhone?: string; // cash rail
   recipientIban?: string; // sepa rail
   recipientVpa?: string; // upi rail (merchant/recipient UPI ID)
+  /**
+   * Payer-supplied remittance reference, carried to the payee on the SEPA
+   * payment so they can reconcile it against their own records. Set by callers
+   * that pay a third party on someone's behalf — the "Pay with Zold" checkout
+   * puts the merchant's own user/transaction handle here. Free text, and it
+   * reaches a bank statement, so it is normalised at send (see sepa.ts).
+   */
+  reference?: string;
   state: TransferState;
   sendEur: number;
   receiveKes: number; // cash rail

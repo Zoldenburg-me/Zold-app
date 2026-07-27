@@ -16,6 +16,7 @@ import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
+import { paymentMemo } from "./sepa.js";
 import { simulateSepaDeposit } from "./adapters/monerium.js";
 import { bridgeUsdcToStellar, CctpBridgeError, type CctpPlan } from "./bridge/cctp.js";
 import {
@@ -593,7 +594,12 @@ export async function executeSepaTransfer(
         const forwardHash = await forwardEureForRedeem(user.address, payoutEur);
         if (forwardHash) txs.push({ step: "eure.transfer(user-safe)", hash: forwardHash });
 
-        const order = await redeemToIban(user, payoutEur, counterpart, `Zold ${transfer.id}`);
+        const order = await redeemToIban(
+          user,
+          payoutEur,
+          counterpart,
+          paymentMemo(transfer.id, transfer.reference),
+        );
         return store.updateTransfer(transfer.id, {
           state: "PAYOUT_SUBMITTED",
           sepa: {
