@@ -4,12 +4,15 @@
  * itemized refund record. Also checks the no-debit failure needs no refund.
  * Runs its own chain/API on shifted ports. Run: npm run fp3:test
  */
+// Must be first: pins the chain/keys before config.js reads the environment.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { newDevice, registerDevice, sendTransfer } from "./device.js";
+
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RPC = "http://127.0.0.1:8547";
@@ -68,7 +71,7 @@ try {
     cwd: ROOT, stdio: "inherit", env: ENV,
   });
   assert.equal(dep.status, 0, "deploy failed");
-  rmSync(path.join(ROOT, "data/db.json"), { force: true });
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"]);
   const start = Date.now();
   while (Date.now() - start < 30_000) {

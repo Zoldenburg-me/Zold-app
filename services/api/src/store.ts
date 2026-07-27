@@ -177,7 +177,7 @@ export interface Transfer {
   /** Internal JIT liquidity execution details. This records how value moved
    *  into the settlement asset for the payout rail; it is not a swap product. */
   liquidity?: {
-    provider: "fx-swapper" | "rfq";
+    provider: "fx-swapper" | "rfq" | "cow";
     side: "EURE_TO_USDC" | "USDC_TO_EURE";
     quoteId: string;
     tokenIn: "EURe" | "USDC";
@@ -191,7 +191,7 @@ export interface Transfer {
      *  because the plan is prepared and executed in separate steps — a quote
      *  that lost its tx cannot be replayed, and re-quoting at execution time
      *  would settle at a price the user never agreed to. */
-    rfq?: { quoteId: string; tx: { to?: string; data?: string; value?: string } | null };
+    rfq?: { quoteId: string; tx: { to?: string; data?: string; value?: string } | null; approvalTarget?: string };
     executedAt?: string;
     txHash?: string;
   };
@@ -255,8 +255,20 @@ interface Db {
   processedMoneriumWebhooks: string[];
 }
 
-const DATA_DIR = path.join(ROOT, "data");
-const DB_PATH = path.join(DATA_DIR, "db.json");
+/**
+ * Where the store lives. TRANSF_DB_PATH overrides it.
+ *
+ * Tests point this somewhere disposable, because they reset the database on
+ * every run — and when that was the same file the running app uses, a test
+ * run destroyed live accounts. That is not hypothetical: it wiped a Safe
+ * owner key on Base Sepolia, stranding the account permanently, since only
+ * the current authorizer may rotate. A test must not be able to reach the
+ * working database at all.
+ */
+const DB_PATH = process.env.TRANSF_DB_PATH
+  ? path.resolve(process.env.TRANSF_DB_PATH)
+  : path.join(ROOT, "data", "db.json");
+const DATA_DIR = path.dirname(DB_PATH);
 
 let db: Db = {
   users: [],

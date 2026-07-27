@@ -247,3 +247,46 @@ export async function vaultBalance(user: `0x${string}`): Promise<number> {
   })) as bigint;
   return eur.fromWei(bal);
 }
+
+
+/**
+ * Move EURe from the orchestrator to a user's Safe so a redeem can burn it.
+ *
+ * Returns null on a local chain: the vault there holds a mock EURe that
+ * Monerium has never heard of, so there is nothing to forward and the
+ * simulated payout does not need it.
+ *
+ * Deliberately a plain ERC-20 transfer rather than anything vault-side. The
+ * orchestrator already holds these tokens — debit sent them there — and the
+ * amount forwarded is the payout only, so our fee stays behind.
+ */
+export async function forwardEureForRedeem(
+  userSafe: `0x${string}`,
+  payoutEur: number,
+): Promise<`0x${string}` | null> {
+  const { moneriumEure } = await import("./adapters/monerium-tokens.js");
+  const { MONERIUM } = await import("./config.js");
+  if (!(await moneriumEure(MONERIUM.baseUrl, CHAIN_ID))) return null;
+
+  const amount = eur.toWei(payoutEur);
+  const held = (await publicClient.readContract({
+    address: addrs().eure,
+    abi: abis.MockToken, // ERC-20 surface; the real EURe answers the same calls
+    functionName: "balanceOf",
+    args: [orchestratorAddress],
+  })) as bigint;
+  if (held < amount) {
+    // Better to say so here than to have Monerium reject an order for reasons
+    // that read as a Monerium problem.
+    throw new Error(
+      `orchestrator holds ${eur.fromWei(held)} EURe but the payout needs ${payoutEur} — ` +
+        `the debit did not land where the redeem expects it`,
+    );
+  }
+  return writeAndWait(orchestratorWallet, {
+    address: addrs().eure,
+    abi: abis.MockToken,
+    functionName: "transfer",
+    args: [userSafe, amount],
+  });
+}

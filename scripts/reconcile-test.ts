@@ -8,6 +8,8 @@
  *
  * Run: npm run reconcile:test
  */
+// Must be first: pins the chain/keys before config.js reads the environment.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
@@ -15,6 +17,7 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { newDevice, registerDevice } from "./device.js";
+
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
@@ -135,7 +138,7 @@ try {
   );
 
   console.log("2/3 API in sandbox mode against the stub…");
-  rmSync(path.join(ROOT, "data/db.json"), { force: true });
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   const apiEnv = {
     MONERIUM_CLIENT_ID: "stub",
     MONERIUM_CLIENT_SECRET: "stub",

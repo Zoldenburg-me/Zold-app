@@ -18,6 +18,7 @@ import {
   type MetaTransaction,
 } from "abstractionkit";
 import { privateKeyToAccount } from "viem/accounts";
+import { encodeFunctionData } from "viem";
 
 export const CANDIDE = {
   chainId: BigInt(process.env.CANDIDE_CHAIN_ID ?? 11155111),
@@ -68,6 +69,67 @@ export async function deploySmartAccount(ownerKey: `0x${string}`): Promise<strin
   const finalOp: any = (sponsored as any).userOperation ?? sponsored;
 
   finalOp.signature = account.signUserOperation(finalOp, [ownerKey], CANDIDE.chainId);
+  const response = await account.sendUserOperation(finalOp, CANDIDE.bundlerUrl);
+  await response.included();
+  return response.userOperationHash;
+}
+
+/**
+ * Move an ERC-20 out of the user's Safe, gaslessly.
+ *
+ * Needed once the vault holds Monerium's real EURe rather than a token we mint
+ * ourselves: a deposit lands in the user's Safe, and RemitVault.creditDeposit
+ * refuses unless the vault actually holds the tokens backing the credit
+ * ("uncovered credit"), so the euros have to be moved before they can be
+ * credited.
+ *
+ * This is a server-signed action today — the same custody gap FP4's second
+ * half exists to close. It is not a new hole, but it is a bigger one: the key
+ * that can do this can now move real euros, not mock ones.
+ */
+export async function transferTokenFromSafe(params: {
+  ownerKey: `0x${string}`;
+  token: `0x${string}`;
+  to: `0x${string}`;
+  amount: bigint;
+}): Promise<string> {
+  const owner = privateKeyToAccount(params.ownerKey);
+  const account = smartAccountFor(owner.address);
+  if (!(await isDeployed(account.accountAddress))) {
+    throw new Error(`Safe ${account.accountAddress} is not deployed — cannot move tokens from it`);
+  }
+  // transfer(address,uint256)
+  const data = encodeFunctionData({
+    abi: [
+      {
+        type: "function",
+        name: "transfer",
+        stateMutability: "nonpayable",
+        inputs: [
+          { name: "to", type: "address" },
+          { name: "amount", type: "uint256" },
+        ],
+        outputs: [{ type: "bool" }],
+      },
+    ],
+    functionName: "transfer",
+    args: [params.to, params.amount],
+  });
+
+  const call: MetaTransaction = { to: params.token, value: 0n, data };
+  const userOperation = await account.createUserOperation(
+    [call],
+    CANDIDE.rpcUrl,
+    CANDIDE.bundlerUrl,
+  );
+  const paymaster = new Erc7677Paymaster(CANDIDE.paymasterUrl);
+  const sponsored = await paymaster.createPaymasterUserOperation(
+    account as any,
+    userOperation as any,
+    CANDIDE.bundlerUrl,
+  );
+  const finalOp: any = (sponsored as any).userOperation ?? sponsored;
+  finalOp.signature = account.signUserOperation(finalOp, [params.ownerKey], CANDIDE.chainId);
   const response = await account.sendUserOperation(finalOp, CANDIDE.bundlerUrl);
   await response.included();
   return response.userOperationHash;

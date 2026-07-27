@@ -14,11 +14,14 @@
  *
  * Run: npm run kyc:operator:test
  */
+// Must be first: pins the chain/keys before config.js reads the environment.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
@@ -92,7 +95,7 @@ try {
   );
 
   console.log("2/3 API in PRODUCTION mode (no ALLOW_SIMULATION)…");
-  rmSync(path.join(ROOT, "data/db.json"), { force: true });
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
     NODE_ENV: "production",
     KYC_OPERATOR_TOKEN: OPERATOR_TOKEN,

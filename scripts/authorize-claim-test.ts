@@ -15,13 +15,15 @@
  *
  * Store-only by design — no chain, no API. Run: npm run authorize:test
  */
+// Must be first: pins chain, keys and a throwaway database.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-rmSync(path.join(ROOT, "data/db.json"), { force: true });
+rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
 const { initStore, store } = await import("../services/api/src/store.js");
 
