@@ -1162,16 +1162,8 @@ app.post(
     const balances = await accountBalances(user.address);
     let fundingSource: Transfer["fundingSource"] = "vault";
     if (balances.vaultBalanceEur < quote.sendEur) {
-      if (balances.safeBalanceEur >= quote.sendEur && quote.rail === "sepa") {
+      if (balances.safeBalanceEur >= quote.sendEur) {
         fundingSource = "safe";
-      } else if (balances.safeBalanceEur >= quote.sendEur) {
-        return res.status(409).json({
-          error:
-            "funds are in the Safe, but Safe-funded cash/UPI execution is not implemented yet; " +
-            "use a SEPA payout or wait for the Safe-funded FX path",
-          safeBalanceEur: balances.safeBalanceEur,
-          vaultBalanceEur: balances.vaultBalanceEur,
-        });
       } else {
         return res.status(400).json({
           error:

@@ -166,9 +166,9 @@ export interface Transfer {
    *
    * vault: legacy/local path. RemitVault.debit verifies the device signature
    * and moves the full send amount to the orchestrator.
-   * safe: transitional live-Monerium SEPA path. EURe already sits in the
-   * user's Safe; the API verifies the same device authorization before using
-   * the legacy Safe owner key to collect the fee and place the redeem.
+   * safe: transitional live-Monerium path. EURe already sits in the user's
+   * Safe; the API verifies the same device authorization before using the
+   * legacy Safe owner key to move the one-time amount needed for this rail.
    */
   fundingSource?: "vault" | "safe";
   /** FP4: the terms the device is asked to authorize. Fixed when the transfer
