@@ -10,7 +10,14 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { defineChain } from "viem";
 import { hardhat, polygon, polygonAmoy } from "viem/chains";
-import { CHAIN_ID, KEYS, RPC_URL, loadAbi, loadDeployments, type Deployments } from "./config.js";
+import {
+  CHAIN_ID,
+  KEYS,
+  RPC_URL,
+  loadAbi,
+  loadDeployments,
+  type Deployments,
+} from "./config.js";
 import type { PayoutRail } from "./store.js";
 
 /**
@@ -248,6 +255,39 @@ export async function vaultBalance(user: `0x${string}`): Promise<number> {
   return eur.fromWei(bal);
 }
 
+export async function safeEurBalance(user: `0x${string}`): Promise<number> {
+  const bal = (await publicClient.readContract({
+    address: addrs().eure,
+    abi: abis.MockToken,
+    functionName: "balanceOf",
+    args: [user],
+  })) as bigint;
+  return eur.fromWei(bal);
+}
+
+/**
+ * Displayed and diagnostic EUR balances.
+ *
+ * The headline balance remains the vault ledger because that is what the
+ * current transfer executor can spend. Safe EURe is exposed separately as
+ * custody/reconciliation state, especially on native-Monerium chains where
+ * deposits briefly, or after a failed mirror permanently, sit in the Safe.
+ */
+export async function accountBalances(user: `0x${string}`): Promise<{
+  balanceEur: number;
+  safeBalanceEur: number;
+  vaultBalanceEur: number;
+}> {
+  const [safeBalanceEur, vaultBalanceEur] = await Promise.all([
+    safeEurBalance(user),
+    vaultBalance(user),
+  ]);
+  return {
+    balanceEur: vaultBalanceEur,
+    safeBalanceEur,
+    vaultBalanceEur,
+  };
+}
 
 /**
  * Move EURe from the orchestrator to a user's Safe so a redeem can burn it.

@@ -39,6 +39,7 @@ import { getTreasury, missingRequiredFields, sep10Auth, sep12CustomerFields } fr
 import { formatReport, reconcile } from "./reconcile.js";
 import {
   addrs,
+  accountBalances,
   assertChainMatches,
   destinationCommitment,
   eur,
@@ -448,8 +449,8 @@ app.get(
     if (sandbox && user.funding?.status === "iban_pending") {
       user = await refreshPendingIban(user);
     }
-    const balanceEur = await vaultBalance(user.address);
-    res.json({ ...publicUser(user), balanceEur });
+    const balances = await accountBalances(user.address);
+    res.json({ ...publicUser(user), ...balances });
   }),
 );
 
@@ -603,8 +604,8 @@ app.post(
             : "identity review required",
       },
     });
-    const balanceEur = await vaultBalance(updated.address).catch(() => 0);
-    res.json({ ...publicUser(updated), balanceEur });
+    const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0, vaultBalanceEur: 0 }));
+    res.json({ ...publicUser(updated), ...balances });
   }),
 );
 
@@ -775,8 +776,8 @@ app.post(
       },
       monerium: { ...user.monerium!, profileId, ...snapshot },
     });
-    const balanceEur = await vaultBalance(updated.address).catch(() => 0);
-    res.json({ ...publicUser(updated), balanceEur });
+    const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0, vaultBalanceEur: 0 }));
+    res.json({ ...publicUser(updated), ...balances });
   }),
 );
 
@@ -818,8 +819,8 @@ async function applyKycDecision(
     },
   });
   if (sandbox && decision === "approved") queueSandboxProvisioning(updated);
-  const balanceEur = await vaultBalance(updated.address).catch(() => 0);
-  return { ...publicUser(updated), balanceEur };
+  const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0, vaultBalanceEur: 0 }));
+  return { ...publicUser(updated), ...balances };
 }
 
 function readDecision(body: any, res: express.Response): "approved" | "rejected" | "manual_review" | undefined {
@@ -1009,8 +1010,8 @@ app.post(
     } catch (err: any) {
       return res.status(401).json({ error: String(err?.message ?? err) });
     }
-    const balanceEur = await vaultBalance(user.address).catch(() => 0);
-    res.json({ ...withSession(user), balanceEur });
+    const balances = await accountBalances(user.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0, vaultBalanceEur: 0 }));
+    res.json({ ...withSession(user), ...balances });
   }),
 );
 
@@ -1071,8 +1072,8 @@ app.post(
     if (!requireKycApproved(user, res)) return;
     const ref = `sepa-${randomUUID()}`;
     const txs = await simulateSepaDeposit(user.address, amount, ref);
-    const balanceEur = await vaultBalance(user.address);
-    res.json({ credited: amount, balanceEur, paymentRef: ref, ...txs });
+    const balances = await accountBalances(user.address);
+    res.json({ credited: amount, ...balances, paymentRef: ref, ...txs });
   }),
 );
 
