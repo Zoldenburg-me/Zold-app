@@ -81,9 +81,11 @@ Running this repo with sandbox credentials, today:
   local vault rather than being the same coins.
 - Live Monerium deposits mint real EURe to the user's Safe. The UI shows both
   the Safe balance and the vault ledger balance. The current transfer executor
-  still debits `RemitVault` first; the transitional poller can move Safe-held
-  EURe into the vault using the server-held Safe owner key, but that is not the
-  target custody model and fails if that key is missing.
+  selects a funding source per transfer: vault ledger first for local/mock
+  compatibility, otherwise Safe-held EURe when available. The Safe-funded path
+  verifies the device authorization before moving the exact signed amount, but
+  it still relies on the legacy server-held Safe owner key until FP4 custody
+  replaces that key with passkey/co-signer approval.
 - FX rates come from constants, not an oracle. The swap contract is a
   stand-in for a DEX route.
 - The UPI partner and the MoneyGram payout (in mock mode) return generated
