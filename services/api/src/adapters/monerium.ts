@@ -8,7 +8,7 @@
  * the RemitVault and credits the user's ledger balance.
  */
 import { keccak256, toHex } from "viem";
-import { abis, addrs, deployerWallet, eur, rampWallet, writeAndWait } from "../chain.js";
+import { abis, addrs, deployerWallet, eur, publicClient, rampWallet, writeAndWait } from "../chain.js";
 
 /** Deterministic mock IBAN (Iceland format, like Monerium's). */
 export function issueIban(userId: string): string {
@@ -87,13 +87,49 @@ export async function creditDepositFromSafe(
   const wei = eur.toWei(amountEur);
   if (!user.privateKey) throw new Error("user has no wallet key — cannot move the deposit");
 
-  const { transferTokenFromSafe } = await import("../wallet/candide.js");
-  const moveHash = await transferTokenFromSafe({
-    ownerKey: user.privateKey as `0x${string}`,
-    token: a.eure,
-    to: a.vault,
-    amount: wei,
-  });
+  /**
+   * Skip the move if the vault already holds enough to back this credit.
+   *
+   * These are two transactions, so a run can die between them — and it did:
+   * the euros reached the vault, the credit failed for want of gas, and every
+   * retry then tried to move them again from a Safe that was already empty.
+   * The deposit could never be credited, even once the credit itself could
+   * have succeeded.
+   *
+   * The condition mirrors what RemitVault.creditDeposit enforces
+   * (balanceOf(vault) >= totalCredited + amount), so "already covered" here
+   * means exactly "the credit will not revert for lack of backing".
+   */
+  const [vaultHeld, credited] = (await Promise.all([
+    publicClient.readContract({
+      address: a.eure,
+      abi: abis.MockToken,
+      functionName: "balanceOf",
+      args: [a.vault],
+    }),
+    publicClient.readContract({
+      address: a.vault,
+      abi: abis.RemitVault,
+      functionName: "totalCredited",
+      args: [],
+    }),
+  ])) as [bigint, bigint];
+
+  let moveHash: string | null = null;
+  if (vaultHeld >= credited + wei) {
+    console.log(
+      `monerium: vault already holds the euros for this deposit (${eur.fromWei(vaultHeld)} EURe ` +
+        `vs ${eur.fromWei(credited)} credited) — crediting without moving again`,
+    );
+  } else {
+    const { transferTokenFromSafe } = await import("../wallet/candide.js");
+    moveHash = await transferTokenFromSafe({
+      ownerKey: user.privateKey as `0x${string}`,
+      token: a.eure,
+      to: a.vault,
+      amount: wei,
+    });
+  }
 
   const creditHash = await writeAndWait(rampWallet, {
     address: a.vault,
