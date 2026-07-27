@@ -357,7 +357,37 @@ function fundableUserPatch(user: User): Partial<User> {
   };
 }
 
+/**
+ * Refuse to issue an IBAN to an account nobody can get back into.
+ *
+ * An IBAN is the point of no return: once it exists, money can arrive, and an
+ * account whose only credential is a session token becomes unreachable the
+ * moment that token is gone. Worse, the spending key is bound on-chain and
+ * only the CURRENT key may rotate it, so a lost browser is not a lockout —
+ * it is permanent. Onboarding lets people skip the passkey, which is fine
+ * while an account is empty and unacceptable once it can hold money.
+ *
+ * Gated on allowSimulation so local demos and e2e still run end to end
+ * without a real authenticator.
+ */
+function passkeyRequiredBeforeFunding(user: User): string | null {
+  if (user.passkey?.publicKey) return null;
+  if (SECURITY.allowSimulation) return null;
+  return (
+    "a passkey is required before an account can be funded — without one there is " +
+    "no way to sign back in, and a lost device key cannot be replaced"
+  );
+}
+
 function queueSandboxProvisioning(user: User) {
+  const blocked = passkeyRequiredBeforeFunding(user);
+  if (blocked) {
+    console.log(`provisioning deferred for ${user.id}: ${blocked}`);
+    store.updateUser(user.id, {
+      funding: { ...(user.funding ?? {}), status: "error", detail: blocked } as User["funding"],
+    });
+    return;
+  }
   provisionFunding(user).catch((err) =>
     console.error(`provisioning failed for ${user.id}: ${err?.message ?? err}`),
   );

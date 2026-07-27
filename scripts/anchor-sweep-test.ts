@@ -3,6 +3,8 @@
  * closed by the background driver once the anchor state is reflected as paid,
  * even when no browser calls /refresh-payout.
  */
+// Must be first: pins chain, keys and a throwaway database.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import path from "node:path";
@@ -14,7 +16,7 @@ process.env.MONERIUM_CLIENT_ID = "";
 process.env.MONERIUM_CLIENT_SECRET = "";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-rmSync(path.join(ROOT, "data/db.json"), { force: true });
+rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { sweepAnchorPayouts } = await import("../services/api/src/orchestrator.js");

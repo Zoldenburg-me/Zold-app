@@ -18,6 +18,8 @@
  *
  * Run: npm run monerium:oauth:test
  */
+// Must be first: pins the chain/keys before config.js reads the environment.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -25,6 +27,7 @@ import { createServer } from "node:http";
 import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
@@ -204,7 +207,7 @@ try {
   );
 
   console.log("2/3 API with a stub Monerium OAuth client…");
-  rmSync(path.join(ROOT, "data/db.json"), { force: true });
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
     MONERIUM_CLIENT_ID: "stub-client",
     MONERIUM_CLIENT_SECRET: "stub-secret",
@@ -267,7 +270,7 @@ try {
   });
 
   await t("tokens are encrypted at rest — plaintext never touches db.json", async () => {
-    const db = readFileSync(path.join(ROOT, "data/db.json"), "utf8");
+    const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
     assert.ok(!db.includes(ACCESS_TOKEN), "access token found in plaintext in db.json");
     assert.ok(!db.includes(REFRESH_TOKEN), "refresh token found in plaintext in db.json");
     assert.ok(db.includes("accessTokenEnc"), "expected an encrypted access token field");
@@ -321,7 +324,7 @@ try {
     const r = await call(`/api/users/${userId}/monerium/connect`, undefined, "DELETE");
     assert.equal(r.status, 200);
     assert.equal(r.data.monerium, undefined);
-    const db = readFileSync(path.join(ROOT, "data/db.json"), "utf8");
+    const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
     assert.ok(!db.includes("accessTokenEnc"), "encrypted tokens should be dropped on disconnect");
   });
 

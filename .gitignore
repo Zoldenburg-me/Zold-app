@@ -14,3 +14,5 @@ contracts/cache/
 deployments.json
 dist/
 *.db
+.local-backups/
+data/db*.json

@@ -8,12 +8,15 @@
  *
  * Run: npm run kyc:test
  */
+// Must be first: pins the chain/keys before config.js reads the environment.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { newDevice } from "./device.js";
+
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3020);
@@ -104,7 +107,7 @@ try {
     env: ENV,
   });
   assert.equal(dep.status, 0, "deploy failed");
-  rmSync(path.join(ROOT, "data/db.json"), { force: true });
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"]);
   await waitFor(`${API}/api/health`);
 
