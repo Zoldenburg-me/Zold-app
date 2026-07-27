@@ -12,7 +12,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { anchorModeEnabled, API_HOST, API_PORT, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
-import { issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
+import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
 import { SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type Transfer, type User } from "./store.js";
 import { createQuote, isExpired } from "./fx.js";
@@ -53,15 +53,24 @@ import {
   vaultAuthorizerOf,
   vaultBalance,
 } from "./chain.js";
-import { smartAccountFor } from "./wallet/candide.js";
+import {
+  CANDIDE,
+  deploySmartAccount,
+  isDeployed,
+  preparePasskeySafeDeployment,
+  signMessageAsSafe,
+  smartAccountFor,
+  smartAccountForPasskeyCosigner,
+  submitPasskeySafeDeployment,
+  webauthnOwnerFromJwk,
+  webauthnOwnerToStore,
+} from "./wallet/candide.js";
 import {
   exchangeAuthorizationCode,
   LINK_MESSAGE,
   moneriumBearerRequest,
   refreshAuthorizationToken,
 } from "./adapters/monerium-client.js";
-import { deploySmartAccount, isDeployed, signMessageAsSafe } from "./wallet/candide.js";
-
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -148,6 +157,9 @@ app.use("/api", (req, res, next) => {
 
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public");
 app.use(express.static(pub));
+
+type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
+const pendingPasskeySafeDeployments = new Map<string, { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }>();
 
 const wrap =
   (fn: express.Handler): express.Handler =>
@@ -380,6 +392,37 @@ function passkeyRequiredBeforeFunding(user: User): string | null {
     "a passkey is required before an account can be funded — without one there is " +
     "no way to sign back in, and a lost device key cannot be replaced"
   );
+}
+
+function passkeySafePlan(
+  user: User,
+  publicKey: NonNullable<NonNullable<User["passkey"]>["publicKey"]>,
+): User["passkeySafe"] | undefined {
+  if (!publicKey || publicKey.alg !== "ES256") return undefined;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(CANDIDE.cosignerAddress)) return undefined;
+  const cosignerAddress = CANDIDE.cosignerAddress as `0x${string}`;
+  const owner = webauthnOwnerFromJwk(publicKey.jwk);
+  if (!owner) return undefined;
+  const account = smartAccountForPasskeyCosigner(owner, cosignerAddress);
+  return {
+    address: account.accountAddress as `0x${string}`,
+    status: "planned",
+    threshold: 2,
+    cosignerAddress,
+    passkeyPublicKey: webauthnOwnerToStore(owner),
+    createdAt: new Date().toISOString(),
+    legacyAddress: user.address,
+  };
+}
+
+function passkeySafeChallenge(challenge: `0x${string}`): string {
+  return bufToB64url(Buffer.from(challenge.slice(2), "hex"));
+}
+
+function prunePendingPasskeySafeDeployments(now = Date.now()) {
+  for (const [id, pending] of pendingPasskeySafeDeployments) {
+    if (pending.expiresAt < now) pendingPasskeySafeDeployments.delete(id);
+  }
 }
 
 function queueSandboxProvisioning(user: User) {
@@ -989,17 +1032,105 @@ app.post(
     if (reg.credentialId !== credentialId) {
       return res.status(400).json({ error: "credentialId does not match attestation" });
     }
+    const passkey = {
+      credentialId,
+      publicKey: reg.key,
+      signCount: reg.signCount,
+      rpId: SECURITY.rpId,
+      attestation,
+      createdAt: new Date().toISOString(),
+    };
+    const plannedSafe = passkeySafePlan(user, reg.key);
     const updated = store.updateUser(user.id, {
       passkey: {
-        credentialId,
-        publicKey: reg.key,
-        signCount: reg.signCount,
-        rpId: SECURITY.rpId,
-        attestation,
-        createdAt: new Date().toISOString(),
+        ...passkey,
       },
+      ...(plannedSafe ? { passkeySafe: plannedSafe } : {}),
     });
     res.status(201).json(publicUser(updated));
+  }),
+);
+
+app.post(
+  "/api/users/:id/passkey-safe/deployment",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!user.passkey?.publicKey || !user.passkeySafe) {
+      return res.status(409).json({ error: "register a passkey before preparing the passkey Safe" });
+    }
+    if (user.passkeySafe.status === "active") {
+      return res.json({ safeAddress: user.passkeySafe.address, status: "active" });
+    }
+    if (!CANDIDE.cosignerKey) {
+      return res.status(503).json({ error: "CANDIDE_COSIGNER_KEY is required before passkey Safe deployment" });
+    }
+    const deployment = await preparePasskeySafeDeployment(user.passkeySafe);
+    if (deployment.challenge === "0x") {
+      const updated = store.updateUser(user.id, {
+        address: user.passkeySafe.address,
+        ownerAddress: undefined,
+        privateKey: undefined,
+        wallet: { type: "candide-safe", deployed: true },
+        passkeySafe: { ...user.passkeySafe, status: "active" },
+      });
+      return res.json(publicUser(updated));
+    }
+    prunePendingPasskeySafeDeployments();
+    const requestId = randomUUID();
+    pendingPasskeySafeDeployments.set(requestId, {
+      userId: user.id,
+      expiresAt: Date.now() + 5 * 60_000,
+      userOperation: deployment.userOperation,
+    });
+    res.status(201).json({
+      requestId,
+      safeAddress: deployment.safeAddress,
+      credentialId: user.passkey.credentialId,
+      challenge: passkeySafeChallenge(deployment.challenge),
+      submitTo: `/api/users/${user.id}/passkey-safe/deployment/${requestId}`,
+    });
+  }),
+);
+
+app.post(
+  "/api/users/:id/passkey-safe/deployment/:requestId",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!user.passkeySafe) return res.status(409).json({ error: "no passkey Safe plan for this account" });
+    prunePendingPasskeySafeDeployments();
+    const pending = pendingPasskeySafeDeployments.get(req.params.requestId);
+    if (!pending || pending.userId !== user.id) {
+      return res.status(404).json({ error: "passkey Safe deployment request not found or expired" });
+    }
+    const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
+    if (!authenticatorData || !clientDataJSON || !signature) {
+      return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
+    }
+    const balances = await accountBalances(user.address);
+    if (balances.safeBalanceEur > 0 || balances.vaultBalanceEur > 0) {
+      return res.status(409).json({
+        error: "legacy Safe still has funds; migrate balances before activating the passkey Safe address",
+        ...balances,
+      });
+    }
+    const opHash = await submitPasskeySafeDeployment(user.passkeySafe, pending.userOperation, {
+      authenticatorData: b64urlToBuf(authenticatorData),
+      clientDataJSON: b64urlToBuf(clientDataJSON),
+      signature: b64urlToBuf(signature),
+    });
+    pendingPasskeySafeDeployments.delete(req.params.requestId);
+    const updated = store.updateUser(user.id, {
+      address: user.passkeySafe.address,
+      ownerAddress: undefined,
+      privateKey: undefined,
+      wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
+      passkeySafe: { ...user.passkeySafe, status: "active" },
+    });
+    res.status(201).json({ ...publicUser(updated), deployOpHash: opHash });
   }),
 );
 

@@ -26,6 +26,7 @@
     "check": "tsx scripts/check.ts",
     "fp5:test": "tsx scripts/fp5-binding-test.ts",
     "fp4:test": "tsx scripts/device-key-test.ts",
+    "passkey-safe:test": "tsx scripts/passkey-safe-plan-test.ts",
     "webhook:test": "tsx scripts/webhook-test.ts",
     "reconcile": "tsx scripts/reconcile.ts",
     "reconcile:test": "tsx scripts/reconcile-test.ts",

@@ -200,6 +200,56 @@ try {
     check("no €0 refund record was written", !out.refund, JSON.stringify(out.refund));
   }
 
+  console.log("3b/5 SEPA moved only the fee, so only the fee comes back…");
+  {
+    const { FX } = await import("../services/api/src/config.js");
+    const user = await seedUser("Safe Sepa Fee", 0);
+    const sendEur = 40;
+    const payoutEur = sendEur - FX.FIXED_FEE_EUR;
+    // Same rounding the orchestrator applies — 40 - 39.01 is not exactly 0.99 in floats.
+    const feeEur = Math.round((sendEur - payoutEur) * 100) / 100;
+    // Only the fee ever reaches the orchestrator on this rail.
+    await writeAndWait(deployerWallet, {
+      address: addrs().eure,
+      abi: abis.MockToken,
+      functionName: "mint",
+      args: [orchestratorAddress, eur.toWei(feeEur)],
+    });
+    const t = {
+      id: randomUUID(),
+      userId: user.id,
+      quoteId: randomUUID(),
+      rail: "sepa" as const,
+      recipientName: "Recipient",
+      recipientIban: "DE89370400440532013000",
+      state: "FAILED" as const,
+      error: "redeem rejected",
+      sendEur,
+      receiveKes: 0,
+      receiveEur: payoutEur,
+      fundingSource: "safe" as const,
+      txs: [{ step: DEBIT_STEP.safeFee, hash: `0x${"33".repeat(32)}` }],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } as any;
+    store.addTransfer(t);
+    const before = await eureBalance(user.address);
+    const out = await compensateTransfer(t.id);
+    check("state is REFUNDED", out.state === "REFUNDED", `got ${out.state} (${out.error ?? ""})`);
+    check(
+      "refund is the fee, not the whole send",
+      out.refund?.amountEur === feeEur,
+      `expected €${feeEur}, got ${out.refund?.amountEur}`,
+    );
+    check(
+      "the untouched payout is itemised rather than silently dropped",
+      /never left the Safe/.test(out.refund?.deductions ?? ""),
+      out.refund?.deductions ?? "",
+    );
+    const after = await eureBalance(user.address);
+    check("only the fee moved back", after - before === feeEur, `${before} -> ${after}`);
+  }
+
   console.log("4/5 the sweep picks up Safe-funded failures…");
   {
     const user = await seedUser("Safe Sweep", 0);
