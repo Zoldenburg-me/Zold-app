@@ -243,11 +243,54 @@ export interface Session {
   revokedAt?: string;
 }
 
+/**
+ * "Pay with Zold" merchant. A partner (e.g. Mony) that redirects its users to
+ * our checkout to be paid via SEPA into `ibanTarget`. clientSecret is used only
+ * for the confidential token exchange; the browser handoff is PKCE-protected.
+ */
+export interface Merchant {
+  id: string;
+  name: string;
+  clientId: string;
+  clientSecret: string;
+  ibanTarget: string; // where settled EUR lands (the merchant's collection IBAN)
+  redirectUris: string[]; // exact-match allowlist; "*" only for the demo merchant
+  webhookUrl?: string;
+  createdAt: string;
+}
+
+export type PaymentIntentStatus = "PENDING" | "AUTHORIZED" | "PAID" | "FAILED" | "EXPIRED";
+
+/**
+ * One "Pay with Zold" checkout. Created from the merchant's OAuth authorize
+ * handoff, fulfilled when the (existing or freshly-onboarded) user authorizes a
+ * transfer into the merchant's IBAN, then handed back as a one-time code the
+ * merchant exchanges for status.
+ */
+export interface PaymentIntent {
+  id: string;
+  merchantId: string;
+  amountEur: number; // what the merchant receives
+  reference: string; // the merchant's own user/order ref, echoed back
+  redirectUri: string;
+  state: string; // merchant's CSRF state, echoed on redirect
+  codeChallenge: string; // PKCE S256
+  status: PaymentIntentStatus;
+  userId?: string;
+  transferId?: string;
+  code?: string; // one-time authorization code (cleared on token exchange)
+  statusToken?: string; // bearer the merchant uses to poll after exchange
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface Db {
   users: User[];
   quotes: Quote[];
   transfers: Transfer[];
   sessions: Session[];
+  merchants: Merchant[];
+  paymentIntents: PaymentIntent[];
   /** Monerium issue-order ids already mirrored into the vault. */
   processedMoneriumOrders: string[];
   /** Monerium webhook delivery ids already accepted. */
@@ -262,6 +305,8 @@ let db: Db = {
   quotes: [],
   transfers: [],
   sessions: [],
+  merchants: [],
+  paymentIntents: [],
   processedMoneriumOrders: [],
   processedMoneriumWebhooks: [],
 };
@@ -271,6 +316,8 @@ export function initStore() {
   if (existsSync(DB_PATH)) {
     db = JSON.parse(readFileSync(DB_PATH, "utf8"));
     db.sessions ??= [];
+    db.merchants ??= [];
+    db.paymentIntents ??= [];
     db.processedMoneriumOrders ??= [];
     db.processedMoneriumWebhooks ??= [];
     for (const q of db.quotes) q.status ??= "OPEN";
@@ -441,5 +488,36 @@ export const store = {
   },
   findTransfer(id: string) {
     return db.transfers.find((t) => t.id === id);
+  },
+  // --- "Pay with Zold" merchants + payment intents ---
+  get merchants() {
+    return db.merchants;
+  },
+  addMerchant(m: Merchant) {
+    db.merchants.push(m);
+    persist();
+  },
+  findMerchantByClientId(clientId: string) {
+    return db.merchants.find((m) => m.clientId === clientId);
+  },
+  findMerchant(id: string) {
+    return db.merchants.find((m) => m.id === id);
+  },
+  addPaymentIntent(p: PaymentIntent) {
+    db.paymentIntents.push(p);
+    persist();
+  },
+  findPaymentIntent(id: string) {
+    return db.paymentIntents.find((p) => p.id === id);
+  },
+  findPaymentIntentByCode(code: string) {
+    return db.paymentIntents.find((p) => p.code === code);
+  },
+  updatePaymentIntent(id: string, patch: Partial<PaymentIntent>) {
+    const p = db.paymentIntents.find((x) => x.id === id);
+    if (!p) throw new Error(`unknown payment intent ${id}`);
+    Object.assign(p, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return p;
   },
 };
