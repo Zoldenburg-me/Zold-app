@@ -37,7 +37,10 @@ import {
   orchestratorWallet,
   paymentAuthorizationTypedData,
   publicClient,
+  returnEureToSafe,
   transferIdHash,
+  vaultDailySpend,
+  vaultProcessedTransfer,
   writeAndWait,
 } from "./chain.js";
 import { transferTokenFromSafe } from "./wallet/candide.js";
@@ -87,6 +90,77 @@ async function assertQuoteRateBinding(transfer: Transfer): Promise<void> {
 const failpoint = (step: string) => {
   if (process.env.FORCE_FAIL_STEP === step) throw new Error(`forced failure after ${step}`);
 };
+
+/**
+ * The step names for the input-funds leg, in one place.
+ *
+ * Recovery decides whether any money actually moved by matching these names,
+ * so the producer and every consumer have to agree. They did not: the Safe
+ * path pushed "safe.transfer(orchestrator)" while compensateTransfer and
+ * sweepStrandedTransfers still looked for "vault.debit" alone, so a failed
+ * Safe-funded transfer recorded a €0 refund reading "nothing was debited"
+ * while the EURe had already left the user's Safe — and the sweep then skipped
+ * it forever, because setting `refund` is what marks a transfer as settled.
+ *
+ * Anything that adds a third funding source must add its step here.
+ */
+export const DEBIT_STEP = {
+  vault: "vault.debit",
+  safe: "safe.transfer(orchestrator)",
+} as const;
+
+/** Did the input leg move the sender's money? True once any funding source has
+ *  committed its debit, which is what makes a failure owe a refund. */
+function inputFundsMoved(txs: Transfer["txs"]): boolean {
+  return txs.some((x) => x.step === DEBIT_STEP.vault || x.step === DEBIT_STEP.safe);
+}
+
+/** EUR this user has committed to Safe-funded transfers today. Counted here
+ *  because nothing on-chain does: the vault's day counter only sees its own
+ *  debits. FAILED/REFUNDED transfers released their reservation. */
+export function safeFundedEurToday(userId: string, now = new Date()): number {
+  const day = now.toISOString().slice(0, 10);
+  return store.transfers
+    .filter(
+      (t) =>
+        t.userId === userId &&
+        t.fundingSource === "safe" &&
+        t.createdAt.slice(0, 10) === day &&
+        !["FAILED", "REFUNDED"].includes(t.state),
+    )
+    .reduce((sum, t) => sum + t.sendEur, 0);
+}
+
+/**
+ * One daily budget across both funding sources.
+ *
+ * RemitVault enforces `debitedOnDay[user][day] + amount <= dailyCap` over its
+ * own debits, and it is the only thing that can. Safe-funded transfers never
+ * touch that counter, so counting them separately gave a user two independent
+ * budgets — a full cap through the vault plus a full cap out of the Safe on
+ * the same day, which is twice the limit the cap exists to set.
+ *
+ * Summing them restores the intended invariant: no more than `dailyCap` leaves
+ * an account per day, whichever pot it comes from. The cap is read from the
+ * contract rather than from FX.DAILY_CAP_EUR so this check cannot drift from
+ * the one the chain will actually apply, and both counters key on the same UTC
+ * day boundary (`block.timestamp / 1 days` is UTC days since the epoch).
+ */
+export async function dailyCapUsage(user: User): Promise<{
+  capEur: number;
+  usedEur: number;
+  fromVaultEur: number;
+  fromSafeEur: number;
+}> {
+  const { capEur, debitedEur } = await vaultDailySpend(user.address);
+  const fromSafeEur = safeFundedEurToday(user.id);
+  return {
+    capEur,
+    usedEur: debitedEur + fromSafeEur,
+    fromVaultEur: debitedEur,
+    fromSafeEur,
+  };
+}
 
 /**
  * Recompute the destination commitment from the payout this orchestrator is
@@ -163,13 +237,39 @@ async function debitInputFunds(
   if (transfer.fundingSource === "safe") {
     await assertDeviceAuthorization(transfer, user, auth);
     if (!user.privateKey) throw new Error("user has no wallet key to move Safe-held EURe");
+
+    /**
+     * Replay guards, in place of the one this path gives up.
+     *
+     * RemitVault.debit refuses a transferId it has already processed, and that
+     * on-chain check is what turned a double submission into a revert rather
+     * than a double spend. A plain ERC-20 transfer out of the Safe has no such
+     * registry, so the two things we CAN still check are checked here:
+     * whether the vault already consumed this transferId, and whether this
+     * transfer record already carries a completed Safe move.
+     *
+     * "duplicate transfer" is the wording on purpose — failAndCompensate
+     * routes that message to MANUAL_REVIEW instead of refunding, which is the
+     * right answer when the payout may already be in flight.
+     *
+     * NOT equivalent to the on-chain guard: both of these read state this API
+     * owns, so they do not survive a restored db.json or a second API instance
+     * racing the first. Closing that gap needs a registry the contract writes.
+     */
+    if (await vaultProcessedTransfer(tid)) {
+      throw new Error("duplicate transfer: the vault already debited this transferId");
+    }
+    if (transfer.txs.some((x) => x.step === DEBIT_STEP.safe)) {
+      throw new Error("duplicate transfer: this transfer already moved EURe out of the Safe");
+    }
+
     const moveHash = await transferTokenFromSafe({
       ownerKey: user.privateKey,
       token: a.eure,
       to: orchestratorAddress,
       amount: sendWei,
     });
-    txs.push({ step: "safe.transfer(orchestrator)", hash: moveHash });
+    txs.push({ step: DEBIT_STEP.safe, hash: moveHash });
     store.updateTransfer(transfer.id, { state: "DEBITED", txs });
     failpoint("safe.transfer");
     return;
@@ -189,7 +289,7 @@ async function debitInputFunds(
       auth.signature,
     ],
   });
-  txs.push({ step: "vault.debit", hash: debitHash });
+  txs.push({ step: DEBIT_STEP.vault, hash: debitHash });
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
   failpoint("vault.debit");
 }
@@ -270,7 +370,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   const steps = new Set(t.txs.map((x) => x.step));
   const now = () => new Date().toISOString();
 
-  if (!steps.has("vault.debit")) {
+  if (!inputFundsMoved(t.txs)) {
     // Nothing moved — FAILED is the whole story.
     return store.updateTransfer(id, {
       refund: { amountEur: 0, recoveredFrom: "none", deductions: "nothing was debited", at: now() },
@@ -312,6 +412,45 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     if (lost > 0) deductions = `€${lost.toFixed(2)} conversion round-trip at current rate`;
   }
 
+  /**
+   * A Safe-funded transfer refunds to the Safe, not to the vault.
+   *
+   * The euros came out of the user's own Safe, so that is the pot they go back
+   * to; re-crediting the vault would return them somewhere else, and on a
+   * native-EURe chain it would need a mint we have no right to perform. This
+   * also means the refund works off a local chain, because it hands back the
+   * very tokens that moved instead of creating new ones.
+   *
+   * Only while they are still EURe, though. Once the input has been swapped to
+   * USDC the orchestrator no longer holds what it took, and unwinding needs a
+   * reverse swap and a decision about who wears the rate movement — so that
+   * case goes to review rather than guessing.
+   */
+  if (t.fundingSource === "safe") {
+    const swapped =
+      steps.has("liquidity.fx-swapper.eure-usdc") || steps.has("swapper.swapExactIn");
+    if (swapped) {
+      return store.updateTransfer(id, {
+        state: "MANUAL_REVIEW",
+        error:
+          `${t.error ?? "transfer failed"}; Safe-funded input was already swapped to USDC, so the euros ` +
+          `taken from the Safe are no longer held as EURe — needs a reverse swap before ` +
+          `€${refundEur} can be returned to ${user.address}`,
+        txs,
+      });
+    }
+    const refundHash = await returnEureToSafe(user.address, refundEur);
+    txs.push({ step: "safe.refundTransfer", hash: refundHash });
+    console.log(
+      `FP3: returned €${refundEur} to ${user.name}'s Safe for transfer ${t.id} (Safe-funded)`,
+    );
+    return store.updateTransfer(id, {
+      state: "REFUNDED",
+      txs,
+      refund: { amountEur: refundEur, recoveredFrom: "Safe-funded EURe", deductions, at: now() },
+    });
+  }
+
   if (!USING_LOCAL_RPC) {
     // Whoever picks this up needs to know where the euros physically are. On
     // the SEPA rail we may already have forwarded the payout into the user's
@@ -349,7 +488,7 @@ export async function sweepStrandedTransfers(): Promise<number> {
   let n = 0;
   for (const t of [...store.transfers]) {
     try {
-      if (t.state === "FAILED" && !t.refund && t.txs.some((x) => x.step === "vault.debit")) {
+      if (t.state === "FAILED" && !t.refund && inputFundsMoved(t.txs)) {
         await compensateTransfer(t.id);
         n++;
       } else if (
