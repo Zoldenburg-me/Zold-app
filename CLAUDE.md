@@ -360,26 +360,10 @@ branch (stale head at merge time; recovered in PR #4). Rules:
   real vs simulated, specifics over adjectives, shortcuts stated openly).
 - Honest assessments valued over cheerleading; say what's mocked.
 
-## Pay with Zold — merchant checkout (July 2026, slice 1 of 2)
-BACKEND DONE: OAuth-style handoff so a partner (Mony) can embed a "Pay with
-Zold" button. We are the authorization server (mirror of the Monerium
-OAuth-connect flow). services/api/src/checkout.ts + store Merchant/
-PaymentIntent + routes: GET /api/checkout/authorize (PKCE S256, creates
-intent, redirects to /checkout?intent=), GET /api/checkout/intents/:id
-(public info for the UI), POST /api/checkout/intents/:id/attach (user links
-their device-authorized SEPA transfer into the merchant IBAN → one-time
-code + redirect), POST /api/checkout/token (merchant: code+verifier+secret →
-status+bearer, burns code), GET /api/checkout/status/:id (poll). Demo
-merchant seeded only when SECURITY.allowSimulation (clientId demo-merchant,
-CHECKOUT_DEMO_IBAN). npm run checkout:test proves the whole handoff for an
-existing user (Version 1), incl. wrong-PKCE rejection. e2e still green.
-The payment reuses the real quote→transfer→device-authorize path (no new
-money-movement code); attach refuses unless the transfer is the user's, SEPA,
-pays the merchant IBAN, matches the amount, and has left CREATED.
-SLICE 2 (TODO, needs a real browser): the /checkout UI page — passkey login
-(existing) or onboard (new, tiered KYC), show "Pay €X to <merchant>", run the
-transfer+device step-up, call attach, redirect back. Also: merchant registry
-beyond the demo seed, signed webhooks on status change, and the Version-3
-onboard-in-flow (new users). KYC caveat stands: at pay time Zold is the
-regulated entity; first-party top-up to the user's own KYC'd Mony wallet is
-the lighter category.
+## Pay with Zold — moved to its own repo (July 2026)
+The merchant checkout / "Pay with Zold" product was extracted to a separate
+repo to keep this consumer app lean. The backend OAuth handoff + existing-user
+checkout that briefly lived here (checkout.ts, checkout.html, checkout-test.ts,
+the /api/checkout/* routes, and store Merchant/PaymentIntent) were REMOVED from
+this repo. Do not rebuild them here — see the checkout-service repo and its
+handoff doc for the new-user onboard-in-flow work.
