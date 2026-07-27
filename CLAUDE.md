@@ -401,6 +401,32 @@ front of someone whose salary is in the account.
    WebAuthn Safe owners for FP4). Monerium sandbox chain name = `amoy` (VERIFIED; other aliases rejected).
    Safes keep the same address cross-chain.
 4. Passkey-as-Safe-owner (true non-custodial; today passkey is auth only).
+5. Card rail — **Immersve** (immersve.com, docs.immersve.com). Mastercard
+   PRINCIPAL MEMBER, so they are the issuer rather than a reseller (contrast
+   Gnosis Pay, which routes through Monavate). Three funding protocols:
+   - *Approval-based* (Universal EVM): cardholder spends straight from their
+     own wallet via a standard ERC-20 approval — no deposit, no migration.
+   - *Flexi deposit*: a dedicated cardholder-scoped contract, balance readable
+     on-chain, PERMISSIONLESS withdrawals (the user can always exit).
+   - *Universal deposit*: one shared partner-scoped contract, cheaper gas.
+   Authorisation flow: Mastercard sends the auth, Immersve reads the chain in
+   real time, and on sufficient funds pulls the token, converts to fiat via
+   Circle and settles with Mastercard.
+   Chains: Algorand, Arbitrum, **Base**, BNB, Ethereum, **Polygon**, Sei —
+   both chains we care about are covered.
+   THE CATCH: **USDC/USDT only. No EURe.** Our vault holds EURe, so a card
+   cannot spend the balance directly. Either the user keeps a USDC sleeve, or
+   we convert on demand — which the cash/UPI rails already do (FxSwapper /
+   JIT RFQ), so the machinery exists. Note this puts EUR/USD FX between a
+   user's balance and their card spend; on the RECIPIENT side that question
+   disappears, since they can be paid in USDC and spend it.
+   Also: Immersve runs its own KYC ("Immersve Conducted KYC", recommended for
+   non-custodial), so it is a second identity relationship alongside
+   Monerium's, not a reuse of it.
+   Best fit is the receiving end — a recipient who can spend beats one
+   collecting cash at a counter. Unanswered: issuer of record per region
+   (their site says "regulatory licenses" without naming entities, and our
+   regulator page names entities precisely), and per-region availability.
 Parked deliberately: NEAR Intents (future multi-chain deposits), Metastable
 (EURe↔EURC later), Flexa/AMP (no — wrong market, card program beats it).
 
