@@ -1,6 +1,6 @@
 # machine-local toolchain & deps
 .toolchain/
-node_modules/
+node_modules
 .claude/
 .DS_Store
 
