@@ -20,6 +20,7 @@ import { bridgeUsdcToStellar, CctpBridgeError, type CctpPlan } from "./bridge/cc
 import {
   executeTransferLiquidity,
   liquidityAmountOutUnits,
+  liquidityProvider,
   prepareTransferLiquidity,
   serializeExecution,
 } from "./liquidity.js";
@@ -63,12 +64,11 @@ async function assertQuoteRateBinding(transfer: Transfer): Promise<void> {
   const quote = store.findQuote(transfer.quoteId);
   if (!quote?.lockedSwapRate) return; // legacy/sepa quotes: nothing to bind
   const locked = BigInt(quote.lockedSwapRate);
-  const live = (await publicClient.readContract({
-    address: addrs().swapper,
-    abi: abis.FxSwapper,
-    functionName: "rate",
-    args: [],
-  })) as bigint;
+  // Ask the provider that will actually fill the swap. Reading the FxSwapper
+  // contract directly compared the quote against the local mock's rate even
+  // when the deployment was pricing through a market maker — the check would
+  // have passed on a number nothing was going to trade at.
+  const { raw: live } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
   const driftBps = (live > locked ? live - locked : locked - live) * 10_000n / locked;
   if (driftBps > BigInt(FX.QUOTE_BINDING_BPS)) {
     throw new Error(

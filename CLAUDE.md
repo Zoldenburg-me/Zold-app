@@ -146,6 +146,46 @@
   `npm run reconcile:test` (6 checks) proves each drift class is caught.
   This is ARCHITECTURE.md §6's reconciler, and it goes away when the mirror
   seam does (Polygon: EURe native, no local mirror).
+- FX rates are LIVE (July 2026): services/api/src/rates.ts fetches EUR mids
+  (TRANSF_RATES_URL, 10-min cache) and REFUSES to quote rather than serve a
+  stale rate. The EUR->USD leg is read from the on-chain swapper, not a
+  constant, so the quote cannot promise a rate the swap will not honour.
+  THE BUG THIS FIXED: EURUSD 1.08 / USDINR 87.2 / USDKES 129.5 were hardcoded
+  and had gone 5-14% stale (real: 1.1379 / 96.55 / 129.64) while the receipt
+  said "real exchange rate" with a "0.50% margin" — EUR->INR was quoting 14.3%
+  under the market. 1.08 lived in THREE places (config twice + deploy.ts) and
+  FP5's binding check compared only two of them, so fixing one alone would have
+  silently promised a rate the swap could not deliver. midRate is now the live
+  mid, fxRate what we deliver, and marginBps is MEASURED between them.
+  TRANSF_RATES_FIXED pins rates for tests/offline (fail-closed in production
+  unless ALLOW_FIXED_RATES=1); DEPLOY_EURUSD_RATE pins the swapper seed.
+  npm run fx:test (11 checks). NOTE for the cash rail: MoneyGram does the
+  USD->local FX itself (their quote guarantees a rate for 30 min; some
+  countries return fxRateEstimated:true and cannot lock), so our KES figure is
+  an estimate of THEIR pricing — the authoritative number should come from
+  their Quote API once we are a real partner.
+- JIT liquidity seam (July 2026): LIQUIDITY_PROVIDER picks who fills the
+  EURe->USDC leg — `fx-swapper` (our own inventory, owner-set rate, the only
+  option on hardhat) or `rfq` (just-in-time from a market maker via Bebop's
+  PMM RFQ API, built against their documented v3 shape:
+  GET /pmm/{chain}/v3/quote -> buyTokens[addr].{amount,minimumAmount}, expiry,
+  and with gasless=false a ready `tx` we submit). The RFQ path is fail-closed
+  everywhere: maker down / declining / slow / wrong token all REFUSE rather
+  than fall back to our own book, which would price real transfers off a rate
+  we chose while reporting a maker set it.
+  Two rates, deliberately: quote() is firm and per-amount; indicativeRate() is
+  cheap and cached (LIQUIDITY_INDICATIVE_TTL_MS) for receipts, so typing in the
+  amount box is not a quote storm.
+  THE COUPLING THIS FIXED: fx.ts and FP5's assertQuoteRateBinding both read the
+  FxSwapper contract directly, so a deployment switched to RFQ would have kept
+  quoting — and binding against — the local mock's rate. Both now ask
+  liquidityProvider(). liquidity.rfq (maker quote id + tx) is persisted on the
+  transfer because prepare and execute are separate steps; re-quoting at
+  execution would settle at a price the user never saw.
+  npm run jit:test (14 checks, stub Bebop, no chain needed).
+  UNPROVEN: never run against real Bebop — needs a supported chain (not
+  hardhat), real token addresses and one live quote. The execute() path in
+  particular has only been exercised through its guard branches.
 - Known TODOs marked in code: per-transfer FX hedging. (Both earlier items
   are done: passkey assertion verification shipped with FP2, and the
   Monerium webhook no longer trusts its request body — see below.)
