@@ -39,8 +39,7 @@
     "stellar:setup": "tsx scripts/stellar-setup.ts",
     "trustline:test": "tsx scripts/trustline-test.ts",
     "fx:test": "tsx scripts/fx-rates-test.ts",
-    "jit:test": "tsx scripts/jit-liquidity-test.ts",
-    "checkout:test": "tsx scripts/checkout-test.ts"
+    "jit:test": "tsx scripts/jit-liquidity-test.ts"
   },
   "devDependencies": {
     "@types/express": "^4.17.25",
