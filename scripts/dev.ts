@@ -2,10 +2,13 @@
  * One-command local stack: chain -> deploy -> API (with UI at :3000).
  * Run: npm run dev
  */
+// Must be first: pins the chain/keys before config.js reads the environment.
+import "./_local-chain.js";
 import { spawn, spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bin = (name: string) => path.join(ROOT, "node_modules/.bin", name);

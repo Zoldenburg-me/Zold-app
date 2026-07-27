@@ -317,6 +317,67 @@ senderProfile PII in plaintext.
 Launch gate: local demos fine; NOT safe hosted, with real funds, or claiming
 payout finality until FP1-FP4 done.
 
+## FP4 completion — recovery (decided July 2026, 2-of-2)
+
+THE BLOCKER: losing the browser device key permanently bricks an account.
+`RemitVault.setAuthorizer` only lets the CURRENT authorizer rotate, and the
+key lives in localStorage. No passkey, no support path, no ramp override
+recovers it. Demonstrated live: the "Base Proof" account on Base Sepolia has
+EUR 121 credited and can never spend it. Safe Foundation's own consumer
+research (built-tested-shelved, July 2026) found users will not fund an
+account without credible, *rehearsable* recovery — so this gates launch, not
+polish.
+
+THE FIX, in this order (the order is not optional):
+ 0. Refuse to issue an IBAN until a passkey exists. An IBAN is the point of
+    no return — after it, money can arrive. DONE (passkeyRequiredBeforeFunding,
+    gated on allowSimulation so e2e/local demos still run).
+ 1. Passkey becomes a Safe owner (abstractionkit `fromSafeWebauthn`),
+    replacing the server-held user.privateKey.
+ 2. Add the co-signer as a second owner, threshold 2. 2-of-2 for now —
+    Privy/Turnkey cost money, so the third (social-login) signer is deferred.
+    The server signs every payment and can never act alone.
+ 3. setAuthorizer(safe, safe). `_isValidSignature` already accepts EIP-1271,
+    so NO CONTRACT CHANGE. After this authorizerOf never changes again.
+ 4. Install Candide's SocialRecoveryModule with guardians. With only 2-of-2
+    there is no spare signer, so guardians are REQUIRED, not optional.
+ 5. Delete user.privateKey — the last server-held key, currently plaintext in
+    db.json next to senderProfile PII.
+
+WHY THE ORDER: steps 1-2 must precede 3. Pointing authorizerOf at the Safe
+while the server still owns it would hand the database spending power over
+every balance. The device key is the only thing preventing that today.
+
+VERIFIED, so nobody re-litigates it:
+ - RIP-7212 (P256 precompile) is LIVE on Base Sepolia AND Base mainnet —
+   tested with a real generated signature. Passkey-owned Safes need no
+   verifier contract.
+ - abstractionkit 0.4.0 (already a dependency) exports SocialRecoveryModule,
+   SocialRecoveryModuleGracePeriodSelector, fromSafeWebauthn,
+   webauthnSignatureFromAssertion, WebauthnDummySignerSignaturePair.
+ - RemitVault._isValidSignature staticcalls isValidSignature for contract
+   signers — the hook is already there.
+
+WRINKLE TO DESIGN IN FROM THE START: redeemToIban signs as the Safe to burn
+EURe, and runs asynchronously after the user has gone. A passkey-owned Safe
+cannot be signed by the server alone. Collect BOTH signatures at send time —
+the vault authorization and the Monerium redeem message. Both are fully
+determined when the user approves (amount + IBAN), so nothing is signed blind.
+
+HARD EDGE: only the current authorizer can rotate, so accounts that still
+hold their device key can migrate themselves; ones that lost it never can.
+This fixes the future, not the past.
+
+BACKSTOP, NOT A PRODUCT: EURe is e-money, so Monerium's liability is to the
+identified customer and holders have a redemption right at par — unlike USDC,
+where Circle owes the holder nothing. Monerium also has the technical means
+(EURe is a UUPS proxy they own, with mint(); no burn/recover/forceTransfer
+selector exists in the deployed implementation). So a lost wallet is likely
+recoverable through re-KYC and reissuance. UNCONFIRMED — not in their docs,
+ask them in writing. It does not cover USDC or in-flight transfers, does not
+restore the Safe, and "submit ID and wait" is not a recovery path to put in
+front of someone whose salary is in the account.
+
 ## Roadmap (agreed priority)
 0. Payout partners secured (July 2026): **dLocal** (crypto product:
    stablecoin-funded payouts, 60+ markets — UPI/India, M-Pesa/Kenya, PIX/
