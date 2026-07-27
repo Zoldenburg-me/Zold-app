@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pay with Zold</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23e6167f'/%3E%3Cpath d='M28 68 L52 30 L58 68 M44 32 L78 24' stroke='white' stroke-width='7' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<style>
+  :root { --bg:#0b0710; --card:#15101c; --line:#2a2233; --ink:#f5f2f8; --dim:#a99fb5; --acc:#e6167f; --ok:#33c98a; --bad:#ff5d73; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:
+    radial-gradient(1200px 500px at 50% -10%, #2a0f22 0%, transparent 60%), var(--bg);
+    color:var(--ink); min-height:100vh; display:grid; place-items:center; padding:1.25rem; }
+  .card { width:100%; max-width:420px; background:var(--card); border:1px solid var(--line);
+    border-radius:20px; padding:1.6rem; box-shadow:0 30px 80px rgba(0,0,0,.5); }
+  .brand { display:flex; align-items:center; gap:.5rem; font-weight:700; font-size:.9rem; color:var(--dim); margin-bottom:1.3rem; }
+  .brand b { color:var(--ink); }
+  .amt { text-align:center; margin:.4rem 0 1.4rem; }
+  .amt .lbl { color:var(--dim); font-size:.85rem; }
+  .amt .val { font-size:2.6rem; font-weight:800; letter-spacing:-.02em; margin-top:.15rem; }
+  .amt .to { color:var(--dim); font-size:.9rem; margin-top:.35rem; }
+  .amt .to b { color:var(--ink); }
+  .row { display:flex; justify-content:space-between; font-size:.86rem; padding:.5rem 0; border-top:1px solid var(--line); color:var(--dim); }
+  .row span:last-child { color:var(--ink); }
+  button { width:100%; margin-top:1.1rem; padding:.85rem; border:0; border-radius:12px; cursor:pointer;
+    font-weight:700; font-size:.95rem; color:#fff; background:linear-gradient(135deg,#a01463,#e6167f); }
+  button:hover { filter:brightness(1.08); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--ink); font-weight:600; }
+  .link { display:block; text-align:center; margin-top:1rem; color:var(--acc); font-size:.85rem; text-decoration:none; cursor:pointer; }
+  .muted { color:var(--dim); font-size:.8rem; text-align:center; margin-top:1rem; line-height:1.5; }
+  .err { margin-top:1rem; padding:.6rem .8rem; border-radius:10px; font-size:.84rem; background:rgba(255,93,115,.09); border:1px solid rgba(255,93,115,.3); color:var(--bad); }
+  .done { text-align:center; }
+  .done .ic { width:60px; height:60px; border-radius:50%; margin:.5rem auto 1rem; display:grid; place-items:center;
+    background:rgba(51,201,138,.14); font-size:1.8rem; }
+  .done.bad .ic { background:rgba(255,93,115,.14); }
+  .spin { display:inline-block; width:16px; height:16px; border:2px solid rgba(255,255,255,.35); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; vertical-align:-3px; margin-right:.5rem; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand"><span>🦄</span> Pay with <b>Zold</b></div>
+
+    <div id="load" class="muted">Loading checkout…</div>
+
+    <div id="pay" class="hidden">
+      <div class="amt">
+        <div class="lbl">Amount</div>
+        <div class="val" id="amt">€0.00</div>
+        <div class="to">to <b id="merchant">merchant</b></div>
+      </div>
+      <div class="row"><span>Fee</span><span id="fee">—</span></div>
+      <div class="row"><span>You pay</span><span id="total">—</span></div>
+      <button id="btn-pay">Confirm with passkey</button>
+      <a class="link" id="link-new">New to Zold? Create an account</a>
+      <div class="muted">You'll approve this payment with your device — Face&nbsp;ID, fingerprint, or screen lock. No passwords.</div>
+      <div class="err hidden" id="err"></div>
+    </div>
+
+    <div id="result" class="hidden done">
+      <div class="ic" id="ic">✓</div>
+      <div id="result-title" style="font-weight:700;font-size:1.1rem"></div>
+      <div class="muted" id="result-note"></div>
+      <div class="muted" id="redir-note"></div>
+    </div>
+  </div>
+
+<script type="module" src="/device.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const deviceLib = new Promise((r) => { window.__deviceLibReady = r; });
+const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")), (c) => c.charCodeAt(0));
+const fmt = (n) => "€" + Number(n).toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const intentId = new URLSearchParams(location.search).get("intent");
+let sessionToken = sessionStorage.getItem("zold-checkout-session") || null;
+let user = null, intent = null;
+
+async function api(path, body) {
+  const headers = {};
+  if (body) headers["content-type"] = "application/json";
+  if (sessionToken) headers.authorization = `Bearer ${sessionToken}`;
+  const res = await fetch(path, body ? { method:"POST", headers, body:JSON.stringify(body) } : { headers });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+const showErr = (e) => { const el = $("err"); el.textContent = e.message || String(e); el.classList.remove("hidden"); };
+const clearErr = () => $("err").classList.add("hidden");
+const credId = () => user?.passkey?.credentialId || null;
+
+function result(ok, title, note, redirNote) {
+  $("pay").classList.add("hidden"); $("load").classList.add("hidden");
+  $("result").classList.remove("hidden");
+  $("result").classList.toggle("bad", !ok);
+  $("ic").textContent = ok ? "✓" : "✕";
+  $("result-title").textContent = title;
+  $("result-note").textContent = note || "";
+  $("redir-note").textContent = redirNote || "";
+}
+
+async function load() {
+  if (!intentId) { $("load").textContent = "Invalid checkout link."; return; }
+  try { intent = await api(`/api/checkout/intents/${intentId}`); }
+  catch (e) { $("load").textContent = "This checkout could not be loaded."; return; }
+  if (intent.expired) return result(false, "Checkout expired", "Ask the merchant to start again.");
+  if (intent.status === "PAID") return result(true, "Already paid", `${fmt(intent.amountEur)} to ${intent.merchant}.`);
+  $("amt").textContent = fmt(intent.amountEur);
+  $("merchant").textContent = intent.merchant || "the merchant";
+  $("load").classList.add("hidden"); $("pay").classList.remove("hidden");
+}
+
+/* Passkey sign-in for an existing Zold user (discoverable credential). */
+async function signIn() {
+  if (!window.PublicKeyCredential) throw new Error("passkeys aren't supported in this browser");
+  const { challenge } = await api("/api/webauthn/challenge", { purpose: "login" });
+  const cred = await navigator.credentials.get({
+    publicKey: { challenge: b64urlToBytes(challenge), userVerification: "preferred", timeout: 60000 },
+  });
+  const u = await api("/api/passkey/login", {
+    credentialId: cred.id,
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  });
+  sessionToken = u.sessionToken;
+  sessionStorage.setItem("zold-checkout-session", sessionToken);
+  user = u;
+  return u;
+}
+
+/* Quote the SEPA leg so the merchant receives exactly intent.amountEur:
+   first quote reveals the flat fee, the second sizes the send to cover it. */
+async function quoteForMerchant() {
+  const probe = await api("/api/quotes", { userId: user.id, rail: "sepa", sendEur: intent.amountEur });
+  const fee = Math.round((probe.sendEur - probe.receiveEur) * 100) / 100;
+  const quote = await api("/api/quotes", { userId: user.id, rail: "sepa", sendEur: intent.amountEur + fee });
+  return { quote, fee };
+}
+
+/* Create the transfer to the merchant IBAN, sign its exact terms on the
+   device (reusing the app's proven path), submit, then attach to the intent. */
+async function payAndAttach(quote) {
+  const recipient = { recipientName: intent.merchant || "Merchant", recipientIban: intent.merchantIban };
+  const created = await api("/api/transfers", { quoteId: quote.id, ...recipient });
+
+  const dev = await deviceLib;
+  const addr = await dev.deviceAddress(credId());
+  if (created.authorization.authorizer.toLowerCase() !== addr.toLowerCase()) {
+    throw new Error("your spending key was set up in a different browser — pay from that device, or open the Zold app to rotate it");
+  }
+  const expected = dev.destinationCommitment("sepa", { iban: recipient.recipientIban, name: recipient.recipientName });
+  if (created.authorization.typedData.message.destination.toLowerCase() !== expected.toLowerCase()) {
+    throw new Error("the signed payout destination does not match this merchant — not signing");
+  }
+  const signature = await dev.signTypedData(created.authorization.typedData, credId());
+  const t = await api(`/api/transfers/${created.id}/authorize`, { signature });
+  const { redirectUrl } = await api(`/api/checkout/intents/${intent.id}/attach`, { transferId: t.id });
+  return redirectUrl;
+}
+
+$("btn-pay").onclick = async () => {
+  clearErr();
+  $("btn-pay").disabled = true;
+  const original = $("btn-pay").textContent;
+  try {
+    if (!user) { $("btn-pay").innerHTML = '<span class="spin"></span>Signing in…'; await signIn(); }
+    const me = await api(`/api/users/${user.id}`);
+    // Enough balance to cover amount + fee?
+    $("btn-pay").innerHTML = '<span class="spin"></span>Preparing…';
+    const { quote, fee } = await quoteForMerchant();
+    $("fee").textContent = fmt(fee);
+    $("total").textContent = fmt(quote.sendEur);
+    if ((me.balanceEur ?? 0) < quote.sendEur - 0.001) {
+      throw new Error(`Not enough balance (${fmt(me.balanceEur ?? 0)}). Top up in the Zold app, then return here.`);
+    }
+    $("btn-pay").innerHTML = '<span class="spin"></span>Approve on your device…';
+    const redirectUrl = await payAndAttach(quote);
+    result(true, "Payment sent", `${fmt(intent.amountEur)} to ${intent.merchant}.`, "Returning to the merchant…");
+    setTimeout(() => { location.href = redirectUrl; }, 1400);
+  } catch (e) {
+    showErr(e);
+    $("btn-pay").disabled = false;
+    $("btn-pay").textContent = original;
+  }
+};
+
+/* New users onboard in the main app, then come back to this exact checkout. */
+$("link-new").onclick = () => {
+  location.href = `/?returnTo=${encodeURIComponent(location.pathname + location.search)}`;
+};
+
+load();
+</script>
+</body>
+</html>
