@@ -47,6 +47,15 @@ Default transfer:
    token, amount, expiry, and rail match the authorized terms.
 5. Backend relays and sponsors the UserOperation, then orchestrates payout.
 
+Current implementation note: live Monerium deposits already land in the user's
+Safe, and the API returns both `safeBalanceEur` and `vaultBalanceEur`.
+`balanceEur` remains the vault ledger until Safe-funded sends land.
+The transfer executor is still vault-first, and the transitional poller can
+move funds from Safe to `RemitVault` with the server-held Safe owner key. That
+is useful for proving the old executor, but not the target custody model; the
+one-time allowance/policy delegate path is the intended migration for making
+Safe-held funds spendable.
+
 Scheduled transfer:
 
 Use recurring allowance only after explicit UX approval that shows reset

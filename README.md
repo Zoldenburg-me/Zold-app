@@ -6,8 +6,8 @@ A remittance app that settles on stablecoin rails. Built by **Zoldenburg**,
 the cross-border payments infrastructure underneath it. 🦄
 
 Money comes in by SEPA transfer to a per-user IBAN and lands on-chain as
-e-money. It sits in a vault contract owned by the user's smart account. It
-goes out three ways: cash pickup in Kenya, bank transfer to any IBAN, or an
+e-money in the user's Safe smart account. It goes out three ways: cash pickup
+in Kenya, bank transfer to any IBAN, or an
 instant UPI payment in India. The app quotes each route with the fee and FX
 spread shown, executes the on-chain legs, and tracks every transfer through
 a state machine to PAID.
@@ -24,6 +24,10 @@ Running this repo with sandbox credentials, today:
 
 - **IBANs**: every new user gets a real IBAN from Monerium's sandbox,
   attached to their own smart account. SEPA deposits mint EURe on-chain.
+- **Balances**: API responses include both `safeBalanceEur` (real EURe held by
+  the user's Safe) and `vaultBalanceEur` (the RemitVault ledger). `balanceEur`
+  remains the primary spendable balance for the current vault-first executor:
+  the vault ledger.
 - **Wallets**: each user's account is a Safe smart account, deployed to
   Sepolia through Candide's bundler. Deployment costs the user nothing;
   gas is sponsored. Monerium verifies ownership via EIP-1271, so the IBAN
@@ -75,6 +79,11 @@ Running this repo with sandbox credentials, today:
 - The settlement chain is a local Hardhat node. EURe and USDC there are
   mock tokens; deposits from the Monerium sandbox are mirrored into the
   local vault rather than being the same coins.
+- Live Monerium deposits mint real EURe to the user's Safe. The UI shows both
+  the Safe balance and the vault ledger balance. The current transfer executor
+  still debits `RemitVault` first; the transitional poller can move Safe-held
+  EURe into the vault using the server-held Safe owner key, but that is not the
+  target custody model and fails if that key is missing.
 - FX rates come from constants, not an oracle. The swap contract is a
   stand-in for a DEX route.
 - The UPI partner and the MoneyGram payout (in mock mode) return generated
@@ -142,8 +151,12 @@ and each adapter has a mock that matches the real API's shape. Monerium
 graduated from mock to real without touching the orchestrator. The intent
 is that MoneyGram, the UPI partner, and the USD side do the same.
 
-Contracts are deliberately small. `RemitVault` holds per-user balances with
-a daily cap, idempotent deposit references, and idempotent transfer IDs.
+Contracts are deliberately small. `RemitVault` is the old/mock custody ledger:
+it holds per-user balances with a daily cap, idempotent deposit references,
+and idempotent transfer IDs. In the Safe-first Monerium path, real EURe lands in
+the user's Safe; today it may be swept into the vault by the server-held Safe
+key, and the remaining migration is to move the vault's policy and replay
+controls to a user-authorized Safe-funded transfer initiation path.
 `FxSwapper` swaps at an owner-set rate behind a slippage guard, restricted
 to approved executors and pausable by the owner.
 `BridgeEscrow` locks funds for the bridge leg, prevents completed transfer
