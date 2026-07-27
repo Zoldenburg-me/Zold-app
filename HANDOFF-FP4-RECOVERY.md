@@ -132,9 +132,31 @@ Temporary compatibility is acceptable for local mock demos, where deposits are
 still mirrored into `RemitVault`.
 
 The transitional implementation may use `fundingSource: "safe"` and verify the
-same device authorization off-chain before moving a one-time Safe amount.
-Treat that as a bridge only: it is not equivalent to on-chain policy
-enforcement while the server still holds `user.privateKey`.
+same device authorization off-chain before moving a one-time Safe amount — the
+full send on the FX rails, the fee alone on SEPA. Treat that as a bridge only: it is not equivalent to on-chain policy enforcement while the
+server still holds `user.privateKey`.
+
+What moving off `RemitVault.debit` costs, and where each piece stands:
+
+| Enforced by the vault | Safe-funded path |
+|---|---|
+| Device signature checked in the contract | Checked by the API (`verifyTypedData`), which also holds the key that moves the money |
+| `debitedOnDay[user][day] + amount <= dailyCap` | `dailyCapUsage` sums the vault's on-chain counter with the API's Safe total against the contract's own `dailyCap` |
+| `require(!processedTransfer[transferId])` | Reads that registry and refuses a transferId the vault already spent, plus refuses a second move for one transfer record — but writes nothing on-chain |
+| Revert on failure leaves nothing to unwind | `compensateTransfer` returns whatever actually left the Safe (see `safeMovedEur`), or sends an already-swapped input to review |
+
+The replay row is the one still short of the guarantee it replaced. Both checks
+read state this API owns, so a restored `db.json` or a second API instance
+defeats them; the authorize-race double-spend of July 2026 is exactly what the
+on-chain registry was backstopping. A contract-side registry the orchestrator
+can write — the same `processedTransfer` marking, without a balance debit — is
+the piece that would close it, and it is worth doing before this path carries
+real money.
+
+Also note the path cannot be exercised locally: `transferTokenFromSafe` goes
+through Candide's bundler and paymaster, which no hardhat node provides. Tests
+cover everything after the debit (`npm run safe-funded:test`); the debit itself
+has only ever run against a real bundler.
 
 ### Step 2 — add the co-signer, threshold 2
 

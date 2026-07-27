@@ -507,6 +507,19 @@ CLIENT of this API: an allowlisted proxy, source of truth for nothing but
 merchants and intents. It runs on its own origin because passkeys are
 RP-ID-scoped and the FP4 device key lives in one origin's localStorage, so a
 user onboarded there has both halves in one place.
+SEPA remittance reference (July 2026): POST /api/transfers takes an optional
+`reference` on the sepa rail and it rides on the payment, so a payee reconciles
+against their own handle instead of our uuid. The memo used to be hardcoded to
+`Zold <transfer.id>` — a merchant could see that Zold sent money but not which
+of their users it was for, which is the manual step the checkout exists to
+remove. services/api/src/sepa.ts folds it into the SEPA Latin subset (accents
+decomposed, so "Müller" arrives as "Muller" not "M ller"), strips the reserved
+slash forms, and truncates the REFERENCE rather than our id — half an id
+identifies nothing. 140 chars is the scheme limit and the route refuses a
+longer one rather than silently shortening the string the payee reconciles on.
+npm run sepa:test (12 checks, no chain). NOT proven end to end: the redeem call
+only runs in Monerium sandbox mode, so the memo has never reached a real
+statement.
 WHAT THIS API STILL OWES IT:
 - RP_ID + WEBAUTHN_ORIGINS must cover the checkout origin or every passkey
   ceremony started there is rejected HERE, which reads like a client bug.
