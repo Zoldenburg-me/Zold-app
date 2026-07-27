@@ -161,6 +161,16 @@ export interface Transfer {
   receiveEur?: number; // sepa rail
   receiveInr?: number; // upi rail
   usdcOut?: number;
+  /**
+   * Where the input EURe is taken from at execution time.
+   *
+   * vault: legacy/local path. RemitVault.debit verifies the device signature
+   * and moves the full send amount to the orchestrator.
+   * safe: transitional live-Monerium path. EURe already sits in the user's
+   * Safe; the API verifies the same device authorization before using the
+   * legacy Safe owner key to move exactly the signed amount.
+   */
+  fundingSource?: "vault" | "safe";
   /** FP4: the terms the device is asked to authorize. Fixed when the transfer
    *  is created so the signature covers exactly what gets submitted; the
    *  transfer cannot leave CREATED until a matching signature arrives. */
