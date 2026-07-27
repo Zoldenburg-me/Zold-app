@@ -12,6 +12,7 @@
  */
 import { FX, moneriumSandboxEnabled, USING_LOCAL_RPC } from "./config.js";
 import { Keypair } from "@stellar/stellar-sdk";
+import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
@@ -33,10 +34,12 @@ import {
   orchestratorAddress,
   forwardEureForRedeem,
   orchestratorWallet,
+  paymentAuthorizationTypedData,
   publicClient,
   transferIdHash,
   writeAndWait,
 } from "./chain.js";
+import { transferTokenFromSafe } from "./wallet/candide.js";
 import {
   createCashPickup,
   createCashPickupViaAnchor,
@@ -98,6 +101,104 @@ function transferDestination(transfer: Transfer): `0x${string}` {
     vpa: transfer.recipientVpa,
     name: transfer.recipientName,
   });
+}
+
+async function assertDeviceAuthorization(
+  transfer: Transfer,
+  user: User,
+  auth: PaymentAuthorization,
+): Promise<void> {
+  if (!transfer.auth) throw new Error("transfer has no authorization terms");
+  const amountWei = BigInt(transfer.auth.amountWei);
+  if (amountWei !== eur.toWei(transfer.sendEur)) {
+    throw new Error("stored amount no longer matches authorization terms");
+  }
+  if (auth.deadline !== transfer.auth.deadline) {
+    throw new Error("submitted authorization deadline does not match transfer terms");
+  }
+  const destination = transferDestination(transfer);
+  if (destination.toLowerCase() !== transfer.auth.destination.toLowerCase()) {
+    throw new Error("stored payout destination no longer matches authorization terms");
+  }
+  if (Date.now() / 1000 > auth.deadline) throw new Error("authorization expired");
+  const authorizer = await publicClient.readContract({
+    address: addrs().vault,
+    abi: abis.RemitVault,
+    functionName: "authorizerOf",
+    args: [user.address],
+  }) as `0x${string}`;
+  if (authorizer === "0x0000000000000000000000000000000000000000") {
+    throw new Error("no authorizer");
+  }
+  const code = await publicClient.getBytecode({ address: authorizer });
+  if (code && code !== "0x") {
+    throw new Error("Safe-funded transfer needs on-chain policy for contract authorizers");
+  }
+  const ok = await verifyTypedData({
+    address: authorizer,
+    ...paymentAuthorizationTypedData({
+      account: user.address,
+      amountWei,
+      to: orchestratorAddress,
+      transferId: transferIdHash(transfer.id),
+      destination,
+      deadline: auth.deadline,
+    }),
+    signature: auth.signature,
+  } as any);
+  if (!ok) throw new Error("bad authorization");
+}
+
+async function debitInputFunds(
+  transfer: Transfer,
+  user: User,
+  auth: PaymentAuthorization,
+  txs: Transfer["txs"],
+): Promise<void> {
+  const a = addrs();
+  const tid = transferIdHash(transfer.id);
+  const sendWei = eur.toWei(transfer.sendEur);
+
+  const debitHash = await writeAndWait(orchestratorWallet, {
+    address: a.vault,
+    abi: abis.RemitVault,
+    functionName: "debit",
+    args: [
+      user.address,
+      sendWei,
+      orchestratorAddress,
+      tid,
+      transferDestination(transfer),
+      BigInt(auth.deadline),
+      auth.signature,
+    ],
+  });
+  txs.push({ step: "vault.debit", hash: debitHash });
+  store.updateTransfer(transfer.id, { state: "DEBITED", txs });
+  failpoint("vault.debit");
+}
+
+async function debitSafeFundedSepaFee(
+  transfer: Transfer,
+  user: User,
+  auth: PaymentAuthorization,
+  payoutEur: number,
+  txs: Transfer["txs"],
+): Promise<void> {
+  await assertDeviceAuthorization(transfer, user, auth);
+  if (!user.privateKey) throw new Error("user has no wallet key to move Safe-held EURe");
+  const feeEur = Math.max(0, transfer.sendEur - payoutEur);
+  if (feeEur > 0) {
+    const feeHash = await transferTokenFromSafe({
+      ownerKey: user.privateKey,
+      token: addrs().eure,
+      to: orchestratorAddress,
+      amount: eur.toWei(feeEur),
+    });
+    txs.push({ step: "safe.transfer(fee)", hash: feeHash });
+  }
+  store.updateTransfer(transfer.id, { state: "DEBITED", txs });
+  failpoint("safe.transfer.fee");
 }
 
 function cctpRecipientStellar(): string {
@@ -300,18 +401,8 @@ export async function executeTransfer(
   const txs = transfer.txs;
 
   try {
-    // 1. Debit the sender's vault balance (full amount incl. fixed fee);
-    //    tokens move to the orchestrator's working address.
-    const sendWei = eur.toWei(transfer.sendEur);
-    const debitHash = await writeAndWait(orchestratorWallet, {
-      address: a.vault,
-      abi: abis.RemitVault,
-      functionName: "debit",
-      args: [user.address, sendWei, orchestratorAddress, tid, transferDestination(transfer), BigInt(auth.deadline), auth.signature],
-    });
-    txs.push({ step: "vault.debit", hash: debitHash });
-    store.updateTransfer(transfer.id, { state: "DEBITED", txs });
-    failpoint("vault.debit");
+    // 1. Move the signed input amount to the orchestrator's working address.
+    await debitInputFunds(transfer, user, auth, txs);
 
     // 2. Swap the convertible portion (send - fixed fee) EURe -> USDC.
     //    The fixed fee stays at the orchestrator address as revenue.
@@ -432,21 +523,10 @@ export async function executeUpiTransfer(
   user: User,
   auth: PaymentAuthorization,
 ): Promise<Transfer> {
-  const a = addrs();
-  const tid = transferIdHash(transfer.id);
   const txs = transfer.txs;
 
   try {
-    const sendWei = eur.toWei(transfer.sendEur);
-    const debitHash = await writeAndWait(orchestratorWallet, {
-      address: a.vault,
-      abi: abis.RemitVault,
-      functionName: "debit",
-      args: [user.address, sendWei, orchestratorAddress, tid, transferDestination(transfer), BigInt(auth.deadline), auth.signature],
-    });
-    txs.push({ step: "vault.debit", hash: debitHash });
-    store.updateTransfer(transfer.id, { state: "DEBITED", txs });
-    failpoint("vault.debit");
+    await debitInputFunds(transfer, user, auth, txs);
 
     // Swap the convertible portion to USDC — the settlement asset we net
     // against the partner's INR float.
@@ -476,33 +556,20 @@ export async function executeUpiTransfer(
 /**
  * SEPA (bank payout) rail:
  *   CREATED -> DEBITED -> PAYOUT_SUBMITTED -> PAID
- * Debits the sender's vault on the local chain, then places a real Monerium
- * redeem order (EURe burned from the user's Safe, SEPA out to the recipient
- * IBAN). If the real order is rejected — typically because the Safe holds no
- * EURe on the sandbox chain — the payout falls back to a simulated SEPA leg
- * and records why, so the corridor still demos end to end.
+ * Vault-funded transfers debit RemitVault, forward the payout amount back to
+ * the user's Safe, then place a real Monerium redeem order. Safe-funded
+ * transfers skip the vault and redeem directly from the Safe after collecting
+ * only the fee leg. If the real order is rejected, the payout falls back to a
+ * simulated SEPA leg only when explicitly allowed.
  */
 export async function executeSepaTransfer(
   transfer: Transfer,
   user: User,
   auth: PaymentAuthorization,
 ): Promise<Transfer> {
-  const a = addrs();
-  const tid = transferIdHash(transfer.id);
   const txs = transfer.txs;
 
   try {
-    const sendWei = eur.toWei(transfer.sendEur);
-    const debitHash = await writeAndWait(orchestratorWallet, {
-      address: a.vault,
-      abi: abis.RemitVault,
-      functionName: "debit",
-      args: [user.address, sendWei, orchestratorAddress, tid, transferDestination(transfer), BigInt(auth.deadline), auth.signature],
-    });
-    txs.push({ step: "vault.debit", hash: debitHash });
-    store.updateTransfer(transfer.id, { state: "DEBITED", txs });
-    failpoint("vault.debit");
-
     const payoutEur = transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR;
     const [firstName, ...rest] = transfer.recipientName.trim().split(/\s+/);
     const counterpart = {
@@ -512,24 +579,30 @@ export async function executeSepaTransfer(
       country: user.country || "DE",
     };
 
+    if (transfer.fundingSource === "safe") {
+      await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs);
+    } else {
+      await debitInputFunds(transfer, user, auth, txs);
+    }
+
     if (moneriumSandboxEnabled()) {
       try {
         /**
-         * On a chain where the vault holds Monerium's real EURe, the euros are
-         * now sitting with the orchestrator (that is where debit sent them),
-         * but a redeem burns from the user's OWN Safe — Monerium proves
-         * ownership by asking the Safe to sign (EIP-1271). So the payout
-         * amount has to be forwarded to the Safe before the redeem, or
-         * Monerium has nothing to burn and the order fails.
+         * Vault-funded native EURe needs a forward before redeem: debit sends
+         * the euros to the orchestrator, while Monerium burns from the user's
+         * own Safe. Safe-funded SEPA already has the payout amount in the Safe,
+         * so only the fee was moved out above.
          *
-         * Only `payoutEur` moves, not the whole debit: the difference is our
-         * fee, and it stays with the orchestrator. Sending the full amount
-         * would hand the fee to the user and we would never collect it.
+         * Only `payoutEur` is forwarded for vault-funded transfers, not the
+         * whole debit: the difference is our fee, and it stays with the
+         * orchestrator.
          *
          * On a local chain the vault holds a mock EURe that Monerium has
          * never heard of, so there is nothing to forward.
          */
-        const forwardHash = await forwardEureForRedeem(user.address, payoutEur);
+        const forwardHash = transfer.fundingSource === "safe"
+          ? null
+          : await forwardEureForRedeem(user.address, payoutEur);
         if (forwardHash) txs.push({ step: "eure.transfer(user-safe)", hash: forwardHash });
 
         const order = await redeemToIban(user, payoutEur, counterpart, `Zold ${transfer.id}`);
