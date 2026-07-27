@@ -91,7 +91,18 @@ Running this repo with sandbox credentials, today:
   redeems directly from the Safe after collecting the fee; Safe-funded cash/UPI
   move the exact signed amount to the orchestrator for the existing FX path.
   These one-time Safe operations still rely on the legacy server-held Safe owner
-  key until FP4 custody replaces that key with passkey/co-signer approval.
+  key until FP4 custody replaces that key with passkey/co-signer approval. A
+  Safe-funded failure refunds to the Safe whatever actually left it — the fee on
+  SEPA, the full amount on the FX rails — and the daily cap counts both pots as
+  one budget rather than giving each its own.
+- The Safe-funded path has no on-chain replay guard. `RemitVault.debit` refuses
+  a transferId it already processed; a plain transfer out of the Safe cannot
+  write that registry, so the checks are the vault's registry (read, not
+  written) plus this API's own record. Neither survives a restored `db.json` or
+  a second API instance, and closing that needs a registry the contract writes.
+  Nor can the path run locally at all — the Safe move goes through Candide's
+  bundler and paymaster, which no hardhat node provides, so only what happens
+  after the debit is covered by tests.
 - FX rates come from constants, not an oracle. The swap contract is a
   stand-in for a DEX route.
 - The UPI partner and the MoneyGram payout (in mock mode) return generated
