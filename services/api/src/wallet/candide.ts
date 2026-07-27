@@ -14,8 +14,13 @@
 import {
   SafeMultiChainSigAccountV1 as SafeAccount,
   Erc7677Paymaster,
+  fromPrivateKey,
+  fromSafeWebauthn,
   getSafeMessageEip712Data,
+  webauthnSignatureFromAssertion,
   type MetaTransaction,
+  type UserOperationV9,
+  type WebauthnPublicKey,
 } from "abstractionkit";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeFunctionData } from "viem";
@@ -25,11 +30,119 @@ export const CANDIDE = {
   bundlerUrl: process.env.CANDIDE_BUNDLER_URL ?? "https://api.candide.dev/public/v3/11155111",
   paymasterUrl: process.env.CANDIDE_PAYMASTER_URL ?? "https://api.candide.dev/public/v3/11155111",
   rpcUrl: process.env.CANDIDE_RPC_URL ?? "https://ethereum-sepolia-rpc.publicnode.com",
+  cosignerAddress: (process.env.CANDIDE_COSIGNER_ADDRESS ?? "") as `0x${string}` | "",
+  cosignerKey: (process.env.CANDIDE_COSIGNER_KEY ?? "") as `0x${string}` | "",
 };
 
 /** Deterministic Safe address for an owner — offline, no network. */
 export function smartAccountFor(ownerAddress: string): SafeAccount {
   return SafeAccount.initializeNewAccount([ownerAddress]);
+}
+
+function b64urlToBigInt(value: string): bigint {
+  const buf = Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+  return BigInt(`0x${buf.toString("hex")}`);
+}
+
+export function webauthnOwnerFromJwk(jwk: JsonWebKey): WebauthnPublicKey | null {
+  if (jwk.kty !== "EC" || jwk.crv !== "P-256" || typeof jwk.x !== "string" || typeof jwk.y !== "string") {
+    return null;
+  }
+  return { x: b64urlToBigInt(jwk.x), y: b64urlToBigInt(jwk.y) };
+}
+
+export function webauthnOwnerToStore(owner: WebauthnPublicKey): { x: string; y: string } {
+  return {
+    x: `0x${owner.x.toString(16).padStart(64, "0")}`,
+    y: `0x${owner.y.toString(16).padStart(64, "0")}`,
+  };
+}
+
+export function webauthnOwnerFromStore(owner: { x: string; y: string }): WebauthnPublicKey {
+  return { x: BigInt(owner.x), y: BigInt(owner.y) };
+}
+
+export function smartAccountForPasskeyCosigner(
+  passkeyOwner: WebauthnPublicKey,
+  cosignerAddress: `0x${string}`,
+): SafeAccount {
+  return SafeAccount.initializeNewAccount([passkeyOwner, cosignerAddress], { threshold: 2 });
+}
+
+export interface PasskeySafeDeploymentPlan {
+  address: `0x${string}`;
+  cosignerAddress: `0x${string}`;
+  passkeyPublicKey: { x: string; y: string };
+}
+
+export interface BrowserPasskeyAssertion {
+  authenticatorData: Uint8Array;
+  clientDataJSON: Uint8Array;
+  signature: Uint8Array;
+}
+
+export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPlan): Promise<{
+  safeAddress: `0x${string}`;
+  challenge: `0x${string}`;
+  userOperation: UserOperationV9;
+}> {
+  const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
+  const account = smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress);
+  if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
+    throw new Error("passkey Safe plan does not match the deterministic account address");
+  }
+  if (await isDeployed(account.accountAddress)) {
+    return {
+      safeAddress: account.accountAddress as `0x${string}`,
+      challenge: "0x",
+      userOperation: {} as UserOperationV9,
+    };
+  }
+  const noop: MetaTransaction = { to: account.accountAddress, value: 0n, data: "0x" };
+  const userOperation = await account.createUserOperation(
+    [noop],
+    CANDIDE.rpcUrl,
+    CANDIDE.bundlerUrl,
+    { expectedSigners: [passkeyOwner, plan.cosignerAddress] },
+  );
+  const paymaster = new Erc7677Paymaster(CANDIDE.paymasterUrl);
+  const sponsored = await paymaster.createPaymasterUserOperation(
+    account as any,
+    userOperation as any,
+    CANDIDE.bundlerUrl,
+  );
+  const finalOp: UserOperationV9 = ((sponsored as any).userOperation ?? sponsored) as UserOperationV9;
+  return {
+    safeAddress: account.accountAddress as `0x${string}`,
+    challenge: account.getUserOperationEip712Hash(finalOp, CANDIDE.chainId) as `0x${string}`,
+    userOperation: finalOp,
+  };
+}
+
+export async function submitPasskeySafeDeployment(
+  plan: PasskeySafeDeploymentPlan,
+  userOperation: UserOperationV9,
+  assertion: BrowserPasskeyAssertion,
+): Promise<string | null> {
+  const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
+  const account = smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress);
+  if (await isDeployed(account.accountAddress)) return null;
+  if (!CANDIDE.cosignerKey) throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign passkey Safe deployment");
+  const passkeySigner = fromSafeWebauthn({
+    publicKey: passkeyOwner,
+    isInit: true,
+    accountClass: SafeAccount,
+    getAssertion: async () => webauthnSignatureFromAssertion(assertion),
+  });
+  const cosigner = fromPrivateKey(CANDIDE.cosignerKey);
+  userOperation.signature = await account.signUserOperationWithSigners(
+    userOperation,
+    [passkeySigner, cosigner],
+    CANDIDE.chainId,
+  );
+  const response = await account.sendUserOperation(userOperation, CANDIDE.bundlerUrl);
+  await response.included();
+  return response.userOperationHash;
 }
 
 export async function isDeployed(address: string): Promise<boolean> {

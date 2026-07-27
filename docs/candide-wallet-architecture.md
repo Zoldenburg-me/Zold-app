@@ -89,7 +89,11 @@ authorizer binding without a verified passkey.
 ## Migration Plan
 
 1. Keep the existing device authorizer path for local demos.
-2. Add client-side Safe UserOperation creation for passkey-owned Safes.
+2. Add client-side Safe UserOperation creation for passkey-owned Safes. The
+   server already records the deterministic 2-of-2 passkey/co-signer Safe plan
+   at passkey registration when `CANDIDE_COSIGNER_ADDRESS` is configured, and
+   can now submit a passkey-signed/co-signed deployment UserOperation when
+   `CANDIDE_COSIGNER_KEY` is available.
 3. Add recovery setup before enabling real deposits.
 4. Add one-time allowance setup for transfers.
 5. Replace server-side Safe deployment/signing with client-signed UserOps.
