@@ -113,7 +113,16 @@ export interface Quote {
   receiveKes: number; // cash rail (0 otherwise)
   receiveEur: number; // sepa rail (0 otherwise)
   receiveInr: number; // upi rail (0 otherwise) — INR-fixed: this drives sendEur
+  /** True market mid from the live feed. A reference we do NOT trade at. */
   midRate: number;
+  /** Measured gap between midRate and fxRate. Not a configured constant: the
+   *  receipt used to assert a flat 0.50% while the mid was a stale hardcoded
+   *  number, so the stated margin and the real one were unrelated. */
+  marginBps: number;
+  /** What the sender really gets per EUR sent, fixed fee included. At small
+   *  amounts the flat fee dominates (EUR 1 on UPI loses 29% to it), and an
+   *  itemised fee alone made that look like a broken exchange rate. */
+  effectiveRate: number;
   /** FP5: the on-chain FxSwapper rate (tokenOut units per 1e18 tokenIn) this
    *  quote's economics assume. Execution refuses to swap if the live rate has
    *  drifted past tolerance — binds quoted price to settlement price. */
@@ -178,6 +187,11 @@ export interface Transfer {
     minOut: string;
     rate: string;
     expiresAt: string;
+    /** RFQ only: the maker's quote id and the tx it wants submitted. Persisted
+     *  because the plan is prepared and executed in separate steps — a quote
+     *  that lost its tx cannot be replayed, and re-quoting at execution time
+     *  would settle at a price the user never agreed to. */
+    rfq?: { quoteId: string; tx: { to?: string; data?: string; value?: string } | null };
     executedAt?: string;
     txHash?: string;
   };

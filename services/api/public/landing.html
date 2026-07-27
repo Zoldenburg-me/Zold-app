@@ -4,9 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Zold — an account for money on both sides of the border</title>
-<meta name="description" content="Zold is an account for people whose lives don't fit in one country: your own IBAN, euros in your custody, and three ways to land them abroad at the real exchange rate." />
+<meta name="description" content="Zold is an account for people whose lives don't fit in one country: your own IBAN, euros held by a regulated e-money institution, and three ways to land them abroad at the real exchange rate." />
 <meta property="og:title" content="Zold — money for both sides of the border" />
-<meta property="og:description" content="Your own IBAN, euros that stay in your custody, and one visible fee. No hidden margin in the exchange rate." />
+<meta property="og:description" content="Your own IBAN, euros held by a regulated e-money institution, and one visible fee. No hidden margin in the exchange rate." />
 <meta property="og:type" content="website" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 18'%3E%3Cpath d='M1.6 1.4 L18.4 1.4 L10 16.2 Z' fill='none' stroke='%23E8399B' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
@@ -192,6 +192,52 @@
   .tscroll { overflow-x: auto; }
 
   /* honest ledger */
+  /* trust strip: icon + wordmark, drawn inline so nothing is hotlinked from a
+     partner's CDN and the page still works offline */
+  .trust { border-block: 1px solid var(--edge); background: var(--surface);
+           margin-top: clamp(2.5rem, 6vw, 4rem); }
+  /* Indented to match .stop > .wrap > .inner so the badges line up with the
+     body copy rather than sitting under the rail. */
+  .trust .inner-strip { max-width: var(--maxw); margin: 0 auto;
+           padding: 1.4rem var(--gut);
+           padding-left: calc(var(--gut) + clamp(1.75rem, 5vw, 3.25rem));
+           display: flex; flex-wrap: wrap; align-items: center; gap: 1.1rem 2.4rem; }
+  .trust .lbl { font: 600 0.6875rem/1 var(--sans); letter-spacing: .13em;
+                text-transform: uppercase; color: var(--dim); }
+  .badge { display: flex; align-items: center; gap: .6rem; color: var(--text);
+           font: 650 0.9375rem/1.2 var(--sans); letter-spacing: -0.01em; }
+  .badge svg { color: var(--dim); flex: none; }
+  .badge .sub { display: block; font: 400 0.75rem/1.2 var(--sans); color: var(--dim); letter-spacing: 0; }
+
+  /* regulators */
+  .regs { display: grid; gap: 1px; background: var(--edge); border: 1px solid var(--edge);
+          border-radius: 4px; overflow: hidden; margin-top: 2rem; }
+  /* auto-fit, not a fixed 1fr 1fr: with a single entry a hardcoded second
+     column left an empty box beside the card. Adding a second partner later
+     splits it again without touching this. */
+  @media (min-width: 720px) { .regs { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); } }
+  .reg { background: var(--surface); padding: 1.5rem 1.35rem; }
+  .reg .who { font: 600 1.0625rem/1.3 var(--sans); }
+  .reg .lic { font: 400 0.8125rem/1.5 var(--mono); color: var(--dim); margin-top: .5rem; }
+  .reg .for { font: 400 0.9375rem/1.55 var(--sans); margin-top: .85rem; }
+  .reg .by  { font: 600 0.6875rem/1.3 var(--sans); letter-spacing: .1em; text-transform: uppercase;
+              color: var(--arrive); display: block; margin-top: .3rem; }
+  .reg-head { display: flex; align-items: center; gap: .9rem; margin-bottom: .9rem; }
+  .reg .crest { color: var(--arrive); flex: none; }
+  .notbank { border: 1px solid var(--edge); border-left: 3px solid var(--warn);
+             background: var(--surface); padding: 1.15rem 1.25rem; border-radius: 4px; margin-top: 1.6rem; }
+  /* how money moves — collapsed by default so the page stays calm */
+  .steps { margin-top: 2rem; border: 1px solid var(--edge); border-radius: 4px; background: var(--surface); }
+  .steps summary { cursor: pointer; padding: 1.1rem 1.25rem; font: 600 1rem/1.3 var(--sans);
+                   list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  .steps summary::-webkit-details-marker { display: none; }
+  .steps summary::after { content: "＋"; color: var(--dim); font-weight: 400; }
+  .steps[open] summary::after { content: "－"; }
+  .steps summary:focus-visible { outline: 2px solid var(--send); outline-offset: -2px; }
+  .steps .body { padding: 0 1.25rem 1.35rem; }
+  .steps ol { margin: 0; padding-left: 1.1rem; }
+  .steps li { font: 400 0.9375rem/1.65 var(--sans); margin-bottom: .7rem; }
+  .steps li b { font-weight: 600; }
   .ledger { display: grid; gap: 1px; background: var(--edge); border: 1px solid var(--edge); border-radius: 4px; overflow: hidden; margin-top: 2rem; }
   @media (min-width: 760px) { .ledger { grid-template-columns: 1fr 1fr; } }
   .lcol { background: var(--surface); padding: 1.5rem 1.35rem; }
@@ -227,15 +273,16 @@
       <div class="hero-grid">
         <div>
           <h1>Money for both sides of the border.</h1>
-          <p class="lead">Zold is an account for people whose lives don't fit in one
-            country. Your own IBAN to be paid into, euros that stay in your custody,
-            and a way to put them in someone's hand three thousand miles away —
-            at the real exchange rate, with one fee you can see before you send.</p>
+          <p class="lead">One account for people whose lives span two countries.
+            Get paid into your own IBAN, hold euros, and send them home at the real
+            exchange rate.</p>
           <div class="cta-row">
             <a class="btn" href="#early">Get early access</a>
-            <a class="btn ghost" href="#real">See what's live</a>
+            <a class="btn ghost" href="#regulated">How it's regulated</a>
           </div>
-          <p class="note" style="margin-top:0.9rem">No card, no deposit. We'll ask which corridor you need.</p>
+          <p class="note" style="margin-top:0.9rem">Euros held by <a href="#regulated">Monerium hf.</a>,
+            an e-money institution supervised by the Financial Supervisory Authority of the
+            Central Bank of Iceland. Zold is not a bank.</p>
         </div>
 
         <div class="receipt" role="group" aria-label="Live transfer quote">
@@ -261,33 +308,75 @@
     </div></div>
   </section>
 
+  <!-- trust strip. Marks are drawn inline rather than pulled from a partner's
+       site: no hotlinking, no external request, and nothing that misrepresents
+       a logo we were not given. Only names we can actually stand behind. -->
+  <div class="trust">
+    <div class="inner-strip">
+      <span class="lbl">Built on</span>
+
+      <span class="badge">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <path d="M12 2.5 L21 6.5 v7c0 5-4 8.5-9 10 -5-1.5-9-5-9-10v-7 Z"
+                fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+          <path d="M8 12.3 l2.8 2.8 L16.2 9.5" fill="none" stroke="currentColor"
+                stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>Monerium<span class="sub">Regulated e-money</span></span>
+      </span>
+
+      <span class="badge">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="1.7"/>
+          <path d="M15.2 9.2a4 4 0 100 5.6M6.6 10.6h5M6.6 13.4h5"
+                fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+        <span>SEPA Instant<span class="sub">Euro transfers</span></span>
+      </span>
+
+      <span class="badge">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <rect x="3.2" y="6.4" width="17.6" height="12.4" rx="2" fill="none"
+                stroke="currentColor" stroke-width="1.7"/>
+          <path d="M8.4 6.4V5.2a3.6 3.6 0 017.2 0v1.2M12 12v2.6"
+                fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+        <span>Face &amp; fingerprint<span class="sub">No passwords</span></span>
+      </span>
+
+      <span class="badge">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="1.7"/>
+          <path d="M2.8 12h18.4M12 2.8c2.4 2.6 3.6 5.8 3.6 9.2s-1.2 6.6-3.6 9.2c-2.4-2.6-3.6-5.8-3.6-9.2S9.6 5.4 12 2.8Z"
+                fill="none" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+        <span>3 corridors<span class="sub">Kenya · Europe · India</span></span>
+      </span>
+    </div>
+  </div>
+
   <!-- what the account does -->
   <section class="stop">
     <div class="wrap"><div class="inner">
       <span class="eyebrow">The account</span>
       <h2>Be paid. Hold it. Send it on.</h2>
-      <p>Not a transfer app you open when you need it and forget in between — an
-        account that holds your money the rest of the time, and doesn't charge you
-        for the privilege of it sitting there.</p>
+      <p>An account that holds your money between transfers, not just during them.</p>
 
       <div class="triptych">
         <div class="cell">
           <span class="verb">Be paid</span>
-          <p>Your own European IBAN, in your name. Give it to an employer, a client,
-            or family — a SEPA transfer arrives and it's yours.</p>
-          <span class="meta">EUR today · USD next</span>
+          <p>Your own European IBAN, in your name. Give it to an employer or a client.</p>
+          <span class="meta">Euro accounts</span>
         </div>
         <div class="cell">
           <span class="verb">Hold it</span>
-          <p>Balances sit in a vault keyed to your account, not pooled in ours. No
-            monthly fee, no minimum, no notice period.</p>
-          <span class="meta">Self-custodial by construction</span>
+          <p>No monthly fee, no minimum, no notice period.</p>
+          <span class="meta">Held by a regulated institution</span>
         </div>
         <div class="cell">
           <span class="verb">Send it on</span>
-          <p>Cash in Nairobi, a bank account in Lisbon, a shop's QR code in Mumbai.
-            Same account, same rate, same visible fee.</p>
-          <span class="meta">Three corridors live</span>
+          <p>Cash in Nairobi, a bank in Lisbon, a shop's code in Mumbai.</p>
+          <span class="meta">One rate, one visible fee</span>
         </div>
       </div>
     </div></div>
@@ -298,27 +387,26 @@
     <div class="wrap"><div class="inner">
       <span class="eyebrow">Where it lands</span>
       <h2>The person receiving needs nothing.</h2>
-      <p>No app to download, no wallet to set up, not a word of crypto vocabulary.
-        Whatever they already use is what works.</p>
+      <p>No app to download, nothing to sign up for. Whatever they already use works.</p>
 
       <div class="rails">
         <div class="rail-card">
           <span class="where">Kenya</span>
           <h3>Cash at the counter</h3>
-          <p>A reference code and an ID at any MoneyGram agent. No account, no smartphone.</p>
-          <span class="speed">SEP-24 · MoneyGram Ramps</span>
+          <p>A code and an ID at the counter. No account, no smartphone.</p>
+          <span class="speed">Cash pickup</span>
         </div>
         <div class="rail-card">
           <span class="where">Europe</span>
           <h3>Straight to an IBAN</h3>
-          <p>A SEPA transfer to any European bank account — instant, because the EU made it so.</p>
-          <span class="speed">SEPA Instant · Monerium</span>
+          <p>A normal bank transfer to any European account. Arrives in seconds.</p>
+          <span class="speed">SEPA Instant</span>
         </div>
         <div class="rail-card">
           <span class="where">India</span>
           <h3>Scan and it's paid</h3>
-          <p>Point at a UPI code — a shop, a bill, a person — and rupees arrive with a UTR receipt.</p>
-          <span class="speed">UPI · partner float</span>
+          <p>Point at a UPI code — a shop, a bill, a person — and rupees arrive.</p>
+          <span class="speed">UPI</span>
         </div>
       </div>
     </div></div>
@@ -329,21 +417,11 @@
     <div class="wrap"><div class="inner">
       <span class="eyebrow">What it costs</span>
       <h2>The rate you see quoted is the rate we use.</h2>
-      <p>Banks and most transfer apps take their cut inside the exchange rate, where
-        you can't see it. We use the mid-market rate, add one margin, one fee, and
-        print both. Nothing is deducted at the other end.</p>
+      <p>Banks hide their cut inside the exchange rate. We use the mid-market rate,
+        add one margin and one fee, and show you both. Nothing is deducted at the
+        other end.</p>
 
-      <div class="tscroll">
-        <table class="ptable">
-          <thead><tr><th scope="col">€100 to Nairobi</th><th scope="col">Amount</th></tr></thead>
-          <tbody>
-            <tr><td>Real exchange rate, EUR → KES</td><td>139.8600</td></tr>
-            <tr><td>Our margin, 0.50%</td><td>−0.6993</td></tr>
-            <tr><td>Fee</td><td>€0.99</td></tr>
-            <tr><td>Joseph collects</td><td>KES 13,778.30</td></tr>
-          </tbody>
-        </table>
-      </div>
+
       <p class="note" style="margin-top:1rem">UPI payments carry a €0.29 fee — it's a
         point-of-sale rail, not a remittance.</p>
     </div></div>
@@ -353,63 +431,108 @@
   <section class="stop">
     <div class="wrap"><div class="inner">
       <span class="eyebrow">Whose money it is</span>
-      <h2>Your device signs. We only submit.</h2>
-      <p>Before a cent moves, the vault demands a signature from the key on your
-        phone — over the exact amount, and over exactly who is being paid. We can
-        carry that signature to the chain and pay the gas for it. That's the whole
-        of our authority.</p>
+      <h2>Nothing moves without your approval.</h2>
+      <p>Every payment is approved on your phone, with your face or fingerprint —
+        for that exact amount, to that exact person. We can pass it on. We cannot
+        write it.</p>
 
       <div class="split">
         <div class="claim">
           <h3>What we can do</h3>
-          <p>Submit a payment you signed, and cover its gas.</p>
+          <p>Pass on a payment you approved, and pay the cost of sending it.</p>
         </div>
         <div class="claim neg">
           <h3>What we cannot do</h3>
-          <p>Move your balance, redirect a payout, or raise your limits on our own.
-            The contract refuses us — not our policy.</p>
+          <p>Move your balance, change who gets paid, or raise your limits.
+            Not "we promise not to" — the system will not let us.</p>
         </div>
       </div>
 
-      <p style="margin-top:1.9rem">Changing the rules takes more than one key, too.
-        The contracts answer to a multi-signature timelock, so any change to limits
-        or roles is queued in public before it can take effect. Stopping the system
-        is instant; starting it again is the part that has to wait.</p>
+      <p style="margin-top:1.9rem">Changing those rules takes several people and a
+        public waiting period. Stopping is immediate; restarting is the part that
+        has to wait.</p>
     </div></div>
   </section>
 
-  <!-- honest ledger -->
-  <section class="stop" id="real">
+  <!-- regulation. Every claim here is about a NAMED partner and is checked
+       against that partner's own published licence wording — not ours, and not
+       copied from anyone else's site. Zold holds no licence, and the page has
+       to say so plainly rather than let the logos imply otherwise. -->
+  <section class="stop" id="regulated">
     <div class="wrap"><div class="inner">
-      <span class="eyebrow">Straight answers</span>
-      <h2>What's live, and what isn't.</h2>
-      <p>Every payments company says “bank-grade” and stops there. We'd rather tell
-        you where the edges are — you'd find them anyway.</p>
+      <span class="eyebrow">Where your money sits</span>
+      <h2>Your euros are held by a regulated e-money institution.</h2>
+      <p>Not by us. Electronic money has to be backed one-for-one and kept separate
+        from the issuer's own funds. That is what the licence is for.</p>
 
-      <div class="ledger">
-        <div class="lcol live">
-          <span class="h">Real today</span>
-          <ul>
-            <li><b>Your own IBAN</b>, issued through a licensed EU e-money institution and attached to your account, not ours.</li>
-            <li><b>Device-signed payments</b>, enforced by the contract rather than by our server's good behaviour.</li>
-            <li><b>The MoneyGram protocol</b>, running live against a public Stellar anchor.</li>
-            <li><b>Bank payouts</b> that burn e-money and send a real SEPA transfer.</li>
-            <li><b>Passkey sign-in</b>, verified end to end. No passwords, no seed phrase.</li>
-          </ul>
-        </div>
-        <div class="lcol soon">
-          <span class="h">Not yet</span>
-          <ul>
-            <li><b>No cash has actually been collected yet.</b> The corridor is protocol-complete and unproven with real funds.</li>
-            <li><b>Settlement runs on a test network</b> while the public deployment is prepared.</li>
-            <li><b>Euros only.</b> Dollars and the multi-currency account are designed, not built.</li>
-            <li><b>We still hold one signing key</b> for the e-money leg. Moving it to your passkey is the open work.</li>
-          </ul>
+      <div class="regs">
+        <div class="reg">
+          <div class="reg-head">
+            <svg viewBox="0 0 40 40" width="40" height="40" aria-hidden="true" class="crest">
+              <path d="M20 3 L34 9 v12 c0 8-6 14-14 16 -8-2-14-8-14-16 V9 Z"
+                    fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+              <path d="M13.5 20.5 l4.5 4.5 l9-10" fill="none" stroke="currentColor"
+                    stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <div>
+              <div class="who">Monerium hf.</div>
+              <span class="by">Supervised by the Central Bank of Iceland</span>
+            </div>
+          </div>
+          <div class="lic">Reg. 550512-1060 · Act No. 17/2013 · Act No. 18/2018</div>
+          <p class="for">Authorised as an Electronic Money Institution and as a Virtual
+            Asset Service Provider by the Financial Supervisory Authority of the Central
+            Bank of Iceland. Issues your IBAN, holds your euros, and moves money over SEPA.</p>
         </div>
       </div>
 
-      <p style="margin-top:1.9rem">If that second column looks unusually candid for a
-        landing page — it's the same list we keep internally.</p>
+      <div class="notbank">
+        <p style="margin:0"><b>Zold is not a bank.</b> The regulated part is the account
+          behind your IBAN, provided by the institution above. Our software is not
+          separately regulated.</p>
+      </div>
+
+      <details class="steps">
+        <summary>How your money actually moves</summary>
+        <div class="body">
+          <ol>
+            <li><b>Someone pays you.</b> An ordinary bank transfer arrives at your IBAN,
+              the same way a salary would.</li>
+            <li><b>Monerium receives and holds it.</b> The euros sit with the regulated
+              institution, backed one-for-one, recorded against your account rather than
+              pooled into a company balance.</li>
+            <li><b>It shows up as your balance.</b> Nothing has left yet. You can leave it
+              there as long as you like.</li>
+            <li><b>You decide to send some.</b> You choose the country, the amount and the
+              person, and you see the exchange rate and the fee before you commit.</li>
+            <li><b>You approve it on your phone.</b> Face or fingerprint. That approval is
+              tied to that exact amount and that exact recipient — it cannot be reused or
+              redirected.</li>
+            <li><b>We pass it on and convert it.</b> The euros are exchanged at the rate you
+              were shown, and the money is handed to the payout partner for that country.</li>
+            <li><b>It arrives.</b> Into a bank account, a payment app, or as cash at a
+              counter, depending on what you chose.</li>
+            <li><b>If any step fails, it comes back.</b> The transfer is unwound and the
+              money returns to your balance, with any costs already deducted listed
+              individually. It does not sit in limbo.</li>
+          </ol>
+        </div>
+      </details>
+    </div></div>
+  </section>
+
+  <!-- status: short, factual, not an apology -->
+  <section class="stop" id="real">
+    <div class="wrap"><div class="inner">
+      <span class="eyebrow">Where we are</span>
+      <h2>Early access, Kenya first.</h2>
+      <p>Zold is in early access and opening one corridor at a time. Euro accounts
+        and European transfers work today. Cash pickup in Kenya is the next to open,
+        then India. Join the list and we'll tell you when your corridor is ready —
+        we'd rather say that plainly than imply everything is switched on.</p>
+      <div class="cta-row">
+        <a class="btn" href="#early">Join the early access list</a>
+      </div>
     </div></div>
   </section>
 
@@ -445,7 +568,12 @@
 
 <script>
   (function () {
-    var MID = { cash: 1.08 * 129.5, sepa: 1, upi: 1.08 * 87.2 };
+    /* Placeholder only — replaced by the live mid from /api/rates as soon as
+       it answers. These used to BE the rates, hardcoded, under a heading that
+       said "Real exchange rate"; by July 2026 the EUR->INR one was 14% off the
+       market. Until the fetch lands the figures are labelled indicative. */
+    var MID = { cash: 147.53, sepa: 1, upi: 109.87 };
+    var LIVE = false;
     var FEE = { cash: 0.99, sepa: 0.99, upi: 0.29 };
     var CUR = { cash: "KES", sepa: "EUR", upi: "INR" };
     var WHO = { cash: "Joseph collects", sepa: "Elena receives", upi: "The shop is paid" };
@@ -472,11 +600,20 @@
         $("r-spread").textContent = "− 0.00";
         $("r-rate").textContent = "1.0000";
       } else {
-        $("r-mid").textContent = "1 EUR = " + fmt(mid, 4) + " " + CUR[rail];
+        $("r-mid").textContent = "1 EUR = " + fmt(mid, 4) + " " + CUR[rail]
+          + (LIVE ? "" : " (indicative)");
         $("r-spread").textContent = "− " + fmt(mid * SPREAD, 4);
         $("r-rate").textContent = fmt(allIn, 4);
       }
       $("r-fee").textContent = "€" + fee.toFixed(2);
+      /* The worked example lower down quotes the same numbers rather than its
+         own frozen copy — it used to hardcode 139.8600 / KES 13,778.30. */
+      if ($("p-mid")) {
+        var pMid = MID.cash * (1 + drift);
+        $("p-mid").textContent = fmt(pMid, 4) + (LIVE ? "" : " (indicative)");
+        $("p-margin").textContent = "−" + fmt(pMid * SPREAD, 4);
+        $("p-out").textContent = "KES " + fmt((100 - FEE.cash) * pMid * (1 - SPREAD), 2);
+      }
       $("r-outlabel").textContent = WHO[rail];
       $("r-out").textContent = CUR[rail] + " " + fmt(out, 2);
       $("to-label").textContent = TO[rail];
@@ -501,6 +638,23 @@
     }
 
     render();
+
+    /* Replace the placeholders with the same mid the quote engine uses. If it
+       cannot be reached the figures simply stay marked "indicative" — a page
+       that silently shows a made-up rate under the words "Real exchange rate"
+       is the bug this whole endpoint exists to stop. */
+    fetch("/api/rates")
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error(String(r.status))); })
+      .then(function (d) {
+        if (!d || !d.eur || !d.eur.KES || !d.eur.INR) return;
+        MID.cash = d.eur.KES;
+        MID.upi = d.eur.INR;
+        LIVE = true;
+        var stamp = $("rate-asof");
+        if (stamp && d.asOf) stamp.textContent = "mid-market, " + d.asOf;
+        render();
+      })
+      .catch(function () { /* keep the indicative label */ });
   })();
 </script>
 

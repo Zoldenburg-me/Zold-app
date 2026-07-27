@@ -555,9 +555,14 @@
             </div>
             <div class="quote" id="quote-box" style="border-top:0;padding-top:0;margin-top:.2rem">
               <div class="qrow" id="row-mid"><span>Mid-market rate</span><span class="dotfill"></span><span id="q-mid"></span></div>
-              <div class="qrow" id="row-rate"><span>Your rate <span class="rate-badge">0.50% spread</span></span><span class="dotfill"></span><span id="q-rate"></span></div>
+              <div class="qrow" id="row-rate"><span>Your rate <span class="rate-badge" id="q-margin"></span></span><span class="dotfill"></span><span id="q-rate"></span></div>
               <div class="qrow"><span>Fixed fee</span><span class="dotfill"></span><span id="q-fee"></span></div>
               <div class="qrow total"><span id="total-label">Recipient gets</span><span class="val" id="q-recv"></span></div>
+              <!-- What the sender actually gets per EUR, fee included. Without
+                   it a small send looks like a broken rate: the EUR 0.29 UPI
+                   fee is 29% of a EUR 1 transfer, so the itemised rows all look
+                   fine while the outcome does not. -->
+              <div class="qrow" id="row-effective"><span id="q-eff-label">Effective rate</span><span class="dotfill"></span><span id="q-eff"></span></div>
               <div class="row2" style="margin-top:.9rem" id="recipient-row">
                 <div><label style="margin-top:0">Recipient name</label><input id="rec-name" placeholder="Joseph Otieno" /></div>
                 <div id="field-phone"><label style="margin-top:0">Phone</label><input id="rec-phone" placeholder="+254 7xx…" /></div>
@@ -1096,10 +1101,26 @@ function selectOption(q) {
     const unit = rail === "upi" ? "INR" : "KES";
     $("q-mid").textContent = `1 EUR = ${fmt(q.midRate, 2)} ${unit}`;
     $("q-rate").textContent = `1 EUR = ${fmt(q.fxRate, 2)} ${unit}`;
+    // Measured against the live mid, not a constant we assert.
+    $("q-margin").textContent = `${fmt((q.marginBps ?? 0) / 100, 2)}% margin`;
   }
   $("q-fee").textContent = `€${fmt(q.fixedFeeEur)}`;
   $("total-label").textContent = "Recipient gets";
   $("q-recv").textContent = recvOf(q);
+  /* Effective rate = what actually arrives per EUR sent, fee included. Shown
+     for every rail, and called out when the fixed fee eats a big share of a
+     small send — that is the case where the row-by-row receipt looks correct
+     and the result still is not worth sending. */
+  const feeShare = q.sendEur > 0 ? q.fixedFeeEur / q.sendEur : 0;
+  const unit2 = rail === "upi" ? "INR" : rail === "cash" ? "KES" : "EUR";
+  $("q-eff").textContent = sepa
+    ? `€${fmt(q.effectiveRate ?? 0, 4)} per €1 sent`
+    : `1 EUR = ${fmt(q.effectiveRate ?? 0, 2)} ${unit2}`;
+  const heavy = feeShare >= 0.05;
+  $("q-eff-label").textContent = heavy
+    ? `Effective rate — the €${fmt(q.fixedFeeEur)} fee is ${fmt(feeShare * 100, 0)}% of this send`
+    : "Effective rate";
+  $("row-effective").style.color = heavy ? "var(--amber)" : "";
   $("field-phone").classList.toggle("hidden", rail !== "cash");
   $("field-iban").classList.toggle("hidden", rail !== "sepa");
   $("recipient-row").classList.toggle("hidden", rail === "upi");
