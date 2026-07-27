@@ -4,6 +4,8 @@
  * settle and auto-refund (FP3), not silently settle at the moved rate.
  * Own ports. Run: npm run fp5:test
  */
+// Must be first: pins the chain/keys before config.js reads the environment.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
@@ -14,6 +16,7 @@ import { createPublicClient, createWalletClient, encodeFunctionData, http, kecca
 import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
 import { newDevice, registerDevice, sendTransfer } from "./device.js";
+
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RPC = "http://127.0.0.1:8548";

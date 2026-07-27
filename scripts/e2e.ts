@@ -5,12 +5,15 @@
  * (demo data only — the chain state it mirrors dies with the chain anyway).
  * Run: npm run e2e
  */
+// Must be first: pins the chain/keys before config.js reads the environment.
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { newDevice, registerDevice, signTerms } from "./device.js";
+
 
 /**
  * Pin FX for the run, before anything spawns — the deploy and the API inherit
