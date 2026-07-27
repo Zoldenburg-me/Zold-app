@@ -4,9 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Zold — an account for money on both sides of the border</title>
-<meta name="description" content="Zold is an account for people whose lives don't fit in one country: your own IBAN, euros in your custody, and three ways to land them abroad at the real exchange rate." />
+<meta name="description" content="Zold is an account for people whose lives don't fit in one country: your own IBAN, euros held by a regulated e-money institution, and three ways to land them abroad at the real exchange rate." />
 <meta property="og:title" content="Zold — money for both sides of the border" />
-<meta property="og:description" content="Your own IBAN, euros that stay in your custody, and one visible fee. No hidden margin in the exchange rate." />
+<meta property="og:description" content="Your own IBAN, euros held by a regulated e-money institution, and one visible fee. No hidden margin in the exchange rate." />
 <meta property="og:type" content="website" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 18'%3E%3Cpath d='M1.6 1.4 L18.4 1.4 L10 16.2 Z' fill='none' stroke='%23E8399B' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
@@ -192,6 +192,30 @@
   .tscroll { overflow-x: auto; }
 
   /* honest ledger */
+  /* regulators */
+  .regs { display: grid; gap: 1px; background: var(--edge); border: 1px solid var(--edge);
+          border-radius: 4px; overflow: hidden; margin-top: 2rem; }
+  @media (min-width: 720px) { .regs { grid-template-columns: 1fr 1fr; } }
+  .reg { background: var(--surface); padding: 1.5rem 1.35rem; }
+  .reg .who { font: 600 1.0625rem/1.3 var(--sans); }
+  .reg .lic { font: 400 0.8125rem/1.5 var(--mono); color: var(--dim); margin-top: .5rem; }
+  .reg .for { font: 400 0.9375rem/1.55 var(--sans); margin-top: .85rem; }
+  .reg .by  { font: 600 0.6875rem/1 var(--sans); letter-spacing: .1em; text-transform: uppercase;
+              color: var(--arrive); margin-bottom: .8rem; display: block; }
+  .notbank { border: 1px solid var(--edge); border-left: 3px solid var(--warn);
+             background: var(--surface); padding: 1.15rem 1.25rem; border-radius: 4px; margin-top: 1.6rem; }
+  /* how money moves — collapsed by default so the page stays calm */
+  .steps { margin-top: 2rem; border: 1px solid var(--edge); border-radius: 4px; background: var(--surface); }
+  .steps summary { cursor: pointer; padding: 1.1rem 1.25rem; font: 600 1rem/1.3 var(--sans);
+                   list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  .steps summary::-webkit-details-marker { display: none; }
+  .steps summary::after { content: "＋"; color: var(--dim); font-weight: 400; }
+  .steps[open] summary::after { content: "－"; }
+  .steps summary:focus-visible { outline: 2px solid var(--send); outline-offset: -2px; }
+  .steps .body { padding: 0 1.25rem 1.35rem; }
+  .steps ol { margin: 0; padding-left: 1.1rem; }
+  .steps li { font: 400 0.9375rem/1.65 var(--sans); margin-bottom: .7rem; }
+  .steps li b { font-weight: 600; }
   .ledger { display: grid; gap: 1px; background: var(--edge); border: 1px solid var(--edge); border-radius: 4px; overflow: hidden; margin-top: 2rem; }
   @media (min-width: 760px) { .ledger { grid-template-columns: 1fr 1fr; } }
   .lcol { background: var(--surface); padding: 1.5rem 1.35rem; }
@@ -228,14 +252,16 @@
         <div>
           <h1>Money for both sides of the border.</h1>
           <p class="lead">Zold is an account for people whose lives don't fit in one
-            country. Your own IBAN to be paid into, euros that stay in your custody,
-            and a way to put them in someone's hand three thousand miles away —
-            at the real exchange rate, with one fee you can see before you send.</p>
+            country. Your own IBAN to be paid into, euros that stay yours, and a way
+            to put them in someone's hand three thousand miles away — at the real
+            exchange rate, with one fee you can see before you send.</p>
           <div class="cta-row">
             <a class="btn" href="#early">Get early access</a>
-            <a class="btn ghost" href="#real">See what's live</a>
+            <a class="btn ghost" href="#regulated">How it's regulated</a>
           </div>
-          <p class="note" style="margin-top:0.9rem">No card, no deposit. We'll ask which corridor you need.</p>
+          <p class="note" style="margin-top:0.9rem">Euros held by <a href="#regulated">Monerium hf.</a>,
+            an e-money institution supervised by the Financial Supervisory Authority of the
+            Central Bank of Iceland. Zold is not a bank.</p>
         </div>
 
         <div class="receipt" role="group" aria-label="Live transfer quote">
@@ -279,9 +305,9 @@
         </div>
         <div class="cell">
           <span class="verb">Hold it</span>
-          <p>Balances sit in a vault keyed to your account, not pooled in ours. No
-            monthly fee, no minimum, no notice period.</p>
-          <span class="meta">Self-custodial by construction</span>
+          <p>Your balance is recorded against your account, not pooled into ours.
+            No monthly fee, no minimum, no notice period.</p>
+          <span class="meta">Held by a regulated institution</span>
         </div>
         <div class="cell">
           <span class="verb">Send it on</span>
@@ -298,8 +324,8 @@
     <div class="wrap"><div class="inner">
       <span class="eyebrow">Where it lands</span>
       <h2>The person receiving needs nothing.</h2>
-      <p>No app to download, no wallet to set up, not a word of crypto vocabulary.
-        Whatever they already use is what works.</p>
+      <p>No app to download, nothing to sign up for, nothing to learn. Whatever
+        they already use is what works.</p>
 
       <div class="rails">
         <div class="rail-card">
@@ -353,28 +379,96 @@
   <section class="stop">
     <div class="wrap"><div class="inner">
       <span class="eyebrow">Whose money it is</span>
-      <h2>Your device signs. We only submit.</h2>
-      <p>Before a cent moves, the vault demands a signature from the key on your
-        phone — over the exact amount, and over exactly who is being paid. We can
-        carry that signature to the chain and pay the gas for it. That's the whole
-        of our authority.</p>
+      <h2>Nothing moves without your approval.</h2>
+      <p>Every payment has to be approved on your own phone, with your face or
+        fingerprint — and that approval covers the exact amount and the exact
+        person being paid. We can pass it on. We cannot write it.</p>
 
       <div class="split">
         <div class="claim">
           <h3>What we can do</h3>
-          <p>Submit a payment you signed, and cover its gas.</p>
+          <p>Pass on a payment you approved, and pay the cost of sending it.</p>
         </div>
         <div class="claim neg">
           <h3>What we cannot do</h3>
-          <p>Move your balance, redirect a payout, or raise your limits on our own.
-            The contract refuses us — not our policy.</p>
+          <p>Move your balance, change who gets paid, or raise your limits.
+            Not "we promise not to" — the system will not let us.</p>
         </div>
       </div>
 
-      <p style="margin-top:1.9rem">Changing the rules takes more than one key, too.
-        The contracts answer to a multi-signature timelock, so any change to limits
-        or roles is queued in public before it can take effect. Stopping the system
-        is instant; starting it again is the part that has to wait.</p>
+      <p style="margin-top:1.9rem">Changing those rules takes more than one person.
+        Any change to limits or permissions has to be proposed, approved by several
+        people, and then wait out a delay in public before it takes effect. Stopping
+        things is immediate; restarting is the part that has to wait.</p>
+    </div></div>
+  </section>
+
+  <!-- regulation. Every claim here is about a NAMED partner and is checked
+       against that partner's own published licence wording — not ours, and not
+       copied from anyone else's site. Zold holds no licence, and the page has
+       to say so plainly rather than let the logos imply otherwise. -->
+  <section class="stop" id="regulated">
+    <div class="wrap"><div class="inner">
+      <span class="eyebrow">Where your money sits</span>
+      <h2>Your euros are held by a regulated e-money institution.</h2>
+      <p>Not by us. The account behind your IBAN is issued and held by Monerium hf.,
+        which is authorised and supervised by the Financial Supervisory Authority of
+        the Central Bank of Iceland. Electronic money has to be backed one-for-one
+        and kept apart from the issuer's own funds — that is what the licence is for.</p>
+
+      <div class="regs">
+        <div class="reg">
+          <span class="by">Central Bank of Iceland</span>
+          <div class="who">Monerium hf.</div>
+          <div class="lic">Reg. 550512-1060 · Act No. 17/2013 · Act No. 18/2018</div>
+          <p class="for">Authorised as an Electronic Money Institution and as a Virtual
+            Asset Service Provider by the Financial Supervisory Authority of the Central
+            Bank of Iceland. Issues your IBAN, holds the euros, and moves money in and
+            out over SEPA.</p>
+        </div>
+        <div class="reg">
+          <span class="by">Cash pickup</span>
+          <div class="who">Not yet contracted</div>
+          <div class="lic">In testing against a public test network</div>
+          <p class="for">Cash collection needs a licensed money transmitter in each
+            country. We are not yet contracted with one, so no partner is named here.
+            When that changes, the name and the licence will appear on this page.</p>
+        </div>
+      </div>
+
+      <div class="notbank">
+        <p style="margin:0"><b>Zold is not a bank</b>, and Zoldenburg holds no financial
+          licence of its own. The regulated part is the account behind your IBAN, provided
+          by the institution named above. The software you use is ours, and it is not
+          separately regulated. We are also not open to the public yet — see below.</p>
+      </div>
+
+      <details class="steps">
+        <summary>How your money actually moves</summary>
+        <div class="body">
+          <ol>
+            <li><b>Someone pays you.</b> An ordinary bank transfer arrives at your IBAN,
+              the same way a salary would.</li>
+            <li><b>Monerium receives and holds it.</b> The euros sit with the regulated
+              institution, backed one-for-one, recorded against your account rather than
+              pooled into a company balance.</li>
+            <li><b>It shows up as your balance.</b> Nothing has left yet. You can leave it
+              there as long as you like.</li>
+            <li><b>You decide to send some.</b> You choose the country, the amount and the
+              person, and you see the exchange rate and the fee before you commit.</li>
+            <li><b>You approve it on your phone.</b> Face or fingerprint. That approval is
+              tied to that exact amount and that exact recipient — it cannot be reused or
+              redirected.</li>
+            <li><b>We pass it on and convert it.</b> The euros are exchanged at the rate you
+              were shown, and the money is handed to the payout partner for that country.</li>
+            <li><b>It arrives.</b> Into a bank account, a payment app, or as cash at a
+              counter, depending on what you chose.</li>
+            <li><b>If any step fails, it comes back.</b> The transfer is unwound and the
+              money returns to your balance, with any costs already deducted listed
+              individually. It does not sit in limbo.</li>
+          </ol>
+        </div>
+      </details>
     </div></div>
   </section>
 
@@ -390,20 +484,19 @@
         <div class="lcol live">
           <span class="h">Real today</span>
           <ul>
-            <li><b>Your own IBAN</b>, issued through a licensed EU e-money institution and attached to your account, not ours.</li>
-            <li><b>Device-signed payments</b>, enforced by the contract rather than by our server's good behaviour.</li>
-            <li><b>The MoneyGram protocol</b>, running live against a public Stellar anchor.</li>
-            <li><b>Bank payouts</b> that burn e-money and send a real SEPA transfer.</li>
-            <li><b>Passkey sign-in</b>, verified end to end. No passwords, no seed phrase.</li>
+            <li><b>Your own IBAN</b>, issued through a licensed European e-money institution, in your name rather than pooled in ours.</li>
+            <li><b>Approval on your device</b>, enforced by the system itself rather than by our good behaviour.</li>
+            <li><b>Bank payouts</b> that arrive as an ordinary SEPA transfer.</li>
+            <li><b>Sign-in with your face or fingerprint.</b> No passwords, nothing to write down.</li>
           </ul>
         </div>
         <div class="lcol soon">
           <span class="h">Not yet</span>
           <ul>
-            <li><b>No cash has actually been collected yet.</b> The corridor is protocol-complete and unproven with real funds.</li>
-            <li><b>Settlement runs on a test network</b> while the public deployment is prepared.</li>
+            <li><b>No cash has been collected at a counter yet.</b> The cash route works end to end in testing; nobody has walked out with money.</li>
+            <li><b>We are still in testing</b>, not open to the public, and not holding anyone's real money.</li>
             <li><b>Euros only.</b> Dollars and the multi-currency account are designed, not built.</li>
-            <li><b>We still hold one signing key</b> for the e-money leg. Moving it to your passkey is the open work.</li>
+            <li><b>We still hold one key</b> used to move money in and out of the bank leg. Handing that to your device is the work in progress.</li>
           </ul>
         </div>
       </div>
