@@ -239,6 +239,20 @@
     font-size: .66rem; font-weight: 600; padding: .2rem .55rem; border-radius: 6px; flex: none;
   }
   .copybtn:hover { color: var(--text); background: #202026; filter: none; }
+  /* Deliberately not .copybtn: that class is wired to the clipboard handler. */
+  .togglebtn {
+    background: var(--row); border: 1px solid var(--border2); color: var(--muted);
+    font-size: .66rem; font-weight: 700; padding: .2rem .7rem; border-radius: 6px; flex: none;
+    letter-spacing: .06em; text-transform: uppercase;
+  }
+  .togglebtn[data-on="1"] { color: #07110b; background: var(--ok, #5ee9a4); border-color: transparent; }
+  .togglebtn:hover { color: var(--text); background: #202026; filter: none; }
+  .togglebtn[data-on="1"]:hover { color: #07110b; background: var(--ok, #5ee9a4); }
+  .cdep { display: flex; justify-content: space-between; gap: .6rem; padding: .4rem 0; border-top: 1px solid var(--border); font-size: .74rem; }
+  .cdep .amt { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+  .cdep .st { font-size: .64rem; font-weight: 700; letter-spacing: .06em; }
+  .cdep .st.ok { color: var(--ok, #5ee9a4); }
+  .cdep .st.no { color: var(--faint); }
 
   /* history — Valerium transaction list */
   .hitem {
@@ -524,6 +538,20 @@
         <div class="error hidden" id="dep-err"></div>
       </div>
 
+      <div class="card" id="crypto-card">
+        <h2>Crypto in</h2>
+        <div class="detail" style="border-top:none; margin-top:0; padding-top:0">
+          <span class="k">AUTO-CONVERT USDC → EURe</span>
+          <button id="btn-autoconvert" class="togglebtn">off</button>
+        </div>
+        <div class="hint">
+          Send USDC to your smart account and it becomes euro balance you can spend on any
+          rail. Off by default — while it is off your USDC stays exactly where it lands.
+        </div>
+        <div id="crypto-list"></div>
+        <div class="error hidden" id="crypto-err"></div>
+      </div>
+
       <div class="card">
         <h2>Transaction history</h2>
         <div id="history"><div class="empty">No transfers yet</div></div>
@@ -699,6 +727,7 @@ function renderUser(u) {
   $("safe-balance").textContent = `€${fmt(u.safeBalanceEur ?? 0)}`;
   $("vault-balance").textContent = `€${fmt(u.vaultBalanceEur ?? 0)}`;
   $("address").textContent = u.address;
+  renderAutoConvert(u.autoConvert);
   const chip = $("fund-chip");
   if (!kycApproved(u)) {
     $("iban").textContent = kycCopy(u.kycStatus, u)[2];
@@ -739,6 +768,9 @@ function renderKycState(u = user) {
 async function refresh() {
   if (!user) return;
   try { renderUser(await api(`/api/users/${user.id}`)); } catch {}
+  // Conversion happens on the server's poll, not on a user action, so the
+  // panel has to be re-read rather than updated optimistically.
+  await refreshCryptoDeposits();
 }
 
 /* ---------- onboarding flow: create -> staged provisioning -> dashboard */
@@ -1051,6 +1083,52 @@ $("link-signin").onclick = async (ev) => {
 	    await api("/api/simulate/sepa-deposit", { iban: user.iban, amountEur: Number($("dep-amount").value) });
 	    await refresh();
   } catch (e) { showErr("dep-err", e); }
+};
+
+/* ---------- crypto in ---------- */
+function renderAutoConvert(on) {
+  const b = $("btn-autoconvert");
+  b.textContent = on ? "on" : "off";
+  b.dataset.on = on ? "1" : "0";
+}
+
+/* Deposits are shown whatever their outcome. A refusal is the case a user most
+   needs to see — their USDC arrived and is sitting there unconverted, and the
+   reason says what to do about it. */
+function renderCryptoDeposits(deposits) {
+  const el = $("crypto-list");
+  if (!deposits?.length) { el.innerHTML = ""; return; }
+  el.innerHTML = deposits
+    .map((d) => {
+      const ok = d.state === "CONVERTED";
+      const right = ok
+        ? `€${fmt(d.creditedEur ?? 0)}`
+        : `<span title="${esc(d.reason ?? "")}">not converted</span>`;
+      return `<div class="cdep">
+        <span class="amt">${fmt(d.amountUsdc, 2)} USDC</span>
+        <span class="st ${ok ? "ok" : "no"}">${right}</span>
+      </div>`;
+    })
+    .join("");
+}
+
+async function refreshCryptoDeposits() {
+  if (!user?.id || !sessionToken) return;
+  try {
+    const r = await api(`/api/users/${user.id}/crypto-deposits`);
+    renderAutoConvert(r.autoConvert);
+    renderCryptoDeposits(r.deposits);
+  } catch { /* the panel is informational; a failure here must not blank the app */ }
+}
+
+$("btn-autoconvert").onclick = async () => {
+  clearErr("crypto-err");
+  try {
+    const next = $("btn-autoconvert").dataset.on !== "1";
+    const u = await api(`/api/users/${user.id}/auto-convert`, { enabled: next });
+    renderUser({ ...user, ...u });
+    await refreshCryptoDeposits();
+  } catch (e) { showErr("crypto-err", e); }
 };
 
 document.querySelectorAll(".copybtn").forEach((b) => {
