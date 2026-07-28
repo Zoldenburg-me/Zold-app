@@ -295,19 +295,33 @@ function formatBits(mask: number): number {
   return ((value << 10) | rem) ^ 0b101010000010010;
 }
 
+/**
+ * Write both copies of the 15 format bits.
+ *
+ * Bit i goes to one position in the vertical strip (column 8, running down the
+ * left) and one in the horizontal strip (row 8, running in from the right).
+ * Getting this wrong is invisible to a round-trip through our own reader and
+ * fatal to a real scanner, which is exactly what happened: the first version
+ * transposed the two strips and reversed the bit order along row 8, so the data
+ * was perfect and no decoder could tell which mask had been applied. It also
+ * walked over the dark module at [size-8][8]; the vertical run below starts at
+ * size-7 and leaves it alone.
+ */
 function placeFormat(g: Grid, mask: number) {
   const size = g.length;
   const bits = formatBits(mask);
-  const bit = (i: number) => (bits >> i) & 1;
-  // Copy 1, around the top-left finder.
-  for (let i = 0; i <= 5; i++) g[8][i] = bit(i);
-  g[8][7] = bit(6);
-  g[8][8] = bit(7);
-  g[7][8] = bit(8);
-  for (let i = 9; i <= 14; i++) g[14 - i][8] = bit(i);
-  // Copy 2, split between the other two finders.
-  for (let i = 0; i <= 7; i++) g[size - 1 - i][8] = bit(i);
-  for (let i = 8; i <= 14; i++) g[8][size - 15 + i] = bit(i);
+  for (let i = 0; i < 15; i++) {
+    const v = ((bits >> i) & 1) as 0 | 1;
+    // Vertical strip, column 8: rows 0-5, then 7-8, then the bottom seven.
+    if (i < 6) g[i][8] = v;
+    else if (i < 8) g[i + 1][8] = v;
+    else g[size - 15 + i][8] = v;
+    // Horizontal strip, row 8: the rightmost eight, then column 7, then 5-0.
+    if (i < 8) g[8][size - 1 - i] = v;
+    else if (i === 8) g[8][7] = v;
+    else g[8][14 - i] = v;
+  }
+  g[size - 8][8] = 1; // the dark module, restated after the strips are written
 }
 
 /**

@@ -125,10 +125,13 @@ Running this repo with sandbox credentials, today:
   not support EURe and the CoW provider is quote-only. So the venue that can
   execute is the mock whose rate we set, which is what the live-mid check
   exists to bound.
-- No phone has scanned a payment-page QR code, and no independent decoder has
-  read one. The encoder is ours (services/api/src/qr.ts) and its test reads the
-  matrix back through its own module ordering, which proves the bitstream and
-  masking agree with each other but not that the ordering matches the spec.
+- Payment-page QR codes are decoded by an independent decoder (`jsqr`) in
+  `npm run pay:test`, which is what caught the format-bit placement bug that
+  our own round-trip could not. No phone camera has scanned one, which is a
+  test of contrast and module size rather than of correctness.
+- Payment-page handles are enumerable: 200 vs 404 reveals whether one is
+  claimed. The page tells the payee that anyone who knows or guesses the handle
+  can find their address.
 - Nothing screens the sending address. Converting an unsolicited transfer from
   an unknown counterparty into e-money is a source-of-funds question, and no
   code here answers it.
