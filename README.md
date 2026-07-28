@@ -41,7 +41,9 @@ Running this repo with sandbox credentials, today:
   Fluidkey's `name.fkey.id`. With auto-convert on, a USDC payment arrives as
   euro balance. Unlike Fluidkey it resolves to the account's ONE address rather
   than a fresh stealth address per visit, so it is **not private** and the page
-  says so; see docs/payment-pages.md. `npm run pay:test` (20 checks).
+  says so. If Candide Forwarding Address is configured, the page shows a
+  forwarding deposit address instead of the Safe address; see
+  docs/payment-pages.md. `npm run pay:test` (23 checks).
 - **Wallets**: each user's account is a Safe smart account, deployed to
   Sepolia through Candide's bundler. Deployment costs the user nothing;
   gas is sponsored. Monerium verifies ownership via EIP-1271, so the IBAN

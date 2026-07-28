@@ -63,6 +63,18 @@ shared, so it is stated rather than papered over: the page tells the payee that
 anyone who knows **or guesses** the handle can find the address, and no comment
 in the code claims the endpoint resists walking.
 
+When Candide Forwarding Address is configured (`CANDIDE_FORWARDING_*`), the
+page shows an activated forwarding deposit address instead of the account's Safe
+address. This is a hardening step, not stealth privacy: the forwarding address
+is still public, deposits to it are still inspectable, and forwarding status can
+still reveal delivery on-chain. What it avoids is publishing the user's main
+Safe address directly from a guessed handle.
+
+The integration deliberately uses a deterministic salt per user handle. That
+keeps one shareable page stable and avoids burning through Candide's active
+address cap; per-payment salts are the next step if the product wants
+transaction-level deposit addresses.
+
 ## Handles
 
 Lowercase, 3–30 characters, alphanumeric with internal hyphens, unique

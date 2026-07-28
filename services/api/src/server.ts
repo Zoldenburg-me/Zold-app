@@ -11,7 +11,7 @@ import {
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, CANDIDE_FORWARDING, candideForwardingEnabled, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type Transfer, type User } from "./store.js";
@@ -35,6 +35,7 @@ import {
   sweepStrandedTransfers,
 } from "./orchestrator.js";
 import { startCryptoDepositPoller } from "./adapters/crypto-deposits.js";
+import { activateForwardingAddress } from "./adapters/candide-forwarding.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from "./pay.js";
 import { qrSvg } from "./qr.js";
 import { isValidVpa } from "./adapters/upi.js";
@@ -585,6 +586,27 @@ function payChain() {
   };
 }
 
+function paymentPageSalt(user: User): `0x${string}` {
+  return `0x${createHash("sha256").update(`zold:pay:${user.id}:${user.handle}`).digest("hex")}`;
+}
+
+async function paymentPagePayee(user: User) {
+  const chain = payChain();
+  if (!candideForwardingEnabled()) return publicPayee(user, chain);
+  const activation = await activateForwardingAddress({
+    recipient: user.address,
+    custodialWithdrawer: CANDIDE_FORWARDING.custodialWithdrawer as `0x${string}`,
+    destinationChainId: CHAIN_ID,
+    sourceChainIds: CANDIDE_FORWARDING.sourceChainIds,
+    salt: paymentPageSalt(user),
+  });
+  return publicPayee(user, chain, {
+    address: activation.address,
+    expiresAt: activation.expiresAt,
+    sourceChainIds: CANDIDE_FORWARDING.sourceChainIds,
+  });
+}
+
 /**
  * Claim or change the account's payment handle.
  *
@@ -636,7 +658,7 @@ app.get(
   wrap(async (req, res) => {
     const user = store.findUserByHandle(req.params.handle);
     if (!user?.handle) return res.status(404).json({ error: "no such payment page" });
-    res.json(publicPayee(user, payChain()));
+    res.json(await paymentPagePayee(user));
   }),
 );
 
@@ -647,9 +669,10 @@ app.get(
   wrap(async (req, res) => {
     const user = store.findUserByHandle(req.params.handle);
     if (!user?.handle) return res.status(404).json({ error: "no such payment page" });
+    const payee = await paymentPagePayee(user);
     res.type("image/svg+xml");
     res.setHeader("cache-control", "public, max-age=300");
-    res.send(qrSvg(user.address));
+    res.send(qrSvg(payee.address));
   }),
 );
 

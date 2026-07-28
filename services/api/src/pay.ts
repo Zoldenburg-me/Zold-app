@@ -86,6 +86,8 @@ export interface PublicPayee {
   handle: string;
   displayName?: string;
   address: `0x${string}`;
+  addressKind: "safe" | "forwarding";
+  forwarding?: { expiresAt: number; sourceChainIds: number[] };
   chainId: number;
   token: { symbol: string; address: `0x${string}`; decimals: number };
 }
@@ -99,12 +101,18 @@ export interface PublicPayee {
 export function publicPayee(
   user: User,
   chain: { chainId: number; token: { symbol: string; address: `0x${string}`; decimals: number } },
+  receiving: { address?: `0x${string}`; expiresAt?: number; sourceChainIds?: number[] } = {},
 ): PublicPayee {
   if (!user.handle) throw new HandleError("account has no payment handle");
+  const address = receiving.address ?? user.address;
   return {
     handle: user.handle,
     ...(user.payDisplayName ? { displayName: user.payDisplayName } : {}),
-    address: user.address,
+    address,
+    addressKind: receiving.address ? "forwarding" : "safe",
+    ...(receiving.address && receiving.expiresAt && receiving.sourceChainIds
+      ? { forwarding: { expiresAt: receiving.expiresAt, sourceChainIds: receiving.sourceChainIds } }
+      : {}),
     chainId: chain.chainId,
     token: chain.token,
   };

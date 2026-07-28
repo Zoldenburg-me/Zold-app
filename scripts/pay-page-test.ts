@@ -102,9 +102,22 @@ check("display name is optional, trimmed, and length-capped", () => {
   throws(() => normaliseDisplayName("x".repeat(41)), /40 characters/);
 });
 
-check("the public projection returns exactly the four expected keys", () => {
+check("the public projection returns exactly the expected keys", () => {
   const p = publicPayee(user, CHAIN);
-  assert.deepEqual(Object.keys(p).sort(), ["address", "chainId", "displayName", "handle", "token"]);
+  assert.deepEqual(Object.keys(p).sort(), ["address", "addressKind", "chainId", "displayName", "handle", "token"]);
+  assert.equal(p.addressKind, "safe");
+});
+
+check("the public projection can expose a forwarding address without exposing the Safe", () => {
+  const p = publicPayee(user, CHAIN, {
+    address: "0x1111111111111111111111111111111111111111",
+    expiresAt: 1_800_000_000,
+    sourceChainIds: [8453],
+  });
+  assert.equal(p.address, "0x1111111111111111111111111111111111111111");
+  assert.equal(p.addressKind, "forwarding");
+  assert.deepEqual(p.forwarding, { expiresAt: 1_800_000_000, sourceChainIds: [8453] });
+  assert.ok(!JSON.stringify(p).includes(user.address), "Safe address leaked through forwarding projection");
 });
 
 check("and leaks no account data — this is the security-relevant one", () => {

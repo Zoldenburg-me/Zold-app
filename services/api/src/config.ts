@@ -77,6 +77,34 @@ export const MONERIUM = {
 export const moneriumSandboxEnabled = () =>
   Boolean(MONERIUM.clientId && MONERIUM.clientSecret);
 
+const numberList = (value: string) =>
+  value
+    .split(",")
+    .map((x) => Number(x.trim()))
+    .filter((x) => Number.isInteger(x) && x > 0);
+
+/**
+ * Candide Forwarding Address. Optional: when fully configured, public payment
+ * pages show a forwarding deposit address instead of the user's Safe address.
+ *
+ * The RPC URL is explicit because Candide's forwarding service is separate
+ * from the public bundler/paymaster URLs used for Safe UserOperations.
+ */
+export const CANDIDE_FORWARDING = {
+  rpcUrl: process.env.CANDIDE_FORWARDING_RPC_URL ?? "",
+  apiKey: process.env.CANDIDE_FORWARDING_API_KEY ?? "",
+  custodialWithdrawer: (process.env.CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER ?? "") as `0x${string}` | "",
+  sourceChainIds: numberList(process.env.CANDIDE_FORWARDING_SOURCE_CHAIN_IDS ?? ""),
+};
+
+export const candideForwardingEnabled = () =>
+  Boolean(
+    CANDIDE_FORWARDING.rpcUrl &&
+      CANDIDE_FORWARDING.apiKey &&
+      CANDIDE_FORWARDING.custodialWithdrawer &&
+      CANDIDE_FORWARDING.sourceChainIds.length,
+  );
+
 /**
  * KYC gate. Local demos auto-approve by default so existing self-contained
  * tests keep running. Production and KYC_AUTO_APPROVE=0 start users in

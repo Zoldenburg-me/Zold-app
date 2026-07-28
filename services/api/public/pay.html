@@ -82,7 +82,7 @@
 
       <div class="qrbox"><img id="qr" alt="QR code of the receiving address" /></div>
 
-      <div class="lbl">RECEIVING ADDRESS</div>
+      <div class="lbl" id="addr-label">RECEIVING ADDRESS</div>
       <div class="addr" id="addr"></div>
       <button id="copy">Copy address</button>
       <button id="open" class="ghost">Open in wallet</button>
@@ -96,7 +96,7 @@
         Send <strong id="note-token">USDC</strong> on <strong id="note-chain">this network</strong>.
         Another token or another network will not reach this account.
       </p>
-      <p class="note">
+      <p class="note" id="privacy-note">
         <strong>This address is public.</strong> Anyone who knows or guesses this handle can find it
         and read its full history and balance on a block explorer. Zold payment pages do not use
         stealth addresses yet, so every payment lands on the same address.
@@ -144,6 +144,11 @@ async function load() {
     $("chip-chain").textContent = chainName(p.chainId);
     $("note-token").textContent = p.token.symbol;
     $("note-chain").textContent = chainName(p.chainId);
+    if (p.addressKind === "forwarding") {
+      $("addr-label").textContent = "FORWARDING DEPOSIT ADDRESS";
+      $("privacy-note").textContent =
+        "This forwarding address is public. Anyone who knows or guesses this handle can inspect deposits to this page. It is not a stealth address and forwards may still be traceable, but the main Safe address is not shown directly.";
+    }
 
     $("copy").onclick = async () => {
       try {
