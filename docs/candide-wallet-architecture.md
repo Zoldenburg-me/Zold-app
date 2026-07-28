@@ -94,7 +94,12 @@ authorizer binding without a verified passkey.
    at passkey registration when `CANDIDE_COSIGNER_ADDRESS` is configured, and
    can now submit a passkey-signed/co-signed deployment UserOperation when
    `CANDIDE_COSIGNER_KEY` is available.
-3. Add recovery setup before enabling real deposits.
+3. Add recovery setup before enabling real deposits. New passkey/co-signer
+   Safe deployments now enable Candide's `SocialRecoveryModule` and add the
+   configured recovery guardian during the first UserOperation when
+   `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` is configured; absent that, it defaults
+   to the co-signer. The lost-passkey initiation/finalization UI is still
+   separate work.
 4. Add one-time allowance setup for transfers.
 5. Replace server-side Safe deployment/signing with client-signed UserOps.
 6. Delete `user.privateKey` from the stored user model.

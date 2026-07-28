@@ -441,14 +441,43 @@ function passkeySafePlan(
   const owner = webauthnOwnerFromJwk(publicKey.jwk);
   if (!owner) return undefined;
   const account = smartAccountForPasskeyCosigner(owner, cosignerAddress);
+  const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
+    ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)
+    : undefined;
   return {
     address: account.accountAddress as `0x${string}`,
     status: "planned",
     threshold: 2,
     cosignerAddress,
     passkeyPublicKey: webauthnOwnerToStore(owner),
+    ...(recoveryGuardianAddress
+      ? {
+          recovery: {
+            moduleAddress: CANDIDE.recoveryModuleAddress,
+            guardianAddress: recoveryGuardianAddress,
+            threshold: 1,
+            status: "planned",
+          },
+        }
+      : {}),
     createdAt: new Date().toISOString(),
     legacyAddress: user.address,
+  };
+}
+
+function activatePasskeySafePlan(plan: NonNullable<User["passkeySafe"]>): User["passkeySafe"] {
+  return {
+    ...plan,
+    status: "active",
+    ...(plan.recovery
+      ? {
+          recovery: {
+            ...plan.recovery,
+            status: "active",
+            enabledAt: new Date().toISOString(),
+          },
+        }
+      : {}),
   };
 }
 
@@ -1259,7 +1288,7 @@ app.post(
         ownerAddress: undefined,
         privateKey: undefined,
         wallet: { type: "candide-safe", deployed: true },
-        passkeySafe: { ...user.passkeySafe, status: "active" },
+        passkeySafe: activatePasskeySafePlan(user.passkeySafe),
       });
       return res.json(publicUser(updated));
     }
@@ -1314,7 +1343,7 @@ app.post(
       ownerAddress: undefined,
       privateKey: undefined,
       wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
-      passkeySafe: { ...user.passkeySafe, status: "active" },
+      passkeySafe: activatePasskeySafePlan(user.passkeySafe),
     });
     res.status(201).json({ ...publicUser(updated), deployOpHash: opHash });
   }),
