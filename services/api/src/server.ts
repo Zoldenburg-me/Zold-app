@@ -366,6 +366,17 @@ function requireKycApproved(user: User, res: express.Response) {
 }
 
 function fundableUserPatch(user: User): Partial<User> {
+  const blocked = custodyBlockerBeforeFunding(user);
+  if (blocked) {
+    return {
+      iban: "",
+      funding: {
+        mode: sandbox ? "sandbox" : "mock",
+        status: "error",
+        detail: blocked,
+      },
+    };
+  }
   if (sandbox) {
     return { funding: { mode: "sandbox", status: "provisioning" } };
   }
@@ -388,12 +399,35 @@ function fundableUserPatch(user: User): Partial<User> {
  * Gated on allowSimulation so local demos and e2e still run end to end
  * without a real authenticator.
  */
-function passkeyRequiredBeforeFunding(user: User): string | null {
-  if (user.passkey?.publicKey) return null;
+function custodyBlockerBeforeFunding(user: User): string | null {
   if (SECURITY.allowSimulation) return null;
+  if (!user.passkey?.publicKey) {
+    return (
+      "a verified passkey is required before an account can be funded — without one there is " +
+      "no way to sign back in, and a lost device key cannot be replaced"
+    );
+  }
+  if (!user.passkeySafe) {
+    return "a passkey/co-signer Safe plan is required before an account can be funded";
+  }
+  if (
+    user.passkeySafe.status !== "active" ||
+    user.address.toLowerCase() !== user.passkeySafe.address.toLowerCase()
+  ) {
+    return "activate the passkey/co-signer Safe before funding this account";
+  }
+  if (user.privateKey || user.ownerAddress) {
+    return "server-held Safe owner keys must be removed before funding this account";
+  }
+  return null;
+}
+
+function passkeyRequiredBeforeFunding(user: User): string | null {
+  const blocked = custodyBlockerBeforeFunding(user);
+  if (!blocked) return null;
   return (
-    "a passkey is required before an account can be funded — without one there is " +
-    "no way to sign back in, and a lost device key cannot be replaced"
+    blocked +
+    (blocked.includes("passkey/co-signer Safe") ? "" : " — complete the passkey Safe setup first")
   );
 }
 
@@ -535,6 +569,8 @@ app.post(
     // applies. Say so plainly rather than accepting the setting and silently
     // refusing every deposit later.
     if (enabled && !requireKycApproved(user, res)) return;
+    const custodyBlocked = enabled ? custodyBlockerBeforeFunding(user) : null;
+    if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
     const updated = store.updateUser(user.id, { autoConvert: enabled });
     res.json({ ...publicUser(updated), ...(await accountBalances(updated.address).catch(() => ({}))) });
   }),
@@ -896,22 +932,42 @@ app.post(
     let user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
-    if (!user.privateKey) return res.status(409).json({ error: "user has no wallet key for address linking" });
-    const privateKey = user.privateKey;
+    const custodyBlocked = custodyBlockerBeforeFunding(user);
+    if (custodyBlocked) {
+      return res.status(409).json({ error: custodyBlocked });
+    }
     const accessToken = await moneriumAccessToken(user);
     const profileId = typeof req.body?.profileId === "string" ? req.body.profileId : user.monerium?.profileId;
 
-    if (!(await isDeployed(user.address))) {
+    if (user.privateKey && !(await isDeployed(user.address))) {
       store.updateUser(user.id, {
         funding: { mode: "sandbox", status: "provisioning", detail: "deploying smart wallet for Monerium" },
       });
-      const opHash = await deploySmartAccount(privateKey);
+      const opHash = await deploySmartAccount(user.privateKey);
       user = store.updateUser(user.id, {
         wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
       });
     }
 
-    const signature = await signMessageAsSafe(privateKey, user.address, LINK_MESSAGE);
+    if (!(await isDeployed(user.address))) {
+      return res.status(409).json({
+        error: "passkey Safe must be deployed before Monerium address linking",
+      });
+    }
+    let signature: `0x${string}`;
+    if (user.privateKey) {
+      signature = await signMessageAsSafe(user.privateKey, user.address, LINK_MESSAGE);
+    } else {
+      const provided = req.body?.signature;
+      if (typeof provided !== "string" || !/^0x[0-9a-fA-F]+$/.test(provided)) {
+        return res.status(409).json({
+          error: "Safe signature required for Monerium address linking",
+          message: LINK_MESSAGE,
+          address: user.address,
+        });
+      }
+      signature = provided as `0x${string}`;
+    }
     await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/addresses", {
       address: user.address,
       signature,
