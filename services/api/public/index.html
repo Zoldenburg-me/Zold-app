@@ -552,6 +552,29 @@
         <div class="error hidden" id="crypto-err"></div>
       </div>
 
+      <div class="card" id="paylink-card">
+        <h2>Payment page</h2>
+        <div class="row2">
+          <div>
+            <label style="margin-top:0">Your handle</label>
+            <input id="handle-input" placeholder="amina" autocapitalize="none" spellcheck="false" />
+          </div>
+          <button id="btn-handle">Claim</button>
+        </div>
+        <div class="detail" id="paylink-row" style="display:none">
+          <span class="k">YOUR LINK</span>
+          <span class="v" id="paylink">—</span>
+          <button class="copybtn" data-copy="paylink">copy</button>
+        </div>
+        <div class="hint">
+          A page anyone can open to pay you in USDC — no account needed on their side. With
+          auto-convert on it lands as euro balance. The address on it is your existing one and is
+          <strong>public</strong>: handles are guessable, so treat it as visible to anyone, and every
+          payment shows up at the same address.
+        </div>
+        <div class="error hidden" id="handle-err"></div>
+      </div>
+
       <div class="card">
         <h2>Transaction history</h2>
         <div id="history"><div class="empty">No transfers yet</div></div>
@@ -728,6 +751,7 @@ function renderUser(u) {
   $("vault-balance").textContent = `€${fmt(u.vaultBalanceEur ?? 0)}`;
   $("address").textContent = u.address;
   renderAutoConvert(u.autoConvert);
+  renderHandle(u.handle);
   const chip = $("fund-chip");
   if (!kycApproved(u)) {
     $("iban").textContent = kycCopy(u.kycStatus, u)[2];
@@ -1071,6 +1095,27 @@ $("link-signin").onclick = async (ev) => {
 	    await api("/api/simulate/sepa-deposit", { iban: user.iban, amountEur: Number($("dep-amount").value) });
 	    await refresh();
   } catch (e) { showErr("dep-err", e); }
+};
+
+/* ---------- payment page ---------- */
+function renderHandle(handle) {
+  const row = $("paylink-row");
+  if (!handle) { row.style.display = "none"; return; }
+  $("handle-input").value = handle;
+  // Shown as an absolute URL because the whole point is pasting it elsewhere.
+  $("paylink").textContent = `${location.origin}/pay/${handle}`;
+  row.style.display = "flex";
+  $("btn-handle").textContent = "Update";
+}
+
+$("btn-handle").onclick = async () => {
+  clearErr("handle-err");
+  try {
+    const handle = $("handle-input").value.trim().toLowerCase();
+    const r = await api(`/api/users/${user.id}/handle`, { handle });
+    user.handle = r.handle;
+    renderHandle(r.handle);
+  } catch (e) { showErr("handle-err", e); }
 };
 
 /* ---------- crypto in ---------- */
