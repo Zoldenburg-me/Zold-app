@@ -21,6 +21,7 @@
     "fp3:test": "tsx scripts/fp3-test.ts",
     "safe-funded:test": "tsx scripts/safe-funded-recovery-test.ts",
     "crypto:test": "tsx scripts/crypto-deposit-test.ts",
+    "pay:test": "tsx scripts/pay-page-test.ts",
     "kyc:test": "tsx scripts/kyc-test.ts",
     "kyc:ui:test": "tsx scripts/kyc-ui-test.ts",
     "audit:deps": "npm audit",
@@ -50,6 +51,7 @@
     "@types/express": "^4.17.25",
     "@types/node": "^22.20.1",
     "hardhat": "^3.11.1",
+    "jsqr": "^1.4.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"
   },

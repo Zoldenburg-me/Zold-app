@@ -36,6 +36,12 @@ Running this repo with sandbox credentials, today:
   live-mid rate check, not KYC-approved, or no deployed Safe to sweep from, the
   deposit is recorded REFUSED with a reason and the tokens stay where they
   landed. `npm run crypto:test` (25 checks).
+- **Payment pages**: an account can claim a handle and share `/pay/<handle>` —
+  a public page with a QR code and the receiving address, in the shape of
+  Fluidkey's `name.fkey.id`. With auto-convert on, a USDC payment arrives as
+  euro balance. Unlike Fluidkey it resolves to the account's ONE address rather
+  than a fresh stealth address per visit, so it is **not private** and the page
+  says so; see docs/payment-pages.md. `npm run pay:test` (20 checks).
 - **Wallets**: each user's account is a Safe smart account, deployed to
   Sepolia through Candide's bundler. Deployment costs the user nothing;
   gas is sponsored. Monerium verifies ownership via EIP-1271, so the IBAN
@@ -119,6 +125,13 @@ Running this repo with sandbox credentials, today:
   not support EURe and the CoW provider is quote-only. So the venue that can
   execute is the mock whose rate we set, which is what the live-mid check
   exists to bound.
+- Payment-page QR codes are decoded by an independent decoder (`jsqr`) in
+  `npm run pay:test`, which is what caught the format-bit placement bug that
+  our own round-trip could not. No phone camera has scanned one, which is a
+  test of contrast and module size rather than of correctness.
+- Payment-page handles are enumerable: 200 vs 404 reveals whether one is
+  claimed. The page tells the payee that anyone who knows or guesses the handle
+  can find their address.
 - Nothing screens the sending address. Converting an unsolicited transfer from
   an unknown counterparty into e-money is a source-of-funds question, and no
   code here answers it.
