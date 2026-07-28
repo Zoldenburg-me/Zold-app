@@ -157,6 +157,19 @@ app.use("/api", (req, res, next) => {
 });
 
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public");
+/**
+ * Landing page at /, the app at /app.
+ *
+ * These are declared BEFORE express.static, which would otherwise answer / with
+ * index.html and never reach them. The app's own assets are absolute
+ * (/device.js, /vendor/...), so it serves correctly from any path — but the
+ * import map depends on that, so do not make them relative.
+ *
+ * /landing.html still resolves, because links to it exist in the wild.
+ */
+app.get("/", (_req, res) => res.sendFile(path.join(pub, "landing.html")));
+app.get(["/app", "/app/"], (_req, res) => res.sendFile(path.join(pub, "index.html")));
+
 app.use(express.static(pub));
 
 type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
@@ -787,7 +800,8 @@ app.get(
         detail: "select a Monerium profile and activate an app IBAN",
       },
     });
-    res.redirect("/?monerium=connected");
+    // The app lives at /app, not /, since the landing page took the root.
+    res.redirect("/app?monerium=connected");
   }),
 );
 
