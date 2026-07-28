@@ -149,13 +149,14 @@ try {
     assert.equal(r.status, 401);
   });
 
-  await t("the operator approves — WITHOUT enabling simulation", async () => {
+  await t("the operator approves — WITHOUT enabling simulation or funding a legacy Safe", async () => {
     const r = await call("/api/kyc/review", { userId, decision: "approved" }, OPERATOR_TOKEN);
     assert.equal(r.status, 200, `operator review failed: ${r.data.error ?? ""}`);
     assert.equal(r.data.kycStatus, "approved");
     assert.equal(r.data.kyc.provider, "manual", "an operator decision is not a mock decision");
-    assert.match(r.data.iban, /^IS14/, "approval should issue funding");
-    assert.equal(r.data.funding.status, "active");
+    assert.equal(r.data.iban, "", "production approval must not issue funding to a legacy server-owned Safe");
+    assert.equal(r.data.funding.status, "error");
+    assert.match(r.data.funding.detail, /passkey|Safe/i);
   });
 
   await t("the approved user can now quote — the deadlock is broken", async () => {

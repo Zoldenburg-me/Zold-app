@@ -50,7 +50,9 @@ Running this repo with sandbox credentials, today:
   passkey/co-signer Safe that will replace the legacy server-owned Safe once
   client-signed UserOps are wired. With `CANDIDE_COSIGNER_ADDRESS` and
   `CANDIDE_COSIGNER_KEY` configured, onboarding can deploy that Safe through a
-  passkey-signed, co-signed Candide UserOperation before funding.
+  passkey-signed, co-signed Candide UserOperation before funding. In
+  non-simulation mode, funding is refused until that passkey/co-signer Safe is
+  active and the server-held owner key is gone.
 - **Bank payouts**: the exit rail places real Monerium redeem orders —
   EURe is burned and a SEPA transfer goes out. (It needs EURe in the Safe
   to succeed; without it, the order is rejected and the app falls back to a
@@ -144,9 +146,9 @@ Running this repo with sandbox credentials, today:
   `data/db.json` in plaintext, next to the Safe keys. A real deployment must
   leave it with the KYC provider and keep only a reference here. Document
   images are refused outright rather than stored.
-- Users' Safe owner keys live in `data/db.json`. Custodial, plainly.
-  The passkey is an auth factor today; making it the Safe's owner is the
-  planned fix.
+- Local/demo users' legacy Safe owner keys live in `data/db.json`. Custodial,
+  plainly. Production funding now gates on the passkey/co-signer Safe being
+  active so new real-funded accounts do not start life on that legacy key.
 
 ## Running it
 
