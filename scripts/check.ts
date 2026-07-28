@@ -20,6 +20,7 @@ const scripts = [
   "kyc:ui:test",
   "monerium:oauth:test",
   "sepa:test",
+  "crypto:test",
   "fp3:test",
   "fp4:test",
   "fp5:test",
