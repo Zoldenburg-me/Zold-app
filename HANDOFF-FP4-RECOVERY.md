@@ -211,6 +211,13 @@ the Monerium redeem message. Both are fully determined the moment the user
 approves (amount + IBAN), so nothing is signed blind. Design this in from the
 start rather than discovering it in step 1.
 
+Current branch status: SEPA transfer creation now fixes the Monerium redeem
+message, amount, IBAN and remittance memo at the same time as the device
+authorization terms, and `/authorize` can persist a user-time
+`moneriumRedeemSignature`. The adapter submits that signature when present,
+falling back to the legacy server Safe key only for existing transitional
+accounts. The remaining work is a browser/passkey signer for that message.
+
 **Monerium address linking** (`monerium-sandbox.ts:92`) also signs as the Safe,
 but happens during onboarding while the user is present — so it is fine, as long
 as the passkey ceremony is part of provisioning.
