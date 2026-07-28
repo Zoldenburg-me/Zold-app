@@ -585,9 +585,15 @@ app.post(
 /**
  * Public payee lookup. No session: this is the point of a payment link.
  *
- * The response comes from publicPayee, which is an allowlist — see pay.ts. The
- * 404 is deliberately identical whether the handle is unclaimed or malformed,
- * so the endpoint cannot be walked to learn which handles exist.
+ * The response comes from publicPayee, which is an allowlist — see pay.ts.
+ *
+ * Handles ARE enumerable, and pretending otherwise would be worse than the
+ * fact: 200 versus 404 tells a caller whether a handle is claimed, and handles
+ * are short and human-readable by design. That is true of every username
+ * system and is not fixable while the link is meant to be shared, so the
+ * honest response is to say it — the page tells the payee that anyone who
+ * knows OR GUESSES the handle can find the address, rather than implying the
+ * link is a secret.
  */
 app.get(
   "/api/pay/:handle",

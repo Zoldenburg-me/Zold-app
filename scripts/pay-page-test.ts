@@ -8,6 +8,14 @@
  * Run: npm run pay:test
  */
 import assert from "node:assert/strict";
+import * as jsqrModule from "jsqr";
+
+/** jsqr ships CommonJS, so the callable is the default under Node ESM. */
+const jsQR = ((jsqrModule as any).default ?? jsqrModule) as (
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+) => { data: string } | null;
 import {
   HandleError,
   normaliseDisplayName,
@@ -162,14 +170,14 @@ const MASKS: Array<(r: number, c: number) => boolean> = [
 function readBack(matrix: boolean[][]): string {
   const size = matrix.length;
   const version = (size - 17) / 4;
-  // Format bits 0..4 sit at row 8, columns 0..4 (masked by 0b101010000010010).
+  // The vertical strip in column 8 holds one copy of the 15 format bits:
+  // rows 0-5, then 7-8, then the bottom seven.
   const formatXor = 0b101010000010010;
   let raw = 0;
-  for (let i = 0; i <= 5; i++) raw |= (matrix[8][i] ? 1 : 0) << i;
-  raw |= (matrix[8][7] ? 1 : 0) << 6;
-  raw |= (matrix[8][8] ? 1 : 0) << 7;
-  raw |= (matrix[7][8] ? 1 : 0) << 8;
-  for (let i = 9; i <= 14; i++) raw |= (matrix[14 - i][8] ? 1 : 0) << i;
+  for (let i = 0; i < 15; i++) {
+    const row = i < 6 ? i : i < 8 ? i + 1 : size - 15 + i;
+    raw |= (matrix[row][8] ? 1 : 0) << i;
+  }
   const unmasked = raw ^ formatXor;
   const mask = (unmasked >> 10) & 0b111;
 
@@ -188,6 +196,58 @@ function readBack(matrix: boolean[][]): string {
   for (let i = 0; i < len; i++) bytes.push(take(12 + i * 8, 8));
   return new TextDecoder().decode(Uint8Array.from(bytes));
 }
+
+/** Rasterise the matrix the way the SVG renders it, so an off-the-shelf
+ *  decoder sees what a camera would. */
+function rasterise(matrix: boolean[][], scale = 8, quiet = 4) {
+  const span = (matrix.length + quiet * 2) * scale;
+  const px = new Uint8ClampedArray(span * span * 4).fill(255);
+  for (let r = 0; r < matrix.length; r++) {
+    for (let c = 0; c < matrix.length; c++) {
+      if (!matrix[r][c]) continue;
+      for (let dy = 0; dy < scale; dy++) {
+        for (let dx = 0; dx < scale; dx++) {
+          const y = (r + quiet) * scale + dy;
+          const x = (c + quiet) * scale + dx;
+          const i = (y * span + x) * 4;
+          px[i] = px[i + 1] = px[i + 2] = 0;
+        }
+      }
+    }
+  }
+  return { px, span };
+}
+
+/**
+ * THE test for this encoder — an independent decoder, not our own reader.
+ *
+ * The first version of placeFormat transposed the two format strips and
+ * reversed the bit order along row 8. Every check we had still passed, because
+ * they all read the matrix back through our own conventions; a real scanner
+ * could not tell which mask had been applied and refused the code outright.
+ * Reading it back with jsqr is the only check that would have caught it, so it
+ * runs on the payloads the product actually emits.
+ */
+check("an independent decoder reads the code — jsqr, not our own reader", () => {
+  for (const payload of [
+    "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1", // an address, what the page emits
+    "0x1806ECe0a808ACba40E4068d87a0010228A66722",
+    "z".repeat(100), // a longer payload, into a higher version
+  ]) {
+    const { px, span } = rasterise(qrMatrix(payload));
+    const decoded = jsQR(px, span, span);
+    assert.ok(decoded, `jsqr could not decode ${payload.slice(0, 20)}…`);
+    assert.equal(decoded.data, payload);
+  }
+});
+
+check("the QR served by the payment page decodes, at its rendered size", () => {
+  // qrSvg is what /api/pay/:handle/qr.svg returns; check the same matrix.
+  const addr = "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1";
+  assert.ok(qrSvg(addr).includes("<path"), "svg has a path");
+  const { px, span } = rasterise(qrMatrix(addr), 4);
+  assert.equal(jsQR(px, span, span)?.data, addr, "decodes at 4px per module");
+});
 
 check("a QR of an address round-trips back to the same string", () => {
   const addr = "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1";

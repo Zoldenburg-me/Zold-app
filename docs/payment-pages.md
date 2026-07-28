@@ -54,6 +54,15 @@ Two other things it would touch, worth knowing before starting:
   on stealth accounts need sweeping into the funding account before they are
   spendable, which is the same Safe-move problem the crypto-in sweep has.
 
+## Handles are enumerable
+
+`200` versus `404` on `/api/pay/:handle` tells a caller whether a handle is
+claimed, and handles are short and human-readable by design. That is true of
+every username system and cannot be fixed while the link is meant to be
+shared, so it is stated rather than papered over: the page tells the payee that
+anyone who knows **or guesses** the handle can find the address, and no comment
+in the code claims the endpoint resists walking.
+
 ## Handles
 
 Lowercase, 3–30 characters, alphanumeric with internal hyphens, unique
@@ -95,8 +104,17 @@ less.
 A full EIP-681 URI with an amount is ~135 bytes and does not fit in version 6 —
 measured. The encoder throws rather than emitting something unscannable.
 
-**Unverified:** no phone has scanned one of these codes, and no independent
-decoder has read one. `npm run pay:test` reads the matrix back through the same
-module ordering, which proves the bitstream, padding, masking and placement
-agree with each other — it cannot prove the ordering matches the spec. Check
-that before this goes in front of users.
+**Verified by an independent decoder.** `npm run pay:test` rasterises the
+matrix and reads it back with `jsqr`, which is the check that matters: our own
+reader shares our own assumptions and will agree with any self-consistent
+mistake.
+
+It caught a real one. The first version of `placeFormat` transposed the two
+format strips — bits 0-5 belong in column 8, not row 8 — and reversed the bit
+order along row 8, and it wrote over the dark module at `[size-8][8]`. The data
+codewords were perfect, every self-check passed, and no scanner could read the
+result, because nothing could tell which mask had been applied. That is the
+shape of bug a round-trip through your own code cannot find.
+
+Still worth doing once: scanning one with an actual phone camera, which tests
+contrast and module size rather than correctness.
