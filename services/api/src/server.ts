@@ -11,7 +11,7 @@ import {
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { anchorModeEnabled, API_HOST, API_PORT, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, CRYPTO_IN, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
 import { SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type Transfer, type User } from "./store.js";
@@ -34,6 +34,7 @@ import {
   sweepAnchorPayouts,
   sweepStrandedTransfers,
 } from "./orchestrator.js";
+import { startCryptoDepositPoller } from "./adapters/crypto-deposits.js";
 import { isValidVpa } from "./adapters/upi.js";
 import { senderProfileToSep9 } from "./adapters/moneygram.js";
 import { toAlpha3 } from "./stellar/sep9.js";
@@ -510,6 +511,50 @@ app.get(
  * Deliberately text-only: no document images. Those belong with a KYC
  * provider, and this store is plaintext JSON on disk.
  */
+/**
+ * Turn auto-conversion of inbound crypto on or off.
+ *
+ * Session-gated to the account itself: this decides whether someone's USDC
+ * becomes e-money at a rate they will not see beforehand, which is the user's
+ * call and nobody else's. Switching it off does not un-convert anything that
+ * already settled; it only stops future deposits being touched.
+ */
+app.post(
+  "/api/users/:id/auto-convert",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const { enabled } = req.body ?? {};
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "enabled must be true or false" });
+    }
+    // The output is e-money, so the same gate that gates a SEPA deposit
+    // applies. Say so plainly rather than accepting the setting and silently
+    // refusing every deposit later.
+    if (enabled && !requireKycApproved(user, res)) return;
+    const updated = store.updateUser(user.id, { autoConvert: enabled });
+    res.json({ ...publicUser(updated), ...(await accountBalances(updated.address).catch(() => ({}))) });
+  }),
+);
+
+/** What arrived as crypto and what became of it. Read-only; the poller owns
+ *  every state change here. */
+app.get(
+  "/api/users/:id/crypto-deposits",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    res.json({
+      autoConvert: !!user.autoConvert,
+      deposits: store.cryptoDeposits
+        .filter((d) => d.userId === user.id)
+        .sort((a, b) => b.detectedAt.localeCompare(a.detectedAt)),
+    });
+  }),
+);
+
 app.post(
   "/api/users/:id/sender-profile",
   wrap(async (req, res) => {
@@ -1643,6 +1688,12 @@ if (sandbox) {
 } else {
   console.log("monerium: mock mode (set MONERIUM_CLIENT_ID/SECRET in .env for sandbox)");
 }
+/**
+ * Inbound crypto is a chain concern, not a Monerium one, so this runs whether
+ * or not the sandbox is configured. It costs nothing until an account opts in:
+ * with no watched users the poller returns before it ever calls getLogs.
+ */
+if (CRYPTO_IN.enabled) startCryptoDepositPoller();
 app.listen(API_PORT, API_HOST, () => {
   console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
 });
