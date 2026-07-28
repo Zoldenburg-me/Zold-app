@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pay · Zold</title>
+<!-- A payment link is shared, so it gets shared out of a chat window and into
+     a preview card. Nothing here is per-account: the handle is in the URL and
+     the page is public, but the OG text must not imply we vouch for anyone. -->
+<meta name="robots" content="noindex" />
+<style>
+  :root {
+    --bg: #0a0a0c; --card: #121216; --row: #17171c; --border: #24242b; --border2: #2e2e37;
+    --text: #f4f4f6; --muted: #a7a7b2; --faint: #6e6e7a; --pink: #ff2d78; --ok: #5ee9a4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); min-height: 100vh;
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+  }
+  .wrap { width: 100%; max-width: 420px; }
+  .brand { display: flex; align-items: center; gap: .5rem; justify-content: center; margin-bottom: 1.25rem; }
+  .brand .mark { color: var(--pink); font-size: 1.1rem; }
+  .brand .name { font-weight: 700; letter-spacing: -.01em; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem; }
+  .who { text-align: center; margin-bottom: 1.25rem; }
+  .avatar {
+    width: 52px; height: 52px; border-radius: 50%; margin: 0 auto .7rem;
+    background: var(--pink); color: #fff; font-weight: 700; font-size: 1.35rem;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .dn { font-size: 1.1rem; font-weight: 650; }
+  .hd { color: var(--faint); font-size: .82rem; font-family: ui-monospace, Menlo, monospace; }
+  .qrbox { background: #fff; border-radius: 12px; padding: .6rem; width: 216px; margin: 0 auto 1.1rem; }
+  .qrbox img { display: block; width: 200px; height: 200px; }
+  .lbl { font-size: .66rem; font-weight: 700; letter-spacing: .07em; color: var(--faint); margin-bottom: .3rem; }
+  .addr {
+    background: var(--row); border: 1px solid var(--border2); border-radius: 10px;
+    padding: .6rem .7rem; font-family: ui-monospace, Menlo, monospace; font-size: .72rem;
+    word-break: break-all; line-height: 1.5; color: var(--muted);
+  }
+  button {
+    width: 100%; margin-top: .6rem; padding: .7rem; border-radius: 10px; border: 0;
+    background: var(--pink); color: #fff; font-weight: 650; font-size: .9rem; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  button.ghost { background: var(--row); color: var(--text); border: 1px solid var(--border2); }
+  .meta { display: flex; gap: .5rem; justify-content: center; margin: 1rem 0 0; flex-wrap: wrap; }
+  .chip {
+    background: var(--row); border: 1px solid var(--border2); border-radius: 999px;
+    padding: .25rem .6rem; font-size: .7rem; color: var(--muted);
+  }
+  .note { margin-top: 1rem; font-size: .72rem; color: var(--faint); line-height: 1.55; }
+  .note strong { color: var(--muted); font-weight: 600; }
+  .missing { text-align: center; padding: 1rem 0; }
+  .missing h1 { font-size: 1.05rem; margin: 0 0 .4rem; }
+  .missing p { color: var(--faint); font-size: .84rem; margin: 0; }
+  .hidden { display: none; }
+  .foot { text-align: center; margin-top: 1rem; font-size: .7rem; color: var(--faint); }
+  .foot a { color: var(--faint); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><span class="mark">▽</span><span class="name">Zold</span></div>
+
+  <div class="card">
+    <div id="loading" class="missing"><p>Loading…</p></div>
+
+    <div id="notfound" class="missing hidden">
+      <h1>No such payment page</h1>
+      <p>This link does not point at an account. Check the address you were given.</p>
+    </div>
+
+    <div id="payee" class="hidden">
+      <div class="who">
+        <div class="avatar" id="avatar">?</div>
+        <div class="dn" id="dn"></div>
+        <div class="hd" id="hd"></div>
+      </div>
+
+      <div class="qrbox"><img id="qr" alt="QR code of the receiving address" /></div>
+
+      <div class="lbl">RECEIVING ADDRESS</div>
+      <div class="addr" id="addr"></div>
+      <button id="copy">Copy address</button>
+      <button id="open" class="ghost">Open in wallet</button>
+
+      <div class="meta">
+        <span class="chip" id="chip-token"></span>
+        <span class="chip" id="chip-chain"></span>
+      </div>
+
+      <p class="note">
+        Send <strong id="note-token">USDC</strong> on <strong id="note-chain">this network</strong>.
+        Another token or another network will not reach this account.
+      </p>
+      <p class="note">
+        <strong>This address is not private.</strong> Every payment arrives at the same address, and
+        anyone with this link can see all of them on a block explorer.
+      </p>
+    </div>
+  </div>
+
+  <div class="foot">Zoldenburg · <a href="/">zold</a></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const show = (id) => $(id).classList.remove("hidden");
+const hide = (id) => $(id).classList.add("hidden");
+/* The payee comes from our own API, but it is rendered into the DOM as text
+   rather than markup regardless — a display name is free text somebody chose. */
+const CHAINS = { 1: "Ethereum", 137: "Polygon", 100: "Gnosis", 8453: "Base", 84532: "Base Sepolia", 80002: "Polygon Amoy", 31337: "local chain" };
+
+function chainName(id) { return CHAINS[id] || `chain ${id}`; }
+
+/* EIP-681, built here so the button reflects whatever the API returned rather
+   than a second copy of the token address baked into the page. */
+function paymentUri(p) {
+  return `ethereum:${p.token.address}@${p.chainId}/transfer?address=${p.address}`;
+}
+
+async function load() {
+  const handle = decodeURIComponent(location.pathname.replace(/^\/pay\//, "")).trim();
+  try {
+    const res = await fetch(`/api/pay/${encodeURIComponent(handle)}`);
+    if (!res.ok) throw new Error("not found");
+    const p = await res.json();
+    hide("loading");
+    show("payee");
+
+    const label = p.displayName || p.handle;
+    $("avatar").textContent = label.trim()[0].toUpperCase();
+    $("dn").textContent = label;
+    $("hd").textContent = `@${p.handle}`;
+    document.title = `Pay ${label} · Zold`;
+
+    $("addr").textContent = p.address;
+    $("qr").src = `/api/pay/${encodeURIComponent(p.handle)}/qr.svg`;
+    $("chip-token").textContent = p.token.symbol;
+    $("chip-chain").textContent = chainName(p.chainId);
+    $("note-token").textContent = p.token.symbol;
+    $("note-chain").textContent = chainName(p.chainId);
+
+    $("copy").onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(p.address);
+        $("copy").textContent = "Copied";
+        setTimeout(() => ($("copy").textContent = "Copy address"), 1400);
+      } catch { /* clipboard refused; the address is on screen to select */ }
+    };
+    $("open").onclick = () => { location.href = paymentUri(p); };
+  } catch {
+    hide("loading");
+    show("notfound");
+  }
+}
+load();
+</script>
+</body>
+</html>
