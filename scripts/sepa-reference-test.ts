@@ -4,7 +4,12 @@
  * Pure functions, no chain and no API. Run: npm run sepa:test
  */
 import assert from "node:assert/strict";
-import { paymentMemo, toSepaCharset, SEPA_REMITTANCE_MAX } from "../services/api/src/sepa.js";
+import {
+  moneriumRedeemMessage,
+  paymentMemo,
+  toSepaCharset,
+  SEPA_REMITTANCE_MAX,
+} from "../services/api/src/sepa.js";
 
 const ID = "7494cd64-4e25-417d-8a43-b2d2f7d1bfed";
 let n = 0;
@@ -76,6 +81,18 @@ check("truncation does not leave a dangling slash at the cut", () => {
   const memo = paymentMemo(ID, "w".repeat(120) + "/" + "w".repeat(60));
   assert.ok(!/\/ Zold/.test(memo), memo);
   assert.ok(memo.length <= SEPA_REMITTANCE_MAX);
+});
+
+check("Monerium redeem text is fixed from transfer-time terms", () => {
+  assert.deepEqual(
+    moneriumRedeemMessage(39.01, "de89 3704 0044 0532 0130 00", "2026-07-28T09:00:00.000Z"),
+    {
+      amount: "39.01",
+      iban: "DE89370400440532013000",
+      issuedAt: "2026-07-28T09:00:00.000Z",
+      message: "Send EUR 39.01 to DE89370400440532013000 at 2026-07-28T09:00:00.000Z",
+    },
+  );
 });
 
 console.log(`\nSEPA REFERENCE TEST PASSED — ${n} checks`);

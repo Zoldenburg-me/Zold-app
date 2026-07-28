@@ -75,3 +75,27 @@ export function paymentMemo(transferId: string, reference?: string): string {
   const room = SEPA_REMITTANCE_MAX - suffix.length;
   return `${stripReservedSlashes(ref.slice(0, room)).trimEnd()}${suffix}`;
 }
+
+export function moneriumAmountString(amountEur: number): string {
+  return amountEur.toFixed(2).replace(/\.?0+$/, "");
+}
+
+export function normalizeIban(iban: string): string {
+  return iban.replace(/\s/g, "").toUpperCase();
+}
+
+export function moneriumRedeemMessage(amountEur: number, iban: string, issuedAt: string): {
+  amount: string;
+  iban: string;
+  issuedAt: string;
+  message: string;
+} {
+  const amount = moneriumAmountString(amountEur);
+  const normalizedIban = normalizeIban(iban);
+  return {
+    amount,
+    iban: normalizedIban,
+    issuedAt,
+    message: `Send EUR ${amount} to ${normalizedIban} at ${issuedAt}`,
+  };
+}

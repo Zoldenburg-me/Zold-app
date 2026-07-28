@@ -26,6 +26,7 @@ import {
 } from "./monerium-client.js";
 import { simulateSepaDeposit } from "./monerium.js";
 import { deploySmartAccount, isDeployed, signMessageAsSafe } from "../wallet/candide.js";
+import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
 
 let client: MoneriumClient | null = null;
 
@@ -147,16 +148,20 @@ export async function refreshPendingIban(user: User): Promise<User> {
   return user;
 }
 
-/** Canonical amount string: same value in the order body and signed message. */
-function amountString(amountEur: number): string {
-  return amountEur.toFixed(2).replace(/\.?0+$/, "");
-}
-
 export interface SepaCounterpart {
   iban: string;
   firstName: string;
   lastName: string;
   country: string;
+}
+
+export interface RedeemAuthorization {
+  amount: string;
+  iban: string;
+  issuedAt: string;
+  message: string;
+  memo?: string;
+  signature: `0x${string}`;
 }
 
 /**
@@ -170,12 +175,29 @@ export async function redeemToIban(
   amountEur: number,
   counterpart: SepaCounterpart,
   memo?: string,
+  authorization?: RedeemAuthorization,
 ): Promise<MoneriumOrder> {
-  if (!user.privateKey) throw new Error("user has no wallet key to sign with");
-  const amount = amountString(amountEur);
-  const iban = counterpart.iban.replace(/\s/g, "").toUpperCase();
-  const message = `Send EUR ${amount} to ${iban} at ${new Date().toISOString()}`;
-  const signature = await signMessageAsSafe(user.privateKey, user.address, message);
+  const amount = moneriumAmountString(amountEur);
+  const iban = normalizeIban(counterpart.iban);
+  let message: string;
+  let signature: `0x${string}`;
+  if (authorization) {
+    const expected = moneriumRedeemMessage(amountEur, iban, authorization.issuedAt);
+    if (
+      authorization.amount !== amount ||
+      authorization.iban !== iban ||
+      authorization.message !== expected.message ||
+      (authorization.memo ?? "") !== (memo ?? "")
+    ) {
+      throw new Error("Monerium redeem authorization does not match this payout");
+    }
+    message = authorization.message;
+    signature = authorization.signature;
+  } else {
+    if (!user.privateKey) throw new Error("user has no wallet key to sign with");
+    message = moneriumRedeemMessage(amountEur, iban, new Date().toISOString()).message;
+    signature = await signMessageAsSafe(user.privateKey, user.address, message);
+  }
   return getClient().placeOrder({
     address: user.address,
     chain: MONERIUM.chain,

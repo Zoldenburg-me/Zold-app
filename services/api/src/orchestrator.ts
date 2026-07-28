@@ -819,6 +819,9 @@ export async function executeSepaTransfer(
           payoutEur,
           counterpart,
           paymentMemo(transfer.id, transfer.reference),
+          transfer.moneriumRedeem?.signature
+            ? { ...transfer.moneriumRedeem, signature: transfer.moneriumRedeem.signature }
+            : undefined,
         );
         return store.updateTransfer(transfer.id, {
           state: "PAYOUT_SUBMITTED",

@@ -249,6 +249,21 @@ export interface Transfer {
     deadline: number; // unix seconds
     authorizedAt?: string;
   };
+  /**
+   * Monerium redeem approval fixed at transfer creation for SEPA payouts.
+   * Once the Safe is passkey/co-signer owned, the browser must sign this while
+   * the user is present; the server can then submit the redeem later without a
+   * database Safe owner key.
+   */
+  moneriumRedeem?: {
+    amount: string;
+    iban: string;
+    issuedAt: string;
+    message: string;
+    memo?: string;
+    signature?: `0x${string}`;
+    signedAt?: string;
+  };
   txs: { step: string; hash: string }[];
   /** Internal JIT liquidity execution details. This records how value moved
    *  into the settlement asset for the payout rail; it is not a swap product. */
