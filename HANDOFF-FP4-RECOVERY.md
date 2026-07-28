@@ -108,7 +108,9 @@ deterministic 2-of-2 passkey/co-signer Safe address when
 deployment UserOperation, and the API co-signs/submits it when
 `CANDIDE_COSIGNER_KEY` is configured. Activation refuses if the legacy Safe or
 vault ledger still holds funds, because that requires a migration rather than a
-blind address switch.
+blind address switch. Non-simulation funding now also refuses to issue an IBAN,
+enable auto-convert, or activate Monerium funding until the passkey/co-signer
+Safe is the active account and the server-held owner key has been removed.
 
 **Verify:** deploy a Safe whose only owner is a passkey, then have it produce a
 signature that `RemitVault._isValidSignature` accepts. If that round-trip works,

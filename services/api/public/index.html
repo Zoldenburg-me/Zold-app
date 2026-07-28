@@ -1011,8 +1011,16 @@ async function createAccount(withPasskey) {
             setTimeout(() => rej(new Error("no response from your device — is a screen lock set up?")), 30000),
           ),
         ]);
+        if (user.passkeySafe && user.passkeySafe.status !== "active") {
+          await Promise.race([
+            activatePasskeySafe(),
+            new Promise((_, rej) =>
+              setTimeout(() => rej(new Error("passkey Safe deployment did not finish in time")), 45000),
+            ),
+          ]);
+        }
       } catch (e) {
-        showErr("pk-err", new Error(`passkey setup didn't complete (${e.message}) — continuing without it; you can add one later`));
+        showErr("pk-err", new Error(`passkey custody setup didn't complete (${e.message}) — continuing without funding; you can finish setup later`));
         await new Promise((r) => setTimeout(r, 1600));
       }
     }
