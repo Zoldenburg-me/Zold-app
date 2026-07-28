@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { smartAccountFor, smartAccountForPasskeyCosigner, webauthnOwnerFromJwk } from "../services/api/src/wallet/candide.js";
+import {
+  CANDIDE,
+  passkeySafeRecoverySetupTransactions,
+  smartAccountFor,
+  smartAccountForPasskeyCosigner,
+  webauthnOwnerFromJwk,
+  webauthnOwnerToStore,
+} from "../services/api/src/wallet/candide.js";
 
 const b64url = (hex: string) => Buffer.from(hex, "hex").toString("base64url");
 
@@ -24,6 +31,27 @@ assert.notEqual(
   smartAccountFor(cosigner).accountAddress.toLowerCase(),
   safe.accountAddress.toLowerCase(),
   "2-of-2 passkey/co-signer Safe must not collapse to the legacy single-EOA Safe",
+);
+const recoverySetup = passkeySafeRecoverySetupTransactions({
+  address: safe.accountAddress as `0x${string}`,
+  cosignerAddress: cosigner,
+  passkeyPublicKey: webauthnOwnerToStore(passkeyOwner),
+  recovery: {
+    moduleAddress: CANDIDE.recoveryModuleAddress,
+    guardianAddress: cosigner,
+    threshold: 1,
+  },
+});
+assert.equal(recoverySetup.length, 2, "recovery setup should enable the module and add one guardian");
+assert.equal(
+  recoverySetup[0].to.toLowerCase(),
+  safe.accountAddress.toLowerCase(),
+  "the Safe itself must receive the enableModule call",
+);
+assert.equal(
+  recoverySetup[1].to.toLowerCase(),
+  CANDIDE.recoveryModuleAddress.toLowerCase(),
+  "the recovery module must receive the guardian setup call",
 );
 assert.equal(webauthnOwnerFromJwk({ ...jwk, crv: "P-384" }), null);
 
