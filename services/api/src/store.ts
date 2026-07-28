@@ -73,6 +73,13 @@ export interface User {
     threshold: 2;
     cosignerAddress: `0x${string}`;
     passkeyPublicKey: { x: string; y: string };
+    recovery?: {
+      moduleAddress: `0x${string}`;
+      guardianAddress: `0x${string}`;
+      threshold: 1;
+      status: "planned" | "active";
+      enabledAt?: string;
+    };
     createdAt: string;
     legacyAddress?: `0x${string}`;
   };

@@ -188,11 +188,18 @@ Guardians replace *owners* on the **same Safe, same address, same funds**. This
 is the only mechanism that actually recovers an account — anything that deploys
 a new Safe produces a different address and recovers nothing.
 
-Design question that is genuinely open: **who are the guardians?** For a
-remittance product the recipient on the other end of the corridor is a natural
-candidate — they already have a phone and a reason to care. Safe Foundation's
-consumer research found users would not fund an account without *rehearsable*
-recovery.
+Current branch status: new passkey/co-signer Safe deployments can now enable
+Candide's `SocialRecoveryModule` and add a threshold-1 recovery guardian in the
+same first UserOperation as deployment. By default the guardian is the
+configured co-signer; `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` can point at a
+separate guardian service when available. This gives crypto-only users a
+non-KYC recovery primitive, but the co-signer/guardian still cannot sign normal
+payments alone because the Safe owner threshold remains 2-of-2.
+
+Remaining work: the actual lost-passkey ceremony is not a product flow yet. The
+recovery UI/API must collect a replacement passkey owner, have the guardian
+confirm recovery through the module, wait the module's grace period, finalize
+the owner replacement, and expose cancellation/status clearly.
 
 ### Step 5 — delete `user.privateKey`
 

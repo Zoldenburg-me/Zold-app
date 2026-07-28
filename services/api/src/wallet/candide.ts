@@ -14,6 +14,8 @@
 import {
   SafeMultiChainSigAccountV1 as SafeAccount,
   Erc7677Paymaster,
+  SocialRecoveryModule,
+  SocialRecoveryModuleGracePeriodSelector,
   fromPrivateKey,
   fromSafeWebauthn,
   getSafeMessageEip712Data,
@@ -32,6 +34,11 @@ export const CANDIDE = {
   rpcUrl: process.env.CANDIDE_RPC_URL ?? "https://ethereum-sepolia-rpc.publicnode.com",
   cosignerAddress: (process.env.CANDIDE_COSIGNER_ADDRESS ?? "") as `0x${string}` | "",
   cosignerKey: (process.env.CANDIDE_COSIGNER_KEY ?? "") as `0x${string}` | "",
+  recoveryGuardianAddress: (process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS ??
+    process.env.CANDIDE_COSIGNER_ADDRESS ??
+    "") as `0x${string}` | "",
+  recoveryModuleAddress: (process.env.CANDIDE_RECOVERY_MODULE_ADDRESS ??
+    SocialRecoveryModuleGracePeriodSelector.After3Days) as `0x${string}`,
 };
 
 /** Deterministic Safe address for an owner — offline, no network. */
@@ -73,6 +80,11 @@ export interface PasskeySafeDeploymentPlan {
   address: `0x${string}`;
   cosignerAddress: `0x${string}`;
   passkeyPublicKey: { x: string; y: string };
+  recovery?: {
+    moduleAddress: `0x${string}`;
+    guardianAddress: `0x${string}`;
+    threshold: 1;
+  };
 }
 
 export interface BrowserPasskeyAssertion {
@@ -91,7 +103,9 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
   if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
     throw new Error("passkey Safe plan does not match the deterministic account address");
   }
-  if (await isDeployed(account.accountAddress)) {
+  const recoverySetup = passkeySafeRecoverySetupTransactions(plan);
+  const deployed = await isDeployed(account.accountAddress);
+  if (deployed && !recoverySetup.length) {
     return {
       safeAddress: account.accountAddress as `0x${string}`,
       challenge: "0x",
@@ -100,7 +114,7 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
   }
   const noop: MetaTransaction = { to: account.accountAddress, value: 0n, data: "0x" };
   const userOperation = await account.createUserOperation(
-    [noop],
+    recoverySetup.length ? recoverySetup : [noop],
     CANDIDE.rpcUrl,
     CANDIDE.bundlerUrl,
     { expectedSigners: [passkeyOwner, plan.cosignerAddress] },
@@ -119,6 +133,18 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
   };
 }
 
+export function passkeySafeRecoverySetupTransactions(plan: PasskeySafeDeploymentPlan): MetaTransaction[] {
+  if (!plan.recovery) return [];
+  const recovery = new SocialRecoveryModule(plan.recovery.moduleAddress);
+  return [
+    recovery.createEnableModuleMetaTransaction(plan.address),
+    recovery.createAddGuardianWithThresholdMetaTransaction(
+      plan.recovery.guardianAddress,
+      BigInt(plan.recovery.threshold),
+    ),
+  ];
+}
+
 export async function submitPasskeySafeDeployment(
   plan: PasskeySafeDeploymentPlan,
   userOperation: UserOperationV9,
@@ -126,11 +152,11 @@ export async function submitPasskeySafeDeployment(
 ): Promise<string | null> {
   const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
   const account = smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress);
-  if (await isDeployed(account.accountAddress)) return null;
   if (!CANDIDE.cosignerKey) throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign passkey Safe deployment");
+  const deployed = await isDeployed(account.accountAddress);
   const passkeySigner = fromSafeWebauthn({
     publicKey: passkeyOwner,
-    isInit: true,
+    isInit: !deployed,
     accountClass: SafeAccount,
     getAssertion: async () => webauthnSignatureFromAssertion(assertion),
   });
