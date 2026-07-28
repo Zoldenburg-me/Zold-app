@@ -11,7 +11,7 @@ import {
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { anchorModeEnabled, API_HOST, API_PORT, CRYPTO_IN, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type Transfer, type User } from "./store.js";
@@ -35,6 +35,8 @@ import {
   sweepStrandedTransfers,
 } from "./orchestrator.js";
 import { startCryptoDepositPoller } from "./adapters/crypto-deposits.js";
+import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from "./pay.js";
+import { qrSvg } from "./qr.js";
 import { isValidVpa } from "./adapters/upi.js";
 import { senderProfileToSep9 } from "./adapters/moneygram.js";
 import { toAlpha3 } from "./stellar/sep9.js";
@@ -537,6 +539,89 @@ app.post(
     res.json({ ...publicUser(updated), ...(await accountBalances(updated.address).catch(() => ({}))) });
   }),
 );
+
+/** The chain and token a payment page asks payers to use. USDC because that is
+ *  what the crypto-in converter knows how to turn into spendable euros. */
+function payChain() {
+  return {
+    chainId: CHAIN_ID,
+    token: { symbol: "USDC", address: addrs().usdc, decimals: 6 },
+  };
+}
+
+/**
+ * Claim or change the account's payment handle.
+ *
+ * KYC-gated, like every other route that leads to money arriving: an inbound
+ * payment is only useful once it can be converted, and conversion refuses on an
+ * unapproved account. Gating here means the public page never has to expose an
+ * account's review status to explain itself.
+ */
+app.post(
+  "/api/users/:id/handle",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!requireKycApproved(user, res)) return;
+    let handle: string;
+    let displayName: string | undefined;
+    try {
+      handle = normaliseHandle(req.body?.handle);
+      displayName = normaliseDisplayName(req.body?.displayName);
+    } catch (e: any) {
+      if (e instanceof HandleError) return res.status(400).json({ error: e.message });
+      throw e;
+    }
+    const taken = store.findUserByHandle(handle);
+    if (taken && taken.id !== user.id) {
+      return res.status(409).json({ error: `"${handle}" is already taken` });
+    }
+    const updated = store.updateUser(user.id, { handle, payDisplayName: displayName });
+    res.json({ handle: updated.handle, displayName: updated.payDisplayName, payUrl: `/pay/${handle}` });
+  }),
+);
+
+/**
+ * Public payee lookup. No session: this is the point of a payment link.
+ *
+ * The response comes from publicPayee, which is an allowlist — see pay.ts.
+ *
+ * Handles ARE enumerable, and pretending otherwise would be worse than the
+ * fact: 200 versus 404 tells a caller whether a handle is claimed, and handles
+ * are short and human-readable by design. That is true of every username
+ * system and is not fixable while the link is meant to be shared, so the
+ * honest response is to say it — the page tells the payee that anyone who
+ * knows OR GUESSES the handle can find the address, rather than implying the
+ * link is a secret.
+ */
+app.get(
+  "/api/pay/:handle",
+  wrap(async (req, res) => {
+    const user = store.findUserByHandle(req.params.handle);
+    if (!user?.handle) return res.status(404).json({ error: "no such payment page" });
+    res.json(publicPayee(user, payChain()));
+  }),
+);
+
+/** The QR image, rendered server-side. Carries the bare address: see the note
+ *  in pay.ts on why the EIP-681 URI is a link instead. */
+app.get(
+  "/api/pay/:handle/qr.svg",
+  wrap(async (req, res) => {
+    const user = store.findUserByHandle(req.params.handle);
+    if (!user?.handle) return res.status(404).json({ error: "no such payment page" });
+    res.type("image/svg+xml");
+    res.setHeader("cache-control", "public, max-age=300");
+    res.send(qrSvg(user.address));
+  }),
+);
+
+/** The page itself. Served for any handle shape — the client fetches the payee
+ *  and renders its own not-found, so a bad link still gets a real page. */
+app.get("/pay/:handle", (_req, res) => {
+  res.sendFile(path.join(pub, "pay.html"));
+});
 
 /** What arrived as crypto and what became of it. Read-only; the poller owns
  *  every state change here. */
