@@ -86,6 +86,16 @@ export interface User {
     attestation?: string;
     createdAt: string;
   };
+  /**
+   * Convert inbound crypto (USDC) to EURe automatically.
+   *
+   * Opt-in, and absent means off. Converting someone's USDC without being
+   * asked is not a neutral default: they may have meant to hold it, the
+   * conversion is irreversible at whatever rate the venue gave, and turning a
+   * crypto balance into e-money is a different regulatory object from holding
+   * the token. So the account has to say yes.
+   */
+  autoConvert?: boolean;
   /** mock: IBAN issued locally. sandbox states track Monerium provisioning. */
   funding?: {
     mode: "mock" | "sandbox";
@@ -159,6 +169,39 @@ export type TransferState =
   | "MANUAL_REVIEW"
   | "FAILED"
   | "REFUNDED";
+
+/**
+ * One inbound crypto transfer seen at a user's account.
+ *
+ * Recorded BEFORE anything is moved or credited, so a crash between detection
+ * and conversion leaves a record to resume from rather than a deposit nobody
+ * knows arrived. `txHash` + `logIndex` is the natural identity of an ERC-20
+ * transfer and is what makes reprocessing a no-op.
+ *
+ * REFUSED is a resting state, not a failure to retry: the euros were never
+ * credited and the tokens are still the user's, sitting where they landed.
+ */
+export interface CryptoDeposit {
+  id: string;
+  userId: string;
+  chainId: number;
+  token: "USDC";
+  txHash: string;
+  logIndex: number;
+  /** Raw token units (USDC is 6dp), as a string — JSON has no bigint. */
+  amountUnits: string;
+  amountUsdc: number;
+  state: "DETECTED" | "CONVERTED" | "REFUSED";
+  /** Why it was refused, in words a support person can act on. */
+  reason?: string;
+  creditedEur?: number;
+  /** The venue that filled it and the rate it filled at, for the receipt. */
+  provider?: string;
+  rate?: number;
+  txs: { step: string; hash: string }[];
+  detectedAt: string;
+  updatedAt: string;
+}
 
 export interface Transfer {
   id: string;
@@ -286,6 +329,16 @@ interface Db {
   processedMoneriumOrders: string[];
   /** Monerium webhook delivery ids already accepted. */
   processedMoneriumWebhooks: string[];
+  /** Inbound crypto seen at a user's account, and what became of it. */
+  cryptoDeposits: CryptoDeposit[];
+  /**
+   * Last block scanned for inbound crypto, per chain id.
+   *
+   * Kept as a string because JSON has no bigint. Per chain because
+   * deployments.json is too: a testnet cursor must not be read as a local one
+   * and skip every block on a fresh chain.
+   */
+  cryptoDepositCursor: Record<string, string>;
 }
 
 /**
@@ -310,6 +363,8 @@ let db: Db = {
   sessions: [],
   processedMoneriumOrders: [],
   processedMoneriumWebhooks: [],
+  cryptoDeposits: [],
+  cryptoDepositCursor: {},
 };
 
 export function initStore() {
@@ -319,6 +374,8 @@ export function initStore() {
     db.sessions ??= [];
     db.processedMoneriumOrders ??= [];
     db.processedMoneriumWebhooks ??= [];
+    db.cryptoDeposits ??= [];
+    db.cryptoDepositCursor ??= {};
     for (const q of db.quotes) q.status ??= "OPEN";
     for (const s of db.sessions) s.expiresAt ??= new Date(Date.parse(s.createdAt) + 24 * 60 * 60 * 1000).toISOString();
     pruneSessions();
@@ -487,5 +544,35 @@ export const store = {
   },
   findTransfer(id: string) {
     return db.transfers.find((t) => t.id === id);
+  },
+
+  get cryptoDeposits() {
+    return db.cryptoDeposits;
+  },
+  /** An ERC-20 transfer is identified by its tx and position in it. */
+  findCryptoDeposit(txHash: string, logIndex: number) {
+    return db.cryptoDeposits.find(
+      (d) => d.txHash.toLowerCase() === txHash.toLowerCase() && d.logIndex === logIndex,
+    );
+  },
+  addCryptoDeposit(d: CryptoDeposit) {
+    db.cryptoDeposits.push(d);
+    persist();
+    return d;
+  },
+  updateCryptoDeposit(id: string, patch: Partial<CryptoDeposit>) {
+    const d = db.cryptoDeposits.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown crypto deposit ${id}`);
+    Object.assign(d, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return d;
+  },
+  cryptoDepositCursor(chainId: number): bigint | undefined {
+    const v = db.cryptoDepositCursor[String(chainId)];
+    return v === undefined ? undefined : BigInt(v);
+  },
+  setCryptoDepositCursor(chainId: number, block: bigint) {
+    db.cryptoDepositCursor[String(chainId)] = block.toString();
+    persist();
   },
 };

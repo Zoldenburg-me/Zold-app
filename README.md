@@ -28,6 +28,14 @@ Running this repo with sandbox credentials, today:
   the user's Safe) and `vaultBalanceEur` (the RemitVault ledger). `balanceEur`
   remains the primary spendable balance for the current vault-first executor:
   the vault ledger.
+- **Crypto in**: an account can opt in to having inbound USDC converted to
+  EURe automatically (`autoConvert`). A poller reads ERC-20 Transfer logs
+  addressed to the account, swaps USDC→EURe through the same liquidity seam the
+  corridor uses, and credits the vault — so a crypto holder can fund a payout
+  without a bank. It refuses rather than guesses: below the dust floor, off a
+  live-mid rate check, not KYC-approved, or no deployed Safe to sweep from, the
+  deposit is recorded REFUSED with a reason and the tokens stay where they
+  landed. `npm run crypto:test` (25 checks).
 - **Wallets**: each user's account is a Safe smart account, deployed to
   Sepolia through Candide's bundler. Deployment costs the user nothing;
   gas is sponsored. Monerium verifies ownership via EIP-1271, so the IBAN
@@ -103,6 +111,17 @@ Running this repo with sandbox credentials, today:
   Nor can the path run locally at all — the Safe move goes through Candide's
   bundler and paymaster, which no hardhat node provides, so only what happens
   after the debit is covered by tests.
+- Crypto in has never converted a real deposit. On a local chain the account's
+  Safe is counterfactual, so there is nothing to sweep from and every deposit
+  is refused for that reason — detection, conversion, pricing and crediting are
+  all covered by tests, the sweep between them is not. On a real chain the
+  sweep works but only `fx-swapper` can execute the USDC→EURe leg: Bebop does
+  not support EURe and the CoW provider is quote-only. So the venue that can
+  execute is the mock whose rate we set, which is what the live-mid check
+  exists to bound.
+- Nothing screens the sending address. Converting an unsolicited transfer from
+  an unknown counterparty into e-money is a source-of-funds question, and no
+  code here answers it.
 - FX rates come from constants, not an oracle. The swap contract is a
   stand-in for a DEX route.
 - The UPI partner and the MoneyGram payout (in mock mode) return generated
