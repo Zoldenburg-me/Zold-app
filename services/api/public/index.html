@@ -979,24 +979,12 @@ async function createAccount(withPasskey) {
             setTimeout(() => rej(new Error("no response from your device — is a screen lock set up?")), 30000),
           ),
         ]);
-        try {
-          await activatePasskeySafe();
-        } catch (e) {
-          console.warn("passkey Safe activation deferred:", e.message);
-        }
       } catch (e) {
         showErr("pk-err", new Error(`passkey setup didn't complete (${e.message}) — continuing without it; you can add one later`));
         await new Promise((r) => setTimeout(r, 1600));
       }
     }
     if (!kycApproved(user)) return enterKycReview(pendingInfo.name);
-    // After the passkey, so the spending key can be locked behind it.
-    try {
-      await registerDeviceKey(u);
-    } catch (e) {
-      // Non-fatal at onboarding — sending will retry and explain.
-      console.warn("device key registration deferred:", e.message);
-    }
     enterProvisioning(pendingInfo.name);
   } catch (e) { showErr("pk-err", e); }
 }
