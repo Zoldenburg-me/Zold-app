@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { anchorModeEnabled, API_HOST, API_PORT, CRYPTO_IN, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
-import { SEPA_REMITTANCE_MAX } from "./sepa.js";
+import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type Transfer, type User } from "./store.js";
 import { createQuote, isExpired } from "./fx.js";
 import { issueIban, simulateSepaDeposit } from "./adapters/monerium.js";
@@ -1389,6 +1389,7 @@ app.post(
     }
     if (!(await assertDailyCap(user, quote.sendEur, res))) return;
 
+    const createdAt = new Date().toISOString();
     const transfer: Transfer = {
       id: randomUUID(),
       userId: user.id,
@@ -1406,9 +1407,17 @@ app.post(
       receiveInr: quote.receiveInr,
       fundingSource,
       txs: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt,
+      updatedAt: createdAt,
     };
+    if (transfer.rail === "sepa" && transfer.recipientIban) {
+      const payoutEur = transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR;
+      const redeem = moneriumRedeemMessage(payoutEur, transfer.recipientIban, createdAt);
+      transfer.moneriumRedeem = {
+        ...redeem,
+        memo: paymentMemo(transfer.id, transfer.reference),
+      };
+    }
     // FP4: the account must be bound to a device key before it can spend.
     const authorizer = await vaultAuthorizerOf(user.address);
     if (authorizer === "0x0000000000000000000000000000000000000000") {
@@ -1445,6 +1454,15 @@ app.post(
           destination,
           deadline,
         }),
+        moneriumRedeem: transfer.moneriumRedeem
+          ? {
+              amount: transfer.moneriumRedeem.amount,
+              iban: transfer.moneriumRedeem.iban,
+              issuedAt: transfer.moneriumRedeem.issuedAt,
+              message: transfer.moneriumRedeem.message,
+              memo: transfer.moneriumRedeem.memo,
+            }
+          : undefined,
         submitTo: `/api/transfers/${transfer.id}/authorize`,
       },
     });
@@ -1529,6 +1547,16 @@ app.post(
     if (Date.now() / 1000 > transfer.auth.deadline) {
       return res.status(410).json({ error: "authorization window expired, create a new transfer" });
     }
+    let executableTransfer = transfer;
+    const redeemSignature = req.body?.moneriumRedeemSignature;
+    if (redeemSignature !== undefined) {
+      if (!transfer.moneriumRedeem) {
+        return res.status(400).json({ error: "this transfer has no Monerium redeem authorization terms" });
+      }
+      if (typeof redeemSignature !== "string" || !/^0x[0-9a-fA-F]+$/.test(redeemSignature)) {
+        return res.status(400).json({ error: "moneriumRedeemSignature must be a 0x signature" });
+      }
+    }
     const user = store.findUser(transfer.userId)!;
     if (!requireKycApproved(user, res)) return;
     // Claim the authorization before anything awaits. Two parallel submissions
@@ -1539,13 +1567,24 @@ app.post(
     if (!store.claimAuthorization(transfer.id)) {
       return res.status(409).json({ error: "authorization already submitted for this transfer" });
     }
+    if (typeof redeemSignature === "string" && transfer.moneriumRedeem) {
+      executableTransfer = store.updateTransfer(transfer.id, {
+        moneriumRedeem: {
+          ...transfer.moneriumRedeem,
+          signature: redeemSignature as `0x${string}`,
+          signedAt: new Date().toISOString(),
+        },
+      });
+    } else {
+      executableTransfer = store.findTransfer(transfer.id)!;
+    }
     const auth = { deadline: transfer.auth.deadline, signature: signature as `0x${string}` };
     const result =
-      transfer.rail === "sepa"
-        ? await executeSepaTransfer(transfer, user, auth)
-        : transfer.rail === "upi"
-          ? await executeUpiTransfer(transfer, user, auth)
-          : await executeTransfer(transfer, user, auth);
+      executableTransfer.rail === "sepa"
+        ? await executeSepaTransfer(executableTransfer, user, auth)
+        : executableTransfer.rail === "upi"
+          ? await executeUpiTransfer(executableTransfer, user, auth)
+          : await executeTransfer(executableTransfer, user, auth);
     res.status(result.state === "FAILED" ? 502 : 200).json(result);
   }),
 );
