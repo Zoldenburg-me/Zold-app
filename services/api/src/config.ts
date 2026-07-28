@@ -380,6 +380,43 @@ export const RATES = {
 // keeping them equal, and FP5's binding check compared only two of them — so
 // editing the quote's copy alone would have promised a rate the swap could not
 // deliver, silently.
+/**
+ * Crypto in: USDC arriving at a user's account, converted to EURe.
+ *
+ * Per-user opt-in (`User.autoConvert`) decides WHO is watched; these settings
+ * decide how. The kill switch exists because this path credits e-money off an
+ * on-chain event, so an operator needs to be able to stop it without a deploy.
+ */
+export const CRYPTO_IN = {
+  enabled: process.env.CRYPTO_IN_ENABLED !== "0",
+  pollMs: Number(process.env.CRYPTO_IN_POLL_MS ?? 15_000),
+  /**
+   * Below this, converting costs more than it delivers — a dust transfer would
+   * be eaten by the swap and leave the user with a confusing €0.00 credit. Left
+   * in place and recorded rather than converted.
+   */
+  minUsdc: Number(process.env.CRYPTO_IN_MIN_USDC ?? 1),
+  /**
+   * How far the venue's rate may sit from the live mid before we refuse.
+   *
+   * This is the same discipline as FP5's quote binding, for the same reason:
+   * the FxSwapper's rate is one WE set, so without an independent check we
+   * could credit e-money at a price no market would give — the exact failure
+   * the live-rates work existed to end.
+   */
+  maxDriftBps: Number(process.env.CRYPTO_IN_MAX_DRIFT_BPS ?? 100),
+  /**
+   * Blocks to wait before treating a deposit as real. A reorg that unwinds the
+   * incoming transfer after we have credited EURe is an unbacked credit, and
+   * the vault has no way to claw it back. Zero on hardhat, where a mined block
+   * is final and waiting would just hang the tests.
+   */
+  confirmations: Number(process.env.CRYPTO_IN_CONFIRMATIONS ?? (IS_LOCAL_CHAIN ? 0 : 2)),
+  /** Cap on a single getLogs span, so a long outage cannot ask an RPC for a
+   *  range it will refuse. The cursor catches up over several ticks instead. */
+  maxBlockSpan: BigInt(process.env.CRYPTO_IN_MAX_BLOCK_SPAN ?? 5_000),
+};
+
 export const FX = {
   SPREAD_BPS: 50, // our FX spread
   FIXED_FEE_EUR: 0.99,
