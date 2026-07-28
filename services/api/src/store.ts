@@ -87,6 +87,18 @@ export interface User {
     createdAt: string;
   };
   /**
+   * Public payment-page handle, e.g. `alice` serving /pay/alice.
+   *
+   * Unique case-insensitively and claimed by the account itself. Stored
+   * lowercase so two handles cannot differ only in case, which would let one
+   * impersonate the other.
+   */
+  handle?: string;
+  /** Optional name shown on the payment page. Deliberately separate from
+   *  `name`: that one may be a legal name from KYC, and claiming a handle is
+   *  not consent to publish it at a guessable URL. */
+  payDisplayName?: string;
+  /**
    * Convert inbound crypto (USDC) to EURe automatically.
    *
    * Opt-in, and absent means off. Converting someone's USDC without being
@@ -546,6 +558,11 @@ export const store = {
     s.lastUsedAt = new Date(now).toISOString();
     persist();
     return s;
+  },
+  /** Handles are compared case-insensitively; they are stored lowercase. */
+  findUserByHandle(handle: string) {
+    const h = handle.trim().toLowerCase();
+    return db.users.find((u) => u.handle === h);
   },
   findUser(id: string) {
     return db.users.find((u) => u.id === id);
