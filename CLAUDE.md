@@ -105,8 +105,8 @@
   bridgeUsdcToStellar now REFUSES to burn when the Stellar recipient cannot
   receive the asset. `npm run stellar:setup [-- --fix]` is the operator step
   (MoneyGram's own guide: fund with XLM, add the trustline, acquire the asset);
-  npm run trustline:test covers it live. NOTE MG_ANCHOR_ASSET still defaults to
-  SRT (testanchor's token) — MoneyGram needs USDC.
+  npm run trustline:test covers it live. MoneyGram domains now default
+  MG_ANCHOR_ASSET to USDC and reject non-USDC assets at startup.
 - CCTP: dry-run by default; CCTP_LIVE=1 + funded CCTP_BURNER_KEY executes
   (faucet.circle.com for testnet USDC). Stellar CCTP domain is 27; mint
   recipient AND destinationCaller must be the CctpForwarder.

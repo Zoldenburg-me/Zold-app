@@ -200,8 +200,8 @@ database and its own local chain, and cannot touch Base Sepolia state.
 - **CCTP has never executed live.** Dry-run by default; `CCTP_LIVE=1` plus a
   funded burner is needed.
 - **No funded Stellar treasury holding the anchor asset exists**, so a cash
-  payout will reach the anchor and stop. `MG_ANCHOR_ASSET` still defaults to SRT
-  (testanchor's token); MoneyGram needs USDC.
+  payout will reach the anchor and stop. MoneyGram domains now default
+  `MG_ANCHOR_ASSET` to USDC and reject non-USDC assets at startup.
 - **The RFQ/JIT liquidity provider has never talked to real Bebop.** Its tests
   run against a stub. Default is the local swapper.
 - **testanchor caps withdrawals at 10 units**, so corridor-sized cash transfers
