@@ -3,660 +3,405 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Zold — an account for money on both sides of the border</title>
-<meta name="description" content="Zold is an account for people whose lives don't fit in one country: your own IBAN, euros held by a regulated e-money institution, and three ways to land them abroad at the real exchange rate." />
-<meta property="og:title" content="Zold — money for both sides of the border" />
-<meta property="og:description" content="Your own IBAN, euros held by a regulated e-money institution, and one visible fee. No hidden margin in the exchange rate." />
+<title>Zold — euros in, local payouts out</title>
+<meta name="description" content="Zold gives you a personal IBAN, holds your euros as regulated e-money in your own smart account, and sends them out by SEPA bank transfer, cash pickup in Kenya, or UPI in India." />
+<meta property="og:title" content="Zold — euros in, local payouts out" />
+<meta property="og:description" content="Deposit by IBAN, hold your balance in a smart account, and send to bank accounts, cash pickup, or UPI through a clear approval flow." />
 <meta property="og:type" content="website" />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 18'%3E%3Cpath d='M1.6 1.4 L18.4 1.4 L10 16.2 Z' fill='none' stroke='%23E8399B' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 18'%3E%3Cpath d='M1.6 1.4 L18.4 1.4 L10 16.2 Z' fill='none' stroke='%23ed188d' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+<style>
+  html, body { margin: 0; padding: 0; background: #08080b; }
+  body { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; color: #ededf0; }
+  * { box-sizing: border-box; }
+  a { color: #ededf0; text-decoration: none; }
+  a:hover { color: #ed188d; }
+  a.pill:hover { background: #ff2d9e; color: #fff; }
+  a.ghost:hover { border-color: #4a4a55; color: #ededf0; }
+  a:focus-visible { outline: 2px solid #ed188d; outline-offset: 2px; }
+  ::selection { background: rgba(237,24,141,.3); }
+  img { max-width: 100%; }
+  @keyframes zfloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+  @keyframes zpulse { 0%,100% { opacity: .55; } 50% { opacity: .9; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
 </head>
 <body>
 
-<style>
-  :root {
-    --ink: #0B0A0F;
-    --surface: #14121B;
-    --surface-2: #1B1825;
-    --edge: #2A2533;
-    --text: #F2EFF6;
-    --dim: #8B8496;
-    --send: #E8399B;
-    --arrive: #35D6A4;
-    --warn: #E8B339;
+<div style="background:#08080b; color:#ededf0; overflow:hidden; padding-bottom:0">
 
-    --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-
-    --gut: clamp(1.25rem, 4vw, 3rem);
-    --maxw: 1080px;
-  }
-
-  @media (prefers-color-scheme: light) {
-    :root {
-      --ink: #F7F5F2; --surface: #FFFFFF; --surface-2: #F1EEF4; --edge: #DCD6E2;
-      --text: #16131C; --dim: #6B6478; --send: #C81E7E; --arrive: #128A63; --warn: #9A7212;
-    }
-  }
-  :root[data-theme="light"] {
-    --ink: #F7F5F2; --surface: #FFFFFF; --surface-2: #F1EEF4; --edge: #DCD6E2;
-    --text: #16131C; --dim: #6B6478; --send: #C81E7E; --arrive: #128A63; --warn: #9A7212;
-  }
-  :root[data-theme="dark"] {
-    --ink: #0B0A0F; --surface: #14121B; --surface-2: #1B1825; --edge: #2A2533;
-    --text: #F2EFF6; --dim: #8B8496; --send: #E8399B; --arrive: #35D6A4; --warn: #E8B339;
-  }
-
-  * { box-sizing: border-box; }
-
-  body {
-    margin: 0; background: var(--ink); color: var(--text);
-    font-family: var(--sans); font-size: 17px; line-height: 1.6;
-    -webkit-font-smoothing: antialiased;
-  }
-
-  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--gut); }
-
-  /* the rail — the corridor money travels down */
-  .rail-page { position: relative; }
-  .rail-page::before {
-    content: ""; position: absolute; left: var(--gut); top: 0; bottom: 0; width: 1px;
-    background: linear-gradient(180deg, transparent, var(--edge) 6%, var(--edge) 94%, transparent);
-  }
-  @media (min-width: 900px) { .rail-page::before { left: calc((100vw - var(--maxw)) / 2 + var(--gut)); } }
-
-  .stop { position: relative; padding: clamp(3.5rem, 9vw, 6.5rem) 0; }
-  .stop > .wrap > .inner { padding-left: clamp(1.75rem, 5vw, 3.25rem); }
-  .stop::before {
-    content: ""; position: absolute; left: calc(var(--gut) - 4px);
-    top: clamp(3.9rem, 9.6vw, 7rem);
-    width: 9px; height: 9px; border-radius: 50%;
-    background: var(--ink); border: 1px solid var(--dim);
-  }
-  @media (min-width: 900px) { .stop::before { left: calc((100vw - var(--maxw)) / 2 + var(--gut) - 4px); } }
-  .stop[data-node="send"]::before { border-color: var(--send); background: var(--send); }
-  .stop[data-node="arrive"]::before { border-color: var(--arrive); background: var(--arrive); }
-
-  .eyebrow {
-    font: 600 0.6875rem/1 var(--sans); letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--dim); display: block; margin-bottom: 1.1rem;
-  }
-
-  h1 {
-    font: 800 clamp(2.5rem, 6.6vw, 4.75rem)/0.95 var(--sans);
-    letter-spacing: -0.045em; text-wrap: balance; margin: 0 0 1.4rem;
-  }
-  h2 {
-    font: 700 clamp(1.55rem, 3.4vw, 2.4rem)/1.08 var(--sans);
-    letter-spacing: -0.032em; text-wrap: balance; margin: 0 0 1rem;
-  }
-  h3 { font: 650 1.0625rem/1.3 var(--sans); letter-spacing: -0.012em; margin: 0 0 0.4rem; }
-  p { margin: 0 0 1.1rem; max-width: 62ch; color: var(--dim); }
-  p.lead { color: var(--text); font-size: clamp(1.0625rem, 1.9vw, 1.28rem); line-height: 1.5; }
-  strong { color: var(--text); font-weight: 650; }
-
-  /* masthead + the ▽ mark */
-  .masthead { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.5rem 0 0; }
-  .mark { display: flex; align-items: center; gap: 0.5rem; font-weight: 750; letter-spacing: -0.035em; font-size: 1.25rem; }
-  .mark svg { display: block; flex: none; }
-  .mark .tri { fill: none; stroke: var(--send); stroke-width: 1.7; stroke-linejoin: round; }
-  .masthead .by { color: var(--dim); font-size: 0.8125rem; }
-
-  /* hero */
-  .hero { padding-top: clamp(2.75rem, 7vw, 5rem); }
-  .hero-grid { display: grid; gap: 2.5rem; align-items: start; }
-  @media (min-width: 940px) { .hero-grid { grid-template-columns: 1.05fr 0.95fr; gap: 3.5rem; } }
-
-  /* the receipt — real rate, one fee, shown up front */
-  .receipt {
-    background: var(--surface); border: 1px solid var(--edge); border-radius: 4px;
-    padding: clamp(1.25rem, 3vw, 1.75rem);
-    font-family: var(--mono); font-size: 0.875rem; font-variant-numeric: tabular-nums;
-  }
-  .receipt .row { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: 0.5rem 0; }
-  .receipt .row + .row { border-top: 1px dashed var(--edge); }
-  .receipt .k { color: var(--dim); }
-  .receipt .v { color: var(--text); }
-  .receipt .spread .v { color: var(--send); }
-  .receipt .out { border-top: 1px solid var(--edge); margin-top: 0.35rem; padding-top: 0.9rem; }
-  .receipt .out .k { color: var(--text); font-family: var(--sans); font-weight: 650; font-size: 0.9375rem; }
-  .receipt .out .v { color: var(--arrive); font-size: clamp(1.3rem, 3.2vw, 1.7rem); font-weight: 600; letter-spacing: -0.02em; }
-  .receipt .amt-in { display: flex; align-items: baseline; gap: 0.4rem; margin-bottom: 0.9rem; }
-  .receipt .amt-in input {
-    width: 5.5ch; background: transparent; border: none; border-bottom: 1px solid var(--edge);
-    color: var(--send); font: inherit; font-size: clamp(1.3rem, 3.2vw, 1.7rem); font-weight: 600;
-    letter-spacing: -0.02em; padding: 0 0 2px; text-align: right;
-  }
-  .receipt .amt-in input:focus { outline: none; border-bottom-color: var(--send); }
-  .receipt .amt-in .cur { color: var(--send); font-size: clamp(1.3rem, 3.2vw, 1.7rem); font-weight: 600; }
-  .receipt .amt-in .to { color: var(--dim); font-family: var(--sans); font-size: 0.8125rem; margin-left: auto; }
-  .dest { display: flex; margin: 0 0 1.2rem; border: 1px solid var(--edge); border-radius: 3px; overflow: hidden; }
-  .dest button {
-    flex: 1; background: transparent; border: none; color: var(--dim);
-    font: 600 0.75rem/1 var(--sans); letter-spacing: 0.03em; padding: 0.6rem 0.5rem; cursor: pointer;
-  }
-  .dest button + button { border-left: 1px solid var(--edge); }
-  .dest button[aria-pressed="true"] { background: var(--surface-2); color: var(--text); }
-  .dest button:focus-visible { outline: 2px solid var(--send); outline-offset: -2px; }
-
-  .cta-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-top: 1.75rem; }
-  .btn {
-    display: inline-block; background: var(--send); color: #fff;
-    font: 650 0.9375rem/1 var(--sans); padding: 0.85rem 1.3rem;
-    border-radius: 3px; text-decoration: none; border: 1px solid var(--send);
-  }
-  .btn:hover { filter: brightness(1.08); }
-  .btn.ghost { background: transparent; color: var(--text); border-color: var(--edge); }
-  .btn:focus-visible { outline: 2px solid var(--arrive); outline-offset: 2px; }
-  .note { color: var(--dim); font-size: 0.8125rem; }
-
-  /* the three things an account does */
-  .triptych { display: grid; gap: 1px; background: var(--edge); border: 1px solid var(--edge); border-radius: 4px; overflow: hidden; margin-top: 2rem; }
-  @media (min-width: 760px) { .triptych { grid-template-columns: repeat(3, 1fr); } }
-  .cell { background: var(--surface); padding: 1.6rem 1.4rem; }
-  .cell .verb {
-    font: 800 clamp(1.5rem, 3vw, 1.9rem)/1 var(--sans); letter-spacing: -0.035em;
-    display: block; margin-bottom: 0.7rem;
-  }
-  .cell:nth-child(1) .verb { color: var(--arrive); }
-  .cell:nth-child(2) .verb { color: var(--text); }
-  .cell:nth-child(3) .verb { color: var(--send); }
-  .cell p { font-size: 0.9375rem; margin: 0; }
-  .cell .meta { display: block; margin-top: 0.9rem; font-family: var(--mono); font-size: 0.75rem; color: var(--dim); }
-
-  /* destinations */
-  .rails { display: grid; gap: 1px; background: var(--edge); border: 1px solid var(--edge); border-radius: 4px; overflow: hidden; margin-top: 2rem; }
-  @media (min-width: 720px) { .rails { grid-template-columns: repeat(3, 1fr); } }
-  .rail-card { background: var(--surface); padding: 1.5rem 1.35rem; }
-  .rail-card .where { font: 600 0.6875rem/1 var(--sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--arrive); margin-bottom: 0.85rem; display: block; }
-  .rail-card p { font-size: 0.9375rem; margin: 0; }
-  .rail-card .speed { display: block; margin-top: 0.9rem; font-family: var(--mono); font-size: 0.75rem; color: var(--dim); }
-
-  /* custody */
-  .split { display: grid; gap: 1.5rem; margin-top: 2rem; }
-  @media (min-width: 760px) { .split { grid-template-columns: 1fr 1fr; gap: 2.5rem; } }
-  .claim { border-left: 2px solid var(--send); padding-left: 1.1rem; }
-  .claim.neg { border-left-color: var(--edge); }
-  .claim h3 {
-    font-family: var(--mono); font-size: 0.75rem; font-weight: 500;
-    text-transform: uppercase; letter-spacing: 0.09em; color: var(--dim);
-  }
-  .claim p { color: var(--text); font-size: 1rem; margin: 0; }
-
-  /* price */
-  .ptable { width: 100%; border-collapse: collapse; margin-top: 1.75rem; font-variant-numeric: tabular-nums; }
-  .ptable th, .ptable td { text-align: left; padding: 0.7rem 0.9rem 0.7rem 0; border-bottom: 1px solid var(--edge); font-size: 0.9375rem; }
-  .ptable th { font: 600 0.6875rem/1 var(--sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); }
-  .ptable td:last-child, .ptable th:last-child { text-align: right; padding-right: 0; font-family: var(--mono); }
-  .ptable tr:last-child td { border-bottom: none; font-weight: 650; }
-  .ptable tr:last-child td:last-child { color: var(--arrive); }
-  .tscroll { overflow-x: auto; }
-
-  /* honest ledger */
-  /* trust strip: icon + wordmark, drawn inline so nothing is hotlinked from a
-     partner's CDN and the page still works offline */
-  .trust { border-block: 1px solid var(--edge); background: var(--surface);
-           margin-top: clamp(2.5rem, 6vw, 4rem); }
-  /* Indented to match .stop > .wrap > .inner so the badges line up with the
-     body copy rather than sitting under the rail. */
-  .trust .inner-strip { max-width: var(--maxw); margin: 0 auto;
-           padding: 1.4rem var(--gut);
-           padding-left: calc(var(--gut) + clamp(1.75rem, 5vw, 3.25rem));
-           display: flex; flex-wrap: wrap; align-items: center; gap: 1.1rem 2.4rem; }
-  .trust .lbl { font: 600 0.6875rem/1 var(--sans); letter-spacing: .13em;
-                text-transform: uppercase; color: var(--dim); }
-  .badge { display: flex; align-items: center; gap: .6rem; color: var(--text);
-           font: 650 0.9375rem/1.2 var(--sans); letter-spacing: -0.01em; }
-  .badge svg { color: var(--dim); flex: none; }
-  .badge .sub { display: block; font: 400 0.75rem/1.2 var(--sans); color: var(--dim); letter-spacing: 0; }
-
-  /* regulators */
-  .regs { display: grid; gap: 1px; background: var(--edge); border: 1px solid var(--edge);
-          border-radius: 4px; overflow: hidden; margin-top: 2rem; }
-  /* auto-fit, not a fixed 1fr 1fr: with a single entry a hardcoded second
-     column left an empty box beside the card. Adding a second partner later
-     splits it again without touching this. */
-  @media (min-width: 720px) { .regs { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); } }
-  .reg { background: var(--surface); padding: 1.5rem 1.35rem; }
-  .reg .who { font: 600 1.0625rem/1.3 var(--sans); }
-  .reg .lic { font: 400 0.8125rem/1.5 var(--mono); color: var(--dim); margin-top: .5rem; }
-  .reg .for { font: 400 0.9375rem/1.55 var(--sans); margin-top: .85rem; }
-  .reg .by  { font: 600 0.6875rem/1.3 var(--sans); letter-spacing: .1em; text-transform: uppercase;
-              color: var(--arrive); display: block; margin-top: .3rem; }
-  .reg-head { display: flex; align-items: center; gap: .9rem; margin-bottom: .9rem; }
-  .reg .crest { color: var(--arrive); flex: none; }
-  .notbank { border: 1px solid var(--edge); border-left: 3px solid var(--warn);
-             background: var(--surface); padding: 1.15rem 1.25rem; border-radius: 4px; margin-top: 1.6rem; }
-  /* how money moves — collapsed by default so the page stays calm */
-  .steps { margin-top: 2rem; border: 1px solid var(--edge); border-radius: 4px; background: var(--surface); }
-  .steps summary { cursor: pointer; padding: 1.1rem 1.25rem; font: 600 1rem/1.3 var(--sans);
-                   list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-  .steps summary::-webkit-details-marker { display: none; }
-  .steps summary::after { content: "＋"; color: var(--dim); font-weight: 400; }
-  .steps[open] summary::after { content: "－"; }
-  .steps summary:focus-visible { outline: 2px solid var(--send); outline-offset: -2px; }
-  .steps .body { padding: 0 1.25rem 1.35rem; }
-  .steps ol { margin: 0; padding-left: 1.1rem; }
-  .steps li { font: 400 0.9375rem/1.65 var(--sans); margin-bottom: .7rem; }
-  .steps li b { font-weight: 600; }
-  .ledger { display: grid; gap: 1px; background: var(--edge); border: 1px solid var(--edge); border-radius: 4px; overflow: hidden; margin-top: 2rem; }
-  @media (min-width: 760px) { .ledger { grid-template-columns: 1fr 1fr; } }
-  .lcol { background: var(--surface); padding: 1.5rem 1.35rem; }
-  .lcol > .h { font: 600 0.6875rem/1 var(--sans); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 1rem; display: block; }
-  .lcol.live > .h { color: var(--arrive); }
-  .lcol.soon > .h { color: var(--warn); }
-  .lcol ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.7rem; }
-  .lcol li { font-size: 0.9375rem; color: var(--dim); padding-left: 1.1rem; position: relative; line-height: 1.45; }
-  .lcol li::before { content: ""; position: absolute; left: 0; top: 0.62em; width: 6px; height: 1px; background: currentColor; }
-  .lcol li b { color: var(--text); font-weight: 600; }
-
-  footer { border-top: 1px solid var(--edge); margin-top: clamp(3rem, 8vw, 5rem); padding: 2.5rem 0 3.5rem; }
-  footer .fin { display: flex; flex-wrap: wrap; gap: 1rem 2rem; justify-content: space-between; align-items: baseline; }
-  footer p { font-size: 0.8125rem; margin: 0; max-width: 48ch; }
-</style>
-
-<div class="rail-page">
-  <div class="wrap">
-    <header class="masthead">
-      <div class="mark">
-        <svg width="20" height="18" viewBox="0 0 20 18" aria-hidden="true">
-          <path class="tri" d="M1.6 1.4 L18.4 1.4 L10 16.2 Z" />
-        </svg>
-        Zold
+  <div style="position:sticky; top:0; z-index:40; backdrop-filter:blur(14px); background:rgba(8,8,11,.78); border-bottom:1px solid rgba(35,35,40,.9)">
+    <div style="max-width:1140px; margin:0 auto; padding:14px 24px; display:flex; align-items:center; gap:24px">
+      <a href="#top" style="display:flex; align-items:center; gap:9px; font-size:17px; font-weight:600; letter-spacing:-.03em">
+        <span style="color:#ed188d; font-size:15px; line-height:1">▽</span>Zold
+      </a>
+      <div style="flex:1"></div>
+      <div style="display:flex; align-items:center; gap:26px; font-size:13.5px; color:#8a8a94">
+        <a href="#rails" style="color:#8a8a94">Rails</a>
+        <a href="#account" style="color:#8a8a94">Your money</a>
+        <a href="#approval" style="color:#8a8a94">Approvals</a>
       </div>
-      <span class="by">by Zoldenburg</span>
-    </header>
-  </div>
-
-  <!-- hero: it's an account, and the price is visible -->
-  <section class="stop hero" data-node="send">
-    <div class="wrap"><div class="inner">
-      <div class="hero-grid">
-        <div>
-          <h1>Money for both sides of the border.</h1>
-          <p class="lead">One account for people whose lives span two countries.
-            Get paid into your own IBAN, hold euros, and send them home at the real
-            exchange rate.</p>
-          <div class="cta-row">
-            <a class="btn" href="#early">Get early access</a>
-            <a class="btn ghost" href="#regulated">How it's regulated</a>
-          </div>
-          <p class="note" style="margin-top:0.9rem">Euros held by <a href="#regulated">Monerium hf.</a>,
-            an e-money institution supervised by the Financial Supervisory Authority of the
-            Central Bank of Iceland. Zold is not a bank.</p>
-        </div>
-
-        <div class="receipt" role="group" aria-label="Live transfer quote">
-          <div class="dest" role="group" aria-label="Where it lands">
-            <button type="button" data-rail="cash" aria-pressed="true">Cash · KE</button>
-            <button type="button" data-rail="sepa" aria-pressed="false">Bank · EU</button>
-            <button type="button" data-rail="upi" aria-pressed="false">UPI · IN</button>
-          </div>
-
-          <div class="amt-in">
-            <span class="cur">€</span>
-            <input id="amt" type="text" inputmode="decimal" value="100" aria-label="Amount in euro" />
-            <span class="to" id="to-label">to Nairobi</span>
-          </div>
-
-          <div class="row"><span class="k">Real exchange rate</span><span class="v" id="r-mid">1 EUR = 139.8600 KES</span></div>
-          <div class="row spread"><span class="k">Our margin · 0.50%</span><span class="v" id="r-spread">− 0.6993</span></div>
-          <div class="row"><span class="k">Your rate</span><span class="v" id="r-rate">139.1607</span></div>
-          <div class="row"><span class="k">Fee</span><span class="v" id="r-fee">€0.99</span></div>
-          <div class="row out"><span class="k" id="r-outlabel">Joseph collects</span><span class="v" id="r-out">KES 13,778.30</span></div>
-        </div>
-      </div>
-    </div></div>
-  </section>
-
-  <!-- trust strip. Marks are drawn inline rather than pulled from a partner's
-       site: no hotlinking, no external request, and nothing that misrepresents
-       a logo we were not given. Only names we can actually stand behind. -->
-  <div class="trust">
-    <div class="inner-strip">
-      <span class="lbl">Built on</span>
-
-      <span class="badge">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-          <path d="M12 2.5 L21 6.5 v7c0 5-4 8.5-9 10 -5-1.5-9-5-9-10v-7 Z"
-                fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-          <path d="M8 12.3 l2.8 2.8 L16.2 9.5" fill="none" stroke="currentColor"
-                stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span>Monerium<span class="sub">Regulated e-money</span></span>
-      </span>
-
-      <span class="badge">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-          <circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="1.7"/>
-          <path d="M15.2 9.2a4 4 0 100 5.6M6.6 10.6h5M6.6 13.4h5"
-                fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-        </svg>
-        <span>SEPA Instant<span class="sub">Euro transfers</span></span>
-      </span>
-
-      <span class="badge">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-          <rect x="3.2" y="6.4" width="17.6" height="12.4" rx="2" fill="none"
-                stroke="currentColor" stroke-width="1.7"/>
-          <path d="M8.4 6.4V5.2a3.6 3.6 0 017.2 0v1.2M12 12v2.6"
-                fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-        </svg>
-        <span>Face &amp; fingerprint<span class="sub">No passwords</span></span>
-      </span>
-
-      <span class="badge">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-          <circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="1.7"/>
-          <path d="M2.8 12h18.4M12 2.8c2.4 2.6 3.6 5.8 3.6 9.2s-1.2 6.6-3.6 9.2c-2.4-2.6-3.6-5.8-3.6-9.2S9.6 5.4 12 2.8Z"
-                fill="none" stroke="currentColor" stroke-width="1.5"/>
-        </svg>
-        <span>3 corridors<span class="sub">Kenya · Europe · India</span></span>
-      </span>
+      <a href="/app" style="display:inline-flex; align-items:center; height:36px; padding:0 18px; border-radius:999px; background:#ed188d; color:#fff; font-size:13.5px; font-weight:600; box-shadow:0 6px 22px rgba(237,24,141,.35)" class="pill">Launch app</a>
     </div>
   </div>
 
-  <!-- what the account does -->
-  <section class="stop">
-    <div class="wrap"><div class="inner">
-      <span class="eyebrow">The account</span>
-      <h2>Be paid. Hold it. Send it on.</h2>
-      <p>An account that holds your money between transfers, not just during them.</p>
-
-      <div class="triptych">
-        <div class="cell">
-          <span class="verb">Be paid</span>
-          <p>Your own European IBAN, in your name. Give it to an employer or a client.</p>
-          <span class="meta">Euro accounts</span>
-        </div>
-        <div class="cell">
-          <span class="verb">Hold it</span>
-          <p>No monthly fee, no minimum, no notice period.</p>
-          <span class="meta">Held by a regulated institution</span>
-        </div>
-        <div class="cell">
-          <span class="verb">Send it on</span>
-          <p>Cash in Nairobi, a bank in Lisbon, a shop's code in Mumbai.</p>
-          <span class="meta">One rate, one visible fee</span>
-        </div>
-      </div>
-    </div></div>
-  </section>
-
-  <!-- destinations -->
-  <section class="stop" data-node="arrive">
-    <div class="wrap"><div class="inner">
-      <span class="eyebrow">Where it lands</span>
-      <h2>The person receiving needs nothing.</h2>
-      <p>No app to download, nothing to sign up for. Whatever they already use works.</p>
-
-      <div class="rails">
-        <div class="rail-card">
-          <span class="where">Kenya</span>
-          <h3>Cash at the counter</h3>
-          <p>A code and an ID at the counter. No account, no smartphone.</p>
-          <span class="speed">Cash pickup</span>
-        </div>
-        <div class="rail-card">
-          <span class="where">Europe</span>
-          <h3>Straight to an IBAN</h3>
-          <p>A normal bank transfer to any European account. Arrives in seconds.</p>
-          <span class="speed">SEPA Instant</span>
-        </div>
-        <div class="rail-card">
-          <span class="where">India</span>
-          <h3>Scan and it's paid</h3>
-          <p>Point at a UPI code — a shop, a bill, a person — and rupees arrive.</p>
-          <span class="speed">UPI</span>
-        </div>
-      </div>
-    </div></div>
-  </section>
-
-  <!-- economics -->
-  <section class="stop">
-    <div class="wrap"><div class="inner">
-      <span class="eyebrow">What it costs</span>
-      <h2>The rate you see quoted is the rate we use.</h2>
-      <p>Banks hide their cut inside the exchange rate. We use the mid-market rate,
-        add one margin and one fee, and show you both. Nothing is deducted at the
-        other end.</p>
-
-
-      <p class="note" style="margin-top:1rem">UPI payments carry a €0.29 fee — it's a
-        point-of-sale rail, not a remittance.</p>
-    </div></div>
-  </section>
-
-  <!-- custody / safety -->
-  <section class="stop">
-    <div class="wrap"><div class="inner">
-      <span class="eyebrow">Whose money it is</span>
-      <h2>Nothing moves without your approval.</h2>
-      <p>Every payment is approved on your phone, with your face or fingerprint —
-        for that exact amount, to that exact person. We can pass it on. We cannot
-        write it.</p>
-
-      <div class="split">
-        <div class="claim">
-          <h3>What we can do</h3>
-          <p>Pass on a payment you approved, and pay the cost of sending it.</p>
-        </div>
-        <div class="claim neg">
-          <h3>What we cannot do</h3>
-          <p>Move your balance, change who gets paid, or raise your limits.
-            Not "we promise not to" — the system will not let us.</p>
-        </div>
+  <section id="top" style="position:relative; padding:clamp(56px,9vw,110px) 24px 0; text-align:center">
+    <div style="position:absolute; inset:-140px 0 auto; height:820px; pointer-events:none; background:radial-gradient(52% 48% at 50% 30%, rgba(237,24,141,.30), rgba(237,24,141,.07) 55%, transparent 72%); animation:zpulse 9s ease-in-out infinite"></div>
+    <div style="position:relative; max-width:1140px; margin:0 auto">
+      <div style="display:inline-flex; align-items:center; gap:8px; padding:6px 13px 6px 9px; border:1px solid rgba(237,24,141,.35); border-radius:999px; font-size:12px; color:#e8a9cd; background:rgba(237,24,141,.07)">
+        <span style="width:6px; height:6px; border-radius:50%; background:#3dd68c; box-shadow:0 0 8px #3dd68c"></span><span>Sandbox live · Monerium IBAN + EURe<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
       </div>
 
-      <p style="margin-top:1.9rem">Changing those rules takes several people and a
-        public waiting period. Stopping is immediate; restarting is the part that
-        has to wait.</p>
-    </div></div>
-  </section>
+      <h1 style="margin:22px 0 0; font-size:clamp(44px,8.2vw,96px); line-height:.94; font-weight:600; letter-spacing:-.045em; color:#fbf9fc; text-wrap:balance">Euros on chain.</h1>
 
-  <!-- regulation. Every claim here is about a NAMED partner and is checked
-       against that partner's own published licence wording — not ours, and not
-       copied from anyone else's site. Zold holds no licence, and the page has
-       to say so plainly rather than let the logos imply otherwise. -->
-  <section class="stop" id="regulated">
-    <div class="wrap"><div class="inner">
-      <span class="eyebrow">Where your money sits</span>
-      <h2>Your euros are held by a regulated e-money institution.</h2>
-      <p>Not by us. Electronic money has to be backed one-for-one and kept separate
-        from the issuer's own funds. That is what the licence is for.</p>
+      <p style="margin:20px auto 0; max-width:585px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Deposit by IBAN, hold EURe in a smart account, and send to bank accounts, cash pickup, or UPI through a clear approval flow.</p>
 
-      <div class="regs">
-        <div class="reg">
-          <div class="reg-head">
-            <svg viewBox="0 0 40 40" width="40" height="40" aria-hidden="true" class="crest">
-              <path d="M20 3 L34 9 v12 c0 8-6 14-14 16 -8-2-14-8-14-16 V9 Z"
-                    fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-              <path d="M13.5 20.5 l4.5 4.5 l9-10" fill="none" stroke="currentColor"
-                    stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            <div>
-              <div class="who">Monerium hf.</div>
-              <span class="by">Supervised by the Central Bank of Iceland</span>
+      <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:30px">
+        <a href="/app" style="display:inline-flex; align-items:center; height:46px; padding:0 26px; border-radius:999px; background:#ed188d; color:#fff; font-size:14.5px; font-weight:600; box-shadow:0 10px 34px rgba(237,24,141,.4)" class="pill">Launch app</a>
+        <a href="#approval" style="display:inline-flex; align-items:center; height:46px; padding:0 24px; border-radius:999px; border:1px solid #2c2c33; background:rgba(255,255,255,.03); font-size:14.5px; font-weight:500; color:#ededf0" class="ghost">View demo flow</a>
+      </div>
+    </div>
+
+    <div style="position:relative; max-width:1000px; margin:clamp(44px,6vw,74px) auto 0; padding:0 0 clamp(40px,6vw,80px)">
+      <div style="position:absolute; left:8%; right:8%; top:18%; bottom:6%; background:radial-gradient(50% 50% at 50% 50%, rgba(237,24,141,.34), transparent 70%); filter:blur(38px); pointer-events:none"></div>
+      <div style="position:relative; border:1px solid #232328; border-radius:16px; background:linear-gradient(180deg,#131317,#0d0d11); box-shadow:0 40px 90px rgba(0,0,0,.65); overflow:hidden; text-align:left">
+        <div style="display:flex; align-items:center; gap:12px; padding:11px 16px; border-bottom:1px solid #1e1e23; background:#0e0e12">
+          <div style="display:flex; gap:6px">
+            <span style="width:9px; height:9px; border-radius:50%; background:#2c2c33"></span>
+            <span style="width:9px; height:9px; border-radius:50%; background:#2c2c33"></span>
+            <span style="width:9px; height:9px; border-radius:50%; background:#2c2c33"></span>
+          </div>
+          <div style="flex:1; max-width:280px; height:20px; border-radius:6px; background:#141419; border:1px solid #232328; display:flex; align-items:center; padding:0 8px; font-size:10.5px; color:#5b5b66">app.zold.money</div>
+          <span style="font-size:10.5px; color:#5b5b66; border:1px solid #232328; border-radius:999px; padding:2px 8px">local demo</span>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:1px; background:#1a1a1f">
+          <div style="background:#0f0f13; padding:clamp(16px,2.4vw,24px)">
+            <div style="display:flex; align-items:center; gap:8px; font-size:11.5px; font-weight:600; color:#8a8a94">Primary account
+              <span style="font-size:10px; letter-spacing:.06em; padding:2px 7px; border-radius:999px; color:#e8a9cd; background:rgba(237,24,141,.12); border:1px solid rgba(237,24,141,.3)">EUR</span>
+              <span style="font-size:10px; letter-spacing:.06em; padding:2px 7px; border-radius:999px; color:#3dd68c; background:rgba(61,214,140,.1); border:1px solid rgba(61,214,140,.28)">ACTIVE</span>
+            </div>
+            <div style="margin-top:10px; font-size:clamp(28px,3.6vw,38px); font-weight:600; letter-spacing:-.035em; color:#fbf9fc"><span style="color:#8a8a94; font-weight:500">€</span>4,206.20</div>
+            <div style="margin-top:18px; display:grid; gap:0">
+              <div style="display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid #1c1c21; font-size:12px"><span style="color:#5b5b66; letter-spacing:.07em">SAFE EURe</span><span style="color:#ededf0">€4,206.20</span></div>
+              <div style="display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid #1c1c21; font-size:12px"><span style="color:#5b5b66; letter-spacing:.07em">IBAN</span><span style="color:#ededf0; font-variant-numeric:tabular-nums">GB59 MONE 0000 0042 8817</span></div>
+              <div style="display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid #1c1c21; font-size:12px"><span style="color:#5b5b66; letter-spacing:.07em">SMART ACCOUNT</span><span style="color:#ededf0">0x7a4c…19bE</span></div>
             </div>
           </div>
-          <div class="lic">Reg. 550512-1060 · Act No. 17/2013 · Act No. 18/2018</div>
-          <p class="for">Authorised as an Electronic Money Institution and as a Virtual
-            Asset Service Provider by the Financial Supervisory Authority of the Central
-            Bank of Iceland. Issues your IBAN, holds your euros, and moves money over SEPA.</p>
+
+          <div style="background:#101014; padding:clamp(16px,2.4vw,24px)">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px">
+              <span style="font-size:11.5px; font-weight:600; color:#8a8a94">Send · Cash pickup, Kenya</span>
+              <span style="font-size:10.5px; color:#f5a623; border:1px solid rgba(245,166,35,.32); background:rgba(245,166,35,.08); border-radius:999px; padding:2px 8px">quote <span class="js-expiry">9:02</span></span>
+            </div>
+            <div style="margin-top:12px; font-size:clamp(26px,3.4vw,34px); font-weight:600; letter-spacing:-.035em; color:#fbf9fc">€<span style="color:#ed188d">250.00</span></div>
+            <div style="margin-top:14px; display:grid; gap:0; font-size:12.5px">
+              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94" id="r-mid-label">Mid-market rate</span><span style="font-variant-numeric:tabular-nums"><span id="r-mid">147.5300</span></span></div>
+              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Your rate <span style="font-size:10px; color:#e8a9cd; border:1px solid rgba(237,24,141,.3); border-radius:4px; padding:1px 5px">0.50%</span></span><span style="font-variant-numeric:tabular-nums"><span id="r-rate">146.7924</span></span></div>
+              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Fixed fee</span><span>€0.99</span></div>
+              <div style="display:flex; justify-content:space-between; align-items:baseline; padding:11px 0 0; border-top:1px solid #2c2c33"><span style="color:#ededf0; font-weight:600">Joseph Otieno collects</span><span style="font-size:17px; font-weight:600; color:#3dd68c; font-variant-numeric:tabular-nums">KES <span id="r-out">36,553</span></span></div>
+            </div>
+            <div style="margin-top:16px; padding-top:14px; border-top:1px solid #1c1c21; display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+              <span id="st-dot" style="width:7px; height:7px; border-radius:50%; background:#f5a623; box-shadow:0 0 9px #f5a623"></span>
+              <span id="st-label" style="font-size:12px; font-weight:600; letter-spacing:.08em; color:#f5a623">QUOTED</span>
+              <span id="st-note" style="font-size:11.5px; color:#5b5b66">rate locked for 10 minutes</span>
+            </div>
+            <div style="margin-top:10px; height:3px; border-radius:2px; background:#1c1c21; overflow:hidden"><div id="st-bar" style="height:100%; width:25%; background:linear-gradient(90deg,#ed188d,#3dd68c); transition:width .6s ease"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
+
+  <section id="rails" style="padding:clamp(56px,8vw,96px) 24px; text-align:center">
+    <div style="max-width:900px; margin:0 auto">
+      <h2 style="margin:0; font-size:clamp(28px,4.4vw,48px); line-height:1.04; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">One account, global payouts.</h2>
+      <p style="margin:16px auto 0; max-width:520px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Euros arrive over SEPA to your own IBAN and land as EURe<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">1</a>. From there they leave over the rail the recipient already uses.</p>
+      <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:clamp(18px,3vw,38px); margin-top:clamp(34px,5vw,52px)">
+        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#e8a9cd; box-shadow:inset 0 1px 0 rgba(255,255,255,.05)"><i class="ph ph-bank"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">IBAN</span>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid rgba(237,24,141,.4); background:radial-gradient(70% 70% at 50% 25%, rgba(237,24,141,.22), #0d0d11); display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:600; color:#ffd6ec; box-shadow:0 0 26px rgba(237,24,141,.28)">EURe</span>
+          <span style="font-size:11.5px; color:#8a8a94">e-money</span>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-arrows-left-right"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">SEPA</span>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-money"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">Cash · KE<a href="#notes" style="color:#ed188d; font-size:9px; vertical-align:super">2</a></span>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-qr-code"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">UPI · IN<a href="#notes" style="color:#ed188d; font-size:9px; vertical-align:super">3</a></span>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-shield-check"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">Safe</span>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-seal-check"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">Monerium</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
+
+  <section id="account" style="padding:clamp(56px,8vw,104px) 24px">
+    <div style="max-width:1080px; margin:0 auto; display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:clamp(32px,5vw,64px); align-items:center">
+      <div style="position:relative">
+        <div style="position:absolute; inset:12% 6%; background:radial-gradient(50% 50% at 40% 45%, rgba(237,24,141,.28), transparent 72%); filter:blur(30px)"></div>
+        <div style="position:relative; border:1px solid #2c2c33; border-radius:18px; padding:clamp(20px,3vw,28px); background:linear-gradient(150deg,#17171d,#0c0c10); box-shadow:0 30px 70px rgba(0,0,0,.6)">
+          <div style="display:flex; align-items:center; justify-content:space-between">
+            <span style="display:flex; align-items:center; gap:7px; font-size:14px; font-weight:600; letter-spacing:-.02em"><span style="color:#ed188d">▽</span>Zold</span>
+            <span style="font-size:10.5px; letter-spacing:.1em; color:#8a8a94">EUR ACCOUNT</span>
+          </div>
+          <div style="margin-top:clamp(28px,5vw,54px); font-size:clamp(15px,2vw,19px); letter-spacing:.14em; color:#ededf0; font-variant-numeric:tabular-nums">GB59 MONE 0000 0042 8817</div>
+          <div style="margin-top:20px; display:flex; align-items:flex-end; justify-content:space-between; gap:16px">
+            <div>
+              <div style="font-size:10.5px; letter-spacing:.1em; color:#5b5b66">ACCOUNT HOLDER</div>
+              <div style="margin-top:4px; font-size:13.5px; color:#cfcfd8">Amara Njoku</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:10.5px; letter-spacing:.1em; color:#5b5b66">HELD AS</div>
+              <div style="margin-top:4px; font-size:13.5px; color:#e8a9cd">EURe · Safe</div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="notbank">
-        <p style="margin:0"><b>Zold is not a bank.</b> The regulated part is the account
-          behind your IBAN, provided by the institution above. Our software is not
-          separately regulated.</p>
-      </div>
-
-      <details class="steps">
-        <summary>How your money actually moves</summary>
-        <div class="body">
-          <ol>
-            <li><b>Someone pays you.</b> An ordinary bank transfer arrives at your IBAN,
-              the same way a salary would.</li>
-            <li><b>Monerium receives and holds it.</b> The euros sit with the regulated
-              institution, backed one-for-one, recorded against your account rather than
-              pooled into a company balance.</li>
-            <li><b>It shows up as your balance.</b> Nothing has left yet. You can leave it
-              there as long as you like.</li>
-            <li><b>You decide to send some.</b> You choose the country, the amount and the
-              person, and you see the exchange rate and the fee before you commit.</li>
-            <li><b>You approve it on your phone.</b> Face or fingerprint. That approval is
-              tied to that exact amount and that exact recipient — it cannot be reused or
-              redirected.</li>
-            <li><b>We pass it on and convert it.</b> The euros are exchanged at the rate you
-              were shown, and the money is handed to the payout partner for that country.</li>
-            <li><b>It arrives.</b> Into a bank account, a payment app, or as cash at a
-              counter, depending on what you chose.</li>
-            <li><b>If any step fails, it comes back.</b> The transfer is unwound and the
-              money returns to your balance, with any costs already deducted listed
-              individually. It does not sit in limbo.</li>
-          </ol>
+      <div>
+        <span style="display:inline-flex; align-items:center; gap:8px; font-size:11.5px; font-weight:600; letter-spacing:.13em; color:#8a8a94">YOUR MONEY</span>
+        <h2 style="margin:14px 0 0; font-size:clamp(28px,4vw,44px); line-height:1.05; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">Your euros stay yours.</h2>
+        <p style="margin:16px 0 0; max-width:46ch; font-size:15.5px; line-height:1.6; color:#9a9aa5">Money paid into your IBAN is held as regulated electronic money,<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">1</a> backed one-for-one and recorded against your account — not pooled with a company's own funds. It sits there until you decide to send it.</p>
+        <div style="display:grid; gap:14px; margin-top:26px">
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#ed188d; font-size:17px; line-height:1.35"><i class="ph ph-coins"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">One balance, in euros</div><div style="font-size:13px; color:#8a8a94">No monthly fee, no minimum, nothing to convert before you can spend it.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#ed188d; font-size:17px; line-height:1.35"><i class="ph ph-fingerprint"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Nothing leaves without your face or fingerprint<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super">4</a></div><div style="font-size:13px; color:#8a8a94">You approve one exact amount, to one exact person. That approval can't be reused or redirected.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#ed188d; font-size:17px; line-height:1.35"><i class="ph ph-list-checks"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">You always know where a payment is</div><div style="font-size:13px; color:#8a8a94">Sent, collected, or back in your balance with the reason it came back. Never in limbo.</div></div></div>
         </div>
-      </details>
-    </div></div>
-  </section>
-
-  <!-- status: short, factual, not an apology -->
-  <section class="stop" id="real">
-    <div class="wrap"><div class="inner">
-      <span class="eyebrow">Where we are</span>
-      <h2>Early access, Kenya first.</h2>
-      <p>Zold is in early access and opening one corridor at a time. Euro accounts
-        and European transfers work today. Cash pickup in Kenya is the next to open,
-        then India. Join the list and we'll tell you when your corridor is ready —
-        we'd rather say that plainly than imply everything is switched on.</p>
-      <div class="cta-row">
-        <a class="btn" href="#early">Join the early access list</a>
       </div>
-    </div></div>
+    </div>
   </section>
 
-  <!-- cta -->
-  <section class="stop" id="early" data-node="send">
-    <div class="wrap"><div class="inner">
-      <span class="eyebrow">Next</span>
-      <h2>Be there when the first corridor opens.</h2>
-      <p>Europe to Kenya first, then India. Early access means a real IBAN, a real
-        transfer, and a direct line to the people building it.</p>
-      <div class="cta-row">
-        <a class="btn" href="#early">Get early access</a>
-        <span class="note">No card. No deposit.</span>
+  <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
+
+  <section style="padding:clamp(38px,5vw,58px) 24px; text-align:center">
+    <div style="font-size:11px; font-weight:600; letter-spacing:.16em; color:#5b5b66">SUPERVISED AND BUILT ON</div>
+    <div style="display:flex; flex-wrap:wrap; justify-content:center; align-items:flex-start; gap:clamp(14px,2.6vw,32px); margin-top:24px; max-width:1000px; margin-left:auto; margin-right:auto">
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px">
+        <img src="assets/logo-cbi.png" alt="Central Bank of Iceland" width="140" height="80" style="width:140px; height:80px; object-fit:contain" />
+        <span style="font-size:13px; font-weight:600; letter-spacing:-.01em; color:#8a8a94; text-align:center">Central Bank of Iceland</span>
+        <span style="font-size:10.5px; line-height:1.35; color:#5b5b66">Supervisor</span>
       </div>
-    </div></div>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px">
+        <img src="assets/logo-monerium.png" alt="Monerium" width="140" height="80" style="width:140px; height:80px; object-fit:contain" />
+        <span style="font-size:13px; font-weight:600; letter-spacing:-.01em; color:#8a8a94; text-align:center">Monerium</span>
+        <span style="font-size:10.5px; line-height:1.35; color:#5b5b66">Your euros</span>
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px">
+        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#4f4f59">MoneyGram</span>
+        <span style="font-size:10.5px; line-height:1.35; color:#5b5b66">Cash pickup</span>
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px">
+        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#4f4f59">Safe</span>
+        <span style="font-size:10.5px; line-height:1.35; color:#5b5b66">Smart accounts</span>
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px">
+        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#4f4f59">SEPA Instant</span>
+        <span style="font-size:10.5px; line-height:1.35; color:#5b5b66">Euro transfers</span>
+      </div>
+    </div>
+    <p style="margin:clamp(26px,3.4vw,38px) auto 0; max-width:70ch; font-size:12.5px; line-height:1.65; color:#8a8a94"><span style="color: rgb(237, 237, 240); font-weight: 600;">Zold is not a bank.</span> Your euros are issued and held as e-money by Monerium ehf., supervised by the Central Bank of Iceland .<a href="#notes" style="color: rgb(237, 24, 141); font-size: 10px; vertical-align: super;">1</a> <a href="#notes" style="color: rgb(232, 169, 205);">Full notes</a>.</p>
   </section>
 
-  <footer>
-    <div class="wrap">
-      <div class="fin">
-        <div class="mark">
-          <svg width="20" height="18" viewBox="0 0 20 18" aria-hidden="true">
-            <path class="tri" d="M1.6 1.4 L18.4 1.4 L10 16.2 Z" />
-          </svg>
-          Zold
+  <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
+
+  <section id="approval" style="position:relative; padding:clamp(56px,8vw,104px) 24px; text-align:center; overflow:hidden">
+    <div style="position:absolute; left:50%; top:38%; width:min(900px,110%); height:640px; transform:translate(-50%,-40%); background:radial-gradient(46% 46% at 50% 50%, rgba(237,24,141,.26), transparent 70%); pointer-events:none"></div>
+    <div style="position:relative; max-width:1080px; margin:0 auto">
+      <h2 style="margin:0; font-size:clamp(28px,4.4vw,48px); line-height:1.05; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">Nothing moves without your approval.</h2>
+      <p style="margin:16px auto 0; max-width:500px; font-size:15.5px; line-height:1.6; color:#9a9aa5">The quote, the recipient and the amount are signed together. If a leg fails, the state machine says so.</p>
+
+      <div style="display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:clamp(20px,4vw,44px); margin-top:clamp(36px,5vw,56px)">
+        <div style="display:grid; gap:14px; min-width:190px; text-align:left">
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-fingerprint"></i></span>Passkey login</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 8.5s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-shield-check"></i></span>Safe ownership checks</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7.8s ease-in-out infinite"><span style="color:#f5a623; font-size:16px"><i class="ph ph-timer"></i></span>Quote expiry</div>
         </div>
-        <p>Zold is a product of Zoldenburg. Payment services are provided through
-          licensed partners; Zoldenburg is not a bank. Nothing here is financial advice.</p>
+
+        <div style="position:relative; width:clamp(248px,26vw,292px); border:1px solid #2c2c33; border-radius:38px; padding:10px; background:linear-gradient(180deg,#1a1a20,#0b0b0e); box-shadow:0 40px 90px rgba(0,0,0,.7), 0 0 60px rgba(237,24,141,.18)">
+          <div style="border-radius:30px; background:#0c0c10; overflow:hidden; text-align:left">
+            <div style="display:flex; justify-content:center; padding:9px 0 4px"><span style="width:56px; height:5px; border-radius:3px; background:#232328"></span></div>
+            <div style="padding:14px 18px 20px">
+              <div style="font-size:11px; letter-spacing:.12em; color:#5b5b66">APPROVE PAYOUT</div>
+              <div style="margin-top:12px; font-size:30px; font-weight:600; letter-spacing:-.035em; color:#fbf9fc">€250.00</div>
+              <div style="margin-top:3px; font-size:12.5px; color:#8a8a94">Cash pickup · Nairobi</div>
+              <div style="margin-top:16px; display:grid; gap:0; font-size:12px">
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Recipient</span><span>Joseph Otieno</span></div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">They collect</span><span style="color:#3dd68c">KES 36,553</span></div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Fee</span><span>€0.99</span></div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Quote expires</span><span class="js-expiry" style="color:#f5a623">9:02</span></div>
+              </div>
+              <div style="margin-top:16px; display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:12px; border:1px solid rgba(237,24,141,.3); background:rgba(237,24,141,.08)">
+                <span style="color:#ed188d; font-size:19px"><i class="ph ph-fingerprint"></i></span>
+                <span style="font-size:12.5px; color:#f0d3e4">Touch ID to sign this exact payout</span>
+              </div>
+              <div style="margin-top:12px; height:40px; border-radius:999px; background:#ed188d; color:#fff; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:600; box-shadow:0 8px 26px rgba(237,24,141,.4)">Approve &amp; send</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid; gap:14px; min-width:190px; text-align:left">
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 8.2s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-signature"></i></span>Recipient commitment</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7.4s ease-in-out infinite"><span style="color:#f5a623; font-size:16px"><i class="ph ph-magnifying-glass"></i></span>Manual review state</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 9s ease-in-out infinite"><span style="color:#3dd68c; font-size:16px"><i class="ph ph-arrow-u-up-left"></i></span>Refund on failure</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
+
+  <section id="launch" style="position:relative; padding:clamp(64px,9vw,120px) 24px; text-align:center; overflow:hidden">
+    <div style="position:absolute; left:50%; bottom:-220px; width:min(760px,120%); height:520px; transform:translateX(-50%); background:radial-gradient(50% 50% at 50% 50%, rgba(237,24,141,.28), transparent 70%); pointer-events:none"></div>
+    <div style="position:relative">
+      <span style="display:inline-flex; align-items:center; justify-content:center; width:72px; height:72px; border-radius:20px; border:1px solid rgba(237,24,141,.35); background:linear-gradient(160deg,#1b1b22,#0d0d11); box-shadow:0 0 44px rgba(237,24,141,.3); font-size:26px; color:#ed188d">▽</span>
+      <h2 style="margin:24px 0 0; font-size:clamp(28px,4.6vw,52px); line-height:1.04; font-weight:600; letter-spacing:-.045em; color:#fbf9fc">Get started with Zold.</h2>
+      <p style="margin:14px auto 0; max-width:440px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Open an account, get an IBAN, and run a payout end to end in the sandbox.</p>
+      <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:28px">
+        <a href="/app" style="display:inline-flex; align-items:center; height:46px; padding:0 28px; border-radius:999px; background:#ed188d; color:#fff; font-size:14.5px; font-weight:600; box-shadow:0 10px 34px rgba(237,24,141,.4)" class="pill">Launch app</a>
+        <a href="#account" style="display:inline-flex; align-items:center; height:46px; padding:0 24px; border-radius:999px; border:1px solid #2c2c33; font-size:14.5px; color:#ededf0" class="ghost">Architecture</a>
+      </div>
+    </div>
+  </section>
+
+  <footer style="border-top:1px solid #1c1c21; padding:clamp(34px,5vw,54px) 24px 48px">
+    <div style="max-width:1080px; margin:0 auto">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:32px 40px">
+        <div style="max-width:34ch">
+          <span style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:600; letter-spacing:-.02em"><span style="color:#ed188d">▽</span>Zold <span style="font-weight:400; color:#5b5b66">by Zoldenburg</span></span>
+          <p style="margin:12px 0 0; font-size:13px; line-height:1.6; color:#8a8a94">Euros in, local payouts out. A personal IBAN, e-money held in your own smart account, and one visible fee on every route. Zold is not a bank.</p>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#5b5b66">PRODUCT</div>
+          <div style="display:grid; gap:9px; margin-top:14px; font-size:13.5px">
+            <a href="#rails" style="color:#8a8a94">Rails</a>
+            <a href="#account" style="color:#8a8a94">Your money</a>
+                <a href="#approval" style="color:#8a8a94">Approvals</a>
+            <a href="/app" style="color:#8a8a94">Launch app</a>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#5b5b66">LEGAL</div>
+          <div style="display:grid; gap:9px; margin-top:14px; font-size:13.5px">
+            <a href="#notes" style="color:#8a8a94">Terms of service</a>
+            <a href="#notes" style="color:#8a8a94">Privacy policy</a>
+            <a href="#notes" style="color:#8a8a94">Disclaimer</a>
+            <a href="#notes" style="color:#8a8a94">Imprint</a>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#5b5b66">STATUS</div>
+          <div style="display:grid; gap:9px; margin-top:14px; font-size:13.5px; color:#8a8a94">
+            <span style="display:flex; align-items:center; gap:8px"><span style="width:6px; height:6px; border-radius:50%; background:#3dd68c"></span>Sandbox live</span>
+            <span style="display:flex; align-items:center; gap:8px"><span style="width:6px; height:6px; border-radius:50%; background:#f5a623"></span>Corridors opening one at a time</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="notes" style="margin-top:clamp(30px,4vw,44px); padding-top:24px; border-top:1px solid #1c1c21; display:grid; gap:16px; max-width:78ch">
+        <div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">PROTOTYPE STATUS — CAPITAL AT RISK</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94">Zold is a prototype running on sandbox e-money and local test rails where noted below. Availability, custody and payout behaviour are under active development, balances shown in this page's screens are illustrative, and nothing here is an offer of a regulated payment service or financial advice.</p>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR EURO ACCOUNTS AND BANK PAYOUTS</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">1</sup> Your IBAN is issued and your euros are held as e-money (EURe) by Monerium ehf. (registered in Iceland No. 550512-1060), authorised as an Electronic Money Institution and as a Virtual Asset Service Provider by the Financial Supervisory Authority of the Central Bank of Iceland under Act No. 17/2013 governing the issuance of electronic money and Act No. 18/2018 governing measures for countering money laundering. SEPA payouts are executed as Monerium redemption orders. Zold operates against Monerium's sandbox environment; it is software, holds no licence of its own, and is not separately regulated in any jurisdiction.</p>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CASH PICKUP AND UPI</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">2</sup> Cash pickup is implemented against the SEP-10 / SEP-24 anchor protocol and verified against a public test anchor. No commercial payout agreement is in place; references returned in sandbox mode are generated, and production availability depends on a licensed partner. Cash pickup is a money transmission, so sender identity data is provided to the anchor before a withdrawal opens, and a payout is refused rather than opened when required details are missing.</p>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">3</sup> UPI payments are executed through a mock partner adapter whose responses match the production API shape. Reference numbers are generated. FX rates are indicative and refreshed from a rate endpoint where available; a quote locks a rate for ten minutes and expires rather than repricing silently.</p>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CUSTODY AND APPROVALS</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">4</sup> Each account is a Safe smart account; deployment gas is sponsored. A passkey is registered at onboarding and every payout is signed against that exact amount and recipient. Today the account's owner key is still held server-side, so the account is custodial in practice — replacing that key with passkey and co-signer approval is in progress. Assets held on chain are not covered by any government or private deposit insurance scheme.</p>
+        </div>
+        <p style="margin:6px 0 0; font-size:12px; color:#5b5b66">© 2026 Zoldenburg. All rights reserved.</p>
       </div>
     </div>
   </footer>
 </div>
 
 <script>
+  /* Mock status cycling for the hero screen — presentation only, no API calls. */
   (function () {
-    /* Placeholder only — replaced by the live mid from /api/rates as soon as
-       it answers. These used to BE the rates, hardcoded, under a heading that
-       said "Real exchange rate"; by July 2026 the EUR->INR one was 14% off the
-       market. Until the fetch lands the figures are labelled indicative. */
-    var MID = { cash: 147.53, sepa: 1, upi: 109.87 };
-    var LIVE = false;
-    var FEE = { cash: 0.99, sepa: 0.99, upi: 0.29 };
-    var CUR = { cash: "KES", sepa: "EUR", upi: "INR" };
-    var WHO = { cash: "Joseph collects", sepa: "Elena receives", upi: "The shop is paid" };
-    var TO  = { cash: "to Nairobi", sepa: "to any IBAN", upi: "to a UPI code" };
-    var SPREAD = 0.005;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    var steps = [
+      { label: "QUOTED", note: "rate locked for 10 minutes", color: "#f5a623", pct: "25%" },
+      { label: "SIGNED", note: "passkey approved this payout", color: "#ed188d", pct: "50%" },
+      { label: "SENT", note: "EURe redeemed, payout dispatched", color: "#ed188d", pct: "78%" },
+      { label: "PAID", note: "collected \u00b7 ref 8F42-QK19", color: "#3dd68c", pct: "100%" }
+    ];
+    var i = 0, secs = 542;
+    var dot = document.getElementById("st-dot"), label = document.getElementById("st-label");
+    var note = document.getElementById("st-note"), bar = document.getElementById("st-bar");
+    var clocks = document.querySelectorAll(".js-expiry");
 
-    var rail = "cash";
-    var drift = 0;
-    var $ = function (id) { return document.getElementById(id); };
-    var fmt = function (n, dp) {
-      return n.toLocaleString("en", { minimumFractionDigits: dp, maximumFractionDigits: dp });
-    };
+    setInterval(function () {
+      i = (i + 1) % steps.length;
+      var s = steps[i];
+      dot.style.background = s.color; dot.style.boxShadow = "0 0 9px " + s.color;
+      label.textContent = s.label; label.style.color = s.color;
+      note.textContent = s.note; bar.style.width = s.pct;
+    }, 2600);
 
-    function render() {
-      var amt = parseFloat($("amt").value);
-      if (!isFinite(amt) || amt <= 0) amt = 0;
-      var mid = MID[rail] * (1 + drift);
-      var allIn = mid * (1 - SPREAD);
-      var fee = FEE[rail];
-      var out = Math.max(0, amt - fee) * allIn;
-
-      if (rail === "sepa") {
-        $("r-mid").textContent = "no conversion";
-        $("r-spread").textContent = "− 0.00";
-        $("r-rate").textContent = "1.0000";
-      } else {
-        $("r-mid").textContent = "1 EUR = " + fmt(mid, 4) + " " + CUR[rail]
-          + (LIVE ? "" : " (indicative)");
-        $("r-spread").textContent = "− " + fmt(mid * SPREAD, 4);
-        $("r-rate").textContent = fmt(allIn, 4);
-      }
-      $("r-fee").textContent = "€" + fee.toFixed(2);
-      /* The worked example lower down quotes the same numbers rather than its
-         own frozen copy — it used to hardcode 139.8600 / KES 13,778.30. */
-      if ($("p-mid")) {
-        var pMid = MID.cash * (1 + drift);
-        $("p-mid").textContent = fmt(pMid, 4) + (LIVE ? "" : " (indicative)");
-        $("p-margin").textContent = "−" + fmt(pMid * SPREAD, 4);
-        $("p-out").textContent = "KES " + fmt((100 - FEE.cash) * pMid * (1 - SPREAD), 2);
-      }
-      $("r-outlabel").textContent = WHO[rail];
-      $("r-out").textContent = CUR[rail] + " " + fmt(out, 2);
-      $("to-label").textContent = TO[rail];
-    }
-
-    $("amt").addEventListener("input", render);
-
-    Array.prototype.forEach.call(document.querySelectorAll(".dest button"), function (b) {
-      b.addEventListener("click", function () {
-        rail = b.getAttribute("data-rail");
-        Array.prototype.forEach.call(document.querySelectorAll(".dest button"), function (o) {
-          o.setAttribute("aria-pressed", String(o === b));
-        });
-        render();
-      });
-    });
-
-    // A real rate moves. Small, slow drift so the receipt feels alive without
-    // ever becoming the loudest thing on the page.
-    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setInterval(function () { drift = (Math.random() - 0.5) * 0.0016; render(); }, 3200);
-    }
-
-    render();
-
-    /* Replace the placeholders with the same mid the quote engine uses. If it
-       cannot be reached the figures simply stay marked "indicative" — a page
-       that silently shows a made-up rate under the words "Real exchange rate"
-       is the bug this whole endpoint exists to stop. */
-    fetch("/api/rates")
-      .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error(String(r.status))); })
-      .then(function (d) {
-        if (!d || !d.eur || !d.eur.KES || !d.eur.INR) return;
-        MID.cash = d.eur.KES;
-        MID.upi = d.eur.INR;
-        LIVE = true;
-        var stamp = $("rate-asof");
-        if (stamp && d.asOf) stamp.textContent = "mid-market, " + d.asOf;
-        render();
-      })
-      .catch(function () { /* keep the indicative label */ });
+    setInterval(function () {
+      secs = secs > 1 ? secs - 1 : 599;
+      var t = Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0");
+      for (var n = 0; n < clocks.length; n++) clocks[n].textContent = t;
+    }, 1000);
   })();
 </script>
 
+<script>
+/* The design ships fixed figures. A page that says "mid-market rate" above a
+   frozen number is the exact bug we removed once already: the old landing page
+   hardcoded 1.08 * 129.5 and drifted 14% from the market while still claiming
+   to show the real rate. So pull the live mid from the same endpoint the
+   product quotes from, and if it cannot be reached, say "indicative" rather
+   than present a made-up number as fact. */
+(function () {
+  var SPREAD = 0.005, FEE = 0.99, SEND = 250;
+  var fmt = function (n, dp) {
+    return n.toLocaleString("en", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  };
+  var $ = function (id) { return document.getElementById(id); };
+  fetch("/api/rates")
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error(String(r.status))); })
+    .then(function (d) {
+      var mid = d && d.eur && d.eur.KES;
+      if (!mid) return;
+      var all = mid * (1 - SPREAD);
+      if ($("r-mid")) $("r-mid").textContent = fmt(mid, 4);
+      if ($("r-rate")) $("r-rate").textContent = fmt(all, 4);
+      if ($("r-out")) $("r-out").textContent = fmt((SEND - FEE) * all, 0);
+    })
+    .catch(function () {
+      /* Unreachable: mark the figures as indicative instead of asserting them. */
+      var l = $("r-mid-label");
+      if (l) l.textContent = "Mid-market rate (indicative)";
+    });
+})();
+</script>
 </body>
 </html>
