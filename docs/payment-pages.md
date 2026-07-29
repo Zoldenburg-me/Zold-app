@@ -63,6 +63,47 @@ shared, so it is stated rather than papered over: the page tells the payee that
 anyone who knows **or guesses** the handle can find the address, and no comment
 in the code claims the endpoint resists walking.
 
+## Roadmap: pay by link, not just crypto QR
+
+The long-term version of `/pay/<handle>` is a payment instrument, not only a
+wallet-address card. It should let a payer choose a route:
+
+- crypto deposit, converted just-in-time to EURe through a real venue such as
+  Bebop;
+- SEPA bank transfer into an app-issued IBAN or virtual account reference;
+- later local rails, if the corridor supports payer-initiated collection.
+
+The UI must then show the recipient a private receipt:
+
+| Field | Why it matters |
+|---|---|
+| payer/source address or bank counterparty | "Who paid me?" |
+| source tx hash or SEPA reference | payer-side proof |
+| source token/amount or bank amount | reconciliation |
+| conversion venue and rate | receipt honesty |
+| credited EURe amount | spendable balance |
+| credit tx / issue order | audit trail |
+
+Do not merge a forwarding-address implementation as "privacy solved". Candide
+Forwarding Address is useful as a deposit-address layer, but the public docs
+describe forwarding/routing to a configured recipient, not arbitrary actions
+such as "swap on Bebop first, then credit EURe". If the recipient is the user's
+Safe, the deposit may still be traceable to that Safe. If the recipient is a
+Zold conversion treasury, Zold takes custody during conversion.
+
+The roadmap decision is therefore explicit:
+
+- **OG build:** keep the current public-address page, with blunt privacy copy.
+- **Near-term hardening:** ask Candide whether custom forwarding hooks or
+  arbitrary calldata are available; if not, treat Candide forwarding as UX
+  hardening only.
+- **Non-custodial privacy path:** use per-payment user-controlled addresses or
+  stealth-style accounts. The app can privately map deposit address to user and
+  show payer details, while the user retains control of funds.
+- **Custodial conversion path:** route deposits to a Zold treasury, execute
+  Bebop just-in-time conversion, then credit EURe to the user's Safe. This has
+  the cleanest public graph, but it is custody and must be treated as such.
+
 ## Handles
 
 Lowercase, 3–30 characters, alphanumeric with internal hyphens, unique
