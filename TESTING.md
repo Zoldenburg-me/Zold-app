@@ -89,8 +89,9 @@ MoneyGram requires client-domain attribution.
 Stellar variables the code understands:
 
 - `MG_ANCHOR_DOMAIN` — anchor home domain, for example `testanchor.stellar.org`
-- `MG_ANCHOR_ASSET` — withdrawal asset, `SRT` for the public test anchor or
-  partner-confirmed `USDC` for MoneyGram production
+- `MG_ANCHOR_ASSET` — withdrawal asset. Defaults to `SRT` for the public test
+  anchor and `USDC` for MoneyGram domains; setting a non-`USDC` MoneyGram asset
+  fails at startup.
 - `STELLAR_TREASURY_SECRET` — treasury signer for SEP-10 auth and on-ledger
   SEP-24 payment
 - `STELLAR_HORIZON`, `STELLAR_SOROBAN_RPC`, `STELLAR_PASSPHRASE`,

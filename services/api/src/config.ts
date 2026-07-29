@@ -133,6 +133,24 @@ export const CCTP = {
   burnerKey: (process.env.CCTP_BURNER_KEY ?? "") as `0x${string}` | "",
 };
 
+const configuredAnchorDomain = process.env.MG_ANCHOR_DOMAIN ?? "";
+const configuredAnchorAsset = process.env.MG_ANCHOR_ASSET?.trim();
+
+function isMoneyGramAnchorDomain(domain: string): boolean {
+  return /(^|\.)moneygram\.com$/i.test(domain.trim());
+}
+
+function defaultAnchorAsset(domain: string): string {
+  return isMoneyGramAnchorDomain(domain) ? "USDC" : "SRT";
+}
+
+const anchorAsset = configuredAnchorAsset || defaultAnchorAsset(configuredAnchorDomain);
+if (isMoneyGramAnchorDomain(configuredAnchorDomain) && anchorAsset !== "USDC") {
+  throw new Error(
+    `MG_ANCHOR_ASSET=${anchorAsset} is incompatible with MoneyGram anchor ${configuredAnchorDomain}; use USDC`,
+  );
+}
+
 /** Stellar treasury + MoneyGram-style anchor (SEP-10/SEP-24). */
 export const STELLAR = {
   horizon: process.env.STELLAR_HORIZON ?? "https://horizon-testnet.stellar.org",
@@ -142,8 +160,8 @@ export const STELLAR = {
   // Anchor home domain for SEP-10/24. Stellar's public test anchor works
   // without any signup; MoneyGram production is the same protocol at their
   // domain with a partner-onboarded account.
-  anchorDomain: process.env.MG_ANCHOR_DOMAIN ?? "",
-  anchorAsset: process.env.MG_ANCHOR_ASSET ?? "SRT", // testanchor's reference token
+  anchorDomain: configuredAnchorDomain,
+  anchorAsset,
   // MoneyGram production may require SEP-10 custodial auth to include a
   // positive integer memo identifying the end user behind a shared account.
   authMemo: process.env.MG_AUTH_MEMO ?? "",

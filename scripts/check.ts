@@ -27,6 +27,7 @@ const scripts = [
   "jit:test",
   "webhook:test",
   "reconcile:test",
+  "anchor:config:test",
   "anchor:test",
   "anchor:safety",
   "travelrule:test",
