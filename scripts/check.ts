@@ -58,14 +58,16 @@ async function freePort(): Promise<number> {
 const apiPort = process.env.TRANSF_API_PORT ?? String(await freePort());
 const rpcPort = process.env.TRANSF_RPC_URL ? "" : String(await freePort());
 const stubPort = process.env.TRANSF_STUB_PORT ?? String(await freePort());
+const ratesStubPort = process.env.TRANSF_RATES_STUB_PORT ?? String(await freePort());
 const env = {
   ...process.env,
   TRANSF_API_PORT: apiPort,
   TRANSF_RPC_URL: process.env.TRANSF_RPC_URL ?? `http://127.0.0.1:${rpcPort}`,
   TRANSF_STUB_PORT: stubPort,
+  TRANSF_RATES_STUB_PORT: ratesStubPort,
 };
 
-console.log(`check ports: api=${env.TRANSF_API_PORT} rpc=${env.TRANSF_RPC_URL} stub=${env.TRANSF_STUB_PORT}`);
+console.log(`check ports: api=${env.TRANSF_API_PORT} rpc=${env.TRANSF_RPC_URL} stub=${env.TRANSF_STUB_PORT} rates=${env.TRANSF_RATES_STUB_PORT}`);
 
 for (const script of scripts) {
   const r = spawnSync(npm, ["run", script], { stdio: "inherit", env });

@@ -176,6 +176,7 @@ app.use(express.static(pub));
 
 type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
 const pendingPasskeySafeDeployments = new Map<string, { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }>();
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
 const wrap =
   (fn: express.Handler): express.Handler =>
@@ -527,11 +528,13 @@ app.post(
       return res.status(400).json({ error: "invalid email" });
     }
     const id = randomUUID();
-    // Candide Safe smart wallet: owner key + deterministic account address
-    // (computed offline; deployed gaslessly during sandbox provisioning).
-    const privateKey = generatePrivateKey();
-    const ownerAddress = privateKeyToAccount(privateKey).address;
-    const safeAddress = smartAccountFor(ownerAddress).accountAddress as `0x${string}`;
+    // Local demos still get a legacy server-owned Safe so the no-authenticator
+    // e2e path works. Production-mode accounts start as an unfunded shell; the
+    // real address is set only after passkey/co-signer Safe deployment.
+    const legacyWallet = SECURITY.allowSimulation;
+    const privateKey = legacyWallet ? generatePrivateKey() : undefined;
+    const ownerAddress = privateKey ? privateKeyToAccount(privateKey).address : undefined;
+    const safeAddress = ownerAddress ? (smartAccountFor(ownerAddress).accountAddress as `0x${string}`) : ZERO_ADDRESS;
     const kycStatus = KYC.autoApprove ? "approved" : "pending";
     const user: User = {
       id,
@@ -545,8 +548,8 @@ app.post(
       },
       iban: kycStatus === "approved" && !sandbox ? issueIban(id) : "",
       address: safeAddress,
-      ownerAddress,
-      privateKey,
+      ...(ownerAddress ? { ownerAddress } : {}),
+      ...(privateKey ? { privateKey } : {}),
       wallet: { type: "candide-safe", deployed: false },
       funding:
         kycStatus === "approved"
