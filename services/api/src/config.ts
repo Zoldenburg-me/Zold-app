@@ -15,6 +15,8 @@ try {
 export const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
 export const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
 export const API_HOST = process.env.TRANSF_API_HOST ?? "127.0.0.1";
+export const IS_PRODUCTION = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
+export const PUBLIC_URL = process.env.TRANSF_PUBLIC_URL ?? "";
 
 export const USING_LOCAL_RPC = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/)/.test(RPC_URL);
 
@@ -46,6 +48,7 @@ export const USING_LOCAL_API_HOST = API_HOST === "127.0.0.1" || API_HOST === "lo
  * by forgetting to set NODE_ENV.
  */
 export const LOOKS_LOCAL = USING_LOCAL_API_HOST && USING_LOCAL_RPC && IS_LOCAL_CHAIN;
+const LOOKS_HOSTED = Boolean(PUBLIC_URL) || !LOOKS_LOCAL;
 
 /**
  * Monerium integration. Mock mode by default; sandbox mode activates when
@@ -113,6 +116,7 @@ if (KYC.operatorToken && KYC.operatorToken.length < 24) {
  */
 export const CCTP = {
   live: process.env.CCTP_LIVE === "1",
+  env: process.env.CCTP_ENV ?? "testnet",
   baseRpc: process.env.CCTP_BASE_RPC ?? "https://sepolia.base.org",
   // Circle CCTP V2 testnet deployments (Base Sepolia, domain 6).
   tokenMessenger: (process.env.CCTP_TOKEN_MESSENGER ??
@@ -151,11 +155,14 @@ if (isMoneyGramAnchorDomain(configuredAnchorDomain) && anchorAsset !== "USDC") {
   );
 }
 
+export const STELLAR_TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
+export const STELLAR_PUBLIC_PASSPHRASE = "Public Global Stellar Network ; September 2015";
+
 /** Stellar treasury + MoneyGram-style anchor (SEP-10/SEP-24). */
 export const STELLAR = {
   horizon: process.env.STELLAR_HORIZON ?? "https://horizon-testnet.stellar.org",
   sorobanRpc: process.env.STELLAR_SOROBAN_RPC ?? "https://soroban-testnet.stellar.org",
-  networkPassphrase: process.env.STELLAR_PASSPHRASE ?? "Test SDF Network ; September 2015",
+  networkPassphrase: process.env.STELLAR_PASSPHRASE ?? STELLAR_TESTNET_PASSPHRASE,
   friendbot: process.env.STELLAR_FRIENDBOT ?? "https://friendbot.stellar.org",
   // Anchor home domain for SEP-10/24. Stellar's public test anchor works
   // without any signup; MoneyGram production is the same protocol at their
@@ -221,11 +228,108 @@ export const SECURITY = {
   exposeInternalErrors: process.env.NODE_ENV !== "production" && LOOKS_LOCAL,
 };
 
-if (process.env.NODE_ENV === "production" && moneriumSandboxEnabled() && !SECURITY.moneriumWebhookSecret) {
-  throw new Error(
-    "MONERIUM_WEBHOOK_SECRET is required in production when Monerium credentials are configured",
-  );
+function isLoopbackUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(u.hostname);
+  } catch {
+    return false;
+  }
 }
+
+function requireExplicitHttpsUrl(name: string, value: string) {
+  let u: URL;
+  try {
+    u = new URL(value);
+  } catch {
+    throw new Error(`${name} must be a valid URL`);
+  }
+  if (u.protocol !== "https:") throw new Error(`${name} must use https in production`);
+  if (isLoopbackUrl(value)) throw new Error(`${name} must not point at localhost in production`);
+}
+
+function validateMoneriumWebhookSecret(value: string) {
+  if (!value.startsWith("whsec_")) {
+    throw new Error("MONERIUM_WEBHOOK_SECRET must use Monerium's whsec_ format");
+  }
+  const raw = value.slice("whsec_".length);
+  if (Buffer.from(raw, "base64").length < 24) {
+    throw new Error("MONERIUM_WEBHOOK_SECRET decodes to a weak key (need at least 24 bytes)");
+  }
+}
+
+function assertProductionConfig() {
+  if (!IS_PRODUCTION) return;
+  const problems: string[] = [];
+  const fail = (message: string) => problems.push(message);
+
+  if (process.env.KYC_AUTO_APPROVE === "1") fail("KYC_AUTO_APPROVE=1 is forbidden in production");
+  if (!KYC.operatorToken) fail("KYC_OPERATOR_TOKEN is required in production");
+  if (process.env.ALLOW_SIMULATION === "1") fail("ALLOW_SIMULATION=1 is forbidden in production");
+  if (process.env.ALLOW_MOCK_FALLBACK === "1") fail("ALLOW_MOCK_FALLBACK=1 is forbidden in production");
+  if (process.env.ALLOW_PLAINTEXT_STORE !== "1") {
+    fail("ALLOW_PLAINTEXT_STORE=1 is required to acknowledge the JSON file store is not production storage");
+  }
+
+  if (SECURITY.moneriumWebhookSecret) {
+    try { validateMoneriumWebhookSecret(SECURITY.moneriumWebhookSecret); } catch (e: any) { fail(e.message); }
+  }
+  if (moneriumSandboxEnabled() && !SECURITY.moneriumWebhookSecret) {
+    fail("MONERIUM_WEBHOOK_SECRET is required in production when Monerium credentials are configured");
+  }
+  if (moneriumSandboxEnabled() && !MONERIUM.tokenEncryptionKey) {
+    fail("MONERIUM_TOKEN_ENCRYPTION_KEY is required in production when Monerium credentials are configured");
+  }
+  if (moneriumSandboxEnabled() || PUBLIC_URL) {
+    if (!process.env.MONERIUM_REDIRECT_URI && LOOKS_HOSTED) {
+      fail("MONERIUM_REDIRECT_URI must be explicit for hosted production");
+    }
+    if (MONERIUM.redirectUri && LOOKS_HOSTED) {
+      try { requireExplicitHttpsUrl("MONERIUM_REDIRECT_URI", MONERIUM.redirectUri); } catch (e: any) { fail(e.message); }
+    }
+  }
+  if (MONERIUM.tokenEncryptionKey && MONERIUM.tokenEncryptionKey.length < 32) {
+    fail("MONERIUM_TOKEN_ENCRYPTION_KEY must be at least 32 characters");
+  }
+  if (CCTP.live) {
+    fail("CCTP_LIVE=1 is a testnet burn/mint path and is forbidden in production");
+  }
+  if (anchorModeEnabled() && STELLAR.networkPassphrase === STELLAR_TESTNET_PASSPHRASE) {
+    fail("production anchor mode must not use the Stellar testnet passphrase");
+  }
+  if (isMoneyGramAnchorDomain(STELLAR.anchorDomain)) {
+    if (!STELLAR.authMemo) fail("MG_AUTH_MEMO is required for production MoneyGram custodial auth");
+    if (!STELLAR.clientDomain) fail("MG_CLIENT_DOMAIN is required for production MoneyGram client attribution");
+    if (!STELLAR.clientDomainSigningSecret) {
+      fail("MG_CLIENT_DOMAIN_SIGNING_SECRET is required for production MoneyGram client attribution");
+    }
+    if (!STELLAR.treasurySecret) fail("STELLAR_TREASURY_SECRET is required for production MoneyGram anchor mode");
+  }
+
+  if (LOOKS_HOSTED) {
+    if (LOOKS_LOCAL) fail("hosted production must not look like the local hardhat stack");
+    if (!process.env.WEBAUTHN_ORIGINS) fail("WEBAUTHN_ORIGINS must be explicit in hosted production");
+    for (const origin of SECURITY.origins) {
+      if (isLoopbackUrl(origin)) fail(`WEBAUTHN_ORIGINS contains localhost origin ${origin}`);
+      try { requireExplicitHttpsUrl("WEBAUTHN_ORIGINS entry", origin); } catch (e: any) { fail(e.message); }
+    }
+    if (!process.env.TRUSTED_PROXY_HOPS) {
+      fail("TRUSTED_PROXY_HOPS must be explicit for hosted production");
+    }
+    if (!process.env.CANDIDE_COSIGNER_ADDRESS || !process.env.CANDIDE_COSIGNER_KEY) {
+      fail("CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required before hosted production funding");
+    }
+    if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS && !process.env.CANDIDE_COSIGNER_ADDRESS) {
+      fail("CANDIDE_RECOVERY_GUARDIAN_ADDRESS or CANDIDE_COSIGNER_ADDRESS is required before hosted production funding");
+    }
+  }
+
+  if (problems.length) {
+    throw new Error(`production configuration is incomplete:\n- ${problems.join("\n- ")}`);
+  }
+}
+
+assertProductionConfig();
 
 // Hardhat's well-known dev accounts — public knowledge, fine on 31337 only.
 const DEV_KEYS = {

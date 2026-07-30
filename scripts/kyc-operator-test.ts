@@ -99,6 +99,7 @@ try {
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
     NODE_ENV: "production",
     KYC_OPERATOR_TOKEN: OPERATOR_TOKEN,
+    ALLOW_PLAINTEXT_STORE: "1",
     // Deliberately NOT set: ALLOW_SIMULATION. That is the whole point.
     ALLOW_SIMULATION: "",
     MONERIUM_CLIENT_ID: "",
