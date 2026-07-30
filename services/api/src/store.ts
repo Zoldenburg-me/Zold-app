@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
-import { ROOT } from "./config.js";
+import { IS_PRODUCTION, ROOT } from "./config.js";
 
 export type KycStatus = "pending" | "approved" | "rejected" | "manual_review";
 
@@ -410,6 +410,15 @@ export function initStore() {
     db.processedMoneriumWebhooks ??= [];
     db.cryptoDeposits ??= [];
     db.cryptoDepositCursor ??= {};
+    if (IS_PRODUCTION) {
+      const custodial = db.users.filter((u) => u.privateKey || u.ownerAddress);
+      if (custodial.length) {
+        throw new Error(
+          `production store contains ${custodial.length} server-owned Safe account(s); ` +
+            "migrate them to active passkey/co-signer Safes before startup",
+        );
+      }
+    }
     for (const q of db.quotes) q.status ??= "OPEN";
     for (const s of db.sessions) s.expiresAt ??= new Date(Date.parse(s.createdAt) + 24 * 60 * 60 * 1000).toISOString();
     pruneSessions();
