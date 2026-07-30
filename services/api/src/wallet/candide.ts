@@ -21,11 +21,12 @@ import {
   getSafeMessageEip712Data,
   webauthnSignatureFromAssertion,
   type MetaTransaction,
+  type SignerSignaturePair,
   type UserOperationV9,
   type WebauthnPublicKey,
 } from "abstractionkit";
 import { privateKeyToAccount } from "viem/accounts";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, hashTypedData } from "viem";
 
 export const CANDIDE = {
   chainId: BigInt(process.env.CANDIDE_CHAIN_ID ?? 11155111),
@@ -91,6 +92,20 @@ export interface BrowserPasskeyAssertion {
   authenticatorData: Uint8Array;
   clientDataJSON: Uint8Array;
   signature: Uint8Array;
+}
+
+export function safeMessageHash(safeAddress: string, message: string): `0x${string}` {
+  const { domain, types, messageValue } = getSafeMessageEip712Data(
+    safeAddress as `0x${string}`,
+    CANDIDE.chainId,
+    message,
+  );
+  return hashTypedData({
+    domain: domain as any,
+    types: types as any,
+    primaryType: "SafeMessage",
+    message: messageValue as any,
+  });
 }
 
 export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPlan): Promise<{
@@ -169,6 +184,38 @@ export async function submitPasskeySafeDeployment(
   const response = await account.sendUserOperation(userOperation, CANDIDE.bundlerUrl);
   await response.included();
   return response.userOperationHash;
+}
+
+export async function signMessageAsPasskeySafe(
+  plan: PasskeySafeDeploymentPlan,
+  safeAddress: string,
+  message: string,
+  assertion: BrowserPasskeyAssertion,
+): Promise<`0x${string}`> {
+  const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
+  const account = smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress);
+  if (account.accountAddress.toLowerCase() !== safeAddress.toLowerCase()) {
+    throw new Error("passkey Safe plan does not match the address being linked");
+  }
+  if (!CANDIDE.cosignerKey) throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign Safe message");
+  const { domain, types, messageValue } = getSafeMessageEip712Data(
+    safeAddress as `0x${string}`,
+    CANDIDE.chainId,
+    message,
+  );
+  const cosigner = privateKeyToAccount(CANDIDE.cosignerKey);
+  const cosignerSignature = await cosigner.signTypedData({
+    domain: domain as any,
+    types: types as any,
+    primaryType: "SafeMessage",
+    message: messageValue as any,
+  });
+  const passkeySignature = SafeAccount.createWebAuthnSignature(webauthnSignatureFromAssertion(assertion));
+  const pairs: SignerSignaturePair[] = [
+    { signer: passkeyOwner, signature: passkeySignature },
+    { signer: plan.cosignerAddress, signature: cosignerSignature },
+  ];
+  return SafeAccount.buildSignaturesFromSingerSignaturePairs(pairs, { isInit: false }) as `0x${string}`;
 }
 
 export async function isDeployed(address: string): Promise<boolean> {

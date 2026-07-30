@@ -184,6 +184,18 @@ function checkClientData(
   if (!origins.includes(cd.origin)) throw new Error(`webauthn: origin ${cd.origin} not allowed`);
 }
 
+function checkClientDataForChallenge(
+  clientDataJSON: Buffer,
+  expectedType: string,
+  origins: string[],
+  expectedChallenge: string,
+) {
+  const cd = JSON.parse(clientDataJSON.toString("utf8"));
+  if (cd.type !== expectedType) throw new Error(`webauthn: unexpected type ${cd.type}`);
+  if (cd.challenge !== expectedChallenge) throw new Error("webauthn: challenge mismatch");
+  if (!origins.includes(cd.origin)) throw new Error(`webauthn: origin ${cd.origin} not allowed`);
+}
+
 export interface RegistrationResult { credentialId: string; key: StoredKey; signCount: number }
 
 export function verifyRegistration(
@@ -216,6 +228,34 @@ export async function verifyAssertion(
 ): Promise<{ signCount: number }> {
   const clientDataJSON = b64urlToBuf(clientDataJSONB64);
   checkClientData(clientDataJSON, "webauthn.get", origins, purpose, binding);
+  return verifyAssertionBytes(authenticatorDataB64, clientDataJSON, signatureB64, storedKey, storedCount, rpId, purpose === "step_up");
+}
+
+export async function verifyAssertionForChallenge(
+  authenticatorDataB64: string,
+  clientDataJSONB64: string,
+  signatureB64: string,
+  storedKey: StoredKey,
+  storedCount: number,
+  rpId: string,
+  origins: string[],
+  expectedChallenge: string,
+  requireUserVerification = true,
+): Promise<{ signCount: number }> {
+  const clientDataJSON = b64urlToBuf(clientDataJSONB64);
+  checkClientDataForChallenge(clientDataJSON, "webauthn.get", origins, expectedChallenge);
+  return verifyAssertionBytes(authenticatorDataB64, clientDataJSON, signatureB64, storedKey, storedCount, rpId, requireUserVerification);
+}
+
+async function verifyAssertionBytes(
+  authenticatorDataB64: string,
+  clientDataJSON: Buffer,
+  signatureB64: string,
+  storedKey: StoredKey,
+  storedCount: number,
+  rpId: string,
+  requireUserVerification: boolean,
+): Promise<{ signCount: number }> {
   const authData = b64urlToBuf(authenticatorDataB64);
   const parsed = parseAuthData(authData);
   if (!parsed.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");
@@ -224,7 +264,7 @@ export async function verifyAssertion(
   // touched the key) is not enough — require that the authenticator actually
   // verified the human (UV flag). Otherwise "Face ID approved this payment" is a
   // claim the server never checked.
-  if (purpose === "step_up" && !(parsed.flags & 0x04)) {
+  if (requireUserVerification && !(parsed.flags & 0x04)) {
     throw new Error("webauthn: user verification required for this action");
   }
   if (storedCount > 0 && parsed.signCount > 0 && parsed.signCount <= storedCount) {
