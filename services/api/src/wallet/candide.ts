@@ -9,7 +9,7 @@
  * For Monerium to verify ownership of a contract wallet it calls EIP-1271 on
  * the address, so the Safe must actually be deployed on the chain Monerium
  * checks (Sepolia in sandbox). Deployment is gasless via Candide's public
- * bundler + paymaster, triggered on first provisioning.
+ * bundler + paymaster and is centralized in the passkey Safe deployment route.
  */
 import {
   SafeMultiChainSigAccountV1 as SafeAccount,
@@ -179,38 +179,6 @@ export async function isDeployed(address: string): Promise<boolean> {
   });
   const { result } = await res.json();
   return typeof result === "string" && result !== "0x";
-}
-
-/**
- * Deploy the user's Safe on the Candide-supported chain via a gasless
- * UserOperation (a 0-value self-call; ERC-4337 deploys on first op).
- * Returns the userOp hash. No-op if already deployed.
- */
-export async function deploySmartAccount(ownerKey: `0x${string}`): Promise<string | null> {
-  const owner = privateKeyToAccount(ownerKey);
-  const account = smartAccountFor(owner.address);
-  if (await isDeployed(account.accountAddress)) return null;
-
-  const noop: MetaTransaction = { to: account.accountAddress, value: 0n, data: "0x" };
-  const userOperation = await account.createUserOperation(
-    [noop],
-    CANDIDE.rpcUrl,
-    CANDIDE.bundlerUrl,
-  );
-
-  // Gas sponsorship via Candide's public paymaster.
-  const paymaster = new Erc7677Paymaster(CANDIDE.paymasterUrl);
-  const sponsored = await paymaster.createPaymasterUserOperation(
-    account as any,
-    userOperation as any,
-    CANDIDE.bundlerUrl,
-  );
-  const finalOp: any = (sponsored as any).userOperation ?? sponsored;
-
-  finalOp.signature = account.signUserOperation(finalOp, [ownerKey], CANDIDE.chainId);
-  const response = await account.sendUserOperation(finalOp, CANDIDE.bundlerUrl);
-  await response.included();
-  return response.userOperationHash;
 }
 
 /**

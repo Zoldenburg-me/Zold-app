@@ -13,11 +13,10 @@ Candide Safe model:
 
 ## Current Risk
 
-The MVP still creates a server-side owner key and stores it as
-`user.privateKey` in the local JSON store. That key is used to deploy the Safe
-and sign Monerium ownership/redeem messages. It is acceptable for local demos,
-but it is not acceptable for real funds because a filesystem compromise can
-become a wallet compromise.
+Some transitional local paths can still store `user.privateKey` in the JSON
+store for API-side signing. That is acceptable only for local demos, not real
+funds, because a filesystem compromise can become a wallet compromise. Safe
+deployment itself is centralized in `/api/users/:id/passkey-safe/deployment`.
 
 ## Target Account Model
 
@@ -101,7 +100,8 @@ authorizer binding without a verified passkey.
    to the co-signer. The lost-passkey initiation/finalization UI is still
    separate work.
 4. Add one-time allowance setup for transfers.
-5. Replace server-side Safe deployment/signing with client-signed UserOps.
+5. Keep Safe deployment centralized in `/api/users/:id/passkey-safe/deployment`
+   and replace remaining API-side signing with client-signed UserOps.
 6. Delete `user.privateKey` from the stored user model.
 7. Add a database migration that refuses to carry plaintext wallet keys into
    production persistence.

@@ -9,9 +9,7 @@
  *  2. Deposits: polls Monerium `issue` orders (EURe minted after a SEPA
  *     transfer arrives in sandbox). Local demo chains mirror each order into
  *     RemitVault (mint mock EURe + credit). Non-local Monerium runs expose both
- *     the Safe's real EURe balance and the vault ledger; the current
- *     transitional mirror can move Safe-held EURe into the vault using the
- *     server-held Safe key, but Safe-funded sends are the target path.
+ *     the Safe's real EURe balance and the vault ledger.
  *
  * Webhooks (order.updated / iban.updated) are the production path; polling is
  * used here because local dev has no public URL.
@@ -25,7 +23,7 @@ import {
   type MoneriumOrder,
 } from "./monerium-client.js";
 import { simulateSepaDeposit } from "./monerium.js";
-import { deploySmartAccount, isDeployed, signMessageAsSafe } from "../wallet/candide.js";
+import { isDeployed, signMessageAsSafe } from "../wallet/candide.js";
 import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
 
 let client: MoneriumClient | null = null;
@@ -78,17 +76,13 @@ export async function provisionFunding(user: User): Promise<User> {
     if (!user.privateKey) throw new Error("user has no wallet key to sign with");
     const privateKey = user.privateKey;
 
-    // 1. The Safe must exist on-chain for Monerium's EIP-1271 signature
-    //    check — deploy it gaslessly via Candide if it isn't there yet.
+    // 1. The Safe must already exist on-chain for Monerium's EIP-1271
+    //    signature check. Deployment is centralized in the passkey Safe endpoint.
     if (!(await isDeployed(user.address))) {
       store.updateUser(user.id, {
-        funding: { mode: "sandbox", status: "provisioning", detail: "deploying smart wallet (Sepolia, gasless)" },
+        funding: { mode: "sandbox", status: "provisioning", detail: "waiting for passkey Safe deployment" },
       });
-      const opHash = await deploySmartAccount(privateKey);
-      user = store.updateUser(user.id, {
-        wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
-        funding: { mode: "sandbox", status: "provisioning", detail: "linking wallet to Monerium" },
-      });
+      throw new Error("passkey Safe must be deployed before Monerium funding provisioning");
     }
 
     // 2. Safe-style signature over the ownership declaration (EIP-1271).

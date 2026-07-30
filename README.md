@@ -47,12 +47,11 @@ Running this repo with sandbox credentials, today:
   gas is sponsored. Monerium verifies ownership via EIP-1271, so the IBAN
   belongs to the contract wallet, not to us.
   A passkey registration now also records the deterministic 2-of-2
-  passkey/co-signer Safe that will replace the legacy server-owned Safe once
-  client-signed UserOps are wired. With `CANDIDE_COSIGNER_ADDRESS` and
+  passkey/co-signer Safe. With `CANDIDE_COSIGNER_ADDRESS` and
   `CANDIDE_COSIGNER_KEY` configured, onboarding can deploy that Safe through a
   passkey-signed, co-signed Candide UserOperation before funding. In
   non-simulation mode, funding is refused until that passkey/co-signer Safe is
-  active and the server-held owner key is gone.
+  active and no API-held owner key remains.
 - **Bank payouts**: the exit rail places real Monerium redeem orders —
   EURe is burned and a SEPA transfer goes out. (It needs EURe in the Safe
   to succeed; without it, the order is rejected and the app falls back to a
@@ -106,8 +105,8 @@ Running this repo with sandbox credentials, today:
   compatibility, otherwise Safe-held EURe when available. Safe-funded SEPA
   redeems directly from the Safe after collecting the fee; Safe-funded cash/UPI
   move the exact signed amount to the orchestrator for the existing FX path.
-  These one-time Safe operations still rely on the legacy server-held Safe owner
-  key until FP4 custody replaces that key with passkey/co-signer approval. A
+  These one-time Safe operations still need to move from API-side signing to
+  passkey/co-signer approval. A
   Safe-funded failure refunds to the Safe whatever actually left it — the fee on
   SEPA, the full amount on the FX rails — and the daily cap counts both pots as
   one budget rather than giving each its own.
@@ -146,9 +145,8 @@ Running this repo with sandbox credentials, today:
   `data/db.json` in plaintext, next to the Safe keys. A real deployment must
   leave it with the KYC provider and keep only a reference here. Document
   images are refused outright rather than stored.
-- Local/demo users' legacy Safe owner keys live in `data/db.json`. Custodial,
-  plainly. Production funding now gates on the passkey/co-signer Safe being
-  active so new real-funded accounts do not start life on that legacy key.
+- Local demo data lives in `data/db.json`. Production funding now gates on the
+  passkey/co-signer Safe being active and no API-held owner key remaining.
 
 ## Running it
 

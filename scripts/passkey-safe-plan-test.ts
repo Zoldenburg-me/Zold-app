@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CANDIDE,
   passkeySafeRecoverySetupTransactions,
@@ -8,6 +11,7 @@ import {
   webauthnOwnerToStore,
 } from "../services/api/src/wallet/candide.js";
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const b64url = (hex: string) => Buffer.from(hex, "hex").toString("base64url");
 
 const jwk: JsonWebKey = {
@@ -54,5 +58,20 @@ assert.equal(
   "the recovery module must receive the guardian setup call",
 );
 assert.equal(webauthnOwnerFromJwk({ ...jwk, crv: "P-384" }), null);
+
+const deploymentSources = [
+  "services/api/src/server.ts",
+  "services/api/src/adapters/monerium-sandbox.ts",
+  "services/api/src/wallet/candide.ts",
+];
+for (const rel of deploymentSources) {
+  const source = readFileSync(path.join(ROOT, rel), "utf8");
+  assert.ok(!source.includes("deploySmartAccount"), `${rel} must not expose an alternate Safe deployment helper`);
+}
+const serverSource = readFileSync(path.join(ROOT, "services/api/src/server.ts"), "utf8");
+assert.ok(
+  serverSource.includes('"/api/users/:id/passkey-safe/deployment"'),
+  "the passkey Safe deployment route must remain present",
+);
 
 console.log("PASSKEY SAFE PLAN TEST PASSED");
