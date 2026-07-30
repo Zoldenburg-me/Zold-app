@@ -58,7 +58,6 @@ import {
 } from "./chain.js";
 import {
   CANDIDE,
-  deploySmartAccount,
   isDeployed,
   preparePasskeySafeDeployment,
   signMessageAsSafe,
@@ -475,7 +474,7 @@ function passkeySafePlan(
         }
       : {}),
     createdAt: new Date().toISOString(),
-    legacyAddress: user.address,
+    previousAddress: user.address,
   };
 }
 
@@ -528,9 +527,8 @@ app.post(
       return res.status(400).json({ error: "invalid email" });
     }
     const id = randomUUID();
-    // Local demos still get a legacy server-owned Safe so the no-authenticator
-    // e2e path works. Production-mode accounts start as an unfunded shell; the
-    // real address is set only after passkey/co-signer Safe deployment.
+    // Local simulation keeps the no-authenticator e2e path available. Outside
+    // simulation, the real address is set by passkey/co-signer Safe deployment.
     const legacyWallet = SECURITY.allowSimulation;
     const privateKey = legacyWallet ? generatePrivateKey() : undefined;
     const ownerAddress = privateKey ? privateKeyToAccount(privateKey).address : undefined;
@@ -985,16 +983,6 @@ app.post(
     const accessToken = await moneriumAccessToken(user);
     const profileId = typeof req.body?.profileId === "string" ? req.body.profileId : user.monerium?.profileId;
 
-    if (user.privateKey && !(await isDeployed(user.address))) {
-      store.updateUser(user.id, {
-        funding: { mode: "sandbox", status: "provisioning", detail: "deploying smart wallet for Monerium" },
-      });
-      const opHash = await deploySmartAccount(user.privateKey);
-      user = store.updateUser(user.id, {
-        wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
-      });
-    }
-
     if (!(await isDeployed(user.address))) {
       return res.status(409).json({
         error: "passkey Safe must be deployed before Monerium address linking",
@@ -1345,7 +1333,7 @@ app.post(
     const balances = await accountBalances(user.address);
     if (balances.safeBalanceEur > 0 || balances.vaultBalanceEur > 0) {
       return res.status(409).json({
-        error: "legacy Safe still has funds; migrate balances before activating the passkey Safe address",
+        error: "current account still has funds; move balances before activating the passkey Safe address",
         ...balances,
       });
     }
@@ -1568,7 +1556,7 @@ app.post(
     if (fundingSource === "safe" && !user.privateKey) {
       return res.status(409).json({
         error:
-          "funds are in the Safe, but this legacy account has no Safe owner key in the API store; " +
+          "funds are in the Safe, but this account has no Safe owner key in the API store; " +
           "create a new passkey/Safe account or recover the Safe before this transfer can execute",
         safeBalanceEur: balances.safeBalanceEur,
         vaultBalanceEur: balances.vaultBalanceEur,

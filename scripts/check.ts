@@ -22,6 +22,7 @@ const scripts = [
   "sepa:test",
   "fp3:test",
   "fp4:test",
+  "passkey-safe:test",
   "fp5:test",
   "fx:test",
   "jit:test",

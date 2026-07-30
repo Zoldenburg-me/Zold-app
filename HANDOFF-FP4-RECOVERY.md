@@ -99,15 +99,15 @@ Replace the server-generated EOA with a WebAuthn signer.
 - `services/api/src/wallet/candide.ts:31` — `smartAccountFor(ownerAddress)`
   currently builds `SafeMultiChainSigAccountV1` from an EOA address. Needs a
   `fromSafeWebauthn` path.
-- `deploySmartAccount` (`candide.ts:50`) takes an `ownerKey`; a passkey-owned
-  Safe has no private key, so this signature changes.
+- Safe deployment is now centralized in `/api/users/:id/passkey-safe/deployment`;
+  alternate owner-key deployment helpers have been removed.
 
 Current branch status: passkey registration can now derive and store the
 deterministic 2-of-2 passkey/co-signer Safe address when
 `CANDIDE_COSIGNER_ADDRESS` is configured. The browser can request and sign a
 deployment UserOperation, and the API co-signs/submits it when
-`CANDIDE_COSIGNER_KEY` is configured. Activation refuses if the legacy Safe or
-vault ledger still holds funds, because that requires a migration rather than a
+`CANDIDE_COSIGNER_KEY` is configured. Activation refuses if the current account
+or vault ledger still holds funds, because that requires an explicit move rather than a
 blind address switch. Non-simulation funding now also refuses to issue an IBAN,
 enable auto-convert, or activate Monerium funding until the passkey/co-signer
 Safe is the active account and the server-held owner key has been removed.

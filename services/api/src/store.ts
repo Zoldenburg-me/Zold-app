@@ -63,9 +63,8 @@ export interface User {
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
   /**
-   * FP4 custody migration state. `wallet` above is the currently active Safe;
-   * this records the passkey + co-signer Safe that should replace the
-   * server-owned Safe once client-signed UserOps are wired.
+   * Passkey/co-signer Safe state. `wallet` above is the currently active Safe;
+   * this records the passkey-owned account before activation.
    */
   passkeySafe?: {
     address: `0x${string}`;
@@ -81,7 +80,7 @@ export interface User {
       enabledAt?: string;
     };
     createdAt: string;
-    legacyAddress?: `0x${string}`;
+    previousAddress?: `0x${string}`;
   };
   /** WebAuthn credential bound to this account. Public key + counter are
    *  stored from a verified registration; login verifies assertions. */
@@ -248,11 +247,11 @@ export interface Transfer {
   /**
    * Where the input EURe is taken from at execution time.
    *
-   * vault: legacy/local path. RemitVault.debit verifies the device signature
+   * vault: local ledger path. RemitVault.debit verifies the device signature
    * and moves the full send amount to the orchestrator.
    * safe: transitional live-Monerium path. EURe already sits in the user's
-   * Safe; the API verifies the same device authorization before using the
-   * legacy Safe owner key to move the one-time amount needed for this rail:
+   * Safe; the API verifies the same device authorization before moving the
+   * one-time amount needed for this rail:
    * the full send on the FX rails, the fee alone on SEPA.
    */
   fundingSource?: "vault" | "safe";
@@ -414,8 +413,8 @@ export function initStore() {
       const custodial = db.users.filter((u) => u.privateKey || u.ownerAddress);
       if (custodial.length) {
         throw new Error(
-          `production store contains ${custodial.length} server-owned Safe account(s); ` +
-            "migrate them to active passkey/co-signer Safes before startup",
+          `production store contains ${custodial.length} account(s) with API-held Safe owner material; ` +
+            "activate passkey/co-signer Safes before startup",
         );
       }
     }
