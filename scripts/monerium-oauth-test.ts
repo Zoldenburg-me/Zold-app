@@ -21,12 +21,13 @@
 // Must be first: pins the chain/keys before config.js reads the environment.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
 import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { privateKeyToAccount } from "viem/accounts";
 
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -45,6 +46,8 @@ const AUTH_CODE = "stub-auth-code";
 const PROFILE_ID = "profile-existing-user";
 const EXISTING_IBAN = "GB33BUKB20201555555555";
 const APP_IBAN = "IS140159260076545510730339";
+const COSIGNER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;
+const COSIGNER_ADDRESS = privateKeyToAccount(COSIGNER_KEY).address;
 
 let token = "";
 const children: ChildProcess[] = [];
@@ -64,6 +67,94 @@ const seen = {
 };
 
 const s256 = (v: string) => createHash("sha256").update(v).digest("base64url");
+const sha256 = (b: Buffer | string) => createHash("sha256").update(b).digest();
+const b64url = (b: Buffer | Uint8Array) => Buffer.from(b).toString("base64url");
+const unb64url = (s: string) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+
+function enc(v: any): Buffer {
+  const head = (major: number, len: number) => {
+    if (len < 24) return Buffer.from([(major << 5) | len]);
+    if (len < 256) return Buffer.from([(major << 5) | 24, len]);
+    const b = Buffer.alloc(3); b[0] = (major << 5) | 25; b.writeUInt16BE(len, 1); return b;
+  };
+  if (typeof v === "number") return v >= 0 ? head(0, v) : head(1, -1 - v);
+  if (Buffer.isBuffer(v) || v instanceof Uint8Array) {
+    const b = Buffer.from(v); return Buffer.concat([head(2, b.length), b]);
+  }
+  if (typeof v === "string") {
+    const b = Buffer.from(v, "utf8"); return Buffer.concat([head(3, b.length), b]);
+  }
+  if (v instanceof Map) {
+    const parts: Buffer[] = [head(5, v.size)];
+    for (const [k, val] of v) parts.push(enc(k), enc(val));
+    return Buffer.concat(parts);
+  }
+  throw new Error("enc: unsupported");
+}
+
+function rawToDer(raw: Buffer): Buffer {
+  const int = (b: Buffer) => {
+    let v = b; while (v.length > 1 && v[0] === 0) v = v.subarray(1);
+    if (v[0] & 0x80) v = Buffer.concat([Buffer.from([0]), v]);
+    return Buffer.concat([Buffer.from([0x02, v.length]), v]);
+  };
+  const r = int(raw.subarray(0, 32));
+  const s = int(raw.subarray(32));
+  return Buffer.concat([Buffer.from([0x30, r.length + s.length]), r, s]);
+}
+
+const ORIGIN = `http://localhost:${API_PORT}`;
+function clientData(type: string, challenge: string) {
+  return b64url(Buffer.from(JSON.stringify({ type, challenge, origin: ORIGIN }), "utf8"));
+}
+
+async function makePasskey() {
+  const pair = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const jwk = await webcrypto.subtle.exportKey("jwk", pair.publicKey);
+  const cose = enc(new Map<number, any>([
+    [1, 2], [3, -7], [-1, 1],
+    [-2, unb64url(jwk.x!)], [-3, unb64url(jwk.y!)],
+  ]));
+  const credId = Buffer.from("monerium-oauth-passkey-0001");
+  const authData = (flags: number, count: number, includeAttestation = false) => {
+    const base = Buffer.alloc(37);
+    sha256("localhost").copy(base, 0);
+    base[32] = flags;
+    base.writeUInt32BE(count, 33);
+    if (!includeAttestation) return base;
+    const cred = Buffer.alloc(18 + credId.length);
+    cred.writeUInt16BE(credId.length, 16);
+    credId.copy(cred, 18);
+    return Buffer.concat([base, cred, cose]);
+  };
+  return {
+    credentialId: b64url(credId),
+    register: (challenge: string) => ({
+      credentialId: b64url(credId),
+      attestation: b64url(enc(new Map<string, any>([
+        ["fmt", "none"],
+        ["attStmt", new Map()],
+        ["authData", authData(0x41, 0, true)],
+      ]))),
+      clientDataJSON: clientData("webauthn.create", challenge),
+    }),
+    assert: async (challenge: string, count: number) => {
+      const clientDataJSON = clientData("webauthn.get", challenge);
+      const authenticatorData = authData(0x05, count);
+      const raw = Buffer.from(await webcrypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        pair.privateKey,
+        Buffer.concat([authenticatorData, sha256(unb64url(clientDataJSON))]),
+      ));
+      return {
+        credentialId: b64url(credId),
+        authenticatorData: b64url(authenticatorData),
+        clientDataJSON,
+        signature: b64url(rawToDer(raw)),
+      };
+    },
+  };
+}
 
 /* A stub that plays both Monerium and the Candide RPC. The RPC half only has
  * to answer eth_getCode so `activate` believes the Safe is already deployed
@@ -217,6 +308,9 @@ try {
     MONERIUM_TOKEN_ENCRYPTION_KEY: ENC_KEY,
     MONERIUM_POLL_MS: "3600000",
     CANDIDE_RPC_URL: STUB,
+    CANDIDE_COSIGNER_ADDRESS: COSIGNER_ADDRESS,
+    CANDIDE_COSIGNER_KEY: COSIGNER_KEY,
+    CANDIDE_RECOVERY_GUARDIAN_ADDRESS: "",
     KYC_AUTO_APPROVE: "0", // the connect path is for pending users
     MG_ANCHOR_DOMAIN: "",
   });
@@ -232,6 +326,19 @@ try {
   const userId = created.data.id;
   token = created.data.sessionToken;
   assert.equal(created.data.kycStatus, "pending", "connect path is for users who have not been approved yet");
+  const passkey = await makePasskey();
+
+  await t("passkey Safe is activated before Monerium linking", async () => {
+    const challenge = await call("/api/webauthn/challenge", { purpose: "register" });
+    assert.equal(challenge.status, 200);
+    const registered = await call(`/api/users/${userId}/passkey`, passkey.register(challenge.data.challenge));
+    assert.equal(registered.status, 201, `passkey registration failed: ${registered.data.error ?? ""}`);
+    assert.ok(registered.data.passkeySafe?.address, "passkey registration should plan a Safe");
+    const activated = await call(`/api/users/${userId}/passkey-safe/deployment`, {});
+    assert.equal(activated.status, 200, `passkey Safe activation failed: ${activated.data.error ?? ""}`);
+    assert.equal(activated.data.passkeySafe.status, "active");
+    assert.equal(activated.data.privateKey, undefined, "API must not expose private key material");
+  });
 
   let redirectUrl = "";
   await t("connect/start returns an authorize URL with a real PKCE S256 challenge", async () => {
@@ -301,14 +408,31 @@ try {
     assert.equal(r.status, 409, "KYC must stay pending until an app IBAN is active");
   });
 
-  await t("activate links the app Safe and requests a NEW app IBAN", async () => {
+  await t("activate refuses without a fresh passkey Safe signature", async () => {
     const r = await call(`/api/users/${userId}/monerium/activate`, { profileId: PROFILE_ID });
+    assert.equal(r.status, 409);
+    assert.match(r.data.error, /passkey Safe signature required/);
+  });
+
+  await t("activate links the app Safe with a passkey/co-signer signature and requests a NEW app IBAN", async () => {
+    const start = await call(`/api/users/${userId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
+    assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
+    assert.equal(start.data.credentialId, passkey.credentialId);
+    assert.equal(start.data.message, "I hereby declare that I am the address owner.");
+    const approval = await passkey.assert(start.data.challenge, 1);
+    const r = await call(`/api/users/${userId}/monerium/activate`, {
+      profileId: PROFILE_ID,
+      linkSignatureRequestId: start.data.requestId,
+      ...approval,
+    });
     assert.equal(r.status, 200, `activate failed: ${r.data.error ?? ""}`);
-    assert.equal(seen.linkedAddress.toLowerCase(), created.data.address.toLowerCase(), "must link the app's Safe address");
+    assert.equal(seen.linkedAddress.toLowerCase(), start.data.address.toLowerCase(), "must link the app's Safe address");
     assert.ok(seen.linkSignature.startsWith("0x"), "expected an ownership-declaration signature");
-    assert.equal(seen.ibanRequestedFor.toLowerCase(), created.data.address.toLowerCase());
+    assert.equal(seen.ibanRequestedFor.toLowerCase(), start.data.address.toLowerCase());
     assert.equal(r.data.iban, APP_IBAN, "funding should use the newly issued app IBAN");
     assert.notEqual(r.data.iban, EXISTING_IBAN, "the user's existing IBAN must never be silently moved");
+    const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
+    assert.ok(!db.includes("privateKey"), "activation must not require storing user private key material");
   });
 
   await t("activation approves the account and opens funding", async () => {
