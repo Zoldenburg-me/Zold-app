@@ -12,7 +12,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
-import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyRegistration } from "./webauthn.js";
+import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type Transfer, type User } from "./store.js";
 import { createQuote, isExpired } from "./fx.js";
@@ -60,7 +60,8 @@ import {
   CANDIDE,
   isDeployed,
   preparePasskeySafeDeployment,
-  signMessageAsSafe,
+  safeMessageHash,
+  signMessageAsPasskeySafe,
   smartAccountFor,
   smartAccountForPasskeyCosigner,
   submitPasskeySafeDeployment,
@@ -175,6 +176,12 @@ app.use(express.static(pub));
 
 type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
 const pendingPasskeySafeDeployments = new Map<string, { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }>();
+const pendingMoneriumLinkSignatures = new Map<string, {
+  userId: string;
+  expiresAt: number;
+  challenge: string;
+  profileId?: string;
+}>();
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
 const wrap =
@@ -501,6 +508,12 @@ function passkeySafeChallenge(challenge: `0x${string}`): string {
 function prunePendingPasskeySafeDeployments(now = Date.now()) {
   for (const [id, pending] of pendingPasskeySafeDeployments) {
     if (pending.expiresAt < now) pendingPasskeySafeDeployments.delete(id);
+  }
+}
+
+function prunePendingMoneriumLinkSignatures(now = Date.now()) {
+  for (const [id, pending] of pendingMoneriumLinkSignatures) {
+    if (pending.expiresAt < now) pendingMoneriumLinkSignatures.delete(id);
   }
 }
 
@@ -971,6 +984,46 @@ app.get(
 );
 
 app.post(
+  "/api/users/:id/monerium/link-signature/start",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const custodyBlocked = custodyBlockerBeforeFunding(user);
+    if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
+    if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
+      return res.status(409).json({ error: "active passkey Safe required before Monerium address linking" });
+    }
+    if (!CANDIDE.cosignerKey) {
+      return res.status(503).json({ error: "CANDIDE_COSIGNER_KEY is required to co-sign Monerium address linking" });
+    }
+    await moneriumAccessToken(user);
+    if (!(await isDeployed(user.address))) {
+      return res.status(409).json({ error: "passkey Safe must be deployed before Monerium address linking" });
+    }
+    prunePendingMoneriumLinkSignatures();
+    const requestId = randomUUID();
+    const profileId = typeof req.body?.profileId === "string" ? req.body.profileId : user.monerium?.profileId;
+    const challenge = passkeySafeChallenge(safeMessageHash(user.address, LINK_MESSAGE));
+    pendingMoneriumLinkSignatures.set(requestId, {
+      userId: user.id,
+      profileId,
+      challenge,
+      expiresAt: Date.now() + 5 * 60_000,
+    });
+    res.status(201).json({
+      requestId,
+      credentialId: user.passkey.credentialId,
+      challenge,
+      rpId: user.passkey.rpId ?? SECURITY.rpId,
+      message: LINK_MESSAGE,
+      address: user.address,
+      submitTo: `/api/users/${user.id}/monerium/activate`,
+    });
+  }),
+);
+
+app.post(
   "/api/users/:id/monerium/activate",
   wrap(async (req, res) => {
     let user = store.findUser(req.params.id);
@@ -981,26 +1034,59 @@ app.post(
       return res.status(409).json({ error: custodyBlocked });
     }
     const accessToken = await moneriumAccessToken(user);
-    const profileId = typeof req.body?.profileId === "string" ? req.body.profileId : user.monerium?.profileId;
 
     if (!(await isDeployed(user.address))) {
       return res.status(409).json({
         error: "passkey Safe must be deployed before Monerium address linking",
       });
     }
+    if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
+      return res.status(409).json({ error: "active passkey Safe required before Monerium address linking" });
+    }
+    const requestId = typeof req.body?.linkSignatureRequestId === "string" ? req.body.linkSignatureRequestId : "";
+    prunePendingMoneriumLinkSignatures();
+    const pending = requestId ? pendingMoneriumLinkSignatures.get(requestId) : undefined;
+    if (!pending || pending.userId !== user.id) {
+      return res.status(409).json({
+        error: "fresh passkey Safe signature required for Monerium address linking",
+        start: `/api/users/${user.id}/monerium/link-signature/start`,
+      });
+    }
+    pendingMoneriumLinkSignatures.delete(requestId);
+    const profileIdFromBody = typeof req.body?.profileId === "string" ? req.body.profileId : undefined;
+    if (pending.profileId && profileIdFromBody && pending.profileId !== profileIdFromBody) {
+      return res.status(400).json({ error: "profileId does not match the signed Monerium linking request" });
+    }
+    const profileId = pending.profileId ?? profileIdFromBody ?? user.monerium?.profileId;
+    const { credentialId, authenticatorData, clientDataJSON, signature: assertionSignature } = req.body ?? {};
+    if (credentialId !== user.passkey.credentialId) {
+      return res.status(403).json({ error: "passkey credential does not match this account" });
+    }
+    if (!authenticatorData || !clientDataJSON || !assertionSignature) {
+      return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
+    }
     let signature: `0x${string}`;
-    if (user.privateKey) {
-      signature = await signMessageAsSafe(user.privateKey, user.address, LINK_MESSAGE);
-    } else {
-      const provided = req.body?.signature;
-      if (typeof provided !== "string" || !/^0x[0-9a-fA-F]+$/.test(provided)) {
-        return res.status(409).json({
-          error: "Safe signature required for Monerium address linking",
-          message: LINK_MESSAGE,
-          address: user.address,
-        });
-      }
-      signature = provided as `0x${string}`;
+    const passkeySafe = user.passkeySafe;
+    try {
+      const { signCount } = await verifyAssertionForChallenge(
+        authenticatorData,
+        clientDataJSON,
+        assertionSignature,
+        user.passkey.publicKey,
+        user.passkey.signCount ?? 0,
+        user.passkey.rpId ?? SECURITY.rpId,
+        SECURITY.origins,
+        pending.challenge,
+        true,
+      );
+      user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+      signature = await signMessageAsPasskeySafe(passkeySafe, user.address, LINK_MESSAGE, {
+        authenticatorData: b64urlToBuf(authenticatorData),
+        clientDataJSON: b64urlToBuf(clientDataJSON),
+        signature: b64urlToBuf(assertionSignature),
+      });
+    } catch (err: any) {
+      return res.status(401).json({ error: String(err?.message ?? err) });
     }
     await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/addresses", {
       address: user.address,
