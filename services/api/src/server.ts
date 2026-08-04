@@ -1680,26 +1680,32 @@ app.post(
       return res.status(503).json({ error: "CANDIDE_COSIGNER_KEY is required before passkey Safe deployment" });
     }
     /**
-     * A passkey Safe is deployed through an ERC-4337 bundler and paymaster.
-     * Neither exists on a local hardhat node, so under `npm run dev` this call
-     * asks Candide about chain CANDIDE_CHAIN_ID for a Safe that only exists on
-     * this laptop, and fails with a network error the UI reports as
-     * "Failed to fetch" — which reads as a bug in our code rather than a chain
-     * that cannot support the operation.
+     * Deploying a passkey Safe goes through an ERC-4337 bundler and paymaster.
+     * A local hardhat node has neither, so under `npm run dev` this reaches
+     * Candide asking about CANDIDE_CHAIN_ID for a Safe that exists only on this
+     * machine, and the browser reports the network failure as "Failed to fetch"
+     * — which reads as a bug in our code rather than a chain that cannot do the
+     * operation.
      *
-     * Refuse with the reason instead. The fix is to run against the chain
-     * Candide is configured for, not to make onboarding limp along here.
+     * Explain it when it happens rather than refusing up front: an already
+     * deployed Safe short-circuits before any bundler call, and that path works
+     * locally (monerium:oauth:test relies on it). Guessing ahead of the failure
+     * broke a passing flow.
      */
-    if (BigInt(CHAIN_ID) !== BigInt(CANDIDE.chainId)) {
-      return res.status(409).json({
-        error:
-          `passkey Safe deployment needs an ERC-4337 bundler, and this API is on chain ${CHAIN_ID} ` +
-          `while Candide is configured for chain ${CANDIDE.chainId}. A local hardhat node has no ` +
-          `bundler or paymaster. Run the API against chain ${CANDIDE.chainId} (npm run api with ` +
-          `TRANSF_CHAIN_ID=${CANDIDE.chainId}) rather than npm run dev.`,
+    let deployment: Awaited<ReturnType<typeof preparePasskeySafeDeployment>>;
+    try {
+      deployment = await preparePasskeySafeDeployment(user.passkeySafe);
+    } catch (err: any) {
+      const mismatch = BigInt(CHAIN_ID) !== BigInt(CANDIDE.chainId);
+      return res.status(mismatch ? 409 : 502).json({
+        error: mismatch
+          ? `passkey Safe deployment needs an ERC-4337 bundler. This API is on chain ${CHAIN_ID} ` +
+            `while Candide is configured for chain ${CANDIDE.chainId}, and a local hardhat node has ` +
+            `no bundler or paymaster. Run against chain ${CANDIDE.chainId} (npm run api) rather than ` +
+            `npm run dev. Underlying error: ${err?.message ?? err}`
+          : `passkey Safe deployment failed: ${err?.message ?? err}`,
       });
     }
-    const deployment = await preparePasskeySafeDeployment(user.passkeySafe);
     if (deployment.challenge === "0x") {
       const updated = store.updateUser(user.id, {
         address: user.passkeySafe.address,
