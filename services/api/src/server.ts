@@ -72,6 +72,7 @@ import {
   safeMessageHash,
   signMessageAsPasskeySafe,
   smartAccountFor,
+  smartAccountForPasskey,
   smartAccountForPasskeyCosigner,
   submitPasskeySafeDeployment,
   webauthnOwnerFromJwk,
@@ -481,19 +482,38 @@ function passkeySafePlan(
   publicKey: NonNullable<NonNullable<User["passkey"]>["publicKey"]>,
 ): User["passkeySafe"] | undefined {
   if (!publicKey || publicKey.alg !== "ES256") return undefined;
-  if (!/^0x[0-9a-fA-F]{40}$/.test(CANDIDE.cosignerAddress)) return undefined;
-  const cosignerAddress = CANDIDE.cosignerAddress as `0x${string}`;
+  const cosignerAddress =
+    CANDIDE.cosignerEnabled && /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.cosignerAddress)
+      ? (CANDIDE.cosignerAddress as `0x${string}`)
+      : undefined;
   const owner = webauthnOwnerFromJwk(publicKey.jwk);
   if (!owner) return undefined;
-  const account = smartAccountForPasskeyCosigner(owner, cosignerAddress);
+  const account = cosignerAddress
+    ? smartAccountForPasskeyCosigner(owner, cosignerAddress)
+    : smartAccountForPasskey(owner);
   const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
     ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)
     : undefined;
   return {
     address: account.accountAddress as `0x${string}`,
     status: "planned",
-    threshold: 2,
-    cosignerAddress,
+    threshold: cosignerAddress ? 2 : 1,
+    ...(cosignerAddress
+      ? {
+          cosignerAddress,
+          cosignerPolicy: {
+            enabled: true,
+            allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+            allowanceAmount: CANDIDE.cosignerAllowanceAmount.toString(),
+          },
+        }
+      : {
+          cosignerPolicy: {
+            enabled: false,
+            allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+            allowanceAmount: "0",
+          },
+        }),
     passkeyPublicKey: webauthnOwnerToStore(owner),
     ...(recoveryGuardianAddress
       ? {
