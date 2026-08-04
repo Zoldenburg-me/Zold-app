@@ -48,7 +48,7 @@ Use restrained product copy:
 
 `Privacy Bundle`
 
-`Kokio eSIM data plus Mysterium VPN, capped so usage stays profitable.`
+`Kokio eSIM data plus Mysterium VPN with clear monthly allowances.`
 
 Avoid:
 
