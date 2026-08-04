@@ -123,8 +123,14 @@ export async function bridgeUsdcToStellar(
       forwarder32, // mintRecipient MUST be the forwarder (Circle rule)
       CCTP.usdc,
       forwarder32, // destinationCaller MUST be the forwarder too
-      0n, // maxFee: standard-finality transfer
-      2000, // minFinalityThreshold: hard finality
+      // Fast Transfer vs standard, and it decides whether a bridge fits inside
+      // a payout quote. minFinalityThreshold 2000 = hard finality, which took
+      // ~15 minutes on Base Sepolia; 1000 = soft finality, which Circle settles
+      // in seconds but charges maxFee for. MoneyGram guarantees a rate for 30
+      // minutes, so the slow path only just fits and the fast path is the one
+      // to use once a real payout depends on it.
+      CCTP.maxFee,
+      CCTP.minFinalityThreshold,
       hookData,
     ],
   });
@@ -150,15 +156,21 @@ export async function bridgeUsdcToStellar(
   // source chain; if the Stellar recipient has no trustline for the asset the
   // mint cannot land and the money is simply gone. Stellar will not create the
   // trustline for us, so refusing here is the only safe answer.
+  // The asset checked here must be the one being BRIDGED — USDC — not
+  // STELLAR.anchorAsset, which still defaults to SRT (testanchor's token).
+  // Checking the anchor asset refused a perfectly good USDC burn for want of an
+  // SRT trustline, and would equally have PASSED a burn whose USDC the
+  // recipient could not hold. Right refusal, wrong reason, both directions.
   if (STELLAR.anchorDomain) {
     const readiness = await anchorPayoutReadiness(
       STELLAR.anchorDomain,
-      STELLAR.anchorAsset,
+      CCTP.bridgedAssetCode,
       recipientStellar,
     );
     if (!readiness.ready) {
       throw new Error(
-        `refusing to burn USDC: the Stellar recipient cannot receive it — ${readiness.problems.join("; ")}`,
+        `refusing to burn USDC: the Stellar recipient cannot receive ${CCTP.bridgedAssetCode} — ` +
+          `${readiness.problems.join("; ")}`,
       );
     }
   }
@@ -173,18 +185,48 @@ export async function bridgeUsdcToStellar(
   const approveReceipt = await pub.waitForTransactionReceipt({ hash: approveHash });
   if (approveReceipt.status !== "success") throw new Error("CCTP USDC approval reverted");
   plan.approveTxHash = approveHash;
+
+  // The approve receipt is not enough. Base's public RPC is load-balanced, and
+  // the burn's gas estimation can be served by a node that has not yet seen the
+  // approval — which reverts with "transfer amount exceeds allowance" while the
+  // allowance is already correct on chain. Wait until the node we are about to
+  // ask can actually see it.
+  for (let i = 0; i < 20; i++) {
+    const seen = (await pub.readContract({
+      address: CCTP.usdc as `0x${string}`,
+      abi: ERC20_ABI,
+      functionName: "allowance",
+      args: [account.address, CCTP.tokenMessenger as `0x${string}`],
+    })) as bigint;
+    if (seen >= units) break;
+    if (i === 19) {
+      throw new Error(
+        `approval ${approveHash} confirmed but the RPC still reports allowance < ${units} — ` +
+          `refusing to burn into a revert`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+
   const burnHash = await wallet.sendTransaction({ to: plan.burnTx.to, data: plan.burnTx.data });
   const receipt = await pub.waitForTransactionReceipt({ hash: burnHash });
   if (receipt.status !== "success") throw new Error("CCTP burn reverted");
   plan.burnTxHash = burnHash;
 
   try {
-    plan.attestation = await pollIris(burnHash);
+    plan.attestation = await pollIris(burnHash, CCTP.attestationTimeoutMs);
     plan.stellarMintTxHash = await mintCctpToStellar(plan.attestation, (hash) => {
       plan.stellarMintTxHash = hash;
     });
   } catch (err: any) {
-    throw new CctpBridgeError(err?.message ?? String(err), plan);
+    // The burn already happened. Say what to do about it, in the error itself —
+    // a bare timeout here reads as "the bridge failed" when in fact real USDC is
+    // burned and only the mint is outstanding.
+    throw new CctpBridgeError(
+      `${err?.message ?? String(err)}. The burn ${burnHash} IS on chain and the USDC is spent — ` +
+        `this is resumable, not lost: npm run cctp:resume ${burnHash}`,
+      plan,
+    );
   }
   return plan;
 }
@@ -238,7 +280,9 @@ export async function mintCctpToStellar(
 /** Poll Iris (sandbox) until the attestation for a burn tx is complete. */
 export async function pollIris(
   burnTxHash: `0x${string}`,
-  timeoutMs = 5 * 60_000,
+  // 5 minutes was shorter than Base Sepolia finality, so a first bridge always
+  // timed out with the USDC already burned. Measured: ~15 minutes hard finality.
+  timeoutMs = CCTP.attestationTimeoutMs,
 ): Promise<{ message: string; attestation: string }> {
   const url = `${CCTP.irisBase}/v2/messages/6?transactionHash=${burnTxHash}`;
   const start = Date.now();
