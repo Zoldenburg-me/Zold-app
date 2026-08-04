@@ -76,73 +76,167 @@
   .row2 > div { flex: 1; }
   .row2 button { flex: none; }
 
-  /* ---------- onboarding (split-screen, Valerium landing) ---------- */
-  #onboard { display: grid; grid-template-columns: 1fr 1.15fr; min-height: 100vh; }
-  .onb-left { display: flex; flex-direction: column; padding: 1.6rem 2.2rem; background: var(--side-bg); }
-  .onb-logo { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1rem; }
-  .onb-logo .tri { color: var(--acc); }
-  .onb-form { margin: auto; width: 100%; max-width: 340px; text-align: center; }
-  .onb-form h1 { font-size: 1.6rem; letter-spacing: -.01em; margin-bottom: .35rem; font-weight: 700; }
-  .onb-form .sub { color: var(--muted); font-size: .84rem; margin-bottom: 1.4rem; }
-  .onb-form label, .onb-form .error { text-align: left; }
-  .btn-primary-lite {
-    width: 100%; margin-top: 1.1rem; padding: .72rem; border-radius: 999px;
-    background: #fff; color: #111114; font-weight: 600; font-size: .9rem;
-  }
-  .btn-primary-lite:hover { filter: brightness(.93); }
-  .onb-terms { margin-top: 1.4rem; font-size: .7rem; color: var(--faint); line-height: 1.7; }
-  .onb-terms a { color: var(--acc); text-decoration: none; cursor: pointer; }
-  .onb-steps { display: flex; gap: .4rem; justify-content: center; margin-bottom: 1.3rem; }
-  .onb-steps .dot { width: 28px; height: 4px; border-radius: 99px; background: var(--border2); transition: background .3s; }
-  .onb-steps .dot.active { background: var(--acc); }
-  .onb-steps .dot.done { background: var(--green); }
-  .pk-card {
-    text-align: left; background: var(--panel); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: .95rem 1.05rem; font-size: .82rem; color: var(--muted);
-    margin-top: .4rem; line-height: 1.6;
-  }
-  .pk-card b { color: var(--text); }
-  .onb-form .ghost.wide { margin-top: .6rem; background: var(--row); }
+  /* ==========================================================================
+     ONBOARDING + SETUP
+     --------------------------------------------------------------------------
+     Scope note for whoever edits this next: these rules style the three
+     pre-dashboard screens only (#onboard, #provisioning, #kyc-review). The
+     dashboard has its own system further down and is designed separately — the
+     one shared class is .kyc-status, which #kyc-card reuses inside the
+     dashboard, so it is deliberately left alone below.
 
+     Every id here is load-bearing. provStep() indexes `#prov-steps .pstep` and
+     rewrites className to "pstep active|done"; the step dots are set to
+     "dot done"/"dot active"; setPasskeyButtonBusy() overwrites #btn-passkey's
+     textContent, so that button must stay text-only with no child elements.
+     ========================================================================== */
+  :root {
+    --onb-ink: #f7f7f9;
+    --onb-sub: #9a9aa6;
+    --onb-line: rgba(255,255,255,.09);
+    --onb-field: #141419;
+    --onb-lift: 0 1px 0 rgba(255,255,255,.04) inset;
+  }
+
+  #onboard { display: grid; grid-template-columns: 1fr 1.05fr; min-height: 100vh; }
+  .onb-left {
+    display: flex; flex-direction: column; padding: 2rem 2.4rem 2.4rem;
+    background: var(--side-bg);
+  }
+  .onb-logo { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1.02rem; letter-spacing: -.01em; }
+  .onb-logo .tri { color: var(--acc); }
+  .onb-form { margin: auto; width: 100%; max-width: 372px; }
+  .onb-form h1 {
+    font-size: 1.9rem; line-height: 1.15; letter-spacing: -.025em;
+    margin-bottom: .5rem; font-weight: 700; color: var(--onb-ink);
+  }
+  .onb-form .sub { color: var(--onb-sub); font-size: .93rem; line-height: 1.55; margin-bottom: 1.9rem; }
+
+  /* Segmented progress. JS toggles .active/.done on the same nodes. */
+  .onb-steps { display: flex; gap: .35rem; margin-bottom: 2rem; }
+  .onb-steps .dot {
+    height: 3px; flex: 1; border-radius: 99px; background: rgba(255,255,255,.09);
+    transition: background .35s ease;
+  }
+  .onb-steps .dot.active { background: var(--acc); }
+  .onb-steps .dot.done { background: rgba(237,24,141,.45); }
+
+  .onb-form label {
+    font-size: .78rem; font-weight: 500; color: var(--onb-sub);
+    margin: 1.05rem 0 .4rem; letter-spacing: 0;
+  }
+  .onb-form input {
+    padding: .82rem .9rem; border-radius: 12px; font-size: .95rem;
+    background: var(--onb-field); border: 1px solid var(--onb-line);
+    box-shadow: var(--onb-lift);
+  }
+  .onb-form input:focus { border-color: var(--acc); box-shadow: 0 0 0 3px rgba(237,24,141,.14); }
+
+  .btn-primary-lite {
+    width: 100%; margin-top: 1.6rem; padding: .88rem; border-radius: 999px;
+    background: #fff; color: #101014; font-weight: 600; font-size: .95rem;
+  }
+  .btn-primary-lite:hover { filter: brightness(.94); }
+  .onb-form .ghost.wide {
+    margin-top: .55rem; padding: .82rem; border-radius: 999px;
+    background: transparent; border: 1px solid var(--onb-line); color: var(--onb-sub);
+    font-size: .92rem; font-weight: 500;
+  }
+  .onb-form .ghost.wide:hover { background: rgba(255,255,255,.03); color: var(--text); }
+
+  /* The passkey explainer. Plain language on purpose — "smart-account vault"
+     told a non-crypto reader nothing they could act on. */
+  .pk-card {
+    display: flex; gap: .8rem; align-items: flex-start;
+    background: rgba(255,255,255,.025); border: 1px solid var(--onb-line);
+    border-radius: 14px; padding: 1rem 1.05rem;
+    font-size: .86rem; color: var(--onb-sub); line-height: 1.6;
+  }
+  .pk-card .pk-ic { font-size: 1.05rem; line-height: 1.35; }
+  .pk-card b { color: var(--text); font-weight: 600; }
+  .onb-note { margin-top: .85rem; font-size: .78rem; color: var(--faint); line-height: 1.6; }
+  .onb-terms { margin-top: 1.8rem; font-size: .76rem; color: var(--faint); line-height: 1.75; }
+  .onb-terms a { color: var(--text); text-decoration: none; cursor: pointer; border-bottom: 1px solid var(--onb-line); }
+  .onb-terms a:hover { border-bottom-color: var(--acc); }
+
+  /* Right panel: what the account actually is. No mock balance — a made-up
+     number is the first thing that makes a product look unfinished. */
   .onb-hero {
     position: relative; overflow: hidden; display: grid; place-items: center;
     background:
-      radial-gradient(720px 440px at 65% 32%, rgba(237, 24, 141, 0.25), transparent 62%),
-      radial-gradient(560px 380px at 38% 62%, rgba(123, 47, 247, 0.16), transparent 60%),
-      #0d0a10;
+      radial-gradient(680px 460px at 72% 22%, rgba(237,24,141,.14), transparent 64%),
+      radial-gradient(560px 420px at 26% 78%, rgba(123,47,247,.10), transparent 62%),
+      #0a0a0d;
+    border-left: 1px solid var(--onb-line);
   }
   .onb-hero::before {
-    content: ""; position: absolute; inset: 0; opacity: .5;
+    content: ""; position: absolute; inset: 0; opacity: .55;
     background:
-      repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 90px),
-      repeating-linear-gradient(0deg, rgba(255,255,255,.04) 0 1px, transparent 1px 90px);
+      repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 1px, transparent 1px 110px),
+      repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 110px);
+    mask-image: radial-gradient(80% 70% at 50% 45%, #000, transparent);
   }
-  .onb-hero-inner { position: relative; text-align: center; padding: 2rem; max-width: 560px; }
-  .onb-hero h2 { font-size: 2.7rem; font-weight: 700; letter-spacing: -.02em; color: #fff; }
-  .onb-hero .tag { color: var(--muted); margin: .45rem 0 1.8rem; font-size: .95rem; }
-  .onb-mock {
-    text-align: left; background: var(--panel); border: 1px solid var(--border2); border-radius: var(--radius);
-    padding: 1.1rem 1.2rem;
-    box-shadow: 0 28px 80px rgba(0, 0, 0, 0.6);
+  .onb-hero-inner { position: relative; padding: 3rem; max-width: 460px; width: 100%; }
+  .onb-hero h2 {
+    font-size: 2.15rem; font-weight: 700; letter-spacing: -.03em; line-height: 1.15;
+    color: #fff; margin-bottom: .6rem;
+  }
+  .onb-hero .tag { color: var(--onb-sub); font-size: .95rem; line-height: 1.6; margin-bottom: 2.4rem; }
+  .onb-points { display: flex; flex-direction: column; gap: 1.35rem; }
+  .onb-point { display: flex; gap: .95rem; align-items: flex-start; }
+  .onb-point .pi {
+    width: 34px; height: 34px; flex: none; border-radius: 10px; display: grid; place-items: center;
+    background: rgba(255,255,255,.045); border: 1px solid var(--onb-line); font-size: .95rem;
+  }
+  .onb-point .pt { display: block; font-size: .92rem; font-weight: 600; color: var(--onb-ink); }
+  .onb-point .pd { display: block; font-size: .84rem; color: var(--onb-sub); line-height: 1.55; margin-top: .15rem; }
+  .onb-foot {
+    position: relative; margin-top: 2.6rem; padding-top: 1.3rem;
+    border-top: 1px solid var(--onb-line); font-size: .78rem; color: var(--faint); line-height: 1.65;
   }
 
-  /* provisioning */
+  /* ---------- setting-up + review screens ---------- */
   #provisioning { display: none; min-height: 100vh; place-items: center; padding: 1.5rem; }
   .prov-card {
-    width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 1.6rem;
+    width: 100%; max-width: 430px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 18px; padding: 2rem 1.8rem;
   }
-  .prov-card h1 { font-size: 1.2rem; margin-bottom: .3rem; font-weight: 700; }
-  .prov-card .sub { color: var(--faint); font-size: .82rem; margin-bottom: 1.3rem; }
-  .pstep { display: flex; align-items: center; gap: .8rem; padding: .55rem 0; color: var(--faint); font-size: .9rem; font-weight: 500; }
+  .prov-card h1 { font-size: 1.45rem; letter-spacing: -.02em; margin-bottom: .4rem; font-weight: 700; }
+  .prov-card .sub { color: var(--onb-sub); font-size: .88rem; line-height: 1.55; margin-bottom: 1.7rem; }
+  /* .wide sets the brand gradient and is declared after .ghost, so the
+     secondary action rendered identically to the primary — two equally loud
+     buttons with different consequences. Scoped to .prov-card so the
+     dashboard's own .wide buttons are untouched. */
+  .prov-card .wide, .prov-card .btn-primary-lite {
+    width: 100%; border-radius: 999px; padding: .82rem; margin-top: .55rem;
+    background: #fff; color: #101014; font-weight: 600; font-size: .93rem;
+  }
+  .prov-card .wide:hover { filter: brightness(.94); }
+  .prov-card .ghost.wide {
+    background: transparent; border: 1px solid var(--onb-line);
+    color: var(--onb-sub); font-weight: 500;
+  }
+  .prov-card .ghost.wide:hover { background: rgba(255,255,255,.03); color: var(--text); filter: none; }
+
+  #prov-steps { display: flex; flex-direction: column; gap: .1rem; }
+  .pstep {
+    display: flex; align-items: center; gap: .85rem; padding: .7rem 0;
+    color: var(--faint); font-size: .92rem; font-weight: 500; transition: color .3s;
+  }
   .pstep .pdot {
-    width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex: none;
-    border: 2px solid var(--border2); font-size: .72rem; color: transparent; transition: all .3s;
+    width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; flex: none;
+    border: 1.5px solid var(--onb-line); font-size: .68rem; color: transparent; transition: all .3s;
   }
   .pstep.active { color: var(--text); }
-  .pstep.active .pdot { border-color: var(--acc2); animation: pulse 1.2s infinite; }
-  .pstep.done { color: var(--muted); }
-  .pstep.done .pdot { border-color: var(--green); background: rgba(61, 214, 140, 0.1); color: var(--green); }
+  .pstep.active .pdot { border-color: var(--acc); animation: pulse 1.2s infinite; }
+  .pstep.done { color: var(--onb-sub); }
+  .pstep.done .pdot { border-color: var(--green); background: rgba(61,214,140,.12); color: var(--green); }
+  /* One flex child for the whole label, so the trailing explanation wraps with
+     the text instead of becoming its own column. */
+  .pstep .ptext { flex: 1; }
+  .pstep .pwhy { font-weight: 400; color: var(--faint); font-size: .84rem; }
+
+  /* Shared with the dashboard's #kyc-card — left as it was on purpose. */
   .kyc-status {
     margin-top: 1rem; padding: .85rem .95rem; border-radius: 10px;
     background: rgba(245, 166, 35, 0.06); border: 1px solid rgba(245, 166, 35, 0.3);
@@ -151,13 +245,14 @@
   .kyc-status .kt { margin-top: .2rem; font-size: .95rem; font-weight: 700; }
   .kyc-status .kd { margin-top: .25rem; font-size: .8rem; color: var(--muted); }
 
-  .panel {
-    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 1.3rem; text-align: left;
+  .kyc-pick { display: flex; flex-direction: column; gap: .55rem; margin-bottom: 1.2rem; }
+  .kyc-pick button {
+    width: 100%; text-align: left; display: flex; flex-direction: column; gap: .2rem;
+    padding: .9rem 1rem; border-radius: 14px; background: rgba(255,255,255,.03);
+    border: 1px solid var(--onb-line); color: var(--text); font-weight: 600; font-size: .92rem;
   }
-  .corridor { display: flex; align-items: center; justify-content: center; gap: .8rem; font-size: .8rem; color: var(--muted); margin-bottom: 1.2rem; }
-  .corridor .flag { font-size: 1.35rem; display: block; text-align: center; }
-  .corridor .arrow { color: var(--faint); }
+  .kyc-pick button:hover { background: rgba(255,255,255,.06); filter: none; }
+  .kyc-pick button span { font-weight: 400; font-size: .82rem; color: var(--onb-sub); }
 
   /* ---------- app shell ---------- */
   #dashboard { display: none; grid-template-columns: 210px 1fr 375px; min-height: 100vh; }
@@ -232,7 +327,17 @@
     #dashboard { grid-template-columns: 210px 1fr; }
     .rail { grid-column: 2; padding: 0 1.5rem 2rem 1.5rem; }
   }
-  @media (max-width: 900px) { #onboard { grid-template-columns: 1fr; } }
+  /* Below the split, the hero is dropped rather than stacked underneath: on a
+     phone it would push the actual form off the first screen, and this is a
+     product people will mostly open on a phone. */
+  @media (max-width: 900px) {
+    #onboard { grid-template-columns: 1fr; }
+    .onb-hero { display: none; }
+    .onb-left { padding: 1.4rem 1.3rem 2rem; }
+    .onb-form { max-width: 420px; }
+    .onb-form h1 { font-size: 1.7rem; }
+    .prov-card { padding: 1.6rem 1.3rem; border-radius: 16px; }
+  }
   @media (max-width: 860px) {
     #dashboard { grid-template-columns: 1fr; }
     .side { display: none; }
@@ -417,8 +522,8 @@
         <div class="onb-steps"><span class="dot active" id="ostep1"></span><span class="dot" id="ostep2"></span></div>
 
         <div id="onb-step1">
-          <h1>Open your Account</h1>
-          <div class="sub">A EUR account with a real IBAN, held in your own smart-account vault.</div>
+          <h1>Open your account</h1>
+          <div class="sub">A euro account with your own IBAN, so money can reach you the ordinary way. Takes about a minute.</div>
           <label>Full name</label>
           <input id="name" placeholder="Amina Kamau" />
           <label>Email</label>
@@ -429,43 +534,65 @@
           <div class="error hidden" id="create-err"></div>
           <div class="onb-terms">
             Already have an account? <a id="link-signin">Sign in with your passkey</a><br/><br/>
-            By signing up you accept the <a href="#">Terms of use</a> &amp; <a href="#">Privacy policy</a>
+            By continuing you accept the <a href="#">Terms of use</a> &amp; <a href="#">Privacy policy</a>
           </div>
         </div>
 
         <div id="onb-step2" class="hidden">
-          <h1>Secure your account</h1>
-          <div class="sub">No passwords, no seed phrases.</div>
+          <h1>Set up your passkey</h1>
+          <div class="sub">Nothing to remember, nothing to write down.</div>
           <div class="pk-card">
-            🔑 <b>Your device becomes the key.</b> Face ID, fingerprint, or your
-            screen lock creates a passkey that signs you in — and will co-own
-            your smart-account vault. It never leaves your device.
+            <span class="pk-ic">🔑</span>
+            <span><b>This device becomes your key.</b> Face ID, your fingerprint
+            or your screen lock unlocks the account and approves each payment.
+            It stays on this device — we never receive it, and there is no
+            password for anyone to steal or phish.</span>
           </div>
           <button class="btn-primary-lite" id="btn-passkey">Create passkey &amp; open account</button>
-          <button class="ghost wide" id="btn-skippk">Skip for now</button>
+          <button class="ghost wide" id="btn-skippk">Set this up later</button>
+          <!-- Honest about the consequence: the API refuses to issue an IBAN to
+               an account with no passkey outside simulation mode
+               (custodyBlockerBeforeFunding), so "later" means before money, not
+               whenever. Saying so here beats a 409 the user cannot read. -->
+          <div class="onb-note">You can look around first, but an account needs a passkey before it can be given an IBAN or hold money.</div>
           <div class="error hidden" id="pk-err"></div>
         </div>
       </div>
     </div>
+    <!-- No mock balance here on purpose. A made-up €40,206.20 is the first
+         thing that reads as a demo rather than a product, and it teaches the
+         reader nothing about what the account is. -->
     <div class="onb-hero">
       <div class="onb-hero-inner">
-        <h2>#BankOnChain</h2>
-        <div class="tag">Welcome to the future of banking.</div>
-        <div class="onb-mock">
-          <div class="label" style="font-size:.72rem;color:var(--muted);font-weight:600">Primary account <span class="chip eur">EUR</span></div>
-          <div class="amount" style="font-size:1.9rem"><span class="cur">€</span>40,206.20</div>
-          <svg width="100%" height="54" viewBox="0 0 420 54" preserveAspectRatio="none" aria-hidden="true">
-            <defs>
-              <linearGradient id="sg2" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0" stop-color="#7b2ff7"/><stop offset="1" stop-color="#ed188d"/>
-              </linearGradient>
-            </defs>
-            <path d="M0 44 L26 40 L52 42 L78 34 L104 38 L130 28 L156 32 L182 24 L208 27 L234 18 L260 22 L286 13 L312 17 L338 9 L364 13 L392 5 L420 9"
-                  fill="none" stroke="url(#sg2)" stroke-width="2.2" stroke-linejoin="round"/>
-          </svg>
-          <div style="display:flex;gap:1rem;font-size:.74rem;color:var(--muted)">
-            <span>IBAN · SEPA in</span><span>🇰🇪 cash out</span><span>🏦 bank out</span><span>🇮🇳 UPI</span>
+        <h2>A euro account that reaches home.</h2>
+        <div class="tag">Money arrives by normal bank transfer and leaves as cash or a bank payment, with the rate and fee shown before you send.</div>
+        <div class="onb-points">
+          <div class="onb-point">
+            <span class="pi">🏦</span>
+            <span>
+              <span class="pt">Your own IBAN</span>
+              <span class="pd">Salary, family, a client — anyone can pay you by ordinary SEPA transfer.</span>
+            </span>
           </div>
+          <div class="onb-point">
+            <span class="pi">🇰🇪</span>
+            <span>
+              <span class="pt">Cash pickup or bank transfer</span>
+              <span class="pd">Send to a counter in Kenya, or to any IBAN in Europe.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">🔒</span>
+            <span>
+              <span class="pt">Only you can approve a payment</span>
+              <span class="pd">Every send is signed by the passkey on your device. We can move nothing on our own.</span>
+            </span>
+          </div>
+        </div>
+        <div class="onb-foot">
+          Your euros are issued and held as e-money by Monerium ehf., an
+          Electronic Money Institution supervised in Iceland. Zold is software
+          and holds no licence of its own.
         </div>
       </div>
     </div>
@@ -475,26 +602,31 @@
   <section id="provisioning">
     <div class="prov-card">
       <h1>Setting up your account</h1>
-      <div class="sub">This happens once — your vault and IBAN are being created for real.</div>
+      <div class="sub">This happens once, and it is the real thing — not a preview. It usually takes under a minute.</div>
+      <!-- provStep() indexes these four in order; keep the count and the
+           .pstep/.pdot structure. Wording is plain on purpose: "deploying your
+           smart wallet (gasless)" told a non-crypto reader nothing. -->
       <div id="prov-steps">
-        <div class="pstep" ><span class="pdot">✓</span> Creating your account</div>
-        <div class="pstep"><span class="pdot">✓</span> Deploying your smart wallet <span style="font-weight:400;color:var(--faint)">(gasless)</span></div>
-        <div class="pstep"><span class="pdot">✓</span> Linking your wallet to Monerium</div>
-        <div class="pstep"><span class="pdot">✓</span> Issuing your IBAN</div>
+        <div class="pstep"><span class="pdot">✓</span><span class="ptext">Creating your account</span></div>
+        <div class="pstep"><span class="pdot">✓</span><span class="ptext">Setting up your wallet <span class="pwhy">— we cover the network fee</span></span></div>
+        <div class="pstep"><span class="pdot">✓</span><span class="ptext">Connecting to Monerium <span class="pwhy">— your e-money issuer</span></span></div>
+        <div class="pstep"><span class="pdot">✓</span><span class="ptext">Issuing your IBAN</span></div>
       </div>
       <div class="error hidden" id="prov-err"></div>
-      <button class="ghost wide hidden" id="btn-skip">Continue to dashboard anyway</button>
+      <button class="ghost wide hidden" id="btn-skip">Continue without finishing</button>
     </div>
   </section>
 
   <!-- ============ KYC review state ============ -->
   <section id="kyc-review" style="display:none; min-height:100vh; place-items:center; padding:1.5rem">
     <div class="prov-card">
-      <h1 id="kyc-title">Identity review</h1>
-      <div class="sub" id="kyc-sub">Your account is created. Funding and transfers unlock after approval.</div>
-      <div id="kyc-choice">
-        <button class="wide" id="btn-monerium-existing">I already have Monerium</button>
-        <button class="ghost wide" id="btn-monerium-new">I need identity review</button>
+      <h1 id="kyc-title">Verify your identity</h1>
+      <div class="sub" id="kyc-sub">Your account exists. Adding money and sending unlock once you are approved — the law requires this before an IBAN can be yours.</div>
+      <div id="kyc-choice" class="kyc-pick">
+        <button id="btn-monerium-existing">Use my Monerium account
+          <span>Already verified with Monerium? Connect it and skip the checks.</span></button>
+        <button id="btn-monerium-new">Verify my identity
+          <span>The standard route — an ID check with our provider.</span></button>
       </div>
       <div class="kyc-status">
         <div class="ks" id="kyc-label">PENDING</div>
@@ -602,14 +734,23 @@
 
       <div class="card" id="fund-card">
         <h2>Add money</h2>
-        <div class="row2">
-          <div>
-            <label style="margin-top:0">SEPA transfer amount (€)</label>
-            <input id="dep-amount" value="250" inputmode="decimal" />
+        <!-- Two mutually exclusive blocks, chosen by GET /api/health's
+             capabilities. The simulate control only exists where the API will
+             actually accept it; everywhere else the real instructions stand in
+             its place, rather than offering a button that 403s. -->
+        <div id="fund-simulate" class="hidden">
+          <div class="row2">
+            <div>
+              <label style="margin-top:0">SEPA transfer amount (€)</label>
+              <input id="dep-amount" value="250" inputmode="decimal" />
+            </div>
+            <button id="btn-deposit">Deposit</button>
           </div>
-          <button id="btn-deposit">Deposit</button>
+          <div class="hint">Simulates a SEPA transfer to your IBAN. Local testing only — this control is absent wherever the API refuses it.</div>
         </div>
-        <div class="hint">Simulates a SEPA transfer to your IBAN — Monerium mints EURe straight into the vault.</div>
+        <div id="fund-real" class="hidden">
+          <div class="hint" id="fund-real-hint"></div>
+        </div>
         <div class="error hidden" id="dep-err"></div>
       </div>
 
@@ -677,7 +818,6 @@
             <button class="filter-btn active" data-tx-filter="all">All</button>
             <button class="filter-btn" data-tx-filter="cash">Cash</button>
             <button class="filter-btn" data-tx-filter="sepa">SEPA</button>
-            <button class="filter-btn" data-tx-filter="upi">UPI</button>
             <button class="ghost" id="btn-refresh-tx">Refresh</button>
           </div>
           <div id="tx-page-list"><div class="empty">No transfers yet</div></div>
@@ -709,7 +849,7 @@
           <h2>Saved contacts</h2>
           <div class="contact-form">
             <div><label style="margin-top:0">Name</label><input id="contact-name" placeholder="Joseph Otieno" /></div>
-            <div><label style="margin-top:0">Destination</label><input id="contact-dest" placeholder="+254..., IBAN, or UPI ID" /></div>
+            <div><label style="margin-top:0">Destination</label><input id="contact-dest" placeholder="+254… or IBAN" /></div>
             <button id="btn-add-contact">Save</button>
           </div>
           <div id="contact-list"><div class="empty">No saved contacts yet</div></div>
@@ -759,23 +899,14 @@
           <!-- step C: recipient details + quote summary -->
           <div id="send-details" class="hidden">
             <div class="stepnav"><a id="back-options">‹ Delivery options</a><span id="det-title"></span></div>
-            <div id="upi-scan" class="hidden">
-              <label style="margin-top:0">UPI ID or QR</label>
-              <div class="row2">
-                <div><input id="upi-qr" placeholder="paste upi://pay?pa=… or merchant@okicici" /></div>
-                <button class="ghost" id="btn-scan">📷 Scan</button>
-              </div>
-              <div class="hint hidden" id="upi-parsed"></div>
-              <video id="qr-video" class="hidden" muted playsinline style="width:100%;border-radius:12px;margin-top:.6rem"></video>
-            </div>
             <div class="quote" id="quote-box" style="border-top:0;padding-top:0;margin-top:.2rem">
               <div class="qrow" id="row-mid"><span>Mid-market rate</span><span class="dotfill"></span><span id="q-mid"></span></div>
               <div class="qrow" id="row-rate"><span>Your rate <span class="rate-badge" id="q-margin"></span></span><span class="dotfill"></span><span id="q-rate"></span></div>
               <div class="qrow"><span>Fixed fee</span><span class="dotfill"></span><span id="q-fee"></span></div>
               <div class="qrow total"><span id="total-label">Recipient gets</span><span class="val" id="q-recv"></span></div>
               <!-- What the sender actually gets per EUR, fee included. Without
-                   it a small send looks like a broken rate: the EUR 0.29 UPI
-                   fee is 29% of a EUR 1 transfer, so the itemised rows all look
+                   it a small send looks like a broken rate: the EUR 0.99 fee is
+                   a fifth of a EUR 5 transfer, so the itemised rows all look
                    fine while the outcome does not. -->
               <div class="qrow" id="row-effective"><span id="q-eff-label">Effective rate</span><span class="dotfill"></span><span id="q-eff"></span></div>
               <div class="row2" style="margin-top:.9rem" id="recipient-row">
@@ -802,11 +933,6 @@
             <div class="plabel" style="color:var(--acc2)">SEPA bank payout</div>
             <div class="code" id="sepa-status" style="font-size:1.15rem;letter-spacing:.04em;color:var(--acc2);text-shadow:none"></div>
             <div class="pnote" id="sepa-note"></div>
-          </div>
-          <div class="pickup hidden" id="upi-box" style="border-color:rgba(63,214,143,.45);background:rgba(63,214,143,.05)">
-            <div class="plabel" style="color:var(--green)">UPI payment successful</div>
-            <div class="code" id="upi-utr" style="font-size:1.25rem;letter-spacing:.1em;color:var(--green);text-shadow:none"></div>
-            <div class="pnote" id="upi-note"></div>
           </div>
           <div class="paidbox hidden" id="paid-box">
             <div class="check"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
@@ -931,8 +1057,38 @@ function renderUser(u) {
     chip.textContent = "PENDING"; chip.className = "chip pend";
   }
   renderFundingActions(u);
+  renderFundCard();
   renderPrivacyBundle();
   renderShellPages();
+}
+
+/**
+ * What this deployment lets the browser do. Defaults are the SAFE ones: with
+ * no answer from /api/health we assume no simulation, so a failed probe hides
+ * a control the server might refuse rather than offering one it will.
+ */
+let caps = { simulation: false, sandbox: false };
+
+async function loadCapabilities() {
+  try {
+    const h = await (await fetch("/api/health")).json();
+    if (h?.capabilities) caps = { ...caps, ...h.capabilities };
+  } catch {
+    /* keep the safe defaults */
+  }
+  renderFundCard();
+}
+
+/** Show the deposit control only where the API accepts simulated deposits;
+ *  otherwise say how money actually arrives. */
+function renderFundCard() {
+  $("fund-simulate")?.classList.toggle("hidden", !caps.simulation);
+  $("fund-real")?.classList.toggle("hidden", !!caps.simulation);
+  const hint = $("fund-real-hint");
+  if (!hint) return;
+  hint.textContent = user?.iban
+    ? "Transfer euros to the IBAN above from any bank. They arrive as balance here once the transfer settles."
+    : "Your IBAN appears here once your account is approved. Money added by bank transfer will show up as balance.";
 }
 
 function needsPasskeySafeSetup(u = user) {
@@ -1563,6 +1719,7 @@ async function resumeSession() {
     localStorage.removeItem("zoll-session");
   }
 }
+loadCapabilities();
 resumeSession();
 
 	$("btn-deposit").onclick = async () => {
@@ -1700,15 +1857,18 @@ let dest = null;
 const RAILS = {
   cash: { icon: "💵", label: "Cash pickup", desc: "Collect at any MoneyGram agent", eta: "~10 min" },
   sepa: { icon: "🏦", label: "Bank transfer", desc: "Any IBAN · SEPA", eta: "seconds – 1 day" },
-  upi: { icon: "⚡", label: "UPI instant", desc: "Any UPI ID or QR", eta: "instant" },
 };
+/**
+ * India is absent on purpose: its only rail was UPI, which was a mock partner
+ * adapter and has been removed. A destination with no live rail would land the
+ * user on an empty options screen with no way forward, so it comes back when a
+ * licensed partner does.
+ */
 const DESTS = [
   { code: "KE", flag: "🇰🇪", name: "Kenya", cur: "KES", rails: ["cash"], soon: [["📱", "M-Pesa wallet", "straight to their phone"]] },
   { code: "EU", flag: "🇪🇺", name: "Europe", cur: "EUR", rails: ["sepa"], soon: [] },
-  { code: "IN", flag: "🇮🇳", name: "India", cur: "INR", rails: ["upi"], soon: [["🏦", "Bank deposit", "IMPS / NEFT"]] },
 ];
-const recvOf = (q) =>
-  q.rail === "sepa" ? `€${fmt(q.receiveEur)}` : q.rail === "upi" ? `₹${fmt(q.receiveInr)}` : `KES ${fmt(q.receiveKes)}`;
+const recvOf = (q) => (q.rail === "sepa" ? `€${fmt(q.receiveEur)}` : `KES ${fmt(q.receiveKes)}`);
 
 function showSendStep(step) {
   $("send-dest").classList.toggle("hidden", step !== "dest");
@@ -1777,9 +1937,8 @@ function selectOption(q) {
   $("row-mid").classList.toggle("hidden", sepa);
   $("row-rate").classList.toggle("hidden", sepa);
   if (!sepa) {
-    const unit = rail === "upi" ? "INR" : "KES";
-    $("q-mid").textContent = `1 EUR = ${fmt(q.midRate, 2)} ${unit}`;
-    $("q-rate").textContent = `1 EUR = ${fmt(q.fxRate, 2)} ${unit}`;
+    $("q-mid").textContent = `1 EUR = ${fmt(q.midRate, 2)} KES`;
+    $("q-rate").textContent = `1 EUR = ${fmt(q.fxRate, 2)} KES`;
     // Measured against the live mid, not a constant we assert.
     $("q-margin").textContent = `${fmt((q.marginBps ?? 0) / 100, 2)}% margin`;
   }
@@ -1791,10 +1950,9 @@ function selectOption(q) {
      small send — that is the case where the row-by-row receipt looks correct
      and the result still is not worth sending. */
   const feeShare = q.sendEur > 0 ? q.fixedFeeEur / q.sendEur : 0;
-  const unit2 = rail === "upi" ? "INR" : rail === "cash" ? "KES" : "EUR";
   $("q-eff").textContent = sepa
     ? `€${fmt(q.effectiveRate ?? 0, 4)} per €1 sent`
-    : `1 EUR = ${fmt(q.effectiveRate ?? 0, 2)} ${unit2}`;
+    : `1 EUR = ${fmt(q.effectiveRate ?? 0, 2)} KES`;
   const heavy = feeShare >= 0.05;
   $("q-eff-label").textContent = heavy
     ? `Effective rate — the €${fmt(q.fixedFeeEur)} fee is ${fmt(feeShare * 100, 0)}% of this send`
@@ -1802,64 +1960,12 @@ function selectOption(q) {
   $("row-effective").style.color = heavy ? "var(--amber)" : "";
   $("field-phone").classList.toggle("hidden", rail !== "cash");
   $("field-iban").classList.toggle("hidden", rail !== "sepa");
-  $("recipient-row").classList.toggle("hidden", rail === "upi");
-  $("upi-scan").classList.toggle("hidden", rail !== "upi");
-  $("btn-send").textContent = rail === "upi" ? `Pay ${recvOf(q)} (€${fmt(q.sendEur)})` : `Send €${fmt(q.sendEur)} now`;
+  $("btn-send").textContent = `Send €${fmt(q.sendEur)} now`;
   showSendStep("details");
 }
 
 $("back-dest").onclick = () => showSendStep("dest");
 $("back-options").onclick = () => showSendStep("options");
-
-/* ---------- UPI QR parsing + camera scan ---------- */
-let upiTarget = { vpa: "", name: "" };
-function parseUpiQr(text) {
-  text = text.trim();
-  if (/^upi:\/\//i.test(text)) {
-    try {
-      const q = new URL(text.replace(/^upi:\/\//i, "http://upi/")).searchParams;
-      return { vpa: (q.get("pa") || "").trim(), name: (q.get("pn") || "").trim(), amount: q.get("am") || "" };
-    } catch { return { vpa: "", name: "", amount: "" }; }
-  }
-  return { vpa: text, name: "", amount: "" };
-}
-$("upi-qr").addEventListener("input", () => {
-  const p = parseUpiQr($("upi-qr").value);
-  upiTarget = { vpa: p.vpa, name: p.name };
-  const hint = $("upi-parsed");
-  if (p.vpa) {
-    hint.textContent = `→ pay ${p.name || p.vpa}${p.name ? ` (${p.vpa})` : ""}`;
-    hint.classList.remove("hidden");
-  } else {
-    hint.classList.add("hidden");
-  }
-});
-$("btn-scan").onclick = async () => {
-  clearErr("send-err");
-  if (!("BarcodeDetector" in window) || !navigator.mediaDevices?.getUserMedia) {
-    return showErr("send-err", new Error("camera scanning not supported in this browser — paste the QR link instead"));
-  }
-  try {
-    const video = $("qr-video");
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-    video.srcObject = stream;
-    video.classList.remove("hidden");
-    await video.play();
-    const detector = new BarcodeDetector({ formats: ["qr_code"] });
-    const timer = setInterval(async () => {
-      try {
-        const codes = await detector.detect(video);
-        if (codes.length) {
-          clearInterval(timer);
-          stream.getTracks().forEach((t) => t.stop());
-          video.classList.add("hidden");
-          $("upi-qr").value = codes[0].rawValue;
-          $("upi-qr").dispatchEvent(new Event("input"));
-        }
-      } catch {}
-    }, 300);
-  } catch (e) { showErr("send-err", e); }
-};
 
 /* quote fetching + rendering now lives in the destination flow above */
 
@@ -1891,11 +1997,6 @@ function sepaSteps(t) {
   }
   return [["SEPA payout (simulated)", s.detail || "", "🏦"]];
 }
-function upiSteps(t) {
-  const u = t.upi || {};
-  return [["UPI credit to merchant", `UTR ${u.utr || "…"} · ${u.state || ""}`, "🇮🇳"]];
-}
-
 function stepEl(title, detail, icon) {
   const el = document.createElement("div");
   el.className = "tstep";
@@ -1915,9 +2016,6 @@ function playTimeline(t, { onDone } = {}) {
   });
   if (t.rail === "sepa") {
     for (const [label, detail, icon] of sepaSteps(t)) steps.push(stepEl(label, detail, icon));
-  }
-  if (t.rail === "upi") {
-    for (const [label, detail, icon] of upiSteps(t)) steps.push(stepEl(label, detail, icon));
   }
   steps.forEach((el) => tl.appendChild(el));
   steps.forEach((el, i) => {
@@ -2031,12 +2129,9 @@ async function pollSepaTransfer(id) {
 
     // 1. Propose: the server fixes the terms and returns them unexecuted.
     const recipient = {
-      recipientName: rail === "upi"
-        ? (upiTarget.name || upiTarget.vpa)
-        : ($("rec-name").value.trim() || "Recipient"),
+      recipientName: $("rec-name").value.trim() || "Recipient",
       recipientPhone: $("rec-phone").value.trim() || "+254700000000",
       recipientIban: $("rec-iban").value.trim(),
-      recipientVpa: upiTarget.vpa,
     };
     const created = await api("/api/transfers", { quoteId: quote.id, ...recipient });
 
@@ -2054,7 +2149,6 @@ async function pollSepaTransfer(id) {
     const expectedDestination = dev.destinationCommitment(rail, {
       phone: recipient.recipientPhone,
       iban: recipient.recipientIban,
-      vpa: recipient.recipientVpa,
       name: recipient.recipientName,
     });
     if (created.authorization.typedData.message.destination.toLowerCase() !== expectedDestination.toLowerCase()) {
@@ -2076,12 +2170,6 @@ async function pollSepaTransfer(id) {
       if (t.rail === "sepa") {
         renderSepaResult(t);
         if (t.state === "PAYOUT_SUBMITTED") pollSepaTransfer(t.id);
-      } else if (t.rail === "upi") {
-        $("upi-box").classList.remove("hidden");
-        $("upi-utr").textContent = `UTR ${(t.upi || {}).utr || ""}`;
-        $("upi-note").textContent =
-          `Paid ₹${fmt(t.receiveInr)} to ${t.recipientName} · you paid €${fmt(t.sendEur)}`;
-        $("btn-again").classList.remove("hidden");
       } else {
         revealPickup(t);
       }
@@ -2130,7 +2218,6 @@ $("btn-again").onclick = () => {
   $("btn-again").classList.add("hidden");
   $("pickup-box").classList.add("hidden");
   $("sepa-box").classList.add("hidden");
-  $("upi-box").classList.add("hidden");
   $("refund-box").classList.add("hidden");
   $("step-quote").classList.remove("hidden");
   showSendStep("dest");
@@ -2141,12 +2228,9 @@ const hist = [];
 function histRow(t) {
   const paid = t.state === "PAID";
   const sepa = t.rail === "sepa";
-  const upi = t.rail === "upi";
-  const sub = upi
-    ? `${esc(t.recipientVpa || "")} · ₹${fmt(t.receiveInr)}${t.upi ? ` · UTR ${esc(t.upi.utr)}` : ""}`
-    : sepa
-      ? `${esc((t.recipientIban || "").slice(0, 9))}… · €${fmt(t.receiveEur)}`
-      : `ref ${esc(t.pickup ? t.pickup.referenceCode : "—")} · KES ${fmt(t.receiveKes)}`;
+  const sub = sepa
+    ? `${esc((t.recipientIban || "").slice(0, 9))}… · €${fmt(t.receiveEur)}`
+    : `ref ${esc(t.pickup ? t.pickup.referenceCode : "—")} · KES ${fmt(t.receiveKes)}`;
   const status = paid ? "PAID" : t.state === "REFUNDED" ? "REFUNDED" : t.state === "FAILED" ? "FAILED"
     : t.state === "PAYOUT_DETAILS_PENDING" ? "DETAILS PENDING"
     : t.state === "PAYOUT_FUNDING_PENDING" ? "FUNDING PENDING"
@@ -2155,7 +2239,7 @@ function histRow(t) {
   const color = paid ? "var(--green)" : t.state === "REFUNDED" ? "var(--muted)"
     : t.state === "FAILED" ? "var(--red)" : "var(--amber)";
   return `
-    <div class="hic">${upi ? "🇮🇳" : sepa ? "🏦" : "🇰🇪"}</div>
+    <div class="hic">${sepa ? "🏦" : "🇰🇪"}</div>
     <div class="hmain">
       <div class="hn">${esc(t.recipientName)}</div>
       <div class="hs">${sub}</div>
