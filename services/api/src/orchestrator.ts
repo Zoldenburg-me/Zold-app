@@ -48,7 +48,6 @@ import {
   getPickup,
 } from "./adapters/moneygram.js";
 import { anchorModeEnabled, CCTP, SECURITY, STELLAR } from "./config.js";
-import { creditVpa } from "./adapters/upi.js";
 
 /**
  * FP4: the user's device signature over this payment's exact terms. The
@@ -175,7 +174,6 @@ function transferDestination(transfer: Transfer): `0x${string}` {
   return destinationCommitment(transfer.rail, {
     phone: transfer.recipientPhone,
     iban: transfer.recipientIban,
-    vpa: transfer.recipientVpa,
     name: transfer.recipientName,
   });
 }
@@ -377,7 +375,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   let refundEur: number;
   let recoveredFrom: string;
   let deductions = "none";
-  const fee = t.rail === "upi" ? FX.UPI_FIXED_FEE_EUR : FX.FIXED_FEE_EUR;
+  const fee = FX.FIXED_FEE_EUR;
   if (!steps.has("liquidity.fx-swapper.eure-usdc") && !steps.has("swapper.swapExactIn")) {
     // Still holding the debited EURe in full.
     refundEur = t.sendEur;
@@ -611,49 +609,6 @@ export async function executeTransfer(
     return store.updateTransfer(transfer.id, {
       state: cashPayoutState(storedPickup),
       pickup: storedPickup,
-    });
-  } catch (err: any) {
-    return failAndCompensate(transfer.id, err, txs);
-  }
-}
-
-/**
- * UPI (India point-of-sale) rail:
- *   CREATED -> DEBITED -> SWAPPED -> PAID
- * Moves EURe from the sender's Safe, swaps EURe -> USDC on-chain (the USDC is the
- * partner-settlement pool), then the UPI partner credits the recipient VPA
- * from its INR float instantly and returns a UTR. Mock partner for now; the
- * production adapter is a licensed Indian PA/PPI (TerraPay-style API).
- */
-export async function executeUpiTransfer(
-  transfer: Transfer,
-  user: User,
-  auth: PaymentAuthorization,
-): Promise<Transfer> {
-  const txs = transfer.txs;
-
-  try {
-    await debitInputFunds(transfer, user, auth, txs);
-
-    // Swap the convertible portion to USDC — the settlement asset we net
-    // against the partner's INR float.
-    await assertQuoteRateBinding(transfer);
-    const liquidityPlan = await prepareTransferLiquidity(transfer);
-    store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
-    const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
-    txs.push(...liquidity.txs);
-    store.updateTransfer(transfer.id, {
-      state: "SWAPPED",
-      txs,
-      usdcOut: liquidityAmountOutUnits(liquidity.quote),
-      liquidity: serializeExecution(liquidity),
-    });
-
-    // Partner credits the VPA from its INR float — instant on real UPI too.
-    const credit = creditVpa(transfer.id, transfer.recipientVpa!, transfer.receiveInr!);
-    return store.updateTransfer(transfer.id, {
-      state: "PAID",
-      upi: { provider: credit.provider, utr: credit.utr, state: credit.state },
     });
   } catch (err: any) {
     return failAndCompensate(transfer.id, err, txs);

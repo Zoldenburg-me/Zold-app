@@ -147,8 +147,8 @@ export async function writeAndWait(
  * The keccak256 commitment to a payout destination that the device signs.
  *
  * The device authorization fixes the amount and the on-chain `to`, but the
- * money actually leaves the system on a fiat leg (SEPA IBAN, UPI VPA, cash
- * pickup phone) the contract can never see. Folding a hash of that target into
+ * money actually leaves the system on a fiat leg (SEPA IBAN, cash pickup
+ * phone) the contract can never see. Folding a hash of that target into
  * the signed struct means the signature attests to *who* is paid: a server
  * that later swaps the recipient produces a payout whose recomputed commitment
  * no longer matches what the user signed, and the relayed spend is refused.
@@ -163,20 +163,17 @@ export async function writeAndWait(
  * orchestrator all derive the identical value from the same recipient:
  *   cash → "cash|phone=<phone>|name=<NAME>"  (phone trimmed)
  *   sepa → "sepa|iban=<IBAN>|name=<NAME>"    (whitespace-stripped, upper-cased)
- *   upi  → "upi|vpa=<vpa>|name=<NAME>"       (vpa trimmed, lower-cased)
  * where <NAME> is trimmed, inner whitespace collapsed, upper-cased.
  * Keep this in lockstep with destinationCommitment() in public/device.js.
  */
 export function destinationCommitment(
   rail: PayoutRail,
-  target: { phone?: string; iban?: string; vpa?: string; name?: string },
+  target: { phone?: string; iban?: string; name?: string },
 ): `0x${string}` {
   const name = (target.name ?? "").trim().replace(/\s+/g, " ").toUpperCase();
   let preimage: string;
   if (rail === "sepa") {
     preimage = `sepa|iban=${(target.iban ?? "").replace(/\s/g, "").toUpperCase()}`;
-  } else if (rail === "upi") {
-    preimage = `upi|vpa=${(target.vpa ?? "").trim().toLowerCase()}`;
   } else {
     preimage = `cash|phone=${(target.phone ?? "").trim()}`;
   }
