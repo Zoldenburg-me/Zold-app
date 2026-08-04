@@ -325,7 +325,7 @@ at execution time.
 
 TESTED AGAINST THE REAL APIS, not docs:
 
-**Bebop — does NOT work for us.**
+**Bebop — SUPERSEDED. See the Aug 2026 re-test below; EURe IS supported.**
  - `TokenNotSupported` for EURe on base, polygon and gnosis, using Monerium's
    own production addresses (0xbf6e2966…, 0xE0aEa583…, 0x420CA0f9…).
  - No testnet at all: /pmm/base-sepolia/... is a 404. So the RFQ path can
@@ -381,20 +381,31 @@ TESTED AGAINST THE REAL APIS, not docs:
    env flip after that silently exercises the default and passes for the wrong
    reason.
 
-**Bebop re-tested Aug 2026 — still no EURe, but the earlier read was incomplete.**
- - base + polygon: TokenNotSupported for Monerium's production EURe. Definitive.
- - gnosis: 404, chain not served by the PMM endpoint.
- - ethereum + arbitrum: UnknownError — and a CONTROL (USDC->WETH, a pair that
-   must work) returns UnknownError on those chains AND on base. So that error
-   is NOT evidence about EURe; the API is refusing us generally, almost
-   certainly an API key requirement that did not exist in July. Those two chains
-   are UNTESTED, not ruled out. Re-run with a BEBOP_API_KEY before concluding.
- - No Bebop/EURe partnership found. The euro-stablecoin partnership in the space
-   is Qivalis (12 European banks, H2 2026, talking to market makers) — a
-   DIFFERENT euro stablecoin, unlaunched.
- - The RFQ adapter is already built and tested, so Bebop needs no new code —
-   only credentials and a supported token. Add `rfq` to LIQUIDITY_VENUES and it
-   competes on price like any other venue.
+**Bebop — CORRECTED Aug 2026. Monerium is a market maker ON Bebop.**
+ - bebop.xyz/case-studies/monerium: Monerium joined Bebop AS A MARKET MAKER,
+   streaming firm EURe quotes into the network. Issuer-led liquidity — the
+   issuer itself is the counterparty, so there is no intermediary spread. Live
+   on ETHEREUM, more chains planned. EURe trades against stablecoins, ETH, WBTC
+   and hundreds of others; six-figure swaps supported.
+ - THIS OVERTURNS THE JULY VERDICT of "does not work for us". That verdict was
+   drawn from base/polygon/gnosis, where EURe still IS TokenNotSupported — the
+   partnership is on the one chain we had not been able to test.
+ - WHY WE COULD NOT SEE IT: ethereum and arbitrum return
+   "UnknownError: UnknownError" for EVERY pair, including a USDC->WETH control
+   that must work. So that error is auth, not token support. Access is gated
+   behind an API key requested via their contact form; a `source` header alone
+   does not open it. Any future "is X supported" test on Bebop MUST run a
+   known-good control on the same chain, or an auth failure reads as an
+   unsupported token.
+ - OUR ADAPTER IS ALREADY CORRECT AND NEEDS NO CODE: RfqLiquidityProvider sends
+   Bebop's documented `source-auth` header and parses the v3 shape. Set
+   BEBOP_API_KEY, BEBOP_CHAIN=ethereum, and add `rfq` to LIQUIDITY_VENUES — then
+   it competes on price like any other venue rather than being trusted blindly.
+ - OPEN QUESTION BEFORE USING IT: EURe-on-Ethereum is 0x39b8B638…, and the
+   best-execution router assumes all venues sit on the app chain. Routing
+   through Bebop means holding EURe on Ethereum (or bridging), and mainnet gas
+   against a corridor-sized transfer is a real cost that the router does NOT
+   net out. Better price, dearer settlement — measure both before switching.
 
 **LI.FI — the production venue (Aug 2026). Aggregation beats one pool.**
  - TESTED LIVE, not assumed: 100 EURe -> USDC returned EXECUTABLE quotes on
