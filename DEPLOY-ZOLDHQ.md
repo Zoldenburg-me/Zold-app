@@ -57,13 +57,14 @@ Then, in two terminals:
 
 | var | value | why |
 |---|---|---|
-| `NODE_ENV` | `production` | drops dev affordances |
+| `KYC_AUTO_APPROVE` | `0` | new users start pending; set explicitly, not inferred |
 | `RP_ID` | `zoldhq.com` | **apex, not a subdomain** — see below |
 | `WEBAUTHN_ORIGINS` | `https://zoldhq.com` | ceremonies are refused from anywhere else |
 | `TRUSTED_PROXY_HOPS` | `1` | cloudflared forwards the client IP; without this every visitor shares one rate-limit bucket |
 | `MONERIUM_REDIRECT_URI` | `https://zoldhq.com/api/monerium/oauth/callback` | must be re-registered with Monerium |
 | `MONERIUM_TOKEN_ENCRYPTION_KEY` | generated | AES-256-GCM for per-user OAuth tokens at rest; the server 503s without it |
-| `MONERIUM_WEBHOOK_SECRET` | generated | **must be set to the same value in Monerium's dashboard** or deliveries are rejected |
+| `MONERIUM_WEBHOOK_SECRET` | generated, `whsec_` | **must be set to the same value in Monerium's dashboard** or deliveries are rejected |
+| `ALLOW_PLAINTEXT_STORE` | `1` | acknowledges db.json is not production storage |
 
 ### RP_ID is a one-way door
 
@@ -75,6 +76,24 @@ every existing passkey would stop working.
 
 Add the checkout origin to `WEBAUTHN_ORIGINS` when that origin exists;
 `RP_ID` stays the apex.
+
+### NODE_ENV is deliberately NOT production
+
+The obvious setting is wrong here, and `assertProductionConfig` refuses it:
+`production anchor mode must not use the Stellar testnet passphrase`. This
+deployment points at Base Sepolia, testanchor and Monerium sandbox, so
+declaring production is a false claim about the environment.
+
+Nothing is lost by omitting it. `LOOKS_LOCAL` is already false off chain 31337,
+so the simulate routes and internal error text are off either way — verified:
+simulate-deposit returns 404 and a new user lands in `pending`. The one thing
+that did depend on it, KYC gating, is now set explicitly above.
+
+Two further requirements that only appear under production, and are worth
+knowing before a real deployment: `MONERIUM_WEBHOOK_SECRET` must use Monerium's
+`whsec_<base64>` format (at least 24 bytes decoded) — a raw hex secret is
+rejected — and `ALLOW_PLAINTEXT_STORE=1` must be set as a deliberate
+acknowledgement rather than a fix.
 
 ## Accounts do not move between origins
 
@@ -92,14 +111,13 @@ Consequences:
 
 ## What end-to-end means here
 
-`NODE_ENV=production` disables the simulate routes and self-serve KYC, so the
-run exercises the real path: account → operator KYC approval
+The simulate routes and self-serve KYC are off, so the run exercises the real
+path: account → operator KYC approval
 (`KYC_OPERATOR_TOKEN`) → passkey → real Monerium IBAN → real SEPA deposit →
 EURe minted on Base Sepolia → send. There is no mock deposit shortcut.
 
-`LOOKS_LOCAL` was already false on chain 84532, so simulation was off before
-`NODE_ENV` was set; the flag is belt-and-braces rather than the thing
-protecting you.
+What protects you is `LOOKS_LOCAL` being false on chain 84532, not a
+`NODE_ENV` flag.
 
 ## Before this is anything but a testnet demo
 
