@@ -17,6 +17,7 @@ const scripts = [
   "authorize:test",
   "kyc:test",
   "kyc:operator:test",
+  "recovery:test",
   "kyc:ui:test",
   "monerium:oauth:test",
   "sepa:test",

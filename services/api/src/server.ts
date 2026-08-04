@@ -11,7 +11,7 @@ import {
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, RECOVERY, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type Transfer, type User } from "./store.js";
@@ -42,6 +42,15 @@ import { senderProfileToSep9 } from "./adapters/moneygram.js";
 import { toAlpha3 } from "./stellar/sep9.js";
 import { getTreasury, missingRequiredFields, sep10Auth, sep12CustomerFields } from "./stellar/anchor.js";
 import { formatReport, reconcile } from "./reconcile.js";
+import {
+  approveRecoveryRequest,
+  assertRecoveryAvailable,
+  buildRecoveryRequest,
+  isEvmAddress,
+  publicRecoveryRequest,
+  readinessStatus,
+} from "./recovery.js";
+import { submitGuardianRecovery } from "./recovery-signer.js";
 import {
   addrs,
   accountBalances,
@@ -149,6 +158,7 @@ app.use("/api", (req, res, next) => {
   const ip = req.ip ?? "?";
   const authRoute =
     req.path.startsWith("/passkey") ||
+    req.path.startsWith("/recovery") ||
     req.path === "/kyc/review" ||
     (req.path === "/users" && req.method === "POST");
   const ok = authRoute
@@ -1333,6 +1343,22 @@ function requireOperator(req: express.Request, res: express.Response): boolean {
   return true;
 }
 
+function operatorLabel(req: express.Request): string {
+  const token = bearerToken(req) ?? "";
+  return `operator:${createHash("sha256").update(token).digest("hex").slice(0, 12)}`;
+}
+
+function recoveryPublicList(userId: string) {
+  const now = new Date();
+  return store.recoveryRequestsForUser(userId)
+    .map((r) => {
+      const status = readinessStatus(r, now);
+      if (status !== r.status) store.updateRecoveryRequest(r.id, { status });
+      return publicRecoveryRequest({ ...r, status });
+    })
+    .sort((a, b) => Date.parse(b.requestedAt) - Date.parse(a.requestedAt));
+}
+
 /**
  * Operator / provider KYC review — the approval path that survives production.
  *
@@ -1355,6 +1381,170 @@ app.post(
     const result = await applyKycDecision(user, decision, "manual", req.body?.reason);
     console.log(`KYC: ${decision} for ${user.id} by operator`);
     res.json(result);
+  }),
+);
+
+app.get(
+  "/api/users/:id/recovery",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const blocked = assertRecoveryAvailable(user);
+    res.json({
+      managedKycGuardian: RECOVERY.managedKycGuardian,
+      available: !blocked,
+      blocked,
+      delayHours: RECOVERY.delayHours,
+      guardianAddress: user.passkeySafe?.recovery?.guardianAddress,
+      recoveryModuleAddress: user.passkeySafe?.recovery?.moduleAddress,
+      requests: recoveryPublicList(user.id),
+    });
+  }),
+);
+
+app.post(
+  "/api/users/:id/recovery/requests",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const newOwnerAddress = req.body?.newOwnerAddress;
+    if (newOwnerAddress !== undefined && !isEvmAddress(newOwnerAddress)) {
+      return res.status(400).json({ error: "newOwnerAddress must be a 0x address" });
+    }
+    try {
+      const request = buildRecoveryRequest(
+        user,
+        randomUUID(),
+        new Date(),
+        newOwnerAddress,
+        user.email,
+      );
+      store.addRecoveryRequest(request);
+      res.status(201).json(publicRecoveryRequest(request));
+    } catch (err: any) {
+      res.status(409).json({ error: String(err?.message ?? err) });
+    }
+  }),
+);
+
+app.post(
+  "/api/recovery/requests",
+  wrap(async (req, res) => {
+    if (!requireOperator(req, res)) return;
+    const user = store.findUser(req.body?.userId);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    const newOwnerAddress = req.body?.newOwnerAddress;
+    if (newOwnerAddress !== undefined && !isEvmAddress(newOwnerAddress)) {
+      return res.status(400).json({ error: "newOwnerAddress must be a 0x address" });
+    }
+    const contact = typeof req.body?.contact === "string" ? req.body.contact.slice(0, 120) : user.email;
+    try {
+      const request = buildRecoveryRequest(user, randomUUID(), new Date(), newOwnerAddress, contact);
+      store.addRecoveryRequest(request);
+      console.log(`RECOVERY: request ${request.id} opened for ${user.id} by ${operatorLabel(req)}`);
+      res.status(201).json(publicRecoveryRequest(request));
+    } catch (err: any) {
+      res.status(409).json({ error: String(err?.message ?? err) });
+    }
+  }),
+);
+
+app.post(
+  "/api/recovery/requests/:id/approve",
+  wrap(async (req, res) => {
+    if (!requireOperator(req, res)) return;
+    const request = store.findRecoveryRequest(req.params.id);
+    if (!request) return res.status(404).json({ error: "recovery request not found" });
+    const user = store.findUser(request.userId);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    const blocked = assertRecoveryAvailable(user);
+    if (blocked) return res.status(409).json({ error: blocked });
+    try {
+      const approved = approveRecoveryRequest(
+        request,
+        new Date(),
+        operatorLabel(req),
+        typeof req.body?.reason === "string" ? req.body.reason : undefined,
+      );
+      const updated = store.updateRecoveryRequest(request.id, approved);
+      console.log(`RECOVERY: request ${request.id} approved; ready at ${updated.readyAt}`);
+      res.json(publicRecoveryRequest(updated));
+    } catch (err: any) {
+      res.status(409).json({ error: String(err?.message ?? err) });
+    }
+  }),
+);
+
+app.post(
+  "/api/recovery/requests/:id/cancel",
+  wrap(async (req, res) => {
+    const request = store.findRecoveryRequest(req.params.id);
+    if (!request) return res.status(404).json({ error: "recovery request not found" });
+    const operator = bearerToken(req) && KYC.operatorToken && bearerToken(req) === KYC.operatorToken;
+    if (!operator && !requireUserSession(req, res, request.userId)) return;
+    if (["FINALIZED", "CANCELED", "EXPIRED", "GUARDIAN_SUBMITTED"].includes(request.status)) {
+      return res.status(409).json({ error: `recovery request is ${request.status}` });
+    }
+    const updated = store.updateRecoveryRequest(request.id, {
+      status: "CANCELED",
+      canceledAt: new Date().toISOString(),
+      cancelReason: typeof req.body?.reason === "string" ? req.body.reason : undefined,
+    });
+    res.json(publicRecoveryRequest(updated));
+  }),
+);
+
+app.post(
+  "/api/recovery/requests/:id/guardian-submit",
+  wrap(async (req, res) => {
+    if (!requireOperator(req, res)) return;
+    let request = store.findRecoveryRequest(req.params.id);
+    if (!request) return res.status(404).json({ error: "recovery request not found" });
+    const status = readinessStatus(request, new Date());
+    if (status !== request.status) request = store.updateRecoveryRequest(request.id, { status });
+    try {
+      const guardianSubmission = await submitGuardianRecovery(request, new Date());
+      const updated = store.updateRecoveryRequest(request.id, {
+        status: "GUARDIAN_SUBMITTED",
+        guardianSubmission,
+      });
+      console.log(`RECOVERY: guardian signer accepted request ${request.id}`);
+      res.json(publicRecoveryRequest(updated));
+    } catch (err: any) {
+      const message = String(err?.message ?? err);
+      const statusCode = message.includes("RECOVERY_GUARDIAN_SIGNER_URL") ? 503 : 409;
+      const updated = store.updateRecoveryRequest(request.id, {
+        guardianSubmission: {
+          mode: "external_signer",
+          requestedAt: new Date().toISOString(),
+          error: message.slice(0, 240),
+        },
+      });
+      res.status(statusCode).json({ ...publicRecoveryRequest(updated), error: message });
+    }
+  }),
+);
+
+app.get(
+  "/api/recovery/requests/:id",
+  wrap(async (req, res) => {
+    const request = store.findRecoveryRequest(req.params.id);
+    if (!request) return res.status(404).json({ error: "recovery request not found" });
+    const operator = bearerToken(req) && KYC.operatorToken && bearerToken(req) === KYC.operatorToken;
+    if (!operator && !requireUserSession(req, res, request.userId)) return;
+    const status = readinessStatus(request, new Date());
+    const latest = status === request.status ? request : store.updateRecoveryRequest(request.id, { status });
+    res.json({
+      ...publicRecoveryRequest(latest),
+      guardianAction:
+        latest.status === "READY_FOR_GUARDIAN"
+          ? "POST /api/recovery/requests/:id/guardian-submit to hand off to the isolated guardian signer"
+          : latest.status === "GUARDIAN_SUBMITTED"
+            ? "guardian signer accepted the recovery handoff; watch the on-chain SocialRecoveryModule recovery state"
+          : undefined,
+    });
   }),
 );
 
