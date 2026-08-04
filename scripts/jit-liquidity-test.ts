@@ -17,6 +17,7 @@
  *
  * Run: npm run jit:test
  */
+import "./_test-env.js";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 

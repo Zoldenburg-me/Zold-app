@@ -1,3 +1,4 @@
+import "./_test-env.js";
 /**
  * Pin a test run to the local hardhat chain. Import this FIRST, before
  * anything else, in any script that spins up its own node.
@@ -44,6 +45,8 @@ for (const [role, key] of Object.entries(DEV_KEYS)) {
 
 // A real Monerium chain name would send provisioning at the wrong network.
 process.env.MONERIUM_CHAIN = "sepolia";
+
+
 
 /**
  * Keep tests away from the working database.

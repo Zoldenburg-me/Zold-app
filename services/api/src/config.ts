@@ -455,7 +455,7 @@ export function loadAbi(contract: string): any[] {
  * but a partner key gets better pricing and higher rate limits.
  */
 export const LIQUIDITY = {
-  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow",
+  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best",
   // Bebop's chain slug, e.g. "polygon", "base", "ethereum".
   BEBOP_CHAIN: process.env.BEBOP_CHAIN ?? "polygon",
   BEBOP_BASE_URL: process.env.BEBOP_BASE_URL ?? "https://api.bebop.xyz",
@@ -477,6 +477,78 @@ export const LIQUIDITY = {
   COW_BASE_URL: process.env.COW_BASE_URL ?? "https://api.cow.fi",
   COW_NETWORK: process.env.COW_NETWORK ?? "xdai",
   COW_TIMEOUT_MS: Number(process.env.COW_TIMEOUT_MS ?? 15_000),
+  /**
+   * Uniswap v3, on-chain. The only venue we can actually execute against on a
+   * testnet: Bebop has no testnet at all and CoW has no Base Sepolia, so both
+   * adapters can only ever be exercised with real money on a mainnet. The v3
+   * interface is identical on Base Sepolia and Base mainnet, so the path we
+   * test is the path that ships.
+   *
+   * Defaults are the verified Base Sepolia deployments (checked with
+   * eth_getCode, not copied from a docs page). Override per chain.
+   */
+  DEX_FACTORY: (process.env.DEX_FACTORY ?? "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24") as `0x${string}`,
+  DEX_ROUTER: (process.env.DEX_ROUTER ?? "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4") as `0x${string}`,
+  DEX_QUOTER: (process.env.DEX_QUOTER ?? "0xC5290058841028F1614F3A6F0F5816cAd0df5E27") as `0x${string}`,
+  /** Fee tiers probed, cheapest first. The deepest pool wins, not the first. */
+  DEX_FEE_TIERS: (process.env.DEX_FEE_TIERS ?? "100,500,3000,10000")
+    .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0),
+  /** Slippage floor written into the swap call as amountOutMinimum. */
+  DEX_SLIPPAGE_BPS: BigInt(process.env.DEX_SLIPPAGE_BPS ?? 50),
+  /**
+   * How far the pool's implied EUR/USD may sit from the independent live mid
+   * before we refuse to trade.
+   *
+   * This guard is the difference between a pool and a market maker. An RFQ
+   * maker quotes a price it is willing to honour; an AMM pool is simply
+   * whatever the last trade left behind, and anyone with capital can move a
+   * thin one. Without this a skewed pool would let us settle a real transfer
+   * at a garbage rate and report it as a market price.
+   */
+  DEX_MAX_MID_DEVIATION_BPS: BigInt(process.env.DEX_MAX_MID_DEVIATION_BPS ?? 300),
+  /**
+   * LI.FI — the production venue.
+   *
+   * Tested, not assumed: EURe->USDC quotes executable on Gnosis (1.1493), Base
+   * (1.1506) and Polygon (1.1491) against a live mid of ~1.1511, routed through
+   * Nordstern Finance / Fly / Bitget — venues a hand-rolled Uniswap adapter
+   * would never see. That routing breadth is the whole argument for an
+   * aggregator over a single pool.
+   *
+   * It CANNOT be exercised on a testnet: it lists Base Sepolia but answers
+   * "No available quotes" even for WETH/USDC, which has real Uniswap depth
+   * there. So `dex` stays as the locally-provable path and this is the one that
+   * ships. Keep both.
+   */
+  LIFI_BASE_URL: process.env.LIFI_BASE_URL ?? "https://li.quest",
+  LIFI_API_KEY: process.env.LIFI_API_KEY ?? "",
+  LIFI_TIMEOUT_MS: Number(process.env.LIFI_TIMEOUT_MS ?? 15_000),
+  /** Fraction, LI.FI's own units: 0.005 = 50bps. */
+  LIFI_SLIPPAGE: Number(process.env.LIFI_SLIPPAGE ?? 0.005),
+  /** Chain to route on. Defaults to the app chain; EURe exists on 1/100/137/8453/42161/59144. */
+  LIFI_CHAIN_ID: Number(process.env.LIFI_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? 8453),
+
+  /**
+   * Best execution. With more than one venue wired, picking one by config means
+   * quietly settling at a worse price whenever the other is better — and having
+   * an aggregator alongside a single-pool adapter makes that likely rather than
+   * theoretical. `best` quotes every venue below in parallel and takes the
+   * largest out for the same in.
+   */
+  VENUES: (process.env.LIQUIDITY_VENUES ?? "lifi,dex")
+    .split(",").map((s) => s.trim()).filter(Boolean),
+  /**
+   * Who keeps positive slippage — the difference between what a venue quoted
+   * and what it actually delivered.
+   *
+   * Default "user", and that default is load-bearing. The receipt reports
+   * marginBps MEASURED between the live mid and what we deliver; silently
+   * pocketing surplus would make that number understate what we take, which is
+   * the exact dishonesty the live-rates work existed to remove. "treasury" is
+   * available but records the amount on the transfer so it stays visible and
+   * can be reflected in the margin rather than hidden in it.
+   */
+  SURPLUS_POLICY: (process.env.LIQUIDITY_SURPLUS_POLICY ?? "user") as "user" | "treasury",
 };
 
 // Live mid-rate feed. Defaults to a free, key-less provider that publishes all

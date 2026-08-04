@@ -13,6 +13,7 @@
  *
  * Run: npm run travelrule:test
  */
+import "./_test-env.js";
 import assert from "node:assert/strict";
 import { STELLAR } from "../services/api/src/config.js";
 import {
