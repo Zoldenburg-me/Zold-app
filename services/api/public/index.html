@@ -704,7 +704,12 @@
   .m-btn-quiet .material-symbols-rounded { color: var(--m-dim); font-size: 18px; }
 
   /* ---------- tiles ---------- */
+  /* Two columns, so an odd tile out would sit against a half-width hole.
+     The last tile spans instead when the count is odd — :nth-child(odd) on the
+     last child is exactly "there is no partner for this one". Add a fourth
+     tile and the rule stops applying on its own. */
   .m-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .m-tiles > :last-child:nth-child(odd) { grid-column: 1 / -1; }
   .m-tile {
     text-align: left; padding: 13px 14px; border-radius: 12px; background: var(--m-surface);
     border: 1px solid var(--m-line); color: #fff; cursor: pointer; min-height: 98px;
