@@ -894,6 +894,51 @@
   }
   .m-ref .code { font-size: 32px; font-weight: 400; letter-spacing: 6px; margin: 10px 0 4px; font-variant-numeric: tabular-nums; }
 
+  /* ---------- activity + profile ----------
+     These follow the handoff's markup for these two screens, which uses larger
+     type and round avatars than the Noir home does. That inconsistency is in
+     the design file itself, not introduced here — see the note in the commit. */
+  #dashboard.m-on[data-msub="activity"] #m-activity-screen,
+  #dashboard.m-on[data-msub="profile"] #m-profile-screen { display: block; }
+
+  .m-title { display: flex; align-items: flex-end; height: 112px; padding-bottom: 20px; font-size: 32px; font-weight: 400; }
+  .m-filters { display: flex; gap: 8px; margin-bottom: 8px; overflow-x: auto; padding-bottom: 4px; }
+  .m-filters button {
+    flex: none; display: flex; align-items: center; gap: 6px; padding: 0 16px; min-height: 32px;
+    border-radius: 8px; font-size: 14px; font-weight: 500; letter-spacing: .1px; cursor: pointer;
+    background: transparent; border: 1px solid var(--m-line-strong); color: var(--m-dim);
+  }
+  .m-filters button.on { background: var(--m-pink-tint); border-color: var(--m-pink-border); color: var(--m-pink-soft); }
+  .m-filters .material-symbols-rounded { font-size: 18px; }
+
+  .m-txrow {
+    width: 100%; display: flex; align-items: center; gap: 16px; text-align: left;
+    background: transparent; border: 0; padding: 12px 4px; color: #fff; cursor: pointer;
+    min-height: 72px; font-family: inherit;
+  }
+  .m-txrow:hover { background: rgba(255, 255, 255, .035); filter: none; }
+  .m-txrow .av {
+    width: 40px; height: 40px; flex: none; border-radius: 50%; background: var(--m-raised);
+    display: grid; place-items: center; font-size: 12px; font-weight: 500; color: var(--m-dim);
+  }
+  .m-txrow .n { font-size: 16px; letter-spacing: .15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m-txrow .s { font-size: 14px; color: var(--m-dim); letter-spacing: .25px; }
+  .m-txrow .a { font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .m-txrow .st { font-size: 11px; font-weight: 500; letter-spacing: .5px; }
+
+  .m-idcard { display: flex; align-items: center; gap: 16px; padding: 16px; border-radius: 10px; background: var(--m-surface); }
+  .m-idcard .av {
+    width: 56px; height: 56px; border-radius: 50%; background: var(--m-pink-tint);
+    display: grid; place-items: center; color: var(--m-pink-soft); font-size: 20px; font-weight: 500;
+  }
+  .m-seclabel { font-size: 14px; font-weight: 500; color: var(--m-pink); letter-spacing: .1px; margin: 24px 0 8px; }
+  .m-secrow {
+    display: flex; align-items: center; gap: 16px; padding: 14px 16px;
+    border-top: 1px solid var(--m-line); min-height: 72px;
+  }
+  .m-secrow:first-child { border-top: 0; }
+  .m-secrow .material-symbols-rounded { font-size: 24px; color: var(--m-pink); flex: none; }
+
   /* Each designed sub-screen is its own block; data-msub picks one. */
   .m-screen { display: none; }
   #dashboard.m-on[data-msub="add"] #m-add-screen,
@@ -983,7 +1028,7 @@
           <h1>Open your account</h1>
           <div class="sub">A euro account with your own IBAN, so money can reach you the ordinary way. Takes about a minute.</div>
           <label>Full name</label>
-          <input id="name" placeholder="Amina Kamau" />
+          <input id="name" placeholder="Miriam Zoldenburg" />
           <label>Email</label>
           <input id="email" type="email" placeholder="amina@example.com" />
           <label>Country of residence</label>
@@ -1466,6 +1511,45 @@
           <div class="error hidden" id="m-prog-err"></div>
           <button class="m-cta hidden" id="m-prog-done">Done</button>
         </div>
+      </div>
+
+      <!-- ================= Activity ================= -->
+      <div class="m-screen" id="m-activity-screen">
+        <div class="m-title">Activity</div>
+        <!-- All / SEPA / Cash only. The design also filters Bank and Crypto;
+             neither rail exists here, so those chips would always be empty. -->
+        <div class="m-filters" id="m-filters">
+          <button data-mfilter="all" class="on"><span class="material-symbols-rounded">check</span>All</button>
+          <button data-mfilter="sepa">SEPA</button>
+          <button data-mfilter="cash">Cash</button>
+        </div>
+        <div id="m-tx-list"></div>
+      </div>
+
+      <!-- ================= Profile ================= -->
+      <div class="m-screen" id="m-profile-screen">
+        <div class="m-title">Profile</div>
+        <div class="m-idcard">
+          <div class="av" id="m-pf-initials">—</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:16px;font-weight:500;letter-spacing:.15px" id="m-pf-name">—</div>
+            <div style="font-size:14px;color:var(--m-dim);letter-spacing:.25px" id="m-pf-email">—</div>
+          </div>
+          <span class="m-chip" id="m-pf-kyc">—</span>
+        </div>
+        <button class="m-optrow" id="m-pf-plus" style="margin-top:8px">
+          <span class="material-symbols-rounded ic">stars</span>
+          <span class="tx"><span class="t">Zold Plus</span><span class="d" id="m-pf-plus-sub">Coming soon</span></span>
+          <span class="material-symbols-rounded ch">chevron_right</span>
+        </button>
+
+        <div class="m-seclabel">Account</div>
+        <div class="m-rows" id="m-pf-account"></div>
+
+        <div class="m-seclabel">Security</div>
+        <div class="m-rows" id="m-pf-security"></div>
+
+        <button class="m-cta" id="m-pf-signout" style="background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink);min-height:48px;font-size:14px">Sign out</button>
       </div>
 
       <!-- Sub-screen header for the legacy cards still reached from the nav. -->
@@ -2017,7 +2101,7 @@ function mobileNav(target) {
   // "send" enters the flow at its first screen.
   const sub = { add: "add", bank: "bank", crypto: "crypto", send: "country", country: "country",
     method: "method", amount: "amount", recipient: "recipient", progress: "progress",
-    plus: "plus", bundle: "bundle" }[target];
+    plus: "plus", bundle: "bundle", activity: "activity", profile: "profile" }[target];
   shell.dataset.msub = sub || "home";
   if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
   else switchView("dashboard");
@@ -2029,6 +2113,8 @@ function mobileNav(target) {
   if (sub === "bank") renderBankScreen();
   if (sub === "crypto") renderCryptoScreen();
   if (sub === "country") { $("m-country-q").value = ""; renderCountryList(); }
+  if (sub === "activity") renderActivityScreen();
+  if (sub === "profile") renderProfileScreen();
   $("dashboard").querySelector(".main").scrollTop = 0;
 }
 
@@ -2293,6 +2379,115 @@ function renderProgress(t) {
   if (t.error) showErr("m-prog-err", new Error(t.error));
   $("m-prog-done").classList.toggle("hidden", !(t.state === "PAID" || stalled || t.pickup));
 }
+
+/* ---------- Activity ---------- */
+let mFilter = "all";
+
+/** One transfer, in the design's activity-row shape. */
+function mTxRow(t) {
+  const sepa = t.rail === "sepa";
+  const inFlight = !["PAID", "REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
+  const status = t.state === "PAID" ? "PAID" : t.state === "REFUNDED" ? "REFUNDED"
+    : t.state === "FAILED" ? "FAILED" : t.state === "MANUAL_REVIEW" ? "IN REVIEW" : "IN FLIGHT";
+  const stColour = inFlight ? "var(--m-pink)" : t.state === "PAID" ? "var(--m-dim)" : "var(--m-amber)";
+  const when = new Date(t.createdAt).toLocaleDateString("en", { day: "numeric", month: "short" });
+  const recv = sepa ? `€${fmt(t.receiveEur ?? 0)}` : `${fmt(t.receiveKes ?? 0)} KES`;
+  return `<button class="m-txrow" data-mtxid="${esc(t.id)}">
+    <span class="av">${sepa ? "EU" : "KE"}</span>
+    <span style="flex:1;min-width:0">
+      <span class="n" style="display:block">${esc(t.recipientName || "—")}</span>
+      <span class="s" style="display:block">${sepa ? "SEPA" : "MoneyGram cash"} · ${esc(when)} · ${esc(recv)}</span>
+    </span>
+    <span style="text-align:right;flex:none">
+      <span class="a" style="display:block">−€${fmt(t.sendEur)}</span>
+      <span class="st" style="display:block;color:${stColour}">${status}</span>
+    </span>
+  </button>`;
+}
+
+function renderActivityScreen() {
+  const list = hist.filter((t) => mFilter === "all" || t.rail === mFilter);
+  $("m-tx-list").innerHTML = list.length
+    ? list.map(mTxRow).join("")
+    : '<div class="m-lede" style="font-size:14px;padding:32px 0;text-align:center">Nothing here yet</div>';
+  document.querySelectorAll("#m-filters button").forEach((b) => {
+    const on = b.dataset.mfilter === mFilter;
+    b.classList.toggle("on", on);
+    // The design puts a leading check on the selected chip only.
+    const tick = b.querySelector(".material-symbols-rounded");
+    if (on && !tick) b.insertAdjacentHTML("afterbegin", '<span class="material-symbols-rounded">check</span>');
+    if (!on && tick) tick.remove();
+  });
+  // Tapping a row opens the transfer in the existing detail list until the
+  // designed detail screen lands.
+  $("m-tx-list").querySelectorAll("[data-mtxid]").forEach((b) => {
+    b.onclick = () => { switchView("transactions"); $("dashboard").dataset.msub = "legacy-tx"; };
+  });
+}
+
+/* ---------- Profile ---------- */
+function renderProfileScreen() {
+  const u = user || {};
+  const name = u.name || "Account";
+  $("m-pf-name").textContent = name;
+  $("m-pf-email").textContent = u.email || "No email on file";
+  $("m-pf-initials").textContent = name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "—";
+  const approved = kycApproved(u);
+  const chip = $("m-pf-kyc");
+  chip.textContent = approved ? "VERIFIED" : (u.kycStatus || "pending").toUpperCase();
+  chip.className = `m-chip${approved ? " on" : ""}`;
+
+  const shorten = (v) => (v && v.length > 22 ? `${v.slice(0, 10)}…${v.slice(-6)}` : v);
+  const account = [
+    { k: "IBAN", v: u.iban || "Not issued yet", copy: u.iban },
+    { k: "Smart account", v: shorten(u.address) || "—", copy: u.address },
+    ...(u.handle ? [{ k: "Payment page", v: `/pay/${u.handle}`, copy: `${location.origin}/pay/${u.handle}` }] : []),
+  ];
+  $("m-pf-account").innerHTML = account.map((r, i) => `
+    <div class="m-detrow">
+      <div style="flex:1;min-width:0">
+        <div class="m-rowk">${esc(r.k)}</div>
+        <div class="m-rowv">${esc(r.v)}</div>
+      </div>
+      ${r.copy ? `<button class="m-copybtn" data-pfcopy="${i}">Copy</button>` : ""}
+    </div>`).join("");
+  $("m-pf-account").querySelectorAll("[data-pfcopy]").forEach((b) => {
+    b.onclick = async () => {
+      try { await navigator.clipboard.writeText(account[Number(b.dataset.pfcopy)].copy); } catch { return; }
+      b.textContent = "Copied";
+      setTimeout(() => { b.textContent = "Copy"; }, 1400);
+    };
+  });
+
+  /* Every row here reports real state. "Not set" is the honest answer for an
+     account that skipped the passkey, and it is worth showing rather than
+     hiding, because funding refuses without one outside simulation. */
+  const safe = u.passkeySafe;
+  const security = [
+    { icon: "fingerprint", t: "Passkey", d: "Signs in and approves payments", st: u.passkey?.publicKey ? "Registered" : "Not set" },
+    { icon: "key", t: "Device spending key", d: "The vault will not debit without it", st: u.authorizerAddress ? "Bound" : "Not bound" },
+    { icon: "group", t: "2-of-2 co-signer", d: "Second owner on your smart account", st: safe?.cosignerAddress ? "Enabled" : "Not enabled" },
+    { icon: "health_and_safety", t: "Managed recovery", d: "Guardian can restore a lost passkey", st: safe?.recovery?.status === "active" ? "Active" : "Not enabled" },
+  ];
+  $("m-pf-security").innerHTML = security.map((r) => `
+    <div class="m-secrow">
+      <span class="material-symbols-rounded">${r.icon}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:16px;letter-spacing:.15px">${esc(r.t)}</div>
+        <div style="font-size:14px;color:var(--m-dim);letter-spacing:.25px">${esc(r.d)}</div>
+      </div>
+      <span style="font-size:11px;font-weight:500;letter-spacing:.5px;color:${/Registered|Bound|Enabled|Active/.test(r.st) ? "var(--m-mint)" : "var(--m-faint)"}">${esc(r.st)}</span>
+    </div>`).join("");
+
+  const sub = u.privacyBundle;
+  $("m-pf-plus-sub").textContent = sub && sub.status !== "canceled" ? "Privacy Bundle active" : "Coming soon";
+}
+
+document.querySelectorAll("#m-filters button").forEach((b) => {
+  b.onclick = () => { mFilter = b.dataset.mfilter; renderActivityScreen(); };
+});
+$("m-pf-plus").onclick = () => mobileNav("plus");
+$("m-pf-signout").onclick = () => $("btn-signout").click();
 
 document.querySelectorAll("[data-mpreset]").forEach((b) => {
   b.onclick = () => { $("m-amount").value = b.dataset.mpreset; requestQuote(); };
@@ -3568,6 +3763,7 @@ function renderHistory() {
     : '<div class="empty">No transfers yet</div>';
   renderTransactionPage();
   renderMobileActivity();
+  if ($("dashboard").dataset.msub === "activity") renderActivityScreen();
 }
 
 function renderTransactionPage() {
