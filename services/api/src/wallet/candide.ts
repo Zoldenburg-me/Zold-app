@@ -47,7 +47,17 @@ export const CANDIDE = {
     SocialRecoveryModuleGracePeriodSelector.After3Days) as `0x${string}`,
   allowanceModuleAddress: (process.env.CANDIDE_ALLOWANCE_MODULE_ADDRESS ??
     AllowanceModule.DEFAULT_ALLOWANCE_MODULE_ADDRESS) as `0x${string}`,
-  cosignerAllowanceAmount: BigInt(process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT ?? "0"),
+  cosignerAllowancePeriodMinutes: BigInt(process.env.CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES ?? "0"),
+  cosignerEureAllowanceWei: BigInt(
+    process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ??
+      process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT ??
+      "0",
+  ),
+  cosignerUsdcAllowanceUnits: BigInt(
+    process.env.CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS ??
+      process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT ??
+      "0",
+  ),
 };
 
 /** Deterministic Safe address for an owner — offline, no network. */
@@ -97,7 +107,14 @@ export interface PasskeySafeDeploymentPlan {
   cosignerPolicy?: {
     enabled: boolean;
     allowanceModuleAddress: `0x${string}`;
-    allowanceAmount: string;
+    allowancePeriodMinutes?: string;
+    allowances?: {
+      token: `0x${string}`;
+      symbol: "EURE" | "USDC";
+      amount: string;
+    }[];
+    /** Deprecated display field kept for old clients. */
+    allowanceAmount?: string;
   };
   recovery?: {
     moduleAddress: `0x${string}`;
@@ -186,13 +203,30 @@ export function passkeySafeRecoverySetupTransactions(plan: PasskeySafeDeployment
 export function passkeySafeAllowanceSetupTransactions(plan: PasskeySafeDeploymentPlan): MetaTransaction[] {
   if (!plan.cosignerAddress || !plan.cosignerPolicy?.enabled) return [];
   const allowance = new AllowanceModule(plan.cosignerPolicy.allowanceModuleAddress);
-  const amount = BigInt(plan.cosignerPolicy.allowanceAmount);
   const txs = [
     allowance.createEnableModuleMetaTransaction(plan.address),
     allowance.createAddDelegateMetaTransaction(plan.cosignerAddress),
   ];
-  if (amount > 0n) {
-    throw new Error("CANDIDE_COSIGNER_ALLOWANCE_AMOUNT must stay 0 until token-scoped limits are implemented");
+  const period = BigInt(plan.cosignerPolicy.allowancePeriodMinutes ?? "0");
+  for (const item of plan.cosignerPolicy.allowances ?? []) {
+    const amount = BigInt(item.amount);
+    if (amount <= 0n) continue;
+    txs.push(
+      period > 0n
+        ? allowance.createRecurringAllowanceMetaTransaction(
+            plan.cosignerAddress,
+            item.token,
+            amount,
+            period,
+            0n,
+          )
+        : allowance.createOneTimeAllowanceMetaTransaction(
+            plan.cosignerAddress,
+            item.token,
+            amount,
+            0n,
+          ),
+    );
   }
   return txs;
 }

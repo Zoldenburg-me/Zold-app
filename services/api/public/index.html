@@ -1158,10 +1158,16 @@ function renderShellPages() {
   $("set-device").textContent = user.authorizerAddress ? `Bound to ${user.authorizerAddress.slice(0, 10)}…${user.authorizerAddress.slice(-6)}` : "Not bound yet.";
   const safe = user.passkeySafe;
   const cosigner = safe?.cosignerPolicy;
+  const allowanceSummary = cosigner?.allowances?.length
+    ? cosigner.allowances
+        .filter((x) => BigInt(x.amount || "0") > 0n)
+        .map((x) => `${x.symbol} ${x.amount}`)
+        .join(", ") || "0"
+    : cosigner?.allowanceAmount || "0";
   $("set-wallet-policy").textContent = !safe
     ? "Passkey Safe not planned yet."
     : cosigner?.enabled
-      ? `Production co-signer · ${safe.threshold}-of-${safe.threshold} Safe · allowance ${cosigner.allowanceAmount}`
+      ? `Production co-signer · ${safe.threshold}-of-${safe.threshold} Safe · allowance ${allowanceSummary}`
       : `Passkey-only Safe · co-signer disabled outside production.`;
   renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
