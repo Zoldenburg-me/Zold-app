@@ -60,6 +60,35 @@ export async function assertChainMatches(): Promise<void> {
   }
 }
 
+/**
+ * Warn when the app chain and the smart-account chain disagree.
+ *
+ * `isDeployed()` in wallet/candide.ts asks CANDIDE_RPC_URL — always — while
+ * everything else here talks to TRANSF_RPC_URL. Point those at different chains
+ * and a passkey Safe deploys on one while the app looks for it on the other.
+ * Nothing throws: both answers are correct, they just describe different
+ * chains. The symptom surfaces three screens into onboarding as
+ * "passkey Safe must be deployed before Monerium funding provisioning" about a
+ * Safe the database quite rightly records as active.
+ *
+ * A WARNING, not a refusal. `npm run dev` runs chain 31337 against a
+ * Candide configured for a public chain, and everything except passkey Safe
+ * deployment works fine there — refusing to start would break the common case
+ * to prevent an uncommon one. Production is different: assertProductionConfig
+ * fails outright, because a mismatch there is never intentional.
+ */
+export function warnIfSmartAccountChainDiffers(): void {
+  const candideChainId = Number(process.env.CANDIDE_CHAIN_ID ?? 11155111);
+  if (candideChainId === CHAIN_ID) return;
+  console.warn(
+    `WARNING: app chain is ${CHAIN_ID} but CANDIDE_CHAIN_ID is ${candideChainId}. ` +
+      `Passkey Safes will deploy on ${candideChainId} and isDeployed() will check ${candideChainId}, ` +
+      `while balances and contracts come from ${CHAIN_ID}. Safe-dependent onboarding will refuse ` +
+      `with a message about deployment that looks unrelated. Run both on the same chain ` +
+      `(npm run api) unless you know why they differ.`,
+  );
+}
+
 export const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
 
 function wallet(key: `0x${string}`) {
