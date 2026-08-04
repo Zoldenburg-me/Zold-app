@@ -25,11 +25,17 @@ The backend may compute addresses, prepare UserOperations, request paymaster
 sponsorship, and relay operations through the bundler. It must not own the
 Safe signing key.
 
-The production wallet should not be a 1-of-1 passkey. Add a recovery path
-before real funds, for example:
+The default recovery path for non-crypto users is managed KYC recovery: the
+Safe has a service guardian, the user proves identity through the KYC/recovery
+operator path, and recovery waits through the module grace period before a new
+owner can take over. The API only decides when a request is allowed to proceed;
+the guardian signature is delegated to a separate signer service configured by
+`RECOVERY_GUARDIAN_SIGNER_URL`, so the API does not become a hot guardian key.
+Advanced users can add:
 
-- Primary passkey plus recovery guardian.
 - Two passkeys on separate devices.
+- Personal guardian address.
+- Optional one-time recovery codes.
 - Social recovery guardians for supported jurisdictions and risk tier.
 
 ## Transfer Permission Model
@@ -97,8 +103,10 @@ authorizer binding without a verified passkey.
    Safe deployments now enable Candide's `SocialRecoveryModule` and add the
    configured recovery guardian during the first UserOperation when
    `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` is configured; absent that, it defaults
-   to the co-signer. The lost-passkey initiation/finalization UI is still
-   separate work.
+   to the co-signer. The managed recovery API tracks requests, KYC/operator
+   approval, the delay window, and the fail-closed handoff to a separate
+   guardian signer. That signer must submit the on-chain
+   `SocialRecoveryModule` recovery transaction; it must not be an API hot key.
 4. Add one-time allowance setup for transfers.
 5. Keep Safe deployment centralized in `/api/users/:id/passkey-safe/deployment`
    and replace remaining API-side signing with client-signed UserOps.
