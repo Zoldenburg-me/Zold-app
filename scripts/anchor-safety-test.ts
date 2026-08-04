@@ -9,6 +9,7 @@
  *
  * Run: npm run anchor:safety
  */
+import "./_test-env.js";
 import assert from "node:assert/strict";
 import {
   AnchorPaymentUncertainError,
