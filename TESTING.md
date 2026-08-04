@@ -11,19 +11,27 @@ npm run compile
 ## Level 0 — automated checks (5 min, no accounts needed)
 
 ```sh
-npm run test:contracts   # 38 Solidity tests: vault caps/roles/replay + FP4 auth, FX access/slippage, escrow, AdminTimelock governance
+npm run test:contracts   # 41 Solidity tests: vault caps/roles/replay + FP4 auth, FX access/slippage, escrow, AdminTimelock governance
 npm run e2e              # full corridor 3x: cash pickup, SEPA exit, UPI scan-and-pay
 npm run audit:deps       # npm advisory scan
+npm run check            # everything: the two above plus ~25 focused harnesses
 ```
 
-Both must end green (`38 tests passed`, `E2E PASSED`). The e2e boots its own
+`npm run check` is the one that matters before pushing — it allocates a random
+free port for the whole run, which is why a suite passing on its own is weaker
+evidence than it looks. Note it is not fully deterministic: `trustline:test`
+reaches MoneyGram's real anchor and fails if that host is unreachable.
+
+Both must end green (`41 tests passed`, `E2E PASSED`). The e2e boots its own
 chain + API, so stop `npm run dev` first if it's running (it will tell you).
 
 ## Level 1 — the app in mock mode (10 min, no accounts needed)
 
 ```sh
-npm run dev              # then open http://localhost:3000
+npm run dev              # then open http://localhost:3000/app
 ```
+
+`/` serves the landing page; the app is at `/app`.
 
 1. **Onboarding** — enter a name, "Open my account". The setup screen steps
    through instantly in mock mode and lands on the dashboard. You get an IBAN
@@ -125,3 +133,29 @@ when Circle/Stellar publishes new deployments.
 - MoneyGram/UPI partners are protocol-shaped mocks unless pointed at a real
   anchor; FX rates are a mock oracle.
 - Fresh `npm run dev` resets the local chain + demo users (`data/db.json`).
+
+## Liquidity venues
+
+```sh
+npm run lifi:test   # 16 checks — aggregated routes bound, wrong answers refused
+npm run dex:test    # 12 checks — pool prices checked against an independent mid
+npm run best:test   # 13 checks — better price wins, surplus measured
+```
+
+All three are offline. What they cannot cover is a real swap: LI.FI publishes
+no testnet, and Base Sepolia has no EURe/USDC pool. `npm run dex:setup` reports
+exactly what is missing and refuses rather than half-running; `-- --fix` creates
+and seeds a pool once the treasury holds EURe.
+
+## Stellar payout
+
+```sh
+npm run stellar:check         # SEP-10 + SEP-24 against Stellar's test anchor
+npm run trustline:test        # 9 checks — the payout account can receive the asset
+npm run stellar:payout:live   # drives a real testnet payment as far as the anchor allows
+```
+
+`stellar:payout:live` proves the ledger half — a real memo-carrying payment
+lands — then stops, because the test anchor never publishes a withdrawal
+account over SEP-24 or SEP-6. It completes unchanged against an anchor that
+does.
