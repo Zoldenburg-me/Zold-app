@@ -124,6 +124,32 @@ if (KYC.operatorToken && KYC.operatorToken.length < 24) {
  * key executes them for real.
  */
 export const CCTP = {
+  /**
+   * Fast Transfer vs standard, and the reason it matters: a bridge that
+   * outlives the payout quote it is funding cannot settle at the rate the user
+   * was shown. minFinalityThreshold 2000 is hard finality — MEASURED at ~15
+   * minutes Base Sepolia -> Stellar, against MoneyGram's 30-minute rate
+   * guarantee, so it fits with little room. 1000 is soft finality, which Circle
+   * settles in seconds in exchange for maxFee. Default stays on the slow, free
+   * path; switch deliberately when a real payout depends on the timing.
+   */
+  minFinalityThreshold: Number(process.env.CCTP_MIN_FINALITY ?? 2000),
+  maxFee: BigInt(process.env.CCTP_MAX_FEE ?? 0),
+  /**
+   * How long to wait for Circle's attestation. The old 5-minute default was
+   * shorter than Base finality, so the FIRST live bridge always timed out with
+   * the USDC already burned — the worst shape of failure, an irreversible step
+   * followed by an error that reads like nothing happened.
+   */
+  attestationTimeoutMs: Number(process.env.CCTP_ATTESTATION_TIMEOUT_MS ?? 30 * 60_000),
+  /**
+   * The asset CCTP actually moves. Distinct from STELLAR.anchorAsset, which is
+   * what the anchor pays out in and still defaults to SRT — checking that one
+   * before a USDC burn refused a good bridge, and would have waved through a
+   * bad one.
+   */
+  bridgedAssetCode: process.env.CCTP_BRIDGED_ASSET ?? "USDC",
+
   live: process.env.CCTP_LIVE === "1",
   env: process.env.CCTP_ENV ?? "testnet",
   baseRpc: process.env.CCTP_BASE_RPC ?? "https://sepolia.base.org",
