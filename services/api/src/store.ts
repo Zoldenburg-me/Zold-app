@@ -112,12 +112,29 @@ export interface User {
   paymentPage?: {
     handle: string;
     displayName?: string;
+    /** Public receive address shown on /pay/<handle>. In production this is a
+     *  Candide Forwarding Address that routes supported deposits into the
+     *  merchant's deployed passkey Safe. */
     depositAddress: `0x${string}`;
-    /**
-     * MVP deposit key for the page address. This is a custody boundary, so it
-     * is stripped from every API response and forbidden in production stores.
-     */
-    depositPrivateKey?: `0x${string}`;
+    /** Destination Safe that should receive forwarded funds. */
+    recipientAddress?: `0x${string}`;
+    forwarder?: {
+      provider: "candide" | "local-safe";
+      recipient: `0x${string}`;
+      destinationChainId: number;
+      sourceChainIds: number[];
+      custodialWithdrawer: `0x${string}`;
+      salt?: `0x${string}`;
+      active: boolean;
+      expiresAt?: string;
+      activatedAt: string;
+    };
+    supportedTokens?: {
+      chainId: number;
+      symbol: "EURE" | "USDC";
+      address: `0x${string}`;
+      decimals: number;
+    }[];
     settlementAsset: "EURE" | "USDC";
     autoConvert: boolean;
     createdAt: string;
@@ -337,6 +354,16 @@ export interface Transfer {
      *  that lost its tx cannot be replayed, and re-quoting at execution time
      *  would settle at a price the user never agreed to. */
     rfq?: { quoteId: string; tx: { to?: string; data?: string; value?: string } | null; approvalTarget?: string };
+    cow?: { orderId: string; feeAmount: string; validTo: number; appData: string };
+    dex?: { pool: `0x${string}`; fee: number; mid: number; deviationBps: number };
+    lifi?: {
+      tool: string;
+      approvalAddress: `0x${string}`;
+      toToken: `0x${string}`;
+      tx: { to: `0x${string}`; data: `0x${string}`; value?: string; gasLimit?: string };
+      mid: number;
+      deviationBps: number;
+    };
     executedAt?: string;
     txHash?: string;
   };
@@ -494,7 +521,7 @@ export function initStore() {
     db.recoveryRequests ??= [];
     db.cryptoDepositCursor ??= {};
     if (IS_PRODUCTION) {
-      const custodial = db.users.filter((u) => u.privateKey || u.ownerAddress || u.paymentPage?.depositPrivateKey);
+      const custodial = db.users.filter((u) => u.privateKey || u.ownerAddress || (u.paymentPage as any)?.depositPrivateKey);
       if (custodial.length) {
         throw new Error(
           `production store contains ${custodial.length} account(s) with API-held Safe owner material; ` +
@@ -680,7 +707,7 @@ export const store = {
   /** Handles are compared case-insensitively; they are stored lowercase. */
   findUserByHandle(handle: string) {
     const h = handle.trim().toLowerCase();
-    return db.users.find((u) => (u.paymentPage?.handle ?? u.handle) === h);
+    return db.users.find((u) => u.paymentPage?.handle === h);
   },
   findUser(id: string) {
     return db.users.find((u) => u.id === id);

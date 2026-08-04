@@ -1,5 +1,5 @@
 /**
- * Crypto in — USDC arriving at a payment-page address, settled for the owner.
+ * Crypto in — USDC forwarded from a payment page into the merchant Safe.
  *
  * The funding story until now was one-directional: euros arrive by SEPA and
  * Monerium issues EURe to the user's Safe. A crypto-native user holding USDC had
@@ -9,8 +9,9 @@
  *
  * Three separable steps, deliberately:
  *
- *   detect  — read Transfer logs addressed to the account (this file)
- *   sweep   — move the tokens to the orchestrator so a venue can trade them
+ *   detect  — read Transfer logs addressed to the merchant Safe (this file)
+ *   sweep   — legacy EURe-settlement path, moving merchant Safe USDC to the
+ *             executor so a venue can trade it
  *   convert — swap USDC->EURe into the merchant Safe
  *
  * They are split because only the middle one needs Candide's bundler, which no
@@ -20,8 +21,9 @@
  *
  * WHAT THIS DOES NOT DO
  * - It converts nothing without `user.paymentPage.autoConvert`.
- * - It does not watch the user's main wallet; a normal wallet transfer must
- *   not inherit a payment page's settlement rule.
+ * - It watches the payment page's configured forwarding recipient. In
+ *   production that should be the merchant Safe, reached through Candide's
+ *   forwarding address rather than an API-held payment-page owner key.
  * - It credits nothing for an account that is not KYC-approved. The output is
  *   e-money, so the same gate that gates a SEPA deposit gates this.
  * - It does not screen the SENDING address. An unsolicited transfer from an
@@ -36,9 +38,9 @@ import {
   addrs,
   eur,
   usd,
-  orchestratorAddress,
   publicClient,
   safeEurBalance,
+  orchestratorAddress,
 } from "../chain.js";
 import { liquidityProvider } from "../liquidity.js";
 import { midRates } from "../rates.js";
@@ -66,6 +68,10 @@ function watchedUsers(): User[] {
   return store.users.filter(
     (u) => u.paymentPage?.autoConvert && u.paymentPage.depositAddress && u.kycStatus === "approved",
   );
+}
+
+function watchedAddress(user: User): `0x${string}` {
+  return user.paymentPage?.recipientAddress ?? user.address;
 }
 
 /**
@@ -96,17 +102,16 @@ async function assertRateSane(rate: bigint): Promise<number> {
 }
 
 /**
- * Get the deposited USDC to the orchestrator, which is who the venues trade
- * with.
+ * Get Safe-held USDC to the legacy executor, which is who the venues trade
+ * with today.
  *
  * Returns the step to record, or null if the tokens were already there — the
  * resumable case, where a previous run moved them and died before crediting.
  *
- * On a real chain the tokens sit in the user's deployed Safe and only a
- * UserOperation can move them; that is the server-held-key custody gap FP4
- * exists to close, and it is not made worse here. On a local chain the Safe is
- * counterfactual (never deployed, no code), so nothing can move tokens out of
- * it and this refuses rather than pretending.
+ * Candide Forwarding Address deposits route into the merchant's Safe. The next
+ * custody cut is to replace this API-held-key executor path with Safe UserOps
+ * or a strict policy delegate; until then, passkey-only production accounts
+ * refuse rather than pretending the swap happened.
  */
 async function sweepToOrchestrator(
   user: User,
@@ -129,19 +134,19 @@ async function sweepToOrchestrator(
 
   const page = user.paymentPage;
   if (!page) throw new Error("account has no payment page");
-  const code = await publicClient.getBytecode({ address: page.depositAddress });
+  const code = await publicClient.getBytecode({ address: user.address });
   if (!code || code === "0x") {
     throw new Error(
-      `payment page ${page.depositAddress} has no deployed Safe, so the deposited USDC cannot be moved ` +
+      `merchant Safe ${user.address} is not deployed, so the forwarded USDC cannot be moved ` +
         `— it is still yours at that address, but this chain cannot convert it`,
     );
   }
-  if (!page.depositPrivateKey) {
-    throw new Error("payment page has no deposit Safe owner key in this store, so the deposit cannot be moved");
+  if (!user.privateKey) {
+    throw new Error("merchant Safe has no API-held owner key; Safe-native UserOps are required for EURe settlement");
   }
   const { transferTokenFromSafe } = await import("../wallet/candide.js");
   const hash = await transferTokenFromSafe({
-    ownerKey: page.depositPrivateKey,
+    ownerKey: user.privateKey,
     token: a.usdc,
     to: orchestratorAddress,
     amount,
@@ -274,12 +279,12 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
   const logs = await publicClient.getLogs({
     address: addrs().usdc,
     event: TRANSFER_EVENT,
-    args: { to: users.map((u) => u.paymentPage!.depositAddress) },
+    args: { to: users.map(watchedAddress) },
     fromBlock,
     toBlock,
   });
 
-  const byAddress = new Map(users.map((u) => [u.paymentPage!.depositAddress.toLowerCase(), u]));
+  const byAddress = new Map(users.map((u) => [watchedAddress(u).toLowerCase(), u]));
   const fresh: CryptoDeposit[] = [];
   for (const log of logs) {
     const to = String(log.args.to ?? "").toLowerCase();
@@ -303,7 +308,7 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
         amountUnits: value.toString(),
         amountUsdc: usd.fromUnits(value),
         settlementAsset: user.paymentPage!.settlementAsset,
-        paymentAddress: user.paymentPage!.depositAddress,
+        paymentAddress: watchedAddress(user),
         state: "DETECTED",
         txs: [],
         detectedAt: now,
