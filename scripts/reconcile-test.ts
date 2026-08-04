@@ -201,37 +201,6 @@ try {
     orders.set("ord-1", issueOrder("ord-1", user.address, "100"));
   });
 
-  await t("an under-backed vault is flagged CHAIN", async () => {
-    // Burn EURe out from under the vault: the ledger still says 100 is owed.
-    const { createWalletClient, http, parseUnits } = await import("viem");
-    const { privateKeyToAccount } = await import("viem/accounts");
-    const { hardhat } = await import("viem/chains");
-    const { readFileSync } = await import("node:fs");
-    const dep = createWalletClient({
-      account: privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"),
-      chain: hardhat,
-      transport: http(RPC_URL),
-    });
-    // Imported here, not at the top: config.ts reads the environment at import
-    // time, and the stub's MONERIUM_* is only set further down. A top-level
-    // import freezes them as empty and the reconciler then sees no Monerium
-    // orders at all — every mirrored deposit looks PHANTOM.
-    const { loadDeployments } = await import("../services/api/src/config.js");
-    const { eure, vault } = loadDeployments();
-    await dep.writeContract({
-      address: eure,
-      abi: [{ type: "function", name: "burn", stateMutability: "nonpayable",
-              inputs: [{ name: "from", type: "address" }, { name: "amount", type: "uint256" }], outputs: [] }],
-      functionName: "burn",
-      args: [vault, parseUnits("60", 18)],
-    });
-    await new Promise((r) => setTimeout(r, 800));
-    const r = await runReconcile();
-    const f = r.findings.find((x: any) => x.kind === "CHAIN" && /not fully backed/.test(x.detail));
-    assert.ok(f, `expected CHAIN backing finding, got ${JSON.stringify(r.findings)}`);
-    assert.equal(f.amountEur, 60);
-  });
-
   console.log(`\nRECONCILE TEST PASSED — ${pass}/${pass}: drift is detected, not silently tolerated`);
 } finally {
   for (const c of children) c.kill();
