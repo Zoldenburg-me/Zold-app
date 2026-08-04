@@ -3,8 +3,8 @@
  *
  * Every user gets a Safe smart account whose address is computed offline and
  * deterministically from their owner key — the same address on every EVM
- * chain. That address is the user's identity everywhere: the local RemitVault
- * ledger, and the address Monerium links the IBAN to.
+ * chain. That address is the user's identity and token balance account, and
+ * the address Monerium links the IBAN to.
  *
  * For Monerium to verify ownership of a contract wallet it calls EIP-1271 on
  * the address, so the Safe must actually be deployed on the chain Monerium
@@ -47,7 +47,17 @@ export const CANDIDE = {
     SocialRecoveryModuleGracePeriodSelector.After3Days) as `0x${string}`,
   allowanceModuleAddress: (process.env.CANDIDE_ALLOWANCE_MODULE_ADDRESS ??
     AllowanceModule.DEFAULT_ALLOWANCE_MODULE_ADDRESS) as `0x${string}`,
-  cosignerAllowanceAmount: BigInt(process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT ?? "0"),
+  cosignerAllowancePeriodMinutes: BigInt(process.env.CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES ?? "0"),
+  cosignerEureAllowanceWei: BigInt(
+    process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ??
+      process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT ??
+      "0",
+  ),
+  cosignerUsdcAllowanceUnits: BigInt(
+    process.env.CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS ??
+      process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT ??
+      "0",
+  ),
 };
 
 /** Deterministic Safe address for an owner — offline, no network. */
@@ -97,7 +107,14 @@ export interface PasskeySafeDeploymentPlan {
   cosignerPolicy?: {
     enabled: boolean;
     allowanceModuleAddress: `0x${string}`;
-    allowanceAmount: string;
+    allowancePeriodMinutes?: string;
+    allowances?: {
+      token: `0x${string}`;
+      symbol: "EURE" | "USDC";
+      amount: string;
+    }[];
+    /** Deprecated display field kept for old clients. */
+    allowanceAmount?: string;
   };
   recovery?: {
     moduleAddress: `0x${string}`;
@@ -186,13 +203,30 @@ export function passkeySafeRecoverySetupTransactions(plan: PasskeySafeDeployment
 export function passkeySafeAllowanceSetupTransactions(plan: PasskeySafeDeploymentPlan): MetaTransaction[] {
   if (!plan.cosignerAddress || !plan.cosignerPolicy?.enabled) return [];
   const allowance = new AllowanceModule(plan.cosignerPolicy.allowanceModuleAddress);
-  const amount = BigInt(plan.cosignerPolicy.allowanceAmount);
   const txs = [
     allowance.createEnableModuleMetaTransaction(plan.address),
     allowance.createAddDelegateMetaTransaction(plan.cosignerAddress),
   ];
-  if (amount > 0n) {
-    throw new Error("CANDIDE_COSIGNER_ALLOWANCE_AMOUNT must stay 0 until token-scoped limits are implemented");
+  const period = BigInt(plan.cosignerPolicy.allowancePeriodMinutes ?? "0");
+  for (const item of plan.cosignerPolicy.allowances ?? []) {
+    const amount = BigInt(item.amount);
+    if (amount <= 0n) continue;
+    txs.push(
+      period > 0n
+        ? allowance.createRecurringAllowanceMetaTransaction(
+            plan.cosignerAddress,
+            item.token,
+            amount,
+            period,
+            0n,
+          )
+        : allowance.createOneTimeAllowanceMetaTransaction(
+            plan.cosignerAddress,
+            item.token,
+            amount,
+            0n,
+          ),
+    );
   }
   return txs;
 }
@@ -277,11 +311,9 @@ export async function isDeployed(address: string): Promise<boolean> {
 /**
  * Move an ERC-20 out of the user's Safe, gaslessly.
  *
- * Needed once the vault holds Monerium's real EURe rather than a token we mint
- * ourselves: a deposit lands in the user's Safe, and RemitVault.creditDeposit
- * refuses unless the vault actually holds the tokens backing the credit
- * ("uncovered credit"), so the euros have to be moved before they can be
- * credited.
+ * Temporary server-side Safe execution helper for the remaining relay flows.
+ * The long-term path is a browser-signed Safe UserOperation with exact token,
+ * amount, destination, and expiry constraints.
  *
  * This is a server-signed action today — the same custody gap FP4's second
  * half exists to close. It is not a new hole, but it is a bigger one: the key

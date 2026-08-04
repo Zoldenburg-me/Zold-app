@@ -1,18 +1,17 @@
 /**
  * Crypto in — USDC arriving at a payment-page address, settled for the owner.
  *
- * The funding story until now was one-directional: euros arrive by SEPA,
- * Monerium issues EURe, the vault credits it. A crypto-native user holding
- * USDC had no way in at all. This watches payment-page deposit addresses for inbound USDC and
- * turns it into the same spendable EUR balance every other rail produces, so
- * a corridor payout can be funded from crypto without the user first finding a
- * bank.
+ * The funding story until now was one-directional: euros arrive by SEPA and
+ * Monerium issues EURe to the user's Safe. A crypto-native user holding USDC had
+ * no way in at all. This watches payment-page deposit addresses for inbound
+ * USDC and settles into the merchant Safe, so a corridor payout can be funded
+ * from crypto without the user first finding a bank.
  *
  * Three separable steps, deliberately:
  *
  *   detect  — read Transfer logs addressed to the account (this file)
  *   sweep   — move the tokens to the orchestrator so a venue can trade them
- *   convert — swap USDC->EURe into the vault and credit the ledger
+ *   convert — swap USDC->EURe into the merchant Safe
  *
  * They are split because only the middle one needs Candide's bundler, which no
  * hardhat node provides. Detection and conversion are therefore testable
@@ -30,7 +29,6 @@
  *   compliance provider, and nothing here answers it.
  */
 import { randomUUID } from "node:crypto";
-import { keccak256, toHex } from "viem";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import {
@@ -40,8 +38,7 @@ import {
   usd,
   orchestratorAddress,
   publicClient,
-  rampWallet,
-  writeAndWait,
+  safeEurBalance,
 } from "../chain.js";
 import { liquidityProvider } from "../liquidity.js";
 import { midRates } from "../rates.js";
@@ -71,16 +68,6 @@ function watchedUsers(): User[] {
   );
 }
 
-/** Deposit reference for RemitVault.creditDeposit.
- *
- *  Derived from the transfer's on-chain identity so the contract's own
- *  `processedDeposit[ref]` is a second, independent guard against crediting
- *  the same euros twice — one that survives a restored db.json, which our
- *  record does not. */
-function depositRef(txHash: string, logIndex: number): `0x${string}` {
-  return keccak256(toHex(`crypto:${CHAIN_ID}:${txHash.toLowerCase()}:${logIndex}`));
-}
-
 /**
  * Refuse to convert at a price the market would not give.
  *
@@ -106,17 +93,6 @@ async function assertRateSane(rate: bigint): Promise<number> {
     );
   }
   return venue;
-}
-
-/** EURe the vault is holding right now. The credit is sized from the movement
- *  in this number, not from the quote. */
-async function vaultEureHeld(): Promise<bigint> {
-  return (await publicClient.readContract({
-    address: addrs().eure,
-    abi: abis.MockToken,
-    functionName: "balanceOf",
-    args: [addrs().vault],
-  })) as bigint;
 }
 
 /**
@@ -174,13 +150,11 @@ async function sweepToOrchestrator(
 }
 
 /**
- * Convert one detected deposit and credit the euros.
+ * Convert one detected deposit and settle the euros.
  *
- * Ordering is the point. The swap sends EURe to the VAULT and the credit is
- * sized from the vault's measured balance change, not from `expectedOut` —
- * a fill anywhere inside the slippage band would otherwise credit a number the
- * vault is not holding, which RemitVault rejects as an uncovered credit at
- * best and over-credits at worst.
+ * Ordering is the point. The swap sends EURe to the merchant Safe and the
+ * settlement record is sized from the Safe's measured balance change, not from
+ * `expectedOut`.
  */
 export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDeposit> {
   if (deposit.state === "CONVERTED") return deposit;
@@ -218,32 +192,21 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
     const quote = await provider.quote("USDC_TO_EURE", amount, quoteId, expiresAt);
     const venueRate = await assertRateSane(quote.rate);
 
-    const before = await vaultEureHeld();
-    const execution = await provider.execute(quote, addrs().vault);
+    const before = eur.toWei(await safeEurBalance(user.address));
+    const execution = await provider.execute(quote, user.address);
     txs.push(...execution.txs);
-    const after = await vaultEureHeld();
+    const after = eur.toWei(await safeEurBalance(user.address));
 
     const receivedWei = after - before;
     if (receivedWei <= 0n) {
-      throw new Error("the swap delivered no EURe to the vault — refusing to credit");
+      throw new Error("the swap delivered no EURe to the merchant Safe — refusing to settle");
     }
     if (receivedWei < quote.minOut) {
-      // Below the slippage floor the quote promised: something is wrong with
-      // the venue, and the euros are in the vault uncredited (recoverable)
-      // rather than credited against nothing (not).
       throw new Error(
         `swap delivered ${eur.fromWei(receivedWei)} EURe, under the ${eur.fromWei(quote.minOut)} ` +
-          `minimum the quote guaranteed — left in the vault uncredited for review`,
+          `minimum the quote guaranteed — left for review`,
       );
     }
-
-    const creditHash = await writeAndWait(rampWallet, {
-      address: addrs().vault,
-      abi: abis.RemitVault,
-      functionName: "creditDeposit",
-      args: [user.address, receivedWei, depositRef(deposit.txHash, deposit.logIndex)],
-    });
-    txs.push({ step: "vault.creditDeposit", hash: creditHash });
 
     const creditedEur = eur.fromWei(receivedWei);
     console.log(

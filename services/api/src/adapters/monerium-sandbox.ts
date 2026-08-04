@@ -7,9 +7,9 @@
  *     link the user's wallet address with a signed ownership declaration, and
  *     request a personal IBAN. IBAN issuance can be async; we poll for it.
  *  2. Deposits: polls Monerium `issue` orders (EURe minted after a SEPA
- *     transfer arrives in sandbox). Local demo chains mirror each order into
- *     RemitVault (mint mock EURe + credit). Non-local Monerium runs expose both
- *     the Safe's real EURe balance and the vault ledger.
+ *     transfer arrives in sandbox). Local demo chains mint the mock EURe
+ *     directly into the user's Safe; non-local Monerium runs read the Safe's
+ *     real EURe balance.
  *
  * Webhooks (order.updated / iban.updated) are the production path; polling is
  * used here because local dev has no public URL.
@@ -231,12 +231,11 @@ function isProcessed(o: MoneriumOrder): boolean {
  * it means we could not reach Monerium, not that the order is bad, so the
  * caller must leave the delivery un-consumed and let the sender retry.
  */
-export type MirrorOutcome = "mirrored" | "duplicate" | "ignored" | "unavailable";
+export type MirrorOutcome = "recorded" | "duplicate" | "ignored" | "unavailable";
 
 /**
- * Mirror one order that came from Monerium's own API into the local vault.
- * This is local/mock custody logic; real Monerium deposits mint EURe to the
- * user's Safe.
+ * Record one order that came from Monerium's own API. Local/mock chains mint
+ * EURe into the user's Safe; real Monerium deposits are already in the Safe.
  *
  * The caller must have fetched `order` from Monerium — never pass in an
  * object built from a request body. Amount and address are taken from the
@@ -249,8 +248,8 @@ async function mirrorOrder(order: MoneriumOrder): Promise<boolean> {
   if (!user) return false;
   const amount = Number(order.amount);
   if (!(amount > 0)) return false;
-  // Native EURe (Amoy, Sepolia, …): the euros already exist in the user's
-  // Safe, so they are moved into the vault. Only a local chain mints.
+  // Native EURe (Amoy, Sepolia, ...): the euros already exist in the user's
+  // Safe. Only a local chain mints mock EURe.
   const { moneriumEure } = await import("./monerium-tokens.js");
   const { CHAIN_ID } = await import("../config.js");
   if (await moneriumEure(MONERIUM.baseUrl, CHAIN_ID)) {
@@ -260,7 +259,7 @@ async function mirrorOrder(order: MoneriumOrder): Promise<boolean> {
     await simulateSepaDeposit(user.address, amount, `monerium:${order.id}`);
   }
   store.markOrderProcessed(order.id);
-  console.log(`monerium: mirrored issue order ${order.id} (€${amount}) for ${user.name}`);
+  console.log(`monerium: recorded issue order ${order.id} (€${amount}) for ${user.name}`);
   return true;
 }
 
@@ -292,7 +291,7 @@ export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
     return "unavailable";
   }
   if (order.id !== orderId) return "ignored";
-  return (await mirrorOrder(order)) ? "mirrored" : "ignored";
+  return (await mirrorOrder(order)) ? "recorded" : "ignored";
 }
 
 /**
@@ -333,8 +332,8 @@ export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
 }
 
 /**
- * One poll cycle: mirror new processed `issue` orders into the local vault.
- * Returns the number of deposits credited.
+ * One poll cycle: record new processed `issue` orders.
+ * Returns the number of deposits recorded.
  */
 export async function pollDepositsOnce(): Promise<number> {
   let credited = 0;
@@ -418,5 +417,5 @@ export async function handleWebhookEvent(
   const id = event?.data?.id ?? event?.order?.id ?? event?.id;
   if (!id || typeof id !== "string") return { handled: false, outcome: "ignored" };
   const outcome = await mirrorOrderById(id);
-  return { handled: outcome === "mirrored", outcome };
+  return { handled: outcome === "recorded", outcome };
 }
