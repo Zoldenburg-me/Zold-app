@@ -111,6 +111,44 @@
   (faucet.circle.com for testnet USDC). Stellar CCTP domain is 27; mint
   recipient AND destinationCaller must be the CctpForwarder.
 
+## Stellar payout leg — how far it actually runs (Aug 2026)
+
+Ran against real testnet and the real testanchor, not mocks.
+
+PROVEN LIVE:
+ - SEP-10 auth as the treasury (GCLMM2GB…), JWT issued.
+ - SEP-12 customer is ACCEPTED with all 12 fields already provided — the Travel
+   Rule work did that, and it is not the blocker for anything below.
+ - Treasury holds ~10,000 XLM and trustlines to TSTLN and to USDC issued by
+   GBBD47IF… — Circle's testnet USDC, the same asset MoneyGram's anchor uses.
+ - SEP-24 AND SEP-6 withdrawals both open successfully.
+ - **A REAL ON-LEDGER PAYMENT LANDS.** tx
+   60528481153e250d00943d09c871ba35da3c0df347ac1cff65fa6bdc41e3d993, ledger
+   3965805: 1.5 XLM moved with an id memo, built exactly as
+   sendSep24WithdrawalPayment builds it (payment op + memo + sign + submit).
+   Sequence handling, memo attachment and submission all work against the real
+   network. This is the piece that had never run.
+
+STILL NOT PROVEN, and testanchor is the reason:
+ - testanchor NEVER publishes withdraw_anchor_account. A SEP-24 withdrawal sits
+   at `incomplete` until a human completes their reference UI, and SEP-6 —
+   which is supposed to be the non-interactive sibling — behaves the same way,
+   returning only an id and a more_info_url. Their reference UI renders empty
+   fields in an embedded browser, so the form cannot be driven headlessly.
+ - Therefore sendSep24WithdrawalPayment itself is STILL UNEXERCISED end to end:
+   the ledger half is proven, the anchor-attribution half is not. Nothing pays
+   an anchor account because no anchor account is ever named.
+ - Their SEP-6 DEPOSIT also parks at `incomplete` with SEP-12 ACCEPTED, so the
+   treasury cannot obtain SRT or USDC from them. Any test needing anchor asset
+   is blocked on that, which is why the live script defaults to native XLM.
+ - CONSEQUENCE: the anchor half will first be exercised against MoneyGram's own
+   anchor, not testanchor. Budget for finding bugs there, and do not read
+   "anchor payouts work" as covering it.
+
+`npm run stellar:payout:live` drives as far as the anchor permits and refuses
+with the precise reason rather than pretending. It will complete unchanged the
+moment an anchor actually publishes an account.
+
 ## Testnet plumbing (July 2026)
 - TRANSF_CHAIN_ID selects the chain (31337 hardhat default, 80002 Amoy, 137
   Polygon); services/api/src/chain.ts resolves the viem chain from it and
