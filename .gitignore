@@ -16,3 +16,6 @@ dist/
 *.db
 .local-backups/
 data/db*.json
+
+# Timestamped .env backups — same secrets as .env, same rule.
+.env.backup-*

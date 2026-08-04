@@ -5,6 +5,7 @@
  * attestation for real.
  * Run: npm run cctp:dryrun [amountUsdc]
  */
+import "./_test-env.js";
 import { CCTP } from "../services/api/src/config.js";
 import { bridgeUsdcToStellar } from "../services/api/src/bridge/cctp.js";
 import { getTreasury } from "../services/api/src/stellar/anchor.js";

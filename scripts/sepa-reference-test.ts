@@ -3,6 +3,7 @@
  *
  * Pure functions, no chain and no API. Run: npm run sepa:test
  */
+import "./_test-env.js";
 import assert from "node:assert/strict";
 import {
   moneriumRedeemMessage,
