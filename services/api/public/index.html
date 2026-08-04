@@ -581,7 +581,7 @@
         </div>
         <div class="row2 hidden" id="funding-actions" style="margin-top:1rem">
           <button class="ghost" id="btn-finish-safe">Finish smart wallet</button>
-          <button id="btn-monerium-dashboard">Connect Monerium</button>
+          <button id="btn-monerium-dashboard">Verify with Monerium</button>
         </div>
         <div class="hint hidden" id="funding-action-hint"></div>
       </div>
@@ -942,14 +942,14 @@ function renderFundingActions(u = user) {
   row.classList.toggle("hidden", !(showSafe || showMonerium || showActivate));
   $("btn-finish-safe").classList.toggle("hidden", !showSafe);
   $("btn-monerium-dashboard").classList.toggle("hidden", !(showMonerium || showActivate));
-  $("btn-monerium-dashboard").textContent = showActivate ? "Activate IBAN" : "Connect Monerium";
+  $("btn-monerium-dashboard").textContent = showActivate ? "Activate IBAN" : "Verify with Monerium";
   hint.classList.toggle("hidden", !(showSafe || showMonerium || showActivate));
   hint.textContent = showSafe
     ? "Finish the smart wallet first, then connect Monerium to issue the app IBAN."
     : showActivate
       ? "Your Monerium account is connected. Activate the app IBAN with your passkey."
       : showMonerium
-        ? "Use your existing Monerium account to issue a new IBAN for this smart account."
+        ? "Use your existing Monerium account for identity verification and app IBAN issuance."
         : "";
 }
 
