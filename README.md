@@ -59,6 +59,7 @@ carried value and which have not.
 
 | Capability | Status |
 |---|---|
+| Residency gate at account creation | **Live** — Monerium's residency tiers, enforced before KYC |
 | IBAN issuance, SEPA deposit → EURe in Safe | **Live** — Monerium, EIP-1271 ownership |
 | Safe deployment, gas-sponsored, passkey-owned | **Live** — Candide bundler + paymaster |
 | Passkey auth, WebAuthn assertion verified server-side | **Live** |
@@ -139,10 +140,22 @@ credential, so a stolen session cannot silently replace it.
 From the passkey, `wallet/candide.ts` derives the Safe address
 deterministically — the address exists before anything is deployed.
 
-### 2 — Identity
+### 2 — Residency and identity
 
-Until the account is approved, IBAN issuance, deposits, device binding, quoting
-and transfers all fail closed. Two paths:
+Account creation is gated on residency before anything else runs
+(`country-policy.ts`). Only countries in Monerium's supported residency tiers
+pass; their `prohibited` tier and any country absent from their reference are
+refused, with common aliases and names normalised so the check cannot be evaded
+by spelling. This is a product gate aligned to what the issuer will support —
+not a substitute for sanctions screening, wallet screening, source-of-funds
+checks, partner corridor rules or legal review, and it needs re-syncing against
+Monerium's reference before launch.
+
+Note it constrains **who may hold an account**, not where money may be sent;
+payout corridors are governed separately by the rails and their partners.
+
+Past that gate, IBAN issuance, deposits, device binding, quoting and transfers
+all fail closed until the account is approved. Two paths:
 
 - **Identity review** — the standard route.
 - **Connect an existing Monerium account** — OAuth Authorization Code + PKCE
@@ -307,7 +320,7 @@ Requires Node 22 or newer.
 npm install
 npm run compile          # contracts
 npm run test:contracts   # 8 tests against a throwaway chain
-npm run check            # 30 suites: contracts, e2e, typecheck, focused harnesses
+npm run check            # 31 suites: contracts, e2e, typecheck, focused harnesses
 npm run api              # run against the configured chain
 ```
 
@@ -349,6 +362,7 @@ services/api/src/
   config.ts            configuration + production readiness gate
   reconcile.ts         issuer/chain drift detection
   sepa.ts              remittance reference normalisation
+  country-policy.ts    residency gate at account creation
   webauthn.ts          challenge, attestation, assertion verification
   recovery.ts          guardian recovery orchestration
   pay.ts  qr.ts        payment pages and QR encoding
