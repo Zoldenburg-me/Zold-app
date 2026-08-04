@@ -2,10 +2,19 @@
  * FP4 device key (browser side).
  *
  * The key that authorizes payments lives here — generated in this browser,
- * never sent anywhere. The server learns only the address. RemitVault refuses
- * any debit not signed by this key over the payment's exact terms, so the
- * server (which holds every other key in the system) cannot move a balance on
- * its own.
+ * never sent anywhere. The server learns only the address, and it signs over
+ * the payment's exact terms: amount, payee commitment and deadline, so nothing
+ * can be swapped after the user approves it.
+ *
+ * WHERE THAT IS ENFORCED CHANGED (Aug 2026) and the difference matters. It used
+ * to be RemitVault.debit, which reverted on-chain for any signature not from
+ * this key — bytecode the server could not talk its way past. RemitVault is
+ * gone; assertDeviceAuthorization() in orchestrator.ts now verifies the same
+ * signature in the API process. The server still cannot FORGE one, but it is
+ * the thing checking, so an API that skipped the check could move EURe out of a
+ * Safe it already holds the owner key for. Do not read the paragraph below as a
+ * guarantee against a compromised server; it is a guarantee against a stolen
+ * session and a swapped payee.
  *
  * The key is encrypted at rest with a secret only the passkey can produce:
  * WebAuthn's PRF extension derives 32 bytes from the authenticator for a

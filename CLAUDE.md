@@ -296,18 +296,20 @@ moment an anchor actually publishes an account.
 ## Mobile app + PWA (Aug 2026) — IN PROGRESS on a branch
 
 Branch `claude/remove-upi-and-onboarding-restyle`, pushed, **PR not opened**.
-Ten commits: UPI removal, onboarding restyle, landing-page sync, PWA layer,
-then the mobile app. Merge or continue from there, not from main.
+Thirteen commits: UPI removal, onboarding restyle, landing-page sync, PWA
+layer, the mobile app, then the token retrofit and the last three screens.
+Merge or continue from there, not from main.
 
 DESIGN SOURCE: `~/Downloads/Zold Mobile Dashboard Redesign.zip` — the user's
 Claude Design export. `README.md` in it is a real spec (tokens, screens,
 behaviour, state); build `Zold Mobile Noir.dc.html`, the approved variant.
 The landing page came from a separate export, already applied.
 
-BUILT: mobile shell (412px column, bottom nav Add·Send·Zold·Activity·Profile),
-Noir home/safe card, Add funds + bank + wallet, Zold Plus, the whole send flow
-(country → method → amount → recipient → progress), Activity, Profile.
-NOT BUILT: Pay hub, transaction detail, KYC gate/pending screens.
+BUILT — every screen in the handoff: mobile shell (412px column, bottom nav
+Add·Send·Zold·Activity·Profile), Noir home/safe card, Add funds + bank +
+wallet, Zold Plus, the Pay hub, the send flow (country → method → amount →
+recipient → progress), Activity, transaction detail, Profile, and the KYC
+gate + pending screens.
 
 THE RULE APPLIED THROUGHOUT, agreed with the user: where the design shows
 something the API cannot back, it is visibly unavailable — never faked. The
@@ -315,23 +317,89 @@ savings vault, USD accounts and Zold Plus say SOON; the send flow offers the
 two corridors the API prices (EUR->KES, EUR->EUR) and states that more open
 with partners rather than listing 182 countries that dead-end at the quote;
 Zold Plus shows no price because that tier does not exist, and links to the
-Privacy Bundle that does. Quotes, signing and the progress timeline are real —
-the timeline reads the transfer's own state, not a timer.
+Privacy Bundle that does. On the Pay hub, Zold and Crypto are SOON and
+genuinely `disabled` — there is no Zold-to-Zold endpoint and USDC arrives at an
+account but nothing sends it out. Its search runs over people this account has
+actually paid, not the design's @zoldtag directory: a handle resolves to a
+deposit address with no rail that can pay it, so the search would find someone
+and then have nowhere to go. No QR affordance either — nothing scans one.
+Quotes, signing and both timelines are real; a timeline reads the transfer's
+own state, not a timer.
 
-OPEN QUESTION, raised three times and still unanswered: the handoff's own Noir
-file is half-converted. Home and the send flow use the documented tokens (12px
-radii, mono labels); Activity, Profile, Plus and KYC in that same file use
-40-56px round avatars and 16/14px M3 type, contradicting the handoff's
-"nothing above 12px, 50% only for status dots". Both looks are now in the app
-because each screen followed the file. Decide before building the last three.
+TOKEN QUESTION — SETTLED (Aug 2026), do not reopen. The Noir file is
+half-converted: home and the send flow follow its README (12px radii, mono
+labels, Space Grotesk figures) while Activity, Profile, Plus and KYC are drawn
+with 40-56px round avatars and 16/14px M3 type. The user chose the README —
+"nothing above 12px, 50% only for status dots" — and the retrofit is done, so
+the app is on ONE scale. `.m-optrow` moved too (Add funds, destination and
+method lists): at 16/14 it sat a size above every row beside it. If a screen
+from that file looks wrong when you port it, the file is wrong, not the app.
 
-NEVER OBSERVED: a successful send through the mobile flow. `npm run dev` cannot
-fund an account here — .env carries Monerium sandbox credentials so
-/api/simulate/sepa-deposit refuses ("make a simulated SEPA transfer from the
-portal"), and provisioning stalls on CANDIDE_CHAIN_ID=84532 against chain
-31337. Quote, validation and refusal paths are proven; debited -> bridged ->
-paid has only been exercised through its state-mapping logic. Use `npm run api`
-against Base Sepolia with a funded account to close that.
+Two structural cleanups worth not undoing:
+ - The dashboard's recent list and the Activity screen render the SAME row
+   component (`mTxRow`). They were two functions drawing two shapes, so one
+   transfer looked like two different things depending on the screen.
+ - The send progress screen and transaction detail share `mTimeline()`. The
+   handoff gives detail 4 steps and progress 5; the same transfer showing a
+   different number of steps per screen is the confusing half of that.
+
+BUG FIXED, and the class name is load-bearing: the timeline's node column is
+`.tl`, NOT `.rail`. `#dashboard.m-on .rail { display:none }` hides the desktop
+layout's right-hand column with a selector that outranks anything scoped to
+`.m-step`, so every timeline rendered with no nodes and no connecting line —
+including the shipped send progress screen, silently, for several commits.
+
+HOW FAR A SEND ACTUALLY RUNS (Aug 2026, re-measured after the RemitVault
+merge). Not "never observed" any more — the wall moved, and it is worth knowing
+exactly where it now is.
+
+PROVEN, locally, through the mobile UI: device key bound -> POST /api/quotes
+(live mid, EUR->KES) -> POST /api/transfers -> device signs the EIP-712
+PaymentAuthorization -> POST /authorize -> orchestrator runs ->
+`assertDeviceAuthorization` PASSES. That last step is the one worth recording:
+after RemitVault was deleted the signature is verified in the API process, and
+this proves that path accepts a real browser-generated signature.
+
+THE WALL: `transferTokenFromSafe` throws "Safe 0x… is not deployed — cannot
+move tokens from it" (wallet/candide.ts:331, called from orchestrator.ts:235,
+i.e. AFTER the authorization check). The Safe address is counterfactual and can
+only be deployed through Candide's bundler on CANDIDE_CHAIN_ID=84532, which
+does not exist on local hardhat 31337. Nothing about the send flow fixes this;
+`npm run api` against Base Sepolia with a funded, deployed Safe is the only way
+past it, and debited -> bridged -> paid is still unexercised beyond its
+state-mapping logic.
+
+FUNDING NOW, since `scripts/credit-test.ts` was DELETED with RemitVault: there
+is no ledger to credit any more, so mint MockToken EURe straight to the user's
+Safe address from hardhat account 0 (the token owner) and `refresh()` picks it
+up. /api/simulate/sepa-deposit still refuses in sandbox mode.
+
+Activity and transaction detail were verified by rendering realistic Transfer
+objects into `hist` — the render code is real, the transfers were fixtures.
+
+BALANCE FIGURES CHANGED SHAPE: `accountBalances` now returns only
+`balanceEur === safeBalanceEur`; `vaultBalanceEur` is gone. `mobileFigures`
+reports total == available deliberately — there is one pot, and an in-flight
+transfer has already left the Safe, so the Safe balance is both what is held
+and what is spendable. Do not "fix" that into a subtraction.
+
+HOW TO SEE THE KYC GATE LOCALLY, because this costs an hour otherwise:
+`npm run dev` CANNOT show it. `scripts/_test-env.ts` sets
+`process.env.KYC_AUTO_APPROVE = ""` outright, so passing KYC_AUTO_APPROVE=0 to
+`npm run dev` does nothing and every new user lands approved. Run a second API
+directly instead, against the chain dev.ts already started:
+  TRANSF_API_PORT=3001 TRANSF_CHAIN_ID=31337 \
+  TRANSF_RPC_URL=http://127.0.0.1:8545 TRANSF_DB_PATH=/tmp/db.gate.json \
+  KYC_AUTO_APPROVE=0 ALLOW_SIMULATION=1 RP_ID=localhost \
+  WEBAUTHN_ORIGINS=http://localhost:3001 MONERIUM_CLIENT_ID= \
+  MONERIUM_CLIENT_SECRET= RAMP_KEY= ORCHESTRATOR_KEY= DEPLOYER_KEY= \
+  npx tsx services/api/src/server.ts
+Blanking the *_KEY vars matters: .env holds real Base Sepolia operator keys and
+they are not the owners of the local 31337 deployment. Gate, both pending
+paths, rejected, and simulate-approval-through-to-dashboard were each exercised
+that way. The KYC checklist is DERIVED from the account, not the design's fixed
+"two done, one in progress" — only the first unfinished step is marked running,
+and a rejected account stops pulsing.
 
 PWA: manifest, generated icons (a committed pure-Python PNG writer — no
 imaging library exists on this machine), and a shell service worker whose one
@@ -374,6 +442,27 @@ FP3 DONE (July 2026): failures auto-compensate (escrow release + vault
 re-credit at current rates, itemized deductions, REFUNDED state), startup +
 5-min sweep recovers stranded transfers; FORCE_FAIL_STEP test hook,
 npm run fp3:test.
+!! STALE SINCE THE REMITVAULT REMOVAL (Aug 2026) — READ THIS FIRST !!
+`contracts/src/RemitVault.sol` NO LONGER EXISTS. It was deleted on main by
+`break/remove-remit-vault`, and that PR did not update this file, so everything
+below describing RemitVault.debit / setAuthorizer / _isValidSignature describes
+a contract that is gone — including the whole "FP4 completion — recovery"
+section further down, whose steps 3 and 4 name functions you cannot call.
+WHAT IS ACTUALLY TRUE NOW: the same EIP-712 PaymentAuthorization is signed by
+the same browser device key, but it is verified by `assertDeviceAuthorization`
+in services/api/src/orchestrator.ts using viem's verifyTypedData — in the API
+process, not by bytecode. The EIP-712 domain moved to "TransF Safe Transfer"
+with the user's Safe as verifyingContract.
+THE SECURITY CONSEQUENCE, stated plainly because the text below claims the
+opposite as VERIFIED: a wrong-key signature is no longer "rejected by the
+contract itself". The server is the thing checking, and it still holds
+`user.privateKey` (FP4's open half), so a compromised or modified API can move
+EURe out of a user's Safe. The device key still stops a stolen session from
+swapping the payee or the amount; it no longer stops the server. Whether that
+trade was intended is a decision for the repo owner — this note records the
+divergence, it does not resolve it. The recovery plan below needs rewriting
+against whatever replaces the vault as the enforcement point.
+
 FP4 (key custody): SPEND-AUTHORITY HALF DONE (July 2026, PR #11, branch
 claude/fp4-vault-authorization — do not re-do differently). RemitVault.debit
 now requires an EIP-712 PaymentAuthorization signed by the account's
