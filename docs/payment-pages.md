@@ -1,6 +1,7 @@
 # Payment pages
 
-A shareable handle that resolves to an address someone can pay: `/pay/alice`.
+A shareable handle that resolves to a page-scoped deposit address someone can
+pay: `/pay/alice`.
 Modelled on Fluidkey's `alice.fkey.id`, which is the clearest version of this
 idea in production.
 
@@ -11,7 +12,7 @@ Checked against `ftx.fkey.id` and their docs, not inferred:
 | | Fluidkey | Here, today |
 |---|---|---|
 | Identifier | `name.fkey.id`, also an ENS name (`name.fkey.eth`) | `/pay/name` path on the app origin |
-| Address shown | a **new stealth address on every resolution**, derived from the recipient's stealth meta-address (ERC-5564) | the account's one existing Safe address |
+| Address shown | a **new stealth address on every resolution**, derived from the recipient's stealth meta-address (ERC-5564) | one deposit Safe address per payment page |
 | Account type | 1/1 Safe smart accounts as the stealth accounts | Candide Safe — the same primitive |
 | Networks | Base, Ethereum, BSC, Arbitrum, Polygon, Gnosis | one, whichever `TRANSF_CHAIN_ID` names |
 | Payer inputs | none — QR plus copy-address | the same: QR plus copy-address |
@@ -22,12 +23,18 @@ Everything else on their page is the same shape, which is why this one is
 deliberately plain: no amount field, no wallet connection. A payer's wallet
 does both better than a web page can.
 
-## Not private, said out loud
+## Page address, not main wallet
 
-Fluidkey's entire pitch is that a payer learns nothing about the recipient's
-other activity. Ours resolves to a single address, so every payment lands in
-the same place and anyone holding the link can read the whole history of it on
-an explorer.
+The payment page does not show the user's main smart account. It has its own
+deposit Safe address and its own settlement rule, so a normal transfer into the
+wallet cannot accidentally be swept because the page's auto-convert setting is
+on.
+
+That page address is still public. Fluidkey's entire pitch is that a payer
+learns nothing about the recipient's other activity. Ours is not there yet: each
+payment page resolves to one address, so every payment to that page lands in the
+same place and anyone holding the link can read that page address history on an
+explorer.
 
 That is a real difference in kind, not a smaller version of the same thing. The
 page therefore states it in plain words, and nothing in the product describes
@@ -40,10 +47,11 @@ Not difficulty — sequencing. Doing it honestly means the recipient controls
 every derived account, which means deriving the keys **client-side** from
 something only they hold. Fluidkey derives from a signature.
 
-Doing it server-side would be easy and wrong: it would put a key for every
+Doing stealth server-side would be easy and wrong: it would put a key for every
 stealth account in `db.json`, next to the one `user.privateKey` that FP4 exists
-to remove. That is the opposite direction from the custody plan, so stealth
-addresses should land after FP4's passkey/co-signer Safe, not before.
+to remove. The current payment-page deposit Safe is a page-level MVP custody
+boundary, not a privacy solution, and its key is stripped from API responses and
+forbidden in production stores.
 
 Two other things it would touch, worth knowing before starting:
 
@@ -93,7 +101,8 @@ Zold conversion treasury, Zold takes custody during conversion.
 
 The roadmap decision is therefore explicit:
 
-- **OG build:** keep the current public-address page, with blunt privacy copy.
+- **OG build:** one public deposit Safe address per payment page, with blunt
+  privacy copy and page-scoped settlement.
 - **Near-term hardening:** ask Candide whether custom forwarding hooks or
   arbitrary calldata are available; if not, treat Candide forwarding as UX
   hardening only.
