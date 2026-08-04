@@ -139,6 +139,30 @@ export interface User {
     ibans?: any[];
     addresses?: any[];
   };
+  privacyBundle?: {
+    planId: string;
+    status: "active" | "pending_fulfillment" | "canceled";
+    startedAt: string;
+    renewsAt: string;
+    canceledAt?: string;
+    esim?: {
+      provider: "kokio";
+      status: "pending" | "active" | "unavailable";
+      dataGb: number;
+      region: string;
+    };
+    vpn?: {
+      provider: "mysterium";
+      status: "pending" | "active" | "unavailable";
+      bandwidthGb: number;
+      devices: number;
+    };
+    usage: {
+      esimGb: number;
+      vpnGb: number;
+      periodStartedAt: string;
+    };
+  };
   createdAt: string;
 }
 
