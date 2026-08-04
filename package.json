@@ -49,6 +49,7 @@
     "sepa:test": "tsx scripts/sepa-reference-test.ts",
     "dex:test": "tsx scripts/dex-test.ts",
     "lifi:test": "tsx scripts/lifi-test.ts",
+    "best:test": "tsx scripts/best-execution-test.ts",
     "dex:setup": "tsx scripts/dex-setup.ts"
   },
   "devDependencies": {
