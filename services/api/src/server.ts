@@ -1578,6 +1578,18 @@ app.delete(
   }),
 );
 
+app.get(
+  "/api/session",
+  wrap(async (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+    const user = store.findUser(session.userId);
+    if (!user) return res.status(404).json({ error: "session user not found" });
+    const balances = await accountBalances(user.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0, vaultBalanceEur: 0 }));
+    res.json({ ...publicUser(user), ...balances });
+  }),
+);
+
 // --- Passkeys (FP2: full WebAuthn verification) ------------------------------
 // Registration parses and verifies the attestation (challenge, origin,
 // rpIdHash) and stores the COSE public key + sign counter. Login verifies the

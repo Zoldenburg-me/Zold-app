@@ -888,6 +888,7 @@ async function api(path, body) {
 }
 const showErr = (id, e) => { const el = $(id); el.textContent = e.message; el.classList.remove("hidden"); };
 const clearErr = (id) => $(id).classList.add("hidden");
+const shortAddr = (addr) => addr ? `${addr.slice(0, 8)}…${addr.slice(-6)}` : "—";
 
 /* ---------- account ---------- */
 function renderUser(u) {
@@ -900,7 +901,9 @@ function renderUser(u) {
   $("balance").innerHTML = `<span class="cur">€</span>${fmt(u.balanceEur ?? 0)}`;
   $("safe-balance").textContent = `€${fmt(u.safeBalanceEur ?? 0)}`;
   $("vault-balance").textContent = `€${fmt(u.vaultBalanceEur ?? 0)}`;
-  $("address").textContent = u.address;
+  const plannedSafe = needsPasskeySafeSetup(u) ? u.passkeySafe?.address : null;
+  $("address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — finish smart wallet` : u.address;
+  document.querySelector('[data-copy="address"]')?.classList.toggle("hidden", !!plannedSafe);
   renderAutoConvert(u.autoConvert);
   renderHandle(u.handle);
   const chip = $("fund-chip");
@@ -1129,7 +1132,9 @@ function renderShellPages() {
   $("send-card")?.classList.toggle("hidden", activeView !== "dashboard" || !kycApproved(user));
   $("acct-balance").innerHTML = `<span class="cur">€</span>${fmt(user.balanceEur ?? 0)}`;
   $("acct-iban").textContent = user.iban || "Not issued yet";
-  $("acct-address").textContent = user.address || "—";
+  const plannedSafe = needsPasskeySafeSetup(user) ? user.passkeySafe?.address : null;
+  $("acct-address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — not deployed` : (user.address || "—");
+  document.querySelector('[data-copy="acct-address"]')?.classList.toggle("hidden", !!plannedSafe);
   $("acct-owner").textContent = user.ownerAddress || "hidden";
   $("acct-kyc").textContent = kycCopy(user.kycStatus, user)[1];
   $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
@@ -1173,6 +1178,7 @@ function enterDashboard(name) {
   $("userpill").style.display = "flex";
   $("pillname").textContent = name;
   $("avatar").textContent = name.trim()[0].toUpperCase();
+  if (poll) clearInterval(poll);
   poll = setInterval(refresh, 5000);
   refresh();
 }
@@ -1301,6 +1307,14 @@ function enterProvisioning(name) {
 const b64url = (buf) =>
   btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 let pendingInfo = null;
+let passkeyOnboardingBusy = false;
+
+function setPasskeyButtonBusy(busy, label) {
+  const btn = $("btn-passkey");
+  passkeyOnboardingBusy = busy;
+  btn.disabled = busy;
+  btn.textContent = label || (user?.id ? "Finish smart wallet" : "Create passkey & open account");
+}
 
 $("btn-continue").onclick = () => {
   clearErr("create-err");
@@ -1382,6 +1396,9 @@ async function finishPasskeySafeSetup(timeoutMs = 45000) {
       setTimeout(() => rej(new Error("passkey Safe deployment did not finish in time")), timeoutMs),
     ),
   ]);
+  if (needsPasskeySafeSetup(user)) {
+    throw new Error("smart wallet deployment did not activate");
+  }
 }
 
 /* FP4: bind this browser's device key as the account's payment authorizer.
@@ -1431,34 +1448,46 @@ async function registerDeviceKey(u) {
 async function createAccount(withPasskey) {
   clearErr("pk-err");
   try {
-    const u = await api("/api/users", pendingInfo);
-    u.balanceEur = 0;
-    u.safeBalanceEur = 0;
-    u.vaultBalanceEur = 0;
-    user = u;
-    renderUser(u);
+    if (!user?.id) {
+      const u = await api("/api/users", pendingInfo);
+      u.balanceEur = 0;
+      u.safeBalanceEur = 0;
+      u.vaultBalanceEur = 0;
+      user = u;
+      renderUser(u);
+    }
     if (withPasskey) {
       try {
+        setPasskeyButtonBusy(true, user.passkey ? "Deploying smart wallet..." : "Creating passkey...");
         // Hard stop: some environments leave the WebAuthn ceremony pending
         // forever instead of rejecting — never strand the user on it.
-        await Promise.race([
-          registerPasskey(u),
-          new Promise((_, rej) =>
-            setTimeout(() => rej(new Error("no response from your device — is a screen lock set up?")), 30000),
-          ),
-        ]);
+        if (!user.passkey) {
+          await Promise.race([
+            registerPasskey(user),
+            new Promise((_, rej) =>
+              setTimeout(() => rej(new Error("no response from your device — is a screen lock set up?")), 30000),
+            ),
+          ]);
+        }
+        setPasskeyButtonBusy(true, "Approve smart wallet deployment...");
         await finishPasskeySafeSetup();
       } catch (e) {
-        showErr("pk-err", new Error(`passkey custody setup didn't complete (${e.message}) — continuing without funding; you can finish setup later`));
-        await new Promise((r) => setTimeout(r, 1600));
+        showErr("pk-err", new Error(`passkey Safe setup didn't complete (${e.message}) — finish it before funding or Monerium IBAN issuance`));
+        setPasskeyButtonBusy(false, user?.passkey ? "Finish smart wallet" : "Create passkey & open account");
+        return;
+      } finally {
+        if (needsPasskeySafeSetup(user)) setPasskeyButtonBusy(false, "Finish smart wallet");
+        else setPasskeyButtonBusy(false, "Create passkey & open account");
       }
     }
-    if (!kycApproved(user)) return enterKycReview(pendingInfo.name);
-    enterProvisioning(pendingInfo.name);
+    const displayName = pendingInfo?.name || user.name || "Account";
+    if (!kycApproved(user)) return enterKycReview(displayName);
+    enterProvisioning(displayName);
   } catch (e) { showErr("pk-err", e); }
 }
 
 $("btn-passkey").onclick = () => {
+  if (passkeyOnboardingBusy) return;
   if (!window.PublicKeyCredential) {
     showErr("pk-err", new Error("this browser doesn't support passkeys — opening account without one"));
     return setTimeout(() => createAccount(false), 1200);
@@ -1498,12 +1527,26 @@ $("link-signin").onclick = async (ev) => {
       signature: b64url(cred.response.signature),
     });
     user = u;
-    await finishPasskeySafeSetup();
     renderUser(user);
     if (kycApproved(user)) enterDashboard(user.name);
     else enterKycReview(user.name);
 	  } catch (e) { showErr("create-err", e); }
-	};
+		};
+
+async function resumeSession() {
+  if (!sessionToken) return;
+  try {
+    const u = await api("/api/session");
+    renderUser(u);
+    if (kycApproved(user)) enterDashboard(user.name);
+    else enterKycReview(user.name);
+  } catch {
+    sessionToken = null;
+    localStorage.removeItem("zold-session");
+    localStorage.removeItem("zoll-session");
+  }
+}
+resumeSession();
 
 	$("btn-deposit").onclick = async () => {
 	  clearErr("dep-err");
