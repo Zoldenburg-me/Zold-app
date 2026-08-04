@@ -28,7 +28,6 @@ import {
   dailyCapUsage,
   executeSepaTransfer,
   executeTransfer,
-  executeUpiTransfer,
   refreshPayout,
   settlePickup,
   sweepAnchorPayouts,
@@ -37,7 +36,6 @@ import {
 import { startCryptoDepositPoller } from "./adapters/crypto-deposits.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from "./pay.js";
 import { qrSvg } from "./qr.js";
-import { isValidVpa } from "./adapters/upi.js";
 import { senderProfileToSep9 } from "./adapters/moneygram.js";
 import { toAlpha3 } from "./stellar/sep9.js";
 import { getTreasury, missingRequiredFields, sep10Auth, sep12CustomerFields } from "./stellar/anchor.js";
@@ -201,11 +199,41 @@ const wrap =
   (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
 
+/**
+ * What this deployment can actually do, so the browser can render against it.
+ *
+ * THE BUG THIS FIXES: the app showed an "Add money" control wired to
+ * /api/simulate/sepa-deposit unconditionally, and that route is dev-only — it
+ * 403s in production and off a loopback socket. Nothing in any API response
+ * told the client which mode it was in, so the only way to find out was to
+ * press the button and read the error. Offering an action the server will
+ * refuse is exactly what makes a product read as unfinished.
+ *
+ * Deliberately NOT per-user, and deliberately public. These are properties of
+ * the deployment rather than of an account, and /api/health already publishes
+ * the contract addresses. Nothing here is exploitable either: the simulate
+ * routes are gated on this flag AND on a loopback socket with no forwarding
+ * headers, so learning the flag's value buys nothing a single refused request
+ * would not have revealed.
+ */
+export function capabilities() {
+  return {
+    /** May the browser offer simulated deposits and cash pickups at all? */
+    simulation: SECURITY.allowSimulation,
+    /**
+     * Are deposits real Monerium IBAN transfers? This is the difference
+     * between "Add money" being a button and being a set of bank details the
+     * user transfers to, so the UI needs it alongside the flag above.
+     */
+    sandbox,
+  };
+}
+
 app.get(
   "/api/health",
   wrap(async (_req, res) => {
     const block = await publicClient.getBlockNumber();
-    res.json({ ok: true, block: Number(block), contracts: addrs() });
+    res.json({ ok: true, block: Number(block), contracts: addrs(), capabilities: capabilities() });
   }),
 );
 
@@ -1948,29 +1976,13 @@ app.post(
 app.post(
   "/api/quotes",
   wrap(async (req, res) => {
-    const { userId, sendEur, receiveInr, rail = "cash" } = req.body ?? {};
+    const { userId, sendEur, rail = "cash" } = req.body ?? {};
     const user = store.findUser(userId);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
     if (!requireKycApproved(user, res)) return;
-    if (!["cash", "sepa", "upi"].includes(rail)) {
-      return res.status(400).json({ error: "rail must be cash, sepa or upi" });
-    }
-    if (rail === "upi") {
-      const inr = Number(receiveInr);
-      const eur = Number(sendEur);
-      if (!(inr > 0) && !(eur > 0)) {
-        return res.status(400).json({ error: "receiveInr or sendEur required for upi" });
-      }
-      const quote = await createQuote(userId, {
-        rail,
-        receiveInr: inr > 0 ? inr : undefined,
-        sendEur: eur > 0 ? eur : undefined,
-      });
-      if (quote.sendEur > FX.DAILY_CAP_EUR) {
-        return res.status(400).json({ error: `amount exceeds daily cap of €${FX.DAILY_CAP_EUR}` });
-      }
-      return res.status(201).json(quote);
+    if (!["cash", "sepa"].includes(rail)) {
+      return res.status(400).json({ error: "rail must be cash or sepa" });
     }
     const amount = Number(sendEur);
     if (!(amount > FX.FIXED_FEE_EUR)) {
@@ -1986,8 +1998,7 @@ app.post(
 app.post(
   "/api/transfers",
   wrap(async (req, res) => {
-    const { quoteId, recipientName, recipientPhone, recipientIban, recipientVpa, reference } =
-      req.body ?? {};
+    const { quoteId, recipientName, recipientPhone, recipientIban, reference } = req.body ?? {};
     const quote = store.findQuote(quoteId);
     if (!quote) return res.status(404).json({ error: "quote not found" });
     if (!requireUserSession(req, res, quote.userId)) return;
@@ -1998,11 +2009,7 @@ app.post(
       store.updateQuote(quote.id, { status: "EXPIRED" });
       return res.status(410).json({ error: "quote expired, request a new one" });
     }
-    if (quote.rail === "upi") {
-      if (!recipientVpa || !isValidVpa(recipientVpa)) {
-        return res.status(400).json({ error: "valid recipientVpa required (e.g. merchant@okicici)" });
-      }
-    } else if (!recipientName) {
+    if (!recipientName) {
       return res.status(400).json({ error: "recipientName required" });
     }
     if (quote.rail === "sepa" && !recipientIban) {
@@ -2062,16 +2069,14 @@ app.post(
       userId: user.id,
       quoteId: quote.id,
       rail: quote.rail,
-      recipientName: recipientName || (quote.rail === "upi" ? recipientVpa : ""),
+      recipientName,
       recipientPhone,
       recipientIban,
-      recipientVpa,
       reference: reference || undefined,
       state: "CREATED" as const,
       sendEur: quote.sendEur,
       receiveKes: quote.receiveKes,
       receiveEur: quote.receiveEur,
-      receiveInr: quote.receiveInr,
       fundingSource,
       txs: [],
       createdAt,
@@ -2104,7 +2109,6 @@ app.post(
     const destination = destinationCommitment(transfer.rail, {
       phone: transfer.recipientPhone,
       iban: transfer.recipientIban,
-      vpa: transfer.recipientVpa,
       name: transfer.recipientName,
     });
     transfer.auth = { to: orchestratorAddress, amountWei: amountWei.toString(), destination, deadline };
@@ -2262,9 +2266,7 @@ app.post(
     const result =
       executableTransfer.rail === "sepa"
         ? await executeSepaTransfer(executableTransfer, user, auth)
-        : executableTransfer.rail === "upi"
-          ? await executeUpiTransfer(executableTransfer, user, auth)
-          : await executeTransfer(executableTransfer, user, auth);
+        : await executeTransfer(executableTransfer, user, auth);
     res.status(result.state === "FAILED" ? 502 : 200).json(result);
   }),
 );
