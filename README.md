@@ -54,7 +54,8 @@ Running this repo with sandbox credentials, today:
   active and no API-held owner key remains. Managed recovery is KYC-backed by
   default: a service guardian is enabled during Safe deployment, recovery
   requests require operator identity approval, and the module delay must elapse
-  before a guardian signer can rotate the owner to a new passkey.
+  before the API hands off to a separate guardian signer service. That signer
+  holds the recovery authority; the web API never stores the guardian key.
 - **Bank payouts**: the exit rail places real Monerium redeem orders —
   EURe is burned and a SEPA transfer goes out. (It needs EURe in the Safe
   to succeed; without it, the order is rejected and the app falls back to a

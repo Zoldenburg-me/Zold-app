@@ -370,6 +370,7 @@ export type RecoveryRequestStatus =
   | "KYC_PENDING"
   | "DELAYING"
   | "READY_FOR_GUARDIAN"
+  | "GUARDIAN_SUBMITTED"
   | "FINALIZED"
   | "CANCELED"
   | "EXPIRED";
@@ -395,6 +396,14 @@ export interface RecoveryRequest {
   reviewedBy?: string;
   reviewReason?: string;
   cancelReason?: string;
+  guardianSubmission?: {
+    mode: "external_signer";
+    requestedAt: string;
+    submittedAt?: string;
+    signerStatus?: string;
+    txHash?: `0x${string}`;
+    error?: string;
+  };
   factors: {
     kyc: "pending" | "passed" | "failed";
     otp: "pending" | "passed" | "failed";

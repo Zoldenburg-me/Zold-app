@@ -50,6 +50,7 @@ import {
   publicRecoveryRequest,
   readinessStatus,
 } from "./recovery.js";
+import { submitGuardianRecovery } from "./recovery-signer.js";
 import {
   addrs,
   accountBalances,
@@ -1483,7 +1484,7 @@ app.post(
     if (!request) return res.status(404).json({ error: "recovery request not found" });
     const operator = bearerToken(req) && KYC.operatorToken && bearerToken(req) === KYC.operatorToken;
     if (!operator && !requireUserSession(req, res, request.userId)) return;
-    if (["FINALIZED", "CANCELED", "EXPIRED"].includes(request.status)) {
+    if (["FINALIZED", "CANCELED", "EXPIRED", "GUARDIAN_SUBMITTED"].includes(request.status)) {
       return res.status(409).json({ error: `recovery request is ${request.status}` });
     }
     const updated = store.updateRecoveryRequest(request.id, {
@@ -1492,6 +1493,37 @@ app.post(
       cancelReason: typeof req.body?.reason === "string" ? req.body.reason : undefined,
     });
     res.json(publicRecoveryRequest(updated));
+  }),
+);
+
+app.post(
+  "/api/recovery/requests/:id/guardian-submit",
+  wrap(async (req, res) => {
+    if (!requireOperator(req, res)) return;
+    let request = store.findRecoveryRequest(req.params.id);
+    if (!request) return res.status(404).json({ error: "recovery request not found" });
+    const status = readinessStatus(request, new Date());
+    if (status !== request.status) request = store.updateRecoveryRequest(request.id, { status });
+    try {
+      const guardianSubmission = await submitGuardianRecovery(request, new Date());
+      const updated = store.updateRecoveryRequest(request.id, {
+        status: "GUARDIAN_SUBMITTED",
+        guardianSubmission,
+      });
+      console.log(`RECOVERY: guardian signer accepted request ${request.id}`);
+      res.json(publicRecoveryRequest(updated));
+    } catch (err: any) {
+      const message = String(err?.message ?? err);
+      const statusCode = message.includes("RECOVERY_GUARDIAN_SIGNER_URL") ? 503 : 409;
+      const updated = store.updateRecoveryRequest(request.id, {
+        guardianSubmission: {
+          mode: "external_signer",
+          requestedAt: new Date().toISOString(),
+          error: message.slice(0, 240),
+        },
+      });
+      res.status(statusCode).json({ ...publicRecoveryRequest(updated), error: message });
+    }
   }),
 );
 
@@ -1508,7 +1540,9 @@ app.get(
       ...publicRecoveryRequest(latest),
       guardianAction:
         latest.status === "READY_FOR_GUARDIAN"
-          ? "guardian signer integration must submit the on-chain SocialRecoveryModule recovery transaction"
+          ? "POST /api/recovery/requests/:id/guardian-submit to hand off to the isolated guardian signer"
+          : latest.status === "GUARDIAN_SUBMITTED"
+            ? "guardian signer accepted the recovery handoff; watch the on-chain SocialRecoveryModule recovery state"
           : undefined,
     });
   }),
