@@ -1679,7 +1679,33 @@ app.post(
     if (!CANDIDE.cosignerKey) {
       return res.status(503).json({ error: "CANDIDE_COSIGNER_KEY is required before passkey Safe deployment" });
     }
-    const deployment = await preparePasskeySafeDeployment(user.passkeySafe);
+    /**
+     * Deploying a passkey Safe goes through an ERC-4337 bundler and paymaster.
+     * A local hardhat node has neither, so under `npm run dev` this reaches
+     * Candide asking about CANDIDE_CHAIN_ID for a Safe that exists only on this
+     * machine, and the browser reports the network failure as "Failed to fetch"
+     * — which reads as a bug in our code rather than a chain that cannot do the
+     * operation.
+     *
+     * Explain it when it happens rather than refusing up front: an already
+     * deployed Safe short-circuits before any bundler call, and that path works
+     * locally (monerium:oauth:test relies on it). Guessing ahead of the failure
+     * broke a passing flow.
+     */
+    let deployment: Awaited<ReturnType<typeof preparePasskeySafeDeployment>>;
+    try {
+      deployment = await preparePasskeySafeDeployment(user.passkeySafe);
+    } catch (err: any) {
+      const mismatch = BigInt(CHAIN_ID) !== BigInt(CANDIDE.chainId);
+      return res.status(mismatch ? 409 : 502).json({
+        error: mismatch
+          ? `passkey Safe deployment needs an ERC-4337 bundler. This API is on chain ${CHAIN_ID} ` +
+            `while Candide is configured for chain ${CANDIDE.chainId}, and a local hardhat node has ` +
+            `no bundler or paymaster. Run against chain ${CANDIDE.chainId} (npm run api) rather than ` +
+            `npm run dev. Underlying error: ${err?.message ?? err}`
+          : `passkey Safe deployment failed: ${err?.message ?? err}`,
+      });
+    }
     if (deployment.challenge === "0x") {
       const updated = store.updateUser(user.id, {
         address: user.passkeySafe.address,
