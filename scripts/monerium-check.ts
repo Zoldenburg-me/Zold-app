@@ -47,6 +47,6 @@ for (const [label, fn] of [
 console.log(
   "\nAll good. Start the stack, create a user in the UI, then make a simulated\n" +
     "SEPA transfer to its IBAN from the Monerium sandbox portal. On non-local\n" +
-    "chains the API reports both Safe and vault balances; local dev still\n" +
-    "mirrors deposits into the mock vault.",
+    "chains and local dev alike, the API reports the user's Safe balance as\n" +
+    "the account balance.",
 );

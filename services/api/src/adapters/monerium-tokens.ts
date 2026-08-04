@@ -4,9 +4,8 @@
  * Locally we deploy a MockToken and mint it ourselves, which is the only way
  * to have EURe on a hardhat node. On a chain where Monerium is really live
  * (Amoy, Sepolia, Base Sepolia, …) minting our own would be worse than
- * useless: a deposit mints Monerium's REAL EURe into the user's Safe, so a
- * vault backed by our own token would be backed by something no deposit can
- * ever produce, on the same chain as the real thing.
+ * useless: a deposit mints Monerium's REAL EURe into the user's Safe, and
+ * the Safe balance is the account balance.
  *
  * The address is read from Monerium rather than hardcoded — it differs per
  * chain, and a wrong one is invisible: balances read zero and it looks like

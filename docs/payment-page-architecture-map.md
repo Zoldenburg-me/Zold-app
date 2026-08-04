@@ -13,8 +13,8 @@ written for public-testing decisions, not as legal advice.
 | Payment-page Safe | The receive account for one payment page. |
 | Merchant main Safe | The merchant's own wallet/account. This should be the final owner of settled funds. |
 | Relayer | Backend service that prepares transactions, sponsors gas, scans deposits, and reports status. |
-| Legacy orchestrator | Current backend/operator wallet used by some old flows to move funds and execute swaps. This should be removed from client-fund movement. |
-| Legacy RemitVault | Current contract-backed EUR ledger. This should be phased out as the merchant Safe becomes the account of record. |
+| Legacy orchestrator | Backend/operator wallet used by old flows to move funds and execute swaps. This should be removed from client-fund movement. |
+| Removed RemitVault | Abandoned contract-backed EUR ledger. The Safe is now the account of record. |
 
 ## The Goal
 
@@ -36,10 +36,9 @@ flowchart TD
   C --> D[Payment-page Safe address]
   D --> E[Backend scanner detects USDC Transfer log]
   E --> F{Merchant selected settlement asset}
-  F -->|EURe| G[Sweep USDC to orchestrator wallet]
+  F -->|EURe| G[Sweep USDC to legacy executor]
   G --> H[Swap USDC to EURe]
-  H --> I[Send EURe to RemitVault]
-  I --> J[Credit merchant EUR ledger]
+  H --> I[Send EURe to merchant Safe]
   F -->|USDC| K[Record creditedUsdc in deposit history]
 ```
 
@@ -53,7 +52,7 @@ The current orchestrator is more than a message relay in some flows:
 
 - It can receive funds as working capital for execution.
 - It executes swap/liquidity operations.
-- It interacts with contracts such as `RemitVault` and bridge/payout contracts.
+- It interacts with bridge/payout contracts.
 - In some transitional Safe flows, the backend still relies on server-held
   signing material to move funds.
 
@@ -61,11 +60,11 @@ That is useful for a demo and for proving the product mechanics, but it is not
 the target architecture. If the Safe already owns the user's account logic, then
 client funds should not move through a separate operator wallet.
 
-## Why RemitVault Should Be Phased Out
+## Why RemitVault Was Removed
 
 `RemitVault` was useful when the app needed an internal EUR ledger and the Safe
-was not yet the main account. After passkeys and Safe modules, the Safe should
-be the source of truth:
+was not yet the main account. After passkeys and Safe modules, the Safe is the
+source of truth:
 
 - EURe balance should be the merchant Safe's token balance.
 - USDC balance should be the merchant Safe's token balance.
@@ -75,9 +74,8 @@ be the source of truth:
 - Receipts can live in app state, but funds should not have to land in app
   custody before the user can spend them.
 
-So the target is not "rename RemitVault". The target is to remove it from
-payment-page settlement and then remove it from remittance funding once the Safe
-path has equivalent replay, limit, and recovery controls.
+So the target is not "rename RemitVault". The target is Safe-owned funds
+end-to-end; receipts can live in app state, but spendable value lives in Safes.
 
 ## Why This Can Look Custodial
 
@@ -162,7 +160,7 @@ legal structure.
 - Counterfactual page Safes that are shown to payers before deployment.
 - USDC settlement that only writes `creditedUsdc` into history.
 - Funds swept into an app/operator wallet.
-- EURe routed into `RemitVault` for payment-page settlement.
+- EURe routed into an internal vault for payment-page settlement.
 - Marketing the page as private when each handle resolves to one public address.
 - Open real-money auto-convert without compliance review.
 
@@ -195,7 +193,7 @@ Do first:
 - Legal/compliance review for MiCA/CASP exposure.
 - Decide whether conversion is non-custodial or done by a regulated partner.
 - Ensure the backend is a relayer, not a custodian.
-- Ensure the merchant Safe, not `RemitVault`, is the balance of record.
+- Ensure the merchant Safe is the balance of record.
 - Publish user-facing terms that match the actual custody model.
 
 ## Near-Term Code Changes
@@ -204,18 +202,18 @@ Do first:
 2. Replace `paymentPage.depositPrivateKey` with merchant-controlled ownership.
 3. Change USDC settlement from "record only" to a real movement into the
    merchant Safe.
-4. Change EURe settlement from "sweep to orchestrator, credit RemitVault" to
-   "swap from Safe, settle to merchant Safe".
-5. Move remittance funding from `vaultBalanceEur` to `safeBalanceEur`.
-6. Replace vault replay/daily-limit checks with Safe/module or policy-contract
-   checks before removing the last `RemitVault` dependency.
+4. Change EURe settlement from "sweep to legacy executor" to "swap from Safe,
+   settle to merchant Safe".
+5. Keep remittance funding on `safeBalanceEur`.
+6. Replace app-state replay/daily-limit checks with Safe/module or
+   policy-contract checks.
 7. Rename custody-sensitive backend paths from "orchestrator" to "relayer" only
    after the code actually behaves as a relayer.
 8. Add tests proving:
    - USDC lands in the merchant-controlled destination.
    - EURe conversion cannot change destination or min-out.
    - production cannot create state that production startup later rejects.
-   - remittance sends spend from the Safe, not `RemitVault`.
+   - remittance sends spend from the Safe.
 
 ## One-Sentence Architecture
 

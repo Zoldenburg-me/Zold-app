@@ -1,77 +1,132 @@
 /**
- * FP5 quote↔execution binding test: quote a transfer, move the on-chain
- * FxSwapper rate past tolerance, then execute — the transfer must refuse to
- * settle and auto-refund (FP3), not silently settle at the moved rate.
- * Own ports. Run: npm run fp5:test
+ * FP5 quote-to-execution binding test.
+ *
+ * RemitVault removal makes local full-remittance execution require a deployed
+ * Safe, which a hardhat-only test does not have. This pins the remaining
+ * invariant directly: a quote records the rate it was priced against, and the
+ * executor refuses if the live on-chain rate has moved past tolerance.
+ *
+ * Own port. Run: npm run fp5:test
  */
-// Must be first: pins the chain/keys before config.js reads the environment.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadDeployments } from "../services/api/src/config.js";
 import { createPublicClient, createWalletClient, encodeFunctionData, http, keccak256, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
-import { newDevice, registerDevice, sendTransfer } from "./device.js";
-
+import { loadDeployments } from "../services/api/src/config.js";
+import { eur } from "../services/api/src/chain.js";
+import { assertQuoteRateBinding } from "../services/api/src/orchestrator.js";
+import { initStore, store, type Quote, type Transfer } from "../services/api/src/store.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const RPC = "http://127.0.0.1:8548";
-const API = "http://127.0.0.1:3011";
+const RPC = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
+const RPC_PORT = new URL(RPC).port || "8545";
 const bin = (n: string) => path.join(ROOT, "node_modules/.bin", n);
-let token = "";
 const ENV = {
   ...process.env,
-  MONERIUM_CLIENT_ID: "", MONERIUM_CLIENT_SECRET: "", MG_ANCHOR_DOMAIN: "",
-  TRANSF_RPC_URL: RPC, TRANSF_API_PORT: "3011",
+  MONERIUM_CLIENT_ID: "",
+  MONERIUM_CLIENT_SECRET: "",
+  MG_ANCHOR_DOMAIN: "",
+  TRANSF_RPC_URL: RPC,
 };
 const children: ChildProcess[] = [];
-const bg = (c: string, a: string[]) => { const p = spawn(c, a, { cwd: ROOT, stdio: "ignore", env: ENV }); children.push(p); return p; };
-
-async function api(p: string, body?: any, expectStatus?: number) {
-  const headers: Record<string, string> = {};
-  if (body) headers["content-type"] = "application/json";
-  if (token) headers.authorization = `Bearer ${token}`;
-  const res = await fetch(API + p, { ...(body ? { method: "POST", body: JSON.stringify(body) } : {}), headers });
-  const data = await res.json();
-  if (expectStatus) { assert.equal(res.status, expectStatus, `${p} → ${res.status}: ${data.error ?? ""}`); return data; }
-  if (!res.ok) throw new Error(`${p}: ${data.error ?? res.statusText}`);
-  return data;
-}
+const bg = (c: string, a: string[]) => {
+  const p = spawn(c, a, { cwd: ROOT, stdio: "ignore", env: ENV });
+  children.push(p);
+  return p;
+};
 
 try {
-  console.log("1/5 chain + deploy + API…");
-  bg(process.execPath, [bin("hardhat"), "node", "--port", "8548"]);
+  console.log("1/3 chain + deploy...");
+  bg(process.execPath, [bin("hardhat"), "node", "--port", RPC_PORT]);
   const pub = createPublicClient({ chain: hardhat, transport: http(RPC) });
-  { const s = Date.now(); while (Date.now() - s < 30_000) { try { await pub.getBlockNumber(); break; } catch { await new Promise(r => setTimeout(r, 300)); } } }
-  assert.equal(spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit", env: { ...ENV, TIMELOCK_DELAY_SECONDS: "0" } }).status, 0);
+  {
+    const s = Date.now();
+    while (Date.now() - s < 30_000) {
+      try {
+        await pub.getBlockNumber();
+        break;
+      } catch {
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
+  }
+  assert.equal(
+    spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
+      cwd: ROOT,
+      stdio: "inherit",
+      env: { ...ENV, TIMELOCK_DELAY_SECONDS: "0" },
+    }).status,
+    0,
+  );
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
-  bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"]);
-  { const s = Date.now(); while (Date.now() - s < 30_000) { try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {} await new Promise(r => setTimeout(r, 300)); } }
+  initStore();
 
-  console.log("2/5 user + €250 deposit + quote €100…");
-  const user = await api("/api/users", { name: "Binding Tester", country: "DE" });
-  token = user.sessionToken;
-  await api("/api/simulate/sepa-deposit", { iban: user.iban, amountEur: 250 });
-  const device = newDevice();
-  await registerDevice(api, user.id, device);
-  const quote = await api("/api/quotes", { userId: user.id, sendEur: 100, rail: "cash" });
-  assert.ok(quote.lockedSwapRate, "quote records lockedSwapRate");
+  console.log("2/3 quote records the locked rate...");
+  const now = new Date().toISOString();
+  const quote: Quote = {
+    id: "q-fp5",
+    userId: "u-fp5",
+    rail: "cash",
+    status: "OPEN",
+    sendEur: 100,
+    fixedFeeEur: 1,
+    fxRate: 1,
+    receiveKes: 12950,
+    receiveEur: 0,
+    receiveInr: 0,
+    midRate: 1,
+    marginBps: 0,
+    effectiveRate: 1,
+    lockedSwapRate: "1151100",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    createdAt: now,
+  };
+  store.addQuote(quote);
+  const transfer: Transfer = {
+    id: "t-fp5",
+    userId: "u-fp5",
+    quoteId: quote.id,
+    rail: "cash",
+    recipientName: "Recipient",
+    recipientPhone: "+254700000000",
+    state: "CREATED",
+    sendEur: 100,
+    receiveKes: 12950,
+    fundingSource: "safe",
+    txs: [],
+    auth: {
+      to: "0x0000000000000000000000000000000000000002",
+      amountWei: eur.toWei(100).toString(),
+      destination: `0x${"cd".repeat(32)}`,
+      deadline: Math.floor(Date.now() / 1000) + 900,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+  await assertQuoteRateBinding(transfer);
 
-  console.log("3/5 moving the on-chain FX rate past tolerance (via the timelock)…");
-  // Admin actions now go through AdminTimelock: no single key can change the
-  // rate, so this both moves the rate and exercises the governance path.
-  const dep = createWalletClient({ account: privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"), chain: hardhat, transport: http(RPC) });
-  const second = createWalletClient({ account: privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"), chain: hardhat, transport: http(RPC) });
+  console.log("3/3 moving the on-chain FX rate past tolerance...");
+  const dep = createWalletClient({
+    account: privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"),
+    chain: hardhat,
+    transport: http(RPC),
+  });
+  const second = createWalletClient({
+    account: privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"),
+    chain: hardhat,
+    transport: http(RPC),
+  });
   const { swapper, timelock } = loadDeployments();
   assert.ok(timelock, "deployments.json should record the AdminTimelock address");
   const setRate = encodeFunctionData({
     abi: [{ type: "function", name: "setRate", stateMutability: "nonpayable", inputs: [{ name: "_rate", type: "uint256" }], outputs: [] }] as const,
     functionName: "setRate",
-    args: [900_000n], // 1.08 → 0.90, ~16%
+    args: [900_000n],
   });
   const tlAbi = [
     { type: "function", name: "queue", stateMutability: "nonpayable", inputs: [{ name: "target", type: "address" }, { name: "value", type: "uint256" }, { name: "data", type: "bytes" }, { name: "salt", type: "bytes32" }], outputs: [{ type: "bytes32" }] },
@@ -86,24 +141,15 @@ try {
     await pub.waitForTransactionReceipt({ hash: await w.writeContract(request) });
   };
   await send(dep, "queue", [swapper, 0n, setRate, salt]);
-  // One key is not enough — a second owner must agree.
   await send(second, "confirm", [opId]);
   await send(dep, "execute", [opId]);
 
-  console.log("4/5 executing — must refuse and refund…");
-  // FP3 turns the binding failure into REFUNDED, which the route returns 201.
-  const t = await sendTransfer(api, device, { quoteId: quote.id, recipientName: "X", recipientPhone: "+254700000000" });
-  assert.equal(t.state, "REFUNDED", `state: ${t.state} (${t.error ?? ""})`);
-  assert.match(t.error ?? "", /rate moved/i, "error names the rate drift");
-  assert.ok(t.txs.some((x: any) => x.step === "vault.refundCredit"), "vault refunded");
-  assert.ok(!t.txs.some((x: any) => x.step === "swapper.swapExactIn"), "no swap happened");
+  await assert.rejects(
+    () => assertQuoteRateBinding(transfer),
+    /FX rate moved since quote/i,
+  );
 
-  console.log("5/5 balance restored…");
-  const after = await api(`/api/users/${user.id}`);
-  assert.ok(Math.abs(after.balanceEur - 250) < 0.02, `balance €${after.balanceEur}`);
-  console.log(`      refused at drift, refunded €${t.refund?.amountEur}, balance €${after.balanceEur}`);
-
-  console.log("\nFP5 BINDING TEST PASSED — quote bound to execution; rate drift refuses + refunds");
+  console.log("\nFP5 BINDING TEST PASSED — moved rates are refused before settlement");
 } finally {
   for (const c of children) c.kill();
 }

@@ -5,10 +5,10 @@
  * their wallet; a SEPA transfer to it mints EURe on-chain automatically and
  * fires a webhook. Here we mock both halves: IBAN issuance is local, and the
  * "SEPA arrived" webhook is simulated by an endpoint that mints mock EURe to
- * the RemitVault and credits the user's ledger balance.
+ * the user's Safe. The Safe is the account of record.
  */
 import { keccak256, toHex } from "viem";
-import { abis, addrs, deployerWallet, eur, publicClient, rampWallet, writeAndWait } from "../chain.js";
+import { abis, addrs, deployerWallet, eur, writeAndWait } from "../chain.js";
 
 /** Deterministic mock IBAN (Iceland format, like Monerium's). */
 export function issueIban(userId: string): string {
@@ -21,8 +21,8 @@ export function issueIban(userId: string): string {
 }
 
 /**
- * Simulate the SEPA-deposit-arrived webhook: mint EURe to the vault, then
- * credit the user's balance. Returns the tx hashes.
+ * Simulate the SEPA-deposit-arrived webhook: mint EURe to the user's Safe.
+ * Returns the tx hash.
  */
 export async function simulateSepaDeposit(
   userAddress: `0x${string}`,
@@ -41,102 +41,29 @@ export async function simulateSepaDeposit(
   if (await moneriumEure(MONERIUM.baseUrl, CHAIN_ID)) {
     throw new Error(
       `refusing to mint on chain ${CHAIN_ID}: Monerium issues the real EURe there. ` +
-        `Use creditDepositFromSafe() — a deposit lands in the user's Safe and is moved, not minted.`,
+        `A deposit lands in the user's Safe directly; do not mint a mock token there.`,
     );
   }
 
-  // MockToken minting is owner-only (the deployer); the credit itself is the
-  // ramp role, mirroring the real split between issuer and ramp adapter.
   const mintHash = await writeAndWait(deployerWallet, {
     address: a.eure,
     abi: abis.MockToken,
     functionName: "mint",
-    args: [a.vault, wei],
+    args: [userAddress, wei],
   });
 
-  const creditHash = await writeAndWait(rampWallet, {
-    address: a.vault,
-    abi: abis.RemitVault,
-    functionName: "creditDeposit",
-    args: [userAddress, wei, keccak256(toHex(paymentRef))],
-  });
-
-  return { mintHash, creditHash };
+  return { mintHash, depositRef: keccak256(toHex(paymentRef)) };
 }
 
 /**
- * Credit a deposit that already exists as real EURe in the user's Safe.
- *
- * This is the native-token counterpart to simulateSepaDeposit. Monerium mints
- * its own EURe straight into the Safe when a SEPA transfer lands, so there is
- * nothing to create — but RemitVault.creditDeposit refuses a credit it cannot
- * cover ("uncovered credit"), so the euros must reach the vault first.
- *
- * Order matters: move first, credit second. Crediting first would fail the
- * coverage check; and if the move succeeds but the credit does not, the money
- * is in the vault uncredited — visible to the reconciler as vault holdings
- * exceeding totalCredited, which is the recoverable direction. The reverse
- * would be a credit backed by nothing.
+ * A real Monerium deposit already exists as EURe in the user's Safe. The order
+ * id is marked processed by the caller after this confirms the target user
+ * exists.
  */
 export async function creditDepositFromSafe(
-  user: { address: `0x${string}`; privateKey?: string },
+  user: { address: `0x${string}` },
   amountEur: number,
   paymentRef: string,
 ) {
-  const a = addrs();
-  const wei = eur.toWei(amountEur);
-  if (!user.privateKey) throw new Error("user has no wallet key — cannot move the deposit");
-
-  /**
-   * Skip the move if the vault already holds enough to back this credit.
-   *
-   * These are two transactions, so a run can die between them — and it did:
-   * the euros reached the vault, the credit failed for want of gas, and every
-   * retry then tried to move them again from a Safe that was already empty.
-   * The deposit could never be credited, even once the credit itself could
-   * have succeeded.
-   *
-   * The condition mirrors what RemitVault.creditDeposit enforces
-   * (balanceOf(vault) >= totalCredited + amount), so "already covered" here
-   * means exactly "the credit will not revert for lack of backing".
-   */
-  const [vaultHeld, credited] = (await Promise.all([
-    publicClient.readContract({
-      address: a.eure,
-      abi: abis.MockToken,
-      functionName: "balanceOf",
-      args: [a.vault],
-    }),
-    publicClient.readContract({
-      address: a.vault,
-      abi: abis.RemitVault,
-      functionName: "totalCredited",
-      args: [],
-    }),
-  ])) as [bigint, bigint];
-
-  let moveHash: string | null = null;
-  if (vaultHeld >= credited + wei) {
-    console.log(
-      `monerium: vault already holds the euros for this deposit (${eur.fromWei(vaultHeld)} EURe ` +
-        `vs ${eur.fromWei(credited)} credited) — crediting without moving again`,
-    );
-  } else {
-    const { transferTokenFromSafe } = await import("../wallet/candide.js");
-    moveHash = await transferTokenFromSafe({
-      ownerKey: user.privateKey as `0x${string}`,
-      token: a.eure,
-      to: a.vault,
-      amount: wei,
-    });
-  }
-
-  const creditHash = await writeAndWait(rampWallet, {
-    address: a.vault,
-    abi: abis.RemitVault,
-    functionName: "creditDeposit",
-    args: [user.address, wei, keccak256(toHex(paymentRef))],
-  });
-
-  return { moveHash, creditHash };
+  return { safeAddress: user.address, amountEur, depositRef: keccak256(toHex(paymentRef)) };
 }
