@@ -10,7 +10,7 @@ written for public-testing decisions, not as legal advice.
 | Payer | The customer or sender who opens `/pay/<handle>` and sends crypto or fiat. |
 | Merchant | The TransF end user who created the payment page and receives settlement. |
 | Payment page | The public link and QR/address the payer uses. |
-| Payment-page Safe | The receive account for one payment page. |
+| Candide Forwarding Address | The public receive address for one payment page. Supported deposits route to the merchant Safe. |
 | Merchant main Safe | The merchant's own wallet/account. This should be the final owner of settled funds. |
 | Relayer | Backend service that prepares transactions, sponsors gas, scans deposits, and reports status. |
 | Legacy orchestrator | Backend/operator wallet used by old flows to move funds and execute swaps. This should be removed from client-fund movement. |
@@ -33,18 +33,19 @@ The intended product is:
 flowchart TD
   A[Payer opens /pay/handle] --> B[Public page shows QR/address]
   B --> C[Payer sends USDC]
-  C --> D[Payment-page Safe address]
-  D --> E[Backend scanner detects USDC Transfer log]
-  E --> F{Merchant selected settlement asset}
-  F -->|EURe| G[Sweep USDC to legacy executor]
-  G --> H[Swap USDC to EURe]
-  H --> I[Send EURe to merchant Safe]
-  F -->|USDC| K[Record creditedUsdc in deposit history]
+  C --> D[Candide Forwarding Address]
+  D --> E[USDC lands in merchant Safe]
+  E --> F[Backend scanner detects USDC Transfer log]
+  F --> G{Merchant selected settlement asset}
+  G -->|EURe| H[Sweep USDC to legacy executor]
+  H --> I[Swap USDC to EURe]
+  I --> J[Send EURe to merchant Safe]
+  G -->|USDC| K[Record creditedUsdc in deposit history]
 ```
 
-The important gap is the `USDC` branch. It records settlement in app state, but
-there is no separate USDC ledger and no transfer from the payment-page Safe to
-the merchant main Safe.
+The `USDC` branch is acceptable only if the watched address is the merchant
+Safe. The deposit record is a receipt for funds already in the user's Safe, not
+a substitute ledger.
 
 ## What The Orchestrator Does Today
 
@@ -96,14 +97,15 @@ For a MiCA-sensitive launch, the safer rule is:
 
 ```mermaid
 flowchart TD
-  A[Payer sends funds] --> B[Payment-page Safe]
-  B --> C{Merchant selected settlement asset}
-  C -->|USDC| D[Merchant main Safe receives USDC]
-  C -->|EURe| E[Merchant signs or pre-authorizes exact swap intent]
-  E --> F[Relayer submits Safe UserOperation]
-  F --> G[Router or venue swaps USDC to EURe]
-  G --> H[EURe settles to merchant Safe]
-  H --> I[App records receipt and balance]
+  A[Payer sends funds] --> B[Candide Forwarding Address]
+  B --> C[Merchant Safe receives whitelisted token]
+  C --> D{Merchant selected settlement asset}
+  D -->|USDC| E[Keep USDC in merchant Safe]
+  D -->|EURe| F[Merchant signs or pre-authorizes exact swap intent]
+  F --> G[Relayer submits Safe UserOperation]
+  G --> H[Router or venue swaps USDC to EURe]
+  H --> I[EURe settles to merchant Safe]
+  I --> J[App records receipt and balance]
 ```
 
 In this model, the backend becomes a relayer. It can help execute the merchant's
@@ -114,17 +116,16 @@ merchant's permission.
 
 If the merchant chooses `USDC`, the clean product behavior is:
 
-1. Payer sends USDC to the payment-page Safe.
+1. Payer sends USDC to the payment-page forwarding address.
 2. The app detects the deposit.
-3. The merchant-owned Safe moves USDC to the merchant main Safe, or the page Safe
-   itself is shown as a spendable merchant wallet with withdrawal controls.
+3. The forwarded USDC is already in the merchant Safe.
 4. The app records the receipt.
 
 The first public version should probably use the merchant main Safe as the
 destination, because it is easiest for users to understand:
 
 ```text
-Payment page receives funds -> merchant wallet owns funds
+Payment page forwarding address receives funds -> merchant Safe owns funds
 ```
 
 ## EURe Settlement Target
@@ -133,17 +134,18 @@ If the merchant chooses `EURe`, there are two acceptable target shapes:
 
 ### Non-custodial Shape
 
-1. Payer sends USDC to the payment-page Safe.
-2. Merchant signs a swap intent or Safe UserOperation.
-3. Relayer submits the operation.
-4. Swap executes with fixed constraints:
+1. Payer sends USDC to the payment-page forwarding address.
+2. Candide forwards the whitelisted token into the merchant Safe.
+3. Merchant signs a swap intent or Safe UserOperation.
+4. Relayer submits the operation.
+5. Swap executes with fixed constraints:
    - source token
    - source amount
    - minimum EURe out
    - destination
    - expiry
    - quote id
-5. EURe goes to the merchant main Safe.
+6. EURe goes to the merchant main Safe.
 
 ### Regulated Partner Shape
 
@@ -157,8 +159,8 @@ legal structure.
 ## What To Avoid Before Real Public Testing
 
 - Server-held payment-page private keys.
-- Counterfactual page Safes that are shown to payers before deployment.
-- USDC settlement that only writes `creditedUsdc` into history.
+- Payment-page activation before the merchant passkey Safe is deployed.
+- USDC settlement records that refer to funds outside the merchant Safe.
 - Funds swept into an app/operator wallet.
 - EURe routed into an internal vault for payment-page settlement.
 - Marketing the page as private when each handle resolves to one public address.
@@ -179,9 +181,9 @@ Allowed:
 
 Do first:
 
-- Deploy payment-page Safes before showing them.
-- Remove server-held page private keys from production.
-- Make USDC settlement actually move to a merchant-controlled Safe.
+- Require a deployed merchant passkey Safe before activating a page.
+- Use Candide Forwarding Address instead of server-held page private keys.
+- Watch the merchant Safe as the forwarding recipient for USDC settlement.
 - Make EURe settlement swap inside the Safe and land in the merchant Safe.
 - Disable auto-convert until user-signed intent exists.
 - Add operational monitoring for stuck deposits.
@@ -198,10 +200,9 @@ Do first:
 
 ## Near-Term Code Changes
 
-1. Add payment-page Safe deployment before a page becomes publicly payable.
-2. Replace `paymentPage.depositPrivateKey` with merchant-controlled ownership.
-3. Change USDC settlement from "record only" to a real movement into the
-   merchant Safe.
+1. Require deployed merchant passkey Safe before a page becomes publicly payable.
+2. Replace `paymentPage.depositPrivateKey` with Candide Forwarding Address metadata.
+3. Keep payment-page token display to whitelisted supported tokens.
 4. Change EURe settlement from "sweep to legacy executor" to "swap from Safe,
    settle to merchant Safe".
 5. Keep remittance funding on `safeBalanceEur`.
@@ -209,7 +210,11 @@ Do first:
    policy-contract checks.
 7. Rename custody-sensitive backend paths from "orchestrator" to "relayer" only
    after the code actually behaves as a relayer.
-8. Add tests proving:
+8. Add Candide route/minimum/status polling:
+   - refresh route and token support from `forwarding_getRoutes`.
+   - refresh below-minimum guidance from `forwarding_getMinimumAmount`.
+   - poll `forwarding_getForwardsByRecipient` for forward status.
+9. Add tests proving:
    - USDC lands in the merchant-controlled destination.
    - EURe conversion cannot change destination or min-out.
    - production cannot create state that production startup later rejects.

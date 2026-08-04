@@ -80,7 +80,7 @@ const server: Server = createServer(async (req, res) => {
 });
 await new Promise<void>((r) => server.listen(PORT, "127.0.0.1", r));
 
-const { liquidityProvider } = await import("../services/api/src/liquidity.js");
+const { liquidityProvider, serializeExecution } = await import("../services/api/src/liquidity.js");
 const p = liquidityProvider();
 const soon = () => new Date(Date.now() + 60_000).toISOString();
 const ONE_HUNDRED = 100n * 10n ** 18n;
@@ -120,6 +120,12 @@ try {
     assert.equal(q.lifi?.tx.to, DIAMOND);
     assert.ok(q.lifi?.tx.data);
     ok("the executable transaction is pinned onto the quote, so execute cannot re-quote");
+
+    const stored = serializeExecution({ quote: q, amountOut: q.expectedOut, txs: [] });
+    assert.equal(stored.lifi?.approvalAddress, APPROVAL);
+    assert.equal(stored.lifi?.tx.to, DIAMOND);
+    assert.equal(stored.lifi?.toToken, USDC);
+    ok("the LI.FI execution payload survives prepare -> store");
 
     assert.equal(asked()?.get("fromToken"), EURE);
     assert.equal(asked()?.get("slippage"), "0.005");

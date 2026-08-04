@@ -57,7 +57,20 @@ const user: any = {
     handle: "amina",
     displayName: "Amina K",
     depositAddress: "0xd8af216C328AAa6a384DD422c4eA005cEd7F73f1",
-    depositPrivateKey: "0xfeedbeef",
+    recipientAddress: "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1",
+    forwarder: {
+      provider: "candide",
+      recipient: "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1",
+      destinationChainId: 31337,
+      sourceChainIds: [31337],
+      custodialWithdrawer: "0xdddd216C328AAa6a384DD422c4eA005cEd7F73f1",
+      salt: `0x${"12".repeat(32)}`,
+      active: true,
+      activatedAt: new Date().toISOString(),
+    },
+    supportedTokens: [
+      { chainId: 31337, symbol: "USDC", address: CHAIN.token.address, decimals: 6 },
+    ],
     settlementAsset: "EURE",
     autoConvert: true,
     createdAt: new Date().toISOString(),
@@ -118,6 +131,7 @@ check("the public projection returns exactly the expected payment-page keys", ()
     "displayName",
     "handle",
     "settlementAsset",
+    "supportedTokens",
     "token",
   ]);
 });
@@ -135,7 +149,8 @@ check("and leaks no account data — this is the security-relevant one", () => {
     "approved",
     user.ownerAddress,
     user.authorizerAddress,
-    user.paymentPage.depositPrivateKey,
+    user.paymentPage.forwarder.custodialWithdrawer,
+    user.paymentPage.recipientAddress,
   ]) {
     assert.ok(!serialised.includes(secret), `leaked ${secret} in ${serialised}`);
   }

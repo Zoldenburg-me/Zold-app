@@ -88,7 +88,6 @@ try {
   const { convertDeposit, pollCryptoDepositsOnce, SWEEP_STEP } = await import(
     "../services/api/src/adapters/crypto-deposits.js"
   );
-  const { smartAccountFor } = await import("../services/api/src/wallet/candide.js");
   initStore();
 
   const safeBalanceOf = async (who: `0x${string}`) =>
@@ -108,22 +107,30 @@ try {
     opts: { autoConvert?: boolean; kyc?: string; settlementAsset?: "EURE" | "USDC" } = {},
   ) {
     const key = generatePrivateKey();
-    const pageKey = generatePrivateKey();
-    const pageOwner = privateKeyToAccount(pageKey).address;
+    const owner = privateKeyToAccount(key).address;
     const now = new Date().toISOString();
     const user = {
       id: randomUUID(),
       name,
       country: "DE",
-      address: privateKeyToAccount(key).address,
-      ownerAddress: privateKeyToAccount(key).address,
+      address: owner,
+      ownerAddress: owner,
       privateKey: key,
       iban: "",
       kycStatus: opts.kyc ?? "approved",
       paymentPage: {
         handle: name.toLowerCase().replace(/\s+/g, "-"),
-        depositAddress: smartAccountFor(pageOwner).accountAddress,
-        depositPrivateKey: pageKey,
+        depositAddress: owner,
+        recipientAddress: owner,
+        forwarder: {
+          provider: "local-safe",
+          recipient: owner,
+          destinationChainId: 31337,
+          sourceChainIds: [31337],
+          custodialWithdrawer: owner,
+          active: true,
+          activatedAt: now,
+        },
         settlementAsset: opts.settlementAsset ?? "EURE",
         autoConvert: opts.autoConvert ?? true,
         createdAt: now,
@@ -186,12 +193,12 @@ try {
     const d = store.cryptoDeposits.find((x) => x.userId === ann.id)!;
     check("attributed to the right account", d.userId === ann.id);
     check("100 USDC recorded from the log", d.amountUsdc === 100, `${d.amountUsdc}`);
-    // No page Safe is deployed locally, so this is the honest refusal — the
-    // money is still the user's, at the page address.
+    // No Safe is deployed locally, so this is the honest refusal — the money
+    // is still the user's, at the destination address.
     check("an undeployed Safe is refused, not converted", d.state === "REFUSED", d.state);
     check(
       "and the reason says the money is still theirs",
-      /no deployed Safe/.test(d.reason ?? "") && /still yours/.test(d.reason ?? ""),
+      /Safe .*not deployed/.test(d.reason ?? "") && /still yours/.test(d.reason ?? ""),
       d.reason ?? "",
     );
     check("nothing was settled", (await safeBalanceOf(ann.address)) === 0);
