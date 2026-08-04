@@ -619,11 +619,13 @@ export const RATES = {
 // editing the quote's copy alone would have promised a rate the swap could not
 // deliver, silently.
 /**
- * Crypto in: USDC arriving at a user's account, converted to EURe.
+ * Crypto in: USDC arriving at a payment-page deposit address, settled for the
+ * owning account.
  *
- * Per-user opt-in (`User.autoConvert`) decides WHO is watched; these settings
- * decide how. The kill switch exists because this path credits e-money off an
- * on-chain event, so an operator needs to be able to stop it without a deploy.
+ * Per-page opt-in (`User.paymentPage.autoConvert`) decides WHO is watched;
+ * these settings decide how. The kill switch exists because this path can
+ * credit e-money off an on-chain event, so an operator needs to be able to stop
+ * it without a deploy.
  */
 export const CRYPTO_IN = {
   enabled: process.env.CRYPTO_IN_ENABLED !== "0",

@@ -235,9 +235,22 @@ app.get(
 
 const sandbox = moneriumSandboxEnabled();
 
-/** Never send wallet keys, OAuth state, or encrypted tokens to the client. */
-const publicUser = ({ privateKey, moneriumConnect, monerium, passkey, ...u }: User & { [k: string]: any }) => ({
+/** Never send wallet keys, payment-page deposit keys, OAuth state, or encrypted tokens to the client. */
+const publicUser = ({ privateKey, moneriumConnect, monerium, passkey, paymentPage, ...u }: User & { [k: string]: any }) => ({
   ...u,
+  ...(paymentPage
+    ? {
+        paymentPage: {
+          handle: paymentPage.handle,
+          displayName: paymentPage.displayName,
+          depositAddress: paymentPage.depositAddress,
+          settlementAsset: paymentPage.settlementAsset,
+          autoConvert: paymentPage.autoConvert,
+          createdAt: paymentPage.createdAt,
+          updatedAt: paymentPage.updatedAt,
+        },
+      }
+    : {}),
   ...(passkey
     ? {
         passkey: {
@@ -649,12 +662,11 @@ app.get(
  * provider, and this store is plaintext JSON on disk.
  */
 /**
- * Turn auto-conversion of inbound crypto on or off.
+ * Turn auto-settlement of payment-page crypto on or off.
  *
- * Session-gated to the account itself: this decides whether someone's USDC
- * becomes e-money at a rate they will not see beforehand, which is the user's
- * call and nobody else's. Switching it off does not un-convert anything that
- * already settled; it only stops future deposits being touched.
+ * Session-gated to the account itself: this decides whether funds sent to the
+ * public page deposit address are swept and settled. It deliberately does not
+ * watch the user's main wallet address.
  */
 app.post(
   "/api/users/:id/auto-convert",
@@ -672,10 +684,22 @@ app.post(
     if (enabled && !requireKycApproved(user, res)) return;
     const custodyBlocked = enabled ? custodyBlockerBeforeFunding(user) : null;
     if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
-    const updated = store.updateUser(user.id, { autoConvert: enabled });
+    const page = user.paymentPage;
+    if (!page) return res.status(409).json({ error: "claim a payment page before enabling auto-settlement" });
+    const updated = store.updateUser(user.id, {
+      paymentPage: { ...page, autoConvert: enabled, updatedAt: new Date().toISOString() },
+    });
     res.json({ ...publicUser(updated), ...(await accountBalances(updated.address).catch(() => ({}))) });
   }),
 );
+
+function normaliseSettlementAsset(raw: unknown): "EURE" | "USDC" {
+  if (raw === undefined || raw === null || raw === "") return "EURE";
+  if (typeof raw !== "string") throw new HandleError("settlementAsset must be EURE or USDC");
+  const asset = raw.trim().toUpperCase();
+  if (asset !== "EURE" && asset !== "USDC") throw new HandleError("settlementAsset must be EURE or USDC");
+  return asset;
+}
 
 /** The chain and token a payment page asks payers to use. USDC because that is
  *  what the crypto-in converter knows how to turn into spendable euros. */
@@ -703,9 +727,11 @@ app.post(
     if (!requireKycApproved(user, res)) return;
     let handle: string;
     let displayName: string | undefined;
+    let settlementAsset: "EURE" | "USDC";
     try {
       handle = normaliseHandle(req.body?.handle);
       displayName = normaliseDisplayName(req.body?.displayName);
+      settlementAsset = normaliseSettlementAsset(req.body?.settlementAsset);
     } catch (e: any) {
       if (e instanceof HandleError) return res.status(400).json({ error: e.message });
       throw e;
@@ -714,8 +740,32 @@ app.post(
     if (taken && taken.id !== user.id) {
       return res.status(409).json({ error: `"${handle}" is already taken` });
     }
-    const updated = store.updateUser(user.id, { handle, payDisplayName: displayName });
-    res.json({ handle: updated.handle, displayName: updated.payDisplayName, payUrl: `/pay/${handle}` });
+    const now = new Date().toISOString();
+    const existing = user.paymentPage;
+    const depositPrivateKey = existing?.depositPrivateKey ?? generatePrivateKey();
+    const depositOwner = privateKeyToAccount(depositPrivateKey).address;
+    const depositAddress = existing?.depositAddress ?? (smartAccountFor(depositOwner).accountAddress as `0x${string}`);
+    const updated = store.updateUser(user.id, {
+      handle: undefined,
+      payDisplayName: undefined,
+      autoConvert: undefined,
+      paymentPage: {
+        handle,
+        displayName,
+        depositAddress,
+        depositPrivateKey,
+        settlementAsset,
+        autoConvert: existing?.autoConvert ?? false,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      },
+    });
+    res.json({
+      handle: updated.paymentPage!.handle,
+      displayName: updated.paymentPage!.displayName,
+      payUrl: `/pay/${handle}`,
+      paymentPage: publicUser(updated).paymentPage,
+    });
   }),
 );
 
@@ -736,7 +786,7 @@ app.get(
   "/api/pay/:handle",
   wrap(async (req, res) => {
     const user = store.findUserByHandle(req.params.handle);
-    if (!user?.handle) return res.status(404).json({ error: "no such payment page" });
+    if (!user?.paymentPage?.handle && !user?.handle) return res.status(404).json({ error: "no such payment page" });
     res.json(publicPayee(user, payChain()));
   }),
 );
@@ -747,10 +797,10 @@ app.get(
   "/api/pay/:handle/qr.svg",
   wrap(async (req, res) => {
     const user = store.findUserByHandle(req.params.handle);
-    if (!user?.handle) return res.status(404).json({ error: "no such payment page" });
+    if (!user?.paymentPage?.handle && !user?.handle) return res.status(404).json({ error: "no such payment page" });
     res.type("image/svg+xml");
     res.setHeader("cache-control", "public, max-age=300");
-    res.send(qrSvg(user.address));
+    res.send(qrSvg(publicPayee(user, payChain()).address));
   }),
 );
 
@@ -769,7 +819,9 @@ app.get(
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
     res.json({
-      autoConvert: !!user.autoConvert,
+      autoConvert: !!user.paymentPage?.autoConvert,
+      settlementAsset: user.paymentPage?.settlementAsset ?? "USDC",
+      depositAddress: user.paymentPage?.depositAddress,
       deposits: store.cryptoDeposits
         .filter((d) => d.userId === user.id)
         .sort((a, b) => b.detectedAt.localeCompare(a.detectedAt)),

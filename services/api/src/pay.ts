@@ -1,18 +1,15 @@
 /**
- * Payment pages — a shareable handle that resolves to an address someone can
- * pay, in the shape of Fluidkey's `name.fkey.id`.
+ * Payment pages — a shareable handle that resolves to a page-scoped deposit
+ * address someone can pay, in the shape of Fluidkey's `name.fkey.id`.
  *
  * The page is deliberately dull: a handle, the address, a QR code, and the
  * chain and token it expects. No amount field and no wallet connection, because
  * the payer's wallet already does both of those better than a web page can.
  *
- * NOT PRIVATE, and the page says so. Fluidkey's whole point is a fresh stealth
- * address per visit, so a payer learns nothing about the recipient's other
- * activity. This resolves to the account's ONE Safe address: every payment
- * lands on the same address and anyone with the link can read the whole history
- * of it. That is a deliberate first step, not an oversight — see
- * `docs/payment-pages.md` — and it must not be described as private anywhere in
- * the product.
+ * NOT PRIVATE, and the page says so. This page has its own deposit address so
+ * random transfers into the user's main wallet do not trigger the page's
+ * settlement rule, but it is still one public address per handle. Anyone with
+ * the handle can inspect that page address on a block explorer.
  *
  * WHAT A PUBLIC RESPONSE MAY CONTAIN is the security-relevant part of this
  * file. `publicPayee` is an allowlist, built by naming the four fields that go
@@ -88,6 +85,8 @@ export interface PublicPayee {
   address: `0x${string}`;
   chainId: number;
   token: { symbol: string; address: `0x${string}`; decimals: number };
+  settlementAsset: "EURE" | "USDC";
+  autoConvert: boolean;
 }
 
 /**
@@ -100,13 +99,27 @@ export function publicPayee(
   user: User,
   chain: { chainId: number; token: { symbol: string; address: `0x${string}`; decimals: number } },
 ): PublicPayee {
-  if (!user.handle) throw new HandleError("account has no payment handle");
+  const page = user.paymentPage;
+  if (!page?.handle) {
+    if (!user.handle) throw new HandleError("account has no payment handle");
+    return {
+      handle: user.handle,
+      ...(user.payDisplayName ? { displayName: user.payDisplayName } : {}),
+      address: user.address,
+      chainId: chain.chainId,
+      token: chain.token,
+      settlementAsset: user.autoConvert ? "EURE" : "USDC",
+      autoConvert: !!user.autoConvert,
+    };
+  }
   return {
-    handle: user.handle,
-    ...(user.payDisplayName ? { displayName: user.payDisplayName } : {}),
-    address: user.address,
+    handle: page.handle,
+    ...(page.displayName ? { displayName: page.displayName } : {}),
+    address: page.depositAddress,
     chainId: chain.chainId,
     token: chain.token,
+    settlementAsset: page.settlementAsset,
+    autoConvert: page.autoConvert,
   };
 }
 
