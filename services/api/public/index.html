@@ -704,7 +704,18 @@
   .m-btn-quiet .material-symbols-rounded { color: var(--m-dim); font-size: 18px; }
 
   /* ---------- tiles ---------- */
+  /* Two columns, so an odd tile out would sit against a half-width hole.
+     The last tile spans instead when the count is odd — :nth-child(odd) on the
+     last child is exactly "there is no partner for this one". Add a fourth
+     tile and the rule stops applying on its own.
+
+     This replaces `#m-payment-page { grid-column: 1 / -1 }` from PR #109, which
+     fixed the same hole by naming the tile. Same result today, but it stays on
+     after a fourth tile arrives and follows the id rather than the position —
+     and the dashboard has now grown a tile three times, each by a different
+     hand. Keeping both would have left two rules for one job. */
   .m-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .m-tiles > :last-child:nth-child(odd) { grid-column: 1 / -1; }
   .m-tile {
     text-align: left; padding: 13px 14px; border-radius: 12px; background: var(--m-surface);
     border: 1px solid var(--m-line); color: #fff; cursor: pointer; min-height: 98px;
@@ -713,7 +724,6 @@
   .m-tile:hover { border-color: var(--m-line-strong); filter: none; }
   .m-tile[disabled] { cursor: default; opacity: 1; }
   .m-tile[disabled]:hover { border-color: var(--m-line); }
-  #m-payment-page { grid-column: 1 / -1; }
   .m-tile-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .m-tile .fig { font: 600 20px var(--m-display); margin-top: auto; }
   .m-tile .ttl { font: 600 15px Inter, sans-serif; margin-top: auto; }
