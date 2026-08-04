@@ -12,6 +12,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, RECOVERY, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
+import { countryBlock, normaliseCountryCode } from "./country-policy.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type Transfer, type User } from "./store.js";
@@ -647,6 +648,15 @@ app.post(
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return res.status(400).json({ error: "invalid email" });
     }
+    const blockedCountry = countryBlock(String(country));
+    if (blockedCountry) {
+      return res.status(403).json({
+        error: blockedCountry.message,
+        code: "COUNTRY_NOT_SUPPORTED",
+        country: blockedCountry.code,
+        reason: blockedCountry.reason,
+      });
+    }
     const id = randomUUID();
     // Local simulation keeps the no-authenticator e2e path available. Outside
     // simulation, the real address is set by passkey/co-signer Safe deployment.
@@ -659,7 +669,7 @@ app.post(
       id,
       name,
       email,
-      country,
+      country: normaliseCountryCode(String(country)),
       kycStatus,
       kyc: {
         provider: KYC.autoApprove ? "mock" : "manual",
