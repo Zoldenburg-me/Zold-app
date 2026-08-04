@@ -104,6 +104,11 @@ Running this repo with sandbox credentials, today:
   pending screen splits users between connecting an existing Monerium account
   and the normal identity-review path. The included mock review endpoint is for
   local tests only, not a regulated provider.
+- **Country gate**: account creation allows only Monerium-supported residency
+  countries. Monerium's current `prohibited` residency tier, plus countries not
+  present in their country reference, fail before KYC or funding starts. This
+  is a product block, not a replacement for sanctions screening, wallet
+  screening, source-of-funds checks, partner corridor rules, or legal review.
 - **Existing Monerium accounts**: a user who already banks with Monerium can
   connect that account (OAuth Authorization Code + PKCE) instead of repeating
   KYC. Their tokens are encrypted at rest and never reach the browser; the app
@@ -266,6 +271,11 @@ meant to be read in one sitting.
   seam with a real KYC provider before issuing IBANs or allowing payments.
   Pending or rejected accounts are visible in the UI, but the approval decision
   must still come from a provider/operator path, not the user's own session.
+- Country blocking is enforced at account creation by
+  `services/api/src/country-policy.ts`. Keep it synced with Monerium's current
+  country reference before real launch; country blocks should also follow
+  current counsel, sanctions screening, FATF posture, crypto legality, and
+  partner terms.
 - Existing Monerium users can connect their own account instead of repeating
   KYC. The loop is built and tested against a stub; nobody has connected a real
   Monerium account in a browser yet.

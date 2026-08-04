@@ -112,6 +112,9 @@ try {
   await waitFor(`${API}/api/health`);
 
   console.log("2/4 pending user cannot fund, bind, quote, or transfer...");
+  const blocked = await expectStatus("/api/users", 403, { name: "Blocked User", country: "US" });
+  assert.equal(blocked.code, "COUNTRY_NOT_SUPPORTED");
+  assert.equal(blocked.country, "US");
   const user = await api("/api/users", { name: "KYC Pending", country: "DE" });
   token = user.sessionToken;
   assert.equal(user.kycStatus, "pending");
