@@ -286,7 +286,7 @@ export interface Transfer {
   /** Internal JIT liquidity execution details. This records how value moved
    *  into the settlement asset for the payout rail; it is not a swap product. */
   liquidity?: {
-    provider: "fx-swapper" | "rfq" | "cow";
+    provider: "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best";
     side: "EURE_TO_USDC" | "USDC_TO_EURE";
     quoteId: string;
     tokenIn: "EURe" | "USDC";
