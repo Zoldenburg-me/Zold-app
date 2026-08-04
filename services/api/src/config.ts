@@ -101,6 +101,12 @@ export const KYC = {
   operatorToken: process.env.KYC_OPERATOR_TOKEN ?? "",
 };
 
+export const RECOVERY = {
+  managedKycGuardian: process.env.RECOVERY_MANAGED_KYC_GUARDIAN !== "0",
+  delayHours: Math.max(1, Number(process.env.RECOVERY_DELAY_HOURS ?? 72)),
+  requestTtlHours: Math.max(1, Number(process.env.RECOVERY_REQUEST_TTL_HOURS ?? 24 * 14)),
+};
+
 // A guessable operator token is worse than none: it is a remote approval
 // switch for every account. Refuse to start rather than serve one.
 if (KYC.operatorToken && KYC.operatorToken.length < 24) {

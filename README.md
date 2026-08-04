@@ -51,7 +51,10 @@ Running this repo with sandbox credentials, today:
   `CANDIDE_COSIGNER_KEY` configured, onboarding can deploy that Safe through a
   passkey-signed, co-signed Candide UserOperation before funding. In
   non-simulation mode, funding is refused until that passkey/co-signer Safe is
-  active and no API-held owner key remains.
+  active and no API-held owner key remains. Managed recovery is KYC-backed by
+  default: a service guardian is enabled during Safe deployment, recovery
+  requests require operator identity approval, and the module delay must elapse
+  before a guardian signer can rotate the owner to a new passkey.
 - **Bank payouts**: the exit rail places real Monerium redeem orders —
   EURe is burned and a SEPA transfer goes out. (It needs EURe in the Safe
   to succeed; without it, the order is rejected and the app falls back to a

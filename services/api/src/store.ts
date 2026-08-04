@@ -366,6 +366,43 @@ export interface Transfer {
   updatedAt: string;
 }
 
+export type RecoveryRequestStatus =
+  | "KYC_PENDING"
+  | "DELAYING"
+  | "READY_FOR_GUARDIAN"
+  | "FINALIZED"
+  | "CANCELED"
+  | "EXPIRED";
+
+export interface RecoveryRequest {
+  id: string;
+  userId: string;
+  safeAddress: `0x${string}`;
+  status: RecoveryRequestStatus;
+  requestedAt: string;
+  expiresAt: string;
+  recoveryDelayHours: number;
+  guardianAddress: `0x${string}`;
+  recoveryModuleAddress: `0x${string}`;
+  /** New owner after recovery. A future passkey recovery flow can derive this
+   *  from WebAuthn coordinates; the API accepts an address for operator pilots. */
+  newOwnerAddress?: `0x${string}`;
+  contact?: string;
+  kycApprovedAt?: string;
+  readyAt?: string;
+  finalizedAt?: string;
+  canceledAt?: string;
+  reviewedBy?: string;
+  reviewReason?: string;
+  cancelReason?: string;
+  factors: {
+    kyc: "pending" | "passed" | "failed";
+    otp: "pending" | "passed" | "failed";
+    liveness: "pending" | "passed" | "failed";
+    manualReview: "pending" | "passed" | "failed";
+  };
+}
+
 export interface Session {
   id: string;
   userId: string;
@@ -388,6 +425,8 @@ interface Db {
   processedMoneriumWebhooks: string[];
   /** Inbound crypto seen at a user's account, and what became of it. */
   cryptoDeposits: CryptoDeposit[];
+  /** Managed KYC guardian recovery requests. */
+  recoveryRequests: RecoveryRequest[];
   /**
    * Last block scanned for inbound crypto, per chain id.
    *
@@ -421,6 +460,7 @@ let db: Db = {
   processedMoneriumOrders: [],
   processedMoneriumWebhooks: [],
   cryptoDeposits: [],
+  recoveryRequests: [],
   cryptoDepositCursor: {},
 };
 
@@ -432,6 +472,7 @@ export function initStore() {
     db.processedMoneriumOrders ??= [];
     db.processedMoneriumWebhooks ??= [];
     db.cryptoDeposits ??= [];
+    db.recoveryRequests ??= [];
     db.cryptoDepositCursor ??= {};
     if (IS_PRODUCTION) {
       const custodial = db.users.filter((u) => u.privateKey || u.ownerAddress);
@@ -483,6 +524,9 @@ export const store = {
   get sessions() {
     return db.sessions;
   },
+  get recoveryRequests() {
+    return db.recoveryRequests;
+  },
   addUser(u: User) {
     db.users.push(u);
     persist();
@@ -493,6 +537,23 @@ export const store = {
     Object.assign(u, patch);
     persist();
     return u;
+  },
+  addRecoveryRequest(r: RecoveryRequest) {
+    db.recoveryRequests.push(r);
+    persist();
+  },
+  updateRecoveryRequest(id: string, patch: Partial<RecoveryRequest>) {
+    const r = db.recoveryRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown recovery request ${id}`);
+    Object.assign(r, patch);
+    persist();
+    return r;
+  },
+  findRecoveryRequest(id: string) {
+    return db.recoveryRequests.find((r) => r.id === id);
+  },
+  recoveryRequestsForUser(userId: string) {
+    return db.recoveryRequests.filter((r) => r.userId === userId);
   },
   findUserByAddress(address: string) {
     return db.users.find((u) => u.address.toLowerCase() === address.toLowerCase());

@@ -708,6 +708,8 @@
             <h2>Security</h2>
             <div class="setting-row"><div><div class="st">Passkey</div><div class="sd" id="set-passkey">—</div></div></div>
             <div class="setting-row"><div><div class="st">Device spending key</div><div class="sd" id="set-device">—</div></div></div>
+            <div class="setting-row"><div><div class="st">Recovery</div><div class="sd" id="set-recovery">—</div></div><button class="ghost" id="btn-recovery-start">Start</button></div>
+            <div class="error hidden" id="recovery-err"></div>
             <div class="setting-row"><div><div class="st">Session</div><div class="sd">Stored only in this browser.</div></div><button class="ghost" id="btn-signout">Sign out</button></div>
           </div>
           <div class="card">
@@ -828,6 +830,7 @@ let sessionToken = localStorage.getItem("zold-session")
   || localStorage.getItem("zoll-session")
   || null;
 let privacyCatalog = null;
+let recoveryInfo = null;
 let activeView = "dashboard";
 let txFilter = "all";
 let contacts = JSON.parse(localStorage.getItem("zoll-contacts") || "[]");
@@ -945,6 +948,55 @@ async function cancelPrivacyBundle() {
   } catch (e) { showErr("privacy-err", e); }
 }
 
+async function loadRecoveryInfo() {
+  if (!user) return null;
+  try {
+    recoveryInfo = await api(`/api/users/${user.id}/recovery`);
+    return recoveryInfo;
+  } catch {
+    recoveryInfo = null;
+    return null;
+  }
+}
+
+function renderRecoveryInfo() {
+  const el = $("set-recovery");
+  const btn = $("btn-recovery-start");
+  if (!el || !btn) return;
+  if (!recoveryInfo) {
+    el.textContent = "Checking recovery status.";
+    btn.disabled = true;
+    return;
+  }
+  const active = recoveryInfo.requests?.find((r) => !["FINALIZED", "CANCELED", "EXPIRED"].includes(r.status));
+  if (active) {
+    const ready = active.readyAt ? new Date(active.readyAt).toLocaleString() : "";
+    el.textContent = active.status === "DELAYING" ? `Delay active until ${ready}` : active.status.replaceAll("_", " ").toLowerCase();
+    btn.disabled = true;
+    btn.textContent = "Open";
+    return;
+  }
+  btn.textContent = "Start";
+  btn.disabled = !recoveryInfo.available;
+  el.textContent = recoveryInfo.available
+    ? `Managed guardian enabled · ${recoveryInfo.delayHours}h delay`
+    : (recoveryInfo.blocked || "Recovery unavailable");
+}
+
+async function startRecoveryRequest() {
+  clearErr("recovery-err");
+  $("btn-recovery-start").disabled = true;
+  try {
+    await api(`/api/users/${user.id}/recovery/requests`, {});
+    await loadRecoveryInfo();
+    renderRecoveryInfo();
+  } catch (e) {
+    showErr("recovery-err", e);
+  } finally {
+    renderRecoveryInfo();
+  }
+}
+
 async function renderPrivacyBundle() {
   const card = $("privacy-card");
   if (!card || !user) return;
@@ -1018,6 +1070,8 @@ async function refresh() {
   try {
     renderUser(await api(`/api/users/${user.id}`));
     await loadTransfers();
+    await loadRecoveryInfo();
+    renderRecoveryInfo();
   } catch {}
   // Conversion happens on the server's poll, not on a user action, so the
   // panel has to be re-read rather than updated optimistically.
@@ -1050,6 +1104,7 @@ function renderShellPages() {
   $("acct-authorizer").textContent = user.authorizerAddress || "Registered when you send from this browser.";
   $("set-passkey").textContent = user.passkey ? `Credential ${user.passkey.credentialId.slice(0, 16)}…` : "No passkey on this account yet.";
   $("set-device").textContent = user.authorizerAddress ? `Bound to ${user.authorizerAddress.slice(0, 10)}…${user.authorizerAddress.slice(-6)}` : "Not bound yet.";
+  renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
     ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`
     : "Pending partner credentials.";
@@ -1338,6 +1393,7 @@ $("btn-dash-kyc-refresh").onclick = async () => {
   await refresh();
   if (kycApproved(user)) enterDashboard(user.name);
 };
+$("btn-recovery-start").onclick = startRecoveryRequest;
 
 /* returning users: discoverable-credential sign-in */
 $("link-signin").onclick = async (ev) => {
