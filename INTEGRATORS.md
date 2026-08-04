@@ -8,9 +8,9 @@ Everything Zold talks to, what it needs from us, and whether getting it costs a 
 |---|---|
 | ✅ Have it (sandbox) | Monerium, Candide, Stellar, Circle CCTP |
 | 🟢 Self-serve — no call, ~10 min each | RPC provider, LI.FI, rates feed, Stripe standard |
-| 🔴 Needs a form/email first | Monerium **production**, a real KYC provider — plus Bridge (bank rails) and MoneyGram (cash) |
+| 🔴 Needs a form/email first | Monerium **production**, **Sumsub** — plus Bridge (bank rails) and MoneyGram (cash) |
 
-Only **two** are hard blockers: Monerium production and a KYC provider. Everything else is either self-serve or optional. Full call list in §1.
+Only **two** are hard blockers: Monerium production and Sumsub. Everything else is either self-serve or optional. Full call list in §1.
 
 ---
 
@@ -21,9 +21,9 @@ Only **two** are hard blockers: Monerium production and a KYC provider. Everythi
 | # | Who | What we need | Blocking? | Start here | Lead time |
 |---|---|---|---|---|---|
 | 1 | **Monerium** (production) | Real e-money relationship. Sandbox → live EUR IBANs | ✅ **YES** — no EUR in or out without it | Existing sandbox contact | Weeks–months (regulated) |
-| 2 | **KYC provider** | One of Sumsub / Persona / Onfido | ✅ **YES** — cannot go live on a mock | Self-serve signup first, sales only for pricing | Days |
-| 3 | **Bridge** (bridge.xyz) | Stablecoin → **bank** payouts: ACH, SEPA, SPEI, Pix, LatAm | ⚠️ Optional — covers **bank** rails in one integration (replaces dLocal, not MoneyGram) | bridge.xyz contact form | Weeks (enterprise) |
-| 4 | **MoneyGram** | Cash-pickup partner agreement | ⚠️ **No substitute on this list** — see below | Via Stellar anchor programme | Months, hard |
+| 2 | **Sumsub** (KYC) | Live KYC. **Decided — the only provider Monerium supports** | ✅ **YES** — cannot go live on a mock | sumsub.com, self-serve signup + sandbox | Days |
+| 3 | **Bridge** (bridge.xyz) | Stablecoin → **bank** payouts: ACH, SEPA, SPEI, Pix, LatAm | ⚠️ Optional — covers **bank** rails in one integration (replaces dLocal) | bridge.xyz contact form | Weeks (enterprise) |
+| 4 | **MoneyGram** | Cash-pickup partner agreement | ⚠️ **No substitute on this list** — cash pickup, not a bank rail | Via Stellar anchor programme | Months, hard |
 | 5 | **Stripe** | Card acceptance for Zold Plus / Privacy Bundle subs | ❌ No — nothing to bill yet | **Standard account is self-serve** — no call | Same day |
 | 6 | **Yellow Card** | Africa payouts, settles USDC, no prefunding | ❌ No | yellowcard.io business form | Weeks |
 | 7 | **Bebop** | RFQ liquidity. Monerium market-makes EURe there | ❌ No — LI.FI already works | Contact form | Weeks |
@@ -34,25 +34,6 @@ Only **two** are hard blockers: Monerium production and a KYC provider. Everythi
 **If you only send two emails: #1 and #2.** Those are the only hard blockers.
 
 **#3 is the strategic one.** Bridge is Stripe-owned (acquired Oct 2024, $1.1B). One integration covers the **bank** rails we'd otherwise chase across dLocal and Yellow Card separately — it's what Peanut runs on. Worth sending even though it isn't blocking.
-
-### ⚠️ Bridge does NOT replace MoneyGram
-
-Different product categories, not different country lists:
-
-| | Recipient needs | Example |
-|---|---|---|
-| **Bridge / dLocal / Yellow Card** | a bank account, CLABE, Pix key or IBAN | SEPA, ACH, Pix |
-| **MoneyGram** | ID and a counter — **no bank account** | Cash pickup, Kenya & Myanmar |
-
-Our own KES rail is cash pickup, so this isn't a Myanmar-only problem — **no bank-rail provider serves the unbanked recipient in any country.** If cash pickup is core to the product, MoneyGram (or a peer: Western Union, Ria) stays on the critical path and nothing on this list substitutes for it.
-
-**Myanmar in particular is harder than "MoneyGram supports it."** Myanmar is on the FATF **blacklist** — high-risk, call for action, alongside Iran and North Korea, reaffirmed 19 June 2026. Consequences:
-
-- Enhanced due diligence is mandatory on every transaction
-- **Monerium is a regulated EMI and will have its own restricted-country list.** EUR leaving via their rails to Myanmar is *their* compliance decision, not only ours — this can veto the corridor regardless of MoneyGram
-- FATF has warned it will consider **countermeasures** if there's no progress by October 2026, which could close the corridor with little notice
-
-So MoneyGram is *necessary* but not *sufficient* for Myanmar. Before building it, the question to answer is not "does the payout partner cover it" but **"will our EUR issuer let euros go there at all."**
 
 > ⚠️ **Naming clash:** `services/api/src/bridge/` in our codebase is the **Circle CCTP** worker (USDC burn/mint to Stellar). Nothing to do with Bridge.xyz. Don't let the two get confused in conversation.
 
@@ -93,7 +74,7 @@ So MoneyGram is *necessary* but not *sufficient* for Myanmar. Before building it
 
 ## 4. Payout rails
 
-Two categories that do **not** substitute for each other — see §1.
+Two categories that do **not** substitute for each other. Bank rails need the recipient to have an account, IBAN, CLABE or Pix key; cash pickup needs only ID at a counter. Our KES rail is cash.
 
 **Cash out (recipient has no bank account)**
 
@@ -113,12 +94,12 @@ Two categories that do **not** substitute for each other — see §1.
 
 ---
 
-## 5. Not yet chosen — we need to pick one
+## 5. Still open
 
-| Need | Why | Options |
+| Need | Status | Notes |
 |---|---|---|
-| **KYC provider** | Currently a mock. `KYC_AUTO_APPROVE` self-approves locally. **Cannot go live without a real one** | Sumsub, Persona, Onfido — all self-serve signup, sandbox in minutes |
-| **eSIM / VPN fulfilment** | Privacy Bundle sells these; fulfilment is manual today | Kokio, Mysterium — credentials pending |
+| **KYC — Sumsub** | ✅ **Chosen.** Not integrated yet | Forced choice: the only provider Monerium supports, so it is not a shortlist. Today KYC is a mock — `KYC_AUTO_APPROVE` self-approves locally and **cannot go live**. Sign up self-serve, wire it, and delete the mock path |
+| **eSIM / VPN fulfilment** | ❌ Not chosen | Privacy Bundle sells these; fulfilment is manual today. Kokio, Mysterium — credentials pending |
 
 ---
 
@@ -177,7 +158,7 @@ Two things worth saying plainly before anyone counts this as done:
 **Fastest unblock, in order:**
 
 1. Real RPC key (10 min, self-serve) → deploy a Safe on Base Sepolia → prove one send to PAID
-2. KYC provider sandbox (30 min, self-serve)
+2. Sumsub sandbox (30 min, self-serve — forced choice, Monerium supports no other)
 3. dLocal sandbox (self-serve) instead of waiting on MoneyGram
 4. Monerium production + Bridge conversations in parallel — those clocks run regardless
 
