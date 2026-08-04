@@ -191,11 +191,45 @@ moment an anchor actually publishes an account.
   `transF` is the live remote, not just the directory name.
 - Deployed on Base Sepolia (84532) against Monerium's real EURe. Landing page
   at `/`, app at `/app`.
-- Working: three payout rails (KES cash / SEPA / UPI), Candide Safe wallets
-  deployed gasless with EIP-1271 Monerium linking, e2e green across all rails.
+- Working: two payout rails (KES cash / SEPA), Candide Safe wallets
+  deployed gasless with EIP-1271 Monerium linking, e2e green across both rails.
+- UPI REMOVED (Aug 2026) — deleted, not disabled, and not to be rebuilt from
+  this repo's history without a partner. It was a mock partner adapter that
+  minted its own UTRs: the rail rendered a "UPI payment successful" panel and a
+  12-digit reference for money that had reached nobody, which is the one class
+  of fake this project does not keep. Gone: adapters/upi.ts, the `upi` member of
+  PayoutRail, receiveInr/recipientVpa/transfer.upi, the INR quote mode (both
+  INR-fixed and EUR-fixed), the destination commitment's `upi|vpa=` preimage in
+  BOTH chain.ts and public/device.js, the QR-scan UI, and the e2e leg. India is
+  gone from the app's destination list too — its only rail was UPI, so leaving
+  it listed meant an empty options screen with no way forward. `POST /api/quotes`
+  now refuses `rail: "upi"` with 400, and e2e asserts that refusal so the rail
+  cannot creep back in unnoticed.
+  KEPT DELIBERATELY: INR in rates.ts's REQUIRED list. That is a currency in a
+  mid-rate feed, not a rail — fx:test uses it as the second currency proving the
+  usdPer() derivation, and dropping it would churn a passing suite for nothing.
+  The roadmap's India entries (dLocal, Mony) are partner intel and still stand;
+  they describe what a real rail would need, which is exactly what was missing.
+  One stale record survives: data/db.json holds a PAID upi transfer from an
+  earlier demo run. It renders as a cash row now (the history icon falls through
+  to 🇰🇪). Left alone rather than edited — rewriting settled history to make a
+  UI tidier is a worse habit than an odd-looking row.
 - NOT "live anchor payouts" — that phrase was in this file and was wrong. The
   Stellar ledger half is proven and the anchor half has never run; see the
   Stellar section.
+- Deployment capabilities are now published (Aug 2026): GET /api/health carries
+  `capabilities: { simulation, sandbox }`. The app's "Add money" card was hard
+  wired to /api/simulate/sepa-deposit and shown to everyone, but that route is
+  dev-only — 403 in production, and 403 off a loopback socket — and NOTHING in
+  any response told the client which mode it was in, so the only way to find
+  out was to press the button and read the error. The browser now renders the
+  deposit control only where the API would accept it and shows real transfer
+  instructions everywhere else. The client default is `simulation: false`, so a
+  failed probe hides a control the server might refuse rather than offering one
+  it will. Public on purpose: it is deployment state, not account state,
+  /api/health already publishes contract addresses, and the simulate routes are
+  gated on the flag AND a loopback socket, so the value buys an attacker
+  nothing one refused request would not.
 - Reconciler (July 2026): services/api/src/reconcile.ts compares Monerium's
   processed issue orders against what we mirrored, plus on-chain invariants
   (totalCredited == sum of balances; vault tokens cover credit). Reports
@@ -258,6 +292,57 @@ moment an anchor actually publishes an account.
   outage from consuming a delivery id — a 503 now asks for the retry instead
   of silently swallowing it). npm run webhook:test covers it with a stub
   Monerium.
+
+## Mobile app + PWA (Aug 2026) — IN PROGRESS on a branch
+
+Branch `claude/remove-upi-and-onboarding-restyle`, pushed, **PR not opened**.
+Ten commits: UPI removal, onboarding restyle, landing-page sync, PWA layer,
+then the mobile app. Merge or continue from there, not from main.
+
+DESIGN SOURCE: `~/Downloads/Zold Mobile Dashboard Redesign.zip` — the user's
+Claude Design export. `README.md` in it is a real spec (tokens, screens,
+behaviour, state); build `Zold Mobile Noir.dc.html`, the approved variant.
+The landing page came from a separate export, already applied.
+
+BUILT: mobile shell (412px column, bottom nav Add·Send·Zold·Activity·Profile),
+Noir home/safe card, Add funds + bank + wallet, Zold Plus, the whole send flow
+(country → method → amount → recipient → progress), Activity, Profile.
+NOT BUILT: Pay hub, transaction detail, KYC gate/pending screens.
+
+THE RULE APPLIED THROUGHOUT, agreed with the user: where the design shows
+something the API cannot back, it is visibly unavailable — never faked. The
+savings vault, USD accounts and Zold Plus say SOON; the send flow offers the
+two corridors the API prices (EUR->KES, EUR->EUR) and states that more open
+with partners rather than listing 182 countries that dead-end at the quote;
+Zold Plus shows no price because that tier does not exist, and links to the
+Privacy Bundle that does. Quotes, signing and the progress timeline are real —
+the timeline reads the transfer's own state, not a timer.
+
+OPEN QUESTION, raised three times and still unanswered: the handoff's own Noir
+file is half-converted. Home and the send flow use the documented tokens (12px
+radii, mono labels); Activity, Profile, Plus and KYC in that same file use
+40-56px round avatars and 16/14px M3 type, contradicting the handoff's
+"nothing above 12px, 50% only for status dots". Both looks are now in the app
+because each screen followed the file. Decide before building the last three.
+
+NEVER OBSERVED: a successful send through the mobile flow. `npm run dev` cannot
+fund an account here — .env carries Monerium sandbox credentials so
+/api/simulate/sepa-deposit refuses ("make a simulated SEPA transfer from the
+portal"), and provisioning stalls on CANDIDE_CHAIN_ID=84532 against chain
+31337. Quote, validation and refusal paths are proven; debited -> bridged ->
+paid has only been exercised through its state-mapping logic. Use `npm run api`
+against Base Sepolia with a funded account to close that.
+
+PWA: manifest, generated icons (a committed pure-Python PNG writer — no
+imaging library exists on this machine), and a shell service worker whose one
+hard rule is that NOTHING under /api/ is cached. Proven by killing the server:
+the app still opens and API calls return a 503 the UI prints. The offline bar
+is driven by BOTH navigator.onLine and api() failing, because a dead server on
+live wifi reports onLine true.
+BEFORE SHIPPING INSTALL: on iOS a home-screen web app may get storage separate
+from Safari. The FP4 device key lives in localStorage and only the current
+authorizer may rotate it, so onboarding in Safari then installing could strand
+an account. Untested on a real device; test before offering install.
 
 ## Security gate (red-team, July 2026 — fix before any hosted/public demo)
 Sessions+authz landed (PR #2). FP1+FP2 DONE (July 2026): simulate endpoints
@@ -641,7 +726,7 @@ front of someone whose salary is in the account.
    both chains we care about are covered.
    THE CATCH: **USDC/USDT only. No EURe.** Our vault holds EURe, so a card
    cannot spend the balance directly. Either the user keeps a USDC sleeve, or
-   we convert on demand — which the cash/UPI rails already do (FxSwapper /
+   we convert on demand — which the cash rail already does (FxSwapper /
    JIT RFQ), so the machinery exists. Note this puts EUR/USD FX between a
    user's balance and their card spend; on the RECIPIENT side that question
    disappears, since they can be paid in USDC and spend it.

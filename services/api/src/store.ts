@@ -177,7 +177,7 @@ export interface User {
   createdAt: string;
 }
 
-export type PayoutRail = "cash" | "sepa" | "upi";
+export type PayoutRail = "cash" | "sepa";
 
 export interface Quote {
   id: string;
@@ -186,10 +186,9 @@ export interface Quote {
   status: "OPEN" | "CONSUMED" | "EXPIRED";
   sendEur: number;
   fixedFeeEur: number;
-  fxRate: number; // all-in rate after spread (EUR->KES, 1 for sepa, EUR->INR)
+  fxRate: number; // all-in rate after spread (EUR->KES, 1 for sepa)
   receiveKes: number; // cash rail (0 otherwise)
   receiveEur: number; // sepa rail (0 otherwise)
-  receiveInr: number; // upi rail (0 otherwise) — INR-fixed: this drives sendEur
   /** True market mid from the live feed. A reference we do NOT trade at. */
   midRate: number;
   /** Measured gap between midRate and fxRate. Not a configured constant: the
@@ -197,7 +196,7 @@ export interface Quote {
    *  number, so the stated margin and the real one were unrelated. */
   marginBps: number;
   /** What the sender really gets per EUR sent, fixed fee included. At small
-   *  amounts the flat fee dominates (EUR 1 on UPI loses 29% to it), and an
+   *  amounts the flat fee dominates (EUR 2 to cash loses half to it), and an
    *  itemised fee alone made that look like a broken exchange rate. */
   effectiveRate: number;
   /** FP5: the on-chain FxSwapper rate (tokenOut units per 1e18 tokenIn) this
@@ -267,7 +266,6 @@ export interface Transfer {
   recipientName: string;
   recipientPhone?: string; // cash rail
   recipientIban?: string; // sepa rail
-  recipientVpa?: string; // upi rail (merchant/recipient UPI ID)
   /**
    * Payer-supplied remittance reference, carried to the payee on the SEPA
    * payment so they can reconcile it against their own records. Set by callers
@@ -280,7 +278,6 @@ export interface Transfer {
   sendEur: number;
   receiveKes: number; // cash rail
   receiveEur?: number; // sepa rail
-  receiveInr?: number; // upi rail
   usdcOut?: number;
   /**
    * Where the input EURe is taken from at execution time.
@@ -365,8 +362,6 @@ export interface Transfer {
   };
   /** SEPA payout leg: a real Monerium redeem order in sandbox, or a mock. */
   sepa?: { mode: "sandbox" | "mock"; orderId?: string; state: string; detail?: string };
-  /** UPI payout leg (mock partner): UTR is the bank-side reference. */
-  upi?: { provider: string; utr: string; state: string };
   error?: string;
   /** FP3: automated compensation after failure. Refund amount depends on
    *  which step failed — costs incurred up to that point are itemized. */

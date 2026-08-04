@@ -890,7 +890,7 @@ export async function executeTransferLiquidity(transfer: Transfer): Promise<Liqu
     ? hydrateQuote(transfer.liquidity)
     : await liquidityProvider().quote(
         "EURE_TO_USDC",
-        eur.toWei(transfer.sendEur - (transfer.rail === "upi" ? FX.UPI_FIXED_FEE_EUR : FX.FIXED_FEE_EUR)),
+        eur.toWei(transfer.sendEur - FX.FIXED_FEE_EUR),
         transfer.quoteId,
         storedQuote?.expiresAt ?? new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
       );
@@ -902,7 +902,7 @@ export async function prepareTransferLiquidity(transfer: Transfer): Promise<NonN
   const storedQuote = store.findQuote(transfer.quoteId);
   const quote = await liquidityProvider().quote(
     "EURE_TO_USDC",
-    eur.toWei(transfer.sendEur - (transfer.rail === "upi" ? FX.UPI_FIXED_FEE_EUR : FX.FIXED_FEE_EUR)),
+    eur.toWei(transfer.sendEur - FX.FIXED_FEE_EUR),
     transfer.quoteId,
     storedQuote?.expiresAt ?? new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
   );

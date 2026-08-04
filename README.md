@@ -6,11 +6,10 @@ A remittance app that settles on stablecoin rails. Built by **Zoldenburg**,
 the cross-border payments infrastructure underneath it. 🦄
 
 Money comes in by SEPA transfer to a per-user IBAN and lands on-chain as
-e-money in the user's Safe smart account. It goes out three ways: cash pickup
-in Kenya, bank transfer to any IBAN, or an
-instant UPI payment in India. The app quotes each route with the fee and FX
-spread shown, executes the on-chain legs, and tracks every transfer through
-a state machine to PAID.
+e-money in the user's Safe smart account. It goes out two ways: cash pickup
+in Kenya, or bank transfer to any IBAN. The app quotes each route with the fee
+and FX spread shown, executes the on-chain legs, and tracks every transfer
+through a state machine to PAID.
 
 This is a prototype, but less of it is fake than you'd expect. A surprising
 amount of regulated financial infrastructure is reachable today without a
@@ -123,8 +122,8 @@ Running this repo with sandbox credentials, today:
   the Safe balance and the vault ledger balance. The current transfer executor
   selects a funding source per transfer: vault ledger first for local/mock
   compatibility, otherwise Safe-held EURe when available. Safe-funded SEPA
-  redeems directly from the Safe after collecting the fee; Safe-funded cash/UPI
-  move the exact signed amount to the orchestrator for the existing FX path.
+  redeems directly from the Safe after collecting the fee; a Safe-funded cash
+  payout moves the exact signed amount to the orchestrator for the FX path.
   These one-time Safe operations still need to move from API-side signing to
   passkey/co-signer approval. A
   Safe-funded failure refunds to the Safe whatever actually left it — the fee on
@@ -167,9 +166,11 @@ Running this repo with sandbox credentials, today:
   code here answers it.
 - Nothing hedges FX. Rates are live and a quote binds to execution, but the
   exposure between the two is carried, not laid off.
-- The UPI partner and the MoneyGram payout (in mock mode) return generated
-  reference numbers. The shapes match the real APIs so swapping in a
-  licensed partner is adapter work.
+- The MoneyGram payout (in mock mode) returns a generated reference number. The
+  shape matches the real API so swapping in a licensed partner is adapter work.
+- There is no India corridor. A UPI rail existed against a mock partner adapter
+  and was removed rather than left in as a rail nobody could actually pay
+  through; it returns when a licensed partner does.
 - Sender identity data (date of birth, address, ID number) is stored in
   `data/db.json` in plaintext, next to the Safe keys. A real deployment must
   leave it with the KYC provider and keep only a reference here. Document
@@ -223,7 +224,7 @@ services/api/src/
   fx.ts              quoting (rates, spread, fees)
   store.ts           JSON file store; stands in for a real ledger
   chain.ts           viem clients for the local chain
-  adapters/          monerium (real), moneygram/anchor, upi (mock)
+  adapters/          monerium (real), moneygram/anchor
   wallet/candide.ts  Safe deployment + EIP-1271 signing
   rates.ts           live FX mids; refuses rather than quoting stale
   liquidity.ts       venue providers + best-execution routing + surplus
@@ -238,7 +239,7 @@ scripts/             deploy, dev stack, e2e, sandbox checks
 The design rule throughout: every external service sits behind an adapter,
 and each adapter has a mock that matches the real API's shape. Monerium
 graduated from mock to real without touching the orchestrator. The intent
-is that MoneyGram, the UPI partner, and the USD side do the same.
+is that MoneyGram and the USD side do the same.
 
 Contracts are deliberately small. `RemitVault` is the old/mock custody ledger:
 it holds per-user balances with a daily cap, idempotent deposit references,
