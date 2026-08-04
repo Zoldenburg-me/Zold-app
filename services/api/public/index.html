@@ -579,6 +579,11 @@
           <span class="v" id="address">—</span>
           <button class="copybtn" data-copy="address">copy</button>
         </div>
+        <div class="row2 hidden" id="funding-actions" style="margin-top:1rem">
+          <button class="ghost" id="btn-finish-safe">Finish smart wallet</button>
+          <button id="btn-monerium-dashboard">Connect Monerium</button>
+        </div>
+        <div class="hint hidden" id="funding-action-hint"></div>
       </div>
 
       <div class="card" id="privacy-card">
@@ -586,7 +591,7 @@
         <div class="bundle-head">
           <div>
             <div class="bundle-title">Privacy Bundle</div>
-            <div class="bundle-sub">Kokio eSIM data plus Mysterium VPN, capped so usage stays profitable.</div>
+            <div class="bundle-sub">Kokio eSIM data plus Mysterium VPN with clear monthly allowances.</div>
           </div>
           <span class="chip pend" id="privacy-chip">OPTIONAL</span>
         </div>
@@ -912,8 +917,40 @@ function renderUser(u) {
     $("iban").textContent = `${(u.funding || {}).detail || "provisioning via Monerium sandbox"}…`;
     chip.textContent = "PENDING"; chip.className = "chip pend";
   }
+  renderFundingActions(u);
   renderPrivacyBundle();
   renderShellPages();
+}
+
+function needsPasskeySafeSetup(u = user) {
+  return !!(u?.passkeySafe && u.passkeySafe.status !== "active");
+}
+
+function hasConnectedMonerium(u = user) {
+  return !!u?.monerium?.connectedAt;
+}
+
+function renderFundingActions(u = user) {
+  const row = $("funding-actions");
+  const hint = $("funding-action-hint");
+  if (!row || !hint || !u) return;
+  const funding = u.funding || {};
+  const needsIban = kycApproved(u) && !u.iban && funding.mode === "sandbox";
+  const showSafe = needsIban && needsPasskeySafeSetup(u);
+  const showMonerium = needsIban && !hasConnectedMonerium(u);
+  const showActivate = needsIban && hasConnectedMonerium(u);
+  row.classList.toggle("hidden", !(showSafe || showMonerium || showActivate));
+  $("btn-finish-safe").classList.toggle("hidden", !showSafe);
+  $("btn-monerium-dashboard").classList.toggle("hidden", !(showMonerium || showActivate));
+  $("btn-monerium-dashboard").textContent = showActivate ? "Activate IBAN" : "Connect Monerium";
+  hint.classList.toggle("hidden", !(showSafe || showMonerium || showActivate));
+  hint.textContent = showSafe
+    ? "Finish the smart wallet first, then connect Monerium to issue the app IBAN."
+    : showActivate
+      ? "Your Monerium account is connected. Activate the app IBAN with your passkey."
+      : showMonerium
+        ? "Use your existing Monerium account to issue a new IBAN for this smart account."
+        : "";
 }
 
 async function loadPrivacyCatalog() {
@@ -1019,7 +1056,7 @@ async function renderPrivacyBundle() {
       <div class="pn">${p.name}</div>
       <div class="pp">€${fmt(p.priceEur)}/mo</div>
       <div class="pd">${p.esimGb} GB eSIM · ${p.vpnGb} GB VPN · ${p.vpnDevices} devices</div>
-      <div class="pm">${Math.round(p.grossMarginBps / 100)}% gross margin</div>
+      <div class="pm">${p.esimRegion} coverage · monthly allowance</div>
       <button class="${isActive ? "ghost" : ""}" data-plan="${p.id}" ${disabled ? "disabled" : ""}>${label}</button>
     </div>`;
   }).join("");
@@ -1174,14 +1211,53 @@ async function chooseFundingPath(path) {
   } catch (e) { showErr("kyc-err", e); }
 }
 
-async function startMoneriumConnect() {
-  clearErr("kyc-err");
+async function startMoneriumConnect(errorId = "kyc-err") {
+  clearErr(errorId);
   try {
     const updated = await api(`/api/users/${user.id}/funding-onboarding-path`, { path: "existing_monerium" });
     renderUser(updated);
     const connect = await api(`/api/users/${user.id}/monerium/connect/start`, {});
     location.href = connect.redirectUrl;
-  } catch (e) { showErr("kyc-err", e); }
+  } catch (e) { showErr(errorId, e); }
+}
+
+async function activateConnectedMonerium() {
+  clearErr("dep-err");
+  try {
+    await finishPasskeySafeSetup();
+    if (!hasConnectedMonerium()) return startMoneriumConnect("dep-err");
+    const accounts = await api(`/api/users/${user.id}/monerium/accounts`);
+    user = { ...user, monerium: { ...(user.monerium || {}), ...accounts } };
+    const profileId = user.monerium?.profileId || accounts.profiles?.[0]?.id;
+    const start = await api(`/api/users/${user.id}/monerium/link-signature/start`, { profileId });
+    const cred = await navigator.credentials.get({
+      publicKey: {
+        challenge: b64urlToBytes(start.challenge),
+        allowCredentials: [{ type: "public-key", id: b64urlToBytes(start.credentialId) }],
+        userVerification: "required",
+        timeout: 60000,
+      },
+    });
+    const activated = await api(start.submitTo, {
+      profileId,
+      linkSignatureRequestId: start.requestId,
+      credentialId: cred.id,
+      authenticatorData: b64url(cred.response.authenticatorData),
+      clientDataJSON: b64url(cred.response.clientDataJSON),
+      signature: b64url(cred.response.signature),
+    });
+    renderUser(activated);
+  } catch (e) { showErr("dep-err", e); }
+}
+
+async function finishDashboardSmartWallet() {
+  clearErr("dep-err");
+  try {
+    await finishPasskeySafeSetup();
+    renderUser(user);
+    if (hasConnectedMonerium()) await activateConnectedMonerium();
+    else await refresh();
+  } catch (e) { showErr("dep-err", e); }
 }
 
 function enterProvisioning(name) {
@@ -1392,6 +1468,8 @@ $("btn-passkey").onclick = () => {
 $("btn-skippk").onclick = () => createAccount(false);
 $("btn-monerium-existing").onclick = () => startMoneriumConnect();
 $("btn-monerium-new").onclick = () => chooseFundingPath("new_monerium");
+$("btn-monerium-dashboard").onclick = () => activateConnectedMonerium();
+$("btn-finish-safe").onclick = () => finishDashboardSmartWallet();
 $("btn-kyc-refresh").onclick = () => refreshKycStatus({ continueWhenApproved: true });
 $("btn-dash-kyc-refresh").onclick = async () => {
   await refresh();
@@ -1540,6 +1618,7 @@ $("btn-add-contact").onclick = () => {
 };
 
 $("btn-signout").onclick = () => {
+  localStorage.removeItem("zold-session");
   localStorage.removeItem("zoll-session");
   location.reload();
 };
