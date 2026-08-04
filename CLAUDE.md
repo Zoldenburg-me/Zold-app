@@ -310,10 +310,17 @@ the real gate: the device key is encrypted at rest with WebAuthn PRF
 (HKDF -> AES-GCM, only {iv,ct} in localStorage), so each payment needs a
 ceremony to unwrap; authenticators without PRF fall back to an unwrapped
 key labelled protection:"none". npm run fp4:test covers the envelope
-headlessly. UNVERIFIED without a real authenticator: that PRF is offered
-at all, and that it returns the SAME 32 bytes across ceremonies — if not,
-a wrapped key is unrecoverable after reload. Test that first in a real
-browser before trusting the wrap.
+headlessly. VERIFIED NEGATIVELY (Aug 2026, real browser + real authenticator):
+the authenticator reported NO PRF SUPPORT, so the device key was stored
+UNWRAPPED with protection:"none". The console says so plainly
+("this authenticator reports no PRF support — the device key cannot be
+passkey-encrypted"), but the consequence is quiet and worth stating: on such a
+device the "every payment needs a passkey ceremony to unwrap the key" property
+DOES NOT HOLD. Anything that can read localStorage can spend. Treat PRF as a
+per-authenticator capability to be detected and surfaced, not a guarantee of
+the design. Still unverified on hardware that DOES offer PRF: that it returns
+the SAME 32 bytes across ceremonies — if not, a wrapped key is unrecoverable
+after reload.
 FP5 (contract governance + quote binding): PARTIAL. Quote↔execution binding
 DONE (services/api/src/orchestrator.ts assertQuoteRateBinding: refuses +
 auto-refunds if on-chain rate drifts > FX.QUOTE_BINDING_BPS from the quote's
@@ -647,6 +654,29 @@ front of someone whose salary is in the account.
    regulator page names entities precisely), and per-region availability.
 Parked deliberately: NEAR Intents (future multi-chain deposits), Metastable
 (EURe↔EURC later), Flexa/AMP (no — wrong market, card program beats it).
+
+## Running the app — which command, and what it costs (Aug 2026)
+
+`npm run dev` and `npm run api` are NOT interchangeable, and picking wrong
+wastes an hour on errors that look like bugs.
+
+| | `npm run dev` | `npm run api` |
+|---|---|---|
+| chain | local hardhat 31337 | whatever TRANSF_CHAIN_ID says (84532) |
+| database | `data/db.dev.json`, **WIPED every start** | `data/db.json`, preserved |
+| passkey Safe deploy | **IMPOSSIBLE** | works |
+
+PASSKEY SAFE DEPLOYMENT CANNOT WORK UNDER `npm run dev`. It goes through an
+ERC-4337 bundler and paymaster, and a local hardhat node has neither — the call
+reaches Candide asking about CANDIDE_CHAIN_ID for a Safe that exists only on
+this laptop. Before the guard it failed as a bare "Failed to fetch" in the
+browser, which reads as our bug rather than a chain that cannot do the
+operation. The API now refuses with 409 and names the mismatch.
+
+Corollary worth remembering: `npm run dev` wiping its own db is why a test
+account vanishes between runs, and why the live accounts in `data/db.json`
+(including any with an on-chain-bound authorizer) must never be exercised with
+it.
 
 ## Multi-agent workflow (THREE+ agents work this repo)
 Claude (local sessions) and OpenClaw (friend's agent) both commit here. The
