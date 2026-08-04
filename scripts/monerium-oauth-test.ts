@@ -414,7 +414,7 @@ try {
     assert.match(r.data.error, /passkey Safe signature required/);
   });
 
-  await t("activate links the app Safe with a passkey/co-signer signature and requests a NEW app IBAN", async () => {
+  await t("activate links the app Safe with a passkey Safe signature and requests a NEW app IBAN", async () => {
     const start = await call(`/api/users/${userId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
     assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
     assert.equal(start.data.credentialId, passkey.credentialId);
