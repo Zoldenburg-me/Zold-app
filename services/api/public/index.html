@@ -15,7 +15,10 @@
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<!-- Material Symbols, as the design specifies. display=block so an icon never
+     flashes as its ligature text before the font arrives. -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=block" rel="stylesheet" />
 <title>Zold — send money home</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23ed188d'/%3E%3Cpath d='M30 66 L54 30 L58 66 M46 30 L74 22' stroke='white' stroke-width='7' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E" />
 <style>
@@ -548,6 +551,258 @@
   @keyframes draw { to { stroke-dashoffset: 0; } }
   .paidbox .pt { font-weight: 700; font-size: 1rem; color: var(--green); }
   .paidbox .pd { font-size: .8rem; color: var(--muted); }
+
+  /* ==========================================================================
+     MOBILE APP — "Noir"
+     --------------------------------------------------------------------------
+     The approved direction from design_handoff_zold_mobile. True-dark OLED
+     ground, hairline borders, one glow. Tokens are the handoff's, verbatim.
+
+     Scoped under #dashboard and the .m- prefix so the onboarding screens and
+     the payment page keep their own system until they are converted too.
+
+     Two rules from the handoff that are easy to lose and expensive to
+     re-discover: nothing is rounded above 12px except status dots, and EVERY
+     financial figure is tabular.
+     ========================================================================== */
+  :root {
+    --m-bg: #050505;
+    --m-surface: #0e0e10;
+    --m-sunken: #0a0a0c;
+    --m-raised: #131316;
+    --m-highest: #1a1a1e;
+    --m-line: #232326;
+    --m-line-strong: #3a3a40;
+    --m-line-faint: #131316;
+    --m-text: #ffffff;
+    --m-dim: #8a8f98;
+    --m-faint: #5c6067;
+    --m-pink: #ff2d8b;
+    --m-pink-hover: #ff4a9c;
+    --m-pink-soft: #ff8fc4;
+    --m-pink-tint: #180910;
+    --m-pink-border: #47142c;
+    --m-mint: #3ee6a8;
+    --m-mint-tint: #0a1a14;
+    --m-mint-border: #1d4b39;
+    --m-amber: #ffc98a;
+    --m-amber-tint: #1a1206;
+    --m-glow: 0 10px 34px rgba(255, 45, 139, .45), 0 0 60px rgba(255, 45, 139, .22);
+    --m-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    --m-display: "Space Grotesk", Inter, sans-serif;
+  }
+
+  .material-symbols-rounded {
+    font-family: "Material Symbols Rounded";
+    font-weight: normal; font-style: normal; line-height: 1;
+    letter-spacing: normal; text-transform: none; white-space: nowrap;
+    direction: ltr; -webkit-font-feature-settings: "liga"; font-feature-settings: "liga";
+    -webkit-font-smoothing: antialiased; user-select: none;
+  }
+
+  /* ---------- shell ----------
+     412 x 892 is the design's content area. On a phone it is the viewport; on
+     a desktop the column is centred rather than stretched, because every
+     measurement in the handoff assumes that width. */
+  #dashboard {
+    display: none; grid-template-columns: 1fr; min-height: 100vh;
+    background: var(--m-bg); color: var(--m-text);
+    font: 400 14px/1.43 Inter, system-ui, sans-serif;
+  }
+  #dashboard.m-on {
+    max-width: 412px; margin: 0 auto;
+    box-shadow: 0 0 0 1px var(--m-line-faint);
+    grid-template-rows: 1fr auto; min-height: 100dvh;
+  }
+  #dashboard.m-on .side, #dashboard.m-on .topbar, #dashboard.m-on .rail { display: none; }
+  #dashboard.m-on .main {
+    grid-column: 1; display: flex; flex-direction: column; min-width: 0;
+    overflow-y: auto; padding: 0 16px calc(28px + env(safe-area-inset-bottom, 0px));
+  }
+  #dashboard.m-on .view { padding: 0; }
+
+  .m-fig { font-variant-numeric: tabular-nums; }
+  .m-mono {
+    font: 500 9.5px var(--m-mono); letter-spacing: .14em;
+    text-transform: uppercase; color: var(--m-faint);
+  }
+
+  /* ---------- header ---------- */
+  .m-head { display: flex; align-items: center; gap: 11px; height: 64px; }
+  .m-initials {
+    width: 38px; height: 38px; border-radius: 10px; flex: none;
+    background: var(--m-pink-tint); border: 1px solid var(--m-pink-border);
+    display: grid; place-items: center; color: var(--m-pink);
+    font: 600 13px var(--m-display); letter-spacing: .04em;
+  }
+  .m-head .m-name { font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: #fff; }
+  .m-head .m-status { display: flex; align-items: center; gap: 6px; margin-top: 1px; font-size: 11px; }
+  .m-dot { width: 5px; height: 5px; border-radius: 50%; }
+  .m-iconbtn {
+    width: 38px; height: 38px; flex: none; border-radius: 10px;
+    background: var(--m-sunken); border: 1px solid var(--m-line);
+    color: var(--m-dim); display: grid; place-items: center; cursor: pointer;
+  }
+  .m-iconbtn:hover { border-color: var(--m-line-strong); color: #fff; filter: none; }
+
+  /* ---------- KYC banner ---------- */
+  .m-kyc-banner {
+    width: 100%; text-align: left; display: flex; gap: 12px; align-items: center;
+    background: var(--m-pink-tint); border: 1px solid var(--m-pink-border);
+    border-radius: 10px; padding: 13px 14px; margin-bottom: 14px;
+    color: #fff; cursor: pointer; min-height: 56px; font-family: inherit;
+  }
+  .m-kyc-banner:hover { border-color: var(--m-pink); filter: none; }
+
+  /* ---------- the safe card ----------
+     The bloom is the signature and is the only glow besides the Send button. */
+  .m-safe { position: relative; border-radius: 12px; border: 1px solid var(--m-line); background: #000; overflow: hidden; }
+  .m-safe::before {
+    content: ""; position: absolute; left: 50%; top: -96px; transform: translateX(-50%);
+    width: 300px; height: 150px; border-radius: 50%;
+    background: rgba(255, 45, 139, .20); filter: blur(60px); pointer-events: none;
+  }
+  .m-safe-body { position: relative; padding: 18px 16px 14px; }
+  .m-safe-top { display: flex; align-items: center; justify-content: space-between; }
+  .m-safe-label { display: flex; align-items: center; gap: 6px; font: 500 10px var(--m-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--m-dim); }
+  .m-chip-eure {
+    font: 500 10px var(--m-mono); letter-spacing: .1em; padding: 3px 7px; border-radius: 6px;
+    border: 1px solid var(--m-pink-border); color: var(--m-pink-soft); background: var(--m-pink-tint);
+  }
+  .m-balance { display: flex; align-items: baseline; gap: 4px; margin-top: 12px; }
+  .m-balance .cur { font: 500 22px var(--m-display); color: var(--m-faint); }
+  .m-balance .amt { font: 600 42px/1 var(--m-display); letter-spacing: -.03em; color: #fff; }
+  .m-addr {
+    display: flex; align-items: center; gap: 7px; margin-top: 12px; padding: 6px 9px;
+    border-radius: 8px; background: var(--m-sunken); border: 1px solid var(--m-line);
+    cursor: pointer; color: var(--m-dim); font: 400 11px var(--m-mono); letter-spacing: .02em;
+  }
+  .m-addr:hover { border-color: var(--m-line-strong); color: #fff; filter: none; }
+  .m-addr .k { color: var(--m-faint); }
+  .m-split { position: relative; display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--m-highest); }
+  .m-split > div { padding: 12px 16px; }
+  .m-split > div + div { border-left: 1px solid var(--m-highest); }
+  .m-split .v { font: 600 16px var(--m-display); margin-top: 4px; color: #fff; }
+  .m-split .v.dim { color: var(--m-dim); }
+
+  /* ---------- action bar ---------- */
+  .m-actions { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 8px; margin-top: 14px; }
+  .m-actions button {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 52px; border-radius: 10px; cursor: pointer; font-family: inherit;
+  }
+  .m-btn-send { background: var(--m-pink); border: 0; color: #fff; font: 600 14px Inter, sans-serif; letter-spacing: .01em; box-shadow: var(--m-glow); }
+  .m-btn-send:hover { background: var(--m-pink-hover); filter: none; }
+  .m-btn-quiet { background: var(--m-surface); border: 1px solid var(--m-line); color: #fff; font: 500 13px Inter, sans-serif; }
+  .m-btn-quiet:hover { border-color: var(--m-line-strong); background: var(--m-raised); filter: none; }
+  .m-btn-quiet .material-symbols-rounded { color: var(--m-dim); font-size: 18px; }
+
+  /* ---------- tiles ---------- */
+  .m-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .m-tile {
+    text-align: left; padding: 13px 14px; border-radius: 12px; background: var(--m-surface);
+    border: 1px solid var(--m-line); color: #fff; cursor: pointer; min-height: 98px;
+    display: flex; flex-direction: column; font-family: inherit;
+  }
+  .m-tile:hover { border-color: var(--m-line-strong); filter: none; }
+  .m-tile[disabled] { cursor: default; opacity: 1; }
+  .m-tile[disabled]:hover { border-color: var(--m-line); }
+  .m-tile-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .m-tile .fig { font: 600 20px var(--m-display); margin-top: auto; }
+  .m-tile .ttl { font: 600 15px Inter, sans-serif; margin-top: auto; }
+  .m-tile .sub { font-size: 11px; color: var(--m-dim); margin-top: 3px; }
+  .m-tag {
+    font: 600 9px var(--m-mono); letter-spacing: .1em; padding: 2px 6px; border-radius: 5px;
+    border: 1px solid var(--m-line-strong); color: var(--m-dim); white-space: nowrap;
+  }
+  .m-tag.soon { border-color: var(--m-line-strong); color: var(--m-dim); }
+  .m-tag.on { background: var(--m-mint-tint); border-color: var(--m-mint-border); color: var(--m-mint); }
+
+  /* ---------- dismissible notice ---------- */
+  .m-notice { margin-top: 8px; border-radius: 12px; border: 1px solid var(--m-line); background: var(--m-sunken); padding: 14px; position: relative; }
+  .m-notice .x {
+    position: absolute; top: 9px; right: 9px; width: 26px; height: 26px; border-radius: 7px;
+    background: transparent; border: 0; color: var(--m-faint); cursor: pointer; display: grid; place-items: center;
+  }
+  .m-notice .x:hover { background: var(--m-raised); color: #fff; filter: none; }
+  .m-notice .body { font-size: 11.5px; color: var(--m-dim); margin-top: 6px; max-width: 250px; line-height: 1.6; }
+  .m-notice .cta {
+    margin-top: 11px; padding: 0 14px; min-height: 34px; border-radius: 8px; background: transparent;
+    border: 1px solid var(--m-pink-border); color: var(--m-pink); font: 600 12px Inter, sans-serif; cursor: pointer;
+  }
+  .m-notice .cta:hover { background: var(--m-pink-tint); border-color: var(--m-pink); filter: none; }
+
+  /* ---------- activity rows ---------- */
+  .m-sec { display: flex; align-items: center; justify-content: space-between; margin: 22px 0 2px; }
+  .m-sec .m-mono { letter-spacing: .16em; }
+  .m-link { background: none; border: 0; color: var(--m-pink); font: 600 12px Inter, sans-serif; cursor: pointer; padding: 6px 4px; }
+  .m-link:hover { filter: none; color: var(--m-pink-hover); }
+  .m-row {
+    width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+    background: transparent; border: 0; border-top: 1px solid var(--m-line-faint);
+    padding: 12px 2px; color: #fff; cursor: pointer; min-height: 62px; font-family: inherit;
+  }
+  .m-row:hover { background: rgba(255, 255, 255, .025); filter: none; }
+  .m-row .cc {
+    width: 34px; height: 34px; flex: none; border-radius: 9px; background: var(--m-surface);
+    border: 1px solid var(--m-line); display: grid; place-items: center;
+    font: 500 10px var(--m-mono); letter-spacing: .06em; color: var(--m-dim);
+  }
+  .m-row .who { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m-row .sub { font-size: 11px; color: var(--m-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .m-row .amt { font: 600 13.5px var(--m-display); }
+  .m-row .st { font: 500 9.5px var(--m-mono); letter-spacing: .1em; margin-top: 2px; }
+  .m-empty { padding: 22px 2px; color: var(--m-faint); font-size: 12px; border-top: 1px solid var(--m-line-faint); }
+
+  /* ---------- bottom navigation ---------- */
+  .m-nav {
+    display: none; grid-template-columns: repeat(5, 1fr); align-items: center;
+    height: calc(76px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--m-bg); border-top: 1px solid var(--m-line-faint);
+    position: sticky; bottom: 0; z-index: 60;
+  }
+  #dashboard.m-on .m-nav { display: grid; }
+  .m-nav button {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    background: none; border: 0; cursor: pointer; height: 100%; padding: 0;
+    color: var(--m-dim); font: 500 12px Inter, sans-serif;
+  }
+  .m-nav button:hover { filter: none; color: #fff; }
+  .m-nav .ind {
+    width: 56px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+    transition: background .2s ease;
+  }
+  .m-nav button.active .ind { background: var(--m-raised); }
+  .m-nav button.active { color: #fff; }
+  .m-nav .material-symbols-rounded { font-size: 24px; }
+  .m-nav .brand { color: var(--m-pink); font: 400 22px Inter, sans-serif; line-height: 1; }
+
+  /* ---------- sub-screens ----------
+     The funding, crypto, payment-page and Plus cards are still the working
+     implementations, so the nav reveals them in place instead of this pass
+     duplicating them. data-msub says which one is open; "home" is the
+     dashboard itself. They get real Noir screens next. */
+  #dashboard.m-on #view-dashboard > .card { display: none; }
+  #dashboard.m-on .m-subhead { display: none; }
+  #dashboard.m-on[data-msub="add"] #fund-card,
+  #dashboard.m-on[data-msub="add"] #crypto-card,
+  #dashboard.m-on[data-msub="add"] #paylink-card,
+  #dashboard.m-on[data-msub="plus"] #privacy-card { display: block; }
+  #dashboard.m-on[data-msub="add"] #m-home,
+  #dashboard.m-on[data-msub="plus"] #m-home { display: none; }
+  #dashboard.m-on[data-msub="add"] .m-subhead,
+  #dashboard.m-on[data-msub="plus"] .m-subhead { display: flex; }
+  /* Send still runs the existing rail flow; it becomes the whole screen rather
+     than a desktop side panel. Its own Noir screens land in the next pass. */
+  #dashboard.m-on[data-msub="send"] .rail {
+    display: block; grid-row: 1; overflow-y: auto;
+    padding: 16px 16px calc(28px + env(safe-area-inset-bottom, 0px));
+  }
+  #dashboard.m-on[data-msub="send"] .main { display: none; }
+
+  @keyframes mPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,45,139,.45); } 50% { box-shadow: 0 0 0 9px rgba(255,45,139,0); } }
+  @keyframes mRise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 </style>
 </head>
 <body>
@@ -772,6 +1027,112 @@
       </div>
 
       <section class="view active" id="view-dashboard">
+
+      <!-- ================= Noir home =================
+           The mobile dashboard from design_handoff_zold_mobile. It replaces
+           the desktop card stack below, which stays in the document because
+           the funding, crypto, payment-page and Plus cards are still the
+           working implementations — the bottom nav reveals them by setting
+           data-msub rather than duplicating them here. They get their own
+           Noir screens in the next pass. -->
+      <div id="m-home">
+        <div class="m-head">
+          <div class="m-initials" id="m-initials">—</div>
+          <div style="flex:1;min-width:0">
+            <div class="m-name" id="m-name">Account</div>
+            <div class="m-status">
+              <span class="m-dot" id="m-kyc-dot"></span>
+              <span id="m-kyc-label">—</span>
+            </div>
+          </div>
+          <button class="m-iconbtn" id="m-bell" title="Activity"><span class="material-symbols-rounded" style="font-size:19px">notifications</span></button>
+        </div>
+
+        <button class="m-kyc-banner hidden" id="m-kyc-banner">
+          <span class="material-symbols-rounded" style="font-size:20px;color:var(--m-pink)">badge</span>
+          <span style="flex:1;min-width:0">
+            <span style="display:block;font-size:13px;font-weight:600" id="m-kyc-banner-title">Verify your identity</span>
+            <span style="display:block;font-size:11.5px;color:var(--m-dim);margin-top:1px" id="m-kyc-banner-sub">Adding money and sending stay paused until then.</span>
+          </span>
+          <span class="material-symbols-rounded" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
+        </button>
+
+        <div class="m-safe">
+          <div class="m-safe-body">
+            <div class="m-safe-top">
+              <div class="m-safe-label"><span class="material-symbols-rounded" style="font-size:13px;color:var(--m-pink)">lock</span> Total in safe</div>
+              <span class="m-chip-eure">EURe</span>
+            </div>
+            <div class="m-balance">
+              <span class="cur">€</span><span class="amt m-fig" id="m-total">0.00</span>
+            </div>
+            <button class="m-addr" id="m-addr">
+              <span class="k">SAFE</span> <span id="m-addr-short">—</span>
+              <span class="material-symbols-rounded" style="font-size:13px" id="m-addr-icon">content_copy</span>
+            </button>
+          </div>
+          <div class="m-split">
+            <div>
+              <div class="m-mono" style="letter-spacing:.14em">Available</div>
+              <div class="v m-fig" id="m-available">€0.00</div>
+            </div>
+            <div>
+              <div class="m-mono" style="letter-spacing:.14em">In flight</div>
+              <div class="v dim m-fig" id="m-inflight">€0.00</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="m-actions">
+          <button class="m-btn-send" id="m-send"><span class="material-symbols-rounded" style="font-size:19px">north_east</span>Send</button>
+          <button class="m-btn-quiet" id="m-add"><span class="material-symbols-rounded">add</span>Add</button>
+          <button class="m-btn-quiet" id="m-activity"><span class="material-symbols-rounded">swap_vert</span>Activity</button>
+        </div>
+
+        <div class="m-tiles">
+          <!-- Savings vault is in the design but has no endpoint behind it, so
+               it states that rather than moving a number that isn't real. -->
+          <div class="m-tile" id="m-vault" disabled>
+            <div class="m-tile-top">
+              <div class="m-mono">Savings vault</div>
+              <span class="material-symbols-rounded" style="font-size:15px;color:var(--m-faint)">savings</span>
+            </div>
+            <div class="ttl" style="color:var(--m-dim)">Not yet</div>
+            <div class="sub">No vault product is live</div>
+          </div>
+          <button class="m-tile" id="m-plus">
+            <div class="m-tile-top">
+              <div class="m-mono">Zold Plus</div>
+              <span class="m-tag" id="m-plus-tag">—</span>
+            </div>
+            <div class="ttl" id="m-plus-title">Upgrade</div>
+            <div class="sub" id="m-plus-sub">VPN · eSIM</div>
+          </button>
+        </div>
+
+        <div class="m-notice" id="m-usd">
+          <button class="x" id="m-usd-x" title="Dismiss"><span class="material-symbols-rounded" style="font-size:16px">close</span></button>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="m-tag soon">SOON</span>
+            <div style="font-size:13.5px;font-weight:600">USD accounts</div>
+          </div>
+          <div class="body">A second balance, US routing details, USDC in and out.</div>
+          <button class="cta" id="m-usd-cta">Notify me</button>
+        </div>
+
+        <div class="m-sec">
+          <div class="m-mono">Recent activity</div>
+          <button class="m-link" id="m-seeall">See all</button>
+        </div>
+        <div id="m-recent"><div class="m-empty">No transfers yet</div></div>
+      </div>
+
+      <!-- Sub-screen header, shown when the nav opens one of the cards below. -->
+      <div class="m-head m-subhead">
+        <button class="m-iconbtn" id="m-back"><span class="material-symbols-rounded" style="font-size:19px">arrow_back</span></button>
+        <div class="m-name" id="m-subtitle">Add money</div>
+      </div>
+
       <div class="card hidden" id="kyc-card">
         <h2>Identity review</h2>
         <div class="kyc-status" style="margin-top:0">
@@ -1057,6 +1418,16 @@
         </div>
       </div>
     </div>
+
+    <!-- Bottom navigation. Order is the handoff's: Add · Send · Zold · Activity
+         · Profile, with the brand mark in the centre routing home. -->
+    <nav class="m-nav" id="m-nav">
+      <button data-mnav="add"><span class="ind"><span class="material-symbols-rounded">add</span></span>Add</button>
+      <button data-mnav="send"><span class="ind"><span class="material-symbols-rounded">north_east</span></span>Send</button>
+      <button data-mnav="home" class="active"><span class="ind"><span class="brand">▽</span></span>Zold</button>
+      <button data-mnav="activity"><span class="ind"><span class="material-symbols-rounded">swap_vert</span></span>Activity</button>
+      <button data-mnav="profile"><span class="ind"><span class="material-symbols-rounded">person</span></span>Profile</button>
+    </nav>
   </section>
 
 <script type="importmap">
@@ -1197,7 +1568,146 @@ function renderUser(u) {
   renderFundCard();
   renderPrivacyBundle();
   renderShellPages();
+  renderMobile(u);
 }
+
+/* ==========================================================================
+   MOBILE APP — "Noir" home
+   --------------------------------------------------------------------------
+   Renders the design's dashboard from real account state. Where the design
+   shows something the API cannot back, this says so rather than inventing a
+   figure — the savings vault and USD accounts are marked SOON, and Zold Plus
+   is bound to the privacy bundle that actually exists rather than the design's
+   €7.99 card tier.
+   ========================================================================== */
+
+/** The design's three figures, mapped onto the three the API reports.
+ *
+ *  "Total in safe" is everything the account holds — EURe sitting in the Safe
+ *  plus whatever the vault ledger has credited. "Available" is what the
+ *  transfer executor can actually spend today, which is the vault ledger.
+ *  "In flight" is summed from transfers that have left CREATED but not reached
+ *  a terminal state; nothing on-chain reports it, so it is derived here. */
+function mobileFigures(u) {
+  const safe = u.safeBalanceEur ?? 0;
+  const vault = u.vaultBalanceEur ?? 0;
+  const live = ["DEBITED", "SWAPPED", "BRIDGED", "PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING",
+    "PAYOUT_FUNDED", "PAYOUT_READY", "PAYOUT_SUBMITTED"];
+  const inflight = hist.filter((t) => live.includes(t.state)).reduce((n, t) => n + (t.sendEur || 0), 0);
+  return { total: safe + vault, available: u.balanceEur ?? 0, inflight };
+}
+
+function renderMobile(u = user) {
+  if (!u) return;
+  const name = u.name || "Account";
+  $("m-name").textContent = name;
+  $("m-initials").textContent = name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "—";
+
+  const approved = kycApproved(u);
+  const dotColour = approved ? "var(--m-mint)" : u.kycStatus === "rejected" ? "var(--m-pink)" : "var(--m-amber)";
+  const dot = $("m-kyc-dot");
+  dot.style.background = dotColour;
+  dot.style.boxShadow = `0 0 8px ${dotColour}`;
+  $("m-kyc-label").textContent = approved ? "Verified" : u.kycStatus === "rejected" ? "Not verified" : "Verification pending";
+  $("m-kyc-label").style.color = approved ? "var(--m-mint)" : u.kycStatus === "rejected" ? "var(--m-pink)" : "var(--m-amber)";
+  $("m-kyc-banner").classList.toggle("hidden", approved);
+
+  const f = mobileFigures(u);
+  $("m-total").textContent = fmt(f.total);
+  $("m-available").textContent = `€${fmt(f.available)}`;
+  $("m-inflight").textContent = `€${fmt(f.inflight)}`;
+
+  const addr = u.address && u.address !== "0x0000000000000000000000000000000000000000" ? u.address : "";
+  $("m-addr").classList.toggle("hidden", !addr);
+  if (addr) $("m-addr-short").textContent = `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+
+  /* Zold Plus is the privacy bundle. The design's price and card perk are not
+     ours to show — these come from /api/privacy-bundles. */
+  const sub = u.privacyBundle;
+  const active = sub && sub.status !== "canceled";
+  const plan = active ? bundlePlan(sub.planId) : null;
+  const cheapest = privacyCatalog?.plans?.[0];
+  $("m-plus-tag").textContent = active ? "ACTIVE" : cheapest ? `€${cheapest.priceEur}` : "—";
+  $("m-plus-tag").className = `m-tag${active ? " on" : ""}`;
+  $("m-plus-title").textContent = active ? (plan ? plan.name : "Active") : "Upgrade";
+  $("m-plus-sub").textContent = active && sub.status === "pending_fulfillment" ? "Awaiting partner setup" : "VPN · eSIM";
+  $("m-plus").parentElement.querySelector("#m-plus").style.borderColor = active ? "var(--m-pink-border)" : "";
+}
+
+/** Recent activity, newest first, in the design's row shape. */
+function renderMobileActivity() {
+  const el = $("m-recent");
+  if (!el) return;
+  if (!hist.length) { el.innerHTML = '<div class="m-empty">No transfers yet</div>'; return; }
+  el.innerHTML = hist.slice(0, 5).map((t) => {
+    const sepa = t.rail === "sepa";
+    const cc = sepa ? "EU" : "KE";
+    const out = true; // every transfer this app creates is outgoing
+    const amount = `−€${fmt(t.sendEur)}`;
+    const inFlight = !["PAID", "REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
+    const status = t.state === "PAID" ? "PAID" : t.state === "REFUNDED" ? "REFUNDED"
+      : t.state === "FAILED" ? "FAILED" : t.state === "MANUAL_REVIEW" ? "IN REVIEW" : "IN FLIGHT";
+    const stColour = inFlight ? "var(--m-pink)" : t.state === "PAID" ? "var(--m-faint)" : "var(--m-amber)";
+    const when = new Date(t.createdAt).toLocaleDateString("en", { day: "numeric", month: "short" });
+    return `<button class="m-row" data-mtx="${esc(t.id)}">
+      <span class="cc">${cc}</span>
+      <span style="flex:1;min-width:0">
+        <span class="who" style="display:block">${esc(t.recipientName || "—")}</span>
+        <span class="sub" style="display:block">${sepa ? "SEPA" : "MoneyGram cash"} · ${esc(when)}</span>
+      </span>
+      <span style="text-align:right;flex:none">
+        <span class="amt m-fig" style="display:block;color:${out ? "#fff" : "var(--m-mint)"}">${amount}</span>
+        <span class="st" style="display:block;color:${stColour}">${status}</span>
+      </span>
+    </button>`;
+  }).join("");
+  el.querySelectorAll("[data-mtx]").forEach((b) => {
+    b.onclick = () => { mobileNav("activity"); };
+  });
+}
+
+/** Bottom-nav routing. Tab switches clear any open sub-screen. */
+function mobileNav(target) {
+  const shell = $("dashboard");
+  const sub = { add: "add", send: "send", plus: "plus" }[target];
+  shell.dataset.msub = sub || "home";
+  if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
+  else switchView("dashboard");
+  const navFor = { add: "add", send: "send", plus: "home", home: "home", activity: "activity", profile: "profile" }[target];
+  document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
+  $("m-subtitle").textContent = sub === "add" ? "Add money" : sub === "plus" ? "Zold Plus" : "Send";
+  $("dashboard").querySelector(".main").scrollTop = 0;
+}
+
+document.querySelectorAll("#m-nav button").forEach((b) => {
+  b.onclick = () => mobileNav(b.dataset.mnav);
+});
+$("m-send").onclick = () => mobileNav("send");
+$("m-add").onclick = () => mobileNav("add");
+$("m-activity").onclick = () => mobileNav("activity");
+$("m-bell").onclick = () => mobileNav("activity");
+$("m-seeall").onclick = () => mobileNav("activity");
+$("m-plus").onclick = () => mobileNav("plus");
+$("m-back").onclick = () => mobileNav("home");
+$("m-kyc-banner").onclick = () => enterKycReview(user?.name || "Account");
+
+/* Copy the Safe address. The icon confirms for 1.4s, per the handoff. */
+$("m-addr").onclick = async () => {
+  if (!user?.address) return;
+  try { await navigator.clipboard.writeText(user.address); } catch { return; }
+  const icon = $("m-addr-icon");
+  icon.textContent = "check";
+  setTimeout(() => { icon.textContent = "content_copy"; }, 1400);
+};
+
+/* USD accounts: a waitlist with nothing behind it would be a lie, so the
+   button states plainly that there is no list yet. */
+$("m-usd-x").onclick = () => $("m-usd").classList.add("hidden");
+$("m-usd-cta").onclick = () => {
+  const b = $("m-usd-cta");
+  b.textContent = "Not open yet";
+  b.disabled = true;
+};
 
 /**
  * What this deployment lets the browser do. Defaults are the SAFE ones: with
@@ -1484,6 +1994,10 @@ function enterDashboard(name) {
   $("onboard").style.display = "none";
   $("provisioning").style.display = "none";
   $("kyc-review").style.display = "none";
+  // The mobile shell is the app now; the desktop sidebar/topbar/rail stay in
+  // the document only until their Noir screens land.
+  $("dashboard").classList.add("m-on");
+  if (!$("dashboard").dataset.msub) $("dashboard").dataset.msub = "home";
   $("dashboard").style.display = "grid";
   $("userpill").style.display = "flex";
   $("pillname").textContent = name;
@@ -2401,6 +2915,7 @@ function renderHistory() {
     ? hist.map((t) => `<div class="hitem">${histRow(t)}</div>`).join("")
     : '<div class="empty">No transfers yet</div>';
   renderTransactionPage();
+  renderMobileActivity();
 }
 
 function renderTransactionPage() {
