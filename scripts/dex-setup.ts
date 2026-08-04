@@ -18,7 +18,7 @@
 import { createPublicClient, createWalletClient, http, parseAbi, formatUnits, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { LIQUIDITY } from "../services/api/src/config.js";
-import { chain } from "../services/api/src/chain.js";
+import { addrs, chain } from "../services/api/src/chain.js";
 import { eurPer } from "../services/api/src/rates.js";
 import { bestPool } from "../services/api/src/dex.js";
 
@@ -40,6 +40,22 @@ const erc20 = parseAbi([
   "function approve(address,uint256) returns (bool)",
   "function allowance(address,address) view returns (uint256)",
 ]);
+/** MockToken: ours on a testnet deploy, so a shortfall is mintable not fundable. */
+const mockAbi = parseAbi([
+  "function owner() view returns (address)",
+  "function mint(address,uint256)",
+]);
+
+/** True only when this token is a mock WE own — never assume it of a real one. */
+async function ownedMock(pub: any, token: `0x${string}`, me: `0x${string}`) {
+  try {
+    const o = (await pub.readContract({ address: token, abi: mockAbi, functionName: "owner" })) as string;
+    return o.toLowerCase() === me.toLowerCase();
+  } catch {
+    return false; // no owner() -> a real token, not ours
+  }
+}
+
 const npmAbi = parseAbi([
   "function createAndInitializePoolIfNecessary(address token0,address token1,uint24 fee,uint160 sqrtPriceX96) payable returns (address pool)",
   "function mint((address token0,address token1,uint24 fee,int24 tickLower,int24 tickUpper,uint256 amount0Desired,uint256 amount1Desired,uint256 amount0Min,uint256 amount1Min,address recipient,uint256 deadline)) payable returns (uint256 tokenId,uint128 liquidity,uint256 amount0,uint256 amount1)",
@@ -73,18 +89,38 @@ async function main() {
   const account = privateKeyToAccount(key);
   const wallet = createWalletClient({ account, chain, transport: http(rpc) });
 
-  const eure = (process.env.DEX_EURE ?? "0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85") as `0x${string}`;
-  const usdc = (process.env.CCTP_USDC ?? "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as `0x${string}`;
+  /**
+   * Seed the pair the PROVIDER trades, read from the same place it reads.
+   *
+   * This previously took usdc from CCTP_USDC, which is Circle's real testnet
+   * USDC — a different token from the one the app is deployed against. The
+   * pool built fine and the provider then correctly reported "no pool", because
+   * it asks for addrs().usdc. Seeding a pair nobody trades is worse than not
+   * seeding: it looks done.
+   *
+   * Note what this means on Base Sepolia: addrs().usdc is a MockToken we
+   * minted, so a pool against it is as synthetic as the FxSwapper — real pool
+   * contract, both tokens ours. It proves the code path, not a price.
+   */
+  const a = addrs();
+  const eure = (process.env.DEX_EURE ?? a.eure) as `0x${string}`;
+  const usdc = (process.env.DEX_USDC ?? a.usdc) as `0x${string}`;
 
   console.log(`chain ${chain.id}  deployer ${account.address}  fee tier ${FEE}`);
 
   const existing = await bestPool(eure, usdc);
   if (existing) {
-    console.log(`\n✓ pool already seeded: ${existing.address} (fee ${existing.fee}, liquidity ${existing.liquidity})`);
-    console.log("  nothing to do — the DEX provider can quote against this.");
-    return;
+    console.log(`\n✓ pool exists: ${existing.address} (fee ${existing.fee}, liquidity ${existing.liquidity})`);
+    if (!FIX) {
+      console.log("  --fix would ADD another full-range position, deepening it.");
+      console.log("  Depth is the whole game here: a pool holding 5 EURe prices a 1 EURe");
+      console.log("  trade 1670bps off mid, and the mid-deviation guard rightly refuses it.");
+      return;
+    }
+    console.log("  --fix given: adding another position rather than stopping.");
+  } else {
+    console.log("\n✗ no EURe/USDC pool with liquidity on this chain");
   }
-  console.log("\n✗ no EURe/USDC pool with liquidity on this chain");
 
   // --- prerequisites, reported together rather than one failure at a time ---
   const [eDec, uDec] = await Promise.all([
@@ -94,7 +130,7 @@ async function main() {
   const mid = await eurPer("USD");
   const needEure = parseUnits(String(SEED_EUR), eDec);
   const needUsdc = parseUnits((SEED_EUR * mid).toFixed(uDec), uDec);
-  const [haveEure, haveUsdc, haveGas] = await Promise.all([
+  let [haveEure, haveUsdc, haveGas] = await Promise.all([
     pub.readContract({ address: eure, abi: erc20, functionName: "balanceOf", args: [account.address] }) as Promise<bigint>,
     pub.readContract({ address: usdc, abi: erc20, functionName: "balanceOf", args: [account.address] }) as Promise<bigint>,
     pub.getBalance({ address: account.address }),
@@ -111,7 +147,33 @@ async function main() {
         `SEPA deposit to a user IBAN — there is no faucet. Fund an account, then transfer EURe to the deployer.`,
     );
   }
-  if (haveUsdc < needUsdc) gaps.push(`USDC short by ${formatUnits(needUsdc - haveUsdc, uDec)} — faucet.circle.com`);
+  /**
+   * A token we OWN is a different problem from a token we do not.
+   *
+   * addrs().usdc on a testnet deploy is our own MockToken, so a shortfall is
+   * not something to send anyone to a faucet for — we can mint it. Saying
+   * "faucet.circle.com" here sent the operator looking for a token that was
+   * never the one the app trades. Minting is honest for a fixture as long as
+   * it is stated: it is our token on our side of a pool nobody else uses.
+   */
+  const mintable = FIX ? await ownedMock(pub, usdc, account.address) : false;
+  if (haveUsdc < needUsdc && mintable) {
+    const short = needUsdc - haveUsdc;
+    console.log(`\n  minting ${formatUnits(short, uDec)} mock USDC — we own this token; it is a fixture, not liquidity`);
+    const h = await wallet.writeContract({
+      address: usdc, abi: [...mockAbi], functionName: "mint",
+      args: [account.address, short], chain, account,
+    });
+    await pub.waitForTransactionReceipt({ hash: h });
+    console.log(`  ✓ mint ${h}`);
+    haveUsdc = needUsdc;
+  }
+  if (haveUsdc < needUsdc) {
+    gaps.push(
+      `USDC short by ${formatUnits(needUsdc - haveUsdc, uDec)}. ` +
+        (mintable ? "" : `This token is not ours to mint — fund it, or re-run with --fix if it is a mock we own.`),
+    );
+  }
   if (haveGas === 0n) gaps.push("no ETH for gas");
 
   if (gaps.length) {
@@ -142,9 +204,14 @@ async function main() {
   console.log(`  ✓ ${createHash}`);
 
   for (const [t, amt, sym] of [[token0, amount0, "token0"], [token1, amount1, "token1"]] as const) {
+    // Approve MORE than amountDesired. mint() derives the liquidity, then
+    // recomputes the amounts owed for it and ROUNDS UP, so an allowance set to
+    // exactly the desired amount can come up a wei short and the position
+    // manager reverts with a bare "STF". Costs nothing: the pull is still
+    // capped at amountDesired, and this is a throwaway testnet key.
     const h = await wallet.writeContract({
       address: t as `0x${string}`, abi: [...erc20], functionName: "approve",
-      args: [POSITION_MANAGER, amt as bigint], chain, account,
+      args: [POSITION_MANAGER, ((amt as bigint) * 12n) / 10n], chain, account,
     });
     await pub.waitForTransactionReceipt({ hash: h });
     console.log(`  ✓ approve ${sym} ${h}`);
