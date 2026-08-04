@@ -622,3 +622,50 @@ export const FX = {
   // transfer is rejected and refunded (bps).
   QUOTE_BINDING_BPS: 50,
 };
+
+const boolEnv = (key: string) => process.env[key] === "1";
+
+export const PRIVACY_BUNDLE = {
+  enabled: process.env.PRIVACY_BUNDLE_ENABLED !== "0",
+  kokioLive: boolEnv("KOKIO_LIVE"),
+  mysteriumLive: boolEnv("MYSTERIUM_LIVE"),
+  minMarginBps: Number(process.env.PRIVACY_BUNDLE_MIN_MARGIN_BPS ?? 3500),
+  plans: [
+    {
+      id: "travel-shield",
+      name: "Travel Shield",
+      priceEur: 9.99,
+      estimatedCostEur: Number(process.env.PRIVACY_BUNDLE_TRAVEL_COST_EUR ?? 5.25),
+      esimGb: 3,
+      esimRegion: "regional",
+      vpnGb: 25,
+      vpnDevices: 3,
+      billingPeriod: "month",
+      positioning: "For one trip or a backup private connection.",
+    },
+    {
+      id: "global-shield",
+      name: "Global Shield",
+      priceEur: 19.99,
+      estimatedCostEur: Number(process.env.PRIVACY_BUNDLE_GLOBAL_COST_EUR ?? 10.75),
+      esimGb: 10,
+      esimRegion: "global",
+      vpnGb: 100,
+      vpnDevices: 5,
+      billingPeriod: "month",
+      positioning: "Best for regular travel and public Wi-Fi.",
+    },
+    {
+      id: "nomad-shield",
+      name: "Nomad Shield",
+      priceEur: 34.99,
+      estimatedCostEur: Number(process.env.PRIVACY_BUNDLE_NOMAD_COST_EUR ?? 19.5),
+      esimGb: 25,
+      esimRegion: "global",
+      vpnGb: 250,
+      vpnDevices: 10,
+      billingPeriod: "month",
+      positioning: "For heavy roaming without selling unlimited usage.",
+    },
+  ],
+};
