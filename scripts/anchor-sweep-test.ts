@@ -45,7 +45,8 @@ store.addTransfer({
   state: "PAYOUT_FUNDED",
   sendEur: 10,
   receiveKes: 1295,
-  txs: [{ step: "vault.debit", hash: "0xdebited" }],
+  fundingSource: "safe",
+  txs: [{ step: "safe.transfer(orchestrator)", hash: "0xdebited" }],
   pickup: {
     referenceCode: "MG123456",
     provider: "anchor:test",
