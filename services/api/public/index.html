@@ -616,12 +616,12 @@
       <div class="card" id="crypto-card">
         <h2>Crypto in</h2>
         <div class="detail" style="border-top:none; margin-top:0; padding-top:0">
-          <span class="k">AUTO-CONVERT USDC → EURe</span>
+          <span class="k">PAYMENT PAGE AUTO-SETTLEMENT</span>
           <button id="btn-autoconvert" class="togglebtn">off</button>
         </div>
         <div class="hint">
-          Send USDC to your smart account and it becomes euro balance you can spend on any
-          rail. Off by default — while it is off your USDC stays exactly where it lands.
+          Only payments sent to your payment page address are settled automatically. Normal transfers
+          to your smart account stay where they land.
         </div>
         <div id="crypto-list"></div>
         <div class="error hidden" id="crypto-err"></div>
@@ -636,16 +636,25 @@
           </div>
           <button id="btn-handle">Claim</button>
         </div>
+        <label>Settle incoming payments as</label>
+        <select id="settlement-asset">
+          <option value="EURE">EUR(e)</option>
+          <option value="USDC">USDC</option>
+        </select>
         <div class="detail" id="paylink-row" style="display:none">
           <span class="k">YOUR LINK</span>
           <span class="v" id="paylink">—</span>
           <button class="copybtn" data-copy="paylink">copy</button>
         </div>
+        <div class="detail" id="payaddr-row" style="display:none">
+          <span class="k">PAGE ADDRESS</span>
+          <span class="v" id="payaddr">—</span>
+          <button class="copybtn" data-copy="payaddr">copy</button>
+        </div>
         <div class="hint">
-          A page anyone can open to pay you in USDC — no account needed on their side. With
-          auto-convert on it lands as euro balance. The address on it is your existing one and is
-          <strong>public</strong>: handles are guessable, so treat it as visible to anyone, and every
-          payment shows up at the same address.
+          A page anyone can open to pay you in USDC today — no account needed on their side. It uses
+          a page-specific public address, so auto-settlement applies to page payments, not every
+          transfer into your smart account.
         </div>
         <div class="error hidden" id="handle-err"></div>
       </div>
@@ -905,8 +914,8 @@ function renderUser(u) {
   const plannedSafe = needsPasskeySafeSetup(u) ? u.passkeySafe?.address : null;
   $("address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — finish smart wallet` : u.address;
   document.querySelector('[data-copy="address"]')?.classList.toggle("hidden", !!plannedSafe);
-  renderAutoConvert(u.autoConvert);
-  renderHandle(u.handle);
+  renderAutoConvert(u.paymentPage?.autoConvert);
+  renderHandle(u.paymentPage);
   const chip = $("fund-chip");
   if (!kycApproved(u)) {
     $("iban").textContent = kycCopy(u.kycStatus, u)[2];
@@ -1566,13 +1575,21 @@ resumeSession();
 };
 
 /* ---------- payment page ---------- */
-function renderHandle(handle) {
+function renderHandle(page) {
   const row = $("paylink-row");
-  if (!handle) { row.style.display = "none"; return; }
-  $("handle-input").value = handle;
+  const addrRow = $("payaddr-row");
+  if (!page?.handle) {
+    row.style.display = "none";
+    addrRow.style.display = "none";
+    return;
+  }
+  $("handle-input").value = page.handle;
+  $("settlement-asset").value = page.settlementAsset || "EURE";
   // Shown as an absolute URL because the whole point is pasting it elsewhere.
-  $("paylink").textContent = `${location.origin}/pay/${handle}`;
+  $("paylink").textContent = `${location.origin}/pay/${page.handle}`;
+  $("payaddr").textContent = page.depositAddress || "—";
   row.style.display = "flex";
+  addrRow.style.display = "flex";
   $("btn-handle").textContent = "Update";
 }
 
@@ -1580,9 +1597,11 @@ $("btn-handle").onclick = async () => {
   clearErr("handle-err");
   try {
     const handle = $("handle-input").value.trim().toLowerCase();
-    const r = await api(`/api/users/${user.id}/handle`, { handle });
-    user.handle = r.handle;
-    renderHandle(r.handle);
+    const settlementAsset = $("settlement-asset").value;
+    const r = await api(`/api/users/${user.id}/handle`, { handle, settlementAsset });
+    user.paymentPage = r.paymentPage;
+    renderHandle(r.paymentPage);
+    renderAutoConvert(r.paymentPage?.autoConvert);
   } catch (e) { showErr("handle-err", e); }
 };
 
@@ -1603,7 +1622,7 @@ function renderCryptoDeposits(deposits) {
     .map((d) => {
       const ok = d.state === "CONVERTED";
       const right = ok
-        ? `€${fmt(d.creditedEur ?? 0)}`
+        ? (d.settlementAsset === "USDC" ? `${fmt(d.creditedUsdc ?? d.amountUsdc, 2)} USDC` : `€${fmt(d.creditedEur ?? 0)}`)
         : `<span title="${esc(d.reason ?? "")}">not converted</span>`;
       return `<div class="cdep">
         <span class="amt">${fmt(d.amountUsdc, 2)} USDC</span>
@@ -1618,6 +1637,7 @@ async function refreshCryptoDeposits() {
   try {
     const r = await api(`/api/users/${user.id}/crypto-deposits`);
     renderAutoConvert(r.autoConvert);
+    if (r.settlementAsset) $("settlement-asset").value = r.settlementAsset;
     renderCryptoDeposits(r.deposits);
   } catch { /* the panel is informational; a failure here must not blank the app */ }
 }
