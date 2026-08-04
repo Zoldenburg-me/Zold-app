@@ -801,15 +801,15 @@
   .m-card .brandline { display: flex; justify-content: space-between; align-items: flex-start; font-size: 16px; font-weight: 500; letter-spacing: .5px; }
   .m-card .pan { margin-top: auto; font-family: var(--m-mono); font-size: 17px; letter-spacing: 3px; color: var(--m-dim); }
   .m-card .foot { display: flex; justify-content: space-between; margin-top: 12px; font-size: 12px; letter-spacing: .5px; color: var(--m-dim); }
-  .m-perks { margin-top: 16px; border-radius: 10px; background: var(--m-surface); overflow: hidden; }
+  .m-perks { margin-top: 16px; border-radius: 12px; background: var(--m-surface); border: 1px solid var(--m-line); overflow: hidden; }
   .m-perk {
-    display: flex; align-items: center; gap: 16px; padding: 14px 16px;
-    border-top: 1px solid var(--m-line); min-height: 72px;
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border-top: 1px solid var(--m-line); min-height: 62px;
   }
   .m-perk:first-child { border-top: 0; }
-  .m-perk .material-symbols-rounded { font-size: 24px; color: var(--m-pink); flex: none; }
-  .m-perk .t { font-size: 16px; letter-spacing: .15px; }
-  .m-perk .d { font-size: 14px; color: var(--m-dim); letter-spacing: .25px; margin-top: 2px; }
+  .m-perk .material-symbols-rounded { font-size: 19px; color: var(--m-pink); flex: none; }
+  .m-perk .t { font-size: 13.5px; font-weight: 500; }
+  .m-perk .d { font-size: 11px; color: var(--m-faint); margin-top: 1px; }
   #dashboard.m-on[data-msub="plus"] #m-plus-screen { display: block; }
 
   /* ---------- send flow ---------- */
@@ -874,9 +874,13 @@
   }
   .m-field input:focus { box-shadow: none; }
 
-  /* Timeline. Done nodes fill pink; the active one pulses. */
+  /* Timeline. Done nodes fill pink; the active one pulses.
+     The node column is .tl, NOT .rail: the mobile shell hides .rail (it is the
+     desktop layout's right-hand column) with a selector that outranks anything
+     scoped to .m-step, so a .rail here rendered every timeline with no nodes
+     and no connecting line at all. */
   .m-step { display: flex; gap: 16px; transition: opacity .4s; }
-  .m-step .rail { display: flex; flex-direction: column; align-items: center; }
+  .m-step .tl { display: flex; flex-direction: column; align-items: center; }
   .m-step .node {
     width: 28px; height: 28px; flex: none; border-radius: 50%;
     display: grid; place-items: center; background: var(--m-raised); color: var(--m-faint);
@@ -895,49 +899,60 @@
   .m-ref .code { font-size: 32px; font-weight: 400; letter-spacing: 6px; margin: 10px 0 4px; font-variant-numeric: tabular-nums; }
 
   /* ---------- activity + profile ----------
-     These follow the handoff's markup for these two screens, which uses larger
-     type and round avatars than the Noir home does. That inconsistency is in
-     the design file itself, not introduced here — see the note in the commit. */
+     Converted to the README's tokens (Aug 2026). The Noir file draws these
+     screens with 40-56px round avatars and 16/14px M3 type, contradicting its
+     OWN written spec — "nothing above 12px, 50% only for status dots" — and the
+     home and send screens built from that spec. The README wins, so the app has
+     one scale rather than two. Activity rows are now literally the dashboard's
+     .m-row: same component, so the two lists cannot drift apart again. */
   #dashboard.m-on[data-msub="activity"] #m-activity-screen,
+  #dashboard.m-on[data-msub="detail"] #m-detail-screen,
   #dashboard.m-on[data-msub="profile"] #m-profile-screen { display: block; }
 
-  .m-title { display: flex; align-items: flex-end; height: 112px; padding-bottom: 20px; font-size: 32px; font-weight: 400; }
-  .m-filters { display: flex; gap: 8px; margin-bottom: 8px; overflow-x: auto; padding-bottom: 4px; }
+  /* ---------- transaction detail ---------- */
+  .m-dethead { text-align: center; padding: 8px 0 4px; }
+  .m-dethead .amt { font: 600 42px/1 var(--m-display); letter-spacing: -.03em; }
+  .m-dethead .who { font-size: 12px; color: var(--m-dim); margin-top: 10px; }
+  .m-dethead .m-tag { display: inline-block; margin-top: 14px; }
+  /* Detail rows are label-left / value-right, per the handoff. The stacked
+     .m-detrow above is for the funding screens, where the value is an IBAN or
+     an address that needs the full width. */
+  .m-detrow.kv { justify-content: space-between; align-items: baseline; gap: 16px; min-height: 0; padding: 13px 14px; }
+  .m-detrow.kv .m-rowk { flex: none; }
+  .m-detrow.kv .m-rowv { margin-top: 0; text-align: right; min-width: 0; word-break: break-all; }
+
+  .m-title { display: flex; align-items: flex-end; height: 112px; padding-bottom: 20px; font-size: 32px; font-weight: 400; letter-spacing: -.01em; }
+  .m-filters { display: flex; gap: 8px; margin-bottom: 4px; overflow-x: auto; padding-bottom: 4px; }
   .m-filters button {
-    flex: none; display: flex; align-items: center; gap: 6px; padding: 0 16px; min-height: 32px;
-    border-radius: 8px; font-size: 14px; font-weight: 500; letter-spacing: .1px; cursor: pointer;
-    background: transparent; border: 1px solid var(--m-line-strong); color: var(--m-dim);
+    flex: none; display: flex; align-items: center; gap: 5px; padding: 0 12px; min-height: 32px;
+    border-radius: 8px; font: 500 11.5px Inter, sans-serif; letter-spacing: .01em; cursor: pointer;
+    background: transparent; border: 1px solid var(--m-line); color: var(--m-dim);
   }
+  .m-filters button:hover { border-color: var(--m-line-strong); color: #fff; filter: none; }
   .m-filters button.on { background: var(--m-pink-tint); border-color: var(--m-pink-border); color: var(--m-pink-soft); }
-  .m-filters .material-symbols-rounded { font-size: 18px; }
+  .m-filters .material-symbols-rounded { font-size: 15px; }
 
-  .m-txrow {
-    width: 100%; display: flex; align-items: center; gap: 16px; text-align: left;
-    background: transparent; border: 0; padding: 12px 4px; color: #fff; cursor: pointer;
-    min-height: 72px; font-family: inherit;
-  }
-  .m-txrow:hover { background: rgba(255, 255, 255, .035); filter: none; }
-  .m-txrow .av {
-    width: 40px; height: 40px; flex: none; border-radius: 50%; background: var(--m-raised);
-    display: grid; place-items: center; font-size: 12px; font-weight: 500; color: var(--m-dim);
-  }
-  .m-txrow .n { font-size: 16px; letter-spacing: .15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .m-txrow .s { font-size: 14px; color: var(--m-dim); letter-spacing: .25px; }
-  .m-txrow .a { font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
-  .m-txrow .st { font-size: 11px; font-weight: 500; letter-spacing: .5px; }
-
-  .m-idcard { display: flex; align-items: center; gap: 16px; padding: 16px; border-radius: 10px; background: var(--m-surface); }
+  .m-idcard { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 12px; background: var(--m-surface); border: 1px solid var(--m-line); }
   .m-idcard .av {
-    width: 56px; height: 56px; border-radius: 50%; background: var(--m-pink-tint);
-    display: grid; place-items: center; color: var(--m-pink-soft); font-size: 20px; font-weight: 500;
+    width: 44px; height: 44px; flex: none; border-radius: 10px; background: var(--m-pink-tint);
+    border: 1px solid var(--m-pink-border); display: grid; place-items: center;
+    color: var(--m-pink); font: 600 15px var(--m-display); letter-spacing: .04em;
   }
-  .m-seclabel { font-size: 14px; font-weight: 500; color: var(--m-pink); letter-spacing: .1px; margin: 24px 0 8px; }
+  .m-idcard .n { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+  .m-idcard .e { font-size: 11.5px; color: var(--m-dim); margin-top: 2px; }
+  .m-seclabel {
+    font: 500 9.5px var(--m-mono); letter-spacing: .16em; text-transform: uppercase;
+    color: var(--m-faint); margin: 22px 0 8px;
+  }
   .m-secrow {
-    display: flex; align-items: center; gap: 16px; padding: 14px 16px;
-    border-top: 1px solid var(--m-line); min-height: 72px;
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border-top: 1px solid var(--m-line); min-height: 62px;
   }
   .m-secrow:first-child { border-top: 0; }
-  .m-secrow .material-symbols-rounded { font-size: 24px; color: var(--m-pink); flex: none; }
+  .m-secrow .material-symbols-rounded { font-size: 19px; color: var(--m-pink); flex: none; }
+  .m-secrow .t { font-size: 13.5px; font-weight: 500; }
+  .m-secrow .d { font-size: 11px; color: var(--m-faint); margin-top: 1px; }
+  .m-secrow .st { font: 500 9.5px var(--m-mono); letter-spacing: .1em; text-transform: uppercase; flex: none; }
 
   /* Each designed sub-screen is its own block; data-msub picks one. */
   .m-screen { display: none; }
@@ -955,33 +970,42 @@
   .m-h1 { font-size: 32px; font-weight: 400; letter-spacing: -.01em; }
   .m-lede { font-size: 16px; color: var(--m-dim); margin-top: 10px; letter-spacing: .5px; line-height: 1.5; }
 
-  /* Option row — the Add funds list. */
+  /* Option row — the Add funds list, the destination list, the Plus row.
+     On the README's scale, like every other list in the app: it used to be
+     16/14px M3 type, which sat a size above the rows it appears beside. */
   .m-optrow {
-    width: 100%; text-align: left; display: flex; gap: 16px; align-items: center;
-    padding: 20px 16px; border-radius: 10px; background: var(--m-surface); border: 0;
-    color: #fff; cursor: pointer; min-height: 88px; font-family: inherit;
+    width: 100%; text-align: left; display: flex; gap: 12px; align-items: center;
+    padding: 15px 14px; border-radius: 10px; background: var(--m-surface);
+    border: 1px solid var(--m-line);
+    color: #fff; cursor: pointer; min-height: 72px; font-family: inherit;
   }
-  .m-optrow:hover { background: var(--m-raised); filter: none; }
-  .m-optrow.off { background: transparent; border: 1px solid var(--m-line); opacity: .6; cursor: default; }
-  .m-optrow.off:hover { background: transparent; }
-  .m-optrow .ic { font-size: 24px; color: var(--m-pink); flex: none; }
+  .m-optrow:hover { background: var(--m-raised); border-color: var(--m-line-strong); filter: none; }
+  .m-optrow.off { background: transparent; opacity: .6; cursor: default; }
+  .m-optrow.off:hover { background: transparent; border-color: var(--m-line); }
+  .m-optrow .ic { font-size: 20px; color: var(--m-pink); flex: none; }
   .m-optrow .tx { flex: 1; min-width: 0; }
-  .m-optrow .t { display: block; font-size: 16px; font-weight: 500; letter-spacing: .15px; }
-  .m-optrow .d { display: block; font-size: 14px; color: var(--m-dim); letter-spacing: .25px; margin-top: 2px; }
-  .m-optrow .ch { font-size: 20px; color: var(--m-dim); flex: none; }
+  .m-optrow .t { display: block; font-size: 13.5px; font-weight: 600; }
+  .m-optrow .d { display: block; font-size: 11px; color: var(--m-faint); margin-top: 2px; }
+  .m-optrow .ch { font-size: 18px; color: var(--m-faint); flex: none; }
+  /* Destination/asset square on the list rows, same 34px tile as .m-row .cc. */
+  .m-optrow .cc {
+    width: 34px; height: 34px; flex: none; border-radius: 9px; background: var(--m-sunken);
+    border: 1px solid var(--m-line); display: grid; place-items: center;
+    font: 500 10px var(--m-mono); letter-spacing: .06em; color: var(--m-dim);
+  }
 
   /* Copyable detail rows. */
-  .m-rows { margin-top: 20px; border-radius: 10px; background: var(--m-surface); overflow: hidden; }
+  .m-rows { margin-top: 20px; border-radius: 12px; background: var(--m-surface); border: 1px solid var(--m-line); overflow: hidden; }
   .m-detrow {
-    display: flex; align-items: center; gap: 12px; padding: 14px 16px;
-    border-top: 1px solid var(--m-line); min-height: 72px;
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border-top: 1px solid var(--m-line); min-height: 62px;
   }
   .m-detrow:first-child { border-top: 0; }
-  .m-rowk { font-size: 12px; letter-spacing: .5px; text-transform: uppercase; color: var(--m-dim); }
-  .m-rowv { font-size: 15px; font-family: var(--m-mono); margin-top: 3px; word-break: break-all; }
+  .m-rowk { font: 500 9.5px var(--m-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--m-faint); }
+  .m-rowv { font-size: 13px; font-family: var(--m-mono); margin-top: 4px; word-break: break-all; }
   .m-copybtn {
-    flex: none; min-height: 40px; padding: 0 16px; border-radius: 10px; background: transparent;
-    border: 1px solid var(--m-line-strong); color: var(--m-pink); font-size: 14px; font-weight: 500; cursor: pointer;
+    flex: none; min-height: 34px; padding: 0 13px; border-radius: 8px; background: transparent;
+    border: 1px solid var(--m-line-strong); color: var(--m-pink); font: 600 12px Inter, sans-serif; cursor: pointer;
   }
   .m-copybtn:hover { background: rgba(255, 45, 139, .10); filter: none; }
 
@@ -1526,16 +1550,39 @@
         <div id="m-tx-list"></div>
       </div>
 
+      <!-- ================= Transaction detail =================
+           Every field is read off the transfer itself. Rows the transfer does
+           not carry (a payer reference, a MoneyGram code, a refund) are absent
+           rather than blank, so a row on this screen always means something
+           happened. -->
+      <div class="m-screen" id="m-detail-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="activity"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-dethead">
+          <div class="amt m-fig" id="m-det-amount">—</div>
+          <div class="who" id="m-det-who">—</div>
+          <span class="m-tag" id="m-det-status">—</span>
+        </div>
+        <div class="m-rows" id="m-det-rows"></div>
+        <div class="m-ref hidden" id="m-det-ref">
+          <div style="font:500 9.5px var(--m-mono);letter-spacing:.14em;text-transform:uppercase;opacity:.85">MoneyGram reference</div>
+          <div class="code" id="m-det-code">—</div>
+          <div style="font-size:11px;opacity:.85">Collectable with photo ID at any agent</div>
+        </div>
+        <div class="m-seclabel">Settlement</div>
+        <div id="m-det-timeline"></div>
+        <div class="m-note warn hidden" id="m-det-error"></div>
+      </div>
+
       <!-- ================= Profile ================= -->
       <div class="m-screen" id="m-profile-screen">
         <div class="m-title">Profile</div>
         <div class="m-idcard">
           <div class="av" id="m-pf-initials">—</div>
           <div style="flex:1;min-width:0">
-            <div style="font-size:16px;font-weight:500;letter-spacing:.15px" id="m-pf-name">—</div>
-            <div style="font-size:14px;color:var(--m-dim);letter-spacing:.25px" id="m-pf-email">—</div>
+            <div class="n" id="m-pf-name">—</div>
+            <div class="e" id="m-pf-email">—</div>
           </div>
-          <span class="m-chip" id="m-pf-kyc">—</span>
+          <span class="m-tag" id="m-pf-kyc">—</span>
         </div>
         <button class="m-optrow" id="m-pf-plus" style="margin-top:8px">
           <span class="material-symbols-rounded ic">stars</span>
@@ -2063,36 +2110,56 @@ function renderMobile(u = user) {
     : cheapest ? `eSIM and VPN, live today from €${cheapest.priceEur}` : "eSIM and VPN, live today";
 }
 
-/** Recent activity, newest first, in the design's row shape. */
+/**
+ * One transfer as an activity row.
+ *
+ * The dashboard's "recent" list and the Activity screen render the SAME
+ * component. They used to be two functions drawing two different row shapes —
+ * the design file draws them differently — and the app showed one transfer two
+ * ways depending on which screen you were on.
+ */
+function mTxStatus(t) {
+  const inFlight = !["PAID", "REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
+  return {
+    inFlight,
+    label: t.state === "PAID" ? "PAID" : t.state === "REFUNDED" ? "REFUNDED"
+      : t.state === "FAILED" ? "FAILED" : t.state === "MANUAL_REVIEW" ? "IN REVIEW" : "IN FLIGHT",
+    colour: inFlight ? "var(--m-pink)" : t.state === "PAID" ? "var(--m-faint)" : "var(--m-amber)",
+  };
+}
+
+function mTxRow(t) {
+  const sepa = t.rail === "sepa";
+  const st = mTxStatus(t);
+  const when = new Date(t.createdAt).toLocaleDateString("en", { day: "numeric", month: "short" });
+  const recv = sepa ? `€${fmt(t.receiveEur ?? 0)}` : `${fmt(t.receiveKes ?? 0)} KES`;
+  return `<button class="m-row" data-mtx="${esc(t.id)}">
+    <span class="cc">${sepa ? "EU" : "KE"}</span>
+    <span style="flex:1;min-width:0">
+      <span class="who" style="display:block">${esc(t.recipientName || "—")}</span>
+      <span class="sub" style="display:block">${sepa ? "SEPA" : "MoneyGram cash"} · ${esc(when)} · ${esc(recv)}</span>
+    </span>
+    <span style="text-align:right;flex:none">
+      <span class="amt m-fig" style="display:block">−€${fmt(t.sendEur)}</span>
+      <span class="st" style="display:block;color:${st.colour}">${st.label}</span>
+    </span>
+  </button>`;
+}
+
+/** Wire every row in a container to open the transaction detail screen. */
+function bindTxRows(el) {
+  el.querySelectorAll("[data-mtx]").forEach((b) => {
+    b.onclick = () => openTransferDetail(b.dataset.mtx);
+  });
+}
+
+/** Recent activity on the dashboard, newest first. */
 function renderMobileActivity() {
   const el = $("m-recent");
   if (!el) return;
   if (!hist.length) { el.innerHTML = '<div class="m-empty">No transfers yet</div>'; return; }
-  el.innerHTML = hist.slice(0, 5).map((t) => {
-    const sepa = t.rail === "sepa";
-    const cc = sepa ? "EU" : "KE";
-    const out = true; // every transfer this app creates is outgoing
-    const amount = `−€${fmt(t.sendEur)}`;
-    const inFlight = !["PAID", "REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
-    const status = t.state === "PAID" ? "PAID" : t.state === "REFUNDED" ? "REFUNDED"
-      : t.state === "FAILED" ? "FAILED" : t.state === "MANUAL_REVIEW" ? "IN REVIEW" : "IN FLIGHT";
-    const stColour = inFlight ? "var(--m-pink)" : t.state === "PAID" ? "var(--m-faint)" : "var(--m-amber)";
-    const when = new Date(t.createdAt).toLocaleDateString("en", { day: "numeric", month: "short" });
-    return `<button class="m-row" data-mtx="${esc(t.id)}">
-      <span class="cc">${cc}</span>
-      <span style="flex:1;min-width:0">
-        <span class="who" style="display:block">${esc(t.recipientName || "—")}</span>
-        <span class="sub" style="display:block">${sepa ? "SEPA" : "MoneyGram cash"} · ${esc(when)}</span>
-      </span>
-      <span style="text-align:right;flex:none">
-        <span class="amt m-fig" style="display:block;color:${out ? "#fff" : "var(--m-mint)"}">${amount}</span>
-        <span class="st" style="display:block;color:${stColour}">${status}</span>
-      </span>
-    </button>`;
-  }).join("");
-  el.querySelectorAll("[data-mtx]").forEach((b) => {
-    b.onclick = () => { mobileNav("activity"); };
-  });
+  el.innerHTML = hist.slice(0, 5).map(mTxRow).join("");
+  bindTxRows(el);
 }
 
 /** Routing. `msub` names the sub-screen; tab switches clear it. */
@@ -2101,19 +2168,20 @@ function mobileNav(target) {
   // "send" enters the flow at its first screen.
   const sub = { add: "add", bank: "bank", crypto: "crypto", send: "country", country: "country",
     method: "method", amount: "amount", recipient: "recipient", progress: "progress",
-    plus: "plus", bundle: "bundle", activity: "activity", profile: "profile" }[target];
+    plus: "plus", bundle: "bundle", activity: "activity", detail: "detail", profile: "profile" }[target];
   shell.dataset.msub = sub || "home";
   if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
   else switchView("dashboard");
   // bank/crypto are inside Add, so the Add tab stays lit while they are open.
   const navFor = { add: "add", bank: "add", crypto: "add", send: "send", country: "send", method: "send",
     amount: "send", recipient: "send", progress: "send", plus: "home", bundle: "home",
-    home: "home", activity: "activity", profile: "profile" }[target];
+    home: "home", activity: "activity", detail: "activity", profile: "profile" }[target];
   document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
   if (sub === "bank") renderBankScreen();
   if (sub === "crypto") renderCryptoScreen();
   if (sub === "country") { $("m-country-q").value = ""; renderCountryList(); }
   if (sub === "activity") renderActivityScreen();
+  if (sub === "detail") renderDetailScreen();
   if (sub === "profile") renderProfileScreen();
   $("dashboard").querySelector(".main").scrollTop = 0;
 }
@@ -2194,11 +2262,11 @@ function renderCountryList(filter = "") {
   const list = M_DESTINATIONS.filter((d) => !q || d.name.toLowerCase().includes(q) || d.cur.toLowerCase().includes(q) || d.cc.toLowerCase().includes(q));
   $("m-country-list").innerHTML = list.length
     ? list.map((d) => `<button class="m-optrow" data-mdest="${d.cc}">
-        <span class="cc" style="width:40px;height:40px;flex:none;border-radius:10px;background:var(--m-raised);display:grid;place-items:center;font:500 12px var(--m-mono);color:var(--m-dim)">${d.cc}</span>
+        <span class="cc">${d.cc}</span>
         <span class="tx"><span class="t">${esc(d.name)}</span><span class="d">${esc(d.sub)}</span></span>
         <span class="material-symbols-rounded ch">chevron_right</span>
       </button>`).join("")
-    : '<div class="m-lede" style="font-size:14px;text-align:center;padding:32px 0">No match</div>';
+    : '<div class="m-empty" style="text-align:center;padding:32px 0">No match</div>';
   $("m-country-list").querySelectorAll("[data-mdest]").forEach((b) => {
     b.onclick = () => pickDestination(M_DESTINATIONS.find((d) => d.cc === b.dataset.mdest));
   });
@@ -2213,7 +2281,7 @@ function pickDestination(d) {
   $("m-method-list").innerHTML = `<button class="m-optrow" id="m-pick-method">
       <span class="material-symbols-rounded ic">${m.icon}</span>
       <span class="tx"><span class="t">${esc(m.title)}</span><span class="d">${esc(m.sub)}</span></span>
-      <span style="text-align:right;flex:none"><span style="display:block;font-size:14px;font-weight:500">${esc(d.eta)}</span><span style="display:block;font-size:12px;color:var(--m-dim)">fee with quote</span></span>
+      <span style="text-align:right;flex:none"><span style="display:block;font-size:12px;font-weight:600">${esc(d.eta)}</span><span style="display:block;font-size:10px;color:var(--m-faint);margin-top:2px">fee with quote</span></span>
     </button>`;
   $("m-pick-method").onclick = () => {
     $("m-amount-kick").textContent = `${m.title} · ${d.name}`;
@@ -2348,10 +2416,17 @@ async function submitMobileSend() {
   }
 }
 
-/** Timeline driven by the transfer's real state, not a timer. */
-function renderProgress(t) {
-  const d = mSend.dest || { rail: t.rail, name: t.rail === "sepa" ? "Europe" : "Kenya", cur: t.rail === "sepa" ? "EUR" : "KES" };
-  const cash = d.rail === "cash";
+/**
+ * The settlement timeline, from the transfer's real state.
+ *
+ * Shared by the send progress screen and the transaction detail screen so a
+ * transfer tells the same story while it is moving and after it has landed.
+ * The handoff draws detail with four steps and progress with five; showing a
+ * user a different number of steps for the same transfer depending on which
+ * screen they opened would be the confusing half of that, so both use five.
+ */
+function mTimeline(t) {
+  const cash = t.rail === "cash";
   const steps = [
     { t: "Quote locked", d: `quote ${String(t.quoteId || "").slice(0, 8)}` },
     { t: "Debited from your safe", d: t.txs?.find((x) => x.step.includes("debit") || x.step.includes("safe.transfer"))?.hash?.slice(0, 18) || "waiting" },
@@ -2362,17 +2437,26 @@ function renderProgress(t) {
   const reached = { CREATED: 1, DEBITED: 2, SWAPPED: 3, BRIDGED: 3, PAYOUT_DETAILS_PENDING: 3,
     PAYOUT_FUNDING_PENDING: 4, PAYOUT_FUNDED: 4, PAYOUT_READY: 4, PAYOUT_SUBMITTED: 4, PAID: 5 }[t.state] ?? 1;
   const stalled = ["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state);
-  $("m-prog-kicker").textContent = stalled ? t.state.replace("_", " ") : t.state === "PAID" ? "Sent" : "Sending";
-  $("m-prog-amount").textContent = cash ? `${fmt(t.receiveKes)} ${d.cur}` : `€${fmt(t.receiveEur ?? t.sendEur)}`;
-  $("m-prog-to").textContent = `to ${mSend.rec?.recipientName || t.recipientName || "—"} · ${d.name}`;
-  $("m-timeline").innerHTML = steps.map((s, i) => {
+  const html = steps.map((s, i) => {
     const cls = stalled && i >= reached ? "" : i < reached ? "done" : i === reached ? "active" : "";
     const icon = i < reached ? "check" : stalled && i === reached ? "priority_high" : "more_horiz";
     return `<div class="m-step ${cls}" style="opacity:${i <= reached ? 1 : .45}">
-      <div class="rail"><div class="node"><span class="material-symbols-rounded" style="font-size:18px">${icon}</span></div><div class="line"></div></div>
+      <div class="tl"><div class="node"><span class="material-symbols-rounded" style="font-size:18px">${icon}</span></div><div class="line"></div></div>
       <div class="body"><div class="t">${esc(s.t)}</div><div class="d">${esc(String(s.d))}</div></div>
     </div>`;
   }).join("");
+  return { html, stalled, reached };
+}
+
+/** Timeline driven by the transfer's real state, not a timer. */
+function renderProgress(t) {
+  const d = mSend.dest || { rail: t.rail, name: t.rail === "sepa" ? "Europe" : "Kenya", cur: t.rail === "sepa" ? "EUR" : "KES" };
+  const cash = d.rail === "cash";
+  const { html, stalled } = mTimeline(t);
+  $("m-prog-kicker").textContent = stalled ? t.state.replace("_", " ") : t.state === "PAID" ? "Sent" : "Sending";
+  $("m-prog-amount").textContent = cash ? `${fmt(t.receiveKes)} ${d.cur}` : `€${fmt(t.receiveEur ?? t.sendEur)}`;
+  $("m-prog-to").textContent = `to ${mSend.rec?.recipientName || t.recipientName || "—"} · ${d.name}`;
+  $("m-timeline").innerHTML = html;
   const ref = t.pickup?.referenceCode;
   $("m-prog-ref").classList.toggle("hidden", !(cash && ref));
   if (ref) $("m-prog-code").textContent = ref;
@@ -2380,36 +2464,87 @@ function renderProgress(t) {
   $("m-prog-done").classList.toggle("hidden", !(t.state === "PAID" || stalled || t.pickup));
 }
 
+/* ---------- transaction detail ---------- */
+let mDetailId = null;
+
+function openTransferDetail(id) {
+  mDetailId = id;
+  mobileNav("detail");
+}
+
+/**
+ * One settled or in-flight transfer, in full.
+ *
+ * Reads the copy of the transfer already in `hist`, then re-reads it from the
+ * API so an open detail screen is not a snapshot from whenever the list was
+ * last loaded. A transfer that has since disappeared says so instead of
+ * showing the stale row.
+ */
+async function renderDetailScreen() {
+  const t = hist.find((x) => x.id === mDetailId);
+  if (!t) {
+    $("m-det-rows").innerHTML = '<div class="m-detrow"><div class="m-rowv">This transfer is no longer on your account.</div></div>';
+    $("m-det-timeline").innerHTML = "";
+    return;
+  }
+  paintDetail(t);
+  try {
+    const fresh = await api(`/api/transfers/${t.id}`);
+    if (mDetailId !== fresh.id) return; // the user moved on while we were loading
+    updateHistory(fresh);
+    paintDetail(fresh);
+  } catch {
+    /* keep the row we already have — it is the last state the API gave us */
+  }
+}
+
+function paintDetail(t) {
+  const sepa = t.rail === "sepa";
+  const st = mTxStatus(t);
+  const dest = sepa ? "Europe" : "Kenya";
+  $("m-det-amount").textContent = `−€${fmt(t.sendEur)}`;
+  $("m-det-who").textContent = `to ${t.recipientName || "—"} · ${dest}`;
+  const tag = $("m-det-status");
+  tag.textContent = st.label;
+  tag.className = `m-tag${t.state === "PAID" ? " on" : ""}`;
+  if (t.state !== "PAID") tag.style.color = st.colour;
+  else tag.style.color = "";
+
+  const mask = (v) => (v && v.length > 12 ? `${v.slice(0, 4)} ···· ${v.slice(-4)}` : v);
+  const rows = [
+    ["Rail", sepa ? "SEPA transfer" : "MoneyGram cash pickup"],
+    ["Destination", dest],
+    ["They receive", sepa ? `€${fmt(t.receiveEur ?? 0)}` : `${fmt(t.receiveKes ?? 0)} KES`],
+    ["Recipient", t.recipientName || "—"],
+    [sepa ? "IBAN" : "Mobile", mask(sepa ? t.recipientIban : t.recipientPhone) || "—"],
+    ...(t.reference ? [["Your reference", t.reference]] : []),
+    ...(t.refund ? [["Refunded", `€${fmt(t.refund.amountEur)} · ${t.refund.deductions}`]] : []),
+    ["Sent", new Date(t.createdAt).toLocaleString("en", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })],
+    ["Transfer ID", t.id],
+  ];
+  $("m-det-rows").innerHTML = rows.map(([k, v]) => `
+    <div class="m-detrow kv">
+      <div class="m-rowk">${esc(k)}</div>
+      <div class="m-rowv">${esc(String(v))}</div>
+    </div>`).join("");
+
+  const ref = t.pickup?.referenceCode;
+  $("m-det-ref").classList.toggle("hidden", !(!sepa && ref));
+  if (ref) $("m-det-code").textContent = ref;
+  $("m-det-timeline").innerHTML = mTimeline(t).html;
+  const err = $("m-det-error");
+  err.classList.toggle("hidden", !t.error);
+  if (t.error) err.innerHTML = `<span class="material-symbols-rounded" style="font-size:20px;flex:none">warning</span><div>${esc(t.error)}</div>`;
+}
+
 /* ---------- Activity ---------- */
 let mFilter = "all";
-
-/** One transfer, in the design's activity-row shape. */
-function mTxRow(t) {
-  const sepa = t.rail === "sepa";
-  const inFlight = !["PAID", "REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
-  const status = t.state === "PAID" ? "PAID" : t.state === "REFUNDED" ? "REFUNDED"
-    : t.state === "FAILED" ? "FAILED" : t.state === "MANUAL_REVIEW" ? "IN REVIEW" : "IN FLIGHT";
-  const stColour = inFlight ? "var(--m-pink)" : t.state === "PAID" ? "var(--m-dim)" : "var(--m-amber)";
-  const when = new Date(t.createdAt).toLocaleDateString("en", { day: "numeric", month: "short" });
-  const recv = sepa ? `€${fmt(t.receiveEur ?? 0)}` : `${fmt(t.receiveKes ?? 0)} KES`;
-  return `<button class="m-txrow" data-mtxid="${esc(t.id)}">
-    <span class="av">${sepa ? "EU" : "KE"}</span>
-    <span style="flex:1;min-width:0">
-      <span class="n" style="display:block">${esc(t.recipientName || "—")}</span>
-      <span class="s" style="display:block">${sepa ? "SEPA" : "MoneyGram cash"} · ${esc(when)} · ${esc(recv)}</span>
-    </span>
-    <span style="text-align:right;flex:none">
-      <span class="a" style="display:block">−€${fmt(t.sendEur)}</span>
-      <span class="st" style="display:block;color:${stColour}">${status}</span>
-    </span>
-  </button>`;
-}
 
 function renderActivityScreen() {
   const list = hist.filter((t) => mFilter === "all" || t.rail === mFilter);
   $("m-tx-list").innerHTML = list.length
     ? list.map(mTxRow).join("")
-    : '<div class="m-lede" style="font-size:14px;padding:32px 0;text-align:center">Nothing here yet</div>';
+    : '<div class="m-empty" style="text-align:center;padding:32px 0">Nothing here yet</div>';
   document.querySelectorAll("#m-filters button").forEach((b) => {
     const on = b.dataset.mfilter === mFilter;
     b.classList.toggle("on", on);
@@ -2418,11 +2553,7 @@ function renderActivityScreen() {
     if (on && !tick) b.insertAdjacentHTML("afterbegin", '<span class="material-symbols-rounded">check</span>');
     if (!on && tick) tick.remove();
   });
-  // Tapping a row opens the transfer in the existing detail list until the
-  // designed detail screen lands.
-  $("m-tx-list").querySelectorAll("[data-mtxid]").forEach((b) => {
-    b.onclick = () => { switchView("transactions"); $("dashboard").dataset.msub = "legacy-tx"; };
-  });
+  bindTxRows($("m-tx-list"));
 }
 
 /* ---------- Profile ---------- */
@@ -2434,8 +2565,8 @@ function renderProfileScreen() {
   $("m-pf-initials").textContent = name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "—";
   const approved = kycApproved(u);
   const chip = $("m-pf-kyc");
-  chip.textContent = approved ? "VERIFIED" : (u.kycStatus || "pending").toUpperCase();
-  chip.className = `m-chip${approved ? " on" : ""}`;
+  chip.textContent = approved ? "VERIFIED" : (u.kycStatus || "pending").replace("_", " ").toUpperCase();
+  chip.className = `m-tag${approved ? " on" : ""}`;
 
   const shorten = (v) => (v && v.length > 22 ? `${v.slice(0, 10)}…${v.slice(-6)}` : v);
   const account = [
@@ -2473,10 +2604,10 @@ function renderProfileScreen() {
     <div class="m-secrow">
       <span class="material-symbols-rounded">${r.icon}</span>
       <div style="flex:1;min-width:0">
-        <div style="font-size:16px;letter-spacing:.15px">${esc(r.t)}</div>
-        <div style="font-size:14px;color:var(--m-dim);letter-spacing:.25px">${esc(r.d)}</div>
+        <div class="t">${esc(r.t)}</div>
+        <div class="d">${esc(r.d)}</div>
       </div>
-      <span style="font-size:11px;font-weight:500;letter-spacing:.5px;color:${/Registered|Bound|Enabled|Active/.test(r.st) ? "var(--m-mint)" : "var(--m-faint)"}">${esc(r.st)}</span>
+      <span class="st" style="color:${/Registered|Bound|Enabled|Active/.test(r.st) ? "var(--m-mint)" : "var(--m-faint)"}">${esc(r.st)}</span>
     </div>`).join("");
 
   const sub = u.privacyBundle;
