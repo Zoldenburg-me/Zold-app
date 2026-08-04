@@ -357,6 +357,41 @@ TESTED AGAINST THE REAL APIS, not docs:
    present, or the orchestrator. Half-working execution would be worse than
    none.
 
+**Uniswap v3 — the one that executes, and the one we build on.**
+ - VERIFIED ON-CHAIN with eth_getCode on Base Sepolia (84532), not read off a
+   docs page: Factory 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24, SwapRouter02
+   0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4, QuoterV2
+   0xC5290058841028F1614F3A6F0F5816cAd0df5E27, NonfungiblePositionManager
+   0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2, Permit2. Monerium's real EURe on
+   that chain is 0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85 (18dp, from their
+   /tokens), USDC is 0x036CbD53842c5426634e7929541eC2318f3dCF7e (6dp).
+ - CHOSEN OVER 1INCH DELIBERATELY. 1inch is mainnet-only, so a 1inch adapter
+   could never be exercised before it touched real money — exactly how the Bebop
+   adapter ended up correct and unrun. The v3 interface is identical on Base
+   Sepolia and Base mainnet, so the tested path is the shipped path. 1inch still
+   fits later as a mainnet ROUTING layer behind the same seam.
+ - THERE IS NO EURe/USDC POOL on Base Sepolia at any fee tier (100/500/3000/
+   10000 all empty), while WETH/USDC has real depth — so the testnet DEX is
+   genuinely used, just not for EURe. `npm run dex:setup [-- --fix]` creates and
+   seeds one. That pool is a TEST FIXTURE, NOT A TREASURY: on mainnet the
+   counterparty is everyone else's liquidity, which is the whole reason for
+   leaving FxSwapper. Never read a Base Sepolia quote as evidence of pricing.
+ - THE GUARD THAT MATTERS, and the way a pool differs from a maker: an RFQ maker
+   names a price it will honour, but an AMM pool is simply wherever the last
+   trade left it, and anyone can move a thin one. So every quote's implied
+   USD/EUR is checked against the independent live mid from rates.ts and REFUSES
+   beyond DEX_MAX_MID_DEVIATION_BPS (300 default). Without it, skewing a pool
+   would make us quote, bind and settle a real transfer at that skew while
+   reporting it as the market. The pool is also pinned onto the quote, so
+   execute() cannot drift to a different, unchecked one, and amountOutMinimum
+   carries the quoted floor into the router.
+ - amountOut is MEASURED as a balance delta after the swap, not copied from the
+   quote — the router reverting on a bad fill and the amount actually received
+   are two different facts.
+ - npm run dex:test (12 checks, no chain). UNPROVEN: no real swap has executed,
+   because seeding needs EURe and there is no faucet for it — it is only minted
+   against a real SEPA deposit. Deployer holds 21 USDC / 0 EURe today.
+
 CONSEQUENCE FOR THE CHAIN DECISION: EURe's deepest liquidity is on GNOSIS, and
 Monerium is Gnosis-native. Base Sepolia was chosen for testing because gas is
 ~9,000x cheaper than Amoy, which was right for testing and says nothing about
