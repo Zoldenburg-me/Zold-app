@@ -1,9 +1,9 @@
 /**
- * Crypto in — USDC arriving at a user's account, converted to EURe.
+ * Crypto in — USDC arriving at a payment-page address, settled for the owner.
  *
  * The funding story until now was one-directional: euros arrive by SEPA,
  * Monerium issues EURe, the vault credits it. A crypto-native user holding
- * USDC had no way in at all. This watches their account for inbound USDC and
+ * USDC had no way in at all. This watches payment-page deposit addresses for inbound USDC and
  * turns it into the same spendable EUR balance every other rail produces, so
  * a corridor payout can be funded from crypto without the user first finding a
  * bank.
@@ -20,8 +20,9 @@
  * has, for the same reason.
  *
  * WHAT THIS DOES NOT DO
- * - It converts nothing without `user.autoConvert`. See the field's note: this
- *   is not a neutral default.
+ * - It converts nothing without `user.paymentPage.autoConvert`.
+ * - It does not watch the user's main wallet; a normal wallet transfer must
+ *   not inherit a payment page's settlement rule.
  * - It credits nothing for an account that is not KYC-approved. The output is
  *   e-money, so the same gate that gates a SEPA deposit gates this.
  * - It does not screen the SENDING address. An unsolicited transfer from an
@@ -63,10 +64,11 @@ const TRANSFER_EVENT = {
  *  cannot drift apart. */
 export const SWEEP_STEP = "safe.transfer(usdc->orchestrator)";
 
-/** Accounts opted in AND allowed to hold a credit. Both are required: the
- *  first is the user's choice, the second is ours. */
+/** Accounts with page-scoped auto-settlement AND allowed to hold a credit. */
 function watchedUsers(): User[] {
-  return store.users.filter((u) => u.autoConvert && u.kycStatus === "approved");
+  return store.users.filter(
+    (u) => u.paymentPage?.autoConvert && u.paymentPage.depositAddress && u.kycStatus === "approved",
+  );
 }
 
 /** Deposit reference for RemitVault.creditDeposit.
@@ -149,19 +151,21 @@ async function sweepToOrchestrator(
    */
   if (deposit.txs.some((x) => x.step === SWEEP_STEP)) return null;
 
-  const code = await publicClient.getBytecode({ address: user.address });
+  const page = user.paymentPage;
+  if (!page) throw new Error("account has no payment page");
+  const code = await publicClient.getBytecode({ address: page.depositAddress });
   if (!code || code === "0x") {
     throw new Error(
-      `account ${user.address} has no deployed Safe, so the deposited USDC cannot be moved ` +
+      `payment page ${page.depositAddress} has no deployed Safe, so the deposited USDC cannot be moved ` +
         `— it is still yours at that address, but this chain cannot convert it`,
     );
   }
-  if (!user.privateKey) {
-    throw new Error("account has no Safe owner key in this store, so the deposit cannot be moved");
+  if (!page.depositPrivateKey) {
+    throw new Error("payment page has no deposit Safe owner key in this store, so the deposit cannot be moved");
   }
   const { transferTokenFromSafe } = await import("../wallet/candide.js");
   const hash = await transferTokenFromSafe({
-    ownerKey: user.privateKey,
+    ownerKey: page.depositPrivateKey,
     token: a.usdc,
     to: orchestratorAddress,
     amount,
@@ -187,12 +191,22 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
   const txs: CryptoDeposit["txs"] = [...deposit.txs];
 
   try {
-    if (!user.autoConvert) throw new Error("account has auto-convert switched off");
+    const page = user.paymentPage;
+    if (!page?.autoConvert) throw new Error("payment page has auto-settlement switched off");
     if (user.kycStatus !== "approved") throw new Error("account is not KYC-approved");
     if (deposit.amountUsdc < CRYPTO_IN.minUsdc) {
       throw new Error(
         `below the ${CRYPTO_IN.minUsdc} USDC floor — left as USDC rather than converted to dust`,
       );
+    }
+    if (page.settlementAsset === "USDC") {
+      return store.updateCryptoDeposit(deposit.id, {
+        state: "CONVERTED",
+        creditedUsdc: deposit.amountUsdc,
+        settlementAsset: "USDC",
+        txs,
+        reason: undefined,
+      });
     }
 
     const sweep = await sweepToOrchestrator(user, amount, deposit);
@@ -239,6 +253,7 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
     return store.updateCryptoDeposit(deposit.id, {
       state: "CONVERTED",
       creditedEur,
+      settlementAsset: "EURE",
       provider: quote.provider,
       rate: venueRate,
       txs,
@@ -296,12 +311,12 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
   const logs = await publicClient.getLogs({
     address: addrs().usdc,
     event: TRANSFER_EVENT,
-    args: { to: users.map((u) => u.address) },
+    args: { to: users.map((u) => u.paymentPage!.depositAddress) },
     fromBlock,
     toBlock,
   });
 
-  const byAddress = new Map(users.map((u) => [u.address.toLowerCase(), u]));
+  const byAddress = new Map(users.map((u) => [u.paymentPage!.depositAddress.toLowerCase(), u]));
   const fresh: CryptoDeposit[] = [];
   for (const log of logs) {
     const to = String(log.args.to ?? "").toLowerCase();
@@ -324,6 +339,8 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
         logIndex,
         amountUnits: value.toString(),
         amountUsdc: usd.fromUnits(value),
+        settlementAsset: user.paymentPage!.settlementAsset,
+        paymentAddress: user.paymentPage!.depositAddress,
         state: "DETECTED",
         txs: [],
         detectedAt: now,

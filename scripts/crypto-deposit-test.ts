@@ -71,7 +71,7 @@ const check = (label: string, cond: boolean, detail = "") => {
 };
 
 try {
-  console.log("1/7 chain + deploy…");
+  console.log("1/8 chain + deploy…");
   bg(process.execPath, [bin("hardhat"), "node", "--port", "8552"]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
@@ -88,6 +88,7 @@ try {
   const { convertDeposit, pollCryptoDepositsOnce, SWEEP_STEP } = await import(
     "../services/api/src/adapters/crypto-deposits.js"
   );
+  const { smartAccountFor } = await import("../services/api/src/wallet/candide.js");
   initStore();
 
   const vaultBalanceOf = async (who: `0x${string}`) =>
@@ -102,8 +103,14 @@ try {
 
   /** Each account gets its own address, as in production — deposits are
    *  attributed by address, so a shared one would attribute them wrongly. */
-  function addUser(name: string, opts: { autoConvert?: boolean; kyc?: string } = {}) {
+  function addUser(
+    name: string,
+    opts: { autoConvert?: boolean; kyc?: string; settlementAsset?: "EURE" | "USDC" } = {},
+  ) {
     const key = generatePrivateKey();
+    const pageKey = generatePrivateKey();
+    const pageOwner = privateKeyToAccount(pageKey).address;
+    const now = new Date().toISOString();
     const user = {
       id: randomUUID(),
       name,
@@ -113,8 +120,16 @@ try {
       privateKey: key,
       iban: "",
       kycStatus: opts.kyc ?? "approved",
-      autoConvert: opts.autoConvert ?? true,
-      createdAt: new Date().toISOString(),
+      paymentPage: {
+        handle: name.toLowerCase().replace(/\s+/g, "-"),
+        depositAddress: smartAccountFor(pageOwner).accountAddress,
+        depositPrivateKey: pageKey,
+        settlementAsset: opts.settlementAsset ?? "EURE",
+        autoConvert: opts.autoConvert ?? true,
+        createdAt: now,
+        updatedAt: now,
+      },
+      createdAt: now,
     } as any;
     store.addUser(user);
     return user;
@@ -142,6 +157,8 @@ try {
       logIndex: 0,
       amountUnits: usd.toUnits(amountUsdc).toString(),
       amountUsdc,
+      settlementAsset: user.paymentPage.settlementAsset,
+      paymentAddress: user.paymentPage.depositAddress,
       state: "DETECTED",
       txs: [{ step: SWEEP_STEP, hash: `0x${"11".repeat(32)}` }],
       detectedAt: now,
@@ -149,7 +166,7 @@ try {
     });
   }
 
-  console.log("2/7 nobody opted in — the chain is not even read…");
+  console.log("2/8 nobody opted in — the chain is not even read…");
   {
     const before = store.cryptoDepositCursor(31337);
     const n = await pollCryptoDepositsOnce();
@@ -157,20 +174,20 @@ try {
     check("and no cursor is written", store.cryptoDepositCursor(31337) === before);
   }
 
-  console.log("3/7 a real inbound transfer is detected and attributed…");
+  console.log("3/8 a real inbound transfer is detected and attributed…");
   const ann = addUser("Crypto Ann");
   // The first poll only establishes the cursor: transfers from before the
   // account opted in are deliberately not swept up.
   await pollCryptoDepositsOnce();
   {
-    await sendUsdc(ann.address, 100);
+    await sendUsdc(ann.paymentPage.depositAddress, 100);
     const n = await pollCryptoDepositsOnce();
     check("the deposit was detected", n === 1, `detected ${n}`);
     const d = store.cryptoDeposits.find((x) => x.userId === ann.id)!;
     check("attributed to the right account", d.userId === ann.id);
     check("100 USDC recorded from the log", d.amountUsdc === 100, `${d.amountUsdc}`);
-    // No Safe is deployed locally, so this is the honest refusal — the money
-    // is still the user's, at their address.
+    // No page Safe is deployed locally, so this is the honest refusal — the
+    // money is still the user's, at the page address.
     check("an undeployed Safe is refused, not converted", d.state === "REFUSED", d.state);
     check(
       "and the reason says the money is still theirs",
@@ -180,7 +197,7 @@ try {
     check("nothing was credited", (await vaultBalanceOf(ann.address)) === 0);
   }
 
-  console.log("4/7 a swept deposit converts and becomes spendable EUR…");
+  console.log("4/8 a swept deposit converts and becomes spendable EUR…");
   const bo = addUser("Crypto Bo");
   {
     const seeded = await seedSweptDeposit(bo, 100);
@@ -207,7 +224,7 @@ try {
     check("the balance is spendable in the vault", Math.abs(bal - d.creditedEur!) < 0.001, `€${bal}`);
   }
 
-  console.log("5/7 the same deposit is never credited twice…");
+  console.log("5/8 the same deposit is never credited twice…");
   {
     const d = store.cryptoDeposits.find((x) => x.userId === bo.id)!;
     const balBefore = await vaultBalanceOf(bo.address);
@@ -223,7 +240,7 @@ try {
     check("and no duplicate row appears", store.cryptoDeposits.length === countBefore);
   }
 
-  console.log("6/7 dust is left alone, opt-outs are not watched…");
+  console.log("6/8 dust is left alone, opt-outs are not watched…");
   {
     const dusty = addUser("Dusty");
     const d = await convertDeposit(await seedSweptDeposit(dusty, 0.25));
@@ -232,7 +249,7 @@ try {
     check("nothing was credited for it", !d.creditedEur);
 
     const optedOut = addUser("Holds USDC", { autoConvert: false });
-    await sendUsdc(optedOut.address, 50);
+    await sendUsdc(optedOut.paymentPage.depositAddress, 50);
     await pollCryptoDepositsOnce();
     check(
       "an opted-out account is not watched at all",
@@ -241,7 +258,7 @@ try {
     check("and keeps a zero EUR balance", (await vaultBalanceOf(optedOut.address)) === 0);
   }
 
-  console.log("7/7 a venue price off the market is refused…");
+  console.log("7/8 a venue price off the market is refused…");
   {
     const cass = addUser("Cass");
     const seeded = await seedSweptDeposit(cass, 100);
@@ -256,6 +273,16 @@ try {
       d.reason ?? "",
     );
     check("no euros were credited at the bad price", (await vaultBalanceOf(cass.address)) === 0);
+  }
+
+  console.log("8/8 a USDC-settled page does not turn the payment into euros…");
+  {
+    const dana = addUser("Crypto Dana", { settlementAsset: "USDC" });
+    const seeded = await seedSweptDeposit(dana, 25);
+    const d = await convertDeposit(seeded);
+    check("it records the USDC settlement target", d.state === "CONVERTED" && d.settlementAsset === "USDC", d.state);
+    check("it does not credit euro balance", (await vaultBalanceOf(dana.address)) === 0);
+    check("the USDC amount is recorded", d.creditedUsdc === 25, `${d.creditedUsdc}`);
   }
 
   console.log(`\ncrypto deposits: ${passed}/${passed} checks passed`);

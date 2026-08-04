@@ -98,26 +98,32 @@ export interface User {
     createdAt: string;
   };
   /**
-   * Public payment-page handle, e.g. `alice` serving /pay/alice.
+   * Public payment page, e.g. `alice` serving /pay/alice.
    *
-   * Unique case-insensitively and claimed by the account itself. Stored
-   * lowercase so two handles cannot differ only in case, which would let one
-   * impersonate the other.
+   * A payment page has its own deposit address. It must not point at the
+   * user's main account: the settlement rule belongs to the page, and generic
+   * transfers into the user's wallet must not be swept or converted just
+   * because a public payment link exists.
    */
+  paymentPage?: {
+    handle: string;
+    displayName?: string;
+    depositAddress: `0x${string}`;
+    /**
+     * MVP deposit key for the page address. This is a custody boundary, so it
+     * is stripped from every API response and forbidden in production stores.
+     */
+    depositPrivateKey?: `0x${string}`;
+    settlementAsset: "EURE" | "USDC";
+    autoConvert: boolean;
+    createdAt: string;
+    updatedAt: string;
+  };
+  /** Legacy payment-page fields. Kept only so existing local db.json files can
+   *  migrate lazily the next time the handle is saved. New code reads
+   *  paymentPage instead. */
   handle?: string;
-  /** Optional name shown on the payment page. Deliberately separate from
-   *  `name`: that one may be a legal name from KYC, and claiming a handle is
-   *  not consent to publish it at a guessable URL. */
   payDisplayName?: string;
-  /**
-   * Convert inbound crypto (USDC) to EURe automatically.
-   *
-   * Opt-in, and absent means off. Converting someone's USDC without being
-   * asked is not a neutral default: they may have meant to hold it, the
-   * conversion is irreversible at whatever rate the venue gave, and turning a
-   * crypto balance into e-money is a different regulatory object from holding
-   * the token. So the account has to say yes.
-   */
   autoConvert?: boolean;
   /** mock: IBAN issued locally. sandbox states track Monerium provisioning. */
   funding?: {
@@ -242,6 +248,9 @@ export interface CryptoDeposit {
   /** Why it was refused, in words a support person can act on. */
   reason?: string;
   creditedEur?: number;
+  creditedUsdc?: number;
+  settlementAsset?: "EURE" | "USDC";
+  paymentAddress?: `0x${string}`;
   /** The venue that filled it and the rate it filled at, for the receipt. */
   provider?: string;
   rate?: number;
@@ -489,11 +498,11 @@ export function initStore() {
     db.recoveryRequests ??= [];
     db.cryptoDepositCursor ??= {};
     if (IS_PRODUCTION) {
-      const custodial = db.users.filter((u) => u.privateKey || u.ownerAddress);
+      const custodial = db.users.filter((u) => u.privateKey || u.ownerAddress || u.paymentPage?.depositPrivateKey);
       if (custodial.length) {
         throw new Error(
           `production store contains ${custodial.length} account(s) with API-held Safe owner material; ` +
-            "activate passkey/co-signer Safes before startup",
+            "activate passkey/co-signer Safes and non-custodial payment pages before startup",
         );
       }
     }
@@ -676,7 +685,7 @@ export const store = {
   /** Handles are compared case-insensitively; they are stored lowercase. */
   findUserByHandle(handle: string) {
     const h = handle.trim().toLowerCase();
-    return db.users.find((u) => u.handle === h);
+    return db.users.find((u) => (u.paymentPage?.handle ?? u.handle) === h);
   },
   findUser(id: string) {
     return db.users.find((u) => u.id === id);
