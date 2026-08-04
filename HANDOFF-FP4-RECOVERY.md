@@ -29,34 +29,47 @@ FP4's **first half is shipped**: `RemitVault.debit` requires an EIP-712
 payout destination hashed into the signed struct. The orchestrator can only
 submit and pay gas. That is real, tested, and live on Base Sepolia.
 
-FP4's **second half — key custody — is not started.** Confirmed by grep:
+FP4's **second half is partly built** (updated Aug 2026 — the paragraph that
+used to sit here said "not started", and was wrong by the time anyone read it).
 
-```
-fromSafeWebauthn        not used anywhere in services/ or scripts/
-co-signer               does not exist
-SocialRecoveryModule    not installed
-```
+Verified by grep against the current tree, not inferred:
 
-And on a live Base Sepolia account:
+| step | state |
+|---|---|
+| 1 — passkey becomes a Safe owner | **BUILT** — `fromSafeWebauthn` in `wallet/candide.ts` |
+| 2 — co-signer, threshold 2 | **BUILT** — `initializeNewAccount([passkeyOwner, cosignerAddress], { threshold: 2 })` |
+| 3 — `setAuthorizer(safe, safe)` | **NOT DONE** — nothing points `authorizerOf` at a Safe |
+| 4 — `SocialRecoveryModule` | **BUILT** — imported, `passkeySafeRecoverySetupTransactions` batches enable-module + add-guardian |
+| 5 — delete `user.privateKey` | **NOT DONE** — still read at `orchestrator.ts:265,293,341,351` |
 
-```
-Safe            0xC034a7f3b986fE6550D0A6b63815a35839b1Ac2f
-authorizerOf    0xCCD5F9B63842E82F16A87f99cec757F778f6Df77   ← a browser EOA
-user.privateKey PRESENT in data/db.json                       ← server owns the Safe
-user.passkey    null
-```
+THE CO-SIGNER IS NOT A SERVICE. `CANDIDE_COSIGNER_KEY` is a private key in the
+API's own `.env`, and the API signs with it directly. There is nothing to run
+and nothing to find. That matters more than it sounds: the same process also
+holds `user.privateKey`, so today the server owns BOTH halves of the "2-of-2"
+and can act alone. The co-signer only starts meaning anything after step 5.
 
-There are **three separate keys** today, and the passkey has the least power:
+WHY STEP 5 IS NOT OPTIONAL, with a number attached: two Safes on Base Sepolia
+hold 219 EURe (0x5397A2c7… 20, 0x49Dc66aF… 199) that nobody can move, because
+the server held their owner key and `npm run dev` wiped `data/db.json`. A
+passkey-owned Safe survives that — the authenticator still holds it.
 
-| Key | Lives | Controls |
-|---|---|---|
-| `user.privateKey` | server, plaintext in `data/db.json` | owns the Safe → Monerium linking, redeem |
-| device key | browser `localStorage`, PRF-wrapped | `authorizerOf` → spending |
-| passkey | the authenticator | a login session, and unwrapping the device key |
+WHY STEP 3 IS A DECISION, NOT A TASK. It makes the SPENDING gate the
+recoverable Safe instead of a browser EOA, which fixes a different brick: the
+"Base Proof" account with EUR 121 that can never spend because its device key
+is gone and only the current authorizer may rotate. But the same outcome comes
+from retiring the vault as the custody path — `fundingSource === "safe"` already
+exists, and §1.5 below proposes exactly that. If Safe-funded becomes the only
+route, `authorizerOf` stops being the gate and step 3 is moot. Decide whether
+the vault survives as custody BEFORE doing step 3: `setAuthorizer` is a one-way
+door, and after it `authorizerOf` never changes again.
 
-The only piece of the recovery plan that IS built: provisioning refuses to
-issue an IBAN without a passkey (`passkeyRequiredBeforeFunding` in
-`services/api/src/server.ts`, gated on `allowSimulation`).
+Provisioning also refuses to issue an IBAN without a passkey
+(`passkeyRequiredBeforeFunding` in `services/api/src/server.ts`, gated on
+`allowSimulation`).
+
+NOTE ON THE ACCOUNT QUOTED ABOVE: `Redeem Base` predates the passkey-Safe work —
+`passkeySafe: none`, `passkey: null`, authorizer still a browser EOA. It cannot
+demonstrate steps 1/2/4; that needs a freshly onboarded account.
 
 The current balance API exposes this split explicitly:
 
