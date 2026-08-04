@@ -136,7 +136,7 @@ Safe, not the vault. A transfer must therefore consume the Safe's EURe directly:
 
 - For SEPA, collect the Monerium redeem signature while the user is present and
   submit the Safe operation that lets Monerium burn from the Safe.
-- For FX/cash/UPI, collect an exact Safe approval or transfer for the quoted
+- For the FX/cash rail, collect an exact Safe approval or transfer for the quoted
   EURe amount, recipient commitment, rail, deadline, fee/spread ceiling, and
   refund terms.
 - Keep `RemitVault` only as a policy/replay/cap module if it still adds value,

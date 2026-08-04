@@ -2,10 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- viewport-fit=cover so a standalone install can paint under the notch and
+     home indicator; use env(safe-area-inset-*) in any full-bleed chrome. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<!-- Installable app. The manifest sets start_url=/app, so an installed icon
+     opens the account rather than the marketing page. -->
+<link rel="manifest" href="/manifest.webmanifest" />
+<meta name="theme-color" content="#0b0b0e" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Zold" />
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<!-- Material Symbols, as the design specifies. display=block so an icon never
+     flashes as its ligature text before the font arrives. -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=block" rel="stylesheet" />
 <title>Zold — send money home</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23ed188d'/%3E%3Cpath d='M30 66 L54 30 L58 66 M46 30 L74 22' stroke='white' stroke-width='7' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E" />
 <style>
@@ -45,6 +58,17 @@
 
   .hidden { display: none !important; }
 
+  /* Sticky rather than fixed: as the first child of <body> it takes part in
+     the flow, so showing it pushes the screen down instead of covering the
+     logo — and it still pins to the top once the page scrolls. The safe-area
+     inset keeps it clear of the notch in a standalone install. */
+  #offline-bar {
+    position: sticky; top: 0; z-index: 200;
+    padding: calc(env(safe-area-inset-top, 0px) + .5rem) 1rem .5rem;
+    text-align: center; font-size: .8rem; font-weight: 500;
+    color: #0b0b0e; background: var(--amber);
+  }
+
   label { display: block; font-size: .74rem; font-weight: 500; color: var(--muted); margin: .85rem 0 .3rem; }
   input {
     width: 100%; padding: .62rem .75rem; border-radius: 8px; font-size: .92rem;
@@ -76,73 +100,183 @@
   .row2 > div { flex: 1; }
   .row2 button { flex: none; }
 
-  /* ---------- onboarding (split-screen, Valerium landing) ---------- */
-  #onboard { display: grid; grid-template-columns: 1fr 1.15fr; min-height: 100vh; }
-  .onb-left { display: flex; flex-direction: column; padding: 1.6rem 2.2rem; background: var(--side-bg); }
-  .onb-logo { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1rem; }
-  .onb-logo .tri { color: var(--acc); }
-  .onb-form { margin: auto; width: 100%; max-width: 340px; text-align: center; }
-  .onb-form h1 { font-size: 1.6rem; letter-spacing: -.01em; margin-bottom: .35rem; font-weight: 700; }
-  .onb-form .sub { color: var(--muted); font-size: .84rem; margin-bottom: 1.4rem; }
-  .onb-form label, .onb-form .error { text-align: left; }
-  .btn-primary-lite {
-    width: 100%; margin-top: 1.1rem; padding: .72rem; border-radius: 999px;
-    background: #fff; color: #111114; font-weight: 600; font-size: .9rem;
-  }
-  .btn-primary-lite:hover { filter: brightness(.93); }
-  .onb-terms { margin-top: 1.4rem; font-size: .7rem; color: var(--faint); line-height: 1.7; }
-  .onb-terms a { color: var(--acc); text-decoration: none; cursor: pointer; }
-  .onb-steps { display: flex; gap: .4rem; justify-content: center; margin-bottom: 1.3rem; }
-  .onb-steps .dot { width: 28px; height: 4px; border-radius: 99px; background: var(--border2); transition: background .3s; }
-  .onb-steps .dot.active { background: var(--acc); }
-  .onb-steps .dot.done { background: var(--green); }
-  .pk-card {
-    text-align: left; background: var(--panel); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: .95rem 1.05rem; font-size: .82rem; color: var(--muted);
-    margin-top: .4rem; line-height: 1.6;
-  }
-  .pk-card b { color: var(--text); }
-  .onb-form .ghost.wide { margin-top: .6rem; background: var(--row); }
+  /* ==========================================================================
+     ONBOARDING + SETUP
+     --------------------------------------------------------------------------
+     Scope note for whoever edits this next: these rules style the three
+     pre-dashboard screens only (#onboard, #provisioning, #kyc-review). The
+     dashboard has its own system further down and is designed separately — the
+     one shared class is .kyc-status, which #kyc-card reuses inside the
+     dashboard, so it is deliberately left alone below.
 
+     Every id here is load-bearing. provStep() indexes `#prov-steps .pstep` and
+     rewrites className to "pstep active|done"; the step dots are set to
+     "dot done"/"dot active"; setPasskeyButtonBusy() overwrites #btn-passkey's
+     textContent, so that button must stay text-only with no child elements.
+     ========================================================================== */
+  :root {
+    --onb-ink: #f7f7f9;
+    --onb-sub: #9a9aa6;
+    --onb-line: rgba(255,255,255,.09);
+    --onb-field: #141419;
+    --onb-lift: 0 1px 0 rgba(255,255,255,.04) inset;
+  }
+
+  #onboard { display: grid; grid-template-columns: 1fr 1.05fr; min-height: 100vh; }
+  .onb-left {
+    display: flex; flex-direction: column; padding: 2rem 2.4rem 2.4rem;
+    background: var(--side-bg);
+  }
+  .onb-logo { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1.02rem; letter-spacing: -.01em; }
+  .onb-logo .tri { color: var(--acc); }
+  .onb-form { margin: auto; width: 100%; max-width: 372px; }
+  .onb-form h1 {
+    font-size: 1.9rem; line-height: 1.15; letter-spacing: -.025em;
+    margin-bottom: .5rem; font-weight: 700; color: var(--onb-ink);
+  }
+  .onb-form .sub { color: var(--onb-sub); font-size: .93rem; line-height: 1.55; margin-bottom: 1.9rem; }
+
+  /* Segmented progress. JS toggles .active/.done on the same nodes. */
+  .onb-steps { display: flex; gap: .35rem; margin-bottom: 2rem; }
+  .onb-steps .dot {
+    height: 3px; flex: 1; border-radius: 99px; background: rgba(255,255,255,.09);
+    transition: background .35s ease;
+  }
+  .onb-steps .dot.active { background: var(--acc); }
+  .onb-steps .dot.done { background: rgba(237,24,141,.45); }
+
+  .onb-form label {
+    font-size: .78rem; font-weight: 500; color: var(--onb-sub);
+    margin: 1.05rem 0 .4rem; letter-spacing: 0;
+  }
+  .onb-form input {
+    padding: .82rem .9rem; border-radius: 12px; font-size: .95rem;
+    background: var(--onb-field); border: 1px solid var(--onb-line);
+    box-shadow: var(--onb-lift);
+  }
+  .onb-form input:focus { border-color: var(--acc); box-shadow: 0 0 0 3px rgba(237,24,141,.14); }
+
+  .btn-primary-lite {
+    width: 100%; margin-top: 1.6rem; padding: .88rem; border-radius: 999px;
+    background: #fff; color: #101014; font-weight: 600; font-size: .95rem;
+  }
+  .btn-primary-lite:hover { filter: brightness(.94); }
+  .onb-form .ghost.wide {
+    margin-top: .55rem; padding: .82rem; border-radius: 999px;
+    background: transparent; border: 1px solid var(--onb-line); color: var(--onb-sub);
+    font-size: .92rem; font-weight: 500;
+  }
+  .onb-form .ghost.wide:hover { background: rgba(255,255,255,.03); color: var(--text); }
+
+  /* The passkey explainer. Plain language on purpose — "smart-account vault"
+     told a non-crypto reader nothing they could act on. */
+  .pk-card {
+    display: flex; gap: .8rem; align-items: flex-start;
+    background: rgba(255,255,255,.025); border: 1px solid var(--onb-line);
+    border-radius: 14px; padding: 1rem 1.05rem;
+    font-size: .86rem; color: var(--onb-sub); line-height: 1.6;
+  }
+  .pk-card .pk-ic { font-size: 1.05rem; line-height: 1.35; }
+  .pk-card b { color: var(--text); font-weight: 600; }
+  .onb-note { margin-top: .85rem; font-size: .78rem; color: var(--faint); line-height: 1.6; }
+  .onb-terms { margin-top: 1.8rem; font-size: .76rem; color: var(--faint); line-height: 1.75; }
+  .onb-terms a { color: var(--text); text-decoration: none; cursor: pointer; border-bottom: 1px solid var(--onb-line); }
+  .onb-terms a:hover { border-bottom-color: var(--acc); }
+
+  /* Right panel: what the account actually is. No mock balance — a made-up
+     number is the first thing that makes a product look unfinished. */
   .onb-hero {
     position: relative; overflow: hidden; display: grid; place-items: center;
     background:
-      radial-gradient(720px 440px at 65% 32%, rgba(237, 24, 141, 0.25), transparent 62%),
-      radial-gradient(560px 380px at 38% 62%, rgba(123, 47, 247, 0.16), transparent 60%),
-      #0d0a10;
+      radial-gradient(680px 460px at 72% 22%, rgba(237,24,141,.14), transparent 64%),
+      radial-gradient(560px 420px at 26% 78%, rgba(123,47,247,.10), transparent 62%),
+      #0a0a0d;
+    border-left: 1px solid var(--onb-line);
   }
   .onb-hero::before {
-    content: ""; position: absolute; inset: 0; opacity: .5;
+    content: ""; position: absolute; inset: 0; opacity: .55;
     background:
-      repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 90px),
-      repeating-linear-gradient(0deg, rgba(255,255,255,.04) 0 1px, transparent 1px 90px);
+      repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 1px, transparent 1px 110px),
+      repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 110px);
+    mask-image: radial-gradient(80% 70% at 50% 45%, #000, transparent);
   }
-  .onb-hero-inner { position: relative; text-align: center; padding: 2rem; max-width: 560px; }
-  .onb-hero h2 { font-size: 2.7rem; font-weight: 700; letter-spacing: -.02em; color: #fff; }
-  .onb-hero .tag { color: var(--muted); margin: .45rem 0 1.8rem; font-size: .95rem; }
-  .onb-mock {
-    text-align: left; background: var(--panel); border: 1px solid var(--border2); border-radius: var(--radius);
-    padding: 1.1rem 1.2rem;
-    box-shadow: 0 28px 80px rgba(0, 0, 0, 0.6);
+  .onb-hero-inner { position: relative; padding: 3rem; max-width: 460px; width: 100%; }
+  /**
+   * One hero per step, driven entirely by which step is visible — no JS, which
+   * is the constraint this restyle works under.
+   *
+   * :has() reads the state the wizard already keeps (the .hidden class the
+   * handlers toggle on #onb-step1/#onb-step2), so there is nothing to keep in
+   * sync. Step one's panel is the default, so a browser without :has() simply
+   * shows it throughout rather than showing nothing.
+   */
+  .onb-hero-inner.hero-2 { display: none; }
+  #onboard:has(#onb-step2:not(.hidden)) .hero-1 { display: none; }
+  #onboard:has(#onb-step2:not(.hidden)) .hero-2 { display: block; }
+  .onb-hero h2 {
+    font-size: 2.15rem; font-weight: 700; letter-spacing: -.03em; line-height: 1.15;
+    color: #fff; margin-bottom: .6rem;
+  }
+  .onb-hero .tag { color: var(--onb-sub); font-size: .95rem; line-height: 1.6; margin-bottom: 2.4rem; }
+  .onb-points { display: flex; flex-direction: column; gap: 1.35rem; }
+  .onb-point { display: flex; gap: .95rem; align-items: flex-start; }
+  .onb-point .pi {
+    width: 34px; height: 34px; flex: none; border-radius: 10px; display: grid; place-items: center;
+    background: rgba(255,255,255,.045); border: 1px solid var(--onb-line); font-size: .95rem;
+  }
+  .onb-point .pt { display: block; font-size: .92rem; font-weight: 600; color: var(--onb-ink); }
+  .onb-point .pd { display: block; font-size: .84rem; color: var(--onb-sub); line-height: 1.55; margin-top: .15rem; }
+  .onb-foot {
+    position: relative; margin-top: 2.6rem; padding-top: 1.3rem;
+    border-top: 1px solid var(--onb-line); font-size: .78rem; color: var(--faint); line-height: 1.65;
   }
 
-  /* provisioning */
-  #provisioning { display: none; min-height: 100vh; place-items: center; padding: 1.5rem; }
+  /* ---------- setting-up + review screens ---------- */
+  /* Same split as onboarding, so step three is not a lone card on a black
+     field. enterProvisioning() sets display:grid, which is what these columns
+     need — do not change that to flex. */
+  #provisioning { display: none; min-height: 100vh; grid-template-columns: 1fr 1.05fr; }
+  .prov-left { display: grid; place-items: center; padding: 2rem 1.6rem; background: var(--side-bg); }
   .prov-card {
-    width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 1.6rem;
+    width: 100%; max-width: 430px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 18px; padding: 2rem 1.8rem;
   }
-  .prov-card h1 { font-size: 1.2rem; margin-bottom: .3rem; font-weight: 700; }
-  .prov-card .sub { color: var(--faint); font-size: .82rem; margin-bottom: 1.3rem; }
-  .pstep { display: flex; align-items: center; gap: .8rem; padding: .55rem 0; color: var(--faint); font-size: .9rem; font-weight: 500; }
+  .prov-card h1 { font-size: 1.45rem; letter-spacing: -.02em; margin-bottom: .4rem; font-weight: 700; }
+  .prov-card .sub { color: var(--onb-sub); font-size: .88rem; line-height: 1.55; margin-bottom: 1.7rem; }
+  /* .wide sets the brand gradient and is declared after .ghost, so the
+     secondary action rendered identically to the primary — two equally loud
+     buttons with different consequences. Scoped to .prov-card so the
+     dashboard's own .wide buttons are untouched. */
+  .prov-card .wide, .prov-card .btn-primary-lite {
+    width: 100%; border-radius: 999px; padding: .82rem; margin-top: .55rem;
+    background: #fff; color: #101014; font-weight: 600; font-size: .93rem;
+  }
+  .prov-card .wide:hover { filter: brightness(.94); }
+  .prov-card .ghost.wide {
+    background: transparent; border: 1px solid var(--onb-line);
+    color: var(--onb-sub); font-weight: 500;
+  }
+  .prov-card .ghost.wide:hover { background: rgba(255,255,255,.03); color: var(--text); filter: none; }
+
+  #prov-steps { display: flex; flex-direction: column; gap: .1rem; }
+  .pstep {
+    display: flex; align-items: center; gap: .85rem; padding: .7rem 0;
+    color: var(--faint); font-size: .92rem; font-weight: 500; transition: color .3s;
+  }
   .pstep .pdot {
-    width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex: none;
-    border: 2px solid var(--border2); font-size: .72rem; color: transparent; transition: all .3s;
+    width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; flex: none;
+    border: 1.5px solid var(--onb-line); font-size: .68rem; color: transparent; transition: all .3s;
   }
   .pstep.active { color: var(--text); }
-  .pstep.active .pdot { border-color: var(--acc2); animation: pulse 1.2s infinite; }
-  .pstep.done { color: var(--muted); }
-  .pstep.done .pdot { border-color: var(--green); background: rgba(61, 214, 140, 0.1); color: var(--green); }
+  .pstep.active .pdot { border-color: var(--acc); animation: pulse 1.2s infinite; }
+  .pstep.done { color: var(--onb-sub); }
+  .pstep.done .pdot { border-color: var(--green); background: rgba(61,214,140,.12); color: var(--green); }
+  /* One flex child for the whole label, so the trailing explanation wraps with
+     the text instead of becoming its own column. */
+  .pstep .ptext { flex: 1; }
+  .pstep .pwhy { font-weight: 400; color: var(--faint); font-size: .84rem; }
+
+  /* Shared with the dashboard's #kyc-card — left as it was on purpose. */
   .kyc-status {
     margin-top: 1rem; padding: .85rem .95rem; border-radius: 10px;
     background: rgba(245, 166, 35, 0.06); border: 1px solid rgba(245, 166, 35, 0.3);
@@ -151,13 +285,14 @@
   .kyc-status .kt { margin-top: .2rem; font-size: .95rem; font-weight: 700; }
   .kyc-status .kd { margin-top: .25rem; font-size: .8rem; color: var(--muted); }
 
-  .panel {
-    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 1.3rem; text-align: left;
+  .kyc-pick { display: flex; flex-direction: column; gap: .55rem; margin-bottom: 1.2rem; }
+  .kyc-pick button {
+    width: 100%; text-align: left; display: flex; flex-direction: column; gap: .2rem;
+    padding: .9rem 1rem; border-radius: 14px; background: rgba(255,255,255,.03);
+    border: 1px solid var(--onb-line); color: var(--text); font-weight: 600; font-size: .92rem;
   }
-  .corridor { display: flex; align-items: center; justify-content: center; gap: .8rem; font-size: .8rem; color: var(--muted); margin-bottom: 1.2rem; }
-  .corridor .flag { font-size: 1.35rem; display: block; text-align: center; }
-  .corridor .arrow { color: var(--faint); }
+  .kyc-pick button:hover { background: rgba(255,255,255,.06); filter: none; }
+  .kyc-pick button span { font-weight: 400; font-size: .82rem; color: var(--onb-sub); }
 
   /* ---------- app shell ---------- */
   #dashboard { display: none; grid-template-columns: 210px 1fr 375px; min-height: 100vh; }
@@ -232,7 +367,17 @@
     #dashboard { grid-template-columns: 210px 1fr; }
     .rail { grid-column: 2; padding: 0 1.5rem 2rem 1.5rem; }
   }
-  @media (max-width: 900px) { #onboard { grid-template-columns: 1fr; } }
+  /* Below the split, the hero is dropped rather than stacked underneath: on a
+     phone it would push the actual form off the first screen, and this is a
+     product people will mostly open on a phone. */
+  @media (max-width: 900px) {
+    #onboard, #provisioning { grid-template-columns: 1fr; }
+    .onb-hero { display: none; }
+    .onb-left, .prov-left { padding: 1.4rem 1.3rem 2rem; }
+    .onb-form { max-width: 420px; }
+    .onb-form h1 { font-size: 1.7rem; }
+    .prov-card { padding: 1.6rem 1.3rem; border-radius: 16px; }
+  }
   @media (max-width: 860px) {
     #dashboard { grid-template-columns: 1fr; }
     .side { display: none; }
@@ -406,9 +551,472 @@
   @keyframes draw { to { stroke-dashoffset: 0; } }
   .paidbox .pt { font-weight: 700; font-size: 1rem; color: var(--green); }
   .paidbox .pd { font-size: .8rem; color: var(--muted); }
+
+  /* ==========================================================================
+     MOBILE APP — "Noir"
+     --------------------------------------------------------------------------
+     The approved direction from design_handoff_zold_mobile. True-dark OLED
+     ground, hairline borders, one glow. Tokens are the handoff's, verbatim.
+
+     Scoped under #dashboard and the .m- prefix so the onboarding screens and
+     the payment page keep their own system until they are converted too.
+
+     Two rules from the handoff that are easy to lose and expensive to
+     re-discover: nothing is rounded above 12px except status dots, and EVERY
+     financial figure is tabular.
+     ========================================================================== */
+  :root {
+    --m-bg: #050505;
+    --m-surface: #0e0e10;
+    --m-sunken: #0a0a0c;
+    --m-raised: #131316;
+    --m-highest: #1a1a1e;
+    --m-line: #232326;
+    --m-line-strong: #3a3a40;
+    --m-line-faint: #131316;
+    --m-text: #ffffff;
+    --m-dim: #8a8f98;
+    --m-faint: #5c6067;
+    --m-pink: #ff2d8b;
+    --m-pink-hover: #ff4a9c;
+    --m-pink-soft: #ff8fc4;
+    --m-pink-tint: #180910;
+    --m-pink-border: #47142c;
+    --m-mint: #3ee6a8;
+    --m-mint-tint: #0a1a14;
+    --m-mint-border: #1d4b39;
+    --m-amber: #ffc98a;
+    --m-amber-tint: #1a1206;
+    --m-glow: 0 10px 34px rgba(255, 45, 139, .45), 0 0 60px rgba(255, 45, 139, .22);
+    --m-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    --m-display: "Space Grotesk", Inter, sans-serif;
+  }
+
+  .material-symbols-rounded {
+    font-family: "Material Symbols Rounded";
+    font-weight: normal; font-style: normal; line-height: 1;
+    letter-spacing: normal; text-transform: none; white-space: nowrap;
+    direction: ltr; -webkit-font-feature-settings: "liga"; font-feature-settings: "liga";
+    -webkit-font-smoothing: antialiased; user-select: none;
+  }
+
+  /* ---------- shell ----------
+     412 x 892 is the design's content area. On a phone it is the viewport; on
+     a desktop the column is centred rather than stretched, because every
+     measurement in the handoff assumes that width. */
+  #dashboard {
+    display: none; grid-template-columns: 1fr; min-height: 100vh;
+    background: var(--m-bg); color: var(--m-text);
+    font: 400 14px/1.43 Inter, system-ui, sans-serif;
+  }
+  #dashboard.m-on {
+    max-width: 412px; margin: 0 auto;
+    box-shadow: 0 0 0 1px var(--m-line-faint);
+    grid-template-rows: 1fr auto; min-height: 100dvh;
+  }
+  #dashboard.m-on .side, #dashboard.m-on .topbar, #dashboard.m-on .rail { display: none; }
+  #dashboard.m-on .main {
+    grid-column: 1; display: flex; flex-direction: column; min-width: 0;
+    overflow-y: auto; padding: 0 16px calc(28px + env(safe-area-inset-bottom, 0px));
+  }
+  #dashboard.m-on .view { padding: 0; }
+
+  .m-fig { font-variant-numeric: tabular-nums; }
+  .m-mono {
+    font: 500 9.5px var(--m-mono); letter-spacing: .14em;
+    text-transform: uppercase; color: var(--m-faint);
+  }
+
+  /* ---------- header ---------- */
+  .m-head { display: flex; align-items: center; gap: 11px; height: 64px; }
+  .m-initials {
+    width: 38px; height: 38px; border-radius: 10px; flex: none;
+    background: var(--m-pink-tint); border: 1px solid var(--m-pink-border);
+    display: grid; place-items: center; color: var(--m-pink);
+    font: 600 13px var(--m-display); letter-spacing: .04em;
+  }
+  .m-head .m-name { font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: #fff; }
+  .m-head .m-status { display: flex; align-items: center; gap: 6px; margin-top: 1px; font-size: 11px; }
+  .m-dot { width: 5px; height: 5px; border-radius: 50%; }
+  .m-iconbtn {
+    width: 38px; height: 38px; flex: none; border-radius: 10px;
+    background: var(--m-sunken); border: 1px solid var(--m-line);
+    color: var(--m-dim); display: grid; place-items: center; cursor: pointer;
+  }
+  .m-iconbtn:hover { border-color: var(--m-line-strong); color: #fff; filter: none; }
+
+  /* ---------- KYC banner ---------- */
+  .m-kyc-banner {
+    width: 100%; text-align: left; display: flex; gap: 12px; align-items: center;
+    background: var(--m-pink-tint); border: 1px solid var(--m-pink-border);
+    border-radius: 10px; padding: 13px 14px; margin-bottom: 14px;
+    color: #fff; cursor: pointer; min-height: 56px; font-family: inherit;
+  }
+  .m-kyc-banner:hover { border-color: var(--m-pink); filter: none; }
+
+  /* ---------- the safe card ----------
+     The bloom is the signature and is the only glow besides the Send button. */
+  .m-safe { position: relative; border-radius: 12px; border: 1px solid var(--m-line); background: #000; overflow: hidden; }
+  .m-safe::before {
+    content: ""; position: absolute; left: 50%; top: -96px; transform: translateX(-50%);
+    width: 300px; height: 150px; border-radius: 50%;
+    background: rgba(255, 45, 139, .20); filter: blur(60px); pointer-events: none;
+  }
+  .m-safe-body { position: relative; padding: 18px 16px 14px; }
+  .m-safe-top { display: flex; align-items: center; justify-content: space-between; }
+  .m-safe-label { display: flex; align-items: center; gap: 6px; font: 500 10px var(--m-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--m-dim); }
+  .m-chip-eure {
+    font: 500 10px var(--m-mono); letter-spacing: .1em; padding: 3px 7px; border-radius: 6px;
+    border: 1px solid var(--m-pink-border); color: var(--m-pink-soft); background: var(--m-pink-tint);
+  }
+  .m-balance { display: flex; align-items: baseline; gap: 4px; margin-top: 12px; }
+  .m-balance .cur { font: 500 22px var(--m-display); color: var(--m-faint); }
+  .m-balance .amt { font: 600 42px/1 var(--m-display); letter-spacing: -.03em; color: #fff; }
+  .m-addr {
+    display: flex; align-items: center; gap: 7px; margin-top: 12px; padding: 6px 9px;
+    border-radius: 8px; background: var(--m-sunken); border: 1px solid var(--m-line);
+    cursor: pointer; color: var(--m-dim); font: 400 11px var(--m-mono); letter-spacing: .02em;
+  }
+  .m-addr:hover { border-color: var(--m-line-strong); color: #fff; filter: none; }
+  .m-addr .k { color: var(--m-faint); }
+  .m-split { position: relative; display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--m-highest); }
+  .m-split > div { padding: 12px 16px; }
+  .m-split > div + div { border-left: 1px solid var(--m-highest); }
+  .m-split .v { font: 600 16px var(--m-display); margin-top: 4px; color: #fff; }
+  .m-split .v.dim { color: var(--m-dim); }
+
+  /* ---------- action bar ---------- */
+  .m-actions { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 8px; margin-top: 14px; }
+  .m-actions button {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    min-height: 52px; border-radius: 10px; cursor: pointer; font-family: inherit;
+  }
+  .m-btn-send { background: var(--m-pink); border: 0; color: #fff; font: 600 14px Inter, sans-serif; letter-spacing: .01em; box-shadow: var(--m-glow); }
+  .m-btn-send:hover { background: var(--m-pink-hover); filter: none; }
+  .m-btn-quiet { background: var(--m-surface); border: 1px solid var(--m-line); color: #fff; font: 500 13px Inter, sans-serif; }
+  .m-btn-quiet:hover { border-color: var(--m-line-strong); background: var(--m-raised); filter: none; }
+  .m-btn-quiet .material-symbols-rounded { color: var(--m-dim); font-size: 18px; }
+
+  /* ---------- tiles ---------- */
+  .m-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .m-tile {
+    text-align: left; padding: 13px 14px; border-radius: 12px; background: var(--m-surface);
+    border: 1px solid var(--m-line); color: #fff; cursor: pointer; min-height: 98px;
+    display: flex; flex-direction: column; font-family: inherit;
+  }
+  .m-tile:hover { border-color: var(--m-line-strong); filter: none; }
+  .m-tile[disabled] { cursor: default; opacity: 1; }
+  .m-tile[disabled]:hover { border-color: var(--m-line); }
+  .m-tile-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .m-tile .fig { font: 600 20px var(--m-display); margin-top: auto; }
+  .m-tile .ttl { font: 600 15px Inter, sans-serif; margin-top: auto; }
+  .m-tile .sub { font-size: 11px; color: var(--m-dim); margin-top: 3px; }
+  .m-tag {
+    font: 600 9px var(--m-mono); letter-spacing: .1em; padding: 2px 6px; border-radius: 5px;
+    border: 1px solid var(--m-line-strong); color: var(--m-dim); white-space: nowrap;
+  }
+  .m-tag.soon { border-color: var(--m-line-strong); color: var(--m-dim); }
+  .m-tag.on { background: var(--m-mint-tint); border-color: var(--m-mint-border); color: var(--m-mint); }
+
+  /* ---------- dismissible notice ---------- */
+  .m-notice { margin-top: 8px; border-radius: 12px; border: 1px solid var(--m-line); background: var(--m-sunken); padding: 14px; position: relative; }
+  .m-notice .x {
+    position: absolute; top: 9px; right: 9px; width: 26px; height: 26px; border-radius: 7px;
+    background: transparent; border: 0; color: var(--m-faint); cursor: pointer; display: grid; place-items: center;
+  }
+  .m-notice .x:hover { background: var(--m-raised); color: #fff; filter: none; }
+  .m-notice .body { font-size: 11.5px; color: var(--m-dim); margin-top: 6px; max-width: 250px; line-height: 1.6; }
+  .m-notice .cta {
+    margin-top: 11px; padding: 0 14px; min-height: 34px; border-radius: 8px; background: transparent;
+    border: 1px solid var(--m-pink-border); color: var(--m-pink); font: 600 12px Inter, sans-serif; cursor: pointer;
+  }
+  .m-notice .cta:hover { background: var(--m-pink-tint); border-color: var(--m-pink); filter: none; }
+
+  /* ---------- activity rows ---------- */
+  .m-sec { display: flex; align-items: center; justify-content: space-between; margin: 22px 0 2px; }
+  .m-sec .m-mono { letter-spacing: .16em; }
+  .m-link { background: none; border: 0; color: var(--m-pink); font: 600 12px Inter, sans-serif; cursor: pointer; padding: 6px 4px; }
+  .m-link:hover { filter: none; color: var(--m-pink-hover); }
+  .m-row {
+    width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+    background: transparent; border: 0; border-top: 1px solid var(--m-line-faint);
+    padding: 12px 2px; color: #fff; cursor: pointer; min-height: 62px; font-family: inherit;
+  }
+  .m-row:hover { background: rgba(255, 255, 255, .025); filter: none; }
+  .m-row .cc {
+    width: 34px; height: 34px; flex: none; border-radius: 9px; background: var(--m-surface);
+    border: 1px solid var(--m-line); display: grid; place-items: center;
+    font: 500 10px var(--m-mono); letter-spacing: .06em; color: var(--m-dim);
+  }
+  .m-row .who { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m-row .sub { font-size: 11px; color: var(--m-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .m-row .amt { font: 600 13.5px var(--m-display); }
+  .m-row .st { font: 500 9.5px var(--m-mono); letter-spacing: .1em; margin-top: 2px; }
+  .m-empty { padding: 22px 2px; color: var(--m-faint); font-size: 12px; border-top: 1px solid var(--m-line-faint); }
+
+  /* ---------- bottom navigation ---------- */
+  .m-nav {
+    display: none; grid-template-columns: repeat(5, 1fr); align-items: center;
+    height: calc(76px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--m-bg); border-top: 1px solid var(--m-line-faint);
+    position: sticky; bottom: 0; z-index: 60;
+  }
+  #dashboard.m-on .m-nav { display: grid; }
+  .m-nav button {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    background: none; border: 0; cursor: pointer; height: 100%; padding: 0;
+    color: var(--m-dim); font: 500 12px Inter, sans-serif;
+  }
+  .m-nav button:hover { filter: none; color: #fff; }
+  .m-nav .ind {
+    width: 56px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+    transition: background .2s ease;
+  }
+  .m-nav button.active .ind { background: var(--m-raised); }
+  .m-nav button.active { color: #fff; }
+  .m-nav .material-symbols-rounded { font-size: 24px; }
+  .m-nav .brand { color: var(--m-pink); font: 400 22px Inter, sans-serif; line-height: 1; }
+
+  /* ---------- sub-screens ----------
+     The funding, crypto, payment-page and Plus cards are still the working
+     implementations, so the nav reveals them in place instead of this pass
+     duplicating them. data-msub says which one is open; "home" is the
+     dashboard itself. They get real Noir screens next. */
+  #dashboard.m-on #view-dashboard > .card { display: none; }
+  #dashboard.m-on .m-subhead { display: none; }
+  #dashboard.m-on[data-msub="bundle"] #privacy-card { display: block; }
+  #dashboard.m-on[data-msub="bundle"] .m-subhead { display: flex; }
+
+  /* ---------- Zold Plus ----------
+     A preview, not a product: the tier in the design (card, no-FX-margin,
+     vault boost) is not built, so the price is replaced by "coming soon" and
+     the CTA cannot be pressed. The eSIM and VPN behind two of these perks DO
+     ship today as the Privacy Bundle, which the last row still reaches. */
+  .m-card {
+    border-radius: 12px; background: linear-gradient(140deg, #4a1a30, #261e20 70%);
+    box-shadow: 0 0 0 1px #2a2a2a, 0 18px 40px rgba(0, 0, 0, .85);
+    padding: 24px; height: 196px; display: flex; flex-direction: column;
+  }
+  .m-card .brandline { display: flex; justify-content: space-between; align-items: flex-start; font-size: 16px; font-weight: 500; letter-spacing: .5px; }
+  .m-card .pan { margin-top: auto; font-family: var(--m-mono); font-size: 17px; letter-spacing: 3px; color: var(--m-dim); }
+  .m-card .foot { display: flex; justify-content: space-between; margin-top: 12px; font-size: 12px; letter-spacing: .5px; color: var(--m-dim); }
+  .m-perks { margin-top: 16px; border-radius: 10px; background: var(--m-surface); overflow: hidden; }
+  .m-perk {
+    display: flex; align-items: center; gap: 16px; padding: 14px 16px;
+    border-top: 1px solid var(--m-line); min-height: 72px;
+  }
+  .m-perk:first-child { border-top: 0; }
+  .m-perk .material-symbols-rounded { font-size: 24px; color: var(--m-pink); flex: none; }
+  .m-perk .t { font-size: 16px; letter-spacing: .15px; }
+  .m-perk .d { font-size: 14px; color: var(--m-dim); letter-spacing: .25px; margin-top: 2px; }
+  #dashboard.m-on[data-msub="plus"] #m-plus-screen { display: block; }
+
+  /* ---------- send flow ---------- */
+  #dashboard.m-on[data-msub="country"] #m-country-screen,
+  #dashboard.m-on[data-msub="method"] #m-method-screen,
+  #dashboard.m-on[data-msub="amount"] #m-amount-screen,
+  #dashboard.m-on[data-msub="recipient"] #m-recipient-screen,
+  #dashboard.m-on[data-msub="progress"] #m-progress-screen { display: block; }
+
+  .m-search {
+    display: flex; align-items: center; gap: 12px; padding: 0 16px;
+    border-radius: 12px; background: var(--m-raised); margin-bottom: 8px;
+  }
+  .m-search input {
+    flex: 1; min-height: 56px; background: transparent; border: 0; outline: none;
+    color: #fff; font-size: 16px; font-family: inherit; letter-spacing: .5px; padding: 0;
+  }
+  .m-search input:focus { box-shadow: none; }
+  .m-h2row { display: flex; align-items: center; gap: 8px; height: 64px; }
+  .m-h2 { font-size: 22px; font-weight: 400; }
+  .m-chiprow { display: flex; gap: 8px; margin-top: 12px; }
+  .m-chip {
+    font-size: 11px; font-weight: 500; letter-spacing: .5px; padding: 6px 12px;
+    border-radius: 8px; border: 1px solid var(--m-line); color: var(--m-dim);
+  }
+  .m-chip.on { background: var(--m-pink-tint); border-color: var(--m-pink-border); color: var(--m-pink-soft); }
+  .m-kick { font-size: 12px; font-weight: 500; letter-spacing: .5px; text-transform: uppercase; color: var(--m-dim); }
+
+  .m-amountline {
+    display: flex; align-items: baseline; gap: 8px; margin-top: 16px;
+    padding: 0 4px 12px; border-bottom: 2px solid var(--m-pink);
+  }
+  .m-amountline .cur { font-size: 32px; font-weight: 400; color: var(--m-dim); }
+  .m-amountline input {
+    flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: #fff;
+    font-size: 45px; font-weight: 400; letter-spacing: -1px; font-variant-numeric: tabular-nums;
+    font-family: inherit; padding: 0;
+  }
+  .m-amountline input:focus { box-shadow: none; }
+  .m-presets { display: flex; gap: 8px; margin-top: 16px; }
+  .m-presets button {
+    flex: 1; min-height: 32px; border-radius: 8px; background: transparent;
+    border: 1px solid var(--m-line-strong); color: #fff; font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .m-presets button:hover { background: rgba(255, 45, 139, .10); filter: none; }
+  .m-quote { margin-top: 24px; padding: 16px; border-radius: 10px; background: var(--m-surface); }
+  .m-qrow { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 14px; color: var(--m-dim); letter-spacing: .25px; }
+  .m-qrow span:last-child { color: #fff; font-variant-numeric: tabular-nums; }
+  .m-qtotal { display: flex; justify-content: space-between; align-items: baseline; margin-top: 12px; padding-top: 14px; border-top: 1px solid var(--m-line); }
+  .m-qtotal .v { font-size: 24px; font-weight: 400; font-variant-numeric: tabular-nums; color: var(--m-pink); }
+  .m-qnote { font-size: 12px; color: var(--m-dim); margin-top: 8px; letter-spacing: .4px; line-height: 1.5; }
+
+  .m-field {
+    background: var(--m-highest); border-radius: 8px 8px 0 0;
+    border-bottom: 1px solid var(--m-dim); padding: 8px 16px;
+  }
+  .m-field:focus-within { border-bottom: 2px solid var(--m-pink); padding-bottom: 7px; }
+  .m-field label { display: block; font-size: 12px; letter-spacing: .4px; color: var(--m-dim); margin: 0; }
+  .m-field input {
+    width: 100%; min-height: 32px; background: transparent; border: 0; outline: none;
+    color: #fff; font-size: 16px; font-family: inherit; letter-spacing: .5px; padding: 0;
+  }
+  .m-field input:focus { box-shadow: none; }
+
+  /* Timeline. Done nodes fill pink; the active one pulses. */
+  .m-step { display: flex; gap: 16px; transition: opacity .4s; }
+  .m-step .rail { display: flex; flex-direction: column; align-items: center; }
+  .m-step .node {
+    width: 28px; height: 28px; flex: none; border-radius: 50%;
+    display: grid; place-items: center; background: var(--m-raised); color: var(--m-faint);
+  }
+  .m-step.done .node { background: var(--m-pink); color: #fff; }
+  .m-step.active .node { background: var(--m-pink); color: #fff; animation: mPulse 1.6s infinite; }
+  .m-step .line { width: 2px; flex: 1; min-height: 20px; background: var(--m-line); margin: 4px 0; }
+  .m-step:last-child .line { display: none; }
+  .m-step .body { padding-bottom: 18px; min-width: 0; }
+  .m-step .t { font-size: 16px; letter-spacing: .15px; }
+  .m-step .d { font-size: 12px; color: var(--m-dim); font-family: var(--m-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 250px; }
+  .m-ref {
+    margin-top: 8px; padding: 20px; border-radius: 10px; background: var(--m-amber-tint);
+    color: var(--m-amber); text-align: center; animation: mRise .4s ease;
+  }
+  .m-ref .code { font-size: 32px; font-weight: 400; letter-spacing: 6px; margin: 10px 0 4px; font-variant-numeric: tabular-nums; }
+
+  /* ---------- activity + profile ----------
+     These follow the handoff's markup for these two screens, which uses larger
+     type and round avatars than the Noir home does. That inconsistency is in
+     the design file itself, not introduced here — see the note in the commit. */
+  #dashboard.m-on[data-msub="activity"] #m-activity-screen,
+  #dashboard.m-on[data-msub="profile"] #m-profile-screen { display: block; }
+
+  .m-title { display: flex; align-items: flex-end; height: 112px; padding-bottom: 20px; font-size: 32px; font-weight: 400; }
+  .m-filters { display: flex; gap: 8px; margin-bottom: 8px; overflow-x: auto; padding-bottom: 4px; }
+  .m-filters button {
+    flex: none; display: flex; align-items: center; gap: 6px; padding: 0 16px; min-height: 32px;
+    border-radius: 8px; font-size: 14px; font-weight: 500; letter-spacing: .1px; cursor: pointer;
+    background: transparent; border: 1px solid var(--m-line-strong); color: var(--m-dim);
+  }
+  .m-filters button.on { background: var(--m-pink-tint); border-color: var(--m-pink-border); color: var(--m-pink-soft); }
+  .m-filters .material-symbols-rounded { font-size: 18px; }
+
+  .m-txrow {
+    width: 100%; display: flex; align-items: center; gap: 16px; text-align: left;
+    background: transparent; border: 0; padding: 12px 4px; color: #fff; cursor: pointer;
+    min-height: 72px; font-family: inherit;
+  }
+  .m-txrow:hover { background: rgba(255, 255, 255, .035); filter: none; }
+  .m-txrow .av {
+    width: 40px; height: 40px; flex: none; border-radius: 50%; background: var(--m-raised);
+    display: grid; place-items: center; font-size: 12px; font-weight: 500; color: var(--m-dim);
+  }
+  .m-txrow .n { font-size: 16px; letter-spacing: .15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m-txrow .s { font-size: 14px; color: var(--m-dim); letter-spacing: .25px; }
+  .m-txrow .a { font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .m-txrow .st { font-size: 11px; font-weight: 500; letter-spacing: .5px; }
+
+  .m-idcard { display: flex; align-items: center; gap: 16px; padding: 16px; border-radius: 10px; background: var(--m-surface); }
+  .m-idcard .av {
+    width: 56px; height: 56px; border-radius: 50%; background: var(--m-pink-tint);
+    display: grid; place-items: center; color: var(--m-pink-soft); font-size: 20px; font-weight: 500;
+  }
+  .m-seclabel { font-size: 14px; font-weight: 500; color: var(--m-pink); letter-spacing: .1px; margin: 24px 0 8px; }
+  .m-secrow {
+    display: flex; align-items: center; gap: 16px; padding: 14px 16px;
+    border-top: 1px solid var(--m-line); min-height: 72px;
+  }
+  .m-secrow:first-child { border-top: 0; }
+  .m-secrow .material-symbols-rounded { font-size: 24px; color: var(--m-pink); flex: none; }
+
+  /* Each designed sub-screen is its own block; data-msub picks one. */
+  .m-screen { display: none; }
+  #dashboard.m-on[data-msub="add"] #m-add-screen,
+  #dashboard.m-on[data-msub="bank"] #m-bank-screen,
+  #dashboard.m-on[data-msub="crypto"] #m-crypto-screen { display: block; }
+  #dashboard.m-on:not([data-msub="home"]) #m-home { display: none; }
+
+  .m-sheadrow { display: flex; align-items: center; height: 64px; }
+  .m-backbtn {
+    width: 48px; height: 48px; margin-left: -12px; border-radius: 50%;
+    background: transparent; border: 0; color: #fff; display: grid; place-items: center; cursor: pointer;
+  }
+  .m-backbtn:hover { background: rgba(255, 45, 139, .10); filter: none; }
+  .m-h1 { font-size: 32px; font-weight: 400; letter-spacing: -.01em; }
+  .m-lede { font-size: 16px; color: var(--m-dim); margin-top: 10px; letter-spacing: .5px; line-height: 1.5; }
+
+  /* Option row — the Add funds list. */
+  .m-optrow {
+    width: 100%; text-align: left; display: flex; gap: 16px; align-items: center;
+    padding: 20px 16px; border-radius: 10px; background: var(--m-surface); border: 0;
+    color: #fff; cursor: pointer; min-height: 88px; font-family: inherit;
+  }
+  .m-optrow:hover { background: var(--m-raised); filter: none; }
+  .m-optrow.off { background: transparent; border: 1px solid var(--m-line); opacity: .6; cursor: default; }
+  .m-optrow.off:hover { background: transparent; }
+  .m-optrow .ic { font-size: 24px; color: var(--m-pink); flex: none; }
+  .m-optrow .tx { flex: 1; min-width: 0; }
+  .m-optrow .t { display: block; font-size: 16px; font-weight: 500; letter-spacing: .15px; }
+  .m-optrow .d { display: block; font-size: 14px; color: var(--m-dim); letter-spacing: .25px; margin-top: 2px; }
+  .m-optrow .ch { font-size: 20px; color: var(--m-dim); flex: none; }
+
+  /* Copyable detail rows. */
+  .m-rows { margin-top: 20px; border-radius: 10px; background: var(--m-surface); overflow: hidden; }
+  .m-detrow {
+    display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+    border-top: 1px solid var(--m-line); min-height: 72px;
+  }
+  .m-detrow:first-child { border-top: 0; }
+  .m-rowk { font-size: 12px; letter-spacing: .5px; text-transform: uppercase; color: var(--m-dim); }
+  .m-rowv { font-size: 15px; font-family: var(--m-mono); margin-top: 3px; word-break: break-all; }
+  .m-copybtn {
+    flex: none; min-height: 40px; padding: 0 16px; border-radius: 10px; background: transparent;
+    border: 1px solid var(--m-line-strong); color: var(--m-pink); font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .m-copybtn:hover { background: rgba(255, 45, 139, .10); filter: none; }
+
+  .m-note {
+    display: flex; gap: 12px; margin-top: 16px; padding: 16px; border-radius: 10px;
+    font-size: 14px; line-height: 1.6; letter-spacing: .25px;
+  }
+  .m-note.info { background: var(--m-raised); color: #e9ebef; }
+  .m-note.warn { background: var(--m-amber-tint); color: var(--m-amber); }
+
+  .m-cta {
+    width: 100%; margin-top: 24px; min-height: 56px; border-radius: 12px; background: var(--m-pink);
+    border: 0; color: #fff; font-size: 16px; font-weight: 500; letter-spacing: .15px; cursor: pointer;
+  }
+  .m-cta:hover { filter: brightness(1.06); }
+  .m-cta:disabled { opacity: .4; cursor: default; }
+  .m-cta.quiet { background: var(--m-raised); color: #e9ebef; margin-top: 16px; min-height: 48px; font-size: 14px; }
+  /* Send still runs the existing rail flow; it becomes the whole screen rather
+     than a desktop side panel. Its own Noir screens land in the next pass. */
+  #dashboard.m-on[data-msub="send"] .rail {
+    display: block; grid-row: 1; overflow-y: auto;
+    padding: 16px 16px calc(28px + env(safe-area-inset-bottom, 0px));
+  }
+  #dashboard.m-on[data-msub="send"] .main { display: none; }
+
+  @keyframes mPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,45,139,.45); } 50% { box-shadow: 0 0 0 9px rgba(255,45,139,0); } }
+  @keyframes mRise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 </style>
 </head>
 <body>
+  <!-- Network state. Kept outside every screen because it is true of all of
+       them, and because the API refuses rather than serving a stale balance
+       while it is up — the user is owed the reason. -->
+  <div id="offline-bar" class="hidden">You're offline — balances and quotes can't be refreshed</div>
+
   <!-- ============ onboarding (split-screen) ============ -->
   <section id="onboard">
     <div class="onb-left">
@@ -417,10 +1025,10 @@
         <div class="onb-steps"><span class="dot active" id="ostep1"></span><span class="dot" id="ostep2"></span></div>
 
         <div id="onb-step1">
-          <h1>Open your Account</h1>
-          <div class="sub">A EUR account with a real IBAN, held in your own smart-account vault.</div>
+          <h1>Open your account</h1>
+          <div class="sub">A euro account with your own IBAN, so money can reach you the ordinary way. Takes about a minute.</div>
           <label>Full name</label>
-          <input id="name" placeholder="Amina Kamau" />
+          <input id="name" placeholder="Miriam Zoldenburg" />
           <label>Email</label>
           <input id="email" type="email" placeholder="amina@example.com" />
           <label>Country of residence</label>
@@ -429,43 +1037,101 @@
           <div class="error hidden" id="create-err"></div>
           <div class="onb-terms">
             Already have an account? <a id="link-signin">Sign in with your passkey</a><br/><br/>
-            By signing up you accept the <a href="#">Terms of use</a> &amp; <a href="#">Privacy policy</a>
+            By continuing you accept the <a href="#">Terms of use</a> &amp; <a href="#">Privacy policy</a>
           </div>
         </div>
 
         <div id="onb-step2" class="hidden">
-          <h1>Secure your account</h1>
-          <div class="sub">No passwords, no seed phrases.</div>
+          <h1>Set up your passkey</h1>
+          <div class="sub">Nothing to remember, nothing to write down.</div>
           <div class="pk-card">
-            🔑 <b>Your device becomes the key.</b> Face ID, fingerprint, or your
-            screen lock creates a passkey that signs you in — and will co-own
-            your smart-account vault. It never leaves your device.
+            <span class="pk-ic">🔑</span>
+            <span><b>This device becomes your key.</b> Face ID, your fingerprint
+            or your screen lock unlocks the account and approves each payment.
+            It stays on this device — we never receive it, and there is no
+            password for anyone to steal or phish.</span>
           </div>
           <button class="btn-primary-lite" id="btn-passkey">Create passkey &amp; open account</button>
-          <button class="ghost wide" id="btn-skippk">Skip for now</button>
+          <button class="ghost wide" id="btn-skippk">Set this up later</button>
+          <!-- Honest about the consequence: the API refuses to issue an IBAN to
+               an account with no passkey outside simulation mode
+               (custodyBlockerBeforeFunding), so "later" means before money, not
+               whenever. Saying so here beats a 409 the user cannot read. -->
+          <div class="onb-note">You can look around first, but an account needs a passkey before it can be given an IBAN or hold money.</div>
           <div class="error hidden" id="pk-err"></div>
         </div>
       </div>
     </div>
+    <!-- No mock balance here on purpose. A made-up €40,206.20 is the first
+         thing that reads as a demo rather than a product, and it teaches the
+         reader nothing about what the account is. -->
     <div class="onb-hero">
-      <div class="onb-hero-inner">
-        <h2>#BankOnChain</h2>
-        <div class="tag">Welcome to the future of banking.</div>
-        <div class="onb-mock">
-          <div class="label" style="font-size:.72rem;color:var(--muted);font-weight:600">Primary account <span class="chip eur">EUR</span></div>
-          <div class="amount" style="font-size:1.9rem"><span class="cur">€</span>40,206.20</div>
-          <svg width="100%" height="54" viewBox="0 0 420 54" preserveAspectRatio="none" aria-hidden="true">
-            <defs>
-              <linearGradient id="sg2" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0" stop-color="#7b2ff7"/><stop offset="1" stop-color="#ed188d"/>
-              </linearGradient>
-            </defs>
-            <path d="M0 44 L26 40 L52 42 L78 34 L104 38 L130 28 L156 32 L182 24 L208 27 L234 18 L260 22 L286 13 L312 17 L338 9 L364 13 L392 5 L420 9"
-                  fill="none" stroke="url(#sg2)" stroke-width="2.2" stroke-linejoin="round"/>
-          </svg>
-          <div style="display:flex;gap:1rem;font-size:.74rem;color:var(--muted)">
-            <span>IBAN · SEPA in</span><span>🇰🇪 cash out</span><span>🏦 bank out</span><span>🇮🇳 UPI</span>
+      <!-- Step 1: what the account is. -->
+      <div class="onb-hero-inner hero-1">
+        <h2>A euro account that reaches home.</h2>
+        <div class="tag">Money arrives by normal bank transfer and leaves as cash or a bank payment, with the rate and fee shown before you send.</div>
+        <div class="onb-points">
+          <div class="onb-point">
+            <span class="pi">🏦</span>
+            <span>
+              <span class="pt">Your own IBAN</span>
+              <span class="pd">Salary, family, a client — anyone can pay you by ordinary SEPA transfer.</span>
+            </span>
           </div>
+          <div class="onb-point">
+            <span class="pi">🇰🇪</span>
+            <span>
+              <span class="pt">Cash pickup or bank transfer</span>
+              <span class="pd">Send to a counter in Kenya, or to any IBAN in Europe.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">🔒</span>
+            <span>
+              <span class="pt">Only you can approve a payment</span>
+              <span class="pd">Every send is signed by the passkey on your device. We can move nothing on our own.</span>
+            </span>
+          </div>
+        </div>
+        <div class="onb-foot">
+          Your euros are issued and held as e-money by Monerium ehf., an
+          Electronic Money Institution supervised in Iceland. Zold is software
+          and holds no licence of its own.
+        </div>
+      </div>
+
+      <!-- Step 2: why the passkey matters. Deliberately makes no promise about
+           recovering a lost device — the guardian ceremony is not a finished
+           product flow, and onboarding is the worst place to imply otherwise. -->
+      <div class="onb-hero-inner hero-2">
+        <h2>Only this device can spend it.</h2>
+        <div class="tag">Your passkey is the account's signature. It is created here, it stays here, and it is what every payment is checked against.</div>
+        <div class="onb-points">
+          <div class="onb-point">
+            <span class="pi">🔑</span>
+            <span>
+              <span class="pt">Nothing to remember</span>
+              <span class="pd">Face ID, your fingerprint or your screen lock. No password, no seed phrase, nothing to write down.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">✍️</span>
+            <span>
+              <span class="pt">You sign the amount and the recipient</span>
+              <span class="pd">Both are fixed before you approve, so a payment cannot be re-priced or redirected after the fact.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">🚫</span>
+            <span>
+              <span class="pt">We cannot move your balance</span>
+              <span class="pd">Our server pays the network fee and submits what you signed. It cannot authorise a payment of its own.</span>
+            </span>
+          </div>
+        </div>
+        <div class="onb-foot">
+          Keep this device. A passkey lives on the device that created it, so
+          setting one up on your everyday phone or laptop is the right choice.
         </div>
       </div>
     </div>
@@ -473,28 +1139,65 @@
 
   <!-- ============ provisioning flow ============ -->
   <section id="provisioning">
-    <div class="prov-card">
-      <h1>Setting up your account</h1>
-      <div class="sub">This happens once — your vault and IBAN are being created for real.</div>
-      <div id="prov-steps">
-        <div class="pstep" ><span class="pdot">✓</span> Creating your account</div>
-        <div class="pstep"><span class="pdot">✓</span> Deploying your smart wallet <span style="font-weight:400;color:var(--faint)">(gasless)</span></div>
-        <div class="pstep"><span class="pdot">✓</span> Linking your wallet to Monerium</div>
-        <div class="pstep"><span class="pdot">✓</span> Issuing your IBAN</div>
+    <div class="prov-left">
+      <div class="prov-card">
+        <h1>Setting up your account</h1>
+        <div class="sub">This happens once, and it is the real thing — not a preview. It usually takes under a minute.</div>
+        <!-- provStep() indexes these four in order; keep the count and the
+             .pstep/.pdot structure. Wording is plain on purpose: "deploying your
+             smart wallet (gasless)" told a non-crypto reader nothing. -->
+        <div id="prov-steps">
+          <div class="pstep"><span class="pdot">✓</span><span class="ptext">Creating your account</span></div>
+          <div class="pstep"><span class="pdot">✓</span><span class="ptext">Setting up your wallet <span class="pwhy">— we cover the network fee</span></span></div>
+          <div class="pstep"><span class="pdot">✓</span><span class="ptext">Connecting to Monerium <span class="pwhy">— your e-money issuer</span></span></div>
+          <div class="pstep"><span class="pdot">✓</span><span class="ptext">Issuing your IBAN</span></div>
+        </div>
+        <div class="error hidden" id="prov-err"></div>
+        <button class="ghost wide hidden" id="btn-skip">Continue without finishing</button>
       </div>
-      <div class="error hidden" id="prov-err"></div>
-      <button class="ghost wide hidden" id="btn-skip">Continue to dashboard anyway</button>
+    </div>
+    <!-- Step 3's hero: what is being made, while it is being made. -->
+    <div class="onb-hero">
+      <div class="onb-hero-inner">
+        <h2>Nearly there.</h2>
+        <div class="tag">Three things are being created for you, once. You will not do this again on this device.</div>
+        <div class="onb-points">
+          <div class="onb-point">
+            <span class="pi">👛</span>
+            <span>
+              <span class="pt">A wallet only you control</span>
+              <span class="pd">Created with the passkey you just made. We cover the network fee for it.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">🏦</span>
+            <span>
+              <span class="pt">A euro IBAN</span>
+              <span class="pd">Issued through Monerium and attached to your account, ready to receive transfers.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">⏱️</span>
+            <span>
+              <span class="pt">Usually under a minute</span>
+              <span class="pd">If a step stalls, you can carry on and finish it from your account later.</span>
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
   <!-- ============ KYC review state ============ -->
   <section id="kyc-review" style="display:none; min-height:100vh; place-items:center; padding:1.5rem">
     <div class="prov-card">
-      <h1 id="kyc-title">Identity review</h1>
-      <div class="sub" id="kyc-sub">Your account is created. Funding and transfers unlock after approval.</div>
-      <div id="kyc-choice">
-        <button class="wide" id="btn-monerium-existing">I already have Monerium</button>
-        <button class="ghost wide" id="btn-monerium-new">I need identity review</button>
+      <h1 id="kyc-title">Verify your identity</h1>
+      <div class="sub" id="kyc-sub">Your account exists. Adding money and sending unlock once you are approved — the law requires this before an IBAN can be yours.</div>
+      <div id="kyc-choice" class="kyc-pick">
+        <button id="btn-monerium-existing">Use my Monerium account
+          <span>Already verified with Monerium? Connect it and skip the checks.</span></button>
+        <button id="btn-monerium-new">Verify my identity
+          <span>The standard route — an ID check with our provider.</span></button>
       </div>
       <div class="kyc-status">
         <div class="ks" id="kyc-label">PENDING</div>
@@ -530,6 +1233,331 @@
       </div>
 
       <section class="view active" id="view-dashboard">
+
+      <!-- ================= Noir home =================
+           The mobile dashboard from design_handoff_zold_mobile. It replaces
+           the desktop card stack below, which stays in the document because
+           the funding, crypto, payment-page and Plus cards are still the
+           working implementations — the bottom nav reveals them by setting
+           data-msub rather than duplicating them here. They get their own
+           Noir screens in the next pass. -->
+      <div id="m-home">
+        <div class="m-head">
+          <div class="m-initials" id="m-initials">—</div>
+          <div style="flex:1;min-width:0">
+            <div class="m-name" id="m-name">Account</div>
+            <div class="m-status">
+              <span class="m-dot" id="m-kyc-dot"></span>
+              <span id="m-kyc-label">—</span>
+            </div>
+          </div>
+          <button class="m-iconbtn" id="m-bell" title="Activity"><span class="material-symbols-rounded" style="font-size:19px">notifications</span></button>
+        </div>
+
+        <button class="m-kyc-banner hidden" id="m-kyc-banner">
+          <span class="material-symbols-rounded" style="font-size:20px;color:var(--m-pink)">badge</span>
+          <span style="flex:1;min-width:0">
+            <span style="display:block;font-size:13px;font-weight:600" id="m-kyc-banner-title">Verify your identity</span>
+            <span style="display:block;font-size:11.5px;color:var(--m-dim);margin-top:1px" id="m-kyc-banner-sub">Adding money and sending stay paused until then.</span>
+          </span>
+          <span class="material-symbols-rounded" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
+        </button>
+
+        <div class="m-safe">
+          <div class="m-safe-body">
+            <div class="m-safe-top">
+              <div class="m-safe-label"><span class="material-symbols-rounded" style="font-size:13px;color:var(--m-pink)">lock</span> Total in safe</div>
+              <span class="m-chip-eure">EURe</span>
+            </div>
+            <div class="m-balance">
+              <span class="cur">€</span><span class="amt m-fig" id="m-total">0.00</span>
+            </div>
+            <button class="m-addr" id="m-addr">
+              <span class="k">SAFE</span> <span id="m-addr-short">—</span>
+              <span class="material-symbols-rounded" style="font-size:13px" id="m-addr-icon">content_copy</span>
+            </button>
+          </div>
+          <div class="m-split">
+            <div>
+              <div class="m-mono" style="letter-spacing:.14em">Available</div>
+              <div class="v m-fig" id="m-available">€0.00</div>
+            </div>
+            <div>
+              <div class="m-mono" style="letter-spacing:.14em">In flight</div>
+              <div class="v dim m-fig" id="m-inflight">€0.00</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="m-actions">
+          <button class="m-btn-send" id="m-send"><span class="material-symbols-rounded" style="font-size:19px">north_east</span>Send</button>
+          <button class="m-btn-quiet" id="m-add"><span class="material-symbols-rounded">add</span>Add</button>
+          <button class="m-btn-quiet" id="m-activity"><span class="material-symbols-rounded">swap_vert</span>Activity</button>
+        </div>
+
+        <div class="m-tiles">
+          <!-- Savings vault is in the design but has no endpoint behind it, so
+               it states that rather than moving a number that isn't real. -->
+          <div class="m-tile" id="m-vault" disabled>
+            <div class="m-tile-top">
+              <div class="m-mono">Savings vault</div>
+              <span class="material-symbols-rounded" style="font-size:15px;color:var(--m-faint)">savings</span>
+            </div>
+            <div class="ttl" style="color:var(--m-dim)">Not yet</div>
+            <div class="sub">No vault product is live</div>
+          </div>
+          <button class="m-tile" id="m-plus">
+            <div class="m-tile-top">
+              <div class="m-mono">Zold Plus</div>
+              <span class="m-tag" id="m-plus-tag">—</span>
+            </div>
+            <div class="ttl" id="m-plus-title">Upgrade</div>
+            <div class="sub" id="m-plus-sub">VPN · eSIM</div>
+          </button>
+        </div>
+
+        <div class="m-notice" id="m-usd">
+          <button class="x" id="m-usd-x" title="Dismiss"><span class="material-symbols-rounded" style="font-size:16px">close</span></button>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="m-tag soon">SOON</span>
+            <div style="font-size:13.5px;font-weight:600">USD accounts</div>
+          </div>
+          <div class="body">A second balance, US routing details, USDC in and out.</div>
+          <button class="cta" id="m-usd-cta">Notify me</button>
+        </div>
+
+        <div class="m-sec">
+          <div class="m-mono">Recent activity</div>
+          <button class="m-link" id="m-seeall">See all</button>
+        </div>
+        <div id="m-recent"><div class="m-empty">No transfers yet</div></div>
+      </div>
+
+      <!-- ================= Add funds ================= -->
+      <div class="m-screen" id="m-add-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Add funds</div>
+        <div class="m-lede">Two ways in. Both land as EURe in your safe.</div>
+        <div style="display:grid;gap:8px;margin-top:24px">
+          <button class="m-optrow" id="m-go-bank">
+            <span class="material-symbols-rounded ic">account_balance</span>
+            <span class="tx"><span class="t">Bank account</span><span class="d">SEPA transfer to your IBAN · free</span></span>
+            <span class="material-symbols-rounded ch">chevron_right</span>
+          </button>
+          <button class="m-optrow" id="m-go-crypto">
+            <span class="material-symbols-rounded ic">account_balance_wallet</span>
+            <span class="tx"><span class="t">Crypto wallet</span><span class="d">USDC on Base</span></span>
+            <span class="material-symbols-rounded ch">chevron_right</span>
+          </button>
+          <div class="m-optrow off">
+            <span class="material-symbols-rounded ic" style="color:var(--m-dim)">attach_money</span>
+            <span class="tx"><span class="t">USD account</span><span class="d">ACH and wire in</span></span>
+            <span class="m-tag soon">SOON</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= Add: from your bank ================= -->
+      <div class="m-screen" id="m-bank-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="add"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">From your bank</div>
+        <div class="m-lede">Send a SEPA transfer to these details.</div>
+        <div class="m-rows" id="m-bank-rows"></div>
+        <div class="m-note info">
+          <span class="material-symbols-rounded" style="font-size:22px;flex:none">info</span>
+          <div>Transfers land in seconds during SEPA Instant hours, otherwise the next business day. Only send from an account in your own name.</div>
+        </div>
+        <!-- Shown only where the API accepts a simulated deposit; see
+             capabilities() in server.ts. -->
+        <button class="m-cta hidden" id="m-simulate">Simulate a €250 deposit</button>
+        <div class="m-lede hidden" id="m-simulate-off" style="font-size:12px;margin-top:16px">This deployment does not accept simulated deposits — send a real SEPA transfer to the IBAN above.</div>
+        <div class="error hidden" id="m-bank-err"></div>
+      </div>
+
+      <!-- ================= Add: from a wallet ================= -->
+      <div class="m-screen" id="m-crypto-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="add"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">From a wallet</div>
+        <div class="m-lede">USDC on Base. Anything else is lost.</div>
+        <div id="m-qr-wrap" style="margin-top:24px;display:flex;justify-content:center"></div>
+        <div style="margin-top:20px;border-radius:10px;background:var(--m-surface);padding:16px">
+          <div class="m-rowk">Wallet address</div>
+          <div id="m-wallet" style="font-size:15px;font-family:var(--m-mono);margin-top:8px;word-break:break-all;line-height:1.5"></div>
+          <button class="m-cta quiet" id="m-copy-wallet">Copy address</button>
+        </div>
+        <div class="m-note warn">
+          <span class="material-symbols-rounded" style="font-size:22px;flex:none">warning</span>
+          <div id="m-crypto-warn">Base network only. USDC is converted to EURe at the live mid rate on arrival.</div>
+        </div>
+      </div>
+
+      <!-- ================= Zold Plus (preview) ================= -->
+      <div class="m-screen" id="m-plus-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-card">
+          <div class="brandline">
+            <div>Zold <span style="color:var(--m-pink)">Plus</span></div>
+            <span class="material-symbols-rounded" style="font-size:24px;color:var(--m-dim);transform:rotate(90deg)">wifi</span>
+          </div>
+          <div class="pan">•••• •••• •••• 4471</div>
+          <div class="foot"><span id="m-card-name">—</span><span>09/29</span></div>
+        </div>
+        <!-- The design prices this at €7.99. No such tier exists, so the price
+             is not shown and the CTA cannot be pressed. -->
+        <div class="m-h1" style="font-size:28px;margin-top:24px">Everything, coming soon</div>
+        <div class="m-perks">
+          <div class="m-perk"><span class="material-symbols-rounded">credit_card</span><div><div class="t">Zold card</div><div class="d">Virtual today, metal on request</div></div></div>
+          <div class="m-perk"><span class="material-symbols-rounded">vpn_lock</span><div><div class="t">Mysterium VPN</div><div class="d">Unlimited, device to node</div></div></div>
+          <div class="m-perk"><span class="material-symbols-rounded">sim_card</span><div><div class="t">Kokio eSIM</div><div class="d">20 GB data in 120 countries</div></div></div>
+          <div class="m-perk"><span class="material-symbols-rounded">percent</span><div><div class="t">No FX margin</div><div class="d">First €2,000 sent each month</div></div></div>
+          <div class="m-perk"><span class="material-symbols-rounded">savings</span><div><div class="t">Vault boost</div><div class="d">2.1% on savings, paid daily</div></div></div>
+        </div>
+        <button class="m-cta" disabled>Coming soon</button>
+        <!-- Two of those perks ship today under a different name, so the real
+             thing stays reachable rather than being hidden behind a preview. -->
+        <button class="m-optrow" id="m-go-bundle" style="margin-top:16px">
+          <span class="material-symbols-rounded ic">check_circle</span>
+          <span class="tx"><span class="t">Available now: Privacy Bundle</span><span class="d" id="m-bundle-sub">eSIM and VPN, live today</span></span>
+          <span class="material-symbols-rounded ch">chevron_right</span>
+        </button>
+      </div>
+
+      <!-- ================= Send: where to ================= -->
+      <div class="m-screen" id="m-country-screen">
+        <div class="m-h2row">
+          <button class="m-backbtn" data-mback><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button>
+          <div class="m-h2">Where to?</div>
+        </div>
+        <div class="m-search">
+          <span class="material-symbols-rounded" style="font-size:24px;color:var(--m-dim)">search</span>
+          <input id="m-country-q" placeholder="Search destinations" autocomplete="off" />
+        </div>
+        <div id="m-country-list"></div>
+        <!-- The design searches 170+ countries. Two corridors are actually
+             priced and payable, so the rest is stated rather than listed as
+             options that would dead-end at the quote. -->
+        <div class="m-note info" style="margin-top:16px">
+          <span class="material-symbols-rounded" style="font-size:22px;flex:none">public</span>
+          <div>More corridors open as payout partners are signed. Only destinations Zold can actually price and pay are listed.</div>
+        </div>
+      </div>
+
+      <!-- ================= Send: method ================= -->
+      <div class="m-screen" id="m-method-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="country"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1" id="m-method-dest">—</div>
+        <div class="m-chiprow">
+          <span class="m-chip on" id="m-method-rail">—</span>
+          <span class="m-chip" id="m-method-cur">—</span>
+        </div>
+        <div class="m-lede" style="font-size:14px" id="m-method-intro">How should it arrive?</div>
+        <div style="display:grid;gap:8px;margin-top:16px" id="m-method-list"></div>
+      </div>
+
+      <!-- ================= Send: amount ================= -->
+      <div class="m-screen" id="m-amount-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="method"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-kick" id="m-amount-kick">—</div>
+        <div class="m-amountline">
+          <span class="cur">€</span>
+          <input id="m-amount" inputmode="decimal" value="250" />
+        </div>
+        <div class="m-presets">
+          <button data-mpreset="50">€50</button>
+          <button data-mpreset="250">€250</button>
+          <button data-mpreset="1000">€1000</button>
+        </div>
+        <div class="m-quote" id="m-quote">
+          <div class="m-qnote" id="m-quote-status">Enter an amount to price it.</div>
+          <div id="m-quote-rows"></div>
+          <div class="m-qtotal hidden" id="m-quote-total">
+            <span style="font-size:14px;font-weight:500">They receive</span>
+            <span class="v" id="m-quote-recv">—</span>
+          </div>
+          <div class="m-qnote hidden" id="m-quote-note"></div>
+        </div>
+        <div class="m-qnote" id="m-balance-note"></div>
+        <div class="error hidden" id="m-amount-err"></div>
+        <button class="m-cta" id="m-amount-next" disabled>Continue</button>
+      </div>
+
+      <!-- ================= Send: recipient ================= -->
+      <div class="m-screen" id="m-recipient-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="amount"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Who gets it?</div>
+        <div class="m-lede" style="font-size:14px" id="m-rec-hint">—</div>
+        <div style="display:grid;gap:12px;margin-top:24px" id="m-rec-fields"></div>
+        <div class="m-quote" style="margin-top:24px">
+          <div class="m-qrow"><span>You send</span><span id="m-sum-send">—</span></div>
+          <div class="m-qrow"><span>They receive</span><span id="m-sum-recv" style="color:var(--m-pink);font-weight:500">—</span></div>
+          <div class="m-qrow"><span>Arrives</span><span id="m-sum-eta">—</span></div>
+        </div>
+        <div class="error hidden" id="m-rec-err"></div>
+        <button class="m-cta" id="m-rec-send" disabled>Send</button>
+      </div>
+
+      <!-- ================= Send: progress ================= -->
+      <div class="m-screen" id="m-progress-screen">
+        <div style="padding-top:32px">
+          <div class="m-kick" id="m-prog-kicker">Sending</div>
+          <div style="font-size:36px;font-weight:400;margin-top:8px;font-variant-numeric:tabular-nums;line-height:44px" id="m-prog-amount">—</div>
+          <div class="m-lede" style="margin-top:4px" id="m-prog-to">—</div>
+          <div style="margin-top:32px" id="m-timeline"></div>
+          <div class="m-ref hidden" id="m-prog-ref">
+            <div style="font-size:12px;font-weight:500;letter-spacing:.5px;text-transform:uppercase;opacity:.85">MoneyGram reference</div>
+            <div class="code" id="m-prog-code">—</div>
+            <div style="font-size:14px;opacity:.85;letter-spacing:.25px">Collectable with photo ID at any agent</div>
+          </div>
+          <div class="error hidden" id="m-prog-err"></div>
+          <button class="m-cta hidden" id="m-prog-done">Done</button>
+        </div>
+      </div>
+
+      <!-- ================= Activity ================= -->
+      <div class="m-screen" id="m-activity-screen">
+        <div class="m-title">Activity</div>
+        <!-- All / SEPA / Cash only. The design also filters Bank and Crypto;
+             neither rail exists here, so those chips would always be empty. -->
+        <div class="m-filters" id="m-filters">
+          <button data-mfilter="all" class="on"><span class="material-symbols-rounded">check</span>All</button>
+          <button data-mfilter="sepa">SEPA</button>
+          <button data-mfilter="cash">Cash</button>
+        </div>
+        <div id="m-tx-list"></div>
+      </div>
+
+      <!-- ================= Profile ================= -->
+      <div class="m-screen" id="m-profile-screen">
+        <div class="m-title">Profile</div>
+        <div class="m-idcard">
+          <div class="av" id="m-pf-initials">—</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:16px;font-weight:500;letter-spacing:.15px" id="m-pf-name">—</div>
+            <div style="font-size:14px;color:var(--m-dim);letter-spacing:.25px" id="m-pf-email">—</div>
+          </div>
+          <span class="m-chip" id="m-pf-kyc">—</span>
+        </div>
+        <button class="m-optrow" id="m-pf-plus" style="margin-top:8px">
+          <span class="material-symbols-rounded ic">stars</span>
+          <span class="tx"><span class="t">Zold Plus</span><span class="d" id="m-pf-plus-sub">Coming soon</span></span>
+          <span class="material-symbols-rounded ch">chevron_right</span>
+        </button>
+
+        <div class="m-seclabel">Account</div>
+        <div class="m-rows" id="m-pf-account"></div>
+
+        <div class="m-seclabel">Security</div>
+        <div class="m-rows" id="m-pf-security"></div>
+
+        <button class="m-cta" id="m-pf-signout" style="background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink);min-height:48px;font-size:14px">Sign out</button>
+      </div>
+
+      <!-- Sub-screen header for the legacy cards still reached from the nav. -->
+      <div class="m-head m-subhead">
+        <button class="m-iconbtn" id="m-back"><span class="material-symbols-rounded" style="font-size:19px">arrow_back</span></button>
+        <div class="m-name" id="m-subtitle">Zold Plus</div>
+      </div>
+
       <div class="card hidden" id="kyc-card">
         <h2>Identity review</h2>
         <div class="kyc-status" style="margin-top:0">
@@ -602,14 +1630,23 @@
 
       <div class="card" id="fund-card">
         <h2>Add money</h2>
-        <div class="row2">
-          <div>
-            <label style="margin-top:0">SEPA transfer amount (€)</label>
-            <input id="dep-amount" value="250" inputmode="decimal" />
+        <!-- Two mutually exclusive blocks, chosen by GET /api/health's
+             capabilities. The simulate control only exists where the API will
+             actually accept it; everywhere else the real instructions stand in
+             its place, rather than offering a button that 403s. -->
+        <div id="fund-simulate" class="hidden">
+          <div class="row2">
+            <div>
+              <label style="margin-top:0">SEPA transfer amount (€)</label>
+              <input id="dep-amount" value="250" inputmode="decimal" />
+            </div>
+            <button id="btn-deposit">Deposit</button>
           </div>
-          <button id="btn-deposit">Deposit</button>
+          <div class="hint">Simulates a SEPA transfer to your IBAN. Local testing only — this control is absent wherever the API refuses it.</div>
         </div>
-        <div class="hint">Simulates a SEPA transfer to your IBAN — Monerium mints EURe straight into the vault.</div>
+        <div id="fund-real" class="hidden">
+          <div class="hint" id="fund-real-hint"></div>
+        </div>
         <div class="error hidden" id="dep-err"></div>
       </div>
 
@@ -677,7 +1714,6 @@
             <button class="filter-btn active" data-tx-filter="all">All</button>
             <button class="filter-btn" data-tx-filter="cash">Cash</button>
             <button class="filter-btn" data-tx-filter="sepa">SEPA</button>
-            <button class="filter-btn" data-tx-filter="upi">UPI</button>
             <button class="ghost" id="btn-refresh-tx">Refresh</button>
           </div>
           <div id="tx-page-list"><div class="empty">No transfers yet</div></div>
@@ -709,7 +1745,7 @@
           <h2>Saved contacts</h2>
           <div class="contact-form">
             <div><label style="margin-top:0">Name</label><input id="contact-name" placeholder="Joseph Otieno" /></div>
-            <div><label style="margin-top:0">Destination</label><input id="contact-dest" placeholder="+254..., IBAN, or UPI ID" /></div>
+            <div><label style="margin-top:0">Destination</label><input id="contact-dest" placeholder="+254… or IBAN" /></div>
             <button id="btn-add-contact">Save</button>
           </div>
           <div id="contact-list"><div class="empty">No saved contacts yet</div></div>
@@ -759,23 +1795,14 @@
           <!-- step C: recipient details + quote summary -->
           <div id="send-details" class="hidden">
             <div class="stepnav"><a id="back-options">‹ Delivery options</a><span id="det-title"></span></div>
-            <div id="upi-scan" class="hidden">
-              <label style="margin-top:0">UPI ID or QR</label>
-              <div class="row2">
-                <div><input id="upi-qr" placeholder="paste upi://pay?pa=… or merchant@okicici" /></div>
-                <button class="ghost" id="btn-scan">📷 Scan</button>
-              </div>
-              <div class="hint hidden" id="upi-parsed"></div>
-              <video id="qr-video" class="hidden" muted playsinline style="width:100%;border-radius:12px;margin-top:.6rem"></video>
-            </div>
             <div class="quote" id="quote-box" style="border-top:0;padding-top:0;margin-top:.2rem">
               <div class="qrow" id="row-mid"><span>Mid-market rate</span><span class="dotfill"></span><span id="q-mid"></span></div>
               <div class="qrow" id="row-rate"><span>Your rate <span class="rate-badge" id="q-margin"></span></span><span class="dotfill"></span><span id="q-rate"></span></div>
               <div class="qrow"><span>Fixed fee</span><span class="dotfill"></span><span id="q-fee"></span></div>
               <div class="qrow total"><span id="total-label">Recipient gets</span><span class="val" id="q-recv"></span></div>
               <!-- What the sender actually gets per EUR, fee included. Without
-                   it a small send looks like a broken rate: the EUR 0.29 UPI
-                   fee is 29% of a EUR 1 transfer, so the itemised rows all look
+                   it a small send looks like a broken rate: the EUR 0.99 fee is
+                   a fifth of a EUR 5 transfer, so the itemised rows all look
                    fine while the outcome does not. -->
               <div class="qrow" id="row-effective"><span id="q-eff-label">Effective rate</span><span class="dotfill"></span><span id="q-eff"></span></div>
               <div class="row2" style="margin-top:.9rem" id="recipient-row">
@@ -803,11 +1830,6 @@
             <div class="code" id="sepa-status" style="font-size:1.15rem;letter-spacing:.04em;color:var(--acc2);text-shadow:none"></div>
             <div class="pnote" id="sepa-note"></div>
           </div>
-          <div class="pickup hidden" id="upi-box" style="border-color:rgba(63,214,143,.45);background:rgba(63,214,143,.05)">
-            <div class="plabel" style="color:var(--green)">UPI payment successful</div>
-            <div class="code" id="upi-utr" style="font-size:1.25rem;letter-spacing:.1em;color:var(--green);text-shadow:none"></div>
-            <div class="pnote" id="upi-note"></div>
-          </div>
           <div class="paidbox hidden" id="paid-box">
             <div class="check"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
             <div class="pt">Cash collected</div>
@@ -821,6 +1843,16 @@
         </div>
       </div>
     </div>
+
+    <!-- Bottom navigation. Order is the handoff's: Add · Send · Zold · Activity
+         · Profile, with the brand mark in the centre routing home. -->
+    <nav class="m-nav" id="m-nav">
+      <button data-mnav="add"><span class="ind"><span class="material-symbols-rounded">add</span></span>Add</button>
+      <button data-mnav="send"><span class="ind"><span class="material-symbols-rounded">north_east</span></span>Send</button>
+      <button data-mnav="home" class="active"><span class="ind"><span class="brand">▽</span></span>Zold</button>
+      <button data-mnav="activity"><span class="ind"><span class="material-symbols-rounded">swap_vert</span></span>Activity</button>
+      <button data-mnav="profile"><span class="ind"><span class="material-symbols-rounded">person</span></span>Profile</button>
+    </nav>
   </section>
 
 <script type="importmap">
@@ -884,15 +1916,42 @@ const kycCopy = (status = "pending", u = user) => {
 }[status] || ["REVIEW", `KYC ${status}`, "Funding and transfers are paused until approval."]);
 };
 
+/**
+ * Show or clear the offline bar.
+ *
+ * `navigator.onLine` is not enough on its own: it reports whether the device
+ * has a network interface, not whether Zold answers. A dead server on a live
+ * wifi is the case that actually happens, and it is indistinguishable to the
+ * user from a broken app unless we say so. So the bar is driven by BOTH — the
+ * interface going away, and any API call failing to reach us.
+ */
+function setReachable(ok) {
+  const bar = document.getElementById("offline-bar");
+  if (bar) bar.classList.toggle("hidden", !!ok && navigator.onLine);
+}
+window.setReachable = setReachable;
+
 async function api(path, body) {
   const headers = {};
   if (body) headers["content-type"] = "application/json";
   if (sessionToken) headers.authorization = `Bearer ${sessionToken}`;
-  const res = await fetch(path, {
-    ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
-    headers,
-  });
-  const data = await res.json();
+  let res;
+  try {
+    res = await fetch(path, {
+      ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
+      headers,
+    });
+  } catch {
+    /* A dead network reads as "Failed to fetch", which tells the user nothing
+       and looks like our bug. The service worker turns API calls into a 503
+       with a readable body, but it only controls the page once it is active —
+       first load, and browsers without one, land here. */
+    setReachable(false);
+    throw new Error("you appear to be offline — Zold could not be reached");
+  }
+  const data = await res.json().catch(() => ({}));
+  // 503 is what the service worker returns when it could not reach us at all.
+  setReachable(res.status !== 503);
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
@@ -931,8 +1990,599 @@ function renderUser(u) {
     chip.textContent = "PENDING"; chip.className = "chip pend";
   }
   renderFundingActions(u);
+  renderFundCard();
   renderPrivacyBundle();
   renderShellPages();
+  renderMobile(u);
+}
+
+/* ==========================================================================
+   MOBILE APP — "Noir" home
+   --------------------------------------------------------------------------
+   Renders the design's dashboard from real account state. Where the design
+   shows something the API cannot back, this says so rather than inventing a
+   figure — the savings vault and USD accounts are marked SOON, and Zold Plus
+   is bound to the privacy bundle that actually exists rather than the design's
+   €7.99 card tier.
+   ========================================================================== */
+
+/** The design's three figures, mapped onto the three the API reports.
+ *
+ *  "Total in safe" is everything the account holds — EURe sitting in the Safe
+ *  plus whatever the vault ledger has credited. "Available" is what the
+ *  transfer executor can actually spend today, which is the vault ledger.
+ *  "In flight" is summed from transfers that have left CREATED but not reached
+ *  a terminal state; nothing on-chain reports it, so it is derived here. */
+function mobileFigures(u) {
+  const safe = u.safeBalanceEur ?? 0;
+  const vault = u.vaultBalanceEur ?? 0;
+  const live = ["DEBITED", "SWAPPED", "BRIDGED", "PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING",
+    "PAYOUT_FUNDED", "PAYOUT_READY", "PAYOUT_SUBMITTED"];
+  const inflight = hist.filter((t) => live.includes(t.state)).reduce((n, t) => n + (t.sendEur || 0), 0);
+  return { total: safe + vault, available: u.balanceEur ?? 0, inflight };
+}
+
+function renderMobile(u = user) {
+  if (!u) return;
+  const name = u.name || "Account";
+  $("m-name").textContent = name;
+  $("m-initials").textContent = name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "—";
+
+  const approved = kycApproved(u);
+  const dotColour = approved ? "var(--m-mint)" : u.kycStatus === "rejected" ? "var(--m-pink)" : "var(--m-amber)";
+  const dot = $("m-kyc-dot");
+  dot.style.background = dotColour;
+  dot.style.boxShadow = `0 0 8px ${dotColour}`;
+  $("m-kyc-label").textContent = approved ? "Verified" : u.kycStatus === "rejected" ? "Not verified" : "Verification pending";
+  $("m-kyc-label").style.color = approved ? "var(--m-mint)" : u.kycStatus === "rejected" ? "var(--m-pink)" : "var(--m-amber)";
+  $("m-kyc-banner").classList.toggle("hidden", approved);
+
+  const f = mobileFigures(u);
+  $("m-total").textContent = fmt(f.total);
+  $("m-available").textContent = `€${fmt(f.available)}`;
+  $("m-inflight").textContent = `€${fmt(f.inflight)}`;
+
+  const addr = u.address && u.address !== "0x0000000000000000000000000000000000000000" ? u.address : "";
+  $("m-addr").classList.toggle("hidden", !addr);
+  if (addr) $("m-addr-short").textContent = `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+
+  /* Zold Plus is a preview: the tier in the design (card, no-FX-margin, vault
+     boost) is not built, so the tile carries no price. The Privacy Bundle that
+     DOES ship is reported on the Plus screen itself. */
+  const sub = u.privacyBundle;
+  const active = sub && sub.status !== "canceled";
+  const plan = active ? bundlePlan(sub.planId) : null;
+  $("m-plus-tag").textContent = "SOON";
+  $("m-plus-tag").className = "m-tag soon";
+  $("m-plus-title").textContent = "Coming soon";
+  $("m-plus-sub").textContent = "Card · VPN · eSIM";
+  $("m-card-name").textContent = (u.name || "").toUpperCase() || "—";
+  const cheapest = privacyCatalog?.plans?.[0];
+  $("m-bundle-sub").textContent = active
+    ? `${plan ? plan.name : "Subscribed"} · ${sub.status === "pending_fulfillment" ? "awaiting partner setup" : "active"}`
+    : cheapest ? `eSIM and VPN, live today from €${cheapest.priceEur}` : "eSIM and VPN, live today";
+}
+
+/** Recent activity, newest first, in the design's row shape. */
+function renderMobileActivity() {
+  const el = $("m-recent");
+  if (!el) return;
+  if (!hist.length) { el.innerHTML = '<div class="m-empty">No transfers yet</div>'; return; }
+  el.innerHTML = hist.slice(0, 5).map((t) => {
+    const sepa = t.rail === "sepa";
+    const cc = sepa ? "EU" : "KE";
+    const out = true; // every transfer this app creates is outgoing
+    const amount = `−€${fmt(t.sendEur)}`;
+    const inFlight = !["PAID", "REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
+    const status = t.state === "PAID" ? "PAID" : t.state === "REFUNDED" ? "REFUNDED"
+      : t.state === "FAILED" ? "FAILED" : t.state === "MANUAL_REVIEW" ? "IN REVIEW" : "IN FLIGHT";
+    const stColour = inFlight ? "var(--m-pink)" : t.state === "PAID" ? "var(--m-faint)" : "var(--m-amber)";
+    const when = new Date(t.createdAt).toLocaleDateString("en", { day: "numeric", month: "short" });
+    return `<button class="m-row" data-mtx="${esc(t.id)}">
+      <span class="cc">${cc}</span>
+      <span style="flex:1;min-width:0">
+        <span class="who" style="display:block">${esc(t.recipientName || "—")}</span>
+        <span class="sub" style="display:block">${sepa ? "SEPA" : "MoneyGram cash"} · ${esc(when)}</span>
+      </span>
+      <span style="text-align:right;flex:none">
+        <span class="amt m-fig" style="display:block;color:${out ? "#fff" : "var(--m-mint)"}">${amount}</span>
+        <span class="st" style="display:block;color:${stColour}">${status}</span>
+      </span>
+    </button>`;
+  }).join("");
+  el.querySelectorAll("[data-mtx]").forEach((b) => {
+    b.onclick = () => { mobileNav("activity"); };
+  });
+}
+
+/** Routing. `msub` names the sub-screen; tab switches clear it. */
+function mobileNav(target) {
+  const shell = $("dashboard");
+  // "send" enters the flow at its first screen.
+  const sub = { add: "add", bank: "bank", crypto: "crypto", send: "country", country: "country",
+    method: "method", amount: "amount", recipient: "recipient", progress: "progress",
+    plus: "plus", bundle: "bundle", activity: "activity", profile: "profile" }[target];
+  shell.dataset.msub = sub || "home";
+  if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
+  else switchView("dashboard");
+  // bank/crypto are inside Add, so the Add tab stays lit while they are open.
+  const navFor = { add: "add", bank: "add", crypto: "add", send: "send", country: "send", method: "send",
+    amount: "send", recipient: "send", progress: "send", plus: "home", bundle: "home",
+    home: "home", activity: "activity", profile: "profile" }[target];
+  document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
+  if (sub === "bank") renderBankScreen();
+  if (sub === "crypto") renderCryptoScreen();
+  if (sub === "country") { $("m-country-q").value = ""; renderCountryList(); }
+  if (sub === "activity") renderActivityScreen();
+  if (sub === "profile") renderProfileScreen();
+  $("dashboard").querySelector(".main").scrollTop = 0;
+}
+
+/**
+ * The SEPA details to transfer to.
+ *
+ * No BIC row, unlike the design: Monerium does not give us one and inventing a
+ * plausible-looking bank identifier is the kind of detail someone would try to
+ * pay against. No reference row either — deposits are matched by IBAN, so
+ * asking for a reference would imply a requirement that does not exist.
+ */
+function renderBankScreen() {
+  const u = user || {};
+  const rows = [
+    { k: "IBAN", v: u.iban || "Not issued yet", copy: !!u.iban },
+    { k: "Account holder", v: u.name || "—", copy: false },
+    { k: "Bank", v: "Monerium ehf. · Iceland", copy: false },
+  ];
+  $("m-bank-rows").innerHTML = rows.map((r, i) => `
+    <div class="m-detrow">
+      <div style="flex:1;min-width:0">
+        <div class="m-rowk">${esc(r.k)}</div>
+        <div class="m-rowv">${esc(r.v)}</div>
+      </div>
+      ${r.copy ? `<button class="m-copybtn" data-mcopy="${i}">Copy</button>` : ""}
+    </div>`).join("");
+  $("m-bank-rows").querySelectorAll("[data-mcopy]").forEach((b) => {
+    b.onclick = async () => {
+      try { await navigator.clipboard.writeText(rows[Number(b.dataset.mcopy)].v); } catch { return; }
+      b.textContent = "Copied";
+      setTimeout(() => { b.textContent = "Copy"; }, 1400);
+    };
+  });
+  // The deposit simulator exists only where the API would accept it.
+  $("m-simulate").classList.toggle("hidden", !caps.simulation);
+  $("m-simulate-off").classList.toggle("hidden", !!caps.simulation);
+}
+
+/** Deposit address for inbound USDC, with the payment-page QR when the account
+ *  has claimed a handle (that endpoint is keyed by handle, and it encodes this
+ *  same address). */
+function renderCryptoScreen() {
+  const u = user || {};
+  $("m-wallet").textContent = u.address || "—";
+  const wrap = $("m-qr-wrap");
+  wrap.innerHTML = u.handle
+    ? `<div style="padding:16px;border-radius:12px;background:#efdfe1">
+         <img src="/api/pay/${encodeURIComponent(u.handle)}/qr.svg" width="168" height="168" alt="Deposit address QR" style="display:block;width:168px;height:168px" />
+       </div>`
+    : `<div class="m-lede" style="font-size:13px;margin:0;text-align:center;max-width:280px">Claim a payment handle to get a scannable code. The address below works either way.</div>`;
+  $("m-crypto-warn").textContent = u.autoConvert
+    ? "Base network only. USDC is converted to EURe at the live mid rate on arrival."
+    : "Base network only. Auto-convert is off, so USDC will sit at this address until you turn it on.";
+}
+
+/* ==========================================================================
+   SEND FLOW — country → method → amount → recipient → progress
+   --------------------------------------------------------------------------
+   Real throughout: quotes come from POST /api/quotes, the payment is signed by
+   the device key exactly as the desktop flow signs it, and the timeline is
+   driven by the transfer's own state rather than a timer. The design's 182
+   corridors and four rails are not here because the API prices two.
+   ========================================================================== */
+const M_DESTINATIONS = [
+  { cc: "EU", name: "Europe", cur: "EUR", rail: "sepa", sub: "SEPA · EUR", eta: "Seconds – 1 day" },
+  { cc: "KE", name: "Kenya", cur: "KES", rail: "cash", sub: "MoneyGram · KES", eta: "Minutes" },
+];
+const M_METHODS = {
+  sepa: { icon: "account_balance", title: "Bank transfer (IBAN)", sub: "To any account in the SEPA zone" },
+  cash: { icon: "payments", title: "Cash pickup (MoneyGram)", sub: "Collect at any agent" },
+};
+let mSend = { dest: null, quote: null, amount: "250", rec: { name: "", iban: "", phone: "" }, transfer: null };
+let mQuoteTimer = null;
+
+function renderCountryList(filter = "") {
+  const q = filter.trim().toLowerCase();
+  const list = M_DESTINATIONS.filter((d) => !q || d.name.toLowerCase().includes(q) || d.cur.toLowerCase().includes(q) || d.cc.toLowerCase().includes(q));
+  $("m-country-list").innerHTML = list.length
+    ? list.map((d) => `<button class="m-optrow" data-mdest="${d.cc}">
+        <span class="cc" style="width:40px;height:40px;flex:none;border-radius:10px;background:var(--m-raised);display:grid;place-items:center;font:500 12px var(--m-mono);color:var(--m-dim)">${d.cc}</span>
+        <span class="tx"><span class="t">${esc(d.name)}</span><span class="d">${esc(d.sub)}</span></span>
+        <span class="material-symbols-rounded ch">chevron_right</span>
+      </button>`).join("")
+    : '<div class="m-lede" style="font-size:14px;text-align:center;padding:32px 0">No match</div>';
+  $("m-country-list").querySelectorAll("[data-mdest]").forEach((b) => {
+    b.onclick = () => pickDestination(M_DESTINATIONS.find((d) => d.cc === b.dataset.mdest));
+  });
+}
+
+function pickDestination(d) {
+  mSend.dest = d;
+  $("m-method-dest").textContent = d.name;
+  $("m-method-rail").textContent = d.rail === "sepa" ? "SEPA" : "MoneyGram";
+  $("m-method-cur").textContent = d.cur;
+  const m = M_METHODS[d.rail];
+  $("m-method-list").innerHTML = `<button class="m-optrow" id="m-pick-method">
+      <span class="material-symbols-rounded ic">${m.icon}</span>
+      <span class="tx"><span class="t">${esc(m.title)}</span><span class="d">${esc(m.sub)}</span></span>
+      <span style="text-align:right;flex:none"><span style="display:block;font-size:14px;font-weight:500">${esc(d.eta)}</span><span style="display:block;font-size:12px;color:var(--m-dim)">fee with quote</span></span>
+    </button>`;
+  $("m-pick-method").onclick = () => {
+    $("m-amount-kick").textContent = `${m.title} · ${d.name}`;
+    mobileNav("amount");
+    requestQuote();
+  };
+  mobileNav("method");
+}
+
+/** Price the corridor. Refuses to show a figure it did not get from the API. */
+async function requestQuote() {
+  const d = mSend.dest;
+  const amount = Number($("m-amount").value);
+  mSend.quote = null;
+  $("m-amount-next").disabled = true;
+  $("m-quote-total").classList.add("hidden");
+  $("m-quote-note").classList.add("hidden");
+  $("m-quote-rows").innerHTML = "";
+  clearErr("m-amount-err");
+  if (!d || !(amount > 0)) { $("m-quote-status").textContent = "Enter an amount to price it."; return; }
+  $("m-quote-status").textContent = "Pricing…";
+  try {
+    const q = await api("/api/quotes", { userId: user.id, rail: d.rail, sendEur: amount });
+    mSend.quote = q;
+    renderQuote(q);
+  } catch (e) {
+    $("m-quote-status").textContent = "";
+    showErr("m-amount-err", e);
+  }
+}
+
+function renderQuote(q) {
+  const d = mSend.dest;
+  const cash = d.rail === "cash";
+  const rows = cash
+    ? [["Mid-market rate", `${fmt(q.midRate, 2)} ${d.cur}`],
+       ["Your rate", `${fmt(q.fxRate, 2)} ${d.cur}`],
+       ["FX margin", `${fmt((q.marginBps ?? 0) / 100, 2)}%`],
+       ["Fee", `€${fmt(q.fixedFeeEur)}`]]
+    : [["You send", `€${fmt(q.sendEur)}`], ["Fee", `€${fmt(q.fixedFeeEur)}`]];
+  $("m-quote-status").textContent = "";
+  $("m-quote-rows").innerHTML = rows.map(([k, v]) => `<div class="m-qrow"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
+  $("m-quote-recv").textContent = cash ? `${fmt(q.receiveKes)} ${d.cur}` : `€${fmt(q.receiveEur)}`;
+  $("m-quote-total").classList.remove("hidden");
+  $("m-quote-note").textContent = "Rate locked for ten minutes. The quote expires rather than repricing silently.";
+  $("m-quote-note").classList.toggle("hidden", !cash);
+  const bal = user?.balanceEur ?? 0;
+  const over = q.sendEur > bal;
+  $("m-balance-note").textContent = over
+    ? `Your available balance is €${fmt(bal)} — this send is more than you hold.`
+    : `Available €${fmt(bal)}`;
+  $("m-amount-next").disabled = over;
+}
+
+function toRecipient() {
+  const d = mSend.dest;
+  const cash = d.rail === "cash";
+  $("m-rec-hint").textContent = cash
+    ? "The name must match the ID they collect with."
+    : "The name and IBAN of the account you're paying.";
+  $("m-rec-fields").innerHTML = `
+    <div class="m-field"><label>Full name</label><input id="m-rec-name" placeholder="${cash ? "Joseph Otieno" : "Elena Weber"}" /></div>
+    ${cash
+      ? '<div class="m-field"><label>Mobile number</label><input id="m-rec-phone" inputmode="tel" placeholder="+254 7xx xxx xxx" /></div>'
+      : '<div class="m-field"><label>IBAN</label><input id="m-rec-iban" placeholder="DE89 3704 0044 0532 0130 00" /></div>'}`;
+  const q = mSend.quote;
+  $("m-sum-send").textContent = `€${fmt(q.sendEur)}`;
+  $("m-sum-recv").textContent = cash ? `${fmt(q.receiveKes)} ${d.cur}` : `€${fmt(q.receiveEur)}`;
+  $("m-sum-eta").textContent = d.eta;
+  const validate = () => {
+    const name = ($("m-rec-name").value || "").trim();
+    const id = cash ? ($("m-rec-phone").value || "").trim() : ($("m-rec-iban").value || "").trim();
+    $("m-rec-send").disabled = !(name && id);
+  };
+  $("m-rec-fields").querySelectorAll("input").forEach((i) => { i.oninput = validate; });
+  validate();
+  $("m-rec-send").textContent = `Send €${fmt(q.sendEur)}`;
+  mobileNav("recipient");
+}
+
+/** Create, sign and submit. Identical guarantees to the desktop flow: the
+ *  device recomputes the payout commitment and refuses to sign if the server's
+ *  terms name a different recipient. */
+async function submitMobileSend() {
+  clearErr("m-rec-err");
+  const btn = $("m-rec-send");
+  btn.disabled = true;
+  const d = mSend.dest;
+  const cash = d.rail === "cash";
+  try {
+    if (!kycApproved(user)) throw new Error("identity review must be approved before sending");
+    if (!user.authorizerAddress) await registerDeviceKey(user);
+    const recipient = {
+      recipientName: ($("m-rec-name").value || "").trim(),
+      recipientPhone: cash ? ($("m-rec-phone").value || "").trim() : undefined,
+      recipientIban: cash ? undefined : ($("m-rec-iban").value || "").trim(),
+    };
+    const created = await api("/api/transfers", { quoteId: mSend.quote.id, ...recipient });
+    mSend.transfer = created;
+    mSend.rec = recipient;
+    renderProgress(created);
+    mobileNav("progress");
+
+    const dev = await deviceLib;
+    const addr = await dev.deviceAddress(credId());
+    if (created.authorization.authorizer.toLowerCase() !== addr.toLowerCase()) {
+      throw new Error("this account's spending key was registered in a different browser — sign in there, or rotate the key from that device");
+    }
+    const expected = dev.destinationCommitment(d.rail, {
+      phone: recipient.recipientPhone,
+      iban: recipient.recipientIban,
+      name: recipient.recipientName,
+    });
+    if (created.authorization.typedData.message.destination.toLowerCase() !== expected.toLowerCase()) {
+      throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
+    }
+    const signature = await dev.signTypedData(created.authorization.typedData, credId());
+    const t = await api(`/api/transfers/${created.id}/authorize`, { signature });
+    mSend.transfer = t;
+    renderProgress(t);
+    refresh();
+    addHistory(t);
+  } catch (e) {
+    /* Report on whichever screen the user is actually looking at. A creation
+       failure (insufficient balance, expired quote) happens before we leave
+       the recipient step, and writing it to the progress screen's slot would
+       have shown them nothing at all. */
+    const onProgress = $("dashboard").dataset.msub === "progress";
+    showErr(onProgress ? "m-prog-err" : "m-rec-err", e);
+    if (onProgress) $("m-prog-done").classList.remove("hidden");
+    btn.disabled = false;
+  }
+}
+
+/** Timeline driven by the transfer's real state, not a timer. */
+function renderProgress(t) {
+  const d = mSend.dest || { rail: t.rail, name: t.rail === "sepa" ? "Europe" : "Kenya", cur: t.rail === "sepa" ? "EUR" : "KES" };
+  const cash = d.rail === "cash";
+  const steps = [
+    { t: "Quote locked", d: `quote ${String(t.quoteId || "").slice(0, 8)}` },
+    { t: "Debited from your safe", d: t.txs?.find((x) => x.step.includes("debit") || x.step.includes("safe.transfer"))?.hash?.slice(0, 18) || "waiting" },
+    { t: cash ? "Anchor session opened" : "Redeem order placed", d: cash ? (t.pickup?.anchorTransactionId || "—") : (t.sepa?.orderId || t.sepa?.state || "—") },
+    { t: cash ? "Converted and bridged" : "Sent over SEPA", d: t.txs?.find((x) => x.step.startsWith("liquidity") || x.step.startsWith("cctp"))?.step || (t.sepa?.state ?? "—") },
+    { t: cash ? "Collected" : "Paid", d: t.state },
+  ];
+  const reached = { CREATED: 1, DEBITED: 2, SWAPPED: 3, BRIDGED: 3, PAYOUT_DETAILS_PENDING: 3,
+    PAYOUT_FUNDING_PENDING: 4, PAYOUT_FUNDED: 4, PAYOUT_READY: 4, PAYOUT_SUBMITTED: 4, PAID: 5 }[t.state] ?? 1;
+  const stalled = ["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state);
+  $("m-prog-kicker").textContent = stalled ? t.state.replace("_", " ") : t.state === "PAID" ? "Sent" : "Sending";
+  $("m-prog-amount").textContent = cash ? `${fmt(t.receiveKes)} ${d.cur}` : `€${fmt(t.receiveEur ?? t.sendEur)}`;
+  $("m-prog-to").textContent = `to ${mSend.rec?.recipientName || t.recipientName || "—"} · ${d.name}`;
+  $("m-timeline").innerHTML = steps.map((s, i) => {
+    const cls = stalled && i >= reached ? "" : i < reached ? "done" : i === reached ? "active" : "";
+    const icon = i < reached ? "check" : stalled && i === reached ? "priority_high" : "more_horiz";
+    return `<div class="m-step ${cls}" style="opacity:${i <= reached ? 1 : .45}">
+      <div class="rail"><div class="node"><span class="material-symbols-rounded" style="font-size:18px">${icon}</span></div><div class="line"></div></div>
+      <div class="body"><div class="t">${esc(s.t)}</div><div class="d">${esc(String(s.d))}</div></div>
+    </div>`;
+  }).join("");
+  const ref = t.pickup?.referenceCode;
+  $("m-prog-ref").classList.toggle("hidden", !(cash && ref));
+  if (ref) $("m-prog-code").textContent = ref;
+  if (t.error) showErr("m-prog-err", new Error(t.error));
+  $("m-prog-done").classList.toggle("hidden", !(t.state === "PAID" || stalled || t.pickup));
+}
+
+/* ---------- Activity ---------- */
+let mFilter = "all";
+
+/** One transfer, in the design's activity-row shape. */
+function mTxRow(t) {
+  const sepa = t.rail === "sepa";
+  const inFlight = !["PAID", "REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
+  const status = t.state === "PAID" ? "PAID" : t.state === "REFUNDED" ? "REFUNDED"
+    : t.state === "FAILED" ? "FAILED" : t.state === "MANUAL_REVIEW" ? "IN REVIEW" : "IN FLIGHT";
+  const stColour = inFlight ? "var(--m-pink)" : t.state === "PAID" ? "var(--m-dim)" : "var(--m-amber)";
+  const when = new Date(t.createdAt).toLocaleDateString("en", { day: "numeric", month: "short" });
+  const recv = sepa ? `€${fmt(t.receiveEur ?? 0)}` : `${fmt(t.receiveKes ?? 0)} KES`;
+  return `<button class="m-txrow" data-mtxid="${esc(t.id)}">
+    <span class="av">${sepa ? "EU" : "KE"}</span>
+    <span style="flex:1;min-width:0">
+      <span class="n" style="display:block">${esc(t.recipientName || "—")}</span>
+      <span class="s" style="display:block">${sepa ? "SEPA" : "MoneyGram cash"} · ${esc(when)} · ${esc(recv)}</span>
+    </span>
+    <span style="text-align:right;flex:none">
+      <span class="a" style="display:block">−€${fmt(t.sendEur)}</span>
+      <span class="st" style="display:block;color:${stColour}">${status}</span>
+    </span>
+  </button>`;
+}
+
+function renderActivityScreen() {
+  const list = hist.filter((t) => mFilter === "all" || t.rail === mFilter);
+  $("m-tx-list").innerHTML = list.length
+    ? list.map(mTxRow).join("")
+    : '<div class="m-lede" style="font-size:14px;padding:32px 0;text-align:center">Nothing here yet</div>';
+  document.querySelectorAll("#m-filters button").forEach((b) => {
+    const on = b.dataset.mfilter === mFilter;
+    b.classList.toggle("on", on);
+    // The design puts a leading check on the selected chip only.
+    const tick = b.querySelector(".material-symbols-rounded");
+    if (on && !tick) b.insertAdjacentHTML("afterbegin", '<span class="material-symbols-rounded">check</span>');
+    if (!on && tick) tick.remove();
+  });
+  // Tapping a row opens the transfer in the existing detail list until the
+  // designed detail screen lands.
+  $("m-tx-list").querySelectorAll("[data-mtxid]").forEach((b) => {
+    b.onclick = () => { switchView("transactions"); $("dashboard").dataset.msub = "legacy-tx"; };
+  });
+}
+
+/* ---------- Profile ---------- */
+function renderProfileScreen() {
+  const u = user || {};
+  const name = u.name || "Account";
+  $("m-pf-name").textContent = name;
+  $("m-pf-email").textContent = u.email || "No email on file";
+  $("m-pf-initials").textContent = name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "—";
+  const approved = kycApproved(u);
+  const chip = $("m-pf-kyc");
+  chip.textContent = approved ? "VERIFIED" : (u.kycStatus || "pending").toUpperCase();
+  chip.className = `m-chip${approved ? " on" : ""}`;
+
+  const shorten = (v) => (v && v.length > 22 ? `${v.slice(0, 10)}…${v.slice(-6)}` : v);
+  const account = [
+    { k: "IBAN", v: u.iban || "Not issued yet", copy: u.iban },
+    { k: "Smart account", v: shorten(u.address) || "—", copy: u.address },
+    ...(u.handle ? [{ k: "Payment page", v: `/pay/${u.handle}`, copy: `${location.origin}/pay/${u.handle}` }] : []),
+  ];
+  $("m-pf-account").innerHTML = account.map((r, i) => `
+    <div class="m-detrow">
+      <div style="flex:1;min-width:0">
+        <div class="m-rowk">${esc(r.k)}</div>
+        <div class="m-rowv">${esc(r.v)}</div>
+      </div>
+      ${r.copy ? `<button class="m-copybtn" data-pfcopy="${i}">Copy</button>` : ""}
+    </div>`).join("");
+  $("m-pf-account").querySelectorAll("[data-pfcopy]").forEach((b) => {
+    b.onclick = async () => {
+      try { await navigator.clipboard.writeText(account[Number(b.dataset.pfcopy)].copy); } catch { return; }
+      b.textContent = "Copied";
+      setTimeout(() => { b.textContent = "Copy"; }, 1400);
+    };
+  });
+
+  /* Every row here reports real state. "Not set" is the honest answer for an
+     account that skipped the passkey, and it is worth showing rather than
+     hiding, because funding refuses without one outside simulation. */
+  const safe = u.passkeySafe;
+  const security = [
+    { icon: "fingerprint", t: "Passkey", d: "Signs in and approves payments", st: u.passkey?.publicKey ? "Registered" : "Not set" },
+    { icon: "key", t: "Device spending key", d: "The vault will not debit without it", st: u.authorizerAddress ? "Bound" : "Not bound" },
+    { icon: "group", t: "2-of-2 co-signer", d: "Second owner on your smart account", st: safe?.cosignerAddress ? "Enabled" : "Not enabled" },
+    { icon: "health_and_safety", t: "Managed recovery", d: "Guardian can restore a lost passkey", st: safe?.recovery?.status === "active" ? "Active" : "Not enabled" },
+  ];
+  $("m-pf-security").innerHTML = security.map((r) => `
+    <div class="m-secrow">
+      <span class="material-symbols-rounded">${r.icon}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:16px;letter-spacing:.15px">${esc(r.t)}</div>
+        <div style="font-size:14px;color:var(--m-dim);letter-spacing:.25px">${esc(r.d)}</div>
+      </div>
+      <span style="font-size:11px;font-weight:500;letter-spacing:.5px;color:${/Registered|Bound|Enabled|Active/.test(r.st) ? "var(--m-mint)" : "var(--m-faint)"}">${esc(r.st)}</span>
+    </div>`).join("");
+
+  const sub = u.privacyBundle;
+  $("m-pf-plus-sub").textContent = sub && sub.status !== "canceled" ? "Privacy Bundle active" : "Coming soon";
+}
+
+document.querySelectorAll("#m-filters button").forEach((b) => {
+  b.onclick = () => { mFilter = b.dataset.mfilter; renderActivityScreen(); };
+});
+$("m-pf-plus").onclick = () => mobileNav("plus");
+$("m-pf-signout").onclick = () => $("btn-signout").click();
+
+document.querySelectorAll("[data-mpreset]").forEach((b) => {
+  b.onclick = () => { $("m-amount").value = b.dataset.mpreset; requestQuote(); };
+});
+$("m-amount").oninput = () => { clearTimeout(mQuoteTimer); mQuoteTimer = setTimeout(requestQuote, 450); };
+$("m-amount-next").onclick = () => mSend.quote && toRecipient();
+$("m-rec-send").onclick = submitMobileSend;
+$("m-prog-done").onclick = () => { mSend = { dest: null, quote: null, amount: "250", rec: {}, transfer: null }; mobileNav("home"); };
+$("m-country-q").oninput = (e) => renderCountryList(e.target.value);
+
+document.querySelectorAll("[data-mback]").forEach((b) => {
+  b.onclick = () => mobileNav(b.dataset.mback || "home");
+});
+$("m-go-bundle").onclick = () => mobileNav("bundle");
+$("m-go-bank").onclick = () => mobileNav("bank");
+$("m-go-crypto").onclick = () => mobileNav("crypto");
+$("m-copy-wallet").onclick = async () => {
+  if (!user?.address) return;
+  try { await navigator.clipboard.writeText(user.address); } catch { return; }
+  const b = $("m-copy-wallet");
+  b.textContent = "Copied";
+  setTimeout(() => { b.textContent = "Copy address"; }, 1400);
+};
+$("m-simulate").onclick = async () => {
+  clearErr("m-bank-err");
+  const b = $("m-simulate");
+  b.disabled = true;
+  try {
+    await api("/api/simulate/sepa-deposit", { iban: user.iban, amountEur: 250 });
+    await refresh();
+    b.textContent = "Deposited €250";
+    setTimeout(() => { b.textContent = "Simulate a €250 deposit"; b.disabled = false; }, 1600);
+  } catch (e) {
+    showErr("m-bank-err", e);
+    b.disabled = false;
+  }
+};
+
+document.querySelectorAll("#m-nav button").forEach((b) => {
+  b.onclick = () => mobileNav(b.dataset.mnav);
+});
+$("m-send").onclick = () => mobileNav("send");
+$("m-add").onclick = () => mobileNav("add");
+$("m-activity").onclick = () => mobileNav("activity");
+$("m-bell").onclick = () => mobileNav("activity");
+$("m-seeall").onclick = () => mobileNav("activity");
+$("m-plus").onclick = () => mobileNav("plus");
+$("m-back").onclick = () => mobileNav("home");
+$("m-kyc-banner").onclick = () => enterKycReview(user?.name || "Account");
+
+/* Copy the Safe address. The icon confirms for 1.4s, per the handoff. */
+$("m-addr").onclick = async () => {
+  if (!user?.address) return;
+  try { await navigator.clipboard.writeText(user.address); } catch { return; }
+  const icon = $("m-addr-icon");
+  icon.textContent = "check";
+  setTimeout(() => { icon.textContent = "content_copy"; }, 1400);
+};
+
+/* USD accounts: a waitlist with nothing behind it would be a lie, so the
+   button states plainly that there is no list yet. */
+$("m-usd-x").onclick = () => $("m-usd").classList.add("hidden");
+$("m-usd-cta").onclick = () => {
+  const b = $("m-usd-cta");
+  b.textContent = "Not open yet";
+  b.disabled = true;
+};
+
+/**
+ * What this deployment lets the browser do. Defaults are the SAFE ones: with
+ * no answer from /api/health we assume no simulation, so a failed probe hides
+ * a control the server might refuse rather than offering one it will.
+ */
+let caps = { simulation: false, sandbox: false };
+
+async function loadCapabilities() {
+  try {
+    const h = await (await fetch("/api/health")).json();
+    if (h?.capabilities) caps = { ...caps, ...h.capabilities };
+  } catch {
+    /* keep the safe defaults */
+  }
+  renderFundCard();
+}
+
+/** Show the deposit control only where the API accepts simulated deposits;
+ *  otherwise say how money actually arrives. */
+function renderFundCard() {
+  $("fund-simulate")?.classList.toggle("hidden", !caps.simulation);
+  $("fund-real")?.classList.toggle("hidden", !!caps.simulation);
+  const hint = $("fund-real-hint");
+  if (!hint) return;
+  hint.textContent = user?.iban
+    ? "Transfer euros to the IBAN above from any bank. They arrive as balance here once the transfer settles."
+    : "Your IBAN appears here once your account is approved. Money added by bank transfer will show up as balance.";
 }
 
 function needsPasskeySafeSetup(u = user) {
@@ -1191,6 +2841,10 @@ function enterDashboard(name) {
   $("onboard").style.display = "none";
   $("provisioning").style.display = "none";
   $("kyc-review").style.display = "none";
+  // The mobile shell is the app now; the desktop sidebar/topbar/rail stay in
+  // the document only until their Noir screens land.
+  $("dashboard").classList.add("m-on");
+  if (!$("dashboard").dataset.msub) $("dashboard").dataset.msub = "home";
   $("dashboard").style.display = "grid";
   $("userpill").style.display = "flex";
   $("pillname").textContent = name;
@@ -1563,6 +3217,7 @@ async function resumeSession() {
     localStorage.removeItem("zoll-session");
   }
 }
+loadCapabilities();
 resumeSession();
 
 	$("btn-deposit").onclick = async () => {
@@ -1700,15 +3355,18 @@ let dest = null;
 const RAILS = {
   cash: { icon: "💵", label: "Cash pickup", desc: "Collect at any MoneyGram agent", eta: "~10 min" },
   sepa: { icon: "🏦", label: "Bank transfer", desc: "Any IBAN · SEPA", eta: "seconds – 1 day" },
-  upi: { icon: "⚡", label: "UPI instant", desc: "Any UPI ID or QR", eta: "instant" },
 };
+/**
+ * India is absent on purpose: its only rail was UPI, which was a mock partner
+ * adapter and has been removed. A destination with no live rail would land the
+ * user on an empty options screen with no way forward, so it comes back when a
+ * licensed partner does.
+ */
 const DESTS = [
   { code: "KE", flag: "🇰🇪", name: "Kenya", cur: "KES", rails: ["cash"], soon: [["📱", "M-Pesa wallet", "straight to their phone"]] },
   { code: "EU", flag: "🇪🇺", name: "Europe", cur: "EUR", rails: ["sepa"], soon: [] },
-  { code: "IN", flag: "🇮🇳", name: "India", cur: "INR", rails: ["upi"], soon: [["🏦", "Bank deposit", "IMPS / NEFT"]] },
 ];
-const recvOf = (q) =>
-  q.rail === "sepa" ? `€${fmt(q.receiveEur)}` : q.rail === "upi" ? `₹${fmt(q.receiveInr)}` : `KES ${fmt(q.receiveKes)}`;
+const recvOf = (q) => (q.rail === "sepa" ? `€${fmt(q.receiveEur)}` : `KES ${fmt(q.receiveKes)}`);
 
 function showSendStep(step) {
   $("send-dest").classList.toggle("hidden", step !== "dest");
@@ -1777,9 +3435,8 @@ function selectOption(q) {
   $("row-mid").classList.toggle("hidden", sepa);
   $("row-rate").classList.toggle("hidden", sepa);
   if (!sepa) {
-    const unit = rail === "upi" ? "INR" : "KES";
-    $("q-mid").textContent = `1 EUR = ${fmt(q.midRate, 2)} ${unit}`;
-    $("q-rate").textContent = `1 EUR = ${fmt(q.fxRate, 2)} ${unit}`;
+    $("q-mid").textContent = `1 EUR = ${fmt(q.midRate, 2)} KES`;
+    $("q-rate").textContent = `1 EUR = ${fmt(q.fxRate, 2)} KES`;
     // Measured against the live mid, not a constant we assert.
     $("q-margin").textContent = `${fmt((q.marginBps ?? 0) / 100, 2)}% margin`;
   }
@@ -1791,10 +3448,9 @@ function selectOption(q) {
      small send — that is the case where the row-by-row receipt looks correct
      and the result still is not worth sending. */
   const feeShare = q.sendEur > 0 ? q.fixedFeeEur / q.sendEur : 0;
-  const unit2 = rail === "upi" ? "INR" : rail === "cash" ? "KES" : "EUR";
   $("q-eff").textContent = sepa
     ? `€${fmt(q.effectiveRate ?? 0, 4)} per €1 sent`
-    : `1 EUR = ${fmt(q.effectiveRate ?? 0, 2)} ${unit2}`;
+    : `1 EUR = ${fmt(q.effectiveRate ?? 0, 2)} KES`;
   const heavy = feeShare >= 0.05;
   $("q-eff-label").textContent = heavy
     ? `Effective rate — the €${fmt(q.fixedFeeEur)} fee is ${fmt(feeShare * 100, 0)}% of this send`
@@ -1802,64 +3458,12 @@ function selectOption(q) {
   $("row-effective").style.color = heavy ? "var(--amber)" : "";
   $("field-phone").classList.toggle("hidden", rail !== "cash");
   $("field-iban").classList.toggle("hidden", rail !== "sepa");
-  $("recipient-row").classList.toggle("hidden", rail === "upi");
-  $("upi-scan").classList.toggle("hidden", rail !== "upi");
-  $("btn-send").textContent = rail === "upi" ? `Pay ${recvOf(q)} (€${fmt(q.sendEur)})` : `Send €${fmt(q.sendEur)} now`;
+  $("btn-send").textContent = `Send €${fmt(q.sendEur)} now`;
   showSendStep("details");
 }
 
 $("back-dest").onclick = () => showSendStep("dest");
 $("back-options").onclick = () => showSendStep("options");
-
-/* ---------- UPI QR parsing + camera scan ---------- */
-let upiTarget = { vpa: "", name: "" };
-function parseUpiQr(text) {
-  text = text.trim();
-  if (/^upi:\/\//i.test(text)) {
-    try {
-      const q = new URL(text.replace(/^upi:\/\//i, "http://upi/")).searchParams;
-      return { vpa: (q.get("pa") || "").trim(), name: (q.get("pn") || "").trim(), amount: q.get("am") || "" };
-    } catch { return { vpa: "", name: "", amount: "" }; }
-  }
-  return { vpa: text, name: "", amount: "" };
-}
-$("upi-qr").addEventListener("input", () => {
-  const p = parseUpiQr($("upi-qr").value);
-  upiTarget = { vpa: p.vpa, name: p.name };
-  const hint = $("upi-parsed");
-  if (p.vpa) {
-    hint.textContent = `→ pay ${p.name || p.vpa}${p.name ? ` (${p.vpa})` : ""}`;
-    hint.classList.remove("hidden");
-  } else {
-    hint.classList.add("hidden");
-  }
-});
-$("btn-scan").onclick = async () => {
-  clearErr("send-err");
-  if (!("BarcodeDetector" in window) || !navigator.mediaDevices?.getUserMedia) {
-    return showErr("send-err", new Error("camera scanning not supported in this browser — paste the QR link instead"));
-  }
-  try {
-    const video = $("qr-video");
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-    video.srcObject = stream;
-    video.classList.remove("hidden");
-    await video.play();
-    const detector = new BarcodeDetector({ formats: ["qr_code"] });
-    const timer = setInterval(async () => {
-      try {
-        const codes = await detector.detect(video);
-        if (codes.length) {
-          clearInterval(timer);
-          stream.getTracks().forEach((t) => t.stop());
-          video.classList.add("hidden");
-          $("upi-qr").value = codes[0].rawValue;
-          $("upi-qr").dispatchEvent(new Event("input"));
-        }
-      } catch {}
-    }, 300);
-  } catch (e) { showErr("send-err", e); }
-};
 
 /* quote fetching + rendering now lives in the destination flow above */
 
@@ -1891,11 +3495,6 @@ function sepaSteps(t) {
   }
   return [["SEPA payout (simulated)", s.detail || "", "🏦"]];
 }
-function upiSteps(t) {
-  const u = t.upi || {};
-  return [["UPI credit to merchant", `UTR ${u.utr || "…"} · ${u.state || ""}`, "🇮🇳"]];
-}
-
 function stepEl(title, detail, icon) {
   const el = document.createElement("div");
   el.className = "tstep";
@@ -1915,9 +3514,6 @@ function playTimeline(t, { onDone } = {}) {
   });
   if (t.rail === "sepa") {
     for (const [label, detail, icon] of sepaSteps(t)) steps.push(stepEl(label, detail, icon));
-  }
-  if (t.rail === "upi") {
-    for (const [label, detail, icon] of upiSteps(t)) steps.push(stepEl(label, detail, icon));
   }
   steps.forEach((el) => tl.appendChild(el));
   steps.forEach((el, i) => {
@@ -2031,12 +3627,9 @@ async function pollSepaTransfer(id) {
 
     // 1. Propose: the server fixes the terms and returns them unexecuted.
     const recipient = {
-      recipientName: rail === "upi"
-        ? (upiTarget.name || upiTarget.vpa)
-        : ($("rec-name").value.trim() || "Recipient"),
+      recipientName: $("rec-name").value.trim() || "Recipient",
       recipientPhone: $("rec-phone").value.trim() || "+254700000000",
       recipientIban: $("rec-iban").value.trim(),
-      recipientVpa: upiTarget.vpa,
     };
     const created = await api("/api/transfers", { quoteId: quote.id, ...recipient });
 
@@ -2054,7 +3647,6 @@ async function pollSepaTransfer(id) {
     const expectedDestination = dev.destinationCommitment(rail, {
       phone: recipient.recipientPhone,
       iban: recipient.recipientIban,
-      vpa: recipient.recipientVpa,
       name: recipient.recipientName,
     });
     if (created.authorization.typedData.message.destination.toLowerCase() !== expectedDestination.toLowerCase()) {
@@ -2076,12 +3668,6 @@ async function pollSepaTransfer(id) {
       if (t.rail === "sepa") {
         renderSepaResult(t);
         if (t.state === "PAYOUT_SUBMITTED") pollSepaTransfer(t.id);
-      } else if (t.rail === "upi") {
-        $("upi-box").classList.remove("hidden");
-        $("upi-utr").textContent = `UTR ${(t.upi || {}).utr || ""}`;
-        $("upi-note").textContent =
-          `Paid ₹${fmt(t.receiveInr)} to ${t.recipientName} · you paid €${fmt(t.sendEur)}`;
-        $("btn-again").classList.remove("hidden");
       } else {
         revealPickup(t);
       }
@@ -2130,7 +3716,6 @@ $("btn-again").onclick = () => {
   $("btn-again").classList.add("hidden");
   $("pickup-box").classList.add("hidden");
   $("sepa-box").classList.add("hidden");
-  $("upi-box").classList.add("hidden");
   $("refund-box").classList.add("hidden");
   $("step-quote").classList.remove("hidden");
   showSendStep("dest");
@@ -2141,12 +3726,9 @@ const hist = [];
 function histRow(t) {
   const paid = t.state === "PAID";
   const sepa = t.rail === "sepa";
-  const upi = t.rail === "upi";
-  const sub = upi
-    ? `${esc(t.recipientVpa || "")} · ₹${fmt(t.receiveInr)}${t.upi ? ` · UTR ${esc(t.upi.utr)}` : ""}`
-    : sepa
-      ? `${esc((t.recipientIban || "").slice(0, 9))}… · €${fmt(t.receiveEur)}`
-      : `ref ${esc(t.pickup ? t.pickup.referenceCode : "—")} · KES ${fmt(t.receiveKes)}`;
+  const sub = sepa
+    ? `${esc((t.recipientIban || "").slice(0, 9))}… · €${fmt(t.receiveEur)}`
+    : `ref ${esc(t.pickup ? t.pickup.referenceCode : "—")} · KES ${fmt(t.receiveKes)}`;
   const status = paid ? "PAID" : t.state === "REFUNDED" ? "REFUNDED" : t.state === "FAILED" ? "FAILED"
     : t.state === "PAYOUT_DETAILS_PENDING" ? "DETAILS PENDING"
     : t.state === "PAYOUT_FUNDING_PENDING" ? "FUNDING PENDING"
@@ -2155,7 +3737,7 @@ function histRow(t) {
   const color = paid ? "var(--green)" : t.state === "REFUNDED" ? "var(--muted)"
     : t.state === "FAILED" ? "var(--red)" : "var(--amber)";
   return `
-    <div class="hic">${upi ? "🇮🇳" : sepa ? "🏦" : "🇰🇪"}</div>
+    <div class="hic">${sepa ? "🏦" : "🇰🇪"}</div>
     <div class="hmain">
       <div class="hn">${esc(t.recipientName)}</div>
       <div class="hs">${sub}</div>
@@ -2180,6 +3762,8 @@ function renderHistory() {
     ? hist.map((t) => `<div class="hitem">${histRow(t)}</div>`).join("")
     : '<div class="empty">No transfers yet</div>';
   renderTransactionPage();
+  renderMobileActivity();
+  if ($("dashboard").dataset.msub === "activity") renderActivityScreen();
 }
 
 function renderTransactionPage() {
@@ -2214,6 +3798,42 @@ function renderContacts() {
     };
   });
 }
+
+/* ---------- progressive web app ---------- */
+/**
+ * Install the shell worker, and tell the truth about the network.
+ *
+ * The worker caches the app shell only — see sw.js for why nothing under
+ * /api/ is ever stored. Everything here is wrapped so that a failure to
+ * register (an insecure origin, a browser without service workers, a private
+ * window) leaves the app working exactly as it did before, just without
+ * offline start-up.
+ *
+ * Kept inside this script rather than a second one on purpose: kyc:ui:test
+ * parses out the last classic script before </body> and evaluates it, so a
+ * sibling <script> block breaks that check for no benefit.
+ */
+(function () {
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("/sw.js").catch(function (err) {
+        console.warn("service worker registration failed: " + err);
+      });
+    });
+  }
+
+  /* A standing, unmissable statement of network state. Balances and quotes
+     are refused rather than served stale while this is up, so the user needs
+     to know why the numbers stopped moving. The interface going away is only
+     half of it — api() also flips this when a call cannot reach us on a
+     perfectly good connection. */
+  function render() {
+    if (window.setReachable) window.setReachable(navigator.onLine);
+  }
+  window.addEventListener("online", render);
+  window.addEventListener("offline", render);
+  render();
+})();
 </script>
 </body>
 </html>

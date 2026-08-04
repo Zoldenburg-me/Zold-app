@@ -12,7 +12,7 @@ npm run compile
 
 ```sh
 npm run test:contracts   # 41 Solidity tests: vault caps/roles/replay + FP4 auth, FX access/slippage, escrow, AdminTimelock governance
-npm run e2e              # full corridor 3x: cash pickup, SEPA exit, UPI scan-and-pay
+npm run e2e              # full corridor: cash pickup + SEPA exit
 npm run audit:deps       # npm advisory scan
 npm run check            # everything: the two above plus ~25 focused harnesses
 ```
@@ -46,10 +46,6 @@ npm run dev              # then open http://localhost:3000/app
    history flips to PAID.
 4. **🏦 Bank transfer** — send €40 to any IBAN. Expect: fee-only quote
    (€39.01), single debit tx, simulated SEPA payout, PAID.
-5. **🇮🇳 UPI** — paste this into the QR field:
-   `upi://pay?pa=chaiwala@okhdfcbank&pn=Mumbai%20Chai%20Stand&am=450&cu=INR`
-   Expect: merchant + ₹450 parsed automatically, INR-fixed quote ("You pay
-   €5.09"), timeline incl. a 12-digit UTR receipt, PAID.
 
 KYC-gated mode: start the API with `KYC_AUTO_APPROVE=0`. A new account should
 land on the Identity review screen instead of the provisioning spinner. The
@@ -130,8 +126,8 @@ when Circle/Stellar publishes new deployments.
 - Settlement chain is a local Hardhat node; EURe/USDC there are mocks.
 - Owner keys of user Safes are stored server-side (`data/db.json`) — custodial
   MVP; passkey owners are the production path.
-- MoneyGram/UPI partners are protocol-shaped mocks unless pointed at a real
-  anchor; FX rates are a mock oracle.
+- The MoneyGram payout is a protocol-shaped mock unless pointed at a real
+  anchor.
 - Fresh `npm run dev` resets the local chain + demo users (`data/db.json`).
 
 ## Liquidity venues
