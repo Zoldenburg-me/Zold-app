@@ -94,12 +94,13 @@
 
       <p class="note">
         Send <strong id="note-token">USDC</strong> on <strong id="note-chain">this network</strong>.
-        Another token or another network will not reach this account.
+        Another token or another network will not reach this payment page.
+        Settlement target: <strong id="note-settlement">EUR(e)</strong>.
       </p>
       <p class="note">
         <strong>This address is public.</strong> Anyone who knows or guesses this handle can find it
         and read its full history and balance on a block explorer. Zold payment pages do not use
-        stealth addresses yet, so every payment lands on the same address.
+        stealth addresses yet, but this address is separate from the payee's main smart account.
       </p>
     </div>
   </div>
@@ -144,6 +145,9 @@ async function load() {
     $("chip-chain").textContent = chainName(p.chainId);
     $("note-token").textContent = p.token.symbol;
     $("note-chain").textContent = chainName(p.chainId);
+    $("note-settlement").textContent = p.autoConvert
+      ? (p.settlementAsset === "USDC" ? "USDC" : "EUR(e)")
+      : "manual";
 
     $("copy").onclick = async () => {
       try {
