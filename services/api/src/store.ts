@@ -63,15 +63,20 @@ export interface User {
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
   /**
-   * Passkey/co-signer Safe state. `wallet` above is the currently active Safe;
-   * this records the passkey-owned account before activation.
+   * Passkey Safe state. Production can add a co-signer as a second owner;
+   * local/test plans stay passkey-only unless the harness opts in.
    */
   passkeySafe?: {
     address: `0x${string}`;
     status: "planned" | "active";
-    threshold: 2;
-    cosignerAddress: `0x${string}`;
+    threshold: 1 | 2;
+    cosignerAddress?: `0x${string}`;
     passkeyPublicKey: { x: string; y: string };
+    cosignerPolicy?: {
+      enabled: boolean;
+      allowanceModuleAddress: `0x${string}`;
+      allowanceAmount: string;
+    };
     recovery?: {
       moduleAddress: `0x${string}`;
       guardianAddress: `0x${string}`;
