@@ -926,6 +926,9 @@ export function serializeExecution(e: LiquidityExecution): NonNullable<Transfer[
     rate: e.quote.rate.toString(),
     expiresAt: e.quote.expiresAt,
     ...(e.quote.rfq ? { rfq: e.quote.rfq } : {}),
+    ...(e.quote.cow ? { cow: e.quote.cow } : {}),
+    ...(e.quote.dex ? { dex: e.quote.dex } : {}),
+    ...(e.quote.lifi ? { lifi: e.quote.lifi } : {}),
     executedAt: new Date().toISOString(),
     txHash: e.txs.at(-1)?.hash,
   };
@@ -948,5 +951,8 @@ function hydrateQuote(q: NonNullable<Transfer["liquidity"]>): LiquidityQuote {
     rate: BigInt(q.rate),
     expiresAt: q.expiresAt,
     ...(q.rfq ? { rfq: q.rfq } : {}),
+    ...(q.cow ? { cow: q.cow } : {}),
+    ...(q.dex ? { dex: q.dex } : {}),
+    ...(q.lifi ? { lifi: q.lifi } : {}),
   };
 }
