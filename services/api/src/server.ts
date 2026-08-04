@@ -454,13 +454,13 @@ function custodyBlockerBeforeFunding(user: User): string | null {
     );
   }
   if (!user.passkeySafe) {
-    return "a passkey/co-signer Safe plan is required before an account can be funded";
+    return "a passkey Safe plan is required before an account can be funded";
   }
   if (
     user.passkeySafe.status !== "active" ||
     user.address.toLowerCase() !== user.passkeySafe.address.toLowerCase()
   ) {
-    return "activate the passkey/co-signer Safe before funding this account";
+    return "activate the passkey Safe before funding this account";
   }
   if (user.privateKey || user.ownerAddress) {
     return "server-held Safe owner keys must be removed before funding this account";
@@ -473,7 +473,7 @@ function passkeyRequiredBeforeFunding(user: User): string | null {
   if (!blocked) return null;
   return (
     blocked +
-    (blocked.includes("passkey/co-signer Safe") ? "" : " — complete the passkey Safe setup first")
+    (blocked.includes("passkey Safe") ? "" : " — complete the passkey Safe setup first")
   );
 }
 
@@ -1696,7 +1696,7 @@ app.post(
     if (user.passkeySafe.status === "active") {
       return res.json({ safeAddress: user.passkeySafe.address, status: "active" });
     }
-    if (!CANDIDE.cosignerKey) {
+    if (user.passkeySafe.cosignerAddress && !CANDIDE.cosignerKey) {
       return res.status(503).json({ error: "CANDIDE_COSIGNER_KEY is required before passkey Safe deployment" });
     }
     /**
