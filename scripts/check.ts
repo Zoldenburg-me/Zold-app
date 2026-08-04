@@ -26,6 +26,7 @@ const scripts = [
   "fp5:test",
   "fx:test",
   "jit:test",
+  "dex:test",
   "webhook:test",
   "reconcile:test",
   "anchor:config:test",

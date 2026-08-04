@@ -455,7 +455,7 @@ export function loadAbi(contract: string): any[] {
  * but a partner key gets better pricing and higher rate limits.
  */
 export const LIQUIDITY = {
-  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow",
+  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow" | "dex",
   // Bebop's chain slug, e.g. "polygon", "base", "ethereum".
   BEBOP_CHAIN: process.env.BEBOP_CHAIN ?? "polygon",
   BEBOP_BASE_URL: process.env.BEBOP_BASE_URL ?? "https://api.bebop.xyz",
@@ -477,6 +477,35 @@ export const LIQUIDITY = {
   COW_BASE_URL: process.env.COW_BASE_URL ?? "https://api.cow.fi",
   COW_NETWORK: process.env.COW_NETWORK ?? "xdai",
   COW_TIMEOUT_MS: Number(process.env.COW_TIMEOUT_MS ?? 15_000),
+  /**
+   * Uniswap v3, on-chain. The only venue we can actually execute against on a
+   * testnet: Bebop has no testnet at all and CoW has no Base Sepolia, so both
+   * adapters can only ever be exercised with real money on a mainnet. The v3
+   * interface is identical on Base Sepolia and Base mainnet, so the path we
+   * test is the path that ships.
+   *
+   * Defaults are the verified Base Sepolia deployments (checked with
+   * eth_getCode, not copied from a docs page). Override per chain.
+   */
+  DEX_FACTORY: (process.env.DEX_FACTORY ?? "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24") as `0x${string}`,
+  DEX_ROUTER: (process.env.DEX_ROUTER ?? "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4") as `0x${string}`,
+  DEX_QUOTER: (process.env.DEX_QUOTER ?? "0xC5290058841028F1614F3A6F0F5816cAd0df5E27") as `0x${string}`,
+  /** Fee tiers probed, cheapest first. The deepest pool wins, not the first. */
+  DEX_FEE_TIERS: (process.env.DEX_FEE_TIERS ?? "100,500,3000,10000")
+    .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0),
+  /** Slippage floor written into the swap call as amountOutMinimum. */
+  DEX_SLIPPAGE_BPS: BigInt(process.env.DEX_SLIPPAGE_BPS ?? 50),
+  /**
+   * How far the pool's implied EUR/USD may sit from the independent live mid
+   * before we refuse to trade.
+   *
+   * This guard is the difference between a pool and a market maker. An RFQ
+   * maker quotes a price it is willing to honour; an AMM pool is simply
+   * whatever the last trade left behind, and anyone with capital can move a
+   * thin one. Without this a skewed pool would let us settle a real transfer
+   * at a garbage rate and report it as a market price.
+   */
+  DEX_MAX_MID_DEVIATION_BPS: BigInt(process.env.DEX_MAX_MID_DEVIATION_BPS ?? 300),
 };
 
 // Live mid-rate feed. Defaults to a free, key-less provider that publishes all
