@@ -812,6 +812,55 @@
   .m-perk .d { font-size: 11px; color: var(--m-faint); margin-top: 1px; }
   #dashboard.m-on[data-msub="plus"] #m-plus-screen { display: block; }
 
+  /* ---------- KYC gate + pending ----------
+     Outside #dashboard, so these rules are not scoped under it; they carry the
+     same 412px column and the same tokens so the gate is not a different app
+     from the one behind it. */
+  #kyc-review {
+    min-height: 100dvh; background: var(--m-bg); color: var(--m-text);
+    font: 400 14px/1.43 Inter, system-ui, sans-serif;
+  }
+  .m-gate {
+    max-width: 412px; margin: 0 auto; padding: 40px 16px calc(32px + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 0 0 1px var(--m-line-faint); min-height: 100dvh;
+  }
+  .m-gate-mark {
+    width: 64px; height: 64px; border-radius: 12px; display: grid; place-items: center;
+    background: var(--m-pink-tint); border: 1px solid var(--m-pink-border);
+    color: var(--m-pink); margin-bottom: 24px;
+  }
+  /* Pulses only while something is genuinely in progress. */
+  .m-gate-mark.wait { animation: mPulse 1.6s infinite; }
+  .m-gate-mark.stop { background: var(--m-amber-tint); border-color: #4a3410; color: var(--m-amber); }
+  .m-gate .m-lede { font-size: 13px; }
+  .m-optrow.accent { background: var(--m-pink-tint); border-color: var(--m-pink-border); }
+  .m-optrow.accent:hover { background: #220d15; border-color: var(--m-pink); }
+
+  .m-gate-steps { margin-top: 26px; }
+  .m-gstep { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; }
+  .m-gstep .nd {
+    width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center;
+    background: var(--m-raised); color: var(--m-faint); margin-top: 1px;
+  }
+  .m-gstep.done .nd { background: var(--m-mint-tint); border: 1px solid var(--m-mint-border); color: var(--m-mint); }
+  .m-gstep.now .nd { background: var(--m-pink); color: #fff; animation: mPulse 1.6s infinite; }
+  .m-gstep.bad .nd { background: var(--m-amber-tint); color: var(--m-amber); }
+  .m-gstep .t { font-size: 13.5px; font-weight: 500; color: var(--m-dim); }
+  .m-gstep.now .t, .m-gstep.bad .t { color: #fff; }
+  .m-gstep .d { font-size: 11px; color: var(--m-faint); margin-top: 2px; }
+
+  .m-gate-status {
+    margin-top: 22px; padding: 13px 14px; border-radius: 12px;
+    background: var(--m-amber-tint); border: 1px solid #4a3410;
+  }
+  .m-gate-status.ok { background: var(--m-mint-tint); border-color: var(--m-mint-border); }
+  .m-gate-status.no { background: var(--m-pink-tint); border-color: var(--m-pink-border); }
+  .m-gate-status .m-mono { color: var(--m-amber); }
+  .m-gate-status.ok .m-mono { color: var(--m-mint); }
+  .m-gate-status.no .m-mono { color: var(--m-pink); }
+  .m-gate-status .t { font-size: 13.5px; font-weight: 600; margin-top: 4px; }
+  .m-gate-status .d { font-size: 11.5px; color: var(--m-dim); margin-top: 4px; line-height: 1.55; }
+
   /* ---------- pay hub ---------- */
   #dashboard.m-on[data-msub="pay"] #m-pay-screen { display: block; }
 
@@ -1252,24 +1301,53 @@
     </div>
   </section>
 
-  <!-- ============ KYC review state ============ -->
-  <section id="kyc-review" style="display:none; min-height:100vh; place-items:center; padding:1.5rem">
-    <div class="prov-card">
-      <h1 id="kyc-title">Verify your identity</h1>
-      <div class="sub" id="kyc-sub">Your account exists. Adding money and sending unlock once you are approved — the law requires this before an IBAN can be yours.</div>
-      <div id="kyc-choice" class="kyc-pick">
-        <button id="btn-monerium-existing">Use my Monerium account
-          <span>Already verified with Monerium? Connect it and skip the checks.</span></button>
-        <button id="btn-monerium-new">Verify my identity
-          <span>The standard route — an ID check with our provider.</span></button>
+  <!-- ============ KYC gate + pending ============
+       Two states in one screen, as the handoff draws them: the gate, where
+       nothing has been chosen and the two routes are offered; and pending,
+       where a route is running. The checklist is derived from the account, not
+       the design's fixed "two done, one in progress" — a step is ticked when
+       the thing it names has actually happened.
+
+       Every id below is load-bearing: renderKycState() writes kyc-label /
+       kyc-main / kyc-detail, kyc-ui-test asserts on kyc-choice,
+       btn-monerium-existing, btn-monerium-new, btn-kyc-refresh and
+       btn-kyc-dashboard, and #kyc-card in the dashboard still uses the
+       untouched .kyc-status block. -->
+  <section id="kyc-review" style="display:none">
+    <div class="m-gate">
+      <div class="m-gate-mark" id="kyc-mark">
+        <span class="material-symbols-rounded" style="font-size:30px">badge</span>
       </div>
-      <div class="kyc-status">
-        <div class="ks" id="kyc-label">PENDING</div>
-        <div class="kt" id="kyc-main">Review in progress</div>
-        <div class="kd" id="kyc-detail">Your IBAN, deposits, device key, quotes, and transfers are paused until approval.</div>
+      <h1 class="m-h1" id="kyc-title">Verify your identity</h1>
+      <div class="m-lede" id="kyc-sub">Your account exists. Adding money and sending unlock once you are approved — the law requires this before an IBAN can be yours.</div>
+
+      <div id="kyc-choice" style="display:grid;gap:8px;margin-top:24px">
+        <button class="m-optrow accent" id="btn-monerium-new">
+          <span class="material-symbols-rounded ic">badge</span>
+          <span class="tx"><span class="t">Verify my identity</span><span class="d">The standard route — an ID check with our provider.</span></span>
+          <span class="material-symbols-rounded ch">chevron_right</span>
+        </button>
+        <button class="m-optrow" id="btn-monerium-existing">
+          <span class="material-symbols-rounded ic">link</span>
+          <span class="tx"><span class="t">Use my Monerium account</span><span class="d">Already verified with Monerium? Connect it and skip the checks.</span></span>
+          <span class="material-symbols-rounded ch">chevron_right</span>
+        </button>
       </div>
-      <button class="wide" id="btn-kyc-refresh">Refresh status</button>
-      <button class="ghost wide" id="btn-kyc-dashboard">View dashboard</button>
+
+      <div id="kyc-pending">
+        <div class="m-gate-steps" id="kyc-steps"></div>
+        <div class="m-gate-status" id="kyc-status-box">
+          <div class="m-mono" id="kyc-label">PENDING</div>
+          <div class="t" id="kyc-main">Review in progress</div>
+          <div class="d" id="kyc-detail">Your IBAN, deposits, device key, quotes, and transfers are paused until approval.</div>
+        </div>
+        <button class="m-cta" id="btn-kyc-refresh">Refresh status</button>
+        <!-- Self-approval. Present only where the API would accept it — the
+             route is gated on ALLOW_SIMULATION and a loopback socket. -->
+        <button class="m-cta quiet hidden" id="btn-kyc-simulate">Simulate approval</button>
+      </div>
+
+      <button class="m-cta quiet" id="btn-kyc-dashboard">View dashboard</button>
       <div class="error hidden" id="kyc-err"></div>
     </div>
   </section>
@@ -3082,6 +3160,7 @@ function renderKycState(u = user) {
   const needsChoice = blocked && u.kycStatus === "pending" && !u.kyc?.onboardingPath;
   $("kyc-choice")?.classList.toggle("hidden", !needsChoice);
   $("kyc-card")?.classList.toggle("hidden", !blocked);
+  renderKycGate(u, needsChoice);
   $("btn-deposit").disabled = blocked;
   $("btn-send").disabled = blocked;
   document.querySelectorAll(".dest-btn").forEach((b) => { b.disabled = blocked; });
@@ -3176,6 +3255,71 @@ function enterDashboard(name) {
   if (poll) clearInterval(poll);
   poll = setInterval(refresh, 5000);
   refresh();
+}
+
+/**
+ * The gate/pending screen's own state.
+ *
+ * The checklist is derived, not scripted. The design shows three steps with
+ * the first two ticked; here a step is ticked when the account actually
+ * carries the thing it names, so a Monerium user who has not finished the
+ * connect does not see a tick claiming they have.
+ */
+function renderKycGate(u, needsChoice) {
+  const gate = $("kyc-pending");
+  if (!gate) return;
+  const monerium = u.kyc?.onboardingPath === "existing_monerium";
+  const rejected = u.kycStatus === "rejected";
+  const approved = kycApproved(u);
+
+  // At the gate nothing is running yet, so there is nothing to report on.
+  gate.classList.toggle("hidden", !!needsChoice);
+  $("kyc-title").textContent = rejected ? "We could not verify you"
+    : needsChoice ? "Verify your identity"
+      : monerium ? "Connecting your Monerium account" : "Checking who you are";
+  if (!needsChoice) {
+    $("kyc-sub").textContent = rejected
+      ? "Funding and transfers stay closed on this account."
+      : monerium
+        ? "We are reading the identity Monerium already holds for you. Nothing moves until it comes back approved."
+        : "Our provider is reviewing your documents. You can close this and come back — nothing is lost.";
+  }
+
+  const mark = $("kyc-mark");
+  mark.className = `m-gate-mark${rejected ? " stop" : !needsChoice && !approved ? " wait" : ""}`;
+  mark.firstElementChild.textContent = rejected ? "priority_high" : approved ? "check" : "badge";
+
+  const steps = [
+    { t: "Account created", d: "Your smart account exists on-chain", state: "done" },
+    monerium
+      ? { t: "Monerium account connected", d: hasConnectedMonerium(u) ? "Linked to your profile" : "Waiting for you to authorise it",
+          state: hasConnectedMonerium(u) ? "done" : "now" }
+      : { t: "Identity check started", d: u.kyc?.applicantId ? `Applicant ${String(u.kyc.applicantId).slice(0, 12)}` : "With our provider",
+          state: u.kyc?.onboardingPath ? "done" : "now" },
+    { t: "Review approved", d: rejected ? "Not approved" : approved ? "Funding and sending are open" : "Usually minutes, sometimes a day",
+      state: rejected ? "bad" : approved ? "done" : "now" },
+  ];
+  /* Only the FIRST unfinished step is "in progress". Nothing is working on
+     step three while step two is still waiting on you, and two things pulsing
+     at once says the opposite. */
+  let running = false;
+  $("kyc-steps").innerHTML = steps.map((s) => {
+    let state = s.state;
+    if (state === "now") {
+      if (running || rejected) state = "";
+      else running = true;
+    }
+    return `<div class="m-gstep ${state}">
+      <div class="nd"><span class="material-symbols-rounded" style="font-size:14px">${
+        state === "done" ? "check" : state === "bad" ? "close" : "more_horiz"}</span></div>
+      <div style="min-width:0"><div class="t">${esc(s.t)}</div><div class="d">${esc(s.d)}</div></div>
+    </div>`;
+  }).join("");
+
+  const box = $("kyc-status-box");
+  if (box) box.className = `m-gate-status${approved ? " ok" : rejected ? " no" : ""}`;
+  // Self-approval only where the API would take it, and never once approved.
+  $("btn-kyc-simulate").classList.toggle("hidden", !caps.simulation || approved || rejected);
 }
 
 function enterKycReview(name) {
@@ -3495,6 +3639,21 @@ $("btn-monerium-new").onclick = () => chooseFundingPath("new_monerium");
 $("btn-monerium-dashboard").onclick = () => activateConnectedMonerium();
 $("btn-finish-safe").onclick = () => finishDashboardSmartWallet();
 $("btn-kyc-refresh").onclick = () => refreshKycStatus({ continueWhenApproved: true });
+/* Local demo self-approval. The API refuses this off a loopback socket and
+   outside ALLOW_SIMULATION, so the button is only rendered where it works. */
+$("btn-kyc-simulate").onclick = async () => {
+  clearErr("kyc-err");
+  const b = $("btn-kyc-simulate");
+  b.disabled = true;
+  try {
+    await api(`/api/users/${user.id}/kyc/mock-review`, { decision: "approved" });
+    await refreshKycStatus({ continueWhenApproved: true });
+  } catch (e) {
+    showErr("kyc-err", e);
+  } finally {
+    b.disabled = false;
+  }
+};
 $("btn-dash-kyc-refresh").onclick = async () => {
   await refresh();
   if (kycApproved(user)) enterDashboard(user.name);
