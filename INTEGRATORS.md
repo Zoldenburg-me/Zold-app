@@ -8,7 +8,7 @@ Everything Zold talks to, what it needs from us, and whether getting it costs a 
 |---|---|
 | ✅ Have it (sandbox) | Monerium, Candide, Stellar, Circle CCTP |
 | 🟢 Self-serve — no call, ~10 min each | RPC provider, LI.FI, rates feed, Stripe standard |
-| 🔴 Needs a form/email first | Monerium **production**, a real KYC provider — plus Bridge |
+| 🔴 Needs a form/email first | Monerium **production**, a real KYC provider — plus Bridge (bank rails) and MoneyGram (cash) |
 
 Only **two** are hard blockers: Monerium production and a KYC provider. Everything else is either self-serve or optional. Full call list in §1.
 
@@ -22,8 +22,8 @@ Only **two** are hard blockers: Monerium production and a KYC provider. Everythi
 |---|---|---|---|---|---|
 | 1 | **Monerium** (production) | Real e-money relationship. Sandbox → live EUR IBANs | ✅ **YES** — no EUR in or out without it | Existing sandbox contact | Weeks–months (regulated) |
 | 2 | **KYC provider** | One of Sumsub / Persona / Onfido | ✅ **YES** — cannot go live on a mock | Self-serve signup first, sales only for pricing | Days |
-| 3 | **Bridge** (bridge.xyz) | Stablecoin ↔ fiat: ACH, SEPA, SPEI, Pix, LatAm | ⚠️ Optional — but **replaces MoneyGram + dLocal + Yellow Card in one integration** | bridge.xyz contact form | Weeks (enterprise) |
-| 4 | **MoneyGram** | Cash-pickup partner agreement | ⚠️ Only if we keep cash pickup | Via Stellar anchor programme | Months, hard |
+| 3 | **Bridge** (bridge.xyz) | Stablecoin → **bank** payouts: ACH, SEPA, SPEI, Pix, LatAm | ⚠️ Optional — covers **bank** rails in one integration (replaces dLocal, not MoneyGram) | bridge.xyz contact form | Weeks (enterprise) |
+| 4 | **MoneyGram** | Cash-pickup partner agreement | ⚠️ **No substitute on this list** — see below | Via Stellar anchor programme | Months, hard |
 | 5 | **Stripe** | Card acceptance for Zold Plus / Privacy Bundle subs | ❌ No — nothing to bill yet | **Standard account is self-serve** — no call | Same day |
 | 6 | **Yellow Card** | Africa payouts, settles USDC, no prefunding | ❌ No | yellowcard.io business form | Weeks |
 | 7 | **Bebop** | RFQ liquidity. Monerium market-makes EURe there | ❌ No — LI.FI already works | Contact form | Weeks |
@@ -33,7 +33,26 @@ Only **two** are hard blockers: Monerium production and a KYC provider. Everythi
 
 **If you only send two emails: #1 and #2.** Those are the only hard blockers.
 
-**#3 is the strategic one.** Bridge is Stripe-owned (acquired Oct 2024, $1.1B). One integration covers the rails we'd otherwise chase across MoneyGram, dLocal and Yellow Card separately — it's what Peanut runs on. Worth sending even though it isn't blocking.
+**#3 is the strategic one.** Bridge is Stripe-owned (acquired Oct 2024, $1.1B). One integration covers the **bank** rails we'd otherwise chase across dLocal and Yellow Card separately — it's what Peanut runs on. Worth sending even though it isn't blocking.
+
+### ⚠️ Bridge does NOT replace MoneyGram
+
+Different product categories, not different country lists:
+
+| | Recipient needs | Example |
+|---|---|---|
+| **Bridge / dLocal / Yellow Card** | a bank account, CLABE, Pix key or IBAN | SEPA, ACH, Pix |
+| **MoneyGram** | ID and a counter — **no bank account** | Cash pickup, Kenya & Myanmar |
+
+Our own KES rail is cash pickup, so this isn't a Myanmar-only problem — **no bank-rail provider serves the unbanked recipient in any country.** If cash pickup is core to the product, MoneyGram (or a peer: Western Union, Ria) stays on the critical path and nothing on this list substitutes for it.
+
+**Myanmar in particular is harder than "MoneyGram supports it."** Myanmar is on the FATF **blacklist** — high-risk, call for action, alongside Iran and North Korea, reaffirmed 19 June 2026. Consequences:
+
+- Enhanced due diligence is mandatory on every transaction
+- **Monerium is a regulated EMI and will have its own restricted-country list.** EUR leaving via their rails to Myanmar is *their* compliance decision, not only ours — this can veto the corridor regardless of MoneyGram
+- FATF has warned it will consider **countermeasures** if there's no progress by October 2026, which could close the corridor with little notice
+
+So MoneyGram is *necessary* but not *sufficient* for Myanmar. Before building it, the question to answer is not "does the payout partner cover it" but **"will our EUR issuer let euros go there at all."**
 
 > ⚠️ **Naming clash:** `services/api/src/bridge/` in our codebase is the **Circle CCTP** worker (USDC burn/mint to Stellar). Nothing to do with Bridge.xyz. Don't let the two get confused in conversation.
 
@@ -74,11 +93,21 @@ Only **two** are hard blockers: Monerium production and a KYC provider. Everythi
 
 ## 4. Payout rails
 
+Two categories that do **not** substitute for each other — see §1.
+
+**Cash out (recipient has no bank account)**
+
+| Rail | Status | Access | Call? |
+|---|---|---|---|
+| **MoneyGram** | 🔴 blocked | Needs a real partner agreement. We're on `testanchor.stellar.org`, which never publishes a payout account, so this **cannot complete end-to-end today** | 🔴 hard |
+| Western Union / Ria | not evaluated | The only real alternatives if MoneyGram stalls | 🔴 |
+
+**Bank out (recipient has an account / Pix key / CLABE)**
+
 | Rail | Status | Access | Call? |
 |---|---|---|---|
 | **SEPA** (EUR→EUR) | ✅ works, via Monerium | — | — |
-| **MoneyGram** (cash pickup) | 🔴 blocked | Needs a real partner agreement. We're on `testanchor.stellar.org`, which never publishes a payout account, so this **cannot complete end-to-end today** | 🔴 hard |
-| **Bridge** (Stripe) | not integrated | Enterprise sales. Covers ACH/SEPA/SPEI/Pix and LatAm | 🔴 |
+| **Bridge** (Stripe) | not integrated | Enterprise sales. ACH/SEPA/SPEI/Pix, LatAm | 🔴 |
 | **dLocal** | not integrated | **Public sandbox at docs.dlocal.com — start today, no call** | 🟢 |
 | **Yellow Card** | not integrated | Africa, settles in USDC, no prefunding | 🔴 |
 
