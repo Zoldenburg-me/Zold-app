@@ -3,8 +3,8 @@
  *
  * Every user gets a Safe smart account whose address is computed offline and
  * deterministically from their owner key — the same address on every EVM
- * chain. That address is the user's identity everywhere: the local RemitVault
- * ledger, and the address Monerium links the IBAN to.
+ * chain. That address is the user's identity and token balance account, and
+ * the address Monerium links the IBAN to.
  *
  * For Monerium to verify ownership of a contract wallet it calls EIP-1271 on
  * the address, so the Safe must actually be deployed on the chain Monerium
@@ -277,11 +277,9 @@ export async function isDeployed(address: string): Promise<boolean> {
 /**
  * Move an ERC-20 out of the user's Safe, gaslessly.
  *
- * Needed once the vault holds Monerium's real EURe rather than a token we mint
- * ourselves: a deposit lands in the user's Safe, and RemitVault.creditDeposit
- * refuses unless the vault actually holds the tokens backing the credit
- * ("uncovered credit"), so the euros have to be moved before they can be
- * credited.
+ * Temporary server-side Safe execution helper for the remaining relay flows.
+ * The long-term path is a browser-signed Safe UserOperation with exact token,
+ * amount, destination, and expiry constraints.
  *
  * This is a server-signed action today — the same custody gap FP4's second
  * half exists to close. It is not a new hole, but it is a bigger one: the key

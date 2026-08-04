@@ -141,11 +141,10 @@ async function call(address: `0x${string}`, name: string, functionName: string, 
   await publicClient.waitForTransactionReceipt({ hash });
 }
 
-const DAILY_CAP_EUR = parseUnits("2500", 18);
 // Governance: admin actions run through an M-of-N timelock, so no single key
-// can raise the cap, grant itself a role, or drain the swapper. Local dev uses
-// a short delay and the hardhat accounts; a real deployment sets these from
-// env and the owners are hardware/multisig keys held by different people.
+// can grant itself a role or drain the swapper. Local dev uses a short delay
+// and the hardhat accounts; a real deployment sets these from env and the
+// owners are hardware/multisig keys held by different people.
 const TIMELOCK_DELAY = BigInt(process.env.TIMELOCK_DELAY_SECONDS ?? 60);
 const TIMELOCK_THRESHOLD = Number(process.env.TIMELOCK_THRESHOLD ?? 2);
 /**
@@ -182,11 +181,10 @@ async function main() {
    * On a chain where Monerium really issues EURe, use THEIR token.
    *
    * Deploying our own MockToken there would be worse than pointless: a deposit
-   * mints Monerium's real EURe into the user's Safe, so a vault backed by our
-   * token is backed by something no deposit can produce — and both tokens
-   * would sit on the same chain calling themselves EURe. The mock exists so
-   * that a hardhat node can have EURe at all, not as a stand-in for the real
-   * one where the real one is available.
+   * mints Monerium's real EURe into the user's Safe, so a mock token would be
+   * something no deposit can produce. The mock exists so that a hardhat node can
+   * have EURe at all, not as a stand-in for the real one where the real one is
+   * available.
    */
   const { moneriumEure } = await import("../services/api/src/adapters/monerium-tokens.js");
   const { MONERIUM } = await import("../services/api/src/config.js");
@@ -207,7 +205,6 @@ async function main() {
     );
   }
   const usdc = await deploy("MockToken", ["USD Coin (mock)", "USDC", 6]);
-  const vault = await deploy("RemitVault", [eure, DAILY_CAP_EUR]);
   const eurUsdRate = await eurUsdSeed();
   console.log(`swapper seeded at EUR/USD ${(Number(eurUsdRate) / 1e6).toFixed(4)}`);
   const swapper = await deploy("FxSwapper", [eure, usdc, eurUsdRate]);
@@ -225,8 +222,6 @@ async function main() {
     TIMELOCK_DELAY,
   ]);
 
-  await call(vault, "RemitVault", "setRamp", [rampAddr, true]);
-  await call(vault, "RemitVault", "setOrchestrator", [orchestratorAddr, true]);
   await call(swapper, "FxSwapper", "setTrader", [orchestratorAddr, true]);
   await call(bridge, "BridgeEscrow", "setOrchestrator", [orchestratorAddr, true]);
   /**
@@ -249,22 +244,20 @@ async function main() {
   await call(usdc, "MockToken", "mint", [swapper, SWAP_INVENTORY_USDC]);
 
   // A guardian can halt the system instantly without waiting out the timelock.
-  await call(vault, "RemitVault", "setGuardian", [rampAddr]);
   await call(swapper, "FxSwapper", "setGuardian", [rampAddr]);
 
   // Roles are wired BEFORE ownership moves — afterwards every admin call has
   // to be queued, confirmed and waited out, which is the point.
-  await call(vault, "RemitVault", "transferOwnership", [timelock]);
   await call(swapper, "FxSwapper", "transferOwnership", [timelock]);
   await call(bridge, "BridgeEscrow", "transferOwnership", [timelock]);
 
-  const out = { eure, usdc, vault, swapper, bridge, timelock };
+  const out = { eure, usdc, swapper, bridge, timelock };
   const file = path.join(ROOT, "deployments.json");
   let all: Record<string, unknown> = {};
   try {
     const existing = JSON.parse(readFileSync(file, "utf8"));
     // Migrate a legacy flat file into its chain slot rather than dropping it.
-    all = typeof existing.vault === "string" ? { "31337": existing } : existing;
+    all = typeof existing.swapper === "string" ? { "31337": existing } : existing;
   } catch {
     all = {};
   }

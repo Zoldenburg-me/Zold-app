@@ -3,10 +3,10 @@ pragma solidity ^0.8.24;
 
 /// @title AdminTimelock — M-of-N owners, plus a delay before anything lands.
 ///
-/// The privileged surface of this system is small but total: whoever owns the
-/// vault can raise the daily cap, grant itself the ramp and orchestrator
-/// roles, or drain the swapper's inventory. A single key holding that is one
-/// compromise away from every user's balance.
+/// The privileged surface of this system is small but powerful: whoever owns
+/// the managed contracts can grant execution roles or drain the swapper's
+/// inventory. A single key holding that is one compromise away from the
+/// system's liquidity.
 ///
 /// This contract becomes that owner. Two properties matter:
 ///
@@ -16,8 +16,8 @@ pragma solidity ^0.8.24;
 ///    and any owner can cancel it.
 ///
 /// Emergency pause is deliberately NOT routed through here — see the guardian
-/// role on RemitVault and FxSwapper. Stopping the system must be instant;
-/// starting it again is what deserves the delay.
+/// role on FxSwapper. Stopping the system must be instant; starting it again
+/// is what deserves the delay.
 contract AdminTimelock {
     struct Operation {
         address target;

@@ -24,11 +24,9 @@ export const USING_LOCAL_RPC = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/
  * Which chain we settle on.
  *
  * This used to be `hardhat` everywhere, hardcoded. That matters more than it
- * looks: RemitVault builds its EIP-712 domain from `block.chainid`, so a
- * server signing against 31337 while the contract lives on 80002 produces
- * signatures the vault rejects — every debit reverts with "bad authorization"
- * and the error points at the signing code, which is innocent. Deriving the id
- * from one place removes that whole class of confusion.
+ * looks: wallet deployment, signatures and token balances all need the same
+ * chain id. Deriving the id from one place removes that whole class of
+ * confusion.
  *
  * 31337 = hardhat (default), 80002 = Polygon Amoy, 137 = Polygon mainnet.
  */
@@ -407,11 +405,9 @@ const DEV_KEYS = {
  * deploy.ts has always been able to take real keys (DEPLOY_*_KEY) while the
  * server could not, so the only way to run against a testnet was to let the
  * hardhat development keys hold the privileged roles. That is not a smaller
- * version of the same risk: the ramp role may bind a payment authorizer to any
- * account that has not bound one yet (RemitVault.setAuthorizer), and the
- * orchestrator role submits debits — with published keys in both, anyone can
- * claim a new user's account before the user's own device does and spend its
- * balance. FP4 buys nothing in that configuration.
+ * version of the same risk: the operator roles can move test liquidity, submit
+ * payout steps, and perform administrative actions. Public development keys
+ * must never hold those powers on a public chain.
  *
  * Accepts ORCHESTRATOR_KEY / RAMP_KEY / DEPLOYER_KEY, falling back to the
  * DEPLOY_*_KEY names so one .env serves both the deploy and the server.
@@ -444,7 +440,6 @@ export interface Deployments {
   eure: `0x${string}`;
   timelock?: `0x${string}`;
   usdc: `0x${string}`;
-  vault: `0x${string}`;
   swapper: `0x${string}`;
   bridge: `0x${string}`;
 }
@@ -461,14 +456,15 @@ export function loadDeployments(chainId: number = CHAIN_ID): Deployments {
   const p = path.join(ROOT, "deployments.json");
   const raw = JSON.parse(readFileSync(p, "utf8"));
   // Legacy shape: addresses at the top level, from before this was per-chain.
-  if (typeof raw.vault === "string") {
+  if (typeof raw.swapper === "string") {
     if (chainId !== 31337) {
       throw new Error(
         `deployments.json is in the old single-chain format and has no entry for chain ${chainId} — ` +
           `re-run the deploy for this chain`,
       );
     }
-    return raw as Deployments;
+    const { vault: _abandonedVault, ...rest } = raw;
+    return rest as Deployments;
   }
   const forChain = raw[String(chainId)];
   if (!forChain) {
@@ -487,7 +483,7 @@ export function saveDeployments(chainId: number, addresses: Deployments) {
   try {
     const existing = JSON.parse(readFileSync(p, "utf8"));
     // Migrate a legacy flat file into its chain slot rather than dropping it.
-    raw = typeof existing.vault === "string" ? { "31337": existing } : existing;
+    raw = typeof existing.swapper === "string" ? { "31337": existing } : existing;
   } catch {
     raw = {};
   }
@@ -666,9 +662,8 @@ export const CRYPTO_IN = {
   maxDriftBps: Number(process.env.CRYPTO_IN_MAX_DRIFT_BPS ?? 100),
   /**
    * Blocks to wait before treating a deposit as real. A reorg that unwinds the
-   * incoming transfer after we have credited EURe is an unbacked credit, and
-   * the vault has no way to claw it back. Zero on hardhat, where a mined block
-   * is final and waiting would just hang the tests.
+   * incoming transfer after we have settled it leaves a false receipt. Zero on
+   * hardhat, where a mined block is final and waiting would just hang the tests.
    */
   confirmations: Number(process.env.CRYPTO_IN_CONFIRMATIONS ?? (IS_LOCAL_CHAIN ? 0 : 2)),
   /** Cap on a single getLogs span, so a long outage cannot ask an RPC for a
@@ -682,7 +677,7 @@ export const FX = {
   // UPI is a point-of-sale rail — small fixed fee, same spread.
   UPI_FIXED_FEE_EUR: 0.29,
   QUOTE_TTL_MS: 10 * 60 * 1000,
-  DAILY_CAP_EUR: 2500, // mirrors RemitVault.dailyCap
+  DAILY_CAP_EUR: 2500,
   // FP5: max on-chain rate drift between quote and execution before the
   // transfer is rejected and refunded (bps).
   QUOTE_BINDING_BPS: 50,

@@ -61,10 +61,7 @@ import {
   orchestratorAddress,
   paymentAuthorizationTypedData,
   publicClient,
-  setVaultAuthorizer,
   transferIdHash,
-  vaultAuthorizerOf,
-  vaultBalance,
 } from "./chain.js";
 import {
   CANDIDE,
@@ -1059,7 +1056,7 @@ app.post(
             : "identity review required",
       },
     });
-    const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0, vaultBalanceEur: 0 }));
+    const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
     res.json({ ...publicUser(updated), ...balances });
   }),
 );
@@ -1315,7 +1312,7 @@ app.post(
       },
       monerium: { ...user.monerium!, profileId, ...snapshot },
     });
-    const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0, vaultBalanceEur: 0 }));
+    const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
     res.json({ ...publicUser(updated), ...balances });
   }),
 );
@@ -1358,7 +1355,7 @@ async function applyKycDecision(
     },
   });
   if (sandbox && decision === "approved") queueSandboxProvisioning(updated);
-  const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0, vaultBalanceEur: 0 }));
+  const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
   return { ...publicUser(updated), ...balances };
 }
 
@@ -1379,13 +1376,12 @@ async function assertDailyCap(
   sendEur: number,
   res: express.Response,
 ): Promise<boolean> {
-  const { capEur, usedEur, fromVaultEur, fromSafeEur } = await dailyCapUsage(user);
+  const { capEur, usedEur, fromSafeEur } = await dailyCapUsage(user);
   if (usedEur + sendEur > capEur) {
     res.status(400).json({
       error:
         `amount exceeds the daily cap of €${capEur.toFixed(2)} ` +
-        `(already used €${usedEur.toFixed(2)} today: €${fromVaultEur.toFixed(2)} from the vault, ` +
-        `€${fromSafeEur.toFixed(2)} from the Safe)`,
+        `(already used €${usedEur.toFixed(2)} today from the Safe: €${fromSafeEur.toFixed(2)})`,
     });
     return false;
   }
@@ -1658,7 +1654,7 @@ app.get(
     if (!session) return;
     const user = store.findUser(session.userId);
     if (!user) return res.status(404).json({ error: "session user not found" });
-    const balances = await accountBalances(user.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0, vaultBalanceEur: 0 }));
+    const balances = await accountBalances(user.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
     res.json({ ...publicUser(user), ...balances });
   }),
 );
@@ -1823,7 +1819,7 @@ app.post(
       return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
     }
     const balances = await accountBalances(user.address);
-    if (balances.safeBalanceEur > 0 || balances.vaultBalanceEur > 0) {
+    if (balances.safeBalanceEur > 0) {
       return res.status(409).json({
         error: "current account still has funds; move balances before activating the passkey Safe address",
         ...balances,
@@ -1876,7 +1872,7 @@ app.post(
     } catch (err: any) {
       return res.status(401).json({ error: String(err?.message ?? err) });
     }
-    const balances = await accountBalances(user.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0, vaultBalanceEur: 0 }));
+    const balances = await accountBalances(user.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
     res.json({ ...withSession(user), ...balances });
   }),
 );
@@ -2033,17 +2029,11 @@ app.post(
     const user = store.findUser(quote.userId)!;
     if (!requireKycApproved(user, res)) return;
     const balances = await accountBalances(user.address);
-    let fundingSource: Transfer["fundingSource"] = "vault";
-    if (balances.vaultBalanceEur < quote.sendEur) {
-      if (balances.safeBalanceEur >= quote.sendEur) {
-        fundingSource = "safe";
-      } else {
-        return res.status(400).json({
-          error:
-            `insufficient balance (safe €${balances.safeBalanceEur.toFixed(2)}, ` +
-            `vault €${balances.vaultBalanceEur.toFixed(2)})`,
-        });
-      }
+    const fundingSource: Transfer["fundingSource"] = "safe";
+    if (balances.safeBalanceEur < quote.sendEur) {
+      return res.status(400).json({
+        error: `insufficient Safe balance (€${balances.safeBalanceEur.toFixed(2)})`,
+      });
     }
     if (fundingSource === "safe" && !user.privateKey) {
       return res.status(409).json({
@@ -2051,7 +2041,6 @@ app.post(
           "funds are in the Safe, but this account has no Safe owner key in the API store; " +
           "create a new passkey/Safe account or recover the Safe before this transfer can execute",
         safeBalanceEur: balances.safeBalanceEur,
-        vaultBalanceEur: balances.vaultBalanceEur,
       });
     }
     if (!(await assertDailyCap(user, quote.sendEur, res))) return;
@@ -2085,9 +2074,9 @@ app.post(
         memo: paymentMemo(transfer.id, transfer.reference),
       };
     }
-    // FP4: the account must be bound to a device key before it can spend.
-    const authorizer = await vaultAuthorizerOf(user.address);
-    if (authorizer === "0x0000000000000000000000000000000000000000") {
+    // The account must be bound to a device key before it can spend.
+    const authorizer = user.authorizerAddress;
+    if (!authorizer) {
       return res.status(409).json({
         error: "no device key registered for this account — POST /api/users/:id/authorizer first",
       });
@@ -2171,11 +2160,10 @@ app.post(
 
 // Monerium webhook receiver (production path; polling covers local dev).
 /**
- * FP4: register the device key that may authorize debits from this account.
+ * Register the device key that may authorize transfers from this account.
  * The browser generates the key, keeps the private half, and sends only the
- * address. The vault accepts the first binding from the ramp role and refuses
- * every later one from anybody but the device itself — so this endpoint can
- * establish a binding, never steal one.
+ * address. This binding is app state until Safe-native module policies replace
+ * it on-chain.
  */
 app.post(
   "/api/users/:id/authorizer",
@@ -2189,19 +2177,17 @@ app.post(
     if (typeof address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
       return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
     }
-    const onChain = await vaultAuthorizerOf(user.address);
-    if (onChain !== "0x0000000000000000000000000000000000000000") {
-      if (onChain.toLowerCase() !== address.toLowerCase()) {
+    if (user.authorizerAddress) {
+      if (user.authorizerAddress.toLowerCase() !== address.toLowerCase()) {
         return res.status(409).json({
           error: "this account is already bound to a different device key — rotate it from that device",
-          authorizerAddress: onChain,
+          authorizerAddress: user.authorizerAddress,
         });
       }
-      return res.json(publicUser(store.updateUser(user.id, { authorizerAddress: onChain })));
+      return res.json(publicUser(user));
     }
-    const hash = await setVaultAuthorizer(user.address, address as `0x${string}`);
     const updated = store.updateUser(user.id, { authorizerAddress: address as `0x${string}` });
-    res.status(201).json({ ...publicUser(updated), txHash: hash });
+    res.status(201).json(publicUser(updated));
   }),
 );
 
@@ -2240,10 +2226,9 @@ app.post(
     const user = store.findUser(transfer.userId)!;
     if (!requireKycApproved(user, res)) return;
     // Claim the authorization before anything awaits. Two parallel submissions
-    // of the same signature both used to clear the CREATED check above, both
-    // submitted `debit`, and the one the vault rejected as a duplicate took the
-    // compensation path — re-crediting the sender while the other completed the
-    // payout. The claim is atomic because nothing yields between here and it.
+    // of the same signature both used to clear the CREATED check above, and
+    // both could submit the same spend. The claim is atomic because nothing
+    // yields between here and it.
     if (!store.claimAuthorization(transfer.id)) {
       return res.status(409).json({ error: "authorization already submitted for this transfer" });
     }
@@ -2362,7 +2347,7 @@ app.use(((err, _req, res, _next) => {
 
 initStore();
 // Fail fast on a chain mismatch: signatures built for the wrong chain id are
-// rejected by the vault as "bad authorization", which reads like a signing bug.
+// rejected as "bad authorization", which reads like a signing bug.
 assertChainMatches().catch((e) => {
   console.error(String(e?.message ?? e));
   process.exit(1);
@@ -2388,7 +2373,7 @@ setInterval(
 ).unref();
 
 // Reconciler: log-only, never repairs. Drift between Monerium's ledger and
-// the local vault should be loud rather than discovered later by a user
+// local receipt state should be loud rather than discovered later by a user
 // missing money. `npm run reconcile` runs the same check on demand.
 const runReconcile = () =>
   reconcile()
