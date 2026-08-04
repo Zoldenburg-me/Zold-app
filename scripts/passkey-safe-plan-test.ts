@@ -75,6 +75,11 @@ const allowanceSetup = passkeySafeAllowanceSetupTransactions({
   cosignerPolicy: {
     enabled: true,
     allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+    allowancePeriodMinutes: "0",
+    allowances: [
+      { token: "0x2222222222222222222222222222222222222222", symbol: "EURE", amount: "0" },
+      { token: "0x3333333333333333333333333333333333333333", symbol: "USDC", amount: "0" },
+    ],
     allowanceAmount: "0",
   },
 });
@@ -89,8 +94,7 @@ assert.equal(
   CANDIDE.allowanceModuleAddress.toLowerCase(),
   "the allowance module must receive the delegate setup call",
 );
-assert.throws(
-  () => passkeySafeAllowanceSetupTransactions({
+const allowanceWithSpend = passkeySafeAllowanceSetupTransactions({
     address: safe.accountAddress as `0x${string}`,
     threshold: 2,
     cosignerAddress: cosigner,
@@ -98,11 +102,17 @@ assert.throws(
     cosignerPolicy: {
       enabled: true,
       allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-      allowanceAmount: "1",
+      allowancePeriodMinutes: "1440",
+      allowances: [
+        { token: "0x2222222222222222222222222222222222222222", symbol: "EURE", amount: "1000000000000000000" },
+        { token: "0x3333333333333333333333333333333333333333", symbol: "USDC", amount: "1000000" },
+      ],
     },
-  }),
-  /must stay 0/,
-  "the co-signer must not receive token spending allowance by default",
+  });
+assert.equal(
+  allowanceWithSpend.length,
+  4,
+  "positive co-signer policy should enable module, add delegate, and set one allowance per token",
 );
 assert.equal(webauthnOwnerFromJwk({ ...jwk, crv: "P-384" }), null);
 

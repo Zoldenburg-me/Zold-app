@@ -502,6 +502,14 @@ function passkeySafePlan(
   const account = cosignerAddress
     ? smartAccountForPasskeyCosigner(owner, cosignerAddress)
     : smartAccountForPasskey(owner);
+  const tokenAllowances = (() => {
+    if (!cosignerAddress) return [];
+    const a = addrs();
+    return [
+      { token: a.eure, symbol: "EURE" as const, amount: CANDIDE.cosignerEureAllowanceWei.toString() },
+      { token: a.usdc, symbol: "USDC" as const, amount: CANDIDE.cosignerUsdcAllowanceUnits.toString() },
+    ];
+  })();
   const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
     ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)
     : undefined;
@@ -515,13 +523,17 @@ function passkeySafePlan(
           cosignerPolicy: {
             enabled: true,
             allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-            allowanceAmount: CANDIDE.cosignerAllowanceAmount.toString(),
+            allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
+            allowances: tokenAllowances,
+            allowanceAmount: tokenAllowances.find((x) => BigInt(x.amount) > 0n)?.amount ?? "0",
           },
         }
       : {
           cosignerPolicy: {
             enabled: false,
             allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+            allowancePeriodMinutes: "0",
+            allowances: [],
             allowanceAmount: "0",
           },
         }),
