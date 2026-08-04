@@ -455,7 +455,7 @@ export function loadAbi(contract: string): any[] {
  * but a partner key gets better pricing and higher rate limits.
  */
 export const LIQUIDITY = {
-  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow" | "dex" | "lifi",
+  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best",
   // Bebop's chain slug, e.g. "polygon", "base", "ethereum".
   BEBOP_CHAIN: process.env.BEBOP_CHAIN ?? "polygon",
   BEBOP_BASE_URL: process.env.BEBOP_BASE_URL ?? "https://api.bebop.xyz",
@@ -527,6 +527,28 @@ export const LIQUIDITY = {
   LIFI_SLIPPAGE: Number(process.env.LIFI_SLIPPAGE ?? 0.005),
   /** Chain to route on. Defaults to the app chain; EURe exists on 1/100/137/8453/42161/59144. */
   LIFI_CHAIN_ID: Number(process.env.LIFI_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? 8453),
+
+  /**
+   * Best execution. With more than one venue wired, picking one by config means
+   * quietly settling at a worse price whenever the other is better — and having
+   * an aggregator alongside a single-pool adapter makes that likely rather than
+   * theoretical. `best` quotes every venue below in parallel and takes the
+   * largest out for the same in.
+   */
+  VENUES: (process.env.LIQUIDITY_VENUES ?? "lifi,dex")
+    .split(",").map((s) => s.trim()).filter(Boolean),
+  /**
+   * Who keeps positive slippage — the difference between what a venue quoted
+   * and what it actually delivered.
+   *
+   * Default "user", and that default is load-bearing. The receipt reports
+   * marginBps MEASURED between the live mid and what we deliver; silently
+   * pocketing surplus would make that number understate what we take, which is
+   * the exact dishonesty the live-rates work existed to remove. "treasury" is
+   * available but records the amount on the transfer so it stays visible and
+   * can be reflected in the margin rather than hidden in it.
+   */
+  SURPLUS_POLICY: (process.env.LIQUIDITY_SURPLUS_POLICY ?? "user") as "user" | "treasury",
 };
 
 // Live mid-rate feed. Defaults to a free, key-less provider that publishes all

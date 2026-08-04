@@ -357,6 +357,45 @@ TESTED AGAINST THE REAL APIS, not docs:
    present, or the orchestrator. Half-working execution would be worse than
    none.
 
+**Best execution + surplus (Aug 2026).**
+ - LIQUIDITY_PROVIDER=best quotes every venue in LIQUIDITY_VENUES in PARALLEL
+   and takes the largest out for the same in. With an aggregator sitting beside
+   a single-pool adapter, choosing by config means settling worse whenever the
+   other venue wins — silently, with nothing in the record. Losers AND their
+   failure reasons are stored on the quote (`routing`), so a route choice is
+   auditable after the fact. One venue down does not sink a trade another can
+   price; ALL failing REFUSES rather than falling back to our own book.
+ - NOT netted against gas. On these L2s gas is cents against a corridor trade,
+   and faking that precision would be worse than the omission — but a venue
+   winning by a hair on price could lose on cost. Revisit if venues land close.
+ - SURPLUS (positive slippage) is MEASURED and ATTRIBUTED, never silent.
+   LIQUIDITY_SURPLUS_POLICY defaults to `user` and that default is load-bearing:
+   the receipt reports marginBps MEASURED between the live mid and what we
+   deliver, so pocketing surplus quietly would make that number understate what
+   we take — the exact dishonesty the live-rates work removed. `treasury` is
+   supported and still records the amount, so it can be reflected in the margin
+   instead of hidden inside it. Keeping the spread is a business decision;
+   hiding it is not one the code will make.
+ - npm run best:test (13 checks, injected stub venues, no chain/network). The
+   router takes injected venues because config is frozen at first import — an
+   env flip after that silently exercises the default and passes for the wrong
+   reason.
+
+**Bebop re-tested Aug 2026 — still no EURe, but the earlier read was incomplete.**
+ - base + polygon: TokenNotSupported for Monerium's production EURe. Definitive.
+ - gnosis: 404, chain not served by the PMM endpoint.
+ - ethereum + arbitrum: UnknownError — and a CONTROL (USDC->WETH, a pair that
+   must work) returns UnknownError on those chains AND on base. So that error
+   is NOT evidence about EURe; the API is refusing us generally, almost
+   certainly an API key requirement that did not exist in July. Those two chains
+   are UNTESTED, not ruled out. Re-run with a BEBOP_API_KEY before concluding.
+ - No Bebop/EURe partnership found. The euro-stablecoin partnership in the space
+   is Qivalis (12 European banks, H2 2026, talking to market makers) — a
+   DIFFERENT euro stablecoin, unlaunched.
+ - The RFQ adapter is already built and tested, so Bebop needs no new code —
+   only credentials and a supported token. Add `rfq` to LIQUIDITY_VENUES and it
+   competes on price like any other venue.
+
 **LI.FI — the production venue (Aug 2026). Aggregation beats one pool.**
  - TESTED LIVE, not assumed: 100 EURe -> USDC returned EXECUTABLE quotes on
    Gnosis 1.1493, Base 1.1506, Polygon 1.1491 against a live mid of ~1.1511 —
