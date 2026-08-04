@@ -4,8 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CANDIDE,
+  passkeySafeAllowanceSetupTransactions,
   passkeySafeRecoverySetupTransactions,
   smartAccountFor,
+  smartAccountForPasskey,
   smartAccountForPasskeyCosigner,
   webauthnOwnerFromJwk,
   webauthnOwnerToStore,
@@ -25,7 +27,9 @@ const passkeyOwner = webauthnOwnerFromJwk(jwk);
 assert.ok(passkeyOwner, "ES256 passkey JWK should produce Safe WebAuthn owner coordinates");
 
 const safe = smartAccountForPasskeyCosigner(passkeyOwner, cosigner);
+const passkeyOnlySafe = smartAccountForPasskey(passkeyOwner);
 assert.match(safe.accountAddress, /^0x[0-9a-fA-F]{40}$/);
+assert.match(passkeyOnlySafe.accountAddress, /^0x[0-9a-fA-F]{40}$/);
 assert.equal(
   smartAccountForPasskeyCosigner(passkeyOwner, cosigner).accountAddress,
   safe.accountAddress,
@@ -36,8 +40,14 @@ assert.notEqual(
   safe.accountAddress.toLowerCase(),
   "2-of-2 passkey/co-signer Safe must not collapse to the legacy single-EOA Safe",
 );
+assert.notEqual(
+  passkeyOnlySafe.accountAddress.toLowerCase(),
+  safe.accountAddress.toLowerCase(),
+  "production co-signer policy must produce a different Safe than local passkey-only setup",
+);
 const recoverySetup = passkeySafeRecoverySetupTransactions({
   address: safe.accountAddress as `0x${string}`,
+  threshold: 2,
   cosignerAddress: cosigner,
   passkeyPublicKey: webauthnOwnerToStore(passkeyOwner),
   recovery: {
@@ -56,6 +66,43 @@ assert.equal(
   recoverySetup[1].to.toLowerCase(),
   CANDIDE.recoveryModuleAddress.toLowerCase(),
   "the recovery module must receive the guardian setup call",
+);
+const allowanceSetup = passkeySafeAllowanceSetupTransactions({
+  address: safe.accountAddress as `0x${string}`,
+  threshold: 2,
+  cosignerAddress: cosigner,
+  passkeyPublicKey: webauthnOwnerToStore(passkeyOwner),
+  cosignerPolicy: {
+    enabled: true,
+    allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+    allowanceAmount: "0",
+  },
+});
+assert.equal(allowanceSetup.length, 2, "co-signer setup should enable allowance module and add delegate only");
+assert.equal(
+  allowanceSetup[0].to.toLowerCase(),
+  safe.accountAddress.toLowerCase(),
+  "the Safe itself must receive the allowance-module enable call",
+);
+assert.equal(
+  allowanceSetup[1].to.toLowerCase(),
+  CANDIDE.allowanceModuleAddress.toLowerCase(),
+  "the allowance module must receive the delegate setup call",
+);
+assert.throws(
+  () => passkeySafeAllowanceSetupTransactions({
+    address: safe.accountAddress as `0x${string}`,
+    threshold: 2,
+    cosignerAddress: cosigner,
+    passkeyPublicKey: webauthnOwnerToStore(passkeyOwner),
+    cosignerPolicy: {
+      enabled: true,
+      allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+      allowanceAmount: "1",
+    },
+  }),
+  /must stay 0/,
+  "the co-signer must not receive token spending allowance by default",
 );
 assert.equal(webauthnOwnerFromJwk({ ...jwk, crv: "P-384" }), null);
 

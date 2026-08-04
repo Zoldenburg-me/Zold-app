@@ -72,6 +72,7 @@ import {
   safeMessageHash,
   signMessageAsPasskeySafe,
   smartAccountFor,
+  smartAccountForPasskey,
   smartAccountForPasskeyCosigner,
   submitPasskeySafeDeployment,
   webauthnOwnerFromJwk,
@@ -453,13 +454,13 @@ function custodyBlockerBeforeFunding(user: User): string | null {
     );
   }
   if (!user.passkeySafe) {
-    return "a passkey/co-signer Safe plan is required before an account can be funded";
+    return "a passkey Safe plan is required before an account can be funded";
   }
   if (
     user.passkeySafe.status !== "active" ||
     user.address.toLowerCase() !== user.passkeySafe.address.toLowerCase()
   ) {
-    return "activate the passkey/co-signer Safe before funding this account";
+    return "activate the passkey Safe before funding this account";
   }
   if (user.privateKey || user.ownerAddress) {
     return "server-held Safe owner keys must be removed before funding this account";
@@ -472,7 +473,7 @@ function passkeyRequiredBeforeFunding(user: User): string | null {
   if (!blocked) return null;
   return (
     blocked +
-    (blocked.includes("passkey/co-signer Safe") ? "" : " — complete the passkey Safe setup first")
+    (blocked.includes("passkey Safe") ? "" : " — complete the passkey Safe setup first")
   );
 }
 
@@ -481,19 +482,38 @@ function passkeySafePlan(
   publicKey: NonNullable<NonNullable<User["passkey"]>["publicKey"]>,
 ): User["passkeySafe"] | undefined {
   if (!publicKey || publicKey.alg !== "ES256") return undefined;
-  if (!/^0x[0-9a-fA-F]{40}$/.test(CANDIDE.cosignerAddress)) return undefined;
-  const cosignerAddress = CANDIDE.cosignerAddress as `0x${string}`;
+  const cosignerAddress =
+    CANDIDE.cosignerEnabled && /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.cosignerAddress)
+      ? (CANDIDE.cosignerAddress as `0x${string}`)
+      : undefined;
   const owner = webauthnOwnerFromJwk(publicKey.jwk);
   if (!owner) return undefined;
-  const account = smartAccountForPasskeyCosigner(owner, cosignerAddress);
+  const account = cosignerAddress
+    ? smartAccountForPasskeyCosigner(owner, cosignerAddress)
+    : smartAccountForPasskey(owner);
   const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
     ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)
     : undefined;
   return {
     address: account.accountAddress as `0x${string}`,
     status: "planned",
-    threshold: 2,
-    cosignerAddress,
+    threshold: cosignerAddress ? 2 : 1,
+    ...(cosignerAddress
+      ? {
+          cosignerAddress,
+          cosignerPolicy: {
+            enabled: true,
+            allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+            allowanceAmount: CANDIDE.cosignerAllowanceAmount.toString(),
+          },
+        }
+      : {
+          cosignerPolicy: {
+            enabled: false,
+            allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+            allowanceAmount: "0",
+          },
+        }),
     passkeyPublicKey: webauthnOwnerToStore(owner),
     ...(recoveryGuardianAddress
       ? {
@@ -1676,10 +1696,36 @@ app.post(
     if (user.passkeySafe.status === "active") {
       return res.json({ safeAddress: user.passkeySafe.address, status: "active" });
     }
-    if (!CANDIDE.cosignerKey) {
+    if (user.passkeySafe.cosignerAddress && !CANDIDE.cosignerKey) {
       return res.status(503).json({ error: "CANDIDE_COSIGNER_KEY is required before passkey Safe deployment" });
     }
-    const deployment = await preparePasskeySafeDeployment(user.passkeySafe);
+    /**
+     * Deploying a passkey Safe goes through an ERC-4337 bundler and paymaster.
+     * A local hardhat node has neither, so under `npm run dev` this reaches
+     * Candide asking about CANDIDE_CHAIN_ID for a Safe that exists only on this
+     * machine, and the browser reports the network failure as "Failed to fetch"
+     * — which reads as a bug in our code rather than a chain that cannot do the
+     * operation.
+     *
+     * Explain it when it happens rather than refusing up front: an already
+     * deployed Safe short-circuits before any bundler call, and that path works
+     * locally (monerium:oauth:test relies on it). Guessing ahead of the failure
+     * broke a passing flow.
+     */
+    let deployment: Awaited<ReturnType<typeof preparePasskeySafeDeployment>>;
+    try {
+      deployment = await preparePasskeySafeDeployment(user.passkeySafe);
+    } catch (err: any) {
+      const mismatch = BigInt(CHAIN_ID) !== BigInt(CANDIDE.chainId);
+      return res.status(mismatch ? 409 : 502).json({
+        error: mismatch
+          ? `passkey Safe deployment needs an ERC-4337 bundler. This API is on chain ${CHAIN_ID} ` +
+            `while Candide is configured for chain ${CANDIDE.chainId}, and a local hardhat node has ` +
+            `no bundler or paymaster. Run against chain ${CANDIDE.chainId} (npm run api) rather than ` +
+            `npm run dev. Underlying error: ${err?.message ?? err}`
+          : `passkey Safe deployment failed: ${err?.message ?? err}`,
+      });
+    }
     if (deployment.challenge === "0x") {
       const updated = store.updateUser(user.id, {
         address: user.passkeySafe.address,
