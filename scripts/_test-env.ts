@@ -62,6 +62,7 @@ process.env.WEBAUTHN_ORIGINS = [...new Set([...PORTS.map(String), ...(RUN_PORT ?
  */
 process.env.MONERIUM_WEBHOOK_SECRET = "";
 process.env.TRUSTED_PROXY_HOPS = "0";
+process.env.RECOVERY_MANAGED_KYC_GUARDIAN = "0";
 
 /**
  * KYC_AUTO_APPROVE is a gate: with "0" a new user starts pending and never
