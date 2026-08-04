@@ -11,7 +11,7 @@ import {
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type Transfer, type User } from "./store.js";
@@ -249,6 +249,21 @@ const publicUser = ({ privateKey, moneriumConnect, monerium, passkey, ...u }: Us
     : {}),
 });
 const withSession = (user: User) => ({ ...publicUser(user), sessionToken: issueSession(user.id) });
+
+function publicPrivacyPlan(plan: (typeof PRIVACY_BUNDLE.plans)[number]) {
+  const grossMarginBps = Math.round(((plan.priceEur - plan.estimatedCostEur) / plan.priceEur) * 10_000);
+  return {
+    ...plan,
+    grossMarginBps,
+    marginProtected: grossMarginBps >= PRIVACY_BUNDLE.minMarginBps,
+  };
+}
+
+function nextMonthlyRenewal() {
+  const d = new Date();
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  return d.toISOString();
+}
 
 function tokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -836,6 +851,96 @@ app.get(
       kyc: user.kyc,
       funding: user.funding,
     });
+  }),
+);
+
+app.get(
+  "/api/privacy-bundles",
+  wrap(async (_req, res) => {
+    res.json({
+      enabled: PRIVACY_BUNDLE.enabled,
+      fulfillment: {
+        kokio: PRIVACY_BUNDLE.kokioLive ? "live" : "pending_partner_credentials",
+        mysterium: PRIVACY_BUNDLE.mysteriumLive ? "live" : "pending_partner_credentials",
+      },
+      guardrails: {
+        minMarginBps: PRIVACY_BUNDLE.minMarginBps,
+        noUnlimitedUsage: true,
+        downgradeWhenMarginUnsafe: true,
+      },
+      plans: PRIVACY_BUNDLE.plans.map(publicPrivacyPlan),
+    });
+  }),
+);
+
+app.post(
+  "/api/users/:id/privacy-bundle",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!requireKycApproved(user, res)) return;
+    if (!PRIVACY_BUNDLE.enabled) return res.status(503).json({ error: "privacy bundle is not enabled" });
+
+    const plan = PRIVACY_BUNDLE.plans.find((p) => p.id === req.body?.planId);
+    if (!plan) return res.status(400).json({ error: "unknown privacy bundle plan" });
+    const publicPlan = publicPrivacyPlan(plan);
+    if (!publicPlan.marginProtected) {
+      return res.status(409).json({
+        error: "plan is below the configured margin floor",
+        plan: publicPlan,
+      });
+    }
+
+    const now = new Date().toISOString();
+    const status =
+      PRIVACY_BUNDLE.kokioLive && PRIVACY_BUNDLE.mysteriumLive ? "active" : "pending_fulfillment";
+    const updated = store.updateUser(user.id, {
+      privacyBundle: {
+        planId: plan.id,
+        status,
+        startedAt: now,
+        renewsAt: nextMonthlyRenewal(),
+        esim: {
+          provider: "kokio",
+          status: PRIVACY_BUNDLE.kokioLive ? "active" : "pending",
+          dataGb: plan.esimGb,
+          region: plan.esimRegion,
+        },
+        vpn: {
+          provider: "mysterium",
+          status: PRIVACY_BUNDLE.mysteriumLive ? "active" : "pending",
+          bandwidthGb: plan.vpnGb,
+          devices: plan.vpnDevices,
+        },
+        usage: {
+          esimGb: 0,
+          vpnGb: 0,
+          periodStartedAt: now,
+        },
+      },
+    });
+    res.status(201).json({ user: publicUser(updated), plan: publicPlan });
+  }),
+);
+
+app.post(
+  "/api/users/:id/privacy-bundle/cancel",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!user.privacyBundle || user.privacyBundle.status === "canceled") {
+      return res.status(409).json({ error: "no active privacy bundle" });
+    }
+    const updated = store.updateUser(user.id, {
+      privacyBundle: {
+        ...user.privacyBundle,
+        status: "canceled",
+        canceledAt: new Date().toISOString(),
+      },
+    });
+    res.json(publicUser(updated));
   }),
 );
 
@@ -1727,6 +1832,19 @@ app.post(
         submitTo: `/api/transfers/${transfer.id}/authorize`,
       },
     });
+  }),
+);
+
+app.get(
+  "/api/users/:id/transfers",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const transfers = store.transfers
+      .filter((t) => t.userId === user.id)
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    res.json({ transfers });
   }),
 );
 

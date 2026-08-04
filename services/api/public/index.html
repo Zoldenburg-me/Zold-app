@@ -196,6 +196,35 @@
     padding: .48rem 1rem; color: var(--faint); font-size: .84rem;
   }
   .net-chip { font-size: .75rem; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: .38rem .85rem; background: var(--panel2); }
+  .view { display: none; }
+  .view.active { display: block; animation: rise .22s ease; }
+  .split-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  .metric-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; margin-bottom: 1rem; }
+  .metric {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    padding: .85rem; min-width: 0;
+  }
+  .metric .mk { color: var(--faint); font-size: .68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  .metric .mv { margin-top: .25rem; font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .toolbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: .85rem; }
+  .filter-btn { padding: .38rem .7rem; background: var(--row); color: var(--muted); border: 1px solid var(--border2); font-size: .74rem; }
+  .filter-btn.active { color: var(--text); border-color: rgba(237, 24, 141, .5); background: rgba(237, 24, 141, .1); }
+  .info-list { display: grid; gap: .15rem; }
+  .contact-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: .7rem; align-items: end; margin-bottom: .9rem; }
+  .contact-card {
+    display: flex; justify-content: space-between; align-items: center; gap: .8rem;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    padding: .75rem .85rem; margin-bottom: .5rem;
+  }
+  .contact-card .cn { font-weight: 700; }
+  .contact-card .cd { color: var(--faint); font-size: .72rem; margin-top: .1rem; }
+  .setting-row {
+    display: flex; justify-content: space-between; gap: 1rem; align-items: center;
+    padding: .75rem 0; border-top: 1px solid var(--border);
+  }
+  .setting-row:first-child { border-top: 0; padding-top: 0; }
+  .setting-row .st { font-weight: 700; }
+  .setting-row .sd { color: var(--muted); font-size: .76rem; margin-top: .15rem; }
 
   .rail { padding: 1.25rem 1.4rem 2rem 0; }
 
@@ -209,6 +238,9 @@
     .side { display: none; }
     .rail, .main { grid-column: 1; }
     .rail { padding: 0 1.4rem 2rem; }
+    .bundle-grid { grid-template-columns: 1fr; }
+    .split-grid, .metric-row, .contact-form { grid-template-columns: 1fr; }
+    .contact-form button { width: 100%; }
   }
 
   /* ---------- cards ---------- */
@@ -266,6 +298,29 @@
   .hitem .hamt { text-align: right; font-weight: 600; color: var(--acc); font-variant-numeric: tabular-nums; }
   .hitem .hst { font-size: .63rem; font-weight: 700; text-align: right; letter-spacing: .04em; }
   .empty { color: var(--faint); font-size: .84rem; text-align: center; padding: .9rem 0; }
+
+  /* premium privacy bundle */
+  .bundle-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem; margin-bottom: .9rem; }
+  .bundle-title { font-size: 1rem; font-weight: 700; }
+  .bundle-sub { color: var(--muted); font-size: .78rem; margin-top: .15rem; }
+  .bundle-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; }
+  .plan {
+    background: var(--panel2); border: 1px solid var(--border2); border-radius: 8px;
+    padding: .75rem; display: grid; gap: .35rem; min-width: 0;
+  }
+  .plan.active { border-color: rgba(61, 214, 140, .45); background: rgba(61, 214, 140, .05); }
+  .plan .pn { font-weight: 700; font-size: .84rem; }
+  .plan .pp { font-size: 1.05rem; font-weight: 700; color: var(--text); }
+  .plan .pd { color: var(--muted); font-size: .7rem; min-height: 2.2rem; }
+  .plan .pm { color: var(--green); font-size: .68rem; font-weight: 700; }
+  .plan button { padding: .42rem .55rem; font-size: .72rem; }
+  .bundle-status {
+    display: grid; gap: .45rem; margin-top: .85rem; padding-top: .85rem;
+    border-top: 1px solid var(--border);
+  }
+  .bundle-meter { height: 6px; overflow: hidden; background: var(--row); border-radius: 99px; }
+  .bundle-meter span { display: block; height: 100%; background: var(--grad); width: 0; }
+  .bundle-line { display: flex; justify-content: space-between; gap: .8rem; color: var(--muted); font-size: .76rem; }
 
   /* ---------- destination-first send flow ---------- */
   .dest-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; }
@@ -458,22 +513,23 @@
       <div class="logo"><span class="tri">▽</span> Zold</div>
       <div class="userpill" id="userpill"><span class="avatar" id="avatar">?</span><span id="pillname"></span></div>
       <nav class="nav">
-        <a class="active" href="#">▦ Dashboard</a>
-        <a href="#">⇅ Transactions</a>
-        <a href="#">▤ Accounts</a>
-        <a href="#">◔ Contacts</a>
-        <a href="#">⚙ Settings</a>
+        <a class="active" href="#" data-view="dashboard">▦ Dashboard</a>
+        <a href="#" data-view="transactions">⇅ Transactions</a>
+        <a href="#" data-view="accounts">▤ Accounts</a>
+        <a href="#" data-view="contacts">◔ Contacts</a>
+        <a href="#" data-view="settings">⚙ Settings</a>
       </nav>
       <div class="foot">? Need help<br/><span style="opacity:.6">🦄 by Zoldenburg</span></div>
     </aside>
 
     <main class="main">
       <div class="topbar">
-        <h1>Dashboard</h1>
+        <h1 id="view-title">Dashboard</h1>
         <div class="search">⌕ Search…</div>
         <div class="net-chip">local demo</div>
       </div>
 
+      <section class="view active" id="view-dashboard">
       <div class="card hidden" id="kyc-card">
         <h2>Identity review</h2>
         <div class="kyc-status" style="margin-top:0">
@@ -523,6 +579,20 @@
           <span class="v" id="address">—</span>
           <button class="copybtn" data-copy="address">copy</button>
         </div>
+      </div>
+
+      <div class="card" id="privacy-card">
+        <h2>Premium</h2>
+        <div class="bundle-head">
+          <div>
+            <div class="bundle-title">Privacy Bundle</div>
+            <div class="bundle-sub">Kokio eSIM data plus Mysterium VPN, capped so usage stays profitable.</div>
+          </div>
+          <span class="chip pend" id="privacy-chip">OPTIONAL</span>
+        </div>
+        <div class="bundle-grid" id="privacy-plans"></div>
+        <div class="bundle-status hidden" id="privacy-status"></div>
+        <div class="error hidden" id="privacy-err"></div>
       </div>
 
       <div class="card" id="fund-card">
@@ -579,6 +649,75 @@
         <h2>Transaction history</h2>
         <div id="history"><div class="empty">No transfers yet</div></div>
       </div>
+      </section>
+
+      <section class="view" id="view-transactions">
+        <div class="metric-row">
+          <div class="metric"><div class="mk">Sent</div><div class="mv" id="tx-total-sent">€0.00</div></div>
+          <div class="metric"><div class="mk">Completed</div><div class="mv" id="tx-total-paid">0</div></div>
+          <div class="metric"><div class="mk">In flight</div><div class="mv" id="tx-total-open">0</div></div>
+        </div>
+        <div class="card">
+          <h2>Ledger</h2>
+          <div class="toolbar">
+            <button class="filter-btn active" data-tx-filter="all">All</button>
+            <button class="filter-btn" data-tx-filter="cash">Cash</button>
+            <button class="filter-btn" data-tx-filter="sepa">SEPA</button>
+            <button class="filter-btn" data-tx-filter="upi">UPI</button>
+            <button class="ghost" id="btn-refresh-tx">Refresh</button>
+          </div>
+          <div id="tx-page-list"><div class="empty">No transfers yet</div></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-accounts">
+        <div class="split-grid">
+          <div class="card acct">
+            <h2>EUR vault</h2>
+            <div class="amount" id="acct-balance"><span class="cur">€</span>0.00</div>
+            <div class="info-list">
+              <div class="detail"><span class="k">IBAN</span><span class="v" id="acct-iban">—</span><button class="copybtn" data-copy="acct-iban">copy</button></div>
+              <div class="detail"><span class="k">SMART ACCOUNT</span><span class="v" id="acct-address">—</span><button class="copybtn" data-copy="acct-address">copy</button></div>
+              <div class="detail"><span class="k">OWNER</span><span class="v" id="acct-owner">—</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Funding</h2>
+            <div class="setting-row"><div><div class="st">Identity status</div><div class="sd" id="acct-kyc">—</div></div><span class="chip review" id="acct-kyc-chip">REVIEW</span></div>
+            <div class="setting-row"><div><div class="st">Funding rail</div><div class="sd" id="acct-funding">—</div></div><span class="chip pend" id="acct-funding-chip">PENDING</span></div>
+            <div class="setting-row"><div><div class="st">Device authorizer</div><div class="sd" id="acct-authorizer">—</div></div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-contacts">
+        <div class="card">
+          <h2>Saved contacts</h2>
+          <div class="contact-form">
+            <div><label style="margin-top:0">Name</label><input id="contact-name" placeholder="Joseph Otieno" /></div>
+            <div><label style="margin-top:0">Destination</label><input id="contact-dest" placeholder="+254..., IBAN, or UPI ID" /></div>
+            <button id="btn-add-contact">Save</button>
+          </div>
+          <div id="contact-list"><div class="empty">No saved contacts yet</div></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="split-grid">
+          <div class="card">
+            <h2>Security</h2>
+            <div class="setting-row"><div><div class="st">Passkey</div><div class="sd" id="set-passkey">—</div></div></div>
+            <div class="setting-row"><div><div class="st">Device spending key</div><div class="sd" id="set-device">—</div></div></div>
+            <div class="setting-row"><div><div class="st">Session</div><div class="sd">Stored only in this browser.</div></div><button class="ghost" id="btn-signout">Sign out</button></div>
+          </div>
+          <div class="card">
+            <h2>Privacy bundle</h2>
+            <div class="setting-row"><div><div class="st">Traffic routing</div><div class="sd">VPN traffic should go device to Mysterium nodes, not through Zoll.</div></div></div>
+            <div class="setting-row"><div><div class="st">Data stored</div><div class="sd">Billing status and aggregate allowance only in this demo.</div></div></div>
+            <div class="setting-row"><div><div class="st">Live fulfillment</div><div class="sd" id="set-privacy-live">Pending partner credentials.</div></div></div>
+          </div>
+        </div>
+      </section>
     </main>
 
     <div class="rail">
@@ -688,6 +827,10 @@ let sessionToken = localStorage.getItem("zold-session")
   // browser is not silently signed out.
   || localStorage.getItem("zoll-session")
   || null;
+let privacyCatalog = null;
+let activeView = "dashboard";
+let txFilter = "all";
+let contacts = JSON.parse(localStorage.getItem("zoll-contacts") || "[]");
 
 const fmt = (n, dp = 2) => Number(n).toLocaleString("en", { minimumFractionDigits: dp, maximumFractionDigits: dp });
 /* Anything that reaches an innerHTML template goes through this first. Some of
@@ -766,6 +909,87 @@ function renderUser(u) {
     $("iban").textContent = `${(u.funding || {}).detail || "provisioning via Monerium sandbox"}…`;
     chip.textContent = "PENDING"; chip.className = "chip pend";
   }
+  renderPrivacyBundle();
+  renderShellPages();
+}
+
+async function loadPrivacyCatalog() {
+  if (privacyCatalog) return privacyCatalog;
+  privacyCatalog = await api("/api/privacy-bundles");
+  return privacyCatalog;
+}
+
+function bundlePlan(planId) {
+  return privacyCatalog?.plans?.find((p) => p.id === planId);
+}
+
+function usageLine(label, used, limit) {
+  const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  return `<div class="bundle-line"><span>${label}</span><span>${fmt(used, 1)} / ${fmt(limit, 0)} GB</span></div><div class="bundle-meter"><span style="width:${pct}%"></span></div>`;
+}
+
+async function subscribePrivacyBundle(planId) {
+  clearErr("privacy-err");
+  try {
+    const result = await api(`/api/users/${user.id}/privacy-bundle`, { planId });
+    user = result.user;
+    renderUser(user);
+  } catch (e) { showErr("privacy-err", e); }
+}
+
+async function cancelPrivacyBundle() {
+  clearErr("privacy-err");
+  try {
+    user = await api(`/api/users/${user.id}/privacy-bundle/cancel`, {});
+    renderUser(user);
+  } catch (e) { showErr("privacy-err", e); }
+}
+
+async function renderPrivacyBundle() {
+  const card = $("privacy-card");
+  if (!card || !user) return;
+  try { await loadPrivacyCatalog(); } catch { return; }
+  if (!privacyCatalog.enabled) {
+    card.classList.add("hidden");
+    return;
+  }
+  card.classList.toggle("hidden", !kycApproved(user));
+  const active = user.privacyBundle?.status && user.privacyBundle.status !== "canceled";
+  const activePlan = active ? bundlePlan(user.privacyBundle.planId) : null;
+  const chip = $("privacy-chip");
+  chip.textContent = active ? user.privacyBundle.status.replace("_", " ").toUpperCase() : "OPTIONAL";
+  chip.className = active && user.privacyBundle.status === "active" ? "chip ok" : active ? "chip pend" : "chip review";
+  $("privacy-plans").innerHTML = privacyCatalog.plans.map((p) => {
+    const isActive = activePlan?.id === p.id;
+    const disabled = !p.marginProtected || isActive;
+    const label = isActive ? "Selected" : p.marginProtected ? "Add" : "Paused";
+    return `<div class="plan ${isActive ? "active" : ""}">
+      <div class="pn">${p.name}</div>
+      <div class="pp">€${fmt(p.priceEur)}/mo</div>
+      <div class="pd">${p.esimGb} GB eSIM · ${p.vpnGb} GB VPN · ${p.vpnDevices} devices</div>
+      <div class="pm">${Math.round(p.grossMarginBps / 100)}% gross margin</div>
+      <button class="${isActive ? "ghost" : ""}" data-plan="${p.id}" ${disabled ? "disabled" : ""}>${label}</button>
+    </div>`;
+  }).join("");
+  document.querySelectorAll("[data-plan]").forEach((b) => {
+    b.onclick = () => subscribePrivacyBundle(b.dataset.plan);
+  });
+  const status = $("privacy-status");
+  if (!activePlan) {
+    status.classList.add("hidden");
+    status.innerHTML = "";
+    return;
+  }
+  const b = user.privacyBundle;
+  status.classList.remove("hidden");
+  status.innerHTML = `
+    <div class="bundle-line"><span>Kokio eSIM</span><span>${b.esim?.status || "pending"} · ${b.esim?.region || activePlan.esimRegion}</span></div>
+    ${usageLine("eSIM data", b.usage?.esimGb || 0, b.esim?.dataGb || activePlan.esimGb)}
+    <div class="bundle-line"><span>Mysterium VPN</span><span>${b.vpn?.status || "pending"} · ${b.vpn?.devices || activePlan.vpnDevices} devices</span></div>
+    ${usageLine("VPN bandwidth", b.usage?.vpnGb || 0, b.vpn?.bandwidthGb || activePlan.vpnGb)}
+    <div class="bundle-line"><span>Renews</span><span>${new Date(b.renewsAt).toLocaleDateString()}</span></div>
+    <button class="ghost" id="btn-privacy-cancel">Cancel bundle</button>`;
+  $("btn-privacy-cancel").onclick = cancelPrivacyBundle;
 }
 
 function renderKycState(u = user) {
@@ -791,10 +1015,56 @@ function renderKycState(u = user) {
 
 async function refresh() {
   if (!user) return;
-  try { renderUser(await api(`/api/users/${user.id}`)); } catch {}
+  try {
+    renderUser(await api(`/api/users/${user.id}`));
+    await loadTransfers();
+  } catch {}
   // Conversion happens on the server's poll, not on a user action, so the
   // panel has to be re-read rather than updated optimistically.
   await refreshCryptoDeposits();
+}
+
+function switchView(view) {
+  activeView = view;
+  document.querySelectorAll(".view").forEach((el) => el.classList.toggle("active", el.id === `view-${view}`));
+  document.querySelectorAll(".nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
+  $("view-title").textContent = ({ dashboard: "Dashboard", transactions: "Transactions", accounts: "Accounts", contacts: "Contacts", settings: "Settings" })[view] || "Dashboard";
+  $("send-card")?.classList.toggle("hidden", view !== "dashboard" || !kycApproved(user));
+  renderShellPages();
+}
+
+function renderShellPages() {
+  if (!user) return;
+  $("send-card")?.classList.toggle("hidden", activeView !== "dashboard" || !kycApproved(user));
+  $("acct-balance").innerHTML = `<span class="cur">€</span>${fmt(user.balanceEur ?? 0)}`;
+  $("acct-iban").textContent = user.iban || "Not issued yet";
+  $("acct-address").textContent = user.address || "—";
+  $("acct-owner").textContent = user.ownerAddress || "hidden";
+  $("acct-kyc").textContent = kycCopy(user.kycStatus, user)[1];
+  $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
+  $("acct-kyc-chip").className = user.kycStatus === "approved" ? "chip ok" : user.kycStatus === "rejected" ? "chip err" : "chip review";
+  const funding = user.funding || {};
+  $("acct-funding").textContent = user.iban || funding.detail || `${funding.mode || "mock"} · ${funding.status || "active"}`;
+  $("acct-funding-chip").textContent = (funding.status || "ACTIVE").toUpperCase();
+  $("acct-funding-chip").className = funding.status === "error" ? "chip err" : funding.status === "active" || user.iban ? "chip ok" : "chip pend";
+  $("acct-authorizer").textContent = user.authorizerAddress || "Registered when you send from this browser.";
+  $("set-passkey").textContent = user.passkey ? `Credential ${user.passkey.credentialId.slice(0, 16)}…` : "No passkey on this account yet.";
+  $("set-device").textContent = user.authorizerAddress ? `Bound to ${user.authorizerAddress.slice(0, 10)}…${user.authorizerAddress.slice(-6)}` : "Not bound yet.";
+  $("set-privacy-live").textContent = privacyCatalog
+    ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`
+    : "Pending partner credentials.";
+  renderContacts();
+  renderTransactionPage();
+}
+
+async function loadTransfers() {
+  if (!user) return;
+  try {
+    const data = await api(`/api/users/${user.id}/transfers`);
+    hist.splice(0, hist.length, ...(data.transfers || []));
+    renderHistory();
+    renderTransactionPage();
+  } catch {}
 }
 
 /* ---------- onboarding flow: create -> staged provisioning -> dashboard */
@@ -1180,6 +1450,38 @@ document.querySelectorAll(".copybtn").forEach((b) => {
     } catch {}
   };
 });
+
+document.querySelectorAll(".nav a").forEach((a) => {
+  a.onclick = (ev) => {
+    ev.preventDefault();
+    switchView(a.dataset.view || "dashboard");
+  };
+});
+
+$("btn-refresh-tx").onclick = () => loadTransfers();
+document.querySelectorAll("[data-tx-filter]").forEach((b) => {
+  b.onclick = () => {
+    txFilter = b.dataset.txFilter;
+    document.querySelectorAll("[data-tx-filter]").forEach((x) => x.classList.toggle("active", x === b));
+    renderTransactionPage();
+  };
+});
+
+$("btn-add-contact").onclick = () => {
+  const name = $("contact-name").value.trim();
+  const destination = $("contact-dest").value.trim();
+  if (!name || !destination) return;
+  contacts.unshift({ id: Date.now().toString(36), name, destination, createdAt: new Date().toISOString() });
+  localStorage.setItem("zoll-contacts", JSON.stringify(contacts));
+  $("contact-name").value = "";
+  $("contact-dest").value = "";
+  renderContacts();
+};
+
+$("btn-signout").onclick = () => {
+  localStorage.removeItem("zoll-session");
+  location.reload();
+};
 
 /* ---------- destination-first send flow ---------- */
 let rail = "cash";
@@ -1666,6 +1968,40 @@ function renderHistory() {
   h.innerHTML = hist.length
     ? hist.map((t) => `<div class="hitem">${histRow(t)}</div>`).join("")
     : '<div class="empty">No transfers yet</div>';
+  renderTransactionPage();
+}
+
+function renderTransactionPage() {
+  const list = $("tx-page-list");
+  if (!list) return;
+  const transfers = txFilter === "all" ? hist : hist.filter((t) => t.rail === txFilter);
+  const totalSent = hist.reduce((sum, t) => sum + (Number(t.sendEur) || 0), 0);
+  const paid = hist.filter((t) => t.state === "PAID").length;
+  const open = hist.filter((t) => !["PAID", "FAILED", "REFUNDED"].includes(t.state)).length;
+  $("tx-total-sent").textContent = `€${fmt(totalSent)}`;
+  $("tx-total-paid").textContent = String(paid);
+  $("tx-total-open").textContent = String(open);
+  list.innerHTML = transfers.length
+    ? transfers.map((t) => `<div class="hitem">${histRow(t)}</div>`).join("")
+    : '<div class="empty">No transfers match this filter</div>';
+}
+
+function renderContacts() {
+  const list = $("contact-list");
+  if (!list) return;
+  list.innerHTML = contacts.length
+    ? contacts.map((c) => `<div class="contact-card">
+        <div><div class="cn">${c.name}</div><div class="cd">${c.destination}</div></div>
+        <button class="ghost" data-contact="${c.id}">Remove</button>
+      </div>`).join("")
+    : '<div class="empty">No saved contacts yet</div>';
+  document.querySelectorAll("[data-contact]").forEach((b) => {
+    b.onclick = () => {
+      contacts = contacts.filter((c) => c.id !== b.dataset.contact);
+      localStorage.setItem("zoll-contacts", JSON.stringify(contacts));
+      renderContacts();
+    };
+  });
 }
 </script>
 </body>
