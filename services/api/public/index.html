@@ -785,14 +785,69 @@
      dashboard itself. They get real Noir screens next. */
   #dashboard.m-on #view-dashboard > .card { display: none; }
   #dashboard.m-on .m-subhead { display: none; }
-  #dashboard.m-on[data-msub="add"] #fund-card,
-  #dashboard.m-on[data-msub="add"] #crypto-card,
-  #dashboard.m-on[data-msub="add"] #paylink-card,
   #dashboard.m-on[data-msub="plus"] #privacy-card { display: block; }
-  #dashboard.m-on[data-msub="add"] #m-home,
-  #dashboard.m-on[data-msub="plus"] #m-home { display: none; }
-  #dashboard.m-on[data-msub="add"] .m-subhead,
   #dashboard.m-on[data-msub="plus"] .m-subhead { display: flex; }
+
+  /* Each designed sub-screen is its own block; data-msub picks one. */
+  .m-screen { display: none; }
+  #dashboard.m-on[data-msub="add"] #m-add-screen,
+  #dashboard.m-on[data-msub="bank"] #m-bank-screen,
+  #dashboard.m-on[data-msub="crypto"] #m-crypto-screen { display: block; }
+  #dashboard.m-on:not([data-msub="home"]) #m-home { display: none; }
+
+  .m-sheadrow { display: flex; align-items: center; height: 64px; }
+  .m-backbtn {
+    width: 48px; height: 48px; margin-left: -12px; border-radius: 50%;
+    background: transparent; border: 0; color: #fff; display: grid; place-items: center; cursor: pointer;
+  }
+  .m-backbtn:hover { background: rgba(255, 45, 139, .10); filter: none; }
+  .m-h1 { font-size: 32px; font-weight: 400; letter-spacing: -.01em; }
+  .m-lede { font-size: 16px; color: var(--m-dim); margin-top: 10px; letter-spacing: .5px; line-height: 1.5; }
+
+  /* Option row — the Add funds list. */
+  .m-optrow {
+    width: 100%; text-align: left; display: flex; gap: 16px; align-items: center;
+    padding: 20px 16px; border-radius: 10px; background: var(--m-surface); border: 0;
+    color: #fff; cursor: pointer; min-height: 88px; font-family: inherit;
+  }
+  .m-optrow:hover { background: var(--m-raised); filter: none; }
+  .m-optrow.off { background: transparent; border: 1px solid var(--m-line); opacity: .6; cursor: default; }
+  .m-optrow.off:hover { background: transparent; }
+  .m-optrow .ic { font-size: 24px; color: var(--m-pink); flex: none; }
+  .m-optrow .tx { flex: 1; min-width: 0; }
+  .m-optrow .t { display: block; font-size: 16px; font-weight: 500; letter-spacing: .15px; }
+  .m-optrow .d { display: block; font-size: 14px; color: var(--m-dim); letter-spacing: .25px; margin-top: 2px; }
+  .m-optrow .ch { font-size: 20px; color: var(--m-dim); flex: none; }
+
+  /* Copyable detail rows. */
+  .m-rows { margin-top: 20px; border-radius: 10px; background: var(--m-surface); overflow: hidden; }
+  .m-detrow {
+    display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+    border-top: 1px solid var(--m-line); min-height: 72px;
+  }
+  .m-detrow:first-child { border-top: 0; }
+  .m-rowk { font-size: 12px; letter-spacing: .5px; text-transform: uppercase; color: var(--m-dim); }
+  .m-rowv { font-size: 15px; font-family: var(--m-mono); margin-top: 3px; word-break: break-all; }
+  .m-copybtn {
+    flex: none; min-height: 40px; padding: 0 16px; border-radius: 10px; background: transparent;
+    border: 1px solid var(--m-line-strong); color: var(--m-pink); font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  .m-copybtn:hover { background: rgba(255, 45, 139, .10); filter: none; }
+
+  .m-note {
+    display: flex; gap: 12px; margin-top: 16px; padding: 16px; border-radius: 10px;
+    font-size: 14px; line-height: 1.6; letter-spacing: .25px;
+  }
+  .m-note.info { background: var(--m-raised); color: #e9ebef; }
+  .m-note.warn { background: var(--m-amber-tint); color: var(--m-amber); }
+
+  .m-cta {
+    width: 100%; margin-top: 24px; min-height: 56px; border-radius: 12px; background: var(--m-pink);
+    border: 0; color: #fff; font-size: 16px; font-weight: 500; letter-spacing: .15px; cursor: pointer;
+  }
+  .m-cta:hover { filter: brightness(1.06); }
+  .m-cta:disabled { opacity: .4; cursor: default; }
+  .m-cta.quiet { background: var(--m-raised); color: #e9ebef; margin-top: 16px; min-height: 48px; font-size: 14px; }
   /* Send still runs the existing rail flow; it becomes the whole screen rather
      than a desktop side panel. Its own Noir screens land in the next pass. */
   #dashboard.m-on[data-msub="send"] .rail {
@@ -1127,10 +1182,68 @@
         <div id="m-recent"><div class="m-empty">No transfers yet</div></div>
       </div>
 
-      <!-- Sub-screen header, shown when the nav opens one of the cards below. -->
+      <!-- ================= Add funds ================= -->
+      <div class="m-screen" id="m-add-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Add funds</div>
+        <div class="m-lede">Two ways in. Both land as EURe in your safe.</div>
+        <div style="display:grid;gap:8px;margin-top:24px">
+          <button class="m-optrow" id="m-go-bank">
+            <span class="material-symbols-rounded ic">account_balance</span>
+            <span class="tx"><span class="t">Bank account</span><span class="d">SEPA transfer to your IBAN · free</span></span>
+            <span class="material-symbols-rounded ch">chevron_right</span>
+          </button>
+          <button class="m-optrow" id="m-go-crypto">
+            <span class="material-symbols-rounded ic">account_balance_wallet</span>
+            <span class="tx"><span class="t">Crypto wallet</span><span class="d">USDC on Base</span></span>
+            <span class="material-symbols-rounded ch">chevron_right</span>
+          </button>
+          <div class="m-optrow off">
+            <span class="material-symbols-rounded ic" style="color:var(--m-dim)">attach_money</span>
+            <span class="tx"><span class="t">USD account</span><span class="d">ACH and wire in</span></span>
+            <span class="m-tag soon">SOON</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= Add: from your bank ================= -->
+      <div class="m-screen" id="m-bank-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="add"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">From your bank</div>
+        <div class="m-lede">Send a SEPA transfer to these details.</div>
+        <div class="m-rows" id="m-bank-rows"></div>
+        <div class="m-note info">
+          <span class="material-symbols-rounded" style="font-size:22px;flex:none">info</span>
+          <div>Transfers land in seconds during SEPA Instant hours, otherwise the next business day. Only send from an account in your own name.</div>
+        </div>
+        <!-- Shown only where the API accepts a simulated deposit; see
+             capabilities() in server.ts. -->
+        <button class="m-cta hidden" id="m-simulate">Simulate a €250 deposit</button>
+        <div class="m-lede hidden" id="m-simulate-off" style="font-size:12px;margin-top:16px">This deployment does not accept simulated deposits — send a real SEPA transfer to the IBAN above.</div>
+        <div class="error hidden" id="m-bank-err"></div>
+      </div>
+
+      <!-- ================= Add: from a wallet ================= -->
+      <div class="m-screen" id="m-crypto-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="add"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">From a wallet</div>
+        <div class="m-lede">USDC on Base. Anything else is lost.</div>
+        <div id="m-qr-wrap" style="margin-top:24px;display:flex;justify-content:center"></div>
+        <div style="margin-top:20px;border-radius:10px;background:var(--m-surface);padding:16px">
+          <div class="m-rowk">Wallet address</div>
+          <div id="m-wallet" style="font-size:15px;font-family:var(--m-mono);margin-top:8px;word-break:break-all;line-height:1.5"></div>
+          <button class="m-cta quiet" id="m-copy-wallet">Copy address</button>
+        </div>
+        <div class="m-note warn">
+          <span class="material-symbols-rounded" style="font-size:22px;flex:none">warning</span>
+          <div id="m-crypto-warn">Base network only. USDC is converted to EURe at the live mid rate on arrival.</div>
+        </div>
+      </div>
+
+      <!-- Sub-screen header for the legacy cards still reached from the nav. -->
       <div class="m-head m-subhead">
         <button class="m-iconbtn" id="m-back"><span class="material-symbols-rounded" style="font-size:19px">arrow_back</span></button>
-        <div class="m-name" id="m-subtitle">Add money</div>
+        <div class="m-name" id="m-subtitle">Zold Plus</div>
       </div>
 
       <div class="card hidden" id="kyc-card">
@@ -1666,18 +1779,99 @@ function renderMobileActivity() {
   });
 }
 
-/** Bottom-nav routing. Tab switches clear any open sub-screen. */
+/** Routing. `msub` names the sub-screen; tab switches clear it. */
 function mobileNav(target) {
   const shell = $("dashboard");
-  const sub = { add: "add", send: "send", plus: "plus" }[target];
+  const sub = { add: "add", bank: "bank", crypto: "crypto", send: "send", plus: "plus" }[target];
   shell.dataset.msub = sub || "home";
   if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
   else switchView("dashboard");
-  const navFor = { add: "add", send: "send", plus: "home", home: "home", activity: "activity", profile: "profile" }[target];
+  // bank/crypto are inside Add, so the Add tab stays lit while they are open.
+  const navFor = { add: "add", bank: "add", crypto: "add", send: "send", plus: "home", home: "home", activity: "activity", profile: "profile" }[target];
   document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
-  $("m-subtitle").textContent = sub === "add" ? "Add money" : sub === "plus" ? "Zold Plus" : "Send";
+  if (sub === "bank") renderBankScreen();
+  if (sub === "crypto") renderCryptoScreen();
   $("dashboard").querySelector(".main").scrollTop = 0;
 }
+
+/**
+ * The SEPA details to transfer to.
+ *
+ * No BIC row, unlike the design: Monerium does not give us one and inventing a
+ * plausible-looking bank identifier is the kind of detail someone would try to
+ * pay against. No reference row either — deposits are matched by IBAN, so
+ * asking for a reference would imply a requirement that does not exist.
+ */
+function renderBankScreen() {
+  const u = user || {};
+  const rows = [
+    { k: "IBAN", v: u.iban || "Not issued yet", copy: !!u.iban },
+    { k: "Account holder", v: u.name || "—", copy: false },
+    { k: "Bank", v: "Monerium ehf. · Iceland", copy: false },
+  ];
+  $("m-bank-rows").innerHTML = rows.map((r, i) => `
+    <div class="m-detrow">
+      <div style="flex:1;min-width:0">
+        <div class="m-rowk">${esc(r.k)}</div>
+        <div class="m-rowv">${esc(r.v)}</div>
+      </div>
+      ${r.copy ? `<button class="m-copybtn" data-mcopy="${i}">Copy</button>` : ""}
+    </div>`).join("");
+  $("m-bank-rows").querySelectorAll("[data-mcopy]").forEach((b) => {
+    b.onclick = async () => {
+      try { await navigator.clipboard.writeText(rows[Number(b.dataset.mcopy)].v); } catch { return; }
+      b.textContent = "Copied";
+      setTimeout(() => { b.textContent = "Copy"; }, 1400);
+    };
+  });
+  // The deposit simulator exists only where the API would accept it.
+  $("m-simulate").classList.toggle("hidden", !caps.simulation);
+  $("m-simulate-off").classList.toggle("hidden", !!caps.simulation);
+}
+
+/** Deposit address for inbound USDC, with the payment-page QR when the account
+ *  has claimed a handle (that endpoint is keyed by handle, and it encodes this
+ *  same address). */
+function renderCryptoScreen() {
+  const u = user || {};
+  $("m-wallet").textContent = u.address || "—";
+  const wrap = $("m-qr-wrap");
+  wrap.innerHTML = u.handle
+    ? `<div style="padding:16px;border-radius:12px;background:#efdfe1">
+         <img src="/api/pay/${encodeURIComponent(u.handle)}/qr.svg" width="168" height="168" alt="Deposit address QR" style="display:block;width:168px;height:168px" />
+       </div>`
+    : `<div class="m-lede" style="font-size:13px;margin:0;text-align:center;max-width:280px">Claim a payment handle to get a scannable code. The address below works either way.</div>`;
+  $("m-crypto-warn").textContent = u.autoConvert
+    ? "Base network only. USDC is converted to EURe at the live mid rate on arrival."
+    : "Base network only. Auto-convert is off, so USDC will sit at this address until you turn it on.";
+}
+
+document.querySelectorAll("[data-mback]").forEach((b) => {
+  b.onclick = () => mobileNav(b.dataset.mback || "home");
+});
+$("m-go-bank").onclick = () => mobileNav("bank");
+$("m-go-crypto").onclick = () => mobileNav("crypto");
+$("m-copy-wallet").onclick = async () => {
+  if (!user?.address) return;
+  try { await navigator.clipboard.writeText(user.address); } catch { return; }
+  const b = $("m-copy-wallet");
+  b.textContent = "Copied";
+  setTimeout(() => { b.textContent = "Copy address"; }, 1400);
+};
+$("m-simulate").onclick = async () => {
+  clearErr("m-bank-err");
+  const b = $("m-simulate");
+  b.disabled = true;
+  try {
+    await api("/api/simulate/sepa-deposit", { iban: user.iban, amountEur: 250 });
+    await refresh();
+    b.textContent = "Deposited €250";
+    setTimeout(() => { b.textContent = "Simulate a €250 deposit"; b.disabled = false; }, 1600);
+  } catch (e) {
+    showErr("m-bank-err", e);
+    b.disabled = false;
+  }
+};
 
 document.querySelectorAll("#m-nav button").forEach((b) => {
   b.onclick = () => mobileNav(b.dataset.mnav);
