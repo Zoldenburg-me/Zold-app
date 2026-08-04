@@ -1,9 +1,9 @@
 /**
  * Recovery for Safe-funded transfers.
  *
- * A Safe-funded transfer takes EURe out of the user's own Safe instead of
- * debiting RemitVault. Compensation used to decide "did any money move?" by
- * looking for the literal step `vault.debit`, which that path never pushes —
+ * A transfer takes EURe out of the user's own Safe. Compensation used to
+ * decide "did any money move?" by looking for an old ledger step, which that
+ * path never pushes —
  * so a failure recorded a €0 refund reading "nothing was debited" while the
  * euros sat at the orchestrator, and the sweep then skipped the transfer
  * forever because a set `refund` is what marks one as settled.
@@ -181,8 +181,8 @@ try {
     const after = await eureBalance(user.address);
     check("EURe arrived back in the Safe", after - before === 100, `${before} -> ${after}`);
     check(
-      "the vault was not credited instead",
-      !out.txs.some((x: any) => x.step === "vault.refundCredit"),
+      "no legacy ledger refund was recorded",
+      !out.txs.some((x: any) => x.step.includes("vault")),
     );
   }
 

@@ -45,10 +45,9 @@ export const chain = (() => {
 /**
  * Refuse to run against an RPC that is not the chain we were told to expect.
  *
- * Silent mismatch is the expensive failure: the EIP-712 domain would carry one
- * chain id while the vault computes another from block.chainid, and every
- * device signature would be rejected as "bad authorization" — an error that
- * points at the signing code rather than at the misconfiguration.
+ * Silent mismatch is the expensive failure: Safe deployment and token balances
+ * would be checked on different chains, and user operations would fail in ways
+ * that look like wallet bugs rather than configuration mistakes.
  */
 export async function assertChainMatches(): Promise<void> {
   const actual = await publicClient.getChainId();
@@ -106,7 +105,6 @@ export const orchestratorAddress = orchestratorWallet.account.address;
 
 export const abis = {
   MockToken: loadAbi("MockToken"),
-  RemitVault: loadAbi("RemitVault"),
   FxSwapper: loadAbi("FxSwapper"),
   BridgeEscrow: loadAbi("BridgeEscrow"),
 };
@@ -153,7 +151,7 @@ export async function writeAndWait(
  * phone) the contract can never see. Folding a hash of that target into
  * the signed struct means the signature attests to *who* is paid: a server
  * that later swaps the recipient produces a payout whose recomputed commitment
- * no longer matches what the user signed, and the vault debit reverts.
+ * no longer matches what the user signed, and the relayed spend is refused.
  *
  * The recipient NAME is part of it, not just the account identifier. On the cash
  * rail the name is the payout identity — it is what the anchor is told and what
@@ -184,8 +182,8 @@ export function destinationCommitment(
 
 /**
  * FP4: the EIP-712 payload the user's device signs to authorize one payment.
- * Mirrors RemitVault's PaymentAuthorization struct exactly — if these drift,
- * the digest changes and the contract rejects the signature.
+ * Safe-native transfer authorization. The API verifies it before relaying Safe
+ * operations.
  */
 export function paymentAuthorizationTypedData(args: {
   account: `0x${string}`;
@@ -197,11 +195,10 @@ export function paymentAuthorizationTypedData(args: {
 }) {
   return {
     domain: {
-      name: "RemitVault",
+      name: "TransF Safe Transfer",
       version: "1",
-      // Must match what RemitVault computed from block.chainid at deploy time.
       chainId: CHAIN_ID,
-      verifyingContract: addrs().vault,
+      verifyingContract: args.account,
     },
     types: {
       PaymentAuthorization: [
@@ -225,33 +222,6 @@ export function paymentAuthorizationTypedData(args: {
   };
 }
 
-/** Which key may authorize debits from `account` (zero address if unbound). */
-export async function vaultAuthorizerOf(account: `0x${string}`): Promise<`0x${string}`> {
-  return (await publicClient.readContract({
-    address: addrs().vault,
-    abi: abis.RemitVault,
-    functionName: "authorizerOf",
-    args: [account],
-  })) as `0x${string}`;
-}
-
-/**
- * Bind an account to its device key. Trust-on-first-use via the ramp role:
- * the contract refuses to let us re-point an account that is already bound,
- * so this can only ever establish the first binding.
- */
-export async function setVaultAuthorizer(
-  account: `0x${string}`,
-  authorizer: `0x${string}`,
-): Promise<`0x${string}`> {
-  return writeAndWait(rampWallet, {
-    address: addrs().vault,
-    abi: abis.RemitVault,
-    functionName: "setAuthorizer",
-    args: [account, authorizer],
-  });
-}
-
 /**
  * The EUR->USD rate the swapper will actually execute at.
  *
@@ -271,16 +241,6 @@ export async function swapperRate(): Promise<{ rate: number; raw: bigint }> {
   return { rate: Number(raw) / 1e6, raw };
 }
 
-export async function vaultBalance(user: `0x${string}`): Promise<number> {
-  const bal = (await publicClient.readContract({
-    address: addrs().vault,
-    abi: abis.RemitVault,
-    functionName: "balanceOf",
-    args: [user],
-  })) as bigint;
-  return eur.fromWei(bal);
-}
-
 export async function safeEurBalance(user: `0x${string}`): Promise<number> {
   const bal = (await publicClient.readContract({
     address: addrs().eure,
@@ -292,69 +252,17 @@ export async function safeEurBalance(user: `0x${string}`): Promise<number> {
 }
 
 /**
- * Displayed and diagnostic EUR balances.
- *
- * The headline balance remains the vault ledger because that is what the
- * current transfer executor can spend. Safe EURe is exposed separately as
- * custody/reconciliation state, especially on native-Monerium chains where
- * deposits briefly, or after a failed mirror permanently, sit in the Safe.
+ * Displayed and diagnostic EUR balances. The Safe is the account of record.
  */
 export async function accountBalances(user: `0x${string}`): Promise<{
   balanceEur: number;
   safeBalanceEur: number;
-  vaultBalanceEur: number;
 }> {
-  const [safeBalanceEur, vaultBalanceEur] = await Promise.all([
-    safeEurBalance(user),
-    vaultBalance(user),
-  ]);
+  const safeBalanceEur = await safeEurBalance(user);
   return {
-    balanceEur: vaultBalanceEur,
+    balanceEur: safeBalanceEur,
     safeBalanceEur,
-    vaultBalanceEur,
   };
-}
-
-/**
- * Move EURe from the orchestrator to a user's Safe so a redeem can burn it.
- *
- * Returns null on a local chain: the vault there holds a mock EURe that
- * Monerium has never heard of, so there is nothing to forward and the
- * simulated payout does not need it.
- *
- * Deliberately a plain ERC-20 transfer rather than anything vault-side. The
- * orchestrator already holds these tokens — debit sent them there — and the
- * amount forwarded is the payout only, so our fee stays behind.
- */
-export async function forwardEureForRedeem(
-  userSafe: `0x${string}`,
-  payoutEur: number,
-): Promise<`0x${string}` | null> {
-  const { moneriumEure } = await import("./adapters/monerium-tokens.js");
-  const { MONERIUM } = await import("./config.js");
-  if (!(await moneriumEure(MONERIUM.baseUrl, CHAIN_ID))) return null;
-
-  const amount = eur.toWei(payoutEur);
-  const held = (await publicClient.readContract({
-    address: addrs().eure,
-    abi: abis.MockToken, // ERC-20 surface; the real EURe answers the same calls
-    functionName: "balanceOf",
-    args: [orchestratorAddress],
-  })) as bigint;
-  if (held < amount) {
-    // Better to say so here than to have Monerium reject an order for reasons
-    // that read as a Monerium problem.
-    throw new Error(
-      `orchestrator holds ${eur.fromWei(held)} EURe but the payout needs ${payoutEur} — ` +
-        `the debit did not land where the redeem expects it`,
-    );
-  }
-  return writeAndWait(orchestratorWallet, {
-    address: addrs().eure,
-    abi: abis.MockToken,
-    functionName: "transfer",
-    args: [userSafe, amount],
-  });
 }
 
 /**
@@ -362,11 +270,10 @@ export async function forwardEureForRedeem(
  *
  * This is the refund leg for a Safe-funded transfer: the euros were taken out
  * of the user's own Safe, so that is where they go back. Deliberately NOT
- * gated on the chain issuing native EURe the way forwardEureForRedeem is — a
  * Safe-funded debit can only have happened where the Safe held the token in
  * the first place, so the same move is always available in reverse.
  *
- * Unlike the vault refund path this mints nothing, which is why it works off a
+ * This mints nothing, which is why it works off a
  * local chain: it hands back the very tokens that were moved.
  */
 export async function returnEureToSafe(
@@ -392,41 +299,4 @@ export async function returnEureToSafe(
     functionName: "transfer",
     args: [userSafe, amount],
   });
-}
-
-/** Has the vault already consumed this transferId? The vault path's replay
- *  guard is `require(!processedTransfer[transferId])` inside RemitVault.debit;
- *  the Safe path cannot write that registry but can still read it, so a
- *  transferId the vault already spent is refused rather than paid twice. */
-export async function vaultProcessedTransfer(transferId: `0x${string}`): Promise<boolean> {
-  return (await publicClient.readContract({
-    address: addrs().vault,
-    abi: abis.RemitVault,
-    functionName: "processedTransfer",
-    args: [transferId],
-  })) as boolean;
-}
-
-/** The vault's own daily-spend accounting for `user`, in EUR: the configured
- *  cap and what RemitVault.debit has already counted against it today. The
- *  contract keys the day as `block.timestamp / 1 days`, so this is UTC days
- *  since the epoch — the same boundary the API's own counter uses. */
-export async function vaultDailySpend(
-  user: `0x${string}`,
-): Promise<{ capEur: number; debitedEur: number }> {
-  const day = BigInt(Math.floor(Date.now() / 86_400_000));
-  const [cap, debited] = (await Promise.all([
-    publicClient.readContract({
-      address: addrs().vault,
-      abi: abis.RemitVault,
-      functionName: "dailyCap",
-    }),
-    publicClient.readContract({
-      address: addrs().vault,
-      abi: abis.RemitVault,
-      functionName: "debitedOnDay",
-      args: [user, day],
-    }),
-  ])) as [bigint, bigint];
-  return { capEur: eur.fromWei(cap), debitedEur: eur.fromWei(debited) };
 }
