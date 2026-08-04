@@ -42,20 +42,20 @@ const CHAIN = {
  *  meaningful rather than vacuous. */
 const user: any = {
   id: "u1",
-  name: "Amina Kamau",
-  email: "amina@example.com",
+  name: "Miriam Zoldenburg",
+  email: "miriam@example.com",
   country: "DE",
   kycStatus: "approved",
   kyc: { provider: "mock", applicantId: "app_123" },
-  senderProfile: { firstName: "Amina", lastName: "Kamau", idNumber: "X1234567" },
+  senderProfile: { firstName: "Miriam", lastName: "Zoldenburg", idNumber: "X1234567" },
   iban: "DE89370400440532013000",
   address: "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1",
   ownerAddress: "0xbbbb216C328AAa6a384DD422c4eA005cEd7F73f1",
   privateKey: "0xdeadbeef",
   authorizerAddress: "0xcccc216C328AAa6a384DD422c4eA005cEd7F73f1",
   paymentPage: {
-    handle: "amina",
-    displayName: "Amina K",
+    handle: "miriam",
+    displayName: "Miriam Z",
     depositAddress: "0xd8af216C328AAa6a384DD422c4eA005cEd7F73f1",
     depositPrivateKey: "0xfeedbeef",
     settlementAsset: "EURE",
@@ -70,7 +70,7 @@ const user: any = {
 console.log("Payment pages");
 
 check("a plain handle is accepted and lowercased", () => {
-  assert.equal(normaliseHandle("Amina"), "amina");
+  assert.equal(normaliseHandle("Miriam"), "miriam");
   assert.equal(normaliseHandle("  bo-b99 "), "bo-b99");
 });
 
@@ -105,7 +105,7 @@ check("a non-string handle is refused rather than coerced", () => {
 check("display name is optional, trimmed, and length-capped", () => {
   assert.equal(normaliseDisplayName(undefined), undefined);
   assert.equal(normaliseDisplayName(""), undefined);
-  assert.equal(normaliseDisplayName("  Amina   K  "), "Amina K");
+  assert.equal(normaliseDisplayName("  Miriam   Z  "), "Miriam Z");
   throws(() => normaliseDisplayName("x".repeat(41)), /40 characters/);
 });
 
@@ -125,13 +125,13 @@ check("the public projection returns exactly the expected payment-page keys", ()
 check("and leaks no account data — this is the security-relevant one", () => {
   const serialised = JSON.stringify(publicPayee(user, CHAIN));
   for (const secret of [
-    "amina@example.com",
+    "miriam@example.com",
     "DE89370400440532013000",
     "0xdeadbeef",
     "app_123",
     "X1234567",
     "secret",
-    "Amina Kamau", // the legal name, as distinct from the chosen display name
+    "Miriam Zoldenburg", // the legal name, as distinct from the chosen display name
     "approved",
     user.ownerAddress,
     user.authorizerAddress,
@@ -144,7 +144,7 @@ check("and leaks no account data — this is the security-relevant one", () => {
 check("display name is omitted entirely when unset, never defaulted to the legal name", () => {
   const p = publicPayee({ ...user, paymentPage: { ...user.paymentPage, displayName: undefined } }, CHAIN);
   assert.ok(!("displayName" in p));
-  assert.ok(!JSON.stringify(p).includes("Amina"));
+  assert.ok(!JSON.stringify(p).includes("Miriam"));
 });
 
 check("an account with no handle cannot be projected at all", () => {

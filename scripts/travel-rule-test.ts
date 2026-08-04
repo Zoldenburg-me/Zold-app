@@ -44,8 +44,8 @@ const RUN_ID = `u-travel-rule-${Date.now()}`;
 const baseUser = (overrides: Partial<User> = {}): User =>
   ({
     id: RUN_ID,
-    name: "Amina Kamau",
-    email: "amina@example.com",
+    name: "Miriam Zoldenburg",
+    email: "miriam@example.com",
     country: "DE",
     kycStatus: "approved",
     iban: "",
@@ -55,8 +55,8 @@ const baseUser = (overrides: Partial<User> = {}): User =>
   }) as User;
 
 const fullProfile = {
-  firstName: "Amina",
-  lastName: "Kamau",
+  firstName: "Miriam",
+  lastName: "Zoldenburg",
   birthDate: "1990-04-12",
   address: "12 Beispielstrasse",
   city: "Berlin",
@@ -66,7 +66,7 @@ const fullProfile = {
   idNumber: "X1234567",
   idCountryCode: "DE",
   mobileNumber: "+4915112345678",
-  emailAddress: "amina@example.com",
+  emailAddress: "miriam@example.com",
 };
 
 console.log(`anchor: ${domain}\n`);
@@ -103,7 +103,7 @@ await t("a partial profile is still refused, naming what is absent", async () =>
   // Names only — no contact details.
   const user = baseUser({
     email: undefined,
-    senderProfile: { firstName: "Amina", lastName: "Kamau" },
+    senderProfile: { firstName: "Miriam", lastName: "Zoldenburg" },
   } as any);
   const missing = missingRequiredFields(declared.fields, senderProfileToSep9(user));
   assert.ok(missing.length > 0, "a name-only profile should not satisfy the anchor");
@@ -117,7 +117,7 @@ await t("our stored profile maps onto SEP-9 field names the anchor knows", async
     if (v === undefined) continue;
     assert.ok(k in declared.fields, `we would send "${k}", which ${domain} does not declare`);
   }
-  assert.equal(mapped.first_name, "Amina");
+  assert.equal(mapped.first_name, "Miriam");
   assert.equal(mapped.birth_date, "1990-04-12");
   assert.equal(mapped.id_number, "X1234567");
 });
@@ -139,7 +139,7 @@ await t("no document images are ever mapped for transmission", async () => {
 
 console.log("live transmission:");
 await t("submitSenderProfile refuses rather than transmitting a partial profile", async () => {
-  const user = baseUser({ email: undefined, senderProfile: { firstName: "Amina", lastName: "Kamau" } } as any);
+  const user = baseUser({ email: undefined, senderProfile: { firstName: "Miriam", lastName: "Zoldenburg" } } as any);
   const result = await submitSenderProfile(domain, jwt, treasury.publicKey(), user);
   assert.ok(result.missing.length > 0, "expected a refusal listing missing fields");
 });
@@ -208,7 +208,7 @@ await t("the MoneyGram body carries only its nine documented fields", async () =
   for (const k of ["email_address", "id_type", "id_number", "id_country_code", "occupation"]) {
     assert.equal(body[k], undefined, `${k} must not go in the MoneyGram body`);
   }
-  assert.equal(body.first_name, "Amina");
+  assert.equal(body.first_name, "Miriam");
 });
 
 await t("state_or_province is dropped outside USA/CAN/MEX", async () => {
