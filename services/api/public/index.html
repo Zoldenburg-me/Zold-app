@@ -2158,14 +2158,15 @@ function renderBankScreen() {
  *  same address). */
 function renderCryptoScreen() {
   const u = user || {};
+  const page = u.paymentPage || {};
   $("m-wallet").textContent = u.address || "—";
   const wrap = $("m-qr-wrap");
-  wrap.innerHTML = u.handle
+  wrap.innerHTML = page.handle
     ? `<div style="padding:16px;border-radius:12px;background:#efdfe1">
-         <img src="/api/pay/${encodeURIComponent(u.handle)}/qr.svg" width="168" height="168" alt="Deposit address QR" style="display:block;width:168px;height:168px" />
+         <img src="/api/pay/${encodeURIComponent(page.handle)}/qr.svg" width="168" height="168" alt="Deposit address QR" style="display:block;width:168px;height:168px" />
        </div>`
     : `<div class="m-lede" style="font-size:13px;margin:0;text-align:center;max-width:280px">Claim a payment handle to get a scannable code. The address below works either way.</div>`;
-  $("m-crypto-warn").textContent = u.autoConvert
+  $("m-crypto-warn").textContent = page.autoConvert
     ? "Base network only. USDC is converted to EURe at the live mid rate on arrival."
     : "Base network only. Auto-convert is off, so USDC will sit at this address until you turn it on.";
 }
@@ -2441,7 +2442,9 @@ function renderProfileScreen() {
   const account = [
     { k: "IBAN", v: u.iban || "Not issued yet", copy: u.iban },
     { k: "Smart account", v: shorten(u.address) || "—", copy: u.address },
-    ...(u.handle ? [{ k: "Payment page", v: `/pay/${u.handle}`, copy: `${location.origin}/pay/${u.handle}` }] : []),
+    ...(u.paymentPage?.handle
+      ? [{ k: "Payment page", v: `/pay/${u.paymentPage.handle}`, copy: `${location.origin}/pay/${u.paymentPage.handle}` }]
+      : []),
   ];
   $("m-pf-account").innerHTML = account.map((r, i) => `
     <div class="m-detrow">

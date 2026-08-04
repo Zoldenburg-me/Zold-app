@@ -16,7 +16,7 @@ process.env.ALLOW_FIXED_RATES = "1";
 process.env.DEX_MAX_MID_DEVIATION_BPS = "300";
 
 const { assertPriceSane, rate6dp } = await import("../services/api/src/dex.js");
-const { liquidityProvider } = await import("../services/api/src/liquidity.js");
+const { liquidityProvider, serializeExecution } = await import("../services/api/src/liquidity.js");
 
 let n = 0;
 const ok = (label: string) => console.log(`${++n}. ${label}`);
@@ -72,6 +72,20 @@ const base = {
   tokenIn: "EURe" as const, tokenOut: "USDC" as const,
   amountIn: 10n ** 18n, expectedOut: 1_137_900n, minOut: 1_132_210n, rate: 1_137_900n,
 };
+{
+  const stored = serializeExecution({
+    quote: {
+      ...base,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      dex: { pool: "0x0000000000000000000000000000000000000001", fee: 500, mid: 1.1379, deviationBps: 0 },
+    },
+    amountOut: base.expectedOut,
+    txs: [],
+  });
+  assert.strictEqual(stored.dex?.pool, "0x0000000000000000000000000000000000000001");
+  assert.strictEqual(stored.dex?.fee, 500);
+  ok("the DEX execution payload survives prepare -> store");
+}
 await refuses(
   "an expired quote at execution",
   () => p.execute({ ...base, expiresAt: new Date(Date.now() - 1_000).toISOString(), dex: { pool: "0x0000000000000000000000000000000000000001", fee: 500, mid: 1.1379, deviationBps: 0 } }),

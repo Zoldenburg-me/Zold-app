@@ -436,6 +436,29 @@ export const KEYS = {
   ramp: operatorKey("ramp"),
 } as const;
 
+const evmAddressRe = /^0x[0-9a-fA-F]{40}$/;
+const parseChainIds = (raw: string | undefined) =>
+  (raw ?? String(CHAIN_ID))
+    .split(",")
+    .map((x) => Number(x.trim()))
+    .filter((x) => Number.isInteger(x) && x > 0);
+
+/**
+ * Candide Forwarding Address service for payment-page receive addresses.
+ *
+ * The activation call needs a server-side account API key. Local/hardhat runs
+ * may fall back to the user's Safe address so tests can run without a Candide
+ * account, but hosted production must be explicitly configured before payment
+ * pages can be activated.
+ */
+export const FORWARDING = {
+  rpcUrl: process.env.CANDIDE_FORWARDING_RPC_URL ?? process.env.FORWARDING_ADDRESS_RPC_URL ?? "",
+  accountApiKey: process.env.CANDIDE_FORWARDING_ACCOUNT_API_KEY ?? "",
+  sourceChainIds: parseChainIds(process.env.CANDIDE_FORWARDING_SOURCE_CHAIN_IDS),
+  custodialWithdrawer: (process.env.CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER ?? "") as `0x${string}` | "",
+  recoveryConfigured: evmAddressRe.test(process.env.CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER ?? ""),
+};
+
 export interface Deployments {
   eure: `0x${string}`;
   timelock?: `0x${string}`;

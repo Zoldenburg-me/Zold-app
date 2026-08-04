@@ -85,6 +85,7 @@ export interface PublicPayee {
   address: `0x${string}`;
   chainId: number;
   token: { symbol: string; address: `0x${string}`; decimals: number };
+  supportedTokens?: { chainId: number; symbol: "EURE" | "USDC"; address: `0x${string}`; decimals: number }[];
   settlementAsset: "EURE" | "USDC";
   autoConvert: boolean;
 }
@@ -101,16 +102,7 @@ export function publicPayee(
 ): PublicPayee {
   const page = user.paymentPage;
   if (!page?.handle) {
-    if (!user.handle) throw new HandleError("account has no payment handle");
-    return {
-      handle: user.handle,
-      ...(user.payDisplayName ? { displayName: user.payDisplayName } : {}),
-      address: user.address,
-      chainId: chain.chainId,
-      token: chain.token,
-      settlementAsset: user.autoConvert ? "EURE" : "USDC",
-      autoConvert: !!user.autoConvert,
-    };
+    throw new HandleError("account has no payment handle");
   }
   return {
     handle: page.handle,
@@ -118,6 +110,7 @@ export function publicPayee(
     address: page.depositAddress,
     chainId: chain.chainId,
     token: chain.token,
+    ...(page.supportedTokens?.length ? { supportedTokens: page.supportedTokens } : {}),
     settlementAsset: page.settlementAsset,
     autoConvert: page.autoConvert,
   };

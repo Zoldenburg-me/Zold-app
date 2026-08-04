@@ -17,6 +17,7 @@ import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.
 import { initStore, store, type Transfer, type User } from "./store.js";
 import { createQuote, isExpired } from "./fx.js";
 import { issueIban, simulateSepaDeposit } from "./adapters/monerium.js";
+import { activatePaymentForwarder } from "./adapters/candide-forwarder.js";
 import {
   checkConnection,
   handleWebhookEvent,
@@ -270,6 +271,17 @@ const publicUser = ({ privateKey, moneriumConnect, monerium, passkey, paymentPag
           handle: paymentPage.handle,
           displayName: paymentPage.displayName,
           depositAddress: paymentPage.depositAddress,
+          recipientAddress: paymentPage.recipientAddress,
+          forwarder: paymentPage.forwarder
+            ? {
+                provider: paymentPage.forwarder.provider,
+                destinationChainId: paymentPage.forwarder.destinationChainId,
+                sourceChainIds: paymentPage.forwarder.sourceChainIds,
+                active: paymentPage.forwarder.active,
+                expiresAt: paymentPage.forwarder.expiresAt,
+              }
+            : undefined,
+          supportedTokens: paymentPage.supportedTokens,
           settlementAsset: paymentPage.settlementAsset,
           autoConvert: paymentPage.autoConvert,
           createdAt: paymentPage.createdAt,
@@ -751,10 +763,9 @@ function payChain() {
 /**
  * Claim or change the account's payment handle.
  *
- * KYC-gated, like every other route that leads to money arriving: an inbound
- * payment is only useful once it can be converted, and conversion refuses on an
- * unapproved account. Gating here means the public page never has to expose an
- * account's review status to explain itself.
+ * Passkey-Safe gated, not KYC-gated. A user can activate a public payment page
+ * before review, but only after their Safe exists on-chain and is the account
+ * of record. Settlement/conversion can still apply its own compliance gates.
  */
 app.post(
   "/api/users/:id/handle",
@@ -762,7 +773,6 @@ app.post(
     const user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
-    if (!requireKycApproved(user, res)) return;
     let handle: string;
     let displayName: string | undefined;
     let settlementAsset: "EURE" | "USDC";
@@ -778,11 +788,22 @@ app.post(
     if (taken && taken.id !== user.id) {
       return res.status(409).json({ error: `"${handle}" is already taken` });
     }
+    if (
+      user.passkeySafe?.status !== "active" ||
+      user.address.toLowerCase() !== user.passkeySafe.address.toLowerCase() ||
+      !(await isDeployed(user.address))
+    ) {
+      return res.status(409).json({
+        error: "deploy and activate the passkey Safe before activating a payment page",
+      });
+    }
     const now = new Date().toISOString();
     const existing = user.paymentPage;
-    const depositPrivateKey = existing?.depositPrivateKey ?? generatePrivateKey();
-    const depositOwner = privateKeyToAccount(depositPrivateKey).address;
-    const depositAddress = existing?.depositAddress ?? (smartAccountFor(depositOwner).accountAddress as `0x${string}`);
+    const forwarder = await activatePaymentForwarder({ userId: user.id, handle, recipient: user.address });
+    const tokens = [
+      { chainId: CHAIN_ID, symbol: "EURE" as const, address: addrs().eure, decimals: 18 },
+      { chainId: CHAIN_ID, symbol: "USDC" as const, address: addrs().usdc, decimals: 6 },
+    ];
     const updated = store.updateUser(user.id, {
       handle: undefined,
       payDisplayName: undefined,
@@ -790,8 +811,10 @@ app.post(
       paymentPage: {
         handle,
         displayName,
-        depositAddress,
-        depositPrivateKey,
+        depositAddress: forwarder.address,
+        recipientAddress: user.address,
+        forwarder: forwarder.forwarder,
+        supportedTokens: tokens,
         settlementAsset,
         autoConvert: existing?.autoConvert ?? false,
         createdAt: existing?.createdAt ?? now,
@@ -824,7 +847,7 @@ app.get(
   "/api/pay/:handle",
   wrap(async (req, res) => {
     const user = store.findUserByHandle(req.params.handle);
-    if (!user?.paymentPage?.handle && !user?.handle) return res.status(404).json({ error: "no such payment page" });
+    if (!user?.paymentPage?.handle) return res.status(404).json({ error: "no such payment page" });
     res.json(publicPayee(user, payChain()));
   }),
 );
@@ -835,7 +858,7 @@ app.get(
   "/api/pay/:handle/qr.svg",
   wrap(async (req, res) => {
     const user = store.findUserByHandle(req.params.handle);
-    if (!user?.paymentPage?.handle && !user?.handle) return res.status(404).json({ error: "no such payment page" });
+    if (!user?.paymentPage?.handle) return res.status(404).json({ error: "no such payment page" });
     res.type("image/svg+xml");
     res.setHeader("cache-control", "public, max-age=300");
     res.send(qrSvg(publicPayee(user, payChain()).address));

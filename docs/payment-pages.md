@@ -1,7 +1,7 @@
 # Payment pages
 
-A shareable handle that resolves to a page-scoped deposit address someone can
-pay: `/pay/alice`.
+A shareable handle that resolves to a page-scoped forwarding address someone
+can pay: `/pay/alice`.
 Modelled on Fluidkey's `alice.fkey.id`, which is the clearest version of this
 idea in production.
 
@@ -12,8 +12,8 @@ Checked against `ftx.fkey.id` and their docs, not inferred:
 | | Fluidkey | Here, today |
 |---|---|---|
 | Identifier | `name.fkey.id`, also an ENS name (`name.fkey.eth`) | `/pay/name` path on the app origin |
-| Address shown | a **new stealth address on every resolution**, derived from the recipient's stealth meta-address (ERC-5564) | one deposit Safe address per payment page |
-| Account type | 1/1 Safe smart accounts as the stealth accounts | Candide Safe — the same primitive |
+| Address shown | a **new stealth address on every resolution**, derived from the recipient's stealth meta-address (ERC-5564) | one Candide Forwarding Address per payment page, routing supported tokens into the merchant Safe |
+| Account type | 1/1 Safe smart accounts as the stealth accounts | merchant-owned Candide Safe as the account of record |
 | Networks | Base, Ethereum, BSC, Arbitrum, Polygon, Gnosis | one, whichever `TRANSF_CHAIN_ID` names |
 | Payer inputs | none — QR plus copy-address | the same: QR plus copy-address |
 | Privacy | unlinkable by construction | **none**, and the page says so |
@@ -25,10 +25,10 @@ does both better than a web page can.
 
 ## Page address, not main wallet
 
-The payment page does not show the user's main smart account. It has its own
-deposit Safe address and its own settlement rule, so a normal transfer into the
-wallet cannot accidentally be swept because the page's auto-convert setting is
-on.
+The payment page does not show the user's main smart account directly. It shows
+a page-scoped Candide Forwarding Address and its own settlement rule. Supported
+tokens routed through that address land in the merchant Safe, and the UI only
+shows whitelisted token balances.
 
 That page address is still public. Fluidkey's entire pitch is that a payer
 learns nothing about the recipient's other activity. Ours is not there yet: each
@@ -49,19 +49,18 @@ something only they hold. Fluidkey derives from a signature.
 
 Doing stealth server-side would be easy and wrong: it would put a key for every
 stealth account in `db.json`, next to the one `user.privateKey` that FP4 exists
-to remove. The current payment-page deposit Safe is a page-level MVP custody
-boundary, not a privacy solution, and its key is stripped from API responses and
-forbidden in production stores.
+to remove. Payment pages therefore must not create API-held deposit owner keys;
+they use a forwarding address whose recipient is the deployed merchant Safe.
 
 Two other things it would touch, worth knowing before starting:
 
-- **Detection.** `crypto-deposits.ts` watches `user.address`. Stealth means
-  watching many addresses per account, or scanning ERC-5564 announcements —
-  a different shape of poller, not a longer address list.
+- **Detection.** `crypto-deposits.ts` watches the forwarding recipient, which
+  should be the merchant Safe. Stealth means watching many addresses per
+  account, or scanning ERC-5564 announcements — a different shape of poller,
+  not a longer address list.
 - **Payout.** Balances are keyed to the merchant Safe. Payments landing on
   stealth accounts need Safe-native movement into the merchant account before
-  they are spendable, which is the same Safe-move problem the crypto-in sweep
-  has.
+  they are spendable.
 
 ## Handles are enumerable
 
@@ -102,11 +101,11 @@ Zold conversion treasury, Zold takes custody during conversion.
 
 The roadmap decision is therefore explicit:
 
-- **OG build:** one public deposit Safe address per payment page, with blunt
-  privacy copy and page-scoped settlement.
-- **Near-term hardening:** ask Candide whether custom forwarding hooks or
-  arbitrary calldata are available; if not, treat Candide forwarding as UX
-  hardening only.
+- **OG build:** one public Candide Forwarding Address per payment page, with
+  blunt privacy copy, whitelisted tokens, and page-scoped settlement.
+- **Near-term hardening:** keep forwarding activation fresh, poll Candide
+  forward status, and refresh route/minimum/token support from Candide rather
+  than hardcoding assumptions.
 - **Non-custodial privacy path:** use per-payment user-controlled addresses or
   stealth-style accounts. The app can privately map deposit address to user and
   show payer details, while the user retains control of funds.
@@ -124,10 +123,9 @@ handle called `settings` invites a convincing phish. `0x` is refused because a
 handle that looks like an address is a trap on a page whose job is showing an
 address.
 
-Claiming a handle is KYC-gated, matching every other route that leads to money
-arriving. Conversion refuses on an unapproved account anyway, so gating the
-claim means the public page never has to expose an account's review status to
-explain itself.
+Claiming a handle is passkey-Safe gated, not KYC-gated. A user can activate a
+payment page once their Safe is deployed with passkeys. Conversion and regulated
+settlement can still require KYC, but publishing the page itself does not.
 
 ## The public projection
 
