@@ -1679,6 +1679,26 @@ app.post(
     if (!CANDIDE.cosignerKey) {
       return res.status(503).json({ error: "CANDIDE_COSIGNER_KEY is required before passkey Safe deployment" });
     }
+    /**
+     * A passkey Safe is deployed through an ERC-4337 bundler and paymaster.
+     * Neither exists on a local hardhat node, so under `npm run dev` this call
+     * asks Candide about chain CANDIDE_CHAIN_ID for a Safe that only exists on
+     * this laptop, and fails with a network error the UI reports as
+     * "Failed to fetch" — which reads as a bug in our code rather than a chain
+     * that cannot support the operation.
+     *
+     * Refuse with the reason instead. The fix is to run against the chain
+     * Candide is configured for, not to make onboarding limp along here.
+     */
+    if (BigInt(CHAIN_ID) !== BigInt(CANDIDE.chainId)) {
+      return res.status(409).json({
+        error:
+          `passkey Safe deployment needs an ERC-4337 bundler, and this API is on chain ${CHAIN_ID} ` +
+          `while Candide is configured for chain ${CANDIDE.chainId}. A local hardhat node has no ` +
+          `bundler or paymaster. Run the API against chain ${CANDIDE.chainId} (npm run api with ` +
+          `TRANSF_CHAIN_ID=${CANDIDE.chainId}) rather than npm run dev.`,
+      });
+    }
     const deployment = await preparePasskeySafeDeployment(user.passkeySafe);
     if (deployment.challenge === "0x") {
       const updated = store.updateUser(user.id, {
