@@ -16,6 +16,7 @@ const scripts = [
   "webauthn:selftest",
   "authorize:test",
   "kyc:test",
+  "country:policy:test",
   "kyc:operator:test",
   "recovery:test",
   "kyc:ui:test",
