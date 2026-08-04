@@ -100,6 +100,13 @@ try {
     NODE_ENV: "production",
     KYC_OPERATOR_TOKEN: OPERATOR_TOKEN,
     ALLOW_PLAINTEXT_STORE: "1",
+    // Managed KYC recovery is on by default and, in production, REQUIRES a
+    // guardian signer URL. That gate is correct — a recovery path with no
+    // signer configured is worse than none — but this test is about the
+    // operator KYC route, not recovery, and it is the only harness that boots
+    // the server in production mode. Opt out here rather than weakening the
+    // gate for everyone.
+    RECOVERY_MANAGED_KYC_GUARDIAN: "0",
     // Deliberately NOT set: ALLOW_SIMULATION. That is the whole point.
     ALLOW_SIMULATION: "",
     MONERIUM_CLIENT_ID: "",
