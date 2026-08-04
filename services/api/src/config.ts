@@ -329,6 +329,25 @@ function assertProductionConfig() {
   if (CCTP.live) {
     fail("CCTP_LIVE=1 is a testnet burn/mint path and is forbidden in production");
   }
+  /**
+   * The app chain and the smart-account chain must agree in production.
+   *
+   * isDeployed() always asks CANDIDE_RPC_URL, so a mismatch means passkey Safes
+   * deploy on one chain while balances, contracts and provisioning read another.
+   * Nothing throws — the two subsystems simply disagree about whether an account
+   * exists, and onboarding refuses with a message about deployment that reads as
+   * unrelated. Locally that is a survivable annoyance and only a warning; in
+   * production it is never intentional.
+   */
+  {
+    const candideChainId = Number(process.env.CANDIDE_CHAIN_ID ?? 11155111);
+    if (candideChainId !== CHAIN_ID) {
+      fail(
+        `CANDIDE_CHAIN_ID (${candideChainId}) must match TRANSF_CHAIN_ID (${CHAIN_ID}) — ` +
+          `passkey Safes would deploy on one chain while the app reads another`,
+      );
+    }
+  }
   if (RECOVERY.managedKycGuardian && !RECOVERY.guardianSignerUrl) {
     fail("RECOVERY_GUARDIAN_SIGNER_URL is required in production when managed KYC recovery is enabled");
   }
