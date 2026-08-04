@@ -455,7 +455,7 @@ export function loadAbi(contract: string): any[] {
  * but a partner key gets better pricing and higher rate limits.
  */
 export const LIQUIDITY = {
-  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow" | "dex",
+  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow" | "dex" | "lifi",
   // Bebop's chain slug, e.g. "polygon", "base", "ethereum".
   BEBOP_CHAIN: process.env.BEBOP_CHAIN ?? "polygon",
   BEBOP_BASE_URL: process.env.BEBOP_BASE_URL ?? "https://api.bebop.xyz",
@@ -506,6 +506,27 @@ export const LIQUIDITY = {
    * at a garbage rate and report it as a market price.
    */
   DEX_MAX_MID_DEVIATION_BPS: BigInt(process.env.DEX_MAX_MID_DEVIATION_BPS ?? 300),
+  /**
+   * LI.FI — the production venue.
+   *
+   * Tested, not assumed: EURe->USDC quotes executable on Gnosis (1.1493), Base
+   * (1.1506) and Polygon (1.1491) against a live mid of ~1.1511, routed through
+   * Nordstern Finance / Fly / Bitget — venues a hand-rolled Uniswap adapter
+   * would never see. That routing breadth is the whole argument for an
+   * aggregator over a single pool.
+   *
+   * It CANNOT be exercised on a testnet: it lists Base Sepolia but answers
+   * "No available quotes" even for WETH/USDC, which has real Uniswap depth
+   * there. So `dex` stays as the locally-provable path and this is the one that
+   * ships. Keep both.
+   */
+  LIFI_BASE_URL: process.env.LIFI_BASE_URL ?? "https://li.quest",
+  LIFI_API_KEY: process.env.LIFI_API_KEY ?? "",
+  LIFI_TIMEOUT_MS: Number(process.env.LIFI_TIMEOUT_MS ?? 15_000),
+  /** Fraction, LI.FI's own units: 0.005 = 50bps. */
+  LIFI_SLIPPAGE: Number(process.env.LIFI_SLIPPAGE ?? 0.005),
+  /** Chain to route on. Defaults to the app chain; EURe exists on 1/100/137/8453/42161/59144. */
+  LIFI_CHAIN_ID: Number(process.env.LIFI_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? 8453),
 };
 
 // Live mid-rate feed. Defaults to a free, key-less provider that publishes all

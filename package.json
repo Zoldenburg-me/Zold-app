@@ -48,6 +48,7 @@
     "eur:proof": "tsx scripts/eur-proof.ts",
     "sepa:test": "tsx scripts/sepa-reference-test.ts",
     "dex:test": "tsx scripts/dex-test.ts",
+    "lifi:test": "tsx scripts/lifi-test.ts",
     "dex:setup": "tsx scripts/dex-setup.ts"
   },
   "devDependencies": {
