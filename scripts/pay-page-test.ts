@@ -53,9 +53,16 @@ const user: any = {
   ownerAddress: "0xbbbb216C328AAa6a384DD422c4eA005cEd7F73f1",
   privateKey: "0xdeadbeef",
   authorizerAddress: "0xcccc216C328AAa6a384DD422c4eA005cEd7F73f1",
-  handle: "amina",
-  payDisplayName: "Amina K",
-  autoConvert: true,
+  paymentPage: {
+    handle: "amina",
+    displayName: "Amina K",
+    depositAddress: "0xd8af216C328AAa6a384DD422c4eA005cEd7F73f1",
+    depositPrivateKey: "0xfeedbeef",
+    settlementAsset: "EURE",
+    autoConvert: true,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
   monerium: { accessTokenEnc: "secret" },
   createdAt: new Date().toISOString(),
 };
@@ -102,9 +109,17 @@ check("display name is optional, trimmed, and length-capped", () => {
   throws(() => normaliseDisplayName("x".repeat(41)), /40 characters/);
 });
 
-check("the public projection returns exactly the four expected keys", () => {
+check("the public projection returns exactly the expected payment-page keys", () => {
   const p = publicPayee(user, CHAIN);
-  assert.deepEqual(Object.keys(p).sort(), ["address", "chainId", "displayName", "handle", "token"]);
+  assert.deepEqual(Object.keys(p).sort(), [
+    "address",
+    "autoConvert",
+    "chainId",
+    "displayName",
+    "handle",
+    "settlementAsset",
+    "token",
+  ]);
 });
 
 check("and leaks no account data — this is the security-relevant one", () => {
@@ -120,26 +135,27 @@ check("and leaks no account data — this is the security-relevant one", () => {
     "approved",
     user.ownerAddress,
     user.authorizerAddress,
+    user.paymentPage.depositPrivateKey,
   ]) {
     assert.ok(!serialised.includes(secret), `leaked ${secret} in ${serialised}`);
   }
 });
 
 check("display name is omitted entirely when unset, never defaulted to the legal name", () => {
-  const p = publicPayee({ ...user, payDisplayName: undefined }, CHAIN);
+  const p = publicPayee({ ...user, paymentPage: { ...user.paymentPage, displayName: undefined } }, CHAIN);
   assert.ok(!("displayName" in p));
   assert.ok(!JSON.stringify(p).includes("Amina"));
 });
 
 check("an account with no handle cannot be projected at all", () => {
-  throws(() => publicPayee({ ...user, handle: undefined }, CHAIN), /no payment handle/);
+  throws(() => publicPayee({ ...user, paymentPage: undefined, handle: undefined }, CHAIN), /no payment handle/);
 });
 
 check("the payment URI is EIP-681 with the token contract and chain", () => {
   const p = publicPayee(user, CHAIN);
   assert.equal(
     paymentUri(p),
-    `ethereum:${CHAIN.token.address}@31337/transfer?address=${user.address}`,
+    `ethereum:${CHAIN.token.address}@31337/transfer?address=${user.paymentPage.depositAddress}`,
   );
 });
 
