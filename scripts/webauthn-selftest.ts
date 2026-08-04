@@ -5,6 +5,7 @@
  * verifyAssertion — including negative cases (bad challenge, tampered
  * signature, cloned-counter). Run: npm run webauthn:selftest
  */
+import "./_test-env.js";
 import assert from "node:assert/strict";
 import { createHash, webcrypto } from "node:crypto";
 import {

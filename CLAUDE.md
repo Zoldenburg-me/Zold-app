@@ -325,7 +325,7 @@ at execution time.
 
 TESTED AGAINST THE REAL APIS, not docs:
 
-**Bebop — does NOT work for us.**
+**Bebop — SUPERSEDED. See the Aug 2026 re-test below; EURe IS supported.**
  - `TokenNotSupported` for EURe on base, polygon and gnosis, using Monerium's
    own production addresses (0xbf6e2966…, 0xE0aEa583…, 0x420CA0f9…).
  - No testnet at all: /pmm/base-sepolia/... is a 404. So the RFQ path can
@@ -356,6 +356,121 @@ TESTED AGAINST THE REAL APIS, not docs:
    struct, and a decision about who signs — the user's Safe with the user
    present, or the orchestrator. Half-working execution would be worse than
    none.
+
+**Best execution + surplus (Aug 2026).**
+ - LIQUIDITY_PROVIDER=best quotes every venue in LIQUIDITY_VENUES in PARALLEL
+   and takes the largest out for the same in. With an aggregator sitting beside
+   a single-pool adapter, choosing by config means settling worse whenever the
+   other venue wins — silently, with nothing in the record. Losers AND their
+   failure reasons are stored on the quote (`routing`), so a route choice is
+   auditable after the fact. One venue down does not sink a trade another can
+   price; ALL failing REFUSES rather than falling back to our own book.
+ - NOT netted against gas. On these L2s gas is cents against a corridor trade,
+   and faking that precision would be worse than the omission — but a venue
+   winning by a hair on price could lose on cost. Revisit if venues land close.
+ - SURPLUS (positive slippage) is MEASURED and ATTRIBUTED, never silent.
+   LIQUIDITY_SURPLUS_POLICY defaults to `user` and that default is load-bearing:
+   the receipt reports marginBps MEASURED between the live mid and what we
+   deliver, so pocketing surplus quietly would make that number understate what
+   we take — the exact dishonesty the live-rates work removed. `treasury` is
+   supported and still records the amount, so it can be reflected in the margin
+   instead of hidden inside it. Keeping the spread is a business decision;
+   hiding it is not one the code will make.
+ - npm run best:test (13 checks, injected stub venues, no chain/network). The
+   router takes injected venues because config is frozen at first import — an
+   env flip after that silently exercises the default and passes for the wrong
+   reason.
+
+**Bebop — CORRECTED Aug 2026. Monerium is a market maker ON Bebop.**
+ - bebop.xyz/case-studies/monerium: Monerium joined Bebop AS A MARKET MAKER,
+   streaming firm EURe quotes into the network. Issuer-led liquidity — the
+   issuer itself is the counterparty, so there is no intermediary spread. Live
+   on ETHEREUM, more chains planned. EURe trades against stablecoins, ETH, WBTC
+   and hundreds of others; six-figure swaps supported.
+ - THIS OVERTURNS THE JULY VERDICT of "does not work for us". That verdict was
+   drawn from base/polygon/gnosis, where EURe still IS TokenNotSupported — the
+   partnership is on the one chain we had not been able to test.
+ - WHY WE COULD NOT SEE IT: ethereum and arbitrum return
+   "UnknownError: UnknownError" for EVERY pair, including a USDC->WETH control
+   that must work. So that error is auth, not token support. Access is gated
+   behind an API key requested via their contact form; a `source` header alone
+   does not open it. Any future "is X supported" test on Bebop MUST run a
+   known-good control on the same chain, or an auth failure reads as an
+   unsupported token.
+ - OUR ADAPTER IS ALREADY CORRECT AND NEEDS NO CODE: RfqLiquidityProvider sends
+   Bebop's documented `source-auth` header and parses the v3 shape. Set
+   BEBOP_API_KEY, BEBOP_CHAIN=ethereum, and add `rfq` to LIQUIDITY_VENUES — then
+   it competes on price like any other venue rather than being trusted blindly.
+ - OPEN QUESTION BEFORE USING IT: EURe-on-Ethereum is 0x39b8B638…, and the
+   best-execution router assumes all venues sit on the app chain. Routing
+   through Bebop means holding EURe on Ethereum (or bridging), and mainnet gas
+   against a corridor-sized transfer is a real cost that the router does NOT
+   net out. Better price, dearer settlement — measure both before switching.
+
+**LI.FI — the production venue (Aug 2026). Aggregation beats one pool.**
+ - TESTED LIVE, not assumed: 100 EURe -> USDC returned EXECUTABLE quotes on
+   Gnosis 1.1493, Base 1.1506, Polygon 1.1491 against a live mid of ~1.1511 —
+   4 to 17bps — routed via Nordstern Finance / Fly / Bitget. A hand-rolled
+   Uniswap adapter can only ever see Uniswap; none of those venues would have
+   been in a hardcoded list. That breadth IS the argument for an aggregator.
+ - EURe exists on more chains than assumed (Monerium production /tokens):
+   ethereum 1, gnosis 100, polygon 137, base 8453, arbitrum 42161, linea 59144.
+   So Base mainnet is a real option, not only Gnosis.
+ - IT CANNOT BE EXERCISED ON A TESTNET. It LISTS Base Sepolia (84532) but
+   answers 404 "No available quotes" there even for WETH/USDC, which has real
+   Uniswap depth — so it is the Bebop gap again. Hence `dex` stays as the
+   locally-provable path and `lifi` is what ships. Keep both; neither replaces
+   the other.
+ - approvalAddress EQUALS transactionRequest.to today (both the LI.FI Diamond
+   0x1231DEB6…). Approving tx.to would therefore work by luck and break
+   silently the day routing moves to a separate settlement contract or Permit2 —
+   the identical trap already found on Bebop. We approve what it NAMES.
+ - NO EXPIRY IS RETURNED (executionDuration: 0), so the only staleness bound is
+   the one we impose via the quote's expiresAt.
+ - The mid-deviation guard matters MORE here than for a pool: route selection is
+   delegated to a third party, so the price is still checked against rates.ts
+   before we bind. assertPriceSane names the venue in its refusal.
+ - 1INCH IS DOMINATED BY THIS: mainnet-only, needs an API key we do not have,
+   and LI.FI aggregates across aggregators (it can route through 1inch itself).
+ - BEBOP JIT REMAINS RULED OUT for EURe on evidence, not preference —
+   TokenNotSupported on base/polygon/gnosis, no testnet.
+ - npm run lifi:test (16 checks, stub LI.FI shaped from a captured live Base
+   response, no chain). UNPROVEN: no real swap has executed.
+
+**Uniswap v3 — the one that executes, and the one we build on.**
+ - VERIFIED ON-CHAIN with eth_getCode on Base Sepolia (84532), not read off a
+   docs page: Factory 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24, SwapRouter02
+   0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4, QuoterV2
+   0xC5290058841028F1614F3A6F0F5816cAd0df5E27, NonfungiblePositionManager
+   0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2, Permit2. Monerium's real EURe on
+   that chain is 0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85 (18dp, from their
+   /tokens), USDC is 0x036CbD53842c5426634e7929541eC2318f3dCF7e (6dp).
+ - CHOSEN OVER 1INCH DELIBERATELY. 1inch is mainnet-only, so a 1inch adapter
+   could never be exercised before it touched real money — exactly how the Bebop
+   adapter ended up correct and unrun. The v3 interface is identical on Base
+   Sepolia and Base mainnet, so the tested path is the shipped path. 1inch still
+   fits later as a mainnet ROUTING layer behind the same seam.
+ - THERE IS NO EURe/USDC POOL on Base Sepolia at any fee tier (100/500/3000/
+   10000 all empty), while WETH/USDC has real depth — so the testnet DEX is
+   genuinely used, just not for EURe. `npm run dex:setup [-- --fix]` creates and
+   seeds one. That pool is a TEST FIXTURE, NOT A TREASURY: on mainnet the
+   counterparty is everyone else's liquidity, which is the whole reason for
+   leaving FxSwapper. Never read a Base Sepolia quote as evidence of pricing.
+ - THE GUARD THAT MATTERS, and the way a pool differs from a maker: an RFQ maker
+   names a price it will honour, but an AMM pool is simply wherever the last
+   trade left it, and anyone can move a thin one. So every quote's implied
+   USD/EUR is checked against the independent live mid from rates.ts and REFUSES
+   beyond DEX_MAX_MID_DEVIATION_BPS (300 default). Without it, skewing a pool
+   would make us quote, bind and settle a real transfer at that skew while
+   reporting it as the market. The pool is also pinned onto the quote, so
+   execute() cannot drift to a different, unchecked one, and amountOutMinimum
+   carries the quoted floor into the router.
+ - amountOut is MEASURED as a balance delta after the swap, not copied from the
+   quote — the router reverting on a bad fill and the amount actually received
+   are two different facts.
+ - npm run dex:test (12 checks, no chain). UNPROVEN: no real swap has executed,
+   because seeding needs EURe and there is no faucet for it — it is only minted
+   against a real SEPA deposit. Deployer holds 21 USDC / 0 EURe today.
 
 CONSEQUENCE FOR THE CHAIN DECISION: EURe's deepest liquidity is on GNOSIS, and
 Monerium is Gnosis-native. Base Sepolia was chosen for testing because gas is

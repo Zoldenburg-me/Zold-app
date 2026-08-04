@@ -46,7 +46,11 @@
     "fx:test": "tsx scripts/fx-rates-test.ts",
     "jit:test": "tsx scripts/jit-liquidity-test.ts",
     "eur:proof": "tsx scripts/eur-proof.ts",
-    "sepa:test": "tsx scripts/sepa-reference-test.ts"
+    "sepa:test": "tsx scripts/sepa-reference-test.ts",
+    "dex:test": "tsx scripts/dex-test.ts",
+    "lifi:test": "tsx scripts/lifi-test.ts",
+    "best:test": "tsx scripts/best-execution-test.ts",
+    "dex:setup": "tsx scripts/dex-setup.ts"
   },
   "devDependencies": {
     "@types/express": "^4.17.25",

@@ -10,6 +10,7 @@
  *
  * Run: npm run anchor:test
  */
+import "./_test-env.js";
 import assert from "node:assert/strict";
 import { Keypair, Networks, WebAuth } from "@stellar/stellar-sdk";
 import { STELLAR } from "../services/api/src/config.js";
