@@ -6,9 +6,9 @@ made the transaction count concrete.
 ## What is true today
 
 The user signs **once**: an EIP-712 `PaymentAuthorization` from their device
-key. Every on-chain leg — `vault.debit`, approve, swap, approve, burn, escrow
-lock, settle — is signed by `orchestratorWallet`, the server's key. So today's
-four transactions cost **gas and latency, not user friction**.
+key. The current transitional executor still submits later on-chain legs from a
+server key, so today's four transactions cost **gas and latency, not user
+friction**.
 
 That changes with FP4. Once the passkey Safe is the authorizer and
 `fundingSource === "safe"`, the funds move from the user's Safe, and each Safe

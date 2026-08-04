@@ -4,10 +4,9 @@
  * The window this closes: POST /api/transfers/:id/authorize checked
  * `state === "CREATED"` and then awaited the chain. Everything before that await
  * runs synchronously, so two submissions of the SAME device signature both
- * cleared the check and both submitted `debit`. The vault rejected the second as
- * a duplicate transferId — and that revert took the FP3 compensation path, which
- * saw the winner's `vault.debit` in the shared tx list and re-credited the
- * sender while the payout it was refunding went through.
+ * cleared the check and both could submit the same spend. One authorization
+ * claim must win before any chain call starts, otherwise the loser can drive a
+ * refund path while the winner is still completing the payout.
  *
  * So the claim has to be atomic against a concurrent handler, which in Node
  * means: no `await` between reading the state and writing it. That is what

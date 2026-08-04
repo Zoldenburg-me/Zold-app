@@ -49,17 +49,15 @@ export interface User {
     updatedAt?: string;
   };
   iban: string; // funding IBAN — mock-issued, or real from Monerium sandbox
-  /** Candide Safe smart-account address — the user's identity everywhere:
-   *  the RemitVault ledger and the address Monerium attaches the IBAN to. */
+  /** Candide Safe smart-account address — the user's identity and balance
+   *  account, and the address Monerium attaches the IBAN to. */
   address: `0x${string}`;
   ownerAddress?: `0x${string}`; // EOA owner (signer) of the Safe
   /** Owner key of the Safe. MVP-grade custody: needed to sign Monerium's
    *  ownership declaration and UserOperations. Production: KMS/passkeys. */
   privateKey?: `0x${string}`;
   /** FP4: the device key allowed to authorize debits from this account. We
-   *  store only its address — the private half stays in the user's browser.
-   *  Registered once against RemitVault.authorizerOf; after that only the
-   *  device itself can rotate it. */
+   *  store only its address — the private half stays in the user's browser. */
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
   /**
@@ -75,7 +73,13 @@ export interface User {
     cosignerPolicy?: {
       enabled: boolean;
       allowanceModuleAddress: `0x${string}`;
-      allowanceAmount: string;
+      allowancePeriodMinutes?: string;
+      allowances?: {
+        token: `0x${string}`;
+        symbol: "EURE" | "USDC";
+        amount: string;
+      }[];
+      allowanceAmount?: string;
     };
     recovery?: {
       moduleAddress: `0x${string}`;
@@ -282,14 +286,11 @@ export interface Transfer {
   /**
    * Where the input EURe is taken from at execution time.
    *
-   * vault: local ledger path. RemitVault.debit verifies the device signature
-   * and moves the full send amount to the orchestrator.
-   * safe: transitional live-Monerium path. EURe already sits in the user's
-   * Safe; the API verifies the same device authorization before moving the
-   * one-time amount needed for this rail:
+   * Safe is the only live funding source now. The API verifies the device
+   * authorization before moving the one-time amount needed for this rail:
    * the full send on the FX rails, the fee alone on SEPA.
    */
-  fundingSource?: "vault" | "safe";
+  fundingSource?: "safe";
   /** FP4: the terms the device is asked to authorize. Fixed when the transfer
    *  is created so the signature covers exactly what gets submitted; the
    *  transfer cannot leave CREATED until a matching signature arrives. */
@@ -437,7 +438,7 @@ interface Db {
   quotes: Quote[];
   transfers: Transfer[];
   sessions: Session[];
-  /** Monerium issue-order ids already mirrored into the vault. */
+  /** Monerium issue-order ids already reflected in local receipt state. */
   processedMoneriumOrders: string[];
   /** Monerium webhook delivery ids already accepted. */
   processedMoneriumWebhooks: string[];
@@ -579,7 +580,7 @@ export const store = {
   findUserByCredential(credentialId: string) {
     return db.users.find((u) => u.passkey?.credentialId === credentialId);
   },
-  /** Every Monerium order id we have mirrored into the vault. */
+  /** Every Monerium order id we have reflected in local receipt state. */
   mirroredOrderIds(): string[] {
     return [...db.processedMoneriumOrders];
   },
@@ -626,9 +627,8 @@ export const store = {
    * Deliberately synchronous: an Express handler runs uninterrupted until its
    * first `await`, so claiming here — before any chain call — is what makes two
    * concurrent submissions of the same device signature impossible. Without it
-   * both passed the `state === "CREATED"` check, both submitted `debit`, and the
-   * loser's "duplicate transfer" revert drove the compensation path: the vault
-   * re-credited the sender while the winner was still completing the payout.
+   * both passed the `state === "CREATED"` check and both could have submitted
+   * the same Safe spend. One claim must win before any chain call starts.
    *
    * Returns false when the transfer is not awaiting authorization, has no terms,
    * or has already been claimed.
