@@ -73,7 +73,13 @@ export interface User {
     cosignerPolicy?: {
       enabled: boolean;
       allowanceModuleAddress: `0x${string}`;
-      allowanceAmount: string;
+      allowancePeriodMinutes?: string;
+      allowances?: {
+        token: `0x${string}`;
+        symbol: "EURE" | "USDC";
+        amount: string;
+      }[];
+      allowanceAmount?: string;
     };
     recovery?: {
       moduleAddress: `0x${string}`;
