@@ -2,7 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- viewport-fit=cover so a standalone install can paint under the notch and
+     home indicator; use env(safe-area-inset-*) in any full-bleed chrome. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<!-- Installable app. The manifest sets start_url=/app, so an installed icon
+     opens the account rather than the marketing page. -->
+<link rel="manifest" href="/manifest.webmanifest" />
+<meta name="theme-color" content="#0b0b0e" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Zold" />
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -44,6 +54,17 @@
   ::-webkit-scrollbar-track { background: transparent; }
 
   .hidden { display: none !important; }
+
+  /* Sticky rather than fixed: as the first child of <body> it takes part in
+     the flow, so showing it pushes the screen down instead of covering the
+     logo — and it still pins to the top once the page scrolls. The safe-area
+     inset keeps it clear of the notch in a standalone install. */
+  #offline-bar {
+    position: sticky; top: 0; z-index: 200;
+    padding: calc(env(safe-area-inset-top, 0px) + .5rem) 1rem .5rem;
+    text-align: center; font-size: .8rem; font-weight: 500;
+    color: #0b0b0e; background: var(--amber);
+  }
 
   label { display: block; font-size: .74rem; font-weight: 500; color: var(--muted); margin: .85rem 0 .3rem; }
   input {
@@ -530,6 +551,11 @@
 </style>
 </head>
 <body>
+  <!-- Network state. Kept outside every screen because it is true of all of
+       them, and because the API refuses rather than serving a stale balance
+       while it is up — the user is owed the reason. -->
+  <div id="offline-bar" class="hidden">You're offline — balances and quotes can't be refreshed</div>
+
   <!-- ============ onboarding (split-screen) ============ -->
   <section id="onboard">
     <div class="onb-left">
@@ -1094,15 +1120,42 @@ const kycCopy = (status = "pending", u = user) => {
 }[status] || ["REVIEW", `KYC ${status}`, "Funding and transfers are paused until approval."]);
 };
 
+/**
+ * Show or clear the offline bar.
+ *
+ * `navigator.onLine` is not enough on its own: it reports whether the device
+ * has a network interface, not whether Zold answers. A dead server on a live
+ * wifi is the case that actually happens, and it is indistinguishable to the
+ * user from a broken app unless we say so. So the bar is driven by BOTH — the
+ * interface going away, and any API call failing to reach us.
+ */
+function setReachable(ok) {
+  const bar = document.getElementById("offline-bar");
+  if (bar) bar.classList.toggle("hidden", !!ok && navigator.onLine);
+}
+window.setReachable = setReachable;
+
 async function api(path, body) {
   const headers = {};
   if (body) headers["content-type"] = "application/json";
   if (sessionToken) headers.authorization = `Bearer ${sessionToken}`;
-  const res = await fetch(path, {
-    ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
-    headers,
-  });
-  const data = await res.json();
+  let res;
+  try {
+    res = await fetch(path, {
+      ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
+      headers,
+    });
+  } catch {
+    /* A dead network reads as "Failed to fetch", which tells the user nothing
+       and looks like our bug. The service worker turns API calls into a 503
+       with a readable body, but it only controls the page once it is active —
+       first load, and browsers without one, land here. */
+    setReachable(false);
+    throw new Error("you appear to be offline — Zold could not be reached");
+  }
+  const data = await res.json().catch(() => ({}));
+  // 503 is what the service worker returns when it could not reach us at all.
+  setReachable(res.status !== 503);
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
@@ -2382,6 +2435,42 @@ function renderContacts() {
     };
   });
 }
+
+/* ---------- progressive web app ---------- */
+/**
+ * Install the shell worker, and tell the truth about the network.
+ *
+ * The worker caches the app shell only — see sw.js for why nothing under
+ * /api/ is ever stored. Everything here is wrapped so that a failure to
+ * register (an insecure origin, a browser without service workers, a private
+ * window) leaves the app working exactly as it did before, just without
+ * offline start-up.
+ *
+ * Kept inside this script rather than a second one on purpose: kyc:ui:test
+ * parses out the last classic script before </body> and evaluates it, so a
+ * sibling <script> block breaks that check for no benefit.
+ */
+(function () {
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("/sw.js").catch(function (err) {
+        console.warn("service worker registration failed: " + err);
+      });
+    });
+  }
+
+  /* A standing, unmissable statement of network state. Balances and quotes
+     are refused rather than served stale while this is up, so the user needs
+     to know why the numbers stopped moving. The interface going away is only
+     half of it — api() also flips this when a call cannot reach us on a
+     perfectly good connection. */
+  function render() {
+    if (window.setReachable) window.setReachable(navigator.onLine);
+  }
+  window.addEventListener("online", render);
+  window.addEventListener("offline", render);
+  render();
+})();
 </script>
 </body>
 </html>
