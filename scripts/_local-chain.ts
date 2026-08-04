@@ -53,9 +53,8 @@ process.env.MONERIUM_CHAIN = "sepolia";
  *
  * Every harness resets the store on startup. While that was data/db.json —
  * the file the running app uses — a test run destroyed live accounts, and on
- * a real chain that is unrecoverable: the Safe owner key lives in this file,
- * and RemitVault only lets the CURRENT authorizer rotate. A suite run ate one
- * such account on Base Sepolia.
+ * a real chain that is unrecoverable: the Safe owner key lives in this file.
+ * A suite run ate one such account on Base Sepolia.
  */
 process.env.TRANSF_DB_PATH ??= path.join(
   os.tmpdir(),

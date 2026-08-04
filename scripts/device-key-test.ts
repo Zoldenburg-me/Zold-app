@@ -45,10 +45,10 @@ const t = async (label: string, fn: () => Promise<void> | void) => {
 
 const TYPED_DATA = {
   domain: {
-    name: "RemitVault",
+    name: "TransF Safe Transfer",
     version: "1",
     chainId: 31337,
-    verifyingContract: "0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0",
+    verifyingContract: "0x1111111111111111111111111111111111111111",
   },
   types: {
     PaymentAuthorization: [
