@@ -107,6 +107,11 @@ try {
     // the server in production mode. Opt out here rather than weakening the
     // gate for everyone.
     RECOVERY_MANAGED_KYC_GUARDIAN: "0",
+    // Production also requires the smart-account chain to match the app chain.
+    // This harness runs the local chain, so Candide must be told the same thing
+    // — otherwise the gate fires and the server never starts, which surfaces as
+    // ECONNREFUSED rather than a config error.
+    CANDIDE_CHAIN_ID: process.env.TRANSF_CHAIN_ID ?? "31337",
     // Deliberately NOT set: ALLOW_SIMULATION. That is the whole point.
     ALLOW_SIMULATION: "",
     MONERIUM_CLIENT_ID: "",

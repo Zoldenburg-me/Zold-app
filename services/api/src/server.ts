@@ -55,6 +55,7 @@ import {
   addrs,
   accountBalances,
   assertChainMatches,
+  warnIfSmartAccountChainDiffers,
   destinationCommitment,
   eur,
   orchestratorAddress,
@@ -2314,6 +2315,9 @@ assertChainMatches().catch((e) => {
   console.error(String(e?.message ?? e));
   process.exit(1);
 });
+// Same class of problem, quieter symptom: the smart-account chain can differ
+// from the app chain without anything throwing.
+warnIfSmartAccountChainDiffers();
 // FP3: compensate anything stranded by a crash or failed payout, then keep
 // sweeping in the background.
 sweepStrandedTransfers()
