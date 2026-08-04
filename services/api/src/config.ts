@@ -363,8 +363,8 @@ function assertProductionConfig() {
     if (!process.env.CANDIDE_COSIGNER_ADDRESS || !process.env.CANDIDE_COSIGNER_KEY) {
       fail("CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required before hosted production funding");
     }
-    if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS && !process.env.CANDIDE_COSIGNER_ADDRESS) {
-      fail("CANDIDE_RECOVERY_GUARDIAN_ADDRESS or CANDIDE_COSIGNER_ADDRESS is required before hosted production funding");
+    if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS) {
+      fail("CANDIDE_RECOVERY_GUARDIAN_ADDRESS is required before hosted production funding");
     }
   }
 
