@@ -713,6 +713,7 @@
             <h2>Security</h2>
             <div class="setting-row"><div><div class="st">Passkey</div><div class="sd" id="set-passkey">—</div></div></div>
             <div class="setting-row"><div><div class="st">Device spending key</div><div class="sd" id="set-device">—</div></div></div>
+            <div class="setting-row"><div><div class="st">Wallet policy</div><div class="sd" id="set-wallet-policy">—</div></div></div>
             <div class="setting-row"><div><div class="st">Recovery</div><div class="sd" id="set-recovery">—</div></div><button class="ghost" id="btn-recovery-start">Start</button></div>
             <div class="error hidden" id="recovery-err"></div>
             <div class="setting-row"><div><div class="st">Session</div><div class="sd">Stored only in this browser.</div></div><button class="ghost" id="btn-signout">Sign out</button></div>
@@ -1019,7 +1020,7 @@ function renderRecoveryInfo() {
   btn.textContent = "Start";
   btn.disabled = !recoveryInfo.available;
   el.textContent = recoveryInfo.available
-    ? `Managed guardian enabled · ${recoveryInfo.delayHours}h delay`
+    ? `Zold recovery module · ${recoveryInfo.delayHours}h delay`
     : (recoveryInfo.blocked || "Recovery unavailable");
 }
 
@@ -1146,6 +1147,13 @@ function renderShellPages() {
   $("acct-authorizer").textContent = user.authorizerAddress || "Registered when you send from this browser.";
   $("set-passkey").textContent = user.passkey ? `Credential ${user.passkey.credentialId.slice(0, 16)}…` : "No passkey on this account yet.";
   $("set-device").textContent = user.authorizerAddress ? `Bound to ${user.authorizerAddress.slice(0, 10)}…${user.authorizerAddress.slice(-6)}` : "Not bound yet.";
+  const safe = user.passkeySafe;
+  const cosigner = safe?.cosignerPolicy;
+  $("set-wallet-policy").textContent = !safe
+    ? "Passkey Safe not planned yet."
+    : cosigner?.enabled
+      ? `Production co-signer · ${safe.threshold}-of-${safe.threshold} Safe · allowance ${cosigner.allowanceAmount}`
+      : `Passkey-only Safe · co-signer disabled outside production.`;
   renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
     ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`
