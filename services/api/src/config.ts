@@ -101,6 +101,15 @@ export const KYC = {
   operatorToken: process.env.KYC_OPERATOR_TOKEN ?? "",
 };
 
+export const RECOVERY = {
+  managedKycGuardian: process.env.RECOVERY_MANAGED_KYC_GUARDIAN !== "0",
+  delayHours: Math.max(1, Number(process.env.RECOVERY_DELAY_HOURS ?? 72)),
+  requestTtlHours: Math.max(1, Number(process.env.RECOVERY_REQUEST_TTL_HOURS ?? 24 * 14)),
+  guardianSignerUrl: process.env.RECOVERY_GUARDIAN_SIGNER_URL ?? "",
+  guardianSignerToken: process.env.RECOVERY_GUARDIAN_SIGNER_TOKEN ?? "",
+  guardianSignerTimeoutMs: Math.max(1000, Number(process.env.RECOVERY_GUARDIAN_SIGNER_TIMEOUT_MS ?? 10_000)),
+};
+
 // A guessable operator token is worse than none: it is a remote approval
 // switch for every account. Refuse to start rather than serve one.
 if (KYC.operatorToken && KYC.operatorToken.length < 24) {
@@ -293,6 +302,15 @@ function assertProductionConfig() {
   }
   if (CCTP.live) {
     fail("CCTP_LIVE=1 is a testnet burn/mint path and is forbidden in production");
+  }
+  if (RECOVERY.managedKycGuardian && !RECOVERY.guardianSignerUrl) {
+    fail("RECOVERY_GUARDIAN_SIGNER_URL is required in production when managed KYC recovery is enabled");
+  }
+  if (RECOVERY.guardianSignerUrl) {
+    try { requireExplicitHttpsUrl("RECOVERY_GUARDIAN_SIGNER_URL", RECOVERY.guardianSignerUrl); } catch (e: any) { fail(e.message); }
+    if (!RECOVERY.guardianSignerToken) {
+      fail("RECOVERY_GUARDIAN_SIGNER_TOKEN is required when RECOVERY_GUARDIAN_SIGNER_URL is configured");
+    }
   }
   if (anchorModeEnabled() && STELLAR.networkPassphrase === STELLAR_TESTNET_PASSPHRASE) {
     fail("production anchor mode must not use the Stellar testnet passphrase");
