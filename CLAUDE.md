@@ -1,5 +1,24 @@
 # Zold — notes for Claude sessions
 
+## Start here
+
+This file is decision history, not a tutorial. It is long because most of it
+records something that was *tested* and should not be re-litigated or
+re-discovered the expensive way. Read the section you need:
+
+| you are about to… | read |
+|---|---|
+| touch money movement or FX | Liquidity venues; Current state |
+| touch keys, passkeys or custody | Security gate; FP4 completion |
+| deploy or change chains | Testnet plumbing; Sandbox modes |
+| touch the Stellar/cash rail | Stellar payout leg; Sandbox modes |
+| pick up someone else's branch | Multi-agent workflow |
+
+Two rules that override convenience: **main is PR-merge only**, and a claim
+here marked VERIFIED was checked against a live chain, API or bytecode — if you
+contradict one, re-test before rewriting it, and say what you ran.
+
+
 ## Naming (decided July 2026)
 - **Zoldenburg** = the company / infra brand (B2B, legal, footer). Old-Swiss-
   bank gravitas.
@@ -128,15 +147,17 @@
 - Still owner-supplied before Amoy: an RPC, three funded keys, MONERIUM_CHAIN=amoy
   (verified name), and MG_ANCHOR_ASSET=USDC (issue #53).
 
-## Current state (July 2026)
+## Current state (Aug 2026)
 - Repo: github.com/tonyzil/transF (private). The GitHub rename never
   happened — pushing to .../Zoll.git returns "Repository not found", so
-  `transF` is the live remote, not just the directory name. PR #1 open:
-  feat/passkey-onboarding-destination-send (passkey onboarding wizard,
-  destination-first send flow, README rewrite).
-- Working: three payout rails (KES cash / SEPA / UPI), Candide Safe
-  wallets deployed gasless with EIP-1271 Monerium linking, live anchor
-  payouts, e2e green across all rails.
+  `transF` is the live remote, not just the directory name.
+- Deployed on Base Sepolia (84532) against Monerium's real EURe. Landing page
+  at `/`, app at `/app`.
+- Working: three payout rails (KES cash / SEPA / UPI), Candide Safe wallets
+  deployed gasless with EIP-1271 Monerium linking, e2e green across all rails.
+- NOT "live anchor payouts" — that phrase was in this file and was wrong. The
+  Stellar ledger half is proven and the anchor half has never run; see the
+  Stellar section.
 - Reconciler (July 2026): services/api/src/reconcile.ts compares Monerium's
   processed issue orders against what we mirrored, plus on-chain invariants
   (totalCredited == sum of balances; vault tokens cover credit). Reports
@@ -317,7 +338,7 @@ senderProfile PII in plaintext.
 Launch gate: local demos fine; NOT safe hosted, with real funds, or claiming
 payout finality until FP1-FP4 done.
 
-## Liquidity venues — tested, not assumed (July 2026)
+## Liquidity venues — tested, not assumed (last checked Aug 2026)
 
 The problem: we cannot carry a treasury. The FxSwapper model holds inventory we
 fund, which does not scale past a demo. Liquidity has to come from someone else
@@ -325,19 +346,13 @@ at execution time.
 
 TESTED AGAINST THE REAL APIS, not docs:
 
-**Bebop — SUPERSEDED. See the Aug 2026 re-test below; EURe IS supported.**
- - `TokenNotSupported` for EURe on base, polygon and gnosis, using Monerium's
-   own production addresses (0xbf6e2966…, 0xE0aEa583…, 0x420CA0f9…).
- - No testnet at all: /pmm/base-sepolia/... is a 404. So the RFQ path can
-   never be exercised on a testnet, only with real money on a mainnet.
- - The adapter itself is CORRECT: a real mainnet quote for a supported pair
-   (USDC->WETH on Base) parses cleanly through RfqLiquidityProvider — every
-   field it reads is present. Keep it; the counterparty is the problem, not
-   the code.
- - Found while doing that: Bebop returns `approvalTarget` SEPARATELY from
-   `tx.to`. They are the same contract today, so approving tx.to worked by
-   luck. Now fixed to approve what the maker names — otherwise a move to a
-   separate settlement contract or Permit2 would break every swap silently.
+**Bebop — see "Bebop — CORRECTED" below.** The July verdict of "does not work
+for us" was drawn from base/polygon/gnosis only and is WRONG as a headline;
+EURe is supported on Ethereum. One finding from that round still stands and is
+load-bearing: Bebop returns `approvalTarget` SEPARATELY from `tx.to`, they are
+the same contract today, so approving tx.to works by luck and would break
+silently on a move to a separate settlement contract or Permit2. The same trap
+exists in LI.FI. Approve what the maker NAMES.
 
 **CoW Protocol — works, and is the likely answer.**
  - Quotes EURe->USDC on Gnosis at essentially the mid: 100 EURe -> 113.83 USDC
@@ -556,11 +571,15 @@ front of someone whose salary is in the account.
    crypto→EURe conversion. Constraints learned: ~2% top-up fee, €25 exit
    fee, low-KYC tier caps; SEPA Instant is EU-mandated since Oct 2025 so
    the "24h" is their internal crediting, not the rail.
-3. Public-chain deployment — decision leans POLYGON over Base: EURe is
-   native there (kills the mirror-seam), CCTP live (domain 7), Candide
-   covers it (and founders are user's friends — also ask them about
-   WebAuthn Safe owners for FP4). Monerium sandbox chain name = `amoy` (VERIFIED; other aliases rejected).
-   Safes keep the same address cross-chain.
+3. Public-chain deployment — DONE on **Base Sepolia (84532)**, not Polygon.
+   The Polygon case was "EURe is native there"; Monerium's production /tokens
+   shows EURe on SIX chains — ethereum 1, gnosis 100, polygon 137, base 8453,
+   arbitrum 42161, linea 59144 — so that argument no longer selects a chain on
+   its own. Choose on liquidity and gas instead: LI.FI quoted best on Base
+   (1.1506 vs 1.1493 Gnosis, 1.1491 Polygon), CoW's EURe depth is on Gnosis,
+   and Bebop's Monerium market-maker feed is on Ethereum. Nothing is pinned:
+   TRANSF_CHAIN_ID selects the chain and deployments.json is keyed by it.
+   Monerium sandbox chain names verified: `amoy`, `basesepolia`.
 4. Passkey-as-Safe-owner (true non-custodial; today passkey is auth only).
 5. Card rail — **Immersve** (immersve.com, docs.immersve.com). Mastercard
    PRINCIPAL MEMBER, so they are the issuer rather than a reseller (contrast
@@ -591,7 +610,7 @@ front of someone whose salary is in the account.
 Parked deliberately: NEAR Intents (future multi-chain deposits), Metastable
 (EURe↔EURC later), Flexa/AMP (no — wrong market, card program beats it).
 
-## Multi-agent workflow (two agents work this repo)
+## Multi-agent workflow (THREE+ agents work this repo)
 Claude (local sessions) and OpenClaw (friend's agent) both commit here. The
 PR #3 merge silently dropped a pushed commit because both touched the same
 branch (stale head at merge time; recovered in PR #4). Rules:
@@ -601,7 +620,13 @@ branch (stale head at merge time; recovered in PR #4). Rules:
   the commit you last pushed; after merging, verify the content actually
   landed (grep the tree, don't trust "merged: true").
 - Start every session with git fetch; expect main to have moved.
-- OpenClaw's token expires soon (July 2026) — its activity may stop.
+- Agents seen on this repo: `claude/*` (local sessions), OpenClaw, `pinky/*`
+  and `baer/*`. Expect main to move mid-session — it did repeatedly in Aug 2026.
+- A merge reporting success is not proof. PR #80 merged at the right SHA and a
+  later check still read as "absent" — the check was broken (zsh treats `:s/`
+  in `$REF:services/...` as a substitution modifier, so `git show` got a mangled
+  ref and grep counted zero). Build the ref in a variable first, and confirm a
+  file is READABLE before believing a grep count of zero.
 
 ## Style
 - User wants prose without AI-marketing jargon (see README voice: what's
