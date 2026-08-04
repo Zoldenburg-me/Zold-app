@@ -357,6 +357,36 @@ TESTED AGAINST THE REAL APIS, not docs:
    present, or the orchestrator. Half-working execution would be worse than
    none.
 
+**LI.FI — the production venue (Aug 2026). Aggregation beats one pool.**
+ - TESTED LIVE, not assumed: 100 EURe -> USDC returned EXECUTABLE quotes on
+   Gnosis 1.1493, Base 1.1506, Polygon 1.1491 against a live mid of ~1.1511 —
+   4 to 17bps — routed via Nordstern Finance / Fly / Bitget. A hand-rolled
+   Uniswap adapter can only ever see Uniswap; none of those venues would have
+   been in a hardcoded list. That breadth IS the argument for an aggregator.
+ - EURe exists on more chains than assumed (Monerium production /tokens):
+   ethereum 1, gnosis 100, polygon 137, base 8453, arbitrum 42161, linea 59144.
+   So Base mainnet is a real option, not only Gnosis.
+ - IT CANNOT BE EXERCISED ON A TESTNET. It LISTS Base Sepolia (84532) but
+   answers 404 "No available quotes" there even for WETH/USDC, which has real
+   Uniswap depth — so it is the Bebop gap again. Hence `dex` stays as the
+   locally-provable path and `lifi` is what ships. Keep both; neither replaces
+   the other.
+ - approvalAddress EQUALS transactionRequest.to today (both the LI.FI Diamond
+   0x1231DEB6…). Approving tx.to would therefore work by luck and break
+   silently the day routing moves to a separate settlement contract or Permit2 —
+   the identical trap already found on Bebop. We approve what it NAMES.
+ - NO EXPIRY IS RETURNED (executionDuration: 0), so the only staleness bound is
+   the one we impose via the quote's expiresAt.
+ - The mid-deviation guard matters MORE here than for a pool: route selection is
+   delegated to a third party, so the price is still checked against rates.ts
+   before we bind. assertPriceSane names the venue in its refusal.
+ - 1INCH IS DOMINATED BY THIS: mainnet-only, needs an API key we do not have,
+   and LI.FI aggregates across aggregators (it can route through 1inch itself).
+ - BEBOP JIT REMAINS RULED OUT for EURe on evidence, not preference —
+   TokenNotSupported on base/polygon/gnosis, no testnet.
+ - npm run lifi:test (16 checks, stub LI.FI shaped from a captured live Base
+   response, no chain). UNPROVEN: no real swap has executed.
+
 **Uniswap v3 — the one that executes, and the one we build on.**
  - VERIFIED ON-CHAIN with eth_getCode on Base Sepolia (84532), not read off a
    docs page: Factory 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24, SwapRouter02

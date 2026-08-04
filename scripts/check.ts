@@ -27,6 +27,7 @@ const scripts = [
   "fx:test",
   "jit:test",
   "dex:test",
+  "lifi:test",
   "webhook:test",
   "reconcile:test",
   "anchor:config:test",
