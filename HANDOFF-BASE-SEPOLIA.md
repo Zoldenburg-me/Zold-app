@@ -194,18 +194,43 @@ database and its own local chain, and cannot touch Base Sepolia state.
 
 ## 7. Known-unproven, so you can tell a real failure from a known gap
 
+Updated Aug 2026. Three items that used to sit here are now PROVEN and have
+been moved out — leaving them in would have sent you re-proving them.
+
+**Proven since this doc was written:**
+
+- **CCTP has executed live.** Burn
+  `0x7dfb7af87e9e5cf0b26bb7f3cda87327cf487127e5e342f40f0b3200fd07dd9d` on Base
+  Sepolia, Stellar mint
+  `4b80014cde687b322985269a92be04a60a1825709bd077855a817f239bd1a037`. Measured
+  ~15 minutes to hard finality; `CCTP_MIN_FINALITY=1000` with a `CCTP_MAX_FEE`
+  is Circle's Fast Transfer and settles in seconds.
+- **The Stellar treasury holds the anchor asset**: 20 USDC, issuer
+  `GBBD47IF…`, which is the same USDC MoneyGram's anchor uses.
+- **MoneyGram's own test anchor works without an allowlist.**
+  `extmgxanchor.moneygram.com` authenticates our treasury over SEP-10 and
+  publishes real limits (min 15, max 2500 USDC) — so the "testanchor caps at 10
+  units" note no longer bounds anything. `extstellar.moneygram.com` is the other
+  deployment and refuses without `client_domain`.
+- **A real Stellar payment lands**: 1.5 XLM with an id memo, ledger 3965805.
+
+**Still unproven:**
+
 - **The redeem has never run on Base Sepolia.** It has run on Sepolia: a real
   order processed, on-chain EURe went 200.00 → 199.00. On Base it is written and
   untested.
-- **CCTP has never executed live.** Dry-run by default; `CCTP_LIVE=1` plus a
-  funded burner is needed.
-- **No funded Stellar treasury holding the anchor asset exists**, so a cash
-  payout will reach the anchor and stop. MoneyGram domains now default
-  `MG_ANCHOR_ASSET` to USDC and reject non-USDC assets at startup.
-- **The RFQ/JIT liquidity provider has never talked to real Bebop.** Its tests
-  run against a stub. Default is the local swapper.
-- **testanchor caps withdrawals at 10 units**, so corridor-sized cash transfers
-  are refused there by design.
+- **No anchor has ever been paid.** MoneyGram opens a withdrawal but never
+  publishes `withdrawAnchorAccount` until a human completes the interactive page
+  at `extramps.moneygram.com`. That is SEP-24 working as designed, not a gap in
+  our code — `sendSep24WithdrawalPayment` correctly refuses when the account is
+  absent, and cannot be exercised headlessly against any conforming anchor.
+- **Bebop has never been reached with credentials.** EURe IS supported — Monerium
+  market-makes on Bebop, on Ethereum — but the API returns `UnknownError` for
+  every pair without an API key, including a known-good control. Untested, not
+  ruled out.
+- **No liquidity venue has settled on a real chain.** LI.FI executed both
+  directions against a *forked* mainnet (1000 USDC → 865.06 EURe, 500 EURe →
+  574.33 USDC at 8bps) — real quote and routing, local settlement.
 
 ---
 
