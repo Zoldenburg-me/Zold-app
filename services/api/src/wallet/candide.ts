@@ -12,6 +12,7 @@
  * bundler + paymaster and is centralized in the passkey Safe deployment route.
  */
 import {
+  AllowanceModule,
   SafeMultiChainSigAccountV1 as SafeAccount,
   Erc7677Paymaster,
   SocialRecoveryModule,
@@ -28,18 +29,25 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeFunctionData, hashTypedData } from "viem";
 
+const CANDIDE_PRODUCTION = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
+const COSIGNER_ENABLED =
+  process.env.CANDIDE_COSIGNER_ENABLED === "1" ||
+  (process.env.CANDIDE_COSIGNER_ENABLED !== "0" && CANDIDE_PRODUCTION);
+
 export const CANDIDE = {
   chainId: BigInt(process.env.CANDIDE_CHAIN_ID ?? 11155111),
   bundlerUrl: process.env.CANDIDE_BUNDLER_URL ?? "https://api.candide.dev/public/v3/11155111",
   paymasterUrl: process.env.CANDIDE_PAYMASTER_URL ?? "https://api.candide.dev/public/v3/11155111",
   rpcUrl: process.env.CANDIDE_RPC_URL ?? "https://ethereum-sepolia-rpc.publicnode.com",
+  cosignerEnabled: COSIGNER_ENABLED,
   cosignerAddress: (process.env.CANDIDE_COSIGNER_ADDRESS ?? "") as `0x${string}` | "",
   cosignerKey: (process.env.CANDIDE_COSIGNER_KEY ?? "") as `0x${string}` | "",
-  recoveryGuardianAddress: (process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS ??
-    process.env.CANDIDE_COSIGNER_ADDRESS ??
-    "") as `0x${string}` | "",
+  recoveryGuardianAddress: (process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS ?? "") as `0x${string}` | "",
   recoveryModuleAddress: (process.env.CANDIDE_RECOVERY_MODULE_ADDRESS ??
     SocialRecoveryModuleGracePeriodSelector.After3Days) as `0x${string}`,
+  allowanceModuleAddress: (process.env.CANDIDE_ALLOWANCE_MODULE_ADDRESS ??
+    AllowanceModule.DEFAULT_ALLOWANCE_MODULE_ADDRESS) as `0x${string}`,
+  cosignerAllowanceAmount: BigInt(process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT ?? "0"),
 };
 
 /** Deterministic Safe address for an owner — offline, no network. */
@@ -77,10 +85,20 @@ export function smartAccountForPasskeyCosigner(
   return SafeAccount.initializeNewAccount([passkeyOwner, cosignerAddress], { threshold: 2 });
 }
 
+export function smartAccountForPasskey(passkeyOwner: WebauthnPublicKey): SafeAccount {
+  return SafeAccount.initializeNewAccount([passkeyOwner]);
+}
+
 export interface PasskeySafeDeploymentPlan {
   address: `0x${string}`;
-  cosignerAddress: `0x${string}`;
+  threshold: 1 | 2;
+  cosignerAddress?: `0x${string}`;
   passkeyPublicKey: { x: string; y: string };
+  cosignerPolicy?: {
+    enabled: boolean;
+    allowanceModuleAddress: `0x${string}`;
+    allowanceAmount: string;
+  };
   recovery?: {
     moduleAddress: `0x${string}`;
     guardianAddress: `0x${string}`;
@@ -114,13 +132,18 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
   userOperation: UserOperationV9;
 }> {
   const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  const account = smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress);
+  const account = plan.cosignerAddress
+    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
+    : smartAccountForPasskey(passkeyOwner);
   if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
     throw new Error("passkey Safe plan does not match the deterministic account address");
   }
-  const recoverySetup = passkeySafeRecoverySetupTransactions(plan);
+  const setup = [
+    ...passkeySafeRecoverySetupTransactions(plan),
+    ...passkeySafeAllowanceSetupTransactions(plan),
+  ];
   const deployed = await isDeployed(account.accountAddress);
-  if (deployed && !recoverySetup.length) {
+  if (deployed && !setup.length) {
     return {
       safeAddress: account.accountAddress as `0x${string}`,
       challenge: "0x",
@@ -129,10 +152,10 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
   }
   const noop: MetaTransaction = { to: account.accountAddress, value: 0n, data: "0x" };
   const userOperation = await account.createUserOperation(
-    recoverySetup.length ? recoverySetup : [noop],
+    setup.length ? setup : [noop],
     CANDIDE.rpcUrl,
     CANDIDE.bundlerUrl,
-    { expectedSigners: [passkeyOwner, plan.cosignerAddress] },
+    { expectedSigners: plan.cosignerAddress ? [passkeyOwner, plan.cosignerAddress] : [passkeyOwner] },
   );
   const paymaster = new Erc7677Paymaster(CANDIDE.paymasterUrl);
   const sponsored = await paymaster.createPaymasterUserOperation(
@@ -160,14 +183,32 @@ export function passkeySafeRecoverySetupTransactions(plan: PasskeySafeDeployment
   ];
 }
 
+export function passkeySafeAllowanceSetupTransactions(plan: PasskeySafeDeploymentPlan): MetaTransaction[] {
+  if (!plan.cosignerAddress || !plan.cosignerPolicy?.enabled) return [];
+  const allowance = new AllowanceModule(plan.cosignerPolicy.allowanceModuleAddress);
+  const amount = BigInt(plan.cosignerPolicy.allowanceAmount);
+  const txs = [
+    allowance.createEnableModuleMetaTransaction(plan.address),
+    allowance.createAddDelegateMetaTransaction(plan.cosignerAddress),
+  ];
+  if (amount > 0n) {
+    throw new Error("CANDIDE_COSIGNER_ALLOWANCE_AMOUNT must stay 0 until token-scoped limits are implemented");
+  }
+  return txs;
+}
+
 export async function submitPasskeySafeDeployment(
   plan: PasskeySafeDeploymentPlan,
   userOperation: UserOperationV9,
   assertion: BrowserPasskeyAssertion,
 ): Promise<string | null> {
   const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  const account = smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress);
-  if (!CANDIDE.cosignerKey) throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign passkey Safe deployment");
+  const account = plan.cosignerAddress
+    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
+    : smartAccountForPasskey(passkeyOwner);
+  if (plan.cosignerAddress && !CANDIDE.cosignerKey) {
+    throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign passkey Safe deployment");
+  }
   const deployed = await isDeployed(account.accountAddress);
   const passkeySigner = fromSafeWebauthn({
     publicKey: passkeyOwner,
@@ -175,10 +216,11 @@ export async function submitPasskeySafeDeployment(
     accountClass: SafeAccount,
     getAssertion: async () => webauthnSignatureFromAssertion(assertion),
   });
-  const cosigner = fromPrivateKey(CANDIDE.cosignerKey);
+  const signers = [passkeySigner];
+  if (plan.cosignerAddress) signers.push(fromPrivateKey(CANDIDE.cosignerKey));
   userOperation.signature = await account.signUserOperationWithSigners(
     userOperation,
-    [passkeySigner, cosigner],
+    signers,
     CANDIDE.chainId,
   );
   const response = await account.sendUserOperation(userOperation, CANDIDE.bundlerUrl);
@@ -193,28 +235,32 @@ export async function signMessageAsPasskeySafe(
   assertion: BrowserPasskeyAssertion,
 ): Promise<`0x${string}`> {
   const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  const account = smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress);
+  const account = plan.cosignerAddress
+    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
+    : smartAccountForPasskey(passkeyOwner);
   if (account.accountAddress.toLowerCase() !== safeAddress.toLowerCase()) {
     throw new Error("passkey Safe plan does not match the address being linked");
   }
-  if (!CANDIDE.cosignerKey) throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign Safe message");
   const { domain, types, messageValue } = getSafeMessageEip712Data(
     safeAddress as `0x${string}`,
     CANDIDE.chainId,
     message,
   );
-  const cosigner = privateKeyToAccount(CANDIDE.cosignerKey);
-  const cosignerSignature = await cosigner.signTypedData({
-    domain: domain as any,
-    types: types as any,
-    primaryType: "SafeMessage",
-    message: messageValue as any,
-  });
   const passkeySignature = SafeAccount.createWebAuthnSignature(webauthnSignatureFromAssertion(assertion));
   const pairs: SignerSignaturePair[] = [
     { signer: passkeyOwner, signature: passkeySignature },
-    { signer: plan.cosignerAddress, signature: cosignerSignature },
   ];
+  if (plan.cosignerAddress) {
+    if (!CANDIDE.cosignerKey) throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign Safe message");
+    const cosigner = privateKeyToAccount(CANDIDE.cosignerKey);
+    const cosignerSignature = await cosigner.signTypedData({
+      domain: domain as any,
+      types: types as any,
+      primaryType: "SafeMessage",
+      message: messageValue as any,
+    });
+    pairs.push({ signer: plan.cosignerAddress, signature: cosignerSignature });
+  }
   return SafeAccount.buildSignaturesFromSingerSignaturePairs(pairs, { isInit: false }) as `0x${string}`;
 }
 
