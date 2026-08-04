@@ -133,9 +133,14 @@ export async function quoteExactInputSingle(args: {
  * fail-closed, and already what the receipt is measured against. If the two
  * disagree by more than the band, we refuse rather than pick a winner.
  */
-export async function assertPriceSane(impliedUsdPerEur: number): Promise<{ mid: number; deviationBps: number }> {
+export async function assertPriceSane(
+  impliedUsdPerEur: number,
+  /** Which venue produced this price. Shared by the DEX and LI.FI providers,
+   *  so the refusal must name the venue an operator is actually using. */
+  venue = "dex pool",
+): Promise<{ mid: number; deviationBps: number }> {
   if (!Number.isFinite(impliedUsdPerEur) || impliedUsdPerEur <= 0) {
-    throw new Error("dex implied rate is not a positive number — refusing to quote");
+    throw new Error(`${venue} implied rate is not a positive number — refusing to quote`);
   }
   // eurPer("USD") is USD per 1 EUR — the same orientation as the pool price.
   const mid = await eurPer("USD");
@@ -146,7 +151,7 @@ export async function assertPriceSane(impliedUsdPerEur: number): Promise<{ mid: 
   const limit = Number(LIQUIDITY.DEX_MAX_MID_DEVIATION_BPS);
   if (deviationBps > limit) {
     throw new Error(
-      `dex pool price ${impliedUsdPerEur.toFixed(6)} USD/EUR deviates ${deviationBps}bps from the live mid ` +
+      `${venue} price ${impliedUsdPerEur.toFixed(6)} USD/EUR deviates ${deviationBps}bps from the live mid ` +
         `${mid.toFixed(6)} (limit ${limit}bps). Refusing — a pool this far from the market is either thin ` +
         `or being moved, and settling against it would price a real transfer off a number nobody else agrees with.`,
     );
