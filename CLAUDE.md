@@ -191,11 +191,45 @@ moment an anchor actually publishes an account.
   `transF` is the live remote, not just the directory name.
 - Deployed on Base Sepolia (84532) against Monerium's real EURe. Landing page
   at `/`, app at `/app`.
-- Working: three payout rails (KES cash / SEPA / UPI), Candide Safe wallets
-  deployed gasless with EIP-1271 Monerium linking, e2e green across all rails.
+- Working: two payout rails (KES cash / SEPA), Candide Safe wallets
+  deployed gasless with EIP-1271 Monerium linking, e2e green across both rails.
+- UPI REMOVED (Aug 2026) — deleted, not disabled, and not to be rebuilt from
+  this repo's history without a partner. It was a mock partner adapter that
+  minted its own UTRs: the rail rendered a "UPI payment successful" panel and a
+  12-digit reference for money that had reached nobody, which is the one class
+  of fake this project does not keep. Gone: adapters/upi.ts, the `upi` member of
+  PayoutRail, receiveInr/recipientVpa/transfer.upi, the INR quote mode (both
+  INR-fixed and EUR-fixed), the destination commitment's `upi|vpa=` preimage in
+  BOTH chain.ts and public/device.js, the QR-scan UI, and the e2e leg. India is
+  gone from the app's destination list too — its only rail was UPI, so leaving
+  it listed meant an empty options screen with no way forward. `POST /api/quotes`
+  now refuses `rail: "upi"` with 400, and e2e asserts that refusal so the rail
+  cannot creep back in unnoticed.
+  KEPT DELIBERATELY: INR in rates.ts's REQUIRED list. That is a currency in a
+  mid-rate feed, not a rail — fx:test uses it as the second currency proving the
+  usdPer() derivation, and dropping it would churn a passing suite for nothing.
+  The roadmap's India entries (dLocal, Mony) are partner intel and still stand;
+  they describe what a real rail would need, which is exactly what was missing.
+  One stale record survives: data/db.json holds a PAID upi transfer from an
+  earlier demo run. It renders as a cash row now (the history icon falls through
+  to 🇰🇪). Left alone rather than edited — rewriting settled history to make a
+  UI tidier is a worse habit than an odd-looking row.
 - NOT "live anchor payouts" — that phrase was in this file and was wrong. The
   Stellar ledger half is proven and the anchor half has never run; see the
   Stellar section.
+- Deployment capabilities are now published (Aug 2026): GET /api/health carries
+  `capabilities: { simulation, sandbox }`. The app's "Add money" card was hard
+  wired to /api/simulate/sepa-deposit and shown to everyone, but that route is
+  dev-only — 403 in production, and 403 off a loopback socket — and NOTHING in
+  any response told the client which mode it was in, so the only way to find
+  out was to press the button and read the error. The browser now renders the
+  deposit control only where the API would accept it and shows real transfer
+  instructions everywhere else. The client default is `simulation: false`, so a
+  failed probe hides a control the server might refuse rather than offering one
+  it will. Public on purpose: it is deployment state, not account state,
+  /api/health already publishes contract addresses, and the simulate routes are
+  gated on the flag AND a loopback socket, so the value buys an attacker
+  nothing one refused request would not.
 - Reconciler (July 2026): services/api/src/reconcile.ts compares Monerium's
   processed issue orders against what we mirrored, plus on-chain invariants
   (totalCredited == sum of balances; vault tokens cover credit). Reports
@@ -641,7 +675,7 @@ front of someone whose salary is in the account.
    both chains we care about are covered.
    THE CATCH: **USDC/USDT only. No EURe.** Our vault holds EURe, so a card
    cannot spend the balance directly. Either the user keeps a USDC sleeve, or
-   we convert on demand — which the cash/UPI rails already do (FxSwapper /
+   we convert on demand — which the cash rail already does (FxSwapper /
    JIT RFQ), so the machinery exists. Note this puts EUR/USD FX between a
    user's balance and their card spend; on the RECIPIENT side that question
    disappears, since they can be paid in USDC and spend it.

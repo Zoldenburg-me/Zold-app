@@ -679,8 +679,6 @@ export const CRYPTO_IN = {
 export const FX = {
   SPREAD_BPS: 50, // our FX spread
   FIXED_FEE_EUR: 0.99,
-  // UPI is a point-of-sale rail — small fixed fee, same spread.
-  UPI_FIXED_FEE_EUR: 0.29,
   QUOTE_TTL_MS: 10 * 60 * 1000,
   DAILY_CAP_EUR: 2500, // mirrors RemitVault.dailyCap
   // FP5: max on-chain rate drift between quote and execution before the

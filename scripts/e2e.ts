@@ -147,20 +147,20 @@ for (const [name, url] of [[`api :${API_PORT}`, `${API}/api/health`], [`chain :$
 }
 
 try {
-  console.log("1/7 starting local chain…");
+  console.log("1/8 starting local chain…");
   spawnBg(process.execPath, [bin("hardhat"), "node", "--port", RPC_PORT]);
   await waitForRpc(RPC_URL);
 
-  console.log("2/7 deploying contracts…");
+  console.log("2/8 deploying contracts…");
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit" });
   assert.equal(dep.status, 0, "deploy failed");
 
-  console.log("3/7 starting API…");
+  console.log("3/8 starting API…");
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   spawnBg(process.execPath, [bin("tsx"), "services/api/src/server.ts"]);
   await waitFor(`${API}/api/health`);
 
-  console.log("4/7 creating user + SEPA deposit of €250…");
+  console.log("4/8 creating user + SEPA deposit of €250…");
   const user = await api("/api/users", { name: "E2E Tester", country: "DE" });
   assert.ok(user.sessionToken, "account creation returns a session token");
   sessionToken = user.sessionToken;
@@ -185,7 +185,7 @@ try {
     address: newDevice().address,
   });
 
-  console.log("5/7 quoting €100 EUR->KES…");
+  console.log("5/8 quoting €100 EUR->KES…");
   const quote = await api("/api/quotes", { userId: user.id, sendEur: 100 });
   assert.ok(quote.receiveKes > 0, "quote has a KES amount");
   // Derived from the pinned rates above, not from hardcoded constants: the
@@ -197,7 +197,7 @@ try {
   assert.ok(quote.midRate > quote.fxRate, "mid should sit above the all-in rate");
   assert.equal(quote.marginBps, 50, "margin is measured against the live mid");
 
-  console.log("6/7 executing transfer…");
+  console.log("6/8 executing transfer…");
   const { result: transfer } = await sendTransfer({
     quoteId: quote.id,
     recipientName: "Joseph Otieno",
@@ -230,7 +230,7 @@ try {
   assert.equal(done.state, "PAID");
   assert.equal(done.txs.at(-1).step, "bridge.settle");
 
-  console.log("8/9 SEPA bank payout of €40…");
+  console.log("8/8 SEPA bank payout of €40…");
   const sepaQuote = await api("/api/quotes", { userId: user.id, sendEur: 40, rail: "sepa" });
   assert.equal(sepaQuote.receiveEur, 40 - 0.99, "sepa quote: fee only, no FX");
   const { result: sepaTransfer } = await sendTransfer({
@@ -244,25 +244,12 @@ try {
   const afterSepa = await api(`/api/users/${user.id}`);
   assert.equal(afterSepa.balanceEur, 110, "balance after cash + sepa transfers");
 
-  console.log("9/9 UPI payment of ₹2000 (scan-and-pay)…");
-  const upiQuote = await api("/api/quotes", { userId: user.id, rail: "upi", receiveInr: 2000 });
-  // Same pinned legs as the cash rail: swapper EUR->USD, feed USD->INR.
-  const expectedEur = 2000 / (PIN.USD * (PIN.INR / PIN.USD) * (1 - 0.005)) + 0.29;
-  assert.ok(Math.abs(upiQuote.sendEur - expectedEur) < 0.02, `upi quote ${upiQuote.sendEur} ≈ ${expectedEur}`);
-  const { result: upiTransfer } = await sendTransfer({
-    quoteId: upiQuote.id,
-    recipientVpa: "chaistand@okicici",
-  });
-  assert.equal(upiTransfer.state, "PAID", `upi state: ${upiTransfer.state} ${upiTransfer.error ?? ""}`);
-  assert.match(upiTransfer.upi.utr, /^\d{12}$/, "12-digit UTR issued");
-  assert.equal(upiTransfer.liquidity.provider, "fx-swapper", "upi rail records internal JIT liquidity provider");
-  assert.equal(upiTransfer.liquidity.tokenOut, "USDC", "upi rail settles through USDC");
-  assert.equal(upiTransfer.txs.length, 3, "upi rail: debit + approve + swap txs");
-  const final = await api(`/api/users/${user.id}`);
-  assert.equal(final.balanceEur, Math.round((110 - upiQuote.sendEur) * 100) / 100, "balance after upi payment");
+  // A rail the API no longer serves must be refused at the quote, not
+  // half-accepted and discovered later in the orchestrator.
+  await expectApiStatus("/api/quotes", 400, { userId: user.id, sendEur: 20, rail: "upi" });
 
   console.log("      FP4: a payment signed by anyone but the device is refused…");
-  const balanceBefore = final.balanceEur;
+  const balanceBefore = afterSepa.balanceEur;
   const attackQuote = await api("/api/quotes", { userId: user.id, sendEur: 20, rail: "sepa" });
   const attackTransfer = await api("/api/transfers", {
     quoteId: attackQuote.id,
@@ -278,7 +265,7 @@ try {
   await expectApiDeleteStatus("/api/session", 204);
   await expectApiStatus(`/api/users/${user.id}`, 401);
 
-  console.log("\nE2E PASSED — cash corridor + SEPA exit rail + UPI scan-and-pay");
+  console.log("\nE2E PASSED — cash corridor + SEPA exit rail");
 } finally {
   for (const c of children) c.kill();
 }

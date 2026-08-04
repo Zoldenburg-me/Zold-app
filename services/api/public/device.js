@@ -79,8 +79,6 @@ export function destinationCommitment(rail, target) {
   let preimage;
   if (rail === "sepa") {
     preimage = `sepa|iban=${(target.iban ?? "").replace(/\s/g, "").toUpperCase()}`;
-  } else if (rail === "upi") {
-    preimage = `upi|vpa=${(target.vpa ?? "").trim().toLowerCase()}`;
   } else {
     preimage = `cash|phone=${(target.phone ?? "").trim()}`;
   }
