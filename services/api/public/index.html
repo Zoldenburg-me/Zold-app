@@ -177,6 +177,18 @@
     mask-image: radial-gradient(80% 70% at 50% 45%, #000, transparent);
   }
   .onb-hero-inner { position: relative; padding: 3rem; max-width: 460px; width: 100%; }
+  /**
+   * One hero per step, driven entirely by which step is visible — no JS, which
+   * is the constraint this restyle works under.
+   *
+   * :has() reads the state the wizard already keeps (the .hidden class the
+   * handlers toggle on #onb-step1/#onb-step2), so there is nothing to keep in
+   * sync. Step one's panel is the default, so a browser without :has() simply
+   * shows it throughout rather than showing nothing.
+   */
+  .onb-hero-inner.hero-2 { display: none; }
+  #onboard:has(#onb-step2:not(.hidden)) .hero-1 { display: none; }
+  #onboard:has(#onb-step2:not(.hidden)) .hero-2 { display: block; }
   .onb-hero h2 {
     font-size: 2.15rem; font-weight: 700; letter-spacing: -.03em; line-height: 1.15;
     color: #fff; margin-bottom: .6rem;
@@ -196,7 +208,11 @@
   }
 
   /* ---------- setting-up + review screens ---------- */
-  #provisioning { display: none; min-height: 100vh; place-items: center; padding: 1.5rem; }
+  /* Same split as onboarding, so step three is not a lone card on a black
+     field. enterProvisioning() sets display:grid, which is what these columns
+     need — do not change that to flex. */
+  #provisioning { display: none; min-height: 100vh; grid-template-columns: 1fr 1.05fr; }
+  .prov-left { display: grid; place-items: center; padding: 2rem 1.6rem; background: var(--side-bg); }
   .prov-card {
     width: 100%; max-width: 430px; background: var(--panel);
     border: 1px solid var(--border); border-radius: 18px; padding: 2rem 1.8rem;
@@ -331,9 +347,9 @@
      phone it would push the actual form off the first screen, and this is a
      product people will mostly open on a phone. */
   @media (max-width: 900px) {
-    #onboard { grid-template-columns: 1fr; }
+    #onboard, #provisioning { grid-template-columns: 1fr; }
     .onb-hero { display: none; }
-    .onb-left { padding: 1.4rem 1.3rem 2rem; }
+    .onb-left, .prov-left { padding: 1.4rem 1.3rem 2rem; }
     .onb-form { max-width: 420px; }
     .onb-form h1 { font-size: 1.7rem; }
     .prov-card { padding: 1.6rem 1.3rem; border-radius: 16px; }
@@ -563,7 +579,8 @@
          thing that reads as a demo rather than a product, and it teaches the
          reader nothing about what the account is. -->
     <div class="onb-hero">
-      <div class="onb-hero-inner">
+      <!-- Step 1: what the account is. -->
+      <div class="onb-hero-inner hero-1">
         <h2>A euro account that reaches home.</h2>
         <div class="tag">Money arrives by normal bank transfer and leaves as cash or a bank payment, with the rate and fee shown before you send.</div>
         <div class="onb-points">
@@ -595,25 +612,92 @@
           and holds no licence of its own.
         </div>
       </div>
+
+      <!-- Step 2: why the passkey matters. Deliberately makes no promise about
+           recovering a lost device — the guardian ceremony is not a finished
+           product flow, and onboarding is the worst place to imply otherwise. -->
+      <div class="onb-hero-inner hero-2">
+        <h2>Only this device can spend it.</h2>
+        <div class="tag">Your passkey is the account's signature. It is created here, it stays here, and it is what every payment is checked against.</div>
+        <div class="onb-points">
+          <div class="onb-point">
+            <span class="pi">🔑</span>
+            <span>
+              <span class="pt">Nothing to remember</span>
+              <span class="pd">Face ID, your fingerprint or your screen lock. No password, no seed phrase, nothing to write down.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">✍️</span>
+            <span>
+              <span class="pt">You sign the amount and the recipient</span>
+              <span class="pd">Both are fixed before you approve, so a payment cannot be re-priced or redirected after the fact.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">🚫</span>
+            <span>
+              <span class="pt">We cannot move your balance</span>
+              <span class="pd">Our server pays the network fee and submits what you signed. It cannot authorise a payment of its own.</span>
+            </span>
+          </div>
+        </div>
+        <div class="onb-foot">
+          Keep this device. A passkey lives on the device that created it, so
+          setting one up on your everyday phone or laptop is the right choice.
+        </div>
+      </div>
     </div>
   </section>
 
   <!-- ============ provisioning flow ============ -->
   <section id="provisioning">
-    <div class="prov-card">
-      <h1>Setting up your account</h1>
-      <div class="sub">This happens once, and it is the real thing — not a preview. It usually takes under a minute.</div>
-      <!-- provStep() indexes these four in order; keep the count and the
-           .pstep/.pdot structure. Wording is plain on purpose: "deploying your
-           smart wallet (gasless)" told a non-crypto reader nothing. -->
-      <div id="prov-steps">
-        <div class="pstep"><span class="pdot">✓</span><span class="ptext">Creating your account</span></div>
-        <div class="pstep"><span class="pdot">✓</span><span class="ptext">Setting up your wallet <span class="pwhy">— we cover the network fee</span></span></div>
-        <div class="pstep"><span class="pdot">✓</span><span class="ptext">Connecting to Monerium <span class="pwhy">— your e-money issuer</span></span></div>
-        <div class="pstep"><span class="pdot">✓</span><span class="ptext">Issuing your IBAN</span></div>
+    <div class="prov-left">
+      <div class="prov-card">
+        <h1>Setting up your account</h1>
+        <div class="sub">This happens once, and it is the real thing — not a preview. It usually takes under a minute.</div>
+        <!-- provStep() indexes these four in order; keep the count and the
+             .pstep/.pdot structure. Wording is plain on purpose: "deploying your
+             smart wallet (gasless)" told a non-crypto reader nothing. -->
+        <div id="prov-steps">
+          <div class="pstep"><span class="pdot">✓</span><span class="ptext">Creating your account</span></div>
+          <div class="pstep"><span class="pdot">✓</span><span class="ptext">Setting up your wallet <span class="pwhy">— we cover the network fee</span></span></div>
+          <div class="pstep"><span class="pdot">✓</span><span class="ptext">Connecting to Monerium <span class="pwhy">— your e-money issuer</span></span></div>
+          <div class="pstep"><span class="pdot">✓</span><span class="ptext">Issuing your IBAN</span></div>
+        </div>
+        <div class="error hidden" id="prov-err"></div>
+        <button class="ghost wide hidden" id="btn-skip">Continue without finishing</button>
       </div>
-      <div class="error hidden" id="prov-err"></div>
-      <button class="ghost wide hidden" id="btn-skip">Continue without finishing</button>
+    </div>
+    <!-- Step 3's hero: what is being made, while it is being made. -->
+    <div class="onb-hero">
+      <div class="onb-hero-inner">
+        <h2>Nearly there.</h2>
+        <div class="tag">Three things are being created for you, once. You will not do this again on this device.</div>
+        <div class="onb-points">
+          <div class="onb-point">
+            <span class="pi">👛</span>
+            <span>
+              <span class="pt">A wallet only you control</span>
+              <span class="pd">Created with the passkey you just made. We cover the network fee for it.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">🏦</span>
+            <span>
+              <span class="pt">A euro IBAN</span>
+              <span class="pd">Issued through Monerium and attached to your account, ready to receive transfers.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">⏱️</span>
+            <span>
+              <span class="pt">Usually under a minute</span>
+              <span class="pd">If a step stalls, you can carry on and finish it from your account later.</span>
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
