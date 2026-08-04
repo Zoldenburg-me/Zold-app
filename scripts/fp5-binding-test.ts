@@ -78,7 +78,6 @@ try {
     fxRate: 1,
     receiveKes: 12950,
     receiveEur: 0,
-    receiveInr: 0,
     midRate: 1,
     marginBps: 0,
     effectiveRate: 1,

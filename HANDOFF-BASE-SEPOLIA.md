@@ -11,7 +11,7 @@ at that time, not copied from a spec.
 ## 1. What this is
 
 Zold moves euros across a border. A user gets a real IBAN, is paid into it, and
-the balance can be sent out three ways: cash pickup, SEPA transfer, or UPI.
+the balance can be sent out two ways: cash pickup or SEPA transfer.
 
 The part that matters for testing: **balances live in a contract, and only the
 user's own key can authorise spending them.** The server submits transactions
