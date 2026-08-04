@@ -1,7 +1,6 @@
 /**
- * Refund guard test: on a non-local RPC, FP3 compensation must not mint mock
- * EURe as a "refund". It must park the transfer for manual review until a
- * treasury-funded refund path exists.
+ * Refund guard test: on a non-local RPC, FP3 compensation must not pretend a
+ * Safe refund happened when the chain call cannot be verified.
  */
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
@@ -41,20 +40,24 @@ store.addTransfer({
   state: "FAILED",
   sendEur: 100,
   receiveKes: 12950,
-  txs: [{ step: "vault.debit", hash: "0xdebited" }],
+  fundingSource: "safe",
+  txs: [{ step: "safe.transfer(orchestrator)", hash: "0xdebited" }],
   createdAt: now,
   updatedAt: now,
 });
 
-const t = await compensateTransfer("t-refund-guard");
+await assert.rejects(
+  () => compensateTransfer("t-refund-guard"),
+  /fetch failed|getaddrinfo|ENOTFOUND|network/i,
+);
+const t = store.findTransfer("t-refund-guard")!;
 
-assert.equal(t.state, "MANUAL_REVIEW");
-assert.match(t.error ?? "", /refusing on non-local RPC/);
+assert.equal(t.state, "FAILED");
 assert.equal(t.refund, undefined, "no refund record should be written without moving value");
 assert.equal(
-  t.txs.some((x: any) => x.step === "vault.refundCredit"),
+  t.txs.some((x: any) => x.step === "safe.refundTransfer"),
   false,
-  "mock refund credit must not be submitted on a non-local RPC",
+  "Safe refund must not be recorded unless the transaction was submitted",
 );
 
-console.log("REFUND GUARD TEST PASSED — non-local compensation parks in MANUAL_REVIEW instead of minting");
+console.log("REFUND GUARD TEST PASSED — failed chain refund does not record a fake credit");

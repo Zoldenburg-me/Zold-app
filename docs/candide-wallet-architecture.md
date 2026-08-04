@@ -52,14 +52,11 @@ Default transfer:
    token, amount, expiry, and rail match the authorized terms.
 5. Backend relays and sponsors the UserOperation, then orchestrates payout.
 
-Current implementation note: live Monerium deposits already land in the user's
-Safe, and the API returns both `safeBalanceEur` and `vaultBalanceEur`.
-`balanceEur` remains the vault ledger until Safe-funded sends land.
-The transfer executor is still vault-first, and the transitional poller can
-move funds from Safe to `RemitVault` with the server-held Safe owner key. That
-is useful for proving the old executor, but not the target custody model; the
-one-time allowance/policy delegate path is the intended migration for making
-Safe-held funds spendable.
+Current implementation note: live Monerium deposits land in the user's Safe,
+and the API now treats `safeBalanceEur` as `balanceEur`. Remittance funding is
+Safe-first; remaining server-side Safe signing is temporary local/demo debt
+until the one-time allowance/policy delegate path can submit user-approved
+Safe operations without storing wallet keys.
 
 Scheduled transfer:
 

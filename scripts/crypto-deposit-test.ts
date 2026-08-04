@@ -1,9 +1,9 @@
 /**
- * Crypto in — USDC arriving at an account becomes a spendable EUR balance.
+ * Crypto in — USDC arriving at a payment page settles into the user's Safe.
  *
  * Detection runs against a real chain: USDC really moves on-chain to a watched
  * address, and the poller reads the Transfer log it emits. Conversion is real
- * too — the swap and the vault credit are the production ones.
+ * too — the swap settles EURe into the Safe.
  *
  * The middle step is what cannot run here. Moving tokens out of a user's Safe
  * needs Candide's bundler and paymaster, and no hardhat node has either; a
@@ -91,11 +91,11 @@ try {
   const { smartAccountFor } = await import("../services/api/src/wallet/candide.js");
   initStore();
 
-  const vaultBalanceOf = async (who: `0x${string}`) =>
+  const safeBalanceOf = async (who: `0x${string}`) =>
     eur.fromWei(
       (await publicClient.readContract({
-        address: addrs().vault,
-        abi: abis.RemitVault,
+        address: addrs().eure,
+        abi: abis.MockToken,
         functionName: "balanceOf",
         args: [who],
       })) as bigint,
@@ -194,7 +194,7 @@ try {
       /no deployed Safe/.test(d.reason ?? "") && /still yours/.test(d.reason ?? ""),
       d.reason ?? "",
     );
-    check("nothing was credited", (await vaultBalanceOf(ann.address)) === 0);
+    check("nothing was settled", (await safeBalanceOf(ann.address)) === 0);
   }
 
   console.log("4/8 a swept deposit converts and becomes spendable EUR…");
@@ -217,20 +217,20 @@ try {
     check(
       "the swap and the credit are both on the record",
       d.txs.some((x) => x.step.includes("usdc-eure")) &&
-        d.txs.some((x) => x.step === "vault.creditDeposit"),
+        !d.txs.some((x) => x.step.includes("vault")),
       d.txs.map((x) => x.step).join(","),
     );
-    const bal = await vaultBalanceOf(bo.address);
-    check("the balance is spendable in the vault", Math.abs(bal - d.creditedEur!) < 0.001, `€${bal}`);
+    const bal = await safeBalanceOf(bo.address);
+    check("the balance is spendable in the Safe", Math.abs(bal - d.creditedEur!) < 0.001, `€${bal}`);
   }
 
   console.log("5/8 the same deposit is never credited twice…");
   {
     const d = store.cryptoDeposits.find((x) => x.userId === bo.id)!;
-    const balBefore = await vaultBalanceOf(bo.address);
+    const balBefore = await safeBalanceOf(bo.address);
     const again = await convertDeposit(d);
     check("converting an already-converted deposit is a no-op", again.state === "CONVERTED");
-    check("the balance did not move", (await vaultBalanceOf(bo.address)) === balBefore, `€${balBefore}`);
+    check("the balance did not move", (await safeBalanceOf(bo.address)) === balBefore, `€${balBefore}`);
 
     // Rewind the cursor so the poller re-reads Ann's original log.
     const countBefore = store.cryptoDeposits.length;
@@ -255,7 +255,7 @@ try {
       "an opted-out account is not watched at all",
       !store.cryptoDeposits.some((x) => x.userId === optedOut.id),
     );
-    check("and keeps a zero EUR balance", (await vaultBalanceOf(optedOut.address)) === 0);
+    check("and keeps a zero EUR balance", (await safeBalanceOf(optedOut.address)) === 0);
   }
 
   console.log("7/8 a venue price off the market is refused…");
@@ -272,7 +272,7 @@ try {
       /bps from the live mid/.test(d.reason ?? ""),
       d.reason ?? "",
     );
-    check("no euros were credited at the bad price", (await vaultBalanceOf(cass.address)) === 0);
+    check("no euros were settled at the bad price", (await safeBalanceOf(cass.address)) === 0);
   }
 
   console.log("8/8 a USDC-settled page does not turn the payment into euros…");
@@ -281,7 +281,7 @@ try {
     const seeded = await seedSweptDeposit(dana, 25);
     const d = await convertDeposit(seeded);
     check("it records the USDC settlement target", d.state === "CONVERTED" && d.settlementAsset === "USDC", d.state);
-    check("it does not credit euro balance", (await vaultBalanceOf(dana.address)) === 0);
+    check("it does not credit euro balance", (await safeBalanceOf(dana.address)) === 0);
     check("the USDC amount is recorded", d.creditedUsdc === 25, `${d.creditedUsdc}`);
   }
 

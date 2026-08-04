@@ -1,6 +1,11 @@
 /**
- * End-to-end test of the full corridor: chain up -> deploy -> API up ->
- * create user -> SEPA deposit -> quote -> transfer -> cash pickup.
+ * End-to-end API smoke test: chain up -> deploy -> API up -> create user ->
+ * SEPA deposit -> quote -> authorization guard.
+ *
+ * RemitVault has been abandoned, so hardhat-only local users can no longer
+ * execute remittances through a fake ledger. Full remittance execution now
+ * requires a deployed Safe/bundler path; local e2e verifies the API refuses to
+ * pretend that path ran.
  * Self-contained: starts and stops its own chain and API. Resets data/db.json
  * (demo data only — the chain state it mirrors dies with the chain anyway).
  * Run: npm run e2e
@@ -197,67 +202,37 @@ try {
   assert.ok(quote.midRate > quote.fxRate, "mid should sit above the all-in rate");
   assert.equal(quote.marginBps, 50, "margin is measured against the live mid");
 
-  console.log("6/8 executing transfer…");
-  const { result: transfer } = await sendTransfer({
-    quoteId: quote.id,
-    recipientName: "Joseph Otieno",
-    recipientPhone: "+254700000000",
-  });
-  assert.equal(transfer.state, "PAYOUT_READY", `transfer state: ${transfer.state} ${transfer.error ?? ""}`);
-  assert.ok(transfer.pickup.referenceCode.length === 8, "pickup reference issued");
-  assert.ok(transfer.txs.some((tx: any) => tx.step === "cctp.dry-run.plan"), "cash rail records a CCTP dry-run plan");
-  assert.equal(transfer.liquidity.provider, "fx-swapper", "cash rail records internal JIT liquidity provider");
-  assert.equal(transfer.liquidity.side, "EURE_TO_USDC", "cash rail routes EUR value through USDC");
-  assert.equal(Number(transfer.liquidity.expectedOut), Math.round(transfer.usdcOut * 1e6), "liquidity output matches USDC leg");
-  assert.ok(
-    transfer.txs.some((tx: any) => tx.step === "liquidity.fx-swapper.eure-usdc"),
-    "cash rail executes through the liquidity layer",
+  console.log("6/8 local remittance refuses undeployed Safe execution…");
+  await assert.rejects(
+    () =>
+      sendTransfer({
+        quoteId: quote.id,
+        recipientName: "Joseph Otieno",
+        recipientPhone: "+254700000000",
+      }),
+    /Safe .* is not deployed/,
   );
-  assert.ok(transfer.txs.some((tx: any) => tx.step === "cctp.mint.prepared"), "cash rail records prepared Stellar mint");
-  assert.ok(transfer.txs.some((tx: any) => tx.step === "bridge.lockForPayout"), "dry-run keeps local escrow for demo completion");
   await expectApiStatus("/api/transfers", 409, {
     quoteId: quote.id,
     recipientName: "Replay Receiver",
     recipientPhone: "+254711111111",
   });
   const after = await api(`/api/users/${user.id}`);
-  assert.equal(after.balanceEur, 150, "balance reduced by send amount");
+  assert.equal(after.balanceEur, 250, "failed local remittance moved no money");
 
-  console.log(`      pickup code ${transfer.pickup.referenceCode}, recipient gets KES ${transfer.receiveKes}`);
-
-  console.log("7/8 simulating cash pickup…");
-  const done = await api("/api/simulate/pickup", { transferId: transfer.id });
-  assert.equal(done.state, "PAID");
-  assert.equal(done.txs.at(-1).step, "bridge.settle");
-
-  console.log("8/8 SEPA bank payout of €40…");
-  const sepaQuote = await api("/api/quotes", { userId: user.id, sendEur: 40, rail: "sepa" });
-  assert.equal(sepaQuote.receiveEur, 40 - 0.99, "sepa quote: fee only, no FX");
-  const { result: sepaTransfer } = await sendTransfer({
-    quoteId: sepaQuote.id,
-    recipientName: "Elena Weber",
-    recipientIban: "DE89 3704 0044 0532 0130 00",
-  });
-  assert.equal(sepaTransfer.state, "PAID", `sepa state: ${sepaTransfer.state} ${sepaTransfer.error ?? ""}`);
-  assert.equal(sepaTransfer.sepa.mode, "mock");
-  assert.equal(sepaTransfer.txs.length, 1, "sepa rail: single debit tx");
-  const afterSepa = await api(`/api/users/${user.id}`);
-  assert.equal(afterSepa.balanceEur, 110, "balance after cash + sepa transfers");
-
-  // A rail the API no longer serves must be refused at the quote, not
-  // half-accepted and discovered later in the orchestrator.
+  console.log("7/8 refusing the retired UPI rail…");
   await expectApiStatus("/api/quotes", 400, { userId: user.id, sendEur: 20, rail: "upi" });
 
-  console.log("      FP4: a payment signed by anyone but the device is refused…");
-  const balanceBefore = afterSepa.balanceEur;
+  console.log("8/8 FP4: a payment signed by anyone but the device is refused…");
+  const balanceBefore = after.balanceEur;
   const attackQuote = await api("/api/quotes", { userId: user.id, sendEur: 20, rail: "sepa" });
   const attackTransfer = await api("/api/transfers", {
     quoteId: attackQuote.id,
     recipientName: "Mallory Attacker",
     recipientIban: "DE89 3704 0044 0532 0130 00",
   });
-  // The server holds the orchestrator key and every user record — and still
-  // cannot produce an authorization the vault will accept.
+  // The server holds the executor key and every user record — and still cannot
+  // produce the browser device authorization.
   const forged = await signTerms(newDevice(), attackTransfer.authorization.typedData);
   await expectApiStatus(`/api/transfers/${attackTransfer.id}/authorize`, 502, { signature: forged });
   const afterAttack = await api(`/api/users/${user.id}`);
@@ -265,7 +240,7 @@ try {
   await expectApiDeleteStatus("/api/session", 204);
   await expectApiStatus(`/api/users/${user.id}`, 401);
 
-  console.log("\nE2E PASSED — cash corridor + SEPA exit rail");
+  console.log("\nE2E PASSED — Safe-first API refuses fake local remittance execution");
 } finally {
   for (const c of children) c.kill();
 }

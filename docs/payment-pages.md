@@ -58,9 +58,10 @@ Two other things it would touch, worth knowing before starting:
 - **Detection.** `crypto-deposits.ts` watches `user.address`. Stealth means
   watching many addresses per account, or scanning ERC-5564 announcements —
   a different shape of poller, not a longer address list.
-- **Payout.** The vault credits are keyed to `user.address`. Payments landing
-  on stealth accounts need sweeping into the funding account before they are
-  spendable, which is the same Safe-move problem the crypto-in sweep has.
+- **Payout.** Balances are keyed to the merchant Safe. Payments landing on
+  stealth accounts need Safe-native movement into the merchant account before
+  they are spendable, which is the same Safe-move problem the crypto-in sweep
+  has.
 
 ## Handles are enumerable
 

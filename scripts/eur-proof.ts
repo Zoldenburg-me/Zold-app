@@ -2,10 +2,10 @@
  * EUR corridor proof — against the real Monerium sandbox, not a stub.
  *
  * Everything else in this repo proves the EUR path against mocks: e2e credits
- * the vault with a local shortcut, the webhook test uses a stub Monerium, and
+ * the Safe with a local shortcut, the webhook test uses a stub Monerium, and
  * `simulateSepaDeposit` never touches a bank. Those prove our code is
  * self-consistent. They cannot prove that a euro arriving at a real IBAN
- * becomes EURe on the sandbox chain, that we mirror the right amount, or that
+ * becomes EURe on the sandbox chain, that we record the right amount, or that
  * a redeem burns it again and sends SEPA out.
  *
  * This walks that round trip and checks each leg against an authority outside
@@ -14,7 +14,7 @@
  *   1. Monerium has an approved IBAN for the account          (Monerium API)
  *   2. A deposit arrives and mints EURe on the sandbox chain  (Monerium + chain)
  *   3. The chain balance matches what Monerium says it issued (chain)
- *   4. Our vault mirrors the same amount                      (local store)
+ *   4. Our local receipt state records the same amount        (local store)
  *   5. A redeem burns EURe and is accepted for SEPA payout    (Monerium + chain)
  *
  * Step 2 needs a human: Monerium's sandbox has no API to originate an inbound
@@ -181,29 +181,10 @@ for (const o of issues.slice(-3)) {
 }
 
 console.log("\n3. Minted on the sandbox chain");
-/**
- * The euros do not necessarily sit in the Safe.
- *
- * On a chain where the vault holds Monerium's real EURe, a working mirror
- * moves a deposit straight out of the Safe and into the vault — so checking
- * the Safe alone reported "the mint did not land" at the exact moment
- * everything had worked. What proves the mint is that the euros exist on
- * chain in one of the two places we control.
- */
-const { createPublicClient: mkClient } = await import("viem");
-const vaultAddr = (await import("../services/api/src/config.js")).loadDeployments().vault;
-const inVault = (await chain.readContract({
-  address: vaultAddr,
-  abi: [{ type: "function", name: "balanceOf", stateMutability: "view",
-          inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }] }],
-  functionName: "balanceOf",
-  args: [address],
-})) as bigint;
-const credited = Number(inVault) / 1e18;
-const onChain = balance + credited;
-ok(`${eur(balance)} in the Safe + ${eur(credited)} credited in the vault = ${eur(onChain)}`);
+const onChain = balance;
+ok(`${eur(onChain)} in the Safe`);
 if (onChain <= 0) {
-  no("Monerium says it issued, but neither the Safe nor the vault holds anything — the mint did not land.");
+  no("Monerium says it issued, but the Safe holds nothing — the mint did not land.");
   process.exit(1);
 }
 if (onChain + 0.005 < issuedEur) {
@@ -211,12 +192,12 @@ if (onChain + 0.005 < issuedEur) {
 }
 
 /* ---------- 4. our mirror agrees ---------- */
-console.log("\n4. Our vault mirrors it");
+console.log("\n4. Our mirror records it");
 const mirrored = issues.filter((o) => store.isOrderProcessed(o.id));
 if (mirrored.length === issues.length) {
-  ok(`all ${issues.length} deposit(s) mirrored into the local vault`);
+  ok(`all ${issues.length} deposit(s) recorded locally`);
 } else {
-  no(`${issues.length - mirrored.length} deposit(s) NOT mirrored — the poller or webhook missed them`);
+  no(`${issues.length - mirrored.length} deposit(s) NOT recorded — the poller or webhook missed them`);
   todo("start the stack so the deposit poller runs, or POST the order id to /api/webhooks/monerium");
 }
 
@@ -242,20 +223,6 @@ console.log("\nEUR CORRIDOR PROVEN — deposit minted, mirrored, and redeemed fo
 }
 
 if (balance < REDEEM_EUR) {
-  // A redeem burns from the Safe, and a mirrored deposit has already left it.
-  // That is not a failure — it is the mirror doing its job — but this script
-  // cannot drive a redeem from here without re-implementing the payout path
-  // (debit -> forward to Safe -> redeem), which the orchestrator owns.
-  if (credited >= REDEEM_EUR) {
-    ok(`${eur(credited)} is credited in the vault, not the Safe — as intended`);
-    todo(
-      `a redeem burns from the Safe, so it runs through the payout path\n` +
-        `       (vault.debit -> forward to Safe -> redeem), not from here. Send a SEPA\n` +
-        `       transfer in the app to exercise it.`,
-    );
-    console.log("\nDEPOSIT LEG PROVEN — issued, minted on chain, moved into the vault and credited.\n");
-    process.exit(0);
-  }
   no(`only ${eur(balance)} in the Safe; need at least ${eur(REDEEM_EUR)} to test a redeem`);
   todo("deposit more, or lower EUR_PROOF_REDEEM_EUR");
   process.exit(2);

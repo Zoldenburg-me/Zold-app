@@ -1,7 +1,11 @@
 /**
- * FP3 test: force a failure after the bridge lock (deepest point) and assert
- * the compensation path — escrow released, vault re-credited, REFUNDED state,
- * itemized refund record. Also checks the no-debit failure needs no refund.
+ * FP3 local API guard.
+ *
+ * After RemitVault removal, a hardhat-only user has a counterfactual Safe but
+ * no Candide bundler/paymaster to deploy or execute it. The API must fail
+ * before pretending a local remittance moved funds. The detailed Safe refund
+ * compensation path is pinned by `safe-funded-recovery-test.ts`, which seeds
+ * the post-Safe-spend state directly.
  * Runs its own chain/API on shifted ports. Run: npm run fp3:test
  */
 // Must be first: pins the chain/keys before config.js reads the environment.
@@ -86,22 +90,15 @@ try {
   const device = newDevice();
   await registerDevice(api, user.id, device);
 
-  console.log("3/5 €100 cash transfer — fails after bridge lock…");
+  console.log("3/5 €100 cash transfer — refuses undeployed local Safe…");
   const quote = await api("/api/quotes", { userId: user.id, sendEur: 100, rail: "cash" });
-  const t = await sendTransfer(api, device, {
-    quoteId: quote.id, recipientName: "X", recipientPhone: "+254700000000",
-  });
-
-  console.log("4/5 asserting compensation…");
-  assert.equal(t.state, "REFUNDED", `state: ${t.state} (${t.error ?? ""})`);
-  const steps = t.txs.map((x: any) => x.step);
-  assert.ok(steps.includes("bridge.lockForPayout"), "reached the bridge");
-  assert.ok(steps.includes("bridge.release"), "escrow released");
-  assert.ok(steps.includes("vault.refundCredit"), "vault re-credited");
-  assert.ok(t.refund && t.refund.amountEur > 99 && t.refund.amountEur <= 100.01, `refund ≈ €100, got ${t.refund?.amountEur}`);
+  await assert.rejects(
+    () => sendTransfer(api, device, { quoteId: quote.id, recipientName: "X", recipientPhone: "+254700000000" }),
+    /Safe .* is not deployed/,
+  );
   const after = await api(`/api/users/${user.id}`);
-  assert.ok(Math.abs(after.balanceEur - 250) < 0.02, `balance restored, got €${after.balanceEur}`);
-  console.log(`      refunded €${t.refund.amountEur} from ${t.refund.recoveredFrom}; balance €${after.balanceEur}`);
+  assert.ok(Math.abs(after.balanceEur - 250) < 0.02, `balance untouched, got €${after.balanceEur}`);
+  console.log(`      refused before movement; balance still €${after.balanceEur}`);
 
   console.log("5/5 pre-debit failure needs no refund…");
   // Force-fail earliest step via a fresh quote against a user with no funds:
@@ -115,7 +112,7 @@ try {
   });
   assert.equal(r2.status, 400, "insufficient balance rejected before any debit");
 
-  console.log("\nFP3 TEST PASSED — failed transfer auto-refunded, escrow released, balance restored");
+  console.log("\nFP3 TEST PASSED — local undeployed Safe does not fake a remittance");
 } finally {
   for (const c of children) c.kill();
 }
