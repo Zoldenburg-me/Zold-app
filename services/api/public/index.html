@@ -2200,20 +2200,24 @@ function renderUser(u) {
    €7.99 card tier.
    ========================================================================== */
 
-/** The design's three figures, mapped onto the three the API reports.
+/** The design's three figures, mapped onto what the API reports.
  *
- *  "Total in safe" is everything the account holds — EURe sitting in the Safe
- *  plus whatever the vault ledger has credited. "Available" is what the
- *  transfer executor can actually spend today, which is the vault ledger.
- *  "In flight" is summed from transfers that have left CREATED but not reached
- *  a terminal state; nothing on-chain reports it, so it is derived here. */
+ *  There is ONE balance now: the EURe in the user's Safe. This used to add a
+ *  local vault ledger on top, and removing RemitVault removed that ledger and
+ *  `vaultBalanceEur` with it — leaving the term in would have added a
+ *  permanent zero and read as if a second pot still existed.
+ *
+ *  So "total" and "available" are the same number, and that is honest rather
+ *  than redundant: an in-flight transfer has already moved its EURe out of the
+ *  Safe, so the Safe balance is both what the account holds and what it can
+ *  spend. "In flight" is summed from transfers that have left CREATED but not
+ *  reached a terminal state; nothing on-chain reports it, so it is derived. */
 function mobileFigures(u) {
-  const safe = u.safeBalanceEur ?? 0;
-  const vault = u.vaultBalanceEur ?? 0;
+  const safe = u.safeBalanceEur ?? u.balanceEur ?? 0;
   const live = ["DEBITED", "SWAPPED", "BRIDGED", "PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING",
     "PAYOUT_FUNDED", "PAYOUT_READY", "PAYOUT_SUBMITTED"];
   const inflight = hist.filter((t) => live.includes(t.state)).reduce((n, t) => n + (t.sendEur || 0), 0);
-  return { total: safe + vault, available: u.balanceEur ?? 0, inflight };
+  return { total: safe, available: u.balanceEur ?? safe, inflight };
 }
 
 function renderMobile(u = user) {
@@ -2699,7 +2703,10 @@ function mTimeline(t) {
   const cash = t.rail === "cash";
   const steps = [
     { t: "Quote locked", d: `quote ${String(t.quoteId || "").slice(0, 8)}` },
-    { t: "Debited from your safe", d: t.txs?.find((x) => x.step.includes("debit") || x.step.includes("safe.transfer"))?.hash?.slice(0, 18) || "waiting" },
+    /* One funding source now that the vault ledger is gone: the move out of
+       the user's own Safe. DEBIT_STEP in orchestrator.ts is the list — if a
+       third source is ever added there, it has to be matched here too. */
+    { t: "Debited from your safe", d: t.txs?.find((x) => x.step.startsWith("safe.transfer"))?.hash?.slice(0, 18) || "waiting" },
     { t: cash ? "Anchor session opened" : "Redeem order placed", d: cash ? (t.pickup?.anchorTransactionId || "—") : (t.sepa?.orderId || t.sepa?.state || "—") },
     { t: cash ? "Converted and bridged" : "Sent over SEPA", d: t.txs?.find((x) => x.step.startsWith("liquidity") || x.step.startsWith("cctp"))?.step || (t.sepa?.state ?? "—") },
     { t: cash ? "Collected" : "Paid", d: t.state },
@@ -2866,7 +2873,7 @@ function renderProfileScreen() {
   const safe = u.passkeySafe;
   const security = [
     { icon: "fingerprint", t: "Passkey", d: "Signs in and approves payments", st: u.passkey?.publicKey ? "Registered" : "Not set" },
-    { icon: "key", t: "Device spending key", d: "The vault will not debit without it", st: u.authorizerAddress ? "Bound" : "Not bound" },
+    { icon: "key", t: "Device spending key", d: "Signs the amount and the payee before anything moves", st: u.authorizerAddress ? "Bound" : "Not bound" },
     { icon: "group", t: "2-of-2 co-signer", d: "Second owner on your smart account", st: safe?.cosignerAddress ? "Enabled" : "Not enabled" },
     { icon: "health_and_safety", t: "Managed recovery", d: "Guardian can restore a lost passkey", st: safe?.recovery?.status === "active" ? "Active" : "Not enabled" },
   ];
