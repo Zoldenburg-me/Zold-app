@@ -8,7 +8,7 @@ Everything Zold talks to, what it needs from us, and whether getting it costs a 
 |---|---|
 | ✅ Have it (sandbox) | Monerium, Candide, Stellar, Circle CCTP |
 | 🟢 Self-serve — no call, ~10 min each | RPC provider, LI.FI, rates feed, Stripe standard |
-| 🔴 Needs a form/email first | Monerium **production**, a real KYC provider — plus Bridge if we go that way |
+| 🔴 Needs a form/email first | Monerium **production**, a real KYC provider — plus Bridge |
 
 Only **two** are hard blockers: Monerium production and a KYC provider. Everything else is either self-serve or optional. Full call list in §1.
 
