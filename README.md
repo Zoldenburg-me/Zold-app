@@ -43,7 +43,7 @@ Running this repo with sandbox credentials, today:
   than a fresh stealth address per visit, so it is **not private** and the page
   says so; see docs/payment-pages.md. `npm run pay:test` (20 checks).
 - **Wallets**: each user's account is a Safe smart account, deployed to
-  Sepolia through Candide's bundler. Deployment costs the user nothing;
+  Base Sepolia through Candide's bundler. Deployment costs the user nothing;
   gas is sponsored. Monerium verifies ownership via EIP-1271, so the IBAN
   belongs to the contract wallet, not to us.
   A passkey registration now also records the deterministic 2-of-2
@@ -69,6 +69,22 @@ Running this repo with sandbox credentials, today:
   It runs in dry-run mode until `npm run cctp:readiness` sees a funded Base
   Sepolia burner and Stellar treasury, then `CCTP_LIVE=1` submits burn,
   attestation polling, and Stellar `mint_and_forward`.
+- **Live FX**: quotes are built from a live mid feed, not constants. The
+  EUR→USD leg comes from whichever liquidity venue would actually fill it, so a
+  quote cannot promise a rate the swap will not honour, and the margin shown on
+  a receipt is *measured* between the mid and what we deliver rather than
+  asserted. A dead feed refuses to quote rather than serving a stale rate.
+- **Liquidity without a treasury**: the EURe→USDC leg routes through LI.FI,
+  which aggregates across venues — real quotes came back 4–17bps off mid on
+  Gnosis, Base and Polygon. With more than one venue configured, `best`
+  execution quotes them in parallel and takes the better price, records what
+  the losers offered, and refuses outright rather than falling back to our own
+  book. Positive slippage is measured and goes to the user by default.
+  Every quote's implied rate is checked against the independent mid and refused
+  beyond a band — an AMM pool is wherever the last trade left it, and a thin one
+  can be moved.
+- **Two front doors**: `/` is the landing page, `/app` is the account. The app's
+  assets are absolute so it serves from any path.
 - **Passkeys**: onboarding registers a WebAuthn credential and returning
   users sign in with it.
 - **Travel Rule data**: cash pickup is a money transmission, so the anchor is
@@ -122,10 +138,19 @@ Running this repo with sandbox credentials, today:
   Safe is counterfactual, so there is nothing to sweep from and every deposit
   is refused for that reason — detection, conversion, pricing and crediting are
   all covered by tests, the sweep between them is not. On a real chain the
-  sweep works but only `fx-swapper` can execute the USDC→EURe leg: Bebop does
-  not support EURe and the CoW provider is quote-only. So the venue that can
-  execute is the mock whose rate we set, which is what the live-mid check
-  exists to bound.
+  sweep works but no venue has executed a real swap yet — LI.FI has no testnet
+  and there is no EURe pool on Base Sepolia to route through, so the only thing
+  that can settle locally is the mock whose rate we set. That is what the
+  live-mid check exists to bound.
+- No real swap has executed on any liquidity venue. LI.FI quotes live but has
+  no testnet; the Uniswap adapter can run on Base Sepolia but there is no
+  EURe/USDC pool there to trade against, and seeding one needs EURe, which has
+  no faucet. `npm run dex:setup` creates a pool when you can fund it — and a
+  seeded testnet pool is a fixture, not a market: both sides would be ours.
+- The Stellar payout leg moves value on a real ledger — payment, memo, signing
+  and submission are proven on testnet — but no anchor has ever been paid.
+  Stellar's test anchor never publishes a withdrawal account over SEP-24 or
+  SEP-6, so the anchor half runs first against MoneyGram's own anchor.
 - Payment-page QR codes are decoded by an independent decoder (`jsqr`) in
   `npm run pay:test`, which is what caught the format-bit placement bug that
   our own round-trip could not. No phone camera has scanned one, which is a
@@ -136,8 +161,8 @@ Running this repo with sandbox credentials, today:
 - Nothing screens the sending address. Converting an unsolicited transfer from
   an unknown counterparty into e-money is a source-of-funds question, and no
   code here answers it.
-- FX rates come from constants, not an oracle. The swap contract is a
-  stand-in for a DEX route.
+- Nothing hedges FX. Rates are live and a quote binds to execution, but the
+  exposure between the two is carried, not laid off.
 - The UPI partner and the MoneyGram payout (in mock mode) return generated
   reference numbers. The shapes match the real APIs so swapping in a
   licensed partner is adapter work.
@@ -155,10 +180,13 @@ You need Node 22 or newer. Nothing else.
 ```sh
 npm install
 npm run compile        # build the contracts
-npm run test:contracts # 38 tests against a throwaway chain
+npm run test:contracts # 41 tests against a throwaway chain
 npm run e2e            # one script: deposit, then all three payout rails
 npm run dev            # chain + contracts + API + UI on localhost:3000
+npm run check          # every suite: contracts, e2e, and ~25 focused harnesses
 ```
+
+`http://localhost:3000/` is the landing page; the app is at `/app`.
 
 The API binds to `127.0.0.1` by default. Set `TRANSF_API_HOST` only for a
 deliberate remote demo; mock mutation endpoints stay disabled on non-local
@@ -178,6 +206,9 @@ sandbox setups. The short version:
   send. Fund a key with Sepolia ETH and USDC from
   [faucet.circle.com](https://faucet.circle.com), set `CCTP_LIVE=1`, and it
   sends them.
+- **Liquidity**: `npm run lifi:test`, `npm run dex:test` and `npm run best:test`
+  cover the venues offline. `npm run dex:setup` reports what a real testnet swap
+  still needs and refuses with the reason when it cannot proceed.
 
 ## How it's put together
 
@@ -190,10 +221,13 @@ services/api/src/
   chain.ts           viem clients for the local chain
   adapters/          monerium (real), moneygram/anchor, upi (mock)
   wallet/candide.ts  Safe deployment + EIP-1271 signing
+  rates.ts           live FX mids; refuses rather than quoting stale
+  liquidity.ts       venue providers + best-execution routing + surplus
+  dex.ts             Uniswap v3 pools, quoting, the mid-deviation guard
   bridge/cctp.ts     Base -> Stellar burn/attest/mint worker
   stellar/anchor.ts  SEP-10 auth, SEP-24 withdrawals
 contracts/src/       RemitVault, FxSwapper, BridgeEscrow, MockToken
-services/api/public/ the UI — one HTML file, no build step
+services/api/public/ landing.html + index.html (the app), no build step
 scripts/             deploy, dev stack, e2e, sandbox checks
 ```
 
@@ -219,14 +253,17 @@ meant to be read in one sitting.
 
 - `npm run dev` resets the local chain and the demo users each start.
 - Quotes lock a rate for ten minutes; nothing hedges the exposure.
+- `LIQUIDITY_SURPLUS_POLICY` defaults to `user`. The receipt's margin is
+  measured against the live mid, so keeping positive slippage would make that
+  number understate what we take — `treasury` is supported and still records
+  the amount, so the spread can be disclosed rather than hidden.
 - Production must set `KYC_AUTO_APPROVE=0` and replace the local mock-review
   seam with a real KYC provider before issuing IBANs or allowing payments.
   Pending or rejected accounts are visible in the UI, but the approval decision
   must still come from a provider/operator path, not the user's own session.
-- Existing Monerium users need a per-user OAuth connection before they can skip
-  duplicate KYC. The repo has the path-selection seam; see
-  [HANDOFF-MONERIUM-CONNECT.md](HANDOFF-MONERIUM-CONNECT.md) for the remaining
-  OAuth and IBAN-linking work.
+- Existing Monerium users can connect their own account instead of repeating
+  KYC. The loop is built and tested against a stub; nobody has connected a real
+  Monerium account in a browser yet.
 - Monerium webhooks verify the documented `webhook-signature` HMAC when
   `MONERIUM_WEBHOOK_SECRET=whsec_...` is set; leave it unset only for local
   sandbox polling or stubbed tests.
