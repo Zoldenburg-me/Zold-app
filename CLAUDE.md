@@ -293,6 +293,57 @@ moment an anchor actually publishes an account.
   of silently swallowing it). npm run webhook:test covers it with a stub
   Monerium.
 
+## Mobile app + PWA (Aug 2026) — IN PROGRESS on a branch
+
+Branch `claude/remove-upi-and-onboarding-restyle`, pushed, **PR not opened**.
+Ten commits: UPI removal, onboarding restyle, landing-page sync, PWA layer,
+then the mobile app. Merge or continue from there, not from main.
+
+DESIGN SOURCE: `~/Downloads/Zold Mobile Dashboard Redesign.zip` — the user's
+Claude Design export. `README.md` in it is a real spec (tokens, screens,
+behaviour, state); build `Zold Mobile Noir.dc.html`, the approved variant.
+The landing page came from a separate export, already applied.
+
+BUILT: mobile shell (412px column, bottom nav Add·Send·Zold·Activity·Profile),
+Noir home/safe card, Add funds + bank + wallet, Zold Plus, the whole send flow
+(country → method → amount → recipient → progress), Activity, Profile.
+NOT BUILT: Pay hub, transaction detail, KYC gate/pending screens.
+
+THE RULE APPLIED THROUGHOUT, agreed with the user: where the design shows
+something the API cannot back, it is visibly unavailable — never faked. The
+savings vault, USD accounts and Zold Plus say SOON; the send flow offers the
+two corridors the API prices (EUR->KES, EUR->EUR) and states that more open
+with partners rather than listing 182 countries that dead-end at the quote;
+Zold Plus shows no price because that tier does not exist, and links to the
+Privacy Bundle that does. Quotes, signing and the progress timeline are real —
+the timeline reads the transfer's own state, not a timer.
+
+OPEN QUESTION, raised three times and still unanswered: the handoff's own Noir
+file is half-converted. Home and the send flow use the documented tokens (12px
+radii, mono labels); Activity, Profile, Plus and KYC in that same file use
+40-56px round avatars and 16/14px M3 type, contradicting the handoff's
+"nothing above 12px, 50% only for status dots". Both looks are now in the app
+because each screen followed the file. Decide before building the last three.
+
+NEVER OBSERVED: a successful send through the mobile flow. `npm run dev` cannot
+fund an account here — .env carries Monerium sandbox credentials so
+/api/simulate/sepa-deposit refuses ("make a simulated SEPA transfer from the
+portal"), and provisioning stalls on CANDIDE_CHAIN_ID=84532 against chain
+31337. Quote, validation and refusal paths are proven; debited -> bridged ->
+paid has only been exercised through its state-mapping logic. Use `npm run api`
+against Base Sepolia with a funded account to close that.
+
+PWA: manifest, generated icons (a committed pure-Python PNG writer — no
+imaging library exists on this machine), and a shell service worker whose one
+hard rule is that NOTHING under /api/ is cached. Proven by killing the server:
+the app still opens and API calls return a 503 the UI prints. The offline bar
+is driven by BOTH navigator.onLine and api() failing, because a dead server on
+live wifi reports onLine true.
+BEFORE SHIPPING INSTALL: on iOS a home-screen web app may get storage separate
+from Safari. The FP4 device key lives in localStorage and only the current
+authorizer may rotate it, so onboarding in Safari then installing could strand
+an account. Untested on a real device; test before offering install.
+
 ## Security gate (red-team, July 2026 — fix before any hosted/public demo)
 Sessions+authz landed (PR #2). FP1+FP2 DONE (July 2026): simulate endpoints
 403 in production (ALLOW_SIMULATION=1 to override), mock fallback fail-closed
