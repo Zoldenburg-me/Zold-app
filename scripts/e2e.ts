@@ -152,20 +152,20 @@ for (const [name, url] of [[`api :${API_PORT}`, `${API}/api/health`], [`chain :$
 }
 
 try {
-  console.log("1/6 starting local chain…");
+  console.log("1/8 starting local chain…");
   spawnBg(process.execPath, [bin("hardhat"), "node", "--port", RPC_PORT]);
   await waitForRpc(RPC_URL);
 
-  console.log("2/6 deploying contracts…");
+  console.log("2/8 deploying contracts…");
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit" });
   assert.equal(dep.status, 0, "deploy failed");
 
-  console.log("3/6 starting API…");
+  console.log("3/8 starting API…");
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   spawnBg(process.execPath, [bin("tsx"), "services/api/src/server.ts"]);
   await waitFor(`${API}/api/health`);
 
-  console.log("4/6 creating user + SEPA deposit of €250…");
+  console.log("4/8 creating user + SEPA deposit of €250…");
   const user = await api("/api/users", { name: "E2E Tester", country: "DE" });
   assert.ok(user.sessionToken, "account creation returns a session token");
   sessionToken = user.sessionToken;
@@ -190,7 +190,7 @@ try {
     address: newDevice().address,
   });
 
-  console.log("5/6 quoting €100 EUR->KES…");
+  console.log("5/8 quoting €100 EUR->KES…");
   const quote = await api("/api/quotes", { userId: user.id, sendEur: 100 });
   assert.ok(quote.receiveKes > 0, "quote has a KES amount");
   // Derived from the pinned rates above, not from hardcoded constants: the
@@ -202,7 +202,7 @@ try {
   assert.ok(quote.midRate > quote.fxRate, "mid should sit above the all-in rate");
   assert.equal(quote.marginBps, 50, "margin is measured against the live mid");
 
-  console.log("6/6 local remittance refuses undeployed Safe execution…");
+  console.log("6/8 local remittance refuses undeployed Safe execution…");
   await assert.rejects(
     () =>
       sendTransfer({
@@ -220,7 +220,10 @@ try {
   const after = await api(`/api/users/${user.id}`);
   assert.equal(after.balanceEur, 250, "failed local remittance moved no money");
 
-  console.log("      FP4: a payment signed by anyone but the device is refused…");
+  console.log("7/8 refusing the retired UPI rail…");
+  await expectApiStatus("/api/quotes", 400, { userId: user.id, sendEur: 20, rail: "upi" });
+
+  console.log("8/8 FP4: a payment signed by anyone but the device is refused…");
   const balanceBefore = after.balanceEur;
   const attackQuote = await api("/api/quotes", { userId: user.id, sendEur: 20, rail: "sepa" });
   const attackTransfer = await api("/api/transfers", {

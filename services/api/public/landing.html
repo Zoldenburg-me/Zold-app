@@ -4,9 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Zold — euros in, local payouts out</title>
-<meta name="description" content="Zold gives you a personal IBAN, holds your euros as regulated e-money in your own smart account, and sends them out by SEPA bank transfer, cash pickup in Kenya, or UPI in India." />
+<meta name="description" content="Zold gives you a personal IBAN, holds your euros as regulated e-money in your own smart account, and sends them out by SEPA bank transfer or cash pickup in Kenya." />
 <meta property="og:title" content="Zold — euros in, local payouts out" />
-<meta property="og:description" content="Deposit by IBAN, hold your balance in a smart account, and send to bank accounts, cash pickup, or UPI through a clear approval flow." />
+<meta property="og:description" content="Deposit by IBAN, hold your balance in a smart account, and send to bank accounts or cash pickup through a clear approval flow." />
 <meta property="og:type" content="website" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 18'%3E%3Cpath d='M1.6 1.4 L18.4 1.4 L10 16.2 Z' fill='none' stroke='%23ed188d' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -54,9 +54,16 @@
         <span style="width:6px; height:6px; border-radius:50%; background:#3dd68c; box-shadow:0 0 8px #3dd68c"></span><span>Sandbox live · Monerium IBAN + EURe<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
       </div>
 
-      <h1 style="margin:22px 0 0; font-size:clamp(44px,8.2vw,96px); line-height:.94; font-weight:600; letter-spacing:-.045em; color:#fbf9fc; text-wrap:balance">Euros on chain.</h1>
+      <!-- Hero headline. The design carries three variants and this is the one
+           selected there; the other two are kept here so switching is one line
+           rather than a redesign:
+             Euros on chain.   font-size:clamp(44px,8.2vw,96px); letter-spacing:-.045em; + text-wrap:balance
+             #SendMoneyOnChain font-size:clamp(38px,7vw,84px);   letter-spacing:-.045em
+           The wordmark says less than "Euros on chain." does, so the line
+           below it is carrying the explanation — keep it descriptive. -->
+      <h1 style="margin:22px 0 0; font-size:clamp(52px,9vw,108px); line-height:.92; font-weight:600; letter-spacing:-.05em; color:#fbf9fc">Zold</h1>
 
-      <p style="margin:20px auto 0; max-width:585px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Deposit by IBAN, hold EURe in a smart account, and send to bank accounts, cash pickup, or UPI through a clear approval flow.</p>
+      <p style="margin:20px auto 0; max-width:585px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Deposit by IBAN, hold EURe in a smart account, and send to bank accounts or cash pickup through a clear approval flow.</p>
 
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:30px">
         <a href="/app" style="display:inline-flex; align-items:center; height:46px; padding:0 26px; border-radius:999px; background:#ed188d; color:#fff; font-size:14.5px; font-weight:600; box-shadow:0 10px 34px rgba(237,24,141,.4)" class="pill">Launch app</a>
@@ -139,10 +146,6 @@
           <span style="font-size:11.5px; color:#8a8a94">Cash · KE<a href="#notes" style="color:#ed188d; font-size:9px; vertical-align:super">2</a></span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-qr-code"></i></span>
-          <span style="font-size:11.5px; color:#8a8a94">UPI · IN<a href="#notes" style="color:#ed188d; font-size:9px; vertical-align:super">3</a></span>
-        </div>
-        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
           <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-shield-check"></i></span>
           <span style="font-size:11.5px; color:#8a8a94">Safe</span>
         </div>
@@ -169,7 +172,7 @@
           <div style="margin-top:20px; display:flex; align-items:flex-end; justify-content:space-between; gap:16px">
             <div>
               <div style="font-size:10.5px; letter-spacing:.1em; color:#5b5b66">ACCOUNT HOLDER</div>
-              <div style="margin-top:4px; font-size:13.5px; color:#cfcfd8">Amara Njoku</div>
+              <div style="margin-top:4px; font-size:13.5px; color:#cfcfd8">Miriam Zoldenburg</div>
             </div>
             <div style="text-align:right">
               <div style="font-size:10.5px; letter-spacing:.1em; color:#5b5b66">HELD AS</div>
@@ -197,27 +200,27 @@
   <section style="padding:clamp(38px,5vw,58px) 24px; text-align:center">
     <div style="font-size:11px; font-weight:600; letter-spacing:.16em; color:#5b5b66">SUPERVISED AND BUILT ON</div>
     <div style="display:flex; flex-wrap:wrap; justify-content:center; align-items:flex-start; gap:clamp(14px,2.6vw,32px); margin-top:24px; max-width:1000px; margin-left:auto; margin-right:auto">
-      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px">
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
         <img src="assets/logo-cbi.png" alt="Central Bank of Iceland" width="140" height="80" style="width:140px; height:80px; object-fit:contain" />
         <span style="font-size:13px; font-weight:600; letter-spacing:-.01em; color:#8a8a94; text-align:center">Central Bank of Iceland</span>
-        <span style="font-size:10.5px; line-height:1.35; color:#5b5b66">Supervisor</span>
+        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Supervisor</span>
       </div>
-      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px">
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
         <img src="assets/logo-monerium.png" alt="Monerium" width="140" height="80" style="width:140px; height:80px; object-fit:contain" />
         <span style="font-size:13px; font-weight:600; letter-spacing:-.01em; color:#8a8a94; text-align:center">Monerium</span>
-        <span style="font-size:10.5px; line-height:1.35; color:#5b5b66">Your euros</span>
+        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Your euros</span>
       </div>
-      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px">
-        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#4f4f59">MoneyGram</span>
-        <span style="font-size:10.5px; line-height:1.35; color:#5b5b66">Cash pickup</span>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
+        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#8a8a94">MoneyGram</span>
+        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Cash pickup</span>
       </div>
-      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px">
-        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#4f4f59">Safe</span>
-        <span style="font-size:10.5px; line-height:1.35; color:#5b5b66">Smart accounts</span>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
+        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#8a8a94">Safe</span>
+        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Smart accounts</span>
       </div>
-      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px">
-        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#4f4f59">SEPA Instant</span>
-        <span style="font-size:10.5px; line-height:1.35; color:#5b5b66">Euro transfers</span>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
+        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#8a8a94">SEPA Instant</span>
+        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Euro transfers</span>
       </div>
     </div>
     <p style="margin:clamp(26px,3.4vw,38px) auto 0; max-width:70ch; font-size:12.5px; line-height:1.65; color:#8a8a94"><span style="color: rgb(237, 237, 240); font-weight: 600;">Zold is not a bank.</span> Your euros are issued and held as e-money by Monerium ehf., supervised by the Central Bank of Iceland .<a href="#notes" style="color: rgb(237, 24, 141); font-size: 10px; vertical-align: super;">1</a> <a href="#notes" style="color: rgb(232, 169, 205);">Full notes</a>.</p>
@@ -328,9 +331,8 @@
           <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">1</sup> Your IBAN is issued and your euros are held as e-money (EURe) by Monerium ehf. (registered in Iceland No. 550512-1060), authorised as an Electronic Money Institution and as a Virtual Asset Service Provider by the Financial Supervisory Authority of the Central Bank of Iceland under Act No. 17/2013 governing the issuance of electronic money and Act No. 18/2018 governing measures for countering money laundering. SEPA payouts are executed as Monerium redemption orders. Zold operates against Monerium's sandbox environment; it is software, holds no licence of its own, and is not separately regulated in any jurisdiction.</p>
         </div>
         <div>
-          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CASH PICKUP AND UPI</div>
-          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">2</sup> Cash pickup is implemented against the SEP-10 / SEP-24 anchor protocol and verified against a public test anchor. No commercial payout agreement is in place; references returned in sandbox mode are generated, and production availability depends on a licensed partner. Cash pickup is a money transmission, so sender identity data is provided to the anchor before a withdrawal opens, and a payout is refused rather than opened when required details are missing.</p>
-          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">3</sup> UPI payments are executed through a mock partner adapter whose responses match the production API shape. Reference numbers are generated. FX rates are indicative and refreshed from a rate endpoint where available; a quote locks a rate for ten minutes and expires rather than repricing silently.</p>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CASH PICKUP</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">2</sup> Cash pickup is implemented against the SEP-10 / SEP-24 anchor protocol and verified against a public test anchor. No commercial payout agreement is in place; references returned in sandbox mode are generated, and production availability depends on a licensed partner. Cash pickup is a money transmission, so sender identity data is provided to the anchor before a withdrawal opens, and a payout is refused rather than opened when required details are missing. FX rates are indicative and refreshed from a rate endpoint where available; a quote locks a rate for ten minutes and expires rather than repricing silently.</p>
         </div>
         <div>
           <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CUSTODY AND APPROVALS</div>
