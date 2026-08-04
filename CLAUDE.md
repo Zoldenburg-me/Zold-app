@@ -349,16 +349,39 @@ layout's right-hand column with a selector that outranks anything scoped to
 `.m-step`, so every timeline rendered with no nodes and no connecting line —
 including the shipped send progress screen, silently, for several commits.
 
-NEVER OBSERVED: a successful send through the mobile flow. `npm run dev` cannot
-fund an account here — .env carries Monerium sandbox credentials so
-/api/simulate/sepa-deposit refuses ("make a simulated SEPA transfer from the
-portal"), and provisioning stalls on CANDIDE_CHAIN_ID=84532 against chain
-31337. Quotes are real and were seen live (EUR->KES priced off the live mid);
-validation and refusal paths are proven; debited -> bridged -> paid has only
-been exercised through its state-mapping logic. Activity and transaction detail
-were verified by rendering realistic Transfer objects into `hist` — the render
-code is real, the transfers were fixtures. Use `npm run api` against Base
-Sepolia with a funded account to close both gaps.
+HOW FAR A SEND ACTUALLY RUNS (Aug 2026, re-measured after the RemitVault
+merge). Not "never observed" any more — the wall moved, and it is worth knowing
+exactly where it now is.
+
+PROVEN, locally, through the mobile UI: device key bound -> POST /api/quotes
+(live mid, EUR->KES) -> POST /api/transfers -> device signs the EIP-712
+PaymentAuthorization -> POST /authorize -> orchestrator runs ->
+`assertDeviceAuthorization` PASSES. That last step is the one worth recording:
+after RemitVault was deleted the signature is verified in the API process, and
+this proves that path accepts a real browser-generated signature.
+
+THE WALL: `transferTokenFromSafe` throws "Safe 0x… is not deployed — cannot
+move tokens from it" (wallet/candide.ts:331, called from orchestrator.ts:235,
+i.e. AFTER the authorization check). The Safe address is counterfactual and can
+only be deployed through Candide's bundler on CANDIDE_CHAIN_ID=84532, which
+does not exist on local hardhat 31337. Nothing about the send flow fixes this;
+`npm run api` against Base Sepolia with a funded, deployed Safe is the only way
+past it, and debited -> bridged -> paid is still unexercised beyond its
+state-mapping logic.
+
+FUNDING NOW, since `scripts/credit-test.ts` was DELETED with RemitVault: there
+is no ledger to credit any more, so mint MockToken EURe straight to the user's
+Safe address from hardhat account 0 (the token owner) and `refresh()` picks it
+up. /api/simulate/sepa-deposit still refuses in sandbox mode.
+
+Activity and transaction detail were verified by rendering realistic Transfer
+objects into `hist` — the render code is real, the transfers were fixtures.
+
+BALANCE FIGURES CHANGED SHAPE: `accountBalances` now returns only
+`balanceEur === safeBalanceEur`; `vaultBalanceEur` is gone. `mobileFigures`
+reports total == available deliberately — there is one pot, and an in-flight
+transfer has already left the Safe, so the Safe balance is both what is held
+and what is spendable. Do not "fix" that into a subtraction.
 
 HOW TO SEE THE KYC GATE LOCALLY, because this costs an hour otherwise:
 `npm run dev` CANNOT show it. `scripts/_test-env.ts` sets
@@ -419,6 +442,27 @@ FP3 DONE (July 2026): failures auto-compensate (escrow release + vault
 re-credit at current rates, itemized deductions, REFUNDED state), startup +
 5-min sweep recovers stranded transfers; FORCE_FAIL_STEP test hook,
 npm run fp3:test.
+!! STALE SINCE THE REMITVAULT REMOVAL (Aug 2026) — READ THIS FIRST !!
+`contracts/src/RemitVault.sol` NO LONGER EXISTS. It was deleted on main by
+`break/remove-remit-vault`, and that PR did not update this file, so everything
+below describing RemitVault.debit / setAuthorizer / _isValidSignature describes
+a contract that is gone — including the whole "FP4 completion — recovery"
+section further down, whose steps 3 and 4 name functions you cannot call.
+WHAT IS ACTUALLY TRUE NOW: the same EIP-712 PaymentAuthorization is signed by
+the same browser device key, but it is verified by `assertDeviceAuthorization`
+in services/api/src/orchestrator.ts using viem's verifyTypedData — in the API
+process, not by bytecode. The EIP-712 domain moved to "TransF Safe Transfer"
+with the user's Safe as verifyingContract.
+THE SECURITY CONSEQUENCE, stated plainly because the text below claims the
+opposite as VERIFIED: a wrong-key signature is no longer "rejected by the
+contract itself". The server is the thing checking, and it still holds
+`user.privateKey` (FP4's open half), so a compromised or modified API can move
+EURe out of a user's Safe. The device key still stops a stolen session from
+swapping the payee or the amount; it no longer stops the server. Whether that
+trade was intended is a decision for the repo owner — this note records the
+divergence, it does not resolve it. The recovery plan below needs rewriting
+against whatever replaces the vault as the enforcement point.
+
 FP4 (key custody): SPEND-AUTHORITY HALF DONE (July 2026, PR #11, branch
 claude/fp4-vault-authorization — do not re-do differently). RemitVault.debit
 now requires an EIP-712 PaymentAuthorization signed by the account's
