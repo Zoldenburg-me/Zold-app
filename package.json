@@ -21,6 +21,7 @@
     "webauthn:selftest": "tsx scripts/webauthn-selftest.ts",
     "fp3:test": "tsx scripts/fp3-test.ts",
     "safe-funded:test": "tsx scripts/safe-funded-recovery-test.ts",
+    "faucet:test": "tsx scripts/faucet-test.ts",
     "crypto:test": "tsx scripts/crypto-deposit-test.ts",
     "pay:test": "tsx scripts/pay-page-test.ts",
     "kyc:test": "tsx scripts/kyc-test.ts",
