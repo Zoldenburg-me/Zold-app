@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 
-const INTERVAL_MS = 15_000; // Poll every 15s
+const INTERVAL_MS = 20 * 60 * 1000; // Poll every 20 minutes
 
 function run(cmd: string): string {
   try {
