@@ -28,23 +28,11 @@ inbound port to firewall.
 
 ## Steps after that
 
-!! BOTH TOOLCHAIN BINARIES ARE arm64 AND THIS MACHINE IS INTEL. `file
-.toolchain/bin/cloudflared` says `Mach-O 64-bit executable arm64`, and
-`.toolchain/node-v22.17.0-darwin-arm64` is the same story, so every command
-below — and every `npm run` script — dies with `Bad CPU type in executable`.
-`arch -arm64` does not help; it reports `Unknown architecture`, because there is
-no Apple Silicon here to translate to. Before this deployment can be driven from
-this Mac, fetch the `darwin-amd64` cloudflared build and use the system node
-(nvm v24.13.0 is installed and is x86_64). The steps themselves are unchanged.
+`cloudflared` 2026.7.3 (`x86_64` build for Intel Mac) is installed at `.toolchain/bin/cloudflared`. Node.js `v24.13.0` is available via `~/.nvm/versions/node/v24.13.0/bin` (configured in `~/.zshrc`).
 
-`cloudflared` 2026.7.3 is installed at `.toolchain/bin/cloudflared` (gitignored,
-next to node, since this machine has no brew). Either use the full path or:
-
-    export PATH="$PWD/.toolchain/bin:$PATH"
-
-    cloudflared tunnel login
-    cloudflared tunnel create zold
-    cloudflared tunnel route dns zold zoldhq.com
+    ./.toolchain/bin/cloudflared tunnel login
+    ./.toolchain/bin/cloudflared tunnel create zold
+    ./.toolchain/bin/cloudflared tunnel route dns zold zoldhq.com
 
 Write `~/.cloudflared/config.yml` (substitute the id printed by `create`):
 

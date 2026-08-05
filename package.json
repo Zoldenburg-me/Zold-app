@@ -74,5 +74,8 @@
   },
   "overrides": {
     "adm-zip": "0.6.0"
+  },
+  "optionalDependencies": {
+    "@esbuild/darwin-x64": "^0.28.1"
   }
 }
