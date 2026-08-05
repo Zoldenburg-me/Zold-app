@@ -10,7 +10,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, IS_PRODUCTION, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
@@ -60,8 +60,10 @@ import {
 } from "./recovery.js";
 import { submitGuardianRecovery } from "./recovery-signer.js";
 import {
+  abis,
   addrs,
   accountBalances,
+  deployerWallet,
   assertChainMatches,
   warnIfSmartAccountChainDiffers,
   destinationCommitment,
@@ -1990,6 +1992,30 @@ app.post(
   }),
 );
 
+/**
+ * Deployer float for the ops dashboard. The faucet and gas both spend from
+ * this address, and running it dry fails silently at onboarding time — the
+ * faucet logs "top it up" to a console nobody watches. 60s cache: the
+ * dashboard polls every 10s and two RPC reads per tick would be rude.
+ */
+let deployerFloatCache: { at: number; value: { address: string; eur: number; eth: number } } | null = null;
+async function deployerFloat() {
+  if (deployerFloatCache && Date.now() - deployerFloatCache.at < 60_000) return deployerFloatCache.value;
+  const address = deployerWallet.account.address;
+  const [eth, eure] = await Promise.all([
+    publicClient.getBalance({ address }),
+    publicClient.readContract({
+      address: addrs().eure,
+      abi: abis.MockToken,
+      functionName: "balanceOf",
+      args: [address],
+    }) as Promise<bigint>,
+  ]);
+  const value = { address, eur: eur.fromWei(eure), eth: Number(eth) / 1e18 };
+  deployerFloatCache = { at: Date.now(), value };
+  return value;
+}
+
 app.get(
   "/api/admin/stats",
   wrap(async (req, res) => {
@@ -1997,7 +2023,7 @@ app.get(
     const users = store.users;
     const transfers = store.transfers;
     const totalUsers = users.length;
-    const kycPending = users.filter((u) => u.kycStatus === "pending").length;
+    const kycPending = users.filter((u) => u.kycStatus === "pending" || u.kycStatus === "manual_review").length;
     const kycApproved = users.filter((u) => u.kycStatus === "approved").length;
     const activeSafes = users.filter((u) => u.passkeySafe?.status === "active" || u.wallet?.deployed).length;
     const totalTransfers = transfers.length;
@@ -2009,6 +2035,8 @@ app.get(
       activeSafes,
       totalTransfers,
       totalVolumeEur,
+      faucetGrantEur: TESTNET_FAUCET.grantEur || 0,
+      deployer: await deployerFloat().catch(() => null),
     });
   }),
 );
