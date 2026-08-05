@@ -1015,7 +1015,57 @@
      .m-row: same component, so the two lists cannot drift apart again. */
   #dashboard.m-on[data-msub="activity"] #m-activity-screen,
   #dashboard.m-on[data-msub="detail"] #m-detail-screen,
+  #dashboard.m-on[data-msub="share"] #m-share-screen,
   #dashboard.m-on[data-msub="profile"] #m-profile-screen { display: block; }
+
+  /* ---------- share receipt (composer) ----------
+     The handoff draws this as a 340px card beside a live 520px preview of the
+     public page. A 412px column cannot hold both, and the handoff itself says
+     "in-app this is a bottom sheet or full screen" — so it is a screen, and the
+     preview is a plain list of what the link will and will not carry. A
+     shrunken, unreadable copy of the receipt would look like a preview without
+     answering the only question the composer exists to answer.
+
+     Tokens are the APP's, not the receipt handoff's: this screen sits between
+     Activity and transaction detail, so it follows their pink and their radii.
+     The public page uses the handoff's own palette — it is a separate surface
+     with its own spec and nothing of the app's chrome around it. */
+  .m-sharegroup { padding: 13px 0; border-bottom: 1px solid var(--m-line-faint); }
+  .m-sharegroup .lab { font-size: 12.5px; font-weight: 500; color: #c9ccd1; }
+  .m-segs { display: flex; gap: 5px; margin-top: 8px; }
+  .m-segs button {
+    flex: 1; min-width: 0; padding: 7px 4px; border-radius: 7px; cursor: pointer;
+    font: 500 11px Inter, sans-serif; background: var(--m-raised);
+    border: 1px solid var(--m-line); color: var(--m-dim); transition: all .15s;
+  }
+  .m-segs button:hover { border-color: var(--m-line-strong); }
+  .m-segs button.on {
+    background: var(--m-pink-tint); border-color: var(--m-pink-border); color: var(--m-pink-soft);
+  }
+  .m-shtoggle {
+    width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+    background: transparent; border: 0; border-bottom: 1px solid var(--m-line-faint);
+    padding: 13px 0; cursor: pointer; color: var(--m-text); font-family: inherit;
+  }
+  .m-shtoggle .lab { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; color: #c9ccd1; }
+  .m-shtoggle .sub { display: block; font-size: 11px; color: var(--m-faint); font-weight: 400; margin-top: 3px; }
+  .m-track {
+    flex: none; width: 36px; height: 21px; border-radius: 11px; padding: 2px;
+    display: flex; justify-content: flex-start; background: var(--m-raised);
+    border: 1px solid var(--m-line-strong); transition: all .18s;
+  }
+  .m-track .knob { width: 15px; height: 15px; border-radius: 50%; background: #34343a; transition: all .18s; }
+  .m-shtoggle[aria-pressed="true"] .m-track { background: var(--m-pink); border-color: var(--m-pink); justify-content: flex-end; }
+  .m-shtoggle[aria-pressed="true"] .m-track .knob { background: #fff; }
+  .m-shprev { margin-top: 16px; border: 1px solid var(--m-line); border-radius: 12px; background: var(--m-card); padding: 4px 14px; }
+  .m-shprev .r { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--m-line-faint); font-size: 12px; }
+  .m-shprev .r:first-child { border-top: 0; }
+  .m-shprev .r .material-symbols-rounded { font-size: 15px; flex: none; }
+  .m-shprev .r.on .material-symbols-rounded { color: var(--m-mint); }
+  .m-shprev .r.off { color: var(--m-faint); }
+  .m-shprev .r.off .material-symbols-rounded { color: var(--m-faint); }
+  .m-shprev .r .v { margin-left: auto; font: 400 11.5px var(--m-mono); color: var(--m-dim); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-shlink { text-align: center; font: 400 10.5px var(--m-mono); color: var(--m-faint); margin-top: 10px; word-break: break-all; }
 
   /* ---------- transaction detail ---------- */
   .m-dethead { text-align: center; padding: 8px 0 4px; }
@@ -1745,6 +1795,31 @@
         <div class="m-seclabel">Settlement</div>
         <div id="m-det-timeline"></div>
         <div class="m-note warn hidden" id="m-det-error"></div>
+        <!-- Only for a transfer that has actually been authorised: a receipt for
+             something still awaiting a signature would publish an outcome that
+             has not happened. The API refuses it too. -->
+        <button class="m-cta quiet hidden" id="m-det-share">
+          <span class="material-symbols-rounded" style="font-size:18px;vertical-align:-4px;margin-right:6px">ios_share</span>Share receipt
+        </button>
+      </div>
+
+      <!-- ================= Share receipt (composer) =================
+           Pick what a recipient sees. Every selection is enforced server-side
+           at /api/r/:slug — the page never receives a withheld value, so this
+           screen is choosing what leaves the building, not what gets hidden. -->
+      <div class="m-screen" id="m-share-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="detail"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div style="padding:4px 0 2px">
+          <div style="font-size:14.5px;font-weight:600;letter-spacing:-.01em">Share receipt</div>
+          <div style="font-size:12px;line-height:1.5;color:var(--m-dim);margin-top:4px">Pick what recipients see. Everything else stays sealed.</div>
+        </div>
+        <div id="m-share-groups"></div>
+        <div id="m-share-toggles"></div>
+        <div class="m-shprev" id="m-share-preview"></div>
+        <button class="m-cta" id="m-share-copy" style="margin-top:16px">Copy share link</button>
+        <button class="m-cta quiet hidden" id="m-share-revoke" style="min-height:44px;font-size:13px;background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink)">Turn this link off</button>
+        <div class="m-shlink" id="m-share-foot"></div>
+        <div class="m-note warn hidden" id="m-share-err"></div>
       </div>
 
       <!-- ================= Profile ================= -->
@@ -2152,14 +2227,18 @@ function setReachable(ok) {
 }
 window.setReachable = setReachable;
 
-async function api(path, body) {
+/**
+ * `method` is explicit only where the verb is not implied by the body: a body
+ * means POST and no body means GET, which covers every call but DELETE.
+ */
+async function api(path, body, method) {
   const headers = {};
   if (body) headers["content-type"] = "application/json";
   if (sessionToken) headers.authorization = `Bearer ${sessionToken}`;
   let res;
   try {
     res = await fetch(path, {
-      ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
+      ...(body ? { method: method ?? "POST", body: JSON.stringify(body) } : method ? { method } : {}),
       headers,
     });
   } catch {
@@ -2353,14 +2432,15 @@ function mobileNav(target) {
   // "send" enters the flow at its first screen.
   const sub = { add: "add", bank: "bank", crypto: "crypto", send: "pay", pay: "pay", country: "country",
     method: "method", amount: "amount", recipient: "recipient", progress: "progress",
-    plus: "plus", bundle: "bundle", payment: "payment", activity: "activity", detail: "detail", profile: "profile" }[target];
+    plus: "plus", bundle: "bundle", payment: "payment", activity: "activity", detail: "detail",
+    share: "share", profile: "profile" }[target];
   shell.dataset.msub = sub || "home";
   if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
   else switchView("dashboard");
   // bank/crypto are inside Add, so the Add tab stays lit while they are open.
   const navFor = { add: "add", bank: "add", crypto: "add", send: "send", pay: "send", country: "send", method: "send",
     amount: "send", recipient: "send", progress: "send", plus: "home", bundle: "home", payment: "home",
-    home: "home", activity: "activity", detail: "activity", profile: "profile" }[target];
+    home: "home", activity: "activity", detail: "activity", share: "activity", profile: "profile" }[target];
   document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
   if (sub === "bundle") $("m-subtitle").textContent = "Zold Plus";
@@ -2370,6 +2450,7 @@ function mobileNav(target) {
   if (sub === "country") { $("m-country-q").value = ""; renderCountryList(); }
   if (sub === "activity") renderActivityScreen();
   if (sub === "detail") renderDetailScreen();
+  if (sub === "share") renderShareScreen();
   if (sub === "profile") renderProfileScreen();
   $("dashboard").querySelector(".main").scrollTop = 0;
 }
@@ -2880,10 +2961,196 @@ function paintDetail(t) {
   $("m-det-ref").classList.toggle("hidden", !(!sepa && ref));
   if (ref) $("m-det-code").textContent = ref;
   $("m-det-timeline").innerHTML = mTimeline(t).html;
+  // CREATED means the device signature has not arrived, so nothing has moved
+  // and there is no outcome to publish. The API refuses a share there too.
+  const shareBtn = $("m-det-share");
+  shareBtn.classList.toggle("hidden", t.state === "CREATED");
+  shareBtn.onclick = () => openShare(t.id);
   const err = $("m-det-error");
   err.classList.toggle("hidden", !t.error);
   if (t.error) err.innerHTML = `<span class="material-symbols-rounded" style="font-size:20px;flex:none">warning</span><div>${esc(t.error)}</div>`;
 }
+
+/* ---------- Share receipt ----------
+   The composer picks what a public receipt exposes. Nothing here enforces
+   anything: the server builds the payload and never sends a withheld value, so
+   these controls choose what leaves the building rather than what CSS hides.
+   That is why a change to a LIVE link is saved immediately — a sender who
+   narrows a selection and closes the screen has narrowed the real link, not
+   just this preview. */
+const SHARE_GROUPS = [
+  { key: "sender", label: "Your name", options: [["full", "Full"], ["first", "First"], ["last", "Last"], ["hidden", "None"]] },
+  { key: "recipient", label: "Recipient name", options: [["full", "Full"], ["first", "First"], ["last", "Last"], ["hidden", "None"]] },
+  { key: "account", label: "Payout account", options: [["full", "Full"], ["short", "Short"], ["hidden", "Hide"]] },
+  { key: "fx", label: "Currency shown", options: [["both", "Both"], ["sender", "EUR only"], ["recipient", "They get"]] },
+];
+
+/* "Reference & purpose" in the handoff. There is no purpose field on a
+   transfer — only the SEPA remittance reference a sender can type — so the
+   toggle governs what exists and is labelled for it. */
+const SHARE_TOGGLES = [
+  { key: "showRate", label: "Rate, fee & margin", sub: "The rate you got and what Zold charged" },
+  { key: "showRef", label: "Your reference", sub: "The note that rides on the payment" },
+  { key: "route", label: "Stats for nerds", sub: "Every settlement hop, with references" },
+];
+
+const SHARE_DEFAULTS = { sender: "last", recipient: "full", account: "short", fx: "both", showRate: true, showRef: true, route: false };
+let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, busy: false };
+
+function openShare(id) {
+  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, link: null, expiresAt: null, busy: false };
+  mobileNav("share");
+}
+
+async function renderShareScreen() {
+  paintShare();
+  if (!mShare.transferId) return;
+  try {
+    // An existing live share is the truth about what is already public; the
+    // screen must open showing that, not the defaults.
+    const s = await api(`/api/transfers/${mShare.transferId}/share`, undefined, "GET");
+    mShare.fields = { ...SHARE_DEFAULTS, ...s.fields };
+    mShare.link = s.url;
+    mShare.expiresAt = s.expiresAt;
+  } catch {
+    /* No live share yet — the defaults stand and the CTA will create one. */
+  }
+  paintShare();
+}
+
+function paintShare() {
+  const f = mShare.fields;
+  $("m-share-groups").innerHTML = SHARE_GROUPS.map((g) => `
+    <div class="m-sharegroup">
+      <div class="lab">${esc(g.label)}</div>
+      <div class="m-segs">${g.options.map(([id, label]) =>
+        `<button data-sgroup="${g.key}" data-sval="${id}" class="${f[g.key] === id ? "on" : ""}">${esc(label)}</button>`
+      ).join("")}</div>
+    </div>`).join("");
+
+  $("m-share-toggles").innerHTML = SHARE_TOGGLES.map((t) => `
+    <button class="m-shtoggle" data-stoggle="${t.key}" aria-pressed="${!!f[t.key]}">
+      <span class="lab">${esc(t.label)}<span class="sub">${esc(t.sub)}</span></span>
+      <span class="m-track"><span class="knob"></span></span>
+    </button>`).join("");
+
+  paintSharePreview();
+  $("m-share-revoke").classList.toggle("hidden", !mShare.link);
+  const foot = $("m-share-foot");
+  if (mShare.link) {
+    const days = Math.max(0, Math.ceil((Date.parse(mShare.expiresAt) - Date.now()) / 86400000));
+    foot.textContent = `${mShare.link.replace(/^https?:\/\//, "")} · expires in ${days} day${days === 1 ? "" : "s"}`;
+  } else {
+    foot.textContent = "A link is created when you copy it, and stays live for 30 days.";
+  }
+
+  $("m-share-groups").querySelectorAll("button").forEach((b) => {
+    b.onclick = () => setShare(b.dataset.sgroup, b.dataset.sval);
+  });
+  $("m-share-toggles").querySelectorAll("button").forEach((b) => {
+    b.onclick = () => setShare(b.dataset.stoggle, !mShare.fields[b.dataset.stoggle]);
+  });
+}
+
+/**
+ * What the link will carry, in words.
+ *
+ * The handoff renders a live 520px copy of the public page beside the pickers.
+ * At 412px that would be a preview too small to read, which answers none of
+ * the question the composer asks — so this lists each field and whether it
+ * survives, which is the same information at the size available.
+ */
+function paintSharePreview() {
+  const t = hist.find((x) => x.id === mShare.transferId) || {};
+  const f = mShare.fields;
+  const sepa = t.rail === "sepa";
+  const nameSummary = (mode, full) => {
+    const parts = String(full || "").trim().split(/\s+/);
+    if (mode === "hidden" || !parts[0]) return null;
+    if (mode === "full") return parts.join(" ");
+    if (mode === "first") return `${parts[0]} ▒▒▒▒▒`;
+    return parts.length > 1 ? `▒▒▒▒▒ ${parts.slice(1).join(" ")}` : null;
+  };
+  const acct = sepa ? t.recipientIban : t.recipientPhone;
+  const acctSummary = () => {
+    if (!acct || f.account === "hidden") return null;
+    const c = String(acct).replace(/\s+/g, "");
+    if (f.account === "full") return c.replace(/(.{4})/g, "$1 ").trim();
+    return c.length > 8 ? `${c.slice(0, 4)} ···· ${c.slice(-4)}` : null;
+  };
+  const rows = [
+    ["Your name", nameSummary(f.sender, user?.name)],
+    ["Recipient", nameSummary(f.recipient, t.recipientName)],
+    [sepa ? "Payout account" : "Mobile number", acctSummary()],
+    ["Amount", f.fx === "both" ? "Both currencies" : f.fx === "sender" ? "What you sent" : "What they get"],
+    ["Rate & fee", f.showRate ? "Shown" : null],
+    ["Your reference", t.reference ? (f.showRef ? t.reference : null) : "—"],
+    ["Settlement route", f.route ? "Shown" : null],
+  ];
+  $("m-share-preview").innerHTML = rows.map(([k, v]) => {
+    const off = v === null;
+    const shown = off ? "withheld" : v;
+    return `<div class="r ${off ? "off" : "on"}">
+      <span class="material-symbols-rounded">${off ? "visibility_off" : "visibility"}</span>
+      <span>${esc(k)}</span><span class="v">${esc(shown)}</span>
+    </div>`;
+  }).join("");
+}
+
+async function setShare(key, value) {
+  mShare.fields = { ...mShare.fields, [key]: value };
+  paintShare();
+  // Only a link that already exists needs pushing: narrowing an unpublished
+  // selection has nothing to narrow yet, and creating one here would publish a
+  // receipt the sender never asked to share.
+  if (mShare.link) await saveShare({ silent: true });
+}
+
+async function saveShare({ silent } = {}) {
+  if (mShare.busy) return null;
+  mShare.busy = true;
+  try {
+    const s = await api(`/api/transfers/${mShare.transferId}/share`, mShare.fields);
+    mShare.link = s.url;
+    mShare.expiresAt = s.expiresAt;
+    clearErr("m-share-err");
+    paintShare();
+    return s;
+  } catch (e) {
+    if (!silent) showErr("m-share-err", e);
+    return null;
+  } finally {
+    mShare.busy = false;
+  }
+}
+
+$("m-share-copy").onclick = async () => {
+  const btn = $("m-share-copy");
+  const s = mShare.link ? { url: mShare.link } : await saveShare();
+  if (!s) return;
+  try {
+    await navigator.clipboard.writeText(s.url);
+  } catch {
+    // A denied clipboard must not read as a failure to create the link — the
+    // link exists either way, and the footer under the button shows it.
+    showErr("m-share-err", new Error("could not reach the clipboard — the link is shown below"));
+    return;
+  }
+  btn.textContent = "Link copied";
+  setTimeout(() => { btn.textContent = "Copy share link"; }, 1800);
+};
+
+$("m-share-revoke").onclick = async () => {
+  try {
+    await api(`/api/transfers/${mShare.transferId}/share`, undefined, "DELETE");
+    mShare.link = null;
+    mShare.expiresAt = null;
+    clearErr("m-share-err");
+    paintShare();
+  } catch (e) {
+    showErr("m-share-err", e);
+  }
+};
 
 /* ---------- Activity ---------- */
 let mFilter = "all";
