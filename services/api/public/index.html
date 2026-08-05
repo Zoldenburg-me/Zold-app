@@ -2744,7 +2744,11 @@ async function submitMobileSend() {
       throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
     }
     const signature = await dev.signTypedData(created.authorization.typedData, credId());
-    const t = await api(`/api/transfers/${created.id}/authorize`, { signature });
+    const redeem = await moneriumRedeemAssertion(created.authorization);
+    const t = await api(`/api/transfers/${created.id}/authorize`, {
+      signature,
+      ...(redeem ? { moneriumRedeemAssertion: redeem } : {}),
+    });
     mSend.transfer = t;
     renderProgress(t);
     refresh();
@@ -3668,6 +3672,26 @@ async function passkeyStepUp() {
   };
 }
 
+async function moneriumRedeemAssertion(authorization) {
+  const redeem = authorization?.moneriumRedeem;
+  if (!redeem) return undefined;
+  if (!redeem.challenge || !redeem.credentialId) return undefined;
+  const cred = await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(redeem.challenge),
+      allowCredentials: [{ type: "public-key", id: b64urlToBytes(redeem.credentialId) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  });
+  return {
+    credentialId: redeem.credentialId,
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  };
+}
+
 /* FP4: mint the device key and bind it as the account's payment authorizer.
    Runs after passkey registration so the key can be wrapped with the
    authenticator's PRF secret; the server takes the first binding and refuses
@@ -4238,9 +4262,13 @@ async function pollSepaTransfer(id) {
       throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
     }
     const signature = await dev.signTypedData(created.authorization.typedData, credId());
+    const redeem = await moneriumRedeemAssertion(created.authorization);
 
     // 3. Submit: the server can only relay the spend this signature approved.
-    const t = await api(`/api/transfers/${created.id}/authorize`, { signature });
+    const t = await api(`/api/transfers/${created.id}/authorize`, {
+      signature,
+      ...(redeem ? { moneriumRedeemAssertion: redeem } : {}),
+    });
     transfer = t;
     $("step-quote").classList.add("hidden");
     $("step-progress").classList.remove("hidden");

@@ -31,6 +31,7 @@ import {
   executeSepaTransfer,
   executeTransfer,
   refreshPayout,
+  safeDebitBlocker,
   settlePickup,
   sweepAnchorPayouts,
   sweepStrandedTransfers,
@@ -2247,11 +2248,10 @@ app.post(
         error: `insufficient Safe balance (€${balances.safeBalanceEur.toFixed(2)})`,
       });
     }
-    if (fundingSource === "safe" && !user.privateKey) {
+    const debitBlocker = safeDebitBlocker(user);
+    if (fundingSource === "safe" && debitBlocker) {
       return res.status(409).json({
-        error:
-          "funds are in the Safe, but this account has no Safe owner key in the API store; " +
-          "create a new passkey/Safe account or recover the Safe before this transfer can execute",
+        error: debitBlocker,
         safeBalanceEur: balances.safeBalanceEur,
       });
     }
@@ -2326,6 +2326,10 @@ app.post(
               issuedAt: transfer.moneriumRedeem.issuedAt,
               message: transfer.moneriumRedeem.message,
               memo: transfer.moneriumRedeem.memo,
+              credentialId: user.passkey?.credentialId,
+              challenge: user.passkeySafe?.status === "active"
+                ? passkeySafeChallenge(safeMessageHash(user.address, transfer.moneriumRedeem.message))
+                : undefined,
             }
           : undefined,
         submitTo: `/api/transfers/${transfer.id}/authorize`,
@@ -2432,20 +2436,75 @@ app.post(
         return res.status(400).json({ error: "moneriumRedeemSignature must be a 0x signature" });
       }
     }
-    const user = store.findUser(transfer.userId)!;
+    let user = store.findUser(transfer.userId)!;
     if (!requireKycApproved(user, res)) return;
-    // Claim the authorization before anything awaits. Two parallel submissions
-    // of the same signature both used to clear the CREATED check above, and
-    // both could submit the same spend. The claim is atomic because nothing
-    // yields between here and it.
+    let effectiveRedeemSignature = typeof redeemSignature === "string" ? redeemSignature as `0x${string}` : undefined;
+    const redeemAssertion = req.body?.moneriumRedeemAssertion;
+    if (!effectiveRedeemSignature && redeemAssertion !== undefined) {
+      if (!transfer.moneriumRedeem) {
+        return res.status(400).json({ error: "this transfer has no Monerium redeem authorization terms" });
+      }
+      if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
+        return res.status(409).json({ error: "active passkey Safe required for Monerium redeem authorization" });
+      }
+      const passkeySafe = user.passkeySafe;
+      const { credentialId, authenticatorData, clientDataJSON, signature: assertionSignature } = redeemAssertion ?? {};
+      if (credentialId !== user.passkey.credentialId) {
+        return res.status(403).json({ error: "passkey credential does not match this account" });
+      }
+      if (!authenticatorData || !clientDataJSON || !assertionSignature) {
+        return res.status(400).json({ error: "moneriumRedeemAssertion requires authenticatorData, clientDataJSON and signature" });
+      }
+      const expectedChallenge = passkeySafeChallenge(safeMessageHash(user.address, transfer.moneriumRedeem.message));
+      try {
+        const { signCount } = await verifyAssertionForChallenge(
+          authenticatorData,
+          clientDataJSON,
+          assertionSignature,
+          user.passkey.publicKey,
+          user.passkey.signCount ?? 0,
+          user.passkey.rpId ?? SECURITY.rpId,
+          SECURITY.origins,
+          expectedChallenge,
+          true,
+        );
+        user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+        effectiveRedeemSignature = await signMessageAsPasskeySafe(
+          passkeySafe,
+          user.address,
+          transfer.moneriumRedeem.message,
+          {
+            authenticatorData: b64urlToBuf(authenticatorData),
+            clientDataJSON: b64urlToBuf(clientDataJSON),
+            signature: b64urlToBuf(assertionSignature),
+          },
+        );
+      } catch (err: any) {
+        return res.status(401).json({ error: String(err?.message ?? err) });
+      }
+    }
+    if (
+      transfer.rail === "sepa" &&
+      transfer.moneriumRedeem &&
+      !effectiveRedeemSignature &&
+      !user.privateKey
+    ) {
+      return res.status(400).json({
+        error: "passkey Safe Monerium redeem approval is required before this SEPA transfer can execute",
+      });
+    }
+    // Claim the authorization before execution. Two parallel submissions of the
+    // same signature both used to clear the CREATED check above, and both could
+    // submit the same spend. claimAuthorization is the atomic boundary: after it
+    // succeeds once, every other caller sees the authorizedAt marker and stops.
     if (!store.claimAuthorization(transfer.id)) {
       return res.status(409).json({ error: "authorization already submitted for this transfer" });
     }
-    if (typeof redeemSignature === "string" && transfer.moneriumRedeem) {
+    if (effectiveRedeemSignature && transfer.moneriumRedeem) {
       executableTransfer = store.updateTransfer(transfer.id, {
         moneriumRedeem: {
           ...transfer.moneriumRedeem,
-          signature: redeemSignature as `0x${string}`,
+          signature: effectiveRedeemSignature,
           signedAt: new Date().toISOString(),
         },
       });

@@ -179,14 +179,18 @@ to another's payout.
 
 The Safe is deployed through an ERC-4337 UserOperation via Candide's bundler,
 with the paymaster covering gas — the user pays nothing and needs no native
-token. It is a **2-of-2**: the passkey and a co-signer, so the server can never
-act alone. Base's RIP-7212 P256 precompile verifies passkey signatures natively,
-so no verifier contract is required.
+token. Owner actions are **2-of-2**: the passkey and a co-signer. Base's RIP-7212
+P256 precompile verifies passkey signatures natively, so no verifier contract is
+required.
 
 Candide's `SocialRecoveryModule` is installed at deployment with a guardian.
 Recovery requires operator identity approval and the module delay must elapse
 before a separate signer service acts; the API never holds the guardian key.
-Co-signer allowances are token-scoped.
+Production payment relays use Candide's `AllowanceModule`: the co-signer is a
+token-scoped delegate with a bounded recurring allowance, so debits can execute
+without storing a user Safe owner key in the API. That is intentionally weaker
+than "server can never move funds alone"; the allowance amount/period is the
+limit and must be treated as production risk configuration.
 
 ### 4 — Device spending key
 
@@ -299,7 +303,7 @@ state rather than advancing on a timer.
 
 | Control | Effect |
 |---|---|
-| Passkey as Safe owner, 2-of-2 with co-signer | The server cannot move funds alone |
+| Passkey as Safe owner, 2-of-2 with co-signer | Owner actions need both signatures; payment relays are limited by token-scoped co-signer allowances |
 | Device key, EIP-712 per payment | A stolen session cannot change the amount or the payee |
 | `destinationCommitment` covers the recipient name | The payout identity is signed, not just the account |
 | `AdminTimelock` M-of-N + delay | No single key can change protocol parameters |
