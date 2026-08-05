@@ -62,11 +62,6 @@ export const CANDIDE = {
   ),
 };
 
-/** Deterministic Safe address for an owner — offline, no network. */
-export function smartAccountFor(ownerAddress: string): SafeAccount {
-  return SafeAccount.initializeNewAccount([ownerAddress]);
-}
-
 function b64urlToBigInt(value: string): bigint {
   const buf = Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64");
   return BigInt(`0x${buf.toString("hex")}`);
@@ -311,73 +306,14 @@ export async function isDeployed(address: string): Promise<boolean> {
 }
 
 /**
- * Move an ERC-20 out of the user's Safe, gaslessly.
- *
- * Temporary server-side Safe execution helper for the remaining relay flows.
- * The long-term path is a browser-signed Safe UserOperation with exact token,
- * amount, destination, and expiry constraints.
- *
- * This is a server-signed action today — the same custody gap FP4's second
- * half exists to close. It is not a new hole, but it is a bigger one: the key
- * that can do this can now move real euros, not mock ones.
- */
-export async function transferTokenFromSafe(params: {
-  ownerKey: `0x${string}`;
-  token: `0x${string}`;
-  to: `0x${string}`;
-  amount: bigint;
-}): Promise<string> {
-  const owner = privateKeyToAccount(params.ownerKey);
-  const account = smartAccountFor(owner.address);
-  if (!(await isDeployed(account.accountAddress))) {
-    throw new Error(`Safe ${account.accountAddress} is not deployed — cannot move tokens from it`);
-  }
-  // transfer(address,uint256)
-  const data = encodeFunctionData({
-    abi: [
-      {
-        type: "function",
-        name: "transfer",
-        stateMutability: "nonpayable",
-        inputs: [
-          { name: "to", type: "address" },
-          { name: "amount", type: "uint256" },
-        ],
-        outputs: [{ type: "bool" }],
-      },
-    ],
-    functionName: "transfer",
-    args: [params.to, params.amount],
-  });
-
-  const call: MetaTransaction = { to: params.token, value: 0n, data };
-  const userOperation = await account.createUserOperation(
-    [call],
-    CANDIDE.rpcUrl,
-    CANDIDE.bundlerUrl,
-  );
-  const paymaster = new Erc7677Paymaster(CANDIDE.paymasterUrl);
-  const sponsored = await paymaster.createPaymasterUserOperation(
-    account as any,
-    userOperation as any,
-    CANDIDE.bundlerUrl,
-  );
-  const finalOp: any = (sponsored as any).userOperation ?? sponsored;
-  finalOp.signature = account.signUserOperation(finalOp, [params.ownerKey], CANDIDE.chainId);
-  const response = await account.sendUserOperation(finalOp, CANDIDE.bundlerUrl);
-  await response.included();
-  return response.userOperationHash;
-}
-
-/**
  * Move an ERC-20 out of a passkey Safe through the production co-signer
  * allowance set up during Safe deployment.
  *
- * This is deliberately narrower than transferTokenFromSafe: it cannot act unless
- * the user's Safe explicitly installed the configured co-signer as an allowance
- * delegate for the token, and the on-chain remaining allowance covers this exact
- * spend. The delegate transaction is sent by the configured co-signer key, so no
- * user Safe owner key has to exist in the API database.
+ * This cannot act unless the user's Safe explicitly installed the configured
+ * co-signer as an allowance delegate for the token, and the on-chain remaining
+ * allowance covers this exact spend. The delegate transaction is sent by the
+ * configured co-signer key, so no user Safe owner key exists in the API
+ * database.
  */
 export async function transferTokenFromSafeAllowance(params: {
   safeAddress: `0x${string}`;
@@ -432,29 +368,4 @@ export async function transferTokenFromSafeAllowance(params: {
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error("passkey Safe allowance debit reverted");
   return hash;
-}
-
-/**
- * Sign a message the Safe way: the owner signs the EIP-712 SafeMessage
- * envelope over the EIP-191 hash of `message`. A deployed Safe validates
- * this via EIP-1271 (isValidSignature) — which is how Monerium verifies
- * contract-wallet ownership.
- */
-export async function signMessageAsSafe(
-  ownerKey: `0x${string}`,
-  safeAddress: string,
-  message: string,
-): Promise<`0x${string}`> {
-  const owner = privateKeyToAccount(ownerKey);
-  const { domain, types, messageValue } = getSafeMessageEip712Data(
-    safeAddress as `0x${string}`,
-    CANDIDE.chainId,
-    message,
-  );
-  return owner.signTypedData({
-    domain: domain as any,
-    types: types as any,
-    primaryType: "SafeMessage",
-    message: messageValue as any,
-  });
 }

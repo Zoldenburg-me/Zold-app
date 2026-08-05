@@ -65,10 +65,6 @@ export interface User {
   /** Candide Safe smart-account address — the user's identity and balance
    *  account, and the address Monerium attaches the IBAN to. */
   address: `0x${string}`;
-  ownerAddress?: `0x${string}`; // EOA owner (signer) of the Safe
-  /** Owner key of the Safe. MVP-grade custody: needed to sign Monerium's
-   *  ownership declaration and UserOperations. Production: KMS/passkeys. */
-  privateKey?: `0x${string}`;
   /** FP4: the device key allowed to authorize debits from this account. We
    *  store only its address — the private half stays in the user's browser. */
   authorizerAddress?: `0x${string}`;
@@ -578,11 +574,11 @@ export function initStore() {
     db.recoveryRequests ??= [];
     db.cryptoDepositCursor ??= {};
     if (IS_PRODUCTION) {
-      const custodial = db.users.filter((u) => u.privateKey || u.ownerAddress || (u.paymentPage as any)?.depositPrivateKey);
+      const custodial = db.users.filter((u) => (u.paymentPage as any)?.depositPrivateKey);
       if (custodial.length) {
         throw new Error(
-          `production store contains ${custodial.length} account(s) with API-held Safe owner material; ` +
-            "activate passkey/co-signer Safes and non-custodial payment pages before startup",
+          `production store contains ${custodial.length} account(s) with API-held payment-page key material; ` +
+            "activate non-custodial payment pages before startup",
         );
       }
     }
