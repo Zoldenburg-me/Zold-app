@@ -742,7 +742,8 @@ export const store = {
    * the sender thought they had narrowed it.
    */
   findReceiptShareByTransfer(transferId: string) {
-    return db.receiptShares.find((s) => s.transferId === transferId);
+    const shares = db.receiptShares.filter((s) => s.transferId === transferId);
+    return shares.find((s) => !s.revokedAt) ?? shares.at(-1);
   },
   findReceiptShareBySlug(slug: string) {
     return db.receiptShares.find((s) => s.slug === slug);
