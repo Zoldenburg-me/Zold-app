@@ -267,12 +267,13 @@ export interface CryptoDeposit {
   id: string;
   userId: string;
   chainId: number;
-  token: "USDC";
+  token: "EURE" | "USDC";
   txHash: string;
   logIndex: number;
-  /** Raw token units (USDC is 6dp), as a string — JSON has no bigint. */
+  /** Raw token units (EURe is 18dp, USDC is 6dp), as a string — JSON has no bigint. */
   amountUnits: string;
-  amountUsdc: number;
+  amountEur?: number;
+  amountUsdc?: number;
   state: "DETECTED" | "CONVERTED" | "REFUSED";
   /** Why it was refused, in words a support person can act on. */
   reason?: string;
@@ -831,11 +832,11 @@ export const store = {
     persist();
     return d;
   },
-  cryptoDepositCursor(chainId: number): bigint | undefined {
+  cryptoDepositCursor(chainId: number | string): bigint | undefined {
     const v = db.cryptoDepositCursor[String(chainId)];
     return v === undefined ? undefined : BigInt(v);
   },
-  setCryptoDepositCursor(chainId: number, block: bigint) {
+  setCryptoDepositCursor(chainId: number | string, block: bigint) {
     db.cryptoDepositCursor[String(chainId)] = block.toString();
     persist();
   },

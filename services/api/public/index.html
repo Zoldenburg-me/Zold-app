@@ -2393,6 +2393,23 @@ function mTxStatus(t) {
 }
 
 function mTxRow(t) {
+  if (t.kind === "funding") {
+    const when = new Date(t.at || t.detectedAt).toLocaleDateString("en", { day: "numeric", month: "short" });
+    const token = t.token === "USDC" ? "USDC" : "EURe";
+    const amount = t.token === "USDC" ? `${fmt(t.amountUsdc || 0)} USDC` : `€${fmt(t.amountEur || 0)}`;
+    const refused = t.state === "REFUSED";
+    return `<div class="m-row">
+    <span class="cc">IN</span>
+    <span style="flex:1;min-width:0">
+      <span class="who" style="display:block">${token} funding</span>
+      <span class="sub" style="display:block">${esc(when)} · ${esc(shortAddr(t.txHash || ""))}</span>
+    </span>
+    <span style="text-align:right;flex:none">
+      <span class="amt m-fig" style="display:block">+${esc(amount)}</span>
+      <span class="st" style="display:block;color:${refused ? "var(--m-amber)" : "var(--m-mint)"}">${refused ? "REVIEW" : "RECEIVED"}</span>
+    </span>
+  </div>`;
+  }
   const sepa = t.rail === "sepa";
   const st = mTxStatus(t);
   const when = new Date(t.createdAt).toLocaleDateString("en", { day: "numeric", month: "short" });
@@ -3591,8 +3608,8 @@ function renderShellPages() {
 async function loadTransfers() {
   if (!user) return;
   try {
-    const data = await api(`/api/users/${user.id}/transfers`);
-    hist.splice(0, hist.length, ...(data.transfers || []));
+    const data = await api(`/api/users/${user.id}/activity`);
+    hist.splice(0, hist.length, ...(data.activity || []));
     renderHistory();
     renderTransactionPage();
   } catch {}
@@ -4606,6 +4623,21 @@ $("btn-again").onclick = () => {
 /* ---------- history ---------- */
 const hist = [];
 function histRow(t) {
+  if (t.kind === "funding") {
+    const token = t.token === "USDC" ? "USDC" : "EURe";
+    const amount = t.token === "USDC" ? `${fmt(t.amountUsdc || 0)} USDC` : `€${fmt(t.amountEur || 0)}`;
+    const color = t.state === "REFUSED" ? "var(--amber)" : "var(--green)";
+    return `
+    <div class="hic">IN</div>
+    <div class="hmain">
+      <div class="hn">${token} funding</div>
+      <div class="hs">${esc(shortAddr(t.txHash || ""))}</div>
+    </div>
+    <div>
+      <div class="hamt">+${esc(amount)}</div>
+      <div class="hst" style="color:${color}">${t.state === "REFUSED" ? "REVIEW" : "RECEIVED"}</div>
+    </div>`;
+  }
   const paid = t.state === "PAID";
   const sepa = t.rail === "sepa";
   const sub = sepa
@@ -4651,10 +4683,10 @@ function renderHistory() {
 function renderTransactionPage() {
   const list = $("tx-page-list");
   if (!list) return;
-  const transfers = txFilter === "all" ? hist : hist.filter((t) => t.rail === txFilter);
+  const transfers = txFilter === "all" ? hist : hist.filter((t) => t.kind === "transfer" && t.rail === txFilter);
   const totalSent = hist.reduce((sum, t) => sum + (Number(t.sendEur) || 0), 0);
-  const paid = hist.filter((t) => t.state === "PAID").length;
-  const open = hist.filter((t) => !["PAID", "FAILED", "REFUNDED"].includes(t.state)).length;
+  const paid = hist.filter((t) => t.kind === "transfer" && t.state === "PAID").length;
+  const open = hist.filter((t) => t.kind === "transfer" && !["PAID", "FAILED", "REFUNDED"].includes(t.state)).length;
   $("tx-total-sent").textContent = `€${fmt(totalSent)}`;
   $("tx-total-paid").textContent = String(paid);
   $("tx-total-open").textContent = String(open);
