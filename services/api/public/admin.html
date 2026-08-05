@@ -35,19 +35,17 @@
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
     body { background-color: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 60px; line-height: 1.5; }
-    
-    /* Background Glow Elements */
+
     .bg-glow {
       position: fixed; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; z-index: 0;
       background: radial-gradient(circle at 20% 20%, rgba(0, 242, 254, 0.04) 0%, transparent 40%),
                   radial-gradient(circle at 80% 80%, rgba(112, 0, 255, 0.04) 0%, transparent 40%);
     }
 
-    .container { max-width: 1400px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+    .container { max-width: 1500px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
 
-    /* Header */
     header {
-      padding: 24px 0; border-bottom: 1px solid var(--border); margin-bottom: 32px;
+      padding: 18px 0; border-bottom: 1px solid var(--border); margin-bottom: 20px;
       display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;
     }
     .logo-group { display: flex; align-items: center; gap: 12px; }
@@ -59,7 +57,6 @@
     .brand-title { font-family: 'Outfit', sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
     .brand-subtitle { font-size: 13px; color: var(--text-muted); }
 
-    /* Auth & Config Bar */
     .auth-bar { display: flex; align-items: center; gap: 12px; background: var(--surface-1); padding: 8px 16px; border-radius: var(--radius-md); border: 1px solid var(--border); }
     .auth-bar input {
       background: transparent; border: none; color: var(--text); font-family: monospace; font-size: 13px; width: 280px; outline: none;
@@ -69,55 +66,84 @@
     .auth-status.offline { background: var(--danger-bg); color: var(--danger); }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
-    /* Stats Grid */
-    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 32px; }
+    /* KPI tiles — one compact row, everything the operator should glance at */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
     .stat-card {
-      background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px 24px;
-      transition: transform 0.2s ease, border-color 0.2s ease;
+      background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 18px;
+      transition: border-color 0.2s ease; cursor: default;
     }
-    .stat-card:hover { transform: translateY(-2px); border-color: rgba(255, 255, 255, 0.15); }
-    .stat-label { font-size: 13px; color: var(--text-muted); font-weight: 500; margin-bottom: 8px; }
-    .stat-value { font-family: 'Outfit', sans-serif; font-size: 32px; font-weight: 700; color: var(--text); }
-    .stat-sub { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+    .stat-card.clickable { cursor: pointer; }
+    .stat-card.clickable:hover { border-color: rgba(255, 255, 255, 0.2); }
+    .stat-label { font-size: 12px; color: var(--text-muted); font-weight: 500; margin-bottom: 4px; }
+    .stat-value { font-family: 'Outfit', sans-serif; font-size: 26px; font-weight: 700; color: var(--text); }
+    .stat-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    /* Main Section Controls */
-    .controls { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
-    .search-box {
-      position: relative; flex: 1; min-width: 280px; max-width: 480px;
+    /* Needs-attention strip: the triage queue lives ABOVE both tables, so the
+       things an operator must act on are never below the fold. */
+    .attention-card {
+      background: var(--surface-1); border: 1px solid var(--border); border-left: 3px solid var(--warning);
+      border-radius: var(--radius-md); margin-bottom: 20px; overflow: hidden;
     }
+    .attention-card.calm { border-left-color: var(--success); }
+    .attention-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; }
+    .attention-title { font-family: 'Outfit', sans-serif; font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+    .attention-count { font-size: 12px; font-weight: 600; background: var(--warning-bg); color: var(--warning); padding: 2px 10px; border-radius: 20px; }
+    .attention-card.calm .attention-count { background: var(--success-bg); color: var(--success); }
+    .attention-list { max-height: 220px; overflow-y: auto; border-top: 1px solid var(--border); }
+    .attention-row {
+      display: flex; align-items: center; gap: 12px; padding: 8px 18px; border-bottom: 1px solid var(--border); font-size: 13px;
+    }
+    .attention-row:last-child { border-bottom: none; }
+    .attention-row .why { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+    .attention-row .who { font-weight: 600; color: var(--text); flex: none; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .attention-kind { flex: none; font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 2px 8px; border-radius: 6px; }
+    .attention-kind.kyc { background: var(--warning-bg); color: var(--warning); }
+    .attention-kind.iban { background: var(--primary-glow); color: var(--primary); }
+    .attention-kind.tx { background: var(--danger-bg); color: var(--danger); }
+    .attention-kind.stale { background: var(--surface-3); color: var(--text-muted); }
+    .attention-kind.float { background: var(--danger-bg); color: var(--danger); }
+
+    .controls { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+    .search-box { position: relative; flex: 1; min-width: 280px; max-width: 520px; }
     .search-box input {
-      width: 100%; background: var(--surface-1); border: 1px solid var(--border); padding: 12px 16px 12px 42px;
+      width: 100%; background: var(--surface-1); border: 1px solid var(--border); padding: 11px 16px 11px 42px;
       border-radius: var(--radius-md); color: var(--text); font-size: 14px; outline: none; transition: border-color 0.2s ease;
     }
     .search-box input:focus { border-color: var(--primary); }
     .search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); }
 
-    .filter-tabs { display: flex; gap: 6px; background: var(--surface-1); padding: 4px; border-radius: var(--radius-md); border: 1px solid var(--border); }
+    .filter-tabs { display: flex; gap: 6px; background: var(--surface-2); padding: 4px; border-radius: var(--radius-md); border: 1px solid var(--border); flex-wrap: wrap; }
     .tab-btn {
-      background: transparent; border: none; color: var(--text-muted); padding: 8px 16px; border-radius: var(--radius-sm);
+      background: transparent; border: none; color: var(--text-muted); padding: 7px 14px; border-radius: var(--radius-sm);
       font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s ease;
     }
     .tab-btn.active { background: var(--surface-3); color: var(--text); font-weight: 600; }
     .tab-btn:hover:not(.active) { color: var(--text); }
-    .section-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin: 36px 0 18px; flex-wrap: wrap; }
-    .section-title { font-family: 'Outfit', sans-serif; font-size: 20px; font-weight: 700; }
-    .section-subtitle { color: var(--text-muted); font-size: 13px; margin-top: 3px; }
 
-    /* Users Table */
-    .table-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow); }
-    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
-    th { background: var(--surface-2); color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
-    td { padding: 18px 20px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    /* Panels: each table is a bounded card with its own scroll and a sticky
+       header row, so neither can push the other below the fold no matter how
+       many accounts exist. */
+    .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow); margin-bottom: 20px; }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    .panel-title { font-family: 'Outfit', sans-serif; font-size: 16px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; }
+    .panel-count { font-size: 12px; color: var(--text-dim); font-weight: 500; }
+    .panel-scroll { max-height: 44vh; overflow: auto; }
+
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13.5px; }
+    th {
+      background: var(--surface-2); color: var(--text-muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px;
+      padding: 10px 16px; border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 2;
+    }
+    td { padding: 10px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: rgba(255, 255, 255, 0.015); }
 
-    .user-info { display: flex; flex-direction: column; gap: 2px; }
+    .user-info { display: flex; flex-direction: column; gap: 1px; }
     .user-name { font-weight: 600; color: var(--text); }
     .user-id { font-family: monospace; font-size: 11px; color: var(--text-dim); }
 
-    .badge {
-      display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600;
-    }
+    .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 20px; font-size: 11.5px; font-weight: 600; }
     .badge-approved { background: var(--success-bg); color: var(--success); }
     .badge-pending { background: var(--warning-bg); color: var(--warning); }
     .badge-rejected { background: var(--danger-bg); color: var(--danger); }
@@ -127,16 +153,13 @@
     .badge-open { background: var(--warning-bg); color: var(--warning); }
 
     .code-pill {
-      font-family: monospace; font-size: 12px; background: var(--surface-2); padding: 4px 8px; border-radius: 6px;
+      font-family: monospace; font-size: 12px; background: var(--surface-2); padding: 3px 8px; border-radius: 6px;
       color: var(--accent); border: 1px solid var(--border); display: inline-flex; align-items: center; gap: 6px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .copy-btn { cursor: pointer; color: var(--text-muted); border: none; background: transparent; padding: 2px; }
-    .copy-btn:hover { color: var(--text); }
 
-    /* Action Buttons */
     .actions-cell { display: flex; gap: 8px; align-items: center; }
     .btn {
-      padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; cursor: pointer; border: none;
+      padding: 6px 12px; border-radius: var(--radius-sm); font-size: 12.5px; font-weight: 600; cursor: pointer; border: none;
       transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 6px;
     }
     .btn-approve { background: var(--success); color: #090b10; }
@@ -145,15 +168,14 @@
     .btn-reject:hover { background: var(--danger-bg); }
     .btn-iban { background: var(--surface-3); color: var(--primary); border: 1px solid var(--border); }
     .btn-iban:hover { border-color: var(--primary); background: var(--primary-glow); }
-    .btn-icon { padding: 8px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); cursor: pointer; }
+    .btn-icon { padding: 6px 8px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); cursor: pointer; }
     .btn-icon:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.2); }
-    .route-stack { display: flex; flex-wrap: wrap; gap: 6px; max-width: 360px; }
-    .route-step { font-family: monospace; font-size: 11px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; }
-    .detail-lines { display: flex; flex-direction: column; gap: 2px; max-width: 260px; }
+    .route-stack { display: flex; flex-wrap: wrap; gap: 5px; max-width: 340px; }
+    .route-step { font-family: monospace; font-size: 11px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); border-radius: 6px; padding: 2px 7px; }
+    .detail-lines { display: flex; flex-direction: column; gap: 1px; max-width: 240px; }
     .detail-main { color: var(--text); font-weight: 600; }
     .detail-sub { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    /* Detail Modal */
     .modal-overlay {
       position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(6px);
       z-index: 100; display: grid; place-items: center; padding: 24px; opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
@@ -191,104 +213,124 @@
       </div>
     </header>
 
-    <!-- Stats KPI Cards -->
+    <!-- KPI tiles. Clicking a tile jumps to the panel it summarises with the
+         matching filter applied. -->
     <div class="stats-grid">
-      <div class="stat-card">
+      <div class="stat-card clickable" onclick="jumpToUsers('all')">
         <div class="stat-label">Total Users</div>
         <div class="stat-value" id="statUsers">--</div>
         <div class="stat-sub">Accounts registered</div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card clickable" onclick="jumpToUsers('pending')">
         <div class="stat-label">Pending KYC</div>
         <div class="stat-value" id="statPending" style="color: var(--warning);">--</div>
         <div class="stat-sub">Awaiting review</div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card clickable" onclick="jumpToUsers('approved')">
         <div class="stat-label">Active Safes</div>
         <div class="stat-value" id="statSafes" style="color: var(--primary);">--</div>
         <div class="stat-sub">Deployed on Base Sepolia</div>
       </div>
-      <div class="stat-card">
-        <div class="stat-label">Total Transfers</div>
+      <div class="stat-card clickable" onclick="jumpToTx('all')">
+        <div class="stat-label">Transfers</div>
         <div class="stat-value" id="statTransfers" style="color: var(--success);">--</div>
-        <div class="stat-sub">EUR / Cash / SEPA</div>
+        <div class="stat-sub" id="statVolume">Volume —</div>
+      </div>
+      <div class="stat-card clickable" onclick="jumpToTx('attention')">
+        <div class="stat-label">Needs Attention</div>
+        <div class="stat-value" id="statAttention">--</div>
+        <div class="stat-sub">KYC · IBANs · failed & stuck transfers</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Deployer Float</div>
+        <div class="stat-value" id="statFloat">--</div>
+        <div class="stat-sub" id="statFloatSub">faucet + gas source</div>
       </div>
     </div>
 
-    <!-- Filter & Search Controls -->
+    <!-- Triage queue: everything actionable, in one bounded list above the fold. -->
+    <div class="attention-card calm" id="attentionCard">
+      <div class="attention-head">
+        <div class="attention-title">Needs attention <span class="attention-count" id="attentionCount">0</span></div>
+        <span style="font-size:12px;color:var(--text-dim)">KYC reviews, missing IBANs, failed / stuck transfers, dry float</span>
+      </div>
+      <div class="attention-list" id="attentionList"></div>
+    </div>
+
+    <!-- One search filters both panels. -->
     <div class="controls">
       <div class="search-box">
         <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" id="searchInput" placeholder="Search by user, transfer, rail status, Safe, IBAN, or tx hash...">
-      </div>
-      <div class="filter-tabs" id="userFilterTabs">
-        <button class="tab-btn active" data-filter="all">All</button>
-        <button class="tab-btn" data-filter="pending">Pending KYC</button>
-        <button class="tab-btn" data-filter="approved">Approved</button>
-        <button class="tab-btn" data-filter="rejected">Rejected</button>
+        <input type="text" id="searchInput" placeholder="Search users and transactions — name, id, Safe, IBAN, state, tx hash...">
       </div>
     </div>
 
-    <!-- Users Table -->
-    <div class="table-card">
-      <table>
-        <thead>
-          <tr>
-            <th>User</th>
-            <th>Country</th>
-            <th>KYC Status</th>
-            <th>Candide Safe</th>
-            <th>Monerium IBAN</th>
-            <th>Created</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="usersTableBody">
-          <tr>
-            <td colspan="7" style="text-align: center; padding: 40px; color: var(--text-muted);">
-              Loading system accounts...
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="section-head">
-      <div>
-        <div class="section-title">Transaction Operations</div>
-        <div class="section-subtitle">KYC rail payouts, Safe funding, bridge, swap, and failure state</div>
+    <!-- Accounts panel: bounded height, own scroll, sticky header. -->
+    <div class="panel" id="usersPanel">
+      <div class="panel-head">
+        <div class="panel-title">Accounts <span class="panel-count" id="usersCount"></span></div>
+        <div class="filter-tabs" id="userFilterTabs">
+          <button class="tab-btn active" data-filter="all">All</button>
+          <button class="tab-btn" data-filter="pending">Pending KYC</button>
+          <button class="tab-btn" data-filter="approved">Approved</button>
+          <button class="tab-btn" data-filter="rejected">Rejected</button>
+          <button class="tab-btn" data-filter="no-iban">No IBAN</button>
+        </div>
       </div>
-      <div class="filter-tabs" id="txFilterTabs">
-        <button class="tab-btn active" data-tx-filter="all">All</button>
-        <button class="tab-btn" data-tx-filter="sepa">Monerium</button>
-        <button class="tab-btn" data-tx-filter="cash">MoneyGram</button>
-        <button class="tab-btn" data-tx-filter="funding">Funding</button>
-        <button class="tab-btn" data-tx-filter="attention">Needs Attention</button>
+      <div class="panel-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Country</th>
+              <th>KYC</th>
+              <th>Safe</th>
+              <th>IBAN</th>
+              <th>Balance</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="usersTableBody">
+            <tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">Loading system accounts...</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
-    <div class="table-card">
-      <table>
-        <thead>
-          <tr>
-            <th>Transaction</th>
-            <th>User</th>
-            <th>Rail</th>
-            <th>Status</th>
-            <th>Amount</th>
-            <th>Route / Backend TXs</th>
-            <th>Updated</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="transactionsTableBody">
-          <tr>
-            <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">
-              Loading transaction operations...
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <!-- Transactions panel: same shape, immediately below — no long scroll to
+         reach it because the accounts panel above is height-bounded. -->
+    <div class="panel" id="txPanel">
+      <div class="panel-head">
+        <div class="panel-title">Transaction Operations <span class="panel-count" id="txCount"></span></div>
+        <div class="filter-tabs" id="txFilterTabs">
+          <button class="tab-btn active" data-tx-filter="all">All</button>
+          <button class="tab-btn" data-tx-filter="sepa">Monerium</button>
+          <button class="tab-btn" data-tx-filter="cash">MoneyGram</button>
+          <button class="tab-btn" data-tx-filter="funding">Funding</button>
+          <button class="tab-btn" data-tx-filter="inflight">In Flight</button>
+          <button class="tab-btn" data-tx-filter="attention">Needs Attention</button>
+        </div>
+      </div>
+      <div class="panel-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Transaction</th>
+              <th>User</th>
+              <th>Rail</th>
+              <th>Status</th>
+              <th>Amount</th>
+              <th>Route / Backend TXs</th>
+              <th>Updated</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="transactionsTableBody">
+            <tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">Loading transaction operations...</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -306,15 +348,28 @@
   <script>
     let allUsers = [];
     let allTransactions = [];
+    let stats = {};
     let currentFilter = 'all';
     let currentTxFilter = 'all';
+
+    /* A transfer still moving through its state machine. Terminal or
+       already-flagged states are excluded; everything else that has not been
+       touched for STALE_MS is probably stuck, and stuck money is the thing an
+       operator exists to notice. */
+    const ATTENTION_STATES = ['FAILED', 'REFUNDED', 'REFUSED', 'MANUAL_REVIEW'];
+    const TERMINAL_STATES = ['PAID', 'CONVERTED', ...ATTENTION_STATES];
+    const STALE_MS = 30 * 60_000;
+    const isInflight = (t) => t.kind !== 'funding' && !TERMINAL_STATES.includes(t.state);
+    const isStale = (t) => {
+      const updated = Date.parse(t.updatedAt || t.createdAt || t.detectedAt || '') || 0;
+      return isInflight(t) && Date.now() - updated > STALE_MS;
+    };
 
     const tokenInput = document.getElementById('operatorToken');
     const authPill = document.getElementById('authPill');
     const authText = document.getElementById('authText');
     const searchInput = document.getElementById('searchInput');
 
-    // Save token locally
     tokenInput.addEventListener('input', () => {
       localStorage.setItem('zold_operator_token', tokenInput.value);
       loadDashboard();
@@ -344,32 +399,142 @@
 
     async function loadDashboard() {
       try {
-        // Stats
         const statsRes = await fetchApi('/api/admin/stats');
         if (statsRes.ok) {
-          const stats = await statsRes.json();
+          stats = await statsRes.json();
           document.getElementById('statUsers').textContent = stats.totalUsers ?? 0;
           document.getElementById('statPending').textContent = stats.kycPending ?? 0;
           document.getElementById('statSafes').textContent = stats.activeSafes ?? 0;
           document.getElementById('statTransfers').textContent = stats.totalTransfers ?? 0;
+          document.getElementById('statVolume').textContent =
+            `Volume €${Number(stats.totalVolumeEur ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+          renderFloat();
         }
 
-        // Users
         const usersRes = await fetchApi('/api/admin/users');
         if (usersRes.ok) {
           allUsers = await usersRes.json();
-          renderUsers();
         }
 
         const txRes = await fetchApi('/api/admin/transactions');
         if (txRes.ok) {
           const data = await txRes.json();
           allTransactions = data.transactions || [];
-          renderTransactions();
         }
+        renderUsers();
+        renderTransactions();
+        renderAttention();
       } catch (err) {
         console.error("Dashboard error:", err);
       }
+    }
+
+    /* The deployer pays gas and the testnet faucet. Its balance dropping below
+       a couple of grants is an outage-in-waiting that otherwise only shows as
+       a console warning nobody reads. */
+    function floatLow() {
+      const d = stats.deployer;
+      if (!d) return false;
+      const grant = Number(stats.faucetGrantEur || 0);
+      return (grant > 0 && d.eur < grant * 3) || d.eth < 0.002;
+    }
+
+    function renderFloat() {
+      const d = stats.deployer;
+      const el = document.getElementById('statFloat');
+      const sub = document.getElementById('statFloatSub');
+      if (!d) { el.textContent = '—'; sub.textContent = 'unreadable'; return; }
+      el.textContent = `€${Number(d.eur).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+      el.style.color = floatLow() ? 'var(--danger)' : 'var(--text)';
+      sub.textContent = `${Number(d.eth).toFixed(4)} ETH gas · faucet grants €${stats.faucetGrantEur || 0}`;
+    }
+
+    /* ---------- triage strip ---------- */
+
+    function attentionItems() {
+      const items = [];
+      if (floatLow()) {
+        const d = stats.deployer;
+        items.push({
+          kind: 'float', label: 'FLOAT', who: 'Deployer wallet',
+          why: `€${Number(d.eur).toFixed(0)} EURe / ${Number(d.eth).toFixed(4)} ETH left — top it up before faucet grants and gas start failing`,
+          actions: '',
+        });
+      }
+      for (const u of allUsers) {
+        if (u.kycStatus === 'pending' || u.kycStatus === 'manual_review') {
+          items.push({
+            kind: 'kyc', label: 'KYC', who: u.name || u.id, why: `${u.kycStatus.replace('_', ' ')} since ${fmtWhen(u.createdAt)}`,
+            actions: `<button class="btn btn-approve" onclick="reviewKyc('${u.id}', 'approved')">Approve</button>
+                      <button class="btn btn-reject" onclick="reviewKyc('${u.id}', 'rejected')">Reject</button>`,
+          });
+        } else if (u.kycStatus === 'approved' && !u.iban) {
+          items.push({
+            kind: 'iban', label: 'IBAN', who: u.name || u.id,
+            why: (u.passkeySafe?.status === 'active' || u.wallet?.deployed)
+              ? 'approved, Safe deployed, no IBAN — user activates with a passkey tap, or assign manually'
+              : 'approved but smart wallet not finished — user must complete onboarding first',
+            actions: `<button class="btn btn-iban" onclick="issueIban('${u.id}')">Issue IBAN</button>`,
+          });
+        }
+      }
+      for (const t of allTransactions) {
+        if (ATTENTION_STATES.includes(t.state)) {
+          items.push({
+            kind: 'tx', label: t.state, who: t.user?.name || t.user?.id || 'unknown',
+            why: `${railLabel(t)} · ${amountLabel(t)} · ${t.statusDetail || t.error || ''}`,
+            actions: `<button class="btn-icon" onclick="inspectEncodedTransaction('${jsonArg(t)}')">🔍</button>`,
+          });
+        } else if (isStale(t)) {
+          items.push({
+            kind: 'stale', label: 'STUCK', who: t.user?.name || t.user?.id || 'unknown',
+            why: `${railLabel(t)} · ${amountLabel(t)} · in ${t.state} since ${fmtWhen(t.updatedAt || t.createdAt)}`,
+            actions: `<button class="btn-icon" onclick="inspectEncodedTransaction('${jsonArg(t)}')">🔍</button>`,
+          });
+        }
+      }
+      return items;
+    }
+
+    function renderAttention() {
+      const items = attentionItems();
+      const card = document.getElementById('attentionCard');
+      const list = document.getElementById('attentionList');
+      document.getElementById('attentionCount').textContent = items.length;
+      document.getElementById('statAttention').textContent = items.length;
+      document.getElementById('statAttention').style.color = items.length ? 'var(--warning)' : 'var(--success)';
+      card.classList.toggle('calm', items.length === 0);
+      list.innerHTML = items.length
+        ? items.map(i => `
+            <div class="attention-row">
+              <span class="attention-kind ${i.kind}">${escapeHtml(i.label)}</span>
+              <span class="who">${escapeHtml(i.who)}</span>
+              <span class="why">${escapeHtml(i.why)}</span>
+              <span class="actions-cell">${i.actions}</span>
+            </div>`).join('')
+        : `<div class="attention-row" style="color:var(--text-dim)">Nothing waiting on you. Queues are clear.</div>`;
+    }
+
+    /* ---------- panels ---------- */
+
+    function jumpToUsers(filter) {
+      setFilter('userFilterTabs', 'filter', filter);
+      currentFilter = filter;
+      renderUsers();
+      document.getElementById('usersPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function jumpToTx(filter) {
+      setFilter('txFilterTabs', 'txFilter', filter);
+      currentTxFilter = filter;
+      renderTransactions();
+      document.getElementById('txPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function setFilter(groupId, dataKey, value) {
+      document.querySelectorAll(`#${groupId} .tab-btn`).forEach(b => {
+        b.classList.toggle('active', b.dataset[dataKey] === value);
+      });
     }
 
     function renderUsers() {
@@ -377,8 +542,11 @@
       const query = searchInput.value.toLowerCase();
 
       const filtered = allUsers.filter(u => {
-        const matchesFilter = currentFilter === 'all' || u.kycStatus === currentFilter;
-        const matchesSearch = !query || 
+        const matchesFilter =
+          currentFilter === 'all' ? true :
+          currentFilter === 'no-iban' ? (u.kycStatus === 'approved' && !u.iban) :
+          u.kycStatus === currentFilter;
+        const matchesSearch = !query ||
           (u.name && u.name.toLowerCase().includes(query)) ||
           (u.id && u.id.toLowerCase().includes(query)) ||
           (u.address && u.address.toLowerCase().includes(query)) ||
@@ -386,26 +554,27 @@
         return matchesFilter && matchesSearch;
       });
 
+      document.getElementById('usersCount').textContent = `${filtered.length} shown · ${allUsers.length} total`;
+
       if (filtered.length === 0) {
-        tbody.innerHTML = `
-          <tr>
-            <td colspan="7" style="text-align: center; padding: 40px; color: var(--text-muted);">
-              No accounts match the criteria.
-            </td>
-          </tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">No accounts match the criteria.</td></tr>`;
         return;
       }
 
       tbody.innerHTML = filtered.map(u => {
         const safeAddr = u.passkeySafe?.address || u.address || '';
-        const shortAddr = safeAddr && safeAddr !== '0x0000000000000000000000000000000000000000' 
+        const shortAddr = safeAddr && safeAddr !== '0x0000000000000000000000000000000000000000'
           ? safeAddr.substring(0, 6) + '...' + safeAddr.substring(safeAddr.length - 4)
           : 'Not Deployed';
 
         const safeDeployed = u.wallet?.deployed || u.passkeySafe?.status === 'active';
 
-        const kycBadgeClass = u.kycStatus === 'approved' ? 'badge-approved' : 
-                             u.kycStatus === 'pending' ? 'badge-pending' : 'badge-rejected';
+        const kycBadgeClass = u.kycStatus === 'approved' ? 'badge-approved' :
+                             (u.kycStatus === 'pending' || u.kycStatus === 'manual_review') ? 'badge-pending' : 'badge-rejected';
+
+        const balance = typeof u.safeBalanceEur === 'number' || typeof u.balanceEur === 'number'
+          ? `€${Number(u.safeBalanceEur ?? u.balanceEur).toFixed(2)}`
+          : '—';
 
         return `
           <tr>
@@ -418,17 +587,14 @@
             <td><strong>${u.country || 'DE'}</strong></td>
             <td><span class="badge ${kycBadgeClass}">${u.kycStatus}</span></td>
             <td>
-              <span class="code-pill">
-                ${shortAddr}
-              </span>
+              <span class="code-pill">${shortAddr}</span>
               ${safeDeployed ? '<span class="badge badge-approved" style="font-size: 10px; padding: 2px 6px;">Live</span>' : ''}
             </td>
             <td>
               ${u.iban ? `<span class="code-pill" style="color: var(--success);">${u.iban}</span>` : '<span style="color: var(--text-dim);">No IBAN</span>'}
             </td>
-            <td style="color: var(--text-muted); font-size: 12px;">
-              ${new Date(u.createdAt).toLocaleDateString()}
-            </td>
+            <td style="font-weight:600">${balance}</td>
+            <td style="color: var(--text-muted); font-size: 12px;">${new Date(u.createdAt).toLocaleDateString()}</td>
             <td>
               <div class="actions-cell">
                 ${u.kycStatus !== 'approved' ? `
@@ -447,7 +613,7 @@
 
     function statusBadgeClass(state) {
       if (['PAID', 'CONVERTED'].includes(state)) return 'badge-paid';
-      if (['FAILED', 'REFUNDED', 'REFUSED', 'MANUAL_REVIEW'].includes(state)) return 'badge-review';
+      if (ATTENTION_STATES.includes(state)) return 'badge-review';
       if (['CREATED', 'DETECTED', 'DEBITED', 'SWAPPED', 'BRIDGED', 'PAYOUT_DETAILS_PENDING', 'PAYOUT_FUNDING_PENDING', 'PAYOUT_FUNDED', 'PAYOUT_READY', 'PAYOUT_SUBMITTED'].includes(state)) return 'badge-open';
       return 'badge-neutral';
     }
@@ -479,7 +645,8 @@
 
     function txMatchesFilter(t) {
       if (currentTxFilter === 'all') return true;
-      if (currentTxFilter === 'attention') return ['FAILED', 'REFUNDED', 'REFUSED', 'MANUAL_REVIEW'].includes(t.state);
+      if (currentTxFilter === 'attention') return ATTENTION_STATES.includes(t.state) || isStale(t);
+      if (currentTxFilter === 'inflight') return isInflight(t);
       if (currentTxFilter === 'funding') return t.kind === 'funding';
       return t.kind === 'transfer' && t.rail === currentTxFilter;
     }
@@ -489,32 +656,19 @@
       const query = searchInput.value.toLowerCase();
       const filtered = allTransactions.filter(t => {
         const hay = [
-          t.id,
-          t.state,
-          t.rail,
-          t.kind,
-          t.user?.name,
-          t.user?.id,
-          t.user?.safeAddress,
-          t.txHash,
-          t.lastHash,
-          t.error,
-          t.statusDetail,
-          t.payout?.orderId,
-          t.payout?.referenceCode,
-          t.payout?.anchorTransactionId,
+          t.id, t.state, t.rail, t.kind,
+          t.user?.name, t.user?.id, t.user?.safeAddress,
+          t.txHash, t.lastHash, t.error, t.statusDetail,
+          t.payout?.orderId, t.payout?.referenceCode, t.payout?.anchorTransactionId,
           t.liquidity?.provider,
         ].filter(Boolean).join(' ').toLowerCase();
         return txMatchesFilter(t) && (!query || hay.includes(query));
       });
 
+      document.getElementById('txCount').textContent = `${filtered.length} shown · ${allTransactions.length} total`;
+
       if (filtered.length === 0) {
-        tbody.innerHTML = `
-          <tr>
-            <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">
-              No transactions match the criteria.
-            </td>
-          </tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">No transactions match the criteria.</td></tr>`;
         return;
       }
 
@@ -541,17 +695,14 @@
             <td><span class="badge badge-neutral">${escapeHtml(railLabel(t))}</span></td>
             <td>
               <span class="badge ${statusBadgeClass(t.state)}">${escapeHtml(t.state || 'unknown')}</span>
+              ${isStale(t) ? '<span class="badge badge-pending" style="font-size:10px;padding:2px 6px">STUCK</span>' : ''}
               ${t.statusDetail ? `<div class="detail-sub">${escapeHtml(t.statusDetail)}</div>` : ''}
             </td>
             <td><strong>${escapeHtml(amountLabel(t))}</strong></td>
             <td><div class="route-stack">${routeChips(t)}</div></td>
-            <td style="color: var(--text-muted); font-size: 12px;">
-              ${updated ? new Date(updated).toLocaleString() : 'Unknown'}
-            </td>
+            <td style="color: var(--text-muted); font-size: 12px;">${updated ? new Date(updated).toLocaleString() : 'Unknown'}</td>
             <td>
-              <button class="btn-icon" onclick="inspectEncodedTransaction('${jsonArg(t)}')" title="View route JSON">
-                ${routeCount ? '⛓' : '🔍'}
-              </button>
+              <button class="btn-icon" onclick="inspectEncodedTransaction('${jsonArg(t)}')" title="View route JSON">${routeCount ? '⛓' : '🔍'}</button>
             </td>
           </tr>
         `;
@@ -629,6 +780,11 @@
       renderTransactions();
     });
 
+    function fmtWhen(iso) {
+      const d = new Date(iso);
+      return isNaN(d) ? 'unknown' : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
     function escapeHtml(str) {
       return String(str ?? '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
@@ -637,7 +793,6 @@
       return encodeURIComponent(JSON.stringify(obj));
     }
 
-    // Initial Load & Auto Refresh
     loadDashboard();
     setInterval(loadDashboard, 10000);
   </script>
