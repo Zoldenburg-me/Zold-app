@@ -127,9 +127,17 @@ Four, deliberately small, no inheritance depth and no proxies.
 | `BridgeEscrow.sol` | Locks funds for the bridge leg, refuses reused transfer ids, refunds only to the target bound at lock time |
 | `MockToken.sol` | Local-chain ERC-20 for tests |
 
-Custody is the user's Safe. There is no protocol-owned balance ledger — that
-was removed deliberately, so the only record of a user's euros is the EURe in
-their own smart account.
+#### Base Sepolia Active Deployments (Chain ID: 84532)
+
+| Contract / Asset | Deployed Address | Notes |
+|---|---|---|
+| `EURe` | `0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85` | Monerium's native EURe token on Base Sepolia |
+| `USDC` | `0xf94c01838c60f4ddf9519da75180feac7450303a` | Circle / Mock USDC token |
+| `FxSwapper` | `0x7b19ccdfb4bcc1bbc12daa2e94e5ad694c8613b8` | Swapper contract |
+| `BridgeEscrow` | `0x11cb28ccb5231c9aedfc818221b0fe7d11085e07` | Escrow contract for cross-chain payouts |
+| `AdminTimelock` | `0xe560f041a8175d72558836159573550eaa89f8c4` | M-of-N Timelock owner of FxSwapper and BridgeEscrow |
+
+Custody is the user's Safe. The only record of a user's euros is the EURe in their own smart account.
 
 ---
 
