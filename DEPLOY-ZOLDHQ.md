@@ -28,6 +28,15 @@ inbound port to firewall.
 
 ## Steps after that
 
+!! BOTH TOOLCHAIN BINARIES ARE arm64 AND THIS MACHINE IS INTEL. `file
+.toolchain/bin/cloudflared` says `Mach-O 64-bit executable arm64`, and
+`.toolchain/node-v22.17.0-darwin-arm64` is the same story, so every command
+below — and every `npm run` script — dies with `Bad CPU type in executable`.
+`arch -arm64` does not help; it reports `Unknown architecture`, because there is
+no Apple Silicon here to translate to. Before this deployment can be driven from
+this Mac, fetch the `darwin-amd64` cloudflared build and use the system node
+(nvm v24.13.0 is installed and is x86_64). The steps themselves are unchanged.
+
 `cloudflared` 2026.7.3 is installed at `.toolchain/bin/cloudflared` (gitignored,
 next to node, since this machine has no brew). Either use the full path or:
 
@@ -52,6 +61,18 @@ Then, in two terminals:
     cloudflared tunnel run zold
 
 `https://zoldhq.com/` is the landing page, `https://zoldhq.com/app` the app.
+
+Two other routes answer without a session, so they are reachable the moment the
+tunnel is up: `/pay/<handle>` (payment pages) and `/r/<slug>` (shareable
+receipts). Set `TRANSF_PUBLIC_URL=https://zoldhq.com` for the second one — the
+share link is built from it, and without it the API falls back to the request's
+own host header. That fallback is correct behind this tunnel only because
+`TRUSTED_PROXY_HOPS=1` makes Express honour `X-Forwarded-Proto`; setting the
+variable removes the dependency on that reasoning holding.
+
+Note that `TRANSF_PUBLIC_URL` also forces `LOOKS_HOSTED` true. That changes
+nothing today (see NODE_ENV below — the block it gates does not run), but it is
+the switch that arms those checks the day `NODE_ENV=production` is set.
 
 ## Config already applied to .env
 
@@ -89,18 +110,48 @@ so the simulate routes and internal error text are off either way — verified:
 simulate-deposit returns 404 and a new user lands in `pending`. The one thing
 that did depend on it, KYC gating, is now set explicitly above.
 
-Two further requirements that only appear under production, and are worth
-knowing before a real deployment: `MONERIUM_WEBHOOK_SECRET` must use Monerium's
-`whsec_<base64>` format (at least 24 bytes decoded) — a raw hex secret is
-rejected — and `ALLOW_PLAINTEXT_STORE=1` must be set as a deliberate
-acknowledgement rather than a fix.
+Be precise about what omitting it does: `assertProductionConfig()` begins
+`if (!IS_PRODUCTION) return`, so the ENTIRE production block is skipped — not
+just the anchor-passphrase check. Everything under `LOOKS_HOSTED` is inert here
+even though `LOOKS_HOSTED` is genuinely true on chain 84532. The dev-only
+behaviour is off for the separate reason above, which is why this is safe; but
+"the config is validated" is not among the things currently true.
+
+The consequence to plan for: the day `NODE_ENV=production` is set, a list of
+requirements arrives at once, and `.env` satisfies none of the last three today.
+Verified by importing `config.ts` against the live `.env` — it returns clean
+now, and would not then.
+
+| requirement | in `.env`? |
+|---|---|
+| `MONERIUM_WEBHOOK_SECRET` in `whsec_<base64>` form, ≥24 bytes decoded — raw hex is rejected | yes |
+| `ALLOW_PLAINTEXT_STORE=1`, a deliberate acknowledgement rather than a fix | yes |
+| `KYC_OPERATOR_TOKEN`, ≥24 chars | yes |
+| `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` | **no** |
+| `CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI` (or `CANDIDE_COSIGNER_ALLOWANCE_AMOUNT`), positive | **no** |
+| `CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES`, positive | **no** |
+
+The last two arrived with the Safe-debit-without-an-API-key change (PR #116) and
+are not in `.env.example` either. They are not cosmetic: a positive allowance is
+a standing authority for the co-signer key to move EURe out of every user's Safe
+through the allowance module, without the passkey. Requiring a positive PERIOD
+alongside it makes that a recurring cap rather than a one-time budget that
+silently runs out mid-life. Decide the numbers deliberately before setting them.
 
 ## Accounts do not move between origins
 
-Device keys live in `localStorage`, scoped per origin, and `RemitVault`'s
-`setAuthorizer` only lets the *current* authorizer rotate. So an account
-onboarded at `localhost` cannot be operated from `zoldhq.com`, and cannot be
-migrated — this is FP4's hard edge, not a bug in the move.
+Device keys live in `localStorage`, scoped per origin, and an account's
+authorizer can never be rebound: `POST /api/users/:id/authorizer` answers 409
+for any address other than the one already stored. So an account onboarded at
+`localhost` cannot be operated from `zoldhq.com`, and cannot be migrated — this
+is FP4's hard edge, not a bug in the move.
+
+(This paragraph used to attribute that to `RemitVault.setAuthorizer` letting
+only the current authorizer rotate. That contract was deleted on main and
+`setAuthorizer` does not exist anywhere in the tree any more. The binding is now
+`user.authorizerAddress` in `db.json`, checked in the API process — so the
+consequence below is unchanged, but it is enforced by the server rather than by
+bytecode, and there is no rotation path at all rather than a restricted one.)
 
 Consequences:
 
@@ -121,8 +172,13 @@ What protects you is `LOOKS_LOCAL` being false on chain 84532, not a
 
 ## Before this is anything but a testnet demo
 
-- Self-host Inter and Phosphor. The landing page currently pulls both from
-  third-party CDNs, so every visitor's browser announces itself to two other
-  origins — which reads badly next to a page about regulated custody.
+- Self-host the fonts and icons. Three third-party origins, not two, and it is
+  no longer only the landing page: `landing.html` pulls Inter from
+  `fonts.googleapis.com`/`fonts.gstatic.com` and Phosphor from `unpkg.com`, and
+  `index.html` and `receipt.html` both pull Inter, Space Grotesk and Material
+  Symbols from Google. So every visitor's browser announces itself to someone
+  else on the landing page, in the app, and on any receipt a user shares —
+  which reads badly next to a page about regulated custody, and worst of all on
+  the receipt, whose whole premise is that the sender controls who sees what.
 - The tunnel is only up while the Mac is. Fine for a demo, not for anything
   someone is told to rely on.
