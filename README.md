@@ -392,3 +392,13 @@ contracts/src/         AdminTimelock, FxSwapper, BridgeEscrow, MockToken
 services/api/public/   landing + app, no build step
 scripts/               deploy, operations, 30 test harnesses
 ```
+
+---
+
+## License
+
+[Apache-2.0](LICENSE). Security policy in [SECURITY.md](SECURITY.md).
+
+This repository is a reference implementation running against testnets and
+sandboxes. It is not an audited, licensed, or operated financial service —
+see SECURITY.md for what that means before you deploy it anywhere real.
