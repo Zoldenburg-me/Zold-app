@@ -209,7 +209,7 @@ export function passkeySafeAllowanceSetupTransactions(
   /** The allowance delegate. Defaults to the co-signer OWNER, but the two are
    *  distinct roles: a single-owner Safe can still delegate spending to the
    *  configured co-signer without making it an owner. */
-  delegate: `0x${string}` | "" | undefined = plan.cosignerAddress,
+  delegate: `0x${string}` | "" | undefined = plan.cosignerAddress || CANDIDE.cosignerAddress,
 ): MetaTransaction[] {
   if (!delegate || !plan.cosignerPolicy?.enabled) return [];
   const allowance = new AllowanceModule(plan.cosignerPolicy.allowanceModuleAddress);
