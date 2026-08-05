@@ -200,6 +200,7 @@ const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public")
  */
 app.get("/", (_req, res) => res.sendFile(path.join(pub, "landing.html")));
 app.get(["/app", "/app/"], (_req, res) => res.sendFile(path.join(pub, "index.html")));
+app.get(["/admin", "/admin/"], (_req, res) => res.sendFile(path.join(pub, "admin.html")));
 
 app.use(express.static(pub));
 
@@ -1741,6 +1742,53 @@ app.post(
     const result = await applyKycDecision(user, decision, "manual", req.body?.reason);
     console.log(`KYC: ${decision} for ${user.id} by operator`);
     res.json(result);
+  }),
+);
+
+app.get(
+  "/api/admin/stats",
+  wrap(async (req, res) => {
+    if (!requireOperator(req, res)) return;
+    const users = store.users;
+    const transfers = store.transfers;
+    const totalUsers = users.length;
+    const kycPending = users.filter((u) => u.kycStatus === "pending").length;
+    const kycApproved = users.filter((u) => u.kycStatus === "approved").length;
+    const activeSafes = users.filter((u) => u.passkeySafe?.status === "active" || u.wallet?.deployed).length;
+    const totalTransfers = transfers.length;
+    const totalVolumeEur = transfers.reduce((sum, t) => sum + (t.sendEur || 0), 0);
+    res.json({
+      totalUsers,
+      kycPending,
+      kycApproved,
+      activeSafes,
+      totalTransfers,
+      totalVolumeEur,
+    });
+  }),
+);
+
+app.get(
+  "/api/admin/users",
+  wrap(async (req, res) => {
+    if (!requireOperator(req, res)) return;
+    const list = store.users.map((u) => publicUser(u));
+    res.json(list);
+  }),
+);
+
+app.post(
+  "/api/admin/users/:id/issue-iban",
+  wrap(async (req, res) => {
+    if (!requireOperator(req, res)) return;
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    const iban = issueIban(user.id);
+    const updated = store.updateUser(user.id, {
+      iban,
+      funding: { mode: "sandbox", status: "active", detail: "admin manual IBAN assignment" },
+    });
+    res.json(publicUser(updated));
   }),
 );
 
