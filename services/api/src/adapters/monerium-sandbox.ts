@@ -16,14 +16,9 @@
  */
 import { MONERIUM } from "../config.js";
 import { store, type User } from "../store.js";
-import {
-  LINK_MESSAGE,
-  MoneriumApiError,
-  MoneriumClient,
-  type MoneriumOrder,
-} from "./monerium-client.js";
+import { MoneriumApiError, MoneriumClient, type MoneriumOrder } from "./monerium-client.js";
 import { simulateSepaDeposit } from "./monerium.js";
-import { isDeployed, signMessageAsSafe } from "../wallet/candide.js";
+import { isDeployed } from "../wallet/candide.js";
 import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
 
 let client: MoneriumClient | null = null;
@@ -71,11 +66,7 @@ async function resolveProfileId(user: User): Promise<string | undefined> {
  * Mutates the stored user with progress; returns the updated user.
  */
 export async function provisionFunding(user: User): Promise<User> {
-  const api = getClient();
   try {
-    if (!user.privateKey) throw new Error("user has no wallet key to sign with");
-    const privateKey = user.privateKey;
-
     // 1. The Safe must already exist on-chain for Monerium's EIP-1271
     //    signature check. Deployment is centralized in the passkey Safe endpoint.
     if (!(await isDeployed(user.address))) {
@@ -85,29 +76,7 @@ export async function provisionFunding(user: User): Promise<User> {
       throw new Error("passkey Safe must be deployed before Monerium funding provisioning");
     }
 
-    // 2. Safe-style signature over the ownership declaration (EIP-1271).
-    const signature = await signMessageAsSafe(privateKey, user.address, LINK_MESSAGE);
-
-    const profileId = await resolveProfileId(user);
-    await api.linkAddress({
-      address: user.address,
-      signature,
-      chain: MONERIUM.chain,
-      message: LINK_MESSAGE,
-      ...(profileId ? { profile: profileId } : {}),
-    });
-
-    await api.requestIban(user.address, MONERIUM.chain);
-
-    const iban = await findIban(user.address);
-    return store.updateUser(user.id, {
-      iban: iban ?? "",
-      funding: {
-        mode: "sandbox",
-        status: iban ? "active" : "iban_pending",
-        moneriumProfileId: profileId,
-      },
-    });
+    throw new Error("Monerium funding provisioning requires interactive passkey Safe linking");
   } catch (err: any) {
     return store.updateUser(user.id, {
       funding: { mode: "sandbox", status: "error", detail: String(err?.message ?? err) },
@@ -188,9 +157,7 @@ export async function redeemToIban(
     message = authorization.message;
     signature = authorization.signature;
   } else {
-    if (!user.privateKey) throw new Error("user has no wallet key to sign with");
-    message = moneriumRedeemMessage(amountEur, iban, new Date().toISOString()).message;
-    signature = await signMessageAsSafe(user.privateKey, user.address, message);
+    throw new Error("Monerium redeem requires passkey Safe authorization");
   }
   return getClient().placeOrder({
     address: user.address,

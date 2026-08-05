@@ -1,9 +1,9 @@
 # Deploying Zold at zoldhq.com (Cloudflare Tunnel)
 
-Testnet only. `db.json` still holds `user.privateKey` and `senderProfile` PII in
-plaintext, and FP4's key-custody half is unfinished — see the launch gate in
-CLAUDE.md. The tunnel is chosen deliberately so that database stays on the
-Mac and never lands on a public host.
+Testnet only. `db.json` still holds senderProfile PII and remains acknowledged
+as plaintext local storage; user Safe owner keys are no longer stored by the
+API. The tunnel is chosen deliberately so that database stays on the Mac and
+never lands on a public host.
 
 Chain is Base Sepolia (84532), Monerium chain `basesepolia`, CCTP dry-run.
 
@@ -73,7 +73,7 @@ the switch that arms those checks the day `NODE_ENV=production` is set.
 | `MONERIUM_REDIRECT_URI` | `https://zoldhq.com/api/monerium/oauth/callback` | must be re-registered with Monerium |
 | `MONERIUM_TOKEN_ENCRYPTION_KEY` | generated | AES-256-GCM for per-user OAuth tokens at rest; the server 503s without it |
 | `MONERIUM_WEBHOOK_SECRET` | generated, `whsec_` | **must be set to the same value in Monerium's dashboard** or deliveries are rejected |
-| `ALLOW_PLAINTEXT_STORE` | `1` | acknowledges db.json is not production storage |
+| `ALLOW_PLAINTEXT_STORE` | `1` | acknowledges db.json is plaintext app storage, not production database infrastructure |
 
 ### RP_ID is a one-way door
 
@@ -113,7 +113,7 @@ now, and would not then.
 | requirement | in `.env`? |
 |---|---|
 | `MONERIUM_WEBHOOK_SECRET` in `whsec_<base64>` form, ≥24 bytes decoded — raw hex is rejected | yes |
-| `ALLOW_PLAINTEXT_STORE=1`, a deliberate acknowledgement rather than a fix | yes |
+| `ALLOW_PLAINTEXT_STORE=1`, an acknowledgement of plaintext PII/app state storage | yes |
 | `KYC_OPERATOR_TOKEN`, ≥24 chars | yes |
 | `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` | **no** |
 | `CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI` (or `CANDIDE_COSIGNER_ALLOWANCE_AMOUNT`), positive | **no** |

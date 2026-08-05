@@ -40,7 +40,7 @@ import {
   transferIdHash,
   writeAndWait,
 } from "./chain.js";
-import { transferTokenFromSafe, transferTokenFromSafeAllowance } from "./wallet/candide.js";
+import { transferTokenFromSafeAllowance } from "./wallet/candide.js";
 import {
   createCashPickup,
   createCashPickupViaAnchor,
@@ -274,10 +274,9 @@ export function safeDebitBlocker(user: User): string | null {
       ? null
       : "active passkey Safe debits require the configured co-signer allowance";
   }
-  if (user.privateKey) return null;
   return (
-    "Safe-held funds need either a legacy API-held owner key or an active passkey Safe " +
-    "with a production co-signer allowance before the API can relay this debit"
+    "Safe-held funds need an active passkey Safe with a production co-signer allowance " +
+    "before the API can relay this debit"
   );
 }
 
@@ -299,31 +298,15 @@ async function moveTokenFromUserSafe(
   to: `0x${string}`,
   amount: bigint,
 ): Promise<string> {
-  if (activePasskeySafe(user)) {
-    if (!passkeySafeAllowanceReady(user)) {
-      throw new Error(
-        "active passkey Safe debits require the configured co-signer allowance; " +
-          "refusing to derive a legacy 1-of-1 Safe from an API-held key",
-      );
-    }
-    return transferTokenFromSafeAllowance({
-      safeAddress: user.address,
-      token,
-      to,
-      amount,
-    });
+  if (!passkeySafeAllowanceReady(user)) {
+    throw new Error(safeDebitBlocker(user) ?? "Safe debit is not configured for this account");
   }
-  if (user.privateKey) {
-    return transferTokenFromSafe({
-      ownerKey: user.privateKey,
-      token,
-      to,
-      amount,
-    });
-  }
-  const blocked = safeDebitBlocker(user);
-  if (blocked) throw new Error(blocked);
-  throw new Error("Safe debit is not configured for this account");
+  return transferTokenFromSafeAllowance({
+    safeAddress: user.address,
+    token,
+    to,
+    amount,
+  });
 }
 
 function cctpRecipientStellar(): string {

@@ -108,8 +108,8 @@ contradict one, re-test before rewriting it, and say what you ran.
   as-is; resolvePaymentAmount still refuses an amount_in ABOVE what we
   authorised. Their bridging page recommends Allbridge/Bridge.xyz and never
   mentions CCTP.
-  PII: senderProfile lands in plaintext db.json alongside private keys — a real
-  deployment must keep it with the KYC provider and store only a reference.
+  PII: senderProfile lands in plaintext db.json — a real deployment must keep
+  it with the KYC provider and store only a reference.
 - Stellar trustlines/gas (July 2026): Stellar refuses to deliver an asset an
   account does not trust, and the repo had NO changeTrust anywhere — so a live
   CCTP burn would have destroyed USDC on Base and minted nothing, and an anchor
@@ -357,10 +357,10 @@ PaymentAuthorization -> POST /authorize -> orchestrator runs ->
 after RemitVault was deleted the signature is verified in the API process, and
 this proves that path accepts a real browser-generated signature.
 
-THE WALL: `transferTokenFromSafe` throws "Safe 0x… is not deployed — cannot
-move tokens from it" (wallet/candide.ts:331, called from orchestrator.ts:235,
-i.e. AFTER the authorization check). The Safe address is counterfactual and can
-only be deployed through Candide's bundler on CANDIDE_CHAIN_ID=84532, which
+THE WALL: local hardhat transfers now refuse before debit unless the account
+has an active passkey Safe with a configured co-signer allowance. The Safe
+address is counterfactual and can only be deployed through Candide's bundler on
+CANDIDE_CHAIN_ID=84532, which
 does not exist on local hardhat 31337. Nothing about the send flow fixes this;
 `npm run api` against Base Sepolia with a funded, deployed Safe is the only way
 past it, and debited -> bridged -> paid is still unexercised beyond its
@@ -452,13 +452,12 @@ process, not by bytecode. The EIP-712 domain moved to "TransF Safe Transfer"
 with the user's Safe as verifyingContract.
 THE SECURITY CONSEQUENCE, stated plainly because the text below claims the
 opposite as VERIFIED: a wrong-key signature is no longer "rejected by the
-contract itself". The server is the thing checking, and it still holds
-`user.privateKey` (FP4's open half), so a compromised or modified API can move
-EURe out of a user's Safe. The device key still stops a stolen session from
-swapping the payee or the amount; it no longer stops the server. Whether that
-trade was intended is a decision for the repo owner — this note records the
-divergence, it does not resolve it. The recovery plan below needs rewriting
-against whatever replaces the vault as the enforcement point.
+contract itself". The server is the thing checking, but it no longer stores
+user Safe owner keys; passkey Safes debit through configured co-signer
+allowances. The device key still stops a stolen session from swapping the payee
+or the amount; the co-signer allowance bounds what the API can relay. The
+recovery plan below needs rewriting against whatever replaces the vault as the
+enforcement point.
 
 FP4 (key custody): SPEND-AUTHORITY HALF DONE (July 2026, PR #11, branch
 claude/fp4-vault-authorization — do not re-do differently). RemitVault.debit
@@ -472,10 +471,9 @@ sign-in-page -> POST /api/transfers/:id/authorize. Verified live: sandbox
 onboarding bound the browser key on-chain; wrong-key signature rejected by
 the contract itself. authorizerOf ALSO accepts EIP-1271 — this is the hook
 for the passkey half below; build against it, not around it.
-FP4 still open (key-custody half): `user.privateKey` remains in db.json —
-Monerium linking + redeem still sign server-side. The plan stands: Candide
-WebAuthn Safe owner (fromSafeWebauthn) signs the Monerium declaration +
-orders via the passkey, then the passkey-owned Safe replaces the browser
+FP4 key-custody half: user Safe owner keys are no longer stored in db.json.
+Candide WebAuthn Safe owner (fromSafeWebauthn) signs the Monerium declaration
+and orders via the passkey, then the passkey-owned Safe replaces the browser
 EOA as the vault authorizer (no contract change needed). The send-time passkey prompt is now
 the real gate: the device key is encrypted at rest with WebAuthn PRF
 (HKDF -> AES-GCM, only {iv,ct} in localStorage), so each payment needs a
@@ -549,8 +547,8 @@ NOT verified in that pass: no solc in the review sandbox, so npm run compile,
 test:contracts and e2e did not run — typecheck, webauthn:selftest and
 authorize:test did. Still open from the same review: KYC approval via a
 connected Monerium account is delegated trust with no identity match (now at
-least auditable via kyc.applicantId), and db.json still holds privateKey +
-senderProfile PII in plaintext.
+least auditable via kyc.applicantId), and db.json still holds senderProfile PII
+in plaintext.
 Launch gate: local demos fine; NOT safe hosted, with real funds, or claiming
 payout finality until FP1-FP4 done.
 
@@ -725,7 +723,7 @@ THE FIX, in this order (the order is not optional):
     no return — after it, money can arrive. DONE (passkeyRequiredBeforeFunding,
     gated on allowSimulation so e2e/local demos still run).
  1. Passkey becomes a Safe owner (abstractionkit `fromSafeWebauthn`),
-    replacing the server-held user.privateKey.
+    replacing the server-held user key path.
  2. Add the co-signer as a second owner, threshold 2. 2-of-2 for now —
     Privy/Turnkey cost money, so the third (social-login) signer is deferred.
     Owner actions still need both passkey and co-signer signatures. Production
@@ -735,12 +733,12 @@ THE FIX, in this order (the order is not optional):
     so NO CONTRACT CHANGE. After this authorizerOf never changes again.
  4. Install Candide's SocialRecoveryModule with guardians. With only 2-of-2
     there is no spare signer, so guardians are REQUIRED, not optional.
- 5. Delete user.privateKey — the last server-held key, currently plaintext in
-    db.json next to senderProfile PII.
+ 5. DONE: delete the server-held user Safe owner key path; db.json now still
+    carries senderProfile PII but not user Safe owner keys.
 
-WHY THE ORDER: steps 1-2 must precede 3. Pointing authorizerOf at the Safe
-while the server still owns it would hand the database spending power over
-every balance. The device key is the only thing preventing that today.
+WHY THE ORDER: steps 1-2 must precede 3. Pointing authorizerOf at a Safe while
+the server owned it would have handed the database spending power over every
+balance. That server-held user owner path has been removed.
 
 VERIFIED, so nobody re-litigates it:
  - RIP-7212 (P256 precompile) is LIVE on Base Sepolia AND Base mainnet —

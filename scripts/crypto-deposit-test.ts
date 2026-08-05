@@ -23,7 +23,7 @@ import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { randomBytes } from "node:crypto";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RPC = "http://127.0.0.1:8552";
@@ -106,16 +106,13 @@ try {
     name: string,
     opts: { autoConvert?: boolean; kyc?: string; settlementAsset?: "EURE" | "USDC" } = {},
   ) {
-    const key = generatePrivateKey();
-    const owner = privateKeyToAccount(key).address;
+    const owner = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
     const now = new Date().toISOString();
     const user = {
       id: randomUUID(),
       name,
       country: "DE",
       address: owner,
-      ownerAddress: owner,
-      privateKey: key,
       iban: "",
       kycStatus: opts.kyc ?? "approved",
       paymentPage: {

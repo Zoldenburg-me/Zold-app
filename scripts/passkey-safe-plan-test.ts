@@ -6,7 +6,6 @@ import {
   CANDIDE,
   passkeySafeAllowanceSetupTransactions,
   passkeySafeRecoverySetupTransactions,
-  smartAccountFor,
   smartAccountForPasskey,
   smartAccountForPasskeyCosigner,
   webauthnOwnerFromJwk,
@@ -34,11 +33,6 @@ assert.equal(
   smartAccountForPasskeyCosigner(passkeyOwner, cosigner).accountAddress,
   safe.accountAddress,
   "passkey/co-signer Safe address must be deterministic",
-);
-assert.notEqual(
-  smartAccountFor(cosigner).accountAddress.toLowerCase(),
-  safe.accountAddress.toLowerCase(),
-  "2-of-2 passkey/co-signer Safe must not collapse to the legacy single-EOA Safe",
 );
 assert.notEqual(
   passkeyOnlySafe.accountAddress.toLowerCase(),
