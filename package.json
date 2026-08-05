@@ -7,6 +7,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx scripts/dev.ts",
+    "tunnel": "cloudflared tunnel run dfce9083-14c1-4267-8a38-648dfe09a340",
     "auto-sync": "tsx scripts/auto-sync.ts",
     "chain": "hardhat node",
     "compile": "hardhat compile",
