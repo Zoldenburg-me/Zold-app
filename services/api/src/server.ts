@@ -10,7 +10,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR } from "./config.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
@@ -1328,7 +1328,7 @@ app.post(
     const user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
-    if (!MONERIUM.clientId || !MONERIUM.clientSecret) {
+    if (!moneriumOAuthEnabled()) {
       return res.status(503).json({ error: "Monerium OAuth client is not configured" });
     }
     if (!MONERIUM.tokenEncryptionKey) {
@@ -2792,7 +2792,7 @@ if (sandbox) {
       console.error(`monerium sandbox auth FAILED — check .env credentials: ${err.message}`);
     });
 } else {
-  console.log("monerium: mock mode (set MONERIUM_CLIENT_ID/SECRET in .env for sandbox)");
+  console.log("monerium: mock mode (set MONERIUM_CLIENT_ID for OAuth, plus MONERIUM_CLIENT_SECRET for app-level API calls)");
 }
 /**
  * Inbound crypto is a chain concern, not a Monerium one, so this runs whether
