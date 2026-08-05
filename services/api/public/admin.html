@@ -99,6 +99,9 @@
     }
     .tab-btn.active { background: var(--surface-3); color: var(--text); font-weight: 600; }
     .tab-btn:hover:not(.active) { color: var(--text); }
+    .section-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin: 36px 0 18px; flex-wrap: wrap; }
+    .section-title { font-family: 'Outfit', sans-serif; font-size: 20px; font-weight: 700; }
+    .section-subtitle { color: var(--text-muted); font-size: 13px; margin-top: 3px; }
 
     /* Users Table */
     .table-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow); }
@@ -119,6 +122,9 @@
     .badge-pending { background: var(--warning-bg); color: var(--warning); }
     .badge-rejected { background: var(--danger-bg); color: var(--danger); }
     .badge-neutral { background: var(--surface-3); color: var(--text-muted); }
+    .badge-review { background: var(--danger-bg); color: var(--danger); }
+    .badge-paid { background: var(--success-bg); color: var(--success); }
+    .badge-open { background: var(--warning-bg); color: var(--warning); }
 
     .code-pill {
       font-family: monospace; font-size: 12px; background: var(--surface-2); padding: 4px 8px; border-radius: 6px;
@@ -141,6 +147,11 @@
     .btn-iban:hover { border-color: var(--primary); background: var(--primary-glow); }
     .btn-icon { padding: 8px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); cursor: pointer; }
     .btn-icon:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.2); }
+    .route-stack { display: flex; flex-wrap: wrap; gap: 6px; max-width: 360px; }
+    .route-step { font-family: monospace; font-size: 11px; background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; }
+    .detail-lines { display: flex; flex-direction: column; gap: 2px; max-width: 260px; }
+    .detail-main { color: var(--text); font-weight: 600; }
+    .detail-sub { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     /* Detail Modal */
     .modal-overlay {
@@ -172,7 +183,7 @@
       </div>
       <div class="auth-bar">
         <span style="font-size: 12px; color: var(--text-muted);">Operator Token:</span>
-        <input type="password" id="operatorToken" value="GQQJMlgOzA2m/VL4BvhG1Tv3JWxtgxsdHHvz3rSumNU=" placeholder="Enter operator token...">
+        <input type="password" id="operatorToken" placeholder="Enter operator token...">
         <div class="auth-status online" id="authPill">
           <span class="status-dot"></span>
           <span id="authText">Connected</span>
@@ -208,9 +219,9 @@
     <div class="controls">
       <div class="search-box">
         <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" id="searchInput" placeholder="Search by name, ID, or Safe address...">
+        <input type="text" id="searchInput" placeholder="Search by user, transfer, rail status, Safe, IBAN, or tx hash...">
       </div>
-      <div class="filter-tabs">
+      <div class="filter-tabs" id="userFilterTabs">
         <button class="tab-btn active" data-filter="all">All</button>
         <button class="tab-btn" data-filter="pending">Pending KYC</button>
         <button class="tab-btn" data-filter="approved">Approved</button>
@@ -241,6 +252,44 @@
         </tbody>
       </table>
     </div>
+
+    <div class="section-head">
+      <div>
+        <div class="section-title">Transaction Operations</div>
+        <div class="section-subtitle">KYC rail payouts, Safe funding, bridge, swap, and failure state</div>
+      </div>
+      <div class="filter-tabs" id="txFilterTabs">
+        <button class="tab-btn active" data-tx-filter="all">All</button>
+        <button class="tab-btn" data-tx-filter="sepa">Monerium</button>
+        <button class="tab-btn" data-tx-filter="cash">MoneyGram</button>
+        <button class="tab-btn" data-tx-filter="funding">Funding</button>
+        <button class="tab-btn" data-tx-filter="attention">Needs Attention</button>
+      </div>
+    </div>
+
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Transaction</th>
+            <th>User</th>
+            <th>Rail</th>
+            <th>Status</th>
+            <th>Amount</th>
+            <th>Route / Backend TXs</th>
+            <th>Updated</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="transactionsTableBody">
+          <tr>
+            <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">
+              Loading transaction operations...
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- Detail JSON Modal -->
@@ -256,7 +305,9 @@
 
   <script>
     let allUsers = [];
+    let allTransactions = [];
     let currentFilter = 'all';
+    let currentTxFilter = 'all';
 
     const tokenInput = document.getElementById('operatorToken');
     const authPill = document.getElementById('authPill');
@@ -308,6 +359,13 @@
         if (usersRes.ok) {
           allUsers = await usersRes.json();
           renderUsers();
+        }
+
+        const txRes = await fetchApi('/api/admin/transactions');
+        if (txRes.ok) {
+          const data = await txRes.json();
+          allTransactions = data.transactions || [];
+          renderTransactions();
         }
       } catch (err) {
         console.error("Dashboard error:", err);
@@ -379,8 +437,121 @@
                 ` : `
                   ${!u.iban ? `<button class="btn btn-iban" onclick="issueIban('${u.id}')">Issue IBAN</button>` : ''}
                 `}
-                <button class="btn-icon" onclick='inspectUser(${JSON.stringify(u)})' title="View JSON">🔍</button>
+                <button class="btn-icon" onclick="inspectEncodedUser('${jsonArg(u)}')" title="View JSON">🔍</button>
               </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function statusBadgeClass(state) {
+      if (['PAID', 'CONVERTED'].includes(state)) return 'badge-paid';
+      if (['FAILED', 'REFUNDED', 'REFUSED', 'MANUAL_REVIEW'].includes(state)) return 'badge-review';
+      if (['CREATED', 'DETECTED', 'DEBITED', 'SWAPPED', 'BRIDGED', 'PAYOUT_DETAILS_PENDING', 'PAYOUT_FUNDING_PENDING', 'PAYOUT_FUNDED', 'PAYOUT_READY', 'PAYOUT_SUBMITTED'].includes(state)) return 'badge-open';
+      return 'badge-neutral';
+    }
+
+    function railLabel(t) {
+      if (t.kind === 'funding') return `${t.token || 'Token'} funding`;
+      if (t.rail === 'sepa') return t.payout?.provider || 'Monerium';
+      if (t.rail === 'cash') return t.payout?.provider || 'MoneyGram';
+      return t.rail || 'Unknown';
+    }
+
+    function amountLabel(t) {
+      if (t.kind === 'funding') {
+        if (t.token === 'USDC') return `+${Number(t.amountUsdc || 0).toFixed(2)} USDC`;
+        return `+€${Number(t.amountEur || 0).toFixed(2)}`;
+      }
+      if (t.rail === 'sepa') return `€${Number(t.sendEur || 0).toFixed(2)} → €${Number(t.receiveEur || 0).toFixed(2)}`;
+      return `€${Number(t.sendEur || 0).toFixed(2)} → KES ${Number(t.receiveKes || 0).toLocaleString()}`;
+    }
+
+    function routeChips(t) {
+      const route = Array.isArray(t.route) ? t.route : [];
+      const steps = route.slice(0, 4).map(x => `<span class="route-step">${escapeHtml(x.step || x.kind)}</span>`);
+      if (route.length > 4) steps.push(`<span class="route-step">+${route.length - 4}</span>`);
+      if (steps.length) return steps.join('');
+      const detail = t.statusDetail || t.error || 'No backend tx recorded yet';
+      return `<span class="route-step">${escapeHtml(detail)}</span>`;
+    }
+
+    function txMatchesFilter(t) {
+      if (currentTxFilter === 'all') return true;
+      if (currentTxFilter === 'attention') return ['FAILED', 'REFUNDED', 'REFUSED', 'MANUAL_REVIEW'].includes(t.state);
+      if (currentTxFilter === 'funding') return t.kind === 'funding';
+      return t.kind === 'transfer' && t.rail === currentTxFilter;
+    }
+
+    function renderTransactions() {
+      const tbody = document.getElementById('transactionsTableBody');
+      const query = searchInput.value.toLowerCase();
+      const filtered = allTransactions.filter(t => {
+        const hay = [
+          t.id,
+          t.state,
+          t.rail,
+          t.kind,
+          t.user?.name,
+          t.user?.id,
+          t.user?.safeAddress,
+          t.txHash,
+          t.lastHash,
+          t.error,
+          t.statusDetail,
+          t.payout?.orderId,
+          t.payout?.referenceCode,
+          t.payout?.anchorTransactionId,
+          t.liquidity?.provider,
+        ].filter(Boolean).join(' ').toLowerCase();
+        return txMatchesFilter(t) && (!query || hay.includes(query));
+      });
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">
+              No transactions match the criteria.
+            </td>
+          </tr>`;
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(t => {
+        const shortId = `${t.id || ''}`.slice(0, 10);
+        const userName = t.user?.name || 'Unknown user';
+        const userId = t.user?.id || '';
+        const updated = t.updatedAt || t.createdAt || t.detectedAt;
+        const routeCount = Array.isArray(t.route) ? t.route.length : 0;
+        return `
+          <tr>
+            <td>
+              <div class="detail-lines">
+                <span class="detail-main">${escapeHtml(shortId)}</span>
+                <span class="detail-sub">${escapeHtml(t.kind === 'funding' ? (t.txHash || '') : (t.quote?.id || ''))}</span>
+              </div>
+            </td>
+            <td>
+              <div class="user-info">
+                <span class="user-name">${escapeHtml(userName)}</span>
+                <span class="user-id">${escapeHtml(userId)}</span>
+              </div>
+            </td>
+            <td><span class="badge badge-neutral">${escapeHtml(railLabel(t))}</span></td>
+            <td>
+              <span class="badge ${statusBadgeClass(t.state)}">${escapeHtml(t.state || 'unknown')}</span>
+              ${t.statusDetail ? `<div class="detail-sub">${escapeHtml(t.statusDetail)}</div>` : ''}
+            </td>
+            <td><strong>${escapeHtml(amountLabel(t))}</strong></td>
+            <td><div class="route-stack">${routeChips(t)}</div></td>
+            <td style="color: var(--text-muted); font-size: 12px;">
+              ${updated ? new Date(updated).toLocaleString() : 'Unknown'}
+            </td>
+            <td>
+              <button class="btn-icon" onclick="inspectEncodedTransaction('${jsonArg(t)}')" title="View route JSON">
+                ${routeCount ? '⛓' : '🔍'}
+              </button>
             </td>
           </tr>
         `;
@@ -417,23 +588,53 @@
       document.getElementById('modalOverlay').classList.add('open');
     }
 
+    function inspectEncodedUser(encoded) {
+      inspectUser(JSON.parse(decodeURIComponent(encoded)));
+    }
+
+    function inspectTransaction(tx) {
+      document.getElementById('modalTitle').textContent = `Transaction: ${tx.id}`;
+      document.getElementById('modalJson').textContent = JSON.stringify(tx, null, 2);
+      document.getElementById('modalOverlay').classList.add('open');
+    }
+
+    function inspectEncodedTransaction(encoded) {
+      inspectTransaction(JSON.parse(decodeURIComponent(encoded)));
+    }
+
     function closeModal() {
       document.getElementById('modalOverlay').classList.remove('open');
     }
 
-    document.querySelectorAll('.tab-btn').forEach(btn => {
+    document.querySelectorAll('[data-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         currentFilter = btn.dataset.filter;
         renderUsers();
       });
     });
 
-    searchInput.addEventListener('input', renderUsers);
+    document.querySelectorAll('[data-tx-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('[data-tx-filter]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentTxFilter = btn.dataset.txFilter;
+        renderTransactions();
+      });
+    });
+
+    searchInput.addEventListener('input', () => {
+      renderUsers();
+      renderTransactions();
+    });
 
     function escapeHtml(str) {
-      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      return String(str ?? '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function jsonArg(obj) {
+      return encodeURIComponent(JSON.stringify(obj));
     }
 
     // Initial Load & Auto Refresh
