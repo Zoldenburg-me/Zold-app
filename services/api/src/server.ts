@@ -74,7 +74,9 @@ import {
 import {
   CANDIDE,
   isDeployed,
+  preparePasskeySafeAllowanceSetup,
   preparePasskeySafeDeployment,
+  readCosignerTokenAllowance,
   safeMessageHash,
   signMessageAsPasskeySafe,
   smartAccountForPasskey,
@@ -207,6 +209,14 @@ app.use(express.static(pub));
 
 type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
 const pendingPasskeySafeDeployments = new Map<string, { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }>();
+/** Allowance repair ceremonies in flight. The refreshed plan rides along
+ *  because the stored one may name the codeless module this repairs. */
+const pendingAllowanceSetups = new Map<string, {
+  userId: string;
+  expiresAt: number;
+  plan: NonNullable<User["passkeySafe"]>;
+  userOperation: PendingPasskeySafeDeployment;
+}>();
 const pendingMoneriumLinkSignatures = new Map<string, {
   userId: string;
   expiresAt: number;
@@ -669,6 +679,29 @@ function prunePendingPasskeySafeDeployments(now = Date.now()) {
   for (const [id, pending] of pendingPasskeySafeDeployments) {
     if (pending.expiresAt < now) pendingPasskeySafeDeployments.delete(id);
   }
+}
+
+function prunePendingAllowanceSetups(now = Date.now()) {
+  for (const [id, pending] of pendingAllowanceSetups) {
+    if (pending.expiresAt < now) pendingAllowanceSetups.delete(id);
+  }
+}
+
+/** The co-signer allowance policy as the CURRENT environment defines it. The
+ *  stored plan's policy is a snapshot from planning time and may name a module
+ *  address that never had code — the repair path must not re-install that. */
+function currentCosignerPolicy(): NonNullable<NonNullable<User["passkeySafe"]>["cosignerPolicy"]> {
+  const a = addrs();
+  return {
+    enabled: true,
+    allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+    allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
+    allowances: [
+      { token: a.eure, symbol: "EURE" as const, amount: CANDIDE.cosignerEureAllowanceWei.toString() },
+      { token: a.usdc, symbol: "USDC" as const, amount: CANDIDE.cosignerUsdcAllowanceUnits.toString() },
+    ],
+    allowanceAmount: CANDIDE.cosignerEureAllowanceWei.toString(),
+  };
 }
 
 function prunePendingMoneriumLinkSignatures(now = Date.now()) {
@@ -2452,6 +2485,102 @@ app.post(
   }),
 );
 
+/**
+ * What the chain says the co-signer may spend from this Safe. The database
+ * records what deployment intended; debits read the chain, and the two have
+ * disagreed — Safes deployed against a codeless allowance module are active,
+ * hold money, and cannot debit. The client uses this to offer the repair.
+ */
+app.get(
+  "/api/users/:id/passkey-safe/allowance",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const active =
+      user.passkeySafe?.status === "active" &&
+      user.address.toLowerCase() === user.passkeySafe.address.toLowerCase();
+    if (!active) return res.json({ configured: false, reason: "no active passkey Safe" });
+    if (!CANDIDE.cosignerAddress || !CANDIDE.cosignerKey) {
+      return res.json({ configured: false, reason: "no co-signer configured on this deployment" });
+    }
+    const a = await readCosignerTokenAllowance(user.address, addrs().eure);
+    res.json({
+      configured: Boolean(a && a.amount > 0n),
+      remainingEur: a ? eur.fromWei(a.remaining) : 0,
+    });
+  }),
+);
+
+app.post(
+  "/api/users/:id/passkey-safe/allowance",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
+      return res.status(409).json({ error: "an active passkey Safe is required before configuring its allowance" });
+    }
+    if (!CANDIDE.cosignerAddress || !CANDIDE.cosignerKey) {
+      return res.status(503).json({ error: "CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required to configure a spending allowance" });
+    }
+    const plan = { ...user.passkeySafe, cosignerPolicy: currentCosignerPolicy() };
+    let prepared: Awaited<ReturnType<typeof preparePasskeySafeAllowanceSetup>>;
+    try {
+      prepared = await preparePasskeySafeAllowanceSetup(plan);
+    } catch (err: any) {
+      return res.status(502).json({ error: `allowance setup failed: ${err?.message ?? err}` });
+    }
+    prunePendingAllowanceSetups();
+    const requestId = randomUUID();
+    pendingAllowanceSetups.set(requestId, {
+      userId: user.id,
+      expiresAt: Date.now() + 5 * 60_000,
+      plan,
+      userOperation: prepared.userOperation,
+    });
+    res.status(201).json({
+      requestId,
+      safeAddress: prepared.safeAddress,
+      credentialId: user.passkey.credentialId,
+      challenge: passkeySafeChallenge(prepared.challenge),
+      rpId: user.passkey.rpId ?? SECURITY.rpId,
+      submitTo: `/api/users/${user.id}/passkey-safe/allowance/${requestId}`,
+    });
+  }),
+);
+
+app.post(
+  "/api/users/:id/passkey-safe/allowance/:requestId",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!user.passkeySafe) return res.status(409).json({ error: "no passkey Safe for this account" });
+    prunePendingAllowanceSetups();
+    const pending = pendingAllowanceSetups.get(req.params.requestId);
+    if (!pending || pending.userId !== user.id) {
+      return res.status(404).json({ error: "allowance setup request not found or expired" });
+    }
+    const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
+    if (!authenticatorData || !clientDataJSON || !signature) {
+      return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
+    }
+    const opHash = await submitPasskeySafeDeployment(pending.plan, pending.userOperation, {
+      authenticatorData: b64urlToBuf(authenticatorData),
+      clientDataJSON: b64urlToBuf(clientDataJSON),
+      signature: b64urlToBuf(signature),
+    });
+    pendingAllowanceSetups.delete(req.params.requestId);
+    // Record the policy that is now actually on-chain. plan.cosignerAddress
+    // (the owner set) is deliberately untouched: owners did not change.
+    const updated = store.updateUser(user.id, {
+      passkeySafe: { ...user.passkeySafe, cosignerPolicy: pending.plan.cosignerPolicy },
+    });
+    res.status(201).json({ ...publicUser(updated), allowanceOpHash: opHash });
+  }),
+);
+
 app.post(
   "/api/passkey/login",
   wrap(async (req, res) => {
@@ -3076,4 +3205,20 @@ if (sandbox) {
 if (CRYPTO_IN.enabled) startCryptoDepositPoller();
 app.listen(API_PORT, API_HOST, () => {
   console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
+  // A co-signer with a zero allowance is the silent version of today's outage:
+  // deployment installs the module and delegate, grants nothing, and every
+  // debit refuses with "allowance is 0". Say so at boot, not at send time.
+  if (
+    CANDIDE.cosignerAddress &&
+    CANDIDE.cosignerKey &&
+    CANDIDE.cosignerEureAllowanceWei <= 0n &&
+    CANDIDE.cosignerUsdcAllowanceUnits <= 0n
+  ) {
+    console.warn(
+      "WARNING: a co-signer is configured but CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI and " +
+        "CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS are both unset/0 — passkey Safes will deploy " +
+        "with a spending allowance of 0 and every debit will refuse. Set the allowance(s) " +
+        "and restart before onboarding accounts.",
+    );
+  }
 });
