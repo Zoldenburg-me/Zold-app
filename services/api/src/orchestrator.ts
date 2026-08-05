@@ -272,11 +272,11 @@ export function safeDebitBlocker(user: User): string | null {
   if (activePasskeySafe(user)) {
     return passkeySafeAllowanceReady(user)
       ? null
-      : "active passkey Safe debits require the configured co-signer allowance";
+      : "Co-signer service is not configured — please ensure CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are set in environment";
   }
   return (
-    "Safe-held funds need an active passkey Safe with a production co-signer allowance " +
-    "before the API can relay this debit"
+    "Safe-held funds need an active passkey Safe with a co-signer service configured " +
+    "before transfers can be executed"
   );
 }
 
@@ -289,7 +289,10 @@ function activePasskeySafe(user: User): boolean {
 
 function passkeySafeAllowanceReady(user: User): boolean {
   if (!activePasskeySafe(user) || !user.passkeySafe) return false;
-  return !!(user.passkeySafe.cosignerPolicy?.enabled && user.passkeySafe.cosignerAddress);
+  return Boolean(
+    (user.passkeySafe.cosignerPolicy?.enabled && user.passkeySafe.cosignerAddress) ||
+    (CANDIDE.cosignerAddress && CANDIDE.cosignerKey)
+  );
 }
 
 async function moveTokenFromUserSafe(
@@ -300,6 +303,25 @@ async function moveTokenFromUserSafe(
 ): Promise<string> {
   if (!passkeySafeAllowanceReady(user)) {
     throw new Error(safeDebitBlocker(user) ?? "Safe debit is not configured for this account");
+  }
+  if (user.passkeySafe && !user.passkeySafe.cosignerPolicy?.enabled && CANDIDE.cosignerAddress) {
+    const a = addrs();
+    store.updateUser(user.id, {
+      passkeySafe: {
+        ...user.passkeySafe,
+        cosignerAddress: CANDIDE.cosignerAddress,
+        cosignerPolicy: {
+          enabled: true,
+          allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+          allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
+          allowances: [
+            { token: a.eure, symbol: "EURE", amount: CANDIDE.cosignerEureAllowanceWei.toString() },
+            { token: a.usdc, symbol: "USDC", amount: CANDIDE.cosignerUsdcAllowanceUnits.toString() },
+          ],
+          allowanceAmount: CANDIDE.cosignerEureAllowanceWei.toString(),
+        },
+      },
+    });
   }
   return transferTokenFromSafeAllowance({
     safeAddress: user.address,

@@ -34,7 +34,8 @@ import { RPC_URL } from "../config.js";
 const CANDIDE_PRODUCTION = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
 const COSIGNER_ENABLED =
   process.env.CANDIDE_COSIGNER_ENABLED === "1" ||
-  (process.env.CANDIDE_COSIGNER_ENABLED !== "0" && CANDIDE_PRODUCTION);
+  (process.env.CANDIDE_COSIGNER_ENABLED !== "0" &&
+    Boolean(process.env.CANDIDE_COSIGNER_ADDRESS && process.env.CANDIDE_COSIGNER_KEY));
 
 export const CANDIDE = {
   chainId: BigInt(process.env.CANDIDE_CHAIN_ID ?? 11155111),
