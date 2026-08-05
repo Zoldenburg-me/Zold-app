@@ -75,6 +75,27 @@ the switch that arms those checks the day `NODE_ENV=production` is set.
 | `MONERIUM_WEBHOOK_SECRET` | generated, `whsec_` | **must be set to the same value in Monerium's dashboard** or deliveries are rejected |
 | `ALLOW_PLAINTEXT_STORE` | `1` | acknowledges db.json is plaintext app storage, not production database infrastructure |
 
+### Monerium OAuth redirect
+
+The existing-Monerium-account flow uses Authorization Code + PKCE. Zold sends
+the exact `MONERIUM_REDIRECT_URI` value as the OAuth `redirect_uri`, and the
+same value is stored with the short-lived state so the callback exchanges the
+code against identical terms.
+
+For the hosted runner, create or update the Monerium OAuth app for the same
+environment as `MONERIUM_BASE_URL` and register this redirect URI exactly:
+
+```text
+https://zoldhq.com/api/monerium/oauth/callback
+```
+
+Exact means same scheme, host, path, and no trailing slash. If Monerium returns
+`Invalid redirect URL: No redirect_uri is registered for client`, the app is
+using credentials for a client that does not have this redirect registered, or
+the environment/client pair does not match. After changing the env or Monerium
+dashboard entry, restart the API and start a fresh connect flow; old OAuth
+states keep the redirect URI they were created with.
+
 ### RP_ID is a one-way door
 
 Passkeys are RP-ID scoped. Credentials registered under `app.zoldhq.com` can
