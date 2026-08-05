@@ -40,7 +40,7 @@ import {
   transferIdHash,
   writeAndWait,
 } from "./chain.js";
-import { transferTokenFromSafeAllowance } from "./wallet/candide.js";
+import { CANDIDE, transferTokenFromSafeAllowance } from "./wallet/candide.js";
 import {
   createCashPickup,
   createCashPickupViaAnchor,
