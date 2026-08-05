@@ -84,6 +84,7 @@ export const moneriumSandboxEnabled = () =>
  * `pending`; an external provider integration should call the review seam.
  */
 export const KYC = {
+  provider: process.env.KYC_PROVIDER ?? "manual",
   autoApprove:
     process.env.KYC_AUTO_APPROVE === "1" ||
     (process.env.KYC_AUTO_APPROVE !== "0" && process.env.NODE_ENV !== "production" && LOOKS_LOCAL),
@@ -98,6 +99,18 @@ export const KYC = {
    */
   operatorToken: process.env.KYC_OPERATOR_TOKEN ?? "",
 };
+
+export const SUMSUB = {
+  baseUrl: process.env.SUMSUB_BASE_URL ?? "https://api.sumsub.com",
+  appToken: process.env.SUMSUB_APP_TOKEN ?? "",
+  secretKey: process.env.SUMSUB_SECRET_KEY ?? "",
+  webhookSecretKey: process.env.SUMSUB_WEBHOOK_SECRET_KEY ?? "",
+  levelName: process.env.SUMSUB_LEVEL_NAME ?? "basic-kyc-level",
+  tokenTtlSecs: Number(process.env.SUMSUB_TOKEN_TTL_SECS ?? 1800),
+  moneriumClientId: process.env.SUMSUB_MONERIUM_CLIENT_ID ?? "monerium",
+};
+
+export const sumsubEnabled = () => Boolean(SUMSUB.appToken && SUMSUB.secretKey && SUMSUB.levelName);
 
 export const RECOVERY = {
   managedKycGuardian: process.env.RECOVERY_MANAGED_KYC_GUARDIAN !== "0",
@@ -295,9 +308,25 @@ function assertProductionConfig() {
   if (!IS_PRODUCTION) return;
   const problems: string[] = [];
   const fail = (message: string) => problems.push(message);
+  const parsePositiveBigint = (name: string, value: string | undefined): bigint => {
+    try {
+      const parsed = BigInt(value ?? "0");
+      if (parsed <= 0n) fail(`${name} must be positive before hosted production funding`);
+      return parsed;
+    } catch {
+      fail(`${name} must be an integer string in base units, for example 1000000000000000000000`);
+      return 0n;
+    }
+  };
 
   if (process.env.KYC_AUTO_APPROVE === "1") fail("KYC_AUTO_APPROVE=1 is forbidden in production");
   if (!KYC.operatorToken) fail("KYC_OPERATOR_TOKEN is required in production");
+  if (KYC.provider === "sumsub" && !sumsubEnabled()) {
+    fail("SUMSUB_APP_TOKEN, SUMSUB_SECRET_KEY and SUMSUB_LEVEL_NAME are required when KYC_PROVIDER=sumsub");
+  }
+  if (KYC.provider === "sumsub" && !SUMSUB.webhookSecretKey) {
+    fail("SUMSUB_WEBHOOK_SECRET_KEY is required in production when KYC_PROVIDER=sumsub");
+  }
   if (process.env.ALLOW_SIMULATION === "1") fail("ALLOW_SIMULATION=1 is forbidden in production");
   if (process.env.ALLOW_MOCK_FALLBACK === "1") fail("ALLOW_MOCK_FALLBACK=1 is forbidden in production");
   if (process.env.ALLOW_PLAINTEXT_STORE !== "1") {
@@ -380,6 +409,14 @@ function assertProductionConfig() {
     if (!process.env.CANDIDE_COSIGNER_ADDRESS || !process.env.CANDIDE_COSIGNER_KEY) {
       fail("CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required before hosted production funding");
     }
+    parsePositiveBigint(
+      "CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI",
+      process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ?? process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT,
+    );
+    parsePositiveBigint(
+      "CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES",
+      process.env.CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES,
+    );
     if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS) {
       fail("CANDIDE_RECOVERY_GUARDIAN_ADDRESS is required before hosted production funding");
     }

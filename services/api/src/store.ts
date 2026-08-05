@@ -11,11 +11,24 @@ export interface User {
   country: string;
   kycStatus: KycStatus;
   kyc?: {
-    provider: "mock" | "manual" | "monerium";
+    provider: "mock" | "manual" | "monerium" | "sumsub";
     onboardingPath?: "existing_monerium" | "new_monerium";
     applicantId?: string;
     checkedAt?: string;
     reason?: string;
+    sumsub?: {
+      externalUserId: string;
+      applicantId?: string;
+      reviewStatus?: string;
+      reviewAnswer?: string;
+      reviewedAt?: string;
+      moneriumShare?: {
+        profileId: string;
+        status: "pending" | "error";
+        updatedAt: string;
+        error?: string;
+      };
+    };
   };
   /**
    * FATF Travel Rule originator data — who is sending the money.

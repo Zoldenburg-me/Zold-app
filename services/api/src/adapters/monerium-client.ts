@@ -115,6 +115,13 @@ export class MoneriumClient {
     return this.request<any>("POST", "/ibans", { address, chain });
   }
 
+  shareKyc(profileId: string, sumsubApplicantToken: string) {
+    return this.request<any>("POST", `/profiles/${encodeURIComponent(profileId)}/share`, {
+      provider: "sumsub",
+      personal: { token: sumsubApplicantToken },
+    });
+  }
+
   ibans() {
     return this.request<{ ibans: any[] }>("GET", "/ibans");
   }
