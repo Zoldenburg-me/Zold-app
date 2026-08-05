@@ -56,6 +56,7 @@ const LOOKS_HOSTED = Boolean(PUBLIC_URL) || !LOOKS_LOCAL;
 export const MONERIUM = {
   clientId: process.env.MONERIUM_CLIENT_ID ?? "",
   clientSecret: process.env.MONERIUM_CLIENT_SECRET ?? "",
+  oauthClientId: process.env.MONERIUM_OAUTH_CLIENT_ID ?? process.env.MONERIUM_CLIENT_ID ?? "",
   baseUrl: process.env.MONERIUM_BASE_URL ?? "https://api.monerium.dev",
   // Chain identifier Monerium should associate linked addresses with.
   // The sandbox expects testnet names ("sepolia", ...); production uses
@@ -78,7 +79,7 @@ export const MONERIUM = {
 export const moneriumSandboxEnabled = () =>
   Boolean(MONERIUM.clientId && MONERIUM.clientSecret);
 
-export const moneriumOAuthEnabled = () => Boolean(MONERIUM.clientId);
+export const moneriumOAuthEnabled = () => Boolean(MONERIUM.oauthClientId);
 
 /**
  * KYC gate. Local demos auto-approve by default so existing self-contained
