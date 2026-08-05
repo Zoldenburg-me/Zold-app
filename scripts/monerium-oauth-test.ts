@@ -31,14 +31,14 @@ import { privateKeyToAccount } from "viem/accounts";
 
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
+const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3001);
 const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
 const RPC_PORT = new URL(RPC_URL).port || "8545";
 const API = `http://127.0.0.1:${API_PORT}`;
 const STUB_PORT = Number(process.env.TRANSF_STUB_PORT ?? 8549);
 const STUB = `http://127.0.0.1:${STUB_PORT}`;
 const ENC_KEY = "test-monerium-token-encryption-key-32b";
-const bin = (n: string) => path.join(ROOT, "node_modules/.bin", n);
+const bin = (n: string) => (n === "tsx" ? path.join(ROOT, "node_modules/tsx/dist/cli.mjs") : path.join(ROOT, "node_modules/.bin", n));
 
 const ACCESS_TOKEN = "stub-access-token-" + randomBytes(8).toString("hex");
 const REFRESH_TOKEN = "stub-refresh-token-" + randomBytes(8).toString("hex");
@@ -253,7 +253,7 @@ async function call(pathname: string, body?: any, method?: string) {
 }
 
 function bg(cmd: string, args: string[], env: Record<string, string> = {}) {
-  const c = spawn(cmd, args, { cwd: ROOT, stdio: "ignore", env: { ...process.env, ...env } });
+  const c = spawn(cmd, args, { cwd: ROOT, stdio: "inherit", env: { ...process.env, ...env } });
   children.push(c);
   return c;
 }
@@ -294,7 +294,7 @@ try {
     await new Promise((r) => setTimeout(r, 300));
   }
   assert.equal(
-    spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit" }).status,
+    spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit", env: { ...process.env, TRANSF_RPC_URL: RPC_URL } }).status,
     0,
     "deploy failed",
   );
@@ -302,6 +302,9 @@ try {
   console.log("2/3 API with a stub Monerium OAuth client…");
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
+    TRANSF_API_PORT: String(API_PORT),
+    TRANSF_RPC_URL: RPC_URL,
+    PORT: String(API_PORT),
     RP_ID: "localhost",
     WEBAUTHN_ORIGINS: `${API},http://localhost:${API_PORT}`,
     MONERIUM_CLIENT_ID: "stub-client",
@@ -312,12 +315,13 @@ try {
     MONERIUM_TOKEN_ENCRYPTION_KEY: ENC_KEY,
     MONERIUM_POLL_MS: "3600000",
     CANDIDE_CHAIN_ID: "31337",
-    CANDIDE_RPC_URL: STUB,
+    CANDIDE_RPC_URL: RPC_URL,
     CANDIDE_COSIGNER_ENABLED: "0",
     CANDIDE_COSIGNER_ADDRESS: COSIGNER_ADDRESS,
     CANDIDE_COSIGNER_KEY: COSIGNER_KEY,
     CANDIDE_ALLOWANCE_MODULE_ADDRESS: "0x691f59471Bfd2B7d639DCF74671a2d648ED1E331",
     CANDIDE_RECOVERY_GUARDIAN_ADDRESS: "",
+    ALLOW_SIMULATION: "1",
     KYC_AUTO_APPROVE: "0", // the connect path is for pending users
     MG_ANCHOR_DOMAIN: "",
   });
@@ -341,8 +345,14 @@ try {
     const registered = await call(`/api/users/${userId}/passkey`, passkey.register(challenge.data.challenge));
     assert.equal(registered.status, 201, `passkey registration failed: ${registered.data.error ?? ""}`);
     assert.ok(registered.data.passkeySafe?.address, "passkey registration should plan a Safe");
-    const activated = await call(`/api/users/${userId}/passkey-safe/deployment`, {});
-    assert.equal(activated.status, 200, `passkey Safe activation failed: ${activated.data.error ?? ""}`);
+    let activated = await call(`/api/users/${userId}/passkey-safe/deployment`, {});
+    assert.ok([200, 201].includes(activated.status), `passkey Safe activation failed: ${activated.data.error ?? ""}`);
+    if (activated.data.requestId) {
+      const assertion = await passkey.assert(activated.data.challenge, 1);
+      const submitRes = await call(activated.data.submitTo, assertion);
+      assert.equal(submitRes.status, 201, `passkey Safe deployment submission failed: ${submitRes.data.error ?? ""}`);
+      activated = submitRes;
+    }
     assert.equal(activated.data.passkeySafe.status, "active");
     assert.equal(activated.data.privateKey, undefined, "API must not expose private key material");
   });
