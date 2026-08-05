@@ -620,26 +620,14 @@ function passkeySafePlan(
     address: account.accountAddress as `0x${string}`,
     status: "planned",
     threshold: cosignerAddress ? 2 : 1,
-    ...(cosignerAddress
-      ? {
-          cosignerAddress,
-          cosignerPolicy: {
-            enabled: true,
-            allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-            allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
-            allowances: tokenAllowances,
-            allowanceAmount: tokenAllowances.find((x) => BigInt(x.amount) > 0n)?.amount ?? "0",
-          },
-        }
-      : {
-          cosignerPolicy: {
-            enabled: false,
-            allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-            allowancePeriodMinutes: "0",
-            allowances: [],
-            allowanceAmount: "0",
-          },
-        }),
+    ...(cosignerAddress ? { cosignerAddress } : {}),
+    cosignerPolicy: {
+      enabled: Boolean(CANDIDE.cosignerAddress),
+      allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
+      allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
+      allowances: tokenAllowances,
+      allowanceAmount: tokenAllowances.find((x) => BigInt(x.amount) > 0n)?.amount ?? "0",
+    },
     passkeyPublicKey: webauthnOwnerToStore(owner),
     ...(recoveryGuardianAddress
       ? {
