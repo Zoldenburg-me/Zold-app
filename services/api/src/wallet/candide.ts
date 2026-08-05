@@ -266,7 +266,7 @@ export async function readCosignerTokenAllowance(
 
 /** Safe's isModuleEnabled(address) — the batch below must skip enableModule
  *  when it already ran, because the Safe reverts on enabling a module twice. */
-async function safeModuleEnabled(safeAddress: `0x${string}`, module: `0x${string}`): Promise<boolean> {
+export async function safeModuleEnabled(safeAddress: string, module: string): Promise<boolean> {
   const data = encodeFunctionData({
     abi: [
       {
@@ -278,7 +278,7 @@ async function safeModuleEnabled(safeAddress: `0x${string}`, module: `0x${string
       },
     ],
     functionName: "isModuleEnabled",
-    args: [module],
+    args: [module as `0x${string}`],
   });
   const res = await fetch(CANDIDE.rpcUrl, {
     method: "POST",
@@ -450,6 +450,12 @@ export async function transferTokenFromSafeAllowance(params: {
   }
   if (!(await isDeployed(params.safeAddress))) {
     throw new Error(`Safe ${params.safeAddress} is not deployed — cannot move tokens from it`);
+  }
+  if (!(await safeModuleEnabled(params.safeAddress, CANDIDE.allowanceModuleAddress))) {
+    throw new Error(
+      `Passkey Safe co-signer allowance module (${CANDIDE.allowanceModuleAddress}) is not enabled on-chain for Safe ${params.safeAddress}. ` +
+        `Please click "Set Up Allowance" in your account dashboard.`,
+    );
   }
 
   const allowance = new AllowanceModule(CANDIDE.allowanceModuleAddress);
