@@ -2024,7 +2024,7 @@
             <div class="info-list">
               <div class="detail"><span class="k">IBAN</span><span class="v" id="acct-iban">—</span><button class="copybtn" data-copy="acct-iban">copy</button></div>
               <div class="detail"><span class="k">SMART ACCOUNT</span><span class="v" id="acct-address">—</span><button class="copybtn" data-copy="acct-address">copy</button></div>
-              <div class="detail"><span class="k">OWNER</span><span class="v" id="acct-owner">—</span></div>
+              <div class="detail"><span class="k">SAFE POLICY</span><span class="v" id="acct-owner">—</span></div>
             </div>
           </div>
           <div class="card">
@@ -3554,7 +3554,9 @@ function renderShellPages() {
   const plannedSafe = needsPasskeySafeSetup(user) ? user.passkeySafe?.address : null;
   $("acct-address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — not deployed` : (user.address || "—");
   document.querySelector('[data-copy="acct-address"]')?.classList.toggle("hidden", !!plannedSafe);
-  $("acct-owner").textContent = user.ownerAddress || "hidden";
+  $("acct-owner").textContent = user.passkeySafe?.status === "active"
+    ? `passkey${user.passkeySafe?.cosignerPolicy?.enabled ? " + allowance" : ""}`
+    : "passkey setup required";
   $("acct-kyc").textContent = kycCopy(user.kycStatus, user)[1];
   $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
   $("acct-kyc-chip").className = user.kycStatus === "approved" ? "chip ok" : user.kycStatus === "rejected" ? "chip err" : "chip review";

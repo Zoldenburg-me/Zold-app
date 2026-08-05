@@ -90,18 +90,17 @@ try {
   const device = newDevice();
   await registerDevice(api, user.id, device);
 
-  console.log("3/5 €100 cash transfer — refuses undeployed local Safe…");
+  console.log("3/5 €100 cash transfer — refuses accounts without passkey Safe allowance…");
   const quote = await api("/api/quotes", { userId: user.id, sendEur: 100, rail: "cash" });
   await assert.rejects(
     () => sendTransfer(api, device, { quoteId: quote.id, recipientName: "X", recipientPhone: "+254700000000" }),
-    /Safe .* is not deployed/,
+    /active passkey Safe with a production co-signer allowance/,
   );
   const after = await api(`/api/users/${user.id}`);
   assert.ok(Math.abs(after.balanceEur - 250) < 0.02, `balance untouched, got €${after.balanceEur}`);
   console.log(`      refused before movement; balance still €${after.balanceEur}`);
 
-  console.log("5/5 pre-debit failure needs no refund…");
-  // Force-fail earliest step via a fresh quote against a user with no funds:
+  console.log("5/5 accounts without configured Safe allowance fail before debit…");
   const broke = await api("/api/users", { name: "No Funds", country: "DE" });
   token = broke.sessionToken;
   const q2 = await api("/api/quotes", { userId: broke.id, sendEur: 50, rail: "cash" });
@@ -110,9 +109,9 @@ try {
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
     body: JSON.stringify({ quoteId: q2.id, recipientName: "X", recipientPhone: "+254700000000" }),
   });
-  assert.equal(r2.status, 400, "insufficient balance rejected before any debit");
+  assert.equal(r2.status, 409, "account setup blocker rejected before any debit");
 
-  console.log("\nFP3 TEST PASSED — local undeployed Safe does not fake a remittance");
+  console.log("\nFP3 TEST PASSED — local accounts without passkey Safe allowance do not fake a remittance");
 } finally {
   for (const c of children) c.kill();
 }

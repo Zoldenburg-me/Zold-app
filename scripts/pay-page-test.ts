@@ -50,8 +50,6 @@ const user: any = {
   senderProfile: { firstName: "Miriam", lastName: "Zoldenburg", idNumber: "X1234567" },
   iban: "DE89370400440532013000",
   address: "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1",
-  ownerAddress: "0xbbbb216C328AAa6a384DD422c4eA005cEd7F73f1",
-  privateKey: "0xdeadbeef",
   authorizerAddress: "0xcccc216C328AAa6a384DD422c4eA005cEd7F73f1",
   paymentPage: {
     handle: "miriam",
@@ -141,13 +139,11 @@ check("and leaks no account data — this is the security-relevant one", () => {
   for (const secret of [
     "miriam@example.com",
     "DE89370400440532013000",
-    "0xdeadbeef",
     "app_123",
     "X1234567",
     "secret",
     "Miriam Zoldenburg", // the legal name, as distinct from the chosen display name
     "approved",
-    user.ownerAddress,
     user.authorizerAddress,
     user.paymentPage.forwarder.custodialWithdrawer,
     user.paymentPage.recipientAddress,

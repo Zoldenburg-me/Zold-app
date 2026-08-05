@@ -316,10 +316,9 @@ Two properties are stated rather than implied:
 - **Device authorisation is verified in the API process**, not by a contract.
   The server cannot forge a signature, but it is the component performing the
   check.
-- **`user.privateKey` remains in the datastore** for accounts not yet migrated
-  to the passkey-owned Safe, and the JSON store requires
-  `ALLOW_PLAINTEXT_STORE=1` to be acknowledged explicitly at startup. Migrating
-  the remaining server-held key is the open item.
+- **The API does not store user Safe owner keys.** Accounts must activate a
+  passkey-owned Safe before funding, and Safe debits go through the configured
+  co-signer allowance path.
 
 ---
 
