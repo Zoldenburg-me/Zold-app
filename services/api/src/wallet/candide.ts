@@ -29,9 +29,11 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { createWalletClient, encodeFunctionData, hashTypedData, http } from "viem";
 import { chain, publicClient } from "../chain.js";
-import { RPC_URL } from "../config.js";
+const allowSimulation = () =>
+  process.env.ALLOW_SIMULATION === "1" ||
+  (process.env.NODE_ENV !== "production" &&
+    /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/)/.test(process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545"));
 
-const CANDIDE_PRODUCTION = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
 const COSIGNER_ENABLED =
   process.env.CANDIDE_COSIGNER_ENABLED === "1" ||
   (process.env.CANDIDE_COSIGNER_ENABLED !== "0" &&
@@ -158,6 +160,13 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
     : smartAccountForPasskey(passkeyOwner);
   if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
     throw new Error("passkey Safe plan does not match the deterministic account address");
+  }
+  if (allowSimulation()) {
+    return {
+      safeAddress: account.accountAddress as `0x${string}`,
+      challenge: "0x1234567890123456789012345678901234567890123456789012345678901234",
+      userOperation: {} as UserOperationV9,
+    };
   }
   const setup = [
     ...passkeySafeRecoverySetupTransactions(plan),
@@ -368,6 +377,9 @@ export async function submitPasskeySafeDeployment(
   if (plan.cosignerAddress && !CANDIDE.cosignerKey) {
     throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign passkey Safe deployment");
   }
+  if (allowSimulation()) {
+    return "0xmock-user-op-hash";
+  }
   const deployed = await isDeployed(account.accountAddress);
   const passkeySigner = fromSafeWebauthn({
     publicKey: passkeyOwner,
@@ -425,6 +437,7 @@ export async function signMessageAsPasskeySafe(
 }
 
 export async function isDeployed(address: string): Promise<boolean> {
+  if (allowSimulation()) return true;
   const res = await fetch(CANDIDE.rpcUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
