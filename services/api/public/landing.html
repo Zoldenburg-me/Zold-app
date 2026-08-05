@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Zold — euros in, local payouts out</title>
-<meta name="description" content="Zold gives you a personal IBAN, holds your euros as regulated e-money in your own smart account, and sends them out by SEPA bank transfer or cash pickup in Kenya." />
-<meta property="og:title" content="Zold — euros in, local payouts out" />
-<meta property="og:description" content="Deposit by IBAN, hold your balance in a smart account, and send to bank accounts or cash pickup through a clear approval flow." />
+<title>Zold — euros in, local spending out</title>
+<meta name="description" content="Zold gives you a personal IBAN, holds your euros as regulated e-money in your own smart account, and sends them out through local rails such as SEPA, PIX, wallets, mobile money and cash pickup." />
+<meta property="og:title" content="Zold — euros in, local spending out" />
+<meta property="og:description" content="Deposit by IBAN, hold your balance in a smart account, and spend locally through the rail the recipient already uses." />
 <meta property="og:type" content="website" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 18'%3E%3Cpath d='M1.6 1.4 L18.4 1.4 L10 16.2 Z' fill='none' stroke='%23ed188d' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -63,7 +63,7 @@
            below it is carrying the explanation — keep it descriptive. -->
       <h1 style="margin:22px 0 0; font-size:clamp(52px,9vw,108px); line-height:.92; font-weight:600; letter-spacing:-.05em; color:#fbf9fc">Zold</h1>
 
-      <p style="margin:20px auto 0; max-width:585px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Deposit by IBAN, hold EURe in a smart account, and send to bank accounts or cash pickup through a clear approval flow.</p>
+      <p style="margin:20px auto 0; max-width:650px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Deposit by IBAN, hold EURe in a smart account, and spend locally through the rail people already use: SEPA, PIX, mobile money, wallets, cash pickup and more.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
 
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:30px">
         <a href="/app" style="display:inline-flex; align-items:center; height:46px; padding:0 26px; border-radius:999px; background:#ed188d; color:#fff; font-size:14.5px; font-weight:600; box-shadow:0 10px 34px rgba(237,24,141,.4)" class="pill">Launch app</a>
@@ -100,15 +100,15 @@
 
           <div style="background:#101014; padding:clamp(16px,2.4vw,24px)">
             <div style="display:flex; align-items:center; justify-content:space-between; gap:10px">
-              <span style="font-size:11.5px; font-weight:600; color:#8a8a94">Send · Cash pickup, Kenya</span>
+              <span style="font-size:11.5px; font-weight:600; color:#8a8a94">Send · Local payout, Brazil</span>
               <span style="font-size:10.5px; color:#f5a623; border:1px solid rgba(245,166,35,.32); background:rgba(245,166,35,.08); border-radius:999px; padding:2px 8px">quote <span class="js-expiry">9:02</span></span>
             </div>
             <div style="margin-top:12px; font-size:clamp(26px,3.4vw,34px); font-weight:600; letter-spacing:-.035em; color:#fbf9fc">€<span style="color:#ed188d">250.00</span></div>
             <div style="margin-top:14px; display:grid; gap:0; font-size:12.5px">
-              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94" id="r-mid-label">Mid-market rate</span><span style="font-variant-numeric:tabular-nums"><span id="r-mid">147.5300</span></span></div>
-              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Your rate <span style="font-size:10px; color:#e8a9cd; border:1px solid rgba(237,24,141,.3); border-radius:4px; padding:1px 5px">0.50%</span></span><span style="font-variant-numeric:tabular-nums"><span id="r-rate">146.7924</span></span></div>
+              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94" id="r-mid-label">Mid-market rate</span><span style="font-variant-numeric:tabular-nums"><span id="r-mid">6.1050</span></span></div>
+              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Your rate <span style="font-size:10px; color:#e8a9cd; border:1px solid rgba(237,24,141,.3); border-radius:4px; padding:1px 5px">0.50%</span></span><span style="font-variant-numeric:tabular-nums"><span id="r-rate">6.0745</span></span></div>
               <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Fixed fee</span><span>€0.99</span></div>
-              <div style="display:flex; justify-content:space-between; align-items:baseline; padding:11px 0 0; border-top:1px solid #2c2c33"><span style="color:#ededf0; font-weight:600">Joseph Otieno collects</span><span style="font-size:17px; font-weight:600; color:#3dd68c; font-variant-numeric:tabular-nums">KES <span id="r-out">36,553</span></span></div>
+              <div style="display:flex; justify-content:space-between; align-items:baseline; padding:11px 0 0; border-top:1px solid #2c2c33"><span style="color:#ededf0; font-weight:600">Marina Silva receives</span><span style="font-size:17px; font-weight:600; color:#3dd68c; font-variant-numeric:tabular-nums">BRL <span id="r-out">1,512</span></span></div>
             </div>
             <div style="margin-top:16px; padding-top:14px; border-top:1px solid #1c1c21; display:flex; align-items:center; gap:10px; flex-wrap:wrap">
               <span id="st-dot" style="width:7px; height:7px; border-radius:50%; background:#f5a623; box-shadow:0 0 9px #f5a623"></span>
@@ -126,8 +126,8 @@
 
   <section id="rails" style="padding:clamp(56px,8vw,96px) 24px; text-align:center">
     <div style="max-width:900px; margin:0 auto">
-      <h2 style="margin:0; font-size:clamp(28px,4.4vw,48px); line-height:1.04; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">One account, global payouts.</h2>
-      <p style="margin:16px auto 0; max-width:520px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Euros arrive over SEPA to your own IBAN and land as EURe<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">1</a>. From there they leave over the rail the recipient already uses.</p>
+      <h2 style="margin:0; font-size:clamp(28px,4.4vw,48px); line-height:1.04; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">One account, local spending everywhere.</h2>
+      <p style="margin:16px auto 0; max-width:620px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Euros arrive over SEPA to your own IBAN and land as EURe<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">1</a>. From there the local-spend layer can route to the method that fits each jurisdiction: bank transfer, real-time payment, wallet, mobile money or cash pickup.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:clamp(18px,3vw,38px); margin-top:clamp(34px,5vw,52px)">
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
           <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#e8a9cd; box-shadow:inset 0 1px 0 rgba(255,255,255,.05)"><i class="ph ph-bank"></i></span>
@@ -142,16 +142,16 @@
           <span style="font-size:11.5px; color:#8a8a94">SEPA</span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-money"></i></span>
-          <span style="font-size:11.5px; color:#8a8a94">Cash · KE<a href="#notes" style="color:#ed188d; font-size:9px; vertical-align:super">2</a></span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:19px; font-weight:700; color:#cfcfd8">PIX</span>
+          <span style="font-size:11.5px; color:#8a8a94">Brazil<a href="#notes" style="color:#ed188d; font-size:9px; vertical-align:super">3</a></span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-shield-check"></i></span>
-          <span style="font-size:11.5px; color:#8a8a94">Safe</span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-device-mobile"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">Mobile money</span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-seal-check"></i></span>
-          <span style="font-size:11.5px; color:#8a8a94">Monerium</span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-wallet"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">Wallets</span>
         </div>
       </div>
     </div>
@@ -215,6 +215,10 @@
         <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Cash pickup</span>
       </div>
       <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
+        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:18px; font-weight:700; letter-spacing:-.02em; color:#8a8a94">Noah</span>
+        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Local spend</span>
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
         <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#8a8a94">Safe</span>
         <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Smart accounts</span>
       </div>
@@ -247,10 +251,10 @@
             <div style="padding:14px 18px 20px">
               <div style="font-size:11px; letter-spacing:.12em; color:#5b5b66">APPROVE PAYOUT</div>
               <div style="margin-top:12px; font-size:30px; font-weight:600; letter-spacing:-.035em; color:#fbf9fc">€250.00</div>
-              <div style="margin-top:3px; font-size:12.5px; color:#8a8a94">Cash pickup · Nairobi</div>
+              <div style="margin-top:3px; font-size:12.5px; color:#8a8a94">PIX payout · São Paulo</div>
               <div style="margin-top:16px; display:grid; gap:0; font-size:12px">
-                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Recipient</span><span>Joseph Otieno</span></div>
-                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">They collect</span><span style="color:#3dd68c">KES 36,553</span></div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Recipient</span><span>Marina Silva</span></div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">They receive</span><span style="color:#3dd68c">BRL 1,512</span></div>
                 <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Fee</span><span>€0.99</span></div>
                 <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Quote expires</span><span class="js-expiry" style="color:#f5a623">9:02</span></div>
               </div>
@@ -292,7 +296,7 @@
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:32px 40px">
         <div style="max-width:34ch">
           <span style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:600; letter-spacing:-.02em"><span style="color:#ed188d">▽</span>Zold <span style="font-weight:400; color:#5b5b66">by Zoldenburg</span></span>
-          <p style="margin:12px 0 0; font-size:13px; line-height:1.6; color:#8a8a94">Euros in, local payouts out. A personal IBAN, e-money held in your own smart account, and one visible fee on every route. Zold is not a bank.</p>
+          <p style="margin:12px 0 0; font-size:13px; line-height:1.6; color:#8a8a94">Euros in, local spending out. A personal IBAN, e-money held in your own smart account, and one visible fee on every route. Zold is not a bank.</p>
         </div>
         <div>
           <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#5b5b66">PRODUCT</div>
@@ -333,6 +337,10 @@
         <div>
           <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CASH PICKUP</div>
           <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">2</sup> Cash pickup is implemented against the SEP-10 / SEP-24 anchor protocol and verified against a public test anchor. No commercial payout agreement is in place; references returned in sandbox mode are generated, and production availability depends on a licensed partner. Cash pickup is a money transmission, so sender identity data is provided to the anchor before a withdrawal opens, and a payout is refused rather than opened when required details are missing. FX rates are indicative and refreshed from a rate endpoint where available; a quote locks a rate for ten minutes and expires rather than repricing silently.</p>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR LOCAL SPEND THROUGH NOAH</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">3</sup> Noah integration is the planned local-spend expansion layer. Noah's public docs describe crypto-to-fiat payouts across 60+ countries, 120+ fiat currencies, and local payment methods including bank transfer, real-time payment systems such as PIX, UPI and SPEI, mobile money, digital wallets and cash pickup. Production availability depends on Noah approval, live channel queries, per-country dynamic forms, limits, KYC/KYB reliance or hosted onboarding, and corridor-specific legal review.</p>
         </div>
         <div>
           <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CUSTODY AND APPROVALS</div>
@@ -391,8 +399,12 @@
   fetch("/api/rates")
     .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error(String(r.status))); })
     .then(function (d) {
-      var mid = d && d.eur && d.eur.KES;
-      if (!mid) return;
+      var mid = d && d.eur && d.eur.BRL;
+      if (!mid) {
+        var label = $("r-mid-label");
+        if (label) label.textContent = "Mid-market rate (indicative)";
+        return;
+      }
       var all = mid * (1 - SPREAD);
       if ($("r-mid")) $("r-mid").textContent = fmt(mid, 4);
       if ($("r-rate")) $("r-rate").textContent = fmt(all, 4);
