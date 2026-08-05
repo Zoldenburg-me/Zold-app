@@ -1511,6 +1511,21 @@
         </button>
         <div class="error hidden" id="m-iban-err" style="margin-bottom:10px"></div>
 
+        <!-- Active Safe whose ON-CHAIN spending allowance is missing: sends
+             refuse with "co-signer allowance is 0". Deployment once installed
+             the policy on a module address with no code, so the database said
+             configured while the chain said nothing. One tap re-runs the setup
+             through the Safe's own signing path. -->
+        <button class="m-kyc-banner hidden" id="m-allowance-banner">
+          <span class="material-symbols-rounded" style="font-size:20px;color:var(--m-pink)">key</span>
+          <span style="flex:1;min-width:0">
+            <span style="display:block;font-size:13px;font-weight:600" id="m-allowance-banner-title">Enable sending</span>
+            <span style="display:block;font-size:11.5px;color:var(--m-dim);margin-top:1px">Your wallet's spending allowance isn't set up — one passkey approval installs it.</span>
+          </span>
+          <span class="material-symbols-rounded" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
+        </button>
+        <div class="error hidden" id="m-allowance-err" style="margin-bottom:10px"></div>
+
         <div class="m-safe">
           <div class="m-safe-body">
             <div class="m-safe-top">
@@ -2392,6 +2407,9 @@ function renderMobile(u = user) {
   } else {
     $("m-iban-err").classList.add("hidden");
   }
+
+  // Async: the answer lives on-chain, so it can't be derived from `u` here.
+  void refreshAllowanceBanner(u);
 
   const f = mobileFigures(u);
   $("m-total").textContent = fmt(f.total);
@@ -3360,6 +3378,58 @@ $("m-plus").onclick = () => mobileNav("plus");
 $("m-payment-page").onclick = () => mobileNav("payment");
 $("m-back").onclick = () => mobileNav("home");
 $("m-kyc-banner").onclick = () => enterKycReview(user?.name || "Account");
+
+/* The on-chain allowance check costs an RPC read on the server, so cache it
+   for a minute and re-check eagerly only after the repair ceremony runs. */
+let allowanceCheck = { at: 0, configured: true };
+async function refreshAllowanceBanner(u = user) {
+  const banner = $("m-allowance-banner");
+  const eligible =
+    u?.id && kycApproved(u) && u.passkeySafe?.status === "active" && !needsPasskeySafeSetup(u);
+  if (!eligible) return banner.classList.add("hidden");
+  if (Date.now() - allowanceCheck.at > 60_000) {
+    allowanceCheck.at = Date.now();
+    try {
+      const r = await api(`/api/users/${u.id}/passkey-safe/allowance`);
+      allowanceCheck.configured = !!r.configured;
+    } catch {
+      allowanceCheck.configured = true; // unknown must not nag
+    }
+  }
+  banner.classList.toggle("hidden", allowanceCheck.configured);
+}
+
+$("m-allowance-banner").onclick = async () => {
+  const banner = $("m-allowance-banner");
+  const err = $("m-allowance-err");
+  err.classList.add("hidden");
+  banner.disabled = true;
+  try {
+    const prepared = await api(`/api/users/${user.id}/passkey-safe/allowance`, {});
+    const cred = await navigator.credentials.get({
+      publicKey: {
+        challenge: b64urlToBytes(prepared.challenge),
+        allowCredentials: [{ type: "public-key", id: b64urlToBytes(prepared.credentialId) }],
+        userVerification: "required",
+        timeout: 60000,
+      },
+    });
+    await api(prepared.submitTo, {
+      authenticatorData: b64url(cred.response.authenticatorData),
+      clientDataJSON: b64url(cred.response.clientDataJSON),
+      signature: b64url(cred.response.signature),
+    });
+    allowanceCheck = { at: 0, configured: true };
+    banner.classList.add("hidden");
+    await refresh();
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    err.classList.remove("hidden");
+  } finally {
+    banner.disabled = false;
+  }
+};
+
 $("m-iban-banner").onclick = async () => {
   const banner = $("m-iban-banner");
   const title = $("m-iban-banner-title");
