@@ -460,11 +460,53 @@ export interface Session {
 }
 
 
+/**
+ * A shareable receipt for one transfer, and the sender's choice of what it
+ * exposes.
+ *
+ * The selections live here rather than on the link because the link is the one
+ * thing a stranger holds: anything encoded into it is something they can edit.
+ * `GET /api/r/:slug` builds the payload from these fields and never sends a
+ * value the sender withheld — the redaction is done before the response, not
+ * by the page that renders it.
+ *
+ * A share is revocable and expires. Both are recorded rather than implied by
+ * deleting the row, so a recipient who opens a dead link is told which of the
+ * two happened.
+ */
+export interface ReceiptShare {
+  id: string;
+  /** Public path segment. Unguessable, because holding it is the whole auth. */
+  slug: string;
+  transferId: string;
+  userId: string;
+  fields: ReceiptShareFields;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+}
+
+export interface ReceiptShareFields {
+  sender: "full" | "first" | "last" | "hidden";
+  recipient: "full" | "first" | "last" | "hidden";
+  /** IBAN on the SEPA rail, mobile number on the cash rail. */
+  account: "full" | "short" | "hidden";
+  /** Which side's currency the page leads with. */
+  fx: "both" | "sender" | "recipient";
+  showRate: boolean;
+  showRef: boolean;
+  /** Whether the settlement route section exists on the page at all. */
+  route: boolean;
+}
+
 interface Db {
   users: User[];
   quotes: Quote[];
   transfers: Transfer[];
   sessions: Session[];
+  /** Public shareable receipts, keyed by an unguessable slug. */
+  receiptShares: ReceiptShare[];
   /** Monerium issue-order ids already reflected in local receipt state. */
   processedMoneriumOrders: string[];
   /** Monerium webhook delivery ids already accepted. */
@@ -503,6 +545,7 @@ let db: Db = {
   quotes: [],
   transfers: [],
   sessions: [],
+  receiptShares: [],
   processedMoneriumOrders: [],
   processedMoneriumWebhooks: [],
   cryptoDeposits: [],
@@ -515,6 +558,7 @@ export function initStore() {
   if (existsSync(DB_PATH)) {
     db = JSON.parse(readFileSync(DB_PATH, "utf8"));
     db.sessions ??= [];
+    db.receiptShares ??= [];
     db.processedMoneriumOrders ??= [];
     db.processedMoneriumWebhooks ??= [];
     db.cryptoDeposits ??= [];
@@ -675,6 +719,39 @@ export const store = {
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
     persist();
     return t;
+  },
+  /**
+   * One share per transfer, deliberately.
+   *
+   * Re-sharing a transfer edits the existing record instead of minting a second
+   * slug, so tightening a selection actually tightens what is public. Two live
+   * links to one transfer would mean the generous first link kept working after
+   * the sender thought they had narrowed it.
+   */
+  findReceiptShareByTransfer(transferId: string) {
+    return db.receiptShares.find((s) => s.transferId === transferId);
+  },
+  findReceiptShareBySlug(slug: string) {
+    return db.receiptShares.find((s) => s.slug === slug);
+  },
+  addReceiptShare(s: ReceiptShare) {
+    db.receiptShares.push(s);
+    persist();
+  },
+  updateReceiptShare(id: string, patch: Partial<ReceiptShare>) {
+    const s = db.receiptShares.find((x) => x.id === id);
+    if (!s) throw new Error(`unknown receipt share ${id}`);
+    Object.assign(s, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return s;
+  },
+  revokeReceiptShare(id: string) {
+    const s = db.receiptShares.find((x) => x.id === id);
+    if (!s) throw new Error(`unknown receipt share ${id}`);
+    s.revokedAt = new Date().toISOString();
+    s.updatedAt = s.revokedAt;
+    persist();
+    return s;
   },
   addSession(s: Session) {
     pruneSessions();
