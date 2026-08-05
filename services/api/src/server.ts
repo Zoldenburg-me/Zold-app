@@ -2486,6 +2486,38 @@ app.get(
 );
 
 app.get(
+  "/api/users/:id/activity",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const transfers = store.transfers
+      .filter((t) => t.userId === user.id)
+      .map((t) => ({ kind: "transfer" as const, at: t.createdAt, ...t }));
+    const funding = store.cryptoDeposits
+      .filter((d) => d.userId === user.id)
+      .map((d) => ({
+        kind: "funding" as const,
+        id: d.id,
+        at: d.detectedAt,
+        chainId: d.chainId,
+        token: d.token,
+        txHash: d.txHash,
+        amountEur: d.amountEur ?? d.creditedEur,
+        amountUsdc: d.amountUsdc ?? d.creditedUsdc,
+        state: d.state,
+        reason: d.reason,
+        settlementAsset: d.settlementAsset,
+        detectedAt: d.detectedAt,
+        updatedAt: d.updatedAt,
+      }));
+    res.json({
+      activity: [...transfers, ...funding].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
+    });
+  }),
+);
+
+app.get(
   "/api/transfers/:id",
   wrap(async (req, res) => {
     const t = store.findTransfer(req.params.id);

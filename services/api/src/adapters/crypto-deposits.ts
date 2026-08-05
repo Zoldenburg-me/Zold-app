@@ -63,15 +63,31 @@ const TRANSFER_EVENT = {
  *  cannot drift apart. */
 export const SWEEP_STEP = "safe.transfer(usdc->orchestrator)";
 
-/** Accounts with page-scoped auto-settlement AND allowed to hold a credit. */
-function watchedUsers(): User[] {
-  return store.users.filter(
-    (u) => u.paymentPage?.autoConvert && u.paymentPage.depositAddress && u.kycStatus === "approved",
-  );
+interface WatchedAddress {
+  user: User;
+  address: `0x${string}`;
+  source: "payment-page" | "safe";
 }
 
-function watchedAddress(user: User): `0x${string}` {
-  return user.paymentPage?.recipientAddress ?? user.address;
+/** Accounts allowed to hold a credit, either on the Safe directly or through
+ * page-scoped auto-settlement. */
+function watchedAddresses(): WatchedAddress[] {
+  const seen = new Set<string>();
+  const out: WatchedAddress[] = [];
+  for (const user of store.users) {
+    if (user.kycStatus !== "approved") continue;
+    const add = (address: `0x${string}`, source: WatchedAddress["source"]) => {
+      const key = `${address.toLowerCase()}:${source}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ user, address, source });
+    };
+    add(user.address, "safe");
+    if (user.paymentPage?.autoConvert && user.paymentPage.depositAddress) {
+      add(user.paymentPage.recipientAddress ?? user.address, "payment-page");
+    }
+  }
+  return out;
 }
 
 /**
@@ -160,7 +176,8 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
     const page = user.paymentPage;
     if (!page?.autoConvert) throw new Error("payment page has auto-settlement switched off");
     if (user.kycStatus !== "approved") throw new Error("account is not KYC-approved");
-    if (deposit.amountUsdc < CRYPTO_IN.minUsdc) {
+    const amountUsdc = deposit.amountUsdc ?? 0;
+    if (amountUsdc < CRYPTO_IN.minUsdc) {
       throw new Error(
         `below the ${CRYPTO_IN.minUsdc} USDC floor — left as USDC rather than converted to dust`,
       );
@@ -168,7 +185,7 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
     if (page.settlementAsset === "USDC") {
       return store.updateCryptoDeposit(deposit.id, {
         state: "CONVERTED",
-        creditedUsdc: deposit.amountUsdc,
+        creditedUsdc: amountUsdc,
         settlementAsset: "USDC",
         txs,
         reason: undefined,
@@ -202,7 +219,7 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
 
     const creditedEur = eur.fromWei(receivedWei);
     console.log(
-      `crypto-in: converted ${deposit.amountUsdc} USDC to €${creditedEur} for ${user.name} ` +
+      `crypto-in: converted ${amountUsdc} USDC to €${creditedEur} for ${user.name} ` +
         `via ${quote.provider} at ${venueRate.toFixed(4)}`,
     );
     return store.updateCryptoDeposit(deposit.id, {
@@ -232,8 +249,9 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
  */
 export async function pollCryptoDepositsOnce(): Promise<number> {
   if (!CRYPTO_IN.enabled) return 0;
-  const users = watchedUsers();
-  if (users.length === 0) return 0;
+  const watched = watchedAddresses();
+  if (watched.length === 0) return 0;
+  const cursorKey = `${CHAIN_ID}:safe-funding-v1`;
 
   /**
    * cacheTime: 0 is load-bearing.
@@ -248,12 +266,12 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
   const safeHead = head - BigInt(CRYPTO_IN.confirmations);
   if (safeHead < 0n) return 0;
 
-  // A fresh install starts at the current head. Crediting transfers that
-  // arrived before the account ever opted in would be a surprise, not a
-  // feature.
-  const cursor = store.cryptoDepositCursor(CHAIN_ID);
+  // A fresh install looks back one bounded window so a just-finished deposit
+  // can still appear in Activity after the scanner deploys or restarts.
+  const cursor = store.cryptoDepositCursor(cursorKey);
   if (cursor === undefined) {
-    store.setCryptoDepositCursor(CHAIN_ID, safeHead);
+    const lookback = CRYPTO_IN.maxBlockSpan;
+    store.setCryptoDepositCursor(cursorKey, safeHead > lookback ? safeHead - lookback : 0n);
     return 0;
   }
   if (safeHead <= cursor) return 0;
@@ -263,50 +281,74 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
     ? fromBlock + CRYPTO_IN.maxBlockSpan - 1n
     : safeHead;
 
-  const logs = await publicClient.getLogs({
-    address: addrs().usdc,
-    event: TRANSFER_EVENT,
-    args: { to: users.map(watchedAddress) },
-    fromBlock,
-    toBlock,
-  });
-
-  const byAddress = new Map(users.map((u) => [watchedAddress(u).toLowerCase(), u]));
+  const byAddress = new Map<string, WatchedAddress[]>();
+  for (const item of watched) {
+    const key = item.address.toLowerCase();
+    byAddress.set(key, [...(byAddress.get(key) ?? []), item]);
+  }
   const fresh: CryptoDeposit[] = [];
-  for (const log of logs) {
-    const to = String(log.args.to ?? "").toLowerCase();
-    const user = byAddress.get(to);
-    if (!user) continue; // not ours; the node filtered loosely
-    const value = (log.args.value ?? 0n) as bigint;
-    if (value <= 0n) continue;
-    const txHash = log.transactionHash!;
-    const logIndex = Number(log.logIndex);
-    if (store.findCryptoDeposit(txHash, logIndex)) continue;
+  for (const token of [
+    { token: "EURE" as const, address: addrs().eure },
+    { token: "USDC" as const, address: addrs().usdc },
+  ]) {
+    const logs = await publicClient.getLogs({
+      address: token.address,
+      event: TRANSFER_EVENT,
+      args: { to: watched.map((x) => x.address) },
+      fromBlock,
+      toBlock,
+    });
 
-    const now = new Date().toISOString();
-    fresh.push(
-      store.addCryptoDeposit({
-        id: randomUUID(),
-        userId: user.id,
-        chainId: CHAIN_ID,
-        token: "USDC",
-        txHash,
-        logIndex,
-        amountUnits: value.toString(),
-        amountUsdc: usd.fromUnits(value),
-        settlementAsset: user.paymentPage!.settlementAsset,
-        paymentAddress: watchedAddress(user),
-        state: "DETECTED",
-        txs: [],
-        detectedAt: now,
-        updatedAt: now,
-      }),
-    );
+    for (const log of logs) {
+      const to = String(log.args.to ?? "").toLowerCase();
+      const matches = byAddress.get(to) ?? [];
+      if (!matches.length) continue; // not ours; the node filtered loosely
+      const value = (log.args.value ?? 0n) as bigint;
+      if (value <= 0n) continue;
+      const from = String(log.args.from ?? "").toLowerCase();
+      if (token.token === "EURE" && from === addrs().swapper.toLowerCase()) continue;
+      const txHash = log.transactionHash!;
+      const logIndex = Number(log.logIndex);
+      if (store.findCryptoDeposit(txHash, logIndex)) continue;
+
+      const pageMatch = matches.find((m) => m.source === "payment-page" && m.user.paymentPage?.autoConvert);
+      const match = token.token === "USDC" && pageMatch ? pageMatch : matches[0];
+      const user = match.user;
+      const now = new Date().toISOString();
+      const directSafeFunding = match.source === "safe" || token.token === "EURE";
+      fresh.push(
+        store.addCryptoDeposit({
+          id: randomUUID(),
+          userId: user.id,
+          chainId: CHAIN_ID,
+          token: token.token,
+          txHash,
+          logIndex,
+          amountUnits: value.toString(),
+          ...(token.token === "EURE" ? { amountEur: eur.fromWei(value), creditedEur: eur.fromWei(value) } : {}),
+          ...(token.token === "USDC"
+            ? {
+                amountUsdc: usd.fromUnits(value),
+                ...(directSafeFunding ? { creditedUsdc: usd.fromUnits(value) } : {}),
+              }
+            : {}),
+          settlementAsset: directSafeFunding
+            ? token.token
+            : user.paymentPage?.settlementAsset ?? token.token,
+          paymentAddress: match.address,
+          state: directSafeFunding ? "CONVERTED" : "DETECTED",
+          txs: [],
+          detectedAt: now,
+          updatedAt: now,
+        }),
+      );
+    }
   }
 
-  store.setCryptoDepositCursor(CHAIN_ID, toBlock);
+  store.setCryptoDepositCursor(cursorKey, toBlock);
 
   for (const deposit of fresh) {
+    if (deposit.state !== "DETECTED") continue;
     try {
       await convertDeposit(deposit);
     } catch (err: any) {
@@ -330,6 +372,7 @@ export async function sweepPendingCryptoDeposits(): Promise<number> {
   let n = 0;
   for (const d of [...store.cryptoDeposits]) {
     if (d.state !== "DETECTED") continue;
+    if (d.token !== "USDC") continue;
     await convertDeposit(d);
     n++;
   }
