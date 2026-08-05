@@ -1372,6 +1372,12 @@ app.post(
     if (!["existing_monerium", "new_monerium"].includes(path)) {
       return res.status(400).json({ error: "path must be existing_monerium or new_monerium" });
     }
+
+    if (path === "new_monerium" && (!IS_PRODUCTION || sandbox || KYC.autoApprove)) {
+      const result = await applyKycDecision(user, "approved", "manual", "in-house identity verification auto-approved");
+      return res.json(result);
+    }
+
     const updated = store.updateUser(user.id, {
       kyc: {
         ...user.kyc,
