@@ -428,6 +428,36 @@ async function moneriumAccessToken(user: User): Promise<string> {
   return decryptToken(user.monerium.accessTokenEnc);
 }
 
+let moneriumAppClientCache: MoneriumClient | null = null;
+function moneriumAppClient(): MoneriumClient {
+  moneriumAppClientCache ??= new MoneriumClient({
+    baseUrl: MONERIUM.baseUrl,
+    clientId: MONERIUM.clientId,
+    clientSecret: MONERIUM.clientSecret,
+  });
+  return moneriumAppClientCache;
+}
+
+/**
+ * Token for Monerium address-linking calls. A connected Monerium account uses
+ * its own OAuth token; an account approved in-house has no connected account,
+ * so the sandbox app credentials (client-credentials grant) act for it. This
+ * is the seam that used to be provisionFunding's server-held-key path before
+ * API-held Safe owner keys were removed — the Safe's EIP-1271 signature still
+ * comes from the user's passkey ceremony either way.
+ */
+async function moneriumLinkAccessToken(user: User): Promise<{ accessToken: string; viaApp: boolean }> {
+  if (user.monerium?.accessTokenEnc) {
+    return { accessToken: await moneriumAccessToken(user), viaApp: false };
+  }
+  if (!MONERIUM.clientSecret) {
+    throw new Error(
+      "no Monerium access for this account — connect a Monerium account, or set MONERIUM_CLIENT_SECRET for app-level address linking",
+    );
+  }
+  return { accessToken: await moneriumAppClient().bearerToken(), viaApp: true };
+}
+
 async function readMoneriumAccountSnapshot(user: User, accessToken?: string) {
   accessToken ??= await moneriumAccessToken(user);
   const [context, profileRes, ibanRes, addressRes] = await Promise.all([
@@ -1444,7 +1474,9 @@ app.post(
     if (!CANDIDE.cosignerKey) {
       return res.status(503).json({ error: "CANDIDE_COSIGNER_KEY is required to co-sign Monerium address linking" });
     }
-    await moneriumAccessToken(user);
+    // Fail here, before the passkey ceremony, if no Monerium access exists —
+    // a ceremony whose submit is doomed just burns the user's approval.
+    await moneriumLinkAccessToken(user);
     if (!(await isDeployed(user.address))) {
       return res.status(409).json({ error: "passkey Safe must be deployed before Monerium address linking" });
     }
@@ -1480,7 +1512,7 @@ app.post(
     if (custodyBlocked) {
       return res.status(409).json({ error: custodyBlocked });
     }
-    const accessToken = await moneriumAccessToken(user);
+    const { accessToken, viaApp } = await moneriumLinkAccessToken(user);
 
     if (!(await isDeployed(user.address))) {
       return res.status(409).json({
@@ -1504,7 +1536,16 @@ app.post(
     if (pending.profileId && profileIdFromBody && pending.profileId !== profileIdFromBody) {
       return res.status(400).json({ error: "profileId does not match the signed Monerium linking request" });
     }
-    const profileId = pending.profileId ?? profileIdFromBody ?? user.monerium?.profileId;
+    let profileId =
+      pending.profileId ?? profileIdFromBody ?? user.monerium?.profileId ?? user.funding?.moneriumProfileId;
+    if (!profileId && viaApp) {
+      // In-house path: attach the address to the app's profile, or a fresh
+      // per-customer profile on whitelabel plans — same resolution the old
+      // automatic provisioning used.
+      profileId =
+        MONERIUM.profileId ||
+        (await moneriumAppClient().createProfile("personal", user.email ?? user.name))?.id;
+    }
     const { credentialId, authenticatorData, clientDataJSON, signature: assertionSignature } = req.body ?? {};
     if (credentialId !== user.passkey.credentialId) {
       return res.status(403).json({ error: "passkey credential does not match this account" });
@@ -1552,20 +1593,28 @@ app.post(
     )?.iban;
     const updated = store.updateUser(user.id, {
       iban: iban ?? "",
-      kycStatus: iban ? "approved" : user.kycStatus,
-      kyc: {
-        provider: "monerium",
-        onboardingPath: "existing_monerium",
-        checkedAt: iban ? new Date().toISOString() : undefined,
-        // Record which Monerium profile this approval rests on. The approval is
-        // delegated trust — nothing here checks that the connected profile is
-        // the same person as the local account — so at minimum it must be
-        // auditable after the fact.
-        applicantId: profileId,
-        reason: iban
-          ? `approved via connected Monerium profile ${profileId ?? "(unnamed)"}`
-          : user.kyc?.reason,
-      },
+      // The connected-account path derives KYC approval from the Monerium
+      // profile. The in-house path (viaApp) already carries its own approval —
+      // linking is plumbing there, not an identity decision, so it must not
+      // rewrite who approved this account or why.
+      ...(viaApp
+        ? {}
+        : {
+            kycStatus: iban ? ("approved" as const) : user.kycStatus,
+            kyc: {
+              provider: "monerium" as const,
+              onboardingPath: "existing_monerium" as const,
+              checkedAt: iban ? new Date().toISOString() : undefined,
+              // Record which Monerium profile this approval rests on. The approval is
+              // delegated trust — nothing here checks that the connected profile is
+              // the same person as the local account — so at minimum it must be
+              // auditable after the fact.
+              applicantId: profileId,
+              reason: iban
+                ? `approved via connected Monerium profile ${profileId ?? "(unnamed)"}`
+                : user.kyc?.reason,
+            },
+          }),
       funding: {
         mode: "sandbox",
         status: iban ? "active" : "iban_pending",
@@ -2249,11 +2298,27 @@ app.post(
       signature: b64urlToBuf(signature),
     });
     pendingPasskeySafeDeployments.delete(req.params.requestId);
-    const updated = store.updateUser(user.id, {
+    let updated = store.updateUser(user.id, {
       address: user.passkeySafe.address,
       wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
       passkeySafe: activatePasskeySafePlan(user.passkeySafe),
     });
+    // The Safe can be linked to Monerium now, but the link signature is a
+    // passkey ceremony the client drives next. Until this patch, an account
+    // whose deploy happened after KYC approval kept the stale pre-deploy
+    // funding error forever and nothing ever issued its IBAN. Record where
+    // provisioning actually stands so both the client and a reload know the
+    // one remaining step.
+    if (sandbox && updated.kycStatus === "approved" && !updated.iban && updated.funding?.status !== "active") {
+      updated = store.updateUser(user.id, {
+        funding: {
+          ...(updated.funding ?? {}),
+          mode: "sandbox",
+          status: "provisioning",
+          detail: "smart wallet deployed — approve IBAN issuance with your passkey",
+        },
+      });
+    }
     res.status(201).json({ ...publicUser(updated), deployOpHash: opHash });
   }),
 );
