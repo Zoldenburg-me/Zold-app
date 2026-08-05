@@ -27,7 +27,9 @@ import {
   type WebauthnPublicKey,
 } from "abstractionkit";
 import { privateKeyToAccount } from "viem/accounts";
-import { encodeFunctionData, hashTypedData } from "viem";
+import { createWalletClient, encodeFunctionData, hashTypedData, http } from "viem";
+import { chain, publicClient } from "../chain.js";
+import { RPC_URL } from "../config.js";
 
 const CANDIDE_PRODUCTION = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
 const COSIGNER_ENABLED =
@@ -365,6 +367,71 @@ export async function transferTokenFromSafe(params: {
   const response = await account.sendUserOperation(finalOp, CANDIDE.bundlerUrl);
   await response.included();
   return response.userOperationHash;
+}
+
+/**
+ * Move an ERC-20 out of a passkey Safe through the production co-signer
+ * allowance set up during Safe deployment.
+ *
+ * This is deliberately narrower than transferTokenFromSafe: it cannot act unless
+ * the user's Safe explicitly installed the configured co-signer as an allowance
+ * delegate for the token, and the on-chain remaining allowance covers this exact
+ * spend. The delegate transaction is sent by the configured co-signer key, so no
+ * user Safe owner key has to exist in the API database.
+ */
+export async function transferTokenFromSafeAllowance(params: {
+  safeAddress: `0x${string}`;
+  token: `0x${string}`;
+  to: `0x${string}`;
+  amount: bigint;
+}): Promise<string> {
+  if (!CANDIDE.cosignerAddress || !CANDIDE.cosignerKey) {
+    throw new Error("CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required for passkey Safe allowance debit");
+  }
+  if (!(await isDeployed(params.safeAddress))) {
+    throw new Error(`Safe ${params.safeAddress} is not deployed — cannot move tokens from it`);
+  }
+
+  const allowance = new AllowanceModule(CANDIDE.allowanceModuleAddress);
+  const current = await allowance.getTokensAllowance(
+    RPC_URL,
+    params.safeAddress,
+    CANDIDE.cosignerAddress,
+    params.token,
+  );
+  const nowMin = BigInt(Math.floor(Date.now() / 60_000));
+  const spent =
+    current.resetTimeMin > 0n && nowMin >= current.lastResetMin + current.resetTimeMin
+      ? 0n
+      : current.spent;
+  const remaining = current.amount > spent ? current.amount - spent : 0n;
+  if (remaining < params.amount) {
+    throw new Error(
+      `passkey Safe co-signer allowance is ${remaining} units for ${params.token}, ` +
+        `but this debit needs ${params.amount}`,
+    );
+  }
+
+  const tx = allowance.createAllowanceTransferMetaTransaction(
+    params.safeAddress,
+    params.token,
+    params.to,
+    params.amount,
+    CANDIDE.cosignerAddress,
+  );
+  const account = privateKeyToAccount(CANDIDE.cosignerKey);
+  if (account.address.toLowerCase() !== CANDIDE.cosignerAddress.toLowerCase()) {
+    throw new Error("CANDIDE_COSIGNER_KEY does not match CANDIDE_COSIGNER_ADDRESS");
+  }
+  const wallet = createWalletClient({ account, chain: chain as any, transport: http(RPC_URL) });
+  const hash = await wallet.sendTransaction({
+    to: tx.to as `0x${string}`,
+    value: tx.value,
+    data: tx.data as `0x${string}`,
+  } as any);
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error("passkey Safe allowance debit reverted");
+  return hash;
 }
 
 /**

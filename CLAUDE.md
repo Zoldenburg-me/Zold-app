@@ -731,7 +731,9 @@ THE FIX, in this order (the order is not optional):
     replacing the server-held user.privateKey.
  2. Add the co-signer as a second owner, threshold 2. 2-of-2 for now —
     Privy/Turnkey cost money, so the third (social-login) signer is deferred.
-    The server signs every payment and can never act alone.
+    Owner actions still need both passkey and co-signer signatures. Production
+    payment relays use a token-scoped AllowanceModule delegate so the API can
+    move only within the configured allowance instead of holding a user owner key.
  3. setAuthorizer(safe, safe). `_isValidSignature` already accepts EIP-1271,
     so NO CONTRACT CHANGE. After this authorizerOf never changes again.
  4. Install Candide's SocialRecoveryModule with guardians. With only 2-of-2
