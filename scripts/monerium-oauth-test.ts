@@ -59,6 +59,7 @@ const seen = {
   redirectUriAtStart: "",
   redirectUriAtExchange: "",
   grantTypes: [] as string[],
+  clientSecrets: [] as string[],
   linkedAddress: "",
   linkMessage: "",
   linkSignature: "",
@@ -180,6 +181,7 @@ const stub = createServer((req, res) => {
       const body = new URLSearchParams(raw);
       const grant = body.get("grant_type") ?? "";
       seen.grantTypes.push(grant);
+      seen.clientSecrets.push(body.get("client_secret") ?? "");
       if (grant === "authorization_code") {
         seen.codeVerifier = body.get("code_verifier") ?? "";
         seen.redirectUriAtExchange = body.get("redirect_uri") ?? "";
@@ -301,7 +303,7 @@ try {
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
     MONERIUM_CLIENT_ID: "stub-client",
-    MONERIUM_CLIENT_SECRET: "stub-secret",
+    MONERIUM_CLIENT_SECRET: "",
     MONERIUM_BASE_URL: STUB,
     MONERIUM_AUTH_URL: `${STUB}/auth`,
     MONERIUM_REDIRECT_URI: `${API}/api/monerium/oauth/callback`,
@@ -372,6 +374,7 @@ try {
     assert.equal(r.status, 302, `callback did not redirect: ${JSON.stringify(r.data)}`);
     assert.match(r.location ?? "", /monerium=connected/);
     assert.equal(seen.grantTypes.includes("authorization_code"), true);
+    assert.equal(seen.clientSecrets[0], "", "public PKCE OAuth clients must not require a client_secret");
     assert.equal(s256(seen.codeVerifier), seen.codeChallenge, "PKCE pair must match");
     assert.equal(seen.redirectUriAtExchange, seen.redirectUriAtStart, "redirect_uri must match between start and exchange");
   });
