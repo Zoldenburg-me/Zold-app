@@ -1215,6 +1215,12 @@ app.get(
   }),
 );
 
+/**
+ * Self-serve identity approval. ONLY where the deployment has already decided
+ * every user is approved (KYC_AUTO_APPROVE) or is an explicit simulation —
+ * this route briefly ran ungated, which let any session approve its own KYC
+ * on any deployment, the exact hole requireOperator exists to close.
+ */
 app.post(
   "/api/users/:id/kyc",
   wrap(async (req, res) => {
@@ -1222,6 +1228,9 @@ app.post(
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
     if (user.kycStatus === "approved") return res.status(409).json({ error: "account is already approved" });
+    if (!KYC.autoApprove && !SECURITY.allowSimulation) {
+      return res.status(403).json({ error: "identity review is operator-only on this deployment" });
+    }
     const result = await applyKycDecision(user, "approved", "mock", "in-house verification auto-approved");
     res.json(result);
   }),
@@ -1235,7 +1244,9 @@ app.post(
     if (!requireUserSession(req, res, user.id)) return;
     if (user.kycStatus === "approved") return res.status(409).json({ error: "account is already approved" });
     if (!sumsubEnabled()) {
-      if (SECURITY.allowSimulation || !IS_PRODUCTION) {
+      // Only the deployment-wide auto-approve flips this; in simulation the
+      // explicit route for self-approval is mock-review, not "start sumsub".
+      if (KYC.autoApprove) {
         const result = await applyKycDecision(user, "approved", "mock", "in-house verification auto-approved");
         return res.json({ verificationUrl: "", kyc: result.kyc, funding: result.funding, kycStatus: result.kycStatus });
       }
@@ -1373,7 +1384,10 @@ app.post(
       return res.status(400).json({ error: "path must be existing_monerium or new_monerium" });
     }
 
-    if (path === "new_monerium" && (!IS_PRODUCTION || sandbox || KYC.autoApprove)) {
+    // Only the deployment-wide auto-approve flips this. Simulation mode keeps
+    // its ONE explicit approval route (mock-review) so the KYC gate stays
+    // testable locally — choosing a path is not an identity decision.
+    if (path === "new_monerium" && KYC.autoApprove) {
       const result = await applyKycDecision(user, "approved", "manual", "in-house identity verification auto-approved");
       return res.json(result);
     }
