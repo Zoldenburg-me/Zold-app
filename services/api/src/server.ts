@@ -1587,6 +1587,7 @@ app.post(
     // Captured under the guard above: `user` is reassigned below (store
     // updates), which discards TypeScript's narrowing on these.
     const passkey = user.passkey;
+    const passkeyKey = user.passkey.publicKey;
     const passkeySafe = user.passkeySafe;
 
     prunePendingMoneriumLinkSignatures();
@@ -1622,7 +1623,7 @@ app.post(
           authenticatorData,
           clientDataJSON,
           assertionSignature,
-          passkey.publicKey,
+          passkeyKey,
           passkey.signCount ?? 0,
           passkey.rpId ?? SECURITY.rpId,
           SECURITY.origins,
@@ -2003,6 +2004,35 @@ async function deployerFloat() {
   return value;
 }
 
+/**
+ * Gas balances of every EOA that sends transactions for the platform. Each is
+ * a distinct outage when dry, and the errors do not say which wallet is empty:
+ * a dry CO-SIGNER fails every Safe debit with "gas required exceeds allowance
+ * (0)" — which reads as a token-allowance problem and cost a day being chased
+ * as one; a dry orchestrator fails swaps and escrow legs; a dry deployer
+ * fails faucet grants. Name them, so the dashboard can too.
+ */
+let operatorGasCache: { at: number; value: { role: string; address: string; eth: number }[] } | null = null;
+async function operatorGas() {
+  if (operatorGasCache && Date.now() - operatorGasCache.at < 60_000) return operatorGasCache.value;
+  const wallets: { role: string; address: `0x${string}` }[] = [
+    { role: "co-signer (Safe debits)", address: (CANDIDE.cosignerAddress || "0x") as `0x${string}` },
+    { role: "orchestrator (swap/escrow)", address: orchestratorAddress },
+    { role: "deployer (faucet/gas)", address: deployerWallet.account.address },
+  ];
+  const value = await Promise.all(
+    wallets
+      .filter((w) => /^0x[0-9a-fA-F]{40}$/.test(w.address))
+      .map(async (w) => ({
+        role: w.role,
+        address: w.address,
+        eth: Number(await publicClient.getBalance({ address: w.address })) / 1e18,
+      })),
+  );
+  operatorGasCache = { at: Date.now(), value };
+  return value;
+}
+
 app.get(
   "/api/admin/stats",
   wrap(async (req, res) => {
@@ -2024,6 +2054,7 @@ app.get(
       totalVolumeEur,
       faucetGrantEur: TESTNET_FAUCET.grantEur || 0,
       deployer: await deployerFloat().catch(() => null),
+      operatorGas: await operatorGas().catch(() => null),
     });
   }),
 );
