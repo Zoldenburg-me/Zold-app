@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx scripts/dev.ts",
+    "auto-sync": "tsx scripts/auto-sync.ts",
     "chain": "hardhat node",
     "compile": "hardhat compile",
     "deploy": "tsx scripts/deploy.ts",
