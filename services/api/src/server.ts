@@ -88,6 +88,7 @@ import {
 import {
   exchangeAuthorizationCode,
   LINK_MESSAGE,
+  MoneriumApiError,
   MoneriumClient,
   moneriumBearerRequest,
   refreshAuthorizationToken,
@@ -1559,6 +1560,11 @@ app.post(
     if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
       return res.status(409).json({ error: "active passkey Safe required before Monerium address linking" });
     }
+    // Captured under the guard above: `user` is reassigned below (store
+    // updates), which discards TypeScript's narrowing on these.
+    const passkey = user.passkey;
+    const passkeyKey = user.passkey.publicKey;
+    const passkeySafe = user.passkeySafe;
     const requestId = typeof req.body?.linkSignatureRequestId === "string" ? req.body.linkSignatureRequestId : "";
     prunePendingMoneriumLinkSignatures();
     const pending = requestId ? pendingMoneriumLinkSignatures.get(requestId) : undefined;
@@ -1582,29 +1588,36 @@ app.post(
       profileId =
         MONERIUM.profileId ||
         (await moneriumAppClient().createProfile("personal", user.email ?? user.name))?.id;
+      // Persist it NOW, not at the end: every step after this can fail, and a
+      // retry that cannot see the profile creates another — each failed click
+      // was leaving one more orphan profile on the Monerium app.
+      if (profileId) {
+        user = store.updateUser(user.id, {
+          funding: { ...(user.funding ?? { mode: "sandbox", status: "provisioning" }), moneriumProfileId: profileId } as User["funding"],
+        });
+      }
     }
     const { credentialId, authenticatorData, clientDataJSON, signature: assertionSignature } = req.body ?? {};
-    if (credentialId !== user.passkey.credentialId) {
+    if (credentialId !== passkey.credentialId) {
       return res.status(403).json({ error: "passkey credential does not match this account" });
     }
     if (!authenticatorData || !clientDataJSON || !assertionSignature) {
       return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
     }
     let signature: `0x${string}`;
-    const passkeySafe = user.passkeySafe;
     try {
       const { signCount } = await verifyAssertionForChallenge(
         authenticatorData,
         clientDataJSON,
         assertionSignature,
-        user.passkey.publicKey,
-        user.passkey.signCount ?? 0,
-        user.passkey.rpId ?? SECURITY.rpId,
+        passkeyKey,
+        passkey.signCount ?? 0,
+        passkey.rpId ?? SECURITY.rpId,
         SECURITY.origins,
         pending.challenge,
         true,
       );
-      user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+      user = store.updateUser(user.id, { passkey: { ...passkey, signCount } });
       signature = await signMessageAsPasskeySafe(passkeySafe, user.address, LINK_MESSAGE, {
         authenticatorData: b64urlToBuf(authenticatorData),
         clientDataJSON: b64urlToBuf(clientDataJSON),
@@ -1613,17 +1626,44 @@ app.post(
     } catch (err: any) {
       return res.status(401).json({ error: String(err?.message ?? err) });
     }
-    await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/addresses", {
-      address: user.address,
-      signature,
-      chain: MONERIUM.chain,
-      message: LINK_MESSAGE,
-      ...(profileId ? { profile: profileId } : {}),
-    });
-    await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/ibans", {
-      address: user.address,
-      chain: MONERIUM.chain,
-    });
+    /**
+     * Monerium's answers here are the interesting failure mode, so they must
+     * reach the user, not collapse into "internal server error": /addresses
+     * verifies the Safe's EIP-1271 signature ON-CHAIN and its 400 carries the
+     * Safe's revert reason (GS020 &c) — the one clue that distinguishes "bad
+     * signature" from "already linked" from "Monerium down".
+     *
+     * "Already linked/exists" answers are SUCCESS for this route's purpose: a
+     * retry after a partial run must finish the remaining steps, not refuse
+     * because an earlier click did the first one.
+     */
+    const alreadyDone = (err: unknown) =>
+      err instanceof MoneriumApiError &&
+      err.status < 500 &&
+      /already|exist|duplicate/i.test(err.message);
+    try {
+      await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/addresses", {
+        address: user.address,
+        signature,
+        chain: MONERIUM.chain,
+        message: LINK_MESSAGE,
+        ...(profileId ? { profile: profileId } : {}),
+      });
+    } catch (err: any) {
+      if (!alreadyDone(err)) {
+        return res.status(502).json({ error: `Monerium refused the address linking: ${err?.message ?? err}` });
+      }
+    }
+    try {
+      await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/ibans", {
+        address: user.address,
+        chain: MONERIUM.chain,
+      });
+    } catch (err: any) {
+      if (!alreadyDone(err)) {
+        return res.status(502).json({ error: `Monerium refused the IBAN request: ${err?.message ?? err}` });
+      }
+    }
     const snapshot = await readMoneriumAccountSnapshot(user, accessToken);
     const iban = snapshot.ibans.find(
       (i: any) => String(i.address ?? "").toLowerCase() === user.address.toLowerCase() && i.iban,
