@@ -469,6 +469,7 @@ export async function transferTokenFromSafeAllowance(params: {
   token: `0x${string}`;
   to: `0x${string}`;
   amount: bigint;
+  moduleAddress?: `0x${string}`;
 }): Promise<string> {
   if (!CANDIDE.cosignerAddress || !CANDIDE.cosignerKey) {
     throw new Error("CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required for passkey Safe allowance debit");
@@ -483,20 +484,26 @@ export async function transferTokenFromSafeAllowance(params: {
     }
     throw new Error(`Safe ${params.safeAddress} is not deployed — cannot move tokens from it`);
   }
-  if (!(await safeModuleEnabled(params.safeAddress, CANDIDE.allowanceModuleAddress))) {
-    if (allowMockFallback()) {
+
+  let moduleAddress = params.moduleAddress ?? CANDIDE.allowanceModuleAddress;
+  if (!(await safeModuleEnabled(params.safeAddress, moduleAddress))) {
+    const legacyModule = "0xAA46724893dedD72658219405185Fb0Fc91e091C" as `0x${string}`;
+    if (await safeModuleEnabled(params.safeAddress, legacyModule)) {
+      moduleAddress = legacyModule;
+    } else if (allowMockFallback()) {
       console.warn(
         `Passkey Safe allowance module is not enabled on-chain for ${params.safeAddress} — falling back to mock fee debit for dev/testnet`,
       );
       return "0xmock-allowance-debit-hash";
+    } else {
+      throw new Error(
+        `Passkey Safe co-signer allowance module (${moduleAddress}) is not enabled on-chain for Safe ${params.safeAddress}. ` +
+          `Please click "Set Up Allowance" in your account dashboard.`,
+      );
     }
-    throw new Error(
-      `Passkey Safe co-signer allowance module (${CANDIDE.allowanceModuleAddress}) is not enabled on-chain for Safe ${params.safeAddress}. ` +
-        `Please click "Set Up Allowance" in your account dashboard.`,
-    );
   }
 
-  const allowance = new AllowanceModule(CANDIDE.allowanceModuleAddress);
+  const allowance = new AllowanceModule(moduleAddress);
   let current: any;
   try {
     current = await allowance.getTokensAllowance(
