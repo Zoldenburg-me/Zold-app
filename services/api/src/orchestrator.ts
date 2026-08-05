@@ -39,7 +39,7 @@ import {
   transferIdHash,
   writeAndWait,
 } from "./chain.js";
-import { transferTokenFromSafe } from "./wallet/candide.js";
+import { transferTokenFromSafe, transferTokenFromSafeAllowance } from "./wallet/candide.js";
 import {
   createCashPickup,
   createCashPickupViaAnchor,
@@ -227,17 +227,11 @@ async function debitInputFunds(
   const sendWei = eur.toWei(transfer.sendEur);
 
   await assertDeviceAuthorization(transfer, user, auth);
-  if (!user.privateKey) throw new Error("user has no wallet key to move Safe-held EURe");
   if (transfer.txs.some((x) => x.step === DEBIT_STEP.safe)) {
     throw new Error("duplicate transfer: this transfer already moved EURe out of the Safe");
   }
 
-  const moveHash = await transferTokenFromSafe({
-    ownerKey: user.privateKey,
-    token: a.eure,
-    to: orchestratorAddress,
-    amount: sendWei,
-  });
+  const moveHash = await moveTokenFromUserSafe(user, a.eure, orchestratorAddress, sendWei);
   txs.push({ step: DEBIT_STEP.safe, hash: moveHash });
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
   failpoint("safe.transfer");
@@ -261,22 +255,56 @@ async function debitSafeFundedSepaFee(
   txs: Transfer["txs"],
 ): Promise<void> {
   await assertDeviceAuthorization(transfer, user, auth);
-  if (!user.privateKey) throw new Error("user has no wallet key to move Safe-held EURe");
   if (transfer.txs.some((x) => x.step === DEBIT_STEP.safeFee)) {
     throw new Error("duplicate transfer: this transfer already moved its fee out of the Safe");
   }
   const feeEur = Math.max(0, transfer.sendEur - payoutEur);
   if (feeEur > 0) {
-    const feeHash = await transferTokenFromSafe({
-      ownerKey: user.privateKey,
-      token: addrs().eure,
-      to: orchestratorAddress,
-      amount: eur.toWei(feeEur),
-    });
+    const feeHash = await moveTokenFromUserSafe(user, addrs().eure, orchestratorAddress, eur.toWei(feeEur));
     txs.push({ step: DEBIT_STEP.safeFee, hash: feeHash });
   }
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
   failpoint("safe.transfer.fee");
+}
+
+export function safeDebitBlocker(user: User): string | null {
+  if (user.privateKey) return null;
+  if (
+    user.passkeySafe?.status === "active" &&
+    user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
+    user.passkeySafe.cosignerPolicy?.enabled &&
+    user.passkeySafe.cosignerAddress
+  ) {
+    return null;
+  }
+  return (
+    "Safe-held funds need either a legacy API-held owner key or an active passkey Safe " +
+    "with a production co-signer allowance before the API can relay this debit"
+  );
+}
+
+async function moveTokenFromUserSafe(
+  user: User,
+  token: `0x${string}`,
+  to: `0x${string}`,
+  amount: bigint,
+): Promise<string> {
+  if (user.privateKey) {
+    return transferTokenFromSafe({
+      ownerKey: user.privateKey,
+      token,
+      to,
+      amount,
+    });
+  }
+  const blocked = safeDebitBlocker(user);
+  if (blocked) throw new Error(blocked);
+  return transferTokenFromSafeAllowance({
+    safeAddress: user.address,
+    token,
+    to,
+    amount,
+  });
 }
 
 function cctpRecipientStellar(): string {

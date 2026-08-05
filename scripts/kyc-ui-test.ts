@@ -33,6 +33,7 @@ const mustContain = [
   "function activateConnectedMonerium",
   "function finishDashboardSmartWallet",
   "/funding-onboarding-path",
+  "/sumsub/start",
   "/monerium/connect/start",
   "/monerium/link-signature/start",
   "if (!kycApproved(user)) return enterKycReview",

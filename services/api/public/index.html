@@ -2825,7 +2825,11 @@ async function submitMobileSend() {
       throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
     }
     const signature = await dev.signTypedData(created.authorization.typedData, credId());
-    const t = await api(`/api/transfers/${created.id}/authorize`, { signature });
+    const redeem = await moneriumRedeemAssertion(created.authorization);
+    const t = await api(`/api/transfers/${created.id}/authorize`, {
+      signature,
+      ...(redeem ? { moneriumRedeemAssertion: redeem } : {}),
+    });
     mSend.transfer = t;
     renderProgress(t);
     refresh();
@@ -3311,7 +3315,7 @@ $("m-usd-cta").onclick = () => {
  * no answer from /api/health we assume no simulation, so a failed probe hides
  * a control the server might refuse rather than offering one it will.
  */
-let caps = { simulation: false, sandbox: false };
+let caps = { simulation: false, sandbox: false, kycProvider: "manual", sumsub: false };
 
 async function loadCapabilities() {
   try {
@@ -3709,6 +3713,16 @@ async function refreshKycStatus({ continueWhenApproved = false } = {}) {
 async function chooseFundingPath(path) {
   clearErr("kyc-err");
   try {
+    if (path === "new_monerium" && caps.kycProvider === "sumsub") {
+      const started = await api(`/api/users/${user.id}/sumsub/start`, {});
+      user = { ...user, kyc: started.kyc, funding: started.funding };
+      if (started.verificationUrl) {
+        location.href = started.verificationUrl;
+        return;
+      }
+      renderKycState(user);
+      return;
+    }
     const updated = await api(`/api/users/${user.id}/funding-onboarding-path`, { path });
     renderUser(updated);
   } catch (e) { showErr("kyc-err", e); }
@@ -3919,6 +3933,26 @@ async function passkeyStepUp() {
   });
   return {
     credentialId: cred.id,
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  };
+}
+
+async function moneriumRedeemAssertion(authorization) {
+  const redeem = authorization?.moneriumRedeem;
+  if (!redeem) return undefined;
+  if (!redeem.challenge || !redeem.credentialId) return undefined;
+  const cred = await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(redeem.challenge),
+      allowCredentials: [{ type: "public-key", id: b64urlToBytes(redeem.credentialId) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  });
+  return {
+    credentialId: redeem.credentialId,
     authenticatorData: b64url(cred.response.authenticatorData),
     clientDataJSON: b64url(cred.response.clientDataJSON),
     signature: b64url(cred.response.signature),
@@ -4495,9 +4529,13 @@ async function pollSepaTransfer(id) {
       throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
     }
     const signature = await dev.signTypedData(created.authorization.typedData, credId());
+    const redeem = await moneriumRedeemAssertion(created.authorization);
 
     // 3. Submit: the server can only relay the spend this signature approved.
-    const t = await api(`/api/transfers/${created.id}/authorize`, { signature });
+    const t = await api(`/api/transfers/${created.id}/authorize`, {
+      signature,
+      ...(redeem ? { moneriumRedeemAssertion: redeem } : {}),
+    });
     transfer = t;
     $("step-quote").classList.add("hidden");
     $("step-progress").classList.remove("hidden");

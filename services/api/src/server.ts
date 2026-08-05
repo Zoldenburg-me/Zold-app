@@ -11,7 +11,7 @@ import {
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR } from "./config.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
@@ -38,6 +38,7 @@ import {
   executeSepaTransfer,
   executeTransfer,
   refreshPayout,
+  safeDebitBlocker,
   settlePickup,
   sweepAnchorPayouts,
   sweepStrandedTransfers,
@@ -86,9 +87,20 @@ import {
 import {
   exchangeAuthorizationCode,
   LINK_MESSAGE,
+  MoneriumClient,
   moneriumBearerRequest,
   refreshAuthorizationToken,
 } from "./adapters/monerium-client.js";
+import {
+  createSumsubShareToken,
+  createSumsubWebSdkLink,
+  decisionFromSumsubWebhook,
+  getSumsubApplicant,
+  senderProfileFromSumsubApplicant,
+  sumsubExternalUserId,
+  userIdFromSumsubExternalId,
+  verifySumsubWebhookDigest,
+} from "./adapters/sumsub.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -235,6 +247,8 @@ export function capabilities() {
      * user transfers to, so the UI needs it alongside the flag above.
      */
     sandbox,
+    kycProvider: KYC.provider,
+    sumsub: sumsubEnabled(),
   };
 }
 
@@ -1157,6 +1171,42 @@ app.get(
   }),
 );
 
+app.post(
+  "/api/users/:id/sumsub/start",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (user.kycStatus === "approved") return res.status(409).json({ error: "account is already approved" });
+    if (!sumsubEnabled()) return res.status(503).json({ error: "Sumsub KYC is not configured" });
+    const base = PUBLIC_URL || `http://${API_HOST}:${API_PORT}`;
+    const externalUserId = sumsubExternalUserId(user.id);
+    const link = await createSumsubWebSdkLink(SUMSUB, {
+      user,
+      successUrl: `${base}/app?kyc=sumsub_success`,
+      rejectUrl: `${base}/app?kyc=sumsub_rejected`,
+    });
+    const updated = store.updateUser(user.id, {
+      kyc: {
+        ...user.kyc,
+        provider: "sumsub",
+        onboardingPath: "new_monerium",
+        reason: "Sumsub identity verification started",
+        sumsub: {
+          ...user.kyc?.sumsub,
+          externalUserId,
+        },
+      },
+      funding: {
+        ...(user.funding ?? { mode: sandbox ? "sandbox" : "mock", status: "kyc_pending" as const }),
+        status: "kyc_pending" as const,
+        detail: "complete Sumsub identity verification",
+      },
+    });
+    res.json({ verificationUrl: link.url, kyc: publicUser(updated).kyc, funding: updated.funding });
+  }),
+);
+
 app.get(
   "/api/privacy-bundles",
   wrap(async (_req, res) => {
@@ -1563,7 +1613,7 @@ app.delete(
 async function applyKycDecision(
   user: User,
   decision: "approved" | "rejected" | "manual_review",
-  provider: "mock" | "manual" | "monerium",
+  provider: "mock" | "manual" | "monerium" | "sumsub",
   reason?: string,
 ) {
   const updated = store.updateUser(user.id, {
@@ -1572,6 +1622,7 @@ async function applyKycDecision(
       : { funding: { ...user.funding!, status: "kyc_pending" as const } }),
     kycStatus: decision,
     kyc: {
+      ...user.kyc,
       provider,
       checkedAt: new Date().toISOString(),
       reason: typeof reason === "string" ? reason : undefined,
@@ -1589,6 +1640,35 @@ function readDecision(body: any, res: express.Response): "approved" | "rejected"
     return undefined;
   }
   return decision;
+}
+
+async function shareApprovedSumsubKycWithMonerium(user: User, applicantId: string): Promise<User> {
+  if (!moneriumSandboxEnabled()) return user;
+  const profileId =
+    user.funding?.moneriumProfileId ||
+    user.monerium?.profileId ||
+    MONERIUM.profileId ||
+    (await new MoneriumClient(MONERIUM).createProfile("personal", user.email ?? user.name)).id;
+  const share = await createSumsubShareToken(SUMSUB, applicantId, SUMSUB.moneriumClientId);
+  await new MoneriumClient(MONERIUM).shareKyc(profileId, share.token);
+  return store.updateUser(user.id, {
+    funding: {
+      ...(user.funding ?? { mode: sandbox ? "sandbox" : "mock", status: "kyc_pending" as const }),
+      moneriumProfileId: profileId,
+      detail: "Sumsub KYC shared with Monerium; waiting for Monerium profile review",
+    },
+    monerium: { ...(user.monerium ?? { connectedAt: new Date().toISOString() }), profileId },
+    kyc: {
+      ...user.kyc,
+      provider: "sumsub",
+      sumsub: {
+        ...user.kyc?.sumsub,
+        externalUserId: user.kyc?.sumsub?.externalUserId ?? sumsubExternalUserId(user.id),
+        applicantId,
+        moneriumShare: { profileId, status: "pending", updatedAt: new Date().toISOString() },
+      },
+    },
+  });
 }
 
 /** Refuse a send that would take the account past its daily cap, counting both
@@ -1673,6 +1753,87 @@ app.post(
     const result = await applyKycDecision(user, decision, "manual", req.body?.reason);
     console.log(`KYC: ${decision} for ${user.id} by operator`);
     res.json(result);
+  }),
+);
+
+app.post(
+  "/api/webhooks/sumsub",
+  wrap(async (req, res) => {
+    const raw = (req as any).rawBody as Buffer | undefined;
+    if (!SUMSUB.webhookSecretKey) return res.status(503).json({ error: "Sumsub webhook secret is not configured" });
+    if (!raw || !verifySumsubWebhookDigest(
+      SUMSUB.webhookSecretKey,
+      raw,
+      req.header("x-payload-digest") ?? undefined,
+      req.header("x-payload-digest-alg") ?? "HMAC_SHA256_HEX",
+    )) {
+      return res.status(401).json({ error: "invalid Sumsub webhook signature" });
+    }
+    const payload = req.body ?? {};
+    const decision = decisionFromSumsubWebhook(payload);
+    if (!decision) return res.json({ ok: true, ignored: payload.type ?? "unknown" });
+    const applicantId = typeof payload.applicantId === "string" ? payload.applicantId : undefined;
+    const externalUserId = typeof payload.externalUserId === "string" ? payload.externalUserId : undefined;
+    const userId = userIdFromSumsubExternalId(externalUserId);
+    let user = (userId ? store.findUser(userId) : undefined) ??
+      store.users.find((u) => u.kyc?.sumsub?.applicantId === applicantId);
+    if (!user) return res.status(404).json({ error: "no local user for Sumsub applicant" });
+
+    user = store.updateUser(user.id, {
+      kyc: {
+        ...user.kyc,
+        provider: "sumsub",
+        onboardingPath: "new_monerium",
+        sumsub: {
+          ...user.kyc?.sumsub,
+          externalUserId: externalUserId ?? user.kyc?.sumsub?.externalUserId ?? sumsubExternalUserId(user.id),
+          applicantId,
+          reviewStatus: payload.reviewStatus,
+          reviewAnswer: payload.reviewResult?.reviewAnswer,
+          reviewedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    if (applicantId) {
+      try {
+        const applicant = await getSumsubApplicant(SUMSUB, applicantId);
+        const senderProfile = senderProfileFromSumsubApplicant(applicant, user);
+        if (senderProfile) user = store.updateUser(user.id, { senderProfile });
+      } catch (err: any) {
+        console.warn(`SUMSUB: applicant ${applicantId} data read failed for ${user.id}: ${err?.message ?? err}`);
+      }
+    }
+
+    const reason = payload.reviewResult?.clientComment || payload.reviewResult?.moderationComment;
+    const result = await applyKycDecision(user, decision, "sumsub", reason);
+    if (decision === "approved" && applicantId) {
+      try {
+        user = await shareApprovedSumsubKycWithMonerium(store.findUser(user.id)!, applicantId);
+      } catch (err: any) {
+        const latest = store.findUser(user.id)!;
+        store.updateUser(user.id, {
+          kyc: {
+            ...latest.kyc,
+            provider: "sumsub",
+            sumsub: {
+              ...latest.kyc?.sumsub,
+              externalUserId: latest.kyc?.sumsub?.externalUserId ?? sumsubExternalUserId(user.id),
+              applicantId,
+              moneriumShare: {
+                profileId: latest.funding?.moneriumProfileId ?? latest.monerium?.profileId ?? MONERIUM.profileId,
+                status: "error",
+                updatedAt: new Date().toISOString(),
+                error: String(err?.message ?? err).slice(0, 240),
+              },
+            },
+          },
+        });
+        console.warn(`SUMSUB: Monerium KYC share failed for ${user.id}: ${err?.message ?? err}`);
+      }
+    }
+    console.log(`SUMSUB: ${decision} for ${user.id} applicant ${applicantId ?? "(unknown)"}`);
+    res.json({ ok: true, userId: user.id, kycStatus: result.kycStatus });
   }),
 );
 
@@ -2237,11 +2398,10 @@ app.post(
         error: `insufficient Safe balance (€${balances.safeBalanceEur.toFixed(2)})`,
       });
     }
-    if (fundingSource === "safe" && !user.privateKey) {
+    const debitBlocker = safeDebitBlocker(user);
+    if (fundingSource === "safe" && debitBlocker) {
       return res.status(409).json({
-        error:
-          "funds are in the Safe, but this account has no Safe owner key in the API store; " +
-          "create a new passkey/Safe account or recover the Safe before this transfer can execute",
+        error: debitBlocker,
         safeBalanceEur: balances.safeBalanceEur,
       });
     }
@@ -2316,6 +2476,10 @@ app.post(
               issuedAt: transfer.moneriumRedeem.issuedAt,
               message: transfer.moneriumRedeem.message,
               memo: transfer.moneriumRedeem.memo,
+              credentialId: user.passkey?.credentialId,
+              challenge: user.passkeySafe?.status === "active"
+                ? passkeySafeChallenge(safeMessageHash(user.address, transfer.moneriumRedeem.message))
+                : undefined,
             }
           : undefined,
         submitTo: `/api/transfers/${transfer.id}/authorize`,
@@ -2422,20 +2586,75 @@ app.post(
         return res.status(400).json({ error: "moneriumRedeemSignature must be a 0x signature" });
       }
     }
-    const user = store.findUser(transfer.userId)!;
+    let user = store.findUser(transfer.userId)!;
     if (!requireKycApproved(user, res)) return;
-    // Claim the authorization before anything awaits. Two parallel submissions
-    // of the same signature both used to clear the CREATED check above, and
-    // both could submit the same spend. The claim is atomic because nothing
-    // yields between here and it.
+    let effectiveRedeemSignature = typeof redeemSignature === "string" ? redeemSignature as `0x${string}` : undefined;
+    const redeemAssertion = req.body?.moneriumRedeemAssertion;
+    if (!effectiveRedeemSignature && redeemAssertion !== undefined) {
+      if (!transfer.moneriumRedeem) {
+        return res.status(400).json({ error: "this transfer has no Monerium redeem authorization terms" });
+      }
+      if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
+        return res.status(409).json({ error: "active passkey Safe required for Monerium redeem authorization" });
+      }
+      const passkeySafe = user.passkeySafe;
+      const { credentialId, authenticatorData, clientDataJSON, signature: assertionSignature } = redeemAssertion ?? {};
+      if (credentialId !== user.passkey.credentialId) {
+        return res.status(403).json({ error: "passkey credential does not match this account" });
+      }
+      if (!authenticatorData || !clientDataJSON || !assertionSignature) {
+        return res.status(400).json({ error: "moneriumRedeemAssertion requires authenticatorData, clientDataJSON and signature" });
+      }
+      const expectedChallenge = passkeySafeChallenge(safeMessageHash(user.address, transfer.moneriumRedeem.message));
+      try {
+        const { signCount } = await verifyAssertionForChallenge(
+          authenticatorData,
+          clientDataJSON,
+          assertionSignature,
+          user.passkey.publicKey,
+          user.passkey.signCount ?? 0,
+          user.passkey.rpId ?? SECURITY.rpId,
+          SECURITY.origins,
+          expectedChallenge,
+          true,
+        );
+        user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+        effectiveRedeemSignature = await signMessageAsPasskeySafe(
+          passkeySafe,
+          user.address,
+          transfer.moneriumRedeem.message,
+          {
+            authenticatorData: b64urlToBuf(authenticatorData),
+            clientDataJSON: b64urlToBuf(clientDataJSON),
+            signature: b64urlToBuf(assertionSignature),
+          },
+        );
+      } catch (err: any) {
+        return res.status(401).json({ error: String(err?.message ?? err) });
+      }
+    }
+    if (
+      transfer.rail === "sepa" &&
+      transfer.moneriumRedeem &&
+      !effectiveRedeemSignature &&
+      !user.privateKey
+    ) {
+      return res.status(400).json({
+        error: "passkey Safe Monerium redeem approval is required before this SEPA transfer can execute",
+      });
+    }
+    // Claim the authorization before execution. Two parallel submissions of the
+    // same signature both used to clear the CREATED check above, and both could
+    // submit the same spend. claimAuthorization is the atomic boundary: after it
+    // succeeds once, every other caller sees the authorizedAt marker and stops.
     if (!store.claimAuthorization(transfer.id)) {
       return res.status(409).json({ error: "authorization already submitted for this transfer" });
     }
-    if (typeof redeemSignature === "string" && transfer.moneriumRedeem) {
+    if (effectiveRedeemSignature && transfer.moneriumRedeem) {
       executableTransfer = store.updateTransfer(transfer.id, {
         moneriumRedeem: {
           ...transfer.moneriumRedeem,
-          signature: redeemSignature as `0x${string}`,
+          signature: effectiveRedeemSignature,
           signedAt: new Date().toISOString(),
         },
       });
