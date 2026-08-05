@@ -69,23 +69,45 @@ interface WatchedAddress {
   source: "payment-page" | "safe";
 }
 
-/** Accounts allowed to hold a credit, either on the Safe directly or through
- * page-scoped auto-settlement. */
+/** Accounts whose inbound transfers are recorded, either as direct Safe
+ * funding or through page-scoped auto-settlement.
+ *
+ * Three rules, each learned from a mis-attribution that shipped:
+ *
+ * - The ZERO ADDRESS is never watched. Accounts without a deployed Safe hold
+ *   0x0 as their address, and watching it attributed every EURe BURN (each
+ *   redeem's Transfer to 0x0) to whichever Safe-less account came first — a
+ *   €22.01 payout burn showed up as a deposit on an unrelated account.
+ * - ONE entry per address, and the page is watched at its DEPOSIT address —
+ *   the address payers are actually told — never at its recipient. Watching
+ *   the recipient meant direct Safe USDC was reclassified as page
+ *   auto-convert (converting money the owner chose to hold as USDC), while
+ *   deposits at a real forwarder address were not watched at all. When the
+ *   deposit address IS the user's Safe (the local-safe provider), the page
+ *   entry wins on purpose: opting that address into auto-convert is the
+ *   owner's explicit instruction for USDC arriving there.
+ * - Direct Safe funding is recorded for EVERY account, not only approved
+ *   ones. Recording is observation, not a credit decision: a pending
+ *   account's Safe can already receive (the faucet funds it at deployment,
+ *   before manual review lands), and skipping it meant the cursor moved past
+ *   the transfer forever — the deposit never appeared even after approval.
+ *   Page auto-convert stays approved-only: conversion IS a credit decision.
+ */
 function watchedAddresses(): WatchedAddress[] {
   const seen = new Set<string>();
   const out: WatchedAddress[] = [];
   for (const user of store.users) {
-    if (user.kycStatus !== "approved") continue;
     const add = (address: `0x${string}`, source: WatchedAddress["source"]) => {
-      const key = `${address.toLowerCase()}:${source}`;
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address ?? "") || /^0x0{40}$/i.test(address)) return;
+      const key = address.toLowerCase();
       if (seen.has(key)) return;
       seen.add(key);
       out.push({ user, address, source });
     };
-    add(user.address, "safe");
-    if (user.paymentPage?.autoConvert && user.paymentPage.depositAddress) {
-      add(user.paymentPage.recipientAddress ?? user.address, "payment-page");
+    if (user.kycStatus === "approved" && user.paymentPage?.autoConvert && user.paymentPage.depositAddress) {
+      add(user.paymentPage.depositAddress, "payment-page");
     }
+    add(user.address, "safe");
   }
   return out;
 }
@@ -313,6 +335,11 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
 
       const pageMatch = matches.find((m) => m.source === "payment-page" && m.user.paymentPage?.autoConvert);
       const match = token.token === "USDC" && pageMatch ? pageMatch : matches[0];
+      // The forwarder's second hop: page money already recorded when it
+      // arrived at the deposit address, now landing on the owner's Safe.
+      // Recording it again would double-count one payment.
+      const ownPage = match.user.paymentPage?.depositAddress?.toLowerCase();
+      if (match.source === "safe" && ownPage && ownPage !== to && from === ownPage) continue;
       const user = match.user;
       const now = new Date().toISOString();
       const directSafeFunding = match.source === "safe" || token.token === "EURE";
