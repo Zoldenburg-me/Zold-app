@@ -45,6 +45,13 @@ terms, and neither can be replaced by the server.
                                                    cash at a counter
 ```
 
+The normal identity-review path can be backed by Sumsub. Sumsub stores document
+images and liveness media; this app stores only the Sumsub applicant reference,
+review result, and extracted text fields needed for Travel Rule and partner
+handoff. Approved Sumsub applicants can be shared to Monerium through Sumsub's
+share-token flow, and MoneyGram receives only the documented SEP-9 text fields.
+Bridge still needs its hosted KYC link or direct Customers API requirements.
+
 Chain selection is configuration, not code: `TRANSF_CHAIN_ID` resolves the
 chain and `deployments.json` is keyed by chain id, so several deployments
 coexist without overwriting each other. The current target is Base Sepolia
@@ -72,7 +79,7 @@ carried value and which have not.
 | CCTP Base → Stellar | Integrated; runs dry until `CCTP_LIVE=1` |
 | Stellar payout leg | Ledger half proven on-chain; anchor attribution not yet exercised |
 | MoneyGram cash pickup | Protocol complete (SEP-10/12/24); requires a partner agreement |
-| KYC provider | **Sumsub selected** — required by Monerium; integration outstanding |
+| KYC provider | **Sumsub integrated** — WebSDK, signed webhooks, Monerium share token, MoneyGram SEP-9 fields |
 
 Two constraints worth naming directly:
 
