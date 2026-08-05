@@ -733,6 +733,16 @@ export const CRYPTO_IN = {
   maxBlockSpan: BigInt(process.env.CRYPTO_IN_MAX_BLOCK_SPAN ?? 5_000),
 };
 
+/**
+ * Testnet faucet: EURe granted to each newly deployed passkey Safe from the
+ * deployer wallet, so a fresh test account has something to send. Opt-in —
+ * unset or 0 disables — and faucet.ts refuses production mode and the chains
+ * where EURe is real money regardless of this value.
+ */
+export const TESTNET_FAUCET = {
+  grantEur: Number(process.env.TESTNET_FAUCET_EUR ?? 0),
+};
+
 export const FX = {
   SPREAD_BPS: 50, // our FX spread
   FIXED_FEE_EUR: 0.99,
