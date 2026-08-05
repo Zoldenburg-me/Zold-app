@@ -1421,7 +1421,7 @@ app.post(
     });
     const params = new URLSearchParams({
       response_type: "code",
-      client_id: MONERIUM.clientId,
+      client_id: MONERIUM.oauthClientId,
       redirect_uri: redirectUri,
       state,
       code_challenge: pkceChallenge(codeVerifier),
@@ -1447,7 +1447,7 @@ app.get(
     const token = await exchangeAuthorizationCode(
       {
         baseUrl: MONERIUM.baseUrl,
-        clientId: MONERIUM.clientId,
+        clientId: MONERIUM.oauthClientId,
         clientSecret: MONERIUM.clientSecret,
       },
       {
