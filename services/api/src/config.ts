@@ -5,15 +5,16 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, "../../..");
 
-// Load .env if present (Node 20.12+ built-in; no dotenv dependency).
+const initialPort = process.env.TRANSF_API_PORT ?? process.env.PORT;
 try {
   process.loadEnvFile(path.join(ROOT, ".env"));
 } catch {
   // no .env — mock mode
 }
+if (initialPort) process.env.TRANSF_API_PORT = initialPort;
 
 export const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
-export const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
+export const API_PORT = Number(process.env.TRANSF_API_PORT ?? process.env.PORT ?? 3000);
 export const API_HOST = process.env.TRANSF_API_HOST ?? "127.0.0.1";
 export const IS_PRODUCTION = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
 export const PUBLIC_URL = process.env.TRANSF_PUBLIC_URL ?? "";
@@ -88,9 +89,7 @@ export const moneriumOAuthEnabled = () => Boolean(MONERIUM.oauthClientId);
  */
 export const KYC = {
   provider: process.env.KYC_PROVIDER ?? "manual",
-  autoApprove:
-    process.env.KYC_AUTO_APPROVE === "1" ||
-    (process.env.KYC_AUTO_APPROVE !== "0" && process.env.NODE_ENV !== "production" && LOOKS_LOCAL),
+  autoApprove: process.env.KYC_AUTO_APPROVE === "1",
   /**
    * Shared secret an operator (or a KYC provider's webhook) presents to record
    * a decision. This is the ONLY approval path that survives production: the
