@@ -17,6 +17,7 @@ const scripts = [
   "authorize:test",
   "kyc:test",
   "country:policy:test",
+  "sumsub:kyc:test",
   "kyc:operator:test",
   "recovery:test",
   "kyc:ui:test",
