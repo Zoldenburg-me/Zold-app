@@ -202,7 +202,7 @@ try {
   assert.ok(quote.midRate > quote.fxRate, "mid should sit above the all-in rate");
   assert.equal(quote.marginBps, 50, "margin is measured against the live mid");
 
-  console.log("6/8 local remittance refuses undeployed Safe execution…");
+  console.log("6/8 local remittance refuses accounts without passkey Safe allowance…");
   await assert.rejects(
     () =>
       sendTransfer({
@@ -210,7 +210,7 @@ try {
         recipientName: "Joseph Otieno",
         recipientPhone: "+254700000000",
       }),
-    /Safe .* is not deployed/,
+    /active passkey Safe with a production co-signer allowance/,
   );
   await expectApiStatus("/api/transfers", 409, {
     quoteId: quote.id,
@@ -223,20 +223,16 @@ try {
   console.log("7/8 refusing the retired UPI rail…");
   await expectApiStatus("/api/quotes", 400, { userId: user.id, sendEur: 20, rail: "upi" });
 
-  console.log("8/8 FP4: a payment signed by anyone but the device is refused…");
+  console.log("8/8 Safe setup blocker still protects the SEPA rail…");
   const balanceBefore = after.balanceEur;
   const attackQuote = await api("/api/quotes", { userId: user.id, sendEur: 20, rail: "sepa" });
-  const attackTransfer = await api("/api/transfers", {
+  await expectApiStatus("/api/transfers", 409, {
     quoteId: attackQuote.id,
     recipientName: "Mallory Attacker",
     recipientIban: "DE89 3704 0044 0532 0130 00",
   });
-  // The server holds the executor key and every user record — and still cannot
-  // produce the browser device authorization.
-  const forged = await signTerms(newDevice(), attackTransfer.authorization.typedData);
-  await expectApiStatus(`/api/transfers/${attackTransfer.id}/authorize`, 502, { signature: forged });
   const afterAttack = await api(`/api/users/${user.id}`);
-  assert.equal(afterAttack.balanceEur, balanceBefore, "forged authorization moved no money");
+  assert.equal(afterAttack.balanceEur, balanceBefore, "blocked SEPA setup moved no money");
   await expectApiDeleteStatus("/api/session", 204);
   await expectApiStatus(`/api/users/${user.id}`, 401);
 
