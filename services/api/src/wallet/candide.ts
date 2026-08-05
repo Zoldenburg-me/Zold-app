@@ -200,12 +200,18 @@ export function passkeySafeRecoverySetupTransactions(plan: PasskeySafeDeployment
   ];
 }
 
-export function passkeySafeAllowanceSetupTransactions(plan: PasskeySafeDeploymentPlan): MetaTransaction[] {
-  if (!plan.cosignerAddress || !plan.cosignerPolicy?.enabled) return [];
+export function passkeySafeAllowanceSetupTransactions(
+  plan: PasskeySafeDeploymentPlan,
+  /** The allowance delegate. Defaults to the co-signer OWNER, but the two are
+   *  distinct roles: a single-owner Safe can still delegate spending to the
+   *  configured co-signer without making it an owner. */
+  delegate: `0x${string}` | "" | undefined = plan.cosignerAddress,
+): MetaTransaction[] {
+  if (!delegate || !plan.cosignerPolicy?.enabled) return [];
   const allowance = new AllowanceModule(plan.cosignerPolicy.allowanceModuleAddress);
   const txs = [
     allowance.createEnableModuleMetaTransaction(plan.address),
-    allowance.createAddDelegateMetaTransaction(plan.cosignerAddress),
+    allowance.createAddDelegateMetaTransaction(delegate),
   ];
   const period = BigInt(plan.cosignerPolicy.allowancePeriodMinutes ?? "0");
   for (const item of plan.cosignerPolicy.allowances ?? []) {
@@ -214,14 +220,14 @@ export function passkeySafeAllowanceSetupTransactions(plan: PasskeySafeDeploymen
     txs.push(
       period > 0n
         ? allowance.createRecurringAllowanceMetaTransaction(
-            plan.cosignerAddress,
+            delegate,
             item.token,
             amount,
             period,
             0n,
           )
         : allowance.createOneTimeAllowanceMetaTransaction(
-            plan.cosignerAddress,
+            delegate,
             item.token,
             amount,
             0n,
@@ -229,6 +235,121 @@ export function passkeySafeAllowanceSetupTransactions(plan: PasskeySafeDeploymen
     );
   }
   return txs;
+}
+
+/**
+ * What the chain says the co-signer may spend from this Safe — as opposed to
+ * what the database says deployment intended. The two have disagreed: setup
+ * batches once pointed at an allowance module address with no code, and calls
+ * to a codeless address succeed, so "deployed with policy" recorded a policy
+ * that does not exist. Debits read the chain, so this must too.
+ * Returns null when the module cannot be read (which a debit would also fail).
+ */
+export async function readCosignerTokenAllowance(
+  safeAddress: `0x${string}`,
+  token: `0x${string}`,
+): Promise<{ amount: bigint; remaining: bigint } | null> {
+  if (!CANDIDE.cosignerAddress) return null;
+  try {
+    const allowance = new AllowanceModule(CANDIDE.allowanceModuleAddress);
+    const current = await allowance.getTokensAllowance(RPC_URL, safeAddress, CANDIDE.cosignerAddress, token);
+    const nowMin = BigInt(Math.floor(Date.now() / 60_000));
+    const spent =
+      current.resetTimeMin > 0n && nowMin >= current.lastResetMin + current.resetTimeMin
+        ? 0n
+        : current.spent;
+    return { amount: current.amount, remaining: current.amount > spent ? current.amount - spent : 0n };
+  } catch {
+    return null;
+  }
+}
+
+/** Safe's isModuleEnabled(address) — the batch below must skip enableModule
+ *  when it already ran, because the Safe reverts on enabling a module twice. */
+async function safeModuleEnabled(safeAddress: `0x${string}`, module: `0x${string}`): Promise<boolean> {
+  const data = encodeFunctionData({
+    abi: [
+      {
+        type: "function",
+        name: "isModuleEnabled",
+        inputs: [{ name: "module", type: "address" }],
+        outputs: [{ name: "", type: "bool" }],
+        stateMutability: "view",
+      },
+    ],
+    functionName: "isModuleEnabled",
+    args: [module],
+  });
+  const res = await fetch(CANDIDE.rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: safeAddress, data }, "latest"] }),
+  });
+  const { result } = await res.json();
+  return typeof result === "string" && BigInt(result) === 1n;
+}
+
+/**
+ * Build the userOp that installs (or repairs) the co-signer spending allowance
+ * on an ALREADY-DEPLOYED passkey Safe.
+ *
+ * Exists because deployment-time setup can configure nothing while reporting
+ * success: Safes deployed against the codeless module address are active, hold
+ * money, and cannot debit. The repair runs the same setup transactions through
+ * the Safe's normal signing path — the passkey owner approves, the co-signer
+ * counter-signs where it is an owner — so the API gains no authority a Safe
+ * owner did not grant.
+ */
+export async function preparePasskeySafeAllowanceSetup(plan: PasskeySafeDeploymentPlan): Promise<{
+  safeAddress: `0x${string}`;
+  challenge: `0x${string}`;
+  userOperation: UserOperationV9;
+}> {
+  if (!CANDIDE.cosignerAddress) {
+    throw new Error("CANDIDE_COSIGNER_ADDRESS is required to configure a spending allowance");
+  }
+  const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
+  const account = plan.cosignerAddress
+    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
+    : smartAccountForPasskey(passkeyOwner);
+  if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
+    throw new Error("passkey Safe plan does not match the deterministic account address");
+  }
+  if (!(await isDeployed(account.accountAddress))) {
+    throw new Error("passkey Safe must be deployed before its spending allowance can be configured");
+  }
+  // The delegate is always the CURRENT co-signer: on a single-owner Safe it is
+  // not an owner at all, and plan.cosignerAddress (the owner set, immutable
+  // after deployment) must not be confused with it.
+  let setup = passkeySafeAllowanceSetupTransactions(plan, CANDIDE.cosignerAddress);
+  if (setup.filter((t) => BigInt(t.to) !== BigInt(plan.address)).length < 2) {
+    // enableModule targets the Safe; everything else targets the module. Less
+    // than delegate+one allowance means the policy would grant nothing.
+    throw new Error(
+      "no spendable allowance is configured — set CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI (and/or USDC) first",
+    );
+  }
+  if (await safeModuleEnabled(plan.address, plan.cosignerPolicy!.allowanceModuleAddress)) {
+    setup = setup.filter((t) => BigInt(t.to) !== BigInt(plan.address));
+  }
+  const userOperation = await account.createUserOperation(
+    setup,
+    CANDIDE.rpcUrl,
+    CANDIDE.bundlerUrl,
+    { expectedSigners: plan.cosignerAddress ? [passkeyOwner, plan.cosignerAddress] : [passkeyOwner] },
+  );
+  const paymaster = new Erc7677Paymaster(CANDIDE.paymasterUrl);
+  const sponsored = await paymaster.createPaymasterUserOperation(
+    account as any,
+    userOperation as any,
+    CANDIDE.bundlerUrl,
+  );
+  const finalOp: UserOperationV9 = ((sponsored as any).userOperation ?? sponsored) as UserOperationV9;
+  return {
+    safeAddress: account.accountAddress as `0x${string}`,
+    challenge: account.getUserOperationEip712Hash(finalOp, CANDIDE.chainId) as `0x${string}`,
+    userOperation: finalOp,
+  };
 }
 
 export async function submitPasskeySafeDeployment(
