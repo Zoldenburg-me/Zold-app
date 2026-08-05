@@ -15,7 +15,14 @@ import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MO
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
-import { initStore, store, type Transfer, type User } from "./store.js";
+import { initStore, store, type ReceiptShare, type Transfer, type User } from "./store.js";
+import {
+  buildReceipt,
+  DEFAULT_SHARE_FIELDS,
+  parseShareFields,
+  receiptSlug,
+  SHARE_TTL_DAYS,
+} from "./receipt.js";
 import { createQuote, isExpired } from "./fx.js";
 import { issueIban, simulateSepaDeposit } from "./adapters/monerium.js";
 import { activatePaymentForwarder } from "./adapters/candide-forwarder.js";
@@ -170,6 +177,9 @@ app.use("/api", (req, res, next) => {
   const authRoute =
     req.path.startsWith("/passkey") ||
     req.path.startsWith("/recovery") ||
+    // A receipt slug is a bearer credential, so looking one up is a guess at a
+    // secret and belongs on the tighter bucket with the other guessable things.
+    req.path.startsWith("/r/") ||
     req.path === "/kyc/review" ||
     (req.path === "/users" && req.method === "POST");
   const ok = authRoute
@@ -893,6 +903,146 @@ app.get(
  *  and renders its own not-found, so a bad link still gets a real page. */
 app.get("/pay/:handle", (_req, res) => {
   res.sendFile(path.join(pub, "pay.html"));
+});
+
+/* ---------------------------------------------------------------------------
+ * Shareable receipts
+ *
+ * Unlike /pay/:handle, this link IS the credential: a slug is the only thing
+ * standing between a stranger and someone's transfer, which is why the slug
+ * carries real entropy and why the route is bucketed with the auth endpoints
+ * against scanning.
+ * ------------------------------------------------------------------------- */
+
+/** The sender's own view of the share, with the URL to hand out. */
+function shareResponse(req: express.Request, share: ReceiptShare) {
+  const base = PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+  return {
+    slug: share.slug,
+    url: `${base}/r/${share.slug}`,
+    fields: share.fields,
+    createdAt: share.createdAt,
+    expiresAt: share.expiresAt,
+    revokedAt: share.revokedAt,
+  };
+}
+
+/**
+ * Create or re-scope the share for a transfer.
+ *
+ * Re-posting edits the existing share rather than minting a second slug, so
+ * narrowing a selection narrows what is actually public. It also keeps the link
+ * a sender has already sent working — reissuing on every edit would silently
+ * break the copy in someone's chat window.
+ *
+ * The expiry is NOT extended by an edit. A share is a 30-day window opened
+ * once; letting a tweak reset the clock would make an indefinitely-live link
+ * out of a link the sender believed was expiring.
+ */
+app.post(
+  "/api/transfers/:id/share",
+  wrap(async (req, res) => {
+    const transfer = store.findTransfer(req.params.id);
+    if (!transfer) return res.status(404).json({ error: "transfer not found" });
+    if (!requireUserSession(req, res, transfer.userId)) return;
+    // Nothing has settled or moved before CREATED clears, and a receipt for a
+    // transfer that may still be refused would publish an outcome that has not
+    // happened yet.
+    if (transfer.state === "CREATED") {
+      return res.status(409).json({ error: "this transfer has not been authorised yet — nothing to share" });
+    }
+    const existing = store.findReceiptShareByTransfer(transfer.id);
+    const fields = parseShareFields(req.body, existing?.fields ?? DEFAULT_SHARE_FIELDS);
+    if (existing && !existing.revokedAt) {
+      return res.json(shareResponse(req, store.updateReceiptShare(existing.id, { fields })));
+    }
+    const now = new Date();
+    const share: ReceiptShare = {
+      id: randomUUID(),
+      slug: receiptSlug((n) => randomBytes(n)),
+      transferId: transfer.id,
+      userId: transfer.userId,
+      fields,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + SHARE_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+    };
+    // A revoked share is replaced rather than resurrected: the old slug stays
+    // recorded as revoked, so a later visitor gets 410 rather than a typo-like
+    // 404 while the new share gets a fresh unguessable slug.
+    store.addReceiptShare(share);
+    res.status(201).json(shareResponse(req, share));
+  }),
+);
+
+app.get(
+  "/api/transfers/:id/share",
+  wrap(async (req, res) => {
+    const transfer = store.findTransfer(req.params.id);
+    if (!transfer) return res.status(404).json({ error: "transfer not found" });
+    if (!requireUserSession(req, res, transfer.userId)) return;
+    const share = store.findReceiptShareByTransfer(transfer.id);
+    if (!share || share.revokedAt) return res.status(404).json({ error: "no live share for this transfer" });
+    res.json(shareResponse(req, share));
+  }),
+);
+
+/** Kill the link. The slug stays recorded so a later visitor is told it was
+ *  revoked rather than getting the same 404 as a typo. */
+app.delete(
+  "/api/transfers/:id/share",
+  wrap(async (req, res) => {
+    const transfer = store.findTransfer(req.params.id);
+    if (!transfer) return res.status(404).json({ error: "transfer not found" });
+    if (!requireUserSession(req, res, transfer.userId)) return;
+    const share = store.findReceiptShareByTransfer(transfer.id);
+    if (!share || share.revokedAt) return res.status(404).json({ error: "no live share for this transfer" });
+    res.json(shareResponse(req, store.revokeReceiptShare(share.id)));
+  }),
+);
+
+/**
+ * The public payload. No session, and no user record beyond the sender's name
+ * at the granularity the sender chose.
+ *
+ * Every refusal is a 404 with the same shape whether the slug is unknown or
+ * merely dead, except that a revoked or expired share says which — the holder
+ * of a real link deserves to know why it stopped working, and a scanner learns
+ * nothing from it that a 404 did not already tell them.
+ */
+app.get(
+  "/api/r/:slug",
+  wrap(async (req, res) => {
+    res.setHeader("cache-control", "no-store");
+    // A receipt names people and amounts; keeping it out of search indexes is
+    // as much a part of "share only what's needed" as the field pickers.
+    res.setHeader("x-robots-tag", "noindex, nofollow");
+    const share = store.findReceiptShareBySlug(String(req.params.slug));
+    if (!share) return res.status(404).json({ error: "no such receipt" });
+    if (share.revokedAt) return res.status(410).json({ error: "the sender revoked this receipt", revoked: true });
+    if (Date.parse(share.expiresAt) < Date.now()) {
+      return res.status(410).json({ error: "this receipt link has expired", expired: true });
+    }
+    const transfer = store.findTransfer(share.transferId);
+    const sender = store.findUser(share.userId);
+    if (!transfer || !sender) return res.status(404).json({ error: "no such receipt" });
+    res.json(
+      buildReceipt({
+        slug: share.slug,
+        transfer,
+        sender,
+        quote: store.findQuote(transfer.quoteId),
+        fields: share.fields,
+        expiresAt: share.expiresAt,
+      }),
+    );
+  }),
+);
+
+/** The page. Rendered for any slug shape; the client fetches and draws its own
+ *  expired/revoked/not-found states, so a dead link is still a real page. */
+app.get("/r/:slug", (_req, res) => {
+  res.sendFile(path.join(pub, "receipt.html"));
 });
 
 /** What arrived as crypto and what became of it. Read-only; the poller owns

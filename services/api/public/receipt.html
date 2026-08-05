@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Receipt · Zold</title>
+<!-- A receipt names two people and an amount. The API sends the same header,
+     but a link pasted into a chat window can be fetched by a crawler that
+     never asks the API, so the page says it too. -->
+<meta name="robots" content="noindex, nofollow" />
+<meta name="referrer" content="no-referrer" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<!-- Inter and Space Grotesk carry the brand; both fall back to system faces so
+     the receipt paints before the fonts land. The design also calls for
+     Material Symbols, but a whole icon font for four glyphs is a blocking
+     request on a page whose one job is to open fast — those are inline SVG. -->
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #000; --surface: #050506; --chrome: #0c0c0f;
+    --line: #18181c; --sep: #101013; --line-raised: #1f1f24;
+    --text: #fff; --text-2: #e6e8ea; --text-3: #c9ccd1;
+    --muted: #7d828b; --faint: #4c4f56; --redacted: #34343a;
+    --pink: #ed188d; --pink-tint: #ff6bb5; --mint: #3ee6a8; --amber: #f5b544; --red: #ff5d5d;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    --display: "Space Grotesk", Inter, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); }
+  body {
+    margin: 0; color: var(--text); min-height: 100vh;
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 40px 22px 32px; }
+  @media (min-width: 520px) { .wrap { padding: 40px 34px 32px; } }
+
+  /* brand */
+  .brand { display: flex; flex-direction: column; align-items: center; }
+  .lockup { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .glow {
+    position: absolute; inset: -26px -34px; pointer-events: none;
+    background: radial-gradient(closest-side, rgba(237,24,141,.2), transparent 72%);
+    animation: glow 4s ease-in-out infinite;
+  }
+  @keyframes glow { 0%, 100% { opacity: .45 } 50% { opacity: .8 } }
+  .glyph { position: relative; color: var(--pink); font-size: 30px; line-height: 1; }
+  .word { position: relative; font-size: 24px; font-weight: 600; letter-spacing: -.03em; line-height: 1; }
+
+  /* hero */
+  .hero { display: flex; flex-direction: column; align-items: center; margin-top: 28px; }
+  .amount {
+    font-family: var(--display); font-weight: 600; font-size: 38px; line-height: 1;
+    letter-spacing: -.03em; font-variant-numeric: tabular-nums; text-align: center;
+  }
+  .status { display: flex; align-items: center; gap: 6px; margin-top: 12px; flex-wrap: wrap; justify-content: center; }
+  .status .lab { font-size: 12.5px; font-weight: 500; }
+  .status .at { font-size: 12.5px; color: var(--faint); }
+  .tone-mint { color: var(--mint); } .tone-amber { color: var(--amber); } .tone-red { color: var(--red); }
+
+  /* cards */
+  .card { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); margin-top: 12px; }
+  .parties { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-top: 26px; }
+  .party { flex: 1; min-width: 0; }
+  .party.to { text-align: right; }
+  .plab { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); font-weight: 500; }
+  .pval { font-size: 13.5px; font-weight: 500; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .arrow { flex: none; color: var(--pink); display: flex; }
+
+  .rows { padding: 4px 16px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10.5px 0; border-top: 1px solid var(--sep); }
+  .row:first-child { border-top: 0; }
+  .row .k { font-size: 12px; color: var(--muted); flex: none; }
+  .row .v {
+    font-size: 12.5px; text-align: right; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  .v.mono { font-family: var(--mono); }
+  .v.muted { color: var(--muted); } .v.mint { color: var(--mint); }
+
+  /* the one thing this page exists to do honestly */
+  .redact { color: var(--redacted); letter-spacing: .14em; }
+
+  /* timeline */
+  .steps { padding: 16px; }
+  .step { display: flex; gap: 12px; }
+  .node { flex: none; display: flex; flex-direction: column; align-items: center; width: 12px; padding-top: 5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-raised); }
+  .dot.done { background: var(--mint); box-shadow: 0 0 0 3px rgba(62,230,168,.1); }
+  .line { flex: 1; width: 1px; background: var(--line); margin-top: 4px; }
+  .step:last-child .line { background: transparent; }
+  .sbody { flex: 1; min-width: 0; display: flex; justify-content: space-between; gap: 12px; align-items: baseline; padding-bottom: 16px; }
+  .step:last-child .sbody { padding-bottom: 0; }
+  .sbody .t { font-size: 12.5px; font-weight: 500; color: var(--text-2); }
+  .step.todo .sbody .t { color: var(--faint); }
+  .sbody .time { font: 400 11px var(--mono); color: var(--faint); flex: none; }
+
+  /* stats for nerds */
+  .nerds { border-color: var(--line-raised); overflow: hidden; }
+  .disc {
+    width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+    background: transparent; border: 0; cursor: pointer; color: var(--muted);
+    font-family: inherit; border-bottom: 1px solid transparent;
+  }
+  .disc:hover { color: var(--text-3); }
+  .disc[aria-expanded="true"] { border-bottom-color: var(--sep); }
+  .disc .cap { font: 500 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+  .disc .hint { font: 400 10px var(--mono); color: var(--faint); margin-left: auto; }
+  .disc .chev { transition: transform .2s; display: flex; }
+  .disc[aria-expanded="true"] .chev { transform: rotate(180deg); }
+  .hops { padding: 16px; animation: rise .3s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
+  .hop { display: flex; gap: 12px; }
+  .hicon { flex: none; display: flex; flex-direction: column; align-items: center; width: 22px; }
+  .hbox {
+    width: 22px; height: 22px; border-radius: 6px; background: var(--chrome);
+    border: 1px solid var(--line-raised); display: grid; place-items: center;
+    font: 500 9.5px var(--mono); color: var(--muted);
+  }
+  .hicon .line { background: var(--line); }
+  .hop:last-child .hicon .line { background: transparent; }
+  .hbody { flex: 1; min-width: 0; padding-bottom: 14px; }
+  .hop:last-child .hbody { padding-bottom: 0; }
+  .htop { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .hrail { font-size: 12.5px; font-weight: 500; }
+  .badge {
+    font: 500 9px var(--mono); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); padding: 2px 5px; border-radius: 4px; border: 1px solid var(--line-raised);
+  }
+  .badge.sim { color: var(--amber); border-color: rgba(245,181,68,.35); }
+  .hvia { font-size: 11.5px; color: var(--faint); margin-top: 3px; line-height: 1.45; }
+  .href { font: 400 10.5px var(--mono); color: var(--muted); margin-top: 4px; word-break: break-all; }
+  .href.redact { color: var(--redacted); letter-spacing: .08em; }
+
+  /* footer + states */
+  .sent { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 26px; }
+  .sent .l { font-size: 11px; color: var(--faint); }
+  .sent .m { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; letter-spacing: -.03em; }
+  .sent .m span { color: var(--pink); font-size: 10px; line-height: 1; }
+  .note { text-align: center; font-size: 10.5px; color: var(--redacted); margin-top: 6px; }
+  .state { text-align: center; padding: 48px 0 8px; }
+  .state .h { font-size: 15px; font-weight: 600; }
+  .state .p { font-size: 12.5px; color: var(--muted); margin-top: 8px; line-height: 1.55; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <div class="lockup">
+      <div class="glow"></div>
+      <span class="glyph">&#9661;</span>
+      <span class="word">Zold</span>
+    </div>
+  </div>
+
+  <div id="state" class="state">
+    <div class="h" id="state-h">Loading receipt…</div>
+    <div class="p" id="state-p"></div>
+  </div>
+
+  <main id="receipt" class="hidden">
+    <div class="hero">
+      <div class="amount" id="amount">—</div>
+      <div class="status">
+        <span id="status-icon" class="tone-mint" style="display:flex"></span>
+        <span class="lab" id="status-lab">—</span>
+        <span class="at" id="status-at"></span>
+      </div>
+    </div>
+
+    <div class="card parties">
+      <div class="party"><div class="plab">From</div><div class="pval" id="from">—</div></div>
+      <span class="arrow" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+      </span>
+      <div class="party to"><div class="plab">To</div><div class="pval" id="to">—</div></div>
+    </div>
+
+    <div class="card rows" id="rows"></div>
+    <div class="card steps" id="steps"></div>
+
+    <div class="card nerds hidden" id="nerds">
+      <button class="disc" id="disc" aria-expanded="false" aria-controls="hops">
+        <span aria-hidden="true" style="display:flex">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-5-6-5M12 19h8"/></svg>
+        </span>
+        <span class="cap">Stats for nerds</span>
+        <span class="hint" id="disc-hint">show full route</span>
+        <span class="chev" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </span>
+      </button>
+      <div class="hops hidden" id="hops"></div>
+    </div>
+
+    <div class="sent">
+      <span class="l">Sent with</span>
+      <span class="m"><span>&#9661;</span>Zold</span>
+    </div>
+    <div class="note hidden" id="withheld-note">Fields marked &#9618; were withheld by the sender.</div>
+  </main>
+</div>
+
+<script>
+/* The slug is the last path segment of /r/<slug>. It is the only credential
+   this page has, so it is never echoed into the DOM — a receipt that printed
+   its own link would put it into any screenshot of itself. */
+const slug = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+));
+const BLOCK = "&#9618;&#9618;&#9618;&#9618;&#9618;";
+
+function showState(h, p) {
+  $("state").classList.remove("hidden");
+  $("receipt").classList.add("hidden");
+  $("state-h").textContent = h;
+  $("state-p").textContent = p || "";
+}
+
+const CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>';
+const CLOCK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/></svg>';
+
+/** A name arrives in parts so the page — not the server — decides how a
+ *  withheld half is drawn. `redact` names the missing half; there is no value
+ *  in the payload for it to leak. */
+function nameHtml(n) {
+  if (!n || n.withheld) return `<span class="redact">${BLOCK}</span>`;
+  const first = n.redact === "first" ? `<span class="redact">${BLOCK}</span>` : esc(n.first || "");
+  const last = n.redact === "last" ? `<span class="redact">${BLOCK}</span>` : esc(n.last || "");
+  return [first, last].filter(Boolean).join(" ");
+}
+
+function when(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function render(r) {
+  $("state").classList.add("hidden");
+  $("receipt").classList.remove("hidden");
+
+  $("amount").textContent = r.hero.amount;
+  const tone = `tone-${r.status.tone}`;
+  $("status-icon").className = tone;
+  $("status-icon").innerHTML = r.status.settled ? CHECK : CLOCK;
+  $("status-lab").className = `lab ${tone}`;
+  $("status-lab").textContent = r.status.label;
+  $("status-at").textContent = r.hero.at ? `· ${when(r.hero.at)}` : "";
+
+  $("from").innerHTML = nameHtml(r.parties.from);
+  $("to").innerHTML = nameHtml(r.parties.to);
+
+  $("rows").innerHTML = (r.rows || []).map((row) => {
+    const cls = ["v", row.mono ? "mono" : "", row.tone === "mint" ? "mint" : row.tone === "muted" ? "muted" : ""].join(" ");
+    const v = row.withheld ? `<span class="redact">${BLOCK}</span>` : esc(row.value);
+    return `<div class="row"><span class="k">${esc(row.key)}</span><span class="${cls}">${v}</span></div>`;
+  }).join("");
+
+  $("steps").innerHTML = (r.steps || []).map((s) => `
+    <div class="step ${s.done ? "" : "todo"}">
+      <div class="node"><div class="dot ${s.done ? "done" : ""}"></div><div class="line"></div></div>
+      <div class="sbody">
+        <span class="t">${esc(s.title)}</span>
+        <span class="time">${s.time ? esc(when(s.time).split(", ").pop()) : ""}</span>
+      </div>
+    </div>`).join("");
+
+  const route = r.route || [];
+  $("nerds").classList.toggle("hidden", route.length === 0);
+  $("hops").innerHTML = route.map((h, i) => {
+    /* The Base mark only appears when the deployment really is on Base — the
+       server sets `base`, the page never assumes it from the badge text. */
+    const icon = h.base
+      ? '<svg width="12" height="12" viewBox="0 0 639 639" aria-hidden="true"><path fill="#0052FF" d="M318.3,639c176.4,0,319.5-143,319.5-319.5C637.8,143.1,494.8,0,318.3,0C151,0,13.6,128.8,0,292.6h422.2v53.7H0C13.6,510.2,151,639,318.3,639L318.3,639z"/></svg>'
+      : esc(String(i + 1).padStart(2, "0"));
+    const ref = h.withheld
+      ? `<div class="href redact">${BLOCK}${BLOCK} · withheld by sender</div>`
+      : h.ref ? `<div class="href">${esc(h.ref)}</div>` : "";
+    /* A leg that never settled is labelled, not quietly drawn like one that
+       did. This is the difference between a route and a diagram of one. */
+    const sim = h.simulated ? '<span class="badge sim">simulated</span>' : "";
+    return `<div class="hop">
+      <div class="hicon"><div class="hbox">${icon}</div><div class="line"></div></div>
+      <div class="hbody">
+        <div class="htop"><span class="hrail">${esc(h.rail)}</span><span class="badge">${esc(h.badge)}</span>${sim}</div>
+        <div class="hvia">${esc(h.via)}</div>
+        ${ref}
+      </div>
+    </div>`;
+  }).join("");
+
+  $("withheld-note").classList.toggle("hidden", !r.anyWithheld);
+}
+
+$("disc").onclick = () => {
+  const btn = $("disc");
+  const open = btn.getAttribute("aria-expanded") === "true";
+  btn.setAttribute("aria-expanded", String(!open));
+  $("hops").classList.toggle("hidden", open);
+  $("disc-hint").textContent = open ? "show full route" : "hide route";
+};
+
+(async () => {
+  if (!slug) return showState("No receipt here", "This link is missing its receipt code.");
+  try {
+    const res = await fetch(`/api/r/${encodeURIComponent(slug)}`, { headers: { accept: "application/json" } });
+    if (res.ok) return render(await res.json());
+    const body = await res.json().catch(() => ({}));
+    /* Revoked and expired are distinguished on purpose: someone holding a real
+       link that stopped working is owed the reason, and neither answer tells a
+       scanner anything a bare 404 did not. */
+    if (body.revoked) {
+      return showState("This receipt was revoked", "The sender turned this link off. Ask them for a new one.");
+    }
+    if (body.expired) {
+      return showState("This receipt has expired", "Receipt links stay live for 30 days. Ask the sender for a new one.");
+    }
+    if (res.status === 429) {
+      return showState("Too many requests", "Give it a minute and reload the page.");
+    }
+    showState("Receipt not found", "This link is wrong, or the sender never shared it.");
+  } catch {
+    showState("Could not load this receipt", "Check your connection and reload the page.");
+  }
+})();
+</script>
+</body>
+</html>

@@ -55,7 +55,8 @@
     "dex:test": "tsx scripts/dex-test.ts",
     "lifi:test": "tsx scripts/lifi-test.ts",
     "best:test": "tsx scripts/best-execution-test.ts",
-    "dex:setup": "tsx scripts/dex-setup.ts"
+    "dex:setup": "tsx scripts/dex-setup.ts",
+    "receipt:test": "tsx scripts/receipt-share-test.ts"
   },
   "devDependencies": {
     "@types/express": "^4.17.25",
