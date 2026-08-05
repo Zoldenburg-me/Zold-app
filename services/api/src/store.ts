@@ -69,6 +69,10 @@ export interface User {
    *  store only its address — the private half stays in the user's browser. */
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
+  /** Testnet faucet grant, recorded so one account is seeded exactly once.
+   *  txHash is empty while the transfer is in flight (the synchronous claim
+   *  that stops a double completion from paying twice). */
+  faucet?: { grantedEur: number; txHash: string; at: string };
   /**
    * Passkey Safe state. Production can add a co-signer as a second owner;
    * local/test plans stay passkey-only unless the harness opts in.
