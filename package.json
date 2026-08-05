@@ -25,6 +25,7 @@
     "pay:test": "tsx scripts/pay-page-test.ts",
     "kyc:test": "tsx scripts/kyc-test.ts",
     "country:policy:test": "tsx scripts/country-policy-test.ts",
+    "sumsub:kyc:test": "tsx scripts/sumsub-kyc-test.ts",
     "kyc:ui:test": "tsx scripts/kyc-ui-test.ts",
     "audit:deps": "npm audit",
     "check": "tsx scripts/check.ts",
