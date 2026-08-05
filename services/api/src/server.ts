@@ -23,6 +23,7 @@ import {
   SHARE_TTL_DAYS,
 } from "./receipt.js";
 import { createQuote, isExpired } from "./fx.js";
+import { faucetFundSafe } from "./faucet.js";
 import { issueIban, simulateSepaDeposit } from "./adapters/monerium.js";
 import { activatePaymentForwarder } from "./adapters/candide-forwarder.js";
 import {
@@ -2319,6 +2320,9 @@ app.post(
         },
       });
     }
+    // Fire-and-forget: the testnet faucet seeds the new Safe with EURe, and
+    // its failure must never fail a deployment that already succeeded.
+    void faucetFundSafe(user.id);
     res.status(201).json({ ...publicUser(updated), deployOpHash: opHash });
   }),
 );
