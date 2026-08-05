@@ -1368,7 +1368,10 @@ app.post(
     }
     const state = randomBytes(24).toString("base64url");
     const codeVerifier = randomBytes(48).toString("base64url");
-    const redirectUri = MONERIUM.redirectUri;
+    const redirectUri =
+      typeof req.body?.redirectUri === "string" && req.body.redirectUri.startsWith("http")
+        ? req.body.redirectUri
+        : MONERIUM.redirectUri;
     store.updateUser(user.id, {
       kyc: { ...user.kyc, provider: "monerium", onboardingPath: "existing_monerium" },
       funding: {
