@@ -1668,14 +1668,28 @@ app.post(
       }
     }
     const snapshot = await readMoneriumAccountSnapshot(user, accessToken);
-    const matchingIban = snapshot.ibans.find(
-      (i: any) => String(i.address ?? "").toLowerCase() === user.address.toLowerCase() && i.iban,
-    )?.iban;
-    const profileIban = snapshot.ibans.find((i: any) => i.iban)?.iban;
-    const iban = matchingIban ?? profileIban ?? "";
+    /**
+     * ADDRESS-MATCHED ONLY — an IBAN is money routing, not decoration.
+     *
+     * There used to be a fallback here to "the first IBAN in the snapshot"
+     * for when Monerium had not issued this address's IBAN yet. With app
+     * credentials that snapshot lists EVERY customer's IBAN, so each
+     * activation that outran issuance displayed some OTHER account's IBAN
+     * as its own — and a real sandbox payment sent to "my IBAN" minted into
+     * the other user's Safe (transfer 0a34425a: €22.01 landed in the wrong
+     * account). No IBAN yet must mean iban_pending, never someone else's;
+     * refreshPendingIban polls by address and attributes correctly.
+     */
+    const iban =
+      snapshot.ibans.find(
+        (i: any) => String(i.address ?? "").toLowerCase() === user.address.toLowerCase() && i.iban,
+      )?.iban ?? "";
 
     const updated = store.updateUser(user.id, {
-      iban: iban || user.iban || "",
+      // What Monerium attributes to THIS address, or nothing. Falling back to
+      // a previously stored value would preserve exactly the mis-attribution
+      // this route used to create.
+      iban,
       ...(viaApp
         ? {}
         : {
