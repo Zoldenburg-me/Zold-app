@@ -968,8 +968,8 @@ app.post(
       expiresAt: new Date(now.getTime() + SHARE_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString(),
     };
     // A revoked share is replaced rather than resurrected: the old slug stays
-    // dead, which is what revoking it was for.
-    if (existing) store.updateReceiptShare(existing.id, { slug: `revoked:${existing.slug}` });
+    // recorded as revoked, so a later visitor gets 410 rather than a typo-like
+    // 404 while the new share gets a fresh unguessable slug.
     store.addReceiptShare(share);
     res.status(201).json(shareResponse(req, share));
   }),

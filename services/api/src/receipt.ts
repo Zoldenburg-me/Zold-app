@@ -202,7 +202,11 @@ function chainLabel(): string {
   return `Chain ${CHAIN_ID}`;
 }
 
-const shortHash = (h?: string) => (h && h.length > 20 ? `${h.slice(0, 10)}…${h.slice(-6)}` : h);
+function routeRate(rate: string, tokenIn: string, tokenOut: string): string {
+  const raw = BigInt(rate);
+  const human = Number(raw) / 1e6;
+  return `1 ${tokenIn} = ${human.toFixed(4)} ${tokenOut}`;
+}
 
 /**
  * The settlement route, derived from what the transfer actually did.
@@ -233,7 +237,7 @@ export function receiptRoute(t: Transfer, fields: ReceiptShareFields): ReceiptHo
       via: feeOnly
         ? "Zold's fee moved out of the sender's smart account; the payout stayed in it until redemption"
         : "EURe moved out of the sender's smart account",
-      ...(fields.sender === "hidden" ? { withheld: true as const } : { ref: shortHash(safeMove.hash) }),
+      ...(fields.sender === "hidden" ? { withheld: true as const } : {}),
     });
   }
 
@@ -247,7 +251,7 @@ export function receiptRoute(t: Transfer, fields: ReceiptShareFields): ReceiptHo
         liq.provider === "fx-swapper"
           ? "Filled from Zold's own inventory at the rate held on the swapper contract"
           : `Filled just-in-time by ${liq.provider}`,
-      ...(fields.showRate ? { ref: `rate ${liq.rate}` } : { withheld: true as const }),
+      ...(fields.showRate ? { ref: routeRate(liq.rate, liq.tokenIn, liq.tokenOut) } : { withheld: true as const }),
       ...(liq.executedAt ? {} : { simulated: true as const }),
     });
   }
@@ -262,7 +266,6 @@ export function receiptRoute(t: Transfer, fields: ReceiptShareFields): ReceiptHo
       via: burn
         ? "USDC burned on the app chain and minted to the Stellar forwarder"
         : "Burn/mint plan recorded; no tokens were burned",
-      ref: shortHash(burn?.hash ?? plan?.hash),
       ...(burn ? {} : { simulated: true as const }),
     });
   }
@@ -302,7 +305,6 @@ export function receiptRoute(t: Transfer, fields: ReceiptShareFields): ReceiptHo
         via: p.anchorPaymentHash
           ? "Payout asset delivered to the anchor's account on Stellar"
           : "Withdrawal opened with the anchor; no on-ledger payment yet",
-        ref: shortHash(p.anchorPaymentHash ?? p.anchorTransactionId),
         ...(p.anchorPaymentHash ? {} : { simulated: true as const }),
       });
     }

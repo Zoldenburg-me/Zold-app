@@ -79,7 +79,13 @@ const cashTransfer: Transfer = {
     { step: "safe.transfer", hash: SAFE_HASH },
     { step: "cctp.dry-run.plan", hash: "0xplan" },
   ],
-  liquidity: { provider: "lifi", rate: "1.1506", tokenIn: "EURe", executedAt: "2026-08-05T14:22:00.000Z" } as any,
+  liquidity: {
+    provider: "lifi",
+    rate: "1150600",
+    tokenIn: "EURe",
+    tokenOut: "USDC",
+    executedAt: "2026-08-05T14:22:00.000Z",
+  } as any,
   pickup: { referenceCode: "88421170", provider: "MoneyGram", status: "PAID" } as any,
   createdAt: "2026-08-05T14:22:00.000Z",
   updatedAt: "2026-08-05T15:07:00.000Z",
@@ -258,9 +264,16 @@ check("route references mirror the same selections as the rows", () => {
   assert.ok(safe.withheld && !safe.ref, "hiding the sender withholds their safe's transaction hash");
   assert.ok(!JSON.stringify(hidden).includes(SAFE_HASH));
 
+  const publicRoute = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true });
+  assert.ok(!JSON.stringify(publicRoute).includes(SAFE_HASH), "route tx hashes are not published as searchable refs");
+  assert.ok(!publicRoute.find((h) => h.rail === "Circle CCTP")?.ref, "CCTP hashes are not published as searchable refs");
+
   const noRate = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true, showRate: false });
   assert.ok(noRate.find((h) => h.rail.includes("lifi"))!.withheld, "the rate toggle also governs the route");
   assert.ok(!JSON.stringify(noRate).includes("1.1506"));
+
+  const rate = publicRoute.find((h) => h.rail.includes("lifi"))!.ref;
+  assert.equal(rate, "1 EURe = 1.1506 USDC");
 
   const noRecipient = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true, recipient: "hidden" });
   assert.ok(noRecipient.find((h) => h.rail === "MoneyGram")!.withheld);
