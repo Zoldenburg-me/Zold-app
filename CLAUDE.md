@@ -877,6 +877,75 @@ branch (stale head at merge time; recovered in PR #4). Rules:
   real vs simulated, specifics over adjectives, shortcuts stated openly).
 - Honest assessments valued over cheerleading; say what's mocked.
 
+## Shareable receipts — /r/:slug (Aug 2026)
+
+DESIGN SOURCE: `~/Downloads/Zold Mobile Dashboard Redesign.zip`. The filename
+lies — the bundle inside is `design_handoff_receipt_share`, "Zold Receipt Share
+— Public Tracking Page", not the mobile dashboard. Its README is a real spec.
+
+WHAT SHIPPED: a sender opens "Share receipt" from transaction detail, picks what
+the link exposes, and copies `/r/<slug>`. A recipient opens it with no account.
+`services/api/src/receipt.ts` builds the payload, `public/receipt.html` renders
+it, `store.receiptShares` holds the selections. npm run receipt:test (20 checks,
+no chain, wired into check.ts).
+
+THE LOAD-BEARING PROPERTY, and what the test actually proves: redaction happens
+server-side. A withheld field is never in the JSON — the test serialises the
+whole payload and greps it for each secret, because "the page does not draw it"
+and "the page was not sent it" are different guarantees and only the second one
+survives someone opening devtools. Withheld fields come back as
+`{withheld:true}` with no value, so the page can still draw the ▒ block the
+design asks for without ever holding the thing.
+
+FOUR PLACES THE DESIGN WAS NOT FOLLOWED, deliberately:
+ - THE SLUG. The mock prints `zold.to/r/8842-1170` — eight decimal digits, 10^8,
+   enumerable in hours, and every hit is a real name and amount on an
+   unauthenticated page. Kept the grouped shape, widened to 15 Crockford base32
+   chars (~75 bits), ambiguous glyphs excluded. `/api/r/` is also bucketed with
+   the auth rate limits, since guessing a slug is guessing a credential.
+ - THE SIX ROUTE HOPS. The design draws a fixed Zold Safe → Base → Monerium →
+   SEPA Instant → Stellar/MYKOBO → MoneyGram route with a hardcoded block
+   number. That is not this codebase: MYKOBO appears nowhere, the SEPA rail has
+   no Stellar leg at all, the swap goes through whichever liquidity venue won,
+   and no block/finality data is stored. Hops are derived per rail from `txs`,
+   `liquidity`, `sepa` and `pickup`; a leg that did not run is not drawn, and a
+   leg that ran in simulation (CCTP dry-run, mock SEPA) carries `simulated` and
+   renders an amber badge. The Base mark only appears when CHAIN_ID really is
+   Base — otherwise the hop shows a step number.
+ - "REFERENCE & PURPOSE". There is no purpose field on a Transfer. The toggle
+   governs the SEPA remittance `reference`, and is labelled for it.
+ - TOKENS. The public page uses the receipt handoff's own palette (#ed188d,
+   #050506); the in-app composer uses the APP's (--m-pink #ff2d8b). The composer
+   sits between Activity and detail and would clash with every screen beside it
+   in a second pink. This is not a reopening of the settled token question — it
+   is one surface with its own spec versus one inside the app.
+
+ALSO DECIDED: one share per transfer (re-posting edits it, so narrowing a
+selection narrows the live link rather than leaving a generous older one alive);
+editing does NOT extend the 30-day expiry; revoking keeps the slug recorded so a
+holder is told "revoked" rather than getting a typo's 404; a share is refused
+while the transfer is still CREATED, because nothing has moved yet.
+
+The in-app composer is a full screen, not the handoff's side-by-side card and
+live 520px page preview — 412px cannot hold both, and a shrunken unreadable copy
+answers none of the question the composer asks. The preview is a list of each
+field and whether it survives.
+
+HOW FAR IT WAS VERIFIED: the payload builder is unit-tested (20 checks incl. the
+leak sweeps) and the page was driven in a browser against real buildReceipt()
+output for the full / fully-redacted / SEPA / in-flight / revoked / expired
+cases. The Express routes and the composer's POST/DELETE were NOT booted — see
+the toolchain note below.
+
+!! TOOLCHAIN: `.toolchain/node-v22.17.0-darwin-arm64` IS THE WRONG ARCH for the
+machine this ran on (Intel x86_64 — `arch` says i386, and `arch -arm64` reports
+"Unknown architecture"). So `npm run dev/api/<anything>:test` all fail with
+"Bad CPU type in executable", and node_modules holds an arm64 esbuild, so tsx
+dies too. There IS a system node now (nvm v24.13.0, x86_64) — the "machine has
+no system Node" line in Environment above is stale. `npm run typecheck` works
+(tsc is pure JS); to run a test, compile it with `npx tsc --outDir <tmp>` and
+run the emitted JS with the system node.
+
 ## Pay with Zold — moved to its own repo (July 2026)
 The merchant checkout / "Pay with Zold" product was extracted to
 **github.com/tonyzil/pay-with-zold** (private; the directory on disk is
