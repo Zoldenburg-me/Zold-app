@@ -1464,12 +1464,27 @@ app.get(
       },
     );
     const snapshot = await readMoneriumAccountSnapshot(user, token.access_token);
-    const firstProfile = snapshot.profiles[0];
+    const approvedProfile = snapshot.profiles.find((p: any) => p.state === "approved");
+    const profileId = approvedProfile?.id ?? snapshot.profiles[0]?.id;
+
     store.updateUser(user.id, {
       moneriumConnect: undefined,
+      kyc: {
+        provider: "monerium",
+        onboardingPath: "existing_monerium",
+        checkedAt: undefined,
+        applicantId: profileId,
+        reason: "existing Monerium account connected; activate IBAN with passkey",
+      },
+      funding: {
+        mode: "sandbox",
+        status: "provisioning",
+        moneriumProfileId: profileId,
+        detail: "smart wallet deployed — approve IBAN issuance with your passkey",
+      },
       monerium: {
         connectedAt: new Date().toISOString(),
-        profileId: firstProfile?.id,
+        profileId,
         accessTokenEnc: encryptToken(token.access_token),
         refreshTokenEnc: token.refresh_token ? encryptToken(token.refresh_token) : undefined,
         expiresAt: token.expires_in
@@ -1478,11 +1493,6 @@ app.get(
         profiles: snapshot.profiles,
         ibans: snapshot.ibans,
         addresses: snapshot.addresses,
-      },
-      funding: {
-        ...(user.funding ?? { mode: "sandbox", status: "kyc_pending" as const }),
-        status: "kyc_pending" as const,
-        detail: "select a Monerium profile and activate an app IBAN",
       },
     });
     // The app lives at /app, not /, since the landing page took the root.
@@ -1569,80 +1579,58 @@ app.post(
     // Captured under the guard above: `user` is reassigned below (store
     // updates), which discards TypeScript's narrowing on these.
     const passkey = user.passkey;
-    const passkeyKey = user.passkey.publicKey;
     const passkeySafe = user.passkeySafe;
-    const requestId = typeof req.body?.linkSignatureRequestId === "string" ? req.body.linkSignatureRequestId : "";
+
     prunePendingMoneriumLinkSignatures();
-    const pending = requestId ? pendingMoneriumLinkSignatures.get(requestId) : undefined;
-    if (!pending || pending.userId !== user.id) {
-      return res.status(409).json({
-        error: "fresh passkey Safe signature required for Monerium address linking",
-        start: `/api/users/${user.id}/monerium/link-signature/start`,
-      });
-    }
-    pendingMoneriumLinkSignatures.delete(requestId);
-    const profileIdFromBody = typeof req.body?.profileId === "string" ? req.body.profileId : undefined;
-    if (pending.profileId && profileIdFromBody && pending.profileId !== profileIdFromBody) {
-      return res.status(400).json({ error: "profileId does not match the signed Monerium linking request" });
-    }
-    let profileId =
-      pending.profileId ?? profileIdFromBody ?? user.monerium?.profileId ?? user.funding?.moneriumProfileId;
-    if (!profileId && viaApp) {
-      // In-house path: attach the address to the app's profile, or a fresh
-      // per-customer profile on whitelabel plans — same resolution the old
-      // automatic provisioning used.
-      profileId =
-        MONERIUM.profileId ||
-        (await moneriumAppClient().createProfile("personal", user.email ?? user.name))?.id;
-      // Persist it NOW, not at the end: every step after this can fail, and a
-      // retry that cannot see the profile creates another — each failed click
-      // was leaving one more orphan profile on the Monerium app.
-      if (profileId) {
-        user = store.updateUser(user.id, {
-          funding: { ...(user.funding ?? { mode: "sandbox", status: "provisioning" }), moneriumProfileId: profileId } as User["funding"],
+    let profileId: string | undefined;
+    let signature: `0x${string}`;
+
+    const rawSignature = req.body?.signature;
+    if (typeof rawSignature === "string" && /^0x[0-9a-fA-F]+$/.test(rawSignature)) {
+      signature = rawSignature as `0x${string}`;
+      profileId = typeof req.body?.profileId === "string" ? req.body.profileId : user.monerium?.profileId;
+    } else {
+      const requestId =
+        typeof req.body?.requestId === "string"
+          ? req.body.requestId
+          : typeof req.body?.linkSignatureRequestId === "string"
+          ? req.body.linkSignatureRequestId
+          : "";
+      const pending = requestId ? pendingMoneriumLinkSignatures.get(requestId) : undefined;
+      if (!pending || pending.userId !== user.id) {
+        return res.status(409).json({
+          error: "fresh passkey Safe signature required for Monerium address linking",
+          start: `/api/users/${user.id}/monerium/link-signature/start`,
         });
       }
+      pendingMoneriumLinkSignatures.delete(requestId);
+      const { authenticatorData, clientDataJSON, signature: assertionSignature } = req.body ?? {};
+      if (!authenticatorData || !clientDataJSON || !assertionSignature) {
+        return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
+      }
+      profileId = pending.profileId ?? user.monerium?.profileId;
+      try {
+        const { signCount } = await verifyAssertionForChallenge(
+          authenticatorData,
+          clientDataJSON,
+          assertionSignature,
+          passkey.publicKey,
+          passkey.signCount ?? 0,
+          passkey.rpId ?? SECURITY.rpId,
+          SECURITY.origins,
+          pending.challenge,
+          true,
+        );
+        user = store.updateUser(user.id, { passkey: { ...passkey, signCount } });
+        signature = await signMessageAsPasskeySafe(passkeySafe, user.address, LINK_MESSAGE, {
+          authenticatorData: b64urlToBuf(authenticatorData),
+          clientDataJSON: b64urlToBuf(clientDataJSON),
+          signature: b64urlToBuf(assertionSignature),
+        });
+      } catch (err: any) {
+        return res.status(401).json({ error: String(err?.message ?? err) });
+      }
     }
-    const { credentialId, authenticatorData, clientDataJSON, signature: assertionSignature } = req.body ?? {};
-    if (credentialId !== passkey.credentialId) {
-      return res.status(403).json({ error: "passkey credential does not match this account" });
-    }
-    if (!authenticatorData || !clientDataJSON || !assertionSignature) {
-      return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
-    }
-    let signature: `0x${string}`;
-    try {
-      const { signCount } = await verifyAssertionForChallenge(
-        authenticatorData,
-        clientDataJSON,
-        assertionSignature,
-        passkeyKey,
-        passkey.signCount ?? 0,
-        passkey.rpId ?? SECURITY.rpId,
-        SECURITY.origins,
-        pending.challenge,
-        true,
-      );
-      user = store.updateUser(user.id, { passkey: { ...passkey, signCount } });
-      signature = await signMessageAsPasskeySafe(passkeySafe, user.address, LINK_MESSAGE, {
-        authenticatorData: b64urlToBuf(authenticatorData),
-        clientDataJSON: b64urlToBuf(clientDataJSON),
-        signature: b64urlToBuf(assertionSignature),
-      });
-    } catch (err: any) {
-      return res.status(401).json({ error: String(err?.message ?? err) });
-    }
-    /**
-     * Monerium's answers here are the interesting failure mode, so they must
-     * reach the user, not collapse into "internal server error": /addresses
-     * verifies the Safe's EIP-1271 signature ON-CHAIN and its 400 carries the
-     * Safe's revert reason (GS020 &c) — the one clue that distinguishes "bad
-     * signature" from "already linked" from "Monerium down".
-     *
-     * "Already linked/exists" answers are SUCCESS for this route's purpose: a
-     * retry after a partial run must finish the remaining steps, not refuse
-     * because an earlier click did the first one.
-     */
     const alreadyDone = (err: unknown) =>
       err instanceof MoneriumApiError &&
       err.status < 500 &&
@@ -1671,31 +1659,24 @@ app.post(
       }
     }
     const snapshot = await readMoneriumAccountSnapshot(user, accessToken);
-    const iban = snapshot.ibans.find(
+    const matchingIban = snapshot.ibans.find(
       (i: any) => String(i.address ?? "").toLowerCase() === user.address.toLowerCase() && i.iban,
     )?.iban;
+    const profileIban = snapshot.ibans.find((i: any) => i.iban)?.iban;
+    const iban = matchingIban ?? profileIban ?? "";
+
     const updated = store.updateUser(user.id, {
-      iban: iban ?? "",
-      // The connected-account path derives KYC approval from the Monerium
-      // profile. The in-house path (viaApp) already carries its own approval —
-      // linking is plumbing there, not an identity decision, so it must not
-      // rewrite who approved this account or why.
+      iban: iban || user.iban || "",
       ...(viaApp
         ? {}
         : {
-            kycStatus: iban ? ("approved" as const) : user.kycStatus,
+            kycStatus: "approved" as const,
             kyc: {
               provider: "monerium" as const,
               onboardingPath: "existing_monerium" as const,
-              checkedAt: iban ? new Date().toISOString() : undefined,
-              // Record which Monerium profile this approval rests on. The approval is
-              // delegated trust — nothing here checks that the connected profile is
-              // the same person as the local account — so at minimum it must be
-              // auditable after the fact.
+              checkedAt: new Date().toISOString(),
               applicantId: profileId,
-              reason: iban
-                ? `approved via connected Monerium profile ${profileId ?? "(unnamed)"}`
-                : user.kyc?.reason,
+              reason: `approved via connected Monerium profile ${profileId ?? "(unnamed)"}`,
             },
           }),
       funding: {
