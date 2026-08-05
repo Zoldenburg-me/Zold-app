@@ -3827,7 +3827,8 @@ async function startMoneriumConnect(errorId = "kyc-err") {
   try {
     const updated = await api(`/api/users/${user.id}/funding-onboarding-path`, { path: "existing_monerium" });
     renderUser(updated);
-    const connect = await api(`/api/users/${user.id}/monerium/connect/start`, {});
+    const redirectUri = `${location.origin}/api/monerium/oauth/callback`;
+    const connect = await api(`/api/users/${user.id}/monerium/connect/start`, { redirectUri });
     location.href = connect.redirectUrl;
   } catch (e) { showErr(errorId, e); }
 }
