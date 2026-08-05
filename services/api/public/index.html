@@ -2404,9 +2404,40 @@ function renderBankScreen() {
       setTimeout(() => { b.textContent = "Copy"; }, 1400);
     };
   });
-  // The deposit simulator exists only where the API would accept it.
-  $("m-simulate").classList.toggle("hidden", !caps.simulation);
-  $("m-simulate-off").classList.toggle("hidden", !!caps.simulation);
+  // The deposit simulator exists only where the API would accept it, which is
+  // BOTH flags, not one: /api/simulate/sepa-deposit refuses in sandbox mode
+  // because the deposit has to come from Monerium's portal to be real money.
+  const sim = depositSimulation();
+  $("m-simulate").classList.toggle("hidden", !sim.available);
+  $("m-simulate-off").classList.toggle("hidden", sim.available);
+  $("m-simulate-off").textContent = sim.hint;
+}
+
+/**
+ * Can this deployment accept a simulated deposit, and if not, how does money
+ * actually arrive?
+ *
+ * Three states, not two — which is why /api/health publishes both flags. The
+ * UI used to read `simulation` alone and so offered the button whenever
+ * simulation was allowed AT ALL, including sandbox mode, where the route
+ * answers 400 and tells you to use Monerium's portal. That is the default
+ * `npm run dev` configuration, so the one place the button appeared was the one
+ * place it could not work.
+ */
+function depositSimulation() {
+  if (!caps.simulation) {
+    return {
+      available: false,
+      hint: "This deployment does not accept simulated deposits — send a real SEPA transfer to the IBAN above.",
+    };
+  }
+  if (caps.sandbox) {
+    return {
+      available: false,
+      hint: "Deposits here are real Monerium transfers. Make a simulated SEPA transfer to the IBAN above from the Monerium portal and it is picked up automatically.",
+    };
+  }
+  return { available: true, hint: "" };
 }
 
 /** Deposit address for inbound USDC, with the payment-page QR when the account
@@ -3028,13 +3059,17 @@ async function loadCapabilities() {
 /** Show the deposit control only where the API accepts simulated deposits;
  *  otherwise say how money actually arrives. */
 function renderFundCard() {
-  $("fund-simulate")?.classList.toggle("hidden", !caps.simulation);
-  $("fund-real")?.classList.toggle("hidden", !!caps.simulation);
+  // Same three-state rule as the mobile bank screen; see depositSimulation().
+  const sim = depositSimulation();
+  $("fund-simulate")?.classList.toggle("hidden", !sim.available);
+  $("fund-real")?.classList.toggle("hidden", sim.available);
   const hint = $("fund-real-hint");
   if (!hint) return;
-  hint.textContent = user?.iban
-    ? "Transfer euros to the IBAN above from any bank. They arrive as balance here once the transfer settles."
-    : "Your IBAN appears here once your account is approved. Money added by bank transfer will show up as balance.";
+  hint.textContent = caps.sandbox
+    ? sim.hint
+    : user?.iban
+      ? "Transfer euros to the IBAN above from any bank. They arrive as balance here once the transfer settles."
+      : "Your IBAN appears here once your account is approved. Money added by bank transfer will show up as balance.";
 }
 
 function needsPasskeySafeSetup(u = user) {
