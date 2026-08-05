@@ -186,13 +186,17 @@ moment an anchor actually publishes an account.
   (verified name), and MG_ANCHOR_ASSET=USDC (issue #53).
 
 ## Current state (Aug 2026)
-- Repo: github.com/tonyzil/transF (private). The GitHub rename never
-  happened — pushing to .../Zoll.git returns "Repository not found", so
-  `transF` is the live remote, not just the directory name.
-- Deployed on Base Sepolia (84532) against Monerium's real EURe. Landing page
-  at `/`, app at `/app`.
-- Working: two payout rails (KES cash / SEPA), Candide Safe wallets
-  deployed gasless with EIP-1271 Monerium linking, e2e green across both rails.
+- Repo: github.com/Zoldenburg-me/Zold-app (active main).
+- Deployed on Base Sepolia (84532) against Monerium's real EURe. Landing page at `/`, app at `/app`, payment pages at `/pay/:handle`, shareable receipts at `/r/:slug`.
+- Active Base Sepolia Deployments (`deployments.json`):
+  - `EURe`: `0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85`
+  - `USDC`: `0xf94c01838c60f4ddf9519da75180feac7450303a`
+  - `FxSwapper`: `0x7b19ccdfb4bcc1bbc12daa2e94e5ad694c8613b8`
+  - `BridgeEscrow`: `0x11cb28ccb5231c9aedfc818221b0fe7d11085e07`
+  - `AdminTimelock`: `0xe560f041a8175d72558836159573550eaa89f8c4`
+- Shareable Receipts (PR #122): `/r/:slug` renders shareable receipts. Set `TRANSF_PUBLIC_URL=https://zoldhq.com` for host generation.
+- Toolchain: Node.js `v24.13.0` (`~/.nvm/versions/node/v24.13.0/bin`) and `x86_64` `cloudflared` 2026.7.3 in `.toolchain/bin/cloudflared`.
+- Working: two payout rails (KES cash / SEPA), Candide Safe 2-of-2 wallets deployed gasless with EIP-1271 Monerium linking, e2e green across both rails.
 - UPI REMOVED (Aug 2026) — deleted, not disabled, and not to be rebuilt from
   this repo's history without a partner. It was a mock partner adapter that
   minted its own UTRs: the rail rendered a "UPI payment successful" panel and a
@@ -205,19 +209,12 @@ moment an anchor actually publishes an account.
   it listed meant an empty options screen with no way forward. `POST /api/quotes`
   now refuses `rail: "upi"` with 400, and e2e asserts that refusal so the rail
   cannot creep back in unnoticed.
-  KEPT DELIBERATELY: INR in rates.ts's REQUIRED list. That is a currency in a
-  mid-rate feed, not a rail — fx:test uses it as the second currency proving the
-  usdPer() derivation, and dropping it would churn a passing suite for nothing.
-  The roadmap's India entries (dLocal, Mony) are partner intel and still stand;
-  they describe what a real rail would need, which is exactly what was missing.
-  One stale record survives: data/db.json holds a PAID upi transfer from an
-  earlier demo run. It renders as a cash row now (the history icon falls through
-  to 🇰🇪). Left alone rather than edited — rewriting settled history to make a
-  UI tidier is a worse habit than an odd-looking row.
 - NOT "live anchor payouts" — that phrase was in this file and was wrong. The
   Stellar ledger half is proven and the anchor half has never run; see the
   Stellar section.
 - Deployment capabilities are now published (Aug 2026): GET /api/health carries
+  `capabilities: { simulation, sandbox }`. The app's "Add money" card renders
+  deposit controls only where the API accepts them.
   `capabilities: { simulation, sandbox }`. The app's "Add money" card was hard
   wired to /api/simulate/sepa-deposit and shown to everyone, but that route is
   dev-only — 403 in production, and 403 off a loopback socket — and NOTHING in
