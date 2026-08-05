@@ -83,6 +83,12 @@ export class MoneriumClient {
     return (text ? JSON.parse(text) : {}) as T;
   }
 
+  /** App-level (client-credentials) bearer token, for callers that talk to
+   *  Monerium through moneriumBearerRequest rather than this client. */
+  bearerToken(): Promise<string> {
+    return this.accessToken();
+  }
+
   authContext() {
     return this.request<any>("GET", "/auth/context");
   }

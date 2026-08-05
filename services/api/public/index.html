@@ -281,6 +281,13 @@
      the text instead of becoming its own column. */
   .pstep .ptext { flex: 1; }
   .pstep .pwhy { font-weight: 400; color: var(--faint); font-size: .84rem; }
+  /* Onboarding's inline copy of the provisioning steps (#pk-steps), plus the
+     one state provisioning never needed: a step that failed while the ones
+     above it genuinely succeeded. */
+  #pk-steps { display: flex; flex-direction: column; gap: .1rem; margin: .35rem 0 .2rem; }
+  #pk-steps .pstep { padding: .45rem 0; }
+  .pstep.fail { color: var(--text); }
+  .pstep.fail .pdot { border-color: var(--red); background: rgba(244,67,108,.1); color: var(--red); }
 
   /* Shared with the dashboard's #kyc-card — left as it was on purpose. */
   .kyc-status {
@@ -1234,6 +1241,17 @@
             password for anyone to steal or phish.</span>
           </div>
           <button class="btn-primary-lite" id="btn-passkey">Create passkey &amp; open account</button>
+          <!-- Deploying the smart wallet used to change nothing but the button
+               label, so the wait read as a stall — and a deploy failure read as
+               "the passkey failed" even though the passkey was already safely
+               registered. Name each step and its state so a failure points at
+               the step that actually failed. Same .pstep/.pdot structure as
+               #prov-steps; pkStep() indexes these three in order. -->
+          <div class="pk-steps hidden" id="pk-steps">
+            <div class="pstep"><span class="pdot">✓</span><span class="ptext">Create your passkey</span></div>
+            <div class="pstep"><span class="pdot">✓</span><span class="ptext">Deploy your smart wallet <span class="pwhy">— approve with the passkey, we cover the fee</span></span></div>
+            <div class="pstep"><span class="pdot">✓</span><span class="ptext">Issue your IBAN <span class="pwhy">— waits for identity approval</span></span></div>
+          </div>
           <button class="ghost wide" id="btn-skippk">Set this up later</button>
           <!-- Honest about the consequence: the API refuses to issue an IBAN to
                an account with no passkey outside simulation mode
@@ -1335,6 +1353,10 @@
           <div class="pstep"><span class="pdot">✓</span><span class="ptext">Issuing your IBAN</span></div>
         </div>
         <div class="error hidden" id="prov-err"></div>
+        <!-- Shown when the one remaining step is the IBAN link ceremony: a
+             passkey prompt needs a click, so polling stops and this asks for
+             it instead of spinning forever on "Issuing your IBAN". -->
+        <button class="btn-primary-lite hidden" id="btn-prov-iban">Approve IBAN issuance</button>
         <button class="ghost wide hidden" id="btn-skip">Continue without finishing</button>
       </div>
     </div>
@@ -3375,20 +3397,23 @@ function renderFundingActions(u = user) {
   const funding = u.funding || {};
   const needsIban = kycApproved(u) && !u.iban && funding.mode === "sandbox";
   const showSafe = needsIban && needsPasskeySafeSetup(u);
-  const showMonerium = needsIban && !hasConnectedMonerium(u);
-  const showActivate = needsIban && hasConnectedMonerium(u);
-  row.classList.toggle("hidden", !(showSafe || showMonerium || showActivate));
+  // Approval is already settled by this point (needsIban requires it), so the
+  // remaining step is the same for both paths: one passkey ceremony that links
+  // the Safe and issues the IBAN. "Verify with Monerium" used to send in-house
+  // approved users into Monerium's OAuth, which they don't need.
+  const showActivate = needsIban && !needsPasskeySafeSetup(u);
+  row.classList.toggle("hidden", !(showSafe || showActivate));
   $("btn-finish-safe").classList.toggle("hidden", !showSafe);
-  $("btn-monerium-dashboard").classList.toggle("hidden", !(showMonerium || showActivate));
-  $("btn-monerium-dashboard").textContent = showActivate ? "Activate IBAN" : "Verify with Monerium";
-  hint.classList.toggle("hidden", !(showSafe || showMonerium || showActivate));
+  $("btn-monerium-dashboard").classList.toggle("hidden", !showActivate);
+  $("btn-monerium-dashboard").textContent = "Activate IBAN";
+  hint.classList.toggle("hidden", !(showSafe || showActivate));
   hint.textContent = showSafe
-    ? "Finish the smart wallet first, then connect Monerium to issue the app IBAN."
+    ? "Finish the smart wallet first, then activate the app IBAN."
     : showActivate
-      ? "Your Monerium account is connected. Activate the app IBAN with your passkey."
-      : showMonerium
-        ? "Use your existing Monerium account for identity verification and app IBAN issuance."
-        : "";
+      ? hasConnectedMonerium(u)
+        ? "Your Monerium account is connected. Activate the app IBAN with your passkey."
+        : "Approve IBAN issuance with your passkey — one confirmation links your wallet to Monerium."
+      : "";
 }
 
 async function loadPrivacyCatalog() {
@@ -3757,32 +3782,50 @@ async function startMoneriumConnect(errorId = "kyc-err") {
   } catch (e) { showErr(errorId, e); }
 }
 
+/* Link the deployed Safe to Monerium and request the app IBAN. One passkey
+   ceremony signs the ownership declaration; the server signs as the Safe
+   (EIP-1271) and asks Monerium for the IBAN. Works for both approval paths:
+   a connected Monerium account uses its own OAuth token, an in-house-approved
+   account goes through the app credentials on the server. Returns true when
+   the ceremony ran. */
+async function issueAppIban() {
+  if (!user?.id || user.iban || !kycApproved(user)) return false;
+  if ((user.funding || {}).mode !== "sandbox") return false;
+  await finishPasskeySafeSetup();
+  let profileId = user.monerium?.profileId;
+  if (hasConnectedMonerium()) {
+    const accounts = await api(`/api/users/${user.id}/monerium/accounts`);
+    user = { ...user, monerium: { ...(user.monerium || {}), ...accounts } };
+    profileId = user.monerium?.profileId || accounts.profiles?.[0]?.id;
+  }
+  const start = await api(`/api/users/${user.id}/monerium/link-signature/start`, { profileId });
+  const cred = await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(start.challenge),
+      allowCredentials: [{ type: "public-key", id: b64urlToBytes(start.credentialId) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  });
+  const activated = await api(start.submitTo, {
+    profileId,
+    linkSignatureRequestId: start.requestId,
+    credentialId: cred.id,
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  });
+  renderUser(activated);
+  return true;
+}
+
 async function activateConnectedMonerium() {
   clearErr("dep-err");
   try {
-    await finishPasskeySafeSetup();
-    if (!hasConnectedMonerium()) return startMoneriumConnect("dep-err");
-    const accounts = await api(`/api/users/${user.id}/monerium/accounts`);
-    user = { ...user, monerium: { ...(user.monerium || {}), ...accounts } };
-    const profileId = user.monerium?.profileId || accounts.profiles?.[0]?.id;
-    const start = await api(`/api/users/${user.id}/monerium/link-signature/start`, { profileId });
-    const cred = await navigator.credentials.get({
-      publicKey: {
-        challenge: b64urlToBytes(start.challenge),
-        allowCredentials: [{ type: "public-key", id: b64urlToBytes(start.credentialId) }],
-        userVerification: "required",
-        timeout: 60000,
-      },
-    });
-    const activated = await api(start.submitTo, {
-      profileId,
-      linkSignatureRequestId: start.requestId,
-      credentialId: cred.id,
-      authenticatorData: b64url(cred.response.authenticatorData),
-      clientDataJSON: b64url(cred.response.clientDataJSON),
-      signature: b64url(cred.response.signature),
-    });
-    renderUser(activated);
+    // A pending account with nothing connected still needs Monerium's OAuth;
+    // an approved account can activate its IBAN directly, connected or not.
+    if (!hasConnectedMonerium() && !kycApproved(user)) return startMoneriumConnect("dep-err");
+    await issueAppIban();
   } catch (e) { showErr("dep-err", e); }
 }
 
@@ -3791,8 +3834,8 @@ async function finishDashboardSmartWallet() {
   try {
     await finishPasskeySafeSetup();
     renderUser(user);
-    if (hasConnectedMonerium()) await activateConnectedMonerium();
-    else await refresh();
+    const issued = await issueAppIban();
+    if (!issued) await refresh();
   } catch (e) { showErr("dep-err", e); }
 }
 
@@ -3802,6 +3845,22 @@ function enterProvisioning(name) {
   provStep(0, "done");
   provStep(1, "active");
   $("btn-skip").onclick = () => enterDashboard(name);
+  $("btn-prov-iban").onclick = async () => {
+    const b = $("btn-prov-iban");
+    b.disabled = true;
+    $("prov-err").classList.add("hidden");
+    try {
+      await issueAppIban();
+      b.classList.add("hidden");
+      enterProvisioning(name); // resume polling; the IBAN (or its pending state) is now visible
+    } catch (e) {
+      const err = $("prov-err");
+      err.textContent = e.message;
+      err.classList.remove("hidden");
+    } finally {
+      b.disabled = false;
+    }
+  };
 
   const tick = async () => {
     let u = user;
@@ -3812,7 +3871,17 @@ function enterProvisioning(name) {
 
     if (u.iban || f.status === "active" || f.mode === "mock") {
       provStep(1, "done"); provStep(2, "done"); provStep(3, "done");
+      $("btn-prov-iban").classList.add("hidden");
       setTimeout(() => enterDashboard(name), 900);
+      return;
+    }
+    // The wallet is deployed and only the link ceremony remains. A passkey
+    // prompt cannot pop unbidden from a polling loop — stop and ask for the
+    // click that starts it.
+    if (f.status === "provisioning" && detail.includes("approve iban")) {
+      provStep(1, "done"); provStep(2, "active");
+      $("btn-prov-iban").classList.remove("hidden");
+      $("btn-skip").classList.remove("hidden");
       return;
     }
     if (f.status === "error") {
@@ -3995,6 +4064,15 @@ async function registerDeviceKey(u) {
   return updated;
 }
 
+/* The onboarding checklist under the passkey button. Mirrors provStep(), plus
+   a fail state whose dot swaps to ✕ — a red check would read as "done, badly". */
+function pkStep(i, state) {
+  const el = document.querySelectorAll("#pk-steps .pstep")[i];
+  if (!el) return;
+  el.className = "pstep" + (state ? " " + state : "");
+  el.querySelector(".pdot").textContent = state === "fail" ? "✕" : "✓";
+}
+
 async function createAccount(withPasskey) {
   clearErr("pk-err");
   try {
@@ -4006,24 +4084,57 @@ async function createAccount(withPasskey) {
       renderUser(u);
     }
     if (withPasskey) {
+      // Which checklist step is running, so a failure marks the step that
+      // actually failed instead of implying the whole chain did.
+      let step = 0;
       try {
-        setPasskeyButtonBusy(true, user.passkey ? "Deploying smart wallet..." : "Creating passkey...");
-        // Hard stop: some environments leave the WebAuthn ceremony pending
-        // forever instead of rejecting — never strand the user on it.
-        if (!user.passkey) {
+        $("pk-steps").classList.remove("hidden");
+        if (user.passkey) pkStep(0, "done");
+        else {
+          pkStep(0, "active");
+          setPasskeyButtonBusy(true, "Creating passkey...");
+          // Hard stop: some environments leave the WebAuthn ceremony pending
+          // forever instead of rejecting — never strand the user on it.
           await Promise.race([
             registerPasskey(user),
             new Promise((_, rej) =>
               setTimeout(() => rej(new Error("no response from your device — is a screen lock set up?")), 30000),
             ),
           ]);
+          pkStep(0, "done");
         }
+        step = 1;
+        pkStep(1, "active");
         setPasskeyButtonBusy(true, "Approve smart wallet deployment...");
         await finishPasskeySafeSetup();
+        pkStep(1, "done");
+        // With KYC already approved (sandbox auto-approve), chain straight into
+        // the IBAN ceremony; otherwise the step stays pending and runs from the
+        // dashboard's "Activate IBAN" once identity review lands.
+        if (kycApproved(user) && !user.iban && (user.funding || {}).mode === "sandbox") {
+          step = 2;
+          pkStep(2, "active");
+          setPasskeyButtonBusy(true, "Approve IBAN issuance...");
+          await issueAppIban();
+          pkStep(2, "done");
+        }
       } catch (e) {
-        showErr("pk-err", new Error(`passkey Safe setup didn't complete (${e.message}) — finish it before funding or Monerium IBAN issuance`));
-        setPasskeyButtonBusy(false, user?.passkey ? "Finish smart wallet" : "Create passkey & open account");
-        return;
+        pkStep(step, "fail");
+        showErr(
+          "pk-err",
+          new Error(
+            step === 0
+              ? `passkey setup didn't complete (${e.message})`
+              : step === 1
+                ? `your passkey was created and is safe — only the smart wallet deployment failed (${e.message}). Press "Finish smart wallet" to retry; nothing needs to be registered again.`
+                : `your passkey and smart wallet are ready — only IBAN issuance failed (${e.message}). Retry it from your account with "Activate IBAN".`,
+          ),
+        );
+        if (step < 2) {
+          setPasskeyButtonBusy(false, user?.passkey ? "Finish smart wallet" : "Create passkey & open account");
+          return;
+        }
+        // Wallet is done; the IBAN can be retried from the dashboard.
       } finally {
         if (needsPasskeySafeSetup(user)) setPasskeyButtonBusy(false, "Finish smart wallet");
         else setPasskeyButtonBusy(false, "Create passkey & open account");
