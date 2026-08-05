@@ -302,6 +302,8 @@ try {
   console.log("2/3 API with a stub Monerium OAuth client…");
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
+    RP_ID: "localhost",
+    WEBAUTHN_ORIGINS: `${API},http://localhost:${API_PORT}`,
     MONERIUM_CLIENT_ID: "stub-client",
     MONERIUM_CLIENT_SECRET: "",
     MONERIUM_BASE_URL: STUB,
