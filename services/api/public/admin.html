@@ -446,13 +446,29 @@
       if (!d) { el.textContent = '—'; sub.textContent = 'unreadable'; return; }
       el.textContent = `€${Number(d.eur).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
       el.style.color = floatLow() ? 'var(--danger)' : 'var(--text)';
-      sub.textContent = `${Number(d.eth).toFixed(4)} ETH gas · faucet grants €${stats.faucetGrantEur || 0}`;
+      const gasParts = (stats.operatorGas || []).map(w => `${w.role.split(' ')[0]} ${Number(w.eth).toFixed(3)}`);
+      sub.textContent = gasParts.length
+        ? `ETH: ${gasParts.join(' · ')} · faucet €${stats.faucetGrantEur || 0}`
+        : `${Number(d.eth).toFixed(4)} ETH gas · faucet grants €${stats.faucetGrantEur || 0}`;
     }
 
     /* ---------- triage strip ---------- */
 
+    /* An operator wallet without gas is a rail-specific outage whose error
+       message will not name the wallet — this row does. */
+    const GAS_FLOOR_ETH = 0.001;
+
     function attentionItems() {
       const items = [];
+      for (const w of (stats.operatorGas || [])) {
+        if (w.eth < GAS_FLOOR_ETH) {
+          items.push({
+            kind: 'float', label: 'GAS', who: w.role,
+            why: `${w.address} holds ${w.eth.toFixed(5)} ETH — its transactions fail with "gas required exceeds allowance (0)" until topped up`,
+            actions: '',
+          });
+        }
+      }
       if (floatLow()) {
         const d = stats.deployer;
         items.push({
