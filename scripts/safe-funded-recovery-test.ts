@@ -190,11 +190,31 @@ try {
   {
     const user = await seedUser("Safe Swapped", 0);
     const t = await seedSafeFundedTransfer(user, 60, ["swapper.swapExactIn"]);
+    store.updateTransfer(t.id, {
+      usdcOut: 50,
+      liquidity: {
+        provider: "dex",
+        side: "EURE_TO_USDC",
+        quoteId: t.quoteId,
+        tokenIn: "EURe",
+        tokenOut: "USDC",
+        amountIn: eur.toWei(59.01).toString(),
+        expectedOut: "50000000",
+        minOut: "49000000",
+        rate: "1000000",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    } as any);
     const out = await compensateTransfer(t.id);
     check("state is MANUAL_REVIEW", out.state === "MANUAL_REVIEW", `got ${out.state}`);
     check(
       "the error explains the euros are no longer EURe",
       /reverse swap/.test(out.error ?? ""),
+      out.error ?? "",
+    );
+    check(
+      "refund estimate uses the persisted execution rate, not the mock swapper",
+      /€50\.99/.test(out.error ?? ""),
       out.error ?? "",
     );
     check("no €0 refund record was written", !out.refund, JSON.stringify(out.refund));

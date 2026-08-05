@@ -36,6 +36,7 @@ import {
   paymentAuthorizationTypedData,
   publicClient,
   returnEureToSafe,
+  swapperRate,
   transferIdHash,
   writeAndWait,
 } from "./chain.js";
@@ -268,19 +269,28 @@ async function debitSafeFundedSepaFee(
 }
 
 export function safeDebitBlocker(user: User): string | null {
-  if (user.privateKey) return null;
-  if (
-    user.passkeySafe?.status === "active" &&
-    user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
-    user.passkeySafe.cosignerPolicy?.enabled &&
-    user.passkeySafe.cosignerAddress
-  ) {
-    return null;
+  if (activePasskeySafe(user)) {
+    return passkeySafeAllowanceReady(user)
+      ? null
+      : "active passkey Safe debits require the configured co-signer allowance";
   }
+  if (user.privateKey) return null;
   return (
     "Safe-held funds need either a legacy API-held owner key or an active passkey Safe " +
     "with a production co-signer allowance before the API can relay this debit"
   );
+}
+
+function activePasskeySafe(user: User): boolean {
+  return (
+    user.passkeySafe?.status === "active" &&
+    user.address.toLowerCase() === user.passkeySafe.address.toLowerCase()
+  );
+}
+
+function passkeySafeAllowanceReady(user: User): boolean {
+  if (!activePasskeySafe(user) || !user.passkeySafe) return false;
+  return !!(user.passkeySafe.cosignerPolicy?.enabled && user.passkeySafe.cosignerAddress);
 }
 
 async function moveTokenFromUserSafe(
@@ -289,6 +299,20 @@ async function moveTokenFromUserSafe(
   to: `0x${string}`,
   amount: bigint,
 ): Promise<string> {
+  if (activePasskeySafe(user)) {
+    if (!passkeySafeAllowanceReady(user)) {
+      throw new Error(
+        "active passkey Safe debits require the configured co-signer allowance; " +
+          "refusing to derive a legacy 1-of-1 Safe from an API-held key",
+      );
+    }
+    return transferTokenFromSafeAllowance({
+      safeAddress: user.address,
+      token,
+      to,
+      amount,
+    });
+  }
   if (user.privateKey) {
     return transferTokenFromSafe({
       ownerKey: user.privateKey,
@@ -299,12 +323,7 @@ async function moveTokenFromUserSafe(
   }
   const blocked = safeDebitBlocker(user);
   if (blocked) throw new Error(blocked);
-  return transferTokenFromSafeAllowance({
-    safeAddress: user.address,
-    token,
-    to,
-    amount,
-  });
+  throw new Error("Safe debit is not configured for this account");
 }
 
 function cctpRecipientStellar(): string {
@@ -409,19 +428,15 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     refundEur = t.sendEur;
     recoveredFrom = "debited EURe";
   } else {
-    // Holding the fee remainder (EURe) + the swapped USDC; convert the USDC
-    // back at the CURRENT rate — the user bears rate movement, itemized.
-    const rate = (await publicClient.readContract({
-      address: addrs().swapper,
-      abi: abis.FxSwapper,
-      functionName: "rate",
-      args: [],
-    })) as bigint;
+    // Holding the fee remainder (EURe) + the swapped USDC. Convert using the
+    // venue execution rate persisted with the liquidity plan, so refunds do not
+    // accidentally read the local mock swapper's rate after a DEX/RFQ/LI.FI fill.
+    const rate = await compensationRate(t);
     const eurBack = (t.usdcOut ?? 0) / (Number(rate) / 1e6);
     refundEur = Math.floor((fee + eurBack) * 100) / 100;
     recoveredFrom = steps.has("bridge.lockForPayout") ? "released escrow" : "post-swap USDC";
     const lost = Math.max(0, t.sendEur - refundEur);
-    if (lost > 0) deductions = `€${lost.toFixed(2)} conversion round-trip at current rate`;
+    if (lost > 0) deductions = `€${lost.toFixed(2)} conversion round-trip at execution rate`;
   }
 
   /**
@@ -480,6 +495,23 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
       `refund path before €${refundEur} can be returned`,
     txs,
   });
+}
+
+async function compensationRate(t: Transfer): Promise<bigint> {
+  if (t.liquidity?.rate) {
+    const rate = BigInt(t.liquidity.rate);
+    if (rate > 0n) return rate;
+  }
+  const quote = store.findQuote(t.quoteId);
+  if (quote?.lockedSwapRate) {
+    const rate = BigInt(quote.lockedSwapRate);
+    if (rate > 0n) return rate;
+  }
+  try {
+    return (await liquidityProvider().indicativeRate("EURE_TO_USDC")).raw;
+  } catch {
+    return (await swapperRate()).raw;
+  }
 }
 
 /** Recovery sweep: compensate FAILED transfers that moved money, and
@@ -742,9 +774,24 @@ export async function settlePickup(transfer: Transfer): Promise<Transfer> {
   });
 }
 
+const refreshPayoutLocks = new Map<string, Promise<Transfer>>();
+
 /** Refresh an anchor-backed cash payout. If the anchor has supplied payment
  * instructions, fund it on-ledger and mark PAID only after anchor completion. */
 export async function refreshPayout(
+  transfer: Transfer,
+  opts: { pollMs?: number; timeoutMs?: number } = {},
+): Promise<Transfer> {
+  const locked = refreshPayoutLocks.get(transfer.id);
+  if (locked) return locked;
+  const run = refreshPayoutUnlocked(transfer, opts).finally(() => {
+    if (refreshPayoutLocks.get(transfer.id) === run) refreshPayoutLocks.delete(transfer.id);
+  });
+  refreshPayoutLocks.set(transfer.id, run);
+  return run;
+}
+
+async function refreshPayoutUnlocked(
   transfer: Transfer,
   opts: { pollMs?: number; timeoutMs?: number } = {},
 ): Promise<Transfer> {
