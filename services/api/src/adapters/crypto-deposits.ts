@@ -102,23 +102,20 @@ async function assertRateSane(rate: bigint): Promise<number> {
 }
 
 /**
- * Get Safe-held USDC to the legacy executor, which is who the venues trade
- * with today.
+ * Get Safe-held USDC to the executor, which is who the venues trade with today.
  *
  * Returns the step to record, or null if the tokens were already there — the
  * resumable case, where a previous run moved them and died before crediting.
  *
  * Candide Forwarding Address deposits route into the merchant's Safe. The next
- * custody cut is to replace this API-held-key executor path with Safe UserOps
- * or a strict policy delegate; until then, passkey-only production accounts
- * refuse rather than pretending the swap happened.
+ * The API no longer holds merchant Safe owner keys, so this refuses until the
+ * settlement path has a Safe-native UserOp or strict policy delegate.
  */
 async function sweepToOrchestrator(
   user: User,
   amount: bigint,
   deposit: CryptoDeposit,
 ): Promise<{ step: string; hash: string } | null> {
-  const a = addrs();
   /**
    * Resumability is decided by THIS deposit's own record, not by a balance.
    *
@@ -141,17 +138,7 @@ async function sweepToOrchestrator(
         `— it is still yours at that address, but this chain cannot convert it`,
     );
   }
-  if (!user.privateKey) {
-    throw new Error("merchant Safe has no API-held owner key; Safe-native UserOps are required for EURe settlement");
-  }
-  const { transferTokenFromSafe } = await import("../wallet/candide.js");
-  const hash = await transferTokenFromSafe({
-    ownerKey: user.privateKey,
-    token: a.usdc,
-    to: orchestratorAddress,
-    amount,
-  });
-  return { step: SWEEP_STEP, hash };
+  throw new Error("merchant Safe settlement requires Safe-native UserOps or a configured allowance module");
 }
 
 /**

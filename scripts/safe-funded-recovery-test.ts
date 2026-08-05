@@ -9,9 +9,8 @@
  * forever because a set `refund` is what marks one as settled.
  *
  * Why this drives compensateTransfer directly instead of sending a transfer:
- * the debit leg itself (`transferTokenFromSafe`) goes through Candide's
- * bundler and paymaster, which do not exist on a hardhat node — the Safe path
- * cannot execute locally at all. What CAN be tested locally is everything that
+ * the debit leg itself now requires an active passkey Safe allowance, which a
+ * hardhat node cannot provide. What CAN be tested locally is everything that
  * happens after it, which is where the money was being lost. The seeded state
  * is exactly what debitInputFunds writes on success.
  *
@@ -21,11 +20,10 @@
 import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RPC = "http://127.0.0.1:8549";
@@ -98,14 +96,12 @@ try {
 
   /** A user whose EURe lives in the Safe, as a live Monerium deposit leaves it. */
   async function seedUser(name: string, safeEur: number) {
-    const key = generatePrivateKey();
-    const address = privateKeyToAccount(key).address;
+    const address = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
     const user = {
       id: randomUUID(),
       name,
       country: "DE",
       address,
-      privateKey: key,
       createdAt: new Date().toISOString(),
       kyc: { status: "approved" as const, updatedAt: new Date().toISOString() },
     } as any;

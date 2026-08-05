@@ -10,7 +10,6 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR } from "./config.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
@@ -77,7 +76,6 @@ import {
   preparePasskeySafeDeployment,
   safeMessageHash,
   signMessageAsPasskeySafe,
-  smartAccountFor,
   smartAccountForPasskey,
   smartAccountForPasskeyCosigner,
   submitPasskeySafeDeployment,
@@ -287,8 +285,8 @@ app.get(
 
 const sandbox = moneriumSandboxEnabled();
 
-/** Never send wallet keys, payment-page deposit keys, OAuth state, or encrypted tokens to the client. */
-const publicUser = ({ privateKey, moneriumConnect, monerium, passkey, paymentPage, ...u }: User & { [k: string]: any }) => ({
+/** Never send payment-page deposit keys, OAuth state, or encrypted tokens to the client. */
+const publicUser = ({ moneriumConnect, monerium, passkey, paymentPage, ...u }: User & { [k: string]: any }) => ({
   ...u,
   ...(paymentPage
     ? {
@@ -538,9 +536,6 @@ function custodyBlockerBeforeFunding(user: User): string | null {
   ) {
     return "activate the passkey Safe before funding this account";
   }
-  if (user.privateKey || user.ownerAddress) {
-    return "server-held Safe owner keys must be removed before funding this account";
-  }
   return null;
 }
 
@@ -682,12 +677,7 @@ app.post(
       });
     }
     const id = randomUUID();
-    // Local simulation keeps the no-authenticator e2e path available. Outside
-    // simulation, the real address is set by passkey/co-signer Safe deployment.
-    const legacyWallet = SECURITY.allowSimulation;
-    const privateKey = legacyWallet ? generatePrivateKey() : undefined;
-    const ownerAddress = privateKey ? privateKeyToAccount(privateKey).address : undefined;
-    const safeAddress = ownerAddress ? (smartAccountFor(ownerAddress).accountAddress as `0x${string}`) : ZERO_ADDRESS;
+    // The real address is set by passkey/co-signer Safe deployment.
     const kycStatus = KYC.autoApprove ? "approved" : "pending";
     const user: User = {
       id,
@@ -700,9 +690,7 @@ app.post(
         checkedAt: KYC.autoApprove ? new Date().toISOString() : undefined,
       },
       iban: kycStatus === "approved" && !sandbox ? issueIban(id) : "",
-      address: safeAddress,
-      ...(ownerAddress ? { ownerAddress } : {}),
-      ...(privateKey ? { privateKey } : {}),
+      address: ZERO_ADDRESS,
       wallet: { type: "candide-safe", deployed: false },
       funding:
         kycStatus === "approved"
@@ -2162,8 +2150,6 @@ app.post(
     if (deployment.challenge === "0x") {
       const updated = store.updateUser(user.id, {
         address: user.passkeySafe.address,
-        ownerAddress: undefined,
-        privateKey: undefined,
         wallet: { type: "candide-safe", deployed: true },
         passkeySafe: activatePasskeySafePlan(user.passkeySafe),
       });
@@ -2217,8 +2203,6 @@ app.post(
     pendingPasskeySafeDeployments.delete(req.params.requestId);
     const updated = store.updateUser(user.id, {
       address: user.passkeySafe.address,
-      ownerAddress: undefined,
-      privateKey: undefined,
       wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
       passkeySafe: activatePasskeySafePlan(user.passkeySafe),
     });
@@ -2636,8 +2620,7 @@ app.post(
     if (
       transfer.rail === "sepa" &&
       transfer.moneriumRedeem &&
-      !effectiveRedeemSignature &&
-      !user.privateKey
+      !effectiveRedeemSignature
     ) {
       return res.status(400).json({
         error: "passkey Safe Monerium redeem approval is required before this SEPA transfer can execute",
