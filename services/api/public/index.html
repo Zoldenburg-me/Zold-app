@@ -396,7 +396,6 @@
     .side { display: none; }
     .rail, .main { grid-column: 1; }
     .rail { padding: 0 1.4rem 2rem; }
-    .bundle-grid { grid-template-columns: 1fr; }
     .split-grid, .metric-row, .contact-form { grid-template-columns: 1fr; }
     .contact-form button { width: 100%; }
   }
@@ -458,27 +457,40 @@
   .empty { color: var(--faint); font-size: .84rem; text-align: center; padding: .9rem 0; }
 
   /* premium privacy bundle */
-  .bundle-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem; margin-bottom: .9rem; }
-  .bundle-title { font-size: 1rem; font-weight: 700; }
-  .bundle-sub { color: var(--muted); font-size: .78rem; margin-top: .15rem; }
-  .bundle-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; }
-  .plan {
-    background: var(--panel2); border: 1px solid var(--border2); border-radius: 8px;
-    padding: .75rem; display: grid; gap: .35rem; min-width: 0;
+  #privacy-card { container-type: inline-size; container-name: privacy-card; }
+  .bundle-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem; margin-bottom: .9rem; flex-wrap: wrap; }
+  .bundle-title { font-size: 1.05rem; font-weight: 700; color: var(--text); }
+  .bundle-sub { color: var(--muted); font-size: .8rem; margin-top: .15rem; line-height: 1.35; }
+  .bundle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .7rem; }
+  
+  @container privacy-card (max-width: 580px) {
+    .bundle-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .55rem; }
   }
-  .plan.active { border-color: rgba(61, 214, 140, .45); background: rgba(61, 214, 140, .05); }
-  .plan .pn { font-weight: 700; font-size: .84rem; }
-  .plan .pp { font-size: 1.05rem; font-weight: 700; color: var(--text); }
-  .plan .pd { color: var(--muted); font-size: .7rem; min-height: 2.2rem; }
-  .plan .pm { color: var(--green); font-size: .68rem; font-weight: 700; }
-  .plan button { padding: .42rem .55rem; font-size: .72rem; }
+  @container privacy-card (max-width: 380px) {
+    .bundle-grid { grid-template-columns: 1fr; }
+    .bundle-head { flex-direction: column; align-items: flex-start; gap: .35rem; }
+  }
+
+  .plan {
+    background: var(--panel2); border: 1px solid var(--border2); border-radius: 12px;
+    padding: .85rem; display: flex; flex-direction: column; gap: .4rem; min-width: 0;
+    transition: all .2s cubic-bezier(0.16, 1, 0.3, 1); position: relative; overflow: hidden;
+  }
+  .plan:hover { border-color: rgba(237, 24, 141, .4); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
+  .plan.active { border-color: rgba(61, 214, 140, .55); background: rgba(61, 214, 140, .06); box-shadow: 0 0 16px rgba(61, 214, 140, .12); }
+  .plan .pn { font-weight: 700; font-size: .88rem; color: var(--text); display: flex; align-items: center; justify-content: space-between; }
+  .plan .pp { font-size: 1.2rem; font-weight: 800; color: var(--text); letter-spacing: -.01em; margin: .1rem 0; }
+  .plan .pd { color: var(--muted); font-size: .74rem; line-height: 1.35; flex: 1; min-height: 2rem; }
+  .plan .pm { color: var(--green); font-size: .7rem; font-weight: 600; display: flex; align-items: center; gap: .3rem; }
+  .plan button { margin-top: .4rem; width: 100%; padding: .55rem .7rem; font-size: .76rem; font-weight: 600; border-radius: 8px; transition: all .15s ease; cursor: pointer; }
+  .plan button:hover:not(:disabled) { transform: scale(1.02); filter: brightness(1.1); }
   .bundle-status {
-    display: grid; gap: .45rem; margin-top: .85rem; padding-top: .85rem;
+    display: grid; gap: .6rem; margin-top: .95rem; padding: rounded; padding-top: .95rem;
     border-top: 1px solid var(--border);
   }
-  .bundle-meter { height: 6px; overflow: hidden; background: var(--row); border-radius: 99px; }
-  .bundle-meter span { display: block; height: 100%; background: var(--grad); width: 0; }
-  .bundle-line { display: flex; justify-content: space-between; gap: .8rem; color: var(--muted); font-size: .76rem; }
+  .bundle-meter { height: 7px; overflow: hidden; background: var(--row); border-radius: 99px; }
+  .bundle-meter span { display: block; height: 100%; background: var(--grad); width: 0; transition: width .4s ease-out; }
+  .bundle-line { display: flex; justify-content: space-between; align-items: center; gap: .8rem; color: var(--muted); font-size: .78rem; flex-wrap: wrap; }
 
   /* ---------- destination-first send flow ---------- */
   .dest-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; }
