@@ -49,7 +49,9 @@ export const CANDIDE = {
   recoveryModuleAddress: (process.env.CANDIDE_RECOVERY_MODULE_ADDRESS ??
     SocialRecoveryModuleGracePeriodSelector.After3Days) as `0x${string}`,
   allowanceModuleAddress: (process.env.CANDIDE_ALLOWANCE_MODULE_ADDRESS ??
-    AllowanceModule.DEFAULT_ALLOWANCE_MODULE_ADDRESS) as `0x${string}`,
+    (BigInt(process.env.CANDIDE_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? 11155111) === 84532n
+      ? "0xAA46724893dedD72658219405185Fb0Fc91e091C"
+      : AllowanceModule.DEFAULT_ALLOWANCE_MODULE_ADDRESS)) as `0x${string}`,
   cosignerAllowancePeriodMinutes: BigInt(process.env.CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES ?? "0"),
   cosignerEureAllowanceWei: BigInt(
     process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ??
