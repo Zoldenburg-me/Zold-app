@@ -129,6 +129,10 @@ export interface BrowserPasskeyAssertion {
   signature: Uint8Array;
 }
 
+export function passkeyAccountAddress(owner: WebauthnPublicKey): `0x${string}` {
+  return SafeAccount.createWebAuthnSignerVerifierAddress(owner.x, owner.y) as `0x${string}`;
+}
+
 export function safeMessageHash(safeAddress: string, message: string): `0x${string}` {
   const { domain, types, messageValue } = getSafeMessageEip712Data(
     safeAddress as `0x${string}`,
@@ -401,9 +405,10 @@ export async function signMessageAsPasskeySafe(
     CANDIDE.chainId,
     message,
   );
+  const webauthnAddr = passkeyAccountAddress(passkeyOwner);
   const passkeySignature = SafeAccount.createWebAuthnSignature(webauthnSignatureFromAssertion(assertion));
   const pairs: SignerSignaturePair[] = [
-    { signer: passkeyOwner, signature: passkeySignature },
+    { signer: webauthnAddr as any, signature: passkeySignature, isContractSignature: true },
   ];
   if (plan.cosignerAddress) {
     if (!CANDIDE.cosignerKey) throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign Safe message");
