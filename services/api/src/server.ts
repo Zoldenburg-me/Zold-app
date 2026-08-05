@@ -14,7 +14,7 @@ import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, KYC, MO
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
-import { initStore, store, type ReceiptShare, type Transfer, type User } from "./store.js";
+import { initStore, store, type CryptoDeposit, type ReceiptShare, type Transfer, type User } from "./store.js";
 import {
   buildReceipt,
   DEFAULT_SHARE_FIELDS,
@@ -1720,6 +1720,119 @@ function recoveryPublicList(userId: string) {
     .sort((a, b) => Date.parse(b.requestedAt) - Date.parse(a.requestedAt));
 }
 
+function adminUserSummary(userId: string) {
+  const u = store.findUser(userId);
+  if (!u) return undefined;
+  return {
+    id: u.id,
+    name: u.name,
+    email: u.email,
+    country: u.country,
+    kycStatus: u.kycStatus,
+    kycProvider: u.kyc?.provider,
+    funding: u.funding,
+    safeAddress: u.address,
+    iban: u.iban,
+  };
+}
+
+function lastHash(txs: { step: string; hash: string }[] = []) {
+  return txs.at(-1)?.hash;
+}
+
+function adminTransfer(transfer: Transfer) {
+  const quote = store.findQuote(transfer.quoteId);
+  const route = [
+    ...transfer.txs.map((tx) => ({ kind: "chain" as const, ...tx })),
+    ...(transfer.liquidity?.txHash
+      ? [{ kind: "liquidity" as const, step: `liquidity.${transfer.liquidity.provider}`, hash: transfer.liquidity.txHash }]
+      : []),
+    ...(transfer.pickup?.anchorPaymentHash
+      ? [{ kind: "payout" as const, step: "moneygram.anchor.payment", hash: transfer.pickup.anchorPaymentHash }]
+      : []),
+  ];
+  return {
+    kind: "transfer" as const,
+    id: transfer.id,
+    user: adminUserSummary(transfer.userId),
+    quote,
+    rail: transfer.rail,
+    state: transfer.state,
+    statusDetail:
+      transfer.error ??
+      transfer.sepa?.detail ??
+      transfer.pickup?.anchorStatus ??
+      transfer.pickup?.status ??
+      transfer.sepa?.state,
+    sendEur: transfer.sendEur,
+    receiveEur: transfer.receiveEur,
+    receiveKes: transfer.receiveKes,
+    recipientName: transfer.recipientName,
+    recipientPhone: transfer.recipientPhone,
+    recipientIban: transfer.recipientIban,
+    fundingSource: transfer.fundingSource,
+    payout:
+      transfer.rail === "sepa"
+        ? {
+            provider: transfer.sepa?.mode === "sandbox" ? "Monerium" : "Mock SEPA",
+            orderId: transfer.sepa?.orderId,
+            state: transfer.sepa?.state,
+            detail: transfer.sepa?.detail,
+            redeemSignedAt: transfer.moneriumRedeem?.signedAt,
+            memo: transfer.moneriumRedeem?.memo,
+          }
+        : {
+            provider: transfer.pickup?.provider ?? "MoneyGram",
+            referenceCode: transfer.pickup?.referenceCode,
+            status: transfer.pickup?.status,
+            anchorStatus: transfer.pickup?.anchorStatus,
+            anchorTransactionId: transfer.pickup?.anchorTransactionId,
+            anchorReferenceNumber: transfer.pickup?.anchorReferenceNumber,
+            anchorAsset: transfer.pickup?.anchorAsset,
+            anchorAmount: transfer.pickup?.anchorAmount,
+            anchorAmountIn: transfer.pickup?.anchorAmountIn,
+            moreInfoUrl: transfer.pickup?.moreInfoUrl,
+          },
+    liquidity: transfer.liquidity,
+    bridge: route.filter((x) => x.step.startsWith("cctp.") || x.step.startsWith("bridge.")),
+    route,
+    lastHash: lastHash(transfer.txs),
+    refund: transfer.refund,
+    error: transfer.error,
+    createdAt: transfer.createdAt,
+    updatedAt: transfer.updatedAt,
+  };
+}
+
+function adminFunding(deposit: CryptoDeposit) {
+  return {
+    kind: "funding" as const,
+    id: deposit.id,
+    user: adminUserSummary(deposit.userId),
+    chainId: deposit.chainId,
+    token: deposit.token,
+    state: deposit.state,
+    statusDetail: deposit.reason,
+    txHash: deposit.txHash,
+    logIndex: deposit.logIndex,
+    amountEur: deposit.amountEur ?? deposit.creditedEur,
+    amountUsdc: deposit.amountUsdc ?? deposit.creditedUsdc,
+    settlementAsset: deposit.settlementAsset,
+    paymentAddress: deposit.paymentAddress,
+    provider: deposit.provider,
+    rate: deposit.rate,
+    txs: deposit.txs,
+    route: [
+      { kind: "chain" as const, step: `erc20.${deposit.token}.transfer.in`, hash: deposit.txHash },
+      ...deposit.txs.map((tx) => ({ kind: "chain" as const, ...tx })),
+    ],
+    reason: deposit.reason,
+    detectedAt: deposit.detectedAt,
+    createdAt: deposit.detectedAt,
+    updatedAt: deposit.updatedAt,
+  };
+}
+
 /**
  * Operator / provider KYC review — the approval path that survives production.
  *
@@ -1774,6 +1887,18 @@ app.get(
     if (!requireOperator(req, res)) return;
     const list = store.users.map((u) => publicUser(u));
     res.json(list);
+  }),
+);
+
+app.get(
+  "/api/admin/transactions",
+  wrap(async (req, res) => {
+    if (!requireOperator(req, res)) return;
+    const entries = [
+      ...store.transfers.map(adminTransfer),
+      ...store.cryptoDeposits.map(adminFunding),
+    ].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    res.json({ transactions: entries });
   }),
 );
 
