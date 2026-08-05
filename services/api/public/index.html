@@ -1496,6 +1496,21 @@
           <span class="material-symbols-rounded" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
         </button>
 
+        <!-- Approved account without an IBAN. The desktop funding card carries
+             this action but the mobile shell never shows that card, so an
+             approved account had no way to trigger IBAN issuance from the app.
+             One tap runs the passkey ceremony that links the Safe to Monerium
+             and requests the IBAN (finishing the wallet first if needed). -->
+        <button class="m-kyc-banner hidden" id="m-iban-banner">
+          <span class="material-symbols-rounded" style="font-size:20px;color:var(--m-pink)">account_balance</span>
+          <span style="flex:1;min-width:0">
+            <span style="display:block;font-size:13px;font-weight:600" id="m-iban-banner-title">Activate your IBAN</span>
+            <span style="display:block;font-size:11.5px;color:var(--m-dim);margin-top:1px" id="m-iban-banner-sub">One passkey approval issues your account IBAN.</span>
+          </span>
+          <span class="material-symbols-rounded" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
+        </button>
+        <div class="error hidden" id="m-iban-err" style="margin-bottom:10px"></div>
+
         <div class="m-safe">
           <div class="m-safe-body">
             <div class="m-safe-top">
@@ -2362,6 +2377,21 @@ function renderMobile(u = user) {
   $("m-kyc-label").textContent = approved ? "Verified" : u.kycStatus === "rejected" ? "Not verified" : "Verification pending";
   $("m-kyc-label").style.color = approved ? "var(--m-mint)" : u.kycStatus === "rejected" ? "var(--m-pink)" : "var(--m-amber)";
   $("m-kyc-banner").classList.toggle("hidden", approved);
+
+  // Approved but no IBAN yet: surface the activation the desktop card hides.
+  // The same tap finishes an undeployed smart wallet first — the two are one
+  // chain for the user, and splitting them made each look broken.
+  const wantsIban = approved && !u.iban && (u.funding || {}).mode === "sandbox";
+  $("m-iban-banner").classList.toggle("hidden", !wantsIban);
+  if (wantsIban) {
+    const safePending = needsPasskeySafeSetup(u);
+    $("m-iban-banner-title").textContent = safePending ? "Finish your smart wallet" : "Activate your IBAN";
+    $("m-iban-banner-sub").textContent = safePending
+      ? "Deploy the wallet, then one passkey approval issues your IBAN."
+      : "One passkey approval issues your account IBAN.";
+  } else {
+    $("m-iban-err").classList.add("hidden");
+  }
 
   const f = mobileFigures(u);
   $("m-total").textContent = fmt(f.total);
@@ -3330,6 +3360,26 @@ $("m-plus").onclick = () => mobileNav("plus");
 $("m-payment-page").onclick = () => mobileNav("payment");
 $("m-back").onclick = () => mobileNav("home");
 $("m-kyc-banner").onclick = () => enterKycReview(user?.name || "Account");
+$("m-iban-banner").onclick = async () => {
+  const banner = $("m-iban-banner");
+  const title = $("m-iban-banner-title");
+  const err = $("m-iban-err");
+  err.classList.add("hidden");
+  banner.disabled = true;
+  const prev = title.textContent;
+  title.textContent = "Approve with your passkey…";
+  try {
+    await finishPasskeySafeSetup();
+    await issueAppIban();
+    renderUser(user);
+  } catch (e) {
+    title.textContent = prev;
+    err.textContent = e.message || String(e);
+    err.classList.remove("hidden");
+  } finally {
+    banner.disabled = false;
+  }
+};
 
 /* Copy the Safe address. The icon confirms for 1.4s, per the handoff. */
 $("m-addr").onclick = async () => {
