@@ -71,7 +71,7 @@ const check = (label: string, cond: boolean, detail = "") => {
 };
 
 try {
-  console.log("1/8 chain + deploy…");
+  console.log("1/9 chain + deploy…");
   bg(process.execPath, [bin("hardhat"), "node", "--port", "8552"]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
@@ -89,6 +89,7 @@ try {
     "../services/api/src/adapters/crypto-deposits.js"
   );
   initStore();
+  const cursorKey = "31337:safe-funding-v1";
 
   const safeBalanceOf = async (who: `0x${string}`) =>
     eur.fromWei(
@@ -146,6 +147,13 @@ try {
       functionName: "mint",
       args: [to, usd.toUnits(amount)],
     });
+  const sendEure = (to: `0x${string}`, amount: number) =>
+    writeAndWait(deployerWallet, {
+      address: addrs().eure,
+      abi: abis.MockToken,
+      functionName: "mint",
+      args: [to, eur.toWei(amount)],
+    });
 
   /** The state a completed sweep leaves: tokens with the orchestrator, the
    *  step on the deposit's own record. */
@@ -170,15 +178,15 @@ try {
     });
   }
 
-  console.log("2/8 nobody opted in — the chain is not even read…");
+  console.log("2/9 nobody opted in — the chain is not even read…");
   {
-    const before = store.cryptoDepositCursor(31337);
+    const before = store.cryptoDepositCursor(cursorKey);
     const n = await pollCryptoDepositsOnce();
     check("no watched users means no work", n === 0);
-    check("and no cursor is written", store.cryptoDepositCursor(31337) === before);
+    check("and no cursor is written", store.cryptoDepositCursor(cursorKey) === before);
   }
 
-  console.log("3/8 a real inbound transfer is detected and attributed…");
+  console.log("3/9 a real inbound transfer is detected and attributed…");
   const ann = addUser("Crypto Ann");
   // The first poll only establishes the cursor: transfers from before the
   // account opted in are deliberately not swept up.
@@ -201,7 +209,7 @@ try {
     check("nothing was settled", (await safeBalanceOf(ann.address)) === 0);
   }
 
-  console.log("4/8 a swept deposit converts and becomes spendable EUR…");
+  console.log("4/9 a swept deposit converts and becomes spendable EUR…");
   const bo = addUser("Crypto Bo");
   {
     const seeded = await seedSweptDeposit(bo, 100);
@@ -228,7 +236,7 @@ try {
     check("the balance is spendable in the Safe", Math.abs(bal - d.creditedEur!) < 0.001, `€${bal}`);
   }
 
-  console.log("5/8 the same deposit is never credited twice…");
+  console.log("5/9 the same deposit is never credited twice…");
   {
     const d = store.cryptoDeposits.find((x) => x.userId === bo.id)!;
     const balBefore = await safeBalanceOf(bo.address);
@@ -238,13 +246,13 @@ try {
 
     // Rewind the cursor so the poller re-reads Ann's original log.
     const countBefore = store.cryptoDeposits.length;
-    store.setCryptoDepositCursor(31337, 0n);
+    store.setCryptoDepositCursor(cursorKey, 0n);
     const n = await pollCryptoDepositsOnce();
     check("re-reading the same log records nothing new", n === 0, `got ${n}`);
     check("and no duplicate row appears", store.cryptoDeposits.length === countBefore);
   }
 
-  console.log("6/8 dust is left alone, opt-outs are not watched…");
+  console.log("6/9 dust is left alone, direct Safe funding is only recorded…");
   {
     const dusty = addUser("Dusty");
     const d = await convertDeposit(await seedSweptDeposit(dusty, 0.25));
@@ -255,14 +263,16 @@ try {
     const optedOut = addUser("Holds USDC", { autoConvert: false });
     await sendUsdc(optedOut.paymentPage.depositAddress, 50);
     await pollCryptoDepositsOnce();
+    const direct = store.cryptoDeposits.find((x) => x.userId === optedOut.id);
     check(
-      "an opted-out account is not watched at all",
-      !store.cryptoDeposits.some((x) => x.userId === optedOut.id),
+      "an opted-out account records direct USDC without converting it",
+      direct?.state === "CONVERTED" && direct.creditedUsdc === 50 && direct.settlementAsset === "USDC",
+      JSON.stringify(direct),
     );
     check("and keeps a zero EUR balance", (await safeBalanceOf(optedOut.address)) === 0);
   }
 
-  console.log("7/8 a venue price off the market is refused…");
+  console.log("7/9 a venue price off the market is refused…");
   {
     const cass = addUser("Cass");
     const seeded = await seedSweptDeposit(cass, 100);
@@ -279,7 +289,7 @@ try {
     check("no euros were settled at the bad price", (await safeBalanceOf(cass.address)) === 0);
   }
 
-  console.log("8/8 a USDC-settled page does not turn the payment into euros…");
+  console.log("8/9 a USDC-settled page does not turn the payment into euros…");
   {
     const dana = addUser("Crypto Dana", { settlementAsset: "USDC" });
     const seeded = await seedSweptDeposit(dana, 25);
@@ -287,6 +297,19 @@ try {
     check("it records the USDC settlement target", d.state === "CONVERTED" && d.settlementAsset === "USDC", d.state);
     check("it does not credit euro balance", (await safeBalanceOf(dana.address)) === 0);
     check("the USDC amount is recorded", d.creditedUsdc === 25, `${d.creditedUsdc}`);
+  }
+
+  console.log("9/9 a direct EURe transfer to the Safe appears as funding activity…");
+  {
+    const eva = addUser("Crypto Eva", { autoConvert: false });
+    await sendEure(eva.address, 30);
+    await pollCryptoDepositsOnce();
+    const d = store.cryptoDeposits.find((x) => x.userId === eva.id);
+    check(
+      "30 EURe was recorded from the chain log",
+      d?.token === "EURE" && d.amountEur === 30 && d.creditedEur === 30 && d.state === "CONVERTED",
+      JSON.stringify(d),
+    );
   }
 
   console.log(`\ncrypto deposits: ${passed}/${passed} checks passed`);
