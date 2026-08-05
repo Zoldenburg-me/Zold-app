@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPublicClient, createWalletClient, http, keccak256, parseUnits, toHex } from "viem";
+import { createPublicClient, createWalletClient, encodeFunctionData, http, keccak256, parseUnits, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
 
@@ -84,6 +84,19 @@ async function waitForRpc(timeout = 30_000) {
     await new Promise((r) => setTimeout(r, 250));
   }
   throw new Error("hardhat node did not start");
+}
+
+async function mineAfter(seconds: number) {
+  await fetch(RPC, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "evm_increaseTime", params: [seconds] }),
+  });
+  await fetch(RPC, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "evm_mine", params: [] }),
+  });
 }
 
 async function main() {
@@ -171,6 +184,55 @@ async function main() {
   await t("timelock can own remaining admin contracts", async () => {
     await write("deployer", swapper, "transferOwnership", [timelock.address]);
     assert.equal(String(await read(swapper, "owner")).toLowerCase(), timelock.address.toLowerCase());
+  });
+
+  await t("re-added owner must re-confirm before a stale operation can execute", async () => {
+    const staleSetDelay = encodeFunctionData({
+      abi: timelock.abi,
+      functionName: "setDelay",
+      args: [9n],
+    });
+    const staleSalt = keccak256(toHex("stale-confirmation"));
+    await write("guardian", timelock, "queue", [timelock.address, 0n, staleSetDelay, staleSalt]);
+    await write("relayer", timelock, "confirm", [
+      await read(timelock, "operationId", [timelock.address, 0n, staleSetDelay, staleSalt]),
+    ]);
+
+    const removeGuardian = encodeFunctionData({
+      abi: timelock.abi,
+      functionName: "removeOwner",
+      args: [guardianAddr],
+    });
+    const removeSalt = keccak256(toHex("remove-guardian"));
+    const removeId = await read(timelock, "operationId", [timelock.address, 0n, removeGuardian, removeSalt]);
+    await write("deployer", timelock, "queue", [timelock.address, 0n, removeGuardian, removeSalt]);
+    await write("relayer", timelock, "confirm", [removeId]);
+    await mineAfter(2);
+    await write("deployer", timelock, "execute", [removeId]);
+
+    const addGuardian = encodeFunctionData({
+      abi: timelock.abi,
+      functionName: "addOwner",
+      args: [guardianAddr],
+    });
+    const addSalt = keccak256(toHex("readd-guardian"));
+    const addId = await read(timelock, "operationId", [timelock.address, 0n, addGuardian, addSalt]);
+    await write("deployer", timelock, "queue", [timelock.address, 0n, addGuardian, addSalt]);
+    await write("relayer", timelock, "confirm", [addId]);
+    await mineAfter(2);
+    await write("deployer", timelock, "execute", [addId]);
+
+    const staleId = await read(timelock, "operationId", [timelock.address, 0n, staleSetDelay, staleSalt]);
+    assert.equal(await read(timelock, "liveConfirmations", [staleId]), 1);
+    await expectRevert(
+      write("deployer", timelock, "execute", [staleId]),
+      "not enough confirmations",
+      "stale timelock confirmation",
+    );
+    await write("guardian", timelock, "confirm", [staleId]);
+    assert.equal(await read(timelock, "liveConfirmations", [staleId]), 2);
+    await write("deployer", timelock, "execute", [staleId]);
+    assert.equal(await read(timelock, "delay"), 9n);
   });
 
   console.log(`\n${pass} tests passed`);

@@ -36,6 +36,8 @@ contract AdminTimelock {
 
     mapping(bytes32 => Operation) public operations;
     mapping(bytes32 => mapping(address => bool)) public confirmedBy;
+    mapping(bytes32 => mapping(address => uint256)) public confirmedOwnerEpoch;
+    mapping(address => uint256) public ownerEpoch;
 
     event Queued(bytes32 indexed id, address indexed target, bytes data, uint256 eta, address proposer);
     event Confirmed(bytes32 indexed id, address indexed owner, uint8 confirmations);
@@ -98,6 +100,7 @@ contract AdminTimelock {
             cancelled: false
         });
         confirmedBy[id][msg.sender] = true;
+        confirmedOwnerEpoch[id][msg.sender] = ownerEpoch[msg.sender];
         emit Queued(id, target, data, operations[id].eta, msg.sender);
         emit Confirmed(id, msg.sender, 1);
     }
@@ -106,9 +109,13 @@ contract AdminTimelock {
         Operation storage op = operations[id];
         require(op.eta != 0, "unknown operation");
         require(!op.executed && !op.cancelled, "operation closed");
-        require(!confirmedBy[id][msg.sender], "already confirmed");
+        require(
+            !confirmedBy[id][msg.sender] || confirmedOwnerEpoch[id][msg.sender] != ownerEpoch[msg.sender],
+            "already confirmed"
+        );
         confirmedBy[id][msg.sender] = true;
-        op.confirmations += 1;
+        confirmedOwnerEpoch[id][msg.sender] = ownerEpoch[msg.sender];
+        op.confirmations = liveConfirmations(id);
         emit Confirmed(id, msg.sender, op.confirmations);
     }
 
@@ -128,7 +135,8 @@ contract AdminTimelock {
     /// so a queued operation must not still be carried by that key's vote.
     function liveConfirmations(bytes32 id) public view returns (uint8 n) {
         for (uint256 i = 0; i < owners.length; i++) {
-            if (confirmedBy[id][owners[i]]) n++;
+            address owner = owners[i];
+            if (confirmedBy[id][owner] && confirmedOwnerEpoch[id][owner] == ownerEpoch[owner]) n++;
         }
     }
 
@@ -158,6 +166,7 @@ contract AdminTimelock {
 
     function addOwner(address who) external onlySelf {
         require(who != address(0) && !isOwner[who], "bad owner");
+        ownerEpoch[who] += 1;
         isOwner[who] = true;
         owners.push(who);
     }
