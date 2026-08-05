@@ -328,6 +328,7 @@ async function moveTokenFromUserSafe(
     token,
     to,
     amount,
+    moduleAddress: user.passkeySafe?.cosignerPolicy?.allowanceModuleAddress as `0x${string}` | undefined,
   });
 }
 
