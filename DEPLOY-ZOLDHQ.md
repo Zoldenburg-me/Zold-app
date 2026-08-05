@@ -82,6 +82,12 @@ the exact `MONERIUM_REDIRECT_URI` value as the OAuth `redirect_uri`, and the
 same value is stored with the short-lived state so the callback exchanges the
 code against identical terms.
 
+Monerium OAuth apps are public PKCE clients. The dashboard may show only a
+client id and no client secret. That is expected for this user OAuth flow:
+configure `MONERIUM_CLIENT_ID` and leave `MONERIUM_CLIENT_SECRET` empty. A
+client secret is only required for app-level client-credentials calls such as
+whitelabel/profile provisioning.
+
 For the hosted runner, create or update the Monerium OAuth app for the same
 environment as `MONERIUM_BASE_URL` and register this redirect URI exactly:
 
