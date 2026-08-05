@@ -29,17 +29,20 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { createWalletClient, encodeFunctionData, hashTypedData, http } from "viem";
 import { chain, publicClient } from "../chain.js";
-import { RPC_URL } from "../config.js";
+import { RPC_URL, SECURITY } from "../config.js";
 
-const allowSimulation = () =>
-  process.env.ALLOW_SIMULATION === "1" ||
-  (process.env.NODE_ENV !== "production" &&
-    /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/)/.test(process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545"));
-
-const allowMockFallback = () =>
-  process.env.ALLOW_MOCK_FALLBACK === "1" ||
-  process.env.NODE_ENV !== "production" ||
-  allowSimulation();
+/**
+ * The ONE simulation gate, shared with the rest of the API (SECURITY.
+ * allowSimulation = explicit ALLOW_SIMULATION=1, or a fully-local stack:
+ * loopback API + local RPC + chain 31337). This file briefly carried its own
+ * looser versions — one keyed on the RPC host alone, and a fallback keyed on
+ * NODE_ENV !== "production", which is TRUE on the hosted testnet deployment.
+ * That fallback made transferTokenFromSafeAllowance return a fake tx hash
+ * whenever a real debit precondition failed, so transfers reported PAID while
+ * no money had left the user's Safe — the exact class of fake the UPI rail
+ * was deleted for. Simulation is for the local dev loop only, ever.
+ */
+const allowSimulation = () => SECURITY.allowSimulation;
 
 const COSIGNER_ENABLED =
   process.env.CANDIDE_COSIGNER_ENABLED === "1" ||
@@ -478,10 +481,6 @@ export async function transferTokenFromSafeAllowance(params: {
     return "0xmock-allowance-debit-hash";
   }
   if (!(await isDeployed(params.safeAddress))) {
-    if (allowMockFallback()) {
-      console.warn(`Safe ${params.safeAddress} is not deployed — falling back to mock fee debit for dev/testnet`);
-      return "0xmock-allowance-debit-hash";
-    }
     throw new Error(`Safe ${params.safeAddress} is not deployed — cannot move tokens from it`);
   }
 
@@ -490,11 +489,6 @@ export async function transferTokenFromSafeAllowance(params: {
     const legacyModule = "0xAA46724893dedD72658219405185Fb0Fc91e091C" as `0x${string}`;
     if (await safeModuleEnabled(params.safeAddress, legacyModule)) {
       moduleAddress = legacyModule;
-    } else if (allowMockFallback()) {
-      console.warn(
-        `Passkey Safe allowance module is not enabled on-chain for ${params.safeAddress} — falling back to mock fee debit for dev/testnet`,
-      );
-      return "0xmock-allowance-debit-hash";
     } else {
       throw new Error(
         `Passkey Safe co-signer allowance module (${moduleAddress}) is not enabled on-chain for Safe ${params.safeAddress}. ` +
@@ -504,21 +498,12 @@ export async function transferTokenFromSafeAllowance(params: {
   }
 
   const allowance = new AllowanceModule(moduleAddress);
-  let current: any;
-  try {
-    current = await allowance.getTokensAllowance(
+  const current = await allowance.getTokensAllowance(
       RPC_URL,
       params.safeAddress,
       CANDIDE.cosignerAddress,
       params.token,
     );
-  } catch (err: any) {
-    if (allowMockFallback()) {
-      console.warn(`Failed to read tokens allowance for ${params.safeAddress} (${err?.message ?? err}) — falling back to mock fee debit for dev/testnet`);
-      return "0xmock-allowance-debit-hash";
-    }
-    throw err;
-  }
   const nowMin = BigInt(Math.floor(Date.now() / 60_000));
   const spent =
     current.resetTimeMin > 0n && nowMin >= current.lastResetMin + current.resetTimeMin
@@ -526,13 +511,6 @@ export async function transferTokenFromSafeAllowance(params: {
       : current.spent;
   const remaining = current.amount > spent ? current.amount - spent : 0n;
   if (remaining < params.amount) {
-    if (allowMockFallback()) {
-      console.warn(
-        `passkey Safe co-signer allowance is ${remaining} units for ${params.token}, ` +
-          `but this debit needs ${params.amount} — falling back to mock fee debit for dev/testnet Safe ${params.safeAddress}`,
-      );
-      return "0xmock-allowance-debit-hash";
-    }
     throw new Error(
       `passkey Safe co-signer allowance is ${remaining} units for ${params.token}, ` +
         `but this debit needs ${params.amount}`,
