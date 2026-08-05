@@ -18,7 +18,7 @@ export class MoneriumApiError extends Error {
 export interface MoneriumConfig {
   baseUrl: string; // https://api.monerium.dev (sandbox) | .app (production)
   clientId: string;
-  clientSecret: string;
+  clientSecret?: string;
 }
 
 export interface MoneriumOrder {
@@ -39,6 +39,9 @@ export class MoneriumClient {
   constructor(private cfg: MoneriumConfig) {}
 
   private async accessToken(): Promise<string> {
+    if (!this.cfg.clientSecret) {
+      throw new Error("MONERIUM_CLIENT_SECRET is required for Monerium app-level API calls");
+    }
     if (this.token && Date.now() < this.token.expiresAt - 60_000) {
       return this.token.value;
     }
@@ -175,6 +178,14 @@ export class MoneriumClient {
   }
 }
 
+function oauthTokenBody(values: Record<string, string | undefined>): URLSearchParams {
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) {
+    if (value) body.set(key, value);
+  }
+  return body;
+}
+
 export interface MoneriumTokenResponse {
   access_token: string;
   refresh_token?: string;
@@ -191,7 +202,7 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
   const res = await fetch(`${cfg.baseUrl}/auth/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
+    body: oauthTokenBody({
       client_id: cfg.clientId,
       client_secret: cfg.clientSecret,
       grant_type: "authorization_code",
@@ -213,7 +224,7 @@ export async function refreshAuthorizationToken(
   const res = await fetch(`${cfg.baseUrl}/auth/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
+    body: oauthTokenBody({
       client_id: cfg.clientId,
       client_secret: cfg.clientSecret,
       grant_type: "refresh_token",

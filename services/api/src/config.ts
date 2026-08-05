@@ -78,6 +78,8 @@ export const MONERIUM = {
 export const moneriumSandboxEnabled = () =>
   Boolean(MONERIUM.clientId && MONERIUM.clientSecret);
 
+export const moneriumOAuthEnabled = () => Boolean(MONERIUM.clientId);
+
 /**
  * KYC gate. Local demos auto-approve by default so existing self-contained
  * tests keep running. Production and KYC_AUTO_APPROVE=0 start users in
@@ -339,8 +341,8 @@ function assertProductionConfig() {
   if (moneriumSandboxEnabled() && !SECURITY.moneriumWebhookSecret) {
     fail("MONERIUM_WEBHOOK_SECRET is required in production when Monerium credentials are configured");
   }
-  if (moneriumSandboxEnabled() && !MONERIUM.tokenEncryptionKey) {
-    fail("MONERIUM_TOKEN_ENCRYPTION_KEY is required in production when Monerium credentials are configured");
+  if (moneriumOAuthEnabled() && !MONERIUM.tokenEncryptionKey) {
+    fail("MONERIUM_TOKEN_ENCRYPTION_KEY is required in production when Monerium OAuth is configured");
   }
   if (moneriumSandboxEnabled() || PUBLIC_URL) {
     if (!process.env.MONERIUM_REDIRECT_URI && LOOKS_HOSTED) {
