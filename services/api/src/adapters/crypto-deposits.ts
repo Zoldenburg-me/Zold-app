@@ -42,7 +42,7 @@ import {
   safeEurBalance,
   orchestratorAddress,
 } from "../chain.js";
-import { liquidityProvider } from "../liquidity.js";
+import { liquidityProvider , balanceAfterWrite } from "../liquidity.js";
 import { midRates } from "../rates.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
@@ -226,7 +226,7 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
     const before = eur.toWei(await safeEurBalance(user.address));
     const execution = await provider.execute(quote, user.address);
     txs.push(...execution.txs);
-    const after = eur.toWei(await safeEurBalance(user.address));
+    const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, before);
 
     const receivedWei = after - before;
     if (receivedWei <= 0n) {
