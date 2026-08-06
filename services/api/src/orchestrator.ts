@@ -24,6 +24,7 @@ import {
   liquidityProvider,
   prepareTransferLiquidity,
   serializeExecution,
+  waitForAllowanceVisibility,
 } from "./liquidity.js";
 import {
   abis,
@@ -461,14 +462,70 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     const swapped =
       steps.has("liquidity.fx-swapper.eure-usdc") || steps.has("swapper.swapExactIn");
     if (swapped) {
-      return store.updateTransfer(id, {
-        state: "MANUAL_REVIEW",
-        error:
-          `${t.error ?? "transfer failed"}; Safe-funded input was already swapped to USDC, so the euros ` +
-          `taken from the Safe are no longer held as EURe — needs a reverse swap before ` +
-          `€${refundEur} can be returned to ${user.address}`,
-        txs,
-      });
+      /**
+       * Reverse the swap and give the euros back. The rate movement of the
+       * round trip is worn by the user as an ITEMIZED deduction (both legs at
+       * execution prices, the received amount MEASURED as a Safe balance
+       * delta, not read off the quote) — that honesty beats the alternative,
+       * which was parking the money in MANUAL_REVIEW indefinitely: the first
+       * live post-swap failure sat exactly there, 4.57 USDC of a user's €5
+       * stranded on the orchestrator. Reversal failing still parks for
+       * review — guessing is the one thing this path must never do.
+       */
+      try {
+        const provider = liquidityProvider();
+        const usdcUnits = usd.toUnits(t.usdcOut ?? 0);
+        if (usdcUnits <= 0n) throw new Error("no recorded USDC output to reverse");
+        const rq = await provider.quote(
+          "USDC_TO_EURE",
+          usdcUnits,
+          `${t.id}:refund`,
+          new Date(Date.now() + 5 * 60_000).toISOString(),
+        );
+        const eureBalance = async () =>
+          (await publicClient.readContract({
+            address: addrs().eure,
+            abi: abis.MockToken,
+            functionName: "balanceOf",
+            args: [user.address],
+          })) as bigint;
+        const before = await eureBalance();
+        const back = await provider.execute(rq, user.address as `0x${string}`);
+        txs.push(...back.txs);
+        const receivedWei = (await eureBalance()) - before;
+        if (receivedWei <= 0n) throw new Error("reverse swap delivered no EURe to the Safe");
+        const eurBack = eur.fromWei(receivedWei);
+        // The fee remainder never left EURe; hand it back too.
+        const feeBack = Math.min(fee, Math.max(0, safeMovedEur(t) - eurBack));
+        if (feeBack > 0) {
+          const feeHash = await returnEureToSafe(user.address, feeBack);
+          txs.push({ step: "safe.refundTransfer", hash: feeHash });
+        }
+        const total = Math.floor((eurBack + feeBack) * 100) / 100;
+        const lost = Math.max(0, safeMovedEur(t) - total);
+        console.log(
+          `FP3: reverse-swapped and returned €${total} to ${user.name}'s Safe for transfer ${t.id} (post-swap)`,
+        );
+        return store.updateTransfer(id, {
+          state: "REFUNDED",
+          txs,
+          refund: {
+            amountEur: total,
+            recoveredFrom: "post-swap USDC, reverse-swapped",
+            deductions: lost > 0 ? `€${lost.toFixed(2)} conversion round-trip at execution rates` : "none",
+            at: now(),
+          },
+        });
+      } catch (err: any) {
+        return store.updateTransfer(id, {
+          state: "MANUAL_REVIEW",
+          error:
+            `${t.error ?? "transfer failed"}; Safe-funded input was already swapped to USDC and the ` +
+            `reverse swap did not complete (${err?.message ?? err}) — needs review before ` +
+            `€${refundEur} can be returned to ${user.address}`,
+          txs,
+        });
+      }
     }
     // Refund what left the Safe, which on the SEPA rail is the fee alone.
     const movedEur = safeMovedEur(t);
@@ -612,6 +669,10 @@ export async function executeTransfer(
         args: [a.bridge, expectedOut],
       });
       txs.push({ step: "usdc.approve(bridge)", hash: approveBridgeHash });
+      // Same replica race as approve->swap, one leg later: the lock SIMULATION
+      // can land on an RPC replica that has not seen the approve block, and
+      // reverts "allowance" against an allowance that is on chain.
+      await waitForAllowanceVisibility(a.usdc, orchestratorAddress, a.bridge, expectedOut);
 
       const lockHash = await writeAndWait(orchestratorWallet, {
         address: a.bridge,

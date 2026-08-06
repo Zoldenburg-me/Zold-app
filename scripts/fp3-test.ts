@@ -94,7 +94,7 @@ try {
   const quote = await api("/api/quotes", { userId: user.id, sendEur: 100, rail: "cash" });
   await assert.rejects(
     () => sendTransfer(api, device, { quoteId: quote.id, recipientName: "X", recipientPhone: "+254700000000" }),
-    /active passkey Safe with a production co-signer allowance/,
+    /active passkey Safe with a co-signer/,
   );
   const after = await api(`/api/users/${user.id}`);
   assert.ok(Math.abs(after.balanceEur - 250) < 0.02, `balance untouched, got €${after.balanceEur}`);
