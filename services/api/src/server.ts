@@ -1709,6 +1709,7 @@ app.post(
       });
     } catch (err: any) {
       if (!alreadyDone(err)) {
+        console.error(`monerium activate: address linking refused for ${user.id}: ${err?.message ?? err}`);
         return res.status(502).json({ error: `Monerium refused the address linking: ${err?.message ?? err}` });
       }
     }
@@ -1719,6 +1720,7 @@ app.post(
       });
     } catch (err: any) {
       if (!alreadyDone(err)) {
+        console.error(`monerium activate: IBAN request refused for ${user.id}: ${err?.message ?? err}`);
         return res.status(502).json({ error: `Monerium refused the IBAN request: ${err?.message ?? err}` });
       }
     }
