@@ -1685,12 +1685,20 @@ app.post(
      * nothing. This ceremony holds a fresh Safe signature, so unlink and let
      * the re-link below bind the address where IBANs actually issue.
      */
+    /**
+     * Wrong-profile bindings are DETECTED and parked, never deleted. The
+     * previous version unlinked the address to re-link it under the right
+     * profile — and Monerium answers every later link attempt for that
+     * address with "Cannot link, please contact support": unlinking BURNS
+     * the address, and a Safe's address cannot be changed. Detection tells
+     * the operator exactly what to raise with Monerium; deletion turned a
+     * stuck account into a bricked one (verified live on 0x9650E5…).
+     */
+    let wrongProfileBinding: string | undefined;
     if (viaApp && profileId) {
       try {
         const rec = await moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", `/addresses/${user.address}`);
-        if (rec?.profile && rec.profile !== profileId) {
-          await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "DELETE", `/addresses/${user.address}`);
-        }
+        if (rec?.profile && rec.profile !== profileId) wrongProfileBinding = rec.profile;
       } catch {
         // not linked yet — the normal first-run case
       }
@@ -1710,7 +1718,9 @@ app.post(
     } catch (err: any) {
       if (!alreadyDone(err)) {
         console.error(`monerium activate: address linking refused for ${user.id}: ${err?.message ?? err}`);
-        return res.status(502).json({ error: `Monerium refused the address linking: ${err?.message ?? err}` });
+        // 400, not 502: Cloudflare swallows origin 502 bodies with its own
+        // error page, so the reason above never reached the user.
+        return res.status(400).json({ error: `Monerium refused the address linking: ${err?.message ?? err}` });
       }
     }
     try {
@@ -1721,7 +1731,7 @@ app.post(
     } catch (err: any) {
       if (!alreadyDone(err)) {
         console.error(`monerium activate: IBAN request refused for ${user.id}: ${err?.message ?? err}`);
-        return res.status(502).json({ error: `Monerium refused the IBAN request: ${err?.message ?? err}` });
+        return res.status(400).json({ error: `Monerium refused the IBAN request: ${err?.message ?? err}` });
       }
     }
     const snapshot = await readMoneriumAccountSnapshot(user, accessToken);
@@ -1763,7 +1773,11 @@ app.post(
         mode: "sandbox",
         status: iban ? "active" : "iban_pending",
         moneriumProfileId: profileId,
-        detail: iban ? undefined : "Monerium IBAN requested; waiting for activation",
+        detail: iban
+          ? undefined
+          : wrongProfileBinding
+            ? `address is linked under Monerium profile ${wrongProfileBinding} instead of this account's — needs Monerium support to move; do NOT unlink`
+            : "Monerium IBAN requested; waiting for activation",
       },
       monerium: { ...user.monerium!, profileId, ...snapshot },
     });
@@ -2729,7 +2743,7 @@ app.post(
     try {
       prepared = await preparePasskeySafeAllowanceSetup(plan);
     } catch (err: any) {
-      return res.status(502).json({ error: `allowance setup failed: ${err?.message ?? err}` });
+      return res.status(400).json({ error: `allowance setup failed: ${err?.message ?? err}` });
     }
     prunePendingAllowanceSetups();
     const requestId = randomUUID();
