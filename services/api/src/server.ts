@@ -1890,6 +1890,13 @@ function lastHash(txs: { step: string; hash: string }[] = []) {
   return txs.at(-1)?.hash;
 }
 
+/** Keep enough to recognise a payee, never the whole identifier. */
+function maskIdentifier(v?: string): string | undefined {
+  if (!v) return v;
+  const s = String(v).replace(/\s+/g, "");
+  return s.length <= 6 ? s : `${s.slice(0, 4)}…${s.slice(-2)}`;
+}
+
 function adminTransfer(transfer: Transfer) {
   const quote = store.findQuote(transfer.quoteId);
   const route = [
@@ -1918,8 +1925,10 @@ function adminTransfer(transfer: Transfer) {
     receiveEur: transfer.receiveEur,
     receiveKes: transfer.receiveKes,
     recipientName: transfer.recipientName,
-    recipientPhone: transfer.recipientPhone,
-    recipientIban: transfer.recipientIban,
+    // Masked in the ops list: the dashboard needs to distinguish payees, not
+    // hold their full identifiers on every poll.
+    recipientPhone: maskIdentifier(transfer.recipientPhone),
+    recipientIban: maskIdentifier(transfer.recipientIban),
     fundingSource: transfer.fundingSource,
     payout:
       transfer.rail === "sepa"
@@ -2100,11 +2109,19 @@ app.get(
   "/api/admin/transactions",
   wrap(async (req, res) => {
     if (!requireOperator(req, res)) return;
+    // Paginated, newest first: one leaked operator token should not dump the
+    // whole ops ledger in a single request.
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 200)));
+    const offset = Math.max(0, Number(req.query.offset ?? 0));
     const entries = [
       ...store.transfers.map(adminTransfer),
       ...store.cryptoDeposits.map(adminFunding),
     ].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-    res.json({ transactions: entries });
+    res.json({
+      total: entries.length,
+      offset,
+      transactions: entries.slice(offset, offset + limit),
+    });
   }),
 );
 
@@ -2114,6 +2131,23 @@ app.post(
     if (!requireOperator(req, res)) return;
     const user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
+    /**
+     * Honesty gates. This route mints a LOCAL display IBAN and marks funding
+     * active. In sandbox mode Monerium issues real, routable IBANs through
+     * the user's passkey ceremony — assigning a fabricated one here would
+     * mask real funding state with an IBAN money can never reach (7 test
+     * accounts carried exactly that). And skipping the custody gate makes an
+     * account look fundable with no passkey Safe to receive anything.
+     */
+    if (moneriumSandboxEnabled()) {
+      return res.status(409).json({
+        error:
+          "this deployment issues real Monerium IBANs — the user activates theirs with a passkey tap " +
+          "(Activate IBAN on their home screen); a manually assigned IBAN would not be routable",
+      });
+    }
+    const custodyBlocked = passkeyRequiredBeforeFunding(user);
+    if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
     const iban = issueIban(user.id);
     const updated = store.updateUser(user.id, {
       iban,
