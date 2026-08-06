@@ -99,6 +99,34 @@ export interface LiquidityProvider {
  * Bounded: a lagging replica converges within a block or two; a truly
  * missing approve stays missing and the swap's own revert reports it.
  */
+/**
+ * Read a balance until it reflects a write we know happened (bounded).
+ *
+ * Same replica-lag disease as waitForAllowanceVisibility, on the read side:
+ * the compensation reverse swap DELIVERED (Safe went 40 -> 44.01 EURe on
+ * chain) and its own verification then read a stale replica, saw no delta,
+ * and declared the delivery missing. Returns the last read either way — the
+ * caller still decides what a zero delta means.
+ */
+export async function balanceAfterWrite(
+  token: `0x${string}`,
+  who: `0x${string}`,
+  before: bigint,
+): Promise<bigint> {
+  let last = before;
+  for (let i = 0; i < 12; i++) {
+    last = (await publicClient.readContract({
+      address: token,
+      abi: abis.MockToken,
+      functionName: "balanceOf",
+      args: [who],
+    })) as bigint;
+    if (last > before) return last;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return last;
+}
+
 export async function waitForAllowanceVisibility(
   token: `0x${string}`,
   owner: `0x${string}`,
