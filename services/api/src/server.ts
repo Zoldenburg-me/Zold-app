@@ -1677,6 +1677,24 @@ app.post(
         return res.status(401).json({ error: String(err?.message ?? err) });
       }
     }
+    /**
+     * Wrong-profile links are rebound, not tolerated. Addresses linked while
+     * the per-customer profile branch was missing sit under the app's DEFAULT
+     * profile, where an IBAN request parks forever — and POST /addresses
+     * answers "already linked" without moving the binding, so a retry changes
+     * nothing. This ceremony holds a fresh Safe signature, so unlink and let
+     * the re-link below bind the address where IBANs actually issue.
+     */
+    if (viaApp && profileId) {
+      try {
+        const rec = await moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", `/addresses/${user.address}`);
+        if (rec?.profile && rec.profile !== profileId) {
+          await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "DELETE", `/addresses/${user.address}`);
+        }
+      } catch {
+        // not linked yet — the normal first-run case
+      }
+    }
     const alreadyDone = (err: unknown) =>
       err instanceof MoneriumApiError &&
       err.status < 500 &&
