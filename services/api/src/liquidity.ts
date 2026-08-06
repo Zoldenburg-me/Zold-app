@@ -99,7 +99,7 @@ export interface LiquidityProvider {
  * Bounded: a lagging replica converges within a block or two; a truly
  * missing approve stays missing and the swap's own revert reports it.
  */
-async function waitForAllowanceVisibility(
+export async function waitForAllowanceVisibility(
   token: `0x${string}`,
   owner: `0x${string}`,
   spender: `0x${string}`,

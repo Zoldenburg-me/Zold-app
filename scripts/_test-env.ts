@@ -78,6 +78,6 @@ process.env.RECOVERY_MANAGED_KYC_GUARDIAN = "0";
  * blanking it would break the OAuth loop rather than restore the default, and
  * monerium:oauth:test passes because it supplies its own).
  */
-process.env.KYC_AUTO_APPROVE = "";
+process.env.KYC_AUTO_APPROVE = "1";
 
 export {};
