@@ -2316,7 +2316,9 @@ async function api(path, body, method) {
   const data = await res.json().catch(() => ({}));
   // 503 is what the service worker returns when it could not reach us at all.
   setReachable(res.status !== 503);
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  // statusText is EMPTY over HTTP/2, so a non-JSON error (a proxy's HTML 502,
+  // a dropped tunnel) used to surface as a blank "Error" with no clue in it.
+  if (!res.ok) throw new Error(data.error || res.statusText || `request failed (HTTP ${res.status})`);
   return data;
 }
 const showErr = (id, e) => { const el = $(id); el.textContent = e.message; el.classList.remove("hidden"); };
