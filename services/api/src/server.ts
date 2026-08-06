@@ -1631,7 +1631,30 @@ app.post(
       if (!authenticatorData || !clientDataJSON || !assertionSignature) {
         return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
       }
-      profileId = pending.profileId ?? user.monerium?.profileId;
+      profileId =
+        pending.profileId ?? user.monerium?.profileId ?? user.funding?.moneriumProfileId;
+      /**
+       * In-house path: the address must be linked under a PER-CUSTOMER
+       * profile, or Monerium never issues the IBAN — the app's default
+       * profile accepts the link and then sits on the request forever. This
+       * branch existed, was dropped in a rework, and every in-house
+       * activation after that parked at "waiting for activation".
+       */
+      if (!profileId && viaApp) {
+        profileId =
+          MONERIUM.profileId ||
+          (await moneriumAppClient().createProfile("personal", user.email ?? user.name))?.id;
+        // Persist NOW: every later step can fail, and a retry that cannot
+        // see the profile would mint another orphan on the Monerium app.
+        if (profileId) {
+          user = store.updateUser(user.id, {
+            funding: {
+              ...(user.funding ?? { mode: "sandbox", status: "provisioning" }),
+              moneriumProfileId: profileId,
+            } as User["funding"],
+          });
+        }
+      }
       try {
         const { signCount } = await verifyAssertionForChallenge(
           authenticatorData,
