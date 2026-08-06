@@ -1718,6 +1718,21 @@ app.post(
     } catch (err: any) {
       if (!alreadyDone(err)) {
         console.error(`monerium activate: address linking refused for ${user.id}: ${err?.message ?? err}`);
+        // "Cannot link ... contact support" is Monerium's permanent verdict on
+        // a burned (once-unlinked) address. A Safe's address cannot change, so
+        // record it: the client stops offering an activation that can only
+        // fail, and the account page says why instead of erroring forever.
+        if (/cannot link/i.test(String(err?.message ?? ""))) {
+          store.updateUser(user.id, {
+            funding: {
+              ...(user.funding ?? { mode: "sandbox" as const }),
+              mode: "sandbox",
+              status: "error",
+              addressUnlinkable: true,
+              detail: "Monerium cannot link this address (support required) — this account cannot receive an IBAN; open a new account",
+            } as User["funding"],
+          });
+        }
         // 400, not 502: Cloudflare swallows origin 502 bodies with its own
         // error page, so the reason above never reached the user.
         return res.status(400).json({ error: `Monerium refused the address linking: ${err?.message ?? err}` });
