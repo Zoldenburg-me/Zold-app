@@ -2410,7 +2410,8 @@ function renderMobile(u = user) {
   // Approved but no IBAN yet: surface the activation the desktop card hides.
   // The same tap finishes an undeployed smart wallet first — the two are one
   // chain for the user, and splitting them made each look broken.
-  const wantsIban = approved && !u.iban && (u.funding || {}).mode === "sandbox";
+  const wantsIban =
+    approved && !u.iban && (u.funding || {}).mode === "sandbox" && !(u.funding || {}).addressUnlinkable;
   $("m-iban-banner").classList.toggle("hidden", !wantsIban);
   if (wantsIban) {
     const safePending = needsPasskeySafeSetup(u);
