@@ -165,6 +165,8 @@ export interface User {
     status: "kyc_pending" | "active" | "provisioning" | "iban_pending" | "error";
     moneriumProfileId?: string;
     detail?: string;
+      /** Monerium's permanent "cannot link" verdict on a burned address. */
+    addressUnlinkable?: boolean;
   };
   /** Per-user Monerium OAuth connect state. Tokens are encrypted at rest and
    *  never returned by the API. */
