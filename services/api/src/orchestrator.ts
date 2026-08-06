@@ -25,6 +25,7 @@ import {
   prepareTransferLiquidity,
   serializeExecution,
   waitForAllowanceVisibility,
+  balanceAfterWrite,
 } from "./liquidity.js";
 import {
   abis,
@@ -492,7 +493,8 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
         const before = await eureBalance();
         const back = await provider.execute(rq, user.address as `0x${string}`);
         txs.push(...back.txs);
-        const receivedWei = (await eureBalance()) - before;
+        const receivedWei =
+          (await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, before)) - before;
         if (receivedWei <= 0n) throw new Error("reverse swap delivered no EURe to the Safe");
         const eurBack = eur.fromWei(receivedWei);
         // The fee remainder never left EURe; hand it back too.
