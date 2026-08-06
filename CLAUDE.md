@@ -453,11 +453,29 @@ with the user's Safe as verifyingContract.
 THE SECURITY CONSEQUENCE, stated plainly because the text below claims the
 opposite as VERIFIED: a wrong-key signature is no longer "rejected by the
 contract itself". The server is the thing checking, but it no longer stores
-user Safe owner keys; passkey Safes debit through configured co-signer
-allowances. The device key still stops a stolen session from swapping the payee
-or the amount; the co-signer allowance bounds what the API can relay. The
-recovery plan below needs rewriting against whatever replaces the vault as the
-enforcement point.
+user Safe owner keys; passkey Safes debit through co-signer allowances. The
+device key still stops a stolen session from swapping the payee or the amount.
+The recovery plan below needs rewriting against whatever replaces the vault as
+the enforcement point.
+PER-TRANSFER ALLOWANCES (Aug 2026, branch claude/per-transfer-allowance): the
+standing env-configured co-signer allowance is GONE. Deployment installs the
+allowance module + delegate with NO amount; POST /api/transfers prepares a
+userOp granting a ONE-TIME allowance for exactly that transfer's debit (fee
+only on the SEPA rail), the passkey signs its hash at send time
+(allowanceAssertion on /authorize, verified against the stored challenge
+before the claim), the co-signer counter-signs, and the debit consumes it.
+deleteAllowance precedes setAllowance in every grant — the module's `spent`
+counter survives setAllowance, so without the delete a second send's grant
+would be short by the first send's spend. Between sends the co-signer's
+on-chain spend authority is ZERO, so a compromised API+cosigner key can move
+nothing until a user approves a send — that is the "user-controlled money"
+property restored. STILL API-SIDE: destination binding (the allowance module
+bounds token+amount, not recipient); the policy-delegate contract from
+docs/candide-wallet-architecture.md remains open. The old CANDIDE_COSIGNER_
+*_ALLOWANCE_* env knobs install nothing and only print a boot note; hosted
+production no longer requires them (config.ts check removed). npm run
+allowance:test (8 checks, pure builder). UNPROVEN: no real Base Sepolia send
+has exercised the grant→debit flow end to end.
 
 FP4 (key custody): SPEND-AUTHORITY HALF DONE (July 2026, PR #11, branch
 claude/fp4-vault-authorization — do not re-do differently). RemitVault.debit

@@ -64,6 +64,10 @@ export const CANDIDE = {
     (BigInt(process.env.CANDIDE_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? 11155111) === 84532n
       ? "0xAA46724893dedD72658219405185Fb0Fc91e091C"
       : AllowanceModule.DEFAULT_ALLOWANCE_MODULE_ADDRESS)) as `0x${string}`,
+  /** DEPRECATED standing-allowance knobs. Spend authority is granted per
+   *  transfer for the exact debit amount (prepareTransferAllowanceGrant);
+   *  deployment no longer installs a standing allowance from these. They are
+   *  parsed only so an operator setting them gets a boot-time explanation. */
   cosignerAllowancePeriodMinutes: BigInt(process.env.CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES ?? "0"),
   cosignerEureAllowanceWei: BigInt(
     process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ??
@@ -261,6 +265,99 @@ export function passkeySafeAllowanceSetupTransactions(
 }
 
 /**
+ * The meta-transactions that grant the co-signer a ONE-TIME allowance for
+ * exactly one transfer's debit — the per-transfer replacement for the standing
+ * env-configured allowance.
+ *
+ * deleteAllowance runs first every time, and it is load-bearing: the module
+ * keeps a cumulative `spent` counter per (safe, delegate, token) that
+ * setAllowance does NOT reset. Granting amount=N on top of spent=M from an
+ * earlier transfer would leave remaining = N - M — the second send would
+ * refuse for no visible reason. Delete zeroes both amount and spent, so every
+ * grant starts from a clean slate and a successful debit consumes it exactly.
+ *
+ * enableModule/addDelegate ride along only when missing (addDelegate is
+ * idempotent in the module, so it is always included), which makes the grant
+ * self-healing for Safes deployed before the module was installed.
+ */
+export function transferAllowanceGrantTransactions(
+  plan: Pick<PasskeySafeDeploymentPlan, "address">,
+  delegate: `0x${string}`,
+  token: `0x${string}`,
+  amount: bigint,
+  opts: { moduleAddress?: `0x${string}`; moduleEnabled: boolean },
+): MetaTransaction[] {
+  if (amount <= 0n) {
+    throw new Error(`a per-transfer allowance grant needs a positive amount, got ${amount}`);
+  }
+  const allowance = new AllowanceModule(opts.moduleAddress ?? CANDIDE.allowanceModuleAddress);
+  return [
+    ...(opts.moduleEnabled ? [] : [allowance.createEnableModuleMetaTransaction(plan.address)]),
+    allowance.createAddDelegateMetaTransaction(delegate),
+    allowance.createDeleteAllowanceMetaTransaction(delegate, token),
+    allowance.createOneTimeAllowanceMetaTransaction(delegate, token, amount, 0n),
+  ];
+}
+
+/**
+ * Build the userOp that grants the co-signer a one-time allowance covering
+ * exactly one transfer's debit. The passkey owner signs its hash at send time
+ * (the co-signer counter-signs where it is an owner), so every euro that can
+ * leave the Safe was approved by the user for THIS transfer — there is no
+ * standing spend authority between sends.
+ */
+export async function prepareTransferAllowanceGrant(
+  plan: PasskeySafeDeploymentPlan,
+  token: `0x${string}`,
+  amount: bigint,
+): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
+  if (!CANDIDE.cosignerAddress) {
+    throw new Error("CANDIDE_COSIGNER_ADDRESS is required to grant a per-transfer allowance");
+  }
+  const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
+  const account = plan.cosignerAddress
+    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
+    : smartAccountForPasskey(passkeyOwner);
+  if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
+    throw new Error("passkey Safe plan does not match the deterministic account address");
+  }
+  if (allowSimulation()) {
+    return {
+      safeAddress: account.accountAddress as `0x${string}`,
+      challenge: "0x1234567890123456789012345678901234567890123456789012345678901234",
+      userOperation: {} as UserOperationV9,
+    };
+  }
+  if (!(await isDeployed(account.accountAddress))) {
+    throw new Error("passkey Safe must be deployed before a per-transfer allowance can be granted");
+  }
+  const moduleAddress = (plan.cosignerPolicy?.allowanceModuleAddress ??
+    CANDIDE.allowanceModuleAddress) as `0x${string}`;
+  const setup = transferAllowanceGrantTransactions(plan, CANDIDE.cosignerAddress, token, amount, {
+    moduleAddress,
+    moduleEnabled: await safeModuleEnabled(plan.address, moduleAddress),
+  });
+  const userOperation = await account.createUserOperation(
+    setup,
+    CANDIDE.rpcUrl,
+    CANDIDE.bundlerUrl,
+    { expectedSigners: plan.cosignerAddress ? [passkeyOwner, plan.cosignerAddress] : [passkeyOwner] },
+  );
+  const paymaster = new Erc7677Paymaster(CANDIDE.paymasterUrl);
+  const sponsored = await paymaster.createPaymasterUserOperation(
+    account as any,
+    userOperation as any,
+    CANDIDE.bundlerUrl,
+  );
+  const finalOp: UserOperationV9 = ((sponsored as any).userOperation ?? sponsored) as UserOperationV9;
+  return {
+    safeAddress: account.accountAddress as `0x${string}`,
+    challenge: account.getUserOperationEip712Hash(finalOp, CANDIDE.chainId) as `0x${string}`,
+    userOperation: finalOp,
+  };
+}
+
+/**
  * What the chain says the co-signer may spend from this Safe — as opposed to
  * what the database says deployment intended. The two have disagreed: setup
  * batches once pointed at an allowance module address with no code, and calls
@@ -345,12 +442,13 @@ export async function preparePasskeySafeAllowanceSetup(plan: PasskeySafeDeployme
   // not an owner at all, and plan.cosignerAddress (the owner set, immutable
   // after deployment) must not be confused with it.
   let setup = passkeySafeAllowanceSetupTransactions(plan, CANDIDE.cosignerAddress);
-  if (setup.filter((t) => BigInt(t.to) !== BigInt(plan.address)).length < 2) {
-    // enableModule targets the Safe; everything else targets the module. Less
-    // than delegate+one allowance means the policy would grant nothing.
-    throw new Error(
-      "no spendable allowance is configured — set CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI (and/or USDC) first",
-    );
+  if (!setup.some((t) => BigInt(t.to) !== BigInt(plan.address))) {
+    // enableModule targets the Safe; the delegate registration targets the
+    // module. Without at least the delegate there is nothing to repair.
+    // Amounts are deliberately NOT required any more: spend authority is
+    // granted per transfer (see prepareTransferAllowanceGrant), so this setup
+    // only installs the module and delegate.
+    throw new Error("allowance module setup has nothing to install for this Safe");
   }
   if (await safeModuleEnabled(plan.address, plan.cosignerPolicy!.allowanceModuleAddress)) {
     setup = setup.filter((t) => BigInt(t.to) !== BigInt(plan.address));
@@ -492,7 +590,8 @@ export async function transferTokenFromSafeAllowance(params: {
     } else {
       throw new Error(
         `Passkey Safe co-signer allowance module (${moduleAddress}) is not enabled on-chain for Safe ${params.safeAddress}. ` +
-          `Please click "Set Up Allowance" in your account dashboard.`,
+          `Approve the transfer again so its per-transfer allowance grant can install the module, ` +
+          `or click "Set Up Allowance" in your account dashboard.`,
       );
     }
   }
@@ -513,7 +612,8 @@ export async function transferTokenFromSafeAllowance(params: {
   if (remaining < params.amount) {
     throw new Error(
       `passkey Safe co-signer allowance is ${remaining} units for ${params.token}, ` +
-        `but this debit needs ${params.amount}`,
+        `but this debit needs ${params.amount} — the per-transfer allowance grant ` +
+        `did not land or was already consumed`,
     );
   }
 

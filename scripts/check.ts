@@ -27,6 +27,7 @@ const scripts = [
   "fp3:test",
   "fp4:test",
   "passkey-safe:test",
+  "allowance:test",
   "fp5:test",
   "fx:test",
   "jit:test",

@@ -2927,9 +2927,11 @@ async function submitMobileSend() {
       throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
     }
     const signature = await dev.signTypedData(created.authorization.typedData, credId());
+    const grant = await allowanceGrantAssertion(created.authorization);
     const redeem = await moneriumRedeemAssertion(created.authorization);
     const t = await api(`/api/transfers/${created.id}/authorize`, {
       signature,
+      ...(grant ? { allowanceAssertion: grant } : {}),
       ...(redeem ? { moneriumRedeemAssertion: redeem } : {}),
     });
     mSend.transfer = t;
@@ -3746,16 +3748,16 @@ function renderShellPages() {
   $("set-device").textContent = user.authorizerAddress ? `Bound to ${user.authorizerAddress.slice(0, 10)}…${user.authorizerAddress.slice(-6)}` : "Not bound yet.";
   const safe = user.passkeySafe;
   const cosigner = safe?.cosignerPolicy;
-  const allowanceSummary = cosigner?.allowances?.length
-    ? cosigner.allowances
-        .filter((x) => BigInt(x.amount || "0") > 0n)
-        .map((x) => `${x.symbol} ${x.amount}`)
-        .join(", ") || "0"
-    : cosigner?.allowanceAmount || "0";
+  /* A legacy account may still carry a standing allowance from before grants
+     went per-transfer; say so rather than hiding it. New accounts have none. */
+  const legacyStanding = cosigner?.allowances?.some((x) => BigInt(x.amount || "0") > 0n);
   $("set-wallet-policy").textContent = !safe
     ? "Passkey Safe not planned yet."
     : cosigner?.enabled
-      ? `Production co-signer · ${safe.threshold}-of-${safe.threshold} Safe · allowance ${allowanceSummary}`
+      ? `Production co-signer · ${safe.threshold}-of-${safe.threshold} Safe · ` +
+        (legacyStanding
+          ? "legacy standing allowance — replaced per transfer on your next send"
+          : "spending approved per transfer with your passkey")
       : `Passkey-only Safe · co-signer disabled outside production.`;
   renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
@@ -4157,6 +4159,31 @@ async function passkeyStepUp() {
   });
   return {
     credentialId: cred.id,
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  };
+}
+
+/* The send-time approval of this transfer's one-time spending allowance.
+   The server prepared a Safe operation granting the co-signer exactly this
+   transfer's amount (nothing is spendable between sends); the passkey signs
+   its hash here, so every euro that can leave the Safe was approved by the
+   user for this specific transfer. */
+async function allowanceGrantAssertion(authorization) {
+  const grant = authorization?.allowanceGrant;
+  if (!grant) return undefined;
+  if (!grant.challenge || !grant.credentialId) return undefined;
+  const cred = await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(grant.challenge),
+      allowCredentials: [{ type: "public-key", id: b64urlToBytes(grant.credentialId) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  });
+  return {
+    credentialId: grant.credentialId,
     authenticatorData: b64url(cred.response.authenticatorData),
     clientDataJSON: b64url(cred.response.clientDataJSON),
     signature: b64url(cred.response.signature),
@@ -4795,11 +4822,14 @@ async function pollSepaTransfer(id) {
       throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
     }
     const signature = await dev.signTypedData(created.authorization.typedData, credId());
+    const grant = await allowanceGrantAssertion(created.authorization);
     const redeem = await moneriumRedeemAssertion(created.authorization);
 
-    // 3. Submit: the server can only relay the spend this signature approved.
+    // 3. Submit: the server can only relay the spend this signature approved,
+    //    and only through the one-time allowance the passkey just granted.
     const t = await api(`/api/transfers/${created.id}/authorize`, {
       signature,
+      ...(grant ? { allowanceAssertion: grant } : {}),
       ...(redeem ? { moneriumRedeemAssertion: redeem } : {}),
     });
     transfer = t;

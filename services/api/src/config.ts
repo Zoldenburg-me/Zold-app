@@ -310,17 +310,6 @@ function assertProductionConfig() {
   if (!IS_PRODUCTION) return;
   const problems: string[] = [];
   const fail = (message: string) => problems.push(message);
-  const parsePositiveBigint = (name: string, value: string | undefined): bigint => {
-    try {
-      const parsed = BigInt(value ?? "0");
-      if (parsed <= 0n) fail(`${name} must be positive before hosted production funding`);
-      return parsed;
-    } catch {
-      fail(`${name} must be an integer string in base units, for example 1000000000000000000000`);
-      return 0n;
-    }
-  };
-
   if (process.env.KYC_AUTO_APPROVE === "1") fail("KYC_AUTO_APPROVE=1 is forbidden in production");
   if (!KYC.operatorToken) fail("KYC_OPERATOR_TOKEN is required in production");
   if (KYC.provider === "sumsub" && !sumsubEnabled()) {
@@ -411,14 +400,10 @@ function assertProductionConfig() {
     if (!process.env.CANDIDE_COSIGNER_ADDRESS || !process.env.CANDIDE_COSIGNER_KEY) {
       fail("CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required before hosted production funding");
     }
-    parsePositiveBigint(
-      "CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI",
-      process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ?? process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT,
-    );
-    parsePositiveBigint(
-      "CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES",
-      process.env.CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES,
-    );
+    // A standing allowance is deliberately NOT required (this check used to
+    // demand a positive recurring one). Spend authority is granted per
+    // transfer for the exact debit amount, approved by the user's passkey at
+    // send time — zero standing allowance is the designed resting state.
     if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS) {
       fail("CANDIDE_RECOVERY_GUARDIAN_ADDRESS is required before hosted production funding");
     }

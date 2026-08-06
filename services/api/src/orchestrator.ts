@@ -307,7 +307,10 @@ async function moveTokenFromUserSafe(
     throw new Error(safeDebitBlocker(user) ?? "Safe debit is not configured for this account");
   }
   if (user.passkeySafe && !user.passkeySafe.cosignerPolicy?.enabled && CANDIDE.cosignerAddress) {
-    const a = addrs();
+    // Record which module the policy uses — NOT a standing spend amount.
+    // Spend authority arrives per transfer via the one-time allowance grant
+    // the user's passkey approves at send time, so an amount recorded here
+    // would describe authority that deliberately does not exist between sends.
     store.updateUser(user.id, {
       passkeySafe: {
         ...user.passkeySafe,
@@ -315,12 +318,8 @@ async function moveTokenFromUserSafe(
         cosignerPolicy: {
           enabled: true,
           allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-          allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
-          allowances: [
-            { token: a.eure, symbol: "EURE", amount: CANDIDE.cosignerEureAllowanceWei.toString() },
-            { token: a.usdc, symbol: "USDC", amount: CANDIDE.cosignerUsdcAllowanceUnits.toString() },
-          ],
-          allowanceAmount: CANDIDE.cosignerEureAllowanceWei.toString(),
+          allowancePeriodMinutes: "0",
+          allowances: [],
         },
       },
     });

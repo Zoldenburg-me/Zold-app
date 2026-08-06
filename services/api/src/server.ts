@@ -34,6 +34,7 @@ import {
   startDepositPoller,
 } from "./adapters/monerium-sandbox.js";
 import {
+  compensateTransfer,
   dailyCapUsage,
   executeSepaTransfer,
   executeTransfer,
@@ -78,8 +79,10 @@ import {
   isDeployed,
   preparePasskeySafeAllowanceSetup,
   preparePasskeySafeDeployment,
+  prepareTransferAllowanceGrant,
   readCosignerTokenAllowance,
   safeMessageHash,
+  safeModuleEnabled,
   signMessageAsPasskeySafe,
   smartAccountForPasskey,
   smartAccountForPasskeyCosigner,
@@ -226,6 +229,26 @@ const pendingMoneriumLinkSignatures = new Map<string, {
   challenge: string;
   profileId?: string;
 }>();
+/**
+ * Per-transfer allowance grants awaiting the send-time passkey ceremony.
+ * Keyed by TRANSFER id: the grant exists for exactly one transfer's debit and
+ * dies with its authorization window. Held in memory on purpose — a restart
+ * only means the user re-creates the transfer, the same recovery as an
+ * expired authorization; nothing durable is lost.
+ */
+const pendingTransferAllowanceGrants = new Map<string, {
+  userId: string;
+  expiresAt: number;
+  challenge: string;
+  plan: NonNullable<User["passkeySafe"]>;
+  userOperation: PendingPasskeySafeDeployment;
+}>();
+
+function prunePendingTransferAllowanceGrants(now = Date.now()) {
+  for (const [id, pending] of pendingTransferAllowanceGrants) {
+    if (pending.expiresAt < now) pendingTransferAllowanceGrants.delete(id);
+  }
+}
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
 const wrap =
@@ -607,14 +630,6 @@ function passkeySafePlan(
   const account = cosignerAddress
     ? smartAccountForPasskeyCosigner(owner, cosignerAddress)
     : smartAccountForPasskey(owner);
-  const tokenAllowances = (() => {
-    if (!cosignerAddress) return [];
-    const a = addrs();
-    return [
-      { token: a.eure, symbol: "EURE" as const, amount: CANDIDE.cosignerEureAllowanceWei.toString() },
-      { token: a.usdc, symbol: "USDC" as const, amount: CANDIDE.cosignerUsdcAllowanceUnits.toString() },
-    ];
-  })();
   const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
     ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)
     : undefined;
@@ -623,12 +638,16 @@ function passkeySafePlan(
     status: "planned",
     threshold: cosignerAddress ? 2 : 1,
     ...(cosignerAddress ? { cosignerAddress } : {}),
+    // Deployment installs the allowance MODULE and the co-signer DELEGATE but
+    // deliberately no standing spend amount. Spend authority is granted per
+    // transfer, for the exact debit, by a passkey ceremony at send time — a
+    // standing amount here would be spendable-without-the-user between sends,
+    // which is the property this product claims not to have.
     cosignerPolicy: {
       enabled: Boolean(CANDIDE.cosignerAddress),
       allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-      allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
-      allowances: tokenAllowances,
-      allowanceAmount: tokenAllowances.find((x) => BigInt(x.amount) > 0n)?.amount ?? "0",
+      allowancePeriodMinutes: "0",
+      allowances: [],
     },
     passkeyPublicKey: webauthnOwnerToStore(owner),
     ...(recoveryGuardianAddress
@@ -680,18 +699,15 @@ function prunePendingAllowanceSetups(now = Date.now()) {
 
 /** The co-signer allowance policy as the CURRENT environment defines it. The
  *  stored plan's policy is a snapshot from planning time and may name a module
- *  address that never had code — the repair path must not re-install that. */
+ *  address that never had code — the repair path must not re-install that.
+ *  No standing amounts: the repair installs module + delegate, and spend
+ *  authority arrives per transfer at send time. */
 function currentCosignerPolicy(): NonNullable<NonNullable<User["passkeySafe"]>["cosignerPolicy"]> {
-  const a = addrs();
   return {
     enabled: true,
     allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-    allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
-    allowances: [
-      { token: a.eure, symbol: "EURE" as const, amount: CANDIDE.cosignerEureAllowanceWei.toString() },
-      { token: a.usdc, symbol: "USDC" as const, amount: CANDIDE.cosignerUsdcAllowanceUnits.toString() },
-    ],
-    allowanceAmount: CANDIDE.cosignerEureAllowanceWei.toString(),
+    allowancePeriodMinutes: "0",
+    allowances: [],
   };
 }
 
@@ -2733,9 +2749,17 @@ app.get(
     if (!CANDIDE.cosignerAddress || !CANDIDE.cosignerKey) {
       return res.json({ configured: false, reason: "no co-signer configured on this deployment" });
     }
+    // "Configured" means the allowance MODULE is installed — a zero remaining
+    // amount is the designed resting state now that spend authority is granted
+    // per transfer and consumed by its debit. Reporting amount>0 here would
+    // nag every healthy account between sends. The per-transfer grant also
+    // self-heals a missing module, so false is informational, not blocking.
+    const moduleAddress = (user.passkeySafe?.cosignerPolicy?.allowanceModuleAddress ??
+      CANDIDE.allowanceModuleAddress) as `0x${string}`;
+    const enabled = await safeModuleEnabled(user.address, moduleAddress).catch(() => false);
     const a = await readCosignerTokenAllowance(user.address, addrs().eure);
     res.json({
-      configured: Boolean(a && a.amount > 0n),
+      configured: enabled,
       remainingEur: a ? eur.fromWei(a.remaining) : 0,
     });
   }),
@@ -3040,11 +3064,60 @@ app.post(
       name: transfer.recipientName,
     });
     transfer.auth = { to: orchestratorAddress, amountWei: amountWei.toString(), destination, deadline };
+    // Per-transfer allowance grant: the exact EURe this transfer will debit,
+    // granted as a one-time allowance the user's passkey approves alongside
+    // the device signature. The Safe-funded SEPA rail only moves the fee
+    // (Monerium burns the payout from the Safe directly), so that is all the
+    // grant covers there. No grant means no debit can happen — the co-signer
+    // holds no standing spend authority between transfers.
+    let allowanceGrant:
+      | { credentialId: string; challenge: string; amountEur: number; token: "EURE" }
+      | undefined;
+    const grantWei =
+      transfer.rail === "sepa"
+        ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR)))
+        : amountWei;
+    if (
+      grantWei > 0n &&
+      user.passkey?.credentialId &&
+      user.passkeySafe?.status === "active" &&
+      user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
+      CANDIDE.cosignerAddress &&
+      CANDIDE.cosignerKey &&
+      !SECURITY.allowSimulation
+    ) {
+      try {
+        const prepared = await prepareTransferAllowanceGrant(user.passkeySafe, addrs().eure, grantWei);
+        prunePendingTransferAllowanceGrants();
+        const challenge = passkeySafeChallenge(prepared.challenge);
+        pendingTransferAllowanceGrants.set(transfer.id, {
+          userId: user.id,
+          expiresAt: deadline * 1000,
+          challenge,
+          plan: user.passkeySafe,
+          userOperation: prepared.userOperation,
+        });
+        allowanceGrant = {
+          credentialId: user.passkey.credentialId,
+          challenge,
+          amountEur: eur.fromWei(grantWei),
+          token: "EURE",
+        };
+      } catch (err: any) {
+        // The transfer is still created: without a grant the debit will refuse
+        // with a precise reason, which beats failing creation for a bundler
+        // hiccup. Say why here so the refusal is diagnosable.
+        console.error(
+          `per-transfer allowance grant preparation failed for ${transfer.id}: ${err?.message ?? err}`,
+        );
+      }
+    }
     store.addTransfer(transfer);
     res.status(201).json({
       ...transfer,
       authorization: {
         authorizer,
+        allowanceGrant,
         typedData: paymentAuthorizationTypedData({
           account: user.address,
           amountWei,
@@ -3258,12 +3331,89 @@ app.post(
         error: "passkey Safe Monerium redeem approval is required before this SEPA transfer can execute",
       });
     }
+    // Per-transfer allowance grant: when creation prepared one, this transfer
+    // can only debit through it, so the send-time passkey approval of that
+    // exact grant is required — the co-signer has no standing authority to
+    // fall back on. Verified BEFORE the authorization is claimed: a bad
+    // assertion must not consume the one-shot claim.
+    prunePendingTransferAllowanceGrants();
+    const pendingGrant = pendingTransferAllowanceGrants.get(transfer.id);
+    if (pendingGrant && pendingGrant.userId !== user.id) {
+      return res.status(403).json({ error: "allowance grant belongs to a different account" });
+    }
+    const allowanceAssertion = req.body?.allowanceAssertion;
+    if (pendingGrant) {
+      if (!user.passkey?.publicKey) {
+        return res.status(409).json({ error: "no passkey registered for this account" });
+      }
+      const { credentialId, authenticatorData, clientDataJSON, signature: assertionSignature } =
+        allowanceAssertion ?? {};
+      if (!allowanceAssertion) {
+        return res.status(400).json({
+          error:
+            "this transfer's one-time spending allowance needs passkey approval — " +
+            "submit allowanceAssertion signed over the allowance grant challenge",
+        });
+      }
+      if (credentialId !== user.passkey.credentialId) {
+        return res.status(403).json({ error: "passkey credential does not match this account" });
+      }
+      if (!authenticatorData || !clientDataJSON || !assertionSignature) {
+        return res.status(400).json({
+          error: "allowanceAssertion requires authenticatorData, clientDataJSON and signature",
+        });
+      }
+      try {
+        const { signCount } = await verifyAssertionForChallenge(
+          authenticatorData,
+          clientDataJSON,
+          assertionSignature,
+          user.passkey.publicKey,
+          user.passkey.signCount ?? 0,
+          user.passkey.rpId ?? SECURITY.rpId,
+          SECURITY.origins,
+          pendingGrant.challenge,
+          true,
+        );
+        user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+      } catch (err: any) {
+        return res.status(401).json({ error: String(err?.message ?? err) });
+      }
+    }
     // Claim the authorization before execution. Two parallel submissions of the
     // same signature both used to clear the CREATED check above, and both could
     // submit the same spend. claimAuthorization is the atomic boundary: after it
     // succeeds once, every other caller sees the authorizedAt marker and stops.
     if (!store.claimAuthorization(transfer.id)) {
       return res.status(409).json({ error: "authorization already submitted for this transfer" });
+    }
+    // Submit the user-approved grant. Only after the claim: the claim is what
+    // makes this the single submission allowed to install and consume it.
+    if (pendingGrant) {
+      try {
+        const grantOpHash = await submitPasskeySafeDeployment(
+          pendingGrant.plan,
+          pendingGrant.userOperation,
+          {
+            authenticatorData: b64urlToBuf(allowanceAssertion.authenticatorData),
+            clientDataJSON: b64urlToBuf(allowanceAssertion.clientDataJSON),
+            signature: b64urlToBuf(allowanceAssertion.signature),
+          },
+        );
+        pendingTransferAllowanceGrants.delete(transfer.id);
+        store.updateTransfer(transfer.id, {
+          txs: [...transfer.txs, { step: "allowance.grant", hash: grantOpHash ?? "0x" }],
+        });
+      } catch (err: any) {
+        // Nothing has moved — the grant never landed, so the debit cannot
+        // have either. FAILED + compensation records the €0 refund story.
+        store.updateTransfer(transfer.id, {
+          state: "FAILED",
+          error: `per-transfer allowance grant failed: ${String(err?.message ?? err).slice(0, 200)}`,
+        });
+        const failed = await compensateTransfer(transfer.id).catch(() => store.findTransfer(transfer.id)!);
+        return res.status(502).json(failed);
+      }
     }
     if (effectiveRedeemSignature && transfer.moneriumRedeem) {
       executableTransfer = store.updateTransfer(transfer.id, {
@@ -3434,20 +3584,15 @@ if (sandbox) {
 if (CRYPTO_IN.enabled) startCryptoDepositPoller();
 app.listen(API_PORT, API_HOST, () => {
   console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
-  // A co-signer with a zero allowance is the silent version of today's outage:
-  // deployment installs the module and delegate, grants nothing, and every
-  // debit refuses with "allowance is 0". Say so at boot, not at send time.
-  if (
-    CANDIDE.cosignerAddress &&
-    CANDIDE.cosignerKey &&
-    CANDIDE.cosignerEureAllowanceWei <= 0n &&
-    CANDIDE.cosignerUsdcAllowanceUnits <= 0n
-  ) {
+  // Standing allowances are gone: spend authority is granted per transfer,
+  // for the exact debit, by a passkey ceremony at send time. An operator still
+  // setting the old env knobs should hear that they no longer do anything —
+  // silently ignoring them would read as a grant that exists but doesn't.
+  if (CANDIDE.cosignerEureAllowanceWei > 0n || CANDIDE.cosignerUsdcAllowanceUnits > 0n) {
     console.warn(
-      "WARNING: a co-signer is configured but CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI and " +
-        "CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS are both unset/0 — passkey Safes will deploy " +
-        "with a spending allowance of 0 and every debit will refuse. Set the allowance(s) " +
-        "and restart before onboarding accounts.",
+      "NOTE: CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI / CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS are set " +
+        "but standing allowances are no longer installed — each transfer grants the co-signer a " +
+        "one-time allowance for its exact amount, approved by the user's passkey at send time.",
     );
   }
 });

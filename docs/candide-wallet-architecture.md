@@ -54,9 +54,22 @@ Default transfer:
 
 Current implementation note: live Monerium deposits land in the user's Safe,
 and the API now treats `safeBalanceEur` as `balanceEur`. Remittance funding is
-Safe-first; remaining server-side Safe signing is temporary local/demo debt
-until the one-time allowance/policy delegate path can submit user-approved
-Safe operations without storing wallet keys.
+Safe-first.
+
+IMPLEMENTED (Aug 2026): the one-time allowance path from steps 1-5 above.
+Deployment installs the allowance module and the co-signer delegate but grants
+no standing amount. At transfer creation the server prepares a UserOperation
+granting a one-time allowance for exactly that transfer's debit (the fee alone
+on the Safe-funded SEPA rail); the user's passkey signs its hash at send time
+alongside the device signature, the co-signer counter-signs, and the debit
+consumes the grant in full. `deleteAllowance` precedes every `setAllowance` so
+the module's cumulative `spent` counter cannot strand a later grant. Between
+sends the co-signer's on-chain spend authority is zero.
+
+Still open from the delegate design below: the delegate is the backend
+co-signer EOA, and the AllowanceModule bounds token+amount, not destination —
+the recipient commitment is enforced by the API's signature check, not by
+bytecode. The policy delegate contract remains the next step.
 
 Scheduled transfer:
 
