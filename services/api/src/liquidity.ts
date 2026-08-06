@@ -89,6 +89,34 @@ export interface LiquidityProvider {
   indicativeRate(side: LiquiditySide): Promise<{ rate: number; raw: bigint }>;
 }
 
+/**
+ * Wait until a fresh read actually shows the allowance the approve just set.
+ *
+ * The public RPC is load-balanced: the swap SIMULATION can land on a replica
+ * that has not seen the approve block yet, and the swap then reverts
+ * ERC20InsufficientAllowance against an allowance that is genuinely on
+ * chain — a real €5 transfer failed and auto-refunded over exactly this.
+ * Bounded: a lagging replica converges within a block or two; a truly
+ * missing approve stays missing and the swap's own revert reports it.
+ */
+async function waitForAllowanceVisibility(
+  token: `0x${string}`,
+  owner: `0x${string}`,
+  spender: `0x${string}`,
+  amount: bigint,
+): Promise<void> {
+  for (let i = 0; i < 12; i++) {
+    const current = (await publicClient.readContract({
+      address: token,
+      abi: abis.MockToken,
+      functionName: "allowance",
+      args: [owner, spender],
+    })) as bigint;
+    if (current >= amount) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
 class FxSwapperLiquidityProvider implements LiquidityProvider {
   async quote(side: LiquiditySide, amountIn: bigint, quoteId: string, expiresAt: string): Promise<LiquidityQuote> {
     const a = addrs();
@@ -119,6 +147,8 @@ class FxSwapperLiquidityProvider implements LiquidityProvider {
     };
   }
 
+
+
   async execute(quote: LiquidityQuote, to: `0x${string}` = orchestratorAddress): Promise<LiquidityExecution> {
     if (Date.now() > Date.parse(quote.expiresAt)) {
       throw new Error("liquidity quote expired, request a new transfer");
@@ -138,6 +168,7 @@ class FxSwapperLiquidityProvider implements LiquidityProvider {
       functionName: "approve",
       args: [a.swapper, quote.amountIn],
     });
+    await waitForAllowanceVisibility(token, orchestratorAddress, a.swapper, quote.amountIn);
     const swapHash = await writeAndWait(orchestratorWallet, {
       address: a.swapper,
       abi: abis.FxSwapper,
