@@ -105,21 +105,16 @@ The treasury must hold the anchor asset and have the required trustline.
 `testanchor.stellar.org` can use `native` with no trustline for protocol
 tests, but production MoneyGram/USDC requires the partner-confirmed asset.
 
-### CCTP bridge (Base Sepolia → Stellar testnet)
+### Bridge.xyz funding (Base USDC -> Stellar-side USDC)
 
 ```sh
-npm run cctp:dryrun      # prints the exact burn/attest/mint plan, moves nothing
-npm run cctp:readiness   # validates live CCTP env + balances, moves nothing
+npm run bridge:dryrun    # prints the Bridge transfer plan, moves nothing
 ```
 
-To execute for real: fund an EOA with Base Sepolia ETH (any faucet) + testnet
-USDC (<https://faucet.circle.com>), set `CCTP_BURNER_KEY`,
-`STELLAR_TREASURY_SECRET`, and `CCTP_LIVE=1`.
-
-`npm run cctp:readiness` also checks the Stellar CCTP contract strkeys:
-`CCTP_STELLAR_FORWARDER` and `CCTP_STELLAR_MSG_TRANSMITTER`. They default to
-the current testnet values in `services/api/src/config.ts`; override them only
-when Circle/Stellar publishes new deployments.
+To execute for real: set `BRIDGE_LIVE=1`, `BRIDGE_API_KEY`,
+`BRIDGE_ON_BEHALF_OF`, and the Bridge-approved Stellar destination fields
+(`BRIDGE_DESTINATION_ADDRESS`, optional `BRIDGE_DESTINATION_MEMO`). The local
+demo keeps using escrow in dry-run mode.
 
 ## Known limitations (by design, MVP)
 

@@ -2025,7 +2025,7 @@ function adminTransfer(transfer: Transfer) {
             moreInfoUrl: transfer.pickup?.moreInfoUrl,
           },
     liquidity: transfer.liquidity,
-    bridge: route.filter((x) => x.step.startsWith("cctp.") || x.step.startsWith("bridge.")),
+    bridge: route.filter((x) => x.step.startsWith("bridge.")),
     route,
     lastHash: lastHash(transfer.txs),
     refund: transfer.refund,

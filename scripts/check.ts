@@ -42,7 +42,7 @@ const scripts = [
   "trustline:test",
   "anchor:sweep:test",
   "refund:guard:test",
-  "cctp:dryrun",
+  "bridge:dryrun",
   "e2e",
 ];
 

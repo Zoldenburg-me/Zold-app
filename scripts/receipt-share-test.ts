@@ -77,7 +77,7 @@ const cashTransfer: Transfer = {
   fundingSource: "safe",
   txs: [
     { step: "safe.transfer", hash: SAFE_HASH },
-    { step: "cctp.dry-run.plan", hash: "0xplan" },
+    { step: "bridge.xyz.dry-run.transfer", hash: "bridge_dry_plan" },
   ],
   liquidity: {
     provider: "lifi",
@@ -248,9 +248,9 @@ check("route hops come from the transfer's own steps, per rail", () => {
 
 check("a leg that did not settle is marked simulated rather than drawn as real", () => {
   const hops = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true });
-  const cctp = hops.find((h) => h.rail === "Circle CCTP");
-  assert.ok(cctp?.simulated, "a dry-run burn/mint plan is not a burn");
-  assert.match(cctp!.via, /no tokens were burned/);
+  const bridge = hops.find((h) => h.rail === "Bridge.xyz");
+  assert.ok(bridge?.simulated, "a dry-run Bridge plan is not settled funding");
+  assert.match(bridge!.via, /no funds were sent/);
 });
 
 check("the SEPA safe hop says only the fee left the safe", () => {
@@ -266,7 +266,7 @@ check("route references mirror the same selections as the rows", () => {
 
   const publicRoute = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true });
   assert.ok(!JSON.stringify(publicRoute).includes(SAFE_HASH), "route tx hashes are not published as searchable refs");
-  assert.ok(!publicRoute.find((h) => h.rail === "Circle CCTP")?.ref, "CCTP hashes are not published as searchable refs");
+  assert.ok(!publicRoute.find((h) => h.rail === "Bridge.xyz")?.ref, "Bridge plan ids are not published as searchable refs");
 
   const noRate = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true, showRate: false });
   assert.ok(noRate.find((h) => h.rail.includes("lifi"))!.withheld, "the rate toggle also governs the route");
