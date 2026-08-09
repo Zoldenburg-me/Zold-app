@@ -2,26 +2,22 @@
 
 A shareable handle that resolves to a page-scoped forwarding address someone
 can pay: `/pay/alice`.
-Modelled on Fluidkey's `alice.fkey.id`, which is the clearest version of this
-idea in production.
 
-## What Fluidkey does, and what we do instead
+## What this is, and what it deliberately is not
 
-Checked against `ftx.fkey.id` and their docs, not inferred:
+| | Here, today |
+|---|---|
+| Identifier | `/pay/name` path on the app origin |
+| Address shown | one Candide Forwarding Address per payment page, routing supported tokens into the merchant Safe |
+| Account type | merchant-owned Candide Safe as the account of record |
+| Networks | one, whichever `TRANSF_CHAIN_ID` names |
+| Payer inputs | none — QR plus copy-address |
+| Privacy | **none**, and the page says so |
 
-| | Fluidkey | Here, today |
-|---|---|---|
-| Identifier | `name.fkey.id`, also an ENS name (`name.fkey.eth`) | `/pay/name` path on the app origin |
-| Address shown | a **new stealth address on every resolution**, derived from the recipient's stealth meta-address (ERC-5564) | one Candide Forwarding Address per payment page, routing supported tokens into the merchant Safe |
-| Account type | 1/1 Safe smart accounts as the stealth accounts | merchant-owned Candide Safe as the account of record |
-| Networks | Base, Ethereum, BSC, Arbitrum, Polygon, Gnosis | one, whichever `TRANSF_CHAIN_ID` names |
-| Payer inputs | none — QR plus copy-address | the same: QR plus copy-address |
-| Privacy | unlinkable by construction | **none**, and the page says so |
-
-The two things they have that we do not are stealth addresses and multi-chain.
-Everything else on their page is the same shape, which is why this one is
-deliberately plain: no amount field, no wallet connection. A payer's wallet
-does both better than a web page can.
+Two things are deliberately absent: stealth addresses (ERC-5564-style
+per-payment unlinkable accounts — see below for why not yet) and multi-chain.
+The page is otherwise deliberately plain: no amount field, no wallet
+connection. A payer's wallet does both better than a web page can.
 
 ## Page address, not main wallet
 
@@ -30,11 +26,11 @@ a page-scoped Candide Forwarding Address and its own settlement rule. Supported
 tokens routed through that address land in the merchant Safe, and the UI only
 shows whitelisted token balances.
 
-That page address is still public. Fluidkey's entire pitch is that a payer
-learns nothing about the recipient's other activity. Ours is not there yet: each
-payment page resolves to one address, so every payment to that page lands in the
-same place and anyone holding the link can read that page address history on an
-explorer.
+That page address is still public. A stealth-address design would give the
+payer nothing to link the recipient's other activity to; ours is not there
+yet: each payment page resolves to one address, so every payment to that page
+lands in the same place and anyone holding the link can read that page address
+history on an explorer.
 
 That is a real difference in kind, not a smaller version of the same thing. The
 page therefore states it in plain words, and nothing in the product describes
@@ -45,7 +41,7 @@ reasons, the feature has become misleading.
 
 Not difficulty — sequencing. Doing it honestly means the recipient controls
 every derived account, which means deriving the keys **client-side** from
-something only they hold. Fluidkey derives from a signature.
+something only they hold (a wallet signature is the usual seed).
 
 Doing stealth server-side would be easy and wrong: it would put a key for every
 stealth account in `db.json`, next to the one `user.privateKey` that FP4 exists

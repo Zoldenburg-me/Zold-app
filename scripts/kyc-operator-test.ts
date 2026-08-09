@@ -100,6 +100,12 @@ try {
     NODE_ENV: "production",
     KYC_OPERATOR_TOKEN: OPERATOR_TOKEN,
     ALLOW_PLAINTEXT_STORE: "1",
+    // _test-env.ts sets KYC_AUTO_APPROVE=1 for the general harness, and this
+    // spawn inherits process.env — but auto-approve is FORBIDDEN in production,
+    // so the child died at the config gate before binding its port and the
+    // whole test read as ECONNREFUSED. This override is the one _test-env's
+    // comment always claimed this test had.
+    KYC_AUTO_APPROVE: "0",
     // Managed KYC recovery is on by default and, in production, REQUIRES a
     // guardian signer URL. That gate is correct — a recovery path with no
     // signer configured is worse than none — but this test is about the

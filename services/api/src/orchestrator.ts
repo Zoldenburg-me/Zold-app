@@ -382,7 +382,7 @@ function cashPayoutState(pickup: NonNullable<Transfer["pickup"]>): TransferState
 /**
  * FP3: mark FAILED, then immediately attempt compensation. The refund the
  * user gets depends on how far the transfer got — costs already incurred
- * (conversion round-trips at the prevailing rate) are itemized, uRamp-style.
+ * (conversion round-trips at the prevailing rate) are itemized on the refund.
  */
 async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Promise<Transfer> {
   const message = String(err?.shortMessage ?? err?.message ?? err);
@@ -688,18 +688,27 @@ export async function executeTransfer(
         }) as Promise<bigint>;
       const before = await usdcBalance();
       await debitInputFunds(transfer, user, auth, txs, execution);
+      // The swap step is recorded WITH the debit, before any measurement: the
+      // batch is atomic, so if the debit landed the swap landed. Recording it
+      // only after a successful balance read would let a stale RPC replica
+      // strand a swapped transfer looking unswapped — and compensation would
+      // then "refund" EURe this side no longer holds.
+      const opHash = txs.at(-1)?.hash ?? "0x";
+      txs.push({ step: `liquidity.${transfer.liquidity?.provider ?? "safe"}.eure-usdc`, hash: opHash });
+      store.updateTransfer(transfer.id, { txs });
       const delivered = (await balanceAfterWrite(a.usdc, recipient, before)) - before;
       const minOut = BigInt(transfer.liquidity?.minOut ?? "0");
       if (delivered < minOut) {
-        // The venue call enforces the floor, so landing here means the batch
-        // reverted mid-flight or the recipient read is stale — either way the
-        // one thing NOT to do is settle a payout against money we cannot see.
+        // The venue call enforces the floor, so landing here means the
+        // recipient read is stale or the output landed somewhere this plan
+        // does not describe — either way the one thing NOT to do is settle a
+        // payout against money we cannot see. With the swap step recorded
+        // above, compensation reviews this as post-swap rather than
+        // mis-refunding it as unswapped.
         throw new Error(
           `Safe swap batch delivered ${delivered} to ${recipient}, below the signed floor ${minOut}`,
         );
       }
-      const opHash = txs.at(-1)?.hash ?? "0x";
-      txs.push({ step: `liquidity.${transfer.liquidity?.provider ?? "safe"}.eure-usdc`, hash: opHash });
       expectedOut = delivered;
       usdcOut = usd.fromUnits(delivered);
       store.updateTransfer(transfer.id, {
