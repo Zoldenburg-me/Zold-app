@@ -10,7 +10,9 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { anchorModeEnabled, API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, FX, IS_PRODUCTION, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, FX, IS_PRODUCTION, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
+import { prepareSafeSwapForTransfer } from "./liquidity.js";
+import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
@@ -77,6 +79,7 @@ import {
   CANDIDE,
   isDeployed,
   preparePasskeySafeDeployment,
+  prepareTransferBatchExecution,
   prepareTransferExecution,
   safeMessageHash,
   signMessageAsPasskeySafe,
@@ -230,6 +233,9 @@ const pendingTransferExecutions = new Map<string, {
   challenge: string;
   plan: NonNullable<User["passkeySafe"]>;
   userOperation: PendingPasskeySafeDeployment;
+  /** Present when the operation is a full fee+approve+swap batch: where the
+   *  swap output is delivered, so execution can measure and settle there. */
+  batch?: { recipient: `0x${string}`; mode: "dry-run" | "live" };
 }>();
 
 function prunePendingTransferExecutions(now = Date.now()) {
@@ -2957,7 +2963,69 @@ app.post(
       !SECURITY.allowSimulation
     ) {
       try {
-        const prepared = await prepareTransferExecution(
+        let prepared: Awaited<ReturnType<typeof prepareTransferExecution>> | undefined;
+        let batch: { recipient: `0x${string}`; mode: "dry-run" | "live" } | undefined;
+        // Cash rail: try the full fee+approve+swap batch first (Change 2,
+        // windows 1-3) — one signature, atomic, and the orchestrator never
+        // holds the input. Falls back to the plain user-signed debit when the
+        // configured venue cannot serve a Safe executor (FxSwapper, CoW) or
+        // the venue is down; the fallback still never moves without the user.
+        if (transfer.rail === "cash") {
+          try {
+            // Where the output lands is the destination the payout leg names:
+            // the Bridge deposit address in live mode, the orchestrator in
+            // dry-run (the local escrow demo pulls from it).
+            let recipient = orchestratorAddress;
+            let mode: "dry-run" | "live" = "dry-run";
+            if (BRIDGE.live) {
+              const convertEur = transfer.sendEur - FX.FIXED_FEE_EUR;
+              const rate = Number(quote.lockedSwapRate ?? "0") / 1e6;
+              if (!(rate > 0)) throw new Error("no locked swap rate to size the Bridge transfer");
+              const bridgePlan = await createBridgeTransfer(
+                transfer.id,
+                Math.floor(convertEur * rate * 100) / 100,
+                {
+                  paymentRail: BRIDGE.destinationRail,
+                  currency: BRIDGE.destinationCurrency,
+                  toAddress: BRIDGE.destinationAddress,
+                  blockchainMemo: BRIDGE.destinationMemo || undefined,
+                },
+                { sourceAddress: user.address },
+              );
+              const deposit = bridgePlan.sourceDepositInstructions?.to_address;
+              if (!deposit || !/^0x[a-fA-F0-9]{40}$/.test(deposit)) {
+                throw new Error("Bridge returned no Base deposit address for the swap to deliver into");
+              }
+              recipient = deposit as `0x${string}`;
+              mode = "live";
+            }
+            const swap = await prepareSafeSwapForTransfer(transfer, {
+              executor: user.address as `0x${string}`,
+              recipient,
+            });
+            if (swap) {
+              const convertWei = swap.plan.approval.amount;
+              if (convertWei >= debitWei) throw new Error("swap amount must leave room for the fee");
+              prepared = await prepareTransferBatchExecution(user.passkeySafe, {
+                token: addrs().eure,
+                feeTo: orchestratorAddress,
+                // Exact by construction: fee + convert always equals the
+                // debited total, whatever floating-point did to the euros.
+                feeAmount: debitWei - convertWei,
+                approval: { spender: swap.plan.approval.spender, amount: convertWei },
+                call: swap.plan.call,
+              });
+              batch = { recipient, mode };
+              transfer.liquidity = swap.serialized;
+              transfer.safeSwap = { recipient, mode };
+            }
+          } catch (err: any) {
+            console.error(
+              `Safe swap batch unavailable for ${transfer.id} (falling back to plain debit): ${err?.message ?? err}`,
+            );
+          }
+        }
+        prepared ??= await prepareTransferExecution(
           user.passkeySafe,
           addrs().eure,
           orchestratorAddress,
@@ -2971,6 +3039,7 @@ app.post(
           challenge,
           plan: user.passkeySafe,
           userOperation: prepared.userOperation,
+          ...(batch ? { batch } : {}),
         });
         safeExecution = {
           credentialId: user.passkey.credentialId,
@@ -3275,6 +3344,7 @@ app.post(
             clientDataJSON: b64urlToBuf(executionAssertion.clientDataJSON),
             signature: b64urlToBuf(executionAssertion.signature),
           },
+          ...(pendingExecution.batch ? { batch: pendingExecution.batch } : {}),
         }
       : undefined;
     if (pendingExecution) pendingTransferExecutions.delete(transfer.id);

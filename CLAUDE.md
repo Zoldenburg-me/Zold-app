@@ -476,13 +476,36 @@ allowanceModuleAddress survives only for that read). The co-signer sends no
 native transactions any more — it needs NO gas. The allowance repair routes
 (GET/POST /passkey-safe/allowance*) and the client's repair banner are
 deleted. The CANDIDE_COSIGNER_*_ALLOWANCE_* env knobs do nothing (boot note
-says so). npm run execution:test (7 checks, pure builder); fp3/e2e blocker
-regexes updated to the new refusal text. STILL OPEN (Change 2, windows 1-3):
-after the debit the orchestrator holds the EURe through swap and bridge —
-folding approve+swap+forward into the same user-signed batch is the next
-step, and depends on making liquidity adapters build calldata for the Safe
-as executor. UNPROVEN: no real Base Sepolia send has exercised the
-execution→debit flow end to end.
+says so). npm run execution:test (13 checks, pure builders); fp3/e2e blocker
+regexes updated to the new refusal text.
+CHANGE 2 WINDOWS 1-3 DONE (same branch): the cash-rail send is ONE user-signed
+batch [legacy revoke?] -> fee transfer -> approve venue -> swap, atomic — a
+failed leg reverts the whole operation and nothing leaves the Safe. The swap
+output goes STRAIGHT to the destination the payout leg names: Bridge's
+deposit address in live mode (the Bridge transfer is created at TRANSFER
+CREATION, idempotency key zold-<id>-bridge, so execute's re-create is stable;
+executeTransfer asserts the deposit address still matches the batch recipient
+and refuses to settle otherwise), the orchestrator only in local dry-run
+(escrow demo pulls from it). Venue side is `safeSwapPlan` on the liquidity
+seam: dex builds exactInputSingle calldata offline (same pool+floor as the
+quote — the ONLY venue provable on Base Sepolia, needs dex:setup's pool);
+lifi/rfq re-quote WITH executor=Safe + recipient baked in (their calldata
+binds the taker — orchestrator-quoted calldata is NOT reusable); fx-swapper
+CANNOT serve a Safe (onlyTrader, our inventory — falls back to plain debit +
+orchestrator swap, so a deployment on LIQUIDITY_PROVIDER=fx-swapper keeps
+windows 2-3; switch to dex/best to close them); cow refuses. usdcOut is
+MEASURED as the recipient's balance delta, floor-checked against the signed
+minOut. COMPENSATION: fixed a latent main bug — the "was it swapped?" check
+matched only liquidity.fx-swapper.eure-usdc, so dex/rfq/lifi-swapped failures
+would have "refunded" EURe the orchestrator no longer held; now prefix-matches
+liquidity.*.eure-usdc. Live-batch failures after the userOp lands are
+MANUAL_REVIEW always (funds are at Bridge, nothing local to reverse —
+compensateTransfer guards on transfer.safeSwap.mode === "live" and
+failAndCompensate on the bridge.xyz.deposit.funded step); dry-run batch
+failures reverse-swap from the orchestrator exactly as before. UNPROVEN: no
+real Base Sepolia send has exercised execution→debit, and no batched swap has
+run against a real pool (needs dex:setup + a funded Safe); Bridge live mode
+remains entirely unexercised.
 
 FP4 (key custody): SPEND-AUTHORITY HALF DONE (July 2026, PR #11, branch
 claude/fp4-vault-authorization — do not re-do differently). RemitVault.debit
