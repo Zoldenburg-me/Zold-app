@@ -54,9 +54,28 @@ Default transfer:
 
 Current implementation note: live Monerium deposits land in the user's Safe,
 and the API now treats `safeBalanceEur` as `balanceEur`. Remittance funding is
-Safe-first; remaining server-side Safe signing is temporary local/demo debt
-until the one-time allowance/policy delegate path can submit user-approved
-Safe operations without storing wallet keys.
+Safe-first.
+
+IMPLEMENTED (Aug 2026): user-signed execution — regulatory-architecture.md's
+Change 1, superseding both the standing allowance and the interim per-transfer
+grant. There is no allowance, no delegate, and no module installed at
+deployment. At transfer creation the server prepares the UserOperation that
+performs the debit itself — an ERC-20 transfer of exactly that transfer's
+amount (the fee alone on the Safe-funded SEPA rail) to the orchestrator's
+working address. The user's passkey signs its hash at send time alongside the
+device signature; the co-signer counter-signs where it is an owner; the
+bundler executes. The chain enforces token, amount and destination, so the
+answer to "can we dispose of client assets without the client" is NO,
+architecturally: the API holds no user owner keys and no delegated spend
+authority of any size, at any time. Legacy standing allowances left on old
+Safes are revoked automatically by the next send's operation
+(`transferExecutionTransactions` prepends a `deleteAllowance`).
+
+The delegate-design section below is therefore historical: there is no
+delegate to constrain. What remains open from Change 2 is the custody window
+AFTER the debit — the orchestrator still holds the EURe through the swap and
+the bridge leg. Folding approve+swap+forward into the same user-signed batch
+(windows 1-3) is the next step.
 
 Scheduled transfer:
 

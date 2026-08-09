@@ -76,9 +76,8 @@ import {
 import {
   CANDIDE,
   isDeployed,
-  preparePasskeySafeAllowanceSetup,
   preparePasskeySafeDeployment,
-  readCosignerTokenAllowance,
+  prepareTransferExecution,
   safeMessageHash,
   signMessageAsPasskeySafe,
   smartAccountForPasskey,
@@ -212,20 +211,32 @@ app.use(express.static(pub));
 
 type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
 const pendingPasskeySafeDeployments = new Map<string, { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }>();
-/** Allowance repair ceremonies in flight. The refreshed plan rides along
- *  because the stored one may name the codeless module this repairs. */
-const pendingAllowanceSetups = new Map<string, {
-  userId: string;
-  expiresAt: number;
-  plan: NonNullable<User["passkeySafe"]>;
-  userOperation: PendingPasskeySafeDeployment;
-}>();
 const pendingMoneriumLinkSignatures = new Map<string, {
   userId: string;
   expiresAt: number;
   challenge: string;
   profileId?: string;
 }>();
+/**
+ * Per-transfer Safe executions awaiting the send-time passkey ceremony: the
+ * UserOperation that will move this transfer's exact debit out of the user's
+ * Safe. Keyed by TRANSFER id; dies with its authorization window. Held in
+ * memory on purpose — a restart only means the user re-creates the transfer,
+ * the same recovery as an expired authorization; nothing durable is lost.
+ */
+const pendingTransferExecutions = new Map<string, {
+  userId: string;
+  expiresAt: number;
+  challenge: string;
+  plan: NonNullable<User["passkeySafe"]>;
+  userOperation: PendingPasskeySafeDeployment;
+}>();
+
+function prunePendingTransferExecutions(now = Date.now()) {
+  for (const [id, pending] of pendingTransferExecutions) {
+    if (pending.expiresAt < now) pendingTransferExecutions.delete(id);
+  }
+}
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
 const wrap =
@@ -607,14 +618,6 @@ function passkeySafePlan(
   const account = cosignerAddress
     ? smartAccountForPasskeyCosigner(owner, cosignerAddress)
     : smartAccountForPasskey(owner);
-  const tokenAllowances = (() => {
-    if (!cosignerAddress) return [];
-    const a = addrs();
-    return [
-      { token: a.eure, symbol: "EURE" as const, amount: CANDIDE.cosignerEureAllowanceWei.toString() },
-      { token: a.usdc, symbol: "USDC" as const, amount: CANDIDE.cosignerUsdcAllowanceUnits.toString() },
-    ];
-  })();
   const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
     ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)
     : undefined;
@@ -623,12 +626,16 @@ function passkeySafePlan(
     status: "planned",
     threshold: cosignerAddress ? 2 : 1,
     ...(cosignerAddress ? { cosignerAddress } : {}),
+    // No allowance module, no delegate, no spend amounts: nothing moves from
+    // the Safe except UserOperations the user's own passkey signs. The policy
+    // record survives only to say whether a co-signing OWNER exists (and to
+    // keep the shape old stored accounts already have); the module address is
+    // retained solely so legacy standing allowances can be found and revoked.
     cosignerPolicy: {
       enabled: Boolean(CANDIDE.cosignerAddress),
       allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-      allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
-      allowances: tokenAllowances,
-      allowanceAmount: tokenAllowances.find((x) => BigInt(x.amount) > 0n)?.amount ?? "0",
+      allowancePeriodMinutes: "0",
+      allowances: [],
     },
     passkeyPublicKey: webauthnOwnerToStore(owner),
     ...(recoveryGuardianAddress
@@ -670,29 +677,6 @@ function prunePendingPasskeySafeDeployments(now = Date.now()) {
   for (const [id, pending] of pendingPasskeySafeDeployments) {
     if (pending.expiresAt < now) pendingPasskeySafeDeployments.delete(id);
   }
-}
-
-function prunePendingAllowanceSetups(now = Date.now()) {
-  for (const [id, pending] of pendingAllowanceSetups) {
-    if (pending.expiresAt < now) pendingAllowanceSetups.delete(id);
-  }
-}
-
-/** The co-signer allowance policy as the CURRENT environment defines it. The
- *  stored plan's policy is a snapshot from planning time and may name a module
- *  address that never had code — the repair path must not re-install that. */
-function currentCosignerPolicy(): NonNullable<NonNullable<User["passkeySafe"]>["cosignerPolicy"]> {
-  const a = addrs();
-  return {
-    enabled: true,
-    allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-    allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
-    allowances: [
-      { token: a.eure, symbol: "EURE" as const, amount: CANDIDE.cosignerEureAllowanceWei.toString() },
-      { token: a.usdc, symbol: "USDC" as const, amount: CANDIDE.cosignerUsdcAllowanceUnits.toString() },
-    ],
-    allowanceAmount: CANDIDE.cosignerEureAllowanceWei.toString(),
-  };
 }
 
 function prunePendingMoneriumLinkSignatures(now = Date.now()) {
@@ -2116,16 +2100,16 @@ async function deployerFloat() {
 /**
  * Gas balances of every EOA that sends transactions for the platform. Each is
  * a distinct outage when dry, and the errors do not say which wallet is empty:
- * a dry CO-SIGNER fails every Safe debit with "gas required exceeds allowance
- * (0)" — which reads as a token-allowance problem and cost a day being chased
- * as one; a dry orchestrator fails swaps and escrow legs; a dry deployer
- * fails faucet grants. Name them, so the dashboard can too.
+ * a dry orchestrator fails swaps and escrow legs; a dry deployer fails faucet
+ * grants. Name them, so the dashboard can too. The co-signer no longer sends
+ * native transactions — Safe debits are UserOperations through the bundler
+ * and paymaster — but it stays listed so a residual balance is visible.
  */
 let operatorGasCache: { at: number; value: { role: string; address: string; eth: number }[] } | null = null;
 async function operatorGas() {
   if (operatorGasCache && Date.now() - operatorGasCache.at < 60_000) return operatorGasCache.value;
   const wallets: { role: string; address: `0x${string}` }[] = [
-    { role: "co-signer (Safe debits)", address: (CANDIDE.cosignerAddress || "0x") as `0x${string}` },
+    { role: "co-signer (userOp counter-signer, no gas needed)", address: (CANDIDE.cosignerAddress || "0x") as `0x${string}` },
     { role: "orchestrator (swap/escrow)", address: orchestratorAddress },
     { role: "deployer (faucet/gas)", address: deployerWallet.account.address },
   ];
@@ -2714,102 +2698,6 @@ app.post(
   }),
 );
 
-/**
- * What the chain says the co-signer may spend from this Safe. The database
- * records what deployment intended; debits read the chain, and the two have
- * disagreed — Safes deployed against a codeless allowance module are active,
- * hold money, and cannot debit. The client uses this to offer the repair.
- */
-app.get(
-  "/api/users/:id/passkey-safe/allowance",
-  wrap(async (req, res) => {
-    const user = store.findUser(req.params.id);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    if (!requireUserSession(req, res, user.id)) return;
-    const active =
-      user.passkeySafe?.status === "active" &&
-      user.address.toLowerCase() === user.passkeySafe.address.toLowerCase();
-    if (!active) return res.json({ configured: false, reason: "no active passkey Safe" });
-    if (!CANDIDE.cosignerAddress || !CANDIDE.cosignerKey) {
-      return res.json({ configured: false, reason: "no co-signer configured on this deployment" });
-    }
-    const a = await readCosignerTokenAllowance(user.address, addrs().eure);
-    res.json({
-      configured: Boolean(a && a.amount > 0n),
-      remainingEur: a ? eur.fromWei(a.remaining) : 0,
-    });
-  }),
-);
-
-app.post(
-  "/api/users/:id/passkey-safe/allowance",
-  wrap(async (req, res) => {
-    const user = store.findUser(req.params.id);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    if (!requireUserSession(req, res, user.id)) return;
-    if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
-      return res.status(409).json({ error: "an active passkey Safe is required before configuring its allowance" });
-    }
-    if (!CANDIDE.cosignerAddress || !CANDIDE.cosignerKey) {
-      return res.status(503).json({ error: "CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required to configure a spending allowance" });
-    }
-    const plan = { ...user.passkeySafe, cosignerPolicy: currentCosignerPolicy() };
-    let prepared: Awaited<ReturnType<typeof preparePasskeySafeAllowanceSetup>>;
-    try {
-      prepared = await preparePasskeySafeAllowanceSetup(plan);
-    } catch (err: any) {
-      return res.status(400).json({ error: `allowance setup failed: ${err?.message ?? err}` });
-    }
-    prunePendingAllowanceSetups();
-    const requestId = randomUUID();
-    pendingAllowanceSetups.set(requestId, {
-      userId: user.id,
-      expiresAt: Date.now() + 5 * 60_000,
-      plan,
-      userOperation: prepared.userOperation,
-    });
-    res.status(201).json({
-      requestId,
-      safeAddress: prepared.safeAddress,
-      credentialId: user.passkey.credentialId,
-      challenge: passkeySafeChallenge(prepared.challenge),
-      rpId: user.passkey.rpId ?? SECURITY.rpId,
-      submitTo: `/api/users/${user.id}/passkey-safe/allowance/${requestId}`,
-    });
-  }),
-);
-
-app.post(
-  "/api/users/:id/passkey-safe/allowance/:requestId",
-  wrap(async (req, res) => {
-    const user = store.findUser(req.params.id);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    if (!requireUserSession(req, res, user.id)) return;
-    if (!user.passkeySafe) return res.status(409).json({ error: "no passkey Safe for this account" });
-    prunePendingAllowanceSetups();
-    const pending = pendingAllowanceSetups.get(req.params.requestId);
-    if (!pending || pending.userId !== user.id) {
-      return res.status(404).json({ error: "allowance setup request not found or expired" });
-    }
-    const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
-    if (!authenticatorData || !clientDataJSON || !signature) {
-      return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
-    }
-    const opHash = await submitPasskeySafeDeployment(pending.plan, pending.userOperation, {
-      authenticatorData: b64urlToBuf(authenticatorData),
-      clientDataJSON: b64urlToBuf(clientDataJSON),
-      signature: b64urlToBuf(signature),
-    });
-    pendingAllowanceSetups.delete(req.params.requestId);
-    // Record the policy that is now actually on-chain. plan.cosignerAddress
-    // (the owner set) is deliberately untouched: owners did not change.
-    const updated = store.updateUser(user.id, {
-      passkeySafe: { ...user.passkeySafe, cosignerPolicy: pending.plan.cosignerPolicy },
-    });
-    res.status(201).json({ ...publicUser(updated), allowanceOpHash: opHash });
-  }),
-);
-
 app.post(
   "/api/passkey/login",
   wrap(async (req, res) => {
@@ -3040,11 +2928,71 @@ app.post(
       name: transfer.recipientName,
     });
     transfer.auth = { to: orchestratorAddress, amountWei: amountWei.toString(), destination, deadline };
+    // Per-transfer allowance grant: the exact EURe this transfer will debit,
+    // granted as a one-time allowance the user's passkey approves alongside
+    // the device signature. The Safe-funded SEPA rail only moves the fee
+    // (Monerium burns the payout from the Safe directly), so that is all the
+    // grant covers there. No grant means no debit can happen — the co-signer
+    // holds no standing spend authority between transfers.
+    // The user-signed debit: a UserOperation moving this transfer's exact
+    // amount (the fee alone on the SEPA rail — the payout burns straight from
+    // the Safe) to the orchestrator's working address. The passkey signs its
+    // hash at send time, so the chain enforces amount and destination; no
+    // allowance and no server-relayable spend authority exists at any point.
+    let safeExecution:
+      | { credentialId: string; challenge: string; amountEur: number; token: "EURE" }
+      | undefined;
+    const debitWei =
+      transfer.rail === "sepa"
+        ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR)))
+        : amountWei;
+    if (
+      debitWei > 0n &&
+      user.passkey?.credentialId &&
+      user.passkeySafe?.status === "active" &&
+      user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
+      // A 2-of-2 Safe needs the co-signer service to counter-sign; a
+      // passkey-only Safe needs nothing beyond the user's assertion.
+      (!user.passkeySafe.cosignerAddress || (CANDIDE.cosignerAddress && CANDIDE.cosignerKey)) &&
+      !SECURITY.allowSimulation
+    ) {
+      try {
+        const prepared = await prepareTransferExecution(
+          user.passkeySafe,
+          addrs().eure,
+          orchestratorAddress,
+          debitWei,
+        );
+        prunePendingTransferExecutions();
+        const challenge = passkeySafeChallenge(prepared.challenge);
+        pendingTransferExecutions.set(transfer.id, {
+          userId: user.id,
+          expiresAt: deadline * 1000,
+          challenge,
+          plan: user.passkeySafe,
+          userOperation: prepared.userOperation,
+        });
+        safeExecution = {
+          credentialId: user.passkey.credentialId,
+          challenge,
+          amountEur: eur.fromWei(debitWei),
+          token: "EURE",
+        };
+      } catch (err: any) {
+        // The transfer is still created: without an execution the debit will
+        // refuse with a precise reason, which beats failing creation for a
+        // bundler hiccup. Say why here so the refusal is diagnosable.
+        console.error(
+          `Safe execution preparation failed for ${transfer.id}: ${err?.message ?? err}`,
+        );
+      }
+    }
     store.addTransfer(transfer);
     res.status(201).json({
       ...transfer,
       authorization: {
         authorizer,
+        safeExecution,
         typedData: paymentAuthorizationTypedData({
           account: user.address,
           amountWei,
@@ -3258,6 +3206,55 @@ app.post(
         error: "passkey Safe Monerium redeem approval is required before this SEPA transfer can execute",
       });
     }
+    // User-signed execution: when creation prepared one, this transfer can
+    // only debit through it — the UserOperation the passkey approves IS the
+    // movement, and there is no server-side authority to fall back on.
+    // Verified BEFORE the authorization is claimed: a bad assertion must not
+    // consume the one-shot claim.
+    prunePendingTransferExecutions();
+    const pendingExecution = pendingTransferExecutions.get(transfer.id);
+    if (pendingExecution && pendingExecution.userId !== user.id) {
+      return res.status(403).json({ error: "Safe execution belongs to a different account" });
+    }
+    const executionAssertion = req.body?.executionAssertion;
+    if (pendingExecution) {
+      if (!user.passkey?.publicKey) {
+        return res.status(409).json({ error: "no passkey registered for this account" });
+      }
+      const { credentialId, authenticatorData, clientDataJSON, signature: assertionSignature } =
+        executionAssertion ?? {};
+      if (!executionAssertion) {
+        return res.status(400).json({
+          error:
+            "this transfer's debit needs passkey approval — " +
+            "submit executionAssertion signed over the safeExecution challenge",
+        });
+      }
+      if (credentialId !== user.passkey.credentialId) {
+        return res.status(403).json({ error: "passkey credential does not match this account" });
+      }
+      if (!authenticatorData || !clientDataJSON || !assertionSignature) {
+        return res.status(400).json({
+          error: "executionAssertion requires authenticatorData, clientDataJSON and signature",
+        });
+      }
+      try {
+        const { signCount } = await verifyAssertionForChallenge(
+          authenticatorData,
+          clientDataJSON,
+          assertionSignature,
+          user.passkey.publicKey,
+          user.passkey.signCount ?? 0,
+          user.passkey.rpId ?? SECURITY.rpId,
+          SECURITY.origins,
+          pendingExecution.challenge,
+          true,
+        );
+        user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+      } catch (err: any) {
+        return res.status(401).json({ error: String(err?.message ?? err) });
+      }
+    }
     // Claim the authorization before execution. Two parallel submissions of the
     // same signature both used to clear the CREATED check above, and both could
     // submit the same spend. claimAuthorization is the atomic boundary: after it
@@ -3265,6 +3262,22 @@ app.post(
     if (!store.claimAuthorization(transfer.id)) {
       return res.status(409).json({ error: "authorization already submitted for this transfer" });
     }
+    // Hand the user-approved execution to the orchestrator. The claim above
+    // makes this the single submission allowed to relay it; the debit leg
+    // submits the UserOperation, so a failed relay flows through the same
+    // FAILED/compensation path as any other debit failure.
+    const execution = pendingExecution
+      ? {
+          plan: pendingExecution.plan,
+          userOperation: pendingExecution.userOperation,
+          assertion: {
+            authenticatorData: b64urlToBuf(executionAssertion.authenticatorData),
+            clientDataJSON: b64urlToBuf(executionAssertion.clientDataJSON),
+            signature: b64urlToBuf(executionAssertion.signature),
+          },
+        }
+      : undefined;
+    if (pendingExecution) pendingTransferExecutions.delete(transfer.id);
     if (effectiveRedeemSignature && transfer.moneriumRedeem) {
       executableTransfer = store.updateTransfer(transfer.id, {
         moneriumRedeem: {
@@ -3279,8 +3292,8 @@ app.post(
     const auth = { deadline: transfer.auth.deadline, signature: signature as `0x${string}` };
     const result =
       executableTransfer.rail === "sepa"
-        ? await executeSepaTransfer(executableTransfer, user, auth)
-        : await executeTransfer(executableTransfer, user, auth);
+        ? await executeSepaTransfer(executableTransfer, user, auth, execution)
+        : await executeTransfer(executableTransfer, user, auth, execution);
     res.status(result.state === "FAILED" ? 502 : 200).json(result);
   }),
 );
@@ -3434,20 +3447,20 @@ if (sandbox) {
 if (CRYPTO_IN.enabled) startCryptoDepositPoller();
 app.listen(API_PORT, API_HOST, () => {
   console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
-  // A co-signer with a zero allowance is the silent version of today's outage:
-  // deployment installs the module and delegate, grants nothing, and every
-  // debit refuses with "allowance is 0". Say so at boot, not at send time.
+  // Allowances are gone entirely: every debit is a UserOperation the user's
+  // passkey signs for the exact amount and destination. An operator still
+  // setting the old env knobs should hear that they no longer do anything —
+  // silently ignoring them would read as authority that exists but doesn't.
   if (
-    CANDIDE.cosignerAddress &&
-    CANDIDE.cosignerKey &&
-    CANDIDE.cosignerEureAllowanceWei <= 0n &&
-    CANDIDE.cosignerUsdcAllowanceUnits <= 0n
+    process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ||
+    process.env.CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS ||
+    process.env.CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES ||
+    process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT
   ) {
     console.warn(
-      "WARNING: a co-signer is configured but CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI and " +
-        "CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS are both unset/0 — passkey Safes will deploy " +
-        "with a spending allowance of 0 and every debit will refuse. Set the allowance(s) " +
-        "and restart before onboarding accounts.",
+      "NOTE: CANDIDE_COSIGNER_*_ALLOWANCE_* env vars are set but co-signer allowances no longer " +
+        "exist — every Safe debit is a UserOperation the user's passkey signs at send time. " +
+        "Legacy standing allowances on old Safes are revoked automatically on the next send.",
     );
   }
 });

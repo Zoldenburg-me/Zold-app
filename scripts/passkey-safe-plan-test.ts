@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CANDIDE,
-  passkeySafeAllowanceSetupTransactions,
   passkeySafeRecoverySetupTransactions,
   smartAccountForPasskey,
   smartAccountForPasskeyCosigner,
@@ -61,53 +60,19 @@ assert.equal(
   CANDIDE.recoveryModuleAddress.toLowerCase(),
   "the recovery module must receive the guardian setup call",
 );
-const allowanceSetup = passkeySafeAllowanceSetupTransactions({
-  address: safe.accountAddress as `0x${string}`,
-  threshold: 2,
-  cosignerAddress: cosigner,
-  passkeyPublicKey: webauthnOwnerToStore(passkeyOwner),
-  cosignerPolicy: {
-    enabled: true,
-    allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-    allowancePeriodMinutes: "0",
-    allowances: [
-      { token: "0x2222222222222222222222222222222222222222", symbol: "EURE", amount: "0" },
-      { token: "0x3333333333333333333333333333333333333333", symbol: "USDC", amount: "0" },
-    ],
-    allowanceAmount: "0",
-  },
-});
-assert.equal(allowanceSetup.length, 2, "co-signer setup should enable allowance module and add delegate only");
-assert.equal(
-  allowanceSetup[0].to.toLowerCase(),
-  safe.accountAddress.toLowerCase(),
-  "the Safe itself must receive the allowance-module enable call",
+/* The allowance model is gone: deployment installs recovery only, and debits
+   are UserOperations the passkey signs. The source assertion below keeps the
+   allowance setup from quietly returning. */
+const candideSource = readFileSync(path.join(ROOT, "services/api/src/wallet/candide.ts"), "utf8");
+assert.ok(
+  !candideSource.includes("passkeySafeAllowanceSetupTransactions"),
+  "Safe deployment must not install an allowance module or delegate",
 );
-assert.equal(
-  allowanceSetup[1].to.toLowerCase(),
-  CANDIDE.allowanceModuleAddress.toLowerCase(),
-  "the allowance module must receive the delegate setup call",
+assert.ok(
+  !candideSource.includes("createAllowanceTransferMetaTransaction"),
+  "no code path may spend through an allowance delegate transfer",
 );
-const allowanceWithSpend = passkeySafeAllowanceSetupTransactions({
-    address: safe.accountAddress as `0x${string}`,
-    threshold: 2,
-    cosignerAddress: cosigner,
-    passkeyPublicKey: webauthnOwnerToStore(passkeyOwner),
-    cosignerPolicy: {
-      enabled: true,
-      allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-      allowancePeriodMinutes: "1440",
-      allowances: [
-        { token: "0x2222222222222222222222222222222222222222", symbol: "EURE", amount: "1000000000000000000" },
-        { token: "0x3333333333333333333333333333333333333333", symbol: "USDC", amount: "1000000" },
-      ],
-    },
-  });
-assert.equal(
-  allowanceWithSpend.length,
-  4,
-  "positive co-signer policy should enable module, add delegate, and set one allowance per token",
-);
+
 assert.equal(webauthnOwnerFromJwk({ ...jwk, crv: "P-384" }), null);
 
 const deploymentSources = [
