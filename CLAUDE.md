@@ -622,8 +622,7 @@ exists in LI.FI. Approve what the maker NAMES.
  - Intent-based: you sign an order, solvers compete to fill it. No inventory on
    either side, which is the whole point.
  - `signingScheme: eip1271` — a Safe can sign the order itself. Same shape as
-   the FP4 recovery plan, and the same combination Safe Foundation used in
-   their consumer build.
+   the FP4 recovery plan.
  - RATE LIMITED, hard. Two quotes seconds apart returned 429 pointing at their
    Discord for a custom limit. indicativeRate() is cached for exactly this
    reason; the 60s default may still be too aggressive with real users, and a
@@ -761,10 +760,9 @@ THE BLOCKER: losing the browser device key permanently bricks an account.
 `RemitVault.setAuthorizer` only lets the CURRENT authorizer rotate, and the
 key lives in localStorage. No passkey, no support path, no ramp override
 recovers it. Demonstrated live: the "Base Proof" account on Base Sepolia has
-EUR 121 credited and can never spend it. Safe Foundation's own consumer
-research (built-tested-shelved, July 2026) found users will not fund an
-account without credible, *rehearsable* recovery — so this gates launch, not
-polish.
+EUR 121 credited and can never spend it. Consumer smart-wallet research
+consistently finds users will not fund an account without credible,
+*rehearsable* recovery — so this gates launch, not polish.
 
 THE FIX, in this order (the order is not optional):
  0. Refuse to issue an IBAN until a passkey exists. An IBAN is the point of

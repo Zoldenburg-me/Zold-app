@@ -1,6 +1,6 @@
 /**
  * Payment pages — a shareable handle that resolves to a page-scoped deposit
- * address someone can pay, in the shape of Fluidkey's `name.fkey.id`.
+ * address someone can pay.
  *
  * The page is deliberately dull: a handle, the address, a QR code, and the
  * chain and token it expects. No amount field and no wallet connection, because
