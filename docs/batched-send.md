@@ -69,11 +69,10 @@ The dust option interacts with `applySurplus`: positive slippage that today
 flows to the user would instead sit in the Safe unaccounted. Decide that
 deliberately rather than discovering it as a balance drift.
 
-**3. CCTP still takes minutes.** Batching removes signatures, not the bridge.
-The burn is atomic with the swap; the Stellar mint is not, and cannot be — it
-waits on Circle's attestation (measured ~15 minutes at hard finality, seconds
-with `CCTP_MIN_FINALITY=1000` and a `maxFee`). So the userOp ends at the burn,
-and the mint stays an async step that `npm run cctp:resume` can recover.
+**3. Bridge settlement is still async.** Batching removes signatures, not the
+external funding wait. The userOp can make the swap and local debit atomic, but
+Bridge/anchor settlement still has to be reconciled as a separate hosted rail
+state before the payout is marked funded.
 
 ## Order of work
 
