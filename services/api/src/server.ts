@@ -3005,7 +3005,9 @@ app.post(
             });
             if (swap) {
               const convertWei = swap.plan.approval.amount;
-              if (convertWei >= debitWei) throw new Error("swap amount must leave room for the fee");
+              // Equality is the legitimate zero-fee shape; only a convert
+              // amount EXCEEDING the signed debit total is incoherent.
+              if (convertWei > debitWei) throw new Error("swap amount exceeds the authorized debit total");
               prepared = await prepareTransferBatchExecution(user.passkeySafe, {
                 token: addrs().eure,
                 feeTo: orchestratorAddress,

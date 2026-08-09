@@ -33,9 +33,9 @@ Only **two** are hard blockers: Monerium production and Sumsub. Everything else 
 
 **If you only send two emails: #1 and #2.** Those are the only hard blockers.
 
-**#3 is the strategic one.** Bridge is Stripe-owned (acquired Oct 2024, $1.1B). One integration covers the **bank** rails we'd otherwise chase across dLocal and Yellow Card separately — it's what Peanut runs on. Worth sending even though it isn't blocking.
+**#3 is the strategic one.** Bridge is Stripe-owned (acquired Oct 2024, $1.1B). One integration covers the **bank** rails we'd otherwise chase across dLocal and Yellow Card separately. Worth sending even though it isn't blocking.
 
-> ⚠️ **Naming clash:** `services/api/src/bridge/` in our codebase is the **Circle CCTP** worker (USDC burn/mint to Stellar). Nothing to do with Bridge.xyz. Don't let the two get confused in conversation.
+> `services/api/src/bridge/bridgexyz.ts` is the Bridge.xyz transfer seam — it replaced the old Circle CCTP worker that previously lived in this directory.
 
 ### Stripe — two very different things
 
