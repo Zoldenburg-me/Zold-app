@@ -41,7 +41,12 @@ import {
   transferIdHash,
   writeAndWait,
 } from "./chain.js";
-import { CANDIDE, transferTokenFromSafeAllowance } from "./wallet/candide.js";
+import {
+  CANDIDE,
+  submitPasskeySafeDeployment,
+  type BrowserPasskeyAssertion,
+  type PasskeySafeDeploymentPlan,
+} from "./wallet/candide.js";
 import {
   createCashPickup,
   createCashPickupViaAnchor,
@@ -58,6 +63,18 @@ import { anchorModeEnabled, SECURITY } from "./config.js";
 export interface PaymentAuthorization {
   deadline: number;
   signature: `0x${string}`;
+}
+
+/**
+ * The user-signed debit of one transfer: a UserOperation prepared at transfer
+ * creation moving the exact amount out of the user's Safe, plus the passkey
+ * assertion over its hash collected at send time. The orchestrator relays it;
+ * it cannot author one.
+ */
+export interface SafeExecution {
+  plan: PasskeySafeDeploymentPlan;
+  userOperation: Parameters<typeof submitPasskeySafeDeployment>[1];
+  assertion: BrowserPasskeyAssertion;
 }
 
 /**
@@ -224,16 +241,14 @@ async function debitInputFunds(
   user: User,
   auth: PaymentAuthorization,
   txs: Transfer["txs"],
+  execution: SafeExecution | undefined,
 ): Promise<void> {
-  const a = addrs();
-  const sendWei = eur.toWei(transfer.sendEur);
-
   await assertDeviceAuthorization(transfer, user, auth);
   if (transfer.txs.some((x) => x.step === DEBIT_STEP.safe)) {
     throw new Error("duplicate transfer: this transfer already moved EURe out of the Safe");
   }
 
-  const moveHash = await moveTokenFromUserSafe(user, a.eure, orchestratorAddress, sendWei);
+  const moveHash = await submitSafeExecution(user, execution);
   txs.push({ step: DEBIT_STEP.safe, hash: moveHash });
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
   failpoint("safe.transfer");
@@ -255,6 +270,7 @@ async function debitSafeFundedSepaFee(
   auth: PaymentAuthorization,
   payoutEur: number,
   txs: Transfer["txs"],
+  execution: SafeExecution | undefined,
 ): Promise<void> {
   await assertDeviceAuthorization(transfer, user, auth);
   if (transfer.txs.some((x) => x.step === DEBIT_STEP.safeFee)) {
@@ -262,7 +278,7 @@ async function debitSafeFundedSepaFee(
   }
   const feeEur = Math.max(0, transfer.sendEur - payoutEur);
   if (feeEur > 0) {
-    const feeHash = await moveTokenFromUserSafe(user, addrs().eure, orchestratorAddress, eur.toWei(feeEur));
+    const feeHash = await submitSafeExecution(user, execution);
     txs.push({ step: DEBIT_STEP.safeFee, hash: feeHash });
   }
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
@@ -271,13 +287,14 @@ async function debitSafeFundedSepaFee(
 
 export function safeDebitBlocker(user: User): string | null {
   if (activePasskeySafe(user)) {
-    return passkeySafeAllowanceReady(user)
+    return passkeySafeExecutionReady(user)
       ? null
-      : "Co-signer service is not configured — please ensure CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are set in environment";
+      : "This account's Safe has a co-signing owner but no co-signer service is configured — " +
+        "set CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY so send approvals can be counter-signed";
   }
   return (
-    "Safe-held funds need an active passkey Safe with a co-signer service configured " +
-    "before transfers can be executed"
+    "Safe-held funds need an active passkey Safe before transfers can be executed — " +
+    "every debit is a UserOperation the passkey signs"
   );
 }
 
@@ -288,49 +305,36 @@ function activePasskeySafe(user: User): boolean {
   );
 }
 
-function passkeySafeAllowanceReady(user: User): boolean {
+/** Can this account's send-time UserOperation actually be completed?
+ *  A passkey-only Safe needs nothing but the user's assertion; a 2-of-2 Safe
+ *  additionally needs the co-signer key to counter-sign. */
+function passkeySafeExecutionReady(user: User): boolean {
   if (!activePasskeySafe(user) || !user.passkeySafe) return false;
-  return Boolean(
-    (user.passkeySafe.cosignerPolicy?.enabled && user.passkeySafe.cosignerAddress) ||
-    (CANDIDE.cosignerAddress && CANDIDE.cosignerKey)
-  );
+  if (!user.passkeySafe.cosignerAddress) return true;
+  return Boolean(CANDIDE.cosignerKey);
 }
 
-async function moveTokenFromUserSafe(
-  user: User,
-  token: `0x${string}`,
-  to: `0x${string}`,
-  amount: bigint,
-): Promise<string> {
-  if (!passkeySafeAllowanceReady(user)) {
+/**
+ * The user-approved debit of one transfer: a UserOperation, prepared at
+ * transfer creation for the exact token/amount/destination, whose hash the
+ * user's passkey signed at send time. This process cannot produce that
+ * signature — it can only counter-sign (where the co-signer is an owner) and
+ * relay. No execution means no debit; there is no server-side fallback path.
+ */
+async function submitSafeExecution(user: User, execution: SafeExecution | undefined): Promise<string> {
+  if (!passkeySafeExecutionReady(user)) {
     throw new Error(safeDebitBlocker(user) ?? "Safe debit is not configured for this account");
   }
-  if (user.passkeySafe && !user.passkeySafe.cosignerPolicy?.enabled && CANDIDE.cosignerAddress) {
-    const a = addrs();
-    store.updateUser(user.id, {
-      passkeySafe: {
-        ...user.passkeySafe,
-        cosignerAddress: CANDIDE.cosignerAddress,
-        cosignerPolicy: {
-          enabled: true,
-          allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-          allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
-          allowances: [
-            { token: a.eure, symbol: "EURE", amount: CANDIDE.cosignerEureAllowanceWei.toString() },
-            { token: a.usdc, symbol: "USDC", amount: CANDIDE.cosignerUsdcAllowanceUnits.toString() },
-          ],
-          allowanceAmount: CANDIDE.cosignerEureAllowanceWei.toString(),
-        },
-      },
-    });
+  if (SECURITY.allowSimulation) {
+    return "0xmock-safe-execution-hash";
   }
-  return transferTokenFromSafeAllowance({
-    safeAddress: user.address,
-    token,
-    to,
-    amount,
-    moduleAddress: user.passkeySafe?.cosignerPolicy?.allowanceModuleAddress as `0x${string}` | undefined,
-  });
+  if (!execution) {
+    throw new Error(
+      "this transfer has no passkey-approved Safe execution — create the transfer again and approve it with your passkey",
+    );
+  }
+  const opHash = await submitPasskeySafeDeployment(execution.plan, execution.userOperation, execution.assertion);
+  return opHash ?? "0x";
 }
 
 function bridgeDestination(): { toAddress: string; blockchainMemo?: string } {
@@ -633,14 +637,16 @@ export async function executeTransfer(
   transfer: Transfer,
   user: User,
   auth: PaymentAuthorization,
+  execution?: SafeExecution,
 ): Promise<Transfer> {
   const a = addrs();
   const tid = transferIdHash(transfer.id);
   const txs = transfer.txs;
 
   try {
-    // 1. Move the signed input amount to the orchestrator's working address.
-    await debitInputFunds(transfer, user, auth, txs);
+    // 1. The user-signed UserOperation moves the input amount to the
+    //    orchestrator's working address.
+    await debitInputFunds(transfer, user, auth, txs, execution);
 
     // 2. Swap the convertible portion (send - fixed fee) EURe -> USDC.
     //    The fixed fee stays at the orchestrator address as revenue.
@@ -793,6 +799,7 @@ export async function executeSepaTransfer(
   transfer: Transfer,
   user: User,
   auth: PaymentAuthorization,
+  execution?: SafeExecution,
 ): Promise<Transfer> {
   const txs = transfer.txs;
 
@@ -806,7 +813,7 @@ export async function executeSepaTransfer(
       country: user.country || "DE",
     };
 
-    await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs);
+    await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs, execution);
 
     if (moneriumSandboxEnabled()) {
       try {
