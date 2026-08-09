@@ -453,11 +453,36 @@ with the user's Safe as verifyingContract.
 THE SECURITY CONSEQUENCE, stated plainly because the text below claims the
 opposite as VERIFIED: a wrong-key signature is no longer "rejected by the
 contract itself". The server is the thing checking, but it no longer stores
-user Safe owner keys; passkey Safes debit through configured co-signer
-allowances. The device key still stops a stolen session from swapping the payee
-or the amount; the co-signer allowance bounds what the API can relay. The
-recovery plan below needs rewriting against whatever replaces the vault as the
-enforcement point.
+user Safe owner keys; passkey Safes debit through co-signer allowances. The
+device key still stops a stolen session from swapping the payee or the amount.
+The recovery plan below needs rewriting against whatever replaces the vault as
+the enforcement point.
+USER-SIGNED EXECUTION (Aug 2026, branch claude/user-signed-execution — the
+regulatory doc's Change 1; supersedes the interim per-transfer allowance that
+briefly lived on claude/per-transfer-allowance and was never merged): the
+ALLOWANCE MODEL IS GONE ENTIRELY. No module, no delegate, no standing or
+one-time amounts — transferTokenFromSafeAllowance no longer exists. POST
+/api/transfers prepares the userOp that IS the debit: an ERC-20 transfer of
+the exact amount (fee only on the SEPA rail; nothing when the fee is 0) to
+the orchestrator address. The passkey signs its hash at send time
+(executionAssertion on /authorize, verified against the stored challenge
+BEFORE the one-shot claim), the co-signer counter-signs where it is an owner,
+and the orchestrator's debit leg submits it through the bundler — so a debit
+failure takes the normal FAILED/compensation path. The chain enforces token,
+amount AND destination; the API can dispose of nothing, ever. Legacy standing
+allowances on old Safes are revoked automatically: the prepared userOp
+prepends deleteAllowance when the chain shows one (CANDIDE.
+allowanceModuleAddress survives only for that read). The co-signer sends no
+native transactions any more — it needs NO gas. The allowance repair routes
+(GET/POST /passkey-safe/allowance*) and the client's repair banner are
+deleted. The CANDIDE_COSIGNER_*_ALLOWANCE_* env knobs do nothing (boot note
+says so). npm run execution:test (7 checks, pure builder); fp3/e2e blocker
+regexes updated to the new refusal text. STILL OPEN (Change 2, windows 1-3):
+after the debit the orchestrator holds the EURe through swap and bridge —
+folding approve+swap+forward into the same user-signed batch is the next
+step, and depends on making liquidity adapters build calldata for the Safe
+as executor. UNPROVEN: no real Base Sepolia send has exercised the
+execution→debit flow end to end.
 
 FP4 (key custody): SPEND-AUTHORITY HALF DONE (July 2026, PR #11, branch
 claude/fp4-vault-authorization — do not re-do differently). RemitVault.debit

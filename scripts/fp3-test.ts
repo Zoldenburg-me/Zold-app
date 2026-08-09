@@ -90,11 +90,11 @@ try {
   const device = newDevice();
   await registerDevice(api, user.id, device);
 
-  console.log("3/5 €100 cash transfer — refuses accounts without passkey Safe allowance…");
+  console.log("3/5 €100 cash transfer — refuses accounts without a passkey Safe…");
   const quote = await api("/api/quotes", { userId: user.id, sendEur: 100, rail: "cash" });
   await assert.rejects(
     () => sendTransfer(api, device, { quoteId: quote.id, recipientName: "X", recipientPhone: "+254700000000" }),
-    /active passkey Safe with a co-signer/,
+    /active passkey Safe before transfers can be executed/,
   );
   const after = await api(`/api/users/${user.id}`);
   assert.ok(Math.abs(after.balanceEur - 250) < 0.02, `balance untouched, got €${after.balanceEur}`);
