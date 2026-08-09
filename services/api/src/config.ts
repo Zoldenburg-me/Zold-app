@@ -132,57 +132,23 @@ if (KYC.operatorToken && KYC.operatorToken.length < 24) {
 }
 
 /**
- * CCTP bridge (Base Sepolia -> Stellar testnet). Dry-run by default: the
- * worker builds and logs the exact transactions; CCTP_LIVE=1 plus a funded
- * key executes them for real.
+ * Bridge.xyz orchestration.
+ *
+ * This is the replacement seam for the old direct CCTP burn/mint worker in
+ * the cash rail. In dry-run mode it records Bridge-shaped deposit instructions
+ * and leaves the local escrow demo intact; BRIDGE_LIVE=1 calls Bridge's
+ * Transfer API and waits for the user/orchestrator-side deposit to fund it.
  */
-export const CCTP = {
-  /**
-   * Fast Transfer vs standard, and the reason it matters: a bridge that
-   * outlives the payout quote it is funding cannot settle at the rate the user
-   * was shown. minFinalityThreshold 2000 is hard finality — MEASURED at ~15
-   * minutes Base Sepolia -> Stellar, against MoneyGram's 30-minute rate
-   * guarantee, so it fits with little room. 1000 is soft finality, which Circle
-   * settles in seconds in exchange for maxFee. Default stays on the slow, free
-   * path; switch deliberately when a real payout depends on the timing.
-   */
-  minFinalityThreshold: Number(process.env.CCTP_MIN_FINALITY ?? 2000),
-  maxFee: BigInt(process.env.CCTP_MAX_FEE ?? 0),
-  /**
-   * How long to wait for Circle's attestation. The old 5-minute default was
-   * shorter than Base finality, so the FIRST live bridge always timed out with
-   * the USDC already burned — the worst shape of failure, an irreversible step
-   * followed by an error that reads like nothing happened.
-   */
-  attestationTimeoutMs: Number(process.env.CCTP_ATTESTATION_TIMEOUT_MS ?? 30 * 60_000),
-  /**
-   * The asset CCTP actually moves. Distinct from STELLAR.anchorAsset, which is
-   * what the anchor pays out in and still defaults to SRT — checking that one
-   * before a USDC burn refused a good bridge, and would have waved through a
-   * bad one.
-   */
-  bridgedAssetCode: process.env.CCTP_BRIDGED_ASSET ?? "USDC",
-
-  live: process.env.CCTP_LIVE === "1",
-  env: process.env.CCTP_ENV ?? "testnet",
-  baseRpc: process.env.CCTP_BASE_RPC ?? "https://sepolia.base.org",
-  // Circle CCTP V2 testnet deployments (Base Sepolia, domain 6).
-  tokenMessenger: (process.env.CCTP_TOKEN_MESSENGER ??
-    "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA") as `0x${string}`,
-  messageTransmitter: (process.env.CCTP_MESSAGE_TRANSMITTER ??
-    "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275") as `0x${string}`,
-  usdc: (process.env.CCTP_USDC ??
-    "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as `0x${string}`,
-  stellarDomain: 27,
-  // Stellar testnet CCTP contracts (C-strkeys). All mints route through the
-  // CctpForwarder: mintRecipient AND destinationCaller must be the forwarder.
-  stellarForwarder:
-    process.env.CCTP_STELLAR_FORWARDER ?? "CA66Q2WFBND6V4UEB7RD4SAXSVIWMD6RA4X3U32ELVFGXV5PJK4T4VSZ",
-  stellarMessageTransmitter:
-    process.env.CCTP_STELLAR_MSG_TRANSMITTER ?? "CBJ6MTCKKZG73PMDZCJMSFRD7DQEMI4FKDH7CGDSV4W6FHCRBCQAVVJY",
-  irisBase: process.env.CCTP_IRIS_BASE ?? "https://iris-api-sandbox.circle.com",
-  // Funded Base Sepolia EOA for live burns (never a hardhat dev key).
-  burnerKey: (process.env.CCTP_BURNER_KEY ?? "") as `0x${string}` | "",
+export const BRIDGE = {
+  live: process.env.BRIDGE_LIVE === "1",
+  apiKey: process.env.BRIDGE_API_KEY ?? "",
+  baseUrl: process.env.BRIDGE_BASE_URL ?? "https://api.bridge.xyz",
+  onBehalfOf: process.env.BRIDGE_ON_BEHALF_OF ?? "",
+  sourceRail: process.env.BRIDGE_SOURCE_RAIL ?? "base",
+  destinationRail: process.env.BRIDGE_DESTINATION_RAIL ?? "stellar",
+  destinationCurrency: process.env.BRIDGE_DESTINATION_CURRENCY ?? "usdc",
+  destinationAddress: process.env.BRIDGE_DESTINATION_ADDRESS ?? "",
+  destinationMemo: process.env.BRIDGE_DESTINATION_MEMO ?? "",
 };
 
 const configuredAnchorDomain = process.env.MG_ANCHOR_DOMAIN ?? "";
@@ -355,8 +321,9 @@ function assertProductionConfig() {
   if (MONERIUM.tokenEncryptionKey && MONERIUM.tokenEncryptionKey.length < 32) {
     fail("MONERIUM_TOKEN_ENCRYPTION_KEY must be at least 32 characters");
   }
-  if (CCTP.live) {
-    fail("CCTP_LIVE=1 is a testnet burn/mint path and is forbidden in production");
+  if (BRIDGE.live) {
+    if (!BRIDGE.apiKey) fail("BRIDGE_API_KEY is required when BRIDGE_LIVE=1");
+    if (!BRIDGE.onBehalfOf) fail("BRIDGE_ON_BEHALF_OF is required when BRIDGE_LIVE=1");
   }
   /**
    * The app chain and the smart-account chain must agree in production.

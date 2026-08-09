@@ -10,14 +10,13 @@
  * marked FAILED; the BridgeEscrow.release() refund path is wired but manual
  * in the MVP.
  */
-import { FX, moneriumSandboxEnabled, USING_LOCAL_RPC } from "./config.js";
-import { Keypair } from "@stellar/stellar-sdk";
+import { BRIDGE, FX, moneriumSandboxEnabled, USING_LOCAL_RPC } from "./config.js";
 import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
 import { paymentMemo } from "./sepa.js";
-import { bridgeUsdcToStellar, CctpBridgeError, type CctpPlan } from "./bridge/cctp.js";
+import { createBridgeTransfer, BridgeTransferError, type BridgeTransferPlan } from "./bridge/bridgexyz.js";
 import {
   executeTransferLiquidity,
   liquidityAmountOutUnits,
@@ -50,7 +49,7 @@ import {
   fundAndRefreshAnchorPickup,
   getPickup,
 } from "./adapters/moneygram.js";
-import { anchorModeEnabled, CCTP, SECURITY, STELLAR } from "./config.js";
+import { anchorModeEnabled, SECURITY } from "./config.js";
 
 /**
  * FP4: the user's device signature over this payment's exact terms. The
@@ -334,21 +333,30 @@ async function moveTokenFromUserSafe(
   });
 }
 
-function cctpRecipientStellar(): string {
-  const explicit = process.env.CCTP_STELLAR_RECIPIENT;
-  if (explicit) return explicit;
-  if (STELLAR.treasurySecret) return Keypair.fromSecret(STELLAR.treasurySecret).publicKey();
-  if (CCTP.live) throw new Error("CCTP_LIVE=1 requires CCTP_STELLAR_RECIPIENT or STELLAR_TREASURY_SECRET");
-  return Keypair.random().publicKey();
+function bridgeDestination(): { toAddress: string; blockchainMemo?: string } {
+  if (BRIDGE.destinationAddress) {
+    return {
+      toAddress: BRIDGE.destinationAddress,
+      ...(BRIDGE.destinationMemo ? { blockchainMemo: BRIDGE.destinationMemo } : {}),
+    };
+  }
+  if (BRIDGE.live) {
+    throw new Error(
+      "BRIDGE_LIVE=1 requires BRIDGE_DESTINATION_ADDRESS until MoneyGram anchor payment instructions are wired into Bridge",
+    );
+  }
+  return { toAddress: "bridge-dry-run-stellar-destination" };
 }
 
-function recordCctpPlan(txs: Transfer["txs"], plan: CctpPlan) {
-  txs.push({ step: `cctp.${plan.mode}.plan`, hash: plan.burnTx.data.slice(0, 66) });
-  if (plan.approveTxHash) txs.push({ step: "cctp.approve", hash: plan.approveTxHash });
-  if (plan.burnTxHash) txs.push({ step: "cctp.burn", hash: plan.burnTxHash });
-  if (plan.attestation) txs.push({ step: "cctp.attestation", hash: plan.attestation.message.slice(0, 66) });
-  txs.push({ step: "cctp.mint.prepared", hash: plan.stellarMint.contract });
-  if (plan.stellarMintTxHash) txs.push({ step: "cctp.mint_and_forward", hash: plan.stellarMintTxHash });
+function recordBridgePlan(txs: Transfer["txs"], plan: BridgeTransferPlan) {
+  txs.push({ step: `bridge.xyz.${plan.mode}.transfer`, hash: plan.transferId ?? plan.idempotencyKey });
+  if (plan.sourceDepositInstructions?.to_address) {
+    txs.push({ step: "bridge.xyz.deposit.address", hash: String(plan.sourceDepositInstructions.to_address) });
+  }
+  if (plan.sourceDepositInstructions?.blockchain_memo) {
+    txs.push({ step: "bridge.xyz.deposit.memo", hash: String(plan.sourceDepositInstructions.blockchain_memo) });
+  }
+  if (plan.destinationTxHash) txs.push({ step: "bridge.xyz.destination_tx", hash: plan.destinationTxHash });
 }
 
 function cashPayoutState(pickup: NonNullable<Transfer["pickup"]>): TransferState {
@@ -383,10 +391,10 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
       txs,
     });
   }
-  if (txs.some((x) => x.step === "cctp.burn")) {
+  if (txs.some((x) => x.step === "bridge.xyz.destination_tx")) {
     return store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
-      error: `${failed.error}; CCTP burn was submitted, so automatic local refund is unsafe until the burn/mint/anchor state is reconciled`,
+      error: `${failed.error}; Bridge reported destination funding, so automatic local refund is unsafe until Bridge/anchor state is reconciled`,
       txs,
     });
   }
@@ -650,20 +658,45 @@ export async function executeTransfer(
       liquidity: serializeExecution(liquidity),
     });
 
-    // 3. Bridge USDC toward Stellar. In dry-run mode we record the exact CCTP
-    //    burn/mint plan and keep the local escrow leg so the no-credential demo
-    //    can still complete. With CCTP_LIVE=1, the CCTP worker submits the Base
-    //    Sepolia burn and polls Iris; failures after burn go to manual review.
-    let cctpPlan: CctpPlan;
+    // 3. Ask Bridge.xyz to fund the Stellar side. In dry-run mode we record
+    //    Bridge-shaped deposit instructions and keep the local escrow leg so
+    //    the no-credential demo can still complete. BRIDGE_LIVE=1 calls the
+    //    Bridge Transfer API; once Bridge reports destination funding, refunds
+    //    must reconcile Bridge + anchor state instead of assuming funds stayed
+    //    local.
+    let bridgePlan: BridgeTransferPlan;
     try {
-      cctpPlan = await bridgeUsdcToStellar(usd.fromUnits(expectedOut), cctpRecipientStellar());
-      recordCctpPlan(txs, cctpPlan);
+      const destination = bridgeDestination();
+      bridgePlan = await createBridgeTransfer(
+        transfer.id,
+        usd.fromUnits(expectedOut),
+        {
+          paymentRail: BRIDGE.destinationRail,
+          currency: BRIDGE.destinationCurrency,
+          toAddress: destination.toAddress,
+          blockchainMemo: destination.blockchainMemo,
+        },
+        { sourceAddress: orchestratorAddress },
+      );
+      recordBridgePlan(txs, bridgePlan);
     } catch (err) {
-      if (err instanceof CctpBridgeError) recordCctpPlan(txs, err.plan);
+      if (err instanceof BridgeTransferError && err.plan) recordBridgePlan(txs, err.plan);
       throw err;
     }
 
-    if (cctpPlan.mode !== "live") {
+    if (bridgePlan.mode === "live") {
+      const depositAddress = bridgePlan.sourceDepositInstructions?.to_address;
+      if (!depositAddress || !/^0x[a-fA-F0-9]{40}$/.test(depositAddress)) {
+        throw new Error("Bridge did not return a Base deposit address; cannot fund transfer");
+      }
+      const depositHash = await writeAndWait(orchestratorWallet, {
+        address: a.usdc,
+        abi: abis.MockToken,
+        functionName: "transfer",
+        args: [depositAddress as `0x${string}`, expectedOut],
+      });
+      txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
+    } else {
       const approveBridgeHash = await writeAndWait(orchestratorWallet, {
         address: a.usdc,
         abi: abis.MockToken,
@@ -685,7 +718,7 @@ export async function executeTransfer(
       txs.push({ step: "bridge.lockForPayout", hash: lockHash });
     }
     store.updateTransfer(transfer.id, { state: "BRIDGED", txs });
-    failpoint(cctpPlan.mode === "live" ? "cctp.burn" : "bridge.lockForPayout");
+    failpoint(bridgePlan.mode === "live" ? "bridge.xyz.transfer" : "bridge.lockForPayout");
 
     // 4. Create the cash pickup at the quoted amount — a real SEP-24 anchor
     //    withdrawal when an anchor is configured, the mock otherwise.
@@ -734,6 +767,11 @@ export async function executeTransfer(
         anchorReferenceNumber: pickup.anchorReferenceNumber,
         moreInfoUrl: pickup.moreInfoUrl,
         anchorStatus: pickup.anchorStatus,
+        bridgeTransferId: bridgePlan.transferId,
+        bridgeState: bridgePlan.state,
+        bridgeDepositAddress: bridgePlan.sourceDepositInstructions?.to_address,
+        bridgeDepositMemo: bridgePlan.sourceDepositInstructions?.blockchain_memo,
+        bridgeDestinationTxHash: bridgePlan.destinationTxHash,
       };
     return store.updateTransfer(transfer.id, {
       state: cashPayoutState(storedPickup),
@@ -895,7 +933,7 @@ async function refreshPayoutUnlocked(
     return updated;
   } catch (err: any) {
     // A failure that may have moved money must never auto-refund the sender:
-    // that would pay twice. Same reasoning as a submitted CCTP burn.
+    // that would pay twice. Same reasoning as a completed Bridge destination leg.
     const latest = store.findTransfer(transfer.id);
     const maybePaid =
       err instanceof AnchorPaymentUncertainError || !!latest?.pickup?.anchorPaymentHash;

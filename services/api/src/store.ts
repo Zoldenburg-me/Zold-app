@@ -403,6 +403,12 @@ export interface Transfer {
     anchorReferenceNumber?: string;
     moreInfoUrl?: string;
     anchorStatus?: string;
+    /** Bridge.xyz transfer funding this anchor withdrawal. */
+    bridgeTransferId?: string;
+    bridgeState?: string;
+    bridgeDepositAddress?: string;
+    bridgeDepositMemo?: string;
+    bridgeDestinationTxHash?: string;
   };
   /** SEPA payout leg: a real Monerium redeem order in sandbox, or a mock. */
   sepa?: { mode: "sandbox" | "mock"; orderId?: string; state: string; detail?: string };

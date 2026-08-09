@@ -256,17 +256,18 @@ export function receiptRoute(t: Transfer, fields: ReceiptShareFields): ReceiptHo
     });
   }
 
-  // 3. Cross-chain. Dry-run is the default and must never read as a burn.
-  const burn = step("cctp.burn");
-  const plan = t.txs?.find((x) => x.step.startsWith("cctp.") && x.step.endsWith(".plan"));
-  if (burn || plan) {
+  // 3. Bridge.xyz funding. Dry-run is the default and must never read as a
+  // completed stablecoin movement.
+  const bridgeFunding = step("bridge.xyz.deposit.transfer") || step("bridge.xyz.destination_tx");
+  const bridgePlan = t.txs?.find((x) => x.step.startsWith("bridge.xyz.") && x.step.endsWith(".transfer"));
+  if (bridgeFunding || bridgePlan) {
     hops.push({
-      rail: "Circle CCTP",
+      rail: "Bridge.xyz",
       badge: "Bridge",
-      via: burn
-        ? "USDC burned on the app chain and minted to the Stellar forwarder"
-        : "Burn/mint plan recorded; no tokens were burned",
-      ...(burn ? {} : { simulated: true as const }),
+      via: bridgeFunding
+        ? "USDC funding was sent to Bridge for Stellar-side settlement"
+        : "Bridge transfer plan recorded; no funds were sent",
+      ...(bridgeFunding ? {} : { simulated: true as const }),
     });
   }
 

@@ -76,7 +76,7 @@ carried value and which have not.
 | Managed recovery (guardian, delay, operator approval) | **Live** |
 | Inbound USDC → EURe conversion | Integrated; no production deposit converted |
 | Liquidity venues (LI.FI, CoW, Uniswap v3, RFQ, best-execution) | Quoting live; no venue has executed a settlement |
-| CCTP Base → Stellar | Integrated; runs dry until `CCTP_LIVE=1` |
+| Bridge.xyz Base → Stellar funding | First integration seam; dry-run by default, live requires Bridge credentials |
 | Stellar payout leg | Ledger half proven on-chain; anchor attribution not yet exercised |
 | MoneyGram cash pickup | Protocol complete (SEP-10/12/24); requires a partner agreement |
 | KYC provider | **Sumsub integrated** — WebSDK, signed webhooks, Monerium share token, MoneyGram SEP-9 fields |
@@ -285,11 +285,11 @@ subset — accents decomposed, reserved forms stripped, truncated at the scheme'
 `liquidity.ts` swaps EURe→USDC at the best available venue price, with every
 quote's implied rate checked against the independent mid and refused beyond a
 band. Positive slippage is measured and attributed to the user by default.
-`bridge/cctp.ts` burns on Base and mints on Stellar via Circle's attestation
-service. `stellar/anchor.ts` authenticates over SEP-10, submits the sender
-profile over SEP-12, opens a SEP-24 withdrawal, and pays the anchor's account
-with its memo — refusing to burn if the Stellar recipient lacks a trustline for
-the asset.
+`bridge/bridgexyz.ts` creates the hosted Bridge transfer and returns deposit
+instructions for Stellar-side settlement. `stellar/anchor.ts` authenticates over
+SEP-10, submits the sender profile over SEP-12, opens a SEP-24 withdrawal, and
+pays the anchor's account with its memo — refusing to fund if the Stellar
+recipient lacks a trustline for the asset.
 
 **Failure.** Compensation releases escrow and re-credits at current rates with
 itemised deductions, reaching `REFUNDED`. Stranded transfers are swept at
@@ -357,7 +357,7 @@ Operational tooling:
 npm run reconcile        # ledger + on-chain invariant drift report
 npm run monerium:check   # verify issuer configuration
 npm run stellar:check    # full anchor protocol run
-npm run cctp:readiness   # confirm burner and treasury funding
+npm run bridge:dryrun    # inspect Bridge.xyz transfer planning
 npm run dex:setup        # pool inspection and setup
 ```
 
@@ -386,7 +386,7 @@ services/api/src/
   pay.ts  qr.ts        payment pages and QR encoding
   wallet/candide.ts    Safe derivation, ERC-4337 deployment, signing
   stellar/             SEP-10 auth, SEP-24 withdrawals, SEP-9 mapping
-  bridge/cctp.ts       Base → Stellar burn / attest / mint
+  bridge/bridgexyz.ts  Bridge.xyz transfer orchestration
   adapters/            monerium, moneygram, crypto deposits, forwarder
 contracts/src/         AdminTimelock, FxSwapper, BridgeEscrow, MockToken
 services/api/public/   landing + app, no build step
