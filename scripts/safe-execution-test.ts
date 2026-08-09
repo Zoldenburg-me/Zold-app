@@ -14,6 +14,7 @@ import { decodeFunctionData } from "viem";
 import {
   CANDIDE,
   transferExecutionTransactions,
+  transferSwapBatchTransactions,
 } from "../services/api/src/wallet/candide.js";
 
 const TOKEN = "0x2222222222222222222222222222222222222222" as `0x${string}`;
@@ -28,6 +29,16 @@ const ABI = [
     name: "transfer",
     inputs: [
       { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
+    name: "approve",
+    inputs: [
+      { name: "spender", type: "address" },
       { name: "amount", type: "uint256" },
     ],
     outputs: [{ name: "", type: "bool" }],
@@ -103,4 +114,92 @@ check("a negative-amount execution refuses", () => {
   assert.throws(() => transferExecutionTransactions(TOKEN, DEST, -1n), /positive amount/);
 });
 
-console.log(`\nsafe-execution-test: ${checks}/7 checks passed`);
+// ---- the fee+approve+swap batch (Change 2, windows 1-3) ----
+const FEE_TO = "0x5555555555555555555555555555555555555555" as `0x${string}`;
+const SPENDER = "0x6666666666666666666666666666666666666666" as `0x${string}`;
+const VENUE = "0x7777777777777777777777777777777777777777" as `0x${string}`;
+const FEE = 500_000_000_000_000_000n; // €0.50
+const CONVERT = 11_845_000_000_000_000_000n; // AMOUNT - FEE, still exact
+const SWAP_DATA = "0xdeadbeef01" as `0x${string}`;
+
+const batch = transferSwapBatchTransactions({
+  token: TOKEN,
+  feeTo: FEE_TO,
+  feeAmount: FEE,
+  approval: { spender: SPENDER, amount: CONVERT },
+  call: { to: VENUE, data: SWAP_DATA, value: 0n },
+});
+
+check("batch is fee transfer, venue approval, swap call — in that order", () => {
+  assert.equal(batch.length, 3);
+  assert.equal(decode(batch[0].data).functionName, "transfer");
+  assert.equal(decode(batch[1].data).functionName, "approve");
+  assert.equal(batch[2].to.toLowerCase(), VENUE.toLowerCase());
+  assert.equal(batch[2].data, SWAP_DATA);
+});
+
+check("the fee moves to the named collector, exactly", () => {
+  const { args } = decode(batch[0].data);
+  assert.equal(String(args![0]).toLowerCase(), FEE_TO.toLowerCase());
+  assert.equal(args![1], FEE);
+});
+
+check("the approval names the venue's spender for exactly the convert amount", () => {
+  assert.equal(batch[1].to.toLowerCase(), TOKEN.toLowerCase());
+  const { args } = decode(batch[1].data);
+  assert.equal(String(args![0]).toLowerCase(), SPENDER.toLowerCase());
+  assert.equal(args![1], CONVERT);
+});
+
+check("a legacy allowance revoke is prepended to the batch", () => {
+  const revoking = transferSwapBatchTransactions({
+    token: TOKEN,
+    feeTo: FEE_TO,
+    feeAmount: FEE,
+    approval: { spender: SPENDER, amount: CONVERT },
+    call: { to: VENUE, data: SWAP_DATA, value: 0n },
+    revokeLegacyAllowance: { delegate: DELEGATE, moduleAddress: MODULE },
+  });
+  assert.equal(revoking.length, 4);
+  assert.equal(decode(revoking[0].data).functionName, "deleteAllowance");
+  assert.equal(revoking[0].to.toLowerCase(), MODULE.toLowerCase());
+});
+
+check("a zero fee drops the fee leg but keeps approval and swap", () => {
+  const noFee = transferSwapBatchTransactions({
+    token: TOKEN,
+    feeTo: FEE_TO,
+    feeAmount: 0n,
+    approval: { spender: SPENDER, amount: CONVERT },
+    call: { to: VENUE, data: SWAP_DATA, value: 0n },
+  });
+  assert.equal(noFee.length, 2);
+  assert.equal(decode(noFee[0].data).functionName, "approve");
+});
+
+check("a zero convert amount refuses; a negative fee refuses", () => {
+  assert.throws(
+    () =>
+      transferSwapBatchTransactions({
+        token: TOKEN,
+        feeTo: FEE_TO,
+        feeAmount: FEE,
+        approval: { spender: SPENDER, amount: 0n },
+        call: { to: VENUE, data: SWAP_DATA, value: 0n },
+      }),
+    /positive convert amount/,
+  );
+  assert.throws(
+    () =>
+      transferSwapBatchTransactions({
+        token: TOKEN,
+        feeTo: FEE_TO,
+        feeAmount: -1n,
+        approval: { spender: SPENDER, amount: CONVERT },
+        call: { to: VENUE, data: SWAP_DATA, value: 0n },
+      }),
+    /negative fee/,
+  );
+});
+
+console.log(`\nsafe-execution-test: ${checks}/13 checks passed`);

@@ -383,6 +383,20 @@ export interface Transfer {
     executedAt?: string;
     txHash?: string;
   };
+  /**
+   * Set when this transfer's debit and swap ride in ONE user-signed
+   * UserOperation (Change 2, windows 1-3): the batch approves the venue and
+   * delivers the output straight to `recipient`, so the orchestrator never
+   * holds the input. `recipient` is the orchestrator only in local dry-run
+   * (the escrow demo pulls from it); in live mode it is the Bridge deposit
+   * address, and once the batch lands the funds are already with the
+   * settlement custodian — which is why compensation must not assume it can
+   * reverse-swap them.
+   */
+  safeSwap?: {
+    recipient: `0x${string}`;
+    mode: "dry-run" | "live";
+  };
   pickup?: {
     referenceCode: string;
     provider: string;

@@ -75,6 +75,13 @@ export interface SafeExecution {
   plan: PasskeySafeDeploymentPlan;
   userOperation: Parameters<typeof submitPasskeySafeDeployment>[1];
   assertion: BrowserPasskeyAssertion;
+  /**
+   * Present when the operation is the full fee+approve+swap batch: the debit
+   * and the swap land atomically in one user-signed operation, with the output
+   * delivered straight to `recipient`. The orchestrator then measures what
+   * arrived there instead of executing a swap of its own.
+   */
+  batch?: { recipient: `0x${string}`; mode: "dry-run" | "live" };
 }
 
 /**
@@ -395,10 +402,10 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
       txs,
     });
   }
-  if (txs.some((x) => x.step === "bridge.xyz.destination_tx")) {
+  if (txs.some((x) => x.step === "bridge.xyz.destination_tx" || x.step === "bridge.xyz.deposit.funded")) {
     return store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
-      error: `${failed.error}; Bridge reported destination funding, so automatic local refund is unsafe until Bridge/anchor state is reconciled`,
+      error: `${failed.error}; funds already reached Bridge (deposit funded or destination paid), so automatic local refund is unsafe until Bridge/anchor state is reconciled`,
       txs,
     });
   }
@@ -439,11 +446,32 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     txs.push({ step: "bridge.release", hash: h });
   }
 
+  // Did a swap actually run? Every venue's step reads liquidity.<venue>.eure-usdc
+  // ("swapper.swapExactIn" is the pre-liquidity-seam legacy name). This used to
+  // match only the fx-swapper's own step, so a dex/rfq/lifi-swapped transfer
+  // read as "still holding EURe" and its refund would have handed back euros
+  // the orchestrator no longer held.
+  const swapRan = [...steps].some(
+    (s) => s === "swapper.swapExactIn" || (s.startsWith("liquidity.") && s.endsWith(".eure-usdc")),
+  );
+  // A batched live send delivered its output straight to Bridge's deposit
+  // address — this side holds nothing to reverse. Never guess at a custodian's
+  // balance; reconcile it by hand.
+  if (swapRan && t.safeSwap?.mode === "live") {
+    return store.updateTransfer(id, {
+      state: "MANUAL_REVIEW",
+      error:
+        `${t.error ?? "transfer failed"}; the user-signed batch delivered USDC to Bridge deposit ` +
+        `${t.safeSwap.recipient} — Bridge/anchor state must be reconciled before any refund`,
+      txs,
+    });
+  }
+
   let refundEur: number;
   let recoveredFrom: string;
   let deductions = "none";
   const fee = FX.FIXED_FEE_EUR;
-  if (!steps.has("liquidity.fx-swapper.eure-usdc") && !steps.has("swapper.swapExactIn")) {
+  if (!swapRan) {
     // Still holding the debited EURe in full.
     refundEur = t.sendEur;
     recoveredFrom = "debited EURe";
@@ -472,9 +500,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
    * case goes to review rather than guessing.
    */
   if (t.fundingSource === "safe") {
-    const swapped =
-      steps.has("liquidity.fx-swapper.eure-usdc") || steps.has("swapper.swapExactIn");
-    if (swapped) {
+    if (swapRan) {
       /**
        * Reverse the swap and give the euros back. The rate movement of the
        * round trip is worn by the user as an ITEMIZED deduction (both legs at
@@ -644,25 +670,67 @@ export async function executeTransfer(
   const txs = transfer.txs;
 
   try {
-    // 1. The user-signed UserOperation moves the input amount to the
-    //    orchestrator's working address.
-    await debitInputFunds(transfer, user, auth, txs, execution);
+    let expectedOut: bigint;
+    let usdcOut: number;
+    if (execution?.batch) {
+      // 1+2 fused: the user-signed batch takes the fee, approves the venue and
+      // swaps — atomically, with the output delivered straight to the batch
+      // recipient. The orchestrator never holds the input; its job here is to
+      // refuse on rate drift BEFORE anything moves, then MEASURE what arrived.
+      await assertQuoteRateBinding(transfer);
+      const recipient = execution.batch.recipient;
+      const usdcBalance = () =>
+        publicClient.readContract({
+          address: a.usdc,
+          abi: abis.MockToken,
+          functionName: "balanceOf",
+          args: [recipient],
+        }) as Promise<bigint>;
+      const before = await usdcBalance();
+      await debitInputFunds(transfer, user, auth, txs, execution);
+      const delivered = (await balanceAfterWrite(a.usdc, recipient, before)) - before;
+      const minOut = BigInt(transfer.liquidity?.minOut ?? "0");
+      if (delivered < minOut) {
+        // The venue call enforces the floor, so landing here means the batch
+        // reverted mid-flight or the recipient read is stale — either way the
+        // one thing NOT to do is settle a payout against money we cannot see.
+        throw new Error(
+          `Safe swap batch delivered ${delivered} to ${recipient}, below the signed floor ${minOut}`,
+        );
+      }
+      const opHash = txs.at(-1)?.hash ?? "0x";
+      txs.push({ step: `liquidity.${transfer.liquidity?.provider ?? "safe"}.eure-usdc`, hash: opHash });
+      expectedOut = delivered;
+      usdcOut = usd.fromUnits(delivered);
+      store.updateTransfer(transfer.id, {
+        state: "SWAPPED",
+        txs,
+        usdcOut,
+        liquidity: transfer.liquidity
+          ? { ...transfer.liquidity, executedAt: new Date().toISOString(), txHash: opHash }
+          : undefined,
+      });
+    } else {
+      // 1. The user-signed UserOperation moves the input amount to the
+      //    orchestrator's working address.
+      await debitInputFunds(transfer, user, auth, txs, execution);
 
-    // 2. Swap the convertible portion (send - fixed fee) EURe -> USDC.
-    //    The fixed fee stays at the orchestrator address as revenue.
-    await assertQuoteRateBinding(transfer);
-    const liquidityPlan = await prepareTransferLiquidity(transfer);
-    store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
-    const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
-    txs.push(...liquidity.txs);
-    const expectedOut = liquidity.amountOut;
-    const usdcOut = liquidityAmountOutUnits(liquidity.quote);
-    store.updateTransfer(transfer.id, {
-      state: "SWAPPED",
-      txs,
-      usdcOut,
-      liquidity: serializeExecution(liquidity),
-    });
+      // 2. Swap the convertible portion (send - fixed fee) EURe -> USDC.
+      //    The fixed fee stays at the orchestrator address as revenue.
+      await assertQuoteRateBinding(transfer);
+      const liquidityPlan = await prepareTransferLiquidity(transfer);
+      store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
+      const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
+      txs.push(...liquidity.txs);
+      expectedOut = liquidity.amountOut;
+      usdcOut = liquidityAmountOutUnits(liquidity.quote);
+      store.updateTransfer(transfer.id, {
+        state: "SWAPPED",
+        txs,
+        usdcOut,
+        liquidity: serializeExecution(liquidity),
+      });
+    }
 
     // 3. Ask Bridge.xyz to fund the Stellar side. In dry-run mode we record
     //    Bridge-shaped deposit instructions and keep the local escrow leg so
@@ -695,13 +763,28 @@ export async function executeTransfer(
       if (!depositAddress || !/^0x[a-fA-F0-9]{40}$/.test(depositAddress)) {
         throw new Error("Bridge did not return a Base deposit address; cannot fund transfer");
       }
-      const depositHash = await writeAndWait(orchestratorWallet, {
-        address: a.usdc,
-        abi: abis.MockToken,
-        functionName: "transfer",
-        args: [depositAddress as `0x${string}`, expectedOut],
-      });
-      txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
+      if (execution?.batch) {
+        // The user-signed batch already delivered the USDC straight to the
+        // deposit address — there is no orchestrator leg to run. The address
+        // must still be THE address the batch was built against: Bridge's
+        // idempotency key makes re-reads stable, but if these ever disagree
+        // the money went somewhere this plan does not describe.
+        if (depositAddress.toLowerCase() !== execution.batch.recipient.toLowerCase()) {
+          throw new Error(
+            `Bridge deposit address ${depositAddress} does not match the batch recipient ` +
+              `${execution.batch.recipient} — the swap output location must be reconciled before payout`,
+          );
+        }
+        txs.push({ step: "bridge.xyz.deposit.funded", hash: txs.at(-1)?.hash ?? "0x" });
+      } else {
+        const depositHash = await writeAndWait(orchestratorWallet, {
+          address: a.usdc,
+          abi: abis.MockToken,
+          functionName: "transfer",
+          args: [depositAddress as `0x${string}`, expectedOut],
+        });
+        txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
+      }
     } else {
       const approveBridgeHash = await writeAndWait(orchestratorWallet, {
         address: a.usdc,
