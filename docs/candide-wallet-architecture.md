@@ -72,10 +72,24 @@ Safes are revoked automatically by the next send's operation
 (`transferExecutionTransactions` prepends a `deleteAllowance`).
 
 The delegate-design section below is therefore historical: there is no
-delegate to constrain. What remains open from Change 2 is the custody window
-AFTER the debit — the orchestrator still holds the EURe through the swap and
-the bridge leg. Folding approve+swap+forward into the same user-signed batch
-(windows 1-3) is the next step.
+delegate to constrain.
+
+ALSO IMPLEMENTED (Aug 2026): Change 2 windows 1-3 — the cash-rail send is ONE
+user-signed batch: fee transfer -> venue approval -> swap, atomic, with the
+output delivered straight to the destination the payout leg names (the Bridge
+deposit address in live mode; the orchestrator only in local dry-run, where
+the escrow demo pulls from it). The orchestrator never holds the input: a
+failed batch reverts entirely and nothing leaves the Safe. The venue half is a
+`safeSwapPlan` capability on the liquidity seam — Uniswap builds calldata
+offline against the same quoted pool and floor; LI.FI and Bebop are quoted
+WITH the Safe as executor so the route is built for the account that runs it;
+FxSwapper cannot serve a Safe (onlyTrader — our own inventory, where we are
+the counterparty and the question is Change 3's, not a custody window) and
+CoW does not execute, so those venues fall back to the plain user-signed
+debit with the orchestrator swapping after.
+
+What custody remains on the cash rail: the dry-run demo's escrow leg, the
+fx-swapper fallback path, and the fee itself (revenue, not client money).
 
 Scheduled transfer:
 

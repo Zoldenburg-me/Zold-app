@@ -247,41 +247,105 @@ export function transferExecutionTransactions(
     );
     txs.push(allowance.createDeleteAllowanceMetaTransaction(opts.revokeLegacyAllowance.delegate, token));
   }
-  txs.push({
+  txs.push(erc20TransferMetaTransaction(token, to, amount));
+  return txs;
+}
+
+const ERC20_TRANSFER_ABI = [
+  {
+    type: "function",
+    name: "transfer",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "nonpayable",
+  },
+] as const;
+
+const ERC20_APPROVE_ABI = [
+  {
+    type: "function",
+    name: "approve",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "nonpayable",
+  },
+] as const;
+
+function erc20TransferMetaTransaction(token: `0x${string}`, to: `0x${string}`, amount: bigint): MetaTransaction {
+  return {
     to: token,
     value: 0n,
+    data: encodeFunctionData({ abi: ERC20_TRANSFER_ABI, functionName: "transfer", args: [to, amount] }),
+  };
+}
+
+/**
+ * The full cash-rail debit as ONE user-signed batch — Change 2, windows 1-3:
+ *
+ *   [revoke legacy allowance?] -> fee transfer -> approve venue -> swap call
+ *
+ * The fee moves to us as its own transfer (a flat service fee, taken openly,
+ * not folded into the conversion); the venue approval is for exactly the
+ * convertible amount and names the spender the VENUE named; the swap call
+ * carries the quoted floor and delivers the output straight to the payout
+ * destination. The batch is atomic: if any leg fails — a stale maker quote, a
+ * moved pool — the whole operation reverts and nothing has left the Safe.
+ * There is no state in which we hold the user's euros.
+ */
+export function transferSwapBatchTransactions(args: {
+  token: `0x${string}`;
+  feeTo: `0x${string}`;
+  feeAmount: bigint;
+  approval: { spender: `0x${string}`; amount: bigint };
+  call: { to: `0x${string}`; data: `0x${string}`; value: bigint };
+  revokeLegacyAllowance?: { delegate: `0x${string}`; moduleAddress?: `0x${string}` };
+}): MetaTransaction[] {
+  if (args.approval.amount <= 0n) {
+    throw new Error(`a Safe swap batch needs a positive convert amount, got ${args.approval.amount}`);
+  }
+  if (args.feeAmount < 0n) {
+    throw new Error(`a Safe swap batch cannot carry a negative fee, got ${args.feeAmount}`);
+  }
+  const txs: MetaTransaction[] = [];
+  if (args.revokeLegacyAllowance) {
+    const allowance = new AllowanceModule(
+      args.revokeLegacyAllowance.moduleAddress ?? CANDIDE.allowanceModuleAddress,
+    );
+    txs.push(allowance.createDeleteAllowanceMetaTransaction(args.revokeLegacyAllowance.delegate, args.token));
+  }
+  if (args.feeAmount > 0n) {
+    txs.push(erc20TransferMetaTransaction(args.token, args.feeTo, args.feeAmount));
+  }
+  txs.push({
+    to: args.token,
+    value: 0n,
     data: encodeFunctionData({
-      abi: [
-        {
-          type: "function",
-          name: "transfer",
-          inputs: [
-            { name: "to", type: "address" },
-            { name: "amount", type: "uint256" },
-          ],
-          outputs: [{ name: "", type: "bool" }],
-          stateMutability: "nonpayable",
-        },
-      ],
-      functionName: "transfer",
-      args: [to, amount],
+      abi: ERC20_APPROVE_ABI,
+      functionName: "approve",
+      args: [args.approval.spender, args.approval.amount],
     }),
   });
+  txs.push({ to: args.call.to, value: args.call.value, data: args.call.data });
   return txs;
 }
 
 /**
- * Build the UserOperation that debits one transfer from the user's Safe. The
- * passkey owner signs its hash at send time (the co-signer counter-signs where
- * it is an owner), so the exact movement — token, amount, destination — is
- * user-approved and chain-enforced. Between sends nothing can move: no owner
- * key is stored server-side and no allowance exists.
+ * The shared core of every send-time user-signed operation: validate the plan,
+ * short-circuit under simulation, refuse undeployed Safes, read (from the
+ * chain, never the database) whether a legacy standing allowance still needs
+ * revoking, then wrap the caller's meta-transactions into a sponsored
+ * UserOperation whose hash the passkey will sign.
  */
-export async function prepareTransferExecution(
+async function prepareSafeExecutionCore(
   plan: PasskeySafeDeploymentPlan,
   token: `0x${string}`,
-  to: `0x${string}`,
-  amount: bigint,
+  buildSetup: (revokeLegacyAllowance?: { delegate: `0x${string}` }) => MetaTransaction[],
 ): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
   const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
   const account = plan.cosignerAddress
@@ -301,8 +365,9 @@ export async function prepareTransferExecution(
     throw new Error("passkey Safe must be deployed before a transfer can be executed from it");
   }
   // Legacy cleanup: revoke a standing co-signer allowance if one survives from
-  // the old delegate model. Read from the chain, not the database — the two
-  // have disagreed before, and the capability that matters is the on-chain one.
+  // the old delegate model. That allowance is spendable by the co-signer key
+  // alone — the exact capability this model removes — so it rides along on the
+  // first user-signed send.
   let revokeLegacyAllowance: { delegate: `0x${string}` } | undefined;
   if (CANDIDE.cosignerAddress) {
     const legacy = await readCosignerTokenAllowance(plan.address, token);
@@ -310,7 +375,7 @@ export async function prepareTransferExecution(
       revokeLegacyAllowance = { delegate: CANDIDE.cosignerAddress };
     }
   }
-  const setup = transferExecutionTransactions(token, to, amount, { revokeLegacyAllowance });
+  const setup = buildSetup(revokeLegacyAllowance);
   const userOperation = await account.createUserOperation(
     setup,
     CANDIDE.rpcUrl,
@@ -329,6 +394,44 @@ export async function prepareTransferExecution(
     challenge: account.getUserOperationEip712Hash(finalOp, CANDIDE.chainId) as `0x${string}`,
     userOperation: finalOp,
   };
+}
+
+/**
+ * Build the UserOperation that debits one transfer from the user's Safe. The
+ * passkey owner signs its hash at send time (the co-signer counter-signs where
+ * it is an owner), so the exact movement — token, amount, destination — is
+ * user-approved and chain-enforced. Between sends nothing can move: no owner
+ * key is stored server-side and no allowance exists.
+ */
+export async function prepareTransferExecution(
+  plan: PasskeySafeDeploymentPlan,
+  token: `0x${string}`,
+  to: `0x${string}`,
+  amount: bigint,
+): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
+  return prepareSafeExecutionCore(plan, token, (revokeLegacyAllowance) =>
+    transferExecutionTransactions(token, to, amount, { revokeLegacyAllowance }),
+  );
+}
+
+/**
+ * Build the UserOperation for a full cash-rail send: fee + venue approval +
+ * swap, one signature, atomic. See transferSwapBatchTransactions for the
+ * batch's shape and why each leg is there.
+ */
+export async function prepareTransferBatchExecution(
+  plan: PasskeySafeDeploymentPlan,
+  args: {
+    token: `0x${string}`;
+    feeTo: `0x${string}`;
+    feeAmount: bigint;
+    approval: { spender: `0x${string}`; amount: bigint };
+    call: { to: `0x${string}`; data: `0x${string}`; value: bigint };
+  },
+): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
+  return prepareSafeExecutionCore(plan, args.token, (revokeLegacyAllowance) =>
+    transferSwapBatchTransactions({ ...args, revokeLegacyAllowance }),
+  );
 }
 
 /**
