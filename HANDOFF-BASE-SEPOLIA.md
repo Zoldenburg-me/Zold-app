@@ -1,5 +1,12 @@
 # Zold on Base Sepolia — testing handoff
 
+> **⚠️ HISTORICAL (Aug 2026).** This handoff describes the RemitVault-era
+> deployment: the vault contract, its `debit`/`setAuthorizer` testers, and the
+> CCTP bridge no longer exist. Balances are Safe token balances, every debit is
+> a user-signed UserOperation, and the bridge leg is the Bridge.xyz seam. Kept
+> for the addresses and narrative; do not follow its instructions.
+
+
 A live deployment of the Zold payment contracts on **Base Sepolia (chain 84532)**,
 wired to **Monerium's real EURe**. This document is what you need to test it.
 

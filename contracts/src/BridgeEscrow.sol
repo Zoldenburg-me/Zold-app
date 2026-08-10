@@ -7,7 +7,7 @@ interface IERC20 {
 }
 
 /// @title BridgeEscrow — locks USDC for the cross-chain payout leg.
-/// In production this is replaced by Circle CCTP burn (Base -> Stellar) ahead
+/// In production this is replaced by the Bridge.xyz transfer leg (Base -> Stellar) ahead
 /// of a MoneyGram Ramps SEP-24 withdrawal; here it locks funds and emits the
 /// event the payout worker listens for. `release` is the refund path if a
 /// payout fails or expires unclaimed.

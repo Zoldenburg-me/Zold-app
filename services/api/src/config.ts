@@ -29,7 +29,9 @@ export const USING_LOCAL_RPC = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/
  * chain id. Deriving the id from one place removes that whole class of
  * confusion.
  *
- * 31337 = hardhat (default), 80002 = Polygon Amoy, 137 = Polygon mainnet.
+ * 31337 = hardhat (default), 84532 = Base Sepolia (the deployed testnet),
+ * 80002 = Polygon Amoy, 137 = Polygon mainnet. Unknown ids are synthesized
+ * by chain.ts, so nothing is pinned to this list.
  */
 export const CHAIN_ID = Number(process.env.TRANSF_CHAIN_ID ?? 31337);
 export const IS_LOCAL_CHAIN = CHAIN_ID === 31337;
@@ -175,7 +177,6 @@ export const STELLAR_PUBLIC_PASSPHRASE = "Public Global Stellar Network ; Septem
 /** Stellar treasury + MoneyGram-style anchor (SEP-10/SEP-24). */
 export const STELLAR = {
   horizon: process.env.STELLAR_HORIZON ?? "https://horizon-testnet.stellar.org",
-  sorobanRpc: process.env.STELLAR_SOROBAN_RPC ?? "https://soroban-testnet.stellar.org",
   networkPassphrase: process.env.STELLAR_PASSPHRASE ?? STELLAR_TESTNET_PASSPHRASE,
   friendbot: process.env.STELLAR_FRIENDBOT ?? "https://friendbot.stellar.org",
   // Anchor home domain for SEP-10/24. Stellar's public test anchor works
@@ -276,17 +277,6 @@ function assertProductionConfig() {
   if (!IS_PRODUCTION) return;
   const problems: string[] = [];
   const fail = (message: string) => problems.push(message);
-  const parsePositiveBigint = (name: string, value: string | undefined): bigint => {
-    try {
-      const parsed = BigInt(value ?? "0");
-      if (parsed <= 0n) fail(`${name} must be positive before hosted production funding`);
-      return parsed;
-    } catch {
-      fail(`${name} must be an integer string in base units, for example 1000000000000000000000`);
-      return 0n;
-    }
-  };
-
   if (process.env.KYC_AUTO_APPROVE === "1") fail("KYC_AUTO_APPROVE=1 is forbidden in production");
   if (!KYC.operatorToken) fail("KYC_OPERATOR_TOKEN is required in production");
   if (KYC.provider === "sumsub" && !sumsubEnabled()) {
@@ -378,14 +368,10 @@ function assertProductionConfig() {
     if (!process.env.CANDIDE_COSIGNER_ADDRESS || !process.env.CANDIDE_COSIGNER_KEY) {
       fail("CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required before hosted production funding");
     }
-    parsePositiveBigint(
-      "CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI",
-      process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ?? process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT,
-    );
-    parsePositiveBigint(
-      "CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES",
-      process.env.CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES,
-    );
+    // A standing allowance is deliberately NOT required (this check used to
+    // demand a positive recurring one). Spend authority is granted per
+    // transfer for the exact debit amount, approved by the user's passkey at
+    // send time — zero standing allowance is the designed resting state.
     if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS) {
       fail("CANDIDE_RECOVERY_GUARDIAN_ADDRESS is required before hosted production funding");
     }
@@ -539,8 +525,11 @@ export function loadAbi(contract: string): any[] {
  * quote rather than a number we chose — which is the point, because a rate you
  * cannot actually trade at is a promise you cannot keep.
  *
- * BEBOP_API_KEY is optional: Bebop's public RFQ endpoint works without one,
- * but a partner key gets better pricing and higher rate limits.
+ * BEBOP_API_KEY is effectively required on the chains that matter: ethereum
+ * and arbitrum answer every unauthenticated request with UnknownError (tested
+ * with a USDC->WETH control), and EURe is TokenNotSupported on the chains the
+ * public endpoint does serve. Request access via Bebop's contact form and set
+ * BEBOP_CHAIN=ethereum before adding rfq to the venue list.
  */
 export const LIQUIDITY = {
   PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best",

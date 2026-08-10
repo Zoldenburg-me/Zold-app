@@ -27,9 +27,8 @@ import {
   type WebauthnPublicKey,
 } from "abstractionkit";
 import { privateKeyToAccount } from "viem/accounts";
-import { createWalletClient, encodeFunctionData, hashTypedData, http } from "viem";
-import { chain, publicClient } from "../chain.js";
-import { RPC_URL, SECURITY } from "../config.js";
+import { encodeFunctionData, hashTypedData } from "viem";
+import { SECURITY } from "../config.js";
 
 /**
  * The ONE simulation gate, shared with the rest of the API (SECURITY.
@@ -60,21 +59,13 @@ export const CANDIDE = {
   recoveryGuardianAddress: (process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS ?? "") as `0x${string}` | "",
   recoveryModuleAddress: (process.env.CANDIDE_RECOVERY_MODULE_ADDRESS ??
     SocialRecoveryModuleGracePeriodSelector.After3Days) as `0x${string}`,
+  /** Kept ONLY to read and revoke legacy standing allowances left on Safes
+   *  deployed under the removed co-signer-delegate model. Nothing installs an
+   *  allowance any more — debits are user-signed UserOperations. */
   allowanceModuleAddress: (process.env.CANDIDE_ALLOWANCE_MODULE_ADDRESS ??
     (BigInt(process.env.CANDIDE_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? 11155111) === 84532n
       ? "0xAA46724893dedD72658219405185Fb0Fc91e091C"
       : AllowanceModule.DEFAULT_ALLOWANCE_MODULE_ADDRESS)) as `0x${string}`,
-  cosignerAllowancePeriodMinutes: BigInt(process.env.CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES ?? "0"),
-  cosignerEureAllowanceWei: BigInt(
-    process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ??
-      process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT ??
-      "0",
-  ),
-  cosignerUsdcAllowanceUnits: BigInt(
-    process.env.CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS ??
-      process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT ??
-      "0",
-  ),
 };
 
 function b64urlToBigInt(value: string): bigint {
@@ -125,8 +116,6 @@ export interface PasskeySafeDeploymentPlan {
       symbol: "EURE" | "USDC";
       amount: string;
     }[];
-    /** Deprecated display field kept for old clients. */
-    allowanceAmount?: string;
   };
   recovery?: {
     moduleAddress: `0x${string}`;
@@ -178,10 +167,11 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
       userOperation: {} as UserOperationV9,
     };
   }
-  const setup = [
-    ...passkeySafeRecoverySetupTransactions(plan),
-    ...passkeySafeAllowanceSetupTransactions(plan),
-  ];
+  // Deployment installs recovery only. The allowance module is deliberately
+  // NOT installed any more: nothing spends from the Safe except UserOperations
+  // the user's own passkey signs, so there is no delegate to authorize and no
+  // standing spend surface to bound.
+  const setup = [...passkeySafeRecoverySetupTransactions(plan)];
   const deployed = await isDeployed(account.accountAddress);
   if (deployed && !setup.length) {
     return {
@@ -223,114 +213,138 @@ export function passkeySafeRecoverySetupTransactions(plan: PasskeySafeDeployment
   ];
 }
 
-export function passkeySafeAllowanceSetupTransactions(
-  plan: PasskeySafeDeploymentPlan,
-  /** The allowance delegate. Defaults to the co-signer OWNER, but the two are
-   *  distinct roles: a single-owner Safe can still delegate spending to the
-   *  configured co-signer without making it an owner. */
-  delegate: `0x${string}` | "" | undefined = plan.cosignerAddress || CANDIDE.cosignerAddress,
+/**
+ * The meta-transactions of one transfer's user-signed debit: the Safe itself
+ * transfers the exact amount to the destination the terms name. No allowance,
+ * no delegate — the movement IS the thing signed, so the chain enforces the
+ * amount and destination rather than our process checking them.
+ *
+ * When the account still carries a legacy standing allowance from the old
+ * co-signer-delegate model, a deleteAllowance rides along and revokes it.
+ * That allowance is spendable by the co-signer key ALONE — exactly the
+ * unilateral disposal capability this model removes — so the first user-signed
+ * send is the right moment to close it: the user is present and signing
+ * anyway, and afterwards the account has no spend path but this one.
+ */
+export function transferExecutionTransactions(
+  token: `0x${string}`,
+  to: `0x${string}`,
+  amount: bigint,
+  opts: {
+    /** Set to revoke a legacy standing allowance for (delegate, token). */
+    revokeLegacyAllowance?: { delegate: `0x${string}`; moduleAddress?: `0x${string}` };
+  } = {},
 ): MetaTransaction[] {
-  if (!delegate || !plan.cosignerPolicy?.enabled) return [];
-  const allowance = new AllowanceModule(plan.cosignerPolicy.allowanceModuleAddress);
-  const txs = [
-    allowance.createEnableModuleMetaTransaction(plan.address),
-    allowance.createAddDelegateMetaTransaction(delegate),
-  ];
-  const period = BigInt(plan.cosignerPolicy.allowancePeriodMinutes ?? "0");
-  for (const item of plan.cosignerPolicy.allowances ?? []) {
-    const amount = BigInt(item.amount);
-    if (amount <= 0n) continue;
-    txs.push(
-      period > 0n
-        ? allowance.createRecurringAllowanceMetaTransaction(
-            delegate,
-            item.token,
-            amount,
-            period,
-            0n,
-          )
-        : allowance.createOneTimeAllowanceMetaTransaction(
-            delegate,
-            item.token,
-            amount,
-            0n,
-          ),
-    );
+  if (amount <= 0n) {
+    throw new Error(`a Safe execution needs a positive amount, got ${amount}`);
   }
+  const txs: MetaTransaction[] = [];
+  if (opts.revokeLegacyAllowance) {
+    const allowance = new AllowanceModule(
+      opts.revokeLegacyAllowance.moduleAddress ?? CANDIDE.allowanceModuleAddress,
+    );
+    txs.push(allowance.createDeleteAllowanceMetaTransaction(opts.revokeLegacyAllowance.delegate, token));
+  }
+  txs.push(erc20TransferMetaTransaction(token, to, amount));
+  return txs;
+}
+
+const ERC20_TRANSFER_ABI = [
+  {
+    type: "function",
+    name: "transfer",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "nonpayable",
+  },
+] as const;
+
+const ERC20_APPROVE_ABI = [
+  {
+    type: "function",
+    name: "approve",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "nonpayable",
+  },
+] as const;
+
+function erc20TransferMetaTransaction(token: `0x${string}`, to: `0x${string}`, amount: bigint): MetaTransaction {
+  return {
+    to: token,
+    value: 0n,
+    data: encodeFunctionData({ abi: ERC20_TRANSFER_ABI, functionName: "transfer", args: [to, amount] }),
+  };
+}
+
+/**
+ * The full cash-rail debit as ONE user-signed batch — Change 2, windows 1-3:
+ *
+ *   [revoke legacy allowance?] -> fee transfer -> approve venue -> swap call
+ *
+ * The fee moves to us as its own transfer (a flat service fee, taken openly,
+ * not folded into the conversion); the venue approval is for exactly the
+ * convertible amount and names the spender the VENUE named; the swap call
+ * carries the quoted floor and delivers the output straight to the payout
+ * destination. The batch is atomic: if any leg fails — a stale maker quote, a
+ * moved pool — the whole operation reverts and nothing has left the Safe.
+ * There is no state in which we hold the user's euros.
+ */
+export function transferSwapBatchTransactions(args: {
+  token: `0x${string}`;
+  feeTo: `0x${string}`;
+  feeAmount: bigint;
+  approval: { spender: `0x${string}`; amount: bigint };
+  call: { to: `0x${string}`; data: `0x${string}`; value: bigint };
+  revokeLegacyAllowance?: { delegate: `0x${string}`; moduleAddress?: `0x${string}` };
+}): MetaTransaction[] {
+  if (args.approval.amount <= 0n) {
+    throw new Error(`a Safe swap batch needs a positive convert amount, got ${args.approval.amount}`);
+  }
+  if (args.feeAmount < 0n) {
+    throw new Error(`a Safe swap batch cannot carry a negative fee, got ${args.feeAmount}`);
+  }
+  const txs: MetaTransaction[] = [];
+  if (args.revokeLegacyAllowance) {
+    const allowance = new AllowanceModule(
+      args.revokeLegacyAllowance.moduleAddress ?? CANDIDE.allowanceModuleAddress,
+    );
+    txs.push(allowance.createDeleteAllowanceMetaTransaction(args.revokeLegacyAllowance.delegate, args.token));
+  }
+  if (args.feeAmount > 0n) {
+    txs.push(erc20TransferMetaTransaction(args.token, args.feeTo, args.feeAmount));
+  }
+  txs.push({
+    to: args.token,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: ERC20_APPROVE_ABI,
+      functionName: "approve",
+      args: [args.approval.spender, args.approval.amount],
+    }),
+  });
+  txs.push({ to: args.call.to, value: args.call.value, data: args.call.data });
   return txs;
 }
 
 /**
- * What the chain says the co-signer may spend from this Safe — as opposed to
- * what the database says deployment intended. The two have disagreed: setup
- * batches once pointed at an allowance module address with no code, and calls
- * to a codeless address succeed, so "deployed with policy" recorded a policy
- * that does not exist. Debits read the chain, so this must too.
- * Returns null when the module cannot be read (which a debit would also fail).
+ * The shared core of every send-time user-signed operation: validate the plan,
+ * short-circuit under simulation, refuse undeployed Safes, read (from the
+ * chain, never the database) whether a legacy standing allowance still needs
+ * revoking, then wrap the caller's meta-transactions into a sponsored
+ * UserOperation whose hash the passkey will sign.
  */
-export async function readCosignerTokenAllowance(
-  safeAddress: `0x${string}`,
+async function prepareSafeExecutionCore(
+  plan: PasskeySafeDeploymentPlan,
   token: `0x${string}`,
-): Promise<{ amount: bigint; remaining: bigint } | null> {
-  if (!CANDIDE.cosignerAddress) return null;
-  try {
-    const allowance = new AllowanceModule(CANDIDE.allowanceModuleAddress);
-    const current = await allowance.getTokensAllowance(RPC_URL, safeAddress, CANDIDE.cosignerAddress, token);
-    const nowMin = BigInt(Math.floor(Date.now() / 60_000));
-    const spent =
-      current.resetTimeMin > 0n && nowMin >= current.lastResetMin + current.resetTimeMin
-        ? 0n
-        : current.spent;
-    return { amount: current.amount, remaining: current.amount > spent ? current.amount - spent : 0n };
-  } catch {
-    return null;
-  }
-}
-
-/** Safe's isModuleEnabled(address) — the batch below must skip enableModule
- *  when it already ran, because the Safe reverts on enabling a module twice. */
-export async function safeModuleEnabled(safeAddress: string, module: string): Promise<boolean> {
-  const data = encodeFunctionData({
-    abi: [
-      {
-        type: "function",
-        name: "isModuleEnabled",
-        inputs: [{ name: "module", type: "address" }],
-        outputs: [{ name: "", type: "bool" }],
-        stateMutability: "view",
-      },
-    ],
-    functionName: "isModuleEnabled",
-    args: [module as `0x${string}`],
-  });
-  const res = await fetch(CANDIDE.rpcUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: safeAddress, data }, "latest"] }),
-  });
-  const { result } = await res.json();
-  return typeof result === "string" && BigInt(result) === 1n;
-}
-
-/**
- * Build the userOp that installs (or repairs) the co-signer spending allowance
- * on an ALREADY-DEPLOYED passkey Safe.
- *
- * Exists because deployment-time setup can configure nothing while reporting
- * success: Safes deployed against the codeless module address are active, hold
- * money, and cannot debit. The repair runs the same setup transactions through
- * the Safe's normal signing path — the passkey owner approves, the co-signer
- * counter-signs where it is an owner — so the API gains no authority a Safe
- * owner did not grant.
- */
-export async function preparePasskeySafeAllowanceSetup(plan: PasskeySafeDeploymentPlan): Promise<{
-  safeAddress: `0x${string}`;
-  challenge: `0x${string}`;
-  userOperation: UserOperationV9;
-}> {
-  if (!CANDIDE.cosignerAddress) {
-    throw new Error("CANDIDE_COSIGNER_ADDRESS is required to configure a spending allowance");
-  }
+  buildSetup: (revokeLegacyAllowance?: { delegate: `0x${string}` }) => MetaTransaction[],
+): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
   const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
   const account = plan.cosignerAddress
     ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
@@ -338,23 +352,28 @@ export async function preparePasskeySafeAllowanceSetup(plan: PasskeySafeDeployme
   if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
     throw new Error("passkey Safe plan does not match the deterministic account address");
   }
+  if (allowSimulation()) {
+    return {
+      safeAddress: account.accountAddress as `0x${string}`,
+      challenge: "0x1234567890123456789012345678901234567890123456789012345678901234",
+      userOperation: {} as UserOperationV9,
+    };
+  }
   if (!(await isDeployed(account.accountAddress))) {
-    throw new Error("passkey Safe must be deployed before its spending allowance can be configured");
+    throw new Error("passkey Safe must be deployed before a transfer can be executed from it");
   }
-  // The delegate is always the CURRENT co-signer: on a single-owner Safe it is
-  // not an owner at all, and plan.cosignerAddress (the owner set, immutable
-  // after deployment) must not be confused with it.
-  let setup = passkeySafeAllowanceSetupTransactions(plan, CANDIDE.cosignerAddress);
-  if (setup.filter((t) => BigInt(t.to) !== BigInt(plan.address)).length < 2) {
-    // enableModule targets the Safe; everything else targets the module. Less
-    // than delegate+one allowance means the policy would grant nothing.
-    throw new Error(
-      "no spendable allowance is configured — set CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI (and/or USDC) first",
-    );
+  // Legacy cleanup: revoke a standing co-signer allowance if one survives from
+  // the old delegate model. That allowance is spendable by the co-signer key
+  // alone — the exact capability this model removes — so it rides along on the
+  // first user-signed send.
+  let revokeLegacyAllowance: { delegate: `0x${string}` } | undefined;
+  if (CANDIDE.cosignerAddress) {
+    const legacy = await readCosignerTokenAllowance(plan.address, token);
+    if (legacy && legacy.amount > 0n) {
+      revokeLegacyAllowance = { delegate: CANDIDE.cosignerAddress };
+    }
   }
-  if (await safeModuleEnabled(plan.address, plan.cosignerPolicy!.allowanceModuleAddress)) {
-    setup = setup.filter((t) => BigInt(t.to) !== BigInt(plan.address));
-  }
+  const setup = buildSetup(revokeLegacyAllowance);
   const userOperation = await account.createUserOperation(
     setup,
     CANDIDE.rpcUrl,
@@ -375,7 +394,75 @@ export async function preparePasskeySafeAllowanceSetup(plan: PasskeySafeDeployme
   };
 }
 
-export async function submitPasskeySafeDeployment(
+/**
+ * Build the UserOperation that debits one transfer from the user's Safe. The
+ * passkey owner signs its hash at send time (the co-signer counter-signs where
+ * it is an owner), so the exact movement — token, amount, destination — is
+ * user-approved and chain-enforced. Between sends nothing can move: no owner
+ * key is stored server-side and no allowance exists.
+ */
+export async function prepareTransferExecution(
+  plan: PasskeySafeDeploymentPlan,
+  token: `0x${string}`,
+  to: `0x${string}`,
+  amount: bigint,
+): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
+  return prepareSafeExecutionCore(plan, token, (revokeLegacyAllowance) =>
+    transferExecutionTransactions(token, to, amount, { revokeLegacyAllowance }),
+  );
+}
+
+/**
+ * Build the UserOperation for a full cash-rail send: fee + venue approval +
+ * swap, one signature, atomic. See transferSwapBatchTransactions for the
+ * batch's shape and why each leg is there.
+ */
+export async function prepareTransferBatchExecution(
+  plan: PasskeySafeDeploymentPlan,
+  args: {
+    token: `0x${string}`;
+    feeTo: `0x${string}`;
+    feeAmount: bigint;
+    approval: { spender: `0x${string}`; amount: bigint };
+    call: { to: `0x${string}`; data: `0x${string}`; value: bigint };
+  },
+): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
+  return prepareSafeExecutionCore(plan, args.token, (revokeLegacyAllowance) =>
+    transferSwapBatchTransactions({ ...args, revokeLegacyAllowance }),
+  );
+}
+
+/**
+ * What the chain says the co-signer may spend from this Safe — as opposed to
+ * what the database says deployment intended. The two have disagreed: setup
+ * batches once pointed at an allowance module address with no code, and calls
+ * to a codeless address succeed, so "deployed with policy" recorded a policy
+ * that does not exist. Debits read the chain, so this must too.
+ * Returns null when the module cannot be read (which a debit would also fail).
+ */
+export async function readCosignerTokenAllowance(
+  safeAddress: `0x${string}`,
+  token: `0x${string}`,
+): Promise<{ amount: bigint; remaining: bigint } | null> {
+  if (!CANDIDE.cosignerAddress) return null;
+  try {
+    const allowance = new AllowanceModule(CANDIDE.allowanceModuleAddress);
+    // Read on the chain the UserOperation will execute on (CANDIDE.rpcUrl),
+    // not the app chain: config allows the two to differ, and deciding the
+    // revoke from the wrong chain silently skips it.
+    const current = await allowance.getTokensAllowance(CANDIDE.rpcUrl, safeAddress, CANDIDE.cosignerAddress, token);
+    const nowMin = BigInt(Math.floor(Date.now() / 60_000));
+    const spent =
+      current.resetTimeMin > 0n && nowMin >= current.lastResetMin + current.resetTimeMin
+        ? 0n
+        : current.spent;
+    return { amount: current.amount, remaining: current.amount > spent ? current.amount - spent : 0n };
+  } catch {
+    return null;
+  }
+}
+
+export async function submitPasskeySafeOperation(
   plan: PasskeySafeDeploymentPlan,
   userOperation: UserOperationV9,
   assertion: BrowserPasskeyAssertion,
@@ -455,86 +542,4 @@ export async function isDeployed(address: string): Promise<boolean> {
   });
   const { result } = await res.json();
   return typeof result === "string" && result !== "0x";
-}
-
-/**
- * Move an ERC-20 out of a passkey Safe through the production co-signer
- * allowance set up during Safe deployment.
- *
- * This cannot act unless the user's Safe explicitly installed the configured
- * co-signer as an allowance delegate for the token, and the on-chain remaining
- * allowance covers this exact spend. The delegate transaction is sent by the
- * configured co-signer key, so no user Safe owner key exists in the API
- * database.
- */
-export async function transferTokenFromSafeAllowance(params: {
-  safeAddress: `0x${string}`;
-  token: `0x${string}`;
-  to: `0x${string}`;
-  amount: bigint;
-  moduleAddress?: `0x${string}`;
-}): Promise<string> {
-  if (!CANDIDE.cosignerAddress || !CANDIDE.cosignerKey) {
-    throw new Error("CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required for passkey Safe allowance debit");
-  }
-  if (allowSimulation()) {
-    return "0xmock-allowance-debit-hash";
-  }
-  if (!(await isDeployed(params.safeAddress))) {
-    throw new Error(`Safe ${params.safeAddress} is not deployed — cannot move tokens from it`);
-  }
-
-  let moduleAddress = params.moduleAddress ?? CANDIDE.allowanceModuleAddress;
-  if (!(await safeModuleEnabled(params.safeAddress, moduleAddress))) {
-    const legacyModule = "0xAA46724893dedD72658219405185Fb0Fc91e091C" as `0x${string}`;
-    if (await safeModuleEnabled(params.safeAddress, legacyModule)) {
-      moduleAddress = legacyModule;
-    } else {
-      throw new Error(
-        `Passkey Safe co-signer allowance module (${moduleAddress}) is not enabled on-chain for Safe ${params.safeAddress}. ` +
-          `Please click "Set Up Allowance" in your account dashboard.`,
-      );
-    }
-  }
-
-  const allowance = new AllowanceModule(moduleAddress);
-  const current = await allowance.getTokensAllowance(
-      RPC_URL,
-      params.safeAddress,
-      CANDIDE.cosignerAddress,
-      params.token,
-    );
-  const nowMin = BigInt(Math.floor(Date.now() / 60_000));
-  const spent =
-    current.resetTimeMin > 0n && nowMin >= current.lastResetMin + current.resetTimeMin
-      ? 0n
-      : current.spent;
-  const remaining = current.amount > spent ? current.amount - spent : 0n;
-  if (remaining < params.amount) {
-    throw new Error(
-      `passkey Safe co-signer allowance is ${remaining} units for ${params.token}, ` +
-        `but this debit needs ${params.amount}`,
-    );
-  }
-
-  const tx = allowance.createAllowanceTransferMetaTransaction(
-    params.safeAddress,
-    params.token,
-    params.to,
-    params.amount,
-    CANDIDE.cosignerAddress,
-  );
-  const account = privateKeyToAccount(CANDIDE.cosignerKey);
-  if (account.address.toLowerCase() !== CANDIDE.cosignerAddress.toLowerCase()) {
-    throw new Error("CANDIDE_COSIGNER_KEY does not match CANDIDE_COSIGNER_ADDRESS");
-  }
-  const wallet = createWalletClient({ account, chain: chain as any, transport: http(RPC_URL) });
-  const hash = await wallet.sendTransaction({
-    to: tx.to as `0x${string}`,
-    value: tx.value,
-    data: tx.data as `0x${string}`,
-  } as any);
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  if (receipt.status !== "success") throw new Error("passkey Safe allowance debit reverted");
-  return hash;
 }

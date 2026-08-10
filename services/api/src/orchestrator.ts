@@ -6,11 +6,12 @@
  *                                                (recipient collects cash)
  *
  * Every leg is idempotent at the contract layer (transferId hash), so a crash
- * mid-flow can be resumed without double-spending. On failure the transfer is
- * marked FAILED; the BridgeEscrow.release() refund path is wired but manual
- * in the MVP.
+ * mid-flow can be resumed without double-spending. Failures auto-compensate:
+ * failAndCompensate releases escrow and refunds what is recoverable, and the
+ * startup/5-minute sweep retries anything stranded (SEPA and the PAYOUT_*
+ * anchor states have their own legs; see executeSepaTransfer/refreshPayout).
  */
-import { BRIDGE, FX, moneriumSandboxEnabled, USING_LOCAL_RPC } from "./config.js";
+import { BRIDGE, FX, moneriumSandboxEnabled } from "./config.js";
 import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
@@ -41,13 +42,17 @@ import {
   transferIdHash,
   writeAndWait,
 } from "./chain.js";
-import { CANDIDE, transferTokenFromSafeAllowance } from "./wallet/candide.js";
+import {
+  CANDIDE,
+  submitPasskeySafeOperation,
+  type BrowserPasskeyAssertion,
+  type PasskeySafeDeploymentPlan,
+} from "./wallet/candide.js";
 import {
   createCashPickup,
   createCashPickupViaAnchor,
   completePickup,
   fundAndRefreshAnchorPickup,
-  getPickup,
 } from "./adapters/moneygram.js";
 import { anchorModeEnabled, SECURITY } from "./config.js";
 
@@ -58,6 +63,25 @@ import { anchorModeEnabled, SECURITY } from "./config.js";
 export interface PaymentAuthorization {
   deadline: number;
   signature: `0x${string}`;
+}
+
+/**
+ * The user-signed debit of one transfer: a UserOperation prepared at transfer
+ * creation moving the exact amount out of the user's Safe, plus the passkey
+ * assertion over its hash collected at send time. The orchestrator relays it;
+ * it cannot author one.
+ */
+export interface SafeExecution {
+  plan: PasskeySafeDeploymentPlan;
+  userOperation: Parameters<typeof submitPasskeySafeOperation>[1];
+  assertion: BrowserPasskeyAssertion;
+  /**
+   * Present when the operation is the full fee+approve+swap batch: the debit
+   * and the swap land atomically in one user-signed operation, with the output
+   * delivered straight to `recipient`. The orchestrator then measures what
+   * arrived there instead of executing a swap of its own.
+   */
+  batch?: { recipient: `0x${string}`; mode: "dry-run" | "live" };
 }
 
 /**
@@ -224,16 +248,14 @@ async function debitInputFunds(
   user: User,
   auth: PaymentAuthorization,
   txs: Transfer["txs"],
+  execution: SafeExecution | undefined,
 ): Promise<void> {
-  const a = addrs();
-  const sendWei = eur.toWei(transfer.sendEur);
-
   await assertDeviceAuthorization(transfer, user, auth);
   if (transfer.txs.some((x) => x.step === DEBIT_STEP.safe)) {
     throw new Error("duplicate transfer: this transfer already moved EURe out of the Safe");
   }
 
-  const moveHash = await moveTokenFromUserSafe(user, a.eure, orchestratorAddress, sendWei);
+  const moveHash = await submitSafeExecution(user, execution);
   txs.push({ step: DEBIT_STEP.safe, hash: moveHash });
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
   failpoint("safe.transfer");
@@ -255,6 +277,7 @@ async function debitSafeFundedSepaFee(
   auth: PaymentAuthorization,
   payoutEur: number,
   txs: Transfer["txs"],
+  execution: SafeExecution | undefined,
 ): Promise<void> {
   await assertDeviceAuthorization(transfer, user, auth);
   if (transfer.txs.some((x) => x.step === DEBIT_STEP.safeFee)) {
@@ -262,7 +285,7 @@ async function debitSafeFundedSepaFee(
   }
   const feeEur = Math.max(0, transfer.sendEur - payoutEur);
   if (feeEur > 0) {
-    const feeHash = await moveTokenFromUserSafe(user, addrs().eure, orchestratorAddress, eur.toWei(feeEur));
+    const feeHash = await submitSafeExecution(user, execution);
     txs.push({ step: DEBIT_STEP.safeFee, hash: feeHash });
   }
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
@@ -271,13 +294,14 @@ async function debitSafeFundedSepaFee(
 
 export function safeDebitBlocker(user: User): string | null {
   if (activePasskeySafe(user)) {
-    return passkeySafeAllowanceReady(user)
+    return passkeySafeExecutionReady(user)
       ? null
-      : "Co-signer service is not configured — please ensure CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are set in environment";
+      : "This account's Safe has a co-signing owner but no co-signer service is configured — " +
+        "set CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY so send approvals can be counter-signed";
   }
   return (
-    "Safe-held funds need an active passkey Safe with a co-signer service configured " +
-    "before transfers can be executed"
+    "Safe-held funds need an active passkey Safe before transfers can be executed — " +
+    "every debit is a UserOperation the passkey signs"
   );
 }
 
@@ -288,49 +312,36 @@ function activePasskeySafe(user: User): boolean {
   );
 }
 
-function passkeySafeAllowanceReady(user: User): boolean {
+/** Can this account's send-time UserOperation actually be completed?
+ *  A passkey-only Safe needs nothing but the user's assertion; a 2-of-2 Safe
+ *  additionally needs the co-signer key to counter-sign. */
+function passkeySafeExecutionReady(user: User): boolean {
   if (!activePasskeySafe(user) || !user.passkeySafe) return false;
-  return Boolean(
-    (user.passkeySafe.cosignerPolicy?.enabled && user.passkeySafe.cosignerAddress) ||
-    (CANDIDE.cosignerAddress && CANDIDE.cosignerKey)
-  );
+  if (!user.passkeySafe.cosignerAddress) return true;
+  return Boolean(CANDIDE.cosignerKey);
 }
 
-async function moveTokenFromUserSafe(
-  user: User,
-  token: `0x${string}`,
-  to: `0x${string}`,
-  amount: bigint,
-): Promise<string> {
-  if (!passkeySafeAllowanceReady(user)) {
+/**
+ * The user-approved debit of one transfer: a UserOperation, prepared at
+ * transfer creation for the exact token/amount/destination, whose hash the
+ * user's passkey signed at send time. This process cannot produce that
+ * signature — it can only counter-sign (where the co-signer is an owner) and
+ * relay. No execution means no debit; there is no server-side fallback path.
+ */
+async function submitSafeExecution(user: User, execution: SafeExecution | undefined): Promise<string> {
+  if (!passkeySafeExecutionReady(user)) {
     throw new Error(safeDebitBlocker(user) ?? "Safe debit is not configured for this account");
   }
-  if (user.passkeySafe && !user.passkeySafe.cosignerPolicy?.enabled && CANDIDE.cosignerAddress) {
-    const a = addrs();
-    store.updateUser(user.id, {
-      passkeySafe: {
-        ...user.passkeySafe,
-        cosignerAddress: CANDIDE.cosignerAddress,
-        cosignerPolicy: {
-          enabled: true,
-          allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-          allowancePeriodMinutes: CANDIDE.cosignerAllowancePeriodMinutes.toString(),
-          allowances: [
-            { token: a.eure, symbol: "EURE", amount: CANDIDE.cosignerEureAllowanceWei.toString() },
-            { token: a.usdc, symbol: "USDC", amount: CANDIDE.cosignerUsdcAllowanceUnits.toString() },
-          ],
-          allowanceAmount: CANDIDE.cosignerEureAllowanceWei.toString(),
-        },
-      },
-    });
+  if (SECURITY.allowSimulation) {
+    return "0xmock-safe-execution-hash";
   }
-  return transferTokenFromSafeAllowance({
-    safeAddress: user.address,
-    token,
-    to,
-    amount,
-    moduleAddress: user.passkeySafe?.cosignerPolicy?.allowanceModuleAddress as `0x${string}` | undefined,
-  });
+  if (!execution) {
+    throw new Error(
+      "this transfer has no passkey-approved Safe execution — create the transfer again and approve it with your passkey",
+    );
+  }
+  const opHash = await submitPasskeySafeOperation(execution.plan, execution.userOperation, execution.assertion);
+  return opHash ?? "0x";
 }
 
 function bridgeDestination(): { toAddress: string; blockchainMemo?: string } {
@@ -371,7 +382,7 @@ function cashPayoutState(pickup: NonNullable<Transfer["pickup"]>): TransferState
 /**
  * FP3: mark FAILED, then immediately attempt compensation. The refund the
  * user gets depends on how far the transfer got — costs already incurred
- * (conversion round-trips at the prevailing rate) are itemized, uRamp-style.
+ * (conversion round-trips at the prevailing rate) are itemized on the refund.
  */
 async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Promise<Transfer> {
   const message = String(err?.shortMessage ?? err?.message ?? err);
@@ -391,10 +402,10 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
       txs,
     });
   }
-  if (txs.some((x) => x.step === "bridge.xyz.destination_tx")) {
+  if (txs.some((x) => x.step === "bridge.xyz.destination_tx" || x.step === "bridge.xyz.deposit.funded")) {
     return store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
-      error: `${failed.error}; Bridge reported destination funding, so automatic local refund is unsafe until Bridge/anchor state is reconciled`,
+      error: `${failed.error}; funds already reached Bridge (deposit funded or destination paid), so automatic local refund is unsafe until Bridge/anchor state is reconciled`,
       txs,
     });
   }
@@ -435,11 +446,32 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     txs.push({ step: "bridge.release", hash: h });
   }
 
+  // Did a swap actually run? Every venue's step reads liquidity.<venue>.eure-usdc
+  // ("swapper.swapExactIn" is the pre-liquidity-seam legacy name). This used to
+  // match only the fx-swapper's own step, so a dex/rfq/lifi-swapped transfer
+  // read as "still holding EURe" and its refund would have handed back euros
+  // the orchestrator no longer held.
+  const swapRan = [...steps].some(
+    (s) => s === "swapper.swapExactIn" || (s.startsWith("liquidity.") && s.endsWith(".eure-usdc")),
+  );
+  // A batched live send delivered its output straight to Bridge's deposit
+  // address — this side holds nothing to reverse. Never guess at a custodian's
+  // balance; reconcile it by hand.
+  if (swapRan && t.safeSwap?.mode === "live") {
+    return store.updateTransfer(id, {
+      state: "MANUAL_REVIEW",
+      error:
+        `${t.error ?? "transfer failed"}; the user-signed batch delivered USDC to Bridge deposit ` +
+        `${t.safeSwap.recipient} — Bridge/anchor state must be reconciled before any refund`,
+      txs,
+    });
+  }
+
   let refundEur: number;
   let recoveredFrom: string;
   let deductions = "none";
   const fee = FX.FIXED_FEE_EUR;
-  if (!steps.has("liquidity.fx-swapper.eure-usdc") && !steps.has("swapper.swapExactIn")) {
+  if (!swapRan) {
     // Still holding the debited EURe in full.
     refundEur = t.sendEur;
     recoveredFrom = "debited EURe";
@@ -468,9 +500,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
    * case goes to review rather than guessing.
    */
   if (t.fundingSource === "safe") {
-    const swapped =
-      steps.has("liquidity.fx-swapper.eure-usdc") || steps.has("swapper.swapExactIn");
-    if (swapped) {
+    if (swapRan) {
       /**
        * Reverse the swap and give the euros back. The rate movement of the
        * round trip is worn by the user as an ITEMIZED deduction (both legs at
@@ -604,6 +634,24 @@ export async function sweepStrandedTransfers(): Promise<number> {
         store.updateTransfer(t.id, { state: "FAILED", error: "stranded mid-flow — auto-compensating" });
         await compensateTransfer(t.id);
         n++;
+      } else if (
+        t.state === "CREATED" &&
+        t.auth?.authorizedAt &&
+        Date.now() - Date.parse(t.auth.authorizedAt) > STALE_MS
+      ) {
+        // The crash window between submitting the user-signed UserOperation
+        // and persisting DEBITED: the claim is consumed (so /authorize 409s
+        // forever) while the on-chain outcome is unknown — the operation may
+        // or may not have landed. Auto-refunding would pay twice if it did;
+        // leaving it CREATED hides that money may have moved with no record.
+        // Review is the only honest state: an operator checks the chain.
+        store.updateTransfer(t.id, {
+          state: "MANUAL_REVIEW",
+          error:
+            "authorization was claimed but no debit was recorded before a restart — " +
+            "the user-signed operation may or may not have landed on chain; reconcile before any refund",
+        });
+        n++;
       }
     } catch (e: any) {
       console.error(`sweep: compensation failed for ${t.id}: ${e?.message ?? e}`);
@@ -617,7 +665,7 @@ export async function sweepAnchorPayouts(): Promise<number> {
   let n = 0;
   for (const t of [...store.transfers]) {
     try {
-      if (["PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED"].includes(t.state)) {
+      if (["PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED"].includes(t.state)) {
         const before = t.updatedAt;
         const updated = await refreshPayout(t);
         if (updated.updatedAt !== before) n++;
@@ -633,30 +681,91 @@ export async function executeTransfer(
   transfer: Transfer,
   user: User,
   auth: PaymentAuthorization,
+  execution?: SafeExecution,
 ): Promise<Transfer> {
   const a = addrs();
   const tid = transferIdHash(transfer.id);
   const txs = transfer.txs;
 
   try {
-    // 1. Move the signed input amount to the orchestrator's working address.
-    await debitInputFunds(transfer, user, auth, txs);
+    let expectedOut: bigint;
+    let usdcOut: number;
+    if (execution?.batch) {
+      // 1+2 fused: the user-signed batch takes the fee, approves the venue and
+      // swaps — atomically, with the output delivered straight to the batch
+      // recipient. The orchestrator never holds the input; its job here is to
+      // refuse on staleness BEFORE anything moves, then MEASURE what arrived.
+      // The expiry check matters here specifically: the non-batch path's
+      // venue execute() refuses expired quotes itself, but the batch never
+      // calls execute — and the authorization window (15 min) outlives the
+      // quote TTL (10 min), so without this a signed-late batch would settle
+      // a price the quote no longer promises, bounded only by minOut.
+      if (transfer.liquidity?.expiresAt && Date.now() > Date.parse(transfer.liquidity.expiresAt)) {
+        throw new Error("liquidity quote expired before the batch was submitted — create the transfer again");
+      }
+      await assertQuoteRateBinding(transfer);
+      const recipient = execution.batch.recipient;
+      const usdcBalance = () =>
+        publicClient.readContract({
+          address: a.usdc,
+          abi: abis.MockToken,
+          functionName: "balanceOf",
+          args: [recipient],
+        }) as Promise<bigint>;
+      const before = await usdcBalance();
+      await debitInputFunds(transfer, user, auth, txs, execution);
+      // The swap step is recorded WITH the debit, before any measurement: the
+      // batch is atomic, so if the debit landed the swap landed. Recording it
+      // only after a successful balance read would let a stale RPC replica
+      // strand a swapped transfer looking unswapped — and compensation would
+      // then "refund" EURe this side no longer holds.
+      const opHash = txs.at(-1)?.hash ?? "0x";
+      txs.push({ step: `liquidity.${transfer.liquidity?.provider ?? "safe"}.eure-usdc`, hash: opHash });
+      store.updateTransfer(transfer.id, { txs });
+      const delivered = (await balanceAfterWrite(a.usdc, recipient, before)) - before;
+      const minOut = BigInt(transfer.liquidity?.minOut ?? "0");
+      if (delivered < minOut) {
+        // The venue call enforces the floor, so landing here means the
+        // recipient read is stale or the output landed somewhere this plan
+        // does not describe — either way the one thing NOT to do is settle a
+        // payout against money we cannot see. With the swap step recorded
+        // above, compensation reviews this as post-swap rather than
+        // mis-refunding it as unswapped.
+        throw new Error(
+          `Safe swap batch delivered ${delivered} to ${recipient}, below the signed floor ${minOut}`,
+        );
+      }
+      expectedOut = delivered;
+      usdcOut = usd.fromUnits(delivered);
+      store.updateTransfer(transfer.id, {
+        state: "SWAPPED",
+        txs,
+        usdcOut,
+        liquidity: transfer.liquidity
+          ? { ...transfer.liquidity, executedAt: new Date().toISOString(), txHash: opHash }
+          : undefined,
+      });
+    } else {
+      // 1. The user-signed UserOperation moves the input amount to the
+      //    orchestrator's working address.
+      await debitInputFunds(transfer, user, auth, txs, execution);
 
-    // 2. Swap the convertible portion (send - fixed fee) EURe -> USDC.
-    //    The fixed fee stays at the orchestrator address as revenue.
-    await assertQuoteRateBinding(transfer);
-    const liquidityPlan = await prepareTransferLiquidity(transfer);
-    store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
-    const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
-    txs.push(...liquidity.txs);
-    const expectedOut = liquidity.amountOut;
-    const usdcOut = liquidityAmountOutUnits(liquidity.quote);
-    store.updateTransfer(transfer.id, {
-      state: "SWAPPED",
-      txs,
-      usdcOut,
-      liquidity: serializeExecution(liquidity),
-    });
+      // 2. Swap the convertible portion (send - fixed fee) EURe -> USDC.
+      //    The fixed fee stays at the orchestrator address as revenue.
+      await assertQuoteRateBinding(transfer);
+      const liquidityPlan = await prepareTransferLiquidity(transfer);
+      store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
+      const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
+      txs.push(...liquidity.txs);
+      expectedOut = liquidity.amountOut;
+      usdcOut = liquidityAmountOutUnits(liquidity.quote);
+      store.updateTransfer(transfer.id, {
+        state: "SWAPPED",
+        txs,
+        usdcOut,
+        liquidity: serializeExecution(liquidity),
+      });
+    }
 
     // 3. Ask Bridge.xyz to fund the Stellar side. In dry-run mode we record
     //    Bridge-shaped deposit instructions and keep the local escrow leg so
@@ -667,16 +776,25 @@ export async function executeTransfer(
     let bridgePlan: BridgeTransferPlan;
     try {
       const destination = bridgeDestination();
+      // A batched live send already created this Bridge transfer at CREATION
+      // (that is where its deposit address came from), so this call is an
+      // idempotent replay and must carry the SAME body — the recorded amount
+      // and the user's Safe as source — not the measured delivery. A replay
+      // with a different body under one idempotency key is either rejected or
+      // silently answered with the original, both wrong.
+      const batchLive = execution?.batch?.mode === "live";
       bridgePlan = await createBridgeTransfer(
         transfer.id,
-        usd.fromUnits(expectedOut),
+        batchLive && transfer.safeSwap?.bridgeAmountUsdc
+          ? transfer.safeSwap.bridgeAmountUsdc
+          : usd.fromUnits(expectedOut),
         {
           paymentRail: BRIDGE.destinationRail,
           currency: BRIDGE.destinationCurrency,
           toAddress: destination.toAddress,
           blockchainMemo: destination.blockchainMemo,
         },
-        { sourceAddress: orchestratorAddress },
+        { sourceAddress: batchLive ? user.address : orchestratorAddress },
       );
       recordBridgePlan(txs, bridgePlan);
     } catch (err) {
@@ -689,13 +807,28 @@ export async function executeTransfer(
       if (!depositAddress || !/^0x[a-fA-F0-9]{40}$/.test(depositAddress)) {
         throw new Error("Bridge did not return a Base deposit address; cannot fund transfer");
       }
-      const depositHash = await writeAndWait(orchestratorWallet, {
-        address: a.usdc,
-        abi: abis.MockToken,
-        functionName: "transfer",
-        args: [depositAddress as `0x${string}`, expectedOut],
-      });
-      txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
+      if (execution?.batch) {
+        // The user-signed batch already delivered the USDC straight to the
+        // deposit address — there is no orchestrator leg to run. The address
+        // must still be THE address the batch was built against: Bridge's
+        // idempotency key makes re-reads stable, but if these ever disagree
+        // the money went somewhere this plan does not describe.
+        if (depositAddress.toLowerCase() !== execution.batch.recipient.toLowerCase()) {
+          throw new Error(
+            `Bridge deposit address ${depositAddress} does not match the batch recipient ` +
+              `${execution.batch.recipient} — the swap output location must be reconciled before payout`,
+          );
+        }
+        txs.push({ step: "bridge.xyz.deposit.funded", hash: txs.at(-1)?.hash ?? "0x" });
+      } else {
+        const depositHash = await writeAndWait(orchestratorWallet, {
+          address: a.usdc,
+          abi: abis.MockToken,
+          functionName: "transfer",
+          args: [depositAddress as `0x${string}`, expectedOut],
+        });
+        txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
+      }
     } else {
       const approveBridgeHash = await writeAndWait(orchestratorWallet, {
         address: a.usdc,
@@ -793,6 +926,7 @@ export async function executeSepaTransfer(
   transfer: Transfer,
   user: User,
   auth: PaymentAuthorization,
+  execution?: SafeExecution,
 ): Promise<Transfer> {
   const txs = transfer.txs;
 
@@ -806,7 +940,7 @@ export async function executeSepaTransfer(
       country: user.country || "DE",
     };
 
-    await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs);
+    await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs, execution);
 
     if (moneriumSandboxEnabled()) {
       try {
@@ -847,6 +981,19 @@ export async function executeSepaTransfer(
       }
     }
 
+    // No Monerium configured at all. Only a simulation-permitted stack may
+    // mark this PAID — on a real deployment the fee debit above genuinely
+    // moved money, and reporting PAID with a mock payout is the exact
+    // fake-success class the sibling fail-closed branch exists to prevent.
+    if (!SECURITY.allowSimulation && !SECURITY.allowMockFallback) {
+      return failAndCompensate(
+        transfer.id,
+        new Error(
+          "no SEPA payout backend is configured (MONERIUM_CLIENT_ID unset) — refusing to simulate a payout on a non-simulation deployment",
+        ),
+        txs,
+      );
+    }
     return store.updateTransfer(transfer.id, {
       state: "PAID",
       sepa: { mode: "mock", state: "processed", detail: "simulated SEPA payout" },
@@ -953,6 +1100,3 @@ async function refreshPayoutUnlocked(
   }
 }
 
-export function pickupStatus(transferId: string) {
-  return getPickup(transferId);
-}

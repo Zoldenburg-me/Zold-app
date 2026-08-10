@@ -202,7 +202,7 @@ try {
   assert.ok(quote.midRate > quote.fxRate, "mid should sit above the all-in rate");
   assert.equal(quote.marginBps, 50, "margin is measured against the live mid");
 
-  console.log("6/8 local remittance refuses accounts without passkey Safe allowance…");
+  console.log("6/8 local remittance refuses accounts without a passkey Safe…");
   await assert.rejects(
     () =>
       sendTransfer({
@@ -210,7 +210,7 @@ try {
         recipientName: "Joseph Otieno",
         recipientPhone: "+254700000000",
       }),
-    /active passkey Safe with a production co-signer allowance/,
+    /active passkey Safe before transfers can be executed/,
   );
   await expectApiStatus("/api/transfers", 409, {
     quoteId: quote.id,

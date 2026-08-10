@@ -11,10 +11,10 @@ npm run compile
 ## Level 0 — automated checks (5 min, no accounts needed)
 
 ```sh
-npm run test:contracts   # 41 Solidity tests: vault caps/roles/replay + FP4 auth, FX access/slippage, escrow, AdminTimelock governance
+npm run test:contracts   # 9 Solidity tests: FX access/slippage, escrow, AdminTimelock governance
 npm run e2e              # full corridor: cash pickup + SEPA exit
 npm run audit:deps       # npm advisory scan
-npm run check            # everything: the two above plus ~25 focused harnesses
+npm run check            # everything: the two above plus ~30 focused harnesses (35 suites)
 ```
 
 `npm run check` is the one that matters before pushing — it allocates a random
@@ -22,7 +22,7 @@ free port for the whole run, which is why a suite passing on its own is weaker
 evidence than it looks. Note it is not fully deterministic: `trustline:test`
 reaches MoneyGram's real anchor and fails if that host is unreachable.
 
-Both must end green (`41 tests passed`, `E2E PASSED`). The e2e boots its own
+Both must end green (`9 tests passed`, `E2E PASSED`). The e2e boots its own
 chain + API, so stop `npm run dev` first if it's running (it will tell you).
 
 ## Level 1 — the app in mock mode (10 min, no accounts needed)
@@ -37,15 +37,14 @@ npm run dev              # then open http://localhost:3000/app
    through instantly in mock mode and lands on the dashboard. You get an IBAN
    (mock-issued) and a real Candide Safe smart-account address (computed
    offline, same tech as production).
-2. **Add money** — deposit €250. Watch the balance: this is a real ERC-20 mint
-   + vault credit on the local chain.
-3. **🇰🇪 Cash pickup** — send €100. Expect: quote with mid-market rate, 0.50%
-   spread, €0.99 fee → animated timeline of 5 real transactions (debit,
-   FX-swap approve, EURe→USDC swap, bridge approve, escrow lock) → amber
-   MoneyGram-style pickup reference → "Simulate cash pickup" → escrow settles,
-   history flips to PAID.
-4. **🏦 Bank transfer** — send €40 to any IBAN. Expect: fee-only quote
-   (€39.01), single debit tx, simulated SEPA payout, PAID.
+2. **Add money** — deposit €250. Watch the balance: a real ERC-20 mint to the
+   account's Safe address on the local chain.
+3. **🇰🇪 Cash pickup / 🏦 Bank transfer** — quoting works end to end, but the
+   SEND ITSELF REFUSES on local hardhat by design: every debit is a
+   UserOperation the passkey signs through Candide's bundler, which does not
+   exist on chain 31337. Expect the clear refusal ("active passkey Safe before
+   transfers can be executed"). Executed sends need `npm run api` against Base
+   Sepolia with a deployed, funded Safe — see Level 2.
 
 KYC-gated mode: start the API with `KYC_AUTO_APPROVE=0`. A new account should
 land on the Identity review screen instead of the provisioning spinner. The
@@ -67,8 +66,7 @@ account becomes `approved`.
    address linked to Monerium via EIP-1271, real sandbox IBAN issued.
 5. Fund it: log into the sandbox portal → *Receive* → simulate a SEPA
    transfer to the user's IBAN. Real test EURe mints to the Safe on Sepolia;
-   the app mirrors it into the vault within ~15s.
-   (Shortcut without the portal: `npx tsx scripts/credit-test.ts <smart-account-address> 250`)
+   the balance reads straight from the Safe within ~15s.
 6. **Real exit flow**: after a portal deposit, a 🏦 Bank transfer places a
    real Monerium redeem order (watch `sepa.orderId` on the transfer, state
    PAYOUT_SUBMITTED → PAID). Without a portal deposit it falls back to a
@@ -119,8 +117,8 @@ demo keeps using escrow in dry-run mode.
 ## Known limitations (by design, MVP)
 
 - Settlement chain is a local Hardhat node; EURe/USDC there are mocks.
-- Owner keys of user Safes are stored server-side (`data/db.json`) — custodial
-  MVP; passkey owners are the production path.
+- No user Safe owner keys are stored server-side: every debit is signed by
+  the user's passkey at send time.
 - The MoneyGram payout is a protocol-shaped mock unless pointed at a real
   anchor.
 - Fresh `npm run dev` resets the local chain + demo users (`data/db.json`).

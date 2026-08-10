@@ -453,11 +453,59 @@ with the user's Safe as verifyingContract.
 THE SECURITY CONSEQUENCE, stated plainly because the text below claims the
 opposite as VERIFIED: a wrong-key signature is no longer "rejected by the
 contract itself". The server is the thing checking, but it no longer stores
-user Safe owner keys; passkey Safes debit through configured co-signer
-allowances. The device key still stops a stolen session from swapping the payee
-or the amount; the co-signer allowance bounds what the API can relay. The
-recovery plan below needs rewriting against whatever replaces the vault as the
-enforcement point.
+user Safe owner keys; passkey Safes debit through co-signer allowances. The
+device key still stops a stolen session from swapping the payee or the amount.
+The recovery plan below needs rewriting against whatever replaces the vault as
+the enforcement point.
+USER-SIGNED EXECUTION (Aug 2026, branch claude/user-signed-execution — the
+regulatory doc's Change 1; supersedes the interim per-transfer allowance that
+briefly lived on claude/per-transfer-allowance and was never merged): the
+ALLOWANCE MODEL IS GONE ENTIRELY. No module, no delegate, no standing or
+one-time amounts — transferTokenFromSafeAllowance no longer exists. POST
+/api/transfers prepares the userOp that IS the debit: an ERC-20 transfer of
+the exact amount (fee only on the SEPA rail; nothing when the fee is 0) to
+the orchestrator address. The passkey signs its hash at send time
+(executionAssertion on /authorize, verified against the stored challenge
+BEFORE the one-shot claim), the co-signer counter-signs where it is an owner,
+and the orchestrator's debit leg submits it through the bundler — so a debit
+failure takes the normal FAILED/compensation path. The chain enforces token,
+amount AND destination; the API can dispose of nothing, ever. Legacy standing
+allowances on old Safes are revoked automatically: the prepared userOp
+prepends deleteAllowance when the chain shows one (CANDIDE.
+allowanceModuleAddress survives only for that read). The co-signer sends no
+native transactions any more — it needs NO gas. The allowance repair routes
+(GET/POST /passkey-safe/allowance*) and the client's repair banner are
+deleted. The CANDIDE_COSIGNER_*_ALLOWANCE_* env knobs do nothing (boot note
+says so). npm run execution:test (13 checks, pure builders); fp3/e2e blocker
+regexes updated to the new refusal text.
+CHANGE 2 WINDOWS 1-3 DONE (same branch): the cash-rail send is ONE user-signed
+batch [legacy revoke?] -> fee transfer -> approve venue -> swap, atomic — a
+failed leg reverts the whole operation and nothing leaves the Safe. The swap
+output goes STRAIGHT to the destination the payout leg names: Bridge's
+deposit address in live mode (the Bridge transfer is created at TRANSFER
+CREATION, idempotency key zold-<id>-bridge, so execute's re-create is stable;
+executeTransfer asserts the deposit address still matches the batch recipient
+and refuses to settle otherwise), the orchestrator only in local dry-run
+(escrow demo pulls from it). Venue side is `safeSwapPlan` on the liquidity
+seam: dex builds exactInputSingle calldata offline (same pool+floor as the
+quote — the ONLY venue provable on Base Sepolia, needs dex:setup's pool);
+lifi/rfq re-quote WITH executor=Safe + recipient baked in (their calldata
+binds the taker — orchestrator-quoted calldata is NOT reusable); fx-swapper
+CANNOT serve a Safe (onlyTrader, our inventory — falls back to plain debit +
+orchestrator swap, so a deployment on LIQUIDITY_PROVIDER=fx-swapper keeps
+windows 2-3; switch to dex/best to close them); cow refuses. usdcOut is
+MEASURED as the recipient's balance delta, floor-checked against the signed
+minOut. COMPENSATION: fixed a latent main bug — the "was it swapped?" check
+matched only liquidity.fx-swapper.eure-usdc, so dex/rfq/lifi-swapped failures
+would have "refunded" EURe the orchestrator no longer held; now prefix-matches
+liquidity.*.eure-usdc. Live-batch failures after the userOp lands are
+MANUAL_REVIEW always (funds are at Bridge, nothing local to reverse —
+compensateTransfer guards on transfer.safeSwap.mode === "live" and
+failAndCompensate on the bridge.xyz.deposit.funded step); dry-run batch
+failures reverse-swap from the orchestrator exactly as before. UNPROVEN: no
+real Base Sepolia send has exercised execution→debit, and no batched swap has
+run against a real pool (needs dex:setup + a funded Safe); Bridge live mode
+remains entirely unexercised.
 
 FP4 (key custody): SPEND-AUTHORITY HALF DONE (July 2026, PR #11, branch
 claude/fp4-vault-authorization — do not re-do differently). RemitVault.debit
@@ -552,6 +600,35 @@ in plaintext.
 Launch gate: local demos fine; NOT safe hosted, with real funds, or claiming
 payout finality until FP1-FP4 done.
 
+## Multi-agent review pass (Aug 2026, branch claude/user-signed-execution)
+
+Four parallel review agents swept the whole tree after the three custody
+iterations; every finding was verified against the code before acting (two of
+the client agent's "dead label" claims were factually wrong — check before
+deleting). Fixed: /authorize now verifies the EXECUTION assertion before the
+redeem assertion (the client performs that ceremony first, so the old order
+read the sign counter backwards and 401'd every Safe-funded SEPA send on
+counter-incrementing authenticators); a claimed-but-unrecorded debit (crash
+between userOp inclusion and the DEBITED write) is swept to MANUAL_REVIEW; a
+SEPA send with no Monerium configured refuses instead of mock-PAID after a
+real fee debit; Bridge execute replays the exact creation body (amount is
+persisted as safeSwap.bridgeAmountUsdc — the idempotency key is shared);
+persisted liquidity quotes execute on the venue that priced them and an
+unknown LIQUIDITY_PROVIDER throws instead of silently using FxSwapper; RFQ
+validates its recipient BEFORE settling; rfq/cow reverse-side rate/probe unit
+bugs; batch path enforces quote expiry. DELIBERATELY KEPT despite "dead"
+reports: the desktop rail UI (parked until Noir screens, see Mobile section),
+getBridgeTransfer + pickup.bridge* fields (the seam for the STILL-MISSING
+Bridge state polling — nothing advances a live Bridge transfer after
+deposit.funded), sender-profile + /users/:id/transfers routes (external API
+surface). KNOWN GAPS left open, in code-comment or here only: recovery can
+only be STARTED from the parked desktop settings view (mobile has no start
+control); the crypto auto-convert toggle is likewise unreachable; batch-mode
+surplus is structurally user-kept regardless of LIQUIDITY_SURPLUS_POLICY;
+the device-signed EIP-712 `to` field still names the orchestrator even for
+batches that deliver to Bridge (changing it needs a coordinated device.js
+lockstep bump).
+
 ## Liquidity venues — tested, not assumed (last checked Aug 2026)
 
 The problem: we cannot carry a treasury. The FxSwapper model holds inventory we
@@ -574,8 +651,7 @@ exists in LI.FI. Approve what the maker NAMES.
  - Intent-based: you sign an order, solvers compete to fill it. No inventory on
    either side, which is the whole point.
  - `signingScheme: eip1271` — a Safe can sign the order itself. Same shape as
-   the FP4 recovery plan, and the same combination Safe Foundation used in
-   their consumer build.
+   the FP4 recovery plan.
  - RATE LIMITED, hard. Two quotes seconds apart returned 429 pointing at their
    Discord for a custom limit. indicativeRate() is cached for exactly this
    reason; the 60s default may still be too aggressive with real users, and a
@@ -713,10 +789,9 @@ THE BLOCKER: losing the browser device key permanently bricks an account.
 `RemitVault.setAuthorizer` only lets the CURRENT authorizer rotate, and the
 key lives in localStorage. No passkey, no support path, no ramp override
 recovers it. Demonstrated live: the "Base Proof" account on Base Sepolia has
-EUR 121 credited and can never spend it. Safe Foundation's own consumer
-research (built-tested-shelved, July 2026) found users will not fund an
-account without credible, *rehearsable* recovery — so this gates launch, not
-polish.
+EUR 121 credited and can never spend it. Consumer smart-wallet research
+consistently finds users will not fund an account without credible,
+*rehearsable* recovery — so this gates launch, not polish.
 
 THE FIX, in this order (the order is not optional):
  0. Refuse to issue an IBAN until a passkey exists. An IBAN is the point of
