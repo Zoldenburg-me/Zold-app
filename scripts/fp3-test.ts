@@ -68,7 +68,7 @@ async function api(p: string, body?: any) {
 }
 
 try {
-  console.log("1/5 chain + deploy + API (FORCE_FAIL_STEP=bridge.lockForPayout)…");
+  console.log("1/4 chain + deploy + API (FORCE_FAIL_STEP=bridge.lockForPayout)…");
   bg(process.execPath, [bin("hardhat"), "node", "--port", "8547"]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
@@ -83,14 +83,14 @@ try {
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  console.log("2/5 user + €250 deposit…");
+  console.log("2/4 user + €250 deposit…");
   const user = await api("/api/users", { name: "Refund Tester", country: "DE" });
   token = user.sessionToken;
   await api("/api/simulate/sepa-deposit", { iban: user.iban, amountEur: 250 });
   const device = newDevice();
   await registerDevice(api, user.id, device);
 
-  console.log("3/5 €100 cash transfer — refuses accounts without a passkey Safe…");
+  console.log("3/4 €100 cash transfer — refuses accounts without a passkey Safe…");
   const quote = await api("/api/quotes", { userId: user.id, sendEur: 100, rail: "cash" });
   await assert.rejects(
     () => sendTransfer(api, device, { quoteId: quote.id, recipientName: "X", recipientPhone: "+254700000000" }),
@@ -100,7 +100,7 @@ try {
   assert.ok(Math.abs(after.balanceEur - 250) < 0.02, `balance untouched, got €${after.balanceEur}`);
   console.log(`      refused before movement; balance still €${after.balanceEur}`);
 
-  console.log("5/5 accounts without configured Safe allowance fail before debit…");
+  console.log("4/4 accounts without a passkey Safe fail before debit…");
   const broke = await api("/api/users", { name: "No Funds", country: "DE" });
   token = broke.sessionToken;
   const q2 = await api("/api/quotes", { userId: broke.id, sendEur: 50, rail: "cash" });
@@ -111,7 +111,7 @@ try {
   });
   assert.equal(r2.status, 409, "account setup blocker rejected before any debit");
 
-  console.log("\nFP3 TEST PASSED — local accounts without passkey Safe allowance do not fake a remittance");
+  console.log("\nFP3 TEST PASSED — local accounts without a passkey Safe do not fake a remittance");
 } finally {
   for (const c of children) c.kill();
 }

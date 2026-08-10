@@ -445,7 +445,7 @@ export async function sep24GetTransaction(
 // Trustlines and reserves
 //
 // Stellar will not let an account receive an asset it does not trust, so a
-// CCTP mint or an anchor refund lands nowhere without a trustline first. Each
+// bridge delivery or an anchor refund lands nowhere without a trustline first. Each
 // trustline also locks 0.5 XLM of reserve (base reserve, read live below), and
 // the account itself needs 2 base reserves, so an account holding one asset
 // needs ~1.5 XLM locked plus fees.
@@ -571,7 +571,7 @@ export async function removeTrustline(keypair: Keypair, asset: Asset): Promise<b
 /**
  * Can this account actually receive the anchor's asset right now?
  *
- * Meant as a pre-flight: a CCTP burn that mints to an account with no
+ * Meant as a pre-flight: a bridge transfer delivered to an account with no
  * trustline destroys USDC on the source chain and delivers nothing, so the
  * cheap check belongs before the irreversible step.
  */

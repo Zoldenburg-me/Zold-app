@@ -6,11 +6,12 @@
  *                                                (recipient collects cash)
  *
  * Every leg is idempotent at the contract layer (transferId hash), so a crash
- * mid-flow can be resumed without double-spending. On failure the transfer is
- * marked FAILED; the BridgeEscrow.release() refund path is wired but manual
- * in the MVP.
+ * mid-flow can be resumed without double-spending. Failures auto-compensate:
+ * failAndCompensate releases escrow and refunds what is recoverable, and the
+ * startup/5-minute sweep retries anything stranded (SEPA and the PAYOUT_*
+ * anchor states have their own legs; see executeSepaTransfer/refreshPayout).
  */
-import { BRIDGE, FX, moneriumSandboxEnabled, USING_LOCAL_RPC } from "./config.js";
+import { BRIDGE, FX, moneriumSandboxEnabled } from "./config.js";
 import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
@@ -43,7 +44,7 @@ import {
 } from "./chain.js";
 import {
   CANDIDE,
-  submitPasskeySafeDeployment,
+  submitPasskeySafeOperation,
   type BrowserPasskeyAssertion,
   type PasskeySafeDeploymentPlan,
 } from "./wallet/candide.js";
@@ -52,7 +53,6 @@ import {
   createCashPickupViaAnchor,
   completePickup,
   fundAndRefreshAnchorPickup,
-  getPickup,
 } from "./adapters/moneygram.js";
 import { anchorModeEnabled, SECURITY } from "./config.js";
 
@@ -73,7 +73,7 @@ export interface PaymentAuthorization {
  */
 export interface SafeExecution {
   plan: PasskeySafeDeploymentPlan;
-  userOperation: Parameters<typeof submitPasskeySafeDeployment>[1];
+  userOperation: Parameters<typeof submitPasskeySafeOperation>[1];
   assertion: BrowserPasskeyAssertion;
   /**
    * Present when the operation is the full fee+approve+swap batch: the debit
@@ -340,7 +340,7 @@ async function submitSafeExecution(user: User, execution: SafeExecution | undefi
       "this transfer has no passkey-approved Safe execution — create the transfer again and approve it with your passkey",
     );
   }
-  const opHash = await submitPasskeySafeDeployment(execution.plan, execution.userOperation, execution.assertion);
+  const opHash = await submitPasskeySafeOperation(execution.plan, execution.userOperation, execution.assertion);
   return opHash ?? "0x";
 }
 
@@ -634,6 +634,24 @@ export async function sweepStrandedTransfers(): Promise<number> {
         store.updateTransfer(t.id, { state: "FAILED", error: "stranded mid-flow — auto-compensating" });
         await compensateTransfer(t.id);
         n++;
+      } else if (
+        t.state === "CREATED" &&
+        t.auth?.authorizedAt &&
+        Date.now() - Date.parse(t.auth.authorizedAt) > STALE_MS
+      ) {
+        // The crash window between submitting the user-signed UserOperation
+        // and persisting DEBITED: the claim is consumed (so /authorize 409s
+        // forever) while the on-chain outcome is unknown — the operation may
+        // or may not have landed. Auto-refunding would pay twice if it did;
+        // leaving it CREATED hides that money may have moved with no record.
+        // Review is the only honest state: an operator checks the chain.
+        store.updateTransfer(t.id, {
+          state: "MANUAL_REVIEW",
+          error:
+            "authorization was claimed but no debit was recorded before a restart — " +
+            "the user-signed operation may or may not have landed on chain; reconcile before any refund",
+        });
+        n++;
       }
     } catch (e: any) {
       console.error(`sweep: compensation failed for ${t.id}: ${e?.message ?? e}`);
@@ -647,7 +665,7 @@ export async function sweepAnchorPayouts(): Promise<number> {
   let n = 0;
   for (const t of [...store.transfers]) {
     try {
-      if (["PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED"].includes(t.state)) {
+      if (["PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING", "PAYOUT_FUNDED"].includes(t.state)) {
         const before = t.updatedAt;
         const updated = await refreshPayout(t);
         if (updated.updatedAt !== before) n++;
@@ -676,7 +694,15 @@ export async function executeTransfer(
       // 1+2 fused: the user-signed batch takes the fee, approves the venue and
       // swaps — atomically, with the output delivered straight to the batch
       // recipient. The orchestrator never holds the input; its job here is to
-      // refuse on rate drift BEFORE anything moves, then MEASURE what arrived.
+      // refuse on staleness BEFORE anything moves, then MEASURE what arrived.
+      // The expiry check matters here specifically: the non-batch path's
+      // venue execute() refuses expired quotes itself, but the batch never
+      // calls execute — and the authorization window (15 min) outlives the
+      // quote TTL (10 min), so without this a signed-late batch would settle
+      // a price the quote no longer promises, bounded only by minOut.
+      if (transfer.liquidity?.expiresAt && Date.now() > Date.parse(transfer.liquidity.expiresAt)) {
+        throw new Error("liquidity quote expired before the batch was submitted — create the transfer again");
+      }
       await assertQuoteRateBinding(transfer);
       const recipient = execution.batch.recipient;
       const usdcBalance = () =>
@@ -750,16 +776,25 @@ export async function executeTransfer(
     let bridgePlan: BridgeTransferPlan;
     try {
       const destination = bridgeDestination();
+      // A batched live send already created this Bridge transfer at CREATION
+      // (that is where its deposit address came from), so this call is an
+      // idempotent replay and must carry the SAME body — the recorded amount
+      // and the user's Safe as source — not the measured delivery. A replay
+      // with a different body under one idempotency key is either rejected or
+      // silently answered with the original, both wrong.
+      const batchLive = execution?.batch?.mode === "live";
       bridgePlan = await createBridgeTransfer(
         transfer.id,
-        usd.fromUnits(expectedOut),
+        batchLive && transfer.safeSwap?.bridgeAmountUsdc
+          ? transfer.safeSwap.bridgeAmountUsdc
+          : usd.fromUnits(expectedOut),
         {
           paymentRail: BRIDGE.destinationRail,
           currency: BRIDGE.destinationCurrency,
           toAddress: destination.toAddress,
           blockchainMemo: destination.blockchainMemo,
         },
-        { sourceAddress: orchestratorAddress },
+        { sourceAddress: batchLive ? user.address : orchestratorAddress },
       );
       recordBridgePlan(txs, bridgePlan);
     } catch (err) {
@@ -946,6 +981,19 @@ export async function executeSepaTransfer(
       }
     }
 
+    // No Monerium configured at all. Only a simulation-permitted stack may
+    // mark this PAID — on a real deployment the fee debit above genuinely
+    // moved money, and reporting PAID with a mock payout is the exact
+    // fake-success class the sibling fail-closed branch exists to prevent.
+    if (!SECURITY.allowSimulation && !SECURITY.allowMockFallback) {
+      return failAndCompensate(
+        transfer.id,
+        new Error(
+          "no SEPA payout backend is configured (MONERIUM_CLIENT_ID unset) — refusing to simulate a payout on a non-simulation deployment",
+        ),
+        txs,
+      );
+    }
     return store.updateTransfer(transfer.id, {
       state: "PAID",
       sepa: { mode: "mock", state: "processed", detail: "simulated SEPA payout" },
@@ -1052,6 +1100,3 @@ async function refreshPayoutUnlocked(
   }
 }
 
-export function pickupStatus(transferId: string) {
-  return getPickup(transferId);
-}
