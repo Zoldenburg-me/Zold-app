@@ -13,10 +13,9 @@ Candide Safe model:
 
 ## Current Risk
 
-Some transitional local paths can still store `user.privateKey` in the JSON
-store for API-side signing. That is acceptable only for local demos, not real
-funds, because a filesystem compromise can become a wallet compromise. Safe
-deployment itself is centralized in `/api/users/:id/passkey-safe/deployment`.
+RESOLVED: no `user.privateKey` path exists anywhere any more — the store
+holds no user Safe owner keys, and every debit is user-signed. Safe deployment
+remains centralized in `/api/users/:id/passkey-safe/deployment`.
 
 ## Target Account Model
 
@@ -40,6 +39,10 @@ Advanced users can add:
 
 ## Transfer Permission Model
 
+> **Superseded (Aug 2026):** the allowance-module design below was replaced by
+> user-signed execution — see the IMPLEMENTED notes further down. Kept for the
+> reasoning that led there.
+
 Use Candide Allowance Module as the bounded spend permission layer.
 
 Default transfer:
@@ -54,9 +57,42 @@ Default transfer:
 
 Current implementation note: live Monerium deposits land in the user's Safe,
 and the API now treats `safeBalanceEur` as `balanceEur`. Remittance funding is
-Safe-first; remaining server-side Safe signing is temporary local/demo debt
-until the one-time allowance/policy delegate path can submit user-approved
-Safe operations without storing wallet keys.
+Safe-first.
+
+IMPLEMENTED (Aug 2026): user-signed execution — regulatory-architecture.md's
+Change 1, superseding both the standing allowance and the interim per-transfer
+grant. There is no allowance, no delegate, and no module installed at
+deployment. At transfer creation the server prepares the UserOperation that
+performs the debit itself — an ERC-20 transfer of exactly that transfer's
+amount (the fee alone on the Safe-funded SEPA rail) to the orchestrator's
+working address. The user's passkey signs its hash at send time alongside the
+device signature; the co-signer counter-signs where it is an owner; the
+bundler executes. The chain enforces token, amount and destination, so the
+answer to "can we dispose of client assets without the client" is NO,
+architecturally: the API holds no user owner keys and no delegated spend
+authority of any size, at any time. Legacy standing allowances left on old
+Safes are revoked automatically by the next send's operation
+(`transferExecutionTransactions` prepends a `deleteAllowance`).
+
+The delegate-design section below is therefore historical: there is no
+delegate to constrain.
+
+ALSO IMPLEMENTED (Aug 2026): Change 2 windows 1-3 — the cash-rail send is ONE
+user-signed batch: fee transfer -> venue approval -> swap, atomic, with the
+output delivered straight to the destination the payout leg names (the Bridge
+deposit address in live mode; the orchestrator only in local dry-run, where
+the escrow demo pulls from it). The orchestrator never holds the input: a
+failed batch reverts entirely and nothing leaves the Safe. The venue half is a
+`safeSwapPlan` capability on the liquidity seam — Uniswap builds calldata
+offline against the same quoted pool and floor; LI.FI and Bebop are quoted
+WITH the Safe as executor so the route is built for the account that runs it;
+FxSwapper cannot serve a Safe (onlyTrader — our own inventory, where we are
+the counterparty and the question is Change 3's, not a custody window) and
+CoW does not execute, so those venues fall back to the plain user-signed
+debit with the orchestrator swapping after.
+
+What custody remains on the cash rail: the dry-run demo's escrow leg, the
+fx-swapper fallback path, and the fee itself (revenue, not client money).
 
 Scheduled transfer:
 
@@ -104,10 +140,10 @@ authorizer binding without a verified passkey.
    approval, the delay window, and the fail-closed handoff to a separate
    guardian signer. That signer must submit the on-chain
    `SocialRecoveryModule` recovery transaction; it must not be an API hot key.
-4. Add one-time allowance setup for transfers.
+4. ~~Add one-time allowance setup for transfers.~~ Superseded: debits are user-signed operations; no allowance exists.
 5. Keep Safe deployment centralized in `/api/users/:id/passkey-safe/deployment`
    and replace remaining API-side signing with client-signed UserOps.
-6. Delete `user.privateKey` from the stored user model.
+6. ~~Delete `user.privateKey` from the stored user model.~~ Done — no such field exists.
 7. Add a database migration that refuses to carry plaintext wallet keys into
    production persistence.
 

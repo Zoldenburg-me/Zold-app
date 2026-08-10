@@ -485,7 +485,7 @@
   .plan button { margin-top: .4rem; width: 100%; padding: .55rem .7rem; font-size: .76rem; font-weight: 600; border-radius: 8px; transition: all .15s ease; cursor: pointer; }
   .plan button:hover:not(:disabled) { transform: scale(1.02); filter: brightness(1.1); }
   .bundle-status {
-    display: grid; gap: .6rem; margin-top: .95rem; padding: rounded; padding-top: .95rem;
+    display: grid; gap: .6rem; margin-top: .95rem; padding-top: .95rem;
     border-top: 1px solid var(--border);
   }
   .bundle-meter { height: 7px; overflow: hidden; background: var(--row); border-radius: 99px; }
@@ -529,8 +529,6 @@
   .bigamount span { font-size: 1.3rem; font-weight: 600; color: var(--muted); }
   .bigamount input { border: 0; background: transparent; font-size: 1.8rem; font-weight: 700; padding: .28rem 0; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
   .bigamount input:focus { box-shadow: none; }
-  .corridor.small { justify-content: flex-start; margin: .8rem 0 0; }
-  .corridor.small .flag { font-size: 1.05rem; }
 
   .quote { margin-top: 1rem; border-top: 1px dashed var(--border2); padding-top: .85rem; animation: rise .3s ease; }
   .qrow { display: flex; justify-content: space-between; font-size: .85rem; padding: .26rem 0; color: var(--muted); }
@@ -744,7 +742,6 @@
   .m-tile[disabled] { cursor: default; opacity: 1; }
   .m-tile[disabled]:hover { border-color: var(--m-line); }
   .m-tile-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .m-tile .fig { font: 600 20px var(--m-display); margin-top: auto; }
   .m-tile .ttl { font: 600 15px Inter, sans-serif; margin-top: auto; }
   .m-tile .sub { font-size: 11px; color: var(--m-dim); margin-top: 3px; }
   .m-tag {
@@ -1076,7 +1073,7 @@
   .m-track .knob { width: 15px; height: 15px; border-radius: 50%; background: #34343a; transition: all .18s; }
   .m-shtoggle[aria-pressed="true"] .m-track { background: var(--m-pink); border-color: var(--m-pink); justify-content: flex-end; }
   .m-shtoggle[aria-pressed="true"] .m-track .knob { background: #fff; }
-  .m-shprev { margin-top: 16px; border: 1px solid var(--m-line); border-radius: 12px; background: var(--m-card); padding: 4px 14px; }
+  .m-shprev { margin-top: 16px; border: 1px solid var(--m-line); border-radius: 12px; background: var(--m-surface); padding: 4px 14px; }
   .m-shprev .r { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--m-line-faint); font-size: 12px; }
   .m-shprev .r:first-child { border-top: 0; }
   .m-shprev .r .material-symbols-rounded { font-size: 15px; flex: none; }
@@ -1522,21 +1519,6 @@
           <span class="material-symbols-rounded" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
         </button>
         <div class="error hidden" id="m-iban-err" style="margin-bottom:10px"></div>
-
-        <!-- Active Safe whose ON-CHAIN spending allowance is missing: sends
-             refuse with "co-signer allowance is 0". Deployment once installed
-             the policy on a module address with no code, so the database said
-             configured while the chain said nothing. One tap re-runs the setup
-             through the Safe's own signing path. -->
-        <button class="m-kyc-banner hidden" id="m-allowance-banner">
-          <span class="material-symbols-rounded" style="font-size:20px;color:var(--m-pink)">key</span>
-          <span style="flex:1;min-width:0">
-            <span style="display:block;font-size:13px;font-weight:600" id="m-allowance-banner-title">Enable sending</span>
-            <span style="display:block;font-size:11.5px;color:var(--m-dim);margin-top:1px">Your wallet's spending allowance isn't set up — one passkey approval installs it.</span>
-          </span>
-          <span class="material-symbols-rounded" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
-        </button>
-        <div class="error hidden" id="m-allowance-err" style="margin-bottom:10px"></div>
 
         <div class="m-safe">
           <div class="m-safe-body">
@@ -2125,7 +2107,7 @@
           </div>
           <div class="card">
             <h2>Privacy bundle</h2>
-            <div class="setting-row"><div><div class="st">Traffic routing</div><div class="sd">VPN traffic should go device to Mysterium nodes, not through Zoll.</div></div></div>
+            <div class="setting-row"><div><div class="st">Traffic routing</div><div class="sd">VPN traffic should go device to Mysterium nodes, not through Zold.</div></div></div>
             <div class="setting-row"><div><div class="st">Data stored</div><div class="sd">Billing status and aggregate allowance only in this demo.</div></div></div>
             <div class="setting-row"><div><div class="st">Live fulfillment</div><div class="sd" id="set-privacy-live">Pending partner credentials.</div></div></div>
           </div>
@@ -2423,9 +2405,6 @@ function renderMobile(u = user) {
     $("m-iban-err").classList.add("hidden");
   }
 
-  // Async: the answer lives on-chain, so it can't be derived from `u` here.
-  void refreshAllowanceBanner(u);
-
   const f = mobileFigures(u);
   $("m-total").textContent = fmt(f.total);
   $("m-available").textContent = `€${fmt(f.available)}`;
@@ -2660,7 +2639,7 @@ const M_METHODS = {
   sepa: { icon: "account_balance", title: "Bank transfer (IBAN)", sub: "To any account in the SEPA zone" },
   cash: { icon: "payments", title: "Cash pickup (MoneyGram)", sub: "Collect at any agent" },
 };
-let mSend = { dest: null, quote: null, amount: "250", rec: { name: "", iban: "", phone: "" }, transfer: null, prefill: null };
+let mSend = { dest: null, quote: null, rec: { name: "", iban: "", phone: "" }, transfer: null, prefill: null };
 let mQuoteTimer = null;
 
 /* ==========================================================================
@@ -2927,9 +2906,11 @@ async function submitMobileSend() {
       throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
     }
     const signature = await dev.signTypedData(created.authorization.typedData, credId());
+    const execution = await safeExecutionAssertion(created.authorization);
     const redeem = await moneriumRedeemAssertion(created.authorization);
     const t = await api(`/api/transfers/${created.id}/authorize`, {
       signature,
+      ...(execution ? { executionAssertion: execution } : {}),
       ...(redeem ? { moneriumRedeemAssertion: redeem } : {}),
     });
     mSend.transfer = t;
@@ -3318,7 +3299,7 @@ function renderProfileScreen() {
      hiding, because funding refuses without one outside simulation. */
   const safe = u.passkeySafe;
   const security = [
-    { icon: "fingerprint", t: "Passkey", d: "Signs in and approves payments", st: u.passkey?.publicKey ? "Registered" : "Not set" },
+    { icon: "fingerprint", t: "Passkey", d: "Signs in and approves payments", st: u.passkey?.credentialId ? "Registered" : "Not set" },
     { icon: "key", t: "Device spending key", d: "Signs the amount and the payee before anything moves", st: u.authorizerAddress ? "Bound" : "Not bound" },
     { icon: "group", t: "2-of-2 co-signer", d: "Second owner on your smart account", st: safe?.cosignerAddress ? "Enabled" : "Not enabled" },
     { icon: "health_and_safety", t: "Managed recovery", d: "Guardian can restore a lost passkey", st: safe?.recovery?.status === "active" ? "Active" : "Not enabled" },
@@ -3349,7 +3330,7 @@ document.querySelectorAll("[data-mpreset]").forEach((b) => {
 $("m-amount").oninput = () => { clearTimeout(mQuoteTimer); mQuoteTimer = setTimeout(requestQuote, 450); };
 $("m-amount-next").onclick = () => mSend.quote && toRecipient();
 $("m-rec-send").onclick = submitMobileSend;
-$("m-prog-done").onclick = () => { mSend = { dest: null, quote: null, amount: "250", rec: {}, transfer: null, prefill: null }; mobileNav("home"); };
+$("m-prog-done").onclick = () => { mSend = { dest: null, quote: null, rec: {}, transfer: null, prefill: null }; mobileNav("home"); };
 $("m-country-q").oninput = (e) => renderCountryList(e.target.value);
 $("m-pay-q").oninput = renderPayMatches;
 
@@ -3394,56 +3375,10 @@ $("m-payment-page").onclick = () => mobileNav("payment");
 $("m-back").onclick = () => mobileNav("home");
 $("m-kyc-banner").onclick = () => enterKycReview(user?.name || "Account");
 
-/* The on-chain allowance check costs an RPC read on the server, so cache it
-   for a minute and re-check eagerly only after the repair ceremony runs. */
-let allowanceCheck = { at: 0, configured: true };
-async function refreshAllowanceBanner(u = user) {
-  const banner = $("m-allowance-banner");
-  const eligible =
-    u?.id && kycApproved(u) && u.passkeySafe?.status === "active" && !needsPasskeySafeSetup(u);
-  if (!eligible) return banner.classList.add("hidden");
-  if (Date.now() - allowanceCheck.at > 60_000) {
-    allowanceCheck.at = Date.now();
-    try {
-      const r = await api(`/api/users/${u.id}/passkey-safe/allowance`);
-      allowanceCheck.configured = !!r.configured;
-    } catch {
-      allowanceCheck.configured = true; // unknown must not nag
-    }
-  }
-  banner.classList.toggle("hidden", allowanceCheck.configured);
-}
-
-$("m-allowance-banner").onclick = async () => {
-  const banner = $("m-allowance-banner");
-  const err = $("m-allowance-err");
-  err.classList.add("hidden");
-  banner.disabled = true;
-  try {
-    const prepared = await api(`/api/users/${user.id}/passkey-safe/allowance`, {});
-    const cred = await navigator.credentials.get({
-      publicKey: {
-        challenge: b64urlToBytes(prepared.challenge),
-        allowCredentials: [{ type: "public-key", id: b64urlToBytes(prepared.credentialId) }],
-        userVerification: "required",
-        timeout: 60000,
-      },
-    });
-    await api(prepared.submitTo, {
-      authenticatorData: b64url(cred.response.authenticatorData),
-      clientDataJSON: b64url(cred.response.clientDataJSON),
-      signature: b64url(cred.response.signature),
-    });
-    allowanceCheck = { at: 0, configured: true };
-    banner.classList.add("hidden");
-    await refresh();
-  } catch (e) {
-    err.textContent = e.message || String(e);
-    err.classList.remove("hidden");
-  } finally {
-    banner.disabled = false;
-  }
-};
+/* The "set up allowance" repair banner is gone with the allowance model:
+   sends debit through a UserOperation the passkey signs, and that operation
+   revokes any legacy standing allowance as it runs, so there is nothing left
+   to install or repair between sends. */
 
 $("m-iban-banner").onclick = async () => {
   const banner = $("m-iban-banner");
@@ -3489,7 +3424,7 @@ $("m-usd-cta").onclick = () => {
  * no answer from /api/health we assume no simulation, so a failed probe hides
  * a control the server might refuse rather than offering one it will.
  */
-let caps = { simulation: false, sandbox: false, kycProvider: "manual", sumsub: false };
+let caps = { simulation: false, sandbox: false, kycProvider: "manual" };
 
 async function loadCapabilities() {
   try {
@@ -3732,7 +3667,7 @@ function renderShellPages() {
   $("acct-address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — not deployed` : (user.address || "—");
   document.querySelector('[data-copy="acct-address"]')?.classList.toggle("hidden", !!plannedSafe);
   $("acct-owner").textContent = user.passkeySafe?.status === "active"
-    ? `passkey${user.passkeySafe?.cosignerPolicy?.enabled ? " + allowance" : ""}`
+    ? `passkey${user.passkeySafe?.cosignerPolicy?.enabled ? " + co-signer" : ""}`
     : "passkey setup required";
   $("acct-kyc").textContent = kycCopy(user.kycStatus, user)[1];
   $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
@@ -3746,17 +3681,18 @@ function renderShellPages() {
   $("set-device").textContent = user.authorizerAddress ? `Bound to ${user.authorizerAddress.slice(0, 10)}…${user.authorizerAddress.slice(-6)}` : "Not bound yet.";
   const safe = user.passkeySafe;
   const cosigner = safe?.cosignerPolicy;
-  const allowanceSummary = cosigner?.allowances?.length
-    ? cosigner.allowances
-        .filter((x) => BigInt(x.amount || "0") > 0n)
-        .map((x) => `${x.symbol} ${x.amount}`)
-        .join(", ") || "0"
-    : cosigner?.allowanceAmount || "0";
+  /* A legacy account may still carry a standing allowance from the removed
+     co-signer-delegate model; the next send's user-signed operation revokes
+     it. New accounts never have one. */
+  const legacyStanding = cosigner?.allowances?.some((x) => BigInt(x.amount || "0") > 0n);
   $("set-wallet-policy").textContent = !safe
     ? "Passkey Safe not planned yet."
     : cosigner?.enabled
-      ? `Production co-signer · ${safe.threshold}-of-${safe.threshold} Safe · allowance ${allowanceSummary}`
-      : `Passkey-only Safe · co-signer disabled outside production.`;
+      ? `Production co-signer · ${safe.threshold}-of-${safe.threshold} Safe · ` +
+        (legacyStanding
+          ? "legacy allowance detected — revoked automatically on your next send"
+          : "every movement signed with your passkey")
+      : `Passkey-only Safe · every movement signed with your passkey.`;
   renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
     ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`
@@ -4157,6 +4093,31 @@ async function passkeyStepUp() {
   });
   return {
     credentialId: cred.id,
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  };
+}
+
+/* The send-time approval of this transfer's debit. The server prepared the
+   Safe operation that moves exactly this transfer's amount out of your Safe;
+   the passkey signs its hash here, so the movement itself — amount and
+   destination — is what you approve, and the chain enforces it. Nothing can
+   move without one of these signatures. */
+async function safeExecutionAssertion(authorization) {
+  const exec = authorization?.safeExecution;
+  if (!exec) return undefined;
+  if (!exec.challenge || !exec.credentialId) return undefined;
+  const cred = await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(exec.challenge),
+      allowCredentials: [{ type: "public-key", id: b64urlToBytes(exec.credentialId) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  });
+  return {
+    credentialId: exec.credentialId,
     authenticatorData: b64url(cred.response.authenticatorData),
     clientDataJSON: b64url(cred.response.clientDataJSON),
     signature: b64url(cred.response.signature),
@@ -4612,11 +4573,12 @@ $("back-options").onclick = () => showSendStep("options");
 const STEP_LABELS = {
   "safe.transfer(orchestrator)": ["Moving EURe from your Safe", "💶"],
   "safe.transfer(fee)": ["Collecting the transfer fee", "💶"],
-  "eure.approve(swapper)": ["Authorizing FX swap", "🔏"],
   "swapper.swapExactIn": ["Swapping EURe → USDC", "🔁"],
   "liquidity.fx-swapper.eure-usdc": ["Routing EURe → USDC liquidity", "🔁"],
   "liquidity.fx-swapper.usdc-eure": ["Routing USDC → EURe liquidity", "🔁"],
+  "eure.approve(swapper)": ["Authorizing FX swap", "🔏"],
   "bridge.xyz.dry-run.transfer": ["Planning Bridge.xyz transfer", "🌉"],
+  "bridge.xyz.deposit.funded": ["Bridge deposit funded by your signed batch", "🌉"],
   "bridge.xyz.live.transfer": ["Creating Bridge.xyz transfer", "🌉"],
   "bridge.xyz.deposit.address": ["Bridge deposit address ready", "🏦"],
   "bridge.xyz.deposit.memo": ["Bridge deposit memo ready", "🏦"],
@@ -4795,11 +4757,14 @@ async function pollSepaTransfer(id) {
       throw new Error("the payout destination in the signed terms does not match the recipient you entered — not signing");
     }
     const signature = await dev.signTypedData(created.authorization.typedData, credId());
+    const execution = await safeExecutionAssertion(created.authorization);
     const redeem = await moneriumRedeemAssertion(created.authorization);
 
-    // 3. Submit: the server can only relay the spend this signature approved.
+    // 3. Submit: the server can only relay the movement the passkey just
+    //    signed — the debit is a Safe operation, not a server action.
     const t = await api(`/api/transfers/${created.id}/authorize`, {
       signature,
+      ...(execution ? { executionAssertion: execution } : {}),
       ...(redeem ? { moneriumRedeemAssertion: redeem } : {}),
     });
     transfer = t;
@@ -4909,7 +4874,9 @@ function histRow(t) {
     </div>`;
 }
 function addHistory(t) {
-  hist.unshift(t);
+  // The activity endpoint tags entries with kind; a raw POST /api/transfers
+  // response has none, and the filters below would drop the just-sent one.
+  hist.unshift(t.kind ? t : { kind: "transfer", ...t });
   renderHistory();
 }
 function updateHistory(t) {
