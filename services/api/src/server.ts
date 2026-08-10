@@ -10,7 +10,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, FX, IS_PRODUCTION, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
 import { prepareSafeSwapForTransfer } from "./liquidity.js";
 import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
@@ -85,7 +85,7 @@ import {
   signMessageAsPasskeySafe,
   smartAccountForPasskey,
   smartAccountForPasskeyCosigner,
-  submitPasskeySafeDeployment,
+  submitPasskeySafeOperation,
   webauthnOwnerFromJwk,
   webauthnOwnerToStore,
 } from "./wallet/candide.js";
@@ -638,7 +638,11 @@ function passkeySafePlan(
     // keep the shape old stored accounts already have); the module address is
     // retained solely so legacy standing allowances can be found and revoked.
     cosignerPolicy: {
-      enabled: Boolean(CANDIDE.cosignerAddress),
+      // Keyed on the GATED cosignerAddress (CANDIDE.cosignerEnabled applied),
+      // not the raw env var: with the co-signer disabled this plan is a
+      // 1-of-1 Safe, and recording enabled:true would make the UI describe a
+      // co-signer that is not in the owner set.
+      enabled: Boolean(cosignerAddress),
       allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
       allowancePeriodMinutes: "0",
       allowances: [],
@@ -2670,7 +2674,7 @@ app.post(
         ...balances,
       });
     }
-    const opHash = await submitPasskeySafeDeployment(user.passkeySafe, pending.userOperation, {
+    const opHash = await submitPasskeySafeOperation(user.passkeySafe, pending.userOperation, {
       authenticatorData: b64urlToBuf(authenticatorData),
       clientDataJSON: b64urlToBuf(clientDataJSON),
       signature: b64urlToBuf(signature),
@@ -2934,12 +2938,6 @@ app.post(
       name: transfer.recipientName,
     });
     transfer.auth = { to: orchestratorAddress, amountWei: amountWei.toString(), destination, deadline };
-    // Per-transfer allowance grant: the exact EURe this transfer will debit,
-    // granted as a one-time allowance the user's passkey approves alongside
-    // the device signature. The Safe-funded SEPA rail only moves the fee
-    // (Monerium burns the payout from the Safe directly), so that is all the
-    // grant covers there. No grant means no debit can happen — the co-signer
-    // holds no standing spend authority between transfers.
     // The user-signed debit: a UserOperation moving this transfer's exact
     // amount (the fee alone on the SEPA rail — the payout burns straight from
     // the Safe) to the orchestrator's working address. The passkey signs its
@@ -2957,9 +2955,13 @@ app.post(
       user.passkey?.credentialId &&
       user.passkeySafe?.status === "active" &&
       user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
-      // A 2-of-2 Safe needs the co-signer service to counter-sign; a
-      // passkey-only Safe needs nothing beyond the user's assertion.
-      (!user.passkeySafe.cosignerAddress || (CANDIDE.cosignerAddress && CANDIDE.cosignerKey)) &&
+      // A 2-of-2 Safe needs the co-signer KEY to counter-sign; a passkey-only
+      // Safe needs nothing beyond the user's assertion. Deliberately the same
+      // condition as the orchestrator's passkeySafeExecutionReady: requiring
+      // more here (the address env var, say) would create transfers that pass
+      // the readiness blocker but silently never get an execution prepared,
+      // and then fail at authorize blaming the user.
+      (!user.passkeySafe.cosignerAddress || CANDIDE.cosignerKey) &&
       !SECURITY.allowSimulation
     ) {
       try {
@@ -2977,13 +2979,23 @@ app.post(
             // dry-run (the local escrow demo pulls from it).
             let recipient = orchestratorAddress;
             let mode: "dry-run" | "live" = "dry-run";
+            let bridgeAmountUsdc: number | undefined;
             if (BRIDGE.live) {
+              if (!BRIDGE.destinationAddress) {
+                // Same refusal bridgeDestination() gives at execute — refuse
+                // here rather than posting Bridge a transfer with an empty
+                // to_address and discovering it one leg later.
+                throw new Error(
+                  "BRIDGE_LIVE=1 requires BRIDGE_DESTINATION_ADDRESS until MoneyGram anchor payment instructions are wired into Bridge",
+                );
+              }
               const convertEur = transfer.sendEur - FX.FIXED_FEE_EUR;
               const rate = Number(quote.lockedSwapRate ?? "0") / 1e6;
               if (!(rate > 0)) throw new Error("no locked swap rate to size the Bridge transfer");
+              bridgeAmountUsdc = Math.floor(convertEur * rate * 100) / 100;
               const bridgePlan = await createBridgeTransfer(
                 transfer.id,
-                Math.floor(convertEur * rate * 100) / 100,
+                bridgeAmountUsdc,
                 {
                   paymentRail: BRIDGE.destinationRail,
                   currency: BRIDGE.destinationCurrency,
@@ -3019,7 +3031,15 @@ app.post(
               });
               batch = { recipient, mode };
               transfer.liquidity = swap.serialized;
-              transfer.safeSwap = { recipient, mode };
+              transfer.safeSwap = {
+                recipient,
+                mode,
+                // The amount the live Bridge transfer was created with. Execute
+                // must re-create with EXACTLY this body — the idempotency key
+                // is shared, and an idempotent replay with a different amount
+                // is either rejected or silently ignored.
+                ...(bridgeAmountUsdc !== undefined ? { bridgeAmountUsdc } : {}),
+              };
             }
           } catch (err: any) {
             console.error(
@@ -3223,6 +3243,60 @@ app.post(
     }
     let user = store.findUser(transfer.userId)!;
     if (!requireKycApproved(user, res)) return;
+    // User-signed execution: when creation prepared one, this transfer can
+    // only debit through it — the UserOperation the passkey approves IS the
+    // movement, and there is no server-side authority to fall back on.
+    // Verified BEFORE the authorization is claimed (a bad assertion must not
+    // consume the one-shot claim) and BEFORE the redeem assertion: the client
+    // performs the execution ceremony first, so on authenticators with a real
+    // signature counter the redeem assertion carries the HIGHER count —
+    // verifying it first would store that count and make the execution
+    // assertion read as a cloned-authenticator regression, failing every
+    // Safe-funded SEPA send on counter-incrementing hardware.
+    prunePendingTransferExecutions();
+    const pendingExecution = pendingTransferExecutions.get(transfer.id);
+    if (pendingExecution && pendingExecution.userId !== user.id) {
+      return res.status(403).json({ error: "Safe execution belongs to a different account" });
+    }
+    const executionAssertion = req.body?.executionAssertion;
+    if (pendingExecution) {
+      if (!user.passkey?.publicKey) {
+        return res.status(409).json({ error: "no passkey registered for this account" });
+      }
+      const { credentialId, authenticatorData, clientDataJSON, signature: assertionSignature } =
+        executionAssertion ?? {};
+      if (!executionAssertion) {
+        return res.status(400).json({
+          error:
+            "this transfer's debit needs passkey approval — " +
+            "submit executionAssertion signed over the safeExecution challenge",
+        });
+      }
+      if (credentialId !== user.passkey.credentialId) {
+        return res.status(403).json({ error: "passkey credential does not match this account" });
+      }
+      if (!authenticatorData || !clientDataJSON || !assertionSignature) {
+        return res.status(400).json({
+          error: "executionAssertion requires authenticatorData, clientDataJSON and signature",
+        });
+      }
+      try {
+        const { signCount } = await verifyAssertionForChallenge(
+          authenticatorData,
+          clientDataJSON,
+          assertionSignature,
+          user.passkey.publicKey,
+          user.passkey.signCount ?? 0,
+          user.passkey.rpId ?? SECURITY.rpId,
+          SECURITY.origins,
+          pendingExecution.challenge,
+          true,
+        );
+        user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+      } catch (err: any) {
+        return res.status(401).json({ error: String(err?.message ?? err) });
+      }
+    }
     let effectiveRedeemSignature = typeof redeemSignature === "string" ? redeemSignature as `0x${string}` : undefined;
     const redeemAssertion = req.body?.moneriumRedeemAssertion;
     if (!effectiveRedeemSignature && redeemAssertion !== undefined) {
@@ -3276,55 +3350,6 @@ app.post(
       return res.status(400).json({
         error: "passkey Safe Monerium redeem approval is required before this SEPA transfer can execute",
       });
-    }
-    // User-signed execution: when creation prepared one, this transfer can
-    // only debit through it — the UserOperation the passkey approves IS the
-    // movement, and there is no server-side authority to fall back on.
-    // Verified BEFORE the authorization is claimed: a bad assertion must not
-    // consume the one-shot claim.
-    prunePendingTransferExecutions();
-    const pendingExecution = pendingTransferExecutions.get(transfer.id);
-    if (pendingExecution && pendingExecution.userId !== user.id) {
-      return res.status(403).json({ error: "Safe execution belongs to a different account" });
-    }
-    const executionAssertion = req.body?.executionAssertion;
-    if (pendingExecution) {
-      if (!user.passkey?.publicKey) {
-        return res.status(409).json({ error: "no passkey registered for this account" });
-      }
-      const { credentialId, authenticatorData, clientDataJSON, signature: assertionSignature } =
-        executionAssertion ?? {};
-      if (!executionAssertion) {
-        return res.status(400).json({
-          error:
-            "this transfer's debit needs passkey approval — " +
-            "submit executionAssertion signed over the safeExecution challenge",
-        });
-      }
-      if (credentialId !== user.passkey.credentialId) {
-        return res.status(403).json({ error: "passkey credential does not match this account" });
-      }
-      if (!authenticatorData || !clientDataJSON || !assertionSignature) {
-        return res.status(400).json({
-          error: "executionAssertion requires authenticatorData, clientDataJSON and signature",
-        });
-      }
-      try {
-        const { signCount } = await verifyAssertionForChallenge(
-          authenticatorData,
-          clientDataJSON,
-          assertionSignature,
-          user.passkey.publicKey,
-          user.passkey.signCount ?? 0,
-          user.passkey.rpId ?? SECURITY.rpId,
-          SECURITY.origins,
-          pendingExecution.challenge,
-          true,
-        );
-        user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
-      } catch (err: any) {
-        return res.status(401).json({ error: String(err?.message ?? err) });
-      }
     }
     // Claim the authorization before execution. Two parallel submissions of the
     // same signature both used to clear the CREATED check above, and both could

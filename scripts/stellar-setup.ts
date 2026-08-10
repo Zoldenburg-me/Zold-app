@@ -6,7 +6,7 @@
  * code, and this does it.
  *
  * Why it matters: Stellar refuses to deliver an asset an account does not
- * trust. Without the trustline a CCTP mint destroys USDC on the source chain
+ * trust. Without the trustline a bridge delivery destroys USDC on the source chain
  * and lands nothing, and an anchor refund has nowhere to go.
  *
  *   npm run stellar:setup          # report only

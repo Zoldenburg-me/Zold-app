@@ -600,6 +600,35 @@ in plaintext.
 Launch gate: local demos fine; NOT safe hosted, with real funds, or claiming
 payout finality until FP1-FP4 done.
 
+## Multi-agent review pass (Aug 2026, branch claude/user-signed-execution)
+
+Four parallel review agents swept the whole tree after the three custody
+iterations; every finding was verified against the code before acting (two of
+the client agent's "dead label" claims were factually wrong — check before
+deleting). Fixed: /authorize now verifies the EXECUTION assertion before the
+redeem assertion (the client performs that ceremony first, so the old order
+read the sign counter backwards and 401'd every Safe-funded SEPA send on
+counter-incrementing authenticators); a claimed-but-unrecorded debit (crash
+between userOp inclusion and the DEBITED write) is swept to MANUAL_REVIEW; a
+SEPA send with no Monerium configured refuses instead of mock-PAID after a
+real fee debit; Bridge execute replays the exact creation body (amount is
+persisted as safeSwap.bridgeAmountUsdc — the idempotency key is shared);
+persisted liquidity quotes execute on the venue that priced them and an
+unknown LIQUIDITY_PROVIDER throws instead of silently using FxSwapper; RFQ
+validates its recipient BEFORE settling; rfq/cow reverse-side rate/probe unit
+bugs; batch path enforces quote expiry. DELIBERATELY KEPT despite "dead"
+reports: the desktop rail UI (parked until Noir screens, see Mobile section),
+getBridgeTransfer + pickup.bridge* fields (the seam for the STILL-MISSING
+Bridge state polling — nothing advances a live Bridge transfer after
+deposit.funded), sender-profile + /users/:id/transfers routes (external API
+surface). KNOWN GAPS left open, in code-comment or here only: recovery can
+only be STARTED from the parked desktop settings view (mobile has no start
+control); the crypto auto-convert toggle is likewise unreachable; batch-mode
+surplus is structurally user-kept regardless of LIQUIDITY_SURPLUS_POLICY;
+the device-signed EIP-712 `to` field still names the orchestrator even for
+batches that deliver to Bridge (changing it needs a coordinated device.js
+lockstep bump).
+
 ## Liquidity venues — tested, not assumed (last checked Aug 2026)
 
 The problem: we cannot carry a treasury. The FxSwapper model holds inventory we

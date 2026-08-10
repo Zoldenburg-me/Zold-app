@@ -24,7 +24,7 @@ Some repositories may stay private while the protocol and product surfaces are s
 
 ## Current Integrations
 
-- **Safe / Candide** for passkey smart-account planning, deployment, and co-signed allowance execution.
+- **Safe / Candide** for passkey smart-account planning, deployment, and user-signed operation execution.
 - **Monerium** for OAuth, IBAN activation, EURe account linking, and SEPA redeem orders.
 - **MoneyGram / Stellar anchors** for cash payout exploration through KYC-compatible rails.
 - **EVM liquidity routes** for EURe/USDC conversion, including recorded route metadata for operator review.

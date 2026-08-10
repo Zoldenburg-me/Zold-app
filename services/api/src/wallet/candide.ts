@@ -28,7 +28,7 @@ import {
 } from "abstractionkit";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeFunctionData, hashTypedData } from "viem";
-import { RPC_URL, SECURITY } from "../config.js";
+import { SECURITY } from "../config.js";
 
 /**
  * The ONE simulation gate, shared with the rest of the API (SECURITY.
@@ -116,8 +116,6 @@ export interface PasskeySafeDeploymentPlan {
       symbol: "EURE" | "USDC";
       amount: string;
     }[];
-    /** Deprecated display field kept for old clients. */
-    allowanceAmount?: string;
   };
   recovery?: {
     moduleAddress: `0x${string}`;
@@ -449,7 +447,10 @@ export async function readCosignerTokenAllowance(
   if (!CANDIDE.cosignerAddress) return null;
   try {
     const allowance = new AllowanceModule(CANDIDE.allowanceModuleAddress);
-    const current = await allowance.getTokensAllowance(RPC_URL, safeAddress, CANDIDE.cosignerAddress, token);
+    // Read on the chain the UserOperation will execute on (CANDIDE.rpcUrl),
+    // not the app chain: config allows the two to differ, and deciding the
+    // revoke from the wrong chain silently skips it.
+    const current = await allowance.getTokensAllowance(CANDIDE.rpcUrl, safeAddress, CANDIDE.cosignerAddress, token);
     const nowMin = BigInt(Math.floor(Date.now() / 60_000));
     const spent =
       current.resetTimeMin > 0n && nowMin >= current.lastResetMin + current.resetTimeMin
@@ -461,7 +462,7 @@ export async function readCosignerTokenAllowance(
   }
 }
 
-export async function submitPasskeySafeDeployment(
+export async function submitPasskeySafeOperation(
   plan: PasskeySafeDeploymentPlan,
   userOperation: UserOperationV9,
   assertion: BrowserPasskeyAssertion,
