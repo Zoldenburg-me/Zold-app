@@ -13,10 +13,9 @@ Candide Safe model:
 
 ## Current Risk
 
-Some transitional local paths can still store `user.privateKey` in the JSON
-store for API-side signing. That is acceptable only for local demos, not real
-funds, because a filesystem compromise can become a wallet compromise. Safe
-deployment itself is centralized in `/api/users/:id/passkey-safe/deployment`.
+RESOLVED: no `user.privateKey` path exists anywhere any more — the store
+holds no user Safe owner keys, and every debit is user-signed. Safe deployment
+remains centralized in `/api/users/:id/passkey-safe/deployment`.
 
 ## Target Account Model
 
@@ -39,6 +38,10 @@ Advanced users can add:
 - Social recovery guardians for supported jurisdictions and risk tier.
 
 ## Transfer Permission Model
+
+> **Superseded (Aug 2026):** the allowance-module design below was replaced by
+> user-signed execution — see the IMPLEMENTED notes further down. Kept for the
+> reasoning that led there.
 
 Use Candide Allowance Module as the bounded spend permission layer.
 
@@ -137,10 +140,10 @@ authorizer binding without a verified passkey.
    approval, the delay window, and the fail-closed handoff to a separate
    guardian signer. That signer must submit the on-chain
    `SocialRecoveryModule` recovery transaction; it must not be an API hot key.
-4. Add one-time allowance setup for transfers.
+4. ~~Add one-time allowance setup for transfers.~~ Superseded: debits are user-signed operations; no allowance exists.
 5. Keep Safe deployment centralized in `/api/users/:id/passkey-safe/deployment`
    and replace remaining API-side signing with client-signed UserOps.
-6. Delete `user.privateKey` from the stored user model.
+6. ~~Delete `user.privateKey` from the stored user model.~~ Done — no such field exists.
 7. Add a database migration that refuses to carry plaintext wallet keys into
    production persistence.
 

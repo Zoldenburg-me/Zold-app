@@ -485,7 +485,7 @@
   .plan button { margin-top: .4rem; width: 100%; padding: .55rem .7rem; font-size: .76rem; font-weight: 600; border-radius: 8px; transition: all .15s ease; cursor: pointer; }
   .plan button:hover:not(:disabled) { transform: scale(1.02); filter: brightness(1.1); }
   .bundle-status {
-    display: grid; gap: .6rem; margin-top: .95rem; padding: rounded; padding-top: .95rem;
+    display: grid; gap: .6rem; margin-top: .95rem; padding-top: .95rem;
     border-top: 1px solid var(--border);
   }
   .bundle-meter { height: 7px; overflow: hidden; background: var(--row); border-radius: 99px; }
@@ -529,8 +529,6 @@
   .bigamount span { font-size: 1.3rem; font-weight: 600; color: var(--muted); }
   .bigamount input { border: 0; background: transparent; font-size: 1.8rem; font-weight: 700; padding: .28rem 0; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
   .bigamount input:focus { box-shadow: none; }
-  .corridor.small { justify-content: flex-start; margin: .8rem 0 0; }
-  .corridor.small .flag { font-size: 1.05rem; }
 
   .quote { margin-top: 1rem; border-top: 1px dashed var(--border2); padding-top: .85rem; animation: rise .3s ease; }
   .qrow { display: flex; justify-content: space-between; font-size: .85rem; padding: .26rem 0; color: var(--muted); }
@@ -744,7 +742,6 @@
   .m-tile[disabled] { cursor: default; opacity: 1; }
   .m-tile[disabled]:hover { border-color: var(--m-line); }
   .m-tile-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .m-tile .fig { font: 600 20px var(--m-display); margin-top: auto; }
   .m-tile .ttl { font: 600 15px Inter, sans-serif; margin-top: auto; }
   .m-tile .sub { font-size: 11px; color: var(--m-dim); margin-top: 3px; }
   .m-tag {
@@ -1076,7 +1073,7 @@
   .m-track .knob { width: 15px; height: 15px; border-radius: 50%; background: #34343a; transition: all .18s; }
   .m-shtoggle[aria-pressed="true"] .m-track { background: var(--m-pink); border-color: var(--m-pink); justify-content: flex-end; }
   .m-shtoggle[aria-pressed="true"] .m-track .knob { background: #fff; }
-  .m-shprev { margin-top: 16px; border: 1px solid var(--m-line); border-radius: 12px; background: var(--m-card); padding: 4px 14px; }
+  .m-shprev { margin-top: 16px; border: 1px solid var(--m-line); border-radius: 12px; background: var(--m-surface); padding: 4px 14px; }
   .m-shprev .r { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--m-line-faint); font-size: 12px; }
   .m-shprev .r:first-child { border-top: 0; }
   .m-shprev .r .material-symbols-rounded { font-size: 15px; flex: none; }
@@ -2110,7 +2107,7 @@
           </div>
           <div class="card">
             <h2>Privacy bundle</h2>
-            <div class="setting-row"><div><div class="st">Traffic routing</div><div class="sd">VPN traffic should go device to Mysterium nodes, not through Zoll.</div></div></div>
+            <div class="setting-row"><div><div class="st">Traffic routing</div><div class="sd">VPN traffic should go device to Mysterium nodes, not through Zold.</div></div></div>
             <div class="setting-row"><div><div class="st">Data stored</div><div class="sd">Billing status and aggregate allowance only in this demo.</div></div></div>
             <div class="setting-row"><div><div class="st">Live fulfillment</div><div class="sd" id="set-privacy-live">Pending partner credentials.</div></div></div>
           </div>
@@ -2642,7 +2639,7 @@ const M_METHODS = {
   sepa: { icon: "account_balance", title: "Bank transfer (IBAN)", sub: "To any account in the SEPA zone" },
   cash: { icon: "payments", title: "Cash pickup (MoneyGram)", sub: "Collect at any agent" },
 };
-let mSend = { dest: null, quote: null, amount: "250", rec: { name: "", iban: "", phone: "" }, transfer: null, prefill: null };
+let mSend = { dest: null, quote: null, rec: { name: "", iban: "", phone: "" }, transfer: null, prefill: null };
 let mQuoteTimer = null;
 
 /* ==========================================================================
@@ -3302,7 +3299,7 @@ function renderProfileScreen() {
      hiding, because funding refuses without one outside simulation. */
   const safe = u.passkeySafe;
   const security = [
-    { icon: "fingerprint", t: "Passkey", d: "Signs in and approves payments", st: u.passkey?.publicKey ? "Registered" : "Not set" },
+    { icon: "fingerprint", t: "Passkey", d: "Signs in and approves payments", st: u.passkey?.credentialId ? "Registered" : "Not set" },
     { icon: "key", t: "Device spending key", d: "Signs the amount and the payee before anything moves", st: u.authorizerAddress ? "Bound" : "Not bound" },
     { icon: "group", t: "2-of-2 co-signer", d: "Second owner on your smart account", st: safe?.cosignerAddress ? "Enabled" : "Not enabled" },
     { icon: "health_and_safety", t: "Managed recovery", d: "Guardian can restore a lost passkey", st: safe?.recovery?.status === "active" ? "Active" : "Not enabled" },
@@ -3333,7 +3330,7 @@ document.querySelectorAll("[data-mpreset]").forEach((b) => {
 $("m-amount").oninput = () => { clearTimeout(mQuoteTimer); mQuoteTimer = setTimeout(requestQuote, 450); };
 $("m-amount-next").onclick = () => mSend.quote && toRecipient();
 $("m-rec-send").onclick = submitMobileSend;
-$("m-prog-done").onclick = () => { mSend = { dest: null, quote: null, amount: "250", rec: {}, transfer: null, prefill: null }; mobileNav("home"); };
+$("m-prog-done").onclick = () => { mSend = { dest: null, quote: null, rec: {}, transfer: null, prefill: null }; mobileNav("home"); };
 $("m-country-q").oninput = (e) => renderCountryList(e.target.value);
 $("m-pay-q").oninput = renderPayMatches;
 
@@ -3427,7 +3424,7 @@ $("m-usd-cta").onclick = () => {
  * no answer from /api/health we assume no simulation, so a failed probe hides
  * a control the server might refuse rather than offering one it will.
  */
-let caps = { simulation: false, sandbox: false, kycProvider: "manual", sumsub: false };
+let caps = { simulation: false, sandbox: false, kycProvider: "manual" };
 
 async function loadCapabilities() {
   try {
@@ -3670,7 +3667,7 @@ function renderShellPages() {
   $("acct-address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — not deployed` : (user.address || "—");
   document.querySelector('[data-copy="acct-address"]')?.classList.toggle("hidden", !!plannedSafe);
   $("acct-owner").textContent = user.passkeySafe?.status === "active"
-    ? `passkey${user.passkeySafe?.cosignerPolicy?.enabled ? " + allowance" : ""}`
+    ? `passkey${user.passkeySafe?.cosignerPolicy?.enabled ? " + co-signer" : ""}`
     : "passkey setup required";
   $("acct-kyc").textContent = kycCopy(user.kycStatus, user)[1];
   $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
@@ -4576,11 +4573,12 @@ $("back-options").onclick = () => showSendStep("options");
 const STEP_LABELS = {
   "safe.transfer(orchestrator)": ["Moving EURe from your Safe", "💶"],
   "safe.transfer(fee)": ["Collecting the transfer fee", "💶"],
-  "eure.approve(swapper)": ["Authorizing FX swap", "🔏"],
   "swapper.swapExactIn": ["Swapping EURe → USDC", "🔁"],
   "liquidity.fx-swapper.eure-usdc": ["Routing EURe → USDC liquidity", "🔁"],
   "liquidity.fx-swapper.usdc-eure": ["Routing USDC → EURe liquidity", "🔁"],
+  "eure.approve(swapper)": ["Authorizing FX swap", "🔏"],
   "bridge.xyz.dry-run.transfer": ["Planning Bridge.xyz transfer", "🌉"],
+  "bridge.xyz.deposit.funded": ["Bridge deposit funded by your signed batch", "🌉"],
   "bridge.xyz.live.transfer": ["Creating Bridge.xyz transfer", "🌉"],
   "bridge.xyz.deposit.address": ["Bridge deposit address ready", "🏦"],
   "bridge.xyz.deposit.memo": ["Bridge deposit memo ready", "🏦"],
@@ -4876,7 +4874,9 @@ function histRow(t) {
     </div>`;
 }
 function addHistory(t) {
-  hist.unshift(t);
+  // The activity endpoint tags entries with kind; a raw POST /api/transfers
+  // response has none, and the filters below would drop the just-sent one.
+  hist.unshift(t.kind ? t : { kind: "transfer", ...t });
   renderHistory();
 }
 function updateHistory(t) {

@@ -92,7 +92,6 @@ export interface User {
         symbol: "EURE" | "USDC";
         amount: string;
       }[];
-      allowanceAmount?: string;
     };
     recovery?: {
       moduleAddress: `0x${string}`;
@@ -396,6 +395,10 @@ export interface Transfer {
   safeSwap?: {
     recipient: `0x${string}`;
     mode: "dry-run" | "live";
+    /** Live mode: the amount the Bridge transfer was created with at transfer
+     *  creation. Execute re-creates under the same idempotency key, so it must
+     *  send exactly this amount — a different body is not an idempotent replay. */
+    bridgeAmountUsdc?: number;
   };
   pickup?: {
     referenceCode: string;

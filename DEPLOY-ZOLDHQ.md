@@ -5,7 +5,7 @@ as plaintext local storage; user Safe owner keys are no longer stored by the
 API. The tunnel is chosen deliberately so that database stays on the Mac and
 never lands on a public host.
 
-Chain is Base Sepolia (84532), Monerium chain `basesepolia`, CCTP dry-run.
+Chain is Base Sepolia (84532), Monerium chain `basesepolia`, Bridge.xyz dry-run.
 
 ## Shape
 
@@ -143,15 +143,11 @@ now, and would not then.
 | `ALLOW_PLAINTEXT_STORE=1`, an acknowledgement of plaintext PII/app state storage | yes |
 | `KYC_OPERATOR_TOKEN`, ≥24 chars | yes |
 | `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` | **no** |
-| `CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI` (or `CANDIDE_COSIGNER_ALLOWANCE_AMOUNT`), positive | **no** |
-| `CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES`, positive | **no** |
 
-The last two arrived with the Safe-debit-without-an-API-key change (PR #116) and
-are not in `.env.example` either. They are not cosmetic: a positive allowance is
-a standing authority for the co-signer key to move EURe out of every user's Safe
-through the allowance module, without the passkey. Requiring a positive PERIOD
-alongside it makes that a recurring cap rather than a one-time budget that
-silently runs out mid-life. Decide the numbers deliberately before setting them.
+The old `CANDIDE_COSIGNER_*_ALLOWANCE_*` knobs are GONE: co-signer allowances
+no longer exist, every debit is a UserOperation the user's passkey signs at
+send time, and setting those vars only produces a boot-time note. Any deploy
+doc telling you to pick allowance numbers is describing a removed model.
 
 ## Accounts do not move between origins
 

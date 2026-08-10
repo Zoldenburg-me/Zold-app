@@ -31,7 +31,6 @@ export interface LiquidityQuote {
   minOut: bigint;
   rate: bigint;
   expiresAt: string;
-  /** RFQ only: the maker's quote id and the tx it wants submitted. */
   /** RFQ only: the maker's quote id, the tx it wants submitted, and the
    *  address that must be approved to pull the sell token. */
   rfq?: {
@@ -45,12 +44,12 @@ export interface LiquidityQuote {
    *  mid it was checked against. execute() must reuse this pool — re-picking
    *  at execution could route through a different, unchecked one. */
   dex?: { pool: `0x${string}`; fee: number; mid: number; deviationBps: number };
-  /** LI.FI only: the route it priced and the tx it wants submitted. Held on
-   *  the quote because prepare and execute are separate steps — re-quoting at
-   *  execution would settle at a price the user never saw. */
   /** Best-execution only: what each venue offered, so the choice is auditable
    *  after the fact rather than a number that appeared from nowhere. */
   routing?: { venue: string; expectedOut: string | null; error?: string }[];
+  /** LI.FI only: the route it priced and the tx it wants submitted. Held on
+   *  the quote because prepare and execute are separate steps — re-quoting at
+   *  execution would settle at a price the user never saw. */
   lifi?: {
     tool: string;
     approvalAddress: `0x${string}`;
@@ -131,16 +130,6 @@ export interface LiquidityProvider {
 }
 
 /**
- * Wait until a fresh read actually shows the allowance the approve just set.
- *
- * The public RPC is load-balanced: the swap SIMULATION can land on a replica
- * that has not seen the approve block yet, and the swap then reverts
- * ERC20InsufficientAllowance against an allowance that is genuinely on
- * chain — a real €5 transfer failed and auto-refunded over exactly this.
- * Bounded: a lagging replica converges within a block or two; a truly
- * missing approve stays missing and the swap's own revert reports it.
- */
-/**
  * Read a balance until it reflects a write we know happened (bounded).
  *
  * Same replica-lag disease as waitForAllowanceVisibility, on the read side:
@@ -168,6 +157,16 @@ export async function balanceAfterWrite(
   return last;
 }
 
+/**
+ * Wait until a fresh read actually shows the allowance the approve just set.
+ *
+ * The public RPC is load-balanced: the swap SIMULATION can land on a replica
+ * that has not seen the approve block yet, and the swap then reverts
+ * ERC20InsufficientAllowance against an allowance that is genuinely on
+ * chain — a real €5 transfer failed and auto-refunded over exactly this.
+ * Bounded: a lagging replica converges within a block or two; a truly
+ * missing approve stays missing and the swap's own revert reports it.
+ */
 export async function waitForAllowanceVisibility(
   token: `0x${string}`,
   owner: `0x${string}`,
@@ -349,8 +348,14 @@ class RfqLiquidityProvider implements LiquidityProvider {
       amountIn,
       expectedOut,
       minOut,
-      // Same 6dp convention as FxSwapper.rate: tokenOut units per 1e18 tokenIn.
-      rate: amountIn > 0n ? (expectedOut * 10n ** 18n) / amountIn : 0n,
+      // Same 6dp convention as FxSwapper.rate, oriented to USDC-per-EURe on
+      // BOTH sides (like dex/lifi): on the reverse side amountIn is 6dp and
+      // expectedOut 18dp, and the naive ratio produced a ~1e30 number that
+      // made every downstream sanity check refuse.
+      rate: rate6dp(
+        side === "EURE_TO_USDC" ? amountIn : expectedOut,
+        side === "EURE_TO_USDC" ? expectedOut : amountIn,
+      ),
       expiresAt:
         makerExpiry && Date.parse(makerExpiry) < Date.parse(expiresAt) ? makerExpiry : expiresAt,
       rfq: {
@@ -378,6 +383,15 @@ class RfqLiquidityProvider implements LiquidityProvider {
       // would execute at a price the user never saw.
       throw new Error("RFQ quote carries no executable tx — request a new quote");
     }
+    if (to.toLowerCase() !== orchestratorAddress.toLowerCase()) {
+      // Bebop pays the receiver named at quote time; we quote with the
+      // orchestrator as receiver, so anything else is a caller mistake rather
+      // than something to paper over by forwarding tokens silently. Checked
+      // BEFORE anything is submitted: this used to be validated after the
+      // settlement, which converted the caller's tokens and then threw — the
+      // worst of both.
+      throw new Error(`RFQ quote pays ${orchestratorAddress}, not ${to}`);
+    }
     const a = addrs();
     const token = quote.side === "EURE_TO_USDC" ? a.eure : a.usdc;
     // Approve the address the maker nominated, not the tx target. Bebop
@@ -397,12 +411,6 @@ class RfqLiquidityProvider implements LiquidityProvider {
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
     if (receipt.status !== "success") throw new Error("RFQ settlement reverted");
-    if (to.toLowerCase() !== orchestratorAddress.toLowerCase()) {
-      // Bebop pays the receiver named at quote time; we quote with the
-      // orchestrator as receiver, so anything else is a caller mistake rather
-      // than something to paper over by forwarding tokens silently.
-      throw new Error(`RFQ quote pays ${orchestratorAddress}, not ${to}`);
-    }
     return {
       quote,
       amountOut: quote.expectedOut,
@@ -454,7 +462,7 @@ class RfqLiquidityProvider implements LiquidityProvider {
     // built from a 1-wei quote would not resemble a real trade.
     const probe = await this.quote(
       side,
-      eur.toWei(LIQUIDITY.PROBE_EUR),
+      side === "EURE_TO_USDC" ? eur.toWei(LIQUIDITY.PROBE_EUR) : usd.toUnits(LIQUIDITY.PROBE_EUR),
       "indicative",
       new Date(now + LIQUIDITY.INDICATIVE_TTL_MS).toISOString(),
     );
@@ -545,8 +553,11 @@ class CowLiquidityProvider implements LiquidityProvider {
       amountIn,
       expectedOut,
       minOut,
-      // Same 6dp-per-1e18 convention as the swapper.
-      rate: amountIn > 0n ? (expectedOut * 10n ** 18n) / amountIn : 0n,
+      // Same 6dp convention as the swapper, oriented USDC-per-EURe both sides.
+      rate: rate6dp(
+        side === "EURE_TO_USDC" ? amountIn : expectedOut,
+        side === "EURE_TO_USDC" ? expectedOut : amountIn,
+      ),
       expiresAt: validTo && Date.parse(validTo) < Date.parse(expiresAt) ? validTo : expiresAt,
       cow: {
         orderId: String(body.id ?? ""),
@@ -573,7 +584,7 @@ class CowLiquidityProvider implements LiquidityProvider {
     }
     const probe = await this.quote(
       side,
-      eur.toWei(LIQUIDITY.PROBE_EUR),
+      side === "EURE_TO_USDC" ? eur.toWei(LIQUIDITY.PROBE_EUR) : usd.toUnits(LIQUIDITY.PROBE_EUR),
       "indicative",
       new Date(now + LIQUIDITY.INDICATIVE_TTL_MS).toISOString(),
     );
@@ -584,13 +595,6 @@ class CowLiquidityProvider implements LiquidityProvider {
   }
 }
 
-/**
- * Which liquidity source this deployment uses.
- *
- * Deliberately explicit: an RFQ provider that silently degrades to our own
- * inventory would price real transfers off a number we chose while reporting
- * that a market maker set it.
- */
 /**
  * Uniswap v3, executed on-chain.
  *
@@ -1119,12 +1123,17 @@ export function applySurplus(
  *  dispatch to the venue that actually priced a quote. */
 export function providerById(id: LiquidityProviderId): LiquidityProvider {
   switch (id) {
+    case "fx-swapper": return new FxSwapperLiquidityProvider();
     case "rfq": return new RfqLiquidityProvider();
     case "cow": return new CowLiquidityProvider();
     case "dex": return new DexLiquidityProvider();
     case "lifi": return new LifiLiquidityProvider();
     case "best": return new BestExecutionProvider();
-    default: return new FxSwapperLiquidityProvider();
+    default:
+      // An unknown id used to fall back to FxSwapper — which silently priced
+      // real transfers off our own inventory on any LIQUIDITY_PROVIDER typo,
+      // the exact degradation this seam exists to refuse.
+      throw new Error(`unknown liquidity provider "${id}" — check LIQUIDITY_PROVIDER/LIQUIDITY_VENUES`);
   }
 }
 
@@ -1142,7 +1151,12 @@ export async function executeTransferLiquidity(transfer: Transfer): Promise<Liqu
         transfer.quoteId,
         storedQuote?.expiresAt ?? new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
       );
-  return liquidityProvider().execute(quote);
+  // Dispatch by the quote's OWN venue, not the currently-configured one: a
+  // persisted quote must execute where it was priced. Routing it through
+  // liquidityProvider() meant a deployment whose LIQUIDITY_PROVIDER changed
+  // between prepare and execute could settle a dex/rfq/lifi-priced quote
+  // through the FxSwapper mock, which never checks quote.provider.
+  return providerById(quote.provider).execute(quote);
 }
 
 export async function prepareTransferLiquidity(transfer: Transfer): Promise<NonNullable<Transfer["liquidity"]>> {

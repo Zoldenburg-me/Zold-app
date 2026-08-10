@@ -17,7 +17,7 @@ Self-custodial remittance platform & borderless account layer:
   - **Crypto-native users**: Direct EURe / USDC deposits into the user's Safe address.
 - **Outbound Payout Rails**:
   - **SEPA Bank Payouts**: Outbound EURe transfers burn EURe via Monerium and settle via SEPA Instant to any IBAN.
-  - **Global Cash Pickups**: USDC bridged to Stellar via Circle CCTP, withdrawn at MoneyGram locations via SEP-10/12/24.
+  - **Global Cash Pickups**: USDC moved to Stellar via the Bridge.xyz transfer seam, withdrawn at MoneyGram locations via SEP-10/12/24.
 
 ---
 
@@ -26,7 +26,7 @@ Self-custodial remittance platform & borderless account layer:
 | Currency | Token | Settlement Rail | Notes |
 |---|---|---|---|
 | EUR | `EURe` (`0x29F37F...`) | Monerium SEPA | Primary launch currency token on Base Sepolia. Issued by Monerium (EU EMI, MiCA compliant). |
-| USD | `USDC` (`0xf94c01...`) | Circle CCTP / MoneyGram | Core settlement backbone for cross-border and cash rails. |
+| USD | `USDC` (`0xf94c01...`) | Bridge.xyz / MoneyGram | Core settlement backbone for cross-border and cash rails. |
 
 ---
 
@@ -34,7 +34,7 @@ Self-custodial remittance platform & borderless account layer:
 
 - **Base Sepolia (84532)**: Primary EVM settlement chain for Monerium EURe issuing and Candide Safe smart accounts.
 - **Stellar (Chain 27)**: Payout rail for MoneyGram Ramps cash pickups (SEP-10 authentication, SEP-12 KYC customer registration, SEP-24 interactive withdrawal).
-- **Circle CCTP**: Native cross-chain mint/burn bridge between Base Sepolia and Stellar for USDC.
+- **Bridge.xyz**: Licensed transfer seam moving USDC from Base to Stellar (dry-run records the plan; BRIDGE_LIVE=1 calls their Transfer API).
 - **Multi-Venue FX Execution**:
   - `liquidity.ts` presents a unified `LiquidityProvider` interface for executing FX swaps.
   - **Implementations**: `FxSwapper` (local inventory), Bebop RFQ (JIT PMM quotes), CoW Protocol, Uniswap v3, and LI.FI.
@@ -48,9 +48,9 @@ All contracts are minimal, un-proxied, and governed:
 
 | Contract | Role |
 |---|---|
-| [`AdminTimelock.sol`](file:///Users/tonythomas/Zold-app/Zold%20antigravity%20workspace/zold-app/contracts/src/AdminTimelock.sol) | M-of-N multisig with timelock delay owning protocol contracts. Guardian role can pause instantly. |
-| [`FxSwapper.sol`](file:///Users/tonythomas/Zold-app/Zold%20antigravity%20workspace/zold-app/contracts/src/FxSwapper.sol) | On-chain FX swapper with rate configuration and slippage protection. |
-| [`BridgeEscrow.sol`](file:///Users/tonythomas/Zold-app/Zold%20antigravity%20workspace/zold-app/contracts/src/BridgeEscrow.sol) | Escrow locking USDC for cross-chain payouts to Stellar. |
+| [`AdminTimelock.sol`](contracts/src/AdminTimelock.sol) | M-of-N multisig with timelock delay owning protocol contracts. Guardian role can pause instantly. |
+| [`FxSwapper.sol`](contracts/src/FxSwapper.sol) | On-chain FX swapper with rate configuration and slippage protection. |
+| [`BridgeEscrow.sol`](contracts/src/BridgeEscrow.sol) | Escrow locking USDC for cross-chain payouts to Stellar. |
 
 ---
 

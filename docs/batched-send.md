@@ -1,7 +1,11 @@
 # One signature per send: batching the corridor into a single userOp
 
-Sketch, not built. Written after the first live CCTP bridge (Aug 2026), which
-made the transaction count concrete.
+STATUS (Aug 2026): BUILT — the cash-rail send is one user-signed UserOperation
+batching [legacy-allowance revoke?] + fee transfer + venue approval + swap,
+with the output delivered to the payout destination (see
+candide-wallet-architecture.md and transferSwapBatchTransactions). The rest of
+this note is the original design sketch, kept for the reasoning; its CCTP leg
+was since replaced by the Bridge.xyz seam.
 
 ## What is true today
 
