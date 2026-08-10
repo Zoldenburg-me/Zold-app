@@ -92,7 +92,6 @@ export interface User {
         symbol: "EURE" | "USDC";
         amount: string;
       }[];
-      allowanceAmount?: string;
     };
     recovery?: {
       moduleAddress: `0x${string}`;
@@ -382,6 +381,24 @@ export interface Transfer {
     };
     executedAt?: string;
     txHash?: string;
+  };
+  /**
+   * Set when this transfer's debit and swap ride in ONE user-signed
+   * UserOperation (Change 2, windows 1-3): the batch approves the venue and
+   * delivers the output straight to `recipient`, so the orchestrator never
+   * holds the input. `recipient` is the orchestrator only in local dry-run
+   * (the escrow demo pulls from it); in live mode it is the Bridge deposit
+   * address, and once the batch lands the funds are already with the
+   * settlement custodian — which is why compensation must not assume it can
+   * reverse-swap them.
+   */
+  safeSwap?: {
+    recipient: `0x${string}`;
+    mode: "dry-run" | "live";
+    /** Live mode: the amount the Bridge transfer was created with at transfer
+     *  creation. Execute re-creates under the same idempotency key, so it must
+     *  send exactly this amount — a different body is not an idempotent replay. */
+    bridgeAmountUsdc?: number;
   };
   pickup?: {
     referenceCode: string;

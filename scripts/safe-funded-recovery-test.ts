@@ -9,7 +9,7 @@
  * forever because a set `refund` is what marks one as settled.
  *
  * Why this drives compensateTransfer directly instead of sending a transfer:
- * the debit leg itself now requires an active passkey Safe allowance, which a
+ * the debit leg itself now requires an active passkey Safe signing the debit, which a
  * hardhat node cannot provide. What CAN be tested locally is everything that
  * happens after it, which is where the money was being lost. The seeded state
  * is exactly what debitInputFunds writes on success.

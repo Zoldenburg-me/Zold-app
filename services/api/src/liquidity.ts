@@ -1,3 +1,4 @@
+import { encodeFunctionData } from "viem";
 import { FX, LIQUIDITY } from "./config.js";
 import {
   abis,
@@ -30,7 +31,6 @@ export interface LiquidityQuote {
   minOut: bigint;
   rate: bigint;
   expiresAt: string;
-  /** RFQ only: the maker's quote id and the tx it wants submitted. */
   /** RFQ only: the maker's quote id, the tx it wants submitted, and the
    *  address that must be approved to pull the sell token. */
   rfq?: {
@@ -44,12 +44,12 @@ export interface LiquidityQuote {
    *  mid it was checked against. execute() must reuse this pool — re-picking
    *  at execution could route through a different, unchecked one. */
   dex?: { pool: `0x${string}`; fee: number; mid: number; deviationBps: number };
-  /** LI.FI only: the route it priced and the tx it wants submitted. Held on
-   *  the quote because prepare and execute are separate steps — re-quoting at
-   *  execution would settle at a price the user never saw. */
   /** Best-execution only: what each venue offered, so the choice is auditable
    *  after the fact rather than a number that appeared from nowhere. */
   routing?: { venue: string; expectedOut: string | null; error?: string }[];
+  /** LI.FI only: the route it priced and the tx it wants submitted. Held on
+   *  the quote because prepare and execute are separate steps — re-quoting at
+   *  execution would settle at a price the user never saw. */
   lifi?: {
     tool: string;
     approvalAddress: `0x${string}`;
@@ -72,9 +72,49 @@ export interface LiquidityExecution {
   surplus?: { amount: string; keptBy: "user" | "treasury" };
 }
 
+/**
+ * A swap the USER'S SAFE executes, not the orchestrator: who runs the calldata
+ * and where the output token is delivered. Venues that bind the taker into
+ * their quote (RFQ makers, LI.FI routes) must be quoted WITH this context —
+ * re-targeting their calldata after the fact silently produces a transaction
+ * the venue will refuse or misdeliver.
+ */
+export interface SafeSwapContext {
+  executor: `0x${string}`;
+  recipient: `0x${string}`;
+}
+
+/**
+ * Everything a user-signed batch needs from the venue: the price being signed,
+ * the approval the venue names (spender is the venue's own answer, never
+ * assumed equal to call.to — the Bebop/LI.FI approvalTarget trap), and the
+ * executable call. The caller composes [approve, call] into the UserOperation.
+ */
+export interface SafeSwapPlan {
+  quote: LiquidityQuote;
+  approval: { token: `0x${string}`; spender: `0x${string}`; amount: bigint };
+  call: { to: `0x${string}`; data: `0x${string}`; value: bigint };
+}
+
 export interface LiquidityProvider {
   quote(side: LiquiditySide, amountIn: bigint, quoteId: string, expiresAt: string): Promise<LiquidityQuote>;
   execute(quote: LiquidityQuote, to?: `0x${string}`): Promise<LiquidityExecution>;
+  /**
+   * Build a swap the user's Safe can execute itself — the venue-specific half
+   * of Change 2 windows 1-3. OPTIONAL because not every venue can serve an
+   * arbitrary executor: FxSwapper is onlyTrader (our own permissioned
+   * inventory — when we are the counterparty the custody question is a
+   * counterparty question, not a window to close), and CoW does not execute
+   * here at all. A venue without this method makes the transfer fall back to
+   * the plain user-signed debit with the orchestrator swapping after.
+   */
+  safeSwapPlan?(
+    side: LiquiditySide,
+    amountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+    ctx: SafeSwapContext,
+  ): Promise<SafeSwapPlan>;
   /**
    * A cheap, display-only EUR->USD rate for building a receipt, as a float and
    * in the swapper's 6dp integer form.
@@ -89,16 +129,6 @@ export interface LiquidityProvider {
   indicativeRate(side: LiquiditySide): Promise<{ rate: number; raw: bigint }>;
 }
 
-/**
- * Wait until a fresh read actually shows the allowance the approve just set.
- *
- * The public RPC is load-balanced: the swap SIMULATION can land on a replica
- * that has not seen the approve block yet, and the swap then reverts
- * ERC20InsufficientAllowance against an allowance that is genuinely on
- * chain — a real €5 transfer failed and auto-refunded over exactly this.
- * Bounded: a lagging replica converges within a block or two; a truly
- * missing approve stays missing and the swap's own revert reports it.
- */
 /**
  * Read a balance until it reflects a write we know happened (bounded).
  *
@@ -127,6 +157,16 @@ export async function balanceAfterWrite(
   return last;
 }
 
+/**
+ * Wait until a fresh read actually shows the allowance the approve just set.
+ *
+ * The public RPC is load-balanced: the swap SIMULATION can land on a replica
+ * that has not seen the approve block yet, and the swap then reverts
+ * ERC20InsufficientAllowance against an allowance that is genuinely on
+ * chain — a real €5 transfer failed and auto-refunded over exactly this.
+ * Bounded: a lagging replica converges within a block or two; a truly
+ * missing approve stays missing and the swap's own revert reports it.
+ */
 export async function waitForAllowanceVisibility(
   token: `0x${string}`,
   owner: `0x${string}`,
@@ -273,14 +313,18 @@ class RfqLiquidityProvider implements LiquidityProvider {
     amountIn: bigint,
     quoteId: string,
     expiresAt: string,
+    ctx?: SafeSwapContext,
   ): Promise<LiquidityQuote> {
     const { sell, buy, tokenIn, tokenOut } = this.tokens(side);
+    // The maker binds the taker into the quote, so a Safe-executed swap must
+    // be quoted AS the Safe — the orchestrator-taker calldata is not reusable.
     const body = await this.request(
       new URLSearchParams({
         sell_tokens: sell,
         buy_tokens: buy,
         sell_amounts: amountIn.toString(),
-        taker_address: orchestratorAddress,
+        taker_address: ctx?.executor ?? orchestratorAddress,
+        ...(ctx ? { receiver_address: ctx.recipient } : {}),
         gasless: "false",
       }),
     );
@@ -304,8 +348,14 @@ class RfqLiquidityProvider implements LiquidityProvider {
       amountIn,
       expectedOut,
       minOut,
-      // Same 6dp convention as FxSwapper.rate: tokenOut units per 1e18 tokenIn.
-      rate: amountIn > 0n ? (expectedOut * 10n ** 18n) / amountIn : 0n,
+      // Same 6dp convention as FxSwapper.rate, oriented to USDC-per-EURe on
+      // BOTH sides (like dex/lifi): on the reverse side amountIn is 6dp and
+      // expectedOut 18dp, and the naive ratio produced a ~1e30 number that
+      // made every downstream sanity check refuse.
+      rate: rate6dp(
+        side === "EURE_TO_USDC" ? amountIn : expectedOut,
+        side === "EURE_TO_USDC" ? expectedOut : amountIn,
+      ),
       expiresAt:
         makerExpiry && Date.parse(makerExpiry) < Date.parse(expiresAt) ? makerExpiry : expiresAt,
       rfq: {
@@ -333,6 +383,15 @@ class RfqLiquidityProvider implements LiquidityProvider {
       // would execute at a price the user never saw.
       throw new Error("RFQ quote carries no executable tx — request a new quote");
     }
+    if (to.toLowerCase() !== orchestratorAddress.toLowerCase()) {
+      // Bebop pays the receiver named at quote time; we quote with the
+      // orchestrator as receiver, so anything else is a caller mistake rather
+      // than something to paper over by forwarding tokens silently. Checked
+      // BEFORE anything is submitted: this used to be validated after the
+      // settlement, which converted the caller's tokens and then threw — the
+      // worst of both.
+      throw new Error(`RFQ quote pays ${orchestratorAddress}, not ${to}`);
+    }
     const a = addrs();
     const token = quote.side === "EURE_TO_USDC" ? a.eure : a.usdc;
     // Approve the address the maker nominated, not the tx target. Bebop
@@ -352,12 +411,6 @@ class RfqLiquidityProvider implements LiquidityProvider {
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
     if (receipt.status !== "success") throw new Error("RFQ settlement reverted");
-    if (to.toLowerCase() !== orchestratorAddress.toLowerCase()) {
-      // Bebop pays the receiver named at quote time; we quote with the
-      // orchestrator as receiver, so anything else is a caller mistake rather
-      // than something to paper over by forwarding tokens silently.
-      throw new Error(`RFQ quote pays ${orchestratorAddress}, not ${to}`);
-    }
     return {
       quote,
       amountOut: quote.expectedOut,
@@ -372,6 +425,34 @@ class RfqLiquidityProvider implements LiquidityProvider {
     };
   }
 
+  /**
+   * Quote with the Safe as taker and the payout destination as receiver — the
+   * maker settles straight to the recipient, so no forwarding leg exists. The
+   * maker's expiry is short (about a minute); a batch signed after it reverts
+   * atomically, which fails the transfer with nothing moved — the acceptable
+   * direction.
+   */
+  async safeSwapPlan(
+    side: LiquiditySide,
+    amountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+    ctx: SafeSwapContext,
+  ): Promise<SafeSwapPlan> {
+    const quote = await this.quote(side, amountIn, quoteId, expiresAt, ctx);
+    const tx = quote.rfq?.tx;
+    const spender = quote.rfq?.approvalTarget;
+    if (!tx?.to || !tx.data || !spender) {
+      throw new Error("RFQ maker returned no executable tx/approval target for a Safe-executed swap");
+    }
+    const { sell } = this.tokens(side);
+    return {
+      quote,
+      approval: { token: sell as `0x${string}`, spender: spender as `0x${string}`, amount: amountIn },
+      call: { to: tx.to as `0x${string}`, data: tx.data as `0x${string}`, value: BigInt(tx.value ?? "0") },
+    };
+  }
+
   async indicativeRate(side: LiquiditySide) {
     const now = Date.now();
     if (this.indicative && now - this.indicative.at < LIQUIDITY.INDICATIVE_TTL_MS) {
@@ -381,7 +462,7 @@ class RfqLiquidityProvider implements LiquidityProvider {
     // built from a 1-wei quote would not resemble a real trade.
     const probe = await this.quote(
       side,
-      eur.toWei(LIQUIDITY.PROBE_EUR),
+      side === "EURE_TO_USDC" ? eur.toWei(LIQUIDITY.PROBE_EUR) : usd.toUnits(LIQUIDITY.PROBE_EUR),
       "indicative",
       new Date(now + LIQUIDITY.INDICATIVE_TTL_MS).toISOString(),
     );
@@ -472,8 +553,11 @@ class CowLiquidityProvider implements LiquidityProvider {
       amountIn,
       expectedOut,
       minOut,
-      // Same 6dp-per-1e18 convention as the swapper.
-      rate: amountIn > 0n ? (expectedOut * 10n ** 18n) / amountIn : 0n,
+      // Same 6dp convention as the swapper, oriented USDC-per-EURe both sides.
+      rate: rate6dp(
+        side === "EURE_TO_USDC" ? amountIn : expectedOut,
+        side === "EURE_TO_USDC" ? expectedOut : amountIn,
+      ),
       expiresAt: validTo && Date.parse(validTo) < Date.parse(expiresAt) ? validTo : expiresAt,
       cow: {
         orderId: String(body.id ?? ""),
@@ -500,7 +584,7 @@ class CowLiquidityProvider implements LiquidityProvider {
     }
     const probe = await this.quote(
       side,
-      eur.toWei(LIQUIDITY.PROBE_EUR),
+      side === "EURE_TO_USDC" ? eur.toWei(LIQUIDITY.PROBE_EUR) : usd.toUnits(LIQUIDITY.PROBE_EUR),
       "indicative",
       new Date(now + LIQUIDITY.INDICATIVE_TTL_MS).toISOString(),
     );
@@ -511,13 +595,6 @@ class CowLiquidityProvider implements LiquidityProvider {
   }
 }
 
-/**
- * Which liquidity source this deployment uses.
- *
- * Deliberately explicit: an RFQ provider that silently degrades to our own
- * inventory would price real transfers off a number we chose while reporting
- * that a market maker set it.
- */
 /**
  * Uniswap v3, executed on-chain.
  *
@@ -634,6 +711,44 @@ class DexLiquidityProvider implements LiquidityProvider {
     };
   }
 
+  /**
+   * The same quote, packaged for the user's Safe to execute. Uniswap's router
+   * is permissionless and takes an explicit recipient, so this needs no
+   * re-quote: the pool, floor and amounts are exactly what quote() produced —
+   * the user signs the price the pipeline saw, and the router enforces the
+   * floor and delivers straight to `ctx.recipient`.
+   */
+  async safeSwapPlan(
+    side: LiquiditySide,
+    amountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+    ctx: SafeSwapContext,
+  ): Promise<SafeSwapPlan> {
+    const quote = await this.quote(side, amountIn, quoteId, expiresAt);
+    const { tokenIn, tokenOut } = this.tokens(side);
+    const data = encodeFunctionData({
+      abi: routerAbi,
+      functionName: "exactInputSingle",
+      args: [
+        {
+          tokenIn,
+          tokenOut,
+          fee: quote.dex!.fee,
+          recipient: ctx.recipient,
+          amountIn: quote.amountIn,
+          amountOutMinimum: quote.minOut,
+          sqrtPriceLimitX96: 0n,
+        },
+      ],
+    });
+    return {
+      quote,
+      approval: { token: tokenIn, spender: LIQUIDITY.DEX_ROUTER, amount: quote.amountIn },
+      call: { to: LIQUIDITY.DEX_ROUTER, data, value: 0n },
+    };
+  }
+
   /** Cached probe, so typing in the amount box is not a quote storm. */
   async indicativeRate(side: LiquiditySide) {
     const now = Date.now();
@@ -671,7 +786,7 @@ class DexLiquidityProvider implements LiquidityProvider {
 class LifiLiquidityProvider implements LiquidityProvider {
   private indicative: { at: number; rate: number; raw: bigint } | null = null;
 
-  private async fetchQuote(side: LiquiditySide, amountIn: bigint) {
+  private async fetchQuote(side: LiquiditySide, amountIn: bigint, ctx?: SafeSwapContext) {
     const a = addrs();
     const fromToken = side === "EURE_TO_USDC" ? a.eure : a.usdc;
     const toToken = side === "EURE_TO_USDC" ? a.usdc : a.eure;
@@ -681,7 +796,11 @@ class LifiLiquidityProvider implements LiquidityProvider {
     url.searchParams.set("fromToken", fromToken);
     url.searchParams.set("toToken", toToken);
     url.searchParams.set("fromAmount", amountIn.toString());
-    url.searchParams.set("fromAddress", orchestratorAddress);
+    // LI.FI builds calldata FOR the fromAddress — a Safe-executed swap must be
+    // quoted as the Safe, with the payout destination as toAddress, or the
+    // route it returns is executable only by the orchestrator.
+    url.searchParams.set("fromAddress", ctx?.executor ?? orchestratorAddress);
+    if (ctx) url.searchParams.set("toAddress", ctx.recipient);
     url.searchParams.set("slippage", String(LIQUIDITY.LIFI_SLIPPAGE));
 
     const headers: Record<string, string> = { accept: "application/json" };
@@ -712,9 +831,15 @@ class LifiLiquidityProvider implements LiquidityProvider {
     return { estimate, tx, tool: String(body?.toolDetails?.name ?? body?.tool ?? "lifi"), toToken };
   }
 
-  async quote(side: LiquiditySide, amountIn: bigint, quoteId: string, expiresAt: string): Promise<LiquidityQuote> {
+  async quote(
+    side: LiquiditySide,
+    amountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+    ctx?: SafeSwapContext,
+  ): Promise<LiquidityQuote> {
     if (amountIn <= 0n) throw new Error("lifi quote requires a positive amount");
-    const { estimate, tx, tool, toToken } = await this.fetchQuote(side, amountIn);
+    const { estimate, tx, tool, toToken } = await this.fetchQuote(side, amountIn, ctx);
     const expectedOut = BigInt(estimate.toAmount);
     const minOut = BigInt(estimate.toAmountMin);
 
@@ -792,6 +917,34 @@ class LifiLiquidityProvider implements LiquidityProvider {
         { step: `${quote.tokenIn.toLowerCase()}.approve(lifi)`, hash: approveHash },
         { step: `liquidity.lifi.${quote.tokenIn.toLowerCase()}-${quote.tokenOut.toLowerCase()}`, hash: swapHash },
       ],
+    };
+  }
+
+  /**
+   * A route quoted FOR the Safe: LI.FI builds calldata for the fromAddress it
+   * was asked about, so the executor and recipient are baked in at quote time
+   * and the user signs exactly the route being executed. The approval spender
+   * is LI.FI's own approvalAddress, never assumed equal to tx.to.
+   */
+  async safeSwapPlan(
+    side: LiquiditySide,
+    amountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+    ctx: SafeSwapContext,
+  ): Promise<SafeSwapPlan> {
+    const quote = await this.quote(side, amountIn, quoteId, expiresAt, ctx);
+    if (!quote.lifi) throw new Error("LI.FI quote carries no executable route for a Safe-executed swap");
+    const a = addrs();
+    const tokenIn = side === "EURE_TO_USDC" ? a.eure : a.usdc;
+    return {
+      quote,
+      approval: { token: tokenIn, spender: quote.lifi.approvalAddress, amount: amountIn },
+      call: {
+        to: quote.lifi.tx.to,
+        data: quote.lifi.tx.data,
+        value: quote.lifi.tx.value ? BigInt(quote.lifi.tx.value) : 0n,
+      },
     };
   }
 
@@ -885,6 +1038,46 @@ export class BestExecutionProvider implements LiquidityProvider {
     return providerById(quote.provider).execute(quote, to);
   }
 
+  /**
+   * Best execution over the venues that can serve a Safe executor. Venues
+   * without safeSwapPlan (FxSwapper, CoW) are excluded HERE, not silently
+   * downgraded — their absence is recorded in routing so a route choice under
+   * this mode stays auditable. All capable venues failing refuses, and the
+   * transfer falls back to the plain user-signed debit path.
+   */
+  async safeSwapPlan(
+    side: LiquiditySide,
+    amountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+    ctx: SafeSwapContext,
+  ): Promise<SafeSwapPlan> {
+    const venues = this.venues();
+    const settled = await Promise.allSettled(
+      venues.map((v) =>
+        v.provider.safeSwapPlan
+          ? v.provider.safeSwapPlan(side, amountIn, quoteId, expiresAt, ctx)
+          : Promise.reject(new Error("venue cannot serve a Safe executor")),
+      ),
+    );
+    const routing = settled.map((r, i) => ({
+      venue: venues[i].id,
+      expectedOut: r.status === "fulfilled" ? r.value.quote.expectedOut.toString() : null,
+      ...(r.status === "rejected" ? { error: String(r.reason?.message ?? r.reason).slice(0, 200) } : {}),
+    }));
+    const winners = settled
+      .map((r) => (r.status === "fulfilled" ? r.value : null))
+      .filter((x): x is SafeSwapPlan => x !== null)
+      .sort((a, b) =>
+        b.quote.expectedOut > a.quote.expectedOut ? 1 : b.quote.expectedOut < a.quote.expectedOut ? -1 : 0,
+      );
+    if (!winners.length) {
+      const why = routing.map((r) => `${r.venue}: ${r.error ?? "no plan"}`).join(" | ");
+      throw new Error(`no venue can fill a Safe-executed ${side} — ${why}`);
+    }
+    return { ...winners[0], quote: { ...winners[0].quote, routing } };
+  }
+
   async indicativeRate(side: LiquiditySide) {
     const now = Date.now();
     if (this.indicative && now - this.indicative.at < LIQUIDITY.INDICATIVE_TTL_MS) {
@@ -930,12 +1123,17 @@ export function applySurplus(
  *  dispatch to the venue that actually priced a quote. */
 export function providerById(id: LiquidityProviderId): LiquidityProvider {
   switch (id) {
+    case "fx-swapper": return new FxSwapperLiquidityProvider();
     case "rfq": return new RfqLiquidityProvider();
     case "cow": return new CowLiquidityProvider();
     case "dex": return new DexLiquidityProvider();
     case "lifi": return new LifiLiquidityProvider();
     case "best": return new BestExecutionProvider();
-    default: return new FxSwapperLiquidityProvider();
+    default:
+      // An unknown id used to fall back to FxSwapper — which silently priced
+      // real transfers off our own inventory on any LIQUIDITY_PROVIDER typo,
+      // the exact degradation this seam exists to refuse.
+      throw new Error(`unknown liquidity provider "${id}" — check LIQUIDITY_PROVIDER/LIQUIDITY_VENUES`);
   }
 }
 
@@ -953,7 +1151,12 @@ export async function executeTransferLiquidity(transfer: Transfer): Promise<Liqu
         transfer.quoteId,
         storedQuote?.expiresAt ?? new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
       );
-  return liquidityProvider().execute(quote);
+  // Dispatch by the quote's OWN venue, not the currently-configured one: a
+  // persisted quote must execute where it was priced. Routing it through
+  // liquidityProvider() meant a deployment whose LIQUIDITY_PROVIDER changed
+  // between prepare and execute could settle a dex/rfq/lifi-priced quote
+  // through the FxSwapper mock, which never checks quote.provider.
+  return providerById(quote.provider).execute(quote);
 }
 
 export async function prepareTransferLiquidity(transfer: Transfer): Promise<NonNullable<Transfer["liquidity"]>> {
@@ -969,6 +1172,38 @@ export async function prepareTransferLiquidity(transfer: Transfer): Promise<NonN
     ...serializeExecution({ quote, amountOut: quote.expectedOut, txs: [] }),
     executedAt: undefined,
     txHash: undefined,
+  };
+}
+
+/**
+ * The Safe-executed swap for one transfer, prepared at CREATION time — its
+ * calldata rides inside the UserOperation the user signs, so unlike the
+ * orchestrator path there is no execute-time quote: the price serialized here
+ * is the price the user's signature covers. Returns null when the configured
+ * venue cannot serve a Safe executor (FxSwapper's permissioned inventory,
+ * CoW) — the transfer then falls back to the plain user-signed debit.
+ */
+export async function prepareSafeSwapForTransfer(
+  transfer: Transfer,
+  ctx: SafeSwapContext,
+): Promise<{ plan: SafeSwapPlan; serialized: NonNullable<Transfer["liquidity"]> } | null> {
+  const provider = liquidityProvider();
+  if (!provider.safeSwapPlan) return null;
+  const storedQuote = store.findQuote(transfer.quoteId);
+  const plan = await provider.safeSwapPlan(
+    "EURE_TO_USDC",
+    eur.toWei(transfer.sendEur - FX.FIXED_FEE_EUR),
+    transfer.quoteId,
+    storedQuote?.expiresAt ?? new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
+    ctx,
+  );
+  return {
+    plan,
+    serialized: {
+      ...serializeExecution({ quote: plan.quote, amountOut: plan.quote.expectedOut, txs: [] }),
+      executedAt: undefined,
+      txHash: undefined,
+    },
   };
 }
 

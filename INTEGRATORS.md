@@ -6,7 +6,7 @@ Everything Zold talks to, what it needs from us, and whether getting it costs a 
 
 | | |
 |---|---|
-| ✅ Have it (sandbox) | Monerium, Candide, Stellar, Circle CCTP |
+| ✅ Have it (sandbox) | Monerium, Candide, Stellar |
 | 🟢 Self-serve — no call, ~10 min each | RPC provider, LI.FI, rates feed, Stripe standard |
 | 🔴 Needs a form/email first | Monerium **production**, **Sumsub** — plus Bridge (bank rails) and MoneyGram (cash) |
 
@@ -33,9 +33,9 @@ Only **two** are hard blockers: Monerium production and Sumsub. Everything else 
 
 **If you only send two emails: #1 and #2.** Those are the only hard blockers.
 
-**#3 is the strategic one.** Bridge is Stripe-owned (acquired Oct 2024, $1.1B). One integration covers the **bank** rails we'd otherwise chase across dLocal and Yellow Card separately — it's what Peanut runs on. Worth sending even though it isn't blocking.
+**#3 is the strategic one.** Bridge is Stripe-owned (acquired Oct 2024, $1.1B). One integration covers the **bank** rails we'd otherwise chase across dLocal and Yellow Card separately. Worth sending even though it isn't blocking.
 
-> ⚠️ **Naming clash:** `services/api/src/bridge/` in our codebase is the **Circle CCTP** worker (USDC burn/mint to Stellar). Nothing to do with Bridge.xyz. Don't let the two get confused in conversation.
+> `services/api/src/bridge/bridgexyz.ts` is the Bridge.xyz transfer seam — it replaced the old Circle CCTP worker that previously lived in this directory.
 
 ### Stripe — two very different things
 
@@ -52,9 +52,8 @@ Only **two** are hard blockers: Monerium production and Sumsub. Everything else 
 |---|---|---|---|---|---|
 | **Monerium** | EUR issuer. Per-user IBANs, EURe on-chain | `MONERIUM_CLIENT_ID`<br>`MONERIUM_CLIENT_SECRET`<br>`MONERIUM_WEBHOOK_SECRET`<br>`MONERIUM_REDIRECT_URI` | ✅ sandbox | Sandbox self-serve at monerium.dev. **Production = regulated e-money relationship** | 🔴 for prod |
 | **Candide** | ERC-4337 bundler + paymaster. Deploys the Safes, pays gas | `CANDIDE_BUNDLER_URL`<br>`CANDIDE_PAYMASTER_URL`<br>`CANDIDE_RPC_URL` | ✅ | Self-serve dashboard | 🟢 |
-| **Circle CCTP** | USDC burn/mint across chains | none — contract addresses only | ✅ | Permissionless. Testnet USDC: faucet.circle.com | 🟢 |
 | **Stellar** | Horizon + Soroban, cash-payout leg | `STELLAR_TREASURY_SECRET` (we generate) | ✅ testnet | Public infra, no key | 🟢 |
-| **RPC provider** | Reading/writing the chain | `TRANSF_RPC_URL`<br>`CANDIDE_RPC_URL`<br>`CCTP_BASE_RPC` | ⚠️ public endpoint | Alchemy / Infura / QuickNode free tier. **Public RPC will rate-limit us in production** | 🟢 |
+| **RPC provider** | Reading/writing the chain | `TRANSF_RPC_URL`<br>`CANDIDE_RPC_URL` | ⚠️ public endpoint | Alchemy / Infura / QuickNode free tier. **Public RPC will rate-limit us in production** | 🟢 |
 | **Rates feed** | Live FX mid-rates | `TRANSF_RATES_URL` | ⚠️ free tier | Defaults to `open.er-api.com`. Paid tier for reliability | 🟢 |
 
 ---
@@ -113,7 +112,6 @@ These are **wallet private keys and secrets we create**. This is the part Baer f
 | `DEPLOY_ORCHESTRATOR_KEY` | Submits transfers, pays gas | **Hot — runs continuously** |
 | `DEPLOY_RAMP_KEY` | Credits deposits | **Hot** |
 | `CANDIDE_COSIGNER_KEY` | 2nd signer on user Safes | **Hot** |
-| `CCTP_BURNER_KEY` | Burns USDC for bridging | **Hot** |
 | `STELLAR_TREASURY_SECRET` | Holds the payout float | **Hot — holds funds** |
 | `MONERIUM_TOKEN_ENCRYPTION_KEY` | Encrypts user OAuth tokens at rest | ≥32 chars, app refuses to start without it |
 | `KYC_OPERATOR_TOKEN` | Approves KYC decisions | Required in production |
@@ -122,7 +120,7 @@ These are **wallet private keys and secrets we create**. This is the part Baer f
 
 - ✅ **Contract ownership is already protected.** `AdminTimelock` (2-of-3 + delay) owns the deployed contracts. No single key can raise the daily cap, grant a role, or drain the swapper. Emergency pause is instant via a separate guardian; only the timelock can un-pause.
 - ❌ **The hot operational keys above are not.** They sit in `.env` as plaintext private keys. This is the real exposure.
-- ❌ **`user.privateKey` is stored in plaintext** in `data/db.json` alongside user PII. The API can move funds from any user Safe. This is the known open half of FP4 and it is the single biggest security item.
+- ✅ **No user Safe owner keys exist server-side any more.** Every debit is a UserOperation the user's passkey signs at send time; the co-signer key only counter-signs those operations and holds no unilateral spend authority.
 
 Recommended: move the hot keys to a KMS or signer service (AWS KMS, GCP KMS, Turnkey, Privy) rather than `.env`. That solves both of Baer's concerns — no keys written down, and no single person's signature needed to keep the app up.
 
@@ -143,7 +141,7 @@ TRUSTED_PROXY_HOPS                must be explicit
 CANDIDE_COSIGNER_ADDRESS + KEY    required before hosted funding
 CANDIDE_RECOVERY_GUARDIAN_ADDRESS required before hosted funding
 CANDIDE_CHAIN_ID == TRANSF_CHAIN_ID
-ALLOW_SIMULATION / ALLOW_MOCK_FALLBACK / CCTP_LIVE   forbidden
+ALLOW_SIMULATION / ALLOW_MOCK_FALLBACK   forbidden
 ```
 
 ---

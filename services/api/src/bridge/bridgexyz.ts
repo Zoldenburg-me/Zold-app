@@ -59,7 +59,10 @@ export class BridgeTransferError extends Error {
 
 function amountString(amount: number): string {
   if (!Number.isFinite(amount) || amount <= 0) throw new Error("Bridge transfer amount must be positive");
-  return amount.toFixed(2);
+  // Floor, never round: toFixed rounds half-up, which could state an amount
+  // LARGER than the USDC actually delivered (measured at 6dp) — a transfer
+  // Bridge would then wait on forever, short by a fraction of a cent.
+  return (Math.floor(amount * 100) / 100).toFixed(2);
 }
 
 function apiPath(path: string): string {
