@@ -48,6 +48,8 @@ import {
 import { startCryptoDepositPoller } from "./adapters/crypto-deposits.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from "./pay.js";
 import { qrSvg } from "./qr.js";
+import { createOrgRouter } from "./routes/orgs.js";
+import { createBusinessRouter, createInvoiceLinkRouter } from "./routes/business.js";
 import { senderProfileToSep9 } from "./adapters/moneygram.js";
 import { toAlpha3 } from "./stellar/sep9.js";
 import { getTreasury, missingRequiredFields, sep10Auth, sep12CustomerFields } from "./stellar/anchor.js";
@@ -209,8 +211,30 @@ const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public")
 app.get("/", (_req, res) => res.sendFile(path.join(pub, "landing.html")));
 app.get(["/app", "/app/"], (_req, res) => res.sendFile(path.join(pub, "index.html")));
 app.get(["/admin", "/admin/"], (_req, res) => res.sendFile(path.join(pub, "admin.html")));
+/** The org dashboard — business and premium personal accounts. */
+app.get(["/business", "/business/"], (_req, res) =>
+  res.sendFile(path.join(pub, "business.html")),
+);
+/** The supplier's invoice view, reached with a one-time link and no account. */
+app.get("/invoice/:token", (_req, res) => res.sendFile(path.join(pub, "invoice.html")));
 
 app.use(express.static(pub));
+
+/**
+ * The organisation domain (docs/business-accounts.md).
+ *
+ * Mounted as routers taking `requireSession` rather than importing the app, so
+ * this file stays the single owner of authentication — a route module cannot
+ * quietly acquire a second way to decide who is calling. Both sit under /api,
+ * so they inherit the rate limiting and the auth-window middleware above.
+ *
+ * The invoice-link router is deliberately NOT session-guarded: it is reached by
+ * a supplier who has no account, holding only the one-time token. Its
+ * responses go through an allowlist view for that reason.
+ */
+app.use("/api/orgs", createOrgRouter(requireSession));
+app.use("/api/orgs", createBusinessRouter(requireSession));
+app.use("/api/invoice-links", createInvoiceLinkRouter());
 
 type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
 const pendingPasskeySafeDeployments = new Map<string, { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }>();
