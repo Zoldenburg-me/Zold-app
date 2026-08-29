@@ -360,11 +360,53 @@ bookkeeping and export, never a signature. Rows are stamped `custody:
 "external"` so a signing path can assert on the row itself. Executing a draft
 from an imported wallet returns unsigned transactions and says so.
 
+DRAFT EXECUTION IS WIRED (Aug 2026). `npm run draft:test` (14 checks, spawns
+its own chain and API). A reviewed draft becomes ONE TRANSFER PER LINE, each
+carrying its own FP4 authorization; nothing moves until the device signs each
+one, which is what makes every refusal path below safe.
+ - ONE CODE PATH. `buildTransferFromQuote` was EXTRACTED from POST
+   /api/transfers unchanged and is INJECTED into the business router, so draft
+   execution cannot become a second, weaker way to create a transfer. The test
+   asserts the batch fails with the byte-identical error a direct transfer
+   gives — that equality is the point, not the failure.
+ - WHO MAY SIGN. Spending authority is a device key in one person's browser, so
+   `Account.backingUserId` records whose it is. A `payer` may approve and may
+   press send, but only the backing user can produce the signature; the API says
+   that in words instead of failing later at /authorize like a bug.
+ - PLAN-DEPENDENT REVIEW. With `transfers.approvals` bought, a draft must be
+   REVIEWED by a second person before it can be sent. WITHOUT it (Starter) there
+   is no review step at all, so DRAFT -> EXECUTING is legal — otherwise every
+   Starter draft would be permanently unsendable, which is what the first cut
+   did.
+ - ALL-OR-NOTHING. Every line is planned before anything is created: wallet
+   destinations, gated currencies, sub-fee amounts and over-cap amounts are all
+   refused up front (422, nothing created). The balance is checked as a TOTAL,
+   because the per-transfer check inside buildTransferFromQuote sees the full
+   balance every time and N lines that each fit can still overdraw together.
+ - PARTIAL FAILURE. If line 3 fails, lines 1-2 exist as CREATED transfers with
+   no signature — they cannot move money and simply expire. The draft goes to
+   FAILED (not back to REVIEWED) so a retry is a deliberate re-draft rather than
+   a second batch stacked on the first.
+ - DRAFT STATE IS DERIVED from its transfers, never stored: a row claiming
+   EXECUTED while a transfer sits in MANUAL_REVIEW would be a comfortable lie.
+ - MOCK IS A THIRD ANSWER. `CurrencyDefinition.mode()` returns "live" | "mock" |
+   false, not a boolean. EUR is "live" against Monerium and "mock" on a genuinely
+   local deployment (SECURITY.allowSimulation) — real machinery, no real money,
+   labelled as such in the API and the UI. The first cut collapsed mock into
+   "closed", which made the entire product unreachable in development and is how
+   a mock path stops being exercised at all.
+ - AN ORG ACCOUNT NEEDS A FUNDING IDENTITY. Per-org Safe/Monerium provisioning
+   is NOT built, so a new org's account is `gated` (never `provisioning`, which
+   would promise work nobody is doing) until someone calls
+   POST /accounts/:id/fund to back it with their own account. A business org
+   must ask; the response says plainly that personal money is now paying company
+   bills.
+ - STILL UNPROVEN: a batch that actually creates transfers. That needs an active
+   passkey Safe, which needs an ERC-4337 bundler; local hardhat has none, which
+   is exactly why e2e asserts the Safe refusal rather than a send. Prove it on
+   Base Sepolia with `npm run api`.
+
 NOT FINISHED, and refused loudly rather than faked:
- - Executing a draft from an ISSUED account returns **501** and names what is
-   missing: the last hop must create one transfer per line and collect an FP4
-   device signature for each. The approval workflow, the drift re-check and the
-   synchronous execution claim are all in place; only that hop is not.
  - No mail transport exists, so member invitations and invoice links return
    their token to the caller with a note saying no email was sent. Do not add a
    "we emailed them" string without adding a transport.
