@@ -59,6 +59,7 @@
     "lifi:test": "tsx scripts/lifi-test.ts",
     "best:test": "tsx scripts/best-execution-test.ts",
     "dex:setup": "tsx scripts/dex-setup.ts",
+    "business:test": "tsx scripts/business-test.ts",
     "receipt:test": "tsx scripts/receipt-share-test.ts"
   },
   "devDependencies": {

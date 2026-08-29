@@ -1,0 +1,784 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+<title>Zold Business</title>
+
+<style>
+  :root {
+    --bg: #0b0b0e;
+    --side-bg: #09090c;
+    --panel: #131317;
+    --panel2: #0e0e12;
+    --row: #1a1a1f;
+    --border: #232328;
+    --border2: #2c2c33;
+    --text: #ededf0;
+    --muted: #8a8a94;
+    --faint: #5b5b66;
+    --acc: #ed188d;
+    --acc2: #8b5cf6;
+    --grad: linear-gradient(90deg, #7b2ff7, #ed188d);
+    --green: #3dd68c;
+    --amber: #f5a623;
+    --red: #f4436c;
+    --radius: 12px;
+    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --display: "Space Grotesk", var(--font);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font: 14px/1.5 var(--font);
+    color: var(--text); background: var(--bg);
+    min-height: 100vh; -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: rgba(237,24,141,.35); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2c2c33; border-radius: 99px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  a { color: var(--acc); text-decoration: none; }
+  .hidden { display: none !important; }
+
+  label { display: block; font-size: .74rem; font-weight: 500; color: var(--muted); margin: .85rem 0 .3rem; }
+  input, select, textarea {
+    width: 100%; padding: .62rem .75rem; border-radius: 8px; font-size: .92rem;
+    border: 1px solid var(--border2); background: var(--panel2); color: var(--text);
+    font-family: var(--font);
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--acc); box-shadow: 0 0 0 3px rgba(237,24,141,.15);
+  }
+  button {
+    padding: .6rem 1.1rem; border-radius: 8px; border: 0; cursor: pointer;
+    font-weight: 600; font-size: .88rem; color: #fff; background: var(--acc);
+    font-family: var(--font); transition: filter .15s, opacity .15s;
+  }
+  button:hover { filter: brightness(1.12); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--border2); color: var(--text); }
+  button.sm { padding: .35rem .7rem; font-size: .78rem; }
+
+  /* ── shell ─────────────────────────────────────────────────────────── */
+  .shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+  .side { background: var(--side-bg); border-right: 1px solid var(--border); padding: 1rem .75rem; display: flex; flex-direction: column; gap: .25rem; }
+  .brand { font-family: var(--display); font-weight: 700; font-size: 1.05rem; padding: .4rem .6rem 1rem; letter-spacing: -.02em; }
+  .brand span { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+  .orgpick { margin: 0 .1rem 1rem; }
+  .orgpick select { font-size: .84rem; padding: .5rem .6rem; }
+
+  .nav a {
+    display: flex; align-items: center; gap: .6rem; padding: .55rem .6rem; border-radius: 8px;
+    color: var(--muted); font-size: .87rem; font-weight: 500; cursor: pointer;
+  }
+  .nav a:hover { background: var(--row); color: var(--text); }
+  .nav a.active { background: var(--row); color: var(--text); }
+  .nav a .lock { margin-left: auto; font-size: .68rem; color: var(--faint); }
+  .nav .sect { font-size: .66rem; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); padding: 1rem .6rem .35rem; }
+
+  .main { padding: 1.5rem 1.75rem 4rem; max-width: 1180px; }
+  .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
+  h1 { font-family: var(--display); font-size: 1.35rem; font-weight: 600; letter-spacing: -.02em; }
+  .sub { color: var(--muted); font-size: .86rem; margin-top: .2rem; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.1rem 1.2rem; margin-bottom: 1rem; }
+  .card h2 { font-family: var(--display); font-size: .98rem; font-weight: 600; margin-bottom: .2rem; }
+  .card .h { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .9rem; }
+  .card .desc { color: var(--muted); font-size: .82rem; }
+
+  .grid { display: grid; gap: 1rem; }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; }
+  .stat .k { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .stat .v { font-family: var(--display); font-size: 1.5rem; font-weight: 600; margin-top: .3rem; letter-spacing: -.02em; }
+  .stat .n { font-size: .76rem; color: var(--faint); margin-top: .25rem; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .86rem; }
+  th { text-align: left; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); font-weight: 600; padding: .5rem .6rem; border-bottom: 1px solid var(--border); }
+  td { padding: .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
+
+  .pill { display: inline-block; padding: .16rem .5rem; border-radius: 99px; font-size: .68rem; font-weight: 600; letter-spacing: .02em; }
+  .pill.ok { background: rgba(61,214,140,.14); color: var(--green); }
+  .pill.warn { background: rgba(245,166,35,.14); color: var(--amber); }
+  .pill.bad { background: rgba(244,67,108,.14); color: var(--red); }
+  .pill.mut { background: var(--row); color: var(--muted); }
+
+  /* An upgrade prompt shown IN PLACE of a gated feature, never a hidden nav
+     item: hiding a feature makes the product look unfinished, and offering an
+     action the API will refuse is worse. */
+  .gate { border: 1px dashed var(--border2); border-radius: var(--radius); padding: 1.5rem 1.3rem; text-align: center; background: var(--panel2); }
+  .gate h3 { font-family: var(--display); font-size: 1rem; margin-bottom: .35rem; }
+  .gate p { color: var(--muted); font-size: .86rem; max-width: 460px; margin: 0 auto .9rem; }
+  .gate .needs { font-size: .78rem; color: var(--faint); margin-top: .7rem; }
+
+  .banner { border-radius: var(--radius); padding: .75rem 1rem; margin-bottom: 1rem; font-size: .85rem; display: flex; gap: .75rem; align-items: center; }
+  .banner.info { background: rgba(139,92,246,.1); border: 1px solid rgba(139,92,246,.25); }
+  .banner.warn { background: rgba(245,166,35,.1); border: 1px solid rgba(245,166,35,.28); }
+  .banner button { margin-left: auto; flex-shrink: 0; }
+
+  .empty { text-align: center; padding: 2rem 1rem; color: var(--muted); font-size: .87rem; }
+  .row-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+
+  dialog { border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: var(--radius); padding: 1.3rem; max-width: 520px; width: calc(100% - 2rem); }
+  dialog::backdrop { background: rgba(0,0,0,.65); }
+  dialog h3 { font-family: var(--display); font-size: 1.05rem; margin-bottom: .6rem; }
+  .dlg-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1.1rem; }
+
+  #toast { position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%); background: var(--row); border: 1px solid var(--border2); padding: .7rem 1.1rem; border-radius: 10px; font-size: .86rem; z-index: 400; max-width: 560px; }
+  #toast.bad { border-color: rgba(244,67,108,.5); }
+
+  @media (max-width: 800px) {
+    .shell { grid-template-columns: 1fr; }
+    .side { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); align-items: center; }
+    .side .brand, .side .sect { display: none; }
+    .orgpick { margin: 0; min-width: 160px; }
+    .nav { display: flex; gap: .25rem; }
+    .nav a { white-space: nowrap; }
+    .main { padding: 1rem; }
+  }
+</style>
+
+<div class="shell">
+  <aside class="side">
+    <div class="brand">Zold <span>Business</span></div>
+    <div class="orgpick"><select id="org-select"></select></div>
+    <nav class="nav" id="nav"></nav>
+  </aside>
+
+  <main class="main">
+    <div id="signed-out" class="hidden">
+      <div class="head"><div><h1>Sign in first</h1>
+        <div class="sub">This dashboard uses the same session as the Zold app.</div></div></div>
+      <div class="card">
+        <p class="desc">Open <a href="/app">the app</a>, sign in with your passkey, then come back here.</p>
+      </div>
+    </div>
+
+    <div id="no-orgs" class="hidden">
+      <div class="head"><div><h1>Create an organisation</h1>
+        <div class="sub">An organisation holds the accounts. A personal one is fine — you can add a business later.</div></div></div>
+      <div class="card" style="max-width:460px">
+        <label>Name</label><input id="new-org-name" placeholder="Acme GmbH" />
+        <label>Type</label>
+        <select id="new-org-type">
+          <option value="personal">Personal — one person, premium plan available</option>
+          <option value="business">Business — members, roles and approvals</option>
+        </select>
+        <label>Country</label><input id="new-org-country" placeholder="DE" maxlength="2" />
+        <div style="margin-top:1rem"><button id="new-org-go">Create</button></div>
+      </div>
+    </div>
+
+    <div id="app" class="hidden">
+      <div id="plan-banner"></div>
+      <div class="head">
+        <div><h1 id="view-title">Overview</h1><div class="sub" id="view-sub"></div></div>
+        <div id="view-actions" class="row-actions"></div>
+      </div>
+      <div id="view"></div>
+    </div>
+  </main>
+</div>
+
+<dialog id="dlg"><div id="dlg-body"></div></dialog>
+<div id="toast" class="hidden"></div>
+
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let token = localStorage.getItem("zold-session") || localStorage.getItem("zoll-session");
+let orgs = [];
+let org = null;          // the full org payload, including `capabilities`
+let view = "overview";
+
+function toast(msg, bad = false) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.className = bad ? "bad" : "";
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.add("hidden"), bad ? 7000 : 3500);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: {
+      ...(opts.body && !opts.raw ? { "content-type": "application/json" } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(opts.headers || {}),
+    },
+    body: opts.raw ? opts.body : opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const text = await res.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  if (!res.ok) {
+    const err = new Error(data.error || `${res.status} ${res.statusText}`);
+    Object.assign(err, data, { status: res.status });
+    throw err;
+  }
+  return data;
+}
+
+/** Can the current org use this capability? Mirrors the server's verdict. */
+const cap = (id) => org?.capabilities?.[id] ?? { allowed: false, label: id };
+
+/**
+ * Render an upgrade / unavailable prompt in place of the feature.
+ * Never hides the nav entry — a hidden feature reads as a missing one.
+ */
+function gateHtml(id) {
+  const v = cap(id);
+  if (v.unavailable) {
+    return `<div class="gate"><h3>${esc(v.label)}</h3>
+      <p>${esc(v.unavailable)}</p>
+      <div class="needs">Not a plan limit — this is not built yet.</div></div>`;
+  }
+  const plans = (v.requiresPlan || []).join(" or ");
+  return `<div class="gate"><h3>${esc(v.label)}</h3>
+    <p>${esc(v.upgradeHint || v.reason || "")}</p>
+    ${plans ? `<button data-act="upgrade" data-plan="${esc(v.requiresPlan[0])}">Upgrade to ${esc(plans)}</button>
+      ${org.trial ? "" : `<button class="ghost" data-act="trial">Start 30-day trial</button>`}` : ""}
+    ${plans ? "" : `<div class="needs">${esc(v.reason || "")}</div>`}</div>`;
+}
+
+// ── navigation ─────────────────────────────────────────────────────────────
+
+const VIEWS = [
+  { id: "overview", label: "Overview", section: "" },
+  { id: "accounts", label: "Accounts", section: "" },
+  { id: "payments", label: "Payments", section: "Money", capability: "transfers.drafts" },
+  { id: "invoices", label: "Invoices", section: "Money", capability: "invoices" },
+  { id: "contacts", label: "Contacts", section: "Money" },
+  { id: "wallets", label: "Wallets", section: "Treasury" },
+  { id: "ledger", label: "Transactions", section: "Books", capability: "ledger.transactions" },
+  { id: "assets", label: "Assets", section: "Books", capability: "assets.costBasis" },
+  { id: "coa", label: "Chart of accounts", section: "Books", capability: "coa.manage" },
+  { id: "members", label: "Members", section: "Admin", capability: "members.manage" },
+  { id: "settings", label: "Settings", section: "Admin" },
+];
+
+function renderNav() {
+  let html = "";
+  let section = null;
+  for (const v of VIEWS) {
+    // Business-only entries stay out of a personal org entirely — that is a
+    // product boundary, not a paywall.
+    const verdict = v.capability ? cap(v.capability) : { allowed: true };
+    if (v.capability && !verdict.allowed && !verdict.requiresPlan && !verdict.unavailable) continue;
+    if (v.section !== section) { section = v.section; if (section) html += `<div class="sect">${esc(section)}</div>`; }
+    const locked = v.capability && !verdict.allowed;
+    html += `<a data-view="${v.id}" class="${view === v.id ? "active" : ""}">${esc(v.label)}
+      ${locked ? `<span class="lock">${verdict.unavailable ? "—" : "PRO"}</span>` : ""}</a>`;
+  }
+  $("#nav").innerHTML = html;
+  $("#nav").querySelectorAll("a").forEach((a) =>
+    a.onclick = () => { view = a.dataset.view; render(); });
+}
+
+function planBanner() {
+  if (!org) return "";
+  const t = org.trial;
+  if (t && !t.endedAt && new Date(t.endsAt) > new Date()) {
+    const days = Math.ceil((new Date(t.endsAt) - new Date()) / 86400000);
+    return `<div class="banner info">Trial of <b>${esc(t.grantsPlan)}</b> — ${days} day${days === 1 ? "" : "s"} left.
+      When it ends you go back to ${esc(org.plan)}; nothing is deleted.
+      <button class="sm" data-act="upgrade" data-plan="${esc(t.grantsPlan)}">Keep it</button></div>`;
+  }
+  if (org.plan === "starter") {
+    return `<div class="banner warn">You are on <b>Starter</b> — payouts, contacts and history.
+      ${org.trial ? "Your trial has been used." : "One 30-day trial is available."}
+      ${org.trial ? "" : `<button class="sm" data-act="trial">Start trial</button>`}</div>`;
+  }
+  return "";
+}
+
+// ── views ──────────────────────────────────────────────────────────────────
+
+const RENDER = {};
+
+RENDER.overview = async () => {
+  const { accounts, currencies } = await api(`/api/orgs/${org.id}/accounts`);
+  const open = accounts.filter((a) => a.status === "active");
+  const live = currencies.filter((c) => c.available).map((c) => c.code);
+
+  let html = `<div class="grid g3" style="margin-bottom:1rem">
+    <div class="stat"><div class="k">Accounts</div><div class="v">${accounts.length}</div>
+      <div class="n">${open.length} open, ${accounts.length - open.length} waiting on a partner</div></div>
+    <div class="stat"><div class="k">Plan</div><div class="v" style="text-transform:capitalize">${esc(org.effectivePlan)}</div>
+      <div class="n">${org.effectivePlan !== org.plan ? "on trial" : esc(org.type) + " organisation"}</div></div>
+    <div class="stat"><div class="k">Live rails</div><div class="v">${live.length}</div>
+      <div class="n">${live.join(", ") || "none configured"}</div></div>
+  </div>`;
+
+  html += cap("dashboard.insights").allowed
+    ? `<div class="card"><div class="h"><div><h2>Recent activity</h2>
+        <div class="desc">Profit and loss, top assets and recent transactions.</div></div></div>
+        <div class="empty">No transactions yet. They appear here once money moves or a wallet syncs.</div></div>`
+    : gateHtml("dashboard.insights");
+  return html;
+};
+
+RENDER.accounts = async () => {
+  const { accounts, currencies } = await api(`/api/orgs/${org.id}/accounts`);
+  let html = `<div class="card"><div class="h"><div><h2>Your accounts</h2>
+    <div class="desc">An account holds one currency and pays out on that currency's local rail.</div></div>
+    <button data-act="open-account">Open an account</button></div>`;
+
+  html += accounts.length ? `<table><thead><tr>
+      <th>Currency</th><th>Identifier</th><th>Status</th><th>Provider</th></tr></thead><tbody>` +
+    accounts.map((a) => {
+      const ident = a.identifier?.iban || a.identifier?.accountNumber || a.identifier?.mobile || "—";
+      const pill = a.status === "active" ? "ok" : a.status === "gated" ? "mut" : "warn";
+      return `<tr>
+        <td><b>${esc(a.currency)}</b><div class="desc">${esc(a.label)}</div></td>
+        <td class="mono">${esc(ident)}</td>
+        <td><span class="pill ${pill}">${esc(a.status)}</span>
+          ${a.gate ? `<div class="desc" style="margin-top:.35rem">${esc(a.gate.reason)}<br>
+            <span style="color:var(--faint)">Needs: ${esc(a.gate.needs)}</span></div>` : ""}</td>
+        <td>${esc(a.provider || "—")}</td></tr>`;
+    }).join("") + `</tbody></table>`
+    : `<div class="empty">No accounts yet.</div>`;
+  html += `</div>`;
+
+  html += `<div class="card"><div class="h"><div><h2>Currencies</h2>
+    <div class="desc">What each rail needs before it can open. Nothing here is simulated.</div></div></div>
+    <table><thead><tr><th>Currency</th><th>Rail</th><th>Status</th></tr></thead><tbody>` +
+    currencies.map((c) => `<tr>
+      <td><b>${esc(c.code)}</b> <span class="desc">${esc(c.name)}</span></td>
+      <td>${esc(c.railName)} <span class="desc">· ${esc(c.provider)}</span></td>
+      <td>${c.available
+        ? `<span class="pill ok">available</span>`
+        : `<span class="pill mut">not open</span><div class="desc" style="margin-top:.3rem">${esc(c.needs)}</div>`}</td>
+    </tr>`).join("") + `</tbody></table></div>`;
+  return html;
+};
+
+RENDER.contacts = async () => {
+  const { contacts } = await api(`/api/orgs/${org.id}/contacts`);
+  return `<div class="card"><div class="h"><div><h2>Address book</h2>
+    <div class="desc">A contact holds wallets and bank details. Payouts read from here.</div></div>
+    <button data-act="new-contact">Add contact</button></div>` +
+    (contacts.length ? `<table><thead><tr><th>Name</th><th>Wallets</th><th>Bank accounts</th><th></th></tr></thead><tbody>` +
+      contacts.map((c) => `<tr>
+        <td><b>${esc(c.name)}</b>${c.email ? `<div class="desc">${esc(c.email)}</div>` : ""}</td>
+        <td class="mono">${c.wallets.map((w) => esc(w.address.slice(0, 10) + "…")).join("<br>") || "—"}</td>
+        <td class="mono">${c.bankAccounts.map((b) =>
+          `${esc(b.currency)} ${esc(b.iban || b.accountNumber || b.mobile || "")}`).join("<br>") || "—"}</td>
+        <td class="row-actions"><button class="ghost sm" data-act="del-contact" data-id="${esc(c.id)}">Delete</button></td>
+      </tr>`).join("") + `</tbody></table>`
+      : `<div class="empty">No contacts yet.</div>`) + `</div>`;
+};
+
+RENDER.wallets = async () => {
+  const { wallets } = await api(`/api/orgs/${org.id}/wallets`);
+  return `<div class="banner info">Imported wallets are <b>read-only</b>. We never hold a key for one —
+    balances and bookkeeping only, and any payment from it is built here and signed by you.</div>
+    <div class="card"><div class="h"><div><h2>Imported wallets</h2>
+    <div class="desc">EOA, MPC or Safe addresses you want counted in the treasury.</div></div>
+    <button data-act="import-wallet">Import wallet</button></div>` +
+    (wallets.length ? `<table><thead><tr><th>Label</th><th>Address</th><th>Chain</th><th>Custody</th><th></th></tr></thead><tbody>` +
+      wallets.map((w) => `<tr>
+        <td><b>${esc(w.label)}</b><div class="desc">${esc(w.kind.toUpperCase())}</div></td>
+        <td class="mono">${esc(w.address)}</td>
+        <td>${esc(w.chainId)}</td>
+        <td><span class="pill mut">external</span></td>
+        <td><button class="ghost sm" data-act="del-wallet" data-id="${esc(w.id)}">Remove</button></td>
+      </tr>`).join("") + `</tbody></table>`
+      : `<div class="empty">No wallets imported.</div>`) + `</div>`;
+};
+
+RENDER.payments = async () => {
+  const { drafts } = await api(`/api/orgs/${org.id}/drafts`);
+  const approvals = cap("transfers.approvals").allowed;
+  let html = "";
+  if (!approvals) html += gateHtml("transfers.approvals");
+  html += `<div class="card"><div class="h"><div><h2>Payments</h2>
+    <div class="desc">Draft, review, then send. A payment whose recipient changed is held, not retargeted.</div></div>
+    <button data-act="new-draft">New draft</button></div>` +
+    (drafts.length ? `<table><thead><tr><th>State</th><th>Lines</th><th>Total</th><th></th></tr></thead><tbody>` +
+      drafts.map((d) => {
+        const pill = d.state === "INVALID_DATA" ? "bad" : d.state === "REVIEWED" ? "ok"
+          : d.state === "PENDING_REVIEW" ? "warn" : "mut";
+        return `<tr>
+          <td><span class="pill ${pill}">${esc(d.state)}</span>
+            ${d.state === "INVALID_DATA" ? `<div class="desc" style="margin-top:.3rem">
+              A recipient changed after this was saved. Re-point the flagged lines.</div>` : ""}</td>
+          <td>${d.lines.length}<div class="desc">${esc(d.lines.map((l) => l.destination.displayName).join(", ").slice(0, 60))}</div></td>
+          <td class="mono">${Object.entries(d.totals || {}).map(([a, v]) => `${esc(v)} ${esc(a)}`).join("<br>")}</td>
+          <td class="row-actions">
+            ${d.state === "DRAFT" ? `<button class="sm" data-act="submit-draft" data-id="${esc(d.id)}">Submit</button>` : ""}
+            ${d.state === "PENDING_REVIEW" ? `<button class="sm" data-act="review-draft" data-id="${esc(d.id)}">Review</button>` : ""}
+            ${d.state === "REVIEWED" ? `<button class="sm" data-act="exec-draft" data-id="${esc(d.id)}">Send</button>` : ""}
+          </td></tr>`;
+      }).join("") + `</tbody></table>`
+      : `<div class="empty">No drafts.</div>`) + `</div>`;
+  return html;
+};
+
+RENDER.invoices = async () => {
+  if (!cap("invoices").allowed) return gateHtml("invoices");
+  const { invoices } = await api(`/api/orgs/${org.id}/invoices`);
+  return `<div class="card"><div class="h"><div><h2>Invoices</h2>
+    <div class="desc">Send a one-time link. Your supplier fills it in with no account and no wallet.</div></div>
+    <button data-act="new-invoice">Create invoice link</button></div>` +
+    (invoices.length ? `<table><thead><tr><th>State</th><th>Supplier</th><th>Total</th><th>Due</th></tr></thead><tbody>` +
+      invoices.map((i) => `<tr>
+        <td><span class="pill ${i.state === "PAID" ? "ok" : i.overdue ? "bad" : "mut"}">${esc(i.overdue && i.state !== "PAID" ? "OVERDUE" : i.state)}</span></td>
+        <td>${esc(i.supplier?.orgName || "— not submitted yet")}
+          ${i.supplier?.invoiceNumber ? `<div class="desc">#${esc(i.supplier.invoiceNumber)}</div>` : ""}</td>
+        <td class="mono">${esc(i.total)} ${esc(i.currency)}</td>
+        <td class="desc">${esc(i.dueDate || "—")}</td></tr>`).join("") + `</tbody></table>`
+      : `<div class="empty">No invoices yet.</div>`) + `</div>`;
+};
+
+RENDER.ledger = async () => {
+  if (!cap("ledger.transactions").allowed) return gateHtml("ledger.transactions");
+  const { entries } = await api(`/api/orgs/${org.id}/ledger`);
+  return `<div class="card"><div class="h"><div><h2>Transactions</h2>
+    <div class="desc">Every movement across your accounts and imported wallets.</div></div>
+    ${cap("export.ledger").allowed ? `<button class="ghost" data-act="export-ledger">Export CSV</button>` : ""}</div>` +
+    (entries.length ? `<table><thead><tr><th>Date</th><th>Asset</th><th>Amount</th><th>Account</th><th>Tags</th></tr></thead><tbody>` +
+      entries.map((e) => `<tr>
+        <td class="desc">${esc(e.at.slice(0, 10))}</td>
+        <td>${esc(e.asset)}</td>
+        <td class="mono" style="color:${e.direction === "in" ? "var(--green)" : "var(--text)"}">
+          ${e.direction === "in" ? "+" : "−"}${esc(e.amount)}</td>
+        <td>${esc(e.accountCode || "—")}</td>
+        <td class="desc">${esc(e.tags.join(", "))}</td></tr>`).join("") + `</tbody></table>`
+      : `<div class="empty">Nothing yet. Transactions appear once money moves or a wallet syncs.</div>`) + `</div>`;
+};
+
+RENDER.assets = async () => {
+  if (!cap("assets.costBasis").allowed) return gateHtml("assets.costBasis");
+  const d = await api(`/api/orgs/${org.id}/assets`);
+  return `<div class="card"><div class="h"><div><h2>Assets and tax lots</h2>
+    <div class="desc">Cost basis is ${esc(d.costBasisMethod)}. Only FIFO is implemented.</div></div></div>` +
+    (d.positions.length ? `<table><thead><tr><th>Asset</th><th>Held</th><th>Cost basis</th><th>Realised</th></tr></thead><tbody>` +
+      d.positions.map((p) => `<tr><td><b>${esc(p.asset)}</b></td>
+        <td class="mono">${p.quantity.toFixed(6)}</td>
+        <td class="mono">${p.costBasis.toFixed(2)}</td>
+        <td class="mono" style="color:${p.realised >= 0 ? "var(--green)" : "var(--red)"}">${p.realised.toFixed(2)}</td>
+      </tr>`).join("") + `</tbody></table>`
+      : `<div class="empty">No positions yet.</div>`) +
+    (d.shortfalls?.length ? `<div class="banner warn" style="margin:1rem 0 0">
+      ${d.shortfalls.length} disposal(s) have no matching acquisition. They are reported rather than
+      booked at zero cost, which would overstate income.</div>` : "") + `</div>`;
+};
+
+RENDER.coa = async () => {
+  if (!cap("coa.manage").allowed) return gateHtml("coa.manage");
+  const { accounts, rules } = await api(`/api/orgs/${org.id}/chart-of-accounts`);
+  return `<div class="card"><div class="h"><div><h2>Chart of accounts</h2>
+    <div class="desc">Your accounts, plus the rules that map transactions onto them.</div></div>
+    <button data-act="new-coa">Add account</button></div>
+    <table><thead><tr><th>Code</th><th>Name</th><th>Type</th></tr></thead><tbody>` +
+    accounts.map((a) => `<tr><td class="mono">${esc(a.code)}</td><td>${esc(a.name)}</td>
+      <td><span class="pill mut">${esc(a.type)}</span></td></tr>`).join("") +
+    `</tbody></table></div>
+    <div class="card"><div class="h"><div><h2>Account rules</h2>
+      <div class="desc">Most specific wins: contact, then wallet and asset, then the transaction-type default.
+      Re-running never overwrites a categorisation you set by hand.</div></div>
+      <button class="ghost" data-act="apply-rules">Re-run rules</button></div>
+      <table><thead><tr><th>Scope</th><th>Match</th><th>Direction</th><th>Account</th></tr></thead><tbody>` +
+      rules.map((r) => `<tr><td><span class="pill mut">${esc(r.scope)}</span></td>
+        <td class="desc">${esc(JSON.stringify(r.match).replace(/[{}"]/g, ""))}</td>
+        <td>${esc(r.direction)}</td><td class="mono">${esc(r.accountCode)}</td></tr>`).join("") +
+      `</tbody></table></div>`;
+};
+
+RENDER.members = async () => {
+  if (!cap("members.manage").allowed) return gateHtml("members.manage");
+  const { members } = await api(`/api/orgs/${org.id}/members`);
+  return `<div class="card"><div class="h"><div><h2>Members</h2>
+    <div class="desc">A role says what a person may do; the plan says what the organisation bought. Both apply.</div></div>
+    <button data-act="invite">Invite</button></div>
+    <table><thead><tr><th>Person</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>` +
+    members.map((m) => `<tr>
+      <td><b>${esc(m.name || m.email)}</b><div class="desc">${esc(m.email)}</div></td>
+      <td><span class="pill mut">${esc(m.role)}</span></td>
+      <td><span class="pill ${m.status === "active" ? "ok" : m.status === "invited" ? "warn" : "mut"}">${esc(m.status)}</span>
+        ${m.status === "invited" && m.inviteExpiresAt ? `<div class="desc">expires ${esc(m.inviteExpiresAt.slice(0, 10))}</div>` : ""}</td>
+      <td class="row-actions">${m.status === "active"
+        ? `<button class="ghost sm" data-act="deactivate" data-id="${esc(m.id)}">Deactivate</button>`
+        : m.status === "deactivated"
+          ? `<button class="ghost sm" data-act="reactivate" data-id="${esc(m.id)}">Reactivate</button>` : ""}</td>
+    </tr>`).join("") + `</tbody></table></div>`;
+};
+
+RENDER.settings = async () => {
+  const plan = await api(`/api/orgs/${org.id}/plan`);
+  return `<div class="card"><div class="h"><div><h2>Organisation</h2></div>
+    <button data-act="save-org">Save</button></div>
+    <label>Name</label><input id="s-name" value="${esc(org.name)}" />
+    <label>Legal name</label><input id="s-legal" value="${esc(org.legalName || "")}" />
+    <label>Tax ID</label><input id="s-tax" value="${esc(org.taxId || "")}" />
+    <label>Notification email</label><input id="s-notify" value="${esc(org.notificationEmail || "")}" />
+    <label>Reporting currency ${cap("settings.reportingCurrency").allowed ? "" : "— included in a paid plan"}</label>
+    <input id="s-currency" value="${esc(org.reporting.currency)}"
+      ${cap("settings.reportingCurrency").allowed ? "" : "disabled"} />
+    </div>
+
+    <div class="card"><div class="h"><div><h2>Plan</h2>
+      <div class="desc">Downgrading pauses features. Nothing is deleted, and upgrading brings it all back.</div></div></div>
+      <div class="grid g2">` +
+      plan.available.map((p) => `<div style="border:1px solid ${p.id === org.effectivePlan ? "var(--acc)" : "var(--border2)"};border-radius:10px;padding:1rem">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <b style="font-family:var(--display)">${esc(p.name)}</b>
+          <span class="pill ${p.id === org.effectivePlan ? "ok" : "mut"}">${esc(p.price)}</span></div>
+        <div class="desc" style="margin:.5rem 0 .8rem">${esc(p.blurb)}</div>
+        ${p.id === org.plan ? `<span class="pill mut">current</span>`
+          : `<button class="sm" data-act="upgrade" data-plan="${esc(p.id)}">Choose ${esc(p.name)}</button>`}
+      </div>`).join("") + `</div>
+      ${plan.trialAvailable ? `<div style="margin-top:1rem"><button class="ghost" data-act="trial">
+        Start the ${plan.trialDays}-day trial</button></div>` : ""}
+    </div>`;
+};
+
+// ── actions ────────────────────────────────────────────────────────────────
+
+function dialog(title, bodyHtml, onSubmit) {
+  $("#dlg-body").innerHTML = `<h3>${esc(title)}</h3>${bodyHtml}
+    <div class="dlg-actions"><button class="ghost" id="dlg-cancel">Cancel</button>
+    <button id="dlg-ok">Save</button></div>`;
+  $("#dlg").showModal();
+  $("#dlg-cancel").onclick = () => $("#dlg").close();
+  $("#dlg-ok").onclick = async () => {
+    try { await onSubmit(); $("#dlg").close(); render(); }
+    catch (e) { toast(e.message, true); }
+  };
+}
+
+const ACTIONS = {
+  async upgrade(el) {
+    const r = await api(`/api/orgs/${org.id}/plan`, { method: "POST", body: { plan: el.dataset.plan } });
+    if (r.note) toast(r.note);
+    await loadOrg(org.id);
+  },
+  async trial() {
+    await api(`/api/orgs/${org.id}/plan/trial`, { method: "POST" });
+    toast("Trial started — 30 days.");
+    await loadOrg(org.id);
+  },
+  "open-account": () => dialog("Open an account",
+    `<label>Currency</label><select id="d-cur">
+      <option value="EUR">EUR — SEPA</option><option value="USD">USD — ACH / SWIFT</option>
+      <option value="GBP">GBP — Faster Payments</option><option value="KES">KES — M-Pesa</option>
+      <option value="INR">INR — UPI</option></select>
+     <label>Label (optional)</label><input id="d-label" placeholder="Operating account" />`,
+    async () => {
+      const r = await api(`/api/orgs/${org.id}/accounts`, {
+        method: "POST",
+        body: { currency: $("#d-cur").value, label: $("#d-label").value },
+      });
+      toast(r.note || `${r.account.currency} account opened.`);
+    }),
+  "new-contact": () => dialog("Add contact",
+    `<label>Name</label><input id="d-name" />
+     <label>Email</label><input id="d-email" />
+     <label>IBAN (optional)</label><input id="d-iban" placeholder="DE89 3704 0044 0532 0130 00" />
+     <label>Account holder</label><input id="d-holder" />
+     <label>Country</label><input id="d-country" maxlength="2" placeholder="DE" />`,
+    async () => {
+      const iban = $("#d-iban").value.trim();
+      await api(`/api/orgs/${org.id}/contacts`, {
+        method: "POST",
+        body: {
+          name: $("#d-name").value, email: $("#d-email").value,
+          bankAccounts: iban ? [{
+            currency: "EUR", country: $("#d-country").value || "DE",
+            holderName: $("#d-holder").value || $("#d-name").value, iban,
+          }] : [],
+        },
+      });
+    }),
+  async "del-contact"(el) {
+    await api(`/api/orgs/${org.id}/contacts/${el.dataset.id}`, { method: "DELETE" });
+  },
+  "import-wallet": () => dialog("Import a wallet",
+    `<div class="desc" style="margin-bottom:.6rem">Read-only. We never hold a key for an imported wallet.</div>
+     <label>Address</label><input id="d-addr" placeholder="0x…" />
+     <label>Chain ID</label><input id="d-chain" value="8453" />
+     <label>Type</label><select id="d-kind"><option value="eoa">EOA</option>
+       <option value="safe">Safe</option><option value="mpc">MPC</option></select>
+     <label>Label</label><input id="d-label" />`,
+    async () => {
+      const r = await api(`/api/orgs/${org.id}/wallets`, {
+        method: "POST",
+        body: { address: $("#d-addr").value, chainId: Number($("#d-chain").value),
+          kind: $("#d-kind").value, label: $("#d-label").value },
+      });
+      toast(r.note);
+    }),
+  async "del-wallet"(el) {
+    await api(`/api/orgs/${org.id}/wallets/${el.dataset.id}`, { method: "DELETE" });
+  },
+  invite: () => dialog("Invite a member",
+    `<label>Email</label><input id="d-email" />
+     <label>Role</label><select id="d-role">
+       <option value="viewer">Viewer — read only</option>
+       <option value="accountant">Accountant — books, not money</option>
+       <option value="payer">Payer — can send</option>
+       <option value="admin">Admin — can approve</option>
+       <option value="owner">Owner</option></select>`,
+    async () => {
+      const r = await api(`/api/orgs/${org.id}/members`, {
+        method: "POST", body: { email: $("#d-email").value, role: $("#d-role").value },
+      });
+      // No mail transport here, so hand the link over rather than pretend.
+      prompt(r.note, `${location.origin}/app?invite=${r.inviteToken}`);
+    }),
+  async deactivate(el) {
+    await api(`/api/orgs/${org.id}/members/${el.dataset.id}`, {
+      method: "PATCH", body: { status: "deactivated" },
+    });
+  },
+  async reactivate(el) {
+    await api(`/api/orgs/${org.id}/members/${el.dataset.id}`, {
+      method: "PATCH", body: { status: "active" },
+    });
+  },
+  "new-invoice": () => dialog("Create an invoice link",
+    `<label>Currency</label><input id="d-cur" value="${esc(org.reporting.currency)}" />
+     <label>Due date</label><input id="d-due" type="date" />
+     <label>Password (optional)</label><input id="d-pw" placeholder="Adds a second factor to the link" />`,
+    async () => {
+      const r = await api(`/api/orgs/${org.id}/invoices`, {
+        method: "POST",
+        body: { currency: $("#d-cur").value, dueDate: $("#d-due").value || undefined,
+          password: $("#d-pw").value || undefined },
+      });
+      prompt(r.note, location.origin + r.linkPath);
+    }),
+  "new-coa": () => dialog("Add an account",
+    `<label>Code</label><input id="d-code" placeholder="6400" />
+     <label>Name</label><input id="d-name" />
+     <label>Type</label><select id="d-type"><option>expense</option><option>revenue</option>
+       <option>asset</option><option>liability</option><option>equity</option></select>`,
+    async () => {
+      await api(`/api/orgs/${org.id}/chart-of-accounts`, {
+        method: "POST",
+        body: { code: $("#d-code").value, name: $("#d-name").value, type: $("#d-type").value },
+      });
+    }),
+  async "apply-rules"() {
+    const r = await api(`/api/orgs/${org.id}/account-rules/apply`, { method: "POST" });
+    toast(`${r.changed} transaction(s) re-mapped. ${r.note}`);
+  },
+  async "export-ledger"() { location.href = `/api/orgs/${org.id}/export/ledger.csv`; },
+  async "save-org"() {
+    const body = {
+      name: $("#s-name").value, legalName: $("#s-legal").value,
+      taxId: $("#s-tax").value, notificationEmail: $("#s-notify").value,
+    };
+    const cur = $("#s-currency");
+    if (cur && !cur.disabled && cur.value !== org.reporting.currency) {
+      body.reporting = { currency: cur.value };
+    }
+    await api(`/api/orgs/${org.id}`, { method: "PATCH", body });
+    toast("Saved.");
+    await loadOrg(org.id);
+  },
+  "new-draft": () => toast("Open a contact first, then draft a payment to it.", false),
+  async "submit-draft"(el) {
+    await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/submit`, { method: "POST" });
+    toast("Submitted for review.");
+  },
+  async "review-draft"(el) {
+    await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/review`, {
+      method: "POST", body: { approve: true },
+    });
+    toast("Approved.");
+  },
+  async "exec-draft"(el) {
+    const r = await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/execute`, { method: "POST" });
+    toast(r.note || "Prepared.");
+  },
+};
+
+document.addEventListener("click", async (ev) => {
+  const el = ev.target.closest("[data-act]");
+  if (!el) return;
+  const fn = ACTIONS[el.dataset.act];
+  if (!fn) return;
+  ev.preventDefault();
+  try { await fn(el); if (!$("#dlg").open) render(); }
+  catch (e) { toast(e.message, true); }
+});
+
+// ── boot ───────────────────────────────────────────────────────────────────
+
+async function render() {
+  if (!org) return;
+  renderNav();
+  $("#plan-banner").innerHTML = planBanner();
+  const def = VIEWS.find((v) => v.id === view);
+  $("#view-title").textContent = def?.label ?? "Overview";
+  $("#view-sub").textContent = `${org.name} · ${org.type} · ${org.effectivePlan}`;
+  $("#view").innerHTML = `<div class="empty">Loading…</div>`;
+  try {
+    $("#view").innerHTML = await (RENDER[view] ?? RENDER.overview)();
+  } catch (e) {
+    // A 402 here means the plan gate fired server-side. Show the same prompt
+    // rather than an error, so the two agree.
+    $("#view").innerHTML = e.status === 402 || e.status === 409
+      ? `<div class="gate"><h3>${esc(e.capability || "Not available")}</h3>
+         <p>${esc(e.error)}</p>${e.requiresPlan
+           ? `<button data-act="upgrade" data-plan="${esc(e.requiresPlan[0])}">Upgrade</button>` : ""}</div>`
+      : `<div class="banner warn">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadOrg(id) {
+  const r = await api(`/api/orgs/${id}`);
+  org = r.organisation;
+  localStorage.setItem("zold-org", org.id);
+}
+
+async function boot() {
+  if (!token) { $("#signed-out").classList.remove("hidden"); return; }
+  let list;
+  try {
+    list = await api("/api/orgs");
+  } catch (e) {
+    if (e.status === 401) { $("#signed-out").classList.remove("hidden"); return; }
+    throw e;
+  }
+  orgs = list.organisations;
+  if (!orgs.length) {
+    $("#no-orgs").classList.remove("hidden");
+    $("#new-org-go").onclick = async () => {
+      try {
+        const r = await api("/api/orgs", {
+          method: "POST",
+          body: {
+            name: $("#new-org-name").value,
+            type: $("#new-org-type").value,
+            country: $("#new-org-country").value,
+          },
+        });
+        location.reload();
+      } catch (e) { toast(e.message, true); }
+    };
+    return;
+  }
+  const wanted = localStorage.getItem("zold-org");
+  org = orgs.find((o) => o.id === wanted) ?? orgs[0];
+  $("#org-select").innerHTML = orgs
+    .map((o) => `<option value="${esc(o.id)}" ${o.id === org.id ? "selected" : ""}>${esc(o.name)}</option>`)
+    .join("");
+  $("#org-select").onchange = async (e) => { await loadOrg(e.target.value); view = "overview"; render(); };
+  await loadOrg(org.id);
+  $("#app").classList.remove("hidden");
+  render();
+}
+
+boot().catch((e) => toast(e.message, true));
+</script>

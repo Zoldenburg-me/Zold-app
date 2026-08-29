@@ -290,12 +290,98 @@ moment an anchor actually publishes an account.
   of silently swallowing it). npm run webhook:test covers it with a stub
   Monerium.
 
-## Mobile app + PWA (Aug 2026) — IN PROGRESS on a branch
+## Business + premium accounts (Aug 2026) — the organisation domain
 
-Branch `claude/remove-upi-and-onboarding-restyle`, pushed, **PR not opened**.
-Thirteen commits: UPI removal, onboarding restyle, landing-page sync, PWA
-layer, the mobile app, then the token retrofit and the last three screens.
-Merge or continue from there, not from main.
+The product moved from "a user is an account" to **global (local) accounts held
+by an organisation**, with the shape of the app around them taken from **Gnosis
+Business** (hq.xyz, discontinued). Their full guide was read — all 64 pages, via
+`llms.txt` — not skimmed. Design and reasoning: `docs/business-accounts.md`.
+`npm run business:test` (39 checks, no chain, no network).
+
+WHAT IS NEW, and what it replaced:
+ - `services/api/src/domain/` — Organisation, Member/Role, Account, Contact,
+   DraftPayment, Invoice, ChartAccount/AccountRule, LedgerEntry, ImportedWallet.
+   The old model had ONE `user.iban`, ONE `user.address`, ONE balance; that is
+   false for a business with several people and several accounts, and for a
+   premium personal user with several currencies.
+ - `services/api/src/routes/{orgs,business,org-context}.ts`, mounted under
+   `/api/orgs` as router FACTORIES taking `requireSession`, so server.ts stays
+   the single owner of authentication.
+ - `public/business.html` (the org dashboard, at `/business`) and
+   `public/invoice.html` (the supplier's invoice view, at `/invoice/:token`).
+ - A migration in store.ts gives every pre-existing user a personal org of one,
+   CARRYING their real IBAN and address forward rather than re-issuing. Verified
+   against the live local `data/db.json`: 5 users, every iban and address
+   matched, funded users -> `active`, kyc_pending -> `provisioning`, and every
+   pre-existing collection untouched. It is idempotent (keyed on a member row).
+
+THREE CHECKS, NOT ONE, and they answer different questions — collapsing any two
+opens a hole. Session (who is this), member+role (may they do this here), plan
+capability (did the org buy it). A viewer on a Business plan must not be able to
+send money; an owner on Starter must not reach the chart of accounts.
+
+THE RULES THAT CARRY THE WEIGHT, each with a test:
+ - **Gating is a read-time filter, NEVER a write-time delete.** A downgraded org
+   keeps its chart of accounts, tags and history; the API refuses to serve them.
+   Gnosis promised exactly this and it is only true if nothing deletes on
+   downgrade. Proved live: downgrade to starter, 15 chart accounts / 8 rules /
+   1 contact / 2 drafts / 1 invoice still in the store, all readable again after
+   re-upgrade. Nothing in `store.ts` deletes an org, account, invoice or ledger
+   row — deliberately no such method exists.
+ - **A trial is a grant with an end date, not a plan change.** `org.plan` is
+   untouched for the whole trial, so lapsing needs no migration. One per org.
+ - **FOUR EYES.** The reviewer may not be the drafter, whatever their role,
+   or review is a button the same person presses twice.
+ - **INVALID_DATA.** A draft whose payee changed after it was saved is HELD, not
+   retargeted. The line stores a fingerprint at save time and it is recomputed
+   at review AND again at execution — the gap between approval and execution is
+   exactly where an address-book edit lands. Bank accounts keep their id when
+   their IBAN is edited, so identity alone does NOT detect this; the fingerprint
+   is what does. Proved end to end through the API.
+ - **An org can never lose its last owner** — by role change or deactivation,
+   which are the same hole reached two ways.
+
+ONLY EUR IS REAL, and that is enforced in one place. `domain/accounts.ts` holds
+the currency registry, and liveness is a PREDICATE (`live()`) that asks whether
+the provider is configured, not a boolean somebody can flip. USD/GBP/KES/INR are
+modelled with `status: "gated"` and a `needs` line naming the partner and the
+missing piece (Iron is request-access and ungranted; Triple-A wants $10k/month;
+dLocal and Yellow Card are uncontracted). A gated account is still RECORDED when
+asked for — that keeps the demand signal and stops the UI lying in the other
+direction — but it can never be spent from. This is the UPI lesson applied
+structurally: a rail that has never moved money must not render as if it has.
+
+WHAT WE TOOK FROM GNOSIS AND WHAT WE DID NOT — the one real conflict is custody.
+Their whole promise was "you import your wallets, we never have access": an
+accounting layer over other people's money. That is incoherent for us, because a
+*local account* is something we ISSUE. So: we issue accounts and sign for them
+(FP4 device key / passkey Safe), and imported wallets are READ-ONLY — balances,
+bookkeeping and export, never a signature. Rows are stamped `custody:
+"external"` so a signing path can assert on the row itself. Executing a draft
+from an imported wallet returns unsigned transactions and says so.
+
+NOT FINISHED, and refused loudly rather than faked:
+ - Executing a draft from an ISSUED account returns **501** and names what is
+   missing: the last hop must create one transfer per line and collect an FP4
+   device signature for each. The approval workflow, the drift re-check and the
+   synchronous execution claim are all in place; only that hop is not.
+ - No mail transport exists, so member invitations and invoice links return
+   their token to the caller with a note saying no email was sent. Do not add a
+   "we emailed them" string without adding a transport.
+ - Imported wallets are never actually synced — `sync.status` stays `pending`.
+   The ledger is therefore empty until something writes to it, and the
+   Transactions/Assets screens say so rather than showing zeros as if final.
+ - Cards are modelled as a capability that reports `unavailable` at ANY price,
+   never as an upgrade. Telling someone to pay for something unbuilt costs them
+   money.
+
+## Mobile app + PWA (Aug 2026) — LANDED
+
+Branch `claude/remove-upi-and-onboarding-restyle` is FULLY MERGED into main
+(`git rev-list --count origin/main..origin/<branch>` is 0). This section used to
+say "IN PROGRESS, PR not opened" and that was doc rot: main already carries the
+UPI removal, the onboarding restyle, the PWA layer and the mobile app. Work from
+main.
 
 DESIGN SOURCE: `~/Downloads/Zold Mobile Dashboard Redesign.zip` — the user's
 Claude Design export. `README.md` in it is a real spec (tokens, screens,
