@@ -16,7 +16,7 @@ import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
-import { initStore, store, type CryptoDeposit, type ReceiptShare, type Transfer, type User } from "./store.js";
+import { initStore, store, type CryptoDeposit, type Quote, type ReceiptShare, type Transfer, type User } from "./store.js";
 import {
   buildReceipt,
   DEFAULT_SHARE_FIELDS,
@@ -233,7 +233,7 @@ app.use(express.static(pub));
  * responses go through an allowlist view for that reason.
  */
 app.use("/api/orgs", createOrgRouter(requireSession));
-app.use("/api/orgs", createBusinessRouter(requireSession));
+app.use("/api/orgs", createBusinessRouter(requireSession, buildTransferFromQuote));
 app.use("/api/invoice-links", createInvoiceLinkRouter());
 
 type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
@@ -2829,74 +2829,54 @@ app.post(
   }),
 );
 
-// --- Quotes & transfers ------------------------------------------------------
+/**
+ * Build a transfer from an open quote, and the authorization the device must
+ * sign for it.
+ *
+ * Extracted from POST /api/transfers unchanged so that draft execution can
+ * create transfers through the SAME code path. A second, parallel construction
+ * would be the classic way for one caller to quietly skip a balance check, a
+ * daily cap, or the destination commitment.
+ *
+ * Returns a discriminated result rather than writing to a response: it has two
+ * callers now, and only one of them owns an HTTP response. The `res` it passes
+ * to requireKycApproved / assertDailyCap is a collector whose
+ * `.status(x).json(y)` evaluates to the failure result itself, so every
+ * refusal below reads exactly as it did when this was a route.
+ */
+type TransferBuildFailure = { ok: false; status: number; body: any };
+type TransferBuildResult =
+  | { ok: true; transfer: Transfer; authorization: any }
+  | TransferBuildFailure;
 
-app.post(
-  "/api/quotes",
-  wrap(async (req, res) => {
-    const { userId, sendEur, rail = "cash" } = req.body ?? {};
-    const user = store.findUser(userId);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    if (!requireUserSession(req, res, user.id)) return;
-    if (!requireKycApproved(user, res)) return;
-    if (!["cash", "sepa"].includes(rail)) {
-      return res.status(400).json({ error: "rail must be cash or sepa" });
-    }
-    const amount = Number(sendEur);
-    if (!(amount > FX.FIXED_FEE_EUR)) {
-      return res.status(400).json({ error: `amount must exceed the €${FX.FIXED_FEE_EUR} fee` });
-    }
-    if (amount > FX.DAILY_CAP_EUR) {
-      return res.status(400).json({ error: `amount exceeds daily cap of €${FX.DAILY_CAP_EUR}` });
-    }
-    res.status(201).json(await createQuote(userId, { rail, sendEur: amount }));
-  }),
-);
+function responseCollector() {
+  const out: TransferBuildFailure = { ok: false, status: 500, body: undefined };
+  const res: any = {
+    status(code: number) {
+      out.status = code;
+      return res;
+    },
+    json(body: any) {
+      out.body = body;
+      return out;
+    },
+  };
+  return { res, out };
+}
 
-app.post(
-  "/api/transfers",
-  wrap(async (req, res) => {
-    const { quoteId, recipientName, recipientPhone, recipientIban, reference } = req.body ?? {};
-    const quote = store.findQuote(quoteId);
-    if (!quote) return res.status(404).json({ error: "quote not found" });
-    if (!requireUserSession(req, res, quote.userId)) return;
-    if ((quote.status ?? "OPEN") !== "OPEN") {
-      return res.status(409).json({ error: `quote already ${quote.status.toLowerCase()}` });
-    }
-    if (isExpired(quote)) {
-      store.updateQuote(quote.id, { status: "EXPIRED" });
-      return res.status(410).json({ error: "quote expired, request a new one" });
-    }
-    if (!recipientName) {
-      return res.status(400).json({ error: "recipientName required" });
-    }
-    if (quote.rail === "sepa" && !recipientIban) {
-      return res.status(400).json({ error: "recipientIban required for bank payout" });
-    }
-    if (quote.rail === "cash" && !recipientPhone) {
-      return res.status(400).json({ error: "recipientPhone required for cash pickup" });
-    }
-    // Remittance reference: carried to the payee on the SEPA rail so they can
-    // reconcile the payment against their own records. Refused rather than
-    // truncated past the scheme's 140 characters — the caller is reconciling on
-    // this string, so a silently shortened one is worse than an error.
-    if (reference !== undefined && reference !== null) {
-      if (typeof reference !== "string") {
-        return res.status(400).json({ error: "reference must be a string" });
-      }
-      if (reference.length > SEPA_REMITTANCE_MAX) {
-        return res.status(400).json({
-          error: `reference must be ${SEPA_REMITTANCE_MAX} characters or fewer (SEPA remittance limit)`,
-        });
-      }
-      if (quote.rail !== "sepa") {
-        return res.status(400).json({
-          error: "reference is only carried on the sepa rail",
-        });
-      }
-    }
+async function buildTransferFromQuote(
+  quote: Quote,
+  recipient: {
+    recipientName: string;
+    recipientPhone?: string;
+    recipientIban?: string;
+    reference?: string;
+  },
+): Promise<TransferBuildResult> {
+  const { res, out } = responseCollector();
+  const { recipientName, recipientPhone, recipientIban, reference } = recipient;
     const user = store.findUser(quote.userId)!;
-    if (!requireKycApproved(user, res)) return;
+    if (!requireKycApproved(user, res)) return out;
     const balances = await accountBalances(user.address);
     const fundingSource: Transfer["fundingSource"] = "safe";
     if (balances.safeBalanceEur < quote.sendEur) {
@@ -2911,7 +2891,7 @@ app.post(
         safeBalanceEur: balances.safeBalanceEur,
       });
     }
-    if (!(await assertDailyCap(user, quote.sendEur, res))) return;
+    if (!(await assertDailyCap(user, quote.sendEur, res))) return out;
 
     const createdAt = new Date().toISOString();
     const transfer: Transfer = {
@@ -3103,8 +3083,9 @@ app.post(
       }
     }
     store.addTransfer(transfer);
-    res.status(201).json({
-      ...transfer,
+    return {
+      ok: true as const,
+      transfer,
       authorization: {
         authorizer,
         safeExecution,
@@ -3131,7 +3112,83 @@ app.post(
           : undefined,
         submitTo: `/api/transfers/${transfer.id}/authorize`,
       },
+    };
+}
+
+// --- Quotes & transfers ------------------------------------------------------
+
+app.post(
+  "/api/quotes",
+  wrap(async (req, res) => {
+    const { userId, sendEur, rail = "cash" } = req.body ?? {};
+    const user = store.findUser(userId);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!requireKycApproved(user, res)) return;
+    if (!["cash", "sepa"].includes(rail)) {
+      return res.status(400).json({ error: "rail must be cash or sepa" });
+    }
+    const amount = Number(sendEur);
+    if (!(amount > FX.FIXED_FEE_EUR)) {
+      return res.status(400).json({ error: `amount must exceed the €${FX.FIXED_FEE_EUR} fee` });
+    }
+    if (amount > FX.DAILY_CAP_EUR) {
+      return res.status(400).json({ error: `amount exceeds daily cap of €${FX.DAILY_CAP_EUR}` });
+    }
+    res.status(201).json(await createQuote(userId, { rail, sendEur: amount }));
+  }),
+);
+
+app.post(
+  "/api/transfers",
+  wrap(async (req, res) => {
+    const { quoteId, recipientName, recipientPhone, recipientIban, reference } = req.body ?? {};
+    const quote = store.findQuote(quoteId);
+    if (!quote) return res.status(404).json({ error: "quote not found" });
+    if (!requireUserSession(req, res, quote.userId)) return;
+    if ((quote.status ?? "OPEN") !== "OPEN") {
+      return res.status(409).json({ error: `quote already ${quote.status.toLowerCase()}` });
+    }
+    if (isExpired(quote)) {
+      store.updateQuote(quote.id, { status: "EXPIRED" });
+      return res.status(410).json({ error: "quote expired, request a new one" });
+    }
+    if (!recipientName) {
+      return res.status(400).json({ error: "recipientName required" });
+    }
+    if (quote.rail === "sepa" && !recipientIban) {
+      return res.status(400).json({ error: "recipientIban required for bank payout" });
+    }
+    if (quote.rail === "cash" && !recipientPhone) {
+      return res.status(400).json({ error: "recipientPhone required for cash pickup" });
+    }
+    // Remittance reference: carried to the payee on the SEPA rail so they can
+    // reconcile the payment against their own records. Refused rather than
+    // truncated past the scheme's 140 characters — the caller is reconciling on
+    // this string, so a silently shortened one is worse than an error.
+    if (reference !== undefined && reference !== null) {
+      if (typeof reference !== "string") {
+        return res.status(400).json({ error: "reference must be a string" });
+      }
+      if (reference.length > SEPA_REMITTANCE_MAX) {
+        return res.status(400).json({
+          error: `reference must be ${SEPA_REMITTANCE_MAX} characters or fewer (SEPA remittance limit)`,
+        });
+      }
+      if (quote.rail !== "sepa") {
+        return res.status(400).json({
+          error: "reference is only carried on the sepa rail",
+        });
+      }
+    }
+    const built = await buildTransferFromQuote(quote, {
+      recipientName,
+      recipientPhone,
+      recipientIban,
+      reference,
     });
+    if (!built.ok) return res.status(built.status).json(built.body);
+    res.status(201).json({ ...built.transfer, authorization: built.authorization });
   }),
 );
 

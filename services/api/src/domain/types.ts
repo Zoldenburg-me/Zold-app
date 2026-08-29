@@ -186,6 +186,21 @@ export interface Account {
    * tokenised (EUR -> EURe). Null for a rail with no token leg.
    */
   address?: `0x${string}`;
+  /**
+   * The User whose Safe funds this account and whose FP4 device key authorises
+   * its debits.
+   *
+   * Spending authority lives with a device key held in one person's browser, so
+   * an account is only spendable by that person — a `payer` on the org cannot
+   * sign for someone else's key, and there is no server-side authority to fall
+   * back on. Stored explicitly rather than inferred from the owner membership,
+   * because membership changes and the key does not follow it.
+   *
+   * Unset on an account opened for a new organisation: provisioning a Safe and
+   * a Monerium profile per org is not built, and execution refuses by name
+   * rather than guessing at someone's wallet.
+   */
+  backingUserId?: string;
   /** Why it is not open, and what would open it. Required when `gated`. */
   gate?: {
     reason: string;

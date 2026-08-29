@@ -16,7 +16,11 @@ import {
   resolveOrg,
   type SessionResolver,
 } from "./org-context.js";
-import { limitsFor } from "../domain/plans.js";
+import { can, limitsFor } from "../domain/plans.js";
+import { FX } from "../config.js";
+import { createQuote } from "../fx.js";
+import { accountBalances } from "../chain.js";
+import { CURRENCY_REGISTRY, accountIsSpendable } from "../domain/accounts.js";
 import { canReviewDraft } from "../domain/roles.js";
 import {
   CSV_MAX_BYTES,
@@ -48,7 +52,7 @@ import {
   positions,
   toCsv,
 } from "../domain/ledger.js";
-import type { DraftPayment, Invoice } from "../domain/types.js";
+import type { DraftPayment, DraftState, Invoice } from "../domain/types.js";
 
 const badRequest = (res: express.Response, err: unknown) => {
   if (err instanceof DraftError || err instanceof InvoiceError || err instanceof CoaError) {
@@ -58,13 +62,75 @@ const badRequest = (res: express.Response, err: unknown) => {
   return false;
 };
 
-export function createBusinessRouter(requireSession: SessionResolver): express.Router {
+/**
+ * Creating a transfer from a quote, injected from server.ts.
+ *
+ * Injected rather than imported so this router cannot acquire its own way of
+ * building a transfer. One code path builds them, so one code path enforces the
+ * balance check, the daily cap and the destination commitment.
+ */
+export type TransferFactory = (
+  quote: Awaited<ReturnType<typeof createQuote>>,
+  recipient: {
+    recipientName: string;
+    recipientPhone?: string;
+    recipientIban?: string;
+    reference?: string;
+  },
+) => Promise<
+  | { ok: true; transfer: { id: string }; authorization: unknown }
+  | { ok: false; status: number; body: any }
+>;
+
+export function createBusinessRouter(
+  requireSession: SessionResolver,
+  buildTransferFromQuote: TransferFactory,
+): express.Router {
   const r = express.Router();
   const ctxOf = (req: express.Request, res: express.Response) =>
     resolveOrg(req, res, requireSession);
 
   const contactsById = (orgId: string) =>
     new Map(store.contactsOf(orgId).map((c) => [c.id, c] as const));
+
+  /**
+   * A draft's execution state, derived from the transfers it created.
+   *
+   * Derived rather than stored: the transfers are the truth. A draft row that
+   * said EXECUTED while one of its transfers sat in MANUAL_REVIEW would be a
+   * comfortable lie, and a background sweep to keep a copy honest is one more
+   * thing to drift. Pure — it returns a view and writes nothing.
+   */
+  const withExecutionState = (draft: DraftPayment) => {
+    if (draft.state !== "EXECUTING" || !draft.transferIds?.length) return draft;
+    const transfers = draft.transferIds
+      .map((id) => store.findTransfer(id))
+      .filter((t): t is NonNullable<typeof t> => Boolean(t));
+
+    const summary = transfers.map((t) => ({ id: t.id, state: t.state }));
+    const settled = transfers.filter((t) => t.state === "PAID");
+    const stuck = transfers.filter((t) =>
+      ["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state),
+    );
+
+    let state: DraftState = draft.state;
+    if (transfers.length === draft.transferIds.length) {
+      if (settled.length === transfers.length) state = "EXECUTED";
+      else if (stuck.length) state = "FAILED";
+    }
+    return {
+      ...draft,
+      state,
+      transfers: summary,
+      ...(stuck.length
+        ? {
+            failureReason: `${stuck.length} of ${transfers.length} transfer(s) did not settle: ${stuck
+              .map((t) => `${t.id.slice(0, 8)} ${t.state}`)
+              .join(", ")}`,
+          }
+        : {}),
+    };
+  };
 
   /** Re-check a draft against the address book and park it if anything moved. */
   const reconcileDrift = (draft: DraftPayment): DraftPayment => {
@@ -92,7 +158,7 @@ export function createBusinessRouter(requireSession: SessionResolver): express.R
     if (!requirePermission(ctx, res, "drafts.read")) return;
     const drafts = store.draftsOf(ctx.org.id);
     res.json({
-      drafts: drafts.map((d) => ({ ...d, totals: totalsByAsset(d) })),
+      drafts: drafts.map((d) => ({ ...withExecutionState(d), totals: totalsByAsset(d) })),
     });
   });
 
@@ -265,7 +331,13 @@ export function createBusinessRouter(requireSession: SessionResolver): express.R
   });
 
   /**
-   * Execute a reviewed draft.
+   * Execute a reviewed draft: one transfer per line, each needing its own FP4
+   * device signature.
+   *
+   * NOTHING MOVES HERE. This endpoint creates transfers and hands back the
+   * authorizations the device must sign; a transfer with no signature can never
+   * debit anything. That property is what makes the partial-failure path below
+   * safe.
    *
    * The claim is synchronous — same shape as the transfer authorization claim,
    * and for the same reason: two parallel submissions of one draft must not
@@ -273,7 +345,7 @@ export function createBusinessRouter(requireSession: SessionResolver): express.R
    * the gap between approval and execution is exactly where an address-book
    * edit lands.
    */
-  r.post("/:orgId/drafts/:draftId/execute", (req, res) => {
+  r.post("/:orgId/drafts/:draftId/execute", async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "transfers.execute")) return;
@@ -289,42 +361,238 @@ export function createBusinessRouter(requireSession: SessionResolver): express.R
         draft: checked,
       });
     }
-    const claimed = store.claimDraftExecution(draft.id);
-    if (!claimed) {
-      return res.status(409).json({
-        error: `This draft is ${checked.state}, not REVIEWED — it may already be executing.`,
-      });
-    }
 
     // An imported wallet is read-only: we build the transactions, its owner
     // signs them. Saying so is the point; silently doing nothing would not be.
-    if (claimed.source.kind === "wallet") {
-      const wallet = store.findImportedWallet(claimed.source.walletId);
-      store.updateDraft(claimed.id, {
-        state: "REVIEWED",
-        activity: [...claimed.activity, activity(ctx.member.id, "prepared_unsigned")],
-      });
+    if (checked.source.kind === "wallet") {
+      const wallet = store.findImportedWallet(checked.source.walletId);
       return res.status(200).json({
         unsigned: true,
-        wallet: wallet ? { address: wallet.address, chainId: wallet.chainId, kind: wallet.kind } : null,
-        lines: claimed.lines,
+        wallet: wallet
+          ? { address: wallet.address, chainId: wallet.chainId, kind: wallet.kind }
+          : null,
+        lines: checked.lines,
         note:
           "This wallet was imported read-only — we hold no key for it. Sign these transactions in your own wallet; nothing has been submitted.",
       });
     }
 
-    // Issued account: hand off to the existing transfer machinery. That path
-    // still requires the FP4 device signature per payment, so this endpoint
-    // prepares and does not move money on its own.
-    store.updateDraft(claimed.id, {
-      state: "REVIEWED",
-      activity: [...claimed.activity, activity(ctx.member.id, "execution_requested")],
+    // ── Funding identity ──────────────────────────────────────────────────
+    const account = store.findAccount(checked.source.accountId);
+    if (!account || account.orgId !== ctx.org.id) {
+      return res.status(404).json({ error: "This draft's funding account no longer exists." });
+    }
+    const spendable = accountIsSpendable(account);
+    if (!spendable.ok) return res.status(409).json({ error: spendable.reason });
+    if (!account.backingUserId) {
+      return res.status(409).json({
+        error:
+          "This account has no funding identity yet. Provisioning a Safe and a Monerium profile per organisation is not built — only accounts carried over from an existing personal account can be spent from today.",
+      });
+    }
+    // Spending authority is a device key in one person's browser. A `payer` on
+    // the org cannot sign for somebody else's key, and there is no server-side
+    // authority to fall back on, so say that rather than failing later at
+    // /authorize with something that reads like a bug.
+    if (ctx.userId !== account.backingUserId) {
+      return res.status(403).json({
+        error:
+          "Only the person holding this account's device key can authorise its payments. Your role permits sending, but the signature has to come from that device.",
+      });
+    }
+    const user = store.findUser(account.backingUserId);
+    if (!user) {
+      return res.status(409).json({ error: "This account's funding identity is missing." });
+    }
+
+    // ── Plan every line BEFORE creating anything ──────────────────────────
+    // A half-created batch consumes quotes and leaves transfers nobody asked
+    // for, so every line is checked first and the whole draft is refused if any
+    // one of them cannot be paid.
+    const plans: { lineId: string; iban: string; name: string; sendEur: number }[] = [];
+    const problems: { lineId: string; reason: string }[] = [];
+
+    for (const line of checked.lines) {
+      const d = line.destination;
+      if (d.kind === "wallet") {
+        problems.push({
+          lineId: line.id,
+          reason:
+            "Paying a wallet from an issued account is not wired — that is a token-to-token payment, not a payout rail.",
+        });
+        continue;
+      }
+      const contact = line.contactId ? store.findContact(line.contactId) : undefined;
+      const bank = contact?.bankAccounts.find((b) => b.id === d.bankAccountId);
+      if (!bank) {
+        problems.push({ lineId: line.id, reason: "The saved bank account is gone." });
+        continue;
+      }
+      if (bank.currency !== "EUR" || !bank.iban) {
+        const def = CURRENCY_REGISTRY[bank.currency];
+        problems.push({
+          lineId: line.id,
+          reason: `${def?.name ?? bank.currency} payouts are not open: ${def?.needs ?? "no rail"}`,
+        });
+        continue;
+      }
+      const sendEur = Number(line.amount);
+      // createQuote refuses these too, but refusing here keeps the whole batch
+      // atomic instead of failing halfway through.
+      if (!(sendEur > FX.FIXED_FEE_EUR)) {
+        problems.push({
+          lineId: line.id,
+          reason: `€${line.amount} does not exceed the €${FX.FIXED_FEE_EUR} fee, so nothing would arrive.`,
+        });
+        continue;
+      }
+      if (sendEur > FX.DAILY_CAP_EUR) {
+        problems.push({
+          lineId: line.id,
+          reason: `€${line.amount} is over the €${FX.DAILY_CAP_EUR} daily cap.`,
+        });
+        continue;
+      }
+      plans.push({ lineId: line.id, iban: bank.iban, name: bank.holderName, sendEur });
+    }
+
+    if (problems.length) {
+      return res.status(422).json({
+        error: `${problems.length} of ${checked.lines.length} line(s) cannot be paid. Nothing was created.`,
+        problems,
+      });
+    }
+
+    // Each line is its own transfer and therefore its own fixed fee. Checked
+    // against the balance as a TOTAL: the per-transfer check inside
+    // buildTransferFromQuote sees the full balance every time, so N lines that
+    // each fit individually can still overdraw together.
+    const totalEur = plans.reduce((s, p) => s + p.sendEur, 0);
+    try {
+      const balances = await accountBalances(user.address);
+      if (balances.safeBalanceEur < totalEur) {
+        return res.status(400).json({
+          error: `This draft sends €${totalEur.toFixed(2)} in total but the account holds €${balances.safeBalanceEur.toFixed(2)}.`,
+          totalEur,
+          availableEur: balances.safeBalanceEur,
+        });
+      }
+    } catch (err) {
+      return res.status(502).json({
+        error: `Could not read the account balance, so the batch was not started: ${(err as Error).message}`,
+      });
+    }
+
+    // ── Claim, then create ────────────────────────────────────────────────
+    // Which states may be sent from depends on the plan. An org WITH approvals
+    // must go through review — that is what it bought. An org without them has
+    // no review step at all, so requiring REVIEWED there would make every draft
+    // permanently unsendable.
+    const approvals = can(ctx.org, "transfers.approvals").allowed;
+    const claimable: DraftState[] = approvals ? ["REVIEWED"] : ["DRAFT", "REVIEWED"];
+    const claimed = store.claimDraftExecution(checked.id, claimable);
+    if (!claimed) {
+      return res.status(409).json({
+        error: approvals
+          ? `This draft is ${checked.state}. On your plan a payment must be reviewed by a second person before it can be sent.`
+          : `This draft is ${checked.state} and cannot be sent from that state — it may already be executing.`,
+      });
+    }
+
+    const authorizations: {
+      lineId: string;
+      transferId: string;
+      recipient: string;
+      sendEur: number;
+      authorization: unknown;
+    }[] = [];
+
+    for (const plan of plans) {
+      let built;
+      try {
+        const quote = await createQuote(user.id, { rail: "sepa", sendEur: plan.sendEur });
+        built = await buildTransferFromQuote(quote, {
+          recipientName: plan.name,
+          recipientIban: plan.iban,
+          reference: `${ctx.org.name} ${claimed.id.slice(0, 8)}`.slice(0, 140),
+        });
+      } catch (err) {
+        built = { ok: false as const, status: 500, body: { error: (err as Error).message } };
+      }
+
+      if (!built.ok) {
+        // Partial batch. The transfers already created sit in CREATED with no
+        // signature, so no money can move through them — they simply expire.
+        // The draft goes to FAILED rather than back to REVIEWED so that a retry
+        // is a deliberate re-draft instead of a second batch on top of the
+        // first.
+        store.updateDraft(claimed.id, {
+          state: "FAILED",
+          transferIds: authorizations.map((a) => a.transferId),
+          failureReason: `Line ${plan.lineId} could not be prepared: ${built.body?.error ?? "unknown"}`,
+          activity: [
+            ...claimed.activity,
+            activity(
+              ctx.member.id,
+              "execution_failed",
+              `${authorizations.length} transfer(s) were created and left unsigned; they expire without moving anything.`,
+            ),
+          ],
+        });
+        return res.status(built.status).json({
+          error: `Line ${plan.lineId} could not be prepared, so the batch was stopped.`,
+          detail: built.body?.error,
+          createdButUnsigned: authorizations.map((a) => a.transferId),
+          note: "Nothing moved. Transfers created before the failure carry no signature and expire unused.",
+        });
+      }
+
+      authorizations.push({
+        lineId: plan.lineId,
+        transferId: built.transfer.id,
+        recipient: plan.name,
+        sendEur: plan.sendEur,
+        authorization: built.authorization,
+      });
+    }
+
+    const updated = store.updateDraft(claimed.id, {
+      transferIds: authorizations.map((a) => a.transferId),
+      activity: [
+        ...claimed.activity,
+        activity(
+          ctx.member.id,
+          "executing",
+          `${authorizations.length} transfer(s) created, awaiting a device signature for each.`,
+        ),
+      ],
     });
-    res.status(501).json({
-      error:
-        "Executing a draft from an issued account is not wired to the transfer machinery yet. The approval workflow, the drift check and the claim are in place; the last hop must create one transfer per line and collect a device signature for each.",
-      draft: claimed,
+
+    res.status(201).json({
+      draft: updated,
+      authorizations,
+      totalEur,
+      // Said plainly: the draft is not sent until every line is signed.
+      note: `${authorizations.length} transfer(s) created. Each needs its own device signature — sign them and POST to each authorization's submitTo. Nothing has moved yet.`,
     });
+  });
+
+  /**
+   * One draft, with its execution state derived from its transfers.
+   *
+   * Derived rather than stored: the transfers are the truth, and a draft row
+   * that says EXECUTED while a transfer sits in MANUAL_REVIEW would be a
+   * comfortable lie.
+   */
+  r.get("/:orgId/drafts/:draftId", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requirePermission(ctx, res, "drafts.read")) return;
+    const draft = store.findDraft(String(req.params.draftId));
+    if (!draft || draft.orgId !== ctx.org.id) {
+      return res.status(404).json({ error: "no such draft" });
+    }
+    res.json({ draft: withExecutionState(draft), totals: totalsByAsset(draft) });
   });
 
   /** Bulk import lines from a CSV. */

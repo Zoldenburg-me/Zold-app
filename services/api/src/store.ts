@@ -772,6 +772,9 @@ function migrateUsersToOrganisations() {
       provider: "monerium",
       identifier: user.iban ? { iban: user.iban } : {},
       address: user.address,
+      // This account IS that user's Safe, so it is spendable by exactly the
+      // person holding its device key — see Account.backingUserId.
+      backingUserId: user.id,
       gate: funded ? undefined : initial.gate,
       detail: user.funding?.detail,
       createdAt: now,
@@ -1206,16 +1209,21 @@ export const store = {
     return d;
   },
   /**
-   * Claim a reviewed draft for execution, synchronously.
+   * Claim a draft for execution, synchronously.
    *
    * Same shape as claimAuthorization above and for the same reason: everything
    * from the state check to the write happens with no await between, so two
    * parallel submissions of one draft cannot both pass. Returns null when
    * somebody else already claimed it.
+   *
+   * `from` is the set of states this caller may claim out of: ["REVIEWED"] for
+   * an org with approvals, ["DRAFT"] for one without. Passed in rather than
+   * hardcoded so the plan decides, but still checked here — inside the same
+   * synchronous window as the write.
    */
-  claimDraftExecution(id: string): DraftPayment | null {
+  claimDraftExecution(id: string, from: DraftPayment["state"][] = ["REVIEWED"]): DraftPayment | null {
     const d = db.drafts.find((x) => x.id === id);
-    if (!d || d.state !== "REVIEWED") return null;
+    if (!d || !from.includes(d.state)) return null;
     d.state = "EXECUTING";
     d.updatedAt = new Date().toISOString();
     persist();

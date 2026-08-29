@@ -427,26 +427,128 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const initial = initialStatusFor(currency);
     const now = new Date().toISOString();
+
+    /**
+     * Where the money actually comes from.
+     *
+     * Provisioning a Safe and a Monerium profile PER ORGANISATION is not built.
+     * Until it is, the only spendable account is one backed by a person's
+     * existing funded account — so an org either adopts the caller's, or has no
+     * funding identity and says so.
+     *
+     * A personal org adopts automatically: it IS that person. A business org
+     * must ask (`useMyAccount: true`), because "your own wallet is now funding
+     * the company" is a decision someone should make on purpose rather than
+     * discover later. Either way `backingUserId` records whose device key can
+     * sign, since spending authority never follows a membership change.
+     */
+    const caller = store.findUser(ctx.userId);
+    const callerFunded =
+      caller && caller.iban && caller.funding?.status === "active" ? caller : undefined;
+    const wantsAdoption =
+      currency === "EUR" &&
+      Boolean(callerFunded) &&
+      (ctx.org.type === "personal" || req.body?.useMyAccount === true);
+
+    /**
+     * An account nobody can fund is GATED, not "provisioning".
+     *
+     * `provisioning` promises that something is working on it. Nothing is:
+     * per-organisation provisioning does not exist, so without adoption the
+     * account would sit in that state forever, which reads as a stuck job
+     * rather than a missing feature. Gated with a reason is the honest state.
+     */
+    const status = wantsAdoption ? "active" : "gated";
+    const gate = wantsAdoption
+      ? undefined
+      : (initial.gate ?? {
+          reason:
+            "This account has no funding identity, so nothing can be sent from it.",
+          needs:
+            "per-organisation account provisioning (a Safe and a Monerium profile of its own), which is not built. Until then an organisation can be funded from a member's own account with useMyAccount: true.",
+        });
+
     const account = store.addAccount({
       id: `acc_${randomUUID()}`,
       orgId: ctx.org.id,
       currency,
       label: String(req.body?.label ?? "").trim() || defaultLabel(currency),
-      status: initial.status,
+      status,
       provider: CURRENCY_REGISTRY[currency].provider,
-      identifier: {},
-      gate: initial.gate,
+      identifier: wantsAdoption ? { iban: callerFunded!.iban } : {},
+      address: wantsAdoption ? callerFunded!.address : undefined,
+      backingUserId: wantsAdoption ? callerFunded!.id : undefined,
+      gate,
       createdAt: now,
       updatedAt: now,
     });
 
-    res.status(201).json({
-      account,
-      // Said plainly rather than left for the user to discover by trying.
+    let note: string | undefined;
+    if (account.status === "gated") {
+      note = `Recorded, but ${CURRENCY_REGISTRY[currency].name} accounts cannot be opened yet: ${account.gate?.needs}`;
+    } else if (wantsAdoption && ctx.org.type === "business") {
+      note =
+        "This organisation is now funded by your personal account — payments come out of your balance and only your device key can authorise them. Per-organisation accounts are not built yet.";
+    } else if (!wantsAdoption && currency === "EUR") {
+      note = callerFunded
+        ? "Opened without a funding identity. Pass useMyAccount: true to fund it from your own account until per-organisation provisioning exists."
+        : "Opened without a funding identity — your own account is not funded yet, and per-organisation provisioning is not built. Nothing can be sent from this account.";
+    }
+
+    res.status(201).json({ account, note });
+  });
+
+  /**
+   * Give an existing account a funding identity, from the caller's own account.
+   *
+   * Separate endpoint rather than a flag on update, because this is the moment
+   * a person's own balance starts paying an organisation's bills — it deserves
+   * its own call, its own permission and its own plain-language answer.
+   */
+  r.post("/:orgId/accounts/:accountId/fund", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requirePermission(ctx, res, "accounts.open")) return;
+
+    const account = store.findAccount(String(req.params.accountId));
+    if (!account || account.orgId !== ctx.org.id) {
+      return res.status(404).json({ error: "no such account" });
+    }
+    if (account.backingUserId) {
+      return res.status(409).json({
+        error:
+          account.backingUserId === ctx.userId
+            ? "This account is already funded by your account."
+            : "This account is already funded by another member's account. Only they can authorise its payments.",
+      });
+    }
+    if (account.currency !== "EUR") {
+      const def = CURRENCY_REGISTRY[account.currency];
+      return res.status(409).json({
+        error: `${def.name} cannot be funded this way: ${def.needs}`,
+      });
+    }
+    const caller = store.findUser(ctx.userId);
+    if (!caller?.iban || caller.funding?.status !== "active") {
+      return res.status(409).json({
+        error:
+          "Your own account is not funded yet, so it cannot fund this organisation. Add money to your account first.",
+      });
+    }
+
+    const funded = store.updateAccount(account.id, {
+      status: "active",
+      identifier: { iban: caller.iban },
+      address: caller.address,
+      backingUserId: caller.id,
+      gate: undefined,
+    });
+    res.json({
+      account: funded,
       note:
-        account.status === "gated"
-          ? `Recorded, but ${CURRENCY_REGISTRY[currency].name} accounts cannot be opened yet: ${account.gate?.needs}`
-          : undefined,
+        ctx.org.type === "business"
+          ? "This organisation is now funded by your personal account — payments come out of your balance and only your device key can authorise them. Per-organisation accounts are not built yet."
+          : "Funded from your account.",
     });
   });
 
