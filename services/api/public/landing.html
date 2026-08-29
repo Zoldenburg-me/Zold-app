@@ -48,8 +48,8 @@
            below this bar still describes the personal product, so these are the
            only signposts that the business one exists — keep them. -->
       <div style="display:flex; align-items:center; gap:clamp(14px,3vw,26px); font-size:13.5px; color:#8a8a94; min-width:0">
-        <a href="/app" style="color:#ededf0">Personal</a>
-        <a href="/business" style="color:#8a8a94">Business</a>
+        <a href="#account" style="color:#ededf0">Personal</a>
+        <a href="#business" style="color:#8a8a94">Business</a>
         <a href="#approval" style="color:#8a8a94" class="js-hide-sm">Approvals</a>
       </div>
       <a href="/app" style="display:inline-flex; align-items:center; height:36px; padding:0 18px; border-radius:999px; background:#ed188d; color:#fff; font-size:13.5px; font-weight:600; white-space:nowrap; flex:none; box-shadow:0 6px 22px rgba(237,24,141,.35)" class="pill js-hide-sm">Launch app</a>
@@ -81,7 +81,7 @@
 
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:30px">
         <a href="/app" style="display:inline-flex; align-items:center; height:46px; padding:0 26px; border-radius:999px; background:#ed188d; color:#fff; font-size:14.5px; font-weight:600; box-shadow:0 10px 34px rgba(237,24,141,.4)" class="pill">Open a personal account</a>
-        <a href="/business" style="display:inline-flex; align-items:center; height:46px; padding:0 24px; border-radius:999px; border:1px solid #2c2c33; background:rgba(255,255,255,.03); font-size:14.5px; font-weight:500; color:#ededf0" class="ghost">For business</a>
+        <a href="#business" style="display:inline-flex; align-items:center; height:46px; padding:0 24px; border-radius:999px; border:1px solid #2c2c33; background:rgba(255,255,255,.03); font-size:14.5px; font-weight:500; color:#ededf0" class="ghost">For business</a>
       </div>
     </div>
 
@@ -292,6 +292,67 @@
 
   <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
 
+  <!-- Business. Mirrors the #account layout with the columns swapped, so it
+       reads as a sibling rather than a repeat. Every claim here maps to
+       something that exists in the app; the ones that do not are named in
+       footnote 5 rather than softened into implication. -->
+  <section id="business" style="padding:clamp(56px,8vw,104px) 24px">
+    <div style="max-width:1080px; margin:0 auto; display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:clamp(32px,5vw,64px); align-items:center">
+
+      <div style="order:2">
+        <div style="position:relative">
+          <div style="position:absolute; inset:12% 6%; background:radial-gradient(50% 50% at 60% 45%, rgba(139,92,246,.26), transparent 72%); filter:blur(30px)"></div>
+          <div style="position:relative; border:1px solid #2c2c33; border-radius:18px; padding:clamp(18px,2.6vw,24px); background:linear-gradient(150deg,#17171d,#0c0c10); box-shadow:0 30px 70px rgba(0,0,0,.6)">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px">
+              <span style="display:flex; align-items:center; gap:7px; font-size:13.5px; font-weight:600; letter-spacing:-.02em"><span style="color:#ed188d">▽</span>Acme GmbH</span>
+              <span style="font-size:10px; font-weight:600; letter-spacing:.06em; padding:3px 8px; border-radius:999px; background:rgba(245,166,35,.14); color:#f5a623">PENDING REVIEW</span>
+            </div>
+
+            <div style="margin-top:18px; font-size:10.5px; letter-spacing:.1em; color:#5b5b66">SUPPLIER RUN · 2 PAYMENTS</div>
+            <div style="margin-top:10px; display:grid; gap:8px">
+              <div style="display:flex; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid #232328; border-radius:10px; background:#0e0e12; font-size:13px">
+                <span style="color:#cfcfd8">Supplier Ltd</span><span style="color:#ededf0; font-variant-numeric:tabular-nums">€1,200.00</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid #232328; border-radius:10px; background:#0e0e12; font-size:13px">
+                <span style="color:#cfcfd8">Contractor BV</span><span style="color:#ededf0; font-variant-numeric:tabular-nums">€840.00</span>
+              </div>
+            </div>
+
+            <div style="margin-top:14px; padding-top:13px; border-top:1px solid #1c1c21; display:flex; align-items:center; gap:9px">
+              <span style="color:#8b5cf6; font-size:15px; line-height:1"><i class="ph ph-users-three"></i></span>
+              <span style="font-size:12px; color:#8a8a94">Drafted by Miriam · needs a second approver</span>
+            </div>
+            <div style="margin-top:12px; display:flex; gap:8px">
+              <span style="flex:1; text-align:center; padding:9px 0; border-radius:999px; background:#ed188d; color:#fff; font-size:12.5px; font-weight:600">Approve</span>
+              <span style="flex:1; text-align:center; padding:9px 0; border-radius:999px; border:1px solid #2c2c33; color:#cfcfd8; font-size:12.5px; font-weight:500">Send back</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="order:1">
+        <span style="display:inline-flex; align-items:center; gap:8px; font-size:11.5px; font-weight:600; letter-spacing:.13em; color:#8a8a94">FOR BUSINESS</span>
+        <h2 style="margin:14px 0 0; font-size:clamp(28px,4vw,44px); line-height:1.05; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">Your company's money, with the controls a company needs.</h2>
+        <p style="margin:16px 0 0; max-width:46ch; font-size:15.5px; line-height:1.6; color:#9a9aa5">An organisation holds the accounts, not a person. Invite your team, give each of them only what their job needs, and put a second pair of eyes in front of every payment that leaves.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">5</a></p>
+
+        <div style="display:grid; gap:14px; margin-top:26px">
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-users-three"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Roles that separate the books from the money</div><div style="font-size:13px; color:#8a8a94">Your bookkeeper can categorise every transaction and never send a euro. Viewer, accountant, payer, admin, owner.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-seal-check"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Four eyes on every payment run</div><div style="font-size:13px; color:#8a8a94">Whoever drafts a payment cannot approve it. And if a payee's bank details change after approval, the payment stops instead of following them.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-receipt"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Invoices your suppliers can actually use</div><div style="font-size:13px; color:#8a8a94">Send a one-time link. They fill in the invoice with no account, no wallet and no onboarding, and you pay it from the same screen.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-notebook"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Books your accountant recognises</div><div style="font-size:13px; color:#8a8a94">Your own chart of accounts, rules that map transactions to it automatically, cost basis, and a CSV that opens in the ledger you already keep.</div></div></div>
+        </div>
+
+        <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:30px">
+          <a href="/business" style="display:inline-flex; align-items:center; height:44px; padding:0 22px; border-radius:999px; background:#ed188d; color:#fff; font-size:14px; font-weight:600; box-shadow:0 10px 30px rgba(237,24,141,.34)" class="pill">Open a business account</a>
+          <span style="font-size:12.5px; color:#5b5b66">Free while you are getting started · 30-day trial of the paid plan<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super">5</a></span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
+
   <section id="launch" style="position:relative; padding:clamp(64px,9vw,120px) 24px; text-align:center; overflow:hidden">
     <div style="position:absolute; left:50%; bottom:-220px; width:min(760px,120%); height:520px; transform:translateX(-50%); background:radial-gradient(50% 50% at 50% 50%, rgba(237,24,141,.28), transparent 70%); pointer-events:none"></div>
     <div style="position:relative">
@@ -360,6 +421,10 @@
         <div>
           <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CUSTODY AND APPROVALS</div>
           <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">4</sup> Each account is a Safe smart account; deployment gas is sponsored. A passkey is registered at onboarding and every payout is signed against that exact amount and recipient. Today the account's owner key is still held server-side, so the account is custodial in practice — replacing that key with passkey and co-signer approval is in progress. Assets held on chain are not covered by any government or private deposit insurance scheme.</p>
+        </div>
+        <div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR BUSINESS ACCOUNTS</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">5</sup> Members, roles, payment approvals, invoices, the address book, the chart of accounts and CSV export are implemented. Accounts are modelled in several currencies, but <strong style="color:#cfcfd8; font-weight:600">only the euro account is open</strong>: USD and GBP need an account provider that has not been granted, and KES and INR need a local payout partner that is not contracted. Each currency states in the app what it is waiting on rather than appearing as though it works. An organisation does not yet get a payment account of its own — until it does, a business account is funded from a member's personal account, which the app says explicitly before you do it. Cards are not built. Free and paid plans are described in-app; the paid plan is not yet chargeable and the 30-day trial is granted on request. Downgrading pauses paid features and deletes nothing.</p>
         </div>
         <p style="margin:6px 0 0; font-size:12px; color:#5b5b66">© 2026 Zoldenburg. All rights reserved.</p>
       </div>
