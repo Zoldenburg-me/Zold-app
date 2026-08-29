@@ -1,6 +1,22 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { IS_PRODUCTION, ROOT } from "./config.js";
+import type {
+  Account,
+  AccountRule,
+  ChartAccount,
+  Contact,
+  DraftPayment,
+  ImportedWallet,
+  Invoice,
+  LedgerEntry,
+  Member,
+  Organisation,
+  WalletGroup,
+} from "./domain/types.js";
+import { DEFAULT_CHART, DEFAULT_RULES } from "./domain/coa.js";
+import { defaultLabel, initialStatusFor } from "./domain/accounts.js";
 
 export type KycStatus = "pending" | "approved" | "rejected" | "manual_review";
 
@@ -562,6 +578,24 @@ interface Db {
    * and skip every block on a fresh chain.
    */
   cryptoDepositCursor: Record<string, string>;
+
+  // ── The organisation domain (docs/business-accounts.md) ───────────────────
+  //
+  // A User is now only a login identity; the tenant that holds money is an
+  // Organisation, and a user reaches one through a Member row. Existing
+  // single-user accounts are migrated into a personal org of one on first
+  // start — see migrateUsersToOrganisations().
+  organisations: Organisation[];
+  members: Member[];
+  accounts: Account[];
+  importedWallets: ImportedWallet[];
+  walletGroups: WalletGroup[];
+  contacts: Contact[];
+  drafts: DraftPayment[];
+  invoices: Invoice[];
+  chartAccounts: ChartAccount[];
+  accountRules: AccountRule[];
+  ledger: LedgerEntry[];
 }
 
 /**
@@ -590,6 +624,17 @@ let db: Db = {
   cryptoDeposits: [],
   recoveryRequests: [],
   cryptoDepositCursor: {},
+  organisations: [],
+  members: [],
+  accounts: [],
+  importedWallets: [],
+  walletGroups: [],
+  contacts: [],
+  drafts: [],
+  invoices: [],
+  chartAccounts: [],
+  accountRules: [],
+  ledger: [],
 };
 
 export function initStore() {
@@ -603,6 +648,17 @@ export function initStore() {
     db.cryptoDeposits ??= [];
     db.recoveryRequests ??= [];
     db.cryptoDepositCursor ??= {};
+    db.organisations ??= [];
+    db.members ??= [];
+    db.accounts ??= [];
+    db.importedWallets ??= [];
+    db.walletGroups ??= [];
+    db.contacts ??= [];
+    db.drafts ??= [];
+    db.invoices ??= [];
+    db.chartAccounts ??= [];
+    db.accountRules ??= [];
+    db.ledger ??= [];
     if (IS_PRODUCTION) {
       const custodial = db.users.filter((u) => (u.paymentPage as any)?.depositPrivateKey);
       if (custodial.length) {
@@ -612,6 +668,7 @@ export function initStore() {
         );
       }
     }
+    migrateUsersToOrganisations();
     for (const q of db.quotes) q.status ??= "OPEN";
     for (const s of db.sessions) s.expiresAt ??= new Date(Date.parse(s.createdAt) + 24 * 60 * 60 * 1000).toISOString();
     pruneSessions();
@@ -632,6 +689,131 @@ function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
     const dead = s.revokedAt ? Date.parse(s.revokedAt) : Date.parse(s.expiresAt);
     return !(Number.isFinite(dead) && dead < cutoff);
   });
+}
+
+/**
+ * Give every pre-existing user a personal organisation of one.
+ *
+ * The old model said a user IS an account. Those users have a real IBAN and a
+ * real on-chain address — on Base Sepolia some of them hold credited EUR — so
+ * the migration must CARRY THEM FORWARD, not re-issue. The org's EUR account
+ * therefore takes the user's existing `iban` and `address` verbatim, and its
+ * status is derived from the user's funding state rather than assumed active:
+ * a user who never finished provisioning must not acquire an account that
+ * claims to be open.
+ *
+ * Idempotent — keyed on a member row existing for the user — so it is safe on
+ * every start, and it never touches a user who already has an org.
+ */
+function migrateUsersToOrganisations() {
+  let migrated = 0;
+  for (const user of db.users) {
+    if (db.members.some((m) => m.userId === user.id)) continue;
+
+    const now = user.createdAt ?? new Date().toISOString();
+    const org: Organisation = {
+      id: `org_${randomUUID()}`,
+      type: "personal",
+      name: user.name || "Personal",
+      email: user.email,
+      address: user.country ? { country: user.country.toUpperCase() } : undefined,
+      plan: "starter",
+      reporting: {
+        currency: "EUR",
+        timeZone: "Europe/Berlin",
+        costBasisMethod: "FIFO",
+      },
+      // The user's KYC decision is an account-issuance verification and nothing
+      // more. It is deliberately NOT copied onto fiat_payout or cards: those
+      // are separate partners' decisions and we were never given them.
+      verifications: {
+        account_issuance: {
+          capability: "account_issuance",
+          status:
+            user.kycStatus === "approved"
+              ? "approved"
+              : user.kycStatus === "rejected"
+                ? "rejected"
+                : user.kycStatus === "manual_review"
+                  ? "in_review"
+                  : "unverified",
+          provider: user.kyc?.provider === "monerium" ? "monerium" : "manual",
+          applicantId: user.kyc?.applicantId,
+          decidedAt: user.kyc?.checkedAt,
+          reason: user.kyc?.reason,
+        },
+      },
+      createdAt: now,
+      updatedAt: new Date().toISOString(),
+    };
+    db.organisations.push(org);
+
+    db.members.push({
+      id: `mem_${randomUUID()}`,
+      orgId: org.id,
+      userId: user.id,
+      email: user.email ?? "",
+      name: user.name,
+      role: "owner",
+      status: "active",
+      invitedAt: now,
+      acceptedAt: now,
+    });
+
+    // Carry the existing EUR account across rather than opening a new one.
+    const funded = user.funding?.status === "active" && Boolean(user.iban);
+    const initial = initialStatusFor("EUR");
+    db.accounts.push({
+      id: `acc_${randomUUID()}`,
+      orgId: org.id,
+      currency: "EUR",
+      label: defaultLabel("EUR"),
+      status: funded ? "active" : initial.status,
+      provider: "monerium",
+      identifier: user.iban ? { iban: user.iban } : {},
+      address: user.address,
+      gate: funded ? undefined : initial.gate,
+      detail: user.funding?.detail,
+      createdAt: now,
+      updatedAt: new Date().toISOString(),
+    });
+
+    seedChartOfAccounts(org.id, now);
+    migrated++;
+  }
+  if (migrated) {
+    console.log(
+      `[store] migrated ${migrated} user(s) into personal organisations ` +
+        "(existing IBANs and addresses carried forward, not re-issued)",
+    );
+  }
+}
+
+/** The default chart and rules, so smart categorisation works on day one. */
+function seedChartOfAccounts(orgId: string, at = new Date().toISOString()) {
+  if (db.chartAccounts.some((c) => c.orgId === orgId)) return;
+  for (const a of DEFAULT_CHART) {
+    db.chartAccounts.push({
+      id: `coa_${randomUUID()}`,
+      orgId,
+      code: a.code,
+      name: a.name,
+      type: a.type,
+      archived: false,
+      createdAt: at,
+    });
+  }
+  for (const r of DEFAULT_RULES) {
+    db.accountRules.push({
+      id: `rule_${randomUUID()}`,
+      orgId,
+      scope: "default",
+      match: { txType: r.txType },
+      direction: r.direction,
+      accountCode: r.accountCode,
+      createdAt: at,
+    });
+  }
 }
 
 function persist() {
@@ -867,6 +1049,288 @@ export const store = {
   },
   setCryptoDepositCursor(chainId: number | string, block: bigint) {
     db.cryptoDepositCursor[String(chainId)] = block.toString();
+    persist();
+  },
+
+  // ── Organisation domain ───────────────────────────────────────────────────
+  //
+  // Reads return live rows; every write goes through here so a single atomic
+  // persist covers the whole file. Deliberately NO delete for organisations,
+  // accounts, invoices or ledger entries: plan downgrades and archival must not
+  // be reachable by a code path that removes rows (see plans.ts rule 1).
+
+  get organisations() {
+    return db.organisations;
+  },
+  get members() {
+    return db.members;
+  },
+  get accounts() {
+    return db.accounts;
+  },
+  get contacts() {
+    return db.contacts;
+  },
+  get drafts() {
+    return db.drafts;
+  },
+  get invoices() {
+    return db.invoices;
+  },
+  get importedWallets() {
+    return db.importedWallets;
+  },
+  get walletGroups() {
+    return db.walletGroups;
+  },
+  get chartAccounts() {
+    return db.chartAccounts;
+  },
+  get accountRules() {
+    return db.accountRules;
+  },
+  get ledger() {
+    return db.ledger;
+  },
+
+  addOrganisation(org: Organisation, seedCoa = true) {
+    db.organisations.push(org);
+    if (seedCoa) seedChartOfAccounts(org.id, org.createdAt);
+    persist();
+    return org;
+  },
+  findOrganisation(id: string) {
+    return db.organisations.find((o) => o.id === id);
+  },
+  updateOrganisation(id: string, patch: Partial<Organisation>) {
+    const o = db.organisations.find((x) => x.id === id);
+    if (!o) throw new Error(`unknown organisation ${id}`);
+    Object.assign(o, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return o;
+  },
+  /** Every org a user can reach, with the membership that grants it. */
+  organisationsForUser(userId: string) {
+    return db.members
+      .filter((m) => m.userId === userId && m.status === "active")
+      .map((m) => ({ member: m, org: db.organisations.find((o) => o.id === m.orgId) }))
+      .filter((x): x is { member: Member; org: Organisation } => Boolean(x.org));
+  },
+
+  addMember(m: Member) {
+    db.members.push(m);
+    persist();
+    return m;
+  },
+  findMember(id: string) {
+    return db.members.find((m) => m.id === id);
+  },
+  /** The membership joining this user to this org, active or not. */
+  memberFor(orgId: string, userId: string) {
+    return db.members.find((m) => m.orgId === orgId && m.userId === userId);
+  },
+  findMemberByInviteHash(tokenHash: string) {
+    return db.members.find((m) => m.invite?.tokenHash === tokenHash);
+  },
+  membersOf(orgId: string) {
+    return db.members.filter((m) => m.orgId === orgId);
+  },
+  updateMember(id: string, patch: Partial<Member>) {
+    const m = db.members.find((x) => x.id === id);
+    if (!m) throw new Error(`unknown member ${id}`);
+    Object.assign(m, patch);
+    persist();
+    return m;
+  },
+
+  addAccount(a: Account) {
+    db.accounts.push(a);
+    persist();
+    return a;
+  },
+  findAccount(id: string) {
+    return db.accounts.find((a) => a.id === id);
+  },
+  accountsOf(orgId: string) {
+    return db.accounts.filter((a) => a.orgId === orgId);
+  },
+  updateAccount(id: string, patch: Partial<Account>) {
+    const a = db.accounts.find((x) => x.id === id);
+    if (!a) throw new Error(`unknown account ${id}`);
+    Object.assign(a, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return a;
+  },
+
+  addContact(c: Contact) {
+    db.contacts.push(c);
+    persist();
+    return c;
+  },
+  findContact(id: string) {
+    return db.contacts.find((c) => c.id === id);
+  },
+  contactsOf(orgId: string) {
+    return db.contacts.filter((c) => c.orgId === orgId);
+  },
+  updateContact(id: string, patch: Partial<Contact>) {
+    const c = db.contacts.find((x) => x.id === id);
+    if (!c) throw new Error(`unknown contact ${id}`);
+    Object.assign(c, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return c;
+  },
+  removeContact(id: string) {
+    const before = db.contacts.length;
+    db.contacts = db.contacts.filter((c) => c.id !== id);
+    persist();
+    return db.contacts.length < before;
+  },
+
+  addDraft(d: DraftPayment) {
+    db.drafts.push(d);
+    persist();
+    return d;
+  },
+  findDraft(id: string) {
+    return db.drafts.find((d) => d.id === id);
+  },
+  draftsOf(orgId: string) {
+    return db.drafts.filter((d) => d.orgId === orgId);
+  },
+  updateDraft(id: string, patch: Partial<DraftPayment>) {
+    const d = db.drafts.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown draft ${id}`);
+    Object.assign(d, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return d;
+  },
+  /**
+   * Claim a reviewed draft for execution, synchronously.
+   *
+   * Same shape as claimAuthorization above and for the same reason: everything
+   * from the state check to the write happens with no await between, so two
+   * parallel submissions of one draft cannot both pass. Returns null when
+   * somebody else already claimed it.
+   */
+  claimDraftExecution(id: string): DraftPayment | null {
+    const d = db.drafts.find((x) => x.id === id);
+    if (!d || d.state !== "REVIEWED") return null;
+    d.state = "EXECUTING";
+    d.updatedAt = new Date().toISOString();
+    persist();
+    return d;
+  },
+
+  addInvoice(i: Invoice) {
+    db.invoices.push(i);
+    persist();
+    return i;
+  },
+  findInvoice(id: string) {
+    return db.invoices.find((i) => i.id === id);
+  },
+  findInvoiceByLinkHash(hash: string) {
+    return db.invoices.find((i) => i.linkTokenHash === hash);
+  },
+  invoicesOf(orgId: string) {
+    return db.invoices.filter((i) => i.orgId === orgId);
+  },
+  updateInvoice(id: string, patch: Partial<Invoice>) {
+    const i = db.invoices.find((x) => x.id === id);
+    if (!i) throw new Error(`unknown invoice ${id}`);
+    Object.assign(i, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return i;
+  },
+
+  addImportedWallet(w: ImportedWallet) {
+    db.importedWallets.push(w);
+    persist();
+    return w;
+  },
+  findImportedWallet(id: string) {
+    return db.importedWallets.find((w) => w.id === id);
+  },
+  importedWalletsOf(orgId: string) {
+    return db.importedWallets.filter((w) => w.orgId === orgId);
+  },
+  updateImportedWallet(id: string, patch: Partial<ImportedWallet>) {
+    const w = db.importedWallets.find((x) => x.id === id);
+    if (!w) throw new Error(`unknown imported wallet ${id}`);
+    Object.assign(w, patch);
+    persist();
+    return w;
+  },
+  removeImportedWallet(id: string) {
+    const before = db.importedWallets.length;
+    db.importedWallets = db.importedWallets.filter((w) => w.id !== id);
+    persist();
+    return db.importedWallets.length < before;
+  },
+
+  addWalletGroup(g: WalletGroup) {
+    db.walletGroups.push(g);
+    persist();
+    return g;
+  },
+  walletGroupsOf(orgId: string) {
+    return db.walletGroups.filter((g) => g.orgId === orgId);
+  },
+
+  chartOf(orgId: string) {
+    return db.chartAccounts.filter((c) => c.orgId === orgId);
+  },
+  addChartAccount(c: ChartAccount) {
+    db.chartAccounts.push(c);
+    persist();
+    return c;
+  },
+  updateChartAccount(id: string, patch: Partial<ChartAccount>) {
+    const c = db.chartAccounts.find((x) => x.id === id);
+    if (!c) throw new Error(`unknown chart account ${id}`);
+    Object.assign(c, patch);
+    persist();
+    return c;
+  },
+  rulesOf(orgId: string) {
+    return db.accountRules.filter((r) => r.orgId === orgId);
+  },
+  addAccountRule(r: AccountRule) {
+    db.accountRules.push(r);
+    persist();
+    return r;
+  },
+  removeAccountRule(id: string) {
+    const before = db.accountRules.length;
+    db.accountRules = db.accountRules.filter((r) => r.id !== id);
+    persist();
+    return db.accountRules.length < before;
+  },
+  seedChartOfAccounts(orgId: string) {
+    seedChartOfAccounts(orgId);
+    persist();
+  },
+
+  ledgerOf(orgId: string) {
+    return db.ledger.filter((e) => e.orgId === orgId);
+  },
+  addLedgerEntries(entries: LedgerEntry[]) {
+    db.ledger.push(...entries);
+    persist();
+    return entries;
+  },
+  updateLedgerEntry(id: string, patch: Partial<LedgerEntry>) {
+    const e = db.ledger.find((x) => x.id === id);
+    if (!e) throw new Error(`unknown ledger entry ${id}`);
+    Object.assign(e, patch);
+    persist();
+    return e;
+  },
+  /** Bulk replace after a rule run. Takes whole rows so one persist covers it. */
+  replaceLedgerEntries(entries: LedgerEntry[]) {
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    db.ledger = db.ledger.map((e) => byId.get(e.id) ?? e);
     persist();
   },
 };

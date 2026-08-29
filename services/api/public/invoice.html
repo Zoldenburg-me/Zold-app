@@ -1,0 +1,205 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+<title>Submit an invoice</title>
+
+<style>
+  :root {
+    --bg: #0b0b0e; --panel: #131317; --panel2: #0e0e12; --row: #1a1a1f;
+    --border: #232328; --border2: #2c2c33; --text: #ededf0; --muted: #8a8a94;
+    --faint: #5b5b66; --acc: #ed188d; --green: #3dd68c; --amber: #f5a623; --red: #f4436c;
+    --font: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+    --display: "Space Grotesk", var(--font);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 14px/1.5 var(--font); color: var(--text); background: var(--bg); padding: 2rem 1rem 5rem; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-family: var(--display); font-size: 1.4rem; font-weight: 600; letter-spacing: -.02em; }
+  .sub { color: var(--muted); font-size: .88rem; margin-top: .3rem; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; margin-top: 1.25rem; }
+  .card h2 { font-family: var(--display); font-size: 1rem; margin-bottom: .8rem; }
+  label { display: block; font-size: .74rem; font-weight: 500; color: var(--muted); margin: .8rem 0 .3rem; }
+  input, select { width: 100%; padding: .62rem .75rem; border-radius: 8px; font-size: .92rem; border: 1px solid var(--border2); background: var(--panel2); color: var(--text); font-family: var(--font); }
+  input:focus { outline: none; border-color: var(--acc); box-shadow: 0 0 0 3px rgba(237,24,141,.15); }
+  button { padding: .65rem 1.2rem; border-radius: 8px; border: 0; cursor: pointer; font-weight: 600; font-size: .9rem; color: #fff; background: var(--acc); font-family: var(--font); }
+  button.ghost { background: transparent; border: 1px solid var(--border2); color: var(--text); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; font-size: .87rem; margin-top: .5rem; }
+  th { text-align: left; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); padding: .4rem .5rem; border-bottom: 1px solid var(--border); }
+  td { padding: .35rem .5rem; border-bottom: 1px solid var(--border); }
+  td input { padding: .45rem .55rem; font-size: .85rem; }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  .pill { display: inline-block; padding: .18rem .55rem; border-radius: 99px; font-size: .7rem; font-weight: 600; }
+  .pill.ok { background: rgba(61,214,140,.14); color: var(--green); }
+  .pill.mut { background: var(--row); color: var(--muted); }
+  .note { color: var(--faint); font-size: .8rem; margin-top: .8rem; }
+  .err { background: rgba(244,67,108,.1); border: 1px solid rgba(244,67,108,.3); border-radius: 10px; padding: .8rem 1rem; font-size: .87rem; margin-top: 1rem; }
+  .total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 1rem; padding-top: .8rem; border-top: 1px solid var(--border); }
+  .total b { font-family: var(--display); font-size: 1.35rem; }
+</style>
+
+<div class="wrap">
+  <h1>Invoice</h1>
+  <div class="sub" id="sub">Loading…</div>
+  <div id="content"></div>
+</div>
+
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const token = location.pathname.split("/").filter(Boolean).pop();
+let password = "";
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: {
+      ...(opts.body ? { "content-type": "application/json" } : {}),
+      ...(password ? { "x-invoice-password": password } : {}),
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const e = new Error(data.error || res.statusText); Object.assign(e, data); throw e; }
+  return data;
+}
+
+let lines = [{ description: "", quantity: "1", unitPrice: "" }];
+
+function lineRows() {
+  return lines.map((l, i) => `<tr>
+    <td><input data-i="${i}" data-f="description" value="${esc(l.description)}" placeholder="What you did" /></td>
+    <td style="width:80px"><input data-i="${i}" data-f="quantity" value="${esc(l.quantity)}" /></td>
+    <td style="width:110px"><input data-i="${i}" data-f="unitPrice" value="${esc(l.unitPrice)}" placeholder="0.00" /></td>
+    <td style="width:100px" class="mono">${(Number(l.quantity || 0) * Number(l.unitPrice || 0)).toFixed(2)}</td>
+  </tr>`).join("");
+}
+
+const total = () =>
+  lines.reduce((s, l) => s + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0).toFixed(2);
+
+function renderForm(inv) {
+  $("#sub").innerHTML = `Requested by <b>${esc(inv.payor.name)}</b>. Fill this in and submit —
+    no account and no wallet needed.`;
+  $("#content").innerHTML = `
+    <div class="card"><h2>Your details</h2>
+      <label>Your organisation</label><input id="f-org" />
+      <label>Email</label><input id="f-email" type="email" />
+      <label>Invoice number</label><input id="f-num" />
+      <label>Tax ID (optional)</label><input id="f-tax" />
+      <label>Address (optional)</label><input id="f-addr" />
+    </div>
+
+    <div class="card"><h2>Lines</h2>
+      <table><thead><tr><th>Description</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead>
+        <tbody id="lines">${lineRows()}</tbody></table>
+      <div style="margin-top:.7rem"><button class="ghost" id="add-line">Add line</button></div>
+      <div class="total"><span>Total</span><b id="total">${total()} ${esc(inv.currency)}</b></div>
+    </div>
+
+    <div class="card"><h2>How to pay you</h2>
+      <label>Wallet address (optional)</label><input id="f-wallet" placeholder="0x…" />
+      <label>Chain ID</label><input id="f-chain" value="8453" />
+      <div class="note">Payment goes from the payor's wallet straight to yours.</div>
+    </div>
+
+    <div style="margin-top:1.2rem"><button id="submit">Submit invoice</button></div>
+    <div class="note">Once submitted the invoice is timestamped and locked — you will not be able to edit it.</div>
+    <div id="err"></div>`;
+
+  $("#lines").addEventListener("input", (e) => {
+    const el = e.target;
+    if (!el.dataset.f) return;
+    lines[Number(el.dataset.i)][el.dataset.f] = el.value;
+    $("#total").textContent = `${total()} ${inv.currency}`;
+    $("#lines").querySelectorAll("tr").forEach((tr, i) => {
+      tr.lastElementChild.textContent =
+        (Number(lines[i].quantity || 0) * Number(lines[i].unitPrice || 0)).toFixed(2);
+    });
+  });
+  $("#add-line").onclick = () => {
+    lines.push({ description: "", quantity: "1", unitPrice: "" });
+    $("#lines").innerHTML = lineRows();
+  };
+  $("#submit").onclick = async () => {
+    $("#err").innerHTML = "";
+    $("#submit").disabled = true;
+    try {
+      const wallet = $("#f-wallet").value.trim();
+      const r = await api(`/api/invoice-links/${encodeURIComponent(token)}/submit`, {
+        method: "POST",
+        body: {
+          supplier: {
+            orgName: $("#f-org").value, email: $("#f-email").value,
+            invoiceNumber: $("#f-num").value, taxId: $("#f-tax").value,
+            address: $("#f-addr").value,
+          },
+          lines,
+          payTo: wallet
+            ? { kind: "wallet", address: wallet, chainId: Number($("#f-chain").value) }
+            : undefined,
+        },
+      });
+      renderSubmitted(r.invoice);
+    } catch (e) {
+      $("#err").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+      $("#submit").disabled = false;
+    }
+  };
+}
+
+function renderSubmitted(inv) {
+  const paid = inv.state === "PAID" || inv.state === "RECONCILED";
+  $("#sub").innerHTML = `To <b>${esc(inv.payor.name)}</b> · ${esc(inv.supplier?.invoiceNumber || "")}`;
+  $("#content").innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">${esc(inv.supplier?.orgName || "")}</h2>
+        <span class="pill ${paid ? "ok" : "mut"}">${esc(inv.state)}</span>
+      </div>
+      <table><thead><tr><th>Description</th><th>Qty</th><th>Unit</th><th>Amount</th></tr></thead><tbody>
+        ${inv.lines.map((l) => `<tr><td>${esc(l.description)}</td><td>${esc(l.quantity)}</td>
+          <td class="mono">${esc(l.unitPrice)}</td><td class="mono">${esc(l.amount)}</td></tr>`).join("")}
+      </tbody></table>
+      <div class="total"><span>Total</span><b>${esc(inv.total)} ${esc(inv.currency)}</b></div>
+      ${inv.txHash ? `<div class="note mono">Paid — ${esc(inv.txHash)}</div>` : ""}
+      <div class="note">Submitted ${esc((inv.submittedAt || "").slice(0, 10))}.
+        Keep this link — reopen it any time to see the payment status.</div>
+    </div>`;
+}
+
+function renderPassword() {
+  $("#sub").textContent = "This invoice link is password protected.";
+  $("#content").innerHTML = `<div class="card">
+    <label>Password</label><input id="f-pw" type="password" />
+    <div style="margin-top:1rem"><button id="pw-go">Open</button></div>
+    <div id="err"></div></div>`;
+  $("#pw-go").onclick = async () => {
+    password = $("#f-pw").value;
+    try { await boot(); } catch (e) {
+      $("#err").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    }
+  };
+}
+
+async function boot() {
+  let data;
+  try {
+    data = await api(`/api/invoice-links/${encodeURIComponent(token)}`);
+  } catch (e) {
+    if (e.passwordRequired) return renderPassword();
+    $("#sub").textContent = "";
+    $("#content").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    return;
+  }
+  const inv = data.invoice;
+  if (inv.editable) renderForm(inv);
+  else renderSubmitted(inv);
+}
+
+boot();
+</script>
