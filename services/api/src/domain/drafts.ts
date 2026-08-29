@@ -24,7 +24,11 @@ export class DraftError extends Error {}
 
 /** Legal moves. Anything not listed is refused by name, not by falling through. */
 const TRANSITIONS: Record<DraftState, DraftState[]> = {
-  DRAFT: ["PENDING_REVIEW", "INVALID_DATA"],
+  // DRAFT -> EXECUTING is legal only for an org WITHOUT the approvals
+  // capability: on Starter there is no review step, so requiring REVIEWED
+  // would make every draft unsendable. The route enforces which of the two
+  // applies; the state machine allows both shapes.
+  DRAFT: ["PENDING_REVIEW", "INVALID_DATA", "EXECUTING"],
   PENDING_REVIEW: ["REVIEWED", "REJECTED", "DRAFT", "INVALID_DATA"],
   REVIEWED: ["EXECUTING", "DRAFT", "INVALID_DATA"],
   REJECTED: ["DRAFT"],

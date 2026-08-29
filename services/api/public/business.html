@@ -188,6 +188,27 @@
 <dialog id="dlg"><div id="dlg-body"></div></dialog>
 <div id="toast" class="hidden"></div>
 
+<!--
+  FP4 device key. The import map is NOT optional: the vendored noble modules
+  import the bare specifiers `crypto` and `@noble/hashes/crypto`, and without
+  these mappings device.js never loads and signing hangs with no error. That
+  exact bug shipped once in the checkout page — do not drop this block.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "crypto": "/vendor/crypto-shim.js",
+    "@noble/hashes/crypto": "/vendor/hashes/cryptoBrowser.js"
+  }
+}
+</script>
+<!-- Classic script: runs during parsing, so the resolver exists before the
+     deferred module below calls it. -->
+<script>
+  window.__deviceLib = new Promise((resolve) => { window.__deviceLibReady = resolve; });
+</script>
+<script type="module" src="/device.js"></script>
+
 <script type="module">
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -328,7 +349,11 @@ RENDER.overview = async () => {
 
 RENDER.accounts = async () => {
   const { accounts, currencies } = await api(`/api/orgs/${org.id}/accounts`);
-  let html = `<div class="card"><div class="h"><div><h2>Your accounts</h2>
+  const mock = currencies.find((c) => c.mode === "mock");
+  let html = mock
+    ? `<div class="banner warn">This deployment is in <b>mock mode</b>. ${esc(mock.mockWarning)}</div>`
+    : "";
+  html += `<div class="card"><div class="h"><div><h2>Your accounts</h2>
     <div class="desc">An account holds one currency and pays out on that currency's local rail.</div></div>
     <button data-act="open-account">Open an account</button></div>`;
 
@@ -342,8 +367,12 @@ RENDER.accounts = async () => {
         <td class="mono">${esc(ident)}</td>
         <td><span class="pill ${pill}">${esc(a.status)}</span>
           ${a.gate ? `<div class="desc" style="margin-top:.35rem">${esc(a.gate.reason)}<br>
-            <span style="color:var(--faint)">Needs: ${esc(a.gate.needs)}</span></div>` : ""}</td>
-        <td>${esc(a.provider || "—")}</td></tr>`;
+            <span style="color:var(--faint)">Needs: ${esc(a.gate.needs)}</span></div>` : ""}
+          ${a.backingUserId ? `<div class="desc" style="margin-top:.3rem">Funded from your account</div>` : ""}</td>
+        <td>${esc(a.provider || "—")}
+          ${!a.backingUserId && a.currency === "EUR"
+            ? `<div style="margin-top:.4rem"><button class="ghost sm" data-act="fund-account"
+                 data-id="${esc(a.id)}">Fund from my account</button></div>` : ""}</td></tr>`;
     }).join("") + `</tbody></table>`
     : `<div class="empty">No accounts yet.</div>`;
   html += `</div>`;
@@ -355,7 +384,9 @@ RENDER.accounts = async () => {
       <td><b>${esc(c.code)}</b> <span class="desc">${esc(c.name)}</span></td>
       <td>${esc(c.railName)} <span class="desc">· ${esc(c.provider)}</span></td>
       <td>${c.available
-        ? `<span class="pill ok">available</span>`
+        ? c.mode === "mock"
+          ? `<span class="pill warn">mock</span><div class="desc" style="margin-top:.3rem">${esc(c.mockWarning)}</div>`
+          : `<span class="pill ok">live</span>`
         : `<span class="pill mut">not open</span><div class="desc" style="margin-top:.3rem">${esc(c.needs)}</div>`}</td>
     </tr>`).join("") + `</tbody></table></div>`;
   return html;
@@ -617,6 +648,10 @@ const ACTIONS = {
       });
       toast(r.note);
     }),
+  async "fund-account"(el) {
+    const r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
+    toast(r.note);
+  },
   async "del-wallet"(el) {
     await api(`/api/orgs/${org.id}/wallets/${el.dataset.id}`, { method: "DELETE" });
   },
@@ -686,7 +721,50 @@ const ACTIONS = {
     toast("Saved.");
     await loadOrg(org.id);
   },
-  "new-draft": () => toast("Open a contact first, then draft a payment to it.", false),
+  async "new-draft"() {
+    const [{ contacts }, { accounts }] = await Promise.all([
+      api(`/api/orgs/${org.id}/contacts`),
+      api(`/api/orgs/${org.id}/accounts`),
+    ]);
+    const payable = contacts.filter((c) => c.bankAccounts.length);
+    const fundable = accounts.filter((a) => a.status === "active" && a.backingUserId);
+    if (!payable.length) return toast("Add a contact with bank details first.", true);
+    if (!fundable.length) {
+      return toast(
+        "No account can fund a payment yet. Open an account and fund it from your own balance.",
+        true,
+      );
+    }
+    dialog("New payment",
+      `<label>From</label><select id="d-acct">${fundable
+        .map((a) => `<option value="${esc(a.id)}">${esc(a.label)} · ${esc(a.currency)}</option>`)
+        .join("")}</select>
+       <label>To</label><select id="d-con">${payable
+        .map((c) => `<option value="${esc(c.id)}">${esc(c.name)} — ${esc(c.bankAccounts[0].iban || "")}</option>`)
+        .join("")}</select>
+       <label>Amount (EUR)</label><input id="d-amt" placeholder="250.00" />
+       <label>Note</label><input id="d-note" />`,
+      async () => {
+        const c = payable.find((x) => x.id === $("#d-con").value);
+        await api(`/api/orgs/${org.id}/drafts`, {
+          method: "POST",
+          body: {
+            source: { kind: "account", accountId: $("#d-acct").value },
+            lines: [{
+              contactId: c.id,
+              destination: {
+                kind: "bank",
+                bankAccountId: c.bankAccounts[0].id,
+                displayName: c.bankAccounts[0].holderName,
+              },
+              asset: "EUR",
+              amount: $("#d-amt").value.trim(),
+              note: $("#d-note").value || undefined,
+            }],
+          },
+        });
+      });
+  },
   async "submit-draft"(el) {
     await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/submit`, { method: "POST" });
     toast("Submitted for review.");
@@ -697,9 +775,49 @@ const ACTIONS = {
     });
     toast("Approved.");
   },
+  /**
+   * Send: create one transfer per line, then sign each on this device.
+   *
+   * Execution and signing are deliberately separate round trips. The server
+   * never holds the key, so the batch exists as unsigned transfers until the
+   * device signs them — and if signing is abandoned halfway, the rest simply
+   * expire without moving anything.
+   */
   async "exec-draft"(el) {
     const r = await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/execute`, { method: "POST" });
-    toast(r.note || "Prepared.");
+
+    if (r.unsigned) {
+      return dialog("Sign in your own wallet",
+        `<p class="desc">${esc(r.note)}</p>
+         <table><thead><tr><th>To</th><th>Amount</th></tr></thead><tbody>${r.lines
+           .map((l) => `<tr><td>${esc(l.destination.displayName)}</td>
+             <td class="mono">${esc(l.amount)} ${esc(l.asset)}</td></tr>`).join("")}</tbody></table>`,
+        async () => {});
+    }
+    if (!r.authorizations?.length) return toast(r.note || "Nothing to sign.");
+
+    const lib = await window.__deviceLib;
+    const credentialId = localStorage.getItem("zold-credential-id") || undefined;
+    let signed = 0;
+    const failures = [];
+    for (const a of r.authorizations) {
+      try {
+        const signature = await lib.signTypedData(a.authorization.typedData, credentialId);
+        await api(a.authorization.submitTo, { method: "POST", body: { signature } });
+        signed++;
+        toast(`Signed ${signed}/${r.authorizations.length}…`);
+      } catch (e) {
+        // Reported per line rather than aborting silently: the ones already
+        // signed are real payments and the user must know which.
+        failures.push(`${a.recipient}: ${e.message}`);
+      }
+    }
+    toast(
+      failures.length
+        ? `${signed} of ${r.authorizations.length} sent. Unsent: ${failures.join("; ")}`
+        : `All ${signed} payment(s) signed and submitted.`,
+      failures.length > 0,
+    );
   },
 };
 

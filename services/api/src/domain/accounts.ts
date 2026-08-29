@@ -15,12 +15,12 @@
  * it has, and the only way to keep that true as the list grows is to make
  * liveness a property computed here rather than a flag set per screen.
  *
- * To make a currency live: give it a provider adapter, then flip its entry's
- * `live` predicate to ask that adapter whether it is configured. Do not flip a
+ * To make a currency live: give it a provider adapter, then have its entry's
+ * `mode` predicate ask that adapter whether it is configured. Do not flip a
  * boolean.
  */
 
-import { moneriumSandboxEnabled } from "../config.js";
+import { SECURITY, moneriumSandboxEnabled } from "../config.js";
 import type {
   Account,
   AccountIdentifier,
@@ -46,10 +46,17 @@ export interface CurrencyDefinition {
   /** Whether the settled currency has an on-chain token leg we custody. */
   tokenised: boolean;
   /**
-   * Is the rail actually usable in this deployment? A predicate, not a
+   * Is the rail usable in this deployment, and on what? A predicate, not a
    * constant, so the answer tracks configuration instead of documentation.
+   *
+   * THREE answers, not two. A rail can be open against the real provider
+   * ("live"), open against a locally-issued mock that only means anything on a
+   * dev chain ("mock"), or not open at all (false). Collapsing mock into live
+   * would let a local demo read as a real rail; collapsing it into closed would
+   * make the whole product unreachable in development, which is how the mock
+   * path stops being exercised at all.
    */
-  live: () => boolean;
+  mode: () => "live" | "mock" | false;
   /** Named partner + missing piece, shown verbatim when gated. */
   needs: string;
 }
@@ -68,9 +75,11 @@ const CURRENCIES: CurrencyDefinition[] = [
     ],
     provider: "monerium",
     tokenised: true,
-    // The only rail that returns true anywhere today. Both halves of the
-    // credential are needed — a client id alone opens nothing.
-    live: () => moneriumSandboxEnabled(),
+    // The only rail that opens anywhere today. Both halves of the Monerium
+    // credential are needed — a client id alone opens nothing. Failing that, a
+    // genuinely local deployment issues a mock IBAN and settles on its own
+    // chain: real machinery, no real money, and labelled as such everywhere.
+    mode: () => (moneriumSandboxEnabled() ? "live" : SECURITY.allowSimulation ? "mock" : false),
     needs: "Monerium credentials (MONERIUM_CLIENT_ID / MONERIUM_CLIENT_SECRET)",
   },
   {
@@ -83,7 +92,7 @@ const CURRENCIES: CurrencyDefinition[] = [
     countries: ["US"],
     provider: "iron",
     tokenised: false,
-    live: () => false,
+    mode: () => false as const,
     needs:
       "a USD account provider. Iron (iron.xyz) is request-access and has not been granted; Triple-A requires $10,000 monthly volume before verification starts.",
   },
@@ -97,7 +106,7 @@ const CURRENCIES: CurrencyDefinition[] = [
     countries: ["GB"],
     provider: "iron",
     tokenised: false,
-    live: () => false,
+    mode: () => false as const,
     needs: "a GBP account provider. Iron is the candidate and access is not granted.",
   },
   {
@@ -110,7 +119,7 @@ const CURRENCIES: CurrencyDefinition[] = [
     countries: ["KE"],
     provider: "yellowcard",
     tokenised: false,
-    live: () => false,
+    mode: () => false as const,
     needs:
       "a Kenyan payout partner. dLocal and Yellow Card both cover KES and neither is contracted; the existing cash rail pays a MoneyGram counter, which is a pickup, not an account.",
   },
@@ -124,7 +133,7 @@ const CURRENCIES: CurrencyDefinition[] = [
     countries: ["IN"],
     provider: "dlocal",
     tokenised: false,
-    live: () => false,
+    mode: () => false as const,
     needs:
       "an Indian payout partner (dLocal is the candidate). The previous UPI rail was a mock that minted its own reference numbers and was deleted in Aug 2026; it is not to be rebuilt from history.",
   },
@@ -150,14 +159,21 @@ export interface CurrencyAvailability {
   provider: AccountProvider;
   countries: string[];
   available: boolean;
+  /** "live" against the real provider, or "mock" on a local deployment. */
+  mode?: "live" | "mock";
+  /** Present when mock. Says plainly that no real money moves. */
+  mockWarning?: string;
   /** Present only when unavailable. Names the partner and the missing piece. */
   needs?: string;
 }
 
+export const MOCK_WARNING =
+  "This deployment issues a locally-generated IBAN and settles on its own chain. The machinery is real; the money is not.";
+
 /** What the client should render in an "open an account" list. */
 export function currencyAvailability(): CurrencyAvailability[] {
   return CURRENCIES.map((c) => {
-    const available = c.live();
+    const mode = c.mode();
     return {
       code: c.code,
       name: c.name,
@@ -165,8 +181,10 @@ export function currencyAvailability(): CurrencyAvailability[] {
       railName: c.railName,
       provider: c.provider,
       countries: c.countries,
-      available,
-      ...(available ? {} : { needs: c.needs }),
+      available: mode !== false,
+      ...(mode ? { mode } : {}),
+      ...(mode === "mock" ? { mockWarning: MOCK_WARNING } : {}),
+      ...(mode === false ? { needs: c.needs } : {}),
     };
   });
 }
@@ -184,7 +202,7 @@ export function initialStatusFor(currency: CurrencyCode): {
   gate?: { reason: string; needs: string };
 } {
   const def = CURRENCY_REGISTRY[currency];
-  if (def.live()) return { status: "provisioning" };
+  if (def.mode()) return { status: "provisioning" };
   return {
     status: "gated",
     gate: {
@@ -223,7 +241,7 @@ export function accountIsSpendable(account: Account): {
 } {
   const def = CURRENCY_REGISTRY[account.currency];
   if (!def) return { ok: false, reason: `Unknown currency ${account.currency}.` };
-  if (!def.live()) {
+  if (!def.mode()) {
     return {
       ok: false,
       reason: `${def.name} is not available in this deployment: ${def.needs}`,
