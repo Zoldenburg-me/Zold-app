@@ -417,6 +417,57 @@ NOT FINISHED, and refused loudly rather than faked:
    never as an upgrade. Telling someone to pay for something unbuilt costs them
    money.
 
+## CHF and NGN — tokens shown, rails still closed (Aug 2026)
+
+Added to the currency registry with the two settlement tokens the user asked
+for. `npm run business:test` (43 checks). ALL FOUR ADDRESSES VERIFIED ON CHAIN
+by reading name()/symbol()/decimals() from the contract — the addresses came
+from a third-party listing and a listing page is a claim, not evidence.
+
+ - **CHF / ZCHF (Frankencoin)** — ethereum
+   `0xB58E61C3098d85632Df34EecfB899A1Ed80921cB`, 18dp, supply ~30.6M.
+ - **NGN / cNGN** (Wrapped CBDC, Africa Stablecoin Consortium), 6dp on all four:
+   base `0x46C85152bFe9f96829aA94755D9f915F9B10EF5F`,
+   bnb `0xa8AEA66B361a8d53e8865c62D142167Af28Af058`,
+   ethereum `0x17CDB2a01e7a34CbB3DD4b83260B05d0274C8dab`,
+   polygon `0x52828daa48C1a9A06F37500882b42daf0bE04C3B`.
+   SUPPLY IS ON BASE (~2.58bn) AND BNB (~699m). Ethereum (~137k) and Polygon
+   (~12.6k) are rounding error — do not design a route through them. Base is
+   also our app chain, so it is the only deployment worth building against.
+
+THE NEW STATE THIS INTRODUCED, and why it needed its own modelling: a currency
+whose TOKEN is real, liquid and verified, but whose ACCOUNT does not exist.
+That is different from USD/GBP (no token, named partner ungranted) and it is
+the shape most likely to mislead — a live token reads as a working rail. So
+`CurrencyDefinition.token` names the token, its issuer, its verified contracts
+and WHAT BACKS IT, and `currencyAvailability()` stamps `heldByUs` on it. The
+test asserts `heldByUs === available`: a token can only be reported as held
+where the rail is actually open, so a shown token can never imply a balance.
+
+BACKING IS THE FIELD THAT MATTERS and the one a currency code hides:
+ - EURe is e-money with a REDEMPTION RIGHT AT PAR against a licensed issuer.
+ - ZCHF has NO issuer who owes anyone redemption — it is minted against
+   borrower collateral with the peg defended by auctions. Under MiCA it is a
+   crypto-asset, not an EMT, and Frankencoin argues some provisions do not
+   apply because it is decentralised — an argument, not a ruling.
+ - cNGN is naira-reserve backed under a NIGERIAN perimeter (SEC Nigeria, 2025
+   Investments and Securities Act; CBN keeps payment-system oversight). That
+   says nothing about MiCA and gives an EEA holder no EU protection.
+Rendering all three as "CHF / EUR / NGN" would flatten instruments that differ
+in kind, which is why the business Currencies table now has a token column
+carrying the backing sentence verbatim.
+
+ALSO: `AccountProvider` gained `"none"` — no candidate identified at all,
+distinct from a named partner we have not contracted with. CHF is `none` (there
+is no Swiss institution in view; Frankencoin is a protocol, not a counterparty
+you can sign with). NGN is `yellowcard`, who genuinely cover Nigeria as their
+largest market and are uncontracted.
+
+AND THE CONSTRAINT THAT BITES cNGN: Bridge supports only USDC and EURC for EEA
+users under MiCA, so cNGN cannot move through our licensed transfer seam for a
+European entity at all. Their API also needs a merchant account and API keys
+nobody has requested.
+
 ## Invoicing by jurisdiction (Aug 2026)
 
 THE MISTAKE THIS FIXED, one commit after the first cut shipped: German law was
