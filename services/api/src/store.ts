@@ -408,6 +408,33 @@ export interface Transfer {
    * settlement custodian — which is why compensation must not assume it can
    * reverse-swap them.
    */
+  /**
+   * Did the orchestrator hold this transfer's input funds?
+   *
+   * Recorded at creation, on EVERY transfer and every rail, because the answer
+   * has regulatory weight and used to be derivable only by replaying which
+   * venue was configured and whether a venue call happened to succeed. A
+   * silent fallback from the Safe-executed batch to the plain debit changed
+   * the answer and left no trace; now it names itself.
+   *
+   *  non-custodial — the user's funds never reach an address we hold a key to.
+   *                  The cash-rail batch delivering straight to Bridge, and the
+   *                  SEPA rail, where Monerium burns the payout from the Safe
+   *                  and only the fee moves.
+   *  orchestrator   — the input was debited to the orchestrator's own address
+   *                  and swapped from there. `reason` says why that path ran.
+   *
+   * The fee is excluded from this judgement on purpose: it is revenue at the
+   * moment it moves, not client funds in transit. `feeToOrchestrator` records
+   * it anyway rather than leaving it to be discovered.
+   */
+  custody?: {
+    mode: "non-custodial" | "orchestrator";
+    /** Why the custodial path ran. Absent when it did not. */
+    reason?: string;
+    /** The fee always lands at the orchestrator; stated, not hidden. */
+    feeToOrchestrator?: boolean;
+  };
   safeSwap?: {
     recipient: `0x${string}`;
     mode: "dry-run" | "live";
