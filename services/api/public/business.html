@@ -380,16 +380,28 @@ RENDER.accounts = async () => {
 
   html += `<div class="card"><div class="h"><div><h2>Currencies</h2>
     <div class="desc">What each rail needs before it can open. Nothing here is simulated.</div></div></div>
-    <table><thead><tr><th>Currency</th><th>Rail</th><th>Status</th></tr></thead><tbody>` +
+    <table><thead><tr><th>Currency</th><th>Rail</th><th>Settlement token</th><th>Status</th></tr></thead><tbody>` +
     currencies.map((c) => `<tr>
       <td><b>${esc(c.code)}</b> <span class="desc">${esc(c.name)}</span></td>
-      <td>${esc(c.railName)} <span class="desc">· ${esc(c.provider)}</span></td>
+      <td>${esc(c.railName)} <span class="desc">· ${esc(c.provider === "none" ? "no provider identified" : c.provider)}</span></td>
+      <td>${c.token
+        ? `<b class="mono">${esc(c.token.symbol)}</b>
+           <span class="pill mut">${c.token.heldByUs ? "held" : "not held"}</span>
+           <div class="desc" style="margin-top:.3rem">${esc(c.token.issuer)}</div>
+           <div class="desc" style="margin-top:.3rem">${esc(c.token.backing)}</div>
+           ${c.token.liquidityNote ? `<div class="desc" style="margin-top:.3rem">${esc(c.token.liquidityNote)}</div>` : ""}
+           <div class="desc mono" style="margin-top:.3rem">${Object.entries(c.token.contracts)
+             .map(([ch, a]) => `${esc(ch)} ${esc(a.slice(0, 10))}…${esc(a.slice(-4))}`).join("<br>")}</div>`
+        : `<span class="desc">—</span>`}</td>
       <td>${c.available
         ? c.mode === "mock"
           ? `<span class="pill warn">mock</span><div class="desc" style="margin-top:.3rem">${esc(c.mockWarning)}</div>`
           : `<span class="pill ok">live</span>`
         : `<span class="pill mut">not open</span><div class="desc" style="margin-top:.3rem">${esc(c.needs)}</div>`}</td>
-    </tr>`).join("") + `</tbody></table></div>`;
+    </tr>`).join("") + `</tbody></table>
+    <div class="desc" style="margin-top:.7rem">A settlement token existing is not the same as an
+    account being open. Where a token is listed and the rail is not, the token is real and we hold
+    none of it — the Status column says what is still missing.</div></div>`;
   return html;
 };
 
