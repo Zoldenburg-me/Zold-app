@@ -417,6 +417,80 @@ NOT FINISHED, and refused loudly rather than faked:
    never as an upgrade. Telling someone to pay for something unbuilt costs them
    money.
 
+## German invoicing (Aug 2026) — §14 UStG compliance
+
+Business users can now ISSUE invoices, not only receive them. `Invoice.direction`
+splits the two: `incoming` is the original Invoice-Me link a supplier fills in,
+`outgoing` is one we issue and which has to satisfy §14 UStG.
+`services/api/src/domain/invoicing.ts` holds the rules; `npm run invoicing:test`
+(26 checks, offline).
+
+NOT TAX ADVICE and the app says so on every screen that touches it. What the
+code guarantees is narrower: the software cannot produce a document missing a
+mandatory field, and cannot show tax the issuer does not owe.
+
+THE TWO RULES WITH MONEY ATTACHED, both silent failures — nothing bounces, the
+damage arrives months later:
+ - §14c UStG: show VAT you did not owe and you OWE IT ANYWAY, and the customer
+   cannot deduct it. So `VatTreatment` is a DISCRIMINATED UNION whose exempt arm
+   has no rate and no tax field — "exempt with a VAT amount" is unrepresentable,
+   not merely discouraged. computeTotals forces every line to 0% when the
+   invoice is exempt, even a line carrying its own rate.
+ - §14 Abs. 4: a missing mandatory field costs the RECIPIENT their Vorsteuerabzug
+   until a corrected invoice arrives. The damage lands on the customer, not on
+   whoever made the mistake, which is why it is checked before issuing.
+
+WHAT IS ENCODED (sources checked against IHK/Haufe/dejure, not memory):
+ - §14 Abs. 4 UStG — the ten mandatory details. The date of supply is required
+   EVEN WHEN it equals the invoice date; a supply PERIOD satisfies it too.
+ - §33 UStDV — Kleinbetragsrechnung up to €250 GROSS drops recipient, invoice
+   number, tax number and supply date. One cent over and full content returns.
+ - §34a UStDV (new 2025) — Kleinunternehmer content rules, so a missing tax
+   number is a WARNING there and an ERROR elsewhere. §19 thresholds rose in 2025
+   to €25,000 prior year / €100,000 current.
+ - Reverse charge — the invoice must carry the literal
+   "Steuerschuldnerschaft des Leistungsempfängers" (Art. 226 Nr. 11a MwStSystRL
+   allows other official EU languages), and EU B2B needs BOTH USt-IdNr.
+ - Also: intra-community supply, export to third countries, place-of-supply
+   abroad, and a free-text `other` that forces the issuer to write the basis.
+ - Every reason carries its statute, printed next to the choice and on the
+   document, so the user can check us rather than trust us.
+
+MONEY IS INTEGER CENTS end to end, and VAT is rounded ONCE PER RATE BUCKET, not
+per line — rounding each line and summing drifts against what the tax office
+recomputes. Per-line VAT is then attributed back so the column adds up exactly.
+
+PREFILL: `Organisation.invoicing` holds the issuer identity (USt-IdNr.,
+Steuernummer, Kleinunternehmer flag, bank, register court/number, payment terms,
+number series, footer). §14 wants the issuer's name, address and tax id on EVERY
+invoice, so they live there once. `issued` on the invoice is a FROZEN SNAPSHOT of
+both parties, the treatment and the display choices — re-rendering from today's
+org profile would quietly rewrite a document the tax office may later ask about.
+
+DISPLAY TOGGLES COVER OPTIONAL BLOCKS ONLY. Everything §14 requires is rendered
+unconditionally and is absent from the settings map: a generator whose settings
+can produce an invalid invoice is a trap, and it springs on the customer.
+
+THE DOCUMENT IS A DOCUMENT. `public/invoice.html` renders a white A4-printable
+sheet inside the dark app chrome, with a German sender line, per-rate VAT table
+and a print stylesheet. Deliberately NOT the receipt-printer aesthetic that was
+considered: a till roll cannot hold two addresses and a VAT table, does not
+print to A4, and reads as less credible to the accountant who must accept it.
+That treatment belongs on /r/:slug receipts, which are a different artifact.
+
+BUG THIS FOUND — QUIRKS MODE. business.html and invoice.html were written
+without `<!DOCTYPE html>`, so they rendered in BackCompat. In quirks mode TABLES
+DO NOT INHERIT COLOR from their parent, so the invoice line items and totals
+rendered in the dark theme's light text on the white sheet — nearly invisible,
+and only visible at all because that page inverts. Every pre-existing page had a
+doctype; only the two new ones did not. Both fixed. Check `document.compatMode`
+is `CSS1Compat` on any new page.
+
+NOT BUILT, and said on the document itself: XRechnung / ZUGFeRD (EN 16931).
+German B2B must already be able to RECEIVE e-invoices; the obligation to ISSUE
+them phases in from 2027 (2028 for smaller turnover), so a PDF is enough today
+and will not be. That is the next real piece of work here.
+
 ## Mobile app + PWA (Aug 2026) — LANDED
 
 Branch `claude/remove-upi-and-onboarding-restyle` is FULLY MERGED into main
