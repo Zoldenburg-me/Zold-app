@@ -882,6 +882,58 @@ the device-signed EIP-712 `to` field still names the orchestrator even for
 batches that deliver to Bridge (changing it needs a coordinated device.js
 lockstep bump).
 
+## Custody — the non-custodial path is the DEFAULT now (Aug 2026)
+
+`npm run custody:test` (11 checks, no chain, no network).
+
+THE BUG THIS FIXED, and it was a shipped default rather than a code path:
+`LIQUIDITY_PROVIDER` defaulted to `fx-swapper`, which CANNOT be executed by a
+user's Safe (its inventory is `onlyTrader`). So `prepareSafeSwapForTransfer`
+returned null, the cash rail fell back to the plain debit, and the DEFAULT
+deployment moved every sender's full balance to the orchestrator's own address
+before swapping it. "We are non-custodial" was true only for an operator who
+knew to change one env var. The fallback that got you there was a
+`console.error` nobody reads.
+
+WHAT CHANGED:
+ - `LIQUIDITY.PROVIDER` defaults to **`best`** (over `LIQUIDITY_VENUES=lifi,dex`,
+   both Safe-executable). `scripts/_local-chain.ts` pins `fx-swapper` with `??=`
+   for hardhat, which has neither LI.FI nor a seeded pool. THE DIRECTION IS THE
+   POINT: production inherits the safe default and the local demo names its
+   exception, not the other way round.
+ - `transfer.custody` is recorded on EVERY transfer and every rail:
+   `mode: "non-custodial" | "orchestrator"`, a `reason` when custodial, and
+   `feeToOrchestrator` stated rather than left to be discovered. It starts at
+   the honest worst case and is narrowed ONLY when a batch is genuinely
+   prepared — so a venue outage leaves the truthful answer behind.
+ - `CUSTODY.requireNonCustodial` (`REQUIRE_NON_CUSTODIAL=1`) refuses at creation
+   rather than falling back. NOT on by default and that is deliberate: with
+   BRIDGE_LIVE unset there is no external deposit address to deliver into, so
+   defaulting it on would brick every dry-run and testnet deployment including
+   Base Sepolia. The PATH is the default; the GUARANTEE is opt-in.
+ - A startup CUSTODY line says which mode this deployment will actually run in.
+   VERIFIED LIVE across four configurations (default/fx-swapper/BRIDGE_LIVE/
+   +REQUIRE_NON_CUSTODIAL) — each printed the right one.
+
+WHAT IS STILL CUSTODIAL, stated rather than glossed:
+ - The FEE always lands at the orchestrator (`feeTo: orchestratorAddress` in the
+   batch). Judged revenue at the moment it moves, not client funds in transit —
+   but recorded, not hidden.
+ - Dry-run mode (BRIDGE_LIVE unset) delivers the batch output to the
+   orchestrator because the local escrow demo pulls from it. Still user-signed,
+   still one batch — and recorded as `orchestrator`, not quietly counted as a
+   win.
+ - The SEPA rail was ALREADY non-custodial for the principal and this did not
+   change it: Monerium's redeem burns the payout straight from the Safe and only
+   the fee moves (`DEBIT_STEP.safeFee`). Do not "fix" that into a full debit.
+
+REGULATORY NOTE, since this is why it matters: custody is NOT the trigger for
+most of what this app does. Money remittance under ZAG/PSD2 is *defined* as the
+no-account case, and MiCA's exchange (Art. 3(1)(16)(e)) and transfer (l)
+services trigger on acting "on behalf of clients". Being non-custodial narrows
+the MiCA class and drops safeguarding; it does not remove the licence question.
+Do not let this work be read as having answered it.
+
 ## Liquidity venues — tested, not assumed (last checked Aug 2026)
 
 The problem: we cannot carry a treasury. The FxSwapper model holds inventory we
