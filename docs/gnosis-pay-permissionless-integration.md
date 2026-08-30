@@ -218,8 +218,14 @@ Funding options:
 - For eligible EU/CH users, use Gnosis Pay's IBAN integration to cash in
   through Monerium directly to the Gnosis Pay account.
 
-The Gnosis Chain option is the cleanest long-term fit because Gnosis Pay,
-Monerium EURe, and CoW EURe liquidity all converge there.
+The Gnosis Chain option is the cleanest long-term fit for the CARD because
+Gnosis Pay, Monerium EURe and CoW EURe liquidity all converge there — but it is
+NOT a reason to move the app. Checked Aug 2026: Bridge.xyz, which is the live
+cash-rail seam, does not support Gnosis Chain as a source or destination at all,
+so the corridor would have no exit there. The shape that works is the user Safe
+deployed on Gnosis IN ADDITION to the app chain: card funding becomes a
+user-signed Base -> Gnosis EURe bridge (LI.FI covers Gnosis; EURe exists on
+both), and the corridor stays where Bridge and Stellar work.
 
 ## Open Questions Before Build
 

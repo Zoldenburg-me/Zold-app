@@ -929,10 +929,30 @@ Safe deploy, card creation, and ALL funding. NOT PROVEN: no real Gnosis Pay
 account has been connected.
 
 SCOPE NOTE: "make everything Gnosis Pay compatible" was scoped to the adapter
-only. Moving Zold to Gnosis Chain was considered and NOT done — the cash rail
-swaps EURe->USDC and bridges via CCTP, and Gnosis is not a CCTP domain (it
-carries bridged USDC.e, not native Circle USDC), so that leg would need
-re-plumbing. That decision is still open; see the Roadmap chain question.
+only. Moving Zold to Gnosis Chain was considered and NOT done, and the REASON
+was corrected once: it is not CCTP. CCTP is the dry-run alternative that has
+never executed live; Bridge.xyz is the live seam (BRIDGE.sourceRail = "base").
+The real reason is that **Bridge does not support Gnosis Chain either** —
+checked against their payment-routes table, which lists Arbitrum, Avalanche,
+Base, Celo, Ethereum, HyperEVM, Linea, Monad, Optimism, Polygon, Solana,
+Stellar, Sui, Tempo, Tron, World Chain, XDC and Aptos, and no Gnosis at all.
+On Gnosis the cash rail would have NO exit. The current Base -> Stellar route
+with USDC at both ends is squarely on their supported set.
+
+AND THE MIGRATION IS NOT NEEDED FOR THE CARD ANYWAY. Gnosis Pay's card Safe is
+theirs, on chain 100, whatever chain Zold runs on. Only two things want Zold on
+Gnosis: the passkey Safe signing SIWE by EIP-1271 (needs it deployed on 100 —
+RIP-7212 is live there, so it works), and funding the Gnosis Pay Safe from Zold
+(needs EURe on 100 — Monerium issues it there). Both are satisfied by deploying
+the user Safe on Gnosis IN ADDITION, with the corridor left on Base. EURe
+exists on both and LI.FI covers Gnosis, so card funding is a user-signed
+Base->Gnosis EURe bridge. That is the shape to build, not a migration.
+
+BRIDGE + EEA, worth knowing before designing any USDT path: their docs state
+"USDC & EURC are the only stablecoins supported for users in the EEA" — MiCA,
+applied by them. Zoldenburg UG is an EEA entity, so Bridge CANNOT handle USDT
+for us. USDT would have to be swapped to USDC before Bridge sees it, and that
+swap is the MiCA exchange service, not an integration detail.
 
 ## Custody — the non-custodial path is the DEFAULT now (Aug 2026)
 
