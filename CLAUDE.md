@@ -417,11 +417,62 @@ NOT FINISHED, and refused loudly rather than faked:
    never as an upgrade. Telling someone to pay for something unbuilt costs them
    money.
 
-## German invoicing (Aug 2026) — §14 UStG compliance
+## Invoicing by jurisdiction (Aug 2026)
+
+THE MISTAKE THIS FIXED, one commit after the first cut shipped: German law was
+applied to EVERY entity. A Polish or Swedish org was offered
+"§ 19 UStG Kleinunternehmerregelung" and a 19% rate; an Indian one was offered
+German exemptions with no mention of GST. That is worse than offering nothing,
+because it looks authoritative. `domain/jurisdictions.ts` now resolves the rule
+set from the ISSUING entity's country — an invoice is governed by where the
+issuer is established, not where the customer is.
+
+THREE RULE SETS, and the difference is what we ENCODE versus what we CARRY:
+ - `DE`  statutory  — German paragraphs encoded and enforced (see below).
+ - `EU`  directive  — the VAT Directive baseline every member state shares
+   (Art. 226 particulars, 196 reverse charge, 138 intra-community, 146 export).
+   National additions are NOT encoded; there are 26 other sets and we verified
+   none. The org adds its own rules for what its country needs.
+ - `GENERIC` structural — both parties, a number, dates and arithmetic that adds
+   up. NO tax law. India, the US, the UK and everywhere else land here.
+
+EVERY REPORT CARRIES ITS VERIFICATION LEVEL, so `ok: true` never claims more
+coverage than we have, and `notVerified` names the gaps verbatim (for India it
+names GSTIN, HSN/SAC, place of supply and the CGST/SGST/IGST split, which we do
+not model). The UI renders that list next to every invoice.
+
+CITATIONS FOLLOW THE RULE SET. `basis(de, eu)` quotes a German paragraph only
+under DE, the Directive article under EU, and NOTHING under GENERIC — quoting
+"§ 14 Abs. 4 UStG" at an Indian entity would be confidently wrong. Same for
+exemption labels: `reasonForRuleSet()` gives Poland "Reverse charge (EU) —
+Art. 196 VAT Directive", not "Reverse Charge (EU-Ausland) — § 3a Abs. 2 UStG".
+Three separate leaks of this kind were found and fixed by testing PL and IN
+against the running server; grep for hardcoded `UStG` before adding UI copy.
+
+NO VAT RATE TABLE IS SHIPPED. Rates change by statute and 27 numbers we have not
+checked would be 27 confident lies. Germany's 19/7 is enforced because we
+checked it; everywhere else the org sets the rate it charges and we validate
+only that it is a percentage. A missing rate REFUSES rather than defaults —
+quietly applying 19 to a Polish entity is the original bug in miniature.
+
+The § 33 UStDV €250 simplified-invoice shortcut is likewise German-only. Member
+states may set their own; we have not checked them, so elsewhere full content is
+required.
+
+CUSTOM RULES: an org can define its own exemption reasons (id, label, legal
+basis, and the note printed verbatim). Required for GENERIC jurisdictions and
+useful in EU ones. Presented as user-supplied everywhere — we print the note and
+do not check it. A custom rule requiring the customer's tax identifier checks
+only that one is PRESENT, never that it matches an EU VAT-ID shape: an Indian
+GSTIN is not a USt-IdNr., and validating it against that shape rejects the
+correct value.
+
+## German invoicing (Aug 2026) — the DE rule set
 
 Business users can now ISSUE invoices, not only receive them. `Invoice.direction`
 splits the two: `incoming` is the original Invoice-Me link a supplier fills in,
-`outgoing` is one we issue and which has to satisfy §14 UStG.
+`outgoing` is one we issue. THIS SECTION IS THE `DE` RULE SET ONLY — see
+"Invoicing by jurisdiction" above for how a non-German entity is handled.
 `services/api/src/domain/invoicing.ts` holds the rules; `npm run invoicing:test`
 (26 checks, offline).
 

@@ -1,12 +1,19 @@
 /**
- * German invoice compliance — §14 UStG and friends.
+ * Invoice compliance, per jurisdiction.
  *
  * NOT TAX ADVICE, and the app says so wherever this surfaces. What this module
  * does is narrower and worth stating precisely: it encodes the *content* rules
- * for a German invoice so the software cannot quietly produce a document that
- * is missing a mandatory field or that shows tax it does not owe. Whether a
- * given transaction is actually exempt is the user's call with their
- * Steuerberater; we make the consequence of that call correct on paper.
+ * for an invoice so the software cannot quietly produce a document that is
+ * missing a mandatory field or that shows tax it does not owe. Whether a given
+ * transaction is actually exempt is the user's call with their accountant; we
+ * make the consequence of that call correct on paper.
+ *
+ * WHICH rules apply comes from jurisdictions.ts, driven by the issuing entity's
+ * country — Germany gets encoded paragraphs, other EU states get the VAT
+ * Directive baseline plus whatever national rules they add themselves, and
+ * everywhere else gets structural checks and an honest statement that no tax law
+ * was applied. Every report carries the verification level so that "ok" never
+ * claims more coverage than we have.
  *
  * THE RULE THAT DRIVES THE DESIGN — §14c UStG: if you show a VAT amount you did
  * not owe, you owe it anyway (unrichtiger Steuerausweis), and the recipient
@@ -27,10 +34,27 @@
  * §4 Nr. 1a/1b i.V.m. §§ 6, 6a UStG (export and intra-community supply).
  */
 
+import {
+  jurisdictionFor,
+  type CustomExemptionReason,
+  type JurisdictionProfile,
+  type RuleSetId,
+  type VerificationLevel,
+} from "./jurisdictions.js";
+
 // ── VAT treatment ───────────────────────────────────────────────────────────
 
-/** German rates. 19% standard, 7% reduced. */
-export type VatRate = 19 | 7 | 0;
+/**
+ * A VAT percentage. Deliberately a plain number rather than a German 19|7
+ * union: Poland charges 23, Sweden 25, and shipping a rate table for 27 member
+ * states would mean asserting 27 numbers we have not checked and that change by
+ * statute. An org sets the rates it charges; Germany is the one place we
+ * enforce the permitted values, because we have checked them.
+ */
+export type VatRate = number;
+
+/** The only rates a German invoice may carry. */
+export const DE_RATES = [19, 7] as const;
 
 export type ExemptionReasonId =
   | "kleinunternehmer"
@@ -39,6 +63,10 @@ export type ExemptionReasonId =
   | "intra_community_supply"
   | "export_third_country"
   | "not_taxable_place_of_supply"
+  /** Every member state has a small-business scheme; the threshold and the
+   *  required wording differ, so the issuer supplies the note. Germany's is
+   *  encoded separately as `kleinunternehmer`. */
+  | "small_business_national"
   | "other";
 
 export interface ExemptionReason {
@@ -46,8 +74,11 @@ export interface ExemptionReason {
   /** What the user picks in the UI. */
   label: string;
   labelEn: string;
-  /** The statute, shown next to the choice so the user can check it. */
+  /** The German statute, shown next to the choice under the DE rule set. */
   legalBasis: string;
+  /** The Directive article, shown to every other member state. Quoting a German
+   *  paragraph at a Polish entity is the leak this whole split exists to close. */
+  legalBasisEu?: string;
   /**
    * The note that MUST appear on the invoice. For reverse charge the wording is
    * not decorative: since 30.6.2013 the invoice must carry
@@ -83,6 +114,7 @@ export const EXEMPTION_REASONS: Record<ExemptionReasonId, ExemptionReason> = {
     label: "Reverse Charge (EU-Ausland)",
     labelEn: "Reverse charge (EU)",
     legalBasis: "§ 3a Abs. 2 UStG, Art. 196 MwStSystRL",
+    legalBasisEu: "Art. 196 VAT Directive 2006/112/EC",
     invoiceNote: "Steuerschuldnerschaft des Leistungsempfängers",
     invoiceNoteEn: "Reverse charge — VAT to be accounted for by the recipient",
     requiresIssuerVatId: true,
@@ -106,6 +138,7 @@ export const EXEMPTION_REASONS: Record<ExemptionReasonId, ExemptionReason> = {
     label: "Innergemeinschaftliche Lieferung",
     labelEn: "Intra-community supply",
     legalBasis: "§ 4 Nr. 1b i. V. m. § 6a UStG",
+    legalBasisEu: "Art. 138 VAT Directive 2006/112/EC",
     invoiceNote: "Steuerfreie innergemeinschaftliche Lieferung",
     invoiceNoteEn: "VAT-exempt intra-community supply",
     requiresIssuerVatId: true,
@@ -117,6 +150,7 @@ export const EXEMPTION_REASONS: Record<ExemptionReasonId, ExemptionReason> = {
     label: "Ausfuhrlieferung (Drittland)",
     labelEn: "Export (non-EU)",
     legalBasis: "§ 4 Nr. 1a i. V. m. § 6 UStG",
+    legalBasisEu: "Art. 146 VAT Directive 2006/112/EC",
     invoiceNote: "Steuerfreie Ausfuhrlieferung",
     invoiceNoteEn: "VAT-exempt export supply",
     requiresIssuerVatId: false,
@@ -126,13 +160,28 @@ export const EXEMPTION_REASONS: Record<ExemptionReasonId, ExemptionReason> = {
   not_taxable_place_of_supply: {
     id: "not_taxable_place_of_supply",
     label: "Nicht steuerbar (Leistungsort im Ausland)",
-    labelEn: "Not taxable in Germany (place of supply abroad)",
+    labelEn: "Not taxable here (place of supply is abroad)",
     legalBasis: "§ 3a Abs. 2 UStG",
+    legalBasisEu: "Art. 44 VAT Directive 2006/112/EC",
     invoiceNote: "Nicht steuerbare sonstige Leistung, Leistungsort im Ausland",
-    invoiceNoteEn: "Not subject to German VAT — place of supply is abroad",
+    invoiceNoteEn: "Not subject to VAT here — place of supply is abroad",
     requiresIssuerVatId: false,
     requiresRecipientVatId: false,
     hint: "Service to a business outside the EU, where the place of supply is not Germany.",
+  },
+  small_business_national: {
+    id: "small_business_national",
+    label: "Small business scheme (national)",
+    labelEn: "Small business scheme (national)",
+    legalBasis: "EU VAT Directive Art. 282–292, as implemented nationally",
+    // Left empty on purpose: the note that satisfies the law differs per member
+    // state, and inventing one would be the most confident kind of wrong.
+    invoiceNote: "",
+    invoiceNoteEn: "",
+    requiresIssuerVatId: false,
+    requiresRecipientVatId: false,
+    requiresFreeText: true,
+    hint: "Your country's small-business exemption. Write the note and citation your own rules require.",
   },
   other: {
     id: "other",
@@ -159,15 +208,42 @@ export type VatTreatment =
   | { kind: "standard"; rate: Exclude<VatRate, 0> }
   | {
       kind: "exempt";
-      reason: ExemptionReasonId;
+      /** A built-in ExemptionReasonId, or the id of an org-defined custom rule. */
+      reason: ExemptionReasonId | string;
       /** Required when the reason is `other`; otherwise the canonical note. */
       note?: string;
     };
 
-export function vatNoteFor(t: VatTreatment, lang: "de" | "en" = "de"): string {
+/**
+ * The label and citation to SHOW for a reason, given the rule set in force.
+ * Under EU the English label and the Directive article; under DE the German
+ * ones. A Polish entity must never be shown "§ 3a Abs. 2 UStG".
+ */
+export function reasonForRuleSet(r: ExemptionReason, ruleSet: RuleSetId) {
+  if (ruleSet === "DE") return { ...r, label: r.label, legalBasis: r.legalBasis };
+  return {
+    ...r,
+    label: r.labelEn,
+    // No invented citation for a free-text reason: the issuer supplies both the
+    // wording and the basis, and implying otherwise would be a small lie.
+    legalBasis: r.requiresFreeText ? "" : (r.legalBasisEu ?? ""),
+    invoiceNote: r.invoiceNoteEn || r.invoiceNote,
+  };
+}
+
+export function vatNoteFor(
+  t: VatTreatment,
+  lang: "de" | "en" = "de",
+  /** Reasons the org defined for a country we do not encode. */
+  customReasons: CustomExemptionReason[] = [],
+): string {
   if (t.kind === "standard") return "";
-  const r = EXEMPTION_REASONS[t.reason];
-  if (t.reason === "other") return t.note?.trim() ?? "";
+  const custom = customReasons.find((c) => c.id === t.reason);
+  if (custom) return custom.invoiceNote;
+  const r = EXEMPTION_REASONS[t.reason as ExemptionReasonId];
+  // `other` and the national small-business scheme both have wording the issuer
+  // supplies — inventing one would be the most confident kind of wrong.
+  if (!r || r.requiresFreeText) return t.note?.trim() ?? "";
   return lang === "de" ? r.invoiceNote : r.invoiceNoteEn;
 }
 
@@ -253,9 +329,15 @@ export function computeTotals(
     // property of the invoice, and letting a stray line rate through is the
     // §14c mistake in miniature.
     const appliedRate: VatRate = treatment.kind === "exempt" ? 0 : (line.vatRate ?? treatment.rate);
-    if (treatment.kind === "standard" && appliedRate !== 19 && appliedRate !== 7) {
+    // Plausibility only. WHICH rates are permitted is a question about the
+    // issuer's country, answered in checkCompliance — Germany allows 19 and 7,
+    // Poland 23/8/5, Sweden 25/12/6, and we do not ship that table.
+    if (
+      treatment.kind === "standard" &&
+      (!Number.isFinite(appliedRate) || appliedRate < 0 || appliedRate > 100)
+    ) {
       throw new InvoiceComplianceError(
-        `Line ${i + 1} uses a ${appliedRate}% rate. German VAT is 19% or 7%.`,
+        `Line ${i + 1} uses a ${appliedRate}% rate, which is not a percentage.`,
       );
     }
     byRate.set(appliedRate, (byRate.get(appliedRate) ?? 0) + netCents);
@@ -375,6 +457,17 @@ export interface ComplianceIssue {
 export interface ComplianceReport {
   /** Which content regime applies to this invoice. */
   regime: "standard" | "kleinbetrag" | "kleinunternehmer";
+  /** Which jurisdiction's rules ran, and how deep they go. Reported so that
+   *  `ok: true` never reads as more coverage than we actually have. */
+  jurisdiction: {
+    country: string;
+    countryName: string;
+    ruleSet: RuleSetId;
+    verification: VerificationLevel;
+    basis: string;
+    /** Named gaps, rendered verbatim next to the result. */
+    notVerified: string[];
+  };
   issues: ComplianceIssue[];
   errors: ComplianceIssue[];
   warnings: ComplianceIssue[];
@@ -394,7 +487,14 @@ const has = (v?: string) => Boolean(v && v.trim());
  * Both carry the statute — a validator that says "invalid" without saying which
  * rule it is applying cannot be checked by the person it is judging.
  */
-export function checkCompliance(draft: InvoiceDraft): ComplianceReport {
+export function checkCompliance(
+  draft: InvoiceDraft,
+  /** Resolved from the ISSUER's country. Defaults to Germany only because that
+   *  is the one rule set encoded to statute; pass the real one. */
+  jur: JurisdictionProfile = jurisdictionFor(draft.issuer.country ?? "DE"),
+  /** Rules the org added for a country we do not encode. */
+  customReasons: CustomExemptionReason[] = [],
+): ComplianceReport {
   const totals = computeTotals(draft.lines, draft.treatment);
   const issues: ComplianceIssue[] = [];
   const add = (
@@ -404,10 +504,27 @@ export function checkCompliance(draft: InvoiceDraft): ComplianceReport {
     legalBasis?: string,
   ) => issues.push({ severity, field, message, legalBasis });
 
+  /**
+   * Pick the citation for the rule set actually in force.
+   *
+   * Quoting "§ 14 Abs. 4 UStG" at a Polish or Indian entity would be
+   * confidently wrong, so a German paragraph is only cited under the DE rule
+   * set, the Directive article under EU, and nothing at all under GENERIC —
+   * where we are not applying tax law and should not imply that we are.
+   */
+  const basis = (de: string, eu?: string) =>
+    jur.ruleSet === "DE" ? de : jur.ruleSet === "EU" ? eu : undefined;
+
   const smallBusiness =
     draft.treatment.kind === "exempt" && draft.treatment.reason === "kleinunternehmer";
+  // The simplified-invoice shortcut only applies where we have actually checked
+  // the threshold — Germany's § 33 UStDV. Member states may set their own and we
+  // have not verified 26 of them, so elsewhere the full content is required.
   const kleinbetrag =
-    totals.grossCents <= KLEINBETRAG_LIMIT_CENTS && !smallBusiness && !draft.selfBilled;
+    jur.simplifiedLimitCents !== undefined &&
+    totals.grossCents <= jur.simplifiedLimitCents &&
+    !smallBusiness &&
+    !draft.selfBilled;
   const regime: ComplianceReport["regime"] = smallBusiness
     ? "kleinunternehmer"
     : kleinbetrag
@@ -416,37 +533,37 @@ export function checkCompliance(draft: InvoiceDraft): ComplianceReport {
 
   // ── Always required, in every regime ─────────────────────────────────────
   if (!has(draft.issuer.name)) {
-    add("error", "issuer.name", "Your full business name is required.", "§ 14 Abs. 4 Nr. 1 UStG");
+    add("error", "issuer.name", "Your full business name is required.", basis("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"));
   }
   if (!has(draft.issuer.addressLine) || !has(draft.issuer.city)) {
-    add("error", "issuer.address", "Your full address is required.", "§ 14 Abs. 4 Nr. 1 UStG");
+    add("error", "issuer.address", "Your full address is required.", basis("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"));
   }
   if (!has(draft.issueDate)) {
-    add("error", "issueDate", "The issue date is required.", "§ 14 Abs. 4 Nr. 3 UStG");
+    add("error", "issueDate", "The issue date is required.", basis("§ 14 Abs. 4 Nr. 3 UStG", "Art. 226(1) VAT Directive"));
   }
   if (!draft.lines.length || draft.lines.some((l) => !has(l.description))) {
     add(
       "error",
       "lines",
       "Every line needs the quantity and the customary description of what was supplied.",
-      "§ 14 Abs. 4 Nr. 5 UStG",
+      basis("§ 14 Abs. 4 Nr. 5 UStG", "Art. 226(6) VAT Directive"),
     );
   }
 
   // ── Full §14 content, unless §33 UStDV applies ───────────────────────────
   if (regime !== "kleinbetrag") {
     if (!has(draft.recipient.name)) {
-      add("error", "recipient.name", "The customer's full name is required.", "§ 14 Abs. 4 Nr. 1 UStG");
+      add("error", "recipient.name", "The customer's full name is required.", basis("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"));
     }
     if (!has(draft.recipient.addressLine) || !has(draft.recipient.city)) {
-      add("error", "recipient.address", "The customer's full address is required.", "§ 14 Abs. 4 Nr. 1 UStG");
+      add("error", "recipient.address", "The customer's full address is required.", basis("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"));
     }
     if (!has(draft.number)) {
       add(
         "error",
         "number",
         "A sequential invoice number is required, and it must be unique.",
-        "§ 14 Abs. 4 Nr. 4 UStG",
+        basis("§ 14 Abs. 4 Nr. 4 UStG", "Art. 226(2) VAT Directive"),
       );
     }
     if (!has(draft.supplyDate) && !draft.supplyPeriod) {
@@ -454,45 +571,92 @@ export function checkCompliance(draft: InvoiceDraft): ComplianceReport {
         "error",
         "supplyDate",
         "The date or period of supply is required — even when it is the same day as the invoice date.",
-        "§ 14 Abs. 4 Nr. 6 UStG",
+        basis("§ 14 Abs. 4 Nr. 6 UStG", "Art. 226(7) VAT Directive"),
       );
     }
     // §34a UStDV gives Kleinunternehmer their own reduced content rules, but a
     // supplier identifier is still how the customer's accountant books it.
     if (!has(draft.issuer.vatId) && !has(draft.issuer.taxNumber)) {
+      // Under GENERIC this can only be a warning. Most countries want some tax
+      // identifier, but we do not know which — an Indian entity has a GSTIN,
+      // not a USt-IdNr., and demanding ours would be the German leak again.
+      const severity: IssueSeverity =
+        jur.ruleSet === "GENERIC" || smallBusiness ? "warning" : "error";
       add(
-        smallBusiness ? "warning" : "error",
+        severity,
         "issuer.taxId",
+        jur.ruleSet === "GENERIC"
+          ? `No tax identifier shown. ${jur.countryName} very likely requires one, but Zold does ` +
+            "not know which — add it as a custom field."
+          : smallBusiness
+            ? "No Steuernummer or USt-IdNr. shown. § 34a UStDV relaxes this for Kleinunternehmer, but most customers expect one."
+            : "Your tax number or VAT ID is required.",
         smallBusiness
-          ? "No Steuernummer or USt-IdNr. shown. § 34a UStDV relaxes this for Kleinunternehmer, but most customers expect one."
-          : "Your Steuernummer or USt-IdNr. is required.",
-        smallBusiness ? "§ 34a UStDV" : "§ 14 Abs. 4 Nr. 2 UStG",
+          ? basis("§ 34a UStDV")
+          : basis("§ 14 Abs. 4 Nr. 2 UStG", "Art. 226(3) VAT Directive"),
       );
     }
   }
 
   // ── Tax presentation ─────────────────────────────────────────────────────
   if (draft.treatment.kind === "standard") {
+    // Only Germany's permitted rates are encoded, because they are the only
+    // ones we have checked. Elsewhere the org sets the rate it charges.
+    if (jur.ruleSet === "DE" && !DE_RATES.includes(draft.treatment.rate as never)) {
+      add(
+        "error",
+        "treatment",
+        `German VAT is ${DE_RATES.join("% or ")}%. ${draft.treatment.rate}% is not a German rate.`,
+        basis("§ 12 UStG"),
+      );
+    }
     if (totals.vatCents <= 0) {
       add(
         "error",
         "treatment",
         "This invoice charges VAT but the tax amount is zero. Pick an exemption reason instead of showing 0%.",
-        "§ 14c UStG",
+        basis("§ 14c UStG", "Art. 203 VAT Directive"),
       );
     }
   } else {
-    const reason = EXEMPTION_REASONS[draft.treatment.reason];
-    const note = vatNoteFor(draft.treatment);
+    // Hoisted: narrowing on `draft.treatment` is lost inside the callback below,
+    // because TypeScript cannot know when the callback runs.
+    const exempt = draft.treatment;
+    const custom = customReasons.find((c) => c.id === exempt.reason);
+    const builtIn = EXEMPTION_REASONS[exempt.reason as ExemptionReasonId];
+    if (!custom && !builtIn) {
+      add("error", "treatment", `"${exempt.reason}" is not a known exemption reason.`);
+    } else if (!custom && !jur.reasons.includes(exempt.reason)) {
+      // Offering German paragraphs to a Swedish entity is the whole mistake
+      // this rewrite exists to fix; refuse rather than print it.
+      add(
+        "error",
+        "treatment",
+        `${reasonForRuleSet(builtIn, jur.ruleSet).label} is not part of the ${jur.countryName} rule set. ` +
+          `Available here: ${jur.reasons.join(", ")}. Add your own rule if your country needs something else.`,
+      );
+    }
+    // Label and citation resolved for the rule set in force, so a Polish entity
+    // is told "Art. 196 VAT Directive", not "§ 3a Abs. 2 UStG".
+    const shown = builtIn ? reasonForRuleSet(builtIn, jur.ruleSet) : undefined;
+    const reason = custom
+      ? {
+          label: custom.label,
+          legalBasis: custom.legalBasis,
+          requiresIssuerVatId: false,
+          requiresRecipientVatId: custom.requiresRecipientVatId === true,
+        }
+      : shown;
+    const note = vatNoteFor(draft.treatment, "de", customReasons);
     if (!has(note)) {
       add(
         "error",
         "treatment.note",
         "An exempt invoice must state the reason on the document. Write it out.",
-        "§ 14 Abs. 4 Nr. 8 UStG",
+        basis("§ 14 Abs. 4 Nr. 8 UStG", "Art. 226(11) VAT Directive"),
       );
     }
-    if (reason.requiresIssuerVatId && !vatIdLooksValid(draft.issuer.vatId ?? "")) {
+    if (reason?.requiresIssuerVatId && !vatIdLooksValid(draft.issuer.vatId ?? "")) {
       add(
         "error",
         "issuer.vatId",
@@ -500,13 +664,23 @@ export function checkCompliance(draft: InvoiceDraft): ComplianceReport {
         reason.legalBasis,
       );
     }
-    if (reason.requiresRecipientVatId && !vatIdLooksValid(draft.recipient.vatId ?? "")) {
-      add(
-        "error",
-        "recipient.vatId",
-        `${reason.label} requires the customer's VAT ID on the invoice.`,
-        reason.legalBasis,
-      );
+    if (reason?.requiresRecipientVatId) {
+      // A built-in EU reason means an EU VAT ID, and that shape is checkable.
+      // A CUSTOM reason may live anywhere — an Indian GSTIN is not an EU VAT ID
+      // and validating it against that shape would reject the correct value.
+      // Outside the EU rule sets we can only insist the identifier is present.
+      const supplied = (draft.recipient.vatId ?? "").trim();
+      const bad = custom ? !supplied : !vatIdLooksValid(supplied);
+      if (bad) {
+        add(
+          "error",
+          "recipient.vatId",
+          custom
+            ? `${reason.label} requires the customer's tax identifier on the invoice.`
+            : `${reason.label} requires the customer's VAT ID on the invoice.`,
+          reason.legalBasis,
+        );
+      }
     }
     // Belt and braces: the type already prevents this, but a hand-built draft
     // could still arrive with lines carrying a rate.
@@ -515,7 +689,7 @@ export function checkCompliance(draft: InvoiceDraft): ComplianceReport {
         "error",
         "treatment",
         "An exempt invoice must not show a VAT amount. Showing tax you do not owe makes you liable for it.",
-        "§ 14c UStG",
+        basis("§ 14c UStG", "Art. 203 VAT Directive"),
       );
     }
   }
@@ -556,13 +730,31 @@ export function checkCompliance(draft: InvoiceDraft): ComplianceReport {
       "warning",
       "selfBilled",
       'A self-billed invoice must carry the word "Gutschrift".',
-      "§ 14 Abs. 4 Nr. 10 UStG",
+      basis("§ 14 Abs. 4 Nr. 10 UStG", "Art. 226(10a) VAT Directive"),
     );
   }
 
   const errors = issues.filter((i) => i.severity === "error");
   const warnings = issues.filter((i) => i.severity === "warning");
-  return { regime, issues, errors, warnings, ok: errors.length === 0, totals };
+  return {
+    regime,
+    // Carried on every result so the caller can say how far the check went.
+    // `ok: true` under GENERIC means "the document is coherent", not "this is
+    // a valid invoice in your country" — and only this block distinguishes them.
+    jurisdiction: {
+      country: jur.country,
+      countryName: jur.countryName,
+      ruleSet: jur.ruleSet,
+      verification: jur.verification,
+      basis: jur.basis,
+      notVerified: jur.notVerified,
+    },
+    issues,
+    errors,
+    warnings,
+    ok: errors.length === 0,
+    totals,
+  };
 }
 
 function reasonLabel(id: ExemptionReasonId): string {
