@@ -480,6 +480,32 @@ export const FORWARDING = {
   recoveryConfigured: evmAddressRe.test(process.env.CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER ?? ""),
 };
 
+/**
+ * Gnosis Pay — permissionless card integration.
+ *
+ * NO API KEY EXISTS for permissionless mode: the user signs in with SIWE and
+ * Gnosis Pay returns a JWT scoped to them. So there is nothing to gate on, and
+ * unlike every other partner here this one is configured by default — the
+ * honest default is the real base URL, because a blank one would make the
+ * feature look unavailable when it is simply unconfigured for no reason.
+ *
+ * `partnerId` is deliberately optional and unset. It belongs to partner mode,
+ * which brings webhooks and card-activity attribution and which we do not
+ * have; sending one we were not issued would be claiming a relationship that
+ * does not exist.
+ *
+ * siweChainId is 100 (Gnosis Chain) and is NOT derived from CHAIN_ID. Gnosis
+ * Pay's account lives on their chain regardless of where Zold runs, and
+ * deriving it would silently produce a message they reject.
+ */
+export const GNOSIS_PAY = {
+  baseUrl: process.env.GNOSIS_PAY_BASE_URL ?? "https://api.gnosispay.com",
+  siweChainId: Number(process.env.GNOSIS_PAY_SIWE_CHAIN_ID ?? 100),
+  jwtTtlSeconds: Number(process.env.GNOSIS_PAY_JWT_TTL_SECONDS ?? 3600),
+  timeoutMs: Number(process.env.GNOSIS_PAY_TIMEOUT_MS ?? 12_000),
+  partnerId: process.env.GNOSIS_PAY_PARTNER_ID ?? "",
+} as const;
+
 export interface Deployments {
   eure: `0x${string}`;
   timelock?: `0x${string}`;

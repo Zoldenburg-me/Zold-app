@@ -50,6 +50,7 @@ import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from 
 import { qrSvg } from "./qr.js";
 import { createOrgRouter } from "./routes/orgs.js";
 import { createBusinessRouter, createInvoiceLinkRouter } from "./routes/business.js";
+import { createGnosisPayRouter } from "./routes/gnosis-pay.js";
 import { senderProfileToSep9 } from "./adapters/moneygram.js";
 import { toAlpha3 } from "./stellar/sep9.js";
 import { getTreasury, missingRequiredFields, sep10Auth, sep12CustomerFields } from "./stellar/anchor.js";
@@ -235,6 +236,7 @@ app.use(express.static(pub));
 app.use("/api/orgs", createOrgRouter(requireSession));
 app.use("/api/orgs", createBusinessRouter(requireSession, buildTransferFromQuote));
 app.use("/api/invoice-links", createInvoiceLinkRouter());
+app.use("/api/gnosis-pay", createGnosisPayRouter(requireSession));
 
 type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
 const pendingPasskeySafeDeployments = new Map<string, { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }>();

@@ -882,6 +882,58 @@ the device-signed EIP-712 `to` field still names the orchestrator even for
 batches that deliver to Bridge (changing it needs a coordinated device.js
 lockstep bump).
 
+## Gnosis Pay — connected card, PR 1 shipped (Aug 2026)
+
+`npm run gnosispay:test` (13 checks, stub, offline). Design + corrections:
+`docs/gnosis-pay-permissionless-integration.md`.
+
+WHAT IT IS: the user connects their OWN Gnosis Pay account by SIWE and Zold
+shows cards, balances and card transactions. Gnosis Pay issues the card, holds
+its KYC and owns the card Safe. Permissionless mode has NO webhooks and NO
+attribution of card activity back to Zold, so nothing may be presented as a
+Zold card — the provenance line is rendered on every state, including errors.
+
+TWO API DETAILS THE DESIGN DOC HAD WRONG, both silently fatal, both found by
+reading the live OpenAPI spec and calling the endpoint rather than trusting the
+transcription — and both now asserted in the test:
+ - `GET /auth/nonce` returns **text/plain**, not JSON.
+ - It **sets a `siwe` cookie** that `POST /auth/challenge` verifies against.
+   Drop it and every signature is rejected as if the user signed wrong.
+Also: `/account-balances` returns decimal strings of MINOR UNITS (`^[0-9]+$`),
+kept as strings end to end; and the `Event` schema behind `/transactions`
+declares no properties, so items are passed through as opaque.
+
+DECISIONS THAT CARRY WEIGHT:
+ - **The JWT is never persisted, not even in localStorage.** It is a bearer
+   credential for a third party's financial account; the browser holds it in
+   memory and sends `x-gnosis-pay-token`, the API forwards and forgets. A
+   reload means signing in again and the screen says so.
+ - **A Gnosis Pay 401 is returned as 409.** Passing it through would make the
+   browser log the user out of ZOLD because someone else's token expired.
+ - **Stored status is shown when signed out; a stored BALANCE never is.** There
+   is nothing pushing updates, so every figure carries `asOf` and is labelled a
+   snapshot.
+ - **The signer is the user's own browser wallet**, not the Zold passkey Safe:
+   EIP-1271 is only verifiable where the contract is deployed, and the Zold Safe
+   is not on chain 100.
+
+CHAIN FACTS, VERIFIED not assumed (scripts were throwaway; re-run before
+relying on them): Gnosis Chain (100) HAS the RIP-7212 P256 precompile — probed
+with a real generated P-256 signature, valid returns 1 and a tampered r returns
+empty, same as Base Sepolia — and Candide's bundler/paymaster cover chain 100.
+So a passkey Safe on Gnosis is possible and is the natural next step; it was NOT
+the blocker it was assumed to be.
+
+NOT BUILT, deliberately (PRs 2-4 in the doc): signup, terms, KYC, phone OTP,
+Safe deploy, card creation, and ALL funding. NOT PROVEN: no real Gnosis Pay
+account has been connected.
+
+SCOPE NOTE: "make everything Gnosis Pay compatible" was scoped to the adapter
+only. Moving Zold to Gnosis Chain was considered and NOT done — the cash rail
+swaps EURe->USDC and bridges via CCTP, and Gnosis is not a CCTP domain (it
+carries bridged USDC.e, not native Circle USDC), so that leg would need
+re-plumbing. That decision is still open; see the Roadmap chain question.
+
 ## Custody — the non-custodial path is the DEFAULT now (Aug 2026)
 
 `npm run custody:test` (11 checks, no chain, no network).
