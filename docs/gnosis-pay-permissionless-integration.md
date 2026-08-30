@@ -27,6 +27,31 @@ The useful product shape is:
 - IBAN integration: https://docs.gnosispay.com/on-off-ramps/iban-integration
 - API reference: https://api.gnosispay.com/api-docs/spec.json
 
+## Corrections To This Document (Aug 2026, found while building PR 1)
+
+Two details below were transcribed wrongly and both are silently fatal — they
+fail in ways that read as a Zold signing bug rather than a wrong request. Found
+by reading the live OpenAPI spec at
+`https://api.gnosispay.com/api-docs/spec.json` and calling the endpoint.
+
+ - `GET /api/v1/auth/nonce` returns **`text/plain`**, not JSON. Parsing it as
+   JSON throws on a perfectly good response.
+ - That same response **sets a `siwe` cookie**, and `POST /auth/challenge`
+   verifies the signature against it. Fetch the nonce server-side without
+   carrying the cookie forward and every signature is rejected as invalid.
+
+Endpoint names that differ from the list below, per the live spec: phone
+verification is `POST /api/v1/verification` and `/verification/check` (not a
+`sendPhoneOtp`/`verifyPhoneOtp` pair); Safe deploy status is
+`GET /api/v1/safe/deploy`; terms are at both `GET /api/v1/terms` and
+`GET|POST /api/v1/user/terms`.
+
+Also worth knowing before building on the shapes: `GET /account-balances`
+returns **decimal strings of minor units** (`^[0-9]+$`), not numbers, and the
+`Event` schema behind `GET /transactions` declares **no properties at all**, so
+transaction items are genuinely opaque and should be passed through rather than
+typed.
+
 ## Permissionless Capabilities
 
 Permissionless integration needs no API key. The user authenticates with
@@ -232,6 +257,43 @@ Monerium EURe, and CoW EURe liquidity all converge there.
    - Reuse Zold's passkey authorization model.
    - Keep bridge/swap/funding receipts separate from Gnosis Pay transaction
      polling.
+
+## PR 1 — BUILT (Aug 2026)
+
+`services/api/src/adapters/gnosis-pay.ts`, `routes/gnosis-pay.ts` (a factory
+taking `requireSession`, mounted at `/api/gnosis-pay`), `user.gnosisPay` status
+in the store, and a Card tile + screen in the mobile app.
+`npm run gnosispay:test` (13 checks, stub Gnosis Pay, no chain, no network).
+
+Answers to the open questions above, as decided while building:
+
+ - **Signer: the user's own browser wallet.** Not the Zold passkey Safe. An
+   EIP-1271 signature is only verifiable where the contract is deployed and the
+   Zold Safe is not on chain 100. Separately VERIFIED with a real generated
+   P-256 signature that Gnosis Chain DOES have the RIP-7212 precompile (valid
+   sig returns 1, tampered sig returns empty), and that Candide's bundler covers
+   chain 100 — so a passkey Safe there is a deliberate next step, not a blocker.
+ - **JWT: never persisted, anywhere.** It is a bearer credential for someone
+   else's card account. The browser holds it in memory for the session and
+   sends it in an `x-gnosis-pay-token` header; the API forwards and forgets.
+   Not localStorage either — an XSS would otherwise own the card account for an
+   hour. A reload means signing in again, and the screen says so.
+ - **A Gnosis Pay 401 becomes a 409 from us.** Passing their 401 through would
+   make the browser treat the user's ZOLD session as expired and log them out
+   because a third party's token aged out.
+ - **Provenance on every response and every render.** Permissionless has no
+   webhooks, so each payload carries `asOf` and the screen says the balance is
+   a snapshot. Stored status is shown when signed out, but a stored BALANCE
+   never is — a stale balance drawn as current is the failure this avoids.
+ - KYC stays separate: Gnosis Pay runs its own, and nothing here touches
+   Sumsub/Monerium.
+
+Still absent, and deliberately: signup, terms, KYC, phone OTP, Safe deploy,
+card creation and all funding — PRs 2-4 below.
+
+NOT PROVEN: no real Gnosis Pay account has been connected. The stub answers the
+shapes their live spec declares; a real SIWE round trip needs a wallet and their
+onboarding.
 
 ## Non-Goals
 

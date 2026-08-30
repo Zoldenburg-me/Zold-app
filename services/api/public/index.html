@@ -1132,6 +1132,7 @@
   .m-screen { display: none; }
   #dashboard.m-on[data-msub="add"] #m-add-screen,
   #dashboard.m-on[data-msub="bank"] #m-bank-screen,
+  #dashboard.m-on[data-msub="card"] #m-card-screen,
   #dashboard.m-on[data-msub="crypto"] #m-crypto-screen { display: block; }
   #dashboard.m-on:not([data-msub="home"]) #m-home { display: none; }
 
@@ -1579,6 +1580,14 @@
             <div class="ttl" id="m-paypage-title">Create link</div>
             <div class="sub" id="m-paypage-sub">Get paid by QR</div>
           </button>
+          <button class="m-tile" id="m-card-tile">
+            <div class="m-tile-top">
+              <div class="m-mono">Card</div>
+              <span class="m-tag" id="m-card-tag">—</span>
+            </div>
+            <div class="ttl" id="m-card-title">Connect</div>
+            <div class="sub" id="m-card-sub">Gnosis Pay</div>
+          </button>
         </div>
 
         <div class="m-notice" id="m-usd">
@@ -1620,6 +1629,19 @@
             <span class="m-tag soon">SOON</span>
           </div>
         </div>
+      </div>
+
+      <!-- ================= Card (Gnosis Pay, connected) =================
+           DELIBERATELY NOT A ZOLD CARD. Gnosis Pay issues it, holds its KYC
+           and owns the card Safe; permissionless mode gives no webhooks and no
+           attribution back to us. So this screen shows a CONNECTED account and
+           says whose it is, every time — and every figure carries the moment it
+           was read, because there is nothing pushing updates. -->
+      <div class="m-screen" id="m-card-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Card</div>
+        <div class="m-lede" id="m-card-lede">A Gnosis Pay card, connected to Zold. Gnosis Pay issues it and holds its KYC.</div>
+        <div id="m-card-body" style="margin-top:24px"></div>
       </div>
 
       <!-- ================= Add: from your bank ================= -->
@@ -2431,6 +2453,7 @@ function renderMobile(u = user) {
   $("m-paypage-sub").textContent = page?.handle
     ? `${page.settlementAsset || "USDC"} settlement`
     : "Get paid by QR";
+  renderCardTile();
   $("m-card-name").textContent = (u.name || "").toUpperCase() || "—";
   const cheapest = privacyCatalog?.plans?.[0];
   $("m-bundle-sub").textContent = active
@@ -2514,19 +2537,21 @@ function mobileNav(target) {
   const sub = { add: "add", bank: "bank", crypto: "crypto", send: "pay", pay: "pay", country: "country",
     method: "method", amount: "amount", recipient: "recipient", progress: "progress",
     plus: "plus", bundle: "bundle", payment: "payment", activity: "activity", detail: "detail",
-    share: "share", profile: "profile" }[target];
+    share: "share", profile: "profile", card: "card" }[target];
   shell.dataset.msub = sub || "home";
   if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
   else switchView("dashboard");
   // bank/crypto are inside Add, so the Add tab stays lit while they are open.
   const navFor = { add: "add", bank: "add", crypto: "add", send: "send", pay: "send", country: "send", method: "send",
     amount: "send", recipient: "send", progress: "send", plus: "home", bundle: "home", payment: "home",
-    home: "home", activity: "activity", detail: "activity", share: "activity", profile: "profile" }[target];
+    card: "home", home: "home", activity: "activity", detail: "activity", share: "activity",
+    profile: "profile" }[target];
   document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
   if (sub === "bundle") $("m-subtitle").textContent = "Zold Plus";
   if (sub === "bank") renderBankScreen();
   if (sub === "crypto") renderCryptoScreen();
+  if (sub === "card") renderCardScreen();
   if (sub === "pay") { $("m-pay-q").value = ""; renderPayScreen(); }
   if (sub === "country") { $("m-country-q").value = ""; renderCountryList(); }
   if (sub === "activity") renderActivityScreen();
@@ -2621,6 +2646,201 @@ function renderCryptoScreen() {
     : settlesTo === "EURE"
       ? "Base network only. USDC is converted to EURe at the live mid rate on arrival."
       : "Base network only. USDC is forwarded to your Safe and recorded as USDC settlement.";
+}
+
+/* ==========================================================================
+   CARD — a CONNECTED Gnosis Pay account, not a Zold card
+   --------------------------------------------------------------------------
+   Gnosis Pay issues the card, holds its KYC and owns the card Safe. In
+   permissionless mode there are no webhooks and no attribution of card
+   activity back to Zold, so two rules apply to everything drawn here:
+
+     1. Never imply Zold issued it. The provenance line is not decoration and
+        is rendered on every state, including the error ones.
+     2. Every figure carries WHEN it was read. There is nothing pushing
+        updates, so a balance with no timestamp claims a liveness that does
+        not exist — the same reason imported-wallet screens say the ledger is
+        empty rather than drawing zeros.
+
+   The JWT lives in this page's memory ONLY. It is a bearer credential for the
+   user's account with a third party; it is never written to localStorage (an
+   XSS then owns their card account for an hour) and never persisted server
+   side. A reload means signing in again, and the screen says so rather than
+   failing mysteriously.
+
+   The signature comes from the user's own browser wallet. Zold's passkey Safe
+   cannot sign here yet: an EIP-1271 signature is only verifiable where the
+   contract is deployed, and the Zold Safe is not on Gnosis Chain.
+   ========================================================================== */
+let gpToken = null;          // in-memory only, deliberately
+let gpAccount = null;
+
+const gpApi = async (path, body, method) => {
+  const headers = {};
+  if (body) headers["content-type"] = "application/json";
+  if (sessionToken) headers.authorization = `Bearer ${sessionToken}`;
+  if (gpToken) headers["x-gnosis-pay-token"] = gpToken;
+  const res = await fetch(`/api/gnosis-pay${path}`, {
+    ...(body ? { method: method ?? "POST", body: JSON.stringify(body) } : method ? { method } : {}),
+    headers,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `request failed (HTTP ${res.status})`);
+    err.reauth = Boolean(data.reauth);
+    throw err;
+  }
+  return data;
+};
+
+/** Minor-unit integer strings, kept as strings. Their format is documented as
+ *  ^[0-9]+$; parseFloat on a balance is how a cent goes missing. */
+function gpAmount(minor) {
+  if (typeof minor !== "string" || !/^[0-9]+$/.test(minor)) return "—";
+  const pad = minor.padStart(3, "0");
+  return `€${pad.slice(0, -2)}.${pad.slice(-2)}`;
+}
+
+const gpWhen = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+function renderCardScreen() {
+  const el = $("m-card-body");
+  const connected = user?.gnosisPay || null;
+
+  if (!gpToken) {
+    // Not signed in to Gnosis Pay THIS session. If we have stored status, say
+    // what we last saw and when — but never draw a balance from it, because a
+    // stale balance shown as current is the exact lie this screen avoids.
+    el.innerHTML = `
+      <div class="m-rows">
+        ${connected ? `
+          <div class="m-row"><span class="k">Connected wallet</span><span class="v">${esc(shortAddr(connected.connectedAddress))}</span></div>
+          ${connected.safeAddress ? `<div class="m-row"><span class="k">Gnosis Pay Safe</span><span class="v">${esc(shortAddr(connected.safeAddress))}</span></div>` : ""}
+          ${connected.kycStatus ? `<div class="m-row"><span class="k">Their KYC</span><span class="v">${esc(connected.kycStatus)}</span></div>` : ""}
+          <div class="m-row"><span class="k">Last seen</span><span class="v">${esc(gpWhen(connected.asOf) || "—")}</span></div>
+        ` : `
+          <div class="m-row"><span class="k">Status</span><span class="v">Not connected</span></div>
+        `}
+      </div>
+      <div class="m-lede" style="font-size:13px;margin-top:16px">
+        ${connected
+          ? "Your Gnosis Pay session ended. Sign in again with the same wallet to see cards and balances."
+          : "Connect a Gnosis Pay account you already have. Zold does not create one for you."}
+      </div>
+      <button class="m-cta" id="m-card-signin" style="margin-top:16px">Sign in with wallet</button>
+      <div class="m-err hidden" id="m-card-err" style="margin-top:12px"></div>
+      <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
+        Gnosis Pay issues and operates this card and holds its KYC. Zold shows your connected account
+        and cannot see card activity except when you open this screen.
+      </div>`;
+    $("m-card-signin").onclick = gpSignIn;
+    return;
+  }
+
+  const a = gpAccount || {};
+  const cards = Array.isArray(a.cards) ? a.cards : [];
+  const b = a.balances || null;
+  el.innerHTML = `
+    <div class="m-rows">
+      <div class="m-row"><span class="k">Spendable</span><span class="v">${b ? esc(gpAmount(b.spendable)) : "—"}</span></div>
+      <div class="m-row"><span class="k">Pending</span><span class="v">${b ? esc(gpAmount(b.pending)) : "—"}</span></div>
+      <div class="m-row"><span class="k">Total</span><span class="v">${b ? esc(gpAmount(b.total)) : "—"}</span></div>
+      ${a.user?.safeAddress ? `<div class="m-row"><span class="k">Gnosis Pay Safe</span><span class="v">${esc(shortAddr(a.user.safeAddress))}</span></div>` : ""}
+      ${a.user?.kycStatus ? `<div class="m-row"><span class="k">Their KYC</span><span class="v">${esc(a.user.kycStatus)}</span></div>` : ""}
+    </div>
+    ${!b ? `<div class="m-lede" style="font-size:13px;margin-top:12px">No balance yet — Gnosis Pay has not deployed a card Safe for this account.</div>` : ""}
+    <div class="m-sec" style="margin-top:24px"><div class="m-mono">Cards</div></div>
+    ${cards.length
+      ? `<div class="m-rows">${cards.map((c) => `
+          <div class="m-row">
+            <span class="k">${c.virtual ? "Virtual" : "Physical"} ·••••&nbsp;${esc(c.lastFourDigits || "····")}</span>
+            <span class="v">${esc(c.statusName || "—")}</span>
+          </div>`).join("")}</div>`
+      : `<div class="m-empty">No cards on this account yet. Create one in Gnosis Pay.</div>`}
+    <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
+      Read at ${esc(gpWhen(a.asOf) || "—")}. Gnosis Pay issues and operates this card and holds its KYC —
+      there are no live updates here, so this is a snapshot, not a running balance.
+    </div>
+    <button class="m-link" id="m-card-refresh" style="margin-top:12px">Refresh</button>
+    <button class="m-link" id="m-card-forget" style="margin-top:12px">Disconnect</button>
+    <div class="m-err hidden" id="m-card-err" style="margin-top:12px"></div>`;
+  $("m-card-refresh").onclick = () => gpLoadAccount().catch((e) => showErr("m-card-err", e));
+  $("m-card-forget").onclick = gpDisconnect;
+}
+
+async function gpSignIn() {
+  clearErr("m-card-err");
+  const eth = window.ethereum;
+  if (!eth) {
+    return showErr("m-card-err", new Error(
+      "no browser wallet found. Gnosis Pay sign-in needs a wallet that can sign a message on Gnosis Chain.",
+    ));
+  }
+  try {
+    const [address] = await eth.request({ method: "eth_requestAccounts" });
+    if (!address) throw new Error("no account was shared by the wallet");
+    // The server fetches the nonce and hands back BOTH the message and the
+    // cookie it is bound to — Gnosis Pay verifies the signature against the
+    // session that issued the nonce, so the cookie must ride back with it.
+    const { message, cookie } = await gpApi("/siwe/start", { address });
+    const signature = await eth.request({ method: "personal_sign", params: [message, address] });
+    const out = await gpApi("/siwe/verify", { message, signature, cookie });
+    gpToken = out.token;
+    if (out.connected && user) user.gnosisPay = out.connected;
+    await gpLoadAccount();
+  } catch (err) {
+    showErr("m-card-err", err.code === 4001 ? new Error("signature request was rejected") : err);
+  }
+}
+
+async function gpLoadAccount() {
+  try {
+    gpAccount = await gpApi("/account");
+    renderCardScreen();
+    renderCardTile();
+  } catch (err) {
+    if (err.reauth) { gpToken = null; gpAccount = null; renderCardScreen(); }
+    throw err;
+  }
+}
+
+async function gpDisconnect() {
+  try {
+    await gpApi("/connection", undefined, "DELETE");
+  } catch { /* forgetting is best-effort; the token is dropped either way */ }
+  gpToken = null;
+  gpAccount = null;
+  if (user) user.gnosisPay = undefined;
+  renderCardScreen();
+  renderCardTile();
+}
+
+/** The home tile. Shows connection state only — never a balance, because the
+ *  home screen has no way to say how old it is. */
+function renderCardTile() {
+  const tag = $("m-card-tag"), title = $("m-card-title"), sub = $("m-card-sub");
+  if (!tag) return;
+  const c = user?.gnosisPay;
+  if (gpToken && gpAccount) {
+    tag.textContent = "ON";
+    tag.className = "m-tag";
+    title.textContent = (gpAccount.cards?.length ? `${gpAccount.cards.length} card` : "No card");
+    sub.textContent = "Gnosis Pay · tap to view";
+  } else if (c) {
+    tag.textContent = "—";
+    tag.className = "m-tag";
+    title.textContent = "Sign in";
+    sub.textContent = "Gnosis Pay · connected";
+  } else {
+    tag.textContent = "—";
+    tag.className = "m-tag";
+    title.textContent = "Connect";
+    sub.textContent = "Gnosis Pay";
+  }
 }
 
 /* ==========================================================================
@@ -3372,6 +3592,7 @@ $("m-bell").onclick = () => mobileNav("activity");
 $("m-seeall").onclick = () => mobileNav("activity");
 $("m-plus").onclick = () => mobileNav("plus");
 $("m-payment-page").onclick = () => mobileNav("payment");
+$("m-card-tile").onclick = () => mobileNav("card");
 $("m-back").onclick = () => mobileNav("home");
 $("m-kyc-banner").onclick = () => enterKycReview(user?.name || "Account");
 

@@ -137,6 +137,29 @@ export interface User {
    * transfers into the user's wallet must not be swept or converted just
    * because a public payment link exists.
    */
+  /**
+   * A Gnosis Pay card account the user has CONNECTED — theirs, not ours.
+   *
+   * Status only. No JWT is ever stored here: it is a bearer credential for a
+   * third party's financial account, the browser holds it for the length of a
+   * session, and this process keeps nothing that could be replayed. What is
+   * here exists so the Card view can say where the user got to without asking
+   * them to sign in again just to render a heading.
+   *
+   * `asOf` is load-bearing rather than decorative: permissionless mode has NO
+   * webhooks, so every figure is a snapshot from the last time the user opened
+   * the view. Presenting it without a timestamp would imply a liveness the
+   * integration cannot provide.
+   */
+  gnosisPay?: {
+    connectedAddress: `0x${string}`;
+    userId?: string;
+    safeAddress?: `0x${string}`;
+    kycStatus?: string;
+    accountStatus?: string;
+    cardCount?: number;
+    asOf: string;
+  };
   paymentPage?: {
     handle: string;
     displayName?: string;
