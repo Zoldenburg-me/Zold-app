@@ -49,11 +49,11 @@ import {
   DEFAULT_SERIES,
   EXEMPTION_REASONS,
   InvoiceComplianceError,
-  KLEINBETRAG_LIMIT_CENTS,
   checkCompliance,
   formatInvoiceNumber,
   fromCents,
   normaliseVatId,
+  reasonForRuleSet,
   taxNumberLooksValid,
   vatIdLooksValid,
   vatNoteFor,
@@ -62,6 +62,12 @@ import {
   type VatTreatment,
 } from "../domain/invoicing.js";
 import { ibanChecksumValid, normaliseIban } from "../domain/contacts.js";
+import {
+  EU_MEMBER_STATES,
+  jurisdictionFor,
+  validateCustomReason,
+  type CustomExemptionReason,
+} from "../domain/jurisdictions.js";
 import {
   LEDGER_EXPORT_COLUMNS,
   computeCostBasis,
@@ -97,6 +103,18 @@ function issuerParty(org: Organisation): InvoiceParty {
   };
 }
 
+/**
+ * Which rules apply to this organisation, from the country in its address.
+ *
+ * Resolved from the ENTITY's address rather than the customer's: an invoice is
+ * governed by where the issuer is established, and a German company invoicing a
+ * Swede still writes a German invoice.
+ */
+const jurisdictionOf = (org: Organisation) => jurisdictionFor(org.address?.country);
+
+const customReasonsOf = (org: Organisation): CustomExemptionReason[] =>
+  (org.invoicing?.customReasons ?? []) as CustomExemptionReason[];
+
 /** Due date from the org's payment terms, so the field is not retyped either. */
 function draftDueDate(org: Organisation, issueDate: string): string | undefined {
   const days = org.invoicing?.paymentTermsDays;
@@ -117,36 +135,69 @@ function draftDueDate(org: Organisation, issueDate: string): string | undefined 
  */
 function draftFrom(org: Organisation, body: Record<string, any>): InvoiceDraft {
   const inv = org.invoicing ?? {};
+  const jur = jurisdictionFor(org.address?.country);
+  const custom = customReasonsOf(org);
+  const known = (id: string) =>
+    jur.reasons.includes(id) || custom.some((c) => c.id === id);
   const wantsExempt =
     body.vat?.kind === "exempt" || (body.vat === undefined && inv.smallBusiness === true);
 
   let treatment: VatTreatment;
   if (wantsExempt) {
-    const reason = (body.vat?.reason ?? (inv.smallBusiness ? "kleinunternehmer" : undefined)) as
-      | ExemptionReasonId
-      | undefined;
-    if (!reason || !EXEMPTION_REASONS[reason]) {
+    // The small-business default is Germany's § 19 only where German rules
+    // apply. Elsewhere the scheme exists but its citation and wording differ,
+    // so the issuer picks it and supplies the note.
+    const fallback = inv.smallBusiness
+      ? jur.ruleSet === "DE"
+        ? "kleinunternehmer"
+        : jur.reasons.includes("small_business_national")
+          ? "small_business_national"
+          : undefined
+      : undefined;
+    const reason = (str(body.vat?.reason) ?? fallback) as string | undefined;
+    if (!reason) {
       throw new InvoiceComplianceError(
-        `Choosing not to charge VAT needs a reason. One of: ${Object.keys(EXEMPTION_REASONS).join(", ")}.`,
+        `Choosing not to charge VAT needs a reason. Available in ${jur.countryName}: ${jur.reasons.join(", ")}` +
+          (custom.length ? `, plus your own: ${custom.map((c) => c.id).join(", ")}.` : "."),
       );
     }
-    if (EXEMPTION_REASONS[reason].requiresFreeText && !str(body.vat?.note)) {
+    if (!known(reason)) {
       throw new InvoiceComplianceError(
-        "Pick \"other\" and you must write the exemption and its legal basis yourself — it has to appear on the invoice.",
+        `"${reason}" is not available in ${jur.countryName}. Available: ${jur.reasons.join(", ")}` +
+          (custom.length ? `, plus your own: ${custom.map((c) => c.id).join(", ")}.` : "."),
+      );
+    }
+    const builtIn = EXEMPTION_REASONS[reason as ExemptionReasonId];
+    if (builtIn?.requiresFreeText && !str(body.vat?.note)) {
+      throw new InvoiceComplianceError(
+        `"${builtIn.label}" has no wording we can supply — the note differs by country. ` +
+          "Write the exemption and its legal basis; it has to appear on the invoice.",
       );
     }
     treatment = { kind: "exempt", reason, note: str(body.vat?.note) };
   } else {
     if (inv.smallBusiness) {
       throw new InvoiceComplianceError(
-        "This organisation is registered as a Kleinunternehmer (§ 19 UStG) and must not charge VAT. Turn that off in the invoicing profile first, or issue the invoice exempt.",
+        jur.ruleSet === "DE"
+          ? "This organisation is registered as a Kleinunternehmer (§ 19 UStG) and must not charge VAT. Turn that off in the invoicing profile first, or issue the invoice exempt."
+          : "This organisation is registered under a small-business scheme and must not charge VAT. Turn that off in the invoicing profile first, or issue the invoice exempt.",
       );
     }
-    const rate = Number(body.vat?.rate ?? inv.defaultVatRate ?? 19);
-    if (rate !== 19 && rate !== 7) {
-      throw new InvoiceComplianceError("German VAT is 19% or 7%.");
+    // No default rate outside Germany: 19 is a German number, and quietly
+    // applying it to a Polish or Swedish entity is exactly the wrongness this
+    // jurisdiction split exists to remove.
+    const raw = body.vat?.rate ?? inv.defaultVatRate ?? (jur.ruleSet === "DE" ? 19 : undefined);
+    if (raw === undefined) {
+      throw new InvoiceComplianceError(
+        `Set the VAT rate you charge. Zold does not maintain a rate table for ${jur.countryName}, ` +
+          "so it will not guess one.",
+      );
     }
-    treatment = { kind: "standard", rate: rate as 19 | 7 };
+    const rate = Number(raw);
+    if (!Number.isFinite(rate) || rate <= 0 || rate > 100) {
+      throw new InvoiceComplianceError(`${raw} is not a VAT percentage.`);
+    }
+    treatment = { kind: "standard", rate };
   }
 
   const issueDate = str(body.issueDate) ?? new Date().toISOString().slice(0, 10);
@@ -872,22 +923,35 @@ export function createBusinessRouter(
     if (!requirePermission(ctx, res, "invoices.read")) return;
 
     const inv = ctx.org.invoicing ?? {};
+    const jur = jurisdictionOf(ctx.org);
+    const custom = customReasonsOf(ctx.org);
     res.json({
       profile: {
         ...inv,
         display: { ...DEFAULT_DISPLAY, ...(inv.display ?? {}) },
         numberSeries: inv.numberSeries ?? DEFAULT_SERIES,
+        customReasons: custom,
       },
       // Prefill: who the issuer is, straight off the organisation.
       issuer: issuerParty(ctx.org),
+      jurisdiction: jur,
       reference: {
-        vatRates: [19, 7],
-        exemptionReasons: Object.values(EXEMPTION_REASONS),
+        // Only the reasons this jurisdiction actually offers. A Swedish entity
+        // must not be shown "§ 19 UStG Kleinunternehmerregelung".
+        exemptionReasons: jur.reasons
+          .map((id) => EXEMPTION_REASONS[id as keyof typeof EXEMPTION_REASONS])
+          .filter(Boolean)
+          // Labels and citations follow the rule set, not the author's country.
+          .map((r) => reasonForRuleSet(r, jur.ruleSet)),
+        customReasons: custom,
+        // Germany is the only place we assert which rates are legal.
+        vatRates: jur.ruleSet === "DE" ? [19, 7] : null,
         displayOptions: Object.keys(DEFAULT_DISPLAY),
-        kleinbetragLimitCents: KLEINBETRAG_LIMIT_CENTS,
+        simplifiedLimitCents: jur.simplifiedLimitCents ?? null,
+        euMemberStates: EU_MEMBER_STATES,
       },
-      disclaimer:
-        "Zold is not a tax adviser. These fields follow §§ 14, 14a UStG and the related rules, but whether a supply is exempt — and which exemption applies — is your decision with your Steuerberater.",
+      disclaimer: jur.disclaimer,
+      notVerified: jur.notVerified,
     });
   });
 
@@ -921,7 +985,17 @@ export function createBusinessRouter(
       next.taxNumber = t || undefined;
     }
     if (typeof b.smallBusiness === "boolean") next.smallBusiness = b.smallBusiness;
-    if (b.defaultVatRate === 19 || b.defaultVatRate === 7) next.defaultVatRate = b.defaultVatRate;
+    if (b.defaultVatRate !== undefined) {
+      // Any plausible percentage: 19 is German, 23 Polish, 25 Swedish. WHICH
+      // rates are legal is checked per jurisdiction at issue, not here.
+      const rate = Number(b.defaultVatRate);
+      if (b.defaultVatRate === null || b.defaultVatRate === "") next.defaultVatRate = undefined;
+      else if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+        return res
+          .status(400)
+          .json({ error: `${b.defaultVatRate} is not a VAT percentage.`, field: "defaultVatRate" });
+      } else next.defaultVatRate = rate;
+    }
     for (const k of ["registerCourt", "registerNumber", "managingDirector", "paymentTermsNote", "footerNote"] as const) {
       if (typeof b[k] === "string") next[k] = b[k].trim() || undefined;
     }
@@ -960,6 +1034,13 @@ export function createBusinessRouter(
       }
       next.display = display;
     }
+    if (Array.isArray(b.customReasons)) {
+      try {
+        next.customReasons = b.customReasons.slice(0, 20).map(validateCustomReason);
+      } catch (err) {
+        return res.status(400).json({ error: (err as Error).message, field: "customReasons" });
+      }
+    }
     if (Array.isArray(b.customFields)) {
       next.customFields = b.customFields
         .slice(0, 12)
@@ -987,7 +1068,7 @@ export function createBusinessRouter(
     if (!requirePermission(ctx, res, "invoices.read")) return;
     try {
       const draft = draftFrom(ctx.org, req.body ?? {});
-      const report = checkCompliance(draft);
+      const report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
       res.json({ ...report, preview: { number: draft.number, totals: report.totals } });
     } catch (err) {
       if (err instanceof InvoiceComplianceError) {
@@ -1019,7 +1100,7 @@ export function createBusinessRouter(
       }
       throw err;
     }
-    const report = checkCompliance(draft);
+    const report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
     if (!report.ok) {
       return res.status(422).json({
         error: `This invoice is missing ${report.errors.length} thing(s) German law requires. It has not been issued.`,
@@ -1081,6 +1162,8 @@ export function createBusinessRouter(
         customFields: ctx.org.invoicing?.customFields,
         language: ctx.org.invoicing?.language ?? "de",
         acceptedWarnings: report.warnings.map((w) => `${w.field}: ${w.message}`),
+        // Frozen with the document: which rules ran, and how far they went.
+        jurisdiction: report.jurisdiction,
       },
       submittedAt: now.toISOString(),
       createdByMemberId: ctx.member.id,
