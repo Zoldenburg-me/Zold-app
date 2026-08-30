@@ -460,7 +460,7 @@ RENDER.invoices = async () => {
   const { invoices } = await api(`/api/orgs/${org.id}/invoices`);
   return `<div class="card"><div class="h"><div><h2>Issue an invoice</h2>
     <div class="desc">A document you send a customer. Your details are filled in from your invoicing
-      profile, and it is checked against §&nbsp;14 UStG before it can be issued.</div></div>
+      profile, and it is checked against your country's rules before it can be issued.</div></div>
     <div class="row-actions">
       <button data-act="issue-invoice">New invoice</button>
       <button class="ghost" data-act="invoicing-settings">Invoicing profile</button>
@@ -598,28 +598,61 @@ RENDER.settings = async () => {
 
 let invoiceDraft = null;
 
+/**
+ * What rules apply and how far we check them.
+ *
+ * The verification level is the honest part: "statutory" means we encoded the
+ * paragraphs, "directive" means only the EU baseline and not the member state's
+ * own rules, "structural" means no tax law at all. Rendered wherever an invoice
+ * is issued so `ok` is never read as more than it is.
+ */
+function jurisdictionBanner(j, disclaimer, notVerified) {
+  const tone = { statutory: "ok", directive: "warn", structural: "bad" }[j.verification] ?? "mut";
+  const what = {
+    statutory: "Rules encoded to statute",
+    directive: "EU baseline only — national rules not encoded",
+    structural: "No tax rules applied — structural checks only",
+  }[j.verification];
+  return `<div class="card">
+    <div class="h"><div><h2>${esc(j.countryName)}</h2>
+      <div class="desc">${esc(j.basis)}</div></div>
+    <span class="pill ${tone}">${esc(what)}</span></div>
+    <div class="desc" style="margin-bottom:.7rem">${esc(disclaimer)}</div>
+    <div style="font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); margin-bottom:.35rem">Not checked by Zold</div>
+    <ul style="margin:0 0 0 1.1rem; padding:0; color:var(--muted); font-size:.82rem; line-height:1.6">
+      ${(notVerified ?? []).map((x) => `<li>${esc(x)}</li>`).join("")}
+    </ul></div>`;
+}
+
 RENDER["invoicing-settings"] = async () => {
   const d = await api(`/api/orgs/${org.id}/invoicing/profile`);
-  const p = d.profile, iss = d.issuer, ref = d.reference;
+  const p = d.profile, iss = d.issuer, ref = d.reference, j = d.jurisdiction;
   const on = (k) => (p.display?.[k] !== false ? "checked" : "");
-  return `
-  <div class="banner info">${esc(d.disclaimer)}</div>
+  return jurisdictionBanner(j, d.disclaimer, d.notVerified) + `
 
   <div class="card"><div class="h"><div><h2>Your details on an invoice</h2>
-    <div class="desc">§&nbsp;14 Abs.&nbsp;4 UStG requires your full name, address and either a
-      Steuernummer or a USt-IdNr. on every invoice. Set them once and they fill in every time.</div></div>
+    <div class="desc">${esc(j.ruleSet === "DE"
+      ? "§ 14 Abs. 4 UStG requires your full name, address and either a Steuernummer or a USt-IdNr. on every invoice."
+      : j.ruleSet === "EU"
+        ? "Art. 226 of the VAT Directive requires your full name, address and VAT identification number on every invoice."
+        : `Almost every country requires your full name, address and a tax identifier on an invoice. Zold does not know which identifier ${j.countryName} wants — add it as a custom field if these do not fit.`)}
+      Set them once and they fill in every time.</div></div>
     <button data-act="save-invoicing">Save</button></div>
     <div class="grid g2">
       <div>
         <label>USt-IdNr.</label><input id="i-vatid" value="${esc(p.vatId || "")}" placeholder="DE123456789" />
         <label>Steuernummer</label><input id="i-taxno" value="${esc(p.taxNumber || "")}" placeholder="123/456/78901" />
         <label>Default VAT rate</label>
-        <select id="i-rate">${ref.vatRates.map((r) => `<option value="${r}" ${p.defaultVatRate === r ? "selected" : ""}>${r}%</option>`).join("")}</select>
+        ${ref.vatRates
+          ? `<select id="i-rate">${ref.vatRates.map((r) => `<option value="${r}" ${p.defaultVatRate === r ? "selected" : ""}>${r}%</option>`).join("")}</select>`
+          : `<input id="i-rate" type="number" min="0" max="100" step="0.1" value="${esc(p.defaultVatRate ?? "")}" placeholder="e.g. 23" />
+             <div class="desc" style="margin-top:.3rem">Zold does not maintain a rate table for
+               ${esc(j.countryName)}, so it will not guess. Set the rate you charge.</div>`}
         <label style="display:flex; gap:.5rem; align-items:flex-start; margin-top:1rem">
           <input type="checkbox" id="i-klein" ${p.smallBusiness ? "checked" : ""} style="width:auto; margin-top:.2rem" />
-          <span style="color:var(--text); font-size:.85rem; font-weight:500">Kleinunternehmer (§&nbsp;19 UStG)
-            <span class="desc" style="display:block; font-weight:400">New invoices will not charge VAT and will
-              carry the §&nbsp;19 note. While this is on, charging VAT is refused rather than allowed by mistake.</span></span>
+          <span style="color:var(--text); font-size:.85rem; font-weight:500">${j.ruleSet === "DE" ? "Kleinunternehmer (§&nbsp;19 UStG)" : "Small business scheme"}
+            <span class="desc" style="display:block; font-weight:400">New invoices will not charge VAT, and charging
+              it is refused rather than allowed by mistake.${j.ruleSet === "DE" ? " The §&nbsp;19 note is printed." : " You supply the note your country requires."}</span></span>
         </label>
       </div>
       <div>
@@ -631,7 +664,7 @@ RENDER["invoicing-settings"] = async () => {
           <input id="i-next" type="number" min="1" value="${esc(p.numberSeries.next)}" style="width:110px" />
         </div>
         <div class="desc" style="margin-top:.3rem">Next: <b>${esc(p.numberSeries.prefix.replace("{YYYY}", new Date().getFullYear()))}${String(p.numberSeries.next).padStart(p.numberSeries.padding, "0")}</b>.
-          §&nbsp;14 wants each number used once — it does not have to be gapless.</div>
+          A number must be used once; it does not have to be gapless${esc(j.ruleSet === "DE" ? " (§ 14 Abs. 4 Nr. 4 UStG)" : j.ruleSet === "EU" ? " (Art. 226(2) VAT Directive)" : "")}.</div>
       </div>
     </div>
   </div>
@@ -664,6 +697,22 @@ RENDER["invoicing-settings"] = async () => {
     </div>
   </div>
 
+  <div class="card"><div class="h"><div><h2>Your own rules</h2>
+    <div class="desc">For anything ${esc(j.countryName)} requires that Zold does not encode. The note you
+      write is printed on the invoice verbatim — we do not check it.</div></div>
+    <button class="ghost sm" data-act="add-custom-reason">Add rule</button></div>
+    ${(p.customReasons ?? []).length
+      ? `<table><thead><tr><th>Id</th><th>Label</th><th>Printed note</th><th></th></tr></thead><tbody>
+          ${p.customReasons.map((c) => `<tr>
+            <td class="mono">${esc(c.id)}</td>
+            <td>${esc(c.label)}${c.legalBasis ? `<div class="desc">${esc(c.legalBasis)}</div>` : ""}</td>
+            <td class="desc">${esc(c.invoiceNote)}</td>
+            <td><button class="ghost sm" data-act="del-custom-reason" data-id="${esc(c.id)}">Remove</button></td>
+          </tr>`).join("")}
+        </tbody></table>`
+      : `<div class="empty">No custom rules.${j.ruleSet === "GENERIC" ? " You will probably need some — Zold applies no tax rules here." : ""}</div>`}
+  </div>
+
   <div class="card"><div class="h"><div><h2>Prefilled from your organisation</h2></div>
     <button class="ghost sm" data-act="goto-settings">Edit</button></div>
     <table><tbody>
@@ -680,18 +729,35 @@ RENDER["invoice-new"] = async () => {
   invoiceDraft ??= {
     lines: [{ description: "", quantity: "1", unitPriceNet: "" }],
     vat: d.profile.smallBusiness
-      ? { kind: "exempt", reason: "kleinunternehmer" }
-      : { kind: "standard", rate: d.profile.defaultVatRate ?? 19 },
+      ? { kind: "exempt", reason: d.jurisdiction.ruleSet === "DE" ? "kleinunternehmer" : "small_business_national" }
+      : { kind: "standard", rate: d.profile.defaultVatRate ?? (d.jurisdiction.ruleSet === "DE" ? 19 : "") },
   };
   const v = invoiceDraft.vat;
-  const reasons = d.reference.exemptionReasons;
+  // Only what this jurisdiction offers, plus the org's own rules. A Swedish
+  // entity must never see "§ 19 UStG".
+  // Same rule as the server's basis(): a German paragraph is only quoted under
+  // the German rule set, the Directive article under EU, nothing under GENERIC.
+  const cite = (de, eu) =>
+    d.jurisdiction.ruleSet === "DE" ? ` (${de})`
+      : d.jurisdiction.ruleSet === "EU" ? ` (${eu})`
+        : "";
+  invoiceDraft._reasons = d.reference.exemptionReasons.map((r) => r.id);
+  invoiceDraft._defaultRate = d.profile.defaultVatRate ?? (d.jurisdiction.ruleSet === "DE" ? 19 : "");
+  const reasons = [
+    ...d.reference.exemptionReasons,
+    ...(d.reference.customReasons ?? []).map((c) => ({
+      id: c.id,
+      label: `${c.label} (your rule)`,
+      legalBasis: c.legalBasis ?? "your own rule",
+      invoiceNote: c.invoiceNote,
+      hint: "You defined this rule. Zold prints your note and does not check it.",
+    })),
+  ];
   const today = new Date().toISOString().slice(0, 10);
 
-  return `
-  <div class="banner info">${esc(d.disclaimer)}</div>
-
+  return jurisdictionBanner(d.jurisdiction, d.disclaimer, d.notVerified) + `
   <div class="card"><div class="h"><div><h2>Customer</h2>
-    <div class="desc">§&nbsp;14 Abs.&nbsp;4 Nr.&nbsp;1 needs their full name and address.</div></div>
+    <div class="desc">Their full name and address are required${esc(cite("§ 14 Abs. 4 Nr. 1 UStG", "Art. 226(5) VAT Directive"))}.</div></div>
     ${contacts.length ? `<select id="inv-contact" style="max-width:240px">
       <option value="">From address book…</option>
       ${contacts.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")}
@@ -707,7 +773,7 @@ RENDER["invoice-new"] = async () => {
           <div style="flex:1"><label>City</label><input id="inv-r-city" value="${esc(invoiceDraft.recipient?.city || "")}" /></div>
         </div>
         <div style="display:flex; gap:.5rem">
-          <div style="width:120px"><label>Country</label><input id="inv-r-country" maxlength="2" value="${esc(invoiceDraft.recipient?.country || "DE")}" /></div>
+          <div style="width:120px"><label>Country</label><input id="inv-r-country" maxlength="2" value="${esc(invoiceDraft.recipient?.country || d.jurisdiction.country)}" /></div>
           <div style="flex:1"><label>VAT ID</label><input id="inv-r-vat" value="${esc(invoiceDraft.recipient?.vatId || "")}" placeholder="required for reverse charge" /></div>
         </div>
       </div>
@@ -715,8 +781,7 @@ RENDER["invoice-new"] = async () => {
   </div>
 
   <div class="card"><div class="h"><div><h2>Dates</h2>
-    <div class="desc">The date of supply is mandatory even when it is the same day as the invoice
-      (§&nbsp;14 Abs.&nbsp;4 Nr.&nbsp;6).</div></div></div>
+    <div class="desc">The date of supply is required even when it is the same day as the invoice${esc(cite("§ 14 Abs. 4 Nr. 6 UStG", "Art. 226(7) VAT Directive"))}.</div></div></div>
     <div class="grid g3">
       <div><label>Invoice date</label><input id="inv-issue" type="date" value="${esc(invoiceDraft.issueDate || today)}" /></div>
       <div><label>Date of supply</label><input id="inv-supply" type="date" value="${esc(invoiceDraft.supplyDate || today)}" /></div>
@@ -745,8 +810,10 @@ RENDER["invoice-new"] = async () => {
       <button class="${v.kind === "exempt" ? "" : "ghost"} sm" data-act="inv-vat-mode" data-mode="exempt">Do not charge VAT</button>
     </div>
     ${v.kind === "standard"
-      ? `<label>Rate</label><select id="inv-rate">${d.reference.vatRates
-          .map((r) => `<option value="${r}" ${v.rate === r ? "selected" : ""}>${r}%</option>`).join("")}</select>`
+      ? (d.reference.vatRates
+          ? `<label>Rate</label><select id="inv-rate">${d.reference.vatRates
+              .map((r) => `<option value="${r}" ${v.rate === r ? "selected" : ""}>${r}%</option>`).join("")}</select>`
+          : `<label>Rate (%)</label><input id="inv-rate" type="number" min="0" max="100" step="0.1" value="${esc(v.rate ?? "")}" />`)
       : `<label>Why not?</label>
          <select id="inv-reason">${reasons.map((r) => `<option value="${esc(r.id)}" ${v.reason === r.id ? "selected" : ""}>${esc(r.label)} — ${esc(r.legalBasis)}</option>`).join("")}</select>
          <div class="desc" style="margin-top:.4rem">${esc(reasons.find((r) => r.id === v.reason)?.hint || "")}</div>
@@ -799,7 +866,14 @@ async function refreshInvoiceCheck() {
       <span class="pill ${cls}">${cls === "bad" ? "required" : "check"}</span>
       <div><div>${esc(i.message)}</div>${i.legalBasis ? `<div class="desc">${esc(i.legalBasis)}</div>` : ""}</div></div>`).join("");
     box.innerHTML = `<div class="h"><div><h2>${r.ok ? "Ready to issue" : `${r.errors.length} thing(s) still needed`}</h2>
-        <div class="desc">${esc({ standard: "Full § 14 UStG content", kleinbetrag: "Kleinbetragsrechnung (§ 33 UStDV, up to €250 gross)", kleinunternehmer: "Kleinunternehmer (§ 19 UStG / § 34a UStDV)" }[r.regime])}</div></div>
+        <div class="desc">${esc(r.jurisdiction.countryName)} · ${esc({
+          standard: r.jurisdiction.ruleSet === "DE" ? "Full § 14 UStG content"
+            : r.jurisdiction.ruleSet === "EU" ? "Full Art. 226 content"
+              : "Structural checks only",
+          kleinbetrag: "Kleinbetragsrechnung (§ 33 UStDV, up to €250 gross)",
+          kleinunternehmer: r.jurisdiction.ruleSet === "DE"
+            ? "Kleinunternehmer (§ 19 UStG / § 34a UStDV)" : "Small business scheme",
+        }[r.regime])}</div></div>
       <div style="text-align:right"><div class="desc">Total</div>
         <div style="font-size:1.3rem; font-weight:600">${fmtEur(t.grossCents)}</div>
         <div class="desc">net ${fmtEur(t.netCents)}${t.vatCents ? ` · VAT ${fmtEur(t.vatCents)}` : " · no VAT"}</div></div></div>
@@ -936,9 +1010,10 @@ const ACTIONS = {
     readInvoiceEditor();
     // Switching mode REPLACES the treatment rather than merging: carrying a
     // rate across into the exempt arm is precisely the § 14c mistake.
+    // The first available reason, not a German one — see the jurisdiction split.
     invoiceDraft.vat = el.dataset.mode === "exempt"
-      ? { kind: "exempt", reason: "kleinunternehmer" }
-      : { kind: "standard", rate: 19 };
+      ? { kind: "exempt", reason: invoiceDraft._reasons?.[0] ?? "other" }
+      : { kind: "standard", rate: invoiceDraft._defaultRate ?? "" };
   },
   async "inv-issue"() {
     readInvoiceEditor();
@@ -962,6 +1037,37 @@ const ACTIONS = {
     prompt(`Invoice ${r.invoice.issued.number} issued. Send your customer this link:`,
       location.origin + r.linkPath);
   },
+  "add-custom-reason": () => dialog("Add your own rule",
+    `<div class="desc" style="margin-bottom:.6rem">For something your country requires that Zold does
+       not encode. The note is printed on the invoice exactly as you write it, and is not checked.</div>
+     <label>Id</label><input id="cr-id" placeholder="gst_rcm" />
+     <label>Label</label><input id="cr-label" placeholder="GST reverse charge" />
+     <label>Legal basis (optional)</label><input id="cr-basis" placeholder="Section 9(3) CGST Act" />
+     <label>Note printed on the invoice</label><input id="cr-note" placeholder="Tax payable under reverse charge mechanism" />
+     <label style="display:flex; gap:.5rem; align-items:center; margin-top:.8rem">
+       <input type="checkbox" id="cr-vat" style="width:auto" />
+       <span style="color:var(--text); font-size:.85rem">Requires the customer's tax identifier</span></label>`,
+    async () => {
+      const d = await api(`/api/orgs/${org.id}/invoicing/profile`);
+      const existing = d.profile.customReasons ?? [];
+      await api(`/api/orgs/${org.id}/invoicing/profile`, {
+        method: "PATCH",
+        body: {
+          customReasons: [...existing, {
+            id: $("#cr-id").value, label: $("#cr-label").value,
+            legalBasis: $("#cr-basis").value, invoiceNote: $("#cr-note").value,
+            requiresRecipientVatId: $("#cr-vat").checked,
+          }],
+        },
+      });
+    }),
+  async "del-custom-reason"(el) {
+    const d = await api(`/api/orgs/${org.id}/invoicing/profile`);
+    await api(`/api/orgs/${org.id}/invoicing/profile`, {
+      method: "PATCH",
+      body: { customReasons: (d.profile.customReasons ?? []).filter((c) => c.id !== el.dataset.id) },
+    });
+  },
   async "save-invoicing"() {
     const val = (id) => $("#" + id)?.value?.trim() ?? "";
     const display = {};
@@ -973,7 +1079,7 @@ const ACTIONS = {
       body: {
         vatId: val("i-vatid"), taxNumber: val("i-taxno"),
         smallBusiness: $("#i-klein")?.checked === true,
-        defaultVatRate: Number($("#i-rate")?.value ?? 19),
+        defaultVatRate: $("#i-rate")?.value ? Number($("#i-rate").value) : undefined,
         paymentTermsDays: val("i-terms-days") ? Number(val("i-terms-days")) : undefined,
         paymentTermsNote: val("i-terms"),
         registerCourt: val("i-court"), registerNumber: val("i-reg"),

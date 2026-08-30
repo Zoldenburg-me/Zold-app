@@ -12,6 +12,11 @@
 
 import assert from "node:assert/strict";
 import {
+  EU_MEMBER_STATES,
+  jurisdictionFor,
+  validateCustomReason,
+} from "../services/api/src/domain/jurisdictions.js";
+import {
   DEFAULT_SERIES,
   EXEMPTION_REASONS,
   InvoiceComplianceError,
@@ -129,15 +134,26 @@ check("an exempt invoice forces every line to 0%, even one carrying a rate", () 
   assert.equal(t.grossCents, t.netCents);
 });
 
-check("a rate other than 19 or 7 is refused", () => {
-  assert.throws(
-    () =>
-      computeTotals(
-        [{ description: "x", quantity: "1", unitPriceNet: "10.00", vatRate: 20 as never }],
-        { kind: "standard", rate: 19 },
-      ),
-    InvoiceComplianceError,
+check("arithmetic accepts any plausible rate — WHICH rates are legal is a jurisdiction question", () => {
+  // 23% is wrong in Germany and right in Poland, so computeTotals must not
+  // decide it; checkCompliance does, per rule set (see the jurisdiction tests).
+  const pl = computeTotals(
+    [{ description: "x", quantity: "1", unitPriceNet: "100.00", vatRate: 23 }],
+    { kind: "standard", rate: 23 },
   );
+  assert.equal(pl.vatCents, 2300);
+  // A non-percentage is still nonsense everywhere.
+  for (const bad of [-5, 101]) {
+    assert.throws(
+      () =>
+        computeTotals(
+          [{ description: "x", quantity: "1", unitPriceNet: "10.00", vatRate: bad }],
+          { kind: "standard", rate: bad },
+        ),
+      InvoiceComplianceError,
+      `${bad}% should be refused`,
+    );
+  }
 });
 
 console.log("\n§ 14 Abs. 4 UStG — mandatory content");
@@ -211,8 +227,8 @@ check("one cent over the limit and the full §14 content applies again", () => {
 console.log("\n§ 14c UStG — never show tax that is not owed");
 
 check("an exempt invoice can never carry a VAT amount", () => {
-  for (const reason of Object.keys(EXEMPTION_REASONS)) {
-    if (reason === "other") continue;
+  for (const [reason, def] of Object.entries(EXEMPTION_REASONS)) {
+    if (def.requiresFreeText) continue;
     const t: VatTreatment = { kind: "exempt", reason: reason as never };
     const totals = computeTotals(
       [{ description: "x", quantity: "1", unitPriceNet: "500.00", vatRate: 19 }],
@@ -330,13 +346,28 @@ check('"other" forces the issuer to write the basis themselves', () => {
   assert.equal(written.ok, true);
 });
 
-check("every exemption reason carries a statute and a printable note", () => {
+check("a reason either ships its wording, or demands the issuer supply it", () => {
   for (const r of Object.values(EXEMPTION_REASONS)) {
-    if (r.id === "other") continue;
+    if (r.requiresFreeText) {
+      // Free-text reasons are deliberately blank: the note that satisfies the
+      // law differs per country, and inventing one would be confidently wrong.
+      assert.equal(r.invoiceNote, "", `${r.id} must not ship invented wording`);
+      continue;
+    }
     assert.ok(r.legalBasis && r.legalBasis !== "—", `${r.id} needs a legal basis`);
     assert.ok(r.invoiceNote.length > 5, `${r.id} needs a German note`);
     assert.ok(r.invoiceNoteEn.length > 5, `${r.id} needs an English note`);
   }
+  // And the free-text ones are refused until the issuer writes something.
+  const blank = checkCompliance(
+    draft({
+      issuer: { ...issuer, country: "SE" },
+      treatment: { kind: "exempt", reason: "small_business_national" },
+    }),
+    jurisdictionFor("SE"),
+  );
+  assert.equal(blank.ok, false);
+  assert.ok(blank.errors.some((e) => e.field === "treatment.note"));
 });
 
 console.log("\nIdentifiers and numbering");
@@ -370,6 +401,210 @@ check("invoice numbers template the year, and pad", () => {
     formatInvoiceNumber({ prefix: "{YY}{MM}-", next: 42, padding: 3 }, new Date("2026-03-05T00:00:00Z")),
     "2603-042",
   );
+});
+
+
+console.log("\nJurisdiction — which rules even apply");
+
+check("Germany gets statutory rules, and its own paragraphs", () => {
+  const j = jurisdictionFor("DE");
+  assert.equal(j.ruleSet, "DE");
+  assert.equal(j.verification, "statutory");
+  assert.ok(j.reasons.includes("kleinunternehmer"));
+  assert.ok(j.reasons.includes("reverse_charge_domestic"));
+  assert.equal(j.simplifiedLimitCents, 25000, "§ 33 UStDV, checked");
+});
+
+check("another EU state gets the Directive baseline, NOT German paragraphs", () => {
+  for (const code of ["PL", "SE", "FR"]) {
+    const j = jurisdictionFor(code);
+    assert.equal(j.ruleSet, "EU", `${code} should be EU`);
+    assert.equal(j.verification, "directive");
+    assert.equal(j.inEu, true);
+    assert.ok(!j.reasons.includes("kleinunternehmer"), `${code} must not be offered § 19 UStG`);
+    assert.ok(!j.reasons.includes("reverse_charge_domestic"), `${code} must not be offered § 13b`);
+    assert.ok(j.reasons.includes("reverse_charge_eu"));
+    assert.ok(j.reasons.includes("small_business_national"), "its own scheme, its own wording");
+    assert.equal(j.simplifiedLimitCents, undefined, "we have not checked its threshold");
+    assert.match(j.disclaimer, new RegExp(EU_MEMBER_STATES[code]));
+  }
+});
+
+check("outside the EU nothing is claimed — structural checks only", () => {
+  const j = jurisdictionFor("IN");
+  assert.equal(j.ruleSet, "GENERIC");
+  assert.equal(j.verification, "structural");
+  assert.equal(j.inEu, false);
+  assert.deepEqual(j.reasons.sort(), ["export_third_country", "other"]);
+  assert.match(j.notVerified.join(" "), /GSTIN/, "India's actual requirements are named");
+  assert.match(j.disclaimer, /does not encode the tax rules/);
+});
+
+check("an unknown country still resolves, and promises nothing", () => {
+  const j = jurisdictionFor(undefined);
+  assert.equal(j.ruleSet, "GENERIC");
+  assert.ok(j.notVerified.length);
+});
+
+check("every jurisdiction names what it does NOT check", () => {
+  for (const code of ["DE", "PL", "IN", "US"]) {
+    const j = jurisdictionFor(code);
+    assert.ok(j.notVerified.length >= 2, `${code} should name its gaps`);
+    assert.ok(j.basis.length > 5);
+  }
+});
+
+console.log("\nRules follow the issuer's country");
+
+const plIssuer = { ...issuer, country: "PL", vatId: "PL1234567890" };
+
+check("a German exemption is REFUSED for a Polish entity", () => {
+  const r = checkCompliance(
+    draft({
+      issuer: plIssuer,
+      treatment: { kind: "exempt", reason: "kleinunternehmer" },
+    }),
+    jurisdictionFor("PL"),
+  );
+  assert.equal(r.ok, false);
+  const hit = r.errors.find((e) => e.field === "treatment");
+  assert.ok(hit, "picking § 19 UStG in Poland must be refused");
+  assert.match(hit!.message, /not part of the Poland rule set/);
+});
+
+check("the EU-wide reasons still work for a Polish entity", () => {
+  const r = checkCompliance(
+    draft({
+      issuer: plIssuer,
+      recipient: { ...recipient, country: "FR", vatId: "FR12345678901" },
+      treatment: { kind: "exempt", reason: "reverse_charge_eu" },
+    }),
+    jurisdictionFor("PL"),
+  );
+  assert.equal(r.ok, true, r.errors.map((e) => e.message).join("; "));
+  assert.equal(r.jurisdiction.ruleSet, "EU");
+});
+
+check("citations follow the rule set — no German paragraphs outside Germany", () => {
+  const de = checkCompliance(draft({ number: undefined }), jurisdictionFor("DE"));
+  assert.match(de.errors.find((e) => e.field === "number")!.legalBasis!, /UStG/);
+
+  const pl = checkCompliance(
+    draft({ issuer: plIssuer, number: undefined }),
+    jurisdictionFor("PL"),
+  );
+  const plHit = pl.errors.find((e) => e.field === "number")!;
+  assert.match(plHit.legalBasis!, /VAT Directive/, "cite the Directive, not the UStG");
+  assert.doesNotMatch(plHit.legalBasis!, /UStG/);
+
+  const inn = checkCompliance(
+    draft({ issuer: { ...issuer, country: "IN" }, number: undefined }),
+    jurisdictionFor("IN"),
+  );
+  assert.equal(
+    inn.errors.find((e) => e.field === "number")!.legalBasis,
+    undefined,
+    "no law is being applied, so none is cited",
+  );
+});
+
+check("the €250 simplified shortcut is German-only", () => {
+  const small = { lines: [{ description: "Kleinteil", quantity: "1", unitPriceNet: "100.00" }], number: undefined, supplyDate: undefined, recipient: {} };
+  assert.equal(checkCompliance(draft(small), jurisdictionFor("DE")).regime, "kleinbetrag");
+  const pl = checkCompliance(draft({ ...small, issuer: plIssuer }), jurisdictionFor("PL"));
+  assert.equal(pl.regime, "standard", "we have not checked Poland's threshold");
+  assert.equal(pl.ok, false);
+});
+
+check("German rates are enforced in Germany and not asserted elsewhere", () => {
+  const deBad = checkCompliance(
+    draft({ treatment: { kind: "standard", rate: 23 } }),
+    jurisdictionFor("DE"),
+  );
+  assert.equal(deBad.ok, false);
+  assert.match(deBad.errors.find((e) => e.field === "treatment")!.message, /not a German rate/);
+
+  const plOk = checkCompliance(
+    draft({ issuer: plIssuer, treatment: { kind: "standard", rate: 23 } }),
+    jurisdictionFor("PL"),
+  );
+  assert.equal(plOk.ok, true, plOk.errors.map((e) => e.message).join("; "));
+  assert.equal(plOk.totals.vatCents, 23000, "23% of 1000.00");
+});
+
+check("every result reports how far it checked", () => {
+  assert.equal(checkCompliance(draft(), jurisdictionFor("DE")).jurisdiction.verification, "statutory");
+  assert.equal(
+    checkCompliance(draft({ issuer: plIssuer }), jurisdictionFor("PL")).jurisdiction.verification,
+    "directive",
+  );
+  const generic = checkCompliance(
+    draft({ issuer: { ...issuer, country: "IN" }, treatment: { kind: "exempt", reason: "other", note: "GST reverse charge" } }),
+    jurisdictionFor("IN"),
+  );
+  assert.equal(generic.jurisdiction.verification, "structural");
+  assert.equal(generic.ok, true, "coherent — which is all we claim");
+  assert.ok(generic.jurisdiction.notVerified.length, "and it says what it did not check");
+});
+
+console.log("\nCustom rules for countries we do not encode");
+
+check("a custom rule needs an id, a label and the note it prints", () => {
+  assert.throws(() => validateCustomReason({ id: "X", label: "a", invoiceNote: "n" }), /id of 2 to 40/);
+  assert.throws(() => validateCustomReason({ id: "gst_rcm", label: "Reverse charge", invoiceNote: "" }), /note to print/);
+  const ok = validateCustomReason({
+    id: "gst_rcm",
+    label: "GST reverse charge",
+    legalBasis: "Section 9(3) CGST Act",
+    invoiceNote: "Tax payable under reverse charge mechanism",
+  });
+  assert.equal(ok.id, "gst_rcm");
+});
+
+check("a custom rule is accepted where a built-in one would not be", () => {
+  const custom = [
+    validateCustomReason({
+      id: "gst_rcm",
+      label: "GST reverse charge",
+      legalBasis: "Section 9(3) CGST Act",
+      invoiceNote: "Tax payable under reverse charge mechanism",
+      requiresRecipientVatId: true,
+    }),
+  ];
+  const inIssuer = { ...issuer, country: "IN" };
+
+  const missingId = checkCompliance(
+    draft({ issuer: inIssuer, treatment: { kind: "exempt", reason: "gst_rcm" } }),
+    jurisdictionFor("IN"),
+    custom,
+  );
+  assert.equal(missingId.ok, false, "the custom rule's own requirement is enforced");
+  assert.ok(missingId.errors.some((e) => e.field === "recipient.vatId"));
+
+  const good = checkCompliance(
+    draft({
+      issuer: inIssuer,
+      recipient: { ...recipient, country: "IN", vatId: "IN1234567890" },
+      treatment: { kind: "exempt", reason: "gst_rcm" },
+    }),
+    jurisdictionFor("IN"),
+    custom,
+  );
+  assert.equal(good.ok, true, good.errors.map((e) => e.message).join("; "));
+  assert.equal(
+    vatNoteFor({ kind: "exempt", reason: "gst_rcm" }, "en", custom),
+    "Tax payable under reverse charge mechanism",
+    "the user's wording is what prints",
+  );
+});
+
+check("an unknown reason is refused rather than printed blank", () => {
+  const r = checkCompliance(
+    draft({ treatment: { kind: "exempt", reason: "made_up" } }),
+    jurisdictionFor("DE"),
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.some((e) => /not a known exemption reason/.test(e.message)));
 });
 
 console.log(`\n${passed} checks passed${process.exitCode ? " (with failures above)" : ""}\n`);

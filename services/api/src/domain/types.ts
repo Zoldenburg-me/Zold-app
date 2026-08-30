@@ -111,8 +111,21 @@ export interface Organisation {
      * §14c mistake, and the default is where it would happen.
      */
     smallBusiness?: boolean;
-    /** 19 or 7. Only consulted when not a small business. */
-    defaultVatRate?: 19 | 7;
+    /** The rate this org normally charges. A number, not a German 19|7 union —
+     *  see VatRate. Only consulted when not a small business. */
+    defaultVatRate?: number;
+    /** Which jurisdiction's rules were applied, resolved from the org address.
+     *  Stored on issue so a later move does not restate old invoices. */
+    jurisdiction?: string;
+    /** Rules the org added because its country needs something we do not
+     *  encode. Always presented as user-supplied, never as validated. */
+    customReasons?: {
+      id: string;
+      label: string;
+      legalBasis?: string;
+      invoiceNote: string;
+      requiresRecipientVatId?: boolean;
+    }[];
     /** Registration details German invoices commonly carry in the footer. */
     registerCourt?: string; // Amtsgericht
     registerNumber?: string; // HRB …
@@ -509,9 +522,11 @@ export interface Invoice {
     supplyPeriod?: { from: string; to: string };
     issuer: InvoiceParty;
     recipient: InvoiceParty;
-    /** See domain/invoicing.ts — exempt arms carry no rate by construction. */
+    /** See domain/invoicing.ts — exempt arms carry no rate by construction.
+     *  The rate is a plain number: it is 19 in Germany, 23 in Poland, 25 in
+     *  Sweden, and we do not ship a rate table. */
     vatTreatment:
-      | { kind: "standard"; rate: 19 | 7 }
+      | { kind: "standard"; rate: number }
       | { kind: "exempt"; reason: string; note?: string };
     /** The statutory note actually printed, resolved at issue time. */
     vatNote?: string;
@@ -528,6 +543,19 @@ export interface Invoice {
     language?: "de" | "en";
     /** Compliance warnings accepted at issue, kept for the audit trail. */
     acceptedWarnings?: string[];
+    /**
+     * Which rules were applied and how deep the check went. Frozen with the
+     * document: the entity may later move country, and a 2026 invoice must keep
+     * saying which rule set it was issued under.
+     */
+    jurisdiction?: {
+      country: string;
+      countryName: string;
+      ruleSet: "DE" | "EU" | "GENERIC";
+      verification: "statutory" | "directive" | "structural";
+      basis: string;
+      notVerified: string[];
+    };
   };
 }
 
