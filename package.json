@@ -61,6 +61,7 @@
     "dex:setup": "tsx scripts/dex-setup.ts",
     "business:test": "tsx scripts/business-test.ts",
     "draft:test": "tsx scripts/draft-execution-test.ts",
+    "invoicing:test": "tsx scripts/invoicing-test.ts",
     "receipt:test": "tsx scripts/receipt-share-test.ts"
   },
   "devDependencies": {

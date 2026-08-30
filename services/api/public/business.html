@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -457,13 +458,22 @@ RENDER.payments = async () => {
 RENDER.invoices = async () => {
   if (!cap("invoices").allowed) return gateHtml("invoices");
   const { invoices } = await api(`/api/orgs/${org.id}/invoices`);
-  return `<div class="card"><div class="h"><div><h2>Invoices</h2>
+  return `<div class="card"><div class="h"><div><h2>Issue an invoice</h2>
+    <div class="desc">A document you send a customer. Your details are filled in from your invoicing
+      profile, and it is checked against §&nbsp;14 UStG before it can be issued.</div></div>
+    <div class="row-actions">
+      <button data-act="issue-invoice">New invoice</button>
+      <button class="ghost" data-act="invoicing-settings">Invoicing profile</button>
+    </div></div></div>
+
+    <div class="card"><div class="h"><div><h2>Request an invoice</h2>
     <div class="desc">Send a one-time link. Your supplier fills it in with no account and no wallet.</div></div>
-    <button data-act="new-invoice">Create invoice link</button></div>` +
+    <button class="ghost" data-act="new-invoice">Create invoice link</button></div>` +
     (invoices.length ? `<table><thead><tr><th>State</th><th>Supplier</th><th>Total</th><th>Due</th></tr></thead><tbody>` +
       invoices.map((i) => `<tr>
-        <td><span class="pill ${i.state === "PAID" ? "ok" : i.overdue ? "bad" : "mut"}">${esc(i.overdue && i.state !== "PAID" ? "OVERDUE" : i.state)}</span></td>
-        <td>${esc(i.supplier?.orgName || "— not submitted yet")}
+        <td><span class="pill ${i.state === "PAID" ? "ok" : i.overdue ? "bad" : "mut"}">${esc(i.overdue && i.state !== "PAID" ? "OVERDUE" : i.state)}</span>
+          <div class="desc">${i.direction === "outgoing" ? "issued by you" : "from a supplier"}</div></td>
+        <td>${esc(i.issued?.recipient?.name || i.supplier?.orgName || "— not submitted yet")}
           ${i.supplier?.invoiceNumber ? `<div class="desc">#${esc(i.supplier.invoiceNumber)}</div>` : ""}</td>
         <td class="mono">${esc(i.total)} ${esc(i.currency)}</td>
         <td class="desc">${esc(i.dueDate || "—")}</td></tr>`).join("") + `</tbody></table>`
@@ -573,6 +583,236 @@ RENDER.settings = async () => {
     </div>`;
 };
 
+
+// ── Invoicing: profile and the issue editor ────────────────────────────────
+//
+// Two rules shape this screen, and both come from the tax code rather than from
+// taste:
+//  - You may choose which OPTIONAL blocks appear. Everything § 14 UStG requires
+//    is always rendered; a settings screen that can switch off a mandatory
+//    field is a trap, and it springs on the customer, who loses their
+//    input-tax deduction.
+//  - Charging VAT and not charging it are a single either/or with a REASON
+//    attached, never a rate box you can zero out. Showing tax you do not owe
+//    makes you liable for it (§ 14c UStG).
+
+let invoiceDraft = null;
+
+RENDER["invoicing-settings"] = async () => {
+  const d = await api(`/api/orgs/${org.id}/invoicing/profile`);
+  const p = d.profile, iss = d.issuer, ref = d.reference;
+  const on = (k) => (p.display?.[k] !== false ? "checked" : "");
+  return `
+  <div class="banner info">${esc(d.disclaimer)}</div>
+
+  <div class="card"><div class="h"><div><h2>Your details on an invoice</h2>
+    <div class="desc">§&nbsp;14 Abs.&nbsp;4 UStG requires your full name, address and either a
+      Steuernummer or a USt-IdNr. on every invoice. Set them once and they fill in every time.</div></div>
+    <button data-act="save-invoicing">Save</button></div>
+    <div class="grid g2">
+      <div>
+        <label>USt-IdNr.</label><input id="i-vatid" value="${esc(p.vatId || "")}" placeholder="DE123456789" />
+        <label>Steuernummer</label><input id="i-taxno" value="${esc(p.taxNumber || "")}" placeholder="123/456/78901" />
+        <label>Default VAT rate</label>
+        <select id="i-rate">${ref.vatRates.map((r) => `<option value="${r}" ${p.defaultVatRate === r ? "selected" : ""}>${r}%</option>`).join("")}</select>
+        <label style="display:flex; gap:.5rem; align-items:flex-start; margin-top:1rem">
+          <input type="checkbox" id="i-klein" ${p.smallBusiness ? "checked" : ""} style="width:auto; margin-top:.2rem" />
+          <span style="color:var(--text); font-size:.85rem; font-weight:500">Kleinunternehmer (§&nbsp;19 UStG)
+            <span class="desc" style="display:block; font-weight:400">New invoices will not charge VAT and will
+              carry the §&nbsp;19 note. While this is on, charging VAT is refused rather than allowed by mistake.</span></span>
+        </label>
+      </div>
+      <div>
+        <label>Payment terms (days)</label><input id="i-terms-days" type="number" min="0" value="${esc(p.paymentTermsDays ?? "")}" />
+        <label>Payment terms note</label><input id="i-terms" value="${esc(p.paymentTermsNote || "")}" placeholder="Zahlbar innerhalb von 14 Tagen ohne Abzug." />
+        <label>Invoice number series</label>
+        <div style="display:flex; gap:.5rem">
+          <input id="i-prefix" value="${esc(p.numberSeries.prefix)}" placeholder="RE-{YYYY}-" />
+          <input id="i-next" type="number" min="1" value="${esc(p.numberSeries.next)}" style="width:110px" />
+        </div>
+        <div class="desc" style="margin-top:.3rem">Next: <b>${esc(p.numberSeries.prefix.replace("{YYYY}", new Date().getFullYear()))}${String(p.numberSeries.next).padStart(p.numberSeries.padding, "0")}</b>.
+          §&nbsp;14 wants each number used once — it does not have to be gapless.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card"><div class="h"><div><h2>Bank details and footer</h2>
+    <div class="desc">Shown on the invoice when the matching block is switched on below.</div></div></div>
+    <div class="grid g2">
+      <div>
+        <label>Account holder</label><input id="i-bank-holder" value="${esc(p.bank?.holder || "")}" />
+        <label>IBAN</label><input id="i-bank-iban" value="${esc(p.bank?.iban || "")}" />
+        <label>BIC</label><input id="i-bank-bic" value="${esc(p.bank?.bic || "")}" />
+      </div>
+      <div>
+        <label>Amtsgericht</label><input id="i-court" value="${esc(p.registerCourt || "")}" placeholder="Amtsgericht Regensburg" />
+        <label>Registernummer</label><input id="i-reg" value="${esc(p.registerNumber || "")}" placeholder="HRB 12345" />
+        <label>Geschäftsführer</label><input id="i-gf" value="${esc(p.managingDirector || "")}" />
+      </div>
+    </div>
+    <label>Footer note</label><input id="i-footer" value="${esc(p.footerNote || "")}" />
+  </div>
+
+  <div class="card"><div class="h"><div><h2>What appears on the invoice</h2>
+    <div class="desc">Optional blocks only. Everything §&nbsp;14 UStG requires is always printed and is
+      not listed here — a switch that can produce an invalid invoice is worse than no switch.</div></div></div>
+    <div class="grid g3">
+      ${ref.displayOptions.map((k) => `<label style="display:flex; gap:.5rem; align-items:center; margin:.3rem 0">
+        <input type="checkbox" data-display="${esc(k)}" ${on(k)} style="width:auto" />
+        <span style="color:var(--text); font-size:.85rem">${esc(k.replace(/([A-Z])/g, " $1").toLowerCase())}</span>
+      </label>`).join("")}
+    </div>
+  </div>
+
+  <div class="card"><div class="h"><div><h2>Prefilled from your organisation</h2></div>
+    <button class="ghost sm" data-act="goto-settings">Edit</button></div>
+    <table><tbody>
+      ${[["Name", iss.name], ["Address", [iss.addressLine, [iss.postalCode, iss.city].filter(Boolean).join(" "), iss.country].filter(Boolean).join(", ")],
+         ["USt-IdNr.", iss.vatId], ["Steuernummer", iss.taxNumber]]
+        .map(([k, v]) => `<tr><td class="desc">${esc(k)}</td><td>${v ? esc(v) : `<span class="pill bad">missing</span>`}</td></tr>`).join("")}
+    </tbody></table>
+  </div>`;
+};
+
+RENDER["invoice-new"] = async () => {
+  const d = await api(`/api/orgs/${org.id}/invoicing/profile`);
+  const { contacts } = await api(`/api/orgs/${org.id}/contacts`);
+  invoiceDraft ??= {
+    lines: [{ description: "", quantity: "1", unitPriceNet: "" }],
+    vat: d.profile.smallBusiness
+      ? { kind: "exempt", reason: "kleinunternehmer" }
+      : { kind: "standard", rate: d.profile.defaultVatRate ?? 19 },
+  };
+  const v = invoiceDraft.vat;
+  const reasons = d.reference.exemptionReasons;
+  const today = new Date().toISOString().slice(0, 10);
+
+  return `
+  <div class="banner info">${esc(d.disclaimer)}</div>
+
+  <div class="card"><div class="h"><div><h2>Customer</h2>
+    <div class="desc">§&nbsp;14 Abs.&nbsp;4 Nr.&nbsp;1 needs their full name and address.</div></div>
+    ${contacts.length ? `<select id="inv-contact" style="max-width:240px">
+      <option value="">From address book…</option>
+      ${contacts.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")}
+    </select>` : ""}</div>
+    <div class="grid g2">
+      <div>
+        <label>Name</label><input id="inv-r-name" value="${esc(invoiceDraft.recipient?.name || "")}" />
+        <label>Street and number</label><input id="inv-r-addr" value="${esc(invoiceDraft.recipient?.addressLine || "")}" />
+      </div>
+      <div>
+        <div style="display:flex; gap:.5rem">
+          <div style="width:120px"><label>Postcode</label><input id="inv-r-zip" value="${esc(invoiceDraft.recipient?.postalCode || "")}" /></div>
+          <div style="flex:1"><label>City</label><input id="inv-r-city" value="${esc(invoiceDraft.recipient?.city || "")}" /></div>
+        </div>
+        <div style="display:flex; gap:.5rem">
+          <div style="width:120px"><label>Country</label><input id="inv-r-country" maxlength="2" value="${esc(invoiceDraft.recipient?.country || "DE")}" /></div>
+          <div style="flex:1"><label>VAT ID</label><input id="inv-r-vat" value="${esc(invoiceDraft.recipient?.vatId || "")}" placeholder="required for reverse charge" /></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card"><div class="h"><div><h2>Dates</h2>
+    <div class="desc">The date of supply is mandatory even when it is the same day as the invoice
+      (§&nbsp;14 Abs.&nbsp;4 Nr.&nbsp;6).</div></div></div>
+    <div class="grid g3">
+      <div><label>Invoice date</label><input id="inv-issue" type="date" value="${esc(invoiceDraft.issueDate || today)}" /></div>
+      <div><label>Date of supply</label><input id="inv-supply" type="date" value="${esc(invoiceDraft.supplyDate || today)}" /></div>
+      <div><label>Purchase order (optional)</label><input id="inv-po" value="${esc(invoiceDraft.purchaseOrder || "")}" /></div>
+    </div>
+  </div>
+
+  <div class="card"><div class="h"><div><h2>Lines</h2></div>
+    <button class="ghost sm" data-act="inv-add-line">Add line</button></div>
+    <table><thead><tr><th>Description</th><th style="width:90px">Qty</th><th style="width:130px">Unit price (net)</th><th style="width:90px"></th></tr></thead>
+      <tbody id="inv-lines">
+        ${invoiceDraft.lines.map((l, i) => `<tr>
+          <td><input data-li="${i}" data-lf="description" value="${esc(l.description)}" /></td>
+          <td><input data-li="${i}" data-lf="quantity" value="${esc(l.quantity)}" /></td>
+          <td><input data-li="${i}" data-lf="unitPriceNet" value="${esc(l.unitPriceNet)}" placeholder="0.00" /></td>
+          <td>${invoiceDraft.lines.length > 1 ? `<button class="ghost sm" data-act="inv-del-line" data-i="${i}">Remove</button>` : ""}</td>
+        </tr>`).join("")}
+      </tbody></table>
+  </div>
+
+  <div class="card"><div class="h"><div><h2>VAT</h2>
+    <div class="desc">Charge it, or say why you are not. Both go on the document.</div></div></div>
+    <div style="display:flex; gap:.6rem; flex-wrap:wrap; margin-bottom:.9rem">
+      <button class="${v.kind === "standard" ? "" : "ghost"} sm" data-act="inv-vat-mode" data-mode="standard"
+        ${d.profile.smallBusiness ? "disabled title='Kleinunternehmer — turn it off in the profile first'" : ""}>Charge VAT</button>
+      <button class="${v.kind === "exempt" ? "" : "ghost"} sm" data-act="inv-vat-mode" data-mode="exempt">Do not charge VAT</button>
+    </div>
+    ${v.kind === "standard"
+      ? `<label>Rate</label><select id="inv-rate">${d.reference.vatRates
+          .map((r) => `<option value="${r}" ${v.rate === r ? "selected" : ""}>${r}%</option>`).join("")}</select>`
+      : `<label>Why not?</label>
+         <select id="inv-reason">${reasons.map((r) => `<option value="${esc(r.id)}" ${v.reason === r.id ? "selected" : ""}>${esc(r.label)} — ${esc(r.legalBasis)}</option>`).join("")}</select>
+         <div class="desc" style="margin-top:.4rem">${esc(reasons.find((r) => r.id === v.reason)?.hint || "")}</div>
+         <div class="desc" style="margin-top:.4rem">Printed on the invoice:
+           <b style="color:var(--text)">${esc(reasons.find((r) => r.id === v.reason)?.invoiceNote || "—")}</b></div>
+         ${v.reason === "other"
+           ? `<label>Exemption and legal basis</label><input id="inv-note" value="${esc(v.note || "")}"
+                placeholder="Steuerfrei nach § 4 Nr. … UStG" />` : ""}`}
+  </div>
+
+  <div class="card" id="inv-check"><div class="desc">Checking…</div></div>
+
+  <div class="row-actions" style="margin-bottom:2rem">
+    <button data-act="inv-issue">Issue invoice</button>
+    <button class="ghost" data-act="inv-cancel">Cancel</button>
+  </div>`;
+};
+
+/** Read the editor's inputs back into the draft. */
+function readInvoiceEditor() {
+  if (!invoiceDraft) return;
+  const val = (id) => $("#" + id)?.value?.trim() ?? "";
+  invoiceDraft.recipient = {
+    name: val("inv-r-name"), addressLine: val("inv-r-addr"), postalCode: val("inv-r-zip"),
+    city: val("inv-r-city"), country: val("inv-r-country").toUpperCase(), vatId: val("inv-r-vat"),
+  };
+  invoiceDraft.issueDate = val("inv-issue");
+  invoiceDraft.supplyDate = val("inv-supply");
+  invoiceDraft.purchaseOrder = val("inv-po");
+  $("#inv-lines")?.querySelectorAll("input").forEach((el) => {
+    invoiceDraft.lines[Number(el.dataset.li)][el.dataset.lf] = el.value;
+  });
+  if (invoiceDraft.vat.kind === "standard") {
+    invoiceDraft.vat.rate = Number($("#inv-rate")?.value ?? 19);
+  } else {
+    invoiceDraft.vat.reason = $("#inv-reason")?.value ?? invoiceDraft.vat.reason;
+    invoiceDraft.vat.note = $("#inv-note")?.value ?? invoiceDraft.vat.note;
+  }
+}
+
+/** Live compliance panel — the missing-field list while it can still be fixed. */
+async function refreshInvoiceCheck() {
+  const box = $("#inv-check");
+  if (!box || !invoiceDraft) return;
+  readInvoiceEditor();
+  try {
+    const r = await api(`/api/orgs/${org.id}/invoicing/check`, { method: "POST", body: invoiceDraft });
+    const t = r.totals;
+    const rows = (list, cls) => list.map((i) => `<div class="issue">
+      <span class="pill ${cls}">${cls === "bad" ? "required" : "check"}</span>
+      <div><div>${esc(i.message)}</div>${i.legalBasis ? `<div class="desc">${esc(i.legalBasis)}</div>` : ""}</div></div>`).join("");
+    box.innerHTML = `<div class="h"><div><h2>${r.ok ? "Ready to issue" : `${r.errors.length} thing(s) still needed`}</h2>
+        <div class="desc">${esc({ standard: "Full § 14 UStG content", kleinbetrag: "Kleinbetragsrechnung (§ 33 UStDV, up to €250 gross)", kleinunternehmer: "Kleinunternehmer (§ 19 UStG / § 34a UStDV)" }[r.regime])}</div></div>
+      <div style="text-align:right"><div class="desc">Total</div>
+        <div style="font-size:1.3rem; font-weight:600">${fmtEur(t.grossCents)}</div>
+        <div class="desc">net ${fmtEur(t.netCents)}${t.vatCents ? ` · VAT ${fmtEur(t.vatCents)}` : " · no VAT"}</div></div></div>
+      ${rows(r.errors, "bad")}${rows(r.warnings, "warn")}
+      ${r.ok && !r.warnings.length ? `<div class="desc">Every mandatory field is present.</div>` : ""}`;
+  } catch (e) {
+    box.innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;
+  }
+}
+
+const fmtEur = (cents) =>
+  new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format((cents ?? 0) / 100);
+
 // ── actions ────────────────────────────────────────────────────────────────
 
 function dialog(title, bodyHtml, onSubmit) {
@@ -679,6 +919,71 @@ const ACTIONS = {
     await api(`/api/orgs/${org.id}/members/${el.dataset.id}`, {
       method: "PATCH", body: { status: "active" },
     });
+  },
+  "invoicing-settings"() { view = "invoicing-settings"; },
+  "goto-settings"() { view = "settings"; },
+  "issue-invoice"() { invoiceDraft = null; view = "invoice-new"; },
+  "inv-cancel"() { invoiceDraft = null; view = "invoices"; },
+  "inv-add-line"() {
+    readInvoiceEditor();
+    invoiceDraft.lines.push({ description: "", quantity: "1", unitPriceNet: "" });
+  },
+  "inv-del-line"(el) {
+    readInvoiceEditor();
+    invoiceDraft.lines.splice(Number(el.dataset.i), 1);
+  },
+  "inv-vat-mode"(el) {
+    readInvoiceEditor();
+    // Switching mode REPLACES the treatment rather than merging: carrying a
+    // rate across into the exempt arm is precisely the § 14c mistake.
+    invoiceDraft.vat = el.dataset.mode === "exempt"
+      ? { kind: "exempt", reason: "kleinunternehmer" }
+      : { kind: "standard", rate: 19 };
+  },
+  async "inv-issue"() {
+    readInvoiceEditor();
+    let r;
+    try {
+      r = await api(`/api/orgs/${org.id}/invoicing/issue`, { method: "POST", body: invoiceDraft });
+    } catch (e) {
+      if (e.status === 409 && e.warnings?.length) {
+        const ok = confirm(
+          "This invoice has warnings:\n\n" + e.warnings.map((w) => "• " + w.message).join("\n") +
+          "\n\nIssue it anyway? Your acceptance is recorded on the document.",
+        );
+        if (!ok) return;
+        r = await api(`/api/orgs/${org.id}/invoicing/issue`, {
+          method: "POST", body: { ...invoiceDraft, acceptWarnings: true },
+        });
+      } else throw e;
+    }
+    invoiceDraft = null;
+    view = "invoices";
+    prompt(`Invoice ${r.invoice.issued.number} issued. Send your customer this link:`,
+      location.origin + r.linkPath);
+  },
+  async "save-invoicing"() {
+    const val = (id) => $("#" + id)?.value?.trim() ?? "";
+    const display = {};
+    document.querySelectorAll("[data-display]").forEach((el) => {
+      display[el.dataset.display] = el.checked;
+    });
+    await api(`/api/orgs/${org.id}/invoicing/profile`, {
+      method: "PATCH",
+      body: {
+        vatId: val("i-vatid"), taxNumber: val("i-taxno"),
+        smallBusiness: $("#i-klein")?.checked === true,
+        defaultVatRate: Number($("#i-rate")?.value ?? 19),
+        paymentTermsDays: val("i-terms-days") ? Number(val("i-terms-days")) : undefined,
+        paymentTermsNote: val("i-terms"),
+        registerCourt: val("i-court"), registerNumber: val("i-reg"),
+        managingDirector: val("i-gf"), footerNote: val("i-footer"),
+        bank: { holder: val("i-bank-holder"), iban: val("i-bank-iban"), bic: val("i-bank-bic") },
+        numberSeries: { prefix: val("i-prefix"), next: Number(val("i-next") || 1), padding: 4 },
+        display,
+      },
+    });
+    toast("Invoicing profile saved.");
   },
   "new-invoice": () => dialog("Create an invoice link",
     `<label>Currency</label><input id="d-cur" value="${esc(org.reporting.currency)}" />
@@ -838,11 +1143,31 @@ async function render() {
   renderNav();
   $("#plan-banner").innerHTML = planBanner();
   const def = VIEWS.find((v) => v.id === view);
-  $("#view-title").textContent = def?.label ?? "Overview";
+  const extraTitles = { "invoice-new": "New invoice", "invoicing-settings": "Invoicing profile" };
+  $("#view-title").textContent = def?.label ?? extraTitles[view] ?? "Overview";
   $("#view-sub").textContent = `${org.name} · ${org.type} · ${org.effectivePlan}`;
   $("#view").innerHTML = `<div class="empty">Loading…</div>`;
   try {
     $("#view").innerHTML = await (RENDER[view] ?? RENDER.overview)();
+    if (view === "invoice-new") {
+      refreshInvoiceCheck();
+      // Debounced so typing an address is not a request per keystroke.
+      let t;
+      $("#view").addEventListener("input", () => {
+        clearTimeout(t);
+        t = setTimeout(refreshInvoiceCheck, 400);
+      });
+      $("#inv-contact")?.addEventListener("change", async (e) => {
+        if (!e.target.value) return;
+        const { contacts } = await api(`/api/orgs/${org.id}/contacts`);
+        const c = contacts.find((x) => x.id === e.target.value);
+        if (!c) return;
+        const b = c.bankAccounts[0];
+        $("#inv-r-name").value = c.name;
+        if (b?.country) $("#inv-r-country").value = b.country;
+        refreshInvoiceCheck();
+      });
+    }
   } catch (e) {
     // A 402 here means the plan gate fired server-side. Show the same prompt
     // rather than an error, so the two agree.

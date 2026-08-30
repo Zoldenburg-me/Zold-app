@@ -45,6 +45,24 @@ import {
 } from "../domain/invoices.js";
 import { CoaError, applyRules, TX_TYPES, validateChartAccount } from "../domain/coa.js";
 import {
+  DEFAULT_DISPLAY,
+  DEFAULT_SERIES,
+  EXEMPTION_REASONS,
+  InvoiceComplianceError,
+  KLEINBETRAG_LIMIT_CENTS,
+  checkCompliance,
+  formatInvoiceNumber,
+  fromCents,
+  normaliseVatId,
+  taxNumberLooksValid,
+  vatIdLooksValid,
+  vatNoteFor,
+  type ExemptionReasonId,
+  type InvoiceDraft,
+  type VatTreatment,
+} from "../domain/invoicing.js";
+import { ibanChecksumValid, normaliseIban } from "../domain/contacts.js";
+import {
   LEDGER_EXPORT_COLUMNS,
   computeCostBasis,
   ledgerExportRows,
@@ -52,7 +70,113 @@ import {
   positions,
   toCsv,
 } from "../domain/ledger.js";
-import type { DraftPayment, DraftState, Invoice } from "../domain/types.js";
+import type { DraftPayment, DraftState, Invoice, InvoiceParty, Organisation } from "../domain/types.js";
+
+
+const str = (v: unknown): string | undefined =>
+  typeof v === "string" && v.trim() ? v.trim() : undefined;
+
+/**
+ * The organisation as it must appear on an invoice it issues.
+ *
+ * This IS the prefill: §14 Abs. 4 Nr. 1 and 2 want the issuer's full name,
+ * address and Steuernummer or USt-IdNr. on every invoice, so they are read off
+ * the org rather than retyped per document. `legalName` wins over the trading
+ * name, because the legal entity is what the tax office matches.
+ */
+function issuerParty(org: Organisation): InvoiceParty {
+  return {
+    name: org.legalName || org.name,
+    addressLine: [org.address?.line1, org.address?.line2].filter(Boolean).join(", ") || undefined,
+    postalCode: org.address?.postalCode,
+    city: org.address?.city,
+    country: org.address?.country,
+    vatId: org.invoicing?.vatId,
+    taxNumber: org.invoicing?.taxNumber,
+    email: org.email,
+  };
+}
+
+/** Due date from the org's payment terms, so the field is not retyped either. */
+function draftDueDate(org: Organisation, issueDate: string): string | undefined {
+  const days = org.invoicing?.paymentTermsDays;
+  if (!days && days !== 0) return undefined;
+  const d = new Date(issueDate);
+  if (Number.isNaN(d.getTime())) return undefined;
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Build a draft from the request, filling the issuer from the organisation and
+ * the VAT treatment from what the user chose.
+ *
+ * THE DEFAULT MATTERS: a Kleinunternehmer must never be handed a VAT rate by
+ * default. Showing tax you do not owe makes you liable for it under §14c, and a
+ * default is exactly where that would slip through unnoticed.
+ */
+function draftFrom(org: Organisation, body: Record<string, any>): InvoiceDraft {
+  const inv = org.invoicing ?? {};
+  const wantsExempt =
+    body.vat?.kind === "exempt" || (body.vat === undefined && inv.smallBusiness === true);
+
+  let treatment: VatTreatment;
+  if (wantsExempt) {
+    const reason = (body.vat?.reason ?? (inv.smallBusiness ? "kleinunternehmer" : undefined)) as
+      | ExemptionReasonId
+      | undefined;
+    if (!reason || !EXEMPTION_REASONS[reason]) {
+      throw new InvoiceComplianceError(
+        `Choosing not to charge VAT needs a reason. One of: ${Object.keys(EXEMPTION_REASONS).join(", ")}.`,
+      );
+    }
+    if (EXEMPTION_REASONS[reason].requiresFreeText && !str(body.vat?.note)) {
+      throw new InvoiceComplianceError(
+        "Pick \"other\" and you must write the exemption and its legal basis yourself — it has to appear on the invoice.",
+      );
+    }
+    treatment = { kind: "exempt", reason, note: str(body.vat?.note) };
+  } else {
+    if (inv.smallBusiness) {
+      throw new InvoiceComplianceError(
+        "This organisation is registered as a Kleinunternehmer (§ 19 UStG) and must not charge VAT. Turn that off in the invoicing profile first, or issue the invoice exempt.",
+      );
+    }
+    const rate = Number(body.vat?.rate ?? inv.defaultVatRate ?? 19);
+    if (rate !== 19 && rate !== 7) {
+      throw new InvoiceComplianceError("German VAT is 19% or 7%.");
+    }
+    treatment = { kind: "standard", rate: rate as 19 | 7 };
+  }
+
+  const issueDate = str(body.issueDate) ?? new Date().toISOString().slice(0, 10);
+  const series = inv.numberSeries ?? DEFAULT_SERIES;
+
+  const recipient: InvoiceParty = {
+    name: str(body.recipient?.name),
+    addressLine: str(body.recipient?.addressLine),
+    postalCode: str(body.recipient?.postalCode),
+    city: str(body.recipient?.city),
+    country: str(body.recipient?.country)?.toUpperCase(),
+    vatId: body.recipient?.vatId ? normaliseVatId(String(body.recipient.vatId)) : undefined,
+    email: str(body.recipient?.email),
+  };
+
+  return {
+    number: str(body.number) ?? formatInvoiceNumber(series, new Date(issueDate)),
+    issueDate,
+    supplyDate: str(body.supplyDate),
+    supplyPeriod:
+      body.supplyPeriod?.from && body.supplyPeriod?.to
+        ? { from: String(body.supplyPeriod.from), to: String(body.supplyPeriod.to) }
+        : undefined,
+    issuer: { ...issuerParty(org), ...(body.issuerOverride ?? {}) },
+    recipient,
+    lines: Array.isArray(body.lines) ? body.lines : [],
+    treatment,
+    selfBilled: body.selfBilled === true,
+  };
+}
 
 const badRequest = (res: express.Response, err: unknown) => {
   if (err instanceof DraftError || err instanceof InvoiceError || err instanceof CoaError) {
@@ -731,6 +855,254 @@ export function createBusinessRouter(
     }
   });
 
+  // ── Invoicing profile (§14 UStG identity, prefilled onto every invoice) ───
+
+  /**
+   * What the issuer looks like on paper, plus the reference data the editor
+   * needs: the VAT rates, the exemption reasons with their statutes, and the
+   * optional blocks that may be switched off. Mandatory §14 fields are NOT in
+   * the display map — an invoice generator whose settings can produce an
+   * invalid document is a trap, and the person it catches is the customer who
+   * loses their input-tax deduction.
+   */
+  r.get("/:orgId/invoicing/profile", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "invoices.read")) return;
+
+    const inv = ctx.org.invoicing ?? {};
+    res.json({
+      profile: {
+        ...inv,
+        display: { ...DEFAULT_DISPLAY, ...(inv.display ?? {}) },
+        numberSeries: inv.numberSeries ?? DEFAULT_SERIES,
+      },
+      // Prefill: who the issuer is, straight off the organisation.
+      issuer: issuerParty(ctx.org),
+      reference: {
+        vatRates: [19, 7],
+        exemptionReasons: Object.values(EXEMPTION_REASONS),
+        displayOptions: Object.keys(DEFAULT_DISPLAY),
+        kleinbetragLimitCents: KLEINBETRAG_LIMIT_CENTS,
+      },
+      disclaimer:
+        "Zold is not a tax adviser. These fields follow §§ 14, 14a UStG and the related rules, but whether a supply is exempt — and which exemption applies — is your decision with your Steuerberater.",
+    });
+  });
+
+  r.patch("/:orgId/invoicing/profile", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "invoices.manage")) return;
+
+    const b = req.body ?? {};
+    const next = { ...(ctx.org.invoicing ?? {}) } as NonNullable<Organisation["invoicing"]>;
+
+    if (typeof b.vatId === "string") {
+      const v = normaliseVatId(b.vatId);
+      if (v && !vatIdLooksValid(v)) {
+        return res.status(400).json({
+          error: `${b.vatId} does not look like a VAT ID. A German one is DE followed by nine digits.`,
+          field: "vatId",
+        });
+      }
+      next.vatId = v || undefined;
+    }
+    if (typeof b.taxNumber === "string") {
+      const t = b.taxNumber.trim();
+      if (t && !taxNumberLooksValid(t)) {
+        return res.status(400).json({
+          error: `${t} does not look like a Steuernummer (10 to 13 digits).`,
+          field: "taxNumber",
+        });
+      }
+      next.taxNumber = t || undefined;
+    }
+    if (typeof b.smallBusiness === "boolean") next.smallBusiness = b.smallBusiness;
+    if (b.defaultVatRate === 19 || b.defaultVatRate === 7) next.defaultVatRate = b.defaultVatRate;
+    for (const k of ["registerCourt", "registerNumber", "managingDirector", "paymentTermsNote", "footerNote"] as const) {
+      if (typeof b[k] === "string") next[k] = b[k].trim() || undefined;
+    }
+    if (typeof b.paymentTermsDays === "number" && b.paymentTermsDays >= 0) {
+      next.paymentTermsDays = Math.round(b.paymentTermsDays);
+    }
+    if (b.language === "de" || b.language === "en") next.language = b.language;
+    if (b.bank && typeof b.bank === "object") {
+      const iban = typeof b.bank.iban === "string" ? normaliseIban(b.bank.iban) : undefined;
+      if (iban && !ibanChecksumValid(iban)) {
+        return res.status(400).json({ error: `${iban} is not a valid IBAN.`, field: "bank.iban" });
+      }
+      next.bank = {
+        holder: b.bank.holder?.trim() || undefined,
+        iban: iban || undefined,
+        bic: b.bank.bic?.toUpperCase().replace(/\s+/g, "") || undefined,
+        bankName: b.bank.bankName?.trim() || undefined,
+      };
+    }
+    if (b.numberSeries && typeof b.numberSeries === "object") {
+      const prefix = String(b.numberSeries.prefix ?? DEFAULT_SERIES.prefix);
+      const nextNo = Number(b.numberSeries.next ?? DEFAULT_SERIES.next);
+      if (!Number.isInteger(nextNo) || nextNo < 1) {
+        return res.status(400).json({ error: "The next invoice number must be a positive integer." });
+      }
+      next.numberSeries = {
+        prefix,
+        next: nextNo,
+        padding: Math.min(10, Math.max(1, Number(b.numberSeries.padding ?? DEFAULT_SERIES.padding))),
+      };
+    }
+    if (b.display && typeof b.display === "object") {
+      const display: Record<string, boolean> = { ...(next.display as Record<string, boolean> | undefined) };
+      for (const key of Object.keys(DEFAULT_DISPLAY)) {
+        if (typeof b.display[key] === "boolean") display[key] = b.display[key];
+      }
+      next.display = display;
+    }
+    if (Array.isArray(b.customFields)) {
+      next.customFields = b.customFields
+        .slice(0, 12)
+        .map((f: Record<string, unknown>) => ({
+          label: String(f.label ?? "").trim().slice(0, 60),
+          value: String(f.value ?? "").trim().slice(0, 200),
+        }))
+        .filter((f: { label: string }) => f.label);
+    }
+
+    const org = store.updateOrganisation(ctx.org.id, { invoicing: next });
+    res.json({ profile: org.invoicing, issuer: issuerParty(org) });
+  });
+
+  /**
+   * Dry-run the compliance check without issuing anything.
+   *
+   * The editor calls this as the user types, so the missing-field list appears
+   * while it can still be fixed rather than at the moment of issuing.
+   */
+  r.post("/:orgId/invoicing/check", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "invoices.read")) return;
+    try {
+      const draft = draftFrom(ctx.org, req.body ?? {});
+      const report = checkCompliance(draft);
+      res.json({ ...report, preview: { number: draft.number, totals: report.totals } });
+    } catch (err) {
+      if (err instanceof InvoiceComplianceError) {
+        return res.status(400).json({ error: err.message });
+      }
+      throw err;
+    }
+  });
+
+  /**
+   * Issue an outgoing invoice.
+   *
+   * Refuses on any compliance ERROR. Warnings can be accepted, but the
+   * acceptance is recorded on the document — "we told you and you said yes" is
+   * only meaningful if it is written down.
+   */
+  r.post("/:orgId/invoicing/issue", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "invoices.manage")) return;
+
+    let draft;
+    try {
+      draft = draftFrom(ctx.org, req.body ?? {});
+    } catch (err) {
+      if (err instanceof InvoiceComplianceError) {
+        return res.status(400).json({ error: err.message });
+      }
+      throw err;
+    }
+    const report = checkCompliance(draft);
+    if (!report.ok) {
+      return res.status(422).json({
+        error: `This invoice is missing ${report.errors.length} thing(s) German law requires. It has not been issued.`,
+        ...report,
+      });
+    }
+    if (report.warnings.length && req.body?.acceptWarnings !== true) {
+      return res.status(409).json({
+        error: "There are warnings on this invoice. Re-send with acceptWarnings: true to issue it anyway.",
+        ...report,
+      });
+    }
+
+    const series = ctx.org.invoicing?.numberSeries ?? DEFAULT_SERIES;
+    const now = new Date();
+    const { token, hash } = newLinkToken();
+    const display: Record<string, boolean> = {
+      ...DEFAULT_DISPLAY,
+      ...(ctx.org.invoicing?.display as Record<string, boolean> | undefined),
+    };
+
+    const invoice = store.addInvoice({
+      id: `inv_${randomUUID()}`,
+      direction: "outgoing",
+      orgId: ctx.org.id,
+      linkTokenHash: hash,
+      state: "SUBMITTED", // issued and locked; nothing for a supplier to fill in
+      lines: report.totals.lines.map((l) => ({
+        description: l.description,
+        quantity: l.quantity,
+        unitPrice: l.unitPriceNet,
+        amount: fromCents(l.netCents),
+      })),
+      currency: "EUR",
+      total: fromCents(report.totals.grossCents),
+      dueDate: draftDueDate(ctx.org, draft.issueDate!),
+      supplier: {
+        orgName: draft.issuer.name ?? ctx.org.name,
+        email: ctx.org.email ?? "",
+        invoiceNumber: draft.number!,
+      },
+      issued: {
+        number: draft.number!,
+        issueDate: draft.issueDate!,
+        supplyDate: draft.supplyDate,
+        supplyPeriod: draft.supplyPeriod,
+        issuer: draft.issuer,
+        recipient: draft.recipient,
+        vatTreatment: draft.treatment,
+        vatNote: vatNoteFor(draft.treatment, ctx.org.invoicing?.language ?? "de"),
+        netCents: report.totals.netCents,
+        vatCents: report.totals.vatCents,
+        grossCents: report.totals.grossCents,
+        buckets: report.totals.buckets,
+        purchaseOrder: str(req.body?.purchaseOrder),
+        paymentTerms: str(req.body?.paymentTerms) ?? ctx.org.invoicing?.paymentTermsNote,
+        notes: str(req.body?.notes),
+        display,
+        customFields: ctx.org.invoicing?.customFields,
+        language: ctx.org.invoicing?.language ?? "de",
+        acceptedWarnings: report.warnings.map((w) => `${w.field}: ${w.message}`),
+      },
+      submittedAt: now.toISOString(),
+      createdByMemberId: ctx.member.id,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    });
+
+    // Burn the number only once the invoice exists: §14 Abs. 4 Nr. 4 wants each
+    // number assigned once, and advancing before the write would leave a gap
+    // pointing at an invoice that was never issued.
+    store.updateOrganisation(ctx.org.id, {
+      invoicing: { ...(ctx.org.invoicing ?? {}), numberSeries: { ...series, next: series.next + 1 } },
+    });
+
+    res.status(201).json({
+      invoice: { ...invoice, linkTokenHash: undefined },
+      linkToken: token,
+      linkPath: `/invoice/${token}`,
+      warnings: report.warnings,
+    });
+  });
+
   // ── Chart of accounts ─────────────────────────────────────────────────────
 
   r.get("/:orgId/chart-of-accounts", (req, res) => {
@@ -960,10 +1332,32 @@ export function createInvoiceLinkRouter(): express.Router {
   const payorName = (invoice: Invoice) =>
     store.findOrganisation(invoice.orgId)?.name ?? "";
 
+  /**
+   * Bank details and footer come from the ISSUING org, and only for an invoice
+   * it issued. An incoming invoice must not leak our bank details to the
+   * supplier who filled it in.
+   */
+  const issuerExtras = (invoice: Invoice) => {
+    if (invoice.direction !== "outgoing") return undefined;
+    const org = store.findOrganisation(invoice.orgId);
+    const footerNote = [
+      org?.invoicing?.footerNote,
+      org?.invoicing?.registerCourt && org?.invoicing?.registerNumber
+        ? `${org.invoicing.registerCourt} ${org.invoicing.registerNumber}`
+        : undefined,
+      org?.invoicing?.managingDirector
+        ? `Geschäftsführer: ${org.invoicing.managingDirector}`
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return { bank: org?.invoicing?.bank, footerNote: footerNote || undefined };
+  };
+
   r.get("/:token", (req, res) => {
     const invoice = load(req, res);
     if (!invoice) return;
-    res.json({ invoice: supplierView(invoice, payorName(invoice)) });
+    res.json({ invoice: supplierView(invoice, payorName(invoice), issuerExtras(invoice)) });
   });
 
   /** The supplier fills the invoice in. Locked once submitted. */
@@ -973,7 +1367,7 @@ export function createInvoiceLinkRouter(): express.Router {
     if (invoice.state !== "LINK_CREATED") {
       return res.status(409).json({
         error: "This invoice was already submitted. Submitted invoices are timestamped and locked.",
-        invoice: supplierView(invoice, payorName(invoice)),
+        invoice: supplierView(invoice, payorName(invoice), issuerExtras(invoice)),
       });
     }
     try {
@@ -1000,7 +1394,7 @@ export function createInvoiceLinkRouter(): express.Router {
         dueDate: typeof req.body?.dueDate === "string" ? req.body.dueDate : invoice.dueDate,
         submittedAt: new Date().toISOString(),
       });
-      res.json({ invoice: supplierView(updated, payorName(updated)) });
+      res.json({ invoice: supplierView(updated, payorName(updated), issuerExtras(updated)) });
     } catch (err) {
       if (err instanceof InvoiceError) return res.status(400).json({ error: err.message });
       throw err;
