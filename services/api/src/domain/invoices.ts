@@ -91,11 +91,32 @@ export function validateLines(input: unknown): { lines: InvoiceLine[]; total: st
  * chosen into this view rather than leaking by default. The payor's org id,
  * member ids, internal notes and the link hashes never cross it.
  */
-export function supplierView(invoice: Invoice, payorName: string) {
+export function supplierView(
+  invoice: Invoice,
+  payorName: string,
+  /** Issuer extras that belong on a printed invoice: where to pay, and the
+   *  registration footer German invoices commonly carry. Passed in rather than
+   *  read here so this module stays free of the store. */
+  issuerExtras?: {
+    bank?: { holder?: string; iban?: string; bic?: string; bankName?: string };
+    footerNote?: string;
+  },
+) {
   return {
     id: invoice.id,
+    direction: invoice.direction ?? "incoming",
     state: invoice.state,
     payor: { name: payorName },
+    /**
+     * The issued document, for an outgoing invoice. Safe to expose in full:
+     * every field here is printed on the invoice the customer already holds,
+     * and an invoice they cannot read is not an invoice. Internal ids, member
+     * ids and the link hashes stay out, as with the rest of this view.
+     */
+    issued: invoice.issued,
+    ...(invoice.issued && issuerExtras
+      ? { bank: issuerExtras.bank, footerNote: issuerExtras.footerNote }
+      : {}),
     supplier: invoice.supplier,
     lines: invoice.lines,
     currency: invoice.currency,

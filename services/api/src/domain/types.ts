@@ -92,6 +92,44 @@ export interface Organisation {
   /** Email that receives invoice and payment notifications. Falls back to the
    *  owner's address when unset. */
   notificationEmail?: string;
+  /**
+   * Everything needed to issue a compliant invoice without retyping it.
+   *
+   * This is the org's own identity as it must appear on a document it issues:
+   * §14 Abs. 4 UStG wants the issuer's full name, address and Steuernummer or
+   * USt-IdNr. on every invoice, so they live here once and prefill every time.
+   * `display` covers only OPTIONAL blocks — see InvoiceDisplayOptions.
+   */
+  invoicing?: {
+    /** USt-IdNr. (DE + 9 digits for Germany). */
+    vatId?: string;
+    /** Steuernummer, the alternative §14 Abs. 4 Nr. 2 accepts. */
+    taxNumber?: string;
+    /**
+     * Kleinunternehmer under § 19 UStG. When set, new invoices default to the
+     * §19 exemption and never to a VAT rate — getting that backwards is the
+     * §14c mistake, and the default is where it would happen.
+     */
+    smallBusiness?: boolean;
+    /** 19 or 7. Only consulted when not a small business. */
+    defaultVatRate?: 19 | 7;
+    /** Registration details German invoices commonly carry in the footer. */
+    registerCourt?: string; // Amtsgericht
+    registerNumber?: string; // HRB …
+    managingDirector?: string; // Geschäftsführer
+    /** Where the money should go. Rendered when display.bankDetails is on. */
+    bank?: { holder?: string; iban?: string; bic?: string; bankName?: string };
+    paymentTermsDays?: number;
+    paymentTermsNote?: string;
+    footerNote?: string;
+    /** Per-year series, e.g. prefix "RE-{YYYY}-". */
+    numberSeries?: { prefix: string; next: number; padding: number };
+    /** Which optional blocks appear. Mandatory ones are not listed. */
+    display?: Partial<Record<string, boolean>>;
+    /** Extra label/value rows the issuer wants on every invoice. */
+    customFields?: { label: string; value: string }[];
+    language?: "de" | "en";
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -390,9 +428,35 @@ export interface InvoiceLine {
   amount: string;
 }
 
+/**
+ * Which way an invoice points.
+ *
+ * `incoming` is the original Invoice-Me flow: we generate a link, a supplier
+ * fills it in, we pay it. `outgoing` is one WE issue to a customer, and it is
+ * the one that has to satisfy §14 UStG — so it carries a frozen snapshot of
+ * both parties and the VAT treatment, rather than reading them live. An issued
+ * invoice must keep saying what it said on the day it was issued, even after
+ * the org changes its address.
+ */
+export type InvoiceDirection = "incoming" | "outgoing";
+
+export interface InvoiceParty {
+  name?: string;
+  addressLine?: string;
+  postalCode?: string;
+  city?: string;
+  country?: string;
+  vatId?: string;
+  taxNumber?: string;
+  email?: string;
+}
+
 export interface Invoice {
   id: string;
-  /** The payor's organisation — the one that generated the link. */
+  /** Defaults to "incoming" for rows written before outgoing existed. */
+  direction?: InvoiceDirection;
+  /** The organisation this row belongs to: payor when incoming, issuer when
+   *  outgoing. */
   orgId: string;
   /** Hash of the one-time link token. The supplier holds the plaintext; we
    *  never store it, so a leaked database does not hand over open invoices. */
@@ -430,6 +494,41 @@ export interface Invoice {
   createdByMemberId: string;
   createdAt: string;
   updatedAt: string;
+
+  // ── Outgoing invoices (§14 UStG) ─────────────────────────────────────────
+  /**
+   * Frozen at issue. Both parties, the VAT treatment and the display choices
+   * are snapshotted so the document is reproducible: an invoice is a statement
+   * about a moment, and re-rendering it from today's org profile would quietly
+   * rewrite history the tax office may later ask about.
+   */
+  issued?: {
+    number: string;
+    issueDate: string;
+    supplyDate?: string;
+    supplyPeriod?: { from: string; to: string };
+    issuer: InvoiceParty;
+    recipient: InvoiceParty;
+    /** See domain/invoicing.ts — exempt arms carry no rate by construction. */
+    vatTreatment:
+      | { kind: "standard"; rate: 19 | 7 }
+      | { kind: "exempt"; reason: string; note?: string };
+    /** The statutory note actually printed, resolved at issue time. */
+    vatNote?: string;
+    netCents: number;
+    vatCents: number;
+    grossCents: number;
+    /** Per-rate breakdown — §14 Abs. 4 Nr. 8 wants the split, not just a total. */
+    buckets: { rate: number; netCents: number; vatCents: number }[];
+    purchaseOrder?: string;
+    paymentTerms?: string;
+    notes?: string;
+    display?: Record<string, boolean>;
+    customFields?: { label: string; value: string }[];
+    language?: "de" | "en";
+    /** Compliance warnings accepted at issue, kept for the audit trail. */
+    acceptedWarnings?: string[];
+  };
 }
 
 // ── Chart of accounts + bookkeeping ─────────────────────────────────────────
