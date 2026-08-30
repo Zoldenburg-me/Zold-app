@@ -27,6 +27,20 @@ process.env.TRANSF_CHAIN_ID = "31337";
 process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:8545";
 
 /**
+ * LIQUIDITY_PROVIDER now defaults to `best` (over lifi,dex) because those are
+ * the venues the user's own Safe can execute — the non-custodial path. Neither
+ * exists on local hardhat: LI.FI answers 404 on testnets and there is no
+ * EURe/USDC pool until `dex:setup` seeds one. So the local chain opts INTO
+ * FxSwapper explicitly.
+ *
+ * The direction matters. Production inherits the non-custodial default and the
+ * local demo names its exception; the other way round is how a custodial path
+ * ended up shipping as the default in the first place. Set with ??= so a
+ * harness that wants a specific venue (dex/lifi/rfq tests) still wins.
+ */
+process.env.LIQUIDITY_PROVIDER ??= "fx-swapper";
+
+/**
  * Hardhat's well-known funded accounts. SET, never deleted: deploy.ts calls
  * process.loadEnvFile, which fills in anything unset but leaves existing
  * values alone — so deleting a key just invites .env to put it back, while

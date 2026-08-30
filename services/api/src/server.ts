@@ -10,7 +10,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, KYC, LIQUIDITY, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
 import { prepareSafeSwapForTransfer } from "./liquidity.js";
 import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
@@ -2950,6 +2950,24 @@ async function buildTransferFromQuote(
     let safeExecution:
       | { credentialId: string; challenge: string; amountEur: number; token: "EURE" }
       | undefined;
+    /**
+     * Which custody mode this transfer will actually run in, recorded on the
+     * transfer itself. Starts at the honest worst case and is narrowed only
+     * when a Safe-executed batch is genuinely prepared — so a venue outage or
+     * a missing config leaves the truthful answer behind rather than an
+     * optimistic one nobody revisited.
+     *
+     * The SEPA rail is already non-custodial for the principal: Monerium's
+     * redeem burns the payout straight from the Safe and only the fee moves.
+     */
+    let custody: NonNullable<Transfer["custody"]> =
+      transfer.rail === "sepa"
+        ? { mode: "non-custodial", feeToOrchestrator: transfer.sendEur > (transfer.receiveEur ?? 0) }
+        : {
+            mode: "orchestrator",
+            reason: "no Safe-executed swap batch was prepared for this transfer",
+            feeToOrchestrator: true,
+          };
     const debitWei =
       transfer.rail === "sepa"
         ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR)))
@@ -3034,6 +3052,21 @@ async function buildTransferFromQuote(
                 call: swap.plan.call,
               });
               batch = { recipient, mode };
+              // Live: the batch delivers straight to Bridge's deposit address,
+              // so the input never reaches an address we hold a key to.
+              // Dry-run: there IS no external destination, so the output lands
+              // at the orchestrator for the local escrow demo to pull from —
+              // still a batch, still user-signed, but custodial, and it says so.
+              custody =
+                mode === "live"
+                  ? { mode: "non-custodial", feeToOrchestrator: true }
+                  : {
+                      mode: "orchestrator",
+                      reason:
+                        "BRIDGE_LIVE is not set, so the swap has no external deposit address to " +
+                        "deliver into and the output lands at the orchestrator",
+                      feeToOrchestrator: true,
+                    };
               transfer.liquidity = swap.serialized;
               transfer.safeSwap = {
                 recipient,
@@ -3045,7 +3078,21 @@ async function buildTransferFromQuote(
                 ...(bridgeAmountUsdc !== undefined ? { bridgeAmountUsdc } : {}),
               };
             }
+            if (!swap) {
+              custody = {
+                mode: "orchestrator",
+                reason:
+                  `the configured liquidity venue (${LIQUIDITY.PROVIDER}) cannot be executed by the ` +
+                  "user's Safe, so the input is debited to the orchestrator and swapped from there",
+                feeToOrchestrator: true,
+              };
+            }
           } catch (err: any) {
+            custody = {
+              mode: "orchestrator",
+              reason: `Safe-executed batch unavailable: ${err?.message ?? err}`,
+              feeToOrchestrator: true,
+            };
             console.error(
               `Safe swap batch unavailable for ${transfer.id} (falling back to plain debit): ${err?.message ?? err}`,
             );
@@ -3082,6 +3129,28 @@ async function buildTransferFromQuote(
         );
       }
     }
+    /**
+     * Turn the preference into a guarantee where an operator asked for one.
+     *
+     * REQUIRE_NON_CUSTODIAL=1 means this deployment has promised it does not
+     * take possession of client funds, so a fallback to the orchestrator is a
+     * broken promise, not a degraded mode — refuse and name the cause rather
+     * than moving money in a way the deployment says it does not.
+     *
+     * This spends the quote (consumed above). That is acceptable precisely
+     * because every cause here is a deployment-wide condition — the venue
+     * cannot serve a Safe, Bridge is not live — so it fails on the first
+     * transfer and is fixed once, not intermittently for one unlucky user.
+     */
+    if (CUSTODY.requireNonCustodial && custody.mode === "orchestrator") {
+      return res.status(409).json({
+        error:
+          "refusing to create this transfer: REQUIRE_NON_CUSTODIAL=1 but it would route the sender's " +
+          `funds through the orchestrator — ${custody.reason ?? "no Safe-executed batch was prepared"}`,
+        custody,
+      });
+    }
+    transfer.custody = custody;
     store.addTransfer(transfer);
     return {
       ok: true as const,
@@ -3625,6 +3694,36 @@ if (sandbox) {
 if (CRYPTO_IN.enabled) startCryptoDepositPoller();
 app.listen(API_PORT, API_HOST, () => {
   console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
+  /**
+   * Say the custody posture out loud at startup.
+   *
+   * Whether the orchestrator ends up holding a user's funds is decided by the
+   * interaction of the liquidity venue and whether Bridge is live, neither of
+   * which announces itself. An operator who believes they are running a
+   * non-custodial deployment should find out here, not from a regulator.
+   */
+  const safeExecutable = ["dex", "lifi", "rfq", "best"].includes(LIQUIDITY.PROVIDER);
+  if (!safeExecutable) {
+    console.warn(
+      `CUSTODY: LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER} cannot be executed by a user's Safe, so ` +
+        "cash-rail transfers debit the full amount to the orchestrator and swap from there. " +
+        "The non-custodial path needs dex, lifi, rfq or best.",
+    );
+  } else if (!BRIDGE.live) {
+    console.warn(
+      "CUSTODY: the Safe-executed swap batch is available, but BRIDGE_LIVE is not set — with no " +
+        "external deposit address the batch delivers its output to the orchestrator. Cash-rail " +
+        "transfers are recorded as custodial until Bridge is live.",
+    );
+  } else {
+    console.log(
+      "CUSTODY: cash-rail transfers run non-custodially — the user's Safe signs one batch that " +
+        "delivers straight to Bridge. The SEPA rail moves only the fee.",
+    );
+  }
+  if (CUSTODY.requireNonCustodial) {
+    console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
+  }
   // Allowances are gone entirely: every debit is a UserOperation the user's
   // passkey signs for the exact amount and destination. An operator still
   // setting the old env knobs should hear that they no longer do anything —

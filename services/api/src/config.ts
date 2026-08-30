@@ -194,6 +194,35 @@ export const STELLAR = {
 
 export const anchorModeEnabled = () => Boolean(STELLAR.anchorDomain);
 
+/**
+ * Custody posture — whether the orchestrator is ever allowed to hold a user's
+ * input funds.
+ *
+ * WHY THIS IS ITS OWN BLOCK. "We never take custody" is a claim with
+ * regulatory weight (it is roughly the difference between a technical service
+ * provider and a payment/crypto-asset service performed on a client's behalf),
+ * and it was previously an emergent property of three unrelated settings —
+ * which venue was configured, whether Bridge was live, and whether a venue call
+ * happened to succeed. A property nobody asserts and nothing records is not a
+ * property; it is a coincidence that held last time somebody looked.
+ *
+ * So: every transfer now RECORDS the custody mode it actually ran in
+ * (`transfer.custody`), and `requireNonCustodial` turns the preference into a
+ * refusal.
+ *
+ * WHY THE REFUSAL IS NOT ON BY DEFAULT, deliberately: with BRIDGE_LIVE unset
+ * there is no external deposit address for a batch to deliver into, so the
+ * output has nowhere to go but the orchestrator (the local escrow demo pulls
+ * from it). Defaulting the refusal on would brick every dry-run and testnet
+ * deployment, including Base Sepolia. The DEFAULT PATH is non-custodial; the
+ * GUARANTEE is opt-in, and a deployment moving real money should set it.
+ */
+export const CUSTODY = {
+  /** Refuse to create a transfer that would route the user's funds through the
+   *  orchestrator, instead of silently falling back to it. */
+  requireNonCustodial: process.env.REQUIRE_NON_CUSTODIAL === "1",
+} as const;
+
 /** FP1/FP2 security posture (red-team fixes). */
 export const SECURITY = {
   /** Simulation endpoints (mock SEPA deposit, pickup, self-serve KYC review)
@@ -532,7 +561,28 @@ export function loadAbi(contract: string): any[] {
  * BEBOP_CHAIN=ethereum before adding rfq to the venue list.
  */
 export const LIQUIDITY = {
-  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "fx-swapper") as "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best",
+  /**
+   * THE DEFAULT IS A CUSTODY DECISION, not a pricing one.
+   *
+   * Only venues that implement `safeSwapPlan` can be executed BY THE USER'S
+   * SAFE — the batch that approves the venue and delivers the output straight
+   * to the payout destination, so the orchestrator never holds the input.
+   * FxSwapper cannot (its inventory is `onlyTrader`) and CoW refuses, so a
+   * deployment on either falls back to debiting the full amount to the
+   * orchestrator's own address and swapping from there.
+   *
+   * That fallback used to be the DEFAULT, which meant the shipped
+   * configuration took possession of every cash-rail transfer unless an
+   * operator knew to change one env var. `best` (over LIQUIDITY_VENUES,
+   * itself defaulting to lifi,dex — both Safe-executable) is now the default,
+   * so the non-custodial path is what runs unless someone opts out.
+   *
+   * Local hardhat has neither LI.FI nor a seeded pool, so `_local-chain.ts`
+   * pins fx-swapper explicitly for dev and the harnesses. That is the right
+   * shape: the weaker mode is opted INTO by the local demo rather than
+   * inherited by production.
+   */
+  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "best") as "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best",
   // Bebop's chain slug, e.g. "polygon", "base", "ethereum".
   BEBOP_CHAIN: process.env.BEBOP_CHAIN ?? "polygon",
   BEBOP_BASE_URL: process.env.BEBOP_BASE_URL ?? "https://api.bebop.xyz",
