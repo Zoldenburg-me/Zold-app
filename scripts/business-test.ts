@@ -212,8 +212,72 @@ check("a gated currency is recorded, not silently opened", () => {
   assert.match(kes.gate!.reason, /never moved money/);
 });
 
+check("a shown token never implies we hold it", () => {
+  // CHF and NGN exist in the list because their TOKENS are real — ZCHF and
+  // cNGN, both verified on chain. That is the exact shape most likely to
+  // mislead: a currency with a live, liquid token and no account behind it.
+  // So every token carries heldByUs, and it must be false wherever we custody
+  // nothing, no matter how real the token is.
+  const list = currencyAvailability();
+  for (const c of list) {
+    if (!c.token) continue;
+    // heldByUs must track whether the rail is actually open. A token shown for
+    // a closed rail claiming to be held is the precise lie this guards: the
+    // token being real is not evidence that we have any.
+    assert.equal(
+      c.token.heldByUs, c.available,
+      `${c.code}: heldByUs=${c.token.heldByUs} but available=${c.available} — a token can only be ` +
+        `held where the rail is open`,
+    );
+    assert.ok(c.token.backing.length > 40, `${c.code}'s token must say what backs it`);
+    assert.ok(
+      Object.keys(c.token.contracts).length > 0,
+      `${c.code}'s token must name at least one verified contract`,
+    );
+    for (const [chain, addr] of Object.entries(c.token.contracts)) {
+      assert.match(addr, /^0x[0-9a-fA-F]{40}$/, `${c.code} ${chain} address is not an EVM address`);
+    }
+  }
+});
+
+check("a token being real does not make its currency available", () => {
+  const list = currencyAvailability();
+  const chf = list.find((c) => c.code === "CHF")!;
+  const ngn = list.find((c) => c.code === "NGN")!;
+  for (const c of [chf, ngn]) {
+    assert.equal(c.available, false, `${c.code} must not report available`);
+    assert.ok(c.token, `${c.code} should still SHOW its token`);
+    // The needs line has to explain the gap the token does not close, or a
+    // reader concludes the token IS the account.
+    assert.match(c.needs!, /account|ramp|partner|issuer/i);
+  }
+  // ZCHF has no issuer who owes redemption; that is the fact a CHF holder most
+  // needs and the one a "CHF" label hides.
+  assert.match(chf.token!.backing, /no issuer who owes a holder redemption/i);
+  // cNGN's regulator is Nigerian, which says nothing about the EEA.
+  assert.match(ngn.token!.backing, /NIGERIAN perimeter, not an EEA one/i);
+});
+
+check("cNGN points at Base, where its supply actually is", () => {
+  const ngn = currencyAvailability().find((c) => c.code === "NGN")!;
+  assert.ok(ngn.token!.contracts.base, "Base is the deployment worth designing against");
+  assert.match(ngn.token!.liquidityNote!, /Base/);
+  // Ethereum and Polygon hold rounding error; listing them without saying so
+  // would invite someone to route through an empty market.
+  assert.match(ngn.token!.liquidityNote!, /effectively empty/i);
+});
+
+check("CHF has no provider candidate, and that differs from an ungranted one", () => {
+  const chf = currencyAvailability().find((c) => c.code === "CHF")!;
+  const usd = currencyAvailability().find((c) => c.code === "USD")!;
+  assert.equal(chf.provider, "none", "no Swiss provider has been identified at all");
+  assert.equal(usd.provider, "iron", "USD has a named partner we simply lack access to");
+});
+
 check("the suggested currency follows the org's country", () => {
   assert.equal(suggestedCurrency({ address: { country: "KE" } }), "KES");
+  assert.equal(suggestedCurrency({ address: { country: "CH" } }), "CHF");
+  assert.equal(suggestedCurrency({ address: { country: "NG" } }), "NGN");
   assert.equal(suggestedCurrency({ address: { country: "DE" } }), "EUR");
   assert.equal(suggestedCurrency({ address: { country: "BR" } }), "EUR", "fall back to the live rail");
 });

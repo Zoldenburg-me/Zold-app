@@ -186,14 +186,21 @@ export interface Member {
 
 /** Currencies the account model knows about. Being listed here is NOT a claim
  *  that the rail works — see `AccountStatus.gated` and accounts.ts. */
-export type CurrencyCode = "EUR" | "USD" | "GBP" | "KES" | "INR";
+export type CurrencyCode = "EUR" | "USD" | "GBP" | "CHF" | "KES" | "NGN" | "INR";
 
 export type AccountProvider =
   | "monerium"
   | "iron"
   | "triplea"
   | "dlocal"
-  | "yellowcard";
+  | "yellowcard"
+  /**
+   * No candidate has been identified at all — distinct from a named partner we
+   * have not contracted with. "iron, not granted" and "nobody yet" are
+   * different states, and collapsing them would let a currency look one email
+   * away from working when no one has looked for a provider.
+   */
+  | "none";
 
 /**
  * `gated` is a first-class resting state, not an error: the currency is real,
@@ -221,6 +228,9 @@ export interface AccountIdentifier {
   mobile?: string;
   /** UPI virtual payment address (INR). */
   vpa?: string;
+  /** NGN: a Nigerian bank account is a 10-digit NUBAN plus its bank code. */
+  nuban?: string;
+  bankCode?: string;
 }
 
 export interface Account {
