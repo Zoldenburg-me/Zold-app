@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<title>Rechnung · Zold</title>
+
+<style>
+  /*
+    A DOCUMENT, not a receipt.
+    An invoice is a tax record that someone's accountant files and that a tax
+    office may later read. It has to survive being printed to A4 and being
+    forwarded as a PDF, so the sheet is white and typeset even though the rest
+    of the app is dark: a till-roll aesthetic cannot hold two addresses and a
+    per-rate VAT table, and it reads as less credible to the person who has to
+    accept it. The page around the sheet carries the app's dark chrome.
+  */
+  :root {
+    --bg: #0b0b0e;
+    --panel: #131317;
+    --border: #232328;
+    --border2: #2c2c33;
+    --text: #ededf0;
+    --muted: #8a8a94;
+    --faint: #5b5b66;
+    --acc: #ed188d;
+    --green: #3dd68c;
+    --amber: #f5a623;
+    --red: #f4436c;
+    --font: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+
+    /* The sheet's own palette. Deliberately independent of the app theme —
+       this half is printed. */
+    --paper: #ffffff;
+    --ink: #14141a;
+    --ink-soft: #5a5a68;
+    --rule: #e2e2e8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 14px/1.55 var(--font); color: var(--text); background: var(--bg); padding: 2rem 1rem 5rem; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.1rem; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: .5rem; font-size: 15px; font-weight: 600; letter-spacing: -.02em; }
+  .brand span { color: var(--acc); }
+  .actions { display: flex; gap: .5rem; }
+
+  button { padding: .55rem 1rem; border-radius: 8px; border: 0; cursor: pointer; font-weight: 600; font-size: .85rem; color: #fff; background: var(--acc); font-family: var(--font); }
+  button.ghost { background: transparent; border: 1px solid var(--border2); color: var(--text); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .pill { display: inline-flex; align-items: center; gap: .35rem; padding: .2rem .6rem; border-radius: 999px; font-size: .7rem; font-weight: 600; letter-spacing: .02em; }
+  .pill.ok { background: rgba(61,214,140,.14); color: var(--green); }
+  .pill.warn { background: rgba(245,166,35,.14); color: var(--amber); }
+  .pill.mut { background: #1a1a1f; color: var(--muted); }
+
+  /* ── the sheet ─────────────────────────────────────────────────────────── */
+  .sheet {
+    background: var(--paper); color: var(--ink);
+    border-radius: 6px;
+    padding: clamp(28px, 5vw, 56px);
+    box-shadow: 0 30px 70px rgba(0,0,0,.55);
+    font-size: 13px; line-height: 1.55;
+  }
+  .sheet h1 { font-size: 26px; font-weight: 600; letter-spacing: -.02em; margin: 0; }
+  .sheet .sub { color: var(--ink-soft); font-size: 12px; }
+
+  .sheet-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; flex-wrap: wrap; }
+  .issuer-block { font-size: 12px; color: var(--ink-soft); text-align: right; line-height: 1.6; }
+  .issuer-block strong { color: var(--ink); font-weight: 600; }
+
+  /* The sender line above the recipient address, as on a German letter. */
+  .sender-line { margin-top: 34px; font-size: 9.5px; color: var(--ink-soft); border-bottom: .5px solid var(--rule); padding-bottom: 3px; }
+  .parties { display: flex; justify-content: space-between; gap: 32px; flex-wrap: wrap; margin-top: 10px; }
+  .addr { font-size: 13px; line-height: 1.6; }
+  .addr .who { font-weight: 600; }
+  .meta { font-size: 12px; min-width: 240px; }
+  .meta div { display: flex; justify-content: space-between; gap: 18px; padding: 2px 0; }
+  .meta .k { color: var(--ink-soft); }
+  .meta .v { font-variant-numeric: tabular-nums; }
+
+  table.items { width: 100%; border-collapse: collapse; margin-top: 30px; font-size: 12.5px; }
+  table.items th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-soft); font-weight: 600; padding: 0 8px 7px; border-bottom: 1px solid var(--ink); }
+  table.items td { padding: 9px 8px; border-bottom: .5px solid var(--rule); vertical-align: top; }
+  table.items td.num, table.items th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  table.items td:first-child, table.items th:first-child { padding-left: 0; }
+  table.items td:last-child, table.items th:last-child { padding-right: 0; }
+
+  .totals { margin-top: 18px; display: flex; justify-content: flex-end; }
+  .totals table { border-collapse: collapse; font-size: 12.5px; min-width: 280px; }
+  .totals td { padding: 5px 0; }
+  .totals td.num { text-align: right; font-variant-numeric: tabular-nums; padding-left: 28px; }
+  .totals tr.grand td { border-top: 1px solid var(--ink); padding-top: 9px; font-size: 15px; font-weight: 600; }
+
+  .vat-note { margin-top: 22px; padding: 11px 13px; border-left: 3px solid var(--ink); background: #f6f6f9; font-size: 12px; }
+  .vat-note .basis { color: var(--ink-soft); font-size: 11px; margin-top: 2px; }
+
+  .blocks { margin-top: 26px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; font-size: 11.5px; }
+  .blocks h3 { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-soft); font-weight: 600; margin-bottom: 5px; }
+  .sheet-footer { margin-top: 32px; padding-top: 14px; border-top: .5px solid var(--rule); font-size: 10.5px; color: var(--ink-soft); line-height: 1.65; }
+
+  /* ── compliance panel (app chrome, never printed) ──────────────────────── */
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem; margin-top: 1rem; }
+  .panel h2 { font-size: .95rem; font-weight: 600; margin-bottom: .5rem; }
+  .issue { display: flex; gap: .6rem; padding: .5rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; }
+  .issue:last-child { border-bottom: 0; }
+  .issue .basis { color: var(--faint); font-size: .76rem; }
+  .err { background: rgba(244,67,108,.1); border: 1px solid rgba(244,67,108,.3); border-radius: 10px; padding: .8rem 1rem; font-size: .87rem; margin-top: 1rem; }
+  .note { color: var(--faint); font-size: .8rem; margin-top: .8rem; line-height: 1.6; }
+
+  label { display: block; font-size: .74rem; font-weight: 500; color: var(--muted); margin: .8rem 0 .3rem; }
+  input, select, textarea { width: 100%; padding: .6rem .72rem; border-radius: 8px; font-size: .9rem; border: 1px solid var(--border2); background: #0e0e12; color: var(--text); font-family: var(--font); }
+  input:focus, select:focus { outline: none; border-color: var(--acc); box-shadow: 0 0 0 3px rgba(237,24,141,.15); }
+
+  @media print {
+    /* Only the sheet prints, edge to edge on A4. Everything else is chrome. */
+    body { background: #fff; padding: 0; }
+    .topbar, .panel, .actions, .no-print { display: none !important; }
+    .wrap { max-width: none; }
+    .sheet { box-shadow: none; border-radius: 0; padding: 0; font-size: 11pt; }
+    @page { size: A4; margin: 18mm 16mm; }
+  }
+</style>
+
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand"><span>▽</span> Zold</div>
+    <div class="actions" id="actions"></div>
+  </div>
+  <div id="content"><div class="panel">Loading…</div></div>
+</div>
+
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const token = location.pathname.split("/").filter(Boolean).pop();
+let password = "";
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: {
+      ...(opts.body ? { "content-type": "application/json" } : {}),
+      ...(password ? { "x-invoice-password": password } : {}),
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const e = new Error(data.error || res.statusText); Object.assign(e, data); throw e; }
+  return data;
+}
+
+const money = (cents, currency = "EUR") =>
+  new Intl.NumberFormat("de-DE", { style: "currency", currency }).format((cents ?? 0) / 100);
+const date = (iso) => (iso ? new Date(iso).toLocaleDateString("de-DE") : "");
+
+// Labels live in one place so a bilingual invoice stays consistent.
+const L = {
+  de: { invoice: "Rechnung", number: "Rechnungsnummer", issueDate: "Rechnungsdatum",
+        supplyDate: "Leistungsdatum", supplyPeriod: "Leistungszeitraum", vatId: "USt-IdNr.",
+        taxNumber: "Steuernummer", description: "Bezeichnung", qty: "Menge", unit: "Einzelpreis",
+        rate: "USt.", amount: "Betrag", net: "Nettobetrag", vat: "Umsatzsteuer", gross: "Gesamtbetrag",
+        terms: "Zahlungsbedingungen", bank: "Bankverbindung", po: "Bestellnummer", due: "Fällig am",
+        from: "Rechnungssteller", to: "Rechnungsempfänger" },
+  en: { invoice: "Invoice", number: "Invoice number", issueDate: "Invoice date",
+        supplyDate: "Date of supply", supplyPeriod: "Period of supply", vatId: "VAT ID",
+        taxNumber: "Tax number", description: "Description", qty: "Qty", unit: "Unit price",
+        rate: "VAT", amount: "Amount", net: "Net", vat: "VAT", gross: "Total",
+        terms: "Payment terms", bank: "Bank details", po: "Purchase order", due: "Due",
+        from: "From", to: "To" },
+};
+
+const addressOf = (p) => [
+  p?.addressLine,
+  [p?.postalCode, p?.city].filter(Boolean).join(" "),
+  p?.country && p.country !== "DE" ? p.country : "",
+].filter(Boolean);
+
+/** Render an issued invoice as the printable document. */
+function renderIssued(inv) {
+  const d = inv.issued;
+  const t = L[d.language === "en" ? "en" : "de"];
+  const show = d.display ?? {};
+  const bilingual = show.bilingual;
+  const lab = (k) => (bilingual && L.de[k] !== L.en[k] ? `${L.de[k]} / ${L.en[k]}` : t[k]);
+
+  const issuerLines = [
+    d.issuer.name,
+    ...addressOf(d.issuer),
+    show.issuerVatId !== false && d.issuer.vatId ? `${t.vatId} ${d.issuer.vatId}` : "",
+    show.issuerTaxNumber !== false && d.issuer.taxNumber ? `${t.taxNumber} ${d.issuer.taxNumber}` : "",
+  ].filter(Boolean);
+
+  const metaRows = [
+    [lab("number"), d.number],
+    [lab("issueDate"), date(d.issueDate)],
+    d.supplyPeriod && show.supplyPeriod !== false
+      ? [lab("supplyPeriod"), `${date(d.supplyPeriod.from)} – ${date(d.supplyPeriod.to)}`]
+      : d.supplyDate ? [lab("supplyDate"), date(d.supplyDate)] : null,
+    inv.dueDate ? [lab("due"), date(inv.dueDate)] : null,
+    show.purchaseOrder && d.purchaseOrder ? [lab("po"), d.purchaseOrder] : null,
+    show.recipientVatId !== false && d.recipient.vatId ? [lab("vatId"), d.recipient.vatId] : null,
+    ...(d.customFields ?? []).map((f) => [f.label, f.value]),
+  ].filter(Boolean);
+
+  const exempt = d.vatTreatment?.kind === "exempt";
+
+  return `
+  <div class="sheet" id="sheet">
+    <div class="sheet-head">
+      <div>
+        <h1>${esc(bilingual ? "Rechnung / Invoice" : t.invoice)}</h1>
+        <div class="sub">${esc(d.number)}</div>
+      </div>
+      <div class="issuer-block">
+        ${issuerLines.map((l, i) => (i === 0 ? `<strong>${esc(l)}</strong>` : esc(l))).join("<br>")}
+      </div>
+    </div>
+
+    <div class="sender-line">${esc([d.issuer.name, ...addressOf(d.issuer)].join(" · "))}</div>
+
+    <div class="parties">
+      <div class="addr">
+        <div class="who">${esc(d.recipient.name ?? "")}</div>
+        ${addressOf(d.recipient).map(esc).join("<br>")}
+      </div>
+      <div class="meta">
+        ${metaRows.map(([k, v]) => `<div><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}
+      </div>
+    </div>
+
+    <table class="items">
+      <thead><tr>
+        <th>${esc(lab("description"))}</th>
+        <th class="num">${esc(lab("qty"))}</th>
+        <th class="num">${esc(lab("unit"))}</th>
+        ${exempt ? "" : `<th class="num">${esc(lab("rate"))}</th>`}
+        <th class="num">${esc(lab("amount"))}</th>
+      </tr></thead>
+      <tbody>
+        ${inv.lines.map((l) => `<tr>
+          <td>${esc(l.description)}</td>
+          <td class="num">${esc(l.quantity)}</td>
+          <td class="num">${esc(Number(l.unitPrice).toLocaleString("de-DE", { minimumFractionDigits: 2 }))}</td>
+          ${exempt ? "" : `<td class="num">${esc(d.vatTreatment.rate)} %</td>`}
+          <td class="num">${esc(Number(l.amount).toLocaleString("de-DE", { minimumFractionDigits: 2 }))}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>
+
+    <div class="totals"><table>
+      <tr><td>${esc(lab("net"))}</td><td class="num">${money(d.netCents)}</td></tr>
+      ${(d.buckets ?? []).filter((b) => b.rate > 0).map((b) =>
+        `<tr><td>${esc(lab("vat"))} ${b.rate} % ${esc(bilingual ? "auf / on" : "auf")} ${money(b.netCents)}</td>
+             <td class="num">${money(b.vatCents)}</td></tr>`).join("")}
+      <tr class="grand"><td>${esc(lab("gross"))}</td><td class="num">${money(d.grossCents)}</td></tr>
+    </table></div>
+
+    ${d.vatNote ? `<div class="vat-note"><div>${esc(d.vatNote)}</div>
+      ${d.vatTreatment?.reason ? `<div class="basis">${esc(reasonBasis(d.vatTreatment.reason))}</div>` : ""}</div>` : ""}
+
+    <div class="blocks">
+      ${show.paymentTerms !== false && d.paymentTerms
+        ? `<div><h3>${esc(lab("terms"))}</h3>${esc(d.paymentTerms)}</div>` : ""}
+      ${show.bankDetails !== false && inv.bank
+        ? `<div><h3>${esc(lab("bank"))}</h3>${[inv.bank.holder, inv.bank.iban, inv.bank.bic, inv.bank.bankName].filter(Boolean).map(esc).join("<br>")}</div>` : ""}
+      ${show.notes !== false && d.notes ? `<div><h3>&nbsp;</h3>${esc(d.notes)}</div>` : ""}
+    </div>
+
+    ${show.footer !== false && inv.footerNote
+      ? `<div class="sheet-footer">${esc(inv.footerNote)}</div>` : ""}
+  </div>
+
+  <div class="panel no-print">
+    <h2>${esc(inv.state === "PAID" || inv.state === "RECONCILED" ? "Paid" : "Awaiting payment")}</h2>
+    <div class="note">This document was generated by Zold against §§ 14, 14a UStG. Zold is not a tax
+      adviser — whether a supply is exempt, and which exemption applies, is the issuer's determination.
+      Zold does not yet produce an XRechnung or ZUGFeRD e-invoice (EN 16931), which German B2B issuing
+      obligations phase in from 2027.</div>
+  </div>`;
+}
+
+const BASES = {
+  kleinunternehmer: "§ 19 UStG",
+  reverse_charge_eu: "§ 3a Abs. 2 UStG, Art. 196 MwStSystRL",
+  reverse_charge_domestic: "§ 13b UStG",
+  intra_community_supply: "§ 4 Nr. 1b i. V. m. § 6a UStG",
+  export_third_country: "§ 4 Nr. 1a i. V. m. § 6 UStG",
+  not_taxable_place_of_supply: "§ 3a Abs. 2 UStG",
+  other: "",
+};
+const reasonBasis = (r) => BASES[r] ?? "";
+
+// ── the incoming "Invoice-Me" flow, unchanged in behaviour ─────────────────
+
+let lines = [{ description: "", quantity: "1", unitPrice: "" }];
+const lineRows = () => lines.map((l, i) => `<tr>
+  <td><input data-i="${i}" data-f="description" value="${esc(l.description)}" placeholder="What you did" /></td>
+  <td style="width:80px"><input data-i="${i}" data-f="quantity" value="${esc(l.quantity)}" /></td>
+  <td style="width:110px"><input data-i="${i}" data-f="unitPrice" value="${esc(l.unitPrice)}" placeholder="0.00" /></td>
+  <td style="width:100px" class="num">${(Number(l.quantity || 0) * Number(l.unitPrice || 0)).toFixed(2)}</td>
+</tr>`).join("");
+const total = () => lines.reduce((s, l) => s + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0).toFixed(2);
+
+function renderForm(inv) {
+  $("#content").innerHTML = `
+    <div class="panel"><h2>Invoice requested by ${esc(inv.payor.name)}</h2>
+      <div class="note">Fill this in and submit — no account and no wallet needed. Once submitted it is
+        timestamped and locked.</div>
+      <label>Your organisation</label><input id="f-org" />
+      <label>Email</label><input id="f-email" type="email" />
+      <label>Invoice number</label><input id="f-num" />
+      <label>VAT ID (optional)</label><input id="f-vat" placeholder="DE123456789" />
+      <label>Address (optional)</label><input id="f-addr" />
+    </div>
+    <div class="panel"><h2>Lines</h2>
+      <table class="items"><thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Unit</th><th class="num">Amount</th></tr></thead>
+        <tbody id="lines">${lineRows()}</tbody></table>
+      <div style="margin-top:.7rem"><button class="ghost" id="add-line">Add line</button></div>
+      <div style="margin-top:1rem; text-align:right; font-size:1.1rem; font-weight:600" id="total">${total()} ${esc(inv.currency)}</div>
+    </div>
+    <div class="panel"><h2>How to pay you</h2>
+      <label>Wallet address (optional)</label><input id="f-wallet" placeholder="0x…" />
+      <label>Chain ID</label><input id="f-chain" value="8453" />
+    </div>
+    <div style="margin-top:1.2rem"><button id="submit">Submit invoice</button></div>
+    <div id="err"></div>`;
+
+  $("#lines").addEventListener("input", (e) => {
+    const el = e.target;
+    if (!el.dataset.f) return;
+    lines[Number(el.dataset.i)][el.dataset.f] = el.value;
+    $("#total").textContent = `${total()} ${inv.currency}`;
+    $("#lines").querySelectorAll("tr").forEach((tr, i) => {
+      tr.lastElementChild.textContent =
+        (Number(lines[i].quantity || 0) * Number(lines[i].unitPrice || 0)).toFixed(2);
+    });
+  });
+  $("#add-line").onclick = () => {
+    lines.push({ description: "", quantity: "1", unitPrice: "" });
+    $("#lines").innerHTML = lineRows();
+  };
+  $("#submit").onclick = async () => {
+    $("#err").innerHTML = ""; $("#submit").disabled = true;
+    try {
+      const wallet = $("#f-wallet").value.trim();
+      const r = await api(`/api/invoice-links/${encodeURIComponent(token)}/submit`, {
+        method: "POST",
+        body: {
+          supplier: { orgName: $("#f-org").value, email: $("#f-email").value,
+            invoiceNumber: $("#f-num").value, taxId: $("#f-vat").value, address: $("#f-addr").value },
+          lines,
+          payTo: wallet ? { kind: "wallet", address: wallet, chainId: Number($("#f-chain").value) } : undefined,
+        },
+      });
+      render(r.invoice);
+    } catch (e) {
+      $("#err").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+      $("#submit").disabled = false;
+    }
+  };
+}
+
+/** A submitted incoming invoice, shown as a plain summary. */
+function renderSubmitted(inv) {
+  $("#content").innerHTML = `<div class="panel">
+    <div style="display:flex; justify-content:space-between; align-items:center">
+      <h2 style="margin:0">${esc(inv.supplier?.orgName ?? "")}</h2>
+      <span class="pill ${inv.state === "PAID" || inv.state === "RECONCILED" ? "ok" : "mut"}">${esc(inv.state)}</span>
+    </div>
+    <table class="items" style="margin-top:1rem"><thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Unit</th><th class="num">Amount</th></tr></thead>
+      <tbody>${inv.lines.map((l) => `<tr><td>${esc(l.description)}</td><td class="num">${esc(l.quantity)}</td>
+        <td class="num">${esc(l.unitPrice)}</td><td class="num">${esc(l.amount)}</td></tr>`).join("")}</tbody></table>
+    <div style="margin-top:1rem; text-align:right; font-size:1.2rem; font-weight:600">${esc(inv.total)} ${esc(inv.currency)}</div>
+    ${inv.txHash ? `<div class="note">Paid — ${esc(inv.txHash)}</div>` : ""}
+    <div class="note">Submitted ${esc((inv.submittedAt || "").slice(0, 10))}. Keep this link — reopen it any
+      time to see the payment status.</div>
+  </div>`;
+}
+
+function render(inv) {
+  if (inv.issued) {
+    document.title = `${inv.issued.number} · Rechnung`;
+    $("#actions").innerHTML = `<button class="ghost" onclick="window.print()">Print / PDF</button>`;
+    $("#content").innerHTML = renderIssued(inv);
+    return;
+  }
+  $("#actions").innerHTML = "";
+  if (inv.editable) renderForm(inv);
+  else renderSubmitted(inv);
+}
+
+function renderPassword() {
+  $("#content").innerHTML = `<div class="panel">
+    <h2>This link is password protected</h2>
+    <label>Password</label><input id="f-pw" type="password" />
+    <div style="margin-top:1rem"><button id="pw-go">Open</button></div>
+    <div id="err"></div></div>`;
+  $("#pw-go").onclick = async () => {
+    password = $("#f-pw").value;
+    try { await boot(); } catch (e) { $("#err").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  };
+}
+
+async function boot() {
+  let data;
+  try {
+    data = await api(`/api/invoice-links/${encodeURIComponent(token)}`);
+  } catch (e) {
+    if (e.passwordRequired) return renderPassword();
+    $("#content").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    return;
+  }
+  render(data.invoice);
+}
+
+boot();
+</script>
