@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Zold — euros in, local spending out</title>
-<meta name="description" content="Zold gives you a personal IBAN, holds your euros as regulated e-money in your own smart account, and sends them out through local rails such as SEPA, PIX, wallets, mobile money and cash pickup." />
-<meta property="og:title" content="Zold — euros in, local spending out" />
-<meta property="og:description" content="Deposit by IBAN, hold your balance in a smart account, and spend locally through the rail the recipient already uses." />
+<title>Zold — Bank on Chain</title>
+<meta name="description" content="Bank on Chain. Personal and business accounts with their own IBAN, euros held in a smart account you control, and local payouts over SEPA, PIX, wallets, mobile money and cash pickup." />
+<meta property="og:title" content="Zold — Bank on Chain" />
+<meta property="og:description" content="Personal and business accounts. Deposit by IBAN, hold your balance in a smart account you control, and spend locally through the rail the recipient already uses." />
 <meta property="og:type" content="website" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 18'%3E%3Cpath d='M1.6 1.4 L18.4 1.4 L10 16.2 Z' fill='none' stroke='%23ed188d' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -26,6 +26,11 @@
   @keyframes zfloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
   @keyframes zpulse { 0%,100% { opacity: .55; } 50% { opacity: .9; } }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  /* !important is required: these elements carry an inline display
+     (inline-flex on the pill), and an inline style outranks a class
+     rule. Without it the header CTA stays put and clips "Business". */
+  @media (max-width: 760px) { .js-hide-sm { display: none !important; } }
+  @media (max-width: 380px) { .js-hide-xs { display: none !important; } }
 </style>
 </head>
 <body>
@@ -38,12 +43,16 @@
         <span style="color:#ed188d; font-size:15px; line-height:1">▽</span>Zold
       </a>
       <div style="flex:1"></div>
-      <div style="display:flex; align-items:center; gap:26px; font-size:13.5px; color:#8a8a94">
-        <a href="#rails" style="color:#8a8a94">Rails</a>
-        <a href="#account" style="color:#8a8a94">Your money</a>
-        <a href="#approval" style="color:#8a8a94">Approvals</a>
+      <!-- Two products, named in the menu. Personal is the consumer account at
+           /app; Business is the organisation dashboard at /business. Everything
+           below this bar still describes the personal product, so these are the
+           only signposts that the business one exists — keep them. -->
+      <div style="display:flex; align-items:center; gap:clamp(14px,3vw,26px); font-size:13.5px; color:#8a8a94; min-width:0">
+        <a href="#account" style="color:#ededf0">Personal</a>
+        <a href="#business" style="color:#8a8a94">Business</a>
+        <a href="#approval" style="color:#8a8a94" class="js-hide-sm">Approvals</a>
       </div>
-      <a href="/app" style="display:inline-flex; align-items:center; height:36px; padding:0 18px; border-radius:999px; background:#ed188d; color:#fff; font-size:13.5px; font-weight:600; box-shadow:0 6px 22px rgba(237,24,141,.35)" class="pill">Launch app</a>
+      <a href="/app" style="display:inline-flex; align-items:center; height:36px; padding:0 18px; border-radius:999px; background:#ed188d; color:#fff; font-size:13.5px; font-weight:600; white-space:nowrap; flex:none; box-shadow:0 6px 22px rgba(237,24,141,.35)" class="pill js-hide-sm">Launch app</a>
     </div>
   </div>
 
@@ -51,23 +60,28 @@
     <div style="position:absolute; inset:-140px 0 auto; height:820px; pointer-events:none; background:radial-gradient(52% 48% at 50% 30%, rgba(237,24,141,.30), rgba(237,24,141,.07) 55%, transparent 72%); animation:zpulse 9s ease-in-out infinite"></div>
     <div style="position:relative; max-width:1140px; margin:0 auto">
       <div style="display:inline-flex; align-items:center; gap:8px; padding:6px 13px 6px 9px; border:1px solid rgba(237,24,141,.35); border-radius:999px; font-size:12px; color:#e8a9cd; background:rgba(237,24,141,.07)">
-        <span style="width:6px; height:6px; border-radius:50%; background:#3dd68c; box-shadow:0 0 8px #3dd68c"></span><span>Sandbox live · Monerium IBAN + EURe<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
+        <span style="width:6px; height:6px; border-radius:50%; background:#3dd68c; box-shadow:0 0 8px #3dd68c"></span><span>Sandbox live · Monerium IBAN<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
       </div>
 
-      <!-- Hero headline. The design carries three variants and this is the one
-           selected there; the other two are kept here so switching is one line
-           rather than a redesign:
-             Euros on chain.   font-size:clamp(44px,8.2vw,96px); letter-spacing:-.045em; + text-wrap:balance
-             #SendMoneyOnChain font-size:clamp(38px,7vw,84px);   letter-spacing:-.045em
-           The wordmark says less than "Euros on chain." does, so the line
-           below it is carrying the explanation — keep it descriptive. -->
-      <h1 style="margin:22px 0 0; font-size:clamp(52px,9vw,108px); line-height:.92; font-weight:600; letter-spacing:-.05em; color:#fbf9fc">Zold</h1>
+      <!-- Hero headline: a fixed line plus a rotating one.
+           The rotator is built in markup, not injected by script, so the first
+           phrase is on screen before any JS runs and the page still reads
+           correctly with JS disabled or blocked. The slot is sized to the
+           LONGEST phrase (see .rot-sizer) so swapping words cannot reflow the
+           page under the reader. -->
+      <h1 style="margin:22px 0 0; font-size:clamp(52px,9vw,108px); line-height:.92; font-weight:600; letter-spacing:-.05em; color:#fbf9fc">Bank on Chain</h1>
 
-      <p style="margin:20px auto 0; max-width:650px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Deposit by IBAN, hold EURe in a smart account, and spend locally through the rail people already use: SEPA, PIX, mobile money, wallets, cash pickup and more.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
+      <div class="rot" aria-live="polite" style="position:relative; margin:14px 0 0; height:1.25em; font-size:clamp(22px,3.4vw,38px); line-height:1.25; font-weight:600; letter-spacing:-.03em">
+        <!-- Invisible sizer: reserves the width of the longest phrase. -->
+        <span class="rot-sizer" aria-hidden="true" style="visibility:hidden; white-space:nowrap">smart money</span>
+        <span id="rot-word" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; white-space:nowrap; background:linear-gradient(90deg,#c084fc,#ed188d); -webkit-background-clip:text; background-clip:text; color:transparent; transition:opacity .32s ease, transform .32s ease">Zold</span>
+      </div>
+
+      <p style="margin:20px auto 0; max-width:650px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Deposit by IBAN, hold your euros in a smart account you control, and spend locally through the rail people already use: SEPA, PIX, mobile money, wallets, cash pickup and more.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
 
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:30px">
-        <a href="/app" style="display:inline-flex; align-items:center; height:46px; padding:0 26px; border-radius:999px; background:#ed188d; color:#fff; font-size:14.5px; font-weight:600; box-shadow:0 10px 34px rgba(237,24,141,.4)" class="pill">Launch app</a>
-        <a href="#approval" style="display:inline-flex; align-items:center; height:46px; padding:0 24px; border-radius:999px; border:1px solid #2c2c33; background:rgba(255,255,255,.03); font-size:14.5px; font-weight:500; color:#ededf0" class="ghost">View demo flow</a>
+        <a href="/app" style="display:inline-flex; align-items:center; height:46px; padding:0 26px; border-radius:999px; background:#ed188d; color:#fff; font-size:14.5px; font-weight:600; box-shadow:0 10px 34px rgba(237,24,141,.4)" class="pill">Open a personal account</a>
+        <a href="#business" style="display:inline-flex; align-items:center; height:46px; padding:0 24px; border-radius:999px; border:1px solid #2c2c33; background:rgba(255,255,255,.03); font-size:14.5px; font-weight:500; color:#ededf0" class="ghost">For business</a>
       </div>
     </div>
 
@@ -92,7 +106,7 @@
             </div>
             <div style="margin-top:10px; font-size:clamp(28px,3.6vw,38px); font-weight:600; letter-spacing:-.035em; color:#fbf9fc"><span style="color:#8a8a94; font-weight:500">€</span>4,206.20</div>
             <div style="margin-top:18px; display:grid; gap:0">
-              <div style="display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid #1c1c21; font-size:12px"><span style="color:#5b5b66; letter-spacing:.07em">SAFE EURe</span><span style="color:#ededf0">€4,206.20</span></div>
+              <div style="display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid #1c1c21; font-size:12px"><span style="color:#5b5b66; letter-spacing:.07em">SAFE BALANCE</span><span style="color:#ededf0">€4,206.20</span></div>
               <div style="display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid #1c1c21; font-size:12px"><span style="color:#5b5b66; letter-spacing:.07em">IBAN</span><span style="color:#ededf0; font-variant-numeric:tabular-nums">GB59 MONE 0000 0042 8817</span></div>
               <div style="display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid #1c1c21; font-size:12px"><span style="color:#5b5b66; letter-spacing:.07em">SMART ACCOUNT</span><span style="color:#ededf0">0x7a4c…19bE</span></div>
             </div>
@@ -127,15 +141,15 @@
   <section id="rails" style="padding:clamp(56px,8vw,96px) 24px; text-align:center">
     <div style="max-width:900px; margin:0 auto">
       <h2 style="margin:0; font-size:clamp(28px,4.4vw,48px); line-height:1.04; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">One account, local spending everywhere.</h2>
-      <p style="margin:16px auto 0; max-width:620px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Euros arrive over SEPA to your own IBAN and land as EURe<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">1</a>. From there the local-spend layer can route to the method that fits each jurisdiction: bank transfer, real-time payment, wallet, mobile money or cash pickup.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
+      <p style="margin:16px auto 0; max-width:620px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Euros arrive over SEPA to your own IBAN and land in a smart account you control<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">1</a>. From there the local-spend layer can route to the method that fits each jurisdiction: bank transfer, real-time payment, wallet, mobile money or cash pickup.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:clamp(18px,3vw,38px); margin-top:clamp(34px,5vw,52px)">
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
           <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#e8a9cd; box-shadow:inset 0 1px 0 rgba(255,255,255,.05)"><i class="ph ph-bank"></i></span>
           <span style="font-size:11.5px; color:#8a8a94">IBAN</span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid rgba(237,24,141,.4); background:radial-gradient(70% 70% at 50% 25%, rgba(237,24,141,.22), #0d0d11); display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:600; color:#ffd6ec; box-shadow:0 0 26px rgba(237,24,141,.28)">EURe</span>
-          <span style="font-size:11.5px; color:#8a8a94">e-money</span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid rgba(237,24,141,.4); background:radial-gradient(70% 70% at 50% 25%, rgba(237,24,141,.22), #0d0d11); display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:600; color:#ffd6ec; box-shadow:0 0 26px rgba(237,24,141,.28)">€</span>
+          <span style="font-size:11.5px; color:#8a8a94">e-money<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
           <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-arrows-left-right"></i></span>
@@ -176,7 +190,7 @@
             </div>
             <div style="text-align:right">
               <div style="font-size:10.5px; letter-spacing:.1em; color:#5b5b66">HELD AS</div>
-              <div style="margin-top:4px; font-size:13.5px; color:#e8a9cd">EURe · Safe</div>
+              <div style="margin-top:4px; font-size:13.5px; color:#e8a9cd">Euros · Safe</div>
             </div>
           </div>
         </div>
@@ -278,6 +292,67 @@
 
   <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
 
+  <!-- Business. Mirrors the #account layout with the columns swapped, so it
+       reads as a sibling rather than a repeat. Every claim here maps to
+       something that exists in the app; the ones that do not are named in
+       footnote 5 rather than softened into implication. -->
+  <section id="business" style="padding:clamp(56px,8vw,104px) 24px">
+    <div style="max-width:1080px; margin:0 auto; display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:clamp(32px,5vw,64px); align-items:center">
+
+      <div style="order:2">
+        <div style="position:relative">
+          <div style="position:absolute; inset:12% 6%; background:radial-gradient(50% 50% at 60% 45%, rgba(139,92,246,.26), transparent 72%); filter:blur(30px)"></div>
+          <div style="position:relative; border:1px solid #2c2c33; border-radius:18px; padding:clamp(18px,2.6vw,24px); background:linear-gradient(150deg,#17171d,#0c0c10); box-shadow:0 30px 70px rgba(0,0,0,.6)">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px">
+              <span style="display:flex; align-items:center; gap:7px; font-size:13.5px; font-weight:600; letter-spacing:-.02em"><span style="color:#ed188d">▽</span>Acme GmbH</span>
+              <span style="font-size:10px; font-weight:600; letter-spacing:.06em; padding:3px 8px; border-radius:999px; background:rgba(245,166,35,.14); color:#f5a623">PENDING REVIEW</span>
+            </div>
+
+            <div style="margin-top:18px; font-size:10.5px; letter-spacing:.1em; color:#5b5b66">SUPPLIER RUN · 2 PAYMENTS</div>
+            <div style="margin-top:10px; display:grid; gap:8px">
+              <div style="display:flex; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid #232328; border-radius:10px; background:#0e0e12; font-size:13px">
+                <span style="color:#cfcfd8">Supplier Ltd</span><span style="color:#ededf0; font-variant-numeric:tabular-nums">€1,200.00</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; gap:12px; padding:10px 12px; border:1px solid #232328; border-radius:10px; background:#0e0e12; font-size:13px">
+                <span style="color:#cfcfd8">Contractor BV</span><span style="color:#ededf0; font-variant-numeric:tabular-nums">€840.00</span>
+              </div>
+            </div>
+
+            <div style="margin-top:14px; padding-top:13px; border-top:1px solid #1c1c21; display:flex; align-items:center; gap:9px">
+              <span style="color:#8b5cf6; font-size:15px; line-height:1"><i class="ph ph-users-three"></i></span>
+              <span style="font-size:12px; color:#8a8a94">Drafted by Miriam · needs a second approver</span>
+            </div>
+            <div style="margin-top:12px; display:flex; gap:8px">
+              <span style="flex:1; text-align:center; padding:9px 0; border-radius:999px; background:#ed188d; color:#fff; font-size:12.5px; font-weight:600">Approve</span>
+              <span style="flex:1; text-align:center; padding:9px 0; border-radius:999px; border:1px solid #2c2c33; color:#cfcfd8; font-size:12.5px; font-weight:500">Send back</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="order:1">
+        <span style="display:inline-flex; align-items:center; gap:8px; font-size:11.5px; font-weight:600; letter-spacing:.13em; color:#8a8a94">FOR BUSINESS</span>
+        <h2 style="margin:14px 0 0; font-size:clamp(28px,4vw,44px); line-height:1.05; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">Your company's money, with the controls a company needs.</h2>
+        <p style="margin:16px 0 0; max-width:46ch; font-size:15.5px; line-height:1.6; color:#9a9aa5">An organisation holds the accounts, not a person. Invite your team, give each of them only what their job needs, and put a second pair of eyes in front of every payment that leaves.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">5</a></p>
+
+        <div style="display:grid; gap:14px; margin-top:26px">
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-users-three"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Roles that separate the books from the money</div><div style="font-size:13px; color:#8a8a94">Your bookkeeper can categorise every transaction and never send a euro. Viewer, accountant, payer, admin, owner.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-seal-check"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Four eyes on every payment run</div><div style="font-size:13px; color:#8a8a94">Whoever drafts a payment cannot approve it. And if a payee's bank details change after approval, the payment stops instead of following them.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-receipt"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Invoices your suppliers can actually use</div><div style="font-size:13px; color:#8a8a94">Send a one-time link. They fill in the invoice with no account, no wallet and no onboarding, and you pay it from the same screen.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-notebook"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Books your accountant recognises</div><div style="font-size:13px; color:#8a8a94">Your own chart of accounts, rules that map transactions to it automatically, cost basis, and a CSV that opens in the ledger you already keep.</div></div></div>
+        </div>
+
+        <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:30px">
+          <a href="/business" style="display:inline-flex; align-items:center; height:44px; padding:0 22px; border-radius:999px; background:#ed188d; color:#fff; font-size:14px; font-weight:600; box-shadow:0 10px 30px rgba(237,24,141,.34)" class="pill">Open a business account</a>
+          <span style="font-size:12.5px; color:#5b5b66">Free while you are getting started · 30-day trial of the paid plan<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super">5</a></span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
+
   <section id="launch" style="position:relative; padding:clamp(64px,9vw,120px) 24px; text-align:center; overflow:hidden">
     <div style="position:absolute; left:50%; bottom:-220px; width:min(760px,120%); height:520px; transform:translateX(-50%); background:radial-gradient(50% 50% at 50% 50%, rgba(237,24,141,.28), transparent 70%); pointer-events:none"></div>
     <div style="position:relative">
@@ -301,10 +376,11 @@
         <div>
           <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#5b5b66">PRODUCT</div>
           <div style="display:grid; gap:9px; margin-top:14px; font-size:13.5px">
+            <a href="/app" style="color:#8a8a94">Personal</a>
+            <a href="/business" style="color:#8a8a94">Business</a>
             <a href="#rails" style="color:#8a8a94">Rails</a>
             <a href="#account" style="color:#8a8a94">Your money</a>
-                <a href="#approval" style="color:#8a8a94">Approvals</a>
-            <a href="/app" style="color:#8a8a94">Launch app</a>
+            <a href="#approval" style="color:#8a8a94">Approvals</a>
           </div>
         </div>
         <div>
@@ -346,6 +422,10 @@
           <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CUSTODY AND APPROVALS</div>
           <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">4</sup> Each account is a Safe smart account; deployment gas is sponsored. A passkey is registered at onboarding and every payout is signed against that exact amount and recipient. Today the account's owner key is still held server-side, so the account is custodial in practice — replacing that key with passkey and co-signer approval is in progress. Assets held on chain are not covered by any government or private deposit insurance scheme.</p>
         </div>
+        <div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR BUSINESS ACCOUNTS</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">5</sup> Members, roles, payment approvals, invoices, the address book, the chart of accounts and CSV export are implemented. Accounts are modelled in several currencies, but <strong style="color:#cfcfd8; font-weight:600">only the euro account is open</strong>: USD and GBP need an account provider that has not been granted, and KES and INR need a local payout partner that is not contracted. Each currency states in the app what it is waiting on rather than appearing as though it works. An organisation does not yet get a payment account of its own — until it does, a business account is funded from a member's personal account, which the app says explicitly before you do it. Cards are not built. Free and paid plans are described in-app; the paid plan is not yet chargeable and the 30-day trial is granted on request. Downgrading pauses paid features and deletes nothing.</p>
+        </div>
         <p style="margin:6px 0 0; font-size:12px; color:#5b5b66">© 2026 Zoldenburg. All rights reserved.</p>
       </div>
     </div>
@@ -353,13 +433,42 @@
 </div>
 
 <script>
+  /* Hero rotator: Zold -> spend local -> smart money.
+     The first phrase is already in the markup, so this only ever REPLACES a
+     visible word — nothing is blank before JS runs. Honours
+     prefers-reduced-motion by leaving the static first phrase in place, which
+     is a complete headline on its own rather than a degraded one. */
+  (function () {
+    var el = document.getElementById("rot-word");
+    if (!el) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    var phrases = ["Zold", "spend local", "smart money"];
+    var i = 0;
+    setInterval(function () {
+      el.style.opacity = "0";
+      el.style.transform = "translateY(-6px)";
+      setTimeout(function () {
+        i = (i + 1) % phrases.length;
+        el.textContent = phrases[i];
+        el.style.transform = "translateY(6px)";
+        /* Next frame, so the browser paints the offset before easing back. */
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            el.style.opacity = "1";
+            el.style.transform = "translateY(0)";
+          });
+        });
+      }, 320);
+    }, 2600);
+  })();
+
   /* Mock status cycling for the hero screen — presentation only, no API calls. */
   (function () {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     var steps = [
       { label: "QUOTED", note: "rate locked for 10 minutes", color: "#f5a623", pct: "25%" },
       { label: "SIGNED", note: "passkey approved this payout", color: "#ed188d", pct: "50%" },
-      { label: "SENT", note: "EURe redeemed, payout dispatched", color: "#ed188d", pct: "78%" },
+      { label: "SENT", note: "euros redeemed, payout dispatched", color: "#ed188d", pct: "78%" },
       { label: "PAID", note: "collected \u00b7 ref 8F42-QK19", color: "#3dd68c", pct: "100%" }
     ];
     var i = 0, secs = 542;

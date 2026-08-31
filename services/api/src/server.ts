@@ -10,13 +10,15 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, FX, KYC, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, KYC, LIQUIDITY, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
 import { prepareSafeSwapForTransfer } from "./liquidity.js";
 import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
+import { resolveSegment, capabilitiesFor, can, type Segment } from "./domain/segments.js";
+import { auditEntry, redact } from "./audit.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
-import { initStore, store, type CryptoDeposit, type ReceiptShare, type Transfer, type User } from "./store.js";
+import { initStore, store, type CryptoDeposit, type Quote, type ReceiptShare, type Transfer, type User } from "./store.js";
 import {
   buildReceipt,
   DEFAULT_SHARE_FIELDS,
@@ -48,6 +50,9 @@ import {
 import { startCryptoDepositPoller } from "./adapters/crypto-deposits.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from "./pay.js";
 import { qrSvg } from "./qr.js";
+import { createOrgRouter } from "./routes/orgs.js";
+import { createBusinessRouter, createInvoiceLinkRouter } from "./routes/business.js";
+import { createGnosisPayRouter } from "./routes/gnosis-pay.js";
 import { senderProfileToSep9 } from "./adapters/moneygram.js";
 import { toAlpha3 } from "./stellar/sep9.js";
 import { getTreasury, missingRequiredFields, sep10Auth, sep12CustomerFields } from "./stellar/anchor.js";
@@ -209,8 +214,31 @@ const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public")
 app.get("/", (_req, res) => res.sendFile(path.join(pub, "landing.html")));
 app.get(["/app", "/app/"], (_req, res) => res.sendFile(path.join(pub, "index.html")));
 app.get(["/admin", "/admin/"], (_req, res) => res.sendFile(path.join(pub, "admin.html")));
+/** The org dashboard — business and premium personal accounts. */
+app.get(["/business", "/business/"], (_req, res) =>
+  res.sendFile(path.join(pub, "business.html")),
+);
+/** The supplier's invoice view, reached with a one-time link and no account. */
+app.get("/invoice/:token", (_req, res) => res.sendFile(path.join(pub, "invoice.html")));
 
 app.use(express.static(pub));
+
+/**
+ * The organisation domain (docs/business-accounts.md).
+ *
+ * Mounted as routers taking `requireSession` rather than importing the app, so
+ * this file stays the single owner of authentication — a route module cannot
+ * quietly acquire a second way to decide who is calling. Both sit under /api,
+ * so they inherit the rate limiting and the auth-window middleware above.
+ *
+ * The invoice-link router is deliberately NOT session-guarded: it is reached by
+ * a supplier who has no account, holding only the one-time token. Its
+ * responses go through an allowlist view for that reason.
+ */
+app.use("/api/orgs", createOrgRouter(requireSession));
+app.use("/api/orgs", createBusinessRouter(requireSession, buildTransferFromQuote));
+app.use("/api/invoice-links", createInvoiceLinkRouter());
+app.use("/api/gnosis-pay", createGnosisPayRouter(requireSession));
 
 type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
 const pendingPasskeySafeDeployments = new Map<string, { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }>();
@@ -318,8 +346,28 @@ app.get(
 const sandbox = moneriumSandboxEnabled();
 
 /** Never send payment-page deposit keys, OAuth state, or encrypted tokens to the client. */
-const publicUser = ({ moneriumConnect, monerium, passkey, paymentPage, ...u }: User & { [k: string]: any }) => ({
+const publicUser = (
+  { moneriumConnect, monerium, passkey, paymentPage, segment, usPersonAnswers, ...u }:
+    User & { [k: string]: any },
+) => ({
   ...u,
+  /**
+   * The client is told its capabilities, NOT the rule that produced them.
+   *
+   * `reasonCode` and the raw US answers are stripped: the first tells someone
+   * which answer to change, and the second is theirs but has no business being
+   * echoed back on every read. `gate` IS sent, because a gated segment must be
+   * able to say what is missing.
+   */
+  ...(segment
+    ? {
+        segment: {
+          value: segment.value,
+          capabilities: capabilitiesFor(segment.value),
+          ...(segment.gate ? { gate: segment.gate } : {}),
+        },
+      }
+    : {}),
   ...(paymentPage
     ? {
         paymentPage: {
@@ -709,21 +757,133 @@ function queueSandboxProvisioning(user: User) {
   );
 }
 
+/**
+ * What a blocked person is told.
+ *
+ * PLAIN, AND NOT A REASON. Each line says what Zold cannot offer and stops
+ * there. It does not cite a rule, a country policy or a partner, because the
+ * user cannot act on any of that and because naming the rule tells someone
+ * which answer to change. The internal reasonCode goes to the audit log.
+ *
+ * No legal advice, and no implication that the user has done something wrong —
+ * which is why the unsupported case says the residence is not served rather
+ * than anything about the person.
+ */
+/**
+ * The single gate in front of every partner call.
+ *
+ * ENFORCED IN CODE, NOT IN THE UI. Hiding a button is a presentation choice
+ * that a crafted request walks straight past; this is the check that actually
+ * decides. An IN_COLLECTIONS account cannot reach Monerium, a Safe, a card or
+ * an on-chain balance no matter what it POSTs, because every one of those
+ * routes asks here first.
+ *
+ * A user with no segment is a pre-existing account from before segmentation.
+ * They are treated as EU_FULL rather than refused: they were created under the
+ * old country gate, which already required a Monerium-servable residence, and
+ * locking them out of their own funded account would be a worse failure than
+ * the one this guards. `npm run segments:test` covers the resolver; this
+ * fallback is the migration seam and is deliberately narrow.
+ */
+function requireCapability(
+  user: User,
+  capability: Parameters<typeof can>[1],
+  res: express.Response,
+): boolean {
+  const segment: Segment = user.segment?.value ?? "EU_FULL";
+  if (can(segment, capability)) return true;
+  store.audit(auditEntry("partner.call_refused", { segment, capability }, user.id));
+  res.status(403).json({
+    error: "This is not part of your account.",
+    code: "CAPABILITY_UNAVAILABLE",
+    capability,
+    ...(user.segment?.gate ? { gate: user.segment.gate } : {}),
+  });
+  return false;
+}
+
+/** Bumped when the wording of the US questions or the consent text changes,
+ *  so a stored answer can be tied to what was actually asked. */
+const US_QUESTIONS_VERSION = "2026-08-31";
+const CONSENT_VERSION = "2026-08-31";
+
+const BLOCKED_COPY: Record<Extract<Segment, `BLOCKED_${string}`>, string> = {
+  BLOCKED_US: "Zold is not available to US persons.",
+  BLOCKED_SANCTIONED: "Zold is not available in your country.",
+  BLOCKED_UNSUPPORTED: "Zold cannot open an account for residents of your country yet.",
+};
+
 app.post(
   "/api/users",
   wrap(async (req, res) => {
-    const { name, country, email } = req.body ?? {};
+    const { name, country, email, citizenships, accountType, usAnswers, consents,
+      companyIncorporationCountry, softSignals } = req.body ?? {};
     if (!name || !country) return res.status(400).json({ error: "name and country required" });
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return res.status(400).json({ error: "invalid email" });
     }
-    const blockedCountry = countryBlock(String(country));
-    if (blockedCountry) {
+
+    /**
+     * SEGMENTATION REPLACES THE OLD COUNTRY GATE.
+     *
+     * `countryBlock()` used to run here and 403 before anything else. It is now
+     * consulted INSIDE resolveSegment, and the reason is not tidiness: it
+     * answers only "will Monerium serve this residence", so on its own it
+     * refused Indian residents' collections path and refused Nigerians with a
+     * message about Monerium's country policy — a partner's name in front of a
+     * user who was never going to use that partner. The resolver asks the three
+     * questions separately and returns which of them actually decided.
+     *
+     * Back-compatible for callers that send no new fields: an individual with a
+     * single citizenship equal to residence and all-no US answers, which is
+     * what the old body implied. Doing otherwise would break every existing
+     * client and every harness in one commit.
+     */
+    const type: "individual" | "company" = accountType === "company" ? "company" : "individual";
+    const answers = {
+      usCitizen: usAnswers?.usCitizen === true,
+      usGreenCard: usAnswers?.usGreenCard === true,
+      usTaxResident: usAnswers?.usTaxResident === true,
+      ...(type === "company"
+        ? { companyUsNexus: usAnswers?.companyUsNexus === true }
+        : { companyUsNexus: null }),
+    };
+    let decision;
+    try {
+      decision = resolveSegment({
+        residence: String(country),
+        citizenships: Array.isArray(citizenships) && citizenships.length
+          ? citizenships.map(String)
+          : [String(country)],
+        accountType: type,
+        usAnswers: answers,
+        ...(companyIncorporationCountry ? { companyIncorporationCountry: String(companyIncorporationCountry) } : {}),
+        ...(softSignals ? { softSignals } : {}),
+      });
+    } catch (err: any) {
+      return res.status(400).json({ error: String(err?.message ?? err) });
+    }
+
+    // A blocked segment is recorded before it is refused: the decision has to
+    // be auditable whether or not an account exists, and "we refused someone
+    // and kept no record of why" is the failure this log exists to prevent.
+    if (decision.segment.startsWith("BLOCKED_")) {
+      store.audit(auditEntry("segment.decided", {
+        residence: normaliseCountryCode(String(country)),
+        citizenships: (Array.isArray(citizenships) ? citizenships : [country]).map((c: any) => normaliseCountryCode(String(c))),
+        accountType: type,
+        usAnswers: answers,
+        segment: decision.segment,
+        reasonCode: decision.reasonCode,
+        email: redact(email ?? ""),
+        outcome: "refused_at_signup",
+      }));
+      // Deliberately says what Zold cannot offer and NOT which rule fired.
+      // reasonCode stays in the log; publishing it tells someone which answer
+      // to change to get a different outcome.
       return res.status(403).json({
-        error: blockedCountry.message,
-        code: "COUNTRY_NOT_SUPPORTED",
-        country: blockedCountry.code,
-        reason: blockedCountry.reason,
+        error: BLOCKED_COPY[decision.segment as keyof typeof BLOCKED_COPY],
+        code: decision.segment,
       });
     }
     const id = randomUUID();
@@ -749,6 +909,44 @@ app.post(
       createdAt: new Date().toISOString(),
     };
     store.addUser(user);
+    store.setSegment(user.id, {
+      value: decision.segment,
+      reasonCode: decision.reasonCode,
+      decidedAt: new Date().toISOString(),
+      decidedBy: "system",
+      ...(decision.gate ? { gate: decision.gate } : {}),
+    });
+    store.updateUser(user.id, {
+      citizenships: (Array.isArray(citizenships) && citizenships.length
+        ? citizenships.map(String) : [String(country)]).map(normaliseCountryCode),
+      accountType: type,
+      ...(companyIncorporationCountry
+        ? { companyIncorporationCountry: normaliseCountryCode(String(companyIncorporationCountry)) }
+        : {}),
+      ...(decision.review
+        ? { softSignals: { ...(softSignals ?? {}), flaggedAt: new Date().toISOString(), reconfirmationPending: true } }
+        : {}),
+    });
+    store.addUsAnswers(user.id, { ...answers, answeredAt: new Date().toISOString(), version: US_QUESTIONS_VERSION });
+    for (const c of Array.isArray(consents) ? consents : []) {
+      if (c?.kind !== "zold_terms" && c?.kind !== "partner_share") continue;
+      store.addConsent(user.id, {
+        kind: c.kind,
+        ...(c.partner ? { partner: String(c.partner) } : {}),
+        version: String(c.version ?? CONSENT_VERSION),
+        at: new Date().toISOString(),
+        ...(req.ip ? { ip: req.ip } : {}),
+      });
+    }
+    store.audit(auditEntry("segment.decided", {
+      residence: user.country,
+      accountType: type,
+      usAnswers: answers,
+      segment: decision.segment,
+      reasonCode: decision.reasonCode,
+      softUsSignals: decision.review?.softUsSignals ?? [],
+      outcome: "account_created",
+    }, user.id));
     if (sandbox && kycStatus === "approved") {
       // Wallet deploy (~20s) + Monerium provisioning run in the background;
       // the UI polls funding status until the IBAN lands.
@@ -1416,6 +1614,7 @@ app.post(
     const user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "monerium", res)) return;
     if (!moneriumOAuthEnabled()) {
       return res.status(503).json({ error: "Monerium OAuth client is not configured" });
     }
@@ -1578,6 +1777,7 @@ app.post(
     let user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "monerium", res)) return;
     const custodyBlocked = custodyBlockerBeforeFunding(user);
     if (custodyBlocked) {
       return res.status(409).json({ error: custodyBlocked });
@@ -2590,6 +2790,7 @@ app.post(
     const user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "safe", res)) return;
     if (!user.passkey?.publicKey || !user.passkeySafe) {
       return res.status(409).json({ error: "register a passkey before preparing the passkey Safe" });
     }
@@ -2805,74 +3006,54 @@ app.post(
   }),
 );
 
-// --- Quotes & transfers ------------------------------------------------------
+/**
+ * Build a transfer from an open quote, and the authorization the device must
+ * sign for it.
+ *
+ * Extracted from POST /api/transfers unchanged so that draft execution can
+ * create transfers through the SAME code path. A second, parallel construction
+ * would be the classic way for one caller to quietly skip a balance check, a
+ * daily cap, or the destination commitment.
+ *
+ * Returns a discriminated result rather than writing to a response: it has two
+ * callers now, and only one of them owns an HTTP response. The `res` it passes
+ * to requireKycApproved / assertDailyCap is a collector whose
+ * `.status(x).json(y)` evaluates to the failure result itself, so every
+ * refusal below reads exactly as it did when this was a route.
+ */
+type TransferBuildFailure = { ok: false; status: number; body: any };
+type TransferBuildResult =
+  | { ok: true; transfer: Transfer; authorization: any }
+  | TransferBuildFailure;
 
-app.post(
-  "/api/quotes",
-  wrap(async (req, res) => {
-    const { userId, sendEur, rail = "cash" } = req.body ?? {};
-    const user = store.findUser(userId);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    if (!requireUserSession(req, res, user.id)) return;
-    if (!requireKycApproved(user, res)) return;
-    if (!["cash", "sepa"].includes(rail)) {
-      return res.status(400).json({ error: "rail must be cash or sepa" });
-    }
-    const amount = Number(sendEur);
-    if (!(amount > FX.FIXED_FEE_EUR)) {
-      return res.status(400).json({ error: `amount must exceed the €${FX.FIXED_FEE_EUR} fee` });
-    }
-    if (amount > FX.DAILY_CAP_EUR) {
-      return res.status(400).json({ error: `amount exceeds daily cap of €${FX.DAILY_CAP_EUR}` });
-    }
-    res.status(201).json(await createQuote(userId, { rail, sendEur: amount }));
-  }),
-);
+function responseCollector() {
+  const out: TransferBuildFailure = { ok: false, status: 500, body: undefined };
+  const res: any = {
+    status(code: number) {
+      out.status = code;
+      return res;
+    },
+    json(body: any) {
+      out.body = body;
+      return out;
+    },
+  };
+  return { res, out };
+}
 
-app.post(
-  "/api/transfers",
-  wrap(async (req, res) => {
-    const { quoteId, recipientName, recipientPhone, recipientIban, reference } = req.body ?? {};
-    const quote = store.findQuote(quoteId);
-    if (!quote) return res.status(404).json({ error: "quote not found" });
-    if (!requireUserSession(req, res, quote.userId)) return;
-    if ((quote.status ?? "OPEN") !== "OPEN") {
-      return res.status(409).json({ error: `quote already ${quote.status.toLowerCase()}` });
-    }
-    if (isExpired(quote)) {
-      store.updateQuote(quote.id, { status: "EXPIRED" });
-      return res.status(410).json({ error: "quote expired, request a new one" });
-    }
-    if (!recipientName) {
-      return res.status(400).json({ error: "recipientName required" });
-    }
-    if (quote.rail === "sepa" && !recipientIban) {
-      return res.status(400).json({ error: "recipientIban required for bank payout" });
-    }
-    if (quote.rail === "cash" && !recipientPhone) {
-      return res.status(400).json({ error: "recipientPhone required for cash pickup" });
-    }
-    // Remittance reference: carried to the payee on the SEPA rail so they can
-    // reconcile the payment against their own records. Refused rather than
-    // truncated past the scheme's 140 characters — the caller is reconciling on
-    // this string, so a silently shortened one is worse than an error.
-    if (reference !== undefined && reference !== null) {
-      if (typeof reference !== "string") {
-        return res.status(400).json({ error: "reference must be a string" });
-      }
-      if (reference.length > SEPA_REMITTANCE_MAX) {
-        return res.status(400).json({
-          error: `reference must be ${SEPA_REMITTANCE_MAX} characters or fewer (SEPA remittance limit)`,
-        });
-      }
-      if (quote.rail !== "sepa") {
-        return res.status(400).json({
-          error: "reference is only carried on the sepa rail",
-        });
-      }
-    }
+async function buildTransferFromQuote(
+  quote: Quote,
+  recipient: {
+    recipientName: string;
+    recipientPhone?: string;
+    recipientIban?: string;
+    reference?: string;
+  },
+): Promise<TransferBuildResult> {
+  const { res, out } = responseCollector();
+  const { recipientName, recipientPhone, recipientIban, reference } = recipient;
     const user = store.findUser(quote.userId)!;
-    if (!requireKycApproved(user, res)) return;
+    if (!requireKycApproved(user, res)) return out;
     const balances = await accountBalances(user.address);
     const fundingSource: Transfer["fundingSource"] = "safe";
     if (balances.safeBalanceEur < quote.sendEur) {
@@ -2887,7 +3068,7 @@ app.post(
         safeBalanceEur: balances.safeBalanceEur,
       });
     }
-    if (!(await assertDailyCap(user, quote.sendEur, res))) return;
+    if (!(await assertDailyCap(user, quote.sendEur, res))) return out;
 
     const createdAt = new Date().toISOString();
     const transfer: Transfer = {
@@ -2946,6 +3127,24 @@ app.post(
     let safeExecution:
       | { credentialId: string; challenge: string; amountEur: number; token: "EURE" }
       | undefined;
+    /**
+     * Which custody mode this transfer will actually run in, recorded on the
+     * transfer itself. Starts at the honest worst case and is narrowed only
+     * when a Safe-executed batch is genuinely prepared — so a venue outage or
+     * a missing config leaves the truthful answer behind rather than an
+     * optimistic one nobody revisited.
+     *
+     * The SEPA rail is already non-custodial for the principal: Monerium's
+     * redeem burns the payout straight from the Safe and only the fee moves.
+     */
+    let custody: NonNullable<Transfer["custody"]> =
+      transfer.rail === "sepa"
+        ? { mode: "non-custodial", feeToOrchestrator: transfer.sendEur > (transfer.receiveEur ?? 0) }
+        : {
+            mode: "orchestrator",
+            reason: "no Safe-executed swap batch was prepared for this transfer",
+            feeToOrchestrator: true,
+          };
     const debitWei =
       transfer.rail === "sepa"
         ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR)))
@@ -3030,6 +3229,21 @@ app.post(
                 call: swap.plan.call,
               });
               batch = { recipient, mode };
+              // Live: the batch delivers straight to Bridge's deposit address,
+              // so the input never reaches an address we hold a key to.
+              // Dry-run: there IS no external destination, so the output lands
+              // at the orchestrator for the local escrow demo to pull from —
+              // still a batch, still user-signed, but custodial, and it says so.
+              custody =
+                mode === "live"
+                  ? { mode: "non-custodial", feeToOrchestrator: true }
+                  : {
+                      mode: "orchestrator",
+                      reason:
+                        "BRIDGE_LIVE is not set, so the swap has no external deposit address to " +
+                        "deliver into and the output lands at the orchestrator",
+                      feeToOrchestrator: true,
+                    };
               transfer.liquidity = swap.serialized;
               transfer.safeSwap = {
                 recipient,
@@ -3041,7 +3255,21 @@ app.post(
                 ...(bridgeAmountUsdc !== undefined ? { bridgeAmountUsdc } : {}),
               };
             }
+            if (!swap) {
+              custody = {
+                mode: "orchestrator",
+                reason:
+                  `the configured liquidity venue (${LIQUIDITY.PROVIDER}) cannot be executed by the ` +
+                  "user's Safe, so the input is debited to the orchestrator and swapped from there",
+                feeToOrchestrator: true,
+              };
+            }
           } catch (err: any) {
+            custody = {
+              mode: "orchestrator",
+              reason: `Safe-executed batch unavailable: ${err?.message ?? err}`,
+              feeToOrchestrator: true,
+            };
             console.error(
               `Safe swap batch unavailable for ${transfer.id} (falling back to plain debit): ${err?.message ?? err}`,
             );
@@ -3078,9 +3306,32 @@ app.post(
         );
       }
     }
+    /**
+     * Turn the preference into a guarantee where an operator asked for one.
+     *
+     * REQUIRE_NON_CUSTODIAL=1 means this deployment has promised it does not
+     * take possession of client funds, so a fallback to the orchestrator is a
+     * broken promise, not a degraded mode — refuse and name the cause rather
+     * than moving money in a way the deployment says it does not.
+     *
+     * This spends the quote (consumed above). That is acceptable precisely
+     * because every cause here is a deployment-wide condition — the venue
+     * cannot serve a Safe, Bridge is not live — so it fails on the first
+     * transfer and is fixed once, not intermittently for one unlucky user.
+     */
+    if (CUSTODY.requireNonCustodial && custody.mode === "orchestrator") {
+      return res.status(409).json({
+        error:
+          "refusing to create this transfer: REQUIRE_NON_CUSTODIAL=1 but it would route the sender's " +
+          `funds through the orchestrator — ${custody.reason ?? "no Safe-executed batch was prepared"}`,
+        custody,
+      });
+    }
+    transfer.custody = custody;
     store.addTransfer(transfer);
-    res.status(201).json({
-      ...transfer,
+    return {
+      ok: true as const,
+      transfer,
       authorization: {
         authorizer,
         safeExecution,
@@ -3107,7 +3358,84 @@ app.post(
           : undefined,
         submitTo: `/api/transfers/${transfer.id}/authorize`,
       },
+    };
+}
+
+// --- Quotes & transfers ------------------------------------------------------
+
+app.post(
+  "/api/quotes",
+  wrap(async (req, res) => {
+    const { userId, sendEur, rail = "cash" } = req.body ?? {};
+    const user = store.findUser(userId);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "onchain_balance", res)) return;
+    if (!requireKycApproved(user, res)) return;
+    if (!["cash", "sepa"].includes(rail)) {
+      return res.status(400).json({ error: "rail must be cash or sepa" });
+    }
+    const amount = Number(sendEur);
+    if (!(amount > FX.FIXED_FEE_EUR)) {
+      return res.status(400).json({ error: `amount must exceed the €${FX.FIXED_FEE_EUR} fee` });
+    }
+    if (amount > FX.DAILY_CAP_EUR) {
+      return res.status(400).json({ error: `amount exceeds daily cap of €${FX.DAILY_CAP_EUR}` });
+    }
+    res.status(201).json(await createQuote(userId, { rail, sendEur: amount }));
+  }),
+);
+
+app.post(
+  "/api/transfers",
+  wrap(async (req, res) => {
+    const { quoteId, recipientName, recipientPhone, recipientIban, reference } = req.body ?? {};
+    const quote = store.findQuote(quoteId);
+    if (!quote) return res.status(404).json({ error: "quote not found" });
+    if (!requireUserSession(req, res, quote.userId)) return;
+    if ((quote.status ?? "OPEN") !== "OPEN") {
+      return res.status(409).json({ error: `quote already ${quote.status.toLowerCase()}` });
+    }
+    if (isExpired(quote)) {
+      store.updateQuote(quote.id, { status: "EXPIRED" });
+      return res.status(410).json({ error: "quote expired, request a new one" });
+    }
+    if (!recipientName) {
+      return res.status(400).json({ error: "recipientName required" });
+    }
+    if (quote.rail === "sepa" && !recipientIban) {
+      return res.status(400).json({ error: "recipientIban required for bank payout" });
+    }
+    if (quote.rail === "cash" && !recipientPhone) {
+      return res.status(400).json({ error: "recipientPhone required for cash pickup" });
+    }
+    // Remittance reference: carried to the payee on the SEPA rail so they can
+    // reconcile the payment against their own records. Refused rather than
+    // truncated past the scheme's 140 characters — the caller is reconciling on
+    // this string, so a silently shortened one is worse than an error.
+    if (reference !== undefined && reference !== null) {
+      if (typeof reference !== "string") {
+        return res.status(400).json({ error: "reference must be a string" });
+      }
+      if (reference.length > SEPA_REMITTANCE_MAX) {
+        return res.status(400).json({
+          error: `reference must be ${SEPA_REMITTANCE_MAX} characters or fewer (SEPA remittance limit)`,
+        });
+      }
+      if (quote.rail !== "sepa") {
+        return res.status(400).json({
+          error: "reference is only carried on the sepa rail",
+        });
+      }
+    }
+    const built = await buildTransferFromQuote(quote, {
+      recipientName,
+      recipientPhone,
+      recipientIban,
+      reference,
     });
+    if (!built.ok) return res.status(built.status).json(built.body);
+    res.status(201).json({ ...built.transfer, authorization: built.authorization });
   }),
 );
 
@@ -3544,6 +3872,36 @@ if (sandbox) {
 if (CRYPTO_IN.enabled) startCryptoDepositPoller();
 app.listen(API_PORT, API_HOST, () => {
   console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
+  /**
+   * Say the custody posture out loud at startup.
+   *
+   * Whether the orchestrator ends up holding a user's funds is decided by the
+   * interaction of the liquidity venue and whether Bridge is live, neither of
+   * which announces itself. An operator who believes they are running a
+   * non-custodial deployment should find out here, not from a regulator.
+   */
+  const safeExecutable = ["dex", "lifi", "rfq", "best"].includes(LIQUIDITY.PROVIDER);
+  if (!safeExecutable) {
+    console.warn(
+      `CUSTODY: LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER} cannot be executed by a user's Safe, so ` +
+        "cash-rail transfers debit the full amount to the orchestrator and swap from there. " +
+        "The non-custodial path needs dex, lifi, rfq or best.",
+    );
+  } else if (!BRIDGE.live) {
+    console.warn(
+      "CUSTODY: the Safe-executed swap batch is available, but BRIDGE_LIVE is not set — with no " +
+        "external deposit address the batch delivers its output to the orchestrator. Cash-rail " +
+        "transfers are recorded as custodial until Bridge is live.",
+    );
+  } else {
+    console.log(
+      "CUSTODY: cash-rail transfers run non-custodially — the user's Safe signs one batch that " +
+        "delivers straight to Bridge. The SEPA rail moves only the fee.",
+    );
+  }
+  if (CUSTODY.requireNonCustodial) {
+    console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
+  }
   // Allowances are gone entirely: every debit is a UserOperation the user's
   // passkey signs for the exact amount and destination. An operator still
   // setting the old env knobs should hear that they no longer do anything —

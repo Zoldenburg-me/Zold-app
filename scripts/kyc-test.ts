@@ -113,8 +113,17 @@ try {
 
   console.log("2/4 pending user cannot fund, bind, quote, or transfer...");
   const blocked = await expectStatus("/api/users", 403, { name: "Blocked User", country: "US" });
-  assert.equal(blocked.code, "COUNTRY_NOT_SUPPORTED");
-  assert.equal(blocked.country, "US");
+  // Was COUNTRY_NOT_SUPPORTED, which came from Monerium's residency table. A US
+  // residence is now a US-PERSON block, decided by resolveSegment before any
+  // partner policy is consulted — a stronger and more accurate reason, and one
+  // that does not name a partner the user was never going to use.
+  // npm run onboarding:test covers the full set of refusals.
+  assert.equal(blocked.code, "BLOCKED_US");
+  assert.equal(blocked.error, "Zold is not available to US persons.");
+  // The refusal is now MINIMAL — no country echo, no partner name, no rule.
+  // It carries what the user can act on and nothing that tells them which
+  // answer to change; the reason code lives in the audit log instead.
+  assert.deepEqual(Object.keys(blocked).sort(), ["code", "error"]);
   const user = await api("/api/users", { name: "KYC Pending", country: "DE" });
   token = user.sessionToken;
   assert.equal(user.kycStatus, "pending");

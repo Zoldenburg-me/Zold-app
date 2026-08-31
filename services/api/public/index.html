@@ -217,6 +217,46 @@
    * shows it throughout rather than showing nothing.
    */
   .onb-hero-inner.hero-2 { display: none; }
+  /* Onboarding step-1 additions. Deliberately built from the same tokens as
+     the existing form (--line, --faint, .ghost) rather than a new palette —
+     a second visual language inside one screen reads as two products. */
+  .onb-hint { color: var(--faint); font-weight: 400; }
+  .onb-seg { display: flex; gap: 8px; margin-bottom: 4px; }
+  .onb-seg button {
+    flex: 1; padding: 10px 12px; border-radius: 10px; cursor: pointer;
+    background: transparent; border: 1px solid var(--line); color: inherit; font: inherit;
+  }
+  .onb-seg button.on { border-color: var(--pink, #ff2d8b); background: rgba(255, 45, 139, .08); }
+  .onb-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  .onb-chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px;
+    border: 1px solid var(--line); border-radius: 999px; font-size: 13px;
+  }
+  .onb-chip button { background: none; border: 0; color: var(--faint); cursor: pointer; font-size: 15px; line-height: 1; }
+  .onb-addrow { display: flex; gap: 8px; align-items: center; }
+  .onb-addrow input { text-transform: uppercase; max-width: 92px; }
+  .onb-qs { margin: 18px 0 6px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .onb-qs-h { font-size: 13px; color: var(--faint); margin-bottom: 10px; }
+  .onb-q { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+  .onb-q + .onb-q { border-top: 1px solid var(--line); }
+  .onb-q .qt { flex: 1; font-size: 14px; line-height: 1.4; }
+  .onb-q .yn { display: flex; gap: 6px; flex: 0 0 auto; }
+  .onb-q .yn button {
+    padding: 6px 12px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13px;
+    background: transparent; border: 1px solid var(--line); color: inherit;
+  }
+  .onb-q .yn button.on { border-color: var(--pink, #ff2d8b); background: rgba(255, 45, 139, .10); }
+  .onb-check { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; font-size: 13.5px; line-height: 1.45; }
+  .onb-check input { margin-top: 3px; flex: 0 0 auto; }
+
+  /* The blocked screen. Same split as onboarding so it does not read as an
+     error page — it is an outcome, not a fault. */
+  #blocked { display: none; place-items: center; min-height: 100vh; padding: 24px; }
+  #blocked.on { display: grid; }
+  #blocked .bk { max-width: 460px; text-align: left; }
+  #blocked h1 { font-size: 28px; font-weight: 400; margin-bottom: 12px; }
+  #blocked .bk p { color: var(--faint); line-height: 1.6; font-size: 15px; }
+
   #onboard:has(#onb-step2:not(.hidden)) .hero-1 { display: none; }
   #onboard:has(#onb-step2:not(.hidden)) .hero-2 { display: block; }
   .onb-hero h2 {
@@ -1132,6 +1172,7 @@
   .m-screen { display: none; }
   #dashboard.m-on[data-msub="add"] #m-add-screen,
   #dashboard.m-on[data-msub="bank"] #m-bank-screen,
+  #dashboard.m-on[data-msub="card"] #m-card-screen,
   #dashboard.m-on[data-msub="crypto"] #m-crypto-screen { display: block; }
   #dashboard.m-on:not([data-msub="home"]) #m-home { display: none; }
 
@@ -1215,6 +1256,22 @@
        while it is up — the user is owed the reason. -->
   <div id="offline-bar" class="hidden">You're offline — balances and quotes can't be refreshed</div>
 
+  <!-- ============ blocked (an outcome, not an error) ============
+       Says what Zold cannot offer and stops. No rule, no partner, no country
+       policy — the user cannot act on any of it, and naming the rule tells
+       someone which answer to change. The reason code is in the audit log. -->
+  <section id="blocked">
+    <div class="bk">
+      <div class="onb-logo"><span class="tri">▽</span> Zold</div>
+      <h1 id="blocked-title">Zold is not available to you</h1>
+      <p id="blocked-body"></p>
+      <p style="margin-top:18px">
+        If you think this is wrong, write to
+        <a href="mailto:support@zoldhq.com">support@zoldhq.com</a> and we will look at it.
+      </p>
+    </div>
+  </section>
+
   <!-- ============ onboarding (split-screen) ============ -->
   <section id="onboard">
     <div class="onb-left">
@@ -1229,13 +1286,61 @@
           <input id="name" placeholder="Miriam Zoldenburg" />
           <label>Email</label>
           <input id="email" type="email" placeholder="miriam@example.com" />
+          <label>Account type</label>
+          <div class="onb-seg" id="acct-type">
+            <button type="button" class="on" data-acct="individual">Individual</button>
+            <button type="button" data-acct="company">Company</button>
+          </div>
           <label>Country of residence</label>
-          <input id="country" value="DE" />
+          <input id="country" value="DE" placeholder="DE" />
+          <div class="hidden" id="incorp-wrap">
+            <label>Country of incorporation</label>
+            <input id="incorp-country" placeholder="DE" />
+          </div>
+          <label>Citizenship <span class="onb-hint">— add every one you hold</span></label>
+          <div class="onb-chips" id="cit-chips"></div>
+          <div class="onb-addrow">
+            <input id="cit-input" placeholder="DE" maxlength="2" />
+            <button type="button" class="ghost sm" id="cit-add">Add</button>
+          </div>
+
+          <!-- The US questions. Separate, explicit, and each stored with its
+               own timestamp — a single "are you a US person?" would be
+               unanswerable by most people who are one. Deliberately NOT
+               pre-answered: an unanswered question and a "no" are different
+               facts, and the API refuses a half-filled set. -->
+          <div class="onb-qs" id="us-qs">
+            <div class="onb-qs-h">A few required questions</div>
+            <div class="onb-q" data-q="usCitizen">
+              <span class="qt">Are you a US citizen?</span>
+              <span class="yn"><button type="button" data-v="yes">Yes</button><button type="button" data-v="no">No</button></span>
+            </div>
+            <div class="onb-q" data-q="usGreenCard">
+              <span class="qt">Do you hold a US Green Card?</span>
+              <span class="yn"><button type="button" data-v="yes">Yes</button><button type="button" data-v="no">No</button></span>
+            </div>
+            <div class="onb-q" data-q="usTaxResident">
+              <span class="qt">Are you a US tax resident, or otherwise subject to US tax reporting?</span>
+              <span class="yn"><button type="button" data-v="yes">Yes</button><button type="button" data-v="no">No</button></span>
+            </div>
+            <div class="onb-q hidden" data-q="companyUsNexus" id="q-company">
+              <span class="qt">Is the company incorporated in the US, or does any owner of 25% or more answer yes above?</span>
+              <span class="yn"><button type="button" data-v="yes">Yes</button><button type="button" data-v="no">No</button></span>
+            </div>
+          </div>
+
+          <!-- Two consents, separate, neither pre-ticked. The partner is named
+               dynamically because the user is consenting to a NAMED recipient;
+               "our partners" is not the consent that was asked for. -->
+          <label class="onb-check"><input type="checkbox" id="consent-terms" />
+            <span>I accept Zold's <a href="#">Terms of use</a> and <a href="#">Privacy policy</a>.</span></label>
+          <label class="onb-check"><input type="checkbox" id="consent-partner" />
+            <span>I agree that Zold may share my identity details with <b id="partner-name">Monerium and Gnosis Pay</b>, who open and run the account.</span></label>
+
           <button class="btn-primary-lite" id="btn-continue">Continue</button>
           <div class="error hidden" id="create-err"></div>
           <div class="onb-terms">
-            Already have an account? <a id="link-signin">Sign in with your passkey</a><br/><br/>
-            By continuing you accept the <a href="#">Terms of use</a> &amp; <a href="#">Privacy policy</a>
+            Already have an account? <a id="link-signin">Sign in with your passkey</a>
           </div>
         </div>
 
@@ -1579,6 +1684,14 @@
             <div class="ttl" id="m-paypage-title">Create link</div>
             <div class="sub" id="m-paypage-sub">Get paid by QR</div>
           </button>
+          <button class="m-tile" id="m-card-tile">
+            <div class="m-tile-top">
+              <div class="m-mono">Card</div>
+              <span class="m-tag" id="m-card-tag">—</span>
+            </div>
+            <div class="ttl" id="m-card-title">Connect</div>
+            <div class="sub" id="m-card-sub">Gnosis Pay</div>
+          </button>
         </div>
 
         <div class="m-notice" id="m-usd">
@@ -1620,6 +1733,19 @@
             <span class="m-tag soon">SOON</span>
           </div>
         </div>
+      </div>
+
+      <!-- ================= Card (Gnosis Pay, connected) =================
+           DELIBERATELY NOT A ZOLD CARD. Gnosis Pay issues it, holds its KYC
+           and owns the card Safe; permissionless mode gives no webhooks and no
+           attribution back to us. So this screen shows a CONNECTED account and
+           says whose it is, every time — and every figure carries the moment it
+           was read, because there is nothing pushing updates. -->
+      <div class="m-screen" id="m-card-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Card</div>
+        <div class="m-lede" id="m-card-lede">A Gnosis Pay card, connected to Zold. Gnosis Pay issues it and holds its KYC.</div>
+        <div id="m-card-body" style="margin-top:24px"></div>
       </div>
 
       <!-- ================= Add: from your bank ================= -->
@@ -2431,6 +2557,8 @@ function renderMobile(u = user) {
   $("m-paypage-sub").textContent = page?.handle
     ? `${page.settlementAsset || "USDC"} settlement`
     : "Get paid by QR";
+  renderCardTile();
+  applySegment();
   $("m-card-name").textContent = (u.name || "").toUpperCase() || "—";
   const cheapest = privacyCatalog?.plans?.[0];
   $("m-bundle-sub").textContent = active
@@ -2514,19 +2642,21 @@ function mobileNav(target) {
   const sub = { add: "add", bank: "bank", crypto: "crypto", send: "pay", pay: "pay", country: "country",
     method: "method", amount: "amount", recipient: "recipient", progress: "progress",
     plus: "plus", bundle: "bundle", payment: "payment", activity: "activity", detail: "detail",
-    share: "share", profile: "profile" }[target];
+    share: "share", profile: "profile", card: "card" }[target];
   shell.dataset.msub = sub || "home";
   if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
   else switchView("dashboard");
   // bank/crypto are inside Add, so the Add tab stays lit while they are open.
   const navFor = { add: "add", bank: "add", crypto: "add", send: "send", pay: "send", country: "send", method: "send",
     amount: "send", recipient: "send", progress: "send", plus: "home", bundle: "home", payment: "home",
-    home: "home", activity: "activity", detail: "activity", share: "activity", profile: "profile" }[target];
+    card: "home", home: "home", activity: "activity", detail: "activity", share: "activity",
+    profile: "profile" }[target];
   document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
   if (sub === "bundle") $("m-subtitle").textContent = "Zold Plus";
   if (sub === "bank") renderBankScreen();
   if (sub === "crypto") renderCryptoScreen();
+  if (sub === "card") renderCardScreen();
   if (sub === "pay") { $("m-pay-q").value = ""; renderPayScreen(); }
   if (sub === "country") { $("m-country-q").value = ""; renderCountryList(); }
   if (sub === "activity") renderActivityScreen();
@@ -2621,6 +2751,267 @@ function renderCryptoScreen() {
     : settlesTo === "EURE"
       ? "Base network only. USDC is converted to EURe at the live mid rate on arrival."
       : "Base network only. USDC is forwarded to your Safe and recorded as USDC settlement.";
+}
+
+/* ==========================================================================
+   PER-SEGMENT RENDERING
+   --------------------------------------------------------------------------
+   A user never sees a feature their segment does not include.
+   --------------------------------------------------------------------------
+   THIS IS PRESENTATION ONLY, and saying so matters: hiding a control is a
+   courtesy, not a control. Every one of these features is ALSO refused by the
+   capability guard on the server, so a crafted request gets a 403 rather than
+   a surprise. If this function ever became the only check, the segment would
+   be decorative — see requireCapability in server.ts.
+
+   The client is handed `capabilities`, never the rule that produced them: a
+   reader who learns the rule learns which answer to change.
+   ========================================================================== */
+const HAS = (cap) => (user?.segment?.capabilities ?? [
+  // A pre-segmentation account keeps everything, matching the server's
+  // migration fallback. Narrow and deliberate.
+  "monerium", "gnosis_pay", "safe", "card", "onchain_balance",
+]).includes(cap);
+
+function applySegment() {
+  const gate = user?.segment?.gate;
+
+  // Send and the whole corridor need an on-chain balance to spend.
+  for (const id of ["m-nav-send", "btn-send", "m-payment-page"]) {
+    const el = $(id);
+    if (el) el.classList.toggle("hidden", !HAS("onchain_balance"));
+  }
+  document.querySelectorAll('#m-nav button[data-mnav="send"]').forEach((b) => {
+    b.classList.toggle("hidden", !HAS("onchain_balance"));
+  });
+
+  // The card tile is Gnosis Pay's, so it follows that capability.
+  const cardTile = $("m-card-tile");
+  if (cardTile) cardTile.classList.toggle("hidden", !HAS("gnosis_pay"));
+
+  // Add-funds routes into Monerium (bank) and the Safe (crypto).
+  for (const id of ["m-go-bank", "m-go-crypto"]) {
+    const el = $(id);
+    if (el) el.classList.toggle("hidden", !HAS("monerium") && !HAS("onchain_balance"));
+  }
+
+  // A gated segment gets ONE honest panel instead of a dashboard of controls
+  // that would all refuse. It names what is missing rather than saying
+  // "coming soon", which promises a date nobody has.
+  let panel = $("segment-gate");
+  if (gate) {
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.id = "segment-gate";
+      panel.className = "m-notice";
+      const home = $("m-home");
+      if (home) home.prepend(panel);
+    }
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="m-tag soon">NOT OPEN</span>
+        <div style="font-size:13.5px;font-weight:600">${esc(gate.reason)}</div>
+      </div>
+      <div class="body">${esc(gate.needs)}</div>
+      <a class="cta" href="mailto:support@zoldhq.com">Ask us about it</a>`;
+  } else if (panel) {
+    panel.remove();
+  }
+}
+
+/* ==========================================================================
+   CARD — a CONNECTED Gnosis Pay account, not a Zold card
+   --------------------------------------------------------------------------
+   Gnosis Pay issues the card, holds its KYC and owns the card Safe. In
+   permissionless mode there are no webhooks and no attribution of card
+   activity back to Zold, so two rules apply to everything drawn here:
+
+     1. Never imply Zold issued it. The provenance line is not decoration and
+        is rendered on every state, including the error ones.
+     2. Every figure carries WHEN it was read. There is nothing pushing
+        updates, so a balance with no timestamp claims a liveness that does
+        not exist — the same reason imported-wallet screens say the ledger is
+        empty rather than drawing zeros.
+
+   The JWT lives in this page's memory ONLY. It is a bearer credential for the
+   user's account with a third party; it is never written to localStorage (an
+   XSS then owns their card account for an hour) and never persisted server
+   side. A reload means signing in again, and the screen says so rather than
+   failing mysteriously.
+
+   The signature comes from the user's own browser wallet. Zold's passkey Safe
+   cannot sign here yet: an EIP-1271 signature is only verifiable where the
+   contract is deployed, and the Zold Safe is not on Gnosis Chain.
+   ========================================================================== */
+let gpToken = null;          // in-memory only, deliberately
+let gpAccount = null;
+
+const gpApi = async (path, body, method) => {
+  const headers = {};
+  if (body) headers["content-type"] = "application/json";
+  if (sessionToken) headers.authorization = `Bearer ${sessionToken}`;
+  if (gpToken) headers["x-gnosis-pay-token"] = gpToken;
+  const res = await fetch(`/api/gnosis-pay${path}`, {
+    ...(body ? { method: method ?? "POST", body: JSON.stringify(body) } : method ? { method } : {}),
+    headers,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `request failed (HTTP ${res.status})`);
+    err.reauth = Boolean(data.reauth);
+    throw err;
+  }
+  return data;
+};
+
+/** Minor-unit integer strings, kept as strings. Their format is documented as
+ *  ^[0-9]+$; parseFloat on a balance is how a cent goes missing. */
+function gpAmount(minor) {
+  if (typeof minor !== "string" || !/^[0-9]+$/.test(minor)) return "—";
+  const pad = minor.padStart(3, "0");
+  return `€${pad.slice(0, -2)}.${pad.slice(-2)}`;
+}
+
+const gpWhen = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+function renderCardScreen() {
+  const el = $("m-card-body");
+  const connected = user?.gnosisPay || null;
+
+  if (!gpToken) {
+    // Not signed in to Gnosis Pay THIS session. If we have stored status, say
+    // what we last saw and when — but never draw a balance from it, because a
+    // stale balance shown as current is the exact lie this screen avoids.
+    el.innerHTML = `
+      <div class="m-rows">
+        ${connected ? `
+          <div class="m-row"><span class="k">Connected wallet</span><span class="v">${esc(shortAddr(connected.connectedAddress))}</span></div>
+          ${connected.safeAddress ? `<div class="m-row"><span class="k">Gnosis Pay Safe</span><span class="v">${esc(shortAddr(connected.safeAddress))}</span></div>` : ""}
+          ${connected.kycStatus ? `<div class="m-row"><span class="k">Their KYC</span><span class="v">${esc(connected.kycStatus)}</span></div>` : ""}
+          <div class="m-row"><span class="k">Last seen</span><span class="v">${esc(gpWhen(connected.asOf) || "—")}</span></div>
+        ` : `
+          <div class="m-row"><span class="k">Status</span><span class="v">Not connected</span></div>
+        `}
+      </div>
+      <div class="m-lede" style="font-size:13px;margin-top:16px">
+        ${connected
+          ? "Your Gnosis Pay session ended. Sign in again with the same wallet to see cards and balances."
+          : "Connect a Gnosis Pay account you already have. Zold does not create one for you."}
+      </div>
+      <button class="m-cta" id="m-card-signin" style="margin-top:16px">Sign in with wallet</button>
+      <div class="m-err hidden" id="m-card-err" style="margin-top:12px"></div>
+      <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
+        Gnosis Pay issues and operates this card and holds its KYC. Zold shows your connected account
+        and cannot see card activity except when you open this screen.
+      </div>`;
+    $("m-card-signin").onclick = gpSignIn;
+    return;
+  }
+
+  const a = gpAccount || {};
+  const cards = Array.isArray(a.cards) ? a.cards : [];
+  const b = a.balances || null;
+  el.innerHTML = `
+    <div class="m-rows">
+      <div class="m-row"><span class="k">Spendable</span><span class="v">${b ? esc(gpAmount(b.spendable)) : "—"}</span></div>
+      <div class="m-row"><span class="k">Pending</span><span class="v">${b ? esc(gpAmount(b.pending)) : "—"}</span></div>
+      <div class="m-row"><span class="k">Total</span><span class="v">${b ? esc(gpAmount(b.total)) : "—"}</span></div>
+      ${a.user?.safeAddress ? `<div class="m-row"><span class="k">Gnosis Pay Safe</span><span class="v">${esc(shortAddr(a.user.safeAddress))}</span></div>` : ""}
+      ${a.user?.kycStatus ? `<div class="m-row"><span class="k">Their KYC</span><span class="v">${esc(a.user.kycStatus)}</span></div>` : ""}
+    </div>
+    ${!b ? `<div class="m-lede" style="font-size:13px;margin-top:12px">No balance yet — Gnosis Pay has not deployed a card Safe for this account.</div>` : ""}
+    <div class="m-sec" style="margin-top:24px"><div class="m-mono">Cards</div></div>
+    ${cards.length
+      ? `<div class="m-rows">${cards.map((c) => `
+          <div class="m-row">
+            <span class="k">${c.virtual ? "Virtual" : "Physical"} ·••••&nbsp;${esc(c.lastFourDigits || "····")}</span>
+            <span class="v">${esc(c.statusName || "—")}</span>
+          </div>`).join("")}</div>`
+      : `<div class="m-empty">No cards on this account yet. Create one in Gnosis Pay.</div>`}
+    <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
+      Read at ${esc(gpWhen(a.asOf) || "—")}. Gnosis Pay issues and operates this card and holds its KYC —
+      there are no live updates here, so this is a snapshot, not a running balance.
+    </div>
+    <button class="m-link" id="m-card-refresh" style="margin-top:12px">Refresh</button>
+    <button class="m-link" id="m-card-forget" style="margin-top:12px">Disconnect</button>
+    <div class="m-err hidden" id="m-card-err" style="margin-top:12px"></div>`;
+  $("m-card-refresh").onclick = () => gpLoadAccount().catch((e) => showErr("m-card-err", e));
+  $("m-card-forget").onclick = gpDisconnect;
+}
+
+async function gpSignIn() {
+  clearErr("m-card-err");
+  const eth = window.ethereum;
+  if (!eth) {
+    return showErr("m-card-err", new Error(
+      "no browser wallet found. Gnosis Pay sign-in needs a wallet that can sign a message on Gnosis Chain.",
+    ));
+  }
+  try {
+    const [address] = await eth.request({ method: "eth_requestAccounts" });
+    if (!address) throw new Error("no account was shared by the wallet");
+    // The server fetches the nonce and hands back BOTH the message and the
+    // cookie it is bound to — Gnosis Pay verifies the signature against the
+    // session that issued the nonce, so the cookie must ride back with it.
+    const { message, cookie } = await gpApi("/siwe/start", { address });
+    const signature = await eth.request({ method: "personal_sign", params: [message, address] });
+    const out = await gpApi("/siwe/verify", { message, signature, cookie });
+    gpToken = out.token;
+    if (out.connected && user) user.gnosisPay = out.connected;
+    await gpLoadAccount();
+  } catch (err) {
+    showErr("m-card-err", err.code === 4001 ? new Error("signature request was rejected") : err);
+  }
+}
+
+async function gpLoadAccount() {
+  try {
+    gpAccount = await gpApi("/account");
+    renderCardScreen();
+    renderCardTile();
+  } catch (err) {
+    if (err.reauth) { gpToken = null; gpAccount = null; renderCardScreen(); }
+    throw err;
+  }
+}
+
+async function gpDisconnect() {
+  try {
+    await gpApi("/connection", undefined, "DELETE");
+  } catch { /* forgetting is best-effort; the token is dropped either way */ }
+  gpToken = null;
+  gpAccount = null;
+  if (user) user.gnosisPay = undefined;
+  renderCardScreen();
+  renderCardTile();
+}
+
+/** The home tile. Shows connection state only — never a balance, because the
+ *  home screen has no way to say how old it is. */
+function renderCardTile() {
+  const tag = $("m-card-tag"), title = $("m-card-title"), sub = $("m-card-sub");
+  if (!tag) return;
+  const c = user?.gnosisPay;
+  if (gpToken && gpAccount) {
+    tag.textContent = "ON";
+    tag.className = "m-tag";
+    title.textContent = (gpAccount.cards?.length ? `${gpAccount.cards.length} card` : "No card");
+    sub.textContent = "Gnosis Pay · tap to view";
+  } else if (c) {
+    tag.textContent = "—";
+    tag.className = "m-tag";
+    title.textContent = "Sign in";
+    sub.textContent = "Gnosis Pay · connected";
+  } else {
+    tag.textContent = "—";
+    tag.className = "m-tag";
+    title.textContent = "Connect";
+    sub.textContent = "Gnosis Pay";
+  }
 }
 
 /* ==========================================================================
@@ -3372,6 +3763,7 @@ $("m-bell").onclick = () => mobileNav("activity");
 $("m-seeall").onclick = () => mobileNav("activity");
 $("m-plus").onclick = () => mobileNav("plus");
 $("m-payment-page").onclick = () => mobileNav("payment");
+$("m-card-tile").onclick = () => mobileNav("card");
 $("m-back").onclick = () => mobileNav("home");
 $("m-kyc-banner").onclick = () => enterKycReview(user?.name || "Account");
 
@@ -3987,6 +4379,74 @@ function setPasskeyButtonBusy(busy, label) {
   btn.textContent = label || (user?.id ? "Finish smart wallet" : "Create passkey & open account");
 }
 
+/* ==========================================================================
+   ONBOARDING STEP 1 — identity basics
+   --------------------------------------------------------------------------
+   The backend decides the path; this screen only collects. It deliberately
+   does NOT branch on country, because a client that knows the rules is a
+   client that can be read to learn them — and because two copies of a rule
+   set drift. The only thing the UI derives locally is which partner to NAME
+   in the consent line, and that is cosmetic: the server records the consent
+   with the partner the segment actually assigns.
+
+   Nothing here is pre-answered. An unanswered US question and a "no" are
+   different facts, and the API refuses a half-filled set rather than reading
+   silence as a denial.
+   ========================================================================== */
+let acctType = "individual";
+let citizenships = [];
+const usAnswers = { usCitizen: null, usGreenCard: null, usTaxResident: null, companyUsNexus: null };
+
+/** Which partner is named in the consent line. Cosmetic and best-effort — the
+ *  server assigns the real one. India is named because its path is Xflow's. */
+function partnerLabel(country) {
+  const cc = (country || "").trim().toUpperCase();
+  if (cc === "IN") return "Xflow";
+  return "Monerium and Gnosis Pay";
+}
+
+function renderCitizenships() {
+  $("cit-chips").innerHTML = citizenships.length
+    ? citizenships.map((c) => `<span class="onb-chip">${esc(c)}<button type="button" data-rm="${esc(c)}">×</button></span>`).join("")
+    : `<span class="onb-hint" style="font-size:13px">None added yet</span>`;
+  $("cit-chips").querySelectorAll("[data-rm]").forEach((b) => {
+    b.onclick = () => { citizenships = citizenships.filter((c) => c !== b.dataset.rm); renderCitizenships(); };
+  });
+}
+
+function addCitizenship() {
+  const v = $("cit-input").value.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(v)) return showErr("create-err", new Error("use a two-letter country code, e.g. DE"));
+  clearErr("create-err");
+  if (!citizenships.includes(v)) citizenships.push(v);
+  $("cit-input").value = "";
+  renderCitizenships();
+}
+$("cit-add").onclick = addCitizenship;
+$("cit-input").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); addCitizenship(); } };
+
+$("acct-type").querySelectorAll("[data-acct]").forEach((b) => {
+  b.onclick = () => {
+    acctType = b.dataset.acct;
+    $("acct-type").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+    // Question (d) and the incorporation country only exist for a company.
+    $("q-company").classList.toggle("hidden", acctType !== "company");
+    $("incorp-wrap").classList.toggle("hidden", acctType !== "company");
+    if (acctType !== "company") usAnswers.companyUsNexus = null;
+  };
+});
+
+$("us-qs").querySelectorAll(".onb-q").forEach((row) => {
+  row.querySelectorAll("[data-v]").forEach((b) => {
+    b.onclick = () => {
+      usAnswers[row.dataset.q] = b.dataset.v === "yes";
+      row.querySelectorAll("[data-v]").forEach((x) => x.classList.toggle("on", x === b));
+    };
+  });
+});
+
+$("country").oninput = () => { $("partner-name").textContent = partnerLabel($("country").value); };
+
 $("btn-continue").onclick = () => {
   clearErr("create-err");
   const name = $("name").value.trim();
@@ -3995,12 +4455,61 @@ $("btn-continue").onclick = () => {
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return showErr("create-err", new Error("that email doesn't look right"));
   }
-  pendingInfo = { name, email: email || undefined, country: $("country").value.trim() || "DE" };
+  const country = ($("country").value.trim() || "").toUpperCase();
+  if (!/^[A-Z]{2}$/.test(country)) {
+    return showErr("create-err", new Error("country of residence must be a two-letter code, e.g. DE"));
+  }
+  if (!citizenships.length) {
+    return showErr("create-err", new Error("please add at least one citizenship"));
+  }
+  const required = ["usCitizen", "usGreenCard", "usTaxResident",
+    ...(acctType === "company" ? ["companyUsNexus"] : [])];
+  if (required.some((k) => usAnswers[k] === null)) {
+    return showErr("create-err", new Error("please answer each of the required questions"));
+  }
+  if (!$("consent-terms").checked) {
+    return showErr("create-err", new Error("please accept the terms to continue"));
+  }
+  if (!$("consent-partner").checked) {
+    return showErr("create-err", new Error("we cannot open the account without permission to share your details with the partner who opens it"));
+  }
+  pendingInfo = {
+    name,
+    email: email || undefined,
+    country,
+    accountType: acctType,
+    citizenships: [...citizenships],
+    usAnswers: { ...usAnswers },
+    ...(acctType === "company" && $("incorp-country").value.trim()
+      ? { companyIncorporationCountry: $("incorp-country").value.trim().toUpperCase() }
+      : {}),
+    consents: [
+      { kind: "zold_terms" },
+      { kind: "partner_share", partner: partnerLabel(country) },
+    ],
+  };
   $("onb-step1").classList.add("hidden");
   $("onb-step2").classList.remove("hidden");
   $("ostep1").className = "dot done";
   $("ostep2").className = "dot active";
 };
+renderCitizenships();
+
+/** A refused signup is an outcome, not an error toast. Shows what Zold cannot
+ *  offer; never the rule, the partner or the country policy. */
+function showBlocked(code, _serverMessage) {
+  $("onboard").style.display = "none";
+  $("blocked").classList.add("on");
+  $("blocked-title").textContent =
+    code === "BLOCKED_US" ? "Zold is not available to US persons"
+    : code === "BLOCKED_SANCTIONED" ? "Zold is not available in your country"
+    : "Zold cannot open an account for you yet";
+  // The server's message IS the title, so repeating it here said the same
+  // sentence twice. The body carries the thing the user actually wants to know
+  // next: that nothing was created and nothing was shared.
+  $("blocked-body").textContent =
+    "Nothing has been created, and none of your details have been shared with anyone.";
+}
 
 const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 
@@ -4174,7 +4683,23 @@ async function createAccount(withPasskey) {
   clearErr("pk-err");
   try {
     if (!user?.id) {
-      const u = await api("/api/users", pendingInfo);
+      // ONE request. api() surfaces only the message, and a refusal needs the
+      // CODE to pick its wording — so signup reads the response itself rather
+      // than retrying to find out why the first attempt failed.
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(pendingInfo),
+      }).catch(() => null);
+      if (!res) throw new Error("you appear to be offline — Zold could not be reached");
+      const u = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // A refusal is a destination, not a toast.
+        if (res.status === 403 && String(u.code || "").startsWith("BLOCKED_")) {
+          return showBlocked(u.code, u.error);
+        }
+        throw new Error(u.error || `could not create the account (HTTP ${res.status})`);
+      }
       u.balanceEur = 0;
       u.safeBalanceEur = 0;
       user = u;
