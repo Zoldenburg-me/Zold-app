@@ -290,12 +290,316 @@ moment an anchor actually publishes an account.
   of silently swallowing it). npm run webhook:test covers it with a stub
   Monerium.
 
-## Mobile app + PWA (Aug 2026) — IN PROGRESS on a branch
+## Business + premium accounts (Aug 2026) — the organisation domain
 
-Branch `claude/remove-upi-and-onboarding-restyle`, pushed, **PR not opened**.
-Thirteen commits: UPI removal, onboarding restyle, landing-page sync, PWA
-layer, the mobile app, then the token retrofit and the last three screens.
-Merge or continue from there, not from main.
+The product moved from "a user is an account" to **global (local) accounts held
+by an organisation**, with the shape of the app around them taken from **Gnosis
+Business** (hq.xyz, discontinued). Their full guide was read — all 64 pages, via
+`llms.txt` — not skimmed. Design and reasoning: `docs/business-accounts.md`.
+`npm run business:test` (39 checks, no chain, no network).
+
+WHAT IS NEW, and what it replaced:
+ - `services/api/src/domain/` — Organisation, Member/Role, Account, Contact,
+   DraftPayment, Invoice, ChartAccount/AccountRule, LedgerEntry, ImportedWallet.
+   The old model had ONE `user.iban`, ONE `user.address`, ONE balance; that is
+   false for a business with several people and several accounts, and for a
+   premium personal user with several currencies.
+ - `services/api/src/routes/{orgs,business,org-context}.ts`, mounted under
+   `/api/orgs` as router FACTORIES taking `requireSession`, so server.ts stays
+   the single owner of authentication.
+ - `public/business.html` (the org dashboard, at `/business`) and
+   `public/invoice.html` (the supplier's invoice view, at `/invoice/:token`).
+ - A migration in store.ts gives every pre-existing user a personal org of one,
+   CARRYING their real IBAN and address forward rather than re-issuing. Verified
+   against the live local `data/db.json`: 5 users, every iban and address
+   matched, funded users -> `active`, kyc_pending -> `provisioning`, and every
+   pre-existing collection untouched. It is idempotent (keyed on a member row).
+
+THREE CHECKS, NOT ONE, and they answer different questions — collapsing any two
+opens a hole. Session (who is this), member+role (may they do this here), plan
+capability (did the org buy it). A viewer on a Business plan must not be able to
+send money; an owner on Starter must not reach the chart of accounts.
+
+THE RULES THAT CARRY THE WEIGHT, each with a test:
+ - **Gating is a read-time filter, NEVER a write-time delete.** A downgraded org
+   keeps its chart of accounts, tags and history; the API refuses to serve them.
+   Gnosis promised exactly this and it is only true if nothing deletes on
+   downgrade. Proved live: downgrade to starter, 15 chart accounts / 8 rules /
+   1 contact / 2 drafts / 1 invoice still in the store, all readable again after
+   re-upgrade. Nothing in `store.ts` deletes an org, account, invoice or ledger
+   row — deliberately no such method exists.
+ - **A trial is a grant with an end date, not a plan change.** `org.plan` is
+   untouched for the whole trial, so lapsing needs no migration. One per org.
+ - **FOUR EYES.** The reviewer may not be the drafter, whatever their role,
+   or review is a button the same person presses twice.
+ - **INVALID_DATA.** A draft whose payee changed after it was saved is HELD, not
+   retargeted. The line stores a fingerprint at save time and it is recomputed
+   at review AND again at execution — the gap between approval and execution is
+   exactly where an address-book edit lands. Bank accounts keep their id when
+   their IBAN is edited, so identity alone does NOT detect this; the fingerprint
+   is what does. Proved end to end through the API.
+ - **An org can never lose its last owner** — by role change or deactivation,
+   which are the same hole reached two ways.
+
+ONLY EUR IS REAL, and that is enforced in one place. `domain/accounts.ts` holds
+the currency registry, and liveness is a PREDICATE (`live()`) that asks whether
+the provider is configured, not a boolean somebody can flip. USD/GBP/KES/INR are
+modelled with `status: "gated"` and a `needs` line naming the partner and the
+missing piece (Iron is request-access and ungranted; Triple-A wants $10k/month;
+dLocal and Yellow Card are uncontracted). A gated account is still RECORDED when
+asked for — that keeps the demand signal and stops the UI lying in the other
+direction — but it can never be spent from. This is the UPI lesson applied
+structurally: a rail that has never moved money must not render as if it has.
+
+WHAT WE TOOK FROM GNOSIS AND WHAT WE DID NOT — the one real conflict is custody.
+Their whole promise was "you import your wallets, we never have access": an
+accounting layer over other people's money. That is incoherent for us, because a
+*local account* is something we ISSUE. So: we issue accounts and sign for them
+(FP4 device key / passkey Safe), and imported wallets are READ-ONLY — balances,
+bookkeeping and export, never a signature. Rows are stamped `custody:
+"external"` so a signing path can assert on the row itself. Executing a draft
+from an imported wallet returns unsigned transactions and says so.
+
+DRAFT EXECUTION IS WIRED (Aug 2026). `npm run draft:test` (14 checks, spawns
+its own chain and API). A reviewed draft becomes ONE TRANSFER PER LINE, each
+carrying its own FP4 authorization; nothing moves until the device signs each
+one, which is what makes every refusal path below safe.
+ - ONE CODE PATH. `buildTransferFromQuote` was EXTRACTED from POST
+   /api/transfers unchanged and is INJECTED into the business router, so draft
+   execution cannot become a second, weaker way to create a transfer. The test
+   asserts the batch fails with the byte-identical error a direct transfer
+   gives — that equality is the point, not the failure.
+ - WHO MAY SIGN. Spending authority is a device key in one person's browser, so
+   `Account.backingUserId` records whose it is. A `payer` may approve and may
+   press send, but only the backing user can produce the signature; the API says
+   that in words instead of failing later at /authorize like a bug.
+ - PLAN-DEPENDENT REVIEW. With `transfers.approvals` bought, a draft must be
+   REVIEWED by a second person before it can be sent. WITHOUT it (Starter) there
+   is no review step at all, so DRAFT -> EXECUTING is legal — otherwise every
+   Starter draft would be permanently unsendable, which is what the first cut
+   did.
+ - ALL-OR-NOTHING. Every line is planned before anything is created: wallet
+   destinations, gated currencies, sub-fee amounts and over-cap amounts are all
+   refused up front (422, nothing created). The balance is checked as a TOTAL,
+   because the per-transfer check inside buildTransferFromQuote sees the full
+   balance every time and N lines that each fit can still overdraw together.
+ - PARTIAL FAILURE. If line 3 fails, lines 1-2 exist as CREATED transfers with
+   no signature — they cannot move money and simply expire. The draft goes to
+   FAILED (not back to REVIEWED) so a retry is a deliberate re-draft rather than
+   a second batch stacked on the first.
+ - DRAFT STATE IS DERIVED from its transfers, never stored: a row claiming
+   EXECUTED while a transfer sits in MANUAL_REVIEW would be a comfortable lie.
+ - MOCK IS A THIRD ANSWER. `CurrencyDefinition.mode()` returns "live" | "mock" |
+   false, not a boolean. EUR is "live" against Monerium and "mock" on a genuinely
+   local deployment (SECURITY.allowSimulation) — real machinery, no real money,
+   labelled as such in the API and the UI. The first cut collapsed mock into
+   "closed", which made the entire product unreachable in development and is how
+   a mock path stops being exercised at all.
+ - AN ORG ACCOUNT NEEDS A FUNDING IDENTITY. Per-org Safe/Monerium provisioning
+   is NOT built, so a new org's account is `gated` (never `provisioning`, which
+   would promise work nobody is doing) until someone calls
+   POST /accounts/:id/fund to back it with their own account. A business org
+   must ask; the response says plainly that personal money is now paying company
+   bills.
+ - STILL UNPROVEN: a batch that actually creates transfers. That needs an active
+   passkey Safe, which needs an ERC-4337 bundler; local hardhat has none, which
+   is exactly why e2e asserts the Safe refusal rather than a send. Prove it on
+   Base Sepolia with `npm run api`.
+
+NOT FINISHED, and refused loudly rather than faked:
+ - No mail transport exists, so member invitations and invoice links return
+   their token to the caller with a note saying no email was sent. Do not add a
+   "we emailed them" string without adding a transport.
+ - Imported wallets are never actually synced — `sync.status` stays `pending`.
+   The ledger is therefore empty until something writes to it, and the
+   Transactions/Assets screens say so rather than showing zeros as if final.
+ - Cards are modelled as a capability that reports `unavailable` at ANY price,
+   never as an upgrade. Telling someone to pay for something unbuilt costs them
+   money.
+
+## CHF and NGN — tokens shown, rails still closed (Aug 2026)
+
+Added to the currency registry with the two settlement tokens the user asked
+for. `npm run business:test` (43 checks). ALL FOUR ADDRESSES VERIFIED ON CHAIN
+by reading name()/symbol()/decimals() from the contract — the addresses came
+from a third-party listing and a listing page is a claim, not evidence.
+
+ - **CHF / ZCHF (Frankencoin)** — ethereum
+   `0xB58E61C3098d85632Df34EecfB899A1Ed80921cB`, 18dp, supply ~30.6M.
+ - **NGN / cNGN** (Wrapped CBDC, Africa Stablecoin Consortium), 6dp on all four:
+   base `0x46C85152bFe9f96829aA94755D9f915F9B10EF5F`,
+   bnb `0xa8AEA66B361a8d53e8865c62D142167Af28Af058`,
+   ethereum `0x17CDB2a01e7a34CbB3DD4b83260B05d0274C8dab`,
+   polygon `0x52828daa48C1a9A06F37500882b42daf0bE04C3B`.
+   SUPPLY IS ON BASE (~2.58bn) AND BNB (~699m). Ethereum (~137k) and Polygon
+   (~12.6k) are rounding error — do not design a route through them. Base is
+   also our app chain, so it is the only deployment worth building against.
+
+THE NEW STATE THIS INTRODUCED, and why it needed its own modelling: a currency
+whose TOKEN is real, liquid and verified, but whose ACCOUNT does not exist.
+That is different from USD/GBP (no token, named partner ungranted) and it is
+the shape most likely to mislead — a live token reads as a working rail. So
+`CurrencyDefinition.token` names the token, its issuer, its verified contracts
+and WHAT BACKS IT, and `currencyAvailability()` stamps `heldByUs` on it. The
+test asserts `heldByUs === available`: a token can only be reported as held
+where the rail is actually open, so a shown token can never imply a balance.
+
+BACKING IS THE FIELD THAT MATTERS and the one a currency code hides:
+ - EURe is e-money with a REDEMPTION RIGHT AT PAR against a licensed issuer.
+ - ZCHF has NO issuer who owes anyone redemption — it is minted against
+   borrower collateral with the peg defended by auctions. Under MiCA it is a
+   crypto-asset, not an EMT, and Frankencoin argues some provisions do not
+   apply because it is decentralised — an argument, not a ruling.
+ - cNGN is naira-reserve backed under a NIGERIAN perimeter (SEC Nigeria, 2025
+   Investments and Securities Act; CBN keeps payment-system oversight). That
+   says nothing about MiCA and gives an EEA holder no EU protection.
+Rendering all three as "CHF / EUR / NGN" would flatten instruments that differ
+in kind, which is why the business Currencies table now has a token column
+carrying the backing sentence verbatim.
+
+ALSO: `AccountProvider` gained `"none"` — no candidate identified at all,
+distinct from a named partner we have not contracted with. CHF is `none` (there
+is no Swiss institution in view; Frankencoin is a protocol, not a counterparty
+you can sign with). NGN is `yellowcard`, who genuinely cover Nigeria as their
+largest market and are uncontracted.
+
+AND THE CONSTRAINT THAT BITES cNGN: Bridge supports only USDC and EURC for EEA
+users under MiCA, so cNGN cannot move through our licensed transfer seam for a
+European entity at all. Their API also needs a merchant account and API keys
+nobody has requested.
+
+## Invoicing by jurisdiction (Aug 2026)
+
+THE MISTAKE THIS FIXED, one commit after the first cut shipped: German law was
+applied to EVERY entity. A Polish or Swedish org was offered
+"§ 19 UStG Kleinunternehmerregelung" and a 19% rate; an Indian one was offered
+German exemptions with no mention of GST. That is worse than offering nothing,
+because it looks authoritative. `domain/jurisdictions.ts` now resolves the rule
+set from the ISSUING entity's country — an invoice is governed by where the
+issuer is established, not where the customer is.
+
+THREE RULE SETS, and the difference is what we ENCODE versus what we CARRY:
+ - `DE`  statutory  — German paragraphs encoded and enforced (see below).
+ - `EU`  directive  — the VAT Directive baseline every member state shares
+   (Art. 226 particulars, 196 reverse charge, 138 intra-community, 146 export).
+   National additions are NOT encoded; there are 26 other sets and we verified
+   none. The org adds its own rules for what its country needs.
+ - `GENERIC` structural — both parties, a number, dates and arithmetic that adds
+   up. NO tax law. India, the US, the UK and everywhere else land here.
+
+EVERY REPORT CARRIES ITS VERIFICATION LEVEL, so `ok: true` never claims more
+coverage than we have, and `notVerified` names the gaps verbatim (for India it
+names GSTIN, HSN/SAC, place of supply and the CGST/SGST/IGST split, which we do
+not model). The UI renders that list next to every invoice.
+
+CITATIONS FOLLOW THE RULE SET. `basis(de, eu)` quotes a German paragraph only
+under DE, the Directive article under EU, and NOTHING under GENERIC — quoting
+"§ 14 Abs. 4 UStG" at an Indian entity would be confidently wrong. Same for
+exemption labels: `reasonForRuleSet()` gives Poland "Reverse charge (EU) —
+Art. 196 VAT Directive", not "Reverse Charge (EU-Ausland) — § 3a Abs. 2 UStG".
+Three separate leaks of this kind were found and fixed by testing PL and IN
+against the running server; grep for hardcoded `UStG` before adding UI copy.
+
+NO VAT RATE TABLE IS SHIPPED. Rates change by statute and 27 numbers we have not
+checked would be 27 confident lies. Germany's 19/7 is enforced because we
+checked it; everywhere else the org sets the rate it charges and we validate
+only that it is a percentage. A missing rate REFUSES rather than defaults —
+quietly applying 19 to a Polish entity is the original bug in miniature.
+
+The § 33 UStDV €250 simplified-invoice shortcut is likewise German-only. Member
+states may set their own; we have not checked them, so elsewhere full content is
+required.
+
+CUSTOM RULES: an org can define its own exemption reasons (id, label, legal
+basis, and the note printed verbatim). Required for GENERIC jurisdictions and
+useful in EU ones. Presented as user-supplied everywhere — we print the note and
+do not check it. A custom rule requiring the customer's tax identifier checks
+only that one is PRESENT, never that it matches an EU VAT-ID shape: an Indian
+GSTIN is not a USt-IdNr., and validating it against that shape rejects the
+correct value.
+
+## German invoicing (Aug 2026) — the DE rule set
+
+Business users can now ISSUE invoices, not only receive them. `Invoice.direction`
+splits the two: `incoming` is the original Invoice-Me link a supplier fills in,
+`outgoing` is one we issue. THIS SECTION IS THE `DE` RULE SET ONLY — see
+"Invoicing by jurisdiction" above for how a non-German entity is handled.
+`services/api/src/domain/invoicing.ts` holds the rules; `npm run invoicing:test`
+(26 checks, offline).
+
+NOT TAX ADVICE and the app says so on every screen that touches it. What the
+code guarantees is narrower: the software cannot produce a document missing a
+mandatory field, and cannot show tax the issuer does not owe.
+
+THE TWO RULES WITH MONEY ATTACHED, both silent failures — nothing bounces, the
+damage arrives months later:
+ - §14c UStG: show VAT you did not owe and you OWE IT ANYWAY, and the customer
+   cannot deduct it. So `VatTreatment` is a DISCRIMINATED UNION whose exempt arm
+   has no rate and no tax field — "exempt with a VAT amount" is unrepresentable,
+   not merely discouraged. computeTotals forces every line to 0% when the
+   invoice is exempt, even a line carrying its own rate.
+ - §14 Abs. 4: a missing mandatory field costs the RECIPIENT their Vorsteuerabzug
+   until a corrected invoice arrives. The damage lands on the customer, not on
+   whoever made the mistake, which is why it is checked before issuing.
+
+WHAT IS ENCODED (sources checked against IHK/Haufe/dejure, not memory):
+ - §14 Abs. 4 UStG — the ten mandatory details. The date of supply is required
+   EVEN WHEN it equals the invoice date; a supply PERIOD satisfies it too.
+ - §33 UStDV — Kleinbetragsrechnung up to €250 GROSS drops recipient, invoice
+   number, tax number and supply date. One cent over and full content returns.
+ - §34a UStDV (new 2025) — Kleinunternehmer content rules, so a missing tax
+   number is a WARNING there and an ERROR elsewhere. §19 thresholds rose in 2025
+   to €25,000 prior year / €100,000 current.
+ - Reverse charge — the invoice must carry the literal
+   "Steuerschuldnerschaft des Leistungsempfängers" (Art. 226 Nr. 11a MwStSystRL
+   allows other official EU languages), and EU B2B needs BOTH USt-IdNr.
+ - Also: intra-community supply, export to third countries, place-of-supply
+   abroad, and a free-text `other` that forces the issuer to write the basis.
+ - Every reason carries its statute, printed next to the choice and on the
+   document, so the user can check us rather than trust us.
+
+MONEY IS INTEGER CENTS end to end, and VAT is rounded ONCE PER RATE BUCKET, not
+per line — rounding each line and summing drifts against what the tax office
+recomputes. Per-line VAT is then attributed back so the column adds up exactly.
+
+PREFILL: `Organisation.invoicing` holds the issuer identity (USt-IdNr.,
+Steuernummer, Kleinunternehmer flag, bank, register court/number, payment terms,
+number series, footer). §14 wants the issuer's name, address and tax id on EVERY
+invoice, so they live there once. `issued` on the invoice is a FROZEN SNAPSHOT of
+both parties, the treatment and the display choices — re-rendering from today's
+org profile would quietly rewrite a document the tax office may later ask about.
+
+DISPLAY TOGGLES COVER OPTIONAL BLOCKS ONLY. Everything §14 requires is rendered
+unconditionally and is absent from the settings map: a generator whose settings
+can produce an invalid invoice is a trap, and it springs on the customer.
+
+THE DOCUMENT IS A DOCUMENT. `public/invoice.html` renders a white A4-printable
+sheet inside the dark app chrome, with a German sender line, per-rate VAT table
+and a print stylesheet. Deliberately NOT the receipt-printer aesthetic that was
+considered: a till roll cannot hold two addresses and a VAT table, does not
+print to A4, and reads as less credible to the accountant who must accept it.
+That treatment belongs on /r/:slug receipts, which are a different artifact.
+
+BUG THIS FOUND — QUIRKS MODE. business.html and invoice.html were written
+without `<!DOCTYPE html>`, so they rendered in BackCompat. In quirks mode TABLES
+DO NOT INHERIT COLOR from their parent, so the invoice line items and totals
+rendered in the dark theme's light text on the white sheet — nearly invisible,
+and only visible at all because that page inverts. Every pre-existing page had a
+doctype; only the two new ones did not. Both fixed. Check `document.compatMode`
+is `CSS1Compat` on any new page.
+
+NOT BUILT, and said on the document itself: XRechnung / ZUGFeRD (EN 16931).
+German B2B must already be able to RECEIVE e-invoices; the obligation to ISSUE
+them phases in from 2027 (2028 for smaller turnover), so a PDF is enough today
+and will not be. That is the next real piece of work here.
+
+## Mobile app + PWA (Aug 2026) — LANDED
+
+Branch `claude/remove-upi-and-onboarding-restyle` is FULLY MERGED into main
+(`git rev-list --count origin/main..origin/<branch>` is 0). This section used to
+say "IN PROGRESS, PR not opened" and that was doc rot: main already carries the
+UPI removal, the onboarding restyle, the PWA layer and the mobile app. Work from
+main.
 
 DESIGN SOURCE: `~/Downloads/Zold Mobile Dashboard Redesign.zip` — the user's
 Claude Design export. `README.md` in it is a real spec (tokens, screens,
@@ -628,6 +932,130 @@ surplus is structurally user-kept regardless of LIQUIDITY_SURPLUS_POLICY;
 the device-signed EIP-712 `to` field still names the orchestrator even for
 batches that deliver to Bridge (changing it needs a coordinated device.js
 lockstep bump).
+
+## Gnosis Pay — connected card, PR 1 shipped (Aug 2026)
+
+`npm run gnosispay:test` (13 checks, stub, offline). Design + corrections:
+`docs/gnosis-pay-permissionless-integration.md`.
+
+WHAT IT IS: the user connects their OWN Gnosis Pay account by SIWE and Zold
+shows cards, balances and card transactions. Gnosis Pay issues the card, holds
+its KYC and owns the card Safe. Permissionless mode has NO webhooks and NO
+attribution of card activity back to Zold, so nothing may be presented as a
+Zold card — the provenance line is rendered on every state, including errors.
+
+TWO API DETAILS THE DESIGN DOC HAD WRONG, both silently fatal, both found by
+reading the live OpenAPI spec and calling the endpoint rather than trusting the
+transcription — and both now asserted in the test:
+ - `GET /auth/nonce` returns **text/plain**, not JSON.
+ - It **sets a `siwe` cookie** that `POST /auth/challenge` verifies against.
+   Drop it and every signature is rejected as if the user signed wrong.
+Also: `/account-balances` returns decimal strings of MINOR UNITS (`^[0-9]+$`),
+kept as strings end to end; and the `Event` schema behind `/transactions`
+declares no properties, so items are passed through as opaque.
+
+DECISIONS THAT CARRY WEIGHT:
+ - **The JWT is never persisted, not even in localStorage.** It is a bearer
+   credential for a third party's financial account; the browser holds it in
+   memory and sends `x-gnosis-pay-token`, the API forwards and forgets. A
+   reload means signing in again and the screen says so.
+ - **A Gnosis Pay 401 is returned as 409.** Passing it through would make the
+   browser log the user out of ZOLD because someone else's token expired.
+ - **Stored status is shown when signed out; a stored BALANCE never is.** There
+   is nothing pushing updates, so every figure carries `asOf` and is labelled a
+   snapshot.
+ - **The signer is the user's own browser wallet**, not the Zold passkey Safe:
+   EIP-1271 is only verifiable where the contract is deployed, and the Zold Safe
+   is not on chain 100.
+
+CHAIN FACTS, VERIFIED not assumed (scripts were throwaway; re-run before
+relying on them): Gnosis Chain (100) HAS the RIP-7212 P256 precompile — probed
+with a real generated P-256 signature, valid returns 1 and a tampered r returns
+empty, same as Base Sepolia — and Candide's bundler/paymaster cover chain 100.
+So a passkey Safe on Gnosis is possible and is the natural next step; it was NOT
+the blocker it was assumed to be.
+
+NOT BUILT, deliberately (PRs 2-4 in the doc): signup, terms, KYC, phone OTP,
+Safe deploy, card creation, and ALL funding. NOT PROVEN: no real Gnosis Pay
+account has been connected.
+
+SCOPE NOTE: "make everything Gnosis Pay compatible" was scoped to the adapter
+only. Moving Zold to Gnosis Chain was considered and NOT done, and the REASON
+was corrected once: it is not CCTP. CCTP is the dry-run alternative that has
+never executed live; Bridge.xyz is the live seam (BRIDGE.sourceRail = "base").
+The real reason is that **Bridge does not support Gnosis Chain either** —
+checked against their payment-routes table, which lists Arbitrum, Avalanche,
+Base, Celo, Ethereum, HyperEVM, Linea, Monad, Optimism, Polygon, Solana,
+Stellar, Sui, Tempo, Tron, World Chain, XDC and Aptos, and no Gnosis at all.
+On Gnosis the cash rail would have NO exit. The current Base -> Stellar route
+with USDC at both ends is squarely on their supported set.
+
+AND THE MIGRATION IS NOT NEEDED FOR THE CARD ANYWAY. Gnosis Pay's card Safe is
+theirs, on chain 100, whatever chain Zold runs on. Only two things want Zold on
+Gnosis: the passkey Safe signing SIWE by EIP-1271 (needs it deployed on 100 —
+RIP-7212 is live there, so it works), and funding the Gnosis Pay Safe from Zold
+(needs EURe on 100 — Monerium issues it there). Both are satisfied by deploying
+the user Safe on Gnosis IN ADDITION, with the corridor left on Base. EURe
+exists on both and LI.FI covers Gnosis, so card funding is a user-signed
+Base->Gnosis EURe bridge. That is the shape to build, not a migration.
+
+BRIDGE + EEA, worth knowing before designing any USDT path: their docs state
+"USDC & EURC are the only stablecoins supported for users in the EEA" — MiCA,
+applied by them. Zoldenburg UG is an EEA entity, so Bridge CANNOT handle USDT
+for us. USDT would have to be swapped to USDC before Bridge sees it, and that
+swap is the MiCA exchange service, not an integration detail.
+
+## Custody — the non-custodial path is the DEFAULT now (Aug 2026)
+
+`npm run custody:test` (11 checks, no chain, no network).
+
+THE BUG THIS FIXED, and it was a shipped default rather than a code path:
+`LIQUIDITY_PROVIDER` defaulted to `fx-swapper`, which CANNOT be executed by a
+user's Safe (its inventory is `onlyTrader`). So `prepareSafeSwapForTransfer`
+returned null, the cash rail fell back to the plain debit, and the DEFAULT
+deployment moved every sender's full balance to the orchestrator's own address
+before swapping it. "We are non-custodial" was true only for an operator who
+knew to change one env var. The fallback that got you there was a
+`console.error` nobody reads.
+
+WHAT CHANGED:
+ - `LIQUIDITY.PROVIDER` defaults to **`best`** (over `LIQUIDITY_VENUES=lifi,dex`,
+   both Safe-executable). `scripts/_local-chain.ts` pins `fx-swapper` with `??=`
+   for hardhat, which has neither LI.FI nor a seeded pool. THE DIRECTION IS THE
+   POINT: production inherits the safe default and the local demo names its
+   exception, not the other way round.
+ - `transfer.custody` is recorded on EVERY transfer and every rail:
+   `mode: "non-custodial" | "orchestrator"`, a `reason` when custodial, and
+   `feeToOrchestrator` stated rather than left to be discovered. It starts at
+   the honest worst case and is narrowed ONLY when a batch is genuinely
+   prepared — so a venue outage leaves the truthful answer behind.
+ - `CUSTODY.requireNonCustodial` (`REQUIRE_NON_CUSTODIAL=1`) refuses at creation
+   rather than falling back. NOT on by default and that is deliberate: with
+   BRIDGE_LIVE unset there is no external deposit address to deliver into, so
+   defaulting it on would brick every dry-run and testnet deployment including
+   Base Sepolia. The PATH is the default; the GUARANTEE is opt-in.
+ - A startup CUSTODY line says which mode this deployment will actually run in.
+   VERIFIED LIVE across four configurations (default/fx-swapper/BRIDGE_LIVE/
+   +REQUIRE_NON_CUSTODIAL) — each printed the right one.
+
+WHAT IS STILL CUSTODIAL, stated rather than glossed:
+ - The FEE always lands at the orchestrator (`feeTo: orchestratorAddress` in the
+   batch). Judged revenue at the moment it moves, not client funds in transit —
+   but recorded, not hidden.
+ - Dry-run mode (BRIDGE_LIVE unset) delivers the batch output to the
+   orchestrator because the local escrow demo pulls from it. Still user-signed,
+   still one batch — and recorded as `orchestrator`, not quietly counted as a
+   win.
+ - The SEPA rail was ALREADY non-custodial for the principal and this did not
+   change it: Monerium's redeem burns the payout straight from the Safe and only
+   the fee moves (`DEBIT_STEP.safeFee`). Do not "fix" that into a full debit.
+
+REGULATORY NOTE, since this is why it matters: custody is NOT the trigger for
+most of what this app does. Money remittance under ZAG/PSD2 is *defined* as the
+no-account case, and MiCA's exchange (Art. 3(1)(16)(e)) and transfer (l)
+services trigger on acting "on behalf of clients". Being non-custodial narrows
+the MiCA class and drops safeguarding; it does not remove the licence question.
+Do not let this work be read as having answered it.
 
 ## Liquidity venues — tested, not assumed (last checked Aug 2026)
 
