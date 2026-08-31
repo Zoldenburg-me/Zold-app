@@ -151,6 +151,65 @@ export interface User {
    * the view. Presenting it without a timestamp would imply a liveness the
    * integration cannot provide.
    */
+  /**
+   * Which path this account takes. Decided once by resolveSegment on the
+   * server, at signup.
+   *
+   * IMMUTABLE FROM THE CLIENT — no route accepts it in a body, and the only
+   * writer is the signup path or an explicit admin action, which records itself
+   * in the audit log. A segment a client could set is a segment a client could
+   * set to EU_FULL.
+   */
+  segment?: {
+    value: import("./domain/segments.js").Segment;
+    /** Internal rule that fired. Logged, never rendered — publishing it tells
+     *  someone which answer to change. */
+    reasonCode: string;
+    decidedAt: string;
+    decidedBy: "system" | "admin";
+    /** Set when the segment exists but cannot be opened in this deployment. */
+    gate?: { reason: string; needs: string };
+  };
+  /**
+   * The US-person questionnaire, APPEND-ONLY.
+   *
+   * A soft US signal forces re-confirmation, and the point of re-confirming is
+   * to compare it with what was said the first time — so an answer is added,
+   * never overwritten. The version records which wording was agreed to.
+   */
+  usPersonAnswers?: {
+    usCitizen: boolean;
+    usGreenCard: boolean;
+    usTaxResident: boolean;
+    companyUsNexus?: boolean | null;
+    answeredAt: string;
+    version: string;
+  }[];
+  /** All citizenships declared at signup. Screened individually. */
+  citizenships?: string[];
+  accountType?: "individual" | "company";
+  companyIncorporationCountry?: string;
+  /** Weak US evidence. Flags for review; never blocks on its own. */
+  softSignals?: {
+    usPhoneCode?: boolean;
+    usMailingAddress?: boolean;
+    usIpAtSignup?: boolean;
+    flaggedAt: string;
+    /** Cleared only when the user re-answers the US questions. */
+    reconfirmationPending?: boolean;
+  };
+  /**
+   * Consents, append-only, one row per grant. The partner is named because the
+   * user consented to a NAMED recipient — a generic "share with partners" is
+   * not the consent that was asked for.
+   */
+  consents?: {
+    kind: "zold_terms" | "partner_share";
+    partner?: string;
+    version: string;
+    at: string;
+    ip?: string;
+  }[];
   gnosisPay?: {
     connectedAddress: `0x${string}`;
     userId?: string;
@@ -618,6 +677,8 @@ interface Db {
   processedMoneriumWebhooks: string[];
   /** Inbound crypto seen at a user's account, and what became of it. */
   cryptoDeposits: CryptoDeposit[];
+  /** Append-only audit trail: segment decisions, consents, partner events. */
+  audit: import("./audit.js").AuditEntry[];
   /** Managed KYC guardian recovery requests. */
   recoveryRequests: RecoveryRequest[];
   /**
@@ -672,6 +733,7 @@ let db: Db = {
   processedMoneriumOrders: [],
   processedMoneriumWebhooks: [],
   cryptoDeposits: [],
+  audit: [],
   recoveryRequests: [],
   cryptoDepositCursor: {},
   organisations: [],
@@ -696,6 +758,7 @@ export function initStore() {
     db.processedMoneriumOrders ??= [];
     db.processedMoneriumWebhooks ??= [];
     db.cryptoDeposits ??= [];
+    db.audit ??= [];
     db.recoveryRequests ??= [];
     db.cryptoDepositCursor ??= {};
     db.organisations ??= [];
@@ -899,6 +962,54 @@ export const store = {
     const u = db.users.find((x) => x.id === id);
     if (!u) throw new Error(`unknown user ${id}`);
     Object.assign(u, patch);
+    persist();
+    return u;
+  },
+  /**
+   * Append one audit entry. There is deliberately no update and no delete —
+   * a log a process can edit proves nothing.
+   */
+  audit(entry: import("./audit.js").AuditEntry) {
+    db.audit.push(entry);
+    persist();
+  },
+  auditFor(userId?: string, limit = 200) {
+    const rows = userId ? db.audit.filter((r) => r.userId === userId) : db.audit;
+    return rows.slice(-limit).reverse();
+  },
+  /**
+   * Set the segment. The ONLY writer, and it refuses to be a silent overwrite:
+   * a segment already decided can be changed only by an explicit admin action,
+   * so a second signup-path call cannot quietly re-segment an existing account.
+   */
+  setSegment(
+    id: string,
+    segment: NonNullable<User["segment"]>,
+    by: "system" | "admin" = "system",
+  ) {
+    const u = db.users.find((x) => x.id === id);
+    if (!u) throw new Error(`unknown user ${id}`);
+    if (u.segment && by !== "admin") {
+      throw new Error(
+        `user ${id} already has segment ${u.segment.value}; only an admin action may change it`,
+      );
+    }
+    u.segment = { ...segment, decidedBy: by };
+    persist();
+    return u;
+  },
+  /** Append-only: consents and US answers are never overwritten. */
+  addConsent(id: string, consent: NonNullable<User["consents"]>[number]) {
+    const u = db.users.find((x) => x.id === id);
+    if (!u) throw new Error(`unknown user ${id}`);
+    (u.consents ??= []).push(consent);
+    persist();
+    return u;
+  },
+  addUsAnswers(id: string, answers: NonNullable<User["usPersonAnswers"]>[number]) {
+    const u = db.users.find((x) => x.id === id);
+    if (!u) throw new Error(`unknown user ${id}`);
+    (u.usPersonAnswers ??= []).push(answers);
     persist();
     return u;
   },

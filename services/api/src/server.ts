@@ -14,6 +14,8 @@ import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUS
 import { prepareSafeSwapForTransfer } from "./liquidity.js";
 import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
+import { resolveSegment, capabilitiesFor, can, type Segment } from "./domain/segments.js";
+import { auditEntry, redact } from "./audit.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
 import { moneriumRedeemMessage, paymentMemo, SEPA_REMITTANCE_MAX } from "./sepa.js";
 import { initStore, store, type CryptoDeposit, type Quote, type ReceiptShare, type Transfer, type User } from "./store.js";
@@ -344,8 +346,28 @@ app.get(
 const sandbox = moneriumSandboxEnabled();
 
 /** Never send payment-page deposit keys, OAuth state, or encrypted tokens to the client. */
-const publicUser = ({ moneriumConnect, monerium, passkey, paymentPage, ...u }: User & { [k: string]: any }) => ({
+const publicUser = (
+  { moneriumConnect, monerium, passkey, paymentPage, segment, usPersonAnswers, ...u }:
+    User & { [k: string]: any },
+) => ({
   ...u,
+  /**
+   * The client is told its capabilities, NOT the rule that produced them.
+   *
+   * `reasonCode` and the raw US answers are stripped: the first tells someone
+   * which answer to change, and the second is theirs but has no business being
+   * echoed back on every read. `gate` IS sent, because a gated segment must be
+   * able to say what is missing.
+   */
+  ...(segment
+    ? {
+        segment: {
+          value: segment.value,
+          capabilities: capabilitiesFor(segment.value),
+          ...(segment.gate ? { gate: segment.gate } : {}),
+        },
+      }
+    : {}),
   ...(paymentPage
     ? {
         paymentPage: {
@@ -735,21 +757,133 @@ function queueSandboxProvisioning(user: User) {
   );
 }
 
+/**
+ * What a blocked person is told.
+ *
+ * PLAIN, AND NOT A REASON. Each line says what Zold cannot offer and stops
+ * there. It does not cite a rule, a country policy or a partner, because the
+ * user cannot act on any of that and because naming the rule tells someone
+ * which answer to change. The internal reasonCode goes to the audit log.
+ *
+ * No legal advice, and no implication that the user has done something wrong —
+ * which is why the unsupported case says the residence is not served rather
+ * than anything about the person.
+ */
+/**
+ * The single gate in front of every partner call.
+ *
+ * ENFORCED IN CODE, NOT IN THE UI. Hiding a button is a presentation choice
+ * that a crafted request walks straight past; this is the check that actually
+ * decides. An IN_COLLECTIONS account cannot reach Monerium, a Safe, a card or
+ * an on-chain balance no matter what it POSTs, because every one of those
+ * routes asks here first.
+ *
+ * A user with no segment is a pre-existing account from before segmentation.
+ * They are treated as EU_FULL rather than refused: they were created under the
+ * old country gate, which already required a Monerium-servable residence, and
+ * locking them out of their own funded account would be a worse failure than
+ * the one this guards. `npm run segments:test` covers the resolver; this
+ * fallback is the migration seam and is deliberately narrow.
+ */
+function requireCapability(
+  user: User,
+  capability: Parameters<typeof can>[1],
+  res: express.Response,
+): boolean {
+  const segment: Segment = user.segment?.value ?? "EU_FULL";
+  if (can(segment, capability)) return true;
+  store.audit(auditEntry("partner.call_refused", { segment, capability }, user.id));
+  res.status(403).json({
+    error: "This is not part of your account.",
+    code: "CAPABILITY_UNAVAILABLE",
+    capability,
+    ...(user.segment?.gate ? { gate: user.segment.gate } : {}),
+  });
+  return false;
+}
+
+/** Bumped when the wording of the US questions or the consent text changes,
+ *  so a stored answer can be tied to what was actually asked. */
+const US_QUESTIONS_VERSION = "2026-08-31";
+const CONSENT_VERSION = "2026-08-31";
+
+const BLOCKED_COPY: Record<Extract<Segment, `BLOCKED_${string}`>, string> = {
+  BLOCKED_US: "Zold is not available to US persons.",
+  BLOCKED_SANCTIONED: "Zold is not available in your country.",
+  BLOCKED_UNSUPPORTED: "Zold cannot open an account for residents of your country yet.",
+};
+
 app.post(
   "/api/users",
   wrap(async (req, res) => {
-    const { name, country, email } = req.body ?? {};
+    const { name, country, email, citizenships, accountType, usAnswers, consents,
+      companyIncorporationCountry, softSignals } = req.body ?? {};
     if (!name || !country) return res.status(400).json({ error: "name and country required" });
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return res.status(400).json({ error: "invalid email" });
     }
-    const blockedCountry = countryBlock(String(country));
-    if (blockedCountry) {
+
+    /**
+     * SEGMENTATION REPLACES THE OLD COUNTRY GATE.
+     *
+     * `countryBlock()` used to run here and 403 before anything else. It is now
+     * consulted INSIDE resolveSegment, and the reason is not tidiness: it
+     * answers only "will Monerium serve this residence", so on its own it
+     * refused Indian residents' collections path and refused Nigerians with a
+     * message about Monerium's country policy — a partner's name in front of a
+     * user who was never going to use that partner. The resolver asks the three
+     * questions separately and returns which of them actually decided.
+     *
+     * Back-compatible for callers that send no new fields: an individual with a
+     * single citizenship equal to residence and all-no US answers, which is
+     * what the old body implied. Doing otherwise would break every existing
+     * client and every harness in one commit.
+     */
+    const type: "individual" | "company" = accountType === "company" ? "company" : "individual";
+    const answers = {
+      usCitizen: usAnswers?.usCitizen === true,
+      usGreenCard: usAnswers?.usGreenCard === true,
+      usTaxResident: usAnswers?.usTaxResident === true,
+      ...(type === "company"
+        ? { companyUsNexus: usAnswers?.companyUsNexus === true }
+        : { companyUsNexus: null }),
+    };
+    let decision;
+    try {
+      decision = resolveSegment({
+        residence: String(country),
+        citizenships: Array.isArray(citizenships) && citizenships.length
+          ? citizenships.map(String)
+          : [String(country)],
+        accountType: type,
+        usAnswers: answers,
+        ...(companyIncorporationCountry ? { companyIncorporationCountry: String(companyIncorporationCountry) } : {}),
+        ...(softSignals ? { softSignals } : {}),
+      });
+    } catch (err: any) {
+      return res.status(400).json({ error: String(err?.message ?? err) });
+    }
+
+    // A blocked segment is recorded before it is refused: the decision has to
+    // be auditable whether or not an account exists, and "we refused someone
+    // and kept no record of why" is the failure this log exists to prevent.
+    if (decision.segment.startsWith("BLOCKED_")) {
+      store.audit(auditEntry("segment.decided", {
+        residence: normaliseCountryCode(String(country)),
+        citizenships: (Array.isArray(citizenships) ? citizenships : [country]).map((c: any) => normaliseCountryCode(String(c))),
+        accountType: type,
+        usAnswers: answers,
+        segment: decision.segment,
+        reasonCode: decision.reasonCode,
+        email: redact(email ?? ""),
+        outcome: "refused_at_signup",
+      }));
+      // Deliberately says what Zold cannot offer and NOT which rule fired.
+      // reasonCode stays in the log; publishing it tells someone which answer
+      // to change to get a different outcome.
       return res.status(403).json({
-        error: blockedCountry.message,
-        code: "COUNTRY_NOT_SUPPORTED",
-        country: blockedCountry.code,
-        reason: blockedCountry.reason,
+        error: BLOCKED_COPY[decision.segment as keyof typeof BLOCKED_COPY],
+        code: decision.segment,
       });
     }
     const id = randomUUID();
@@ -775,6 +909,44 @@ app.post(
       createdAt: new Date().toISOString(),
     };
     store.addUser(user);
+    store.setSegment(user.id, {
+      value: decision.segment,
+      reasonCode: decision.reasonCode,
+      decidedAt: new Date().toISOString(),
+      decidedBy: "system",
+      ...(decision.gate ? { gate: decision.gate } : {}),
+    });
+    store.updateUser(user.id, {
+      citizenships: (Array.isArray(citizenships) && citizenships.length
+        ? citizenships.map(String) : [String(country)]).map(normaliseCountryCode),
+      accountType: type,
+      ...(companyIncorporationCountry
+        ? { companyIncorporationCountry: normaliseCountryCode(String(companyIncorporationCountry)) }
+        : {}),
+      ...(decision.review
+        ? { softSignals: { ...(softSignals ?? {}), flaggedAt: new Date().toISOString(), reconfirmationPending: true } }
+        : {}),
+    });
+    store.addUsAnswers(user.id, { ...answers, answeredAt: new Date().toISOString(), version: US_QUESTIONS_VERSION });
+    for (const c of Array.isArray(consents) ? consents : []) {
+      if (c?.kind !== "zold_terms" && c?.kind !== "partner_share") continue;
+      store.addConsent(user.id, {
+        kind: c.kind,
+        ...(c.partner ? { partner: String(c.partner) } : {}),
+        version: String(c.version ?? CONSENT_VERSION),
+        at: new Date().toISOString(),
+        ...(req.ip ? { ip: req.ip } : {}),
+      });
+    }
+    store.audit(auditEntry("segment.decided", {
+      residence: user.country,
+      accountType: type,
+      usAnswers: answers,
+      segment: decision.segment,
+      reasonCode: decision.reasonCode,
+      softUsSignals: decision.review?.softUsSignals ?? [],
+      outcome: "account_created",
+    }, user.id));
     if (sandbox && kycStatus === "approved") {
       // Wallet deploy (~20s) + Monerium provisioning run in the background;
       // the UI polls funding status until the IBAN lands.
@@ -1442,6 +1614,7 @@ app.post(
     const user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "monerium", res)) return;
     if (!moneriumOAuthEnabled()) {
       return res.status(503).json({ error: "Monerium OAuth client is not configured" });
     }
@@ -1604,6 +1777,7 @@ app.post(
     let user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "monerium", res)) return;
     const custodyBlocked = custodyBlockerBeforeFunding(user);
     if (custodyBlocked) {
       return res.status(409).json({ error: custodyBlocked });
@@ -2616,6 +2790,7 @@ app.post(
     const user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "safe", res)) return;
     if (!user.passkey?.publicKey || !user.passkeySafe) {
       return res.status(409).json({ error: "register a passkey before preparing the passkey Safe" });
     }
@@ -3195,6 +3370,7 @@ app.post(
     const user = store.findUser(userId);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "onchain_balance", res)) return;
     if (!requireKycApproved(user, res)) return;
     if (!["cash", "sepa"].includes(rail)) {
       return res.status(400).json({ error: "rail must be cash or sepa" });
