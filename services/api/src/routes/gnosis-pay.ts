@@ -33,6 +33,7 @@ import {
   verifySiwe,
 } from "../adapters/gnosis-pay.js";
 import type { SessionResolver } from "./org-context.js";
+import { can } from "../domain/segments.js";
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
@@ -82,6 +83,29 @@ function tokenOf(req: express.Request, res: express.Response): string | undefine
 
 export function createGnosisPayRouter(requireSession: SessionResolver): express.Router {
   const r = express.Router();
+
+  /**
+   * Segment gate for the whole router.
+   *
+   * Gnosis Pay is EU_FULL only. Enforced here rather than per-route so a new
+   * endpoint added later cannot forget it — the gate is the door, not a note
+   * on each room. A pre-segmentation account defaults to EU_FULL for the same
+   * migration reason as the server-side guard.
+   */
+  r.use((req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+    const user = store.findUser(session.userId);
+    const segment = user?.segment?.value ?? "EU_FULL";
+    if (!can(segment, "gnosis_pay")) {
+      return res.status(403).json({
+        error: "This is not part of your account.",
+        code: "CAPABILITY_UNAVAILABLE",
+        capability: "gnosis_pay",
+      });
+    }
+    next();
+  });
 
   /** What this deployment can do, so the client renders a real state. */
   r.get("/config", (req, res) => {
