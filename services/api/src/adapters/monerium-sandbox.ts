@@ -18,8 +18,9 @@ import { MONERIUM, moneriumSandboxEnabled } from "../config.js";
 import { store, type User } from "../store.js";
 import { MoneriumApiError, MoneriumClient, type MoneriumOrder } from "./monerium-client.js";
 import { moneriumAppClient, moneriumClientFor, usersWithOwnCredentials } from "./monerium-connection.js";
-import { simulateSepaDeposit } from "./monerium.js";
-import { isDeployed } from "../wallet/candide.js";
+import { HARNESS } from "../config.js";
+import { abis, addrs, deployerWallet, eur, writeAndWait } from "../chain.js";
+import { keccak256, toHex } from "viem";
 import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
 
 /**
@@ -37,51 +38,7 @@ export async function checkConnection() {
   return ctx;
 }
 
-/**
- * Resolve the profile to attach the user's address to.
- * Whitelabel plans can create per-customer profiles; other plans fall back to
- * the app's own (first) profile.
- */
-async function resolveProfileId(user: User): Promise<string | undefined> {
-  if (MONERIUM.profileId) return MONERIUM.profileId;
-  const api = getClient();
-  try {
-    const created = await api.createProfile("personal", user.name);
-    if (created?.id) return created.id;
-  } catch {
-    // Not a whitelabel plan (or creation rejected) — fall through.
-  }
-  try {
-    const res = await api.profiles();
-    const list = Array.isArray(res) ? res : (res?.profiles ?? []);
-    return list[0]?.id;
-  } catch {
-    return undefined;
-  }
-}
 
-/**
- * Provision Monerium funding for a user: profile -> link address -> IBAN.
- * Mutates the stored user with progress; returns the updated user.
- */
-export async function provisionFunding(user: User): Promise<User> {
-  try {
-    // 1. The Safe must already exist on-chain for Monerium's EIP-1271
-    //    signature check. Deployment is centralized in the passkey Safe endpoint.
-    if (!(await isDeployed(user.address))) {
-      store.updateUser(user.id, {
-        funding: { mode: "sandbox", status: "provisioning", detail: "waiting for passkey Safe deployment" },
-      });
-      throw new Error("passkey Safe must be deployed before Monerium funding provisioning");
-    }
-
-    throw new Error("Monerium funding provisioning requires interactive passkey Safe linking");
-  } catch (err: any) {
-    return store.updateUser(user.id, {
-      funding: { mode: "sandbox", status: "error", detail: String(err?.message ?? err) },
-    });
-  }
-}
 
 /** Look up the issued IBAN for an address, if any yet — on the user's own
  *  credentials when they have some, since that is where their IBAN lives. */
@@ -215,19 +172,34 @@ async function mirrorOrder(order: MoneriumOrder): Promise<boolean> {
   if (!user) return false;
   const amount = Number(order.amount);
   if (!(amount > 0)) return false;
-  // Native EURe (Amoy, Sepolia, ...): the euros already exist in the user's
-  // Safe. Only a local chain mints mock EURe.
+  // Monerium minted the EURe into the user's Safe on the app chain; there is
+  // nothing to move and nothing to mint — the Safe balance IS the account.
   const { moneriumEure } = await import("./monerium-tokens.js");
   const { CHAIN_ID } = await import("../config.js");
-  if (await moneriumEure(MONERIUM.baseUrl, CHAIN_ID)) {
-    const { creditDepositFromSafe } = await import("./monerium.js");
-    await creditDepositFromSafe(user, amount, `monerium:${order.id}`);
-  } else {
-    await simulateSepaDeposit(user.address, amount, `monerium:${order.id}`);
+  if (!(await moneriumEure(MONERIUM.baseUrl, CHAIN_ID))) {
+    if (HARNESS.enabled) {
+      // Test fixture, hardhat only: the harnesses' stub Monerium reports an
+      // order and the local MockToken stands in for the mint. Unreachable on
+      // any real-money chain (HARNESS needs chain 31337).
+      await mintLocalTestEure(user.address, amount, `monerium:${order.id}`);
+    } else {
+      console.warn(`monerium: order ${order.id} is on a chain where Monerium issues no EURe (${CHAIN_ID}); not recorded`);
+      return false;
+    }
   }
   store.markOrderProcessed(order.id);
   console.log(`monerium: recorded issue order ${order.id} (€${amount}) for ${user.name}`);
   return true;
+}
+
+async function mintLocalTestEure(to: `0x${string}`, amountEur: number, ref: string) {
+  await writeAndWait(deployerWallet, {
+    address: addrs().eure,
+    abi: abis.MockToken,
+    functionName: "mint",
+    args: [to, eur.toWei(amountEur)],
+  });
+  return keccak256(toHex(ref));
 }
 
 /**

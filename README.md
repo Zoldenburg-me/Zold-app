@@ -54,8 +54,9 @@ Bridge still needs its hosted KYC link or direct Customers API requirements.
 
 Chain selection is configuration, not code: `TRANSF_CHAIN_ID` resolves the
 chain and `deployments.json` is keyed by chain id, so several deployments
-coexist without overwriting each other. The current target is Base Sepolia
-(84532) against Monerium's EURe.
+coexist without overwriting each other. The default is Base mainnet (8453)
+against Monerium's production EURe and Circle's USDC; Base Sepolia (84532) with
+`MONERIUM_BASE_URL` pointed at the sandbox is the testnet configuration.
 
 ---
 
@@ -66,7 +67,8 @@ carried value and which have not.
 
 | Capability | Status |
 |---|---|
-| Residency gate at account creation | **Live** — Monerium's residency tiers, enforced before KYC |
+| Residency gate at account creation | **Live** — Monerium's residency tiers, enforced before anything else |
+| Identity | **Monerium's** — an account is approved when its Monerium connection (OAuth sign-in, or the user's own API keys) attributes an IBAN to the Safe. No in-house review, no third-party KYC provider, no auto-approval. |
 | IBAN issuance, SEPA deposit → EURe in Safe | **Live** — Monerium, EIP-1271 ownership |
 | Safe deployment, gas-sponsored, passkey-owned | **Live** — Candide bundler + paymaster |
 | Passkey auth, WebAuthn assertion verified server-side | **Live** |
@@ -76,10 +78,9 @@ carried value and which have not.
 | Managed recovery (guardian, delay, operator approval) | **Live** |
 | Inbound USDC → EURe conversion | Integrated; no production deposit converted |
 | Liquidity venues (LI.FI, CoW, Uniswap v3, RFQ, best-execution) | Quoting live; no venue has executed a settlement |
-| Bridge.xyz Base → Stellar funding | First integration seam; dry-run by default, live requires Bridge credentials |
+| Bridge.xyz Base → Stellar funding | Integration seam built; the cash rail is **closed** until `BRIDGE_LIVE=1` with credentials — there is no dry-run |
 | Stellar payout leg | Ledger half proven on-chain; anchor attribution not yet exercised |
 | MoneyGram cash pickup | Protocol complete (SEP-10/12/24); requires a partner agreement |
-| KYC provider | **Sumsub integrated** — WebSDK, signed webhooks, Monerium share token, MoneyGram SEP-9 fields |
 
 Two constraints worth naming directly:
 
@@ -127,15 +128,19 @@ Four, deliberately small, no inheritance depth and no proxies.
 | `BridgeEscrow.sol` | Locks funds for the bridge leg, refuses reused transfer ids, refunds only to the target bound at lock time |
 | `MockToken.sol` | Local-chain ERC-20 for tests |
 
-#### Base Sepolia Active Deployments (Chain ID: 84532)
+#### Base mainnet (chain id 8453) — the token addresses the app uses
 
-| Contract / Asset | Deployed Address | Notes |
+Nothing of ours is deployed on a real chain. `npm run deploy` there records the
+two real tokens in `deployments.json` and stops; liquidity comes from LI.FI /
+Uniswap v3 through the user's own Safe, and the cash leg goes through Bridge.xyz.
+
+| Asset | Address | Source |
 |---|---|---|
-| `EURe` | `0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85` | Monerium's native EURe token on Base Sepolia |
-| `USDC` | `0xf94c01838c60f4ddf9519da75180feac7450303a` | Circle / Mock USDC token |
-| `FxSwapper` | `0x7b19ccdfb4bcc1bbc12daa2e94e5ad694c8613b8` | Swapper contract |
-| `BridgeEscrow` | `0x11cb28ccb5231c9aedfc818221b0fe7d11085e07` | Escrow contract for cross-chain payouts |
-| `AdminTimelock` | `0xe560f041a8175d72558836159573550eaa89f8c4` | M-of-N Timelock owner of FxSwapper and BridgeEscrow |
+| `EURe` | `0xbf6e2966A9C3D99C9E4D069E04f7Bdb9C8aa762C` | Monerium's own, from their production `/tokens` |
+| `USDC` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | Circle's own; code and symbol verified on-chain |
+
+The `FxSwapper`, `BridgeEscrow` and `AdminTimelock` contracts are local-chain
+fixtures for the test harnesses and are not deployed on any real chain.
 
 Custody is the user's Safe. The only record of a user's euros is the EURe in their own smart account.
 
@@ -170,21 +175,27 @@ Note it constrains **who may hold an account**, not where money may be sent;
 payout corridors are governed separately by the rails and their partners.
 
 Past that gate, IBAN issuance, deposits, device binding, quoting and transfers
-all fail closed until the account is approved. Two paths:
+all fail closed until the account is approved — and identity is Monerium's.
+After the passkey is registered and the smart wallet deployed, the account is
+connected to Monerium in one of two ways, and approved when that connection
+attributes an IBAN to the Safe:
 
-- **Identity review** — the standard route.
-- **Connect an existing Monerium account** — OAuth Authorization Code + PKCE
-  (S256). Per-user tokens are AES-256-GCM encrypted at rest, never returned by
-  any endpoint. The app links its own Safe and requests a new IBAN; the user's
-  existing account is untouched.
-- **Connect your own Monerium API keys** (Profile → Monerium keys) — for
-  testing against your own account: paste the client id and secret of an app
-  created in your Monerium account. The pair is verified against Monerium
-  before anything is stored, the secret is encrypted with the same key as the
-  OAuth tokens and never returned, and activation, deposit polling and SEPA
-  redeems for that account run on those keys — the app's own credentials
-  cannot see a profile they do not own. `npm run monerium:apikeys:test` drives
-  it against a stub that answers only to the user's own token.
+- **Sign up or sign in with Monerium** — OAuth Authorization Code + PKCE
+  (S256). Monerium verifies the person and issues the IBAN. Per-user tokens are
+  AES-256-GCM encrypted at rest, never returned by any endpoint. The app links
+  its own Safe under the user's profile and requests an IBAN there.
+- **Add your own Monerium API keys** — for testing against your own account:
+  paste the client id and secret of an app created in your Monerium account.
+  The pair is verified against Monerium before anything is stored, the secret
+  is encrypted with the same key as the OAuth tokens and never returned, and
+  activation, deposit polling and SEPA redeems for that account run on those
+  keys — the app's own credentials cannot see a profile they do not own.
+  `npm run monerium:apikeys:test` drives it against a stub that answers only to
+  the user's own token.
+
+There is no in-house identity review, no Sumsub, no operator approval and no
+whitelabel provisioning any more. The app never creates a Monerium profile for
+a user.
 
 For cash payouts the sender's FATF originator data is collected and mapped to
 SEP-9 field names (`stellar/sep9.ts`). Each user gets a distinct SEP-12 customer
@@ -346,7 +357,7 @@ Requires Node 22 or newer.
 npm install
 npm run compile          # contracts
 npm run test:contracts   # 9 tests against a throwaway chain
-npm run check            # 35 suites: contracts, e2e, typecheck, focused harnesses
+npm run check            # contracts, typecheck, focused harnesses (local hardhat)
 npm run api              # run against the configured chain
 ```
 
@@ -354,10 +365,12 @@ npm run api              # run against the configured chain
 
 Configuration lives in `.env`; `.env.example` documents every variable.
 `config.ts` enforces a production readiness gate at startup and refuses to run
-on an incomplete configuration — missing operator token, unacknowledged
-datastore, absent webhook secret or token encryption key, non-explicit origins
-or proxy hops, missing co-signer or recovery guardian, or a smart-account chain
-that disagrees with the app chain.
+on an incomplete configuration — a non-mainnet chain, a Monerium base URL other
+than production, no Monerium connection path (neither OAuth client nor key
+encryption key), any of the removed mock/simulation/faucet/Sumsub variables
+still set, missing operator token, unacknowledged datastore, absent webhook
+secret, non-explicit origins or proxy hops, missing co-signer or recovery
+guardian, or a smart-account chain that disagrees with the app chain.
 
 Operational tooling:
 
@@ -365,7 +378,6 @@ Operational tooling:
 npm run reconcile        # ledger + on-chain invariant drift report
 npm run monerium:check   # verify issuer configuration
 npm run stellar:check    # full anchor protocol run
-npm run bridge:dryrun    # inspect Bridge.xyz transfer planning
 npm run dex:setup        # pool inspection and setup
 ```
 
@@ -407,6 +419,6 @@ scripts/               deploy, operations, 30 test harnesses
 
 [Apache-2.0](LICENSE). Security policy in [SECURITY.md](SECURITY.md).
 
-This repository is a reference implementation running against testnets and
-sandboxes. It is not an audited, licensed, or operated financial service —
-see SECURITY.md for what that means before you deploy it anywhere real.
+This repository is software that defaults to real networks and a real e-money
+issuer. It is not an audited, licensed, or operated financial service — see
+SECURITY.md for what that means before you deploy it anywhere real.

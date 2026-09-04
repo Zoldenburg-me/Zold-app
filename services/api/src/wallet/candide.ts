@@ -28,31 +28,32 @@ import {
 } from "abstractionkit";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeFunctionData, hashTypedData } from "viem";
-import { SECURITY } from "../config.js";
 
 /**
- * The ONE simulation gate, shared with the rest of the API (SECURITY.
- * allowSimulation = explicit ALLOW_SIMULATION=1, or a fully-local stack:
- * loopback API + local RPC + chain 31337). This file briefly carried its own
- * looser versions — one keyed on the RPC host alone, and a fallback keyed on
- * NODE_ENV !== "production", which is TRUE on the hosted testnet deployment.
- * That fallback made transferTokenFromSafeAllowance return a fake tx hash
- * whenever a real debit precondition failed, so transfers reported PAID while
- * no money had left the user's Safe — the exact class of fake the UPI rail
- * was deleted for. Simulation is for the local dev loop only, ever.
+ * The only shortcuts left are the HARNESS ones (config.ts): fake challenges
+ * and a fake UserOperation hash on the hardhat chain, where no bundler
+ * exists. They used to key on ALLOW_SIMULATION or "looks local" — once on
+ * NODE_ENV alone, which was TRUE on the hosted testnet, so transfers reported
+ * PAID while no money had left the user's Safe. HARNESS.enabled cannot be true
+ * on any chain where money is real.
  */
-const allowSimulation = () => SECURITY.allowSimulation;
+import { HARNESS } from "../config.js";
+const allowSimulation = () => HARNESS.enabled;
 
 const COSIGNER_ENABLED =
   process.env.CANDIDE_COSIGNER_ENABLED === "1" ||
   (process.env.CANDIDE_COSIGNER_ENABLED !== "0" &&
     Boolean(process.env.CANDIDE_COSIGNER_ADDRESS && process.env.CANDIDE_COSIGNER_KEY));
 
+/** The smart-account chain follows the app chain unless told otherwise, and
+ *  Candide's public endpoints are addressed by that id (their v3 bundler and
+ *  paymaster answer for 8453 — checked with eth_supportedEntryPoints). */
+const CANDIDE_CHAIN_ID = process.env.CANDIDE_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? "8453";
 export const CANDIDE = {
-  chainId: BigInt(process.env.CANDIDE_CHAIN_ID ?? 11155111),
-  bundlerUrl: process.env.CANDIDE_BUNDLER_URL ?? "https://api.candide.dev/public/v3/11155111",
-  paymasterUrl: process.env.CANDIDE_PAYMASTER_URL ?? "https://api.candide.dev/public/v3/11155111",
-  rpcUrl: process.env.CANDIDE_RPC_URL ?? "https://ethereum-sepolia-rpc.publicnode.com",
+  chainId: BigInt(CANDIDE_CHAIN_ID),
+  bundlerUrl: process.env.CANDIDE_BUNDLER_URL ?? `https://api.candide.dev/public/v3/${CANDIDE_CHAIN_ID}`,
+  paymasterUrl: process.env.CANDIDE_PAYMASTER_URL ?? `https://api.candide.dev/public/v3/${CANDIDE_CHAIN_ID}`,
+  rpcUrl: process.env.CANDIDE_RPC_URL ?? process.env.TRANSF_RPC_URL ?? "https://mainnet.base.org",
   cosignerEnabled: COSIGNER_ENABLED,
   cosignerAddress: (process.env.CANDIDE_COSIGNER_ADDRESS ?? "") as `0x${string}` | "",
   cosignerKey: (process.env.CANDIDE_COSIGNER_KEY ?? "") as `0x${string}` | "",
@@ -63,7 +64,7 @@ export const CANDIDE = {
    *  deployed under the removed co-signer-delegate model. Nothing installs an
    *  allowance any more — debits are user-signed UserOperations. */
   allowanceModuleAddress: (process.env.CANDIDE_ALLOWANCE_MODULE_ADDRESS ??
-    (BigInt(process.env.CANDIDE_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? 11155111) === 84532n
+    (BigInt(CANDIDE_CHAIN_ID) === 84532n
       ? "0xAA46724893dedD72658219405185Fb0Fc91e091C"
       : AllowanceModule.DEFAULT_ALLOWANCE_MODULE_ADDRESS)) as `0x${string}`,
 };
