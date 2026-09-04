@@ -138,7 +138,7 @@ if (KYC.operatorToken && KYC.operatorToken.length < 24) {
  *
  * This is the replacement seam for the old direct CCTP burn/mint worker in
  * the cash rail. In dry-run mode it records Bridge-shaped deposit instructions
- * and leaves the local escrow demo intact; BRIDGE_LIVE=1 calls Bridge's
+ * and moves nothing on chain; BRIDGE_LIVE=1 calls Bridge's
  * Transfer API and waits for the user/orchestrator-side deposit to fund it.
  */
 export const BRIDGE = {
@@ -212,7 +212,7 @@ export const anchorModeEnabled = () => Boolean(STELLAR.anchorDomain);
  *
  * WHY THE REFUSAL IS NOT ON BY DEFAULT, deliberately: with BRIDGE_LIVE unset
  * there is no external deposit address for a batch to deliver into, so the
- * output has nowhere to go but the orchestrator (the local escrow demo pulls
+ * output has nowhere to go but the orchestrator (the local demo settles
  * from it). Defaulting the refusal on would brick every dry-run and testnet
  * deployment, including Base Sepolia. The DEFAULT PATH is non-custodial; the
  * GUARANTEE is opt-in, and a deployment moving real money should set it.
@@ -511,7 +511,6 @@ export interface Deployments {
   timelock?: `0x${string}`;
   usdc: `0x${string}`;
   swapper: `0x${string}`;
-  bridge: `0x${string}`;
 }
 
 /**
