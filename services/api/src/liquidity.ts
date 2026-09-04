@@ -1207,6 +1207,50 @@ export async function prepareSafeSwapForTransfer(
   };
 }
 
+/**
+ * The Safe-executed swap for an inbound crypto deposit — USDC in, EURe back
+ * into the SAME Safe it came from.
+ *
+ * WHY THIS EXISTS. Conversion used to sweep the user's USDC to the
+ * orchestrator and swap from there, which needed an API-held Safe owner key.
+ * Removing those keys (FP4) left `sweepToOrchestrator` an unconditional throw,
+ * so auto-convert has been unreachable code ever since — it could only
+ * "succeed" on the USDC-settlement branch, which converts nothing.
+ *
+ * This is the same shape the cash rail already uses: one user-signed batch
+ * that approves the venue and executes the swap, with the output delivered
+ * straight back to the user. The orchestrator never holds the deposit, so the
+ * path is non-custodial end to end and needs no owner key to restore.
+ *
+ * RECIPIENT IS THE USER'S OWN SAFE, deliberately. On the cash rail the output
+ * goes to a payout destination; here there is no payout — the user is
+ * converting their own money and keeping it. Anything else would be a transfer
+ * wearing a conversion's clothes.
+ */
+export async function prepareDepositConversion(
+  safeAddress: `0x${string}`,
+  amountUsdcUnits: bigint,
+  quoteId: string,
+): Promise<{ plan: SafeSwapPlan; serialized: NonNullable<Transfer["liquidity"]> } | null> {
+  const provider = liquidityProvider();
+  if (!provider.safeSwapPlan) return null;
+  const plan = await provider.safeSwapPlan(
+    "USDC_TO_EURE",
+    amountUsdcUnits,
+    quoteId,
+    new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
+    { executor: safeAddress, recipient: safeAddress },
+  );
+  return {
+    plan,
+    serialized: {
+      ...serializeExecution({ quote: plan.quote, amountOut: plan.quote.expectedOut, txs: [] }),
+      executedAt: undefined,
+      txHash: undefined,
+    },
+  };
+}
+
 export function serializeExecution(e: LiquidityExecution): NonNullable<Transfer["liquidity"]> {
   return {
     provider: e.quote.provider,
