@@ -110,11 +110,9 @@ async function main() {
   const eure = await deploy("MockToken", ["Monerium EUR emoney (mock)", "EURe", 18]);
   const usdc = await deploy("MockToken", ["USD Coin (mock)", "USDC", 6]);
   const swapper = await deploy("FxSwapper", [eure.address, usdc.address, 1_080_000n]);
-  const bridge = await deploy("BridgeEscrow", [usdc.address]);
   const timelock = await deploy("AdminTimelock", [[wallets.deployer.account.address, relayerAddr, guardianAddr], 2, 1n]);
 
   await write("deployer", swapper, "setTrader", [relayerAddr, true]);
-  await write("deployer", bridge, "setOrchestrator", [relayerAddr, true]);
   await write("deployer", eure, "mint", [relayerAddr, E("1000")]);
   await write("deployer", usdc, "mint", [swapper.address, U("1000")]);
   await write("deployer", eure, "mint", [swapper.address, E("1000")]);
@@ -149,35 +147,6 @@ async function main() {
       "swap while paused",
     );
     await write("deployer", swapper, "setPaused", [false]);
-  });
-
-  console.log("BridgeEscrow:");
-  await t("lock pulls USDC and records amount", async () => {
-    const tid = keccak256(toHex("t1"));
-    await write("deployer", usdc, "mint", [relayerAddr, U("5")]);
-    await write("relayer", usdc, "approve", [bridge.address, U("5")]);
-    await write("relayer", bridge, "lockForPayout", [tid, U("5"), "stellar", "mgi:+254700"]);
-    assert.equal(await read(bridge, "lockedAmount", [tid]), U("5"));
-    assert.equal(await read(bridge, "totalLocked"), U("5"));
-  });
-
-  await t("non-relayer cannot lock", () =>
-    expectRevert(
-      write("guardian", bridge, "lockForPayout", [keccak256(toHex("bad")), U("1"), "stellar", "x"]),
-      "not orchestrator",
-      "bridge role",
-    ),
-  );
-
-  await t("release returns a locked payout to its refund target", async () => {
-    const tid = keccak256(toHex("refund"));
-    await write("deployer", usdc, "mint", [relayerAddr, U("5")]);
-    await write("relayer", usdc, "approve", [bridge.address, U("5")]);
-    await write("relayer", bridge, "lockForPayout", [tid, U("5"), "stellar", "refund"]);
-    const before = (await read(usdc, "balanceOf", [relayerAddr])) as bigint;
-    await write("relayer", bridge, "release", [tid, relayerAddr]);
-    const after = (await read(usdc, "balanceOf", [relayerAddr])) as bigint;
-    assert.equal(after - before, U("5"));
   });
 
   console.log("AdminTimelock:");

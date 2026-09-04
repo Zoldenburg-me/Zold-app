@@ -7,7 +7,7 @@
  *
  * Every leg is idempotent at the contract layer (transferId hash), so a crash
  * mid-flow can be resumed without double-spending. Failures auto-compensate:
- * failAndCompensate releases escrow and refunds what is recoverable, and the
+ * failAndCompensate refunds what is recoverable, and the
  * startup/5-minute sweep retries anything stranded (SEPA and the PAYOUT_*
  * anchor states have their own legs; see executeSepaTransfer/refreshPayout).
  */
@@ -418,8 +418,8 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
   }
 }
 
-/** Walk a failed transfer backwards: release escrow if locked and return
- * recoverable EURe to the sender's Safe. */
+/** Walk a failed transfer backwards: return recoverable EURe to the sender's
+ * Safe. */
 export async function compensateTransfer(id: string): Promise<Transfer> {
   const t = store.findTransfer(id);
   if (!t) throw new Error(`unknown transfer ${id}`);
@@ -437,15 +437,11 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   }
 
   const txs = t.txs;
-  if (steps.has("bridge.lockForPayout") && !steps.has("bridge.settle")) {
-    const h = await writeAndWait(orchestratorWallet, {
-      address: addrs().bridge,
-      abi: abis.BridgeEscrow,
-      functionName: "release",
-      args: [transferIdHash(t.id), orchestratorAddress],
-    });
-    txs.push({ step: "bridge.release", hash: h });
-  }
+  // No escrow to release any more: dry-run never locks anything on chain, and
+  // the live path's funds are with Bridge the moment the deposit lands — which
+  // is why a live failure after that point is MANUAL_REVIEW rather than an
+  // automatic refund. What remains recoverable is whatever the orchestrator
+  // still holds, handled by the reverse swap below.
 
   // Did a swap actually run? Every venue's step reads liquidity.<venue>.eure-usdc
   // ("swapper.swapExactIn" is the pre-liquidity-seam legacy name). This used to
@@ -830,27 +826,24 @@ export async function executeTransfer(
         });
         txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
       }
-    } else {
-      const approveBridgeHash = await writeAndWait(orchestratorWallet, {
-        address: a.usdc,
-        abi: abis.MockToken,
-        functionName: "approve",
-        args: [a.bridge, expectedOut],
-      });
-      txs.push({ step: "usdc.approve(bridge)", hash: approveBridgeHash });
-      // Same replica race as approve->swap, one leg later: the lock SIMULATION
-      // can land on an RPC replica that has not seen the approve block, and
-      // reverts "allowance" against an allowance that is on chain.
-      await waitForAllowanceVisibility(a.usdc, orchestratorAddress, a.bridge, expectedOut);
-
-      const lockHash = await writeAndWait(orchestratorWallet, {
-        address: a.bridge,
-        abi: abis.BridgeEscrow,
-        functionName: "lockForPayout",
-        args: [tid, expectedOut, "stellar", `mgi:${transfer.recipientPhone}`],
-      });
-      txs.push({ step: "bridge.lockForPayout", hash: lockHash });
     }
+    /**
+     * DRY-RUN WRITES NOTHING ON CHAIN, and that is the point.
+     *
+     * There used to be a BridgeEscrow contract here that dry-run locked the
+     * USDC into. It was removed with the CCTP-to-Stellar route: the live path
+     * is Bridge.xyz, which never touched it, so the escrow existed only to give
+     * the credential-less demo an on-chain leg.
+     *
+     * Removing it makes dry-run MORE honest rather than less. That lock
+     * produced a real transaction hash on a real contract, recorded as
+     * "bridge.lockForPayout" — an artifact that reads like a settlement to
+     * anyone scanning the transfer, for money that had reached no bridge at
+     * all. recordBridgePlan already writes "bridge.xyz.dry-run.transfer" with
+     * the plan's idempotency key, which says exactly what happened: a plan was
+     * recorded, nothing moved. The USDC stays with the orchestrator, which is
+     * also what makes compensation a plain reverse swap.
+     */
     store.updateTransfer(transfer.id, { state: "BRIDGED", txs });
     failpoint(bridgePlan.mode === "live" ? "bridge.xyz.transfer" : "bridge.lockForPayout");
 
@@ -1006,22 +999,17 @@ export async function executeSepaTransfer(
   }
 }
 
-/** Recipient collected the cash: settle the escrow and close the transfer. */
+/** Recipient collected the cash: close the transfer.
+ *
+ *  There is no escrow to settle any more — the BridgeEscrow contract went with
+ *  the CCTP-to-Stellar route. On the live path the funds are Bridge's from the
+ *  moment the deposit lands, and in dry-run nothing moved on chain at all, so
+ *  collection is a pickup-state change and nothing else. */
 export async function settlePickup(transfer: Transfer): Promise<Transfer> {
   if (!["PAYOUT_READY", "PAYOUT_FUNDED"].includes(transfer.state)) {
     throw new Error(`transfer is ${transfer.state}, expected PAYOUT_READY/PAYOUT_FUNDED`);
   }
   const txs = [...transfer.txs];
-  const steps = new Set(txs.map((x) => x.step));
-  if (steps.has("bridge.lockForPayout") && !steps.has("bridge.settle")) {
-    const settleHash = await writeAndWait(orchestratorWallet, {
-      address: addrs().bridge,
-      abi: abis.BridgeEscrow,
-      functionName: "settle",
-      args: [transferIdHash(transfer.id)],
-    });
-    txs.push({ step: "bridge.settle", hash: settleHash });
-  }
   const pickup = completePickup(transfer.id);
   const stored = pickup ?? transfer.pickup!;
   return store.updateTransfer(transfer.id, {

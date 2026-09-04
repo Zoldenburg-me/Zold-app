@@ -192,7 +192,6 @@ moment an anchor actually publishes an account.
   - `EURe`: `0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85`
   - `USDC`: `0xf94c01838c60f4ddf9519da75180feac7450303a`
   - `FxSwapper`: `0x7b19ccdfb4bcc1bbc12daa2e94e5ad694c8613b8`
-  - `BridgeEscrow`: `0x11cb28ccb5231c9aedfc818221b0fe7d11085e07`
   - `AdminTimelock`: `0xe560f041a8175d72558836159573550eaa89f8c4`
 - Shareable Receipts (PR #122): `/r/:slug` renders shareable receipts. Set `TRANSF_PUBLIC_URL=https://zoldhq.com` for host generation.
 - Toolchain: Node.js `v24.13.0` (`~/.nvm/versions/node/v24.13.0/bin`) and `x86_64` `cloudflared` 2026.7.3 in `.toolchain/bin/cloudflared`.
@@ -1066,6 +1065,36 @@ docs say an app created in an account acts with that account's scope; one run
 against api.monerium.dev with real sandbox keys settles it, and the redeem leg
 on a user client has only the guard branches exercised. Also unproven: the
 OAuth refresh client-id change above (no test refreshes).
+
+## BridgeEscrow REMOVED (Sep 2026)
+
+`contracts/src/BridgeEscrow.sol` is gone, with its deploy step, its role
+wiring, its contract tests and its `bridge` key in deployments.json.
+
+WHY: it only ever served the CCTP-to-Stellar route, which is dropped. The live
+cash rail is Bridge.xyz and never touched the escrow — `executeTransfer`'s
+live branch transfers USDC straight to Bridge's deposit address. The escrow was
+the DRY-RUN branch alone.
+
+AND REMOVING IT MADE DRY-RUN MORE HONEST, not less. The lock produced a real
+transaction on a real contract, recorded as `bridge.lockForPayout` — an
+artifact that reads like a settlement to anyone scanning the transfer, for
+money that had reached no bridge at all. That is the UPI lesson in miniature.
+`recordBridgePlan` already writes `bridge.xyz.dry-run.transfer` with the plan's
+idempotency key, which says what actually happened: a plan was recorded and
+nothing moved.
+
+CONSEQUENCES, all simplifications: dry-run leaves the USDC with the
+orchestrator, so compensation is a plain reverse swap with no escrow release
+first; `settlePickup` is a pickup-state change and nothing else; and the
+`bridge.lockForPayout` / `bridge.release` / `bridge.settle` steps no longer
+exist. A live failure after Bridge has the deposit is still MANUAL_REVIEW —
+that was never the escrow's doing.
+
+VERIFIED BEFORE DELETING: both deployed BridgeEscrow contracts on Base Sepolia
+(the one in deployments.json and the different one CLAUDE.md had recorded —
+they disagreed, so the file had been redeployed) hold ZERO USDC. Nothing was
+stranded by dropping the addresses.
 
 ## Custody — the non-custodial path is the DEFAULT now (Aug 2026)
 
