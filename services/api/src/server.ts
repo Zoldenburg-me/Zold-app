@@ -2643,7 +2643,7 @@ async function deployerFloat() {
 /**
  * Gas balances of every EOA that sends transactions for the platform. Each is
  * a distinct outage when dry, and the errors do not say which wallet is empty:
- * a dry orchestrator fails swaps and escrow legs; a dry deployer fails faucet
+ * a dry orchestrator fails swaps and the fee leg; a dry deployer fails faucet
  * grants. Name them, so the dashboard can too. The co-signer no longer sends
  * native transactions — Safe debits are UserOperations through the bundler
  * and paymaster — but it stays listed so a residual balance is visible.
@@ -2653,7 +2653,7 @@ async function operatorGas() {
   if (operatorGasCache && Date.now() - operatorGasCache.at < 60_000) return operatorGasCache.value;
   const wallets: { role: string; address: `0x${string}` }[] = [
     { role: "co-signer (userOp counter-signer, no gas needed)", address: (CANDIDE.cosignerAddress || "0x") as `0x${string}` },
-    { role: "orchestrator (swap/escrow)", address: orchestratorAddress },
+    { role: "orchestrator (swaps, fees, dry-run settlement)", address: orchestratorAddress },
     { role: "deployer (faucet/gas)", address: deployerWallet.account.address },
   ];
   const value = await Promise.all(
@@ -3508,7 +3508,7 @@ async function buildTransferFromQuote(
           try {
             // Where the output lands is the destination the payout leg names:
             // the Bridge deposit address in live mode, the orchestrator in
-            // dry-run (the local escrow demo pulls from it).
+            // dry-run (the local demo settles from it).
             let recipient = orchestratorAddress;
             let mode: "dry-run" | "live" = "dry-run";
             let bridgeAmountUsdc: number | undefined;
@@ -3565,7 +3565,7 @@ async function buildTransferFromQuote(
               // Live: the batch delivers straight to Bridge's deposit address,
               // so the input never reaches an address we hold a key to.
               // Dry-run: there IS no external destination, so the output lands
-              // at the orchestrator for the local escrow demo to pull from —
+              // at the orchestrator for the local demo to settle from —
               // still a batch, still user-signed, but custodial, and it says so.
               custody =
                 mode === "live"
