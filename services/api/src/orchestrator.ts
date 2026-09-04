@@ -11,7 +11,8 @@
  * startup/5-minute sweep retries anything stranded (SEPA and the PAYOUT_*
  * anchor states have their own legs; see executeSepaTransfer/refreshPayout).
  */
-import { BRIDGE, FX, moneriumSandboxEnabled } from "./config.js";
+import { BRIDGE, FX } from "./config.js";
+import { moneriumLiveFor } from "./adapters/monerium-connection.js";
 import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
@@ -942,7 +943,9 @@ export async function executeSepaTransfer(
 
     await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs, execution);
 
-    if (moneriumSandboxEnabled()) {
+    // Real for the deployment (app credentials) OR for this user (their own
+    // connected account): a redeem from a connected account is a real order.
+    if (moneriumLiveFor(user)) {
       try {
         const order = await redeemToIban(
           user,

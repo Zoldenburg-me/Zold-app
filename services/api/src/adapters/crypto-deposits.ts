@@ -124,6 +124,37 @@ function watchedAddresses(): WatchedAddress[] {
  * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), matching what
  * FxSwapper.rate() posts and what the liquidity providers report.
  */
+/**
+ * What a USDC deposit was worth in EUR when it arrived, with the provenance to
+ * defend the number later.
+ *
+ * REFUSES rather than guessing. rates.ts has no stale fallback by design, and
+ * a receipt valued at an invented rate is worse than one valued late: the
+ * first is a wrong figure in the books, the second is a gap someone can fill.
+ * A deposit whose rate could not be read is recorded without a receipt value
+ * and can be valued on the next attempt.
+ */
+async function valueAtReceipt(
+  amountUsdc: number,
+  blockTimestamp?: string,
+): Promise<CryptoDeposit["receipt"] | undefined> {
+  try {
+    const r = await midRates();
+    const usdPerEur = r.eur.USD;
+    if (!(usdPerEur > 0)) return undefined;
+    return {
+      amountEur: Math.round((amountUsdc / usdPerEur) * 100) / 100,
+      rate: usdPerEur,
+      rateProvider: r.provider,
+      rateAsOf: r.asOf,
+      ratedAt: new Date().toISOString(),
+      ...(blockTimestamp ? { blockTimestamp } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function assertRateSane(rate: bigint): Promise<number> {
   const venue = Number(rate) / 1e6;
   if (!(venue > 0)) throw new Error("venue quoted a zero rate");
@@ -292,18 +323,72 @@ export async function settleConvertedDeposit(
   }
 
   const creditedEur = eur.fromWei(receivedWei);
+  /**
+   * The realised gain: what arrived, minus what it was worth at receipt.
+   *
+   * Recorded as a FACT at the moment it is known, never recomputed. A gain
+   * re-derived later from whatever rate a feed reports then is not the gain
+   * that occurred. Near zero when the conversion follows the receipt promptly,
+   * which is the tax argument for converting promptly at all.
+   *
+   * Absent when the receipt could not be valued — an unknown basis yields an
+   * unknown gain, and a zero would be a claim.
+   */
+  const realisedGainEur =
+    deposit.receipt
+      ? Math.round((creditedEur - deposit.receipt.amountEur) * 100) / 100
+      : undefined;
   console.log(
     `crypto-in: converted ${deposit.amountUsdc ?? 0} USDC to EUR ${creditedEur} for ${user.name} ` +
-      `via ${quote.provider} at ${venueRate.toFixed(4)}`,
+      `via ${quote.provider} at ${venueRate.toFixed(4)}` +
+      (realisedGainEur === undefined ? "" : ` (realised EUR ${realisedGainEur})`),
   );
-  return store.updateCryptoDeposit(deposit.id, {
+  const settled = store.updateCryptoDeposit(deposit.id, {
     state: "CONVERTED",
     creditedEur,
     settlementAsset: "EURE",
     provider: quote.provider,
     rate: venueRate,
+    ...(realisedGainEur === undefined ? {} : { realisedGainEur }),
     txs,
     reason: undefined,
+  });
+  if (settled.invoiceId) recordInvoiceSettlement(settled);
+  return settled;
+}
+
+/**
+ * Write the payment back onto the invoice it settles.
+ *
+ * The invoice is the Beleg and the deposit is the Zahlung; German bookkeeping
+ * wants them tied, and an auditor asking "how was invoice 2026-001 paid?"
+ * should get one thread: this transaction arrived, this one converted it, this
+ * much euro landed. Reconstructing that later from timestamps and amounts is
+ * guesswork dressed as reconciliation.
+ *
+ * Appends rather than replaces: an invoice can legitimately be settled by more
+ * than one payment, and overwriting would erase the earlier ones.
+ */
+export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
+  if (!deposit.invoiceId) return;
+  const invoice = store.invoices.find((i) => i.id === deposit.invoiceId);
+  if (!invoice) return;
+  const receiptTx = deposit.txHash;
+  const conversionTx = deposit.txs.find((t) => t.step.includes("usdc->eure"))?.hash;
+  const settlement = {
+    depositId: deposit.id,
+    receivedAsset: deposit.token,
+    receivedAmount: deposit.token === "USDC" ? deposit.amountUsdc ?? 0 : deposit.amountEur ?? 0,
+    receiptTxHash: receiptTx,
+    ...(deposit.receipt ? { receiptAmountEur: deposit.receipt.amountEur, receiptRate: deposit.receipt.rate, receiptRateProvider: deposit.receipt.rateProvider } : {}),
+    ...(conversionTx ? { conversionTxHash: conversionTx } : {}),
+    ...(deposit.creditedEur === undefined ? {} : { creditedEur: deposit.creditedEur }),
+    ...(deposit.realisedGainEur === undefined ? {} : { realisedGainEur: deposit.realisedGainEur }),
+    at: new Date().toISOString(),
+  };
+  const existing = invoice.settlements ?? [];
+  store.updateInvoice(invoice.id, {
+    settlements: [...existing.filter((x) => x.depositId !== deposit.id), settlement],
   });
 }
 
@@ -368,6 +453,18 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
       toBlock,
     });
 
+    // Block times for the window, one call per distinct block. The chain's
+    // timestamp is when the money actually arrived; detection is a couple of
+    // confirmations later. Recording both lets the Steuerberater decide which
+    // instant counts rather than us deciding by omission.
+    const blockTimes = new Map<bigint, string>();
+    for (const bn of new Set(logs.map((l) => l.blockNumber).filter((b): b is bigint => b != null))) {
+      try {
+        const blk = await publicClient.getBlock({ blockNumber: bn });
+        blockTimes.set(bn, new Date(Number(blk.timestamp) * 1000).toISOString());
+      } catch { /* a missing block time is not worth failing a deposit over */ }
+    }
+
     for (const log of logs) {
       const to = String(log.args.to ?? "").toLowerCase();
       const matches = byAddress.get(to) ?? [];
@@ -390,6 +487,19 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
       const user = match.user;
       const now = new Date().toISOString();
       const directSafeFunding = match.source === "safe" || token.token === "EURE";
+      /**
+       * The acquisition value, stamped HERE — at detection, once, with the
+       * rate's provenance — and never recomputed. A figure re-derived months
+       * later from whatever the feed says then is not the value at receipt;
+       * it is a guess wearing its clothes.
+       */
+      const receipt =
+        token.token === "USDC"
+          ? await valueAtReceipt(
+              usd.fromUnits(value),
+              log.blockNumber != null ? blockTimes.get(log.blockNumber) : undefined,
+            )
+          : undefined;
       fresh.push(
         store.addCryptoDeposit({
           id: randomUUID(),
@@ -403,6 +513,7 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
           ...(token.token === "USDC"
             ? {
                 amountUsdc: usd.fromUnits(value),
+                ...(receipt ? { receipt, amountEur: receipt.amountEur } : {}),
                 ...(directSafeFunding ? { creditedUsdc: usd.fromUnits(value) } : {}),
               }
             : {}),

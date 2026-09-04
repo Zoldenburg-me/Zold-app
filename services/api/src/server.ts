@@ -1,8 +1,6 @@
 import express from "express";
 import path from "node:path";
 import {
-  createCipheriv,
-  createDecipheriv,
   createHash,
   createHmac,
   randomBytes,
@@ -29,6 +27,19 @@ import {
 import { createQuote, isExpired } from "./fx.js";
 import { faucetFundSafe } from "./faucet.js";
 import { issueIban, simulateSepaDeposit } from "./adapters/monerium.js";
+import {
+  decryptToken,
+  encryptToken,
+  forgetUserClient,
+  moneriumAccessToken,
+  moneriumApiKeysAvailable,
+  moneriumAppClient,
+  moneriumEnvironment,
+  moneriumLinkAccessToken,
+  publicApiKeys,
+  validateApiKeyInput,
+  verifyApiKeys,
+} from "./adapters/monerium-connection.js";
 import { activatePaymentForwarder } from "./adapters/candide-forwarder.js";
 import {
   checkConnection,
@@ -51,6 +62,7 @@ import {
   startCryptoDepositPoller,
   depositConversionBlocker,
   settleConvertedDeposit,
+  recordInvoiceSettlement,
 } from "./adapters/crypto-deposits.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from "./pay.js";
 import { qrSvg } from "./qr.js";
@@ -104,7 +116,6 @@ import {
   MoneriumApiError,
   MoneriumClient,
   moneriumBearerRequest,
-  refreshAuthorizationToken,
 } from "./adapters/monerium-client.js";
 import {
   createSumsubShareToken,
@@ -196,6 +207,9 @@ app.use("/api", (req, res, next) => {
     // secret and belongs on the tighter bucket with the other guessable things.
     req.path.startsWith("/r/") ||
     req.path === "/kyc/review" ||
+    // Submitting Monerium API keys is a credential check against a third
+    // party; guessing at it belongs on the tight bucket too.
+    (req.path.endsWith("/monerium/api-keys") && req.method === "POST") ||
     (req.path === "/users" && req.method === "POST");
   const ok = authRoute
     ? rateLimit(`a:${ip}`, SECURITY.authRateLimitPerMin)
@@ -311,6 +325,15 @@ export function capabilities() {
     sandbox,
     kycProvider: KYC.provider,
     sumsub: sumsubEnabled(),
+    /**
+     * May a user connect their OWN Monerium app credentials? Needs the
+     * encryption key, because the secret is never written in plaintext. The
+     * environment tells the browser which portal the keys must come from —
+     * sandbox keys against production, or the reverse, fail as "wrong secret".
+     */
+    moneriumApiKeys: moneriumApiKeysAvailable(),
+    moneriumEnvironment: moneriumEnvironment(),
+    moneriumHost: (() => { try { return new URL(MONERIUM.baseUrl).host; } catch { return MONERIUM.baseUrl; } })(),
   };
 }
 
@@ -409,10 +432,14 @@ const publicUser = (
     ? {
         monerium: {
           connectedAt: monerium.connectedAt,
+          method: monerium.method ?? (monerium.accessTokenEnc ? "oauth" : undefined),
           profileId: monerium.profileId,
           profiles: monerium.profiles,
           ibans: monerium.ibans,
           addresses: monerium.addresses,
+          // Client id, environment and when it was verified. Never the secret,
+          // and never its ciphertext.
+          ...(monerium.apiKeys ? { apiKeys: publicApiKeys(monerium.apiKeys) } : {}),
         },
       }
     : {}),
@@ -455,91 +482,14 @@ function pkceChallenge(verifier: string) {
   return base64url(createHash("sha256").update(verifier).digest());
 }
 
-function moneriumTokenKey(): Buffer {
-  if (!MONERIUM.tokenEncryptionKey) {
-    throw new Error("MONERIUM_TOKEN_ENCRYPTION_KEY is required before connecting user Monerium accounts");
-  }
-  return createHash("sha256").update(MONERIUM.tokenEncryptionKey).digest();
-}
-
-function encryptToken(value: string): string {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", moneriumTokenKey(), iv);
-  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-  return [base64url(iv), base64url(cipher.getAuthTag()), base64url(ciphertext)].join(".");
-}
-
-function decryptToken(value: string): string {
-  const [iv64, tag64, ciphertext64] = value.split(".");
-  const decipher = createDecipheriv("aes-256-gcm", moneriumTokenKey(), Buffer.from(iv64, "base64url"));
-  decipher.setAuthTag(Buffer.from(tag64, "base64url"));
-  return Buffer.concat([
-    decipher.update(Buffer.from(ciphertext64, "base64url")),
-    decipher.final(),
-  ]).toString("utf8");
-}
-
-async function moneriumAccessToken(user: User): Promise<string> {
-  if (!user.monerium?.accessTokenEnc) throw new Error("Monerium account is not connected");
-  if (
-    user.monerium.refreshTokenEnc &&
-    user.monerium.expiresAt &&
-    Date.now() > Date.parse(user.monerium.expiresAt) - 60_000
-  ) {
-    const refreshed = await refreshAuthorizationToken(
-      {
-        baseUrl: MONERIUM.baseUrl,
-        clientId: MONERIUM.clientId,
-        clientSecret: MONERIUM.clientSecret,
-      },
-      decryptToken(user.monerium.refreshTokenEnc),
-    );
-    const next = store.updateUser(user.id, {
-      monerium: {
-        ...user.monerium,
-        accessTokenEnc: encryptToken(refreshed.access_token),
-        refreshTokenEnc: refreshed.refresh_token
-          ? encryptToken(refreshed.refresh_token)
-          : user.monerium.refreshTokenEnc,
-        expiresAt: refreshed.expires_in
-          ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
-          : user.monerium.expiresAt,
-      },
-    });
-    return decryptToken(next.monerium!.accessTokenEnc!);
-  }
-  return decryptToken(user.monerium.accessTokenEnc);
-}
-
-let moneriumAppClientCache: MoneriumClient | null = null;
-function moneriumAppClient(): MoneriumClient {
-  moneriumAppClientCache ??= new MoneriumClient({
-    baseUrl: MONERIUM.baseUrl,
-    clientId: MONERIUM.clientId,
-    clientSecret: MONERIUM.clientSecret,
-  });
-  return moneriumAppClientCache;
-}
-
-/**
- * Token for Monerium address-linking calls. A connected Monerium account uses
- * its own OAuth token; an account approved in-house has no connected account,
- * so the sandbox app credentials (client-credentials grant) act for it. This
- * is the seam that used to be provisionFunding's server-held-key path before
- * API-held Safe owner keys were removed — the Safe's EIP-1271 signature still
- * comes from the user's passkey ceremony either way.
+/*
+ * Monerium token handling — encryption at rest, OAuth refresh, the app client
+ * and the "whose credentials act for this user" decision — lives in
+ * adapters/monerium-connection.ts, because the sandbox adapter's redeem and
+ * deposit polling need the same answer as the routes below. Same AES-256-GCM
+ * scheme as before (crypto-at-rest.ts, purpose `monerium`), so tokens written
+ * by the previous in-file copy still decrypt.
  */
-async function moneriumLinkAccessToken(user: User): Promise<{ accessToken: string; viaApp: boolean }> {
-  if (user.monerium?.accessTokenEnc) {
-    return { accessToken: await moneriumAccessToken(user), viaApp: false };
-  }
-  if (!MONERIUM.clientSecret) {
-    throw new Error(
-      "no Monerium access for this account — connect a Monerium account, or set MONERIUM_CLIENT_SECRET for app-level address linking",
-    );
-  }
-  return { accessToken: await moneriumAppClient().bearerToken(), viaApp: true };
-}
 
 async function readMoneriumAccountSnapshot(user: User, accessToken?: string) {
   accessToken ??= await moneriumAccessToken(user);
@@ -1001,6 +951,45 @@ const pendingDepositConversions = new Map<string, {
   userOperation: PendingPasskeySafeDeployment;
   quote: { provider: string; rate: string; minOut: string };
 }>();
+
+/**
+ * Tie a payment to the invoice it settles.
+ *
+ * Deliberately explicit rather than inferred. Matching an incoming amount to
+ * an open invoice by value and date guesses, and a guess written into the
+ * books as a fact is worse than an unlinked payment someone has to look at.
+ * The account holder says which invoice this was.
+ */
+app.post(
+  "/api/users/:id/crypto-deposits/:depositId/invoice",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    const deposit = store.cryptoDeposits.find(
+      (d) => d.id === req.params.depositId && d.userId === user.id,
+    );
+    if (!deposit) return res.status(404).json({ error: "deposit not found" });
+
+    const invoiceId = req.body?.invoiceId;
+    if (invoiceId === null) {
+      store.updateCryptoDeposit(deposit.id, { invoiceId: undefined });
+      return res.json({ deposit: store.cryptoDeposits.find((d) => d.id === deposit.id) });
+    }
+    const invoice = store.invoices.find((i) => i.id === String(invoiceId ?? ""));
+    if (!invoice) return res.status(404).json({ error: "invoice not found" });
+
+    const linked = store.updateCryptoDeposit(deposit.id, { invoiceId: invoice.id });
+    // Already converted? Then the whole thread is known now and belongs on the
+    // invoice immediately, rather than waiting for a conversion that happened
+    // before the link existed.
+    if (linked.state === "CONVERTED") recordInvoiceSettlement(linked);
+    res.json({
+      deposit: store.cryptoDeposits.find((d) => d.id === deposit.id),
+      invoice: store.invoices.find((i) => i.id === invoice.id),
+    });
+  }),
+);
 
 app.post(
   "/api/users/:id/crypto-deposits/:depositId/convert/prepare",
@@ -2180,11 +2169,172 @@ app.delete(
     const user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
+    forgetUserClient(user.id);
     const updated = store.updateUser(user.id, {
       moneriumConnect: undefined,
       monerium: undefined,
       funding: { ...(user.funding ?? { mode: "sandbox", status: "kyc_pending" as const }), status: "kyc_pending" as const },
     });
+    res.json(publicUser(updated));
+  }),
+);
+
+/**
+ * Connect the user's OWN Monerium app credentials.
+ *
+ * For testing against your own Monerium account: create an app in the account's
+ * developer section, paste its client id and secret here. The server proves the
+ * pair against Monerium first (a stored credential nobody checked turns every
+ * later failure into a phantom bug), then stores the secret encrypted and
+ * treats the connection like an OAuth one — activation, deposit polling and
+ * SEPA redeems run on these credentials, since the user's profile is invisible
+ * to the app's own keys.
+ *
+ * WHAT IT DOES NOT DO: approve KYC. Connecting is not identity. Approval comes
+ * from activation (address-matched IBAN on the connected account), exactly as
+ * for the OAuth path — unless the connected account ALREADY attributes an IBAN
+ * to this Safe, which is the same evidence activation would produce.
+ */
+app.post(
+  "/api/users/:id/monerium/api-keys",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "monerium", res)) return;
+    if (!moneriumApiKeysAvailable()) {
+      return res.status(503).json({
+        error: "Monerium token encryption key is not configured — set MONERIUM_TOKEN_ENCRYPTION_KEY; API keys are never stored in plaintext",
+      });
+    }
+    let input: ReturnType<typeof validateApiKeyInput>;
+    try {
+      input = validateApiKeyInput(req.body);
+    } catch (err: any) {
+      return res.status(400).json({ error: err?.message ?? "invalid credentials" });
+    }
+    let verified: Awaited<ReturnType<typeof verifyApiKeys>>;
+    try {
+      verified = await verifyApiKeys(input.clientId, input.clientSecret);
+    } catch (err: any) {
+      if (err instanceof MoneriumApiError && err.status < 500) {
+        store.audit(auditEntry("partner.call_refused", { partner: "monerium", capability: "api_keys", status: err.status }, user.id));
+        return res.status(400).json({ error: err.message });
+      }
+      return res.status(503).json({ error: `Monerium could not be reached to verify the keys: ${String(err?.message ?? err).slice(0, 200)}` });
+    }
+
+    const approvedProfile = verified.profiles.find((p: any) => p.state === "approved");
+    const profileId = approvedProfile?.id ?? verified.profiles[0]?.id;
+    // ADDRESS-MATCHED ONLY, for the reason activate gives: any other IBAN in
+    // the snapshot is somebody's money routing, not this account's.
+    const ownIban =
+      verified.ibans.find(
+        (i: any) => String(i.address ?? "").toLowerCase() === user.address.toLowerCase() && i.iban,
+      )?.iban ?? "";
+    const now = new Date().toISOString();
+    const wasApproved = user.kycStatus === "approved";
+    // A locally issued mock IBAN is retired: this account is on Monerium now,
+    // and a simulated deposit to a fake IBAN beside a real one is a trap.
+    const retiringMockIban = user.funding?.mode === "mock" && Boolean(user.iban) && !ownIban;
+
+    const updated = store.updateUser(user.id, {
+      moneriumConnect: undefined,
+      ...(wasApproved
+        ? {}
+        : ownIban
+          ? {
+              kycStatus: "approved" as const,
+              kyc: {
+                provider: "monerium" as const,
+                onboardingPath: "existing_monerium" as const,
+                checkedAt: now,
+                applicantId: profileId,
+                reason: `approved via connected Monerium profile ${profileId ?? "(unnamed)"} (IBAN already attributed to this account)`,
+              },
+            }
+          : {
+              kyc: {
+                provider: "monerium" as const,
+                onboardingPath: "existing_monerium" as const,
+                applicantId: profileId,
+                reason: "own Monerium API keys connected; activate IBAN with passkey",
+              },
+            }),
+      ...(ownIban ? { iban: ownIban } : retiringMockIban ? { iban: "" } : {}),
+      funding: {
+        ...(user.funding ?? {}),
+        mode: "sandbox" as const,
+        status: ownIban
+          ? ("active" as const)
+          : user.funding?.status === "active" && !retiringMockIban
+            ? ("active" as const)
+            : ("provisioning" as const),
+        moneriumProfileId: profileId,
+        detail: ownIban
+          ? `IBAN attributed to this account by your Monerium (${moneriumEnvironment()}) account`
+          : retiringMockIban
+            ? "mock IBAN retired — approve the Monerium IBAN with your passkey"
+            : user.funding?.status === "active"
+              ? "own Monerium keys connected; the existing IBAN is kept and Monerium calls for this account now use your keys"
+              : "own Monerium account connected — approve IBAN issuance with your passkey",
+      },
+      monerium: {
+        connectedAt: now,
+        method: "api_keys",
+        profileId,
+        apiKeys: {
+          clientId: input.clientId,
+          clientSecretEnc: encryptToken(input.clientSecret),
+          baseUrl: MONERIUM.baseUrl,
+          label: input.label,
+          verifiedAt: now,
+          accountEmail: typeof verified.context?.email === "string" ? verified.context.email : undefined,
+        },
+        profiles: verified.profiles,
+        ibans: verified.ibans,
+        addresses: verified.addresses,
+      },
+    });
+    forgetUserClient(user.id);
+    store.audit(auditEntry(
+      "partner.credentials_connected",
+      { partner: "monerium", method: "api_keys", clientId: input.clientId, environment: moneriumEnvironment(), profileId, ibanAttributed: Boolean(ownIban) },
+      user.id,
+    ));
+    const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
+    res.status(201).json({ ...publicUser(updated), ...balances });
+  }),
+);
+
+/**
+ * Forget the user's API keys. The IBAN Monerium issued stays recorded — it
+ * exists at Monerium whether or not we hold a credential — but nothing on this
+ * account can be read or redeemed until keys are connected again, and the
+ * funding detail says so instead of leaving a silent dead rail.
+ */
+app.delete(
+  "/api/users/:id/monerium/api-keys",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (user.monerium?.method !== "api_keys") {
+      return res.status(409).json({ error: "no Monerium API keys are connected to this account" });
+    }
+    forgetUserClient(user.id);
+    const updated = store.updateUser(user.id, {
+      monerium: undefined,
+      funding: user.funding
+        ? {
+            ...user.funding,
+            detail: sandbox
+              ? "own Monerium keys removed; the app's credentials act for this account again"
+              : "own Monerium keys removed — deposits and payouts on this account are paused until keys are connected again",
+          }
+        : user.funding,
+    });
+    store.audit(auditEntry("partner.credentials_removed", { partner: "monerium", method: "api_keys" }, user.id));
     res.json(publicUser(updated));
   }),
 );
@@ -4042,6 +4192,13 @@ if (sandbox) {
     });
 } else {
   console.log("monerium: mock mode (set MONERIUM_CLIENT_ID for OAuth, plus MONERIUM_CLIENT_SECRET for app-level API calls)");
+  if (moneriumApiKeysAvailable()) {
+    // Users may still connect their OWN Monerium keys; their deposits and
+    // redeem orders are polled on those. The poller does nothing until
+    // someone has.
+    console.log(`monerium: per-user API-key connections enabled (${moneriumEnvironment()}) — polling connected accounts on their own credentials`);
+    startDepositPoller();
+  }
 }
 /**
  * Inbound crypto is a chain concern, not a Monerium one, so this runs whether
