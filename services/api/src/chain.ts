@@ -106,7 +106,6 @@ export const orchestratorAddress = orchestratorWallet.account.address;
 export const abis = {
   MockToken: loadAbi("MockToken"),
   FxSwapper: loadAbi("FxSwapper"),
-  BridgeEscrow: loadAbi("BridgeEscrow"),
 };
 
 let deployments: Deployments | null = null;

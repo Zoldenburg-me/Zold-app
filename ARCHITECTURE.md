@@ -50,7 +50,6 @@ All contracts are minimal, un-proxied, and governed:
 |---|---|
 | [`AdminTimelock.sol`](contracts/src/AdminTimelock.sol) | M-of-N multisig with timelock delay owning protocol contracts. Guardian role can pause instantly. |
 | [`FxSwapper.sol`](contracts/src/FxSwapper.sol) | On-chain FX swapper with rate configuration and slippage protection. |
-| [`BridgeEscrow.sol`](contracts/src/BridgeEscrow.sol) | Escrow locking USDC for cross-chain payouts to Stellar. |
 
 ---
 
