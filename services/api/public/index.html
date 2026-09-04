@@ -1072,7 +1072,8 @@
   #dashboard.m-on[data-msub="activity"] #m-activity-screen,
   #dashboard.m-on[data-msub="detail"] #m-detail-screen,
   #dashboard.m-on[data-msub="share"] #m-share-screen,
-  #dashboard.m-on[data-msub="profile"] #m-profile-screen { display: block; }
+  #dashboard.m-on[data-msub="profile"] #m-profile-screen,
+  #dashboard.m-on[data-msub="monerium"] #m-monerium-screen { display: block; }
 
   /* ---------- share receipt (composer) ----------
      The handoff draws this as a 340px card beside a live 520px preview of the
@@ -2013,11 +2014,31 @@
 
         <div class="m-seclabel">Account</div>
         <div class="m-rows" id="m-pf-account"></div>
+        <!-- Your OWN Monerium app credentials, for testing against your own
+             account. Follows the `monerium` capability like every other
+             Monerium control. -->
+        <button class="m-optrow" id="m-pf-monerium" style="margin-top:8px">
+          <span class="material-symbols-rounded ic">vpn_key</span>
+          <span class="tx"><span class="t">Monerium keys</span><span class="d" id="m-pf-monerium-sub">Not connected</span></span>
+          <span class="material-symbols-rounded ch">chevron_right</span>
+        </button>
 
         <div class="m-seclabel">Security</div>
         <div class="m-rows" id="m-pf-security"></div>
 
         <button class="m-cta" id="m-pf-signout" style="background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink);min-height:48px;font-size:14px">Sign out</button>
+      </div>
+
+      <!-- ================= Monerium: your own API keys =================
+           For testing against YOUR Monerium account. The keys are that
+           account's own app credentials (client id + secret). The secret goes
+           to the server once, is verified against Monerium, stored encrypted
+           and never shown again — not even to the person who pasted it. -->
+      <div class="m-screen" id="m-monerium-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Monerium keys</div>
+        <div class="m-lede" id="m-mon-lede">Connect the API keys of your own Monerium account.</div>
+        <div id="m-mon-body" style="margin-top:24px"></div>
       </div>
 
       <!-- Sub-screen header for the legacy cards still reached from the nav. -->
@@ -2642,7 +2663,7 @@ function mobileNav(target) {
   const sub = { add: "add", bank: "bank", crypto: "crypto", send: "pay", pay: "pay", country: "country",
     method: "method", amount: "amount", recipient: "recipient", progress: "progress",
     plus: "plus", bundle: "bundle", payment: "payment", activity: "activity", detail: "detail",
-    share: "share", profile: "profile", card: "card" }[target];
+    share: "share", profile: "profile", card: "card", monerium: "monerium" }[target];
   shell.dataset.msub = sub || "home";
   if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
   else switchView("dashboard");
@@ -2650,7 +2671,7 @@ function mobileNav(target) {
   const navFor = { add: "add", bank: "add", crypto: "add", send: "send", pay: "send", country: "send", method: "send",
     amount: "send", recipient: "send", progress: "send", plus: "home", bundle: "home", payment: "home",
     card: "home", home: "home", activity: "activity", detail: "activity", share: "activity",
-    profile: "profile" }[target];
+    profile: "profile", monerium: "profile" }[target];
   document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
   if (sub === "bundle") $("m-subtitle").textContent = "Zold Plus";
@@ -2663,6 +2684,7 @@ function mobileNav(target) {
   if (sub === "detail") renderDetailScreen();
   if (sub === "share") renderShareScreen();
   if (sub === "profile") renderProfileScreen();
+  if (sub === "monerium") renderMoneriumScreen();
   $("dashboard").querySelector(".main").scrollTop = 0;
 }
 
@@ -3707,12 +3729,128 @@ function renderProfileScreen() {
 
   const sub = u.privacyBundle;
   $("m-pf-plus-sub").textContent = sub && sub.status !== "canceled" ? "Privacy Bundle active" : "Coming soon";
+
+  /* Own Monerium keys: state, never a promise. "Unavailable" is what a
+     deployment without an encryption key honestly is. */
+  const mon = $("m-pf-monerium");
+  mon.classList.toggle("hidden", !HAS("monerium"));
+  const keys = u.monerium?.method === "api_keys" ? u.monerium.apiKeys : null;
+  $("m-pf-monerium-sub").textContent = keys
+    ? `Connected · ${keys.environment}${keys.accountEmail ? ` · ${keys.accountEmail}` : ""}`
+    : !caps.moneriumApiKeys ? "Unavailable on this deployment"
+      : u.monerium?.method === "oauth" ? "Connected by OAuth · keys not used"
+        : "Use your own Monerium account for testing";
+}
+
+/* ---------- Monerium: your own API keys ---------- */
+function renderMoneriumScreen() {
+  const el = $("m-mon-body");
+  const u = user || {};
+  const m = u.monerium;
+  const keys = m?.method === "api_keys" ? m.apiKeys : null;
+  const env = caps.moneriumEnvironment || "sandbox";
+  const portal = env === "production" ? "monerium.app" : env === "sandbox" ? "monerium.dev" : caps.moneriumHost;
+  $("m-mon-lede").textContent =
+    `Connect the API keys of your own Monerium account. This deployment talks to Monerium ${env} (${caps.moneriumHost}), so the keys must come from an app created at ${portal} — keys from the other environment are refused as a wrong secret.`;
+  const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
+  const when = (iso) => { const d = new Date(iso || ""); return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString(); };
+
+  if (!caps.moneriumApiKeys) {
+    el.innerHTML = `
+      <div class="m-rows">${row("Status", "Unavailable")}</div>
+      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no MONERIUM_TOKEN_ENCRYPTION_KEY, so it cannot store a client secret. It refuses rather than keep one in plaintext.</div>`;
+    return;
+  }
+
+  if (keys) {
+    const funding = u.funding || {};
+    const needsIban = kycApproved(u) && !u.iban && funding.mode === "sandbox";
+    el.innerHTML = `
+      <div class="m-rows">
+        ${row("Status", "Connected")}
+        ${row("Client id", keys.clientId)}
+        ${keys.label ? row("Label", keys.label) : ""}
+        ${keys.accountEmail ? row("Monerium account", keys.accountEmail) : ""}
+        ${row("Environment", `${keys.environment} · ${keys.host}`)}
+        ${row("Verified", when(keys.verifiedAt))}
+        ${m.profileId ? row("Profile", m.profileId) : ""}
+        ${row("IBAN", u.iban || "Not issued yet")}
+      </div>
+      <div class="m-lede" style="font-size:13px;margin-top:16px">${esc(funding.detail || "Deposits to this account and SEPA payouts from it run on these keys.")}</div>
+      ${needsIban ? `<button class="m-cta" id="m-mon-activate" style="margin-top:16px">Activate IBAN with passkey</button>` : ""}
+      <button class="m-link" id="m-mon-refresh" style="margin-top:12px">Refresh accounts</button>
+      <button class="m-link" id="m-mon-remove" style="margin-top:12px">Remove keys</button>
+      <div class="m-err hidden" id="m-mon-err" style="margin-top:12px"></div>
+      <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
+        The secret was checked against Monerium once and stored encrypted. It is never shown again, not even to you —
+        to rotate it, remove the keys and connect the new pair.
+      </div>`;
+    const act = $("m-mon-activate");
+    if (act) act.onclick = async () => {
+      clearErr("m-mon-err");
+      try { await issueAppIban(); mobileNav("monerium"); } catch (e) { showErr("m-mon-err", e); }
+    };
+    $("m-mon-refresh").onclick = async () => {
+      clearErr("m-mon-err");
+      try {
+        const accounts = await api(`/api/users/${user.id}/monerium/accounts`);
+        user = { ...user, monerium: { ...(user.monerium || {}), ...accounts } };
+        renderUser(await api(`/api/users/${user.id}`));
+        mobileNav("monerium");
+      } catch (e) { showErr("m-mon-err", e); }
+    };
+    $("m-mon-remove").onclick = async () => {
+      clearErr("m-mon-err");
+      if (!confirm("Remove the Monerium keys from this account? Deposits and payouts on it pause until keys are connected again.")) return;
+      try {
+        renderUser(await api(`/api/users/${user.id}/monerium/api-keys`, undefined, "DELETE"));
+        mobileNav("monerium");
+      } catch (e) { showErr("m-mon-err", e); }
+    };
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="m-field"><label>Client id</label><input id="m-mon-id" autocomplete="off" spellcheck="false" placeholder="from your Monerium app"></div>
+    <div class="m-field" style="margin-top:12px"><label>Client secret</label><input id="m-mon-secret" type="password" autocomplete="off" placeholder="shown once when the app was created"></div>
+    <div class="m-field" style="margin-top:12px"><label>Label (optional)</label><input id="m-mon-label" placeholder="e.g. my sandbox app"></div>
+    <button class="m-cta" id="m-mon-connect" style="margin-top:16px">Verify and connect</button>
+    <div class="m-err hidden" id="m-mon-err" style="margin-top:12px"></div>
+    <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
+      Zold verifies the pair against Monerium before storing anything, encrypts the secret at rest and never returns it.
+      Your Monerium account, its profile and its IBANs stay yours; Zold links its smart account under that profile and asks
+      Monerium for an IBAN bound to it. Deposits and SEPA payouts on this account then run on your keys.
+      ${m?.method === "oauth" ? "This account is connected by OAuth today; connecting keys replaces that connection." : ""}
+    </div>`;
+  $("m-mon-connect").onclick = connectMoneriumKeys;
+}
+
+async function connectMoneriumKeys() {
+  clearErr("m-mon-err");
+  const btn = $("m-mon-connect");
+  btn.disabled = true;
+  btn.textContent = "Checking with Monerium…";
+  try {
+    const updated = await api(`/api/users/${user.id}/monerium/api-keys`, {
+      clientId: $("m-mon-id").value,
+      clientSecret: $("m-mon-secret").value,
+      label: $("m-mon-label").value,
+    });
+    $("m-mon-secret").value = "";
+    renderUser(updated);
+    mobileNav("monerium");
+  } catch (e) {
+    showErr("m-mon-err", e);
+    btn.disabled = false;
+    btn.textContent = "Verify and connect";
+  }
 }
 
 document.querySelectorAll("#m-filters button").forEach((b) => {
   b.onclick = () => { mFilter = b.dataset.mfilter; renderActivityScreen(); };
 });
 $("m-pf-plus").onclick = () => mobileNav("plus");
+$("m-pf-monerium").onclick = () => mobileNav("monerium");
 $("m-pf-signout").onclick = () => $("btn-signout").click();
 
 document.querySelectorAll("[data-mpreset]").forEach((b) => {
@@ -3816,7 +3954,7 @@ $("m-usd-cta").onclick = () => {
  * no answer from /api/health we assume no simulation, so a failed probe hides
  * a control the server might refuse rather than offering one it will.
  */
-let caps = { simulation: false, sandbox: false, kycProvider: "manual" };
+let caps = { simulation: false, sandbox: false, kycProvider: "manual", moneriumApiKeys: false, moneriumEnvironment: "sandbox", moneriumHost: "api.monerium.dev" };
 
 async function loadCapabilities() {
   try {

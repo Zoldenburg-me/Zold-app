@@ -31,7 +31,10 @@ export type AuditKind =
   | "consent.given"
   | "partner.account_created"
   | "partner.webhook_received"
-  | "partner.call_refused";
+  | "partner.call_refused"
+  /** A user connected or removed credentials of their own for a partner. */
+  | "partner.credentials_connected"
+  | "partner.credentials_removed";
 
 export interface AuditEntry {
   id: string;
