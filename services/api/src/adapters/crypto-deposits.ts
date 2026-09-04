@@ -43,6 +43,7 @@ import {
   orchestratorAddress,
 } from "../chain.js";
 import { liquidityProvider , balanceAfterWrite } from "../liquidity.js";
+import { safeDebitBlocker } from "../orchestrator.js";
 import { midRates } from "../rates.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
@@ -123,6 +124,37 @@ function watchedAddresses(): WatchedAddress[] {
  * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), matching what
  * FxSwapper.rate() posts and what the liquidity providers report.
  */
+/**
+ * What a USDC deposit was worth in EUR when it arrived, with the provenance to
+ * defend the number later.
+ *
+ * REFUSES rather than guessing. rates.ts has no stale fallback by design, and
+ * a receipt valued at an invented rate is worse than one valued late: the
+ * first is a wrong figure in the books, the second is a gap someone can fill.
+ * A deposit whose rate could not be read is recorded without a receipt value
+ * and can be valued on the next attempt.
+ */
+async function valueAtReceipt(
+  amountUsdc: number,
+  blockTimestamp?: string,
+): Promise<CryptoDeposit["receipt"] | undefined> {
+  try {
+    const r = await midRates();
+    const usdPerEur = r.eur.USD;
+    if (!(usdPerEur > 0)) return undefined;
+    return {
+      amountEur: Math.round((amountUsdc / usdPerEur) * 100) / 100,
+      rate: usdPerEur,
+      rateProvider: r.provider,
+      rateAsOf: r.asOf,
+      ratedAt: new Date().toISOString(),
+      ...(blockTimestamp ? { blockTimestamp } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function assertRateSane(rate: bigint): Promise<number> {
   const venue = Number(rate) / 1e6;
   if (!(venue > 0)) throw new Error("venue quoted a zero rate");
@@ -149,34 +181,50 @@ async function assertRateSane(rate: bigint): Promise<number> {
  * The API no longer holds merchant Safe owner keys, so this refuses until the
  * settlement path has a Safe-native UserOp or strict policy delegate.
  */
-async function sweepToOrchestrator(
-  user: User,
-  amount: bigint,
-  deposit: CryptoDeposit,
-): Promise<{ step: string; hash: string } | null> {
-  /**
-   * Resumability is decided by THIS deposit's own record, not by a balance.
-   *
-   * Checking `orchestrator holds >= amount` looked equivalent and is not: the
-   * orchestrator's USDC is working capital for in-flight transfers, not
-   * earmarked. A deposit arriving while a transfer held USDC there would skip
-   * its own sweep, convert somebody else's tokens, credit the depositor, and
-   * leave the transfer short — with the deposit still sitting in the user's
-   * Safe. The step we recorded is the only thing that actually means "these
-   * euros already moved".
-   */
-  if (deposit.txs.some((x) => x.step === SWEEP_STEP)) return null;
-
+/**
+ * Can this deposit be converted, and if not, why in words the user can act on?
+ *
+ * REPLACES `sweepToOrchestrator`, which moved the user's USDC to the
+ * orchestrator using an API-held Safe owner key. Those keys were removed with
+ * FP4 and the function became an unconditional throw, which made auto-convert
+ * unreachable code for months — it could only "succeed" on the branch that
+ * converts nothing. Nothing sweeps anywhere now: the swap is one user-signed
+ * batch out of the user's own Safe, delivering EURe back into it.
+ */
+export function depositConversionBlocker(user: User, deposit: CryptoDeposit): string | null {
+  if (deposit.state === "CONVERTED") return "this deposit has already been settled";
+  if (user.kycStatus !== "approved") return "your account is not approved for settlement yet";
   const page = user.paymentPage;
-  if (!page) throw new Error("account has no payment page");
-  const code = await publicClient.getBytecode({ address: user.address });
-  if (!code || code === "0x") {
-    throw new Error(
-      `merchant Safe ${user.address} is not deployed, so the forwarded USDC cannot be moved ` +
-        `— it is still yours at that address, but this chain cannot convert it`,
+  if (!page) return "this account has no payment page";
+  if (page.settlementAsset === "USDC") {
+    return "your payment page settles in USDC, so there is nothing to convert";
+  }
+  const amountUsdc = deposit.amountUsdc ?? 0;
+  if (amountUsdc < CRYPTO_IN.minUsdc) {
+    return `${amountUsdc} USDC is below the ${CRYPTO_IN.minUsdc} USDC floor — converting it would cost more than it delivers`;
+  }
+  /**
+   * No Safe, nothing to sign with.
+   *
+   * The old sweep checked this by reading bytecode and threw "the merchant
+   * Safe is not deployed". Dropping the check would leave such a deposit
+   * sitting at DETECTED telling the user to approve it with a passkey that
+   * has no Safe to act on — a worse message than the one it replaced, because
+   * it asks for something they cannot do. safeDebitBlocker is the same check
+   * the send path uses, so the two cannot drift.
+   */
+  const safeBlocker = safeDebitBlocker(user);
+  if (safeBlocker) {
+    // Carry the reassurance the old sweep's message had. Someone reading this
+    // has money sitting at an address they own and is being told it cannot be
+    // converted; the first thing they need to know is that it has not gone
+    // anywhere. Losing that sentence would make a solvable state read as a loss.
+    return (
+      `${safeBlocker}. Your ${deposit.amountUsdc ?? 0} USDC is still yours at ${user.address} — ` +
+      "it simply cannot be converted until the account can sign."
     );
   }
-  throw new Error("merchant Safe settlement requires Safe-native UserOps or a configured allowance module");
+  return null;
 }
 
 /**
@@ -190,74 +238,158 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
   if (deposit.state === "CONVERTED") return deposit;
   const user = store.findUser(deposit.userId);
   if (!user) throw new Error(`unknown user for crypto deposit ${deposit.id}`);
-
-  const amount = BigInt(deposit.amountUnits);
   const txs: CryptoDeposit["txs"] = [...deposit.txs];
 
   try {
     const page = user.paymentPage;
     if (!page?.autoConvert) throw new Error("payment page has auto-settlement switched off");
-    if (user.kycStatus !== "approved") throw new Error("account is not KYC-approved");
-    const amountUsdc = deposit.amountUsdc ?? 0;
-    if (amountUsdc < CRYPTO_IN.minUsdc) {
-      throw new Error(
-        `below the ${CRYPTO_IN.minUsdc} USDC floor — left as USDC rather than converted to dust`,
-      );
-    }
+    const blocker = depositConversionBlocker(user, deposit);
+    // Settling in USDC is not a blocker, it is a DIFFERENT settlement — the
+    // user chose to keep the asset, and that is a completed deposit, not a
+    // refused one.
     if (page.settlementAsset === "USDC") {
       return store.updateCryptoDeposit(deposit.id, {
         state: "CONVERTED",
-        creditedUsdc: amountUsdc,
+        creditedUsdc: deposit.amountUsdc ?? 0,
         settlementAsset: "USDC",
         txs,
         reason: undefined,
       });
     }
+    if (blocker) throw new Error(blocker);
 
-    const sweep = await sweepToOrchestrator(user, amount, deposit);
-    if (sweep) txs.push(sweep);
-
-    const provider = liquidityProvider();
-    const quoteId = `crypto-in-${deposit.id}`;
-    const expiresAt = new Date(Date.now() + 60_000).toISOString();
-    const quote = await provider.quote("USDC_TO_EURE", amount, quoteId, expiresAt);
-    const venueRate = await assertRateSane(quote.rate);
-
-    const before = eur.toWei(await safeEurBalance(user.address));
-    const execution = await provider.execute(quote, user.address);
-    txs.push(...execution.txs);
-    const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, before);
-
-    const receivedWei = after - before;
-    if (receivedWei <= 0n) {
-      throw new Error("the swap delivered no EURe to the merchant Safe — refusing to settle");
-    }
-    if (receivedWei < quote.minOut) {
-      throw new Error(
-        `swap delivered ${eur.fromWei(receivedWei)} EURe, under the ${eur.fromWei(quote.minOut)} ` +
-          `minimum the quote guaranteed — left for review`,
-      );
-    }
-
-    const creditedEur = eur.fromWei(receivedWei);
-    console.log(
-      `crypto-in: converted ${amountUsdc} USDC to €${creditedEur} for ${user.name} ` +
-        `via ${quote.provider} at ${venueRate.toFixed(4)}`,
-    );
+    /**
+     * THE SWAP IS NOT PERFORMED HERE, and that is the whole change.
+     *
+     * Converting means moving the user's USDC, and the only thing that may do
+     * that is a UserOperation their passkey signed. This poller runs with
+     * nobody present, so it CANNOT convert — it can only establish that the
+     * deposit is ready to be converted and wait for the account holder.
+     *
+     * So "auto-convert" means detected automatically and converted on
+     * approval, and the deposit says so rather than sitting at DETECTED with
+     * no explanation. Pretending otherwise is what the old code did: it called
+     * a sweep that always threw and recorded the throw as a refusal, which
+     * read like a fault rather than a missing signature.
+     */
     return store.updateCryptoDeposit(deposit.id, {
-      state: "CONVERTED",
-      creditedEur,
-      settlementAsset: "EURE",
-      provider: quote.provider,
-      rate: venueRate,
+      state: "DETECTED",
+      reason:
+        "ready to convert to EURe — approve it with your passkey. Nothing can move your funds " +
+        "without that signature.",
       txs,
-      reason: undefined,
     });
   } catch (err: any) {
     const reason = String(err?.shortMessage ?? err?.message ?? err);
     console.warn(`crypto-in: refusing deposit ${deposit.txHash}#${deposit.logIndex}: ${reason}`);
     return store.updateCryptoDeposit(deposit.id, { state: "REFUSED", reason, txs });
   }
+}
+
+/**
+ * Record the result of a conversion the USER signed and the API submitted.
+ *
+ * The credited amount is MEASURED as the Safe's EURe balance delta, never
+ * copied from the quote: "the router did not revert" and "this much EURe
+ * arrived" are different facts, and only the second one may be credited. The
+ * signed floor is checked against the measured delta for the same reason.
+ */
+export async function settleConvertedDeposit(
+  deposit: CryptoDeposit,
+  user: User,
+  quote: { provider: string; rate: bigint; minOut: bigint },
+  balanceBeforeWei: bigint,
+  txs: CryptoDeposit["txs"],
+): Promise<CryptoDeposit> {
+  const venueRate = await assertRateSane(quote.rate);
+  const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, balanceBeforeWei);
+  const receivedWei = after - balanceBeforeWei;
+
+  if (receivedWei <= 0n) {
+    return store.updateCryptoDeposit(deposit.id, {
+      state: "REFUSED",
+      reason: "the swap delivered no EURe to your account — nothing has been credited",
+      txs,
+    });
+  }
+  if (receivedWei < quote.minOut) {
+    return store.updateCryptoDeposit(deposit.id, {
+      state: "REFUSED",
+      reason:
+        `the swap delivered €${eur.fromWei(receivedWei)}, under the €${eur.fromWei(quote.minOut)} ` +
+        "floor your signature guaranteed — left for review rather than credited",
+      txs,
+    });
+  }
+
+  const creditedEur = eur.fromWei(receivedWei);
+  /**
+   * The realised gain: what arrived, minus what it was worth at receipt.
+   *
+   * Recorded as a FACT at the moment it is known, never recomputed. A gain
+   * re-derived later from whatever rate a feed reports then is not the gain
+   * that occurred. Near zero when the conversion follows the receipt promptly,
+   * which is the tax argument for converting promptly at all.
+   *
+   * Absent when the receipt could not be valued — an unknown basis yields an
+   * unknown gain, and a zero would be a claim.
+   */
+  const realisedGainEur =
+    deposit.receipt
+      ? Math.round((creditedEur - deposit.receipt.amountEur) * 100) / 100
+      : undefined;
+  console.log(
+    `crypto-in: converted ${deposit.amountUsdc ?? 0} USDC to EUR ${creditedEur} for ${user.name} ` +
+      `via ${quote.provider} at ${venueRate.toFixed(4)}` +
+      (realisedGainEur === undefined ? "" : ` (realised EUR ${realisedGainEur})`),
+  );
+  const settled = store.updateCryptoDeposit(deposit.id, {
+    state: "CONVERTED",
+    creditedEur,
+    settlementAsset: "EURE",
+    provider: quote.provider,
+    rate: venueRate,
+    ...(realisedGainEur === undefined ? {} : { realisedGainEur }),
+    txs,
+    reason: undefined,
+  });
+  if (settled.invoiceId) recordInvoiceSettlement(settled);
+  return settled;
+}
+
+/**
+ * Write the payment back onto the invoice it settles.
+ *
+ * The invoice is the Beleg and the deposit is the Zahlung; German bookkeeping
+ * wants them tied, and an auditor asking "how was invoice 2026-001 paid?"
+ * should get one thread: this transaction arrived, this one converted it, this
+ * much euro landed. Reconstructing that later from timestamps and amounts is
+ * guesswork dressed as reconciliation.
+ *
+ * Appends rather than replaces: an invoice can legitimately be settled by more
+ * than one payment, and overwriting would erase the earlier ones.
+ */
+export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
+  if (!deposit.invoiceId) return;
+  const invoice = store.invoices.find((i) => i.id === deposit.invoiceId);
+  if (!invoice) return;
+  const receiptTx = deposit.txHash;
+  const conversionTx = deposit.txs.find((t) => t.step.includes("usdc->eure"))?.hash;
+  const settlement = {
+    depositId: deposit.id,
+    receivedAsset: deposit.token,
+    receivedAmount: deposit.token === "USDC" ? deposit.amountUsdc ?? 0 : deposit.amountEur ?? 0,
+    receiptTxHash: receiptTx,
+    ...(deposit.receipt ? { receiptAmountEur: deposit.receipt.amountEur, receiptRate: deposit.receipt.rate, receiptRateProvider: deposit.receipt.rateProvider } : {}),
+    ...(conversionTx ? { conversionTxHash: conversionTx } : {}),
+    ...(deposit.creditedEur === undefined ? {} : { creditedEur: deposit.creditedEur }),
+    ...(deposit.realisedGainEur === undefined ? {} : { realisedGainEur: deposit.realisedGainEur }),
+    at: new Date().toISOString(),
+  };
+  const existing = invoice.settlements ?? [];
+  store.updateInvoice(invoice.id, {
+    settlements: [...existing.filter((x) => x.depositId !== deposit.id), settlement],
+  });
 }
 
 /**
@@ -321,6 +453,18 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
       toBlock,
     });
 
+    // Block times for the window, one call per distinct block. The chain's
+    // timestamp is when the money actually arrived; detection is a couple of
+    // confirmations later. Recording both lets the Steuerberater decide which
+    // instant counts rather than us deciding by omission.
+    const blockTimes = new Map<bigint, string>();
+    for (const bn of new Set(logs.map((l) => l.blockNumber).filter((b): b is bigint => b != null))) {
+      try {
+        const blk = await publicClient.getBlock({ blockNumber: bn });
+        blockTimes.set(bn, new Date(Number(blk.timestamp) * 1000).toISOString());
+      } catch { /* a missing block time is not worth failing a deposit over */ }
+    }
+
     for (const log of logs) {
       const to = String(log.args.to ?? "").toLowerCase();
       const matches = byAddress.get(to) ?? [];
@@ -343,6 +487,19 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
       const user = match.user;
       const now = new Date().toISOString();
       const directSafeFunding = match.source === "safe" || token.token === "EURE";
+      /**
+       * The acquisition value, stamped HERE — at detection, once, with the
+       * rate's provenance — and never recomputed. A figure re-derived months
+       * later from whatever the feed says then is not the value at receipt;
+       * it is a guess wearing its clothes.
+       */
+      const receipt =
+        token.token === "USDC"
+          ? await valueAtReceipt(
+              usd.fromUnits(value),
+              log.blockNumber != null ? blockTimes.get(log.blockNumber) : undefined,
+            )
+          : undefined;
       fresh.push(
         store.addCryptoDeposit({
           id: randomUUID(),
@@ -356,6 +513,7 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
           ...(token.token === "USDC"
             ? {
                 amountUsdc: usd.fromUnits(value),
+                ...(receipt ? { receipt, amountEur: receipt.amountEur } : {}),
                 ...(directSafeFunding ? { creditedUsdc: usd.fromUnits(value) } : {}),
               }
             : {}),

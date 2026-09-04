@@ -177,6 +177,14 @@ all fail closed until the account is approved. Two paths:
   (S256). Per-user tokens are AES-256-GCM encrypted at rest, never returned by
   any endpoint. The app links its own Safe and requests a new IBAN; the user's
   existing account is untouched.
+- **Connect your own Monerium API keys** (Profile → Monerium keys) — for
+  testing against your own account: paste the client id and secret of an app
+  created in your Monerium account. The pair is verified against Monerium
+  before anything is stored, the secret is encrypted with the same key as the
+  OAuth tokens and never returned, and activation, deposit polling and SEPA
+  redeems for that account run on those keys — the app's own credentials
+  cannot see a profile they do not own. `npm run monerium:apikeys:test` drives
+  it against a stub that answers only to the user's own token.
 
 For cash payouts the sender's FATF originator data is collected and mapped to
 SEP-9 field names (`stellar/sep9.ts`). Each user gets a distinct SEP-12 customer

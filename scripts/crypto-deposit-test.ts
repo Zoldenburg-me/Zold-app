@@ -5,13 +5,20 @@
  * address, and the poller reads the Transfer log it emits. Conversion is real
  * too — the swap settles EURe into the Safe.
  *
- * The middle step is what cannot run here. Moving tokens out of a user's Safe
- * needs Candide's bundler and paymaster, and no hardhat node has either; a
- * local account address is a counterfactual Safe with no code at all. So the
- * conversion cases seed the state a completed sweep leaves behind — the
- * deposit carrying SWEEP_STEP, the tokens with the orchestrator — and the
- * un-swept case is exercised for real, because refusing an undeployed Safe is
- * exactly what should happen.
+ * The middle step is what cannot run here. The swap is now a user-signed batch
+ * out of the user's own Safe, which needs Candide's bundler and paymaster, and
+ * no hardhat node has either. So these seed the INPUT — USDC arrived, the row
+ * is DETECTED — drive the poller for real, and then exercise
+ * settleConvertedDeposit directly with EURe minted into the Safe to stand in
+ * for the batch having landed.
+ *
+ * A TRAP THIS TEST FELL INTO, worth not repeating: it used to seed a deposit
+ * already carrying SWEEP_STEP with the tokens at the orchestrator — the OUTPUT
+ * of the step under test. That made sweepToOrchestrator take its "already
+ * swept" early return, so it never reached the `throw` sitting at the end of
+ * it since FP4 removed API-held owner keys. The suite stayed green for months
+ * while auto-convert was dead code in production. Seed the input, never the
+ * output.
  *
  * Run: npm run crypto:test
  */
@@ -85,7 +92,7 @@ try {
   const { initStore, store } = await import("../services/api/src/store.js");
   const { abis, addrs, eur, usd, orchestratorAddress, publicClient, writeAndWait, deployerWallet } =
     await import("../services/api/src/chain.js");
-  const { convertDeposit, pollCryptoDepositsOnce, SWEEP_STEP } = await import(
+  const { convertDeposit, pollCryptoDepositsOnce, settleConvertedDeposit } = await import(
     "../services/api/src/adapters/crypto-deposits.js"
   );
   initStore();
@@ -105,7 +112,14 @@ try {
    *  attributed by address, so a shared one would attribute them wrongly. */
   function addUser(
     name: string,
-    opts: { autoConvert?: boolean; kyc?: string; settlementAsset?: "EURE" | "USDC" } = {},
+    opts: {
+      autoConvert?: boolean; kyc?: string; settlementAsset?: "EURE" | "USDC";
+      /** Record an ACTIVE passkey Safe so safeDebitBlocker passes. No Safe can
+       *  actually be deployed on hardhat (no bundler), and step 3 covers the
+       *  undeployed case for real — this is for the cases about deposit
+       *  handling, where Safe deployment is not what is under test. */
+      withSafe?: boolean;
+    } = {},
   ) {
     const owner = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
     const now = new Date().toISOString();
@@ -114,6 +128,12 @@ try {
       name,
       country: "DE",
       address: owner,
+      ...(opts.withSafe
+        ? {
+            passkey: { credentialId: `cred-${name}`, publicKey: { x: "0x1", y: "0x2" } },
+            passkeySafe: { status: "active", address: owner },
+          }
+        : {}),
       iban: "",
       kycStatus: opts.kyc ?? "approved",
       paymentPage: {
@@ -140,6 +160,17 @@ try {
     return user;
   }
 
+  /** Stand in for the signed swap having landed: EURe arrives in the user's own
+   *  Safe. The batch itself cannot run here — it needs Candide's bundler, and
+   *  no hardhat node has one. */
+  const mintEure = (to: `0x${string}`, amount: number) =>
+    writeAndWait(deployerWallet, {
+      address: addrs().eure,
+      abi: abis.MockToken,
+      functionName: "mint",
+      args: [to, eur.toWei(amount)],
+    });
+
   const sendUsdc = (to: `0x${string}`, amount: number) =>
     writeAndWait(deployerWallet, {
       address: addrs().usdc,
@@ -157,8 +188,17 @@ try {
 
   /** The state a completed sweep leaves: tokens with the orchestrator, the
    *  step on the deposit's own record. */
-  async function seedSweptDeposit(user: any, amountUsdc: number) {
-    await sendUsdc(orchestratorAddress, amountUsdc);
+  /**
+   * Seed a deposit in the state the POLLER would leave it: USDC has arrived at
+   * the user's own address and the row is DETECTED. Deliberately no sweep row
+   * and nothing at the orchestrator — seeding the output of the step under
+   * test is what hid a dead code path here for months.
+   */
+  async function seedReadyDeposit(user: any, amountUsdc: number) {
+    // Deliberately does NOT move real USDC. Nothing in the path under test
+    // reads a USDC balance — parking reads the deposit row, and settling
+    // measures the EURe delta — and sending to the user's own address would
+    // make the poller see it as a second, real deposit on the next scan.
     const now = new Date().toISOString();
     return store.addCryptoDeposit({
       id: randomUUID(),
@@ -172,7 +212,7 @@ try {
       settlementAsset: user.paymentPage.settlementAsset,
       paymentAddress: user.paymentPage.depositAddress,
       state: "DETECTED",
-      txs: [{ step: SWEEP_STEP, hash: `0x${"11".repeat(32)}` }],
+      txs: [],
       detectedAt: now,
       updatedAt: now,
     });
@@ -201,25 +241,61 @@ try {
     // No Safe is deployed locally, so this is the honest refusal — the money
     // is still the user's, at the destination address.
     check("an undeployed Safe is refused, not converted", d.state === "REFUSED", d.state);
+    // The wording moved deliberately: the refusal now comes from
+    // safeDebitBlocker, the SAME check the send path uses, so a deposit can
+    // never be judged convertible by a rule the send path disagrees with. It
+    // used to be a second, hand-written "Safe is not deployed" string that
+    // could drift. What must survive is the intent — say it is a Safe problem,
+    // and reassure that the money has not gone anywhere.
     check(
       "and the reason says the money is still theirs",
-      /Safe .*not deployed/.test(d.reason ?? "") && /still yours/.test(d.reason ?? ""),
+      /Safe/.test(d.reason ?? "") && /still yours/.test(d.reason ?? ""),
       d.reason ?? "",
     );
     check("nothing was settled", (await safeBalanceOf(ann.address)) === 0);
   }
 
-  console.log("4/9 a swept deposit converts and becomes spendable EUR…");
-  const bo = addUser("Crypto Bo");
+  console.log("4/9 a ready deposit parks for a signature, then settles what ARRIVED…");
+  const bo = addUser("Crypto Bo", { withSafe: true });
   {
-    const seeded = await seedSweptDeposit(bo, 100);
-    const d = await convertDeposit(seeded);
-    check("it converted", d.state === "CONVERTED", `${d.state} (${d.reason ?? ""})`);
-    // 100 USDC at 1.1379 EUR/USD is ~87.88 EURe.
+    /**
+     * THIS STEP USED TO TEST A PATH THAT COULD NOT RUN.
+     *
+     * It called convertDeposit on a deposit seeded with a fake SWEEP_STEP row,
+     * which made sweepToOrchestrator take its "already swept" early return and
+     * never reach the `throw` that had sat at the end of it since FP4 removed
+     * API-held owner keys. So the test manufactured the output of the one
+     * broken step and stayed green for months while auto-convert was dead
+     * code in production. Worth remembering when seeding intermediate state:
+     * seed the INPUT, never the output of the thing under test.
+     *
+     * The swap is now a user-signed batch out of the user's own Safe, so the
+     * poller can only park the deposit — and the crediting logic it used to
+     * carry lives in settleConvertedDeposit, which is exercised directly here.
+     */
+    const parked = await convertDeposit(await seedReadyDeposit(bo, 100));
+    check("the poller parks it rather than claiming to convert", parked.state === "DETECTED", parked.state);
     check(
-      "the credit is the euro value, not the dollar number",
+      "and says a passkey signature is what is missing",
+      /passkey/i.test(parked.reason ?? ""),
+      parked.reason ?? "",
+    );
+    check("nothing is credited before the signature", !parked.creditedEur);
+
+    // Simulate the signed batch having landed: EURe arrives in the user's own
+    // Safe. settleConvertedDeposit credits the MEASURED delta, not the quote.
+    const before = eur.toWei(await safeBalanceOf(bo.address));
+    await mintEure(bo.address, 87.88);
+    const d = await settleConvertedDeposit(
+      parked, store.findUser(bo.id)!,
+      { provider: "fx-swapper", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(80) },
+      before, [...parked.txs, { step: "safe.swap(usdc->eure)", hash: `0x${"22".repeat(32)}` }],
+    );
+    check("it settles once the swap has landed", d.state === "CONVERTED", `${d.state} (${d.reason ?? ""})`);
+    check(
+      "the credit is the euro value that ARRIVED, not the dollar number",
       d.creditedEur! > 87 && d.creditedEur! < 89,
-      `€${d.creditedEur}`,
+      `EUR ${d.creditedEur}`,
     );
     check(
       "the venue and rate are recorded for the receipt",
@@ -227,24 +303,31 @@ try {
       `${d.provider} @ ${d.rate}`,
     );
     check(
-      "the swap and the credit are both on the record",
-      d.txs.some((x) => x.step.includes("usdc-eure")) &&
-        !d.txs.some((x) => x.step.includes("vault")),
+      "the swap is on the record and nothing swept anywhere",
+      d.txs.some((x) => x.step.includes("usdc->eure")) &&
+        !d.txs.some((x) => /vault|sweep|orchestrator/i.test(x.step)),
       d.txs.map((x) => x.step).join(","),
     );
     const bal = await safeBalanceOf(bo.address);
-    check("the balance is spendable in the Safe", Math.abs(bal - d.creditedEur!) < 0.001, `€${bal}`);
+    check("the balance is spendable in the Safe", Math.abs(bal - 87.88) < 0.001, `EUR ${bal}`);
   }
 
   console.log("5/9 the same deposit is never credited twice…");
   {
-    const d = store.cryptoDeposits.find((x) => x.userId === bo.id)!;
+    const d = store.cryptoDeposits.find((x) => x.userId === bo.id && x.state === "CONVERTED")!;
     const balBefore = await safeBalanceOf(bo.address);
     const again = await convertDeposit(d);
     check("converting an already-converted deposit is a no-op", again.state === "CONVERTED");
     check("the balance did not move", (await safeBalanceOf(bo.address)) === balBefore, `€${balBefore}`);
 
-    // Rewind the cursor so the poller re-reads Ann's original log.
+    // Catch up first: step 4 minted EURe into Bo's Safe to stand in for the
+    // signed swap landing, and the poller records inbound EURe too (step 9).
+    // Without this the rewind would find that transfer for the first time and
+    // count it as new — which is correct behaviour, but not what this step is
+    // asking about. The question here is whether a log already RECORDED gets
+    // recorded twice.
+    await pollCryptoDepositsOnce();
+    // Rewind the cursor so the poller re-reads every log from genesis.
     const countBefore = store.cryptoDeposits.length;
     store.setCryptoDepositCursor(cursorKey, 0n);
     const n = await pollCryptoDepositsOnce();
@@ -254,8 +337,8 @@ try {
 
   console.log("6/9 dust is left alone, direct Safe funding is only recorded…");
   {
-    const dusty = addUser("Dusty");
-    const d = await convertDeposit(await seedSweptDeposit(dusty, 0.25));
+    const dusty = addUser("Dusty", { withSafe: true });
+    const d = await convertDeposit(await seedReadyDeposit(dusty, 0.25));
     check("a sub-floor deposit is refused", d.state === "REFUSED", d.state);
     check("and says why in words", /floor/.test(d.reason ?? ""), d.reason ?? "");
     check("nothing was credited for it", !d.creditedEur);
@@ -274,25 +357,33 @@ try {
 
   console.log("7/9 a venue price off the market is refused…");
   {
-    const cass = addUser("Cass");
-    const seeded = await seedSweptDeposit(cass, 100);
-    // The swapper still posts 1.1379; tell the rate feed the market is at 1.40.
+    const cass = addUser("Cass", { withSafe: true });
+    const parked = await convertDeposit(await seedReadyDeposit(cass, 100));
+    const before = eur.toWei(await safeBalanceOf(cass.address));
+    await mintEure(cass.address, 87.88);
+    // The rate the batch filled at is 1.1379; tell the feed the market is 1.40.
     pinMid(1.4);
-    const d = await convertDeposit(seeded);
+    let refused = false;
+    let reason = "";
+    try {
+      await settleConvertedDeposit(
+        parked, store.findUser(cass.id)!,
+        { provider: "fx-swapper", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(80) },
+        before, parked.txs,
+      );
+    } catch (err: any) {
+      refused = true;
+      reason = String(err?.message ?? err);
+    }
     pinMid(MID);
-    check("a rate far off the mid is refused", d.state === "REFUSED", d.state);
-    check(
-      "and the reason names the drift",
-      /bps from the live mid/.test(d.reason ?? ""),
-      d.reason ?? "",
-    );
-    check("no euros were settled at the bad price", (await safeBalanceOf(cass.address)) === 0);
+    check("a rate far off the mid is refused", refused, reason || "it settled anyway");
+    check("and the reason names the drift", /bps from the live mid/.test(reason), reason);
   }
 
   console.log("8/9 a USDC-settled page does not turn the payment into euros…");
   {
     const dana = addUser("Crypto Dana", { settlementAsset: "USDC" });
-    const seeded = await seedSweptDeposit(dana, 25);
+    const seeded = await seedReadyDeposit(dana, 25);
     const d = await convertDeposit(seeded);
     check("it records the USDC settlement target", d.state === "CONVERTED" && d.settlementAsset === "USDC", d.state);
     check("it does not credit euro balance", (await safeBalanceOf(dana.address)) === 0);

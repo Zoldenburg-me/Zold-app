@@ -1005,6 +1005,68 @@ applied by them. Zoldenburg UG is an EEA entity, so Bridge CANNOT handle USDT
 for us. USDT would have to be swapped to USDC before Bridge sees it, and that
 swap is the MiCA exchange service, not an integration detail.
 
+## Monerium — your OWN API keys as a connector (Sep 2026)
+
+`npm run monerium:apikeys:test` (13 checks, stub Monerium + local chain). For
+testing against your own Monerium account: Profile -> Monerium keys, paste the
+client id + secret of an app created in THAT account's developer section.
+
+WHERE THE CREDENTIAL DECISION LIVES NOW: `adapters/monerium-connection.ts`.
+`moneriumClientFor(user)` answers "whose credentials act for this user" —
+API keys, then OAuth, then the app's MONERIUM_CLIENT_ID/SECRET — and
+`moneriumLiveFor(user)` answers "is Monerium real for this user" (app
+credentials OR a connection of their own). The token encrypt/decrypt/refresh
+helpers that used to sit in server.ts moved there unchanged in scheme
+(crypto-at-rest.ts purpose `monerium`; old ciphertext still decrypts). ONE
+DELIBERATE CHANGE inside that move: the OAuth refresh now sends
+MONERIUM_OAUTH_CLIENT_ID (falls back to MONERIUM_CLIENT_ID), the same client
+that did the code exchange; the old code sent MONERIUM_CLIENT_ID, which a real
+OAuth server rejects when the two differ.
+
+WHY THE SANDBOX ADAPTER HAD TO CHANGE, not just the routes: the address the
+app links and the IBAN it requests live under the USER's profile, which the
+app's keys cannot see (the same blind spot `MoneriumClient.orders()` documents
+for unscoped calls). So `redeemToIban`, `getOrderState`, `findIban` and the
+deposit poller now run on the user's client when they have one; the poller
+additionally walks `usersWithOwnCredentials()` and asks each one's account
+(default profile AND the recorded one). The test proves it the hard way: the
+API is started with NO app secret, the stub issues a token only for the one
+known pair and 401s everything else, and activation + a credited deposit still
+happen. `executeSepaTransfer` is gated on `moneriumLiveFor(user)`, so an
+account connected by API keys places a REAL redeem even on a deployment whose
+own credentials are unset — a connected account mock-PAYING would be the UPI
+fake again.
+
+RULES THAT CARRY WEIGHT:
+ - VERIFIED BEFORE STORED. The pair is exchanged for a token and /auth/context,
+   /profiles, /ibans, /addresses are read before anything is written. A 400/
+   401/403 from the grant is a 400 to the caller naming the ENVIRONMENT
+   (sandbox keys against production is the likely mistake); 5xx/DNS is a 503.
+   A refused pair leaves no row behind, not even encrypted.
+ - THE SECRET NEVER LEAVES. Encrypted with MONERIUM_TOKEN_ENCRYPTION_KEY, never
+   in a response — not even its ciphertext (`publicApiKeys` strips it, the test
+   greps every body). Without that key the connector reports `unavailable` in
+   /api/health capabilities and the route 503s; plaintext storage is refused.
+ - CONNECTING IS NOT APPROVAL. kycStatus stays pending; activation's
+   address-matched IBAN approves, exactly as for OAuth. The ONE shortcut: if the
+   connected account ALREADY attributes an IBAN to this Safe address, that is
+   the same evidence activation would produce, so it is taken at connect time.
+   Any other IBAN in the snapshot is somebody's money routing — ignored.
+ - A MOCK IBAN IS RETIRED on connect (funding.mode mock -> sandbox, iban
+   cleared, status provisioning) so "Activate IBAN with passkey" appears. An
+   app-provisioned active IBAN is KEPT — if the operator connects the very
+   account the app's credentials belong to, the app profile IS their profile.
+ - REMOVING KEYS keeps the IBAN recorded (it exists at Monerium regardless) and
+   says in funding.detail that deposits/payouts pause until keys return.
+ - POST is on the auth rate bucket (it is a credential check against a third
+   party). Audit kinds `partner.credentials_connected/removed` record it.
+
+UNPROVEN: no real Monerium app's client-credentials token has been used. Their
+docs say an app created in an account acts with that account's scope; one run
+against api.monerium.dev with real sandbox keys settles it, and the redeem leg
+on a user client has only the guard branches exercised. Also unproven: the
+OAuth refresh client-id change above (no test refreshes).
+
 ## Custody — the non-custodial path is the DEFAULT now (Aug 2026)
 
 `npm run custody:test` (11 checks, no chain, no network).
