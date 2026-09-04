@@ -31,6 +31,7 @@ import {
   decryptToken,
   encryptToken,
   forgetUserClient,
+  hasOwnMoneriumCredentials,
   moneriumAccessToken,
   moneriumApiKeysAvailable,
   moneriumAppClient,
@@ -1889,6 +1890,9 @@ app.get(
     const user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
+    if (!hasOwnMoneriumCredentials(user)) {
+      return res.status(409).json({ error: "no Monerium account is connected to this account — connect one by OAuth or with your own API keys" });
+    }
     const snapshot = await readMoneriumAccountSnapshot(user);
     const updated = store.updateUser(user.id, {
       monerium: { ...user.monerium!, ...snapshot },
