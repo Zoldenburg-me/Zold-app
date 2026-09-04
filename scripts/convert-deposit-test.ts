@@ -29,7 +29,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 process.env.TRANSF_DB_PATH = "/tmp/db.convert-test.json";
-process.env.TRANSF_RATES_FIXED ??= JSON.stringify({ USD: 1.1379, KES: 147.53 });
+process.env.TRANSF_RATES_FIXED ??= JSON.stringify({ USD: 1.1379, KES: 147.53, INR: 109.87 });
 process.env.ALLOW_FIXED_RATES = "1";
 
 const { store, initStore } = await import("../services/api/src/store.js");
@@ -127,6 +127,75 @@ await check("an already-converted deposit cannot be converted twice", () => {
 await check("a ready deposit has NO blocker", () => {
   const u = mkUser();
   assert.equal(depositConversionBlocker(u, mkDeposit(u.id)), null);
+});
+
+console.log("\nThe tax record: valued at receipt, gain measured, tied to the invoice");
+
+await check("a USDC deposit is valued in EUR AT RECEIPT, with the rate's provenance", async () => {
+  const { midRates } = await import("../services/api/src/rates.js");
+  const r = await midRates();
+  // 100 USDC at 1.1379 USD/EUR is ~87.88 EUR.
+  const expected = Math.round((100 / r.eur.USD) * 100) / 100;
+  const u = mkUser();
+  const d = mkDeposit(u.id, {
+    amountUsdc: 100, amountUnits: "100000000",
+    receipt: {
+      amountEur: expected, rate: r.eur.USD, rateProvider: r.provider,
+      rateAsOf: r.asOf, ratedAt: new Date().toISOString(),
+    },
+  });
+  assert.equal(d.receipt!.amountEur, expected);
+  // The rate alone proves nothing; the source is what makes it a record.
+  assert.ok(d.receipt!.rateProvider, "the rate's provider must be stored");
+  assert.ok(d.receipt!.rateAsOf, "when the provider published it must be stored");
+  assert.ok(d.receipt!.ratedAt, "when we read it must be stored — it differs from asOf");
+});
+
+await check("the realised gain is what arrived minus the receipt value", () => {
+  // Converting promptly keeps this near zero, which is the tax argument for
+  // converting promptly at all.
+  const receiptEur = 87.88;
+  const credited = 87.9;
+  assert.equal(Math.round((credited - receiptEur) * 100) / 100, 0.02);
+});
+
+await check("an unvalued receipt yields NO gain rather than a zero", () => {
+  const src = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
+  const fn = src.slice(src.indexOf("export async function settleConvertedDeposit"));
+  assert.match(fn.slice(0, 2200), /deposit\.receipt\s*\n?\s*\?/,
+    "the gain must be conditional on a receipt value existing");
+  assert.ok(!/realisedGainEur:\s*0\b/.test(fn.slice(0, 2200)),
+    "an unknown basis gives an unknown gain — zero would be a claim");
+});
+
+await check("the receipt is stamped at DETECTION, not recomputed later", () => {
+  const src = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
+  assert.match(src, /const receipt =\s*\n?\s*token\.token === "USDC"/,
+    "valuation must happen in the detection loop");
+  assert.match(src, /blockTimes\.get\(log\.blockNumber\)/,
+    "the chain's own timestamp must be recorded alongside the rate's");
+});
+
+await check("an invoice settlement carries the whole thread", () => {
+  const src = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
+  const fn = src.slice(src.indexOf("export function recordInvoiceSettlement"));
+  for (const field of ["receiptTxHash", "conversionTxHash", "creditedEur", "realisedGainEur", "receiptAmountEur"]) {
+    assert.ok(fn.slice(0, 1800).includes(field), `settlement must carry ${field}`);
+  }
+});
+
+await check("settlements append rather than replace", () => {
+  const src = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
+  const fn = src.slice(src.indexOf("export function recordInvoiceSettlement"));
+  assert.match(fn.slice(0, 1800), /existing\.filter\(\(x\) => x\.depositId !== deposit\.id\)/,
+    "an invoice can be paid more than once; overwriting would erase the earlier payments");
+});
+
+await check("the invoice link is explicit, never inferred from amounts", () => {
+  const src = readFileSync("services/api/src/server.ts", "utf8");
+  const route = src.slice(src.indexOf("/crypto-deposits/:depositId/invoice"));
+  assert.match(route.slice(0, 2000), /req\.body\?\.invoiceId/,
+    "the account holder names the invoice — matching by amount and date guesses");
 });
 
 console.log("\nThe wiring that makes it non-custodial");

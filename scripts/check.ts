@@ -22,6 +22,7 @@ const scripts = [
   "recovery:test",
   "kyc:ui:test",
   "monerium:oauth:test",
+  "monerium:apikeys:test",
   "sepa:test",
   "receipt:test",
   "fp3:test",

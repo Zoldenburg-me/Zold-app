@@ -14,22 +14,21 @@
  * Webhooks (order.updated / iban.updated) are the production path; polling is
  * used here because local dev has no public URL.
  */
-import { MONERIUM } from "../config.js";
+import { MONERIUM, moneriumSandboxEnabled } from "../config.js";
 import { store, type User } from "../store.js";
 import { MoneriumApiError, MoneriumClient, type MoneriumOrder } from "./monerium-client.js";
+import { moneriumAppClient, moneriumClientFor, usersWithOwnCredentials } from "./monerium-connection.js";
 import { simulateSepaDeposit } from "./monerium.js";
 import { isDeployed } from "../wallet/candide.js";
 import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
 
-let client: MoneriumClient | null = null;
-
+/**
+ * The APP's client (MONERIUM_CLIENT_ID/SECRET). Anything about ONE user goes
+ * through `moneriumClientFor(user)` instead, which prefers the credentials the
+ * user connected themselves — their profile is invisible to the app's keys.
+ */
 function getClient(): MoneriumClient {
-  client ??= new MoneriumClient({
-    baseUrl: MONERIUM.baseUrl,
-    clientId: MONERIUM.clientId,
-    clientSecret: MONERIUM.clientSecret,
-  });
-  return client;
+  return moneriumAppClient();
 }
 
 /** Auth smoke test — used by scripts/monerium-check.ts and server startup. */
@@ -84,9 +83,10 @@ export async function provisionFunding(user: User): Promise<User> {
   }
 }
 
-/** Look up the issued IBAN for an address, if any yet. */
-export async function findIban(address: string): Promise<string | undefined> {
-  const res = await getClient().ibans();
+/** Look up the issued IBAN for an address, if any yet — on the user's own
+ *  credentials when they have some, since that is where their IBAN lives. */
+export async function findIban(address: string, user?: User): Promise<string | undefined> {
+  const res = await (user ? moneriumClientFor(user) : getClient()).ibans();
   const list = Array.isArray(res) ? res : (res?.ibans ?? []);
   const hit = list.find(
     (i: any) => String(i.address ?? "").toLowerCase() === address.toLowerCase() && i.iban,
@@ -98,7 +98,7 @@ export async function findIban(address: string): Promise<string | undefined> {
 export async function refreshPendingIban(user: User): Promise<User> {
   if (user.funding?.status !== "iban_pending") return user;
   try {
-    const iban = await findIban(user.address);
+    const iban = await findIban(user.address, user);
     if (iban) {
       return store.updateUser(user.id, {
         iban,
@@ -159,7 +159,7 @@ export async function redeemToIban(
   } else {
     throw new Error("Monerium redeem requires passkey Safe authorization");
   }
-  return getClient().placeOrder({
+  return moneriumClientFor(user).placeOrder({
     address: user.address,
     chain: MONERIUM.chain,
     kind: "redeem",
@@ -179,8 +179,8 @@ export async function redeemToIban(
   });
 }
 
-export async function getOrderState(orderId: string): Promise<string> {
-  const order = await getClient().getOrder(orderId);
+export async function getOrderState(orderId: string, user?: User): Promise<string> {
+  const order = await (user ? moneriumClientFor(user) : getClient()).getOrder(orderId);
   return order.meta?.state ?? order.state ?? "unknown";
 }
 
@@ -286,7 +286,7 @@ function ourProfileIds(): (string | undefined)[] {
  *  of what should have been credited locally. */
 export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
   const seen = new Map<string, MoneriumOrder>();
-  for (const profile of ourProfileIds()) {
+  for (const profile of moneriumSandboxEnabled() ? ourProfileIds() : []) {
     let list: MoneriumOrder[] = [];
     try {
       list = orderList(await getClient().orders(profile));
@@ -294,6 +294,17 @@ export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
       continue; // a dead profile must not blind us to the others
     }
     for (const o of list) if (o.kind === "issue" && isProcessed(o)) seen.set(o.id, o);
+  }
+  for (const u of usersWithOwnCredentials()) {
+    for (const profile of ownProfilesOf(u)) {
+      let list: MoneriumOrder[] = [];
+      try {
+        list = orderList(await moneriumClientFor(u).orders(profile));
+      } catch {
+        continue;
+      }
+      for (const o of list) if (o.kind === "issue" && isProcessed(o)) seen.set(o.id, o);
+    }
   }
   return [...seen.values()];
 }
@@ -307,7 +318,7 @@ export async function pollDepositsOnce(): Promise<number> {
   // Once per profile. An unscoped call returns ONLY the default profile's
   // orders, so with a profile per user this loop is the difference between
   // seeing every customer deposit and seeing none of them.
-  for (const profile of ourProfileIds()) {
+  for (const profile of moneriumSandboxEnabled() ? ourProfileIds() : []) {
     let list: MoneriumOrder[] = [];
     try {
       list = orderList(await getClient().orders(profile));
@@ -318,7 +329,35 @@ export async function pollDepositsOnce(): Promise<number> {
       if (await mirrorOrder(order)) credited++;
     }
   }
+  /**
+   * Users who connected their OWN Monerium account (API keys or OAuth). Their
+   * IBAN sits under a profile the app's credentials cannot see, so their
+   * deposits are only visible on their client. mirrorOrder attributes by the
+   * order's address, and dedupes on the order id, so an order seen twice
+   * (default profile and named profile) is recorded once.
+   */
+  for (const u of usersWithOwnCredentials()) {
+    for (const profile of ownProfilesOf(u)) {
+      let list: MoneriumOrder[] = [];
+      try {
+        list = orderList(await moneriumClientFor(u).orders(profile));
+      } catch (err: any) {
+        console.warn(`monerium: could not read orders for ${u.id} on their own credentials: ${err?.message ?? err}`);
+        continue;
+      }
+      for (const order of list) {
+        if (await mirrorOrder(order)) credited++;
+      }
+    }
+  }
   return credited;
+}
+
+/** The profiles a user's own credentials should be asked about: their default
+ *  (unscoped) and the one we recorded, when it differs. */
+function ownProfilesOf(u: User): (string | undefined)[] {
+  const named = u.monerium?.profileId ?? u.funding?.moneriumProfileId;
+  return named ? [undefined, named] : [undefined];
 }
 
 /** Advance transfers whose SEPA redeem order is still in flight. */
@@ -328,7 +367,8 @@ export async function pollRedeemOrdersOnce(): Promise<void> {
   );
   for (const t of waiting) {
     try {
-      const state = await getOrderState(t.sepa!.orderId!);
+      // The order was placed on this user's client, so it is read on it too.
+      const state = await getOrderState(t.sepa!.orderId!, store.findUser(t.userId));
       if (state === "processed") {
         store.updateTransfer(t.id, { state: "PAID", sepa: { ...t.sepa!, state } });
         console.log(`monerium: redeem order ${t.sepa!.orderId} processed (transfer ${t.id})`);
