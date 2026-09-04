@@ -541,7 +541,7 @@ export interface Transfer {
    * UserOperation (Change 2, windows 1-3): the batch approves the venue and
    * delivers the output straight to `recipient`, so the orchestrator never
    * holds the input. `recipient` is the orchestrator only in local dry-run
-   * (the escrow demo pulls from it); in live mode it is the Bridge deposit
+   * (the local demo settles from it); in live mode it is the Bridge deposit
    * address, and once the batch lands the funds are already with the
    * settlement custodian — which is why compensation must not assume it can
    * reverse-swap them.
