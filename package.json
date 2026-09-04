@@ -24,6 +24,7 @@
     "safe-funded:test": "tsx scripts/safe-funded-recovery-test.ts",
     "faucet:test": "tsx scripts/faucet-test.ts",
     "crypto:test": "tsx scripts/crypto-deposit-test.ts",
+    "convert:test": "tsx scripts/convert-deposit-test.ts",
     "pay:test": "tsx scripts/pay-page-test.ts",
     "kyc:test": "tsx scripts/kyc-test.ts",
     "country:policy:test": "tsx scripts/country-policy-test.ts",

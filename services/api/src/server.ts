@@ -11,7 +11,7 @@ import {
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, KYC, LIQUIDITY, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
-import { prepareSafeSwapForTransfer } from "./liquidity.js";
+import { prepareSafeSwapForTransfer, prepareDepositConversion } from "./liquidity.js";
 import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
 import { resolveSegment, capabilitiesFor, can, type Segment } from "./domain/segments.js";
@@ -47,7 +47,11 @@ import {
   sweepAnchorPayouts,
   sweepStrandedTransfers,
 } from "./orchestrator.js";
-import { startCryptoDepositPoller } from "./adapters/crypto-deposits.js";
+import {
+  startCryptoDepositPoller,
+  depositConversionBlocker,
+  settleConvertedDeposit,
+} from "./adapters/crypto-deposits.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from "./pay.js";
 import { qrSvg } from "./qr.js";
 import { createOrgRouter } from "./routes/orgs.js";
@@ -967,6 +971,181 @@ app.get(
     }
     const balances = await accountBalances(user.address);
     res.json({ ...publicUser(user), ...balances });
+  }),
+);
+
+/* ==========================================================================
+   CONVERTING AN INBOUND CRYPTO DEPOSIT
+   --------------------------------------------------------------------------
+   Two calls, because a conversion moves the user's money and only their
+   passkey may authorise that:
+
+     prepare  -> builds the swap batch, returns a challenge to sign
+     convert  -> verifies the assertion, submits, credits what ARRIVED
+
+   The poller detects deposits and stops there. It runs with nobody present,
+   so it cannot sign, and the previous design pretended otherwise: it called a
+   sweep that always threw and recorded the throw as a refusal, which read to
+   the user like a fault rather than a missing signature.
+
+   NON-CUSTODIAL BY CONSTRUCTION. The batch approves the venue and swaps out of
+   the user's own Safe, delivering EURe straight back into it. The orchestrator
+   is not in the path and holds nothing at any point — which is also why this
+   needed no owner key to restore after FP4 removed them.
+   ========================================================================== */
+const pendingDepositConversions = new Map<string, {
+  userId: string;
+  expiresAt: number;
+  challenge: string;
+  plan: NonNullable<User["passkeySafe"]>;
+  userOperation: PendingPasskeySafeDeployment;
+  quote: { provider: string; rate: string; minOut: string };
+}>();
+
+app.post(
+  "/api/users/:id/crypto-deposits/:depositId/convert/prepare",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "onchain_balance", res)) return;
+
+    const deposit = store.cryptoDeposits.find(
+      (d) => d.id === req.params.depositId && d.userId === user.id,
+    );
+    if (!deposit) return res.status(404).json({ error: "deposit not found" });
+
+    const blocker = depositConversionBlocker(user, deposit);
+    if (blocker) return res.status(409).json({ error: blocker });
+    const safeBlocker = safeDebitBlocker(user);
+    if (safeBlocker) return res.status(409).json({ error: safeBlocker });
+
+    try {
+      const swap = await prepareDepositConversion(
+        user.address as `0x${string}`,
+        BigInt(deposit.amountUnits),
+        `crypto-in-${deposit.id}`,
+      );
+      if (!swap) {
+        return res.status(503).json({
+          error:
+            `the configured liquidity venue (${LIQUIDITY.PROVIDER}) cannot be executed by your ` +
+            "account, so this deposit cannot be converted here. dex, lifi, rfq or best can.",
+        });
+      }
+      // No fee on a conversion: the user is converting their own money and
+      // keeping it. transferSwapBatchTransactions skips the fee leg at 0.
+      const prepared = await prepareTransferBatchExecution(user.passkeySafe!, {
+        token: addrs().usdc,
+        feeTo: orchestratorAddress,
+        feeAmount: 0n,
+        approval: { spender: swap.plan.approval.spender, amount: swap.plan.approval.amount },
+        call: swap.plan.call,
+      });
+      const challenge = passkeySafeChallenge(prepared.challenge);
+      for (const [id, p] of pendingDepositConversions) {
+        if (p.expiresAt < Date.now()) pendingDepositConversions.delete(id);
+      }
+      pendingDepositConversions.set(deposit.id, {
+        userId: user.id,
+        expiresAt: Date.now() + AUTH_WINDOW_SEC * 1000,
+        challenge,
+        plan: user.passkeySafe!,
+        userOperation: prepared.userOperation,
+        quote: {
+          provider: swap.plan.quote.provider,
+          rate: swap.plan.quote.rate.toString(),
+          minOut: swap.plan.quote.minOut.toString(),
+        },
+      });
+      res.json({
+        depositId: deposit.id,
+        credentialId: user.passkey?.credentialId,
+        challenge,
+        amountUsdc: deposit.amountUsdc,
+        expectedEur: eur.fromWei(swap.plan.quote.expectedOut),
+        minEur: eur.fromWei(swap.plan.quote.minOut),
+        provider: swap.plan.quote.provider,
+      });
+    } catch (err: any) {
+      res.status(502).json({ error: String(err?.shortMessage ?? err?.message ?? err) });
+    }
+  }),
+);
+
+app.post(
+  "/api/users/:id/crypto-deposits/:depositId/convert",
+  wrap(async (req, res) => {
+    const user = store.findUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "user not found" });
+    if (!requireUserSession(req, res, user.id)) return;
+    if (!requireCapability(user, "onchain_balance", res)) return;
+
+    const deposit = store.cryptoDeposits.find(
+      (d) => d.id === req.params.depositId && d.userId === user.id,
+    );
+    if (!deposit) return res.status(404).json({ error: "deposit not found" });
+
+    // Claim the pending execution BEFORE any await, so two parallel submissions
+    // of one signature cannot both proceed — the same race the transfer
+    // authorize path had, and the same fix.
+    const pending = pendingDepositConversions.get(deposit.id);
+    if (!pending) {
+      return res.status(409).json({ error: "no prepared conversion — call convert/prepare first" });
+    }
+    pendingDepositConversions.delete(deposit.id);
+    if (pending.userId !== user.id) {
+      return res.status(403).json({ error: "this conversion belongs to a different account" });
+    }
+
+    const a = req.body?.executionAssertion;
+    if (!a?.authenticatorData || !a?.clientDataJSON || !a?.signature) {
+      return res.status(400).json({
+        error: "executionAssertion requires authenticatorData, clientDataJSON and signature",
+      });
+    }
+    if (!user.passkey?.publicKey) {
+      return res.status(409).json({ error: "no passkey registered for this account" });
+    }
+    if (a.credentialId !== user.passkey.credentialId) {
+      return res.status(403).json({ error: "passkey credential does not match this account" });
+    }
+
+    try {
+      const { signCount } = await verifyAssertionForChallenge(
+        a.authenticatorData, a.clientDataJSON, a.signature,
+        user.passkey.publicKey, user.passkey.signCount ?? 0,
+        user.passkey.rpId ?? SECURITY.rpId, SECURITY.origins, pending.challenge,
+      );
+      store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+    } catch (err: any) {
+      return res.status(401).json({ error: String(err?.message ?? err) });
+    }
+
+    // Measure BEFORE submitting: the credited amount is the balance delta, not
+    // anything the quote promised.
+    const before = eur.toWei(await accountBalances(user.address).then((b) => b.safeBalanceEur));
+    let opHash: string | null = null;
+    try {
+      opHash = await submitPasskeySafeOperation(pending.plan, pending.userOperation, {
+        authenticatorData: a.authenticatorData,
+        clientDataJSON: a.clientDataJSON,
+        signature: a.signature,
+      });
+    } catch (err: any) {
+      const reason = String(err?.shortMessage ?? err?.message ?? err);
+      store.updateCryptoDeposit(deposit.id, { state: "REFUSED", reason });
+      return res.status(502).json({ error: reason });
+    }
+
+    const txs = [...deposit.txs, { step: "safe.swap(usdc->eure)", hash: opHash ?? "0x" }];
+    const settled = await settleConvertedDeposit(
+      deposit, user,
+      { provider: pending.quote.provider, rate: BigInt(pending.quote.rate), minOut: BigInt(pending.quote.minOut) },
+      before, txs,
+    );
+    const balances = await accountBalances(user.address);
+    res.json({ deposit: settled, ...balances });
   }),
 );
 
