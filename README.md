@@ -124,7 +124,6 @@ Four, deliberately small, no inheritance depth and no proxies.
 |---|---|
 | `AdminTimelock.sol` | M-of-N + delay owner of the others. No single key can raise a cap, grant a role or drain inventory. A separate guardian can pause instantly; only the timelock can un-pause |
 | `FxSwapper.sol` | Swaps at an owner-set rate behind a slippage guard, restricted to approved executors, pausable |
-| `BridgeEscrow.sol` | Locks funds for the bridge leg, refuses reused transfer ids, refunds only to the target bound at lock time |
 | `MockToken.sol` | Local-chain ERC-20 for tests |
 
 #### Base Sepolia Active Deployments (Chain ID: 84532)
@@ -134,8 +133,7 @@ Four, deliberately small, no inheritance depth and no proxies.
 | `EURe` | `0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85` | Monerium's native EURe token on Base Sepolia |
 | `USDC` | `0xf94c01838c60f4ddf9519da75180feac7450303a` | Circle / Mock USDC token |
 | `FxSwapper` | `0x7b19ccdfb4bcc1bbc12daa2e94e5ad694c8613b8` | Swapper contract |
-| `BridgeEscrow` | `0x11cb28ccb5231c9aedfc818221b0fe7d11085e07` | Escrow contract for cross-chain payouts |
-| `AdminTimelock` | `0xe560f041a8175d72558836159573550eaa89f8c4` | M-of-N Timelock owner of FxSwapper and BridgeEscrow |
+| `AdminTimelock` | `0xe560f041a8175d72558836159573550eaa89f8c4` | M-of-N Timelock owner of FxSwapper |
 
 Custody is the user's Safe. The only record of a user's euros is the EURe in their own smart account.
 
@@ -396,7 +394,7 @@ services/api/src/
   stellar/             SEP-10 auth, SEP-24 withdrawals, SEP-9 mapping
   bridge/bridgexyz.ts  Bridge.xyz transfer orchestration
   adapters/            monerium, moneygram, crypto deposits, forwarder
-contracts/src/         AdminTimelock, FxSwapper, BridgeEscrow, MockToken
+contracts/src/         AdminTimelock, FxSwapper, MockToken
 services/api/public/   landing + app, no build step
 scripts/               deploy, operations, 30 test harnesses
 ```

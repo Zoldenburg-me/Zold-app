@@ -31,7 +31,7 @@ const ENV = {
   MG_ANCHOR_DOMAIN: "",
   TRANSF_RPC_URL: RPC,
   TRANSF_API_PORT: "3010",
-  FORCE_FAIL_STEP: "bridge.lockForPayout",
+  FORCE_FAIL_STEP: "bridge.xyz.dry-run.transfer",
 };
 
 const children: ChildProcess[] = [];
@@ -68,7 +68,7 @@ async function api(p: string, body?: any) {
 }
 
 try {
-  console.log("1/4 chain + deploy + API (FORCE_FAIL_STEP=bridge.lockForPayout)…");
+  console.log("1/4 chain + deploy + API (FORCE_FAIL_STEP=bridge.xyz.dry-run.transfer)…");
   bg(process.execPath, [bin("hardhat"), "node", "--port", "8547"]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {

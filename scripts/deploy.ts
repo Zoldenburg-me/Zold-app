@@ -208,7 +208,6 @@ async function main() {
   const eurUsdRate = await eurUsdSeed();
   console.log(`swapper seeded at EUR/USD ${(Number(eurUsdRate) / 1e6).toFixed(4)}`);
   const swapper = await deploy("FxSwapper", [eure, usdc, eurUsdRate]);
-  const bridge = await deploy("BridgeEscrow", [usdc]);
 
   // Hardhat accounts #0/#1/#2 stand in for three separate signers.
   const timelockOwners = [
@@ -223,7 +222,6 @@ async function main() {
   ]);
 
   await call(swapper, "FxSwapper", "setTrader", [orchestratorAddr, true]);
-  await call(bridge, "BridgeEscrow", "setOrchestrator", [orchestratorAddr, true]);
   /**
    * Seed the swapper's inventory.
    *
@@ -249,9 +247,8 @@ async function main() {
   // Roles are wired BEFORE ownership moves — afterwards every admin call has
   // to be queued, confirmed and waited out, which is the point.
   await call(swapper, "FxSwapper", "transferOwnership", [timelock]);
-  await call(bridge, "BridgeEscrow", "transferOwnership", [timelock]);
 
-  const out = { eure, usdc, swapper, bridge, timelock };
+  const out = { eure, usdc, swapper, timelock };
   const file = path.join(ROOT, "deployments.json");
   let all: Record<string, unknown> = {};
   try {
