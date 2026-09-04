@@ -511,7 +511,6 @@ export interface Deployments {
   timelock?: `0x${string}`;
   usdc: `0x${string}`;
   swapper: `0x${string}`;
-  bridge: `0x${string}`;
 }
 
 /**
