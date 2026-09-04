@@ -275,10 +275,27 @@ export interface User {
   };
   monerium?: {
     connectedAt: string;
+    /** How the connection authenticates. Absent on rows written before the
+     *  API-key connector existed, which were all OAuth. */
+    method?: "oauth" | "api_keys";
     profileId?: string;
     accessTokenEnc?: string;
     refreshTokenEnc?: string;
     expiresAt?: string;
+    /**
+     * The user's OWN Monerium app credentials (client-credentials grant),
+     * pasted from their Monerium account's developer section. The secret is
+     * AES-256-GCM encrypted at rest and never leaves the server, not even as
+     * ciphertext; `baseUrl` records which environment accepted it.
+     */
+    apiKeys?: {
+      clientId: string;
+      clientSecretEnc: string;
+      baseUrl: string;
+      label?: string;
+      verifiedAt: string;
+      accountEmail?: string;
+    };
     profiles?: any[];
     ibans?: any[];
     addresses?: any[];
@@ -377,6 +394,45 @@ export interface CryptoDeposit {
   amountUnits: string;
   amountEur?: number;
   amountUsdc?: number;
+  /**
+   * What this was worth in EUR AT THE MOMENT OF RECEIPT — the acquisition
+   * value, and the number the whole tax treatment rests on.
+   *
+   * A German company has no private sphere (§8 Abs. 2 KStG), so crypto arriving
+   * as payment is a Betriebseinnahme at its EUR value on the day, and that
+   * value becomes the cost basis. Converting later is a disposal (Tausch)
+   * whose gain is measured against exactly this figure. Without it recorded at
+   * receipt there is nothing to measure against and nothing to show.
+   *
+   * THE RATE'S SOURCE IS STORED, NOT JUST THE RATE. The 2025 BMF update on
+   * Aufzeichnungspflichten wants a rate from a recognised source applied
+   * consistently — "1.1379" alone proves nothing, "1.1379 from <provider> as
+   * of <date>" is a record. `ratedAt` is when we read it, `asOf` is when the
+   * provider says it was published; they differ and both matter.
+   */
+  receipt?: {
+    amountEur: number;
+    /** USD per 1 EUR, the direction midRates() reports. */
+    rate: number;
+    rateProvider: string;
+    rateAsOf: string;
+    ratedAt: string;
+    /**
+     * When the chain says the funds arrived. Detection happens a couple of
+     * confirmations later, so this and `ratedAt` are different instants —
+     * recorded separately rather than conflated, because which one counts as
+     * "receipt" is the Steuerberater's call, not ours.
+     */
+    blockTimestamp?: string;
+  };
+  /**
+   * Realised on conversion: what was credited minus what it was worth at
+   * receipt. Stored as a fact rather than recomputed later from rates nobody
+   * kept. Near zero when converted promptly, which is the point.
+   */
+  realisedGainEur?: number;
+  /** The invoice this payment settles, tying Beleg to Zahlung. */
+  invoiceId?: string;
   state: "DETECTED" | "CONVERTED" | "REFUSED";
   /** Why it was refused, in words a support person can act on. */
   reason?: string;
