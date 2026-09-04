@@ -1,6 +1,36 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+/// A raw ERC-20 interface rather than OpenZeppelin's SafeERC20, DELIBERATELY.
+/// Recorded here because an audit flagged it (issue #120, FLAW-04) and the
+/// answer is a decision, not an oversight.
+///
+/// The complaint has two halves and only one of them applies:
+///
+///  1. IGNORING THE RETURN VALUE would let a token that returns `false` on
+///     failure look like success, and this contract would credit a transfer
+///     that never happened. That is the half that loses money, and it is NOT
+///     present: every call below is require-wrapped.
+///
+///  2. ASSUMING A `bool` RETURN EXISTS is real. A token whose `transfer`
+///     returns nothing — USDT being the canonical example — makes Solidity's
+///     decoder expect 32 bytes, find none, and revert. The transfer would
+///     succeed on chain and the surrounding call would unwind it.
+///
+/// (2) cannot happen here: `tokenIn` and `tokenOut` are immutable, set once at
+/// construction, and are EURe and USDC on every deployment — both compliant,
+/// both returning bools. The contract cannot be pointed at USDT later.
+///
+/// And the reason not to harden it anyway: FxSwapper is on its way out. It
+/// holds inventory we fund, which does not scale past a demo, and it cannot be
+/// executed by a user's Safe (onlyTrader) — which is why LIQUIDITY_PROVIDER
+/// now defaults to `best` over lifi,dex and this survives as the local hardhat
+/// fixture. If a non-compliant token ever matters it will matter on the DEX or
+/// aggregator path, which is other people's contracts.
+///
+/// If that changes — a mutable token pair, or this contract going to
+/// production — replace these with a low-level call that treats empty return
+/// data as success and decodes a bool otherwise.
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
