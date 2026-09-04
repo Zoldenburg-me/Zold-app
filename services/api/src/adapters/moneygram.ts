@@ -51,35 +51,11 @@ export interface CashPickup {
 
 const pickups = new Map<string, CashPickup>(); // transferId -> pickup
 
-export function createCashPickup(
-  transferId: string,
-  payoutKes: number,
-  recipientName: string,
-  recipientPhone: string,
-): CashPickup {
-  const referenceCode = randomBytes(4).readUInt32BE(0).toString().padStart(8, "0").slice(0, 8);
-  const pickup: CashPickup = {
-    referenceCode,
-    provider: "moneygram-mock",
-    status: "READY_FOR_PICKUP",
-    payoutKes,
-    recipientName,
-    recipientPhone,
-  };
-  pickups.set(transferId, pickup);
-  return pickup;
-}
 
 export function getPickup(transferId: string): CashPickup | undefined {
   return pickups.get(transferId);
 }
 
-/** Simulate the recipient collecting cash at an agent (mock mode). */
-export function completePickup(transferId: string): CashPickup | undefined {
-  const p = pickups.get(transferId);
-  if (p) p.status = "PAID";
-  return p;
-}
 
 /** Return the memo this pickup must use for every SEP-10 call. Stored pickups
  *  from before this field existed can recover it from the transfer's user. */

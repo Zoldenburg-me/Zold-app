@@ -1365,14 +1365,12 @@
           <div class="pk-steps hidden" id="pk-steps">
             <div class="pstep"><span class="pdot">✓</span><span class="ptext">Create your passkey</span></div>
             <div class="pstep"><span class="pdot">✓</span><span class="ptext">Deploy your smart wallet <span class="pwhy">— approve with the passkey, we cover the fee</span></span></div>
-            <div class="pstep"><span class="pdot">✓</span><span class="ptext">Issue your IBAN <span class="pwhy">— waits for identity approval</span></span></div>
+            <div class="pstep"><span class="pdot">✓</span><span class="ptext">Connect Monerium <span class="pwhy">— sign in, or add your API keys, once the wallet exists</span></span></div>
           </div>
-          <button class="ghost wide" id="btn-skippk">Set this up later</button>
-          <!-- Honest about the consequence: the API refuses to issue an IBAN to
-               an account with no passkey outside simulation mode
-               (custodyBlockerBeforeFunding), so "later" means before money, not
-               whenever. Saying so here beats a 409 the user cannot read. -->
-          <div class="onb-note">You can look around first, but an account needs a passkey before it can be given an IBAN or hold money.</div>
+          <!-- No "later": the API refuses to issue an IBAN to an account with no
+               passkey (custodyBlockerBeforeFunding), and there is no mock IBAN
+               to look around with. The passkey IS the account. -->
+          <div class="onb-note">The passkey is the account: it signs in, it approves every payment, and it is what Monerium's IBAN is bound to. Without one nothing can be issued.</div>
           <div class="error hidden" id="pk-err"></div>
         </div>
       </div>
@@ -1514,43 +1512,58 @@
        the design's fixed "two done, one in progress" — a step is ticked when
        the thing it names has actually happened.
 
+       Identity is Monerium's. The gate offers exactly two routes — sign up or
+       sign in with Monerium (OAuth), or add the API keys of a Monerium account
+       you already hold — and nothing else: no in-house review, no provider,
+       no self-approval. The wallet is already deployed when this screen shows.
+
        Every id below is load-bearing: renderKycState() writes kyc-label /
-       kyc-main / kyc-detail, kyc-ui-test asserts on kyc-choice,
-       btn-monerium-existing, btn-monerium-new, btn-kyc-refresh and
-       btn-kyc-dashboard, and #kyc-card in the dashboard still uses the
+       kyc-main / kyc-detail, and #kyc-card in the dashboard still uses the
        untouched .kyc-status block. -->
   <section id="kyc-review" style="display:none">
     <div class="m-gate">
       <div class="m-gate-mark" id="kyc-mark">
         <span class="material-symbols-rounded" style="font-size:30px">badge</span>
       </div>
-      <h1 class="m-h1" id="kyc-title">Verify your identity</h1>
-      <div class="m-lede" id="kyc-sub">Your account exists. Adding money and sending unlock once you are approved — the law requires this before an IBAN can be yours.</div>
+      <h1 class="m-h1" id="kyc-title">Connect Monerium</h1>
+      <div class="m-lede" id="kyc-sub">Your smart wallet is deployed. Your identity check and your IBAN come from Monerium — sign up or sign in there, or add the API keys of a Monerium account you already have.</div>
 
       <div id="kyc-choice" style="display:grid;gap:8px;margin-top:24px">
-        <button class="m-optrow accent" id="btn-monerium-new">
-          <span class="material-symbols-rounded ic">badge</span>
-          <span class="tx"><span class="t">Verify my identity</span><span class="d">The standard route — an ID check with our provider.</span></span>
+        <button class="m-optrow accent" id="btn-monerium-existing">
+          <span class="material-symbols-rounded ic">login</span>
+          <span class="tx"><span class="t">Sign up or sign in with Monerium</span><span class="d">Monerium verifies you and issues the IBAN. New to Monerium? Open the account there in the same step.</span></span>
           <span class="material-symbols-rounded ch">chevron_right</span>
         </button>
-        <button class="m-optrow" id="btn-monerium-existing">
-          <span class="material-symbols-rounded ic">link</span>
-          <span class="tx"><span class="t">Use my Monerium account</span><span class="d">Already verified with Monerium? Connect it and skip the checks.</span></span>
+        <button class="m-optrow" id="btn-monerium-keys">
+          <span class="material-symbols-rounded ic">vpn_key</span>
+          <span class="tx"><span class="t">Add Monerium API keys</span><span class="d">Testing with your own Monerium account: paste an app's client id and secret.</span></span>
           <span class="material-symbols-rounded ch">chevron_right</span>
         </button>
+        <div class="m-lede hidden" id="kyc-noroute" style="font-size:13px">This deployment has no Monerium connection configured (neither an OAuth client nor a key-encryption key), so no account can be opened here yet.</div>
+      </div>
+
+      <!-- Inline API-key form, same fields as the Profile screen's; the gate
+           is pre-dashboard so it cannot navigate there. -->
+      <div id="kyc-keys" class="hidden" style="margin-top:24px">
+        <div class="m-field"><label>Client id</label><input id="kyc-mon-id" autocomplete="off" spellcheck="false" placeholder="from your Monerium app"></div>
+        <div class="m-field" style="margin-top:12px"><label>Client secret</label><input id="kyc-mon-secret" type="password" autocomplete="off" placeholder="shown once when the app was created"></div>
+        <button class="m-cta" id="btn-kyc-keys-connect" style="margin-top:16px">Verify and connect</button>
+        <button class="m-link" id="btn-kyc-keys-back" style="margin-top:12px">Back</button>
+        <div class="m-lede" id="kyc-keys-note" style="font-size:12px;margin-top:16px;color:var(--m-dim)"></div>
       </div>
 
       <div id="kyc-pending">
         <div class="m-gate-steps" id="kyc-steps"></div>
         <div class="m-gate-status" id="kyc-status-box">
           <div class="m-mono" id="kyc-label">PENDING</div>
-          <div class="t" id="kyc-main">Review in progress</div>
-          <div class="d" id="kyc-detail">Your IBAN, deposits, device key, quotes, and transfers are paused until approval.</div>
+          <div class="t" id="kyc-main">Connect Monerium</div>
+          <div class="d" id="kyc-detail">Your IBAN, deposits, quotes and transfers open once a Monerium account is connected and the IBAN is activated.</div>
         </div>
-        <button class="m-cta" id="btn-kyc-refresh">Refresh status</button>
-        <!-- Self-approval. Present only where the API would accept it — the
-             route is gated on ALLOW_SIMULATION and a loopback socket. -->
-        <button class="m-cta quiet hidden" id="btn-kyc-simulate">Simulate approval</button>
+        <!-- Connected but not yet activated: one passkey ceremony links the
+             Safe under the Monerium profile and asks for the IBAN. -->
+        <button class="m-cta hidden" id="btn-kyc-activate">Activate IBAN with passkey</button>
+        <button class="m-cta quiet" id="btn-kyc-refresh">Refresh status</button>
+        <button class="m-link hidden" id="btn-kyc-reconnect">Use a different Monerium account</button>
       </div>
 
       <button class="m-cta quiet" id="btn-kyc-dashboard">View dashboard</button>
@@ -1759,10 +1772,7 @@
           <span class="material-symbols-rounded" style="font-size:22px;flex:none">info</span>
           <div>Transfers land in seconds during SEPA Instant hours, otherwise the next business day. Only send from an account in your own name.</div>
         </div>
-        <!-- Shown only where the API accepts a simulated deposit; see
-             capabilities() in server.ts. -->
-        <button class="m-cta hidden" id="m-simulate">Simulate a €250 deposit</button>
-        <div class="m-lede hidden" id="m-simulate-off" style="font-size:12px;margin-top:16px">This deployment does not accept simulated deposits — send a real SEPA transfer to the IBAN above.</div>
+        <div class="m-lede" id="m-bank-note" style="font-size:12px;margin-top:16px">Deposits are real SEPA transfers to your Monerium IBAN. They are picked up automatically once Monerium has minted the euros to your wallet.</div>
         <div class="error hidden" id="m-bank-err"></div>
       </div>
 
@@ -2126,21 +2136,7 @@
 
       <div class="card" id="fund-card">
         <h2>Add money</h2>
-        <!-- Two mutually exclusive blocks, chosen by GET /api/health's
-             capabilities. The simulate control only exists where the API will
-             actually accept it; everywhere else the real instructions stand in
-             its place, rather than offering a button that 403s. -->
-        <div id="fund-simulate" class="hidden">
-          <div class="row2">
-            <div>
-              <label style="margin-top:0">SEPA transfer amount (€)</label>
-              <input id="dep-amount" value="250" inputmode="decimal" />
-            </div>
-            <button id="btn-deposit">Deposit</button>
-          </div>
-          <div class="hint">Simulates a SEPA transfer to your IBAN. Local testing only — this control is absent wherever the API refuses it.</div>
-        </div>
-        <div id="fund-real" class="hidden">
+        <div id="fund-real">
           <div class="hint" id="fund-real-hint"></div>
         </div>
         <div class="error hidden" id="dep-err"></div>
@@ -2319,7 +2315,6 @@
             <div class="code" id="t-ref"></div>
             <div class="pnote"><span id="p-note-text"></span> <b id="p-kes"></b><span id="p-links"></span></div>
             <button class="ghost hidden" style="margin-top:.9rem" id="btn-refresh-payout">Refresh MoneyGram status</button>
-            <button class="ghost" style="margin-top:.9rem" id="btn-pickup">Simulate cash pickup</button>
           </div>
           <div class="pickup hidden" id="sepa-box" style="border-color:rgba(176,109,245,.45);background:rgba(176,109,245,.06)">
             <div class="plabel" style="color:var(--acc2)">SEPA bank payout</div>
@@ -2399,15 +2394,18 @@ const safeUrl = (u) => {
     return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
   } catch { return null; }
 };
-const kycApproved = (u = user) => (u?.kycStatus || "approved") === "approved";
+/* An absent status is NOT approval. The old default read a missing field as
+   "approved", which after the in-house review path was removed would have
+   opened funding on any payload that dropped the field. */
+const kycApproved = (u = user) => u?.kycStatus === "approved";
 const kycCopy = (status = "pending", u = user) => {
-  if (u?.kyc?.onboardingPath === "existing_monerium") {
-    return ["MONERIUM", "Connect your existing account", "Funding unlocks after your Monerium profile is connected and approved."];
+  if (status !== "approved" && hasConnectedMonerium(u)) {
+    return ["MONERIUM", "Activate your IBAN", "Your Monerium account is connected. One passkey confirmation links your wallet to it and asks Monerium for the IBAN."];
   }
   return ({
-  pending: ["PENDING", "Review in progress", "Your IBAN, deposits, device key, quotes, and transfers are paused until approval."],
-  manual_review: ["MANUAL REVIEW", "Additional review needed", "A reviewer needs to approve this account before funding and transfers unlock."],
-  rejected: ["REJECTED", "Review not approved", "Funding and transfers are disabled for this account."],
+  pending: ["PENDING", "Connect Monerium", "Your IBAN, deposits, quotes and transfers open once a Monerium account is connected and the IBAN is activated."],
+  manual_review: ["MANUAL REVIEW", "Additional review needed", "Monerium is still reviewing this account; funding and transfers open when it completes."],
+  rejected: ["REJECTED", "Not approved", "Funding and transfers are disabled for this account."],
   approved: ["APPROVED", "Account approved", "Funding and transfers are available."],
 }[status] || ["REVIEW", `KYC ${status}`, "Funding and transfers are paused until approval."]);
 };
@@ -2488,7 +2486,7 @@ function renderUser(u) {
     $("iban").textContent = (u.funding.detail || "provisioning failed").slice(0, 60);
     chip.textContent = "ERROR"; chip.className = "chip err";
   } else {
-    $("iban").textContent = `${(u.funding || {}).detail || "provisioning via Monerium sandbox"}…`;
+    $("iban").textContent = `${(u.funding || {}).detail || "waiting for Monerium"}…`;
     chip.textContent = "PENDING"; chip.className = "chip pend";
   }
   renderFundingActions(u);
@@ -2725,41 +2723,11 @@ function renderBankScreen() {
       setTimeout(() => { b.textContent = "Copy"; }, 1400);
     };
   });
-  // The deposit simulator exists only where the API would accept it, which is
-  // BOTH flags, not one: /api/simulate/sepa-deposit refuses in sandbox mode
-  // because the deposit has to come from Monerium's portal to be real money.
-  const sim = depositSimulation();
-  $("m-simulate").classList.toggle("hidden", !sim.available);
-  $("m-simulate-off").classList.toggle("hidden", sim.available);
-  $("m-simulate-off").textContent = sim.hint;
+  $("m-bank-note").textContent = u.iban
+    ? "Deposits are real SEPA transfers to your Monerium IBAN. They are picked up automatically once Monerium has minted the euros to your wallet."
+    : "Your IBAN appears here once your Monerium account is connected and the IBAN is activated.";
 }
 
-/**
- * Can this deployment accept a simulated deposit, and if not, how does money
- * actually arrive?
- *
- * Three states, not two — which is why /api/health publishes both flags. The
- * UI used to read `simulation` alone and so offered the button whenever
- * simulation was allowed AT ALL, including sandbox mode, where the route
- * answers 400 and tells you to use Monerium's portal. That is the default
- * `npm run dev` configuration, so the one place the button appeared was the one
- * place it could not work.
- */
-function depositSimulation() {
-  if (!caps.simulation) {
-    return {
-      available: false,
-      hint: "This deployment does not accept simulated deposits — send a real SEPA transfer to the IBAN above.",
-    };
-  }
-  if (caps.sandbox) {
-    return {
-      available: false,
-      hint: "Deposits here are real Monerium transfers. Make a simulated SEPA transfer to the IBAN above from the Monerium portal and it is picked up automatically.",
-    };
-  }
-  return { available: true, hint: "" };
-}
 
 /** Deposit address for inbound USDC, with the payment-page QR when the account
  *  has claimed a handle (that endpoint is keyed by handle, and it encodes this
@@ -3219,7 +3187,11 @@ const M_RAILS = [
 ];
 
 function renderPayScreen() {
-  $("m-rails").innerHTML = M_RAILS.map((r) => `
+  // The cash corridor is only offered when the deployment can actually pay it
+  // (Bridge live + an anchor); otherwise it reads as coming, not as a wall.
+  const rails = M_RAILS.map((r) => r.id !== "cash" ? r
+    : { ...r, live: caps.cashRail, d: caps.cashRail ? r.d : "Cash pickup opens with a payout partner" });
+  $("m-rails").innerHTML = rails.map((r) => `
     <button class="m-rail${r.live ? (r.accent ? " go" : "") : " off"}" ${r.live ? `data-mrail="${r.id}"` : "disabled"}>
       ${r.live ? `<span class="material-symbols-rounded">${r.icon}</span>` : '<span class="m-tag soon">SOON</span>'}
       <span class="t">${esc(r.t)}</span>
@@ -3296,7 +3268,10 @@ function startSend(rail, payee) {
 
 function renderCountryList(filter = "") {
   const q = filter.trim().toLowerCase();
-  const list = M_DESTINATIONS.filter((d) => !q || d.name.toLowerCase().includes(q) || d.cur.toLowerCase().includes(q) || d.cc.toLowerCase().includes(q));
+  // A cash destination is only listed when the deployment can pay it.
+  const list = M_DESTINATIONS
+    .filter((d) => d.rail !== "cash" || caps.cashRail)
+    .filter((d) => !q || d.name.toLowerCase().includes(q) || d.cur.toLowerCase().includes(q) || d.cc.toLowerCase().includes(q));
   $("m-country-list").innerHTML = list.length
     ? list.map((d) => `<button class="m-optrow" data-mdest="${d.cc}">
         <span class="cc">${d.cc}</span>
@@ -4005,20 +3980,6 @@ $("m-copy-wallet").onclick = async () => {
   b.textContent = "Copied";
   setTimeout(() => { b.textContent = "Copy address"; }, 1400);
 };
-$("m-simulate").onclick = async () => {
-  clearErr("m-bank-err");
-  const b = $("m-simulate");
-  b.disabled = true;
-  try {
-    await api("/api/simulate/sepa-deposit", { iban: user.iban, amountEur: 250 });
-    await refresh();
-    b.textContent = "Deposited €250";
-    setTimeout(() => { b.textContent = "Simulate a €250 deposit"; b.disabled = false; }, 1600);
-  } catch (e) {
-    showErr("m-bank-err", e);
-    b.disabled = false;
-  }
-};
 
 document.querySelectorAll("#m-nav button").forEach((b) => {
   b.onclick = () => mobileNav(b.dataset.mnav);
@@ -4083,7 +4044,7 @@ $("m-usd-cta").onclick = () => {
  * no answer from /api/health we assume no simulation, so a failed probe hides
  * a control the server might refuse rather than offering one it will.
  */
-let caps = { simulation: false, sandbox: false, kycProvider: "manual", moneriumApiKeys: false, moneriumEnvironment: "sandbox", moneriumHost: "api.monerium.dev" };
+let caps = { sandbox: true, cashRail: false, moneriumOAuth: false, moneriumApiKeys: false, moneriumEnvironment: "production", moneriumHost: "api.monerium.app" };
 
 async function loadCapabilities() {
   try {
@@ -4095,20 +4056,13 @@ async function loadCapabilities() {
   renderFundCard();
 }
 
-/** Show the deposit control only where the API accepts simulated deposits;
- *  otherwise say how money actually arrives. */
+/** How money actually arrives: a real SEPA transfer to the Monerium IBAN. */
 function renderFundCard() {
-  // Same three-state rule as the mobile bank screen; see depositSimulation().
-  const sim = depositSimulation();
-  $("fund-simulate")?.classList.toggle("hidden", !sim.available);
-  $("fund-real")?.classList.toggle("hidden", sim.available);
   const hint = $("fund-real-hint");
   if (!hint) return;
-  hint.textContent = caps.sandbox
-    ? sim.hint
-    : user?.iban
-      ? "Transfer euros to the IBAN above from any bank. They arrive as balance here once the transfer settles."
-      : "Your IBAN appears here once your account is approved. Money added by bank transfer will show up as balance.";
+  hint.textContent = user?.iban
+    ? "Transfer euros to the IBAN above from any bank. They arrive as balance here once Monerium has minted them to your wallet."
+    : "Your IBAN appears here once your Monerium account is connected and the IBAN is activated.";
 }
 
 function needsPasskeySafeSetup(u = user) {
@@ -4284,11 +4238,12 @@ function renderKycState(u = user) {
     const el = $(id);
     if (el) el.textContent = value;
   }
-  const needsChoice = blocked && u.kycStatus === "pending" && !u.kyc?.onboardingPath;
+  // Nothing connected yet = offer the two routes. A chosen-but-abandoned OAuth
+  // (path set, never authorised) still counts as nothing connected.
+  const needsChoice = blocked && u.kycStatus === "pending" && !hasConnectedMonerium(u);
   $("kyc-choice")?.classList.toggle("hidden", !needsChoice);
   $("kyc-card")?.classList.toggle("hidden", !blocked);
   renderKycGate(u, needsChoice);
-  $("btn-deposit").disabled = blocked;
   $("btn-send").disabled = blocked;
   document.querySelectorAll(".dest-btn").forEach((b) => { b.disabled = blocked; });
   $("fund-card")?.classList.toggle("hidden", blocked);
@@ -4404,35 +4359,42 @@ function enterDashboard(name) {
 function renderKycGate(u, needsChoice) {
   const gate = $("kyc-pending");
   if (!gate) return;
-  const monerium = u.kyc?.onboardingPath === "existing_monerium";
+  const connected = hasConnectedMonerium(u);
   const rejected = u.kycStatus === "rejected";
   const approved = kycApproved(u);
+  const walletReady = !needsPasskeySafeSetup(u) && !!u.passkeySafe;
 
   // At the gate nothing is running yet, so there is nothing to report on.
   gate.classList.toggle("hidden", !!needsChoice);
+  $("kyc-keys").classList.toggle("hidden", !needsChoice || !keysFormOpen);
+  $("kyc-choice").classList.toggle("hidden", !needsChoice || keysFormOpen);
+  $("btn-monerium-existing").classList.toggle("hidden", !caps.moneriumOAuth);
+  $("btn-monerium-keys").classList.toggle("hidden", !caps.moneriumApiKeys);
+  $("kyc-noroute").classList.toggle("hidden", caps.moneriumOAuth || caps.moneriumApiKeys);
   $("kyc-title").textContent = rejected ? "We could not verify you"
-    : needsChoice ? "Verify your identity"
-      : monerium ? "Connecting your Monerium account" : "Checking who you are";
-  if (!needsChoice) {
-    $("kyc-sub").textContent = rejected
-      ? "Funding and transfers stay closed on this account."
-      : monerium
-        ? "We are reading the identity Monerium already holds for you. Nothing moves until it comes back approved."
-        : "Our provider is reviewing your documents. You can close this and come back — nothing is lost.";
-  }
+    : needsChoice ? (keysFormOpen ? "Monerium API keys" : "Connect Monerium")
+      : connected && !approved ? "Activate your IBAN" : "Connecting Monerium";
+  $("kyc-sub").textContent = rejected
+    ? "Funding and transfers stay closed on this account."
+    : needsChoice
+      ? keysFormOpen
+        ? `Keys from an app created in your Monerium account. This deployment talks to Monerium ${caps.moneriumEnvironment} (${caps.moneriumHost}); keys from the other environment are refused as a wrong secret.`
+        : "Your smart wallet is deployed. Your identity check and your IBAN come from Monerium — sign up or sign in there, or add the API keys of a Monerium account you already have."
+      : connected && !approved
+        ? "Your Monerium account is connected. One passkey confirmation links your wallet under that account and asks Monerium for the IBAN."
+        : "We are reading the identity Monerium holds for you. Nothing moves until it comes back approved.";
+  $("kyc-keys-note").textContent =
+    "Zold verifies the pair against Monerium before storing anything, encrypts the secret at rest and never returns it. Your Monerium account, its profile and its IBANs stay yours.";
 
   const mark = $("kyc-mark");
   mark.className = `m-gate-mark${rejected ? " stop" : !needsChoice && !approved ? " wait" : ""}`;
   mark.firstElementChild.textContent = rejected ? "priority_high" : approved ? "check" : "badge";
 
   const steps = [
-    { t: "Account created", d: "Your smart account exists on-chain", state: "done" },
-    monerium
-      ? { t: "Monerium account connected", d: hasConnectedMonerium(u) ? "Linked to your profile" : "Waiting for you to authorise it",
-          state: hasConnectedMonerium(u) ? "done" : "now" }
-      : { t: "Identity check started", d: u.kyc?.applicantId ? `Applicant ${String(u.kyc.applicantId).slice(0, 12)}` : "With our provider",
-          state: u.kyc?.onboardingPath ? "done" : "now" },
-    { t: "Review approved", d: rejected ? "Not approved" : approved ? "Funding and sending are open" : "Usually minutes, sometimes a day",
+    { t: "Account created", d: "Your passkey is registered", state: "done" },
+    { t: "Smart wallet deployed", d: walletReady ? "Your account exists on-chain" : "Approve the deployment with your passkey", state: walletReady ? "done" : "now" },
+    { t: "Monerium connected", d: connected ? (u.monerium?.method === "api_keys" ? "Your own API keys" : "Signed in with Monerium") : "Sign in, or add your API keys", state: connected ? "done" : "now" },
+    { t: "IBAN activated", d: rejected ? "Not approved" : approved ? "Funding and sending are open" : "One passkey confirmation",
       state: rejected ? "bad" : approved ? "done" : "now" },
   ];
   /* Only the FIRST unfinished step is "in progress". Nothing is working on
@@ -4454,9 +4416,11 @@ function renderKycGate(u, needsChoice) {
 
   const box = $("kyc-status-box");
   if (box) box.className = `m-gate-status${approved ? " ok" : rejected ? " no" : ""}`;
-  // Self-approval only where the API would take it, and never once approved.
-  $("btn-kyc-simulate").classList.toggle("hidden", !caps.simulation || approved || rejected);
+  $("btn-kyc-activate").classList.toggle("hidden", !(connected && !approved && !u.iban && !rejected));
+  $("btn-kyc-reconnect").classList.toggle("hidden", !(connected && !approved));
 }
+
+let keysFormOpen = false;
 
 function enterKycReview(name) {
   $("onboard").style.display = "none";
@@ -4476,7 +4440,7 @@ async function refreshKycStatus({ continueWhenApproved = false } = {}) {
     if (kycApproved(user) && continueWhenApproved) {
       const full = await api(`/api/users/${user.id}`);
       renderUser(full);
-      if (user.iban || user.funding?.status === "active" || user.funding?.mode === "mock") {
+      if (user.iban || user.funding?.status === "active") {
         return enterDashboard(user.name || pendingInfo?.name || "Account");
       }
       return enterProvisioning(user.name || pendingInfo?.name || "Account");
@@ -4484,29 +4448,10 @@ async function refreshKycStatus({ continueWhenApproved = false } = {}) {
   } catch (e) { showErr("kyc-err", e); }
 }
 
-async function chooseFundingPath(path) {
-  clearErr("kyc-err");
-  try {
-    if (path === "new_monerium" && caps.kycProvider === "sumsub") {
-      const started = await api(`/api/users/${user.id}/sumsub/start`, {});
-      user = { ...user, kyc: started.kyc, funding: started.funding };
-      if (started.verificationUrl) {
-        location.href = started.verificationUrl;
-        return;
-      }
-      renderKycState(user);
-      return;
-    }
-    const updated = await api(`/api/users/${user.id}/funding-onboarding-path`, { path });
-    renderUser(updated);
-  } catch (e) { showErr("kyc-err", e); }
-}
 
 async function startMoneriumConnect(errorId = "kyc-err") {
   clearErr(errorId);
   try {
-    const updated = await api(`/api/users/${user.id}/funding-onboarding-path`, { path: "existing_monerium" });
-    renderUser(updated);
     const redirectUri = `${location.origin}/api/monerium/oauth/callback`;
     const connect = await api(`/api/users/${user.id}/monerium/connect/start`, { redirectUri });
     location.href = connect.redirectUrl;
@@ -4519,8 +4464,46 @@ async function startMoneriumConnect(errorId = "kyc-err") {
    a connected Monerium account uses its own OAuth token, an in-house-approved
    account goes through the app credentials on the server. Returns true when
    the ceremony ran. */
+async function connectMoneriumKeysAtGate() {
+  clearErr("kyc-err");
+  const btn = $("btn-kyc-keys-connect");
+  btn.disabled = true;
+  btn.textContent = "Checking with Monerium…";
+  try {
+    const updated = await api(`/api/users/${user.id}/monerium/api-keys`, {
+      clientId: $("kyc-mon-id").value,
+      clientSecret: $("kyc-mon-secret").value,
+    });
+    $("kyc-mon-secret").value = "";
+    keysFormOpen = false;
+    renderUser(updated);
+    if (kycApproved(user)) return enterProvisioning(user.name || "Account");
+    renderKycState(user);
+  } catch (e) {
+    showErr("kyc-err", e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Verify and connect";
+  }
+}
+
+/* Activation from the gate: the account is still pending (activation is what
+   approves it), so this deliberately does not require approval first. */
+async function activateIbanAtGate() {
+  clearErr("kyc-err");
+  const b = $("btn-kyc-activate");
+  b.disabled = true;
+  try {
+    await issueAppIban();
+    if (kycApproved(user)) return enterProvisioning(user.name || "Account");
+    renderKycState(user);
+  } catch (e) { showErr("kyc-err", e); } finally { b.disabled = false; }
+}
+
 async function issueAppIban() {
-  if (!user?.id || user.iban || !kycApproved(user)) return false;
+  // A connected Monerium account may activate before approval — activation
+  // IS what approves it (address-matched IBAN on the connected account).
+  if (!user?.id || user.iban || !(kycApproved(user) || hasConnectedMonerium(user))) return false;
   if ((user.funding || {}).mode !== "sandbox") return false;
   await finishPasskeySafeSetup();
   let profileId = user.monerium?.profileId;
@@ -4553,8 +4536,8 @@ async function issueAppIban() {
 async function activateConnectedMonerium() {
   clearErr("dep-err");
   try {
-    // A pending account with nothing connected still needs Monerium's OAuth;
-    // an approved account can activate its IBAN directly, connected or not.
+    // A pending account with nothing connected still needs a Monerium
+    // connection; an approved or connected account activates directly.
     if (!hasConnectedMonerium() && !kycApproved(user)) return startMoneriumConnect("dep-err");
     await issueAppIban();
   } catch (e) { showErr("dep-err", e); }
@@ -4997,9 +4980,8 @@ async function createAccount(withPasskey) {
         setPasskeyButtonBusy(true, "Approve smart wallet deployment...");
         await finishPasskeySafeSetup();
         pkStep(1, "done");
-        // With KYC already approved (sandbox auto-approve), chain straight into
-        // the IBAN ceremony; otherwise the step stays pending and runs from the
-        // dashboard's "Activate IBAN" once identity review lands.
+        // Only the hardhat harness auto-approves; a real account is pending
+        // here and continues at the Monerium gate below.
         if (kycApproved(user) && !user.iban && (user.funding || {}).mode === "sandbox") {
           step = 2;
           pkStep(2, "active");
@@ -5038,32 +5020,29 @@ async function createAccount(withPasskey) {
 $("btn-passkey").onclick = () => {
   if (passkeyOnboardingBusy) return;
   if (!window.PublicKeyCredential) {
-    showErr("pk-err", new Error("this browser doesn't support passkeys — opening account without one"));
-    return setTimeout(() => createAccount(false), 1200);
+    // No passkey, no account: there is nothing an account without one can
+    // hold, and no skip path that lands somewhere useful.
+    return showErr("pk-err", new Error("this browser doesn't support passkeys — open Zold in a browser with passkey support to create an account"));
   }
   createAccount(true);
 };
-$("btn-skippk").onclick = () => createAccount(false);
 $("btn-monerium-existing").onclick = () => startMoneriumConnect();
-$("btn-monerium-new").onclick = () => chooseFundingPath("new_monerium");
+$("btn-monerium-keys").onclick = () => { keysFormOpen = true; clearErr("kyc-err"); renderKycState(user); };
+$("btn-kyc-keys-back").onclick = () => { keysFormOpen = false; clearErr("kyc-err"); renderKycState(user); };
+$("btn-kyc-keys-connect").onclick = connectMoneriumKeysAtGate;
+$("btn-kyc-activate").onclick = activateIbanAtGate;
+$("btn-kyc-reconnect").onclick = async () => {
+  clearErr("kyc-err");
+  try {
+    const path = user.monerium?.method === "api_keys" ? "api-keys" : "connect";
+    renderUser(await api(`/api/users/${user.id}/monerium/${path}`, undefined, "DELETE"));
+    keysFormOpen = false;
+    renderKycState(user);
+  } catch (e) { showErr("kyc-err", e); }
+};
 $("btn-monerium-dashboard").onclick = () => activateConnectedMonerium();
 $("btn-finish-safe").onclick = () => finishDashboardSmartWallet();
 $("btn-kyc-refresh").onclick = () => refreshKycStatus({ continueWhenApproved: true });
-/* Local demo self-approval. The API refuses this off a loopback socket and
-   outside ALLOW_SIMULATION, so the button is only rendered where it works. */
-$("btn-kyc-simulate").onclick = async () => {
-  clearErr("kyc-err");
-  const b = $("btn-kyc-simulate");
-  b.disabled = true;
-  try {
-    await api(`/api/users/${user.id}/kyc/mock-review`, { decision: "approved" });
-    await refreshKycStatus({ continueWhenApproved: true });
-  } catch (e) {
-    showErr("kyc-err", e);
-  } finally {
-    b.disabled = false;
-  }
-};
 $("btn-dash-kyc-refresh").onclick = async () => {
   await refresh();
   if (kycApproved(user)) enterDashboard(user.name);
@@ -5113,14 +5092,6 @@ async function resumeSession() {
 loadCapabilities();
 resumeSession();
 
-	$("btn-deposit").onclick = async () => {
-	  clearErr("dep-err");
-	  try {
-	    if (!kycApproved(user)) throw new Error("identity review must be approved before adding money");
-	    await api("/api/simulate/sepa-deposit", { iban: user.iban, amountEur: Number($("dep-amount").value) });
-	    await refresh();
-  } catch (e) { showErr("dep-err", e); }
-};
 
 /* ---------- payment page ---------- */
 function renderHandle(page) {
@@ -5478,7 +5449,6 @@ function revealPickup(t) {
       ` · <a href="${esc(moreInfo)}" target="_blank" rel="noreferrer" style="color:var(--amber)">details ↗</a>`);
   }
   $("btn-refresh-payout").classList.toggle("hidden", !p.anchorTransactionId);
-  $("btn-pickup").classList.toggle("hidden", !!p.anchorTransactionId);
   $("pickup-box").scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
@@ -5598,20 +5568,6 @@ async function refreshCashPayout() {
 
 $("btn-refresh-payout").onclick = refreshCashPayout;
 
-$("btn-pickup").onclick = async () => {
-  try {
-    const t = await api("/api/simulate/pickup", { transferId: transfer.id });
-    transfer = t;
-    $("pickup-box").classList.add("hidden");
-    playTimeline(t);
-    setTimeout(() => {
-      $("paid-box").classList.remove("hidden");
-      $("paid-note").textContent = `${t.recipientName} collected KES ${fmt(t.receiveKes)} · ref ${t.pickup.referenceCode}`;
-      $("btn-again").classList.remove("hidden");
-      updateHistory(t);
-    }, 380 * (t.txs.length + 1) + 600);
-  } catch (e) { showErr("send-err", e); }
-};
 
 $("btn-again").onclick = () => {
   $("step-progress").classList.add("hidden");

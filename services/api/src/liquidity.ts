@@ -7,6 +7,7 @@ import {
   orchestratorAddress,
   orchestratorWallet,
   publicClient,
+  swapperAddress,
   usd,
   writeAndWait,
 } from "./chain.js";
@@ -190,13 +191,13 @@ class FxSwapperLiquidityProvider implements LiquidityProvider {
     const a = addrs();
     const functionName = side === "EURE_TO_USDC" ? "quoteOut" : "quoteReverseOut";
     const expectedOut = (await publicClient.readContract({
-      address: a.swapper,
+      address: swapperAddress(),
       abi: abis.FxSwapper,
       functionName,
       args: [amountIn],
     })) as bigint;
     const rate = (await publicClient.readContract({
-      address: a.swapper,
+      address: swapperAddress(),
       abi: abis.FxSwapper,
       functionName: "rate",
       args: [],
@@ -234,11 +235,11 @@ class FxSwapperLiquidityProvider implements LiquidityProvider {
       address: token,
       abi: abis.MockToken,
       functionName: "approve",
-      args: [a.swapper, quote.amountIn],
+      args: [swapperAddress(), quote.amountIn],
     });
-    await waitForAllowanceVisibility(token, orchestratorAddress, a.swapper, quote.amountIn);
+    await waitForAllowanceVisibility(token, orchestratorAddress, swapperAddress(), quote.amountIn);
     const swapHash = await writeAndWait(orchestratorWallet, {
-      address: a.swapper,
+      address: swapperAddress(),
       abi: abis.FxSwapper,
       functionName: swapFunction,
       args: [quote.amountIn, quote.minOut, to],
@@ -256,7 +257,7 @@ class FxSwapperLiquidityProvider implements LiquidityProvider {
   /** The mock's own posted rate — the price it will really swap at. */
   async indicativeRate(_side: LiquiditySide) {
     const raw = (await publicClient.readContract({
-      address: addrs().swapper,
+      address: swapperAddress(),
       abi: abis.FxSwapper,
       functionName: "rate",
       args: [],

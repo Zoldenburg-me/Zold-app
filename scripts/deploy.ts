@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { createPublicClient, createWalletClient, http, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { defineChain } from "viem";
-import { hardhat, polygon, polygonAmoy } from "viem/chains";
+import { base, baseSepolia, hardhat, polygon, polygonAmoy } from "viem/chains";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -32,11 +32,23 @@ try {
   // no .env — shell environment or defaults
 }
 
-const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
-const CHAIN_ID = Number(process.env.TRANSF_CHAIN_ID ?? 31337);
+const RPC_URL = process.env.TRANSF_RPC_URL ?? "https://mainnet.base.org";
+const CHAIN_ID = Number(process.env.TRANSF_CHAIN_ID ?? 8453);
+
+/**
+ * Circle's USDC, per chain, verified with eth_getCode + symbol() (Sep 2026).
+ * On a real chain nothing is deployed for USDC — it is theirs. Other chains
+ * need DEPLOY_USDC_ADDRESS.
+ */
+const KNOWN_USDC: Record<number, `0x${string}`> = {
+  8453: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  84532: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+};
 
 const chain = (() => {
   switch (CHAIN_ID) {
+    case base.id: return base;
+    case baseSepolia.id: return baseSepolia;
     case hardhat.id: return hardhat;
     case polygonAmoy.id: return polygonAmoy;
     case polygon.id: return polygon;
@@ -168,6 +180,20 @@ async function eurUsdSeed(): Promise<bigint> {
 const SWAP_INVENTORY_EURE = parseUnits("1000000", 18);
 const SWAP_INVENTORY_USDC = parseUnits("1000000", 6);
 
+function writeDeployments(out: Record<string, `0x${string}`>) {
+  const file = path.join(ROOT, "deployments.json");
+  let all: Record<string, unknown> = {};
+  try {
+    const existing = JSON.parse(readFileSync(file, "utf8"));
+    // Migrate a legacy flat file into its chain slot rather than dropping it.
+    all = typeof existing.swapper === "string" ? { "31337": existing } : existing;
+  } catch {
+    all = {};
+  }
+  all[String(CHAIN_ID)] = out;
+  writeFileSync(file, JSON.stringify(all, null, 2) + "\n");
+}
+
 async function main() {
   // Deploying to the wrong chain wastes gas and produces addresses the API will
   // silently use with a mismatched EIP-712 domain. Check before spending.
@@ -204,11 +230,31 @@ async function main() {
         `could never arrive. Monerium issues on: ${chains.join(", ") || "(could not reach Monerium)"}`,
     );
   }
+  /**
+   * Off hardhat, the deployment IS the two real token addresses and nothing
+   * else. The FxSwapper (our own inventory, not Safe-executable) and the
+   * BridgeEscrow (the removed dry-run leg) are local fixtures; production
+   * liquidity comes from LI.FI / Uniswap through the user's own Safe, and the
+   * cash leg goes through Bridge.xyz. Deploying mock USDC on a real chain, as
+   * this script used to, would have pointed every rail at a token nobody holds.
+   */
+  if (CHAIN_ID !== hardhat.id) {
+    const usdcAddr = (process.env.DEPLOY_USDC_ADDRESS as `0x${string}` | undefined) ?? KNOWN_USDC[CHAIN_ID];
+    if (!usdcAddr) {
+      throw new Error(`no USDC address known for chain ${CHAIN_ID}; set DEPLOY_USDC_ADDRESS to Circle's USDC there`);
+    }
+    const code = await publicClient.getCode({ address: usdcAddr });
+    if (!code || code === "0x") throw new Error(`USDC ${usdcAddr} has no code on chain ${CHAIN_ID}`);
+    console.log(`USDC   ${usdcAddr}  (Circle's own — not deployed by us)`);
+    writeDeployments({ eure, usdc: usdcAddr });
+    console.log(`wrote deployments.json entry for chain ${CHAIN_ID}: token addresses only, nothing deployed`);
+    return;
+  }
+
   const usdc = await deploy("MockToken", ["USD Coin (mock)", "USDC", 6]);
   const eurUsdRate = await eurUsdSeed();
   console.log(`swapper seeded at EUR/USD ${(Number(eurUsdRate) / 1e6).toFixed(4)}`);
   const swapper = await deploy("FxSwapper", [eure, usdc, eurUsdRate]);
-  const bridge = await deploy("BridgeEscrow", [usdc]);
 
   // Hardhat accounts #0/#1/#2 stand in for three separate signers.
   const timelockOwners = [
@@ -223,7 +269,6 @@ async function main() {
   ]);
 
   await call(swapper, "FxSwapper", "setTrader", [orchestratorAddr, true]);
-  await call(bridge, "BridgeEscrow", "setOrchestrator", [orchestratorAddr, true]);
   /**
    * Seed the swapper's inventory.
    *
@@ -249,20 +294,8 @@ async function main() {
   // Roles are wired BEFORE ownership moves — afterwards every admin call has
   // to be queued, confirmed and waited out, which is the point.
   await call(swapper, "FxSwapper", "transferOwnership", [timelock]);
-  await call(bridge, "BridgeEscrow", "transferOwnership", [timelock]);
 
-  const out = { eure, usdc, swapper, bridge, timelock };
-  const file = path.join(ROOT, "deployments.json");
-  let all: Record<string, unknown> = {};
-  try {
-    const existing = JSON.parse(readFileSync(file, "utf8"));
-    // Migrate a legacy flat file into its chain slot rather than dropping it.
-    all = typeof existing.swapper === "string" ? { "31337": existing } : existing;
-  } catch {
-    all = {};
-  }
-  all[String(CHAIN_ID)] = out;
-  writeFileSync(file, JSON.stringify(all, null, 2) + "\n");
+  writeDeployments({ eure, usdc, swapper, timelock });
   console.log(
     `\nroles wired, swapper seeded with ${real ? "0" : "1,000,000"} EURe and 1,000,000 USDC` +
       `\nadmin ownership -> AdminTimelock ${timelock} (${TIMELOCK_THRESHOLD}-of-${timelockOwners.length}, ${TIMELOCK_DELAY}s delay)`,
