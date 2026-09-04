@@ -27,24 +27,13 @@ export interface User {
   country: string;
   kycStatus: KycStatus;
   kyc?: {
-    provider: "mock" | "manual" | "monerium" | "sumsub";
-    onboardingPath?: "existing_monerium" | "new_monerium";
+    /** Identity is Monerium's. The other literals only describe rows written
+     *  before the in-house, mock and Sumsub paths were removed. */
+    provider: "monerium" | "manual" | "mock" | "sumsub";
+    onboardingPath?: "existing_monerium";
     applicantId?: string;
     checkedAt?: string;
     reason?: string;
-    sumsub?: {
-      externalUserId: string;
-      applicantId?: string;
-      reviewStatus?: string;
-      reviewAnswer?: string;
-      reviewedAt?: string;
-      moneriumShare?: {
-        profileId: string;
-        status: "pending" | "error";
-        updatedAt: string;
-        error?: string;
-      };
-    };
   };
   /**
    * FATF Travel Rule originator data — who is sending the money.
@@ -85,11 +74,7 @@ export interface User {
    *  store only its address — the private half stays in the user's browser. */
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
-  /** Testnet faucet grant, recorded so one account is seeded exactly once.
-   *  txHash is empty while the transfer is in flight (the synchronous claim
-   *  that stops a double completion from paying twice). */
-  faucet?: { grantedEur: number; txHash: string; at: string };
-  /**
+    /**
    * Passkey Safe state. Production can add a co-signer as a second owner;
    * local/test plans stay passkey-only unless the harness opts in.
    */
