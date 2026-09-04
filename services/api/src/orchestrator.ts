@@ -479,7 +479,11 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     const rate = await compensationRate(t);
     const eurBack = (t.usdcOut ?? 0) / (Number(rate) / 1e6);
     refundEur = Math.floor((fee + eurBack) * 100) / 100;
-    recoveredFrom = steps.has("bridge.lockForPayout") ? "released escrow" : "post-swap USDC";
+    // Was a ternary on "bridge.lockForPayout" — a step that no longer exists,
+    // so the escrow arm had become unreachable. With BridgeEscrow gone the
+    // swapped USDC sits with the orchestrator until Bridge takes it, and that
+    // is the only place a refund can come from.
+    recoveredFrom = "post-swap USDC";
     const lost = Math.max(0, t.sendEur - refundEur);
     if (lost > 0) deductions = `€${lost.toFixed(2)} conversion round-trip at execution rate`;
   }
@@ -765,11 +769,11 @@ export async function executeTransfer(
     }
 
     // 3. Ask Bridge.xyz to fund the Stellar side. In dry-run mode we record
-    //    Bridge-shaped deposit instructions and keep the local escrow leg so
-    //    the no-credential demo can still complete. BRIDGE_LIVE=1 calls the
-    //    Bridge Transfer API; once Bridge reports destination funding, refunds
-    //    must reconcile Bridge + anchor state instead of assuming funds stayed
-    //    local.
+    //    Bridge-shaped deposit instructions and nothing moves on chain, so the
+    //    no-credential demo completes with the USDC still at the orchestrator.
+    //    BRIDGE_LIVE=1 calls the Bridge Transfer API; once Bridge reports
+    //    destination funding, refunds must reconcile Bridge + anchor state
+    //    instead of assuming funds stayed local.
     let bridgePlan: BridgeTransferPlan;
     try {
       const destination = bridgeDestination();
@@ -845,7 +849,10 @@ export async function executeTransfer(
      * also what makes compensation a plain reverse swap.
      */
     store.updateTransfer(transfer.id, { state: "BRIDGED", txs });
-    failpoint(bridgePlan.mode === "live" ? "bridge.xyz.transfer" : "bridge.lockForPayout");
+    // Both arms now name the step actually recorded in txs, so a FORCE_FAIL_STEP
+    // value can be read straight off a transfer. The dry-run arm used to be
+    // "bridge.lockForPayout", a step that no longer exists.
+    failpoint(bridgePlan.mode === "live" ? "bridge.xyz.transfer" : "bridge.xyz.dry-run.transfer");
 
     // 4. Create the cash pickup at the quoted amount — a real SEP-24 anchor
     //    withdrawal when an anchor is configured, the mock otherwise.
