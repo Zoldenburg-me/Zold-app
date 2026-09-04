@@ -19,6 +19,11 @@ export interface MoneriumConfig {
   baseUrl: string; // https://api.monerium.dev (sandbox) | .app (production)
   clientId: string;
   clientSecret?: string;
+  /**
+   * Supply the bearer token from elsewhere (a user's OAuth token) instead of
+   * the client-credentials grant. When set, clientSecret is never used.
+   */
+  tokenProvider?: () => Promise<string>;
 }
 
 export interface MoneriumOrder {
@@ -39,6 +44,7 @@ export class MoneriumClient {
   constructor(private cfg: MoneriumConfig) {}
 
   private async accessToken(): Promise<string> {
+    if (this.cfg.tokenProvider) return this.cfg.tokenProvider();
     if (!this.cfg.clientSecret) {
       throw new Error("MONERIUM_CLIENT_SECRET is required for Monerium app-level API calls");
     }

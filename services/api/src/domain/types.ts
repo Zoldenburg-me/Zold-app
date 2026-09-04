@@ -474,6 +474,36 @@ export interface InvoiceParty {
   email?: string;
 }
 
+/**
+ * An on-chain payment that settled an invoice.
+ *
+ * Written when the payment is converted, so the invoice carries the whole
+ * thread: what arrived, in what, on which transaction; what it was worth in
+ * EUR at that moment and on whose rate; which transaction converted it; and
+ * what actually landed. An auditor asking how an invoice was paid should not
+ * have to match amounts against timestamps to find out.
+ *
+ * `creditedEur` is what ARRIVED, measured as a balance delta — not what any
+ * quote promised. `realisedGainEur` is that minus the receipt value, and is
+ * absent rather than zero when the receipt could not be valued: an unknown
+ * basis gives an unknown gain, and zero would be a claim.
+ */
+export interface InvoiceSettlement {
+  depositId: string;
+  receivedAsset: "USDC" | "EURE";
+  receivedAmount: number;
+  receiptTxHash: string;
+  /** EUR value at receipt, with the rate and whose feed it came from. */
+  receiptAmountEur?: number;
+  receiptRate?: number;
+  receiptRateProvider?: string;
+  /** The user-signed swap, when one was needed. */
+  conversionTxHash?: string;
+  creditedEur?: number;
+  realisedGainEur?: number;
+  at: string;
+}
+
 export interface Invoice {
   id: string;
   /** Defaults to "incoming" for rows written before outgoing existed. */
@@ -567,6 +597,9 @@ export interface Invoice {
       notVerified: string[];
     };
   };
+  /** On-chain payments that settled this invoice. Appended, never replaced —
+   *  an invoice can legitimately be paid more than once. */
+  settlements?: InvoiceSettlement[];
 }
 
 // ── Chart of accounts + bookkeeping ─────────────────────────────────────────
