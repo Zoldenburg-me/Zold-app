@@ -409,9 +409,9 @@ export function startDepositPoller() {
  * Webhook receiver (production path — needs a public URL).
  *
  * The body is treated as untrusted: we read an order id out of it and throw
- * the rest away, then re-read that order from Monerium. Previously this
- * endpoint credited whatever address and amount the request stated, which
- * made it an unauthenticated mint for anyone who could reach the port.
+ * the rest away, then re-read that order from Monerium. Crediting whatever
+ * address and amount the request stated would make this an unauthenticated
+ * mint for anyone who could reach the port.
  *
  * A shared secret (MONERIUM_WEBHOOK_SECRET) gates it further when set — see
  * verifyWebhookSignature in server.ts. Both controls are worth having: the

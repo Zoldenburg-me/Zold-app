@@ -1,12 +1,10 @@
 /**
  * Live FX mid rates.
  *
- * These used to be three hardcoded constants (EURUSD 1.08, USDINR 87.2,
- * USDKES 129.5). By July 2026 the real rates were 1.1379, 96.55 and 129.64 —
- * so a EUR->INR quote came out 14.3% below the market mid while the receipt
- * told the sender it was using "the real exchange rate" with a 0.50% margin.
- * A number that is wrong by 14% and labelled honest is worse than one that is
- * openly a mock, so the rate now comes from a feed.
+ * Never hardcode these. A constant drifts silently while the receipt keeps
+ * telling the sender it is using "the real exchange rate" — a number that is
+ * wrong by 14% and labelled honest is worse than one that is openly a mock,
+ * so the rate comes from a feed.
  *
  * Two rules follow from that:
  *
@@ -36,11 +34,10 @@ let inFlight: Promise<MidRates> | null = null;
 /**
  * Pinned rates for tests and offline demos: TRANSF_RATES_FIXED='{"USD":1.14,…}'.
  *
- * This is the same shape as the bug it replaces — a rate that does not move —
- * so it is fail-closed in production the way ALLOW_MOCK_FALLBACK is. A hosted
- * deploy that inherits this env var by accident would quote a frozen rate and
- * look completely healthy doing it, which is exactly how the constants went
- * 14% stale unnoticed in the first place.
+ * A rate that does not move is exactly the thing this module exists to
+ * prevent, so it is fail-closed in production the way ALLOW_MOCK_FALLBACK is.
+ * A hosted deploy that inherits this env var by accident would quote a frozen
+ * rate and look completely healthy doing it.
  */
 function pinned(): MidRates | null {
   const raw = process.env.TRANSF_RATES_FIXED;

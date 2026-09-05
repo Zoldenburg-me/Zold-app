@@ -147,7 +147,7 @@ try {
     assert.equal(r.status, 409);
   });
 
-  await t("mock-review is blocked in production (the old dead end)", async () => {
+  await t("mock-review is blocked in production", async () => {
     const r = await call(`/api/users/${userId}/kyc/mock-review`, { decision: "approved" }, userToken);
     assert.equal(r.status, 403, "self-service review must stay off in production");
   });
