@@ -141,7 +141,7 @@ try {
   await waitFor(`${API}/api/health`);
 
   console.log("4/6 funding an account and binding its device key…");
-  const owner = await ok("POST", "/api/users", { body: { name: "Owner", country: "DE" } });
+  const owner = await ok("POST", "/api/users", { body: { name: "Owner", email: "owner@example.com", country: "DE" } });
   const ownerToken: string = owner.sessionToken;
   // No simulated deposits exist any more: fund the local Safe by minting the
   // hardhat MockToken EURe straight to it (what a Monerium issue order does on
@@ -286,7 +286,7 @@ try {
 
   // Four eyes: a second human approves.
   await ok("POST", `/api/orgs/${org.id}/drafts/${draft.id}/submit`, { token: ownerToken });
-  const reviewer = await ok("POST", "/api/users", { body: { name: "Reviewer", country: "DE" } });
+  const reviewer = await ok("POST", "/api/users", { body: { name: "Reviewer", email: "reviewer@example.com", country: "DE" } });
   const invite = await ok("POST", `/api/orgs/${org.id}/members`, {
     token: ownerToken,
     body: { email: "reviewer@example.com", role: "admin" },

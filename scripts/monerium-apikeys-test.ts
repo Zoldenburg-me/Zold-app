@@ -347,7 +347,7 @@ try {
     assert.equal(h.data.capabilities.moneriumHost, `127.0.0.1:${STUB_PORT}`);
   });
 
-  const created = await call("/api/users", { name: "Own Account Tester", country: "DE" });
+  const created = await call("/api/users", { name: "Own Account Tester", email: "own.keys@example.com", country: "DE" });
   assert.equal(created.status, 201);
   const userId = created.data.id;
   token = created.data.sessionToken;
