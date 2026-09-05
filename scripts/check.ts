@@ -17,6 +17,7 @@ const scripts = [
   "authorize:test",
   "country:policy:test",
   "recovery:test",
+  "recovery:candide:test",
   "monerium:oauth:test",
   "monerium:apikeys:test",
   "sepa:test",
