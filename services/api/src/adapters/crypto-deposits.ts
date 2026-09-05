@@ -73,7 +73,7 @@ interface WatchedAddress {
  *   owner's explicit instruction for USDC arriving there.
  * - Direct Safe funding is recorded for EVERY account, not only approved
  *   ones. Recording is observation, not a credit decision: a pending
- *   account's Safe can already receive (the faucet funds it at deployment,
+ *   account's Safe can already receive (a deposit lands there directly,
  *   before manual review lands), and skipping it meant the cursor moved past
  *   the transfer forever — the deposit never appeared even after approval.
  *   Page auto-convert stays approved-only: conversion IS a credit decision.
@@ -436,7 +436,7 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
       const value = (log.args.value ?? 0n) as bigint;
       if (value <= 0n) continue;
       const from = String(log.args.from ?? "").toLowerCase();
-      if (token.token === "EURE" && from === addrs().swapper.toLowerCase()) continue;
+      if (token.token === "EURE" && from === (addrs().swapper ?? "").toLowerCase()) continue;
       const txHash = log.transactionHash!;
       const logIndex = Number(log.logIndex);
       if (store.findCryptoDeposit(txHash, logIndex)) continue;

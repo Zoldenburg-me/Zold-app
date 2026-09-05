@@ -13,7 +13,9 @@ try {
 }
 if (initialPort) process.env.TRANSF_API_PORT = initialPort;
 
-export const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
+// Base mainnet by default. The local hardhat stack sets its own RPC and chain
+// id (scripts/_local-chain.ts); nothing else should ever land here by accident.
+export const RPC_URL = process.env.TRANSF_RPC_URL ?? "https://mainnet.base.org";
 export const API_PORT = Number(process.env.TRANSF_API_PORT ?? process.env.PORT ?? 3000);
 export const API_HOST = process.env.TRANSF_API_HOST ?? "127.0.0.1";
 export const IS_PRODUCTION = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
@@ -25,11 +27,14 @@ export const USING_LOCAL_RPC = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/
  * Which chain we settle on. Wallet deployment, signatures and token balances
  * all need the same chain id, so it is derived from this one place.
  *
- * 31337 = hardhat (default), 84532 = Base Sepolia (the deployed testnet),
- * 80002 = Polygon Amoy, 137 = Polygon mainnet. Unknown ids are synthesized
- * by chain.ts, so nothing is pinned to this list.
+ * 8453 = Base mainnet (default — the production chain, where Monerium issues
+ * the real EURe and Circle the real USDC), 31337 = the local hardhat stack the
+ * test harnesses pin themselves to. Unknown ids are synthesized by chain.ts.
  */
-export const CHAIN_ID = Number(process.env.TRANSF_CHAIN_ID ?? 31337);
+export const CHAIN_ID = Number(process.env.TRANSF_CHAIN_ID ?? 8453);
+/** Chains where the tokens are real money. Anything test-only refuses here. */
+export const REAL_MONEY_CHAINS = new Set([1, 100, 137, 8453, 42161, 59144]);
+export const IS_REAL_MONEY_CHAIN = REAL_MONEY_CHAINS.has(CHAIN_ID);
 export const IS_LOCAL_CHAIN = CHAIN_ID === 31337;
 export const USING_LOCAL_API_HOST = API_HOST === "127.0.0.1" || API_HOST === "localhost" || API_HOST === "::1";
 
@@ -48,19 +53,23 @@ export const LOOKS_LOCAL = USING_LOCAL_API_HOST && USING_LOCAL_RPC && IS_LOCAL_C
 const LOOKS_HOSTED = Boolean(PUBLIC_URL) || !LOOKS_LOCAL;
 
 /**
- * Monerium integration. Mock mode by default; sandbox mode activates when
- * client credentials are present (create an app at https://monerium.dev,
- * sandbox environment, and put the credentials in .env).
+ * Monerium integration — PRODUCTION by default (api.monerium.app). There is no
+ * mock mode any more: every account is a real Monerium account, connected
+ * either by OAuth (the user signs up / signs in at Monerium) or by the user's
+ * own API keys. The app's client credentials, when set, only re-read webhook
+ * orders and reconcile; they never provision profiles for users.
+ * Point MONERIUM_BASE_URL at https://api.monerium.dev for the sandbox.
  */
+const MONERIUM_BASE_URL = process.env.MONERIUM_BASE_URL ?? "https://api.monerium.app";
 export const MONERIUM = {
   clientId: process.env.MONERIUM_CLIENT_ID ?? "",
   clientSecret: process.env.MONERIUM_CLIENT_SECRET ?? "",
   oauthClientId: process.env.MONERIUM_OAUTH_CLIENT_ID ?? process.env.MONERIUM_CLIENT_ID ?? "",
-  baseUrl: process.env.MONERIUM_BASE_URL ?? "https://api.monerium.dev",
-  // Chain identifier Monerium should associate linked addresses with.
-  // The sandbox expects testnet names ("sepolia", ...); production uses
-  // mainnet names ("ethereum", "gnosis", "polygon").
-  chain: process.env.MONERIUM_CHAIN ?? "sepolia",
+  baseUrl: MONERIUM_BASE_URL,
+  // Chain identifier Monerium should associate linked addresses with. Their
+  // production names are ethereum/gnosis/polygon/base/arbitrum/linea; the
+  // sandbox uses testnet names (basesepolia, sepolia, ...).
+  chain: process.env.MONERIUM_CHAIN ?? "base",
   // Optional: pin a profile id instead of creating/discovering one.
   profileId: process.env.MONERIUM_PROFILE_ID ?? "",
   // How often to poll for incoming EURe issue orders (webhooks need a public
@@ -68,7 +77,7 @@ export const MONERIUM = {
   pollMs: Number(process.env.MONERIUM_POLL_MS ?? 15_000),
   // User-owned account connect (Authorization Code + PKCE). Redirect URI must
   // exactly match the OAuth app registration.
-  authUrl: process.env.MONERIUM_AUTH_URL ?? `${process.env.MONERIUM_BASE_URL ?? "https://api.monerium.dev"}/auth`,
+  authUrl: process.env.MONERIUM_AUTH_URL ?? `${MONERIUM_BASE_URL}/auth`,
   redirectUri:
     process.env.MONERIUM_REDIRECT_URI ??
     `http://${API_HOST}:${API_PORT}/api/monerium/oauth/callback`,
@@ -81,36 +90,40 @@ export const moneriumSandboxEnabled = () =>
 export const moneriumOAuthEnabled = () => Boolean(MONERIUM.oauthClientId);
 
 /**
- * KYC gate. Local demos auto-approve by default so existing self-contained
- * tests keep running. Production and KYC_AUTO_APPROVE=0 start users in
- * `pending`; an external provider integration should call the review seam.
+ * THE ONE HARNESS SEAM. scripts/_local-chain.ts sets LOCAL_HARNESS=1 for every
+ * test suite, and it is honoured ONLY on the hardhat chain (31337) outside
+ * production: that chain has no Monerium, no ERC-4337 bundler and no anchor,
+ * so the suites need fake Safe ceremonies, a fake UserOperation hash, a
+ * locally minted EURe for a mirrored deposit, and up-front account approval.
+ * On every real-money chain the flag is inert by construction (the chain id
+ * test cannot be configured away), and production refuses to start with it.
+ * This replaces the old ALLOW_SIMULATION, which also opened product routes
+ * (simulated deposits, self-approval, mock payouts) — those are gone.
+ */
+export const HARNESS = {
+  enabled: process.env.LOCAL_HARNESS === "1" && IS_LOCAL_CHAIN && !IS_PRODUCTION,
+};
+
+/**
+ * Identity is Monerium's. An account is approved when a Monerium connection
+ * (OAuth or the user's own API keys) attributes an IBAN to its Safe — there is
+ * no in-house review, no auto-approval and no third-party KYC provider.
  */
 export const KYC = {
-  provider: process.env.KYC_PROVIDER ?? "manual",
-  autoApprove: process.env.KYC_AUTO_APPROVE === "1",
   /**
-   * Shared secret an operator (or a KYC provider's webhook) presents to record
-   * a decision. This is the ONLY approval path that survives production: the
-   * mock-review endpoint is gated on ALLOW_SIMULATION, and turning that on to
-   * approve a user would also re-open simulated deposits and cash pickup.
-   *
-   * Unset means no operator path at all — fail closed rather than leave an
-   * unauthenticated admin endpoint exposed.
+   * HARNESS ONLY. The local hardhat chain (31337) has no Monerium, so the test
+   * suites approve accounts up front with KYC_AUTO_APPROVE=1. The flag is
+   * ignored on every other chain — there is no auto-approval on a chain where
+   * money is real — and refused outright in production mode below.
+   */
+  autoApprove: process.env.KYC_AUTO_APPROVE === "1" && HARNESS.enabled,
+  /**
+   * Shared secret for the operator/admin routes (ops dashboard, recovery
+   * approvals). Unset means no operator path at all — fail closed rather than
+   * leave an unauthenticated admin endpoint exposed.
    */
   operatorToken: process.env.KYC_OPERATOR_TOKEN ?? "",
 };
-
-export const SUMSUB = {
-  baseUrl: process.env.SUMSUB_BASE_URL ?? "https://api.sumsub.com",
-  appToken: process.env.SUMSUB_APP_TOKEN ?? "",
-  secretKey: process.env.SUMSUB_SECRET_KEY ?? "",
-  webhookSecretKey: process.env.SUMSUB_WEBHOOK_SECRET_KEY ?? "",
-  levelName: process.env.SUMSUB_LEVEL_NAME ?? "basic-kyc-level",
-  tokenTtlSecs: Number(process.env.SUMSUB_TOKEN_TTL_SECS ?? 1800),
-  moneriumClientId: process.env.SUMSUB_MONERIUM_CLIENT_ID ?? "monerium",
-};
-
-export const sumsubEnabled = () => Boolean(SUMSUB.appToken && SUMSUB.secretKey && SUMSUB.levelName);
 
 export const RECOVERY = {
   managedKycGuardian: process.env.RECOVERY_MANAGED_KYC_GUARDIAN !== "0",
@@ -132,9 +145,9 @@ if (KYC.operatorToken && KYC.operatorToken.length < 24) {
 /**
  * Bridge.xyz orchestration — the cash rail's exit to Stellar.
  *
- * In dry-run mode it records Bridge-shaped deposit instructions and moves
- * nothing on chain; BRIDGE_LIVE=1 calls Bridge's Transfer API and waits for
- * the user/orchestrator-side deposit to fund it.
+ * Without BRIDGE_LIVE=1 the cash rail is CLOSED (no dry-run, no local escrow);
+ * BRIDGE_LIVE=1 calls Bridge's Transfer API and waits for the
+ * user/orchestrator-side deposit to fund it.
  */
 export const BRIDGE = {
   live: process.env.BRIDGE_LIVE === "1",
@@ -171,9 +184,11 @@ export const STELLAR_PUBLIC_PASSPHRASE = "Public Global Stellar Network ; Septem
 
 /** Stellar treasury + MoneyGram-style anchor (SEP-10/SEP-24). */
 export const STELLAR = {
-  horizon: process.env.STELLAR_HORIZON ?? "https://horizon-testnet.stellar.org",
-  networkPassphrase: process.env.STELLAR_PASSPHRASE ?? STELLAR_TESTNET_PASSPHRASE,
-  friendbot: process.env.STELLAR_FRIENDBOT ?? "https://friendbot.stellar.org",
+  // Public network by default. The Stellar testnet (horizon-testnet, the test
+  // passphrase, friendbot) is opt-in for the anchor harnesses.
+  horizon: process.env.STELLAR_HORIZON ?? "https://horizon.stellar.org",
+  networkPassphrase: process.env.STELLAR_PASSPHRASE ?? STELLAR_PUBLIC_PASSPHRASE,
+  friendbot: process.env.STELLAR_FRIENDBOT ?? "",
   // Anchor home domain for SEP-10/24. Stellar's public test anchor works
   // without any signup; MoneyGram production is the same protocol at their
   // domain with a partner-onboarded account.
@@ -207,9 +222,9 @@ export const anchorModeEnabled = () => Boolean(STELLAR.anchorDomain);
  *
  * WHY THE REFUSAL IS NOT ON BY DEFAULT, deliberately: with BRIDGE_LIVE unset
  * there is no external deposit address for a batch to deliver into, so the
- * output has nowhere to go but the orchestrator (the local demo settles
- * from it). Defaulting the refusal on would brick every dry-run and testnet
- * deployment, including Base Sepolia. The DEFAULT PATH is non-custodial; the
+ * output has nowhere to go but the orchestrator. Defaulting the refusal on
+ * would brick every testnet deployment, including Base Sepolia. The DEFAULT
+ * PATH is non-custodial; the
  * GUARANTEE is opt-in, and a deployment moving real money should set it.
  */
 export const CUSTODY = {
@@ -220,12 +235,6 @@ export const CUSTODY = {
 
 /** FP1/FP2 security posture (red-team fixes). */
 export const SECURITY = {
-  /** Simulation endpoints (mock SEPA deposit, pickup, self-serve KYC review)
-   *  are dev-only unless explicitly re-enabled. Gated on LOOKS_LOCAL rather
-   *  than the API host alone: a hosted deploy behind a reverse proxy binds
-   *  loopback too, and must not get free EURe and self-approved KYC. */
-  allowSimulation:
-    process.env.ALLOW_SIMULATION === "1" || (process.env.NODE_ENV !== "production" && LOOKS_LOCAL),
   /**
    * How many reverse proxies sit in front of this process.
    *
@@ -237,9 +246,6 @@ export const SECURITY = {
    * which is correct only when nothing is in front.
    */
   trustedProxyHops: Math.max(0, Number(process.env.TRUSTED_PROXY_HOPS ?? 0)),
-  /** When a real rail (anchor / Monerium sandbox) fails, fall back to a
-   *  simulated payout only if explicitly allowed — otherwise fail closed. */
-  allowMockFallback: process.env.ALLOW_MOCK_FALLBACK === "1",
   /** WebAuthn relying-party id + origins allowed for ceremonies and for
    *  cross-origin state-changing requests. */
   rpId: process.env.RP_ID ?? "localhost",
@@ -301,16 +307,27 @@ function assertProductionConfig() {
   if (!IS_PRODUCTION) return;
   const problems: string[] = [];
   const fail = (message: string) => problems.push(message);
-  if (process.env.KYC_AUTO_APPROVE === "1") fail("KYC_AUTO_APPROVE=1 is forbidden in production");
   if (!KYC.operatorToken) fail("KYC_OPERATOR_TOKEN is required in production");
-  if (KYC.provider === "sumsub" && !sumsubEnabled()) {
-    fail("SUMSUB_APP_TOKEN, SUMSUB_SECRET_KEY and SUMSUB_LEVEL_NAME are required when KYC_PROVIDER=sumsub");
+  if (process.env.KYC_AUTO_APPROVE === "1") fail("KYC_AUTO_APPROVE=1 is forbidden in production");
+  if (process.env.LOCAL_HARNESS === "1") fail("LOCAL_HARNESS=1 is forbidden in production");
+  for (const dead of ["ALLOW_SIMULATION", "ALLOW_MOCK_FALLBACK", "TESTNET_FAUCET_EUR", "KYC_PROVIDER", "SUMSUB_APP_TOKEN"]) {
+    if (process.env[dead]) fail(`${dead} no longer exists — the mock, simulation, faucet and Sumsub paths were removed; unset it`);
   }
-  if (KYC.provider === "sumsub" && !SUMSUB.webhookSecretKey) {
-    fail("SUMSUB_WEBHOOK_SECRET_KEY is required in production when KYC_PROVIDER=sumsub");
+  /**
+   * Mainnet means mainnet everywhere. A production deployment pointed at the
+   * Monerium sandbox, a testnet chain, or a Monerium chain name from the other
+   * environment would link addresses on one network and read balances on
+   * another, and every symptom would look like a bug elsewhere.
+   */
+  if (!IS_REAL_MONEY_CHAIN) fail(`TRANSF_CHAIN_ID=${CHAIN_ID} is not a mainnet chain (expected one of ${[...REAL_MONEY_CHAINS].join(", ")})`);
+  if (MONERIUM.baseUrl !== "https://api.monerium.app") fail(`MONERIUM_BASE_URL must be https://api.monerium.app in production (got ${MONERIUM.baseUrl})`);
+  if (!/^(ethereum|gnosis|polygon|base|arbitrum|linea)$/.test(MONERIUM.chain)) {
+    fail(`MONERIUM_CHAIN=${MONERIUM.chain} is not a Monerium production chain name`);
   }
-  if (process.env.ALLOW_SIMULATION === "1") fail("ALLOW_SIMULATION=1 is forbidden in production");
-  if (process.env.ALLOW_MOCK_FALLBACK === "1") fail("ALLOW_MOCK_FALLBACK=1 is forbidden in production");
+  if (!moneriumOAuthEnabled() && !MONERIUM.tokenEncryptionKey) {
+    fail("no way for a user to connect Monerium: set MONERIUM_OAUTH_CLIENT_ID (sign in with Monerium) and/or MONERIUM_TOKEN_ENCRYPTION_KEY (own API keys)");
+  }
+  if (Number(process.env.LIFI_CHAIN_ID ?? CHAIN_ID) !== CHAIN_ID) fail("LIFI_CHAIN_ID must equal TRANSF_CHAIN_ID");
   if (process.env.ALLOW_PLAINTEXT_STORE !== "1") {
     fail("ALLOW_PLAINTEXT_STORE=1 is required to acknowledge the JSON file store is not production storage");
   }
@@ -350,7 +367,7 @@ function assertProductionConfig() {
    * production it is never intentional.
    */
   {
-    const candideChainId = Number(process.env.CANDIDE_CHAIN_ID ?? 11155111);
+    const candideChainId = Number(process.env.CANDIDE_CHAIN_ID ?? CHAIN_ID);
     if (candideChainId !== CHAIN_ID) {
       fail(
         `CANDIDE_CHAIN_ID (${candideChainId}) must match TRANSF_CHAIN_ID (${CHAIN_ID}) — ` +
@@ -501,9 +518,13 @@ export const GNOSIS_PAY = {
 
 export interface Deployments {
   eure: `0x${string}`;
-  timelock?: `0x${string}`;
   usdc: `0x${string}`;
-  swapper: `0x${string}`;
+  /** Local-only: the FxSwapper venue and the AdminTimelock that owns it. A
+   *  real chain's entry carries the two token addresses and nothing else. */
+  timelock?: `0x${string}`;
+  swapper?: `0x${string}`;
+  /** Present in older entries, never read. */
+  bridge?: `0x${string}`;
 }
 
 /**
@@ -620,18 +641,17 @@ export const LIQUIDITY = {
   COW_NETWORK: process.env.COW_NETWORK ?? "xdai",
   COW_TIMEOUT_MS: Number(process.env.COW_TIMEOUT_MS ?? 15_000),
   /**
-   * Uniswap v3, on-chain. The only venue we can actually execute against on a
-   * testnet: Bebop has no testnet at all and CoW has no Base Sepolia, so both
-   * adapters can only ever be exercised with real money on a mainnet. The v3
-   * interface is identical on Base Sepolia and Base mainnet, so the path we
-   * test is the path that ships.
+   * Uniswap v3, on-chain. The v3 interface is identical on Base Sepolia and
+   * Base mainnet, so the path tested on the testnet is the path that ships.
    *
-   * Defaults are the verified Base Sepolia deployments (checked with
-   * eth_getCode, not copied from a docs page). Override per chain.
+   * Defaults are the Base MAINNET deployments, verified with eth_getCode and
+   * a chainId read against mainnet.base.org (Sep 2026), not copied from a docs
+   * page: UniswapV3Factory, SwapRouter02, QuoterV2. Override per chain
+   * (Base Sepolia: 0x4752ba5D… / 0x94cC0AaC… / 0xC5290058…).
    */
-  DEX_FACTORY: (process.env.DEX_FACTORY ?? "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24") as `0x${string}`,
-  DEX_ROUTER: (process.env.DEX_ROUTER ?? "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4") as `0x${string}`,
-  DEX_QUOTER: (process.env.DEX_QUOTER ?? "0xC5290058841028F1614F3A6F0F5816cAd0df5E27") as `0x${string}`,
+  DEX_FACTORY: (process.env.DEX_FACTORY ?? "0x33128a8fC17869897dcE68Ed026d694621f6FDfD") as `0x${string}`,
+  DEX_ROUTER: (process.env.DEX_ROUTER ?? "0x2626664c2603336E57B271c5C0b26F421741e481") as `0x${string}`,
+  DEX_QUOTER: (process.env.DEX_QUOTER ?? "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a") as `0x${string}`,
   /** Fee tiers probed, cheapest first. The deepest pool wins, not the first. */
   DEX_FEE_TIERS: (process.env.DEX_FEE_TIERS ?? "100,500,3000,10000")
     .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0),
@@ -667,8 +687,8 @@ export const LIQUIDITY = {
   LIFI_TIMEOUT_MS: Number(process.env.LIFI_TIMEOUT_MS ?? 15_000),
   /** Fraction, LI.FI's own units: 0.005 = 50bps. */
   LIFI_SLIPPAGE: Number(process.env.LIFI_SLIPPAGE ?? 0.005),
-  /** Chain to route on. Defaults to the app chain; EURe exists on 1/100/137/8453/42161/59144. */
-  LIFI_CHAIN_ID: Number(process.env.LIFI_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? 8453),
+  /** Chain to route on. The app chain; EURe exists on 1/100/137/8453/42161/59144. */
+  LIFI_CHAIN_ID: Number(process.env.LIFI_CHAIN_ID ?? CHAIN_ID),
 
   /**
    * Best execution. With more than one venue wired, picking one by config means
@@ -740,15 +760,6 @@ export const CRYPTO_IN = {
   maxBlockSpan: BigInt(process.env.CRYPTO_IN_MAX_BLOCK_SPAN ?? 5_000),
 };
 
-/**
- * Testnet faucet: EURe granted to each newly deployed passkey Safe from the
- * deployer wallet, so a fresh test account has something to send. Opt-in —
- * unset or 0 disables — and faucet.ts refuses production mode and the chains
- * where EURe is real money regardless of this value.
- */
-export const TESTNET_FAUCET = {
-  grantEur: Number(process.env.TESTNET_FAUCET_EUR ?? 0),
-};
 
 // FX configuration for the launch corridor (EUR -> KES cash pickup).
 //

@@ -24,6 +24,9 @@ import path from "node:path";
 import os from "node:os";
 
 process.env.TRANSF_CHAIN_ID = "31337";
+// The hardhat-only harness seam (fake Safe ceremonies, minted EURe, up-front
+// approval). Inert on any other chain id; see HARNESS in config.ts.
+process.env.LOCAL_HARNESS = "1";
 process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:8545";
 
 /**
