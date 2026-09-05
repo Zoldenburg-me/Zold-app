@@ -726,9 +726,32 @@ app.post(
   wrap(async (req, res) => {
     const { name, country, email, citizenships, accountType, usAnswers, consents,
       companyIncorporationCountry, softSignals } = req.body ?? {};
-    if (!name || !country) return res.status(400).json({ error: "name and country required" });
-    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    if (!name || !country) return res.status(400).json({ error: "name, email and country required" });
+    /**
+     * EMAIL IS REQUIRED, and it is a channel, not an identity. Identity is
+     * Monerium's; the passkey is the login. The email exists so the account
+     * can be found and recovered from a device that no longer has the
+     * passkey (Candide's guardian looks the account up by it), and so the
+     * OS passkey picker shows something that does not collide the way a
+     * full name does. It is verified only where it is used: Candide's OTP at
+     * recovery enrolment. Nothing here sends mail, and nothing claims to.
+     */
+    const emailNorm = typeof email === "string" ? email.trim() : "";
+    if (!emailNorm) return res.status(400).json({ error: "name, email and country required" });
+    if (emailNorm.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailNorm)) {
       return res.status(400).json({ error: "invalid email" });
+    }
+    // ONE CLAIMABLE ACCOUNT PER EMAIL. Recovery resolves an email to an
+    // account, so two accounts with passkeys on one address would make the
+    // lookup a guess. A row with no passkey is onboarding that stopped before
+    // any credential existed — nothing can sign in to it — so the same
+    // person may start again rather than being locked out by a failed
+    // ceremony.
+    if (store.usersByEmail(emailNorm).some((u) => !!u.passkey)) {
+      return res.status(409).json({
+        error: "an account already uses this email — sign in with your passkey, or recover the account if you lost the device",
+        code: "EMAIL_IN_USE",
+      });
     }
 
     /**
@@ -788,7 +811,7 @@ app.post(
         usAnswers: answers,
         segment: decision.segment,
         reasonCode: decision.reasonCode,
-        email: redact(email ?? ""),
+        email: redact(emailNorm),
         outcome: "refused_at_signup",
       }));
       // Deliberately says what Zold cannot offer and NOT which rule fired.
@@ -809,7 +832,7 @@ app.post(
     const user: User = {
       id,
       name,
-      email,
+      email: emailNorm,
       country: normaliseCountryCode(String(country)),
       kycStatus: approved ? "approved" : "pending",
       kyc: approved

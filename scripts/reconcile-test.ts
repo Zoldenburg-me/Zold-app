@@ -154,7 +154,7 @@ try {
   // The reconciler reads MONERIUM_* from the environment too.
   Object.assign(process.env, apiEnv);
 
-  const user = await api("/api/users", { name: "Recon Target", country: "DE" });
+  const user = await api("/api/users", { name: "Recon Target", email: "recon@example.com", country: "DE" });
   token = user.sessionToken;
   await registerDevice(api, user.id, newDevice());
 
