@@ -35,37 +35,6 @@ export interface User {
     checkedAt?: string;
     reason?: string;
   };
-  /**
-   * FATF Travel Rule originator data — who is sending the money.
-   *
-   * A cash pickup is a money transmission: the anchor pays a stranger at a
-   * counter and its licence obliges it to know who funded that. MoneyGram's
-   * anchor requires these as SEP-9 fields before a withdrawal can complete;
-   * without them a SEP-12 customer sits at NEEDS_INFO.
-   *
-   * PII WARNING: this store is plaintext JSON on disk (see `db.json`), so a
-   * real deployment must move these into whatever holds the KYC record —
-   * ideally the provider keeps them and this app holds only a reference.
-   * Document images are deliberately NOT accepted here; they belong with the
-   * KYC provider, not in this file.
-   */
-  senderProfile?: {
-    firstName: string;
-    lastName: string;
-    birthDate?: string; // ISO yyyy-mm-dd
-    address?: string;
-    city?: string;
-    postalCode?: string;
-    stateOrProvince?: string;
-    addressCountryCode?: string; // ISO 3166-1 alpha-2
-    idType?: "passport" | "drivers_license" | "id_card";
-    idNumber?: string;
-    idCountryCode?: string;
-    mobileNumber?: string;
-    emailAddress?: string;
-    occupation?: string;
-    updatedAt?: string;
-  };
   iban: string; // funding IBAN — mock-issued, or real from Monerium sandbox
   /** Candide Safe smart-account address — the user's identity and balance
    *  account, and the address Monerium attaches the IBAN to. */
@@ -891,6 +860,7 @@ export function initStore() {
       }
     }
     migrateUsersToOrganisations();
+    stripSenderProfiles();
     for (const q of db.quotes) q.status ??= "OPEN";
     for (const s of db.sessions) s.expiresAt ??= new Date(Date.parse(s.createdAt) + 24 * 60 * 60 * 1000).toISOString();
     pruneSessions();
@@ -928,6 +898,28 @@ function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
  * Idempotent — keyed on a member row existing for the user — so it is safe on
  * every start, and it never touches a user who already has an org.
  */
+/**
+ * Delete stored Travel Rule sender profiles (Sep 2026).
+ *
+ * `user.senderProfile` held identity-document numbers, birth dates and home
+ * addresses for the anchor leg of the cash rail — a rail no deployment has
+ * ever opened. Keeping the most sensitive data in the system for a purpose
+ * that cannot run fails data minimisation, so the field is gone from the
+ * type and any row that still carries one (the Travel Rule harness wrote
+ * some) is stripped on load. Originator data is collected per transfer when
+ * an anchor is actually integrated; see adapters/moneygram.ts SenderDetails.
+ */
+function stripSenderProfiles() {
+  let stripped = 0;
+  for (const user of db.users as unknown as Array<Record<string, unknown>>) {
+    if ("senderProfile" in user) {
+      delete user.senderProfile;
+      stripped++;
+    }
+  }
+  if (stripped) console.log(`[store] removed stored sender profiles from ${stripped} user row(s)`);
+}
+
 function migrateUsersToOrganisations() {
   let migrated = 0;
   for (const user of db.users) {
