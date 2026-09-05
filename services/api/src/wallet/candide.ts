@@ -33,13 +33,10 @@ import { SECURITY } from "../config.js";
 /**
  * The ONE simulation gate, shared with the rest of the API (SECURITY.
  * allowSimulation = explicit ALLOW_SIMULATION=1, or a fully-local stack:
- * loopback API + local RPC + chain 31337). This file briefly carried its own
- * looser versions — one keyed on the RPC host alone, and a fallback keyed on
- * NODE_ENV !== "production", which is TRUE on the hosted testnet deployment.
- * That fallback made transferTokenFromSafeAllowance return a fake tx hash
- * whenever a real debit precondition failed, so transfers reported PAID while
- * no money had left the user's Safe — the exact class of fake the UPI rail
- * was deleted for. Simulation is for the local dev loop only, ever.
+ * loopback API + local RPC + chain 31337). Do not add a looser local gate
+ * here: one keyed on NODE_ENV !== "production" is TRUE on the hosted testnet
+ * deployment and would return fake tx hashes for debits that never happened.
+ * Simulation is for the local dev loop only, ever.
  */
 const allowSimulation = () => SECURITY.allowSimulation;
 
@@ -59,9 +56,8 @@ export const CANDIDE = {
   recoveryGuardianAddress: (process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS ?? "") as `0x${string}` | "",
   recoveryModuleAddress: (process.env.CANDIDE_RECOVERY_MODULE_ADDRESS ??
     SocialRecoveryModuleGracePeriodSelector.After3Days) as `0x${string}`,
-  /** Kept ONLY to read and revoke legacy standing allowances left on Safes
-   *  deployed under the removed co-signer-delegate model. Nothing installs an
-   *  allowance any more — debits are user-signed UserOperations. */
+  /** Used ONLY to read and revoke standing allowances left on older Safes.
+   *  Nothing installs an allowance — debits are user-signed UserOperations. */
   allowanceModuleAddress: (process.env.CANDIDE_ALLOWANCE_MODULE_ADDRESS ??
     (BigInt(process.env.CANDIDE_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? 11155111) === 84532n
       ? "0xAA46724893dedD72658219405185Fb0Fc91e091C"
@@ -168,8 +164,8 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
     };
   }
   // Deployment installs recovery only. The allowance module is deliberately
-  // NOT installed any more: nothing spends from the Safe except UserOperations
-  // the user's own passkey signs, so there is no delegate to authorize and no
+  // NOT installed: nothing spends from the Safe except UserOperations the
+  // user's own passkey signs, so there is no delegate to authorize and no
   // standing spend surface to bound.
   const setup = [...passkeySafeRecoverySetupTransactions(plan)];
   const deployed = await isDeployed(account.accountAddress);
@@ -219,19 +215,19 @@ export function passkeySafeRecoverySetupTransactions(plan: PasskeySafeDeployment
  * no delegate — the movement IS the thing signed, so the chain enforces the
  * amount and destination rather than our process checking them.
  *
- * When the account still carries a legacy standing allowance from the old
- * co-signer-delegate model, a deleteAllowance rides along and revokes it.
- * That allowance is spendable by the co-signer key ALONE — exactly the
- * unilateral disposal capability this model removes — so the first user-signed
- * send is the right moment to close it: the user is present and signing
- * anyway, and afterwards the account has no spend path but this one.
+ * When the account still carries a standing allowance from an older
+ * deployment, a deleteAllowance rides along and revokes it. That allowance is
+ * spendable by the co-signer key ALONE — exactly the unilateral disposal
+ * capability this model rules out — so the first user-signed send is the
+ * right moment to close it: the user is present and signing anyway, and
+ * afterwards the account has no spend path but this one.
  */
 export function transferExecutionTransactions(
   token: `0x${string}`,
   to: `0x${string}`,
   amount: bigint,
   opts: {
-    /** Set to revoke a legacy standing allowance for (delegate, token). */
+    /** Set to revoke a standing allowance for (delegate, token). */
     revokeLegacyAllowance?: { delegate: `0x${string}`; moduleAddress?: `0x${string}` };
   } = {},
 ): MetaTransaction[] {
@@ -362,9 +358,8 @@ async function prepareSafeExecutionCore(
   if (!(await isDeployed(account.accountAddress))) {
     throw new Error("passkey Safe must be deployed before a transfer can be executed from it");
   }
-  // Legacy cleanup: revoke a standing co-signer allowance if one survives from
-  // the old delegate model. That allowance is spendable by the co-signer key
-  // alone — the exact capability this model removes — so it rides along on the
+  // Revoke a standing co-signer allowance if one survives on an older Safe.
+  // It is spendable by the co-signer key alone, so it rides along on the
   // first user-signed send.
   let revokeLegacyAllowance: { delegate: `0x${string}` } | undefined;
   if (CANDIDE.cosignerAddress) {
@@ -434,11 +429,9 @@ export async function prepareTransferBatchExecution(
 
 /**
  * What the chain says the co-signer may spend from this Safe — as opposed to
- * what the database says deployment intended. The two have disagreed: setup
- * batches once pointed at an allowance module address with no code, and calls
- * to a codeless address succeed, so "deployed with policy" recorded a policy
- * that does not exist. Debits read the chain, so this must too.
- * Returns null when the module cannot be read (which a debit would also fail).
+ * what the database says deployment intended. Calls to a codeless module
+ * address succeed, so a stored policy can describe an allowance that does not
+ * exist; only the chain answers. Returns null when the module cannot be read.
  */
 export async function readCosignerTokenAllowance(
   safeAddress: `0x${string}`,

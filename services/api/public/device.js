@@ -6,15 +6,11 @@
  * the payment's exact terms: amount, payee commitment and deadline, so nothing
  * can be swapped after the user approves it.
  *
- * WHERE THAT IS ENFORCED CHANGED (Aug 2026) and the difference matters. It used
- * to be RemitVault.debit, which reverted on-chain for any signature not from
- * this key — bytecode the server could not talk its way past. RemitVault is
- * gone; assertDeviceAuthorization() in orchestrator.ts now verifies the same
- * signature in the API process. The server still cannot FORGE one, but it is
- * the thing checking, so an API that skipped the check could move EURe out of a
- * Safe it already holds the owner key for. Do not read the paragraph below as a
- * guarantee against a compromised server; it is a guarantee against a stolen
- * session and a swapped payee.
+ * WHERE THAT IS ENFORCED matters: assertDeviceAuthorization() in
+ * orchestrator.ts verifies the signature in the API process, not in bytecode.
+ * The server cannot FORGE one, but it is the thing checking. Do not read the
+ * paragraph below as a guarantee against a compromised server; it is a
+ * guarantee against a stolen session and a swapped payee.
  *
  * The key is encrypted at rest with a secret only the passkey can produce:
  * WebAuthn's PRF extension derives 32 bytes from the authenticator for a
@@ -31,16 +27,16 @@
  *
  * Crypto is vendored @noble/secp256k1 + @noble/hashes (audited, no build
  * step; see /vendor). Signing is RFC6979 deterministic with low-s enforced,
- * matching the contract's EIP-2 check.
+ * as ecrecover's EIP-2 check requires.
  */
 import { keccak_256 } from "./vendor/hashes/sha3.js";
 import * as secp from "./vendor/secp256k1.js";
 
 const KEY_SLOT = "zold-device-key";
-/** The slot this used to live in, before the Zoll -> Zold rename. The device
- *  key is bound on-chain via authorizerOf and only the CURRENT authorizer can
- *  rotate it, so losing this slot would leave an account permanently unable to
- *  spend. Read the old name once and carry it forward. */
+/** The slot from before the Zoll -> Zold rename. The device key is bound as
+ *  the account's authorizer and only the CURRENT authorizer can rotate it, so
+ *  dropping this slot would leave an account permanently unable to spend.
+ *  Read the old name once and carry it forward. */
 const LEGACY_KEY_SLOT = "zoll-device-key";
 /**
  * Fixed PRF input: same salt must yield the same wrapping key every time.
@@ -244,7 +240,7 @@ export async function deviceAddress(credentialId) {
   const blob = readSlot();
   if (!blob) return (await createKey(credentialId)).address;
   if (blob.address) return blob.address;
-  return addressOf(blob.key); // legacy plaintext blob with no cached address
+  return addressOf(blob.key); // pre-PRF plaintext blob with no cached address
 }
 
 /**

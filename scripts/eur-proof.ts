@@ -154,9 +154,8 @@ if (record.state !== "approved") {
 console.log("\n2. Inbound deposit");
 
 // Scoped to this account's profile. An unscoped /orders returns only the
-// app's DEFAULT profile, so this used to report "no deposit yet" for an
-// account whose euros were already on chain — the same blind spot the
-// deposit poller had.
+// app's DEFAULT profile and would report "no deposit yet" for an account
+// whose euros are already on chain.
 const orders = orderList(await api.orders(record.profile)) as any[];
 const mine = orders.filter((o) => o.address && getAddress(o.address) === address);
 const issues = mine.filter((o) => o.kind === "issue" && stateOf(o) === "processed");
