@@ -2,12 +2,12 @@
  * SEPA remittance information — the line the payee reads on their statement.
  *
  * This is the only field that travels with the money, so it is what a merchant
- * reconciles against. We used to send `Zold <our uuid>`, which told the payee
- * nothing they could act on: a merchant receiving a checkout payment could see
- * that Zold sent it but not which of their users it was for, leaving them
- * matching payments by hand — the manual step the product exists to remove.
+ * reconciles against. A bare `Zold <our uuid>` tells the payee nothing they
+ * can act on: a merchant receiving a checkout payment could see that Zold sent
+ * it but not which of their users it was for, leaving them matching payments
+ * by hand — the manual step the product exists to remove.
  *
- * Now the payer's reference leads and our transfer id follows, so both sides
+ * So the payer's reference leads and our transfer id follows, and both sides
  * can reconcile from the same string.
  *
  * The constraints are the scheme's, not ours. SEPA carries at most 140

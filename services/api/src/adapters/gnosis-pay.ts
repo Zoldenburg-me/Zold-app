@@ -9,12 +9,12 @@
  *
  * THE CHAIN CONSTRAINT: Gnosis Pay's account and card Safe live on Gnosis
  * Chain (100), and the SIWE message must name that chain. Zold's app chain is
- * something else today, which is exactly why the first cut has the user's own
- * wallet sign rather than their Zold passkey Safe: an EIP-1271 signature is
- * only verifiable where the contract is deployed, and the Zold Safe is not
- * deployed on 100. Verified separately that Gnosis Chain DOES have the RIP-7212
- * P256 precompile, so a passkey Safe there is possible later — that is a
- * deliberate next step, not a missing one.
+ * something else today, which is exactly why the user's own wallet signs
+ * rather than their Zold passkey Safe: an EIP-1271 signature is only
+ * verifiable where the contract is deployed, and the Zold Safe is not deployed
+ * on 100. Verified separately that Gnosis Chain DOES have the RIP-7212 P256
+ * precompile, so a passkey Safe there is possible later — that is a deliberate
+ * next step, not a missing one.
  *
  * TWO THINGS THE INTEGRATION DOC GOT WRONG, both found by reading the live
  * OpenAPI spec and calling the endpoint, and both silently fatal:

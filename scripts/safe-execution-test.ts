@@ -1,10 +1,10 @@
 /**
  * User-signed Safe execution — the meta-transactions of one transfer's debit,
- * signed by the user's passkey as a UserOperation. This replaced the co-signer
- * allowance entirely: there is no delegate and no standing spend authority,
- * so the property under test is that the batch contains EXACTLY the movement
- * the user approves — token, destination and amount chain-enforced — plus, at
- * most, the revocation of a legacy standing allowance.
+ * signed by the user's passkey as a UserOperation. There is no delegate and
+ * no standing spend authority, so the property under test is that the batch
+ * contains EXACTLY the movement the user approves — token, destination and
+ * amount chain-enforced — plus, at most, the revocation of a standing
+ * allowance left on an older Safe.
  *
  * No chain, no bundler: the builder is pure. The bundler/paymaster wrapper and
  * the authorize-route flow are exercised against Base Sepolia, not here.
@@ -84,8 +84,8 @@ check("no allowance-module call appears in a plain debit", () => {
   for (const t of plain) assert.notEqual(t.to.toLowerCase(), MODULE.toLowerCase());
 });
 
-// ---- legacy cleanup: a standing allowance is revoked in the same operation ----
-check("a legacy standing allowance is revoked BEFORE the transfer", () => {
+// ---- cleanup: a standing allowance is revoked in the same operation ----
+check("a standing allowance is revoked BEFORE the transfer", () => {
   const revoking = transferExecutionTransactions(TOKEN, DEST, AMOUNT, {
     revokeLegacyAllowance: { delegate: DELEGATE, moduleAddress: MODULE },
   });
@@ -151,7 +151,7 @@ check("the approval names the venue's spender for exactly the convert amount", (
   assert.equal(args![1], CONVERT);
 });
 
-check("a legacy allowance revoke is prepended to the batch", () => {
+check("an allowance revoke is prepended to the batch", () => {
   const revoking = transferSwapBatchTransactions({
     token: TOKEN,
     feeTo: FEE_TO,
