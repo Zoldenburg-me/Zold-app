@@ -186,9 +186,11 @@ export interface User {
    * never overwritten. The version records which wording was agreed to.
    */
   usPersonAnswers?: {
-    usCitizen: boolean;
-    usGreenCard: boolean;
-    usTaxResident: boolean;
+    /** Combined wording (current app): citizen, Green Card or tax resident. */
+    usPerson?: boolean;
+    usCitizen?: boolean;
+    usGreenCard?: boolean;
+    usTaxResident?: boolean;
     companyUsNexus?: boolean | null;
     answeredAt: string;
     version: string;
