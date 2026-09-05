@@ -116,8 +116,31 @@ export interface User {
       status: "planned" | "active";
       enabledAt?: string;
     };
+    /**
+     * Candide's email/SMS guardian on this Safe.
+     *
+     * `channels` are the OTP channels registered with Candide's recovery
+     * service; `guardianAddress` is the key Candide signs recoveries with and
+     * is only worth anything once it is IN THE MODULE's guardian set, which
+     * `guardianStatus` tracks — "pending_setup" means the service knows the
+     * user but the Safe does not yet know the guardian, and no recovery can
+     * run. Targets are stored as given (a phone number, an email) and masked
+     * on every public read.
+     */
+    candideRecovery?: {
+      moduleAddress: `0x${string}`;
+      guardianAddress: `0x${string}`;
+      channels: { registrationId: string; channel: "email" | "sms"; target: string; verifiedAt: string }[];
+      guardianStatus: "pending_setup" | "active";
+      guardianOpHash?: string;
+      activatedAt?: string;
+    };
     createdAt: string;
     previousAddress?: `0x${string}`;
+    /** Set once a recovery replaced the owner: the Safe keeps its address but
+     *  that address is no longer the counterfactual one of its current owner,
+     *  so the account must be built from the address, never re-derived. */
+    recoveredAt?: string;
   };
   /** WebAuthn credential bound to this account. Public key + counter are
    *  stored from a verified registration; login verifies assertions. */
@@ -627,6 +650,12 @@ export type RecoveryRequestStatus =
   | "DELAYING"
   | "READY_FOR_GUARDIAN"
   | "GUARDIAN_SUBMITTED"
+  /** Candide guardian: the recovering browser has not registered its new passkey yet. */
+  | "PASSKEY_PENDING"
+  /** Candide guardian: OTPs outstanding on one or more registered channels. */
+  | "OTP_PENDING"
+  /** Candide guardian: executed on chain; the owner may still cancel until `finalizeAfter`. */
+  | "GRACE_PERIOD"
   | "FINALIZED"
   | "CANCELED"
   | "EXPIRED";
@@ -635,6 +664,8 @@ export interface RecoveryRequest {
   id: string;
   userId: string;
   safeAddress: `0x${string}`;
+  /** `managed` (operator-approved, external signer) unless set. */
+  mode?: "managed" | "candide";
   status: RecoveryRequestStatus;
   requestedAt: string;
   expiresAt: string;
@@ -665,6 +696,42 @@ export interface RecoveryRequest {
     otp: "pending" | "passed" | "failed";
     liveness: "pending" | "passed" | "failed";
     manualReview: "pending" | "passed" | "failed";
+  };
+  /**
+   * Candide email/SMS recovery, driven by the person who lost their device.
+   *
+   * `newPasskey` is the credential the recovering browser registered. It is
+   * held HERE, not on the user, until the chain confirms the new owner: a
+   * credential that could sign in before the grace period ended would let
+   * whoever holds the OTP channels read the account while the real owner
+   * still has the right to cancel.
+   */
+  candide?: {
+    newPasskey?: {
+      credentialId: string;
+      publicKey: { jwk: JsonWebKey; alg: "ES256" | "RS256" };
+      signCount: number;
+      rpId: string;
+      attestation?: string;
+      createdAt: string;
+    };
+    /** The owner set the recovery installs: the new passkey's signer, plus
+     *  the co-signer where the Safe is 2-of-2. */
+    newOwners?: `0x${string}`[];
+    newThreshold?: number;
+    /** Candide's signature-request id and the OTP challenges it issued. */
+    serviceRequestId?: string;
+    requiredVerifications?: number;
+    auths?: { challengeId: string; channel: string; target: string; verified: boolean }[];
+    guardianAddress?: string;
+    /** Candide's recovery request id once created and executed on chain. */
+    recoveryRequestId?: string;
+    executedAt?: string;
+    gracePeriodSeconds?: number;
+    finalizeAfter?: string;
+    verifierDeployTxHash?: string;
+    finalizeAttempts?: number;
+    finalizeError?: string;
   };
 }
 
@@ -1091,6 +1158,24 @@ export const store = {
   },
   findUserByCredential(credentialId: string) {
     return db.users.find((u) => u.passkey?.credentialId === credentialId);
+  },
+  /** Case-insensitive email match. Prefers an account that can actually be
+   *  recovered when the same address was used more than once. */
+  findUserByEmail(email: string) {
+    const needle = email.trim().toLowerCase();
+    if (!needle) return undefined;
+    const matches = db.users.filter((u) => (u.email ?? "").trim().toLowerCase() === needle);
+    return (
+      matches.find((u) => u.passkeySafe?.candideRecovery?.guardianStatus === "active") ??
+      matches.find((u) => u.passkeySafe?.status === "active") ??
+      matches[0]
+    );
+  },
+  findUserBySafeAddress(address: string) {
+    const needle = address.trim().toLowerCase();
+    return db.users.find(
+      (u) => u.address?.toLowerCase() === needle || u.passkeySafe?.address?.toLowerCase() === needle,
+    );
   },
   /** Every Monerium order id we have reflected in local receipt state. */
   mirroredOrderIds(): string[] {
