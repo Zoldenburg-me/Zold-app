@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<meta name="referrer" content="no-referrer" />
+<title>Account document · Zold</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  /*
+    A DOCUMENT, printed. White A4 sheet inside the app's dark chrome, the same
+    treatment as the invoice: a landlord or a tax adviser has to accept this,
+    and it has to survive print-to-PDF. The verdict strip above the sheet is
+    live — it is what makes a printed copy checkable rather than believable.
+  */
+  :root {
+    --bg: #0b0b0e; --panel: #131317; --border: #232328; --border2: #2c2c33;
+    --text: #ededf0; --muted: #8a8a94; --faint: #5b5b66; --acc: #ed188d;
+    --green: #3dd68c; --amber: #f5a623; --red: #f4436c;
+    --font: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+    --paper: #fff; --ink: #14141a; --ink-soft: #5a5a68; --rule: #e2e2e8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 14px/1.55 var(--font); color: var(--text); background: var(--bg); padding: 2rem 1rem 5rem; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.1rem; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: .5rem; font-size: 15px; font-weight: 600; letter-spacing: -.02em; }
+  .brand span { color: var(--acc); }
+  button { padding: .55rem 1rem; border-radius: 8px; border: 0; cursor: pointer; font-weight: 600; font-size: .85rem; color: #fff; background: var(--acc); font-family: var(--font); }
+  button.ghost { background: transparent; border: 1px solid var(--border2); color: var(--text); }
+
+  .verdict { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel); margin-bottom: 1.1rem; }
+  .verdict .dot { width: 12px; height: 12px; border-radius: 50%; margin-top: 4px; flex: none; }
+  .verdict.ok .dot { background: var(--green); } .verdict.bad .dot { background: var(--red); } .verdict.wait .dot { background: var(--amber); }
+  .verdict .t { font-weight: 600; }
+  .verdict .d { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .checks { list-style: none; margin-top: 8px; display: grid; gap: 4px; font-size: 12.5px; }
+  .checks li::before { content: "✓ "; color: var(--green); } .checks li.bad::before { content: "✗ "; color: var(--red); }
+  .checks li span { color: var(--muted); }
+
+  .sheet { background: var(--paper); color: var(--ink); border-radius: 6px; padding: clamp(28px, 5vw, 56px); box-shadow: 0 30px 70px rgba(0,0,0,.55); font-size: 13px; line-height: 1.55; }
+  .sheet h1 { font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
+  .sheet .sub { color: var(--ink-soft); font-size: 12px; }
+  .head { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .head .zold { font-weight: 700; font-size: 16px; letter-spacing: -.02em; }
+  .head .zold b { color: var(--acc); }
+  .head .right { text-align: right; font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
+  .holder { margin-top: 28px; display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+  .addr { line-height: 1.6; } .addr .who { font-weight: 600; text-transform: uppercase; }
+  .meta { font-size: 12px; min-width: 260px; }
+  .meta div { display: flex; justify-content: space-between; gap: 18px; padding: 2px 0; border-bottom: .5px solid var(--rule); }
+  .meta .k { color: var(--ink-soft); } .meta .v { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 22px; font-size: 12.5px; }
+  th { text-align: left; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-soft); padding: 6px 6px; border-bottom: 1px solid var(--ink); }
+  td { padding: 7px 6px; border-bottom: .5px solid var(--rule); vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.mono { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  .neg { color: #b3261e; } .pos { color: #1b7f4b; }
+  .totals { margin-top: 14px; margin-left: auto; width: min(100%, 360px); font-size: 12.5px; }
+  .totals div { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: .5px solid var(--rule); }
+  .totals .grand { font-weight: 600; border-bottom: 1.5px solid var(--ink); }
+  .note { margin-top: 18px; padding: 10px 12px; border-left: 3px solid var(--amber); background: #fff8e8; font-size: 12px; }
+  .prose { margin-top: 26px; font-size: 13.5px; line-height: 1.7; }
+  .sig { margin-top: 26px; display: grid; gap: 10px; font-size: 11.5px; color: var(--ink-soft); }
+  .sig .k { font-weight: 600; color: var(--ink); }
+  .sig .mono { font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+  .legal { margin-top: 30px; padding-top: 12px; border-top: 1px solid var(--rule); font-size: 10px; line-height: 1.55; color: var(--ink-soft); display: grid; gap: 6px; }
+  .foot { margin-top: 12px; font-size: 10px; color: var(--ink-soft); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .foot .code { font-family: ui-monospace, Menlo, monospace; letter-spacing: .06em; color: var(--ink); }
+  .err { color: var(--red); padding: 2rem 0; }
+  @media (max-width: 640px) { body { padding: 1rem .6rem 4rem; } .head .right { text-align: left; } table { font-size: 11.5px; } td, th { padding: 6px 4px; } }
+  @media print {
+    body { background: #fff; padding: 0; }
+    .topbar, .verdict { display: none; }
+    .sheet { box-shadow: none; border-radius: 0; padding: 14mm; font-size: 11.5px; }
+    @page { size: A4; margin: 10mm; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand"><span>▽</span> Zold</div>
+    <div class="actions"><button class="ghost" id="btn-print">Print / save as PDF</button></div>
+  </div>
+  <div class="verdict wait" id="verdict"><div class="dot"></div><div><div class="t">Checking this document…</div><div class="d">Re-verifying the signature and re-reading the chain.</div></div></div>
+  <div class="sheet" id="sheet"><div class="sub">Loading…</div></div>
+</div>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const eur = (n) => `€${Number(n).toLocaleString("en-IE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const when = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC"; };
+const day = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("en-GB", { dateStyle: "long", timeZone: "UTC" }); };
+const ibanFmt = (s) => String(s || "").replace(/\s/g, "").replace(/(.{4})/g, "$1 ").trim();
+const short = (a) => a ? `${a.slice(0, 8)}…${a.slice(-6)}` : "—";
+const code = location.pathname.split("/").pop();
+
+function head(doc, title, sub) {
+  return `<div class="head">
+    <div><div class="zold"><b>▽</b> Zold</div><div class="sub">${esc(sub)}</div></div>
+    <div class="right"><div><strong>${esc(title)}</strong></div><div>Generated ${esc(day(doc.createdAt))}</div><div>Verification ${esc(code)}</div></div>
+  </div>`;
+}
+function holder(h, extra = []) {
+  const rows = [
+    ...(h.iban ? [["IBAN", ibanFmt(h.iban)]] : []),
+    ...(h.bic ? [["BIC", h.bic]] : []),
+    ["Currency", "EUR"],
+    ["Account of record", short(h.safeAddress)],
+    ["Chain", `Base (${h.chainId})`],
+    ...extra,
+  ];
+  return `<div class="holder">
+    <div class="addr"><div class="who">${esc(h.name)}</div>${h.addressLines.map((l) => `<div>${esc(l)}</div>`).join("")}</div>
+    <div class="meta">${rows.map(([k, v]) => `<div><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
+  </div>`;
+}
+function lineRows(lines) {
+  return lines.map((l) => `<tr>
+    <td class="mono">${esc(when(l.at))}</td>
+    <td class="mono">${esc(l.counterpartyIban ? ibanFmt(l.counterpartyIban) : (l.txHash ? short(l.txHash) : "—"))}</td>
+    <td>${esc(l.counterpartyName || "—")}</td>
+    <td>${esc(l.memo || l.reference || "—")}</td>
+    <td class="num ${l.direction === "out" ? "neg" : "pos"}">${l.direction === "out" ? "−" : "+"}${esc(eur(l.amountEur))}</td>
+  </tr>`).join("");
+}
+const TABLE_HEAD = `<thead><tr><th>Date</th><th>IBAN / tx</th><th>Name</th><th>Memo / reference</th><th class="num">Amount</th></tr></thead>`;
+
+function legal(doc, extra = []) {
+  return `<div class="legal">
+    ${extra.map((x) => `<div>${esc(x)}</div>`).join("")}
+    <div>${esc((doc.parties || {}).footer || "")}</div>
+  </div>
+  <div class="foot"><div>Verify this document at <span class="code">${esc(location.origin)}/v/${esc(code)}</span></div><div>© ${new Date().getUTCFullYear()} Zold · Page 1 of 1</div></div>`;
+}
+function signatures(doc) {
+  const z = doc.attestations.zold;
+  const s = doc.attestations.safe;
+  return `<div class="sig">
+    <div><span class="k">Signed by Zold</span> · <span class="mono">${esc(short(z.signer))}</span> · ${esc(when(z.signedAt))}</div>
+    ${s ? `<div><span class="k">Signed by the account holder's smart account</span> · <span class="mono">${esc(short(s.address))}</span> · ${esc(when(s.signedAt))}</div>` : ""}
+  </div>`;
+}
+
+function render(doc) {
+  const s = doc.snapshot;
+  if (s.kind === "receipt") {
+    return head(doc, "Transfer receipt", "Zold account document") + holder(s.holder) +
+      `<table>${TABLE_HEAD}<tbody>${lineRows([s.line])}</tbody></table>` +
+      (s.feeEur ? `<div class="totals"><div><span>Zold fee</span><span>${esc(eur(s.feeEur))}</span></div></div>` : "") +
+      `<div class="prose">Paid from the account of <strong>${esc(s.holder.name)}</strong> and settled as a SEPA credit transfer${s.line.reference ? ` · issuer order ${esc(s.line.reference)}` : ""}.</div>` +
+      signatures(doc) + legal(doc, ["This receipt is for informational purposes only. Transfer data is provided by the e-money issuer, Monerium."]);
+  }
+  if (s.kind === "statement") {
+    const bal = (b) => b ? `${eur(b.amountEur)} (block ${b.number}, ${when(b.at)})` : "unavailable";
+    return head(doc, "Account statement", `Statement period ${day(s.period.from)} to ${day(s.period.to)}`) +
+      holder(s.holder, [["Opening balance", s.opening ? eur(s.opening.amountEur) : "—"], ["Closing balance", s.closing ? eur(s.closing.amountEur) : "—"]]) +
+      (s.lines.length ? `<table>${TABLE_HEAD}<tbody>${lineRows(s.lines)}</tbody></table>` : `<div class="prose sub">No movements in this period.</div>`) +
+      `<div class="totals">
+        <div><span>Opening balance</span><span>${esc(bal(s.opening))}</span></div>
+        <div><span>Money in</span><span class="pos">+${esc(eur(s.totals.inEur))}</span></div>
+        <div><span>Money out</span><span class="neg">−${esc(eur(s.totals.outEur))}</span></div>
+        <div class="grand"><span>Closing balance</span><span>${esc(bal(s.closing))}</span></div>
+      </div>` +
+      (s.reconciliation.reconciles ? "" : `<div class="note">This statement does not fully reconcile: ${esc(s.reconciliation.note || "")}. The balances are read from the chain and are correct; the lines are what the issuer and this software recorded.</div>`) +
+      (s.sources.monerium !== "ok" ? `<div class="note">Counterparty names and memos are unavailable for this statement (${esc(s.sources.monerium)}); lines carry the ledger data only.</div>` : "") +
+      signatures(doc) + legal(doc, ["Balances are read from the Base ledger at the stated blocks. Transfer data is provided by the e-money issuer, Monerium."]);
+  }
+  if (s.kind === "balance") {
+    return head(doc, "Balance confirmation", "Zold account document") + holder(s.holder) +
+      `<div class="prose">This confirms that on <strong>${esc(when(s.block.at))}</strong> the account of <strong>${esc(s.holder.name)}</strong> held <strong>${esc(eur(s.balanceEur))}</strong>, read from the Base ledger at block ${esc(String(s.block.number))}. The balance is e-money redeemable at par; it is not a bank deposit.</div>` +
+      signatures(doc) + legal(doc);
+  }
+  if (s.kind === "ownership") {
+    return head(doc, "Proof of account ownership", "Zold account document") + holder(s.holder) +
+      `<div class="prose">${esc(s.statement)}</div>
+      <div class="prose sub">${doc.attestations.safe
+        ? "Signed by the account holder with the account itself; the signature is checked against the account contract on every verification."
+        : "Signed by Zold only. The holder can add the account's own signature from the app."}</div>` +
+      signatures(doc) + legal(doc);
+  }
+  return `<div class="err">Unknown document kind.</div>`;
+}
+
+function verdict(v) {
+  const el = document.getElementById("verdict");
+  const ok = Boolean(v.verification?.ok);
+  el.className = `verdict ${ok ? "ok" : "bad"}`;
+  el.innerHTML = `<div class="dot"></div><div><div class="t">${ok ? "This document verifies" : "This document does NOT verify"}</div>
+    <div class="d">Checked ${esc(when(v.verifiedAt))} against the signature and the ledger.</div>
+    <ul class="checks">${v.verification.checks.map((c) => `<li class="${c.ok ? "" : "bad"}">${esc(c.name)}${c.detail ? ` <span>— ${esc(c.detail)}</span>` : ""}</li>`).join("")}</ul></div>`;
+}
+
+document.getElementById("btn-print").onclick = () => window.print();
+(async () => {
+  try {
+    const res = await fetch(`/api/v/${encodeURIComponent(code)}`, { headers: { accept: "application/json" } });
+    const doc = await res.json();
+    if (!res.ok) throw new Error(doc.error || `HTTP ${res.status}`);
+    document.title = `${doc.kind === "statement" ? "Account statement" : doc.kind === "receipt" ? "Transfer receipt" : doc.kind === "balance" ? "Balance confirmation" : "Proof of ownership"} · Zold`;
+    document.getElementById("sheet").innerHTML = render(doc);
+    verdict(doc);
+  } catch (e) {
+    document.getElementById("sheet").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    const el = document.getElementById("verdict");
+    el.className = "verdict bad";
+    el.innerHTML = `<div class="dot"></div><div><div class="t">Not found</div><div class="d">No document exists under this code, or it was mistyped.</div></div>`;
+  }
+})();
+</script>
+</body>
+</html>

@@ -1375,6 +1375,54 @@ Monerium is Gnosis-native. Base Sepolia was chosen for testing because gas is
 production. If CoW-on-Gnosis is the liquidity route, Gnosis is the natural
 production chain — not Base, not Polygon. Decide it deliberately.
 
+## Account documents — statement, receipt, balance, ownership (Sep 2026)
+
+`npm run documents:test` (13 checks: pure builders offline, then the routes on
+a hardhat chain with a harness Safe). Code: `documents.ts` (builders, canonical
+digest, signing, parties text), `routes/documents.ts` (routes + verifier),
+`public/document.html` (the printable sheet and the live verdict). Profile ->
+"Statements & documents"; transaction detail -> "Transfer receipt (PDF)".
+
+MODELLED ON REBIND'S RECEIPT (a Monerium-based app; the user's own receipt was
+the reference): holder block, IBAN + BIC, a DATE / IBAN / NAME / MEMO / AMOUNT
+table, and the Monerium legal footer. Their PDF's producer is Chromium, so
+theirs is a browser print too — ours is the same: the page at `/v/<code>` IS
+the record, the PDF is its print. No PDF library.
+
+THE PROPERTY: every document is a frozen snapshot under a 15-char Crockford
+verification code, signed by the server's document key (EIP-191 over the
+canonical digest; `DOCUMENT_SIGNING_KEY`, else the orchestrator key), and the
+verifier RE-CHECKS on every visit — signature, balance re-read from the chain
+at the stated block, statement reconciliation, and the Safe's EIP-1271
+signature on a proof of ownership. A revoked document fails verification
+rather than vanishing. Codes are on the auth rate bucket (`/v/`), like slugs.
+
+WHO IS WHO, from Monerium's own terms (personal and business ToS, s. 1.1, 4,
+5, 6): Monerium is the e-money issuer; the IBAN and the SEPA payment services
+are provided by AS LHV Pank, Tallinn (the IBAN is Estonian, BIC LHVBEE22 —
+confirmed on the reference receipt); e-money is redeemable at par, safeguarded,
+NOT a bank deposit and NOT deposit-guarantee covered; Zold is software. ONE
+footer paragraph (`PARTIES.footer`) carries that, once per document, in the
+shape of Rebind's two-line footer; the first cut restated it in every body
+and was trimmed on the user's call. The bank-details screen was also
+corrected: it used to call Monerium the bank.
+
+STATEMENT SOURCES, in order of authority: chain balances at the period's
+boundary blocks (binary search over block timestamps), Monerium orders for the
+counterparty name/IBAN/memo, our transfer records. Duplicates across sources
+are the same money seen twice and are merged by amount within a day. A
+statement that does not reconcile SAYS SO with the delta rather than refusing;
+a statement without a Monerium connection says its lines carry ledger data
+only. Proof of ownership is framed as proof of CONTROL (the Safe signs a
+message naming the account, the code and the day); the issuer's word is
+Monerium's own account history, and the document says so.
+
+REFUSED: any document for an account whose account of record is the zero
+address; a receipt for a transfer that has not moved money.
+
+NOT PROVEN: Monerium order data on real statement lines (needs a connected
+production account) and the printed PDF's look in a real print dialog.
+
 ## Email / SMS recovery — Candide's guardian (Sep 2026)
 
 `npm run recovery:candide:test` (25 checks, stub service, simulated chain).
@@ -1676,8 +1724,9 @@ RP-ID-scoped and the FP4 device key lives in one origin's localStorage, so a
 user onboarded there has both halves in one place.
 SEPA remittance reference (July 2026): POST /api/transfers takes an optional
 `reference` on the sepa rail and it rides on the payment, so a payee reconciles
-against their own handle instead of our uuid. The memo used to be hardcoded to
-`Zold <transfer.id>` — a merchant could see that Zold sent money but not which
+against their own handle instead of our uuid. Without one the line reads
+`Powered by Zold <transfer.id>` (Sep 2026: the tag was "Zold"). A bare id meant
+a merchant could see that Zold sent money but not which
 of their users it was for, which is the manual step the checkout exists to
 remove. services/api/src/sepa.ts folds it into the SEPA Latin subset (accents
 decomposed, so "Müller" arrives as "Muller" not "M ller"), strips the reserved

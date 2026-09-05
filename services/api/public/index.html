@@ -1106,6 +1106,7 @@
   #dashboard.m-on[data-msub="profile"] #m-profile-screen,
   #dashboard.m-on[data-msub="monerium"] #m-monerium-screen { display: block; }
   #dashboard.m-on[data-msub="recovery"] #m-recovery-screen { display: block; }
+  #dashboard.m-on[data-msub="documents"] #m-documents-screen { display: block; }
 
   /* ---------- share receipt (composer) ----------
      The handoff draws this as a 340px card beside a live 520px preview of the
@@ -2035,6 +2036,12 @@
         <button class="m-cta quiet hidden" id="m-det-share">
           <span class="material-symbols-rounded" style="font-size:18px;vertical-align:-4px;margin-right:6px">ios_share</span>Share receipt
         </button>
+        <!-- A printable, verifiable receipt of a SEPA payout — the document a
+             landlord or an accountant wants, as opposed to the share page's
+             tracking view. Only once money has actually left. -->
+        <button class="m-cta quiet hidden" id="m-det-receipt">
+          <span class="material-symbols-rounded" style="font-size:18px;vertical-align:-4px;margin-right:6px">receipt_long</span>Transfer receipt (PDF)
+        </button>
       </div>
 
       <!-- ================= Share receipt (composer) =================
@@ -2086,6 +2093,11 @@
 
         <div class="m-seclabel">Security</div>
         <div class="m-rows" id="m-pf-security"></div>
+        <button class="m-optrow" id="m-pf-documents" style="margin-top:8px">
+          <span class="material-symbols-rounded ic">description</span>
+          <span class="tx"><span class="t">Statements &amp; documents</span><span class="d">Statement, balance confirmation, proof of ownership</span></span>
+          <span class="material-symbols-rounded ch">chevron_right</span>
+        </button>
         <button class="m-optrow" id="m-pf-recovery" style="margin-top:8px">
           <span class="material-symbols-rounded ic">health_and_safety</span>
           <span class="tx"><span class="t">Email / SMS recovery</span><span class="d" id="m-pf-recovery-sub">Not set up</span></span>
@@ -2093,6 +2105,17 @@
         </button>
 
         <button class="m-cta" id="m-pf-signout" style="background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink);min-height:48px;font-size:14px">Sign out</button>
+      </div>
+
+      <!-- ================= Statements & documents =================
+           Every document is a frozen, signed snapshot under a verification
+           code and opens on /v/<code>, where anyone holding the code sees a
+           live verdict. The PDF is that page printed. -->
+      <div class="m-screen" id="m-documents-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Statements &amp; documents</div>
+        <div class="m-lede">Each document opens at a verification link, where anyone can check it and where you print it to PDF.</div>
+        <div id="m-doc-body" style="margin-top:24px"></div>
       </div>
 
       <!-- ================= Email / SMS recovery =================
@@ -2725,7 +2748,7 @@ function mobileNav(target) {
   const sub = { add: "add", bank: "bank", crypto: "crypto", send: "pay", pay: "pay", country: "country",
     method: "method", amount: "amount", recipient: "recipient", progress: "progress",
     plus: "plus", bundle: "bundle", payment: "payment", activity: "activity", detail: "detail",
-    share: "share", profile: "profile", card: "card", monerium: "monerium", recovery: "recovery" }[target];
+    share: "share", profile: "profile", card: "card", monerium: "monerium", recovery: "recovery", documents: "documents" }[target];
   shell.dataset.msub = sub || "home";
   if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
   else switchView("dashboard");
@@ -2733,7 +2756,7 @@ function mobileNav(target) {
   const navFor = { add: "add", bank: "add", crypto: "add", send: "send", pay: "send", country: "send", method: "send",
     amount: "send", recipient: "send", progress: "send", plus: "home", bundle: "home", payment: "home",
     card: "home", home: "home", activity: "activity", detail: "activity", share: "activity",
-    profile: "profile", monerium: "profile", recovery: "profile" }[target];
+    profile: "profile", monerium: "profile", recovery: "profile", documents: "profile" }[target];
   document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
   if (sub === "bundle") $("m-subtitle").textContent = "Zold Plus";
@@ -2748,6 +2771,7 @@ function mobileNav(target) {
   if (sub === "profile") renderProfileScreen();
   if (sub === "monerium") renderMoneriumScreen();
   if (sub === "recovery") renderRecoveryScreen();
+  if (sub === "documents") renderDocumentsScreen();
   $("dashboard").querySelector(".main").scrollTop = 0;
 }
 
@@ -2764,7 +2788,11 @@ function renderBankScreen() {
   const rows = [
     { k: "IBAN", v: u.iban || "Not issued yet", copy: !!u.iban },
     { k: "Account holder", v: u.name || "—", copy: false },
-    { k: "Bank", v: "Monerium ehf. · Iceland", copy: false },
+    // Two institutions, named as Monerium's own terms name them (s. 5 and
+    // s. 1.1): the IBAN and the SEPA rail belong to AS LHV Pank, the e-money
+    // itself to Monerium. Calling Monerium "the bank" was wrong on both.
+    { k: "IBAN & SEPA provided by", v: "AS LHV Pank · Tallinn, Estonia", copy: false },
+    { k: "E-money issuer", v: "Monerium · Reykjavík, Iceland", copy: false },
   ];
   $("m-bank-rows").innerHTML = rows.map((r, i) => `
     <div class="m-detrow">
@@ -3628,6 +3656,9 @@ function paintDetail(t) {
   const shareBtn = $("m-det-share");
   shareBtn.classList.toggle("hidden", t.state === "CREATED");
   shareBtn.onclick = () => openShare(t.id);
+  // The printable receipt is a proof of payment, so it exists only for a
+  // SEPA payout Monerium has processed. The share page covers in-flight ones.
+  $("m-det-receipt").classList.toggle("hidden", !(t.rail === "sepa" && t.state === "PAID"));
   const err = $("m-det-error");
   err.classList.toggle("hidden", !t.error);
   if (t.error) err.innerHTML = `<span class="material-symbols-rounded" style="font-size:20px;flex:none">warning</span><div>${esc(t.error)}</div>`;
@@ -3910,6 +3941,75 @@ function renderProfileScreen() {
     : !caps.moneriumApiKeys ? "Unavailable on this deployment"
       : u.monerium?.method === "oauth" ? "Connected by OAuth · keys not used"
         : "Use your own Monerium account for testing";
+}
+
+/* ---------- Statements & documents ---------- */
+const DOC_KIND_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership" };
+
+function monthOptions() {
+  const out = [];
+  const now = new Date();
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    out.push({ value: d.toISOString().slice(0, 7), label: d.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }) });
+  }
+  return out;
+}
+
+async function renderDocumentsScreen() {
+  const el = $("m-doc-body");
+  el.innerHTML = `<div class="m-lede" style="font-size:13px">Loading…</div>`;
+  let docs = [];
+  try { docs = (await api(`/api/users/${user.id}/documents`)).documents || []; }
+  catch (e) { el.innerHTML = `<div class="m-err">${esc(e.message)}</div>`; return; }
+  const months = monthOptions();
+  el.innerHTML = `
+    <div class="m-seclabel">Create</div>
+    <div class="m-field"><label>Statement month</label>
+      <select id="m-doc-month" style="width:100%;background:var(--m-surface);color:inherit;border:1px solid var(--m-line);border-radius:10px;padding:12px;font:inherit">
+        ${months.map((m) => `<option value="${m.value}">${esc(m.label)}</option>`).join("")}
+      </select></div>
+    <button class="m-cta" id="m-doc-statement" style="margin-top:12px">Create statement</button>
+    <button class="m-cta quiet" id="m-doc-balance" style="margin-top:8px">Balance confirmation (now)</button>
+    <button class="m-cta quiet" id="m-doc-ownership" style="margin-top:8px">Proof of ownership (sign with passkey)</button>
+    <div class="m-err hidden" id="m-doc-err" style="margin-top:12px"></div>
+    <div class="m-seclabel" style="margin-top:24px">Issued</div>
+    <div class="m-rows" id="m-doc-list">${docs.length ? docs.map((d) => `
+      <button class="m-secrow" data-doc-url="${esc(d.url)}" style="width:100%;text-align:left;background:none;border:0;color:inherit;font:inherit;cursor:pointer">
+        <span class="material-symbols-rounded">${d.kind === "receipt" ? "receipt_long" : d.kind === "balance" ? "account_balance" : d.kind === "ownership" ? "verified_user" : "description"}</span>
+        <div style="flex:1;min-width:0"><div class="t">${esc(DOC_KIND_LABEL[d.kind] || d.kind)}</div><div class="d">${esc(d.summary || "")} · ${esc(new Date(d.createdAt).toLocaleDateString())}${d.revokedAt ? " · revoked" : ""}</div></div>
+        <span class="material-symbols-rounded" style="color:var(--m-faint)">open_in_new</span>
+      </button>`).join("") : `<div class="m-lede" style="font-size:13px">Nothing issued yet.</div>`}</div>
+    `;
+  el.querySelectorAll("[data-doc-url]").forEach((b) => { b.onclick = () => window.open(b.dataset.docUrl, "_blank", "noopener"); });
+  const busy = (on) => ["m-doc-statement", "m-doc-balance", "m-doc-ownership"].forEach((id) => { $(id).disabled = on; });
+  const open = (d) => { window.open(d.url, "_blank", "noopener"); renderDocumentsScreen(); };
+  $("m-doc-statement").onclick = async () => {
+    clearErr("m-doc-err"); busy(true);
+    try {
+      const [y, m] = $("m-doc-month").value.split("-").map(Number);
+      const from = new Date(Date.UTC(y, m - 1, 1)).toISOString();
+      const to = new Date(Date.UTC(y, m, 1) - 1).toISOString();
+      open(await api(`/api/users/${user.id}/documents/statement`, { from, to }));
+    } catch (e) { showErr("m-doc-err", e); } finally { busy(false); }
+  };
+  $("m-doc-balance").onclick = async () => {
+    clearErr("m-doc-err"); busy(true);
+    try { open(await api(`/api/users/${user.id}/documents/balance`, {})); }
+    catch (e) { showErr("m-doc-err", e); } finally { busy(false); }
+  };
+  $("m-doc-ownership").onclick = async () => {
+    clearErr("m-doc-err"); busy(true);
+    try {
+      let d = await api(`/api/users/${user.id}/documents/ownership`, {});
+      if (d.safeSignature) {
+        // The part a screenshot cannot fake: the account's own signature.
+        const sig = await passkeySignPrepared(d.safeSignature);
+        d = await api(d.safeSignature.submitTo, sig);
+      }
+      open(d);
+    } catch (e) { showErr("m-doc-err", e); } finally { busy(false); }
+  };
 }
 
 /* ---------- Email / SMS recovery (Candide guardian) ---------- */
@@ -5377,6 +5477,15 @@ $("btn-dash-kyc-refresh").onclick = async () => {
 };
 $("btn-recovery-start").onclick = startRecoveryRequest;
 $("m-pf-recovery").onclick = () => mobileNav("recovery");
+$("m-pf-documents").onclick = () => mobileNav("documents");
+$("m-det-receipt").onclick = async () => {
+  const t = detailTransfer;
+  if (!t) return;
+  try {
+    const d = await api(`/api/users/${user.id}/documents/receipt`, { transferId: t.id });
+    window.open(d.url, "_blank", "noopener");
+  } catch (e) { $("m-det-error").textContent = e.message; $("m-det-error").classList.remove("hidden"); }
+};
 $("link-recover").onclick = (ev) => { ev.preventDefault(); rcState = null; showRecoverPanel(true); renderRecoverState(); };
 $("link-rc-back").onclick = (ev) => { ev.preventDefault(); showRecoverPanel(false); };
 $("btn-rc-start").onclick = recoverStart;

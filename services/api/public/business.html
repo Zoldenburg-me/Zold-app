@@ -572,6 +572,15 @@ RENDER.settings = async () => {
     <button data-act="save-org">Save</button></div>
     <label>Name</label><input id="s-name" value="${esc(org.name)}" />
     <label>Legal name</label><input id="s-legal" value="${esc(org.legalName || "")}" />
+    <label>Registered address</label>
+    <input id="s-addr1" value="${esc(org.address?.line1 || "")}" placeholder="Street and number" />
+    <input id="s-addr2" value="${esc(org.address?.line2 || "")}" placeholder="Address line 2 (optional)" style="margin-top:.4rem" />
+    <div style="display:flex;gap:.6rem;margin-top:.4rem">
+      <div style="width:130px"><label>Postcode</label><input id="s-zip" value="${esc(org.address?.postalCode || "")}" /></div>
+      <div style="flex:1"><label>City</label><input id="s-city" value="${esc(org.address?.city || "")}" /></div>
+      <div style="width:90px"><label>Country</label><input id="s-country" value="${esc(org.address?.country || "")}" placeholder="DE" maxlength="2" /></div>
+    </div>
+    <div class="desc" style="margin-top:.3rem">Printed on every invoice you issue. The country decides which invoicing rules apply.</div>
     <label>Tax ID</label><input id="s-tax" value="${esc(org.taxId || "")}" />
     <label>Notification email</label><input id="s-notify" value="${esc(org.notificationEmail || "")}" />
     <label>Reporting currency ${cap("settings.reportingCurrency").allowed ? "" : "— included in a paid plan"}</label>
@@ -1135,6 +1144,11 @@ const ACTIONS = {
     const body = {
       name: $("#s-name").value, legalName: $("#s-legal").value,
       taxId: $("#s-tax").value, notificationEmail: $("#s-notify").value,
+      address: {
+        line1: $("#s-addr1").value, line2: $("#s-addr2").value,
+        postalCode: $("#s-zip").value, city: $("#s-city").value,
+        country: $("#s-country").value,
+      },
     };
     const cur = $("#s-currency");
     if (cur && !cur.disabled && cur.value !== org.reporting.currency) {
