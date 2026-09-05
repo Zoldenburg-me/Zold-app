@@ -1375,6 +1375,58 @@ Monerium is Gnosis-native. Base Sepolia was chosen for testing because gas is
 production. If CoW-on-Gnosis is the liquidity route, Gnosis is the natural
 production chain — not Base, not Polygon. Decide it deliberately.
 
+## Email / SMS recovery — Candide's guardian (Sep 2026)
+
+`npm run recovery:candide:test` (25 checks, stub service, simulated chain).
+Access to Candide's Safe Recovery Service is arranged; `RECOVERY_SERVICE_URL`
+is the switch, and without it the feature reports `unavailable` and every route
+refuses. Code: `recovery/candide-guardian.ts` (SDK wrapper, fail-closed),
+`routes/recovery-candide.ts` (both halves), recovery-module reads and setup
+ops in `wallet/candide.ts`.
+
+WHAT IT IS: Candide holds ONE guardian key and adds it to the user's Safe via
+the SocialRecoveryModule. Enrolment registers an email or phone against the
+Safe — a SIWE statement the SAFE signs (EIP-1271, a passkey ceremony), then an
+OTP — and a second passkey ceremony adds Candide's guardian to the module
+(threshold 1). Recovery from a lost device: name the account, create a NEW
+passkey on that device, pass an OTP on EVERY registered channel, Candide signs,
+the service executes (sponsored), the module's grace period runs, then
+finalisation swaps the Safe's owner to the new passkey.
+
+RULES THAT CARRY WEIGHT, each with a check:
+ - **The new credential lives on the RecoveryRequest, not the user, until the
+   chain confirms the new owner.** Whoever holds the OTP channels can start a
+   recovery — that is what they are for — but cannot sign in or spend before
+   the grace period has run, which is the rightful owner's window to cancel.
+   Finalisation reads `getOwners()` from the chain before binding anything.
+ - **Module agreement.** Candide recovers through ONE module per chain
+   (`getNetworkConfig().moduleAddress`); a guardian added to any other module
+   is a guardian in no module, so enrolment refuses on mismatch.
+ - **The 3-day/7-day/14-day modules have NO CODE on Base Sepolia** (checked
+   with eth_getCode). Only the 3-minute test module `0x949d…8c66` exists there,
+   so testnet must pin `CANDIDE_RECOVERY_MODULE_ADDRESS` to it; production
+   refuses to boot with it. `Safe.enableModule` on a codeless address does not
+   revert, so `preparePasskeySafeDeployment` now refuses before the user signs.
+ - **A recovered Safe keeps its address but that address is no longer the
+   counterfactual one of its owner set.** `passkeySafe.recoveredAt` makes every
+   account builder use `new SafeAccount(address)` instead of re-deriving; the
+   new passkey's signer verifier is deployed by the deployer key at execution
+   time (permissionless factory call) so the first post-recovery UserOperation
+   can validate.
+ - Finalisation also unbinds the FP4 device key (only the lost device could
+   rotate it) and revokes the lost device's sessions. Channel targets are
+   masked on every surface, including the account payload.
+ - Recoveries finalize themselves on a sweep (`RECOVERY_SWEEP_MS`); the user
+   need not come back.
+
+NOT PROVEN: no real Candide service has been called (stub only), no on-chain
+guardian add / execute / finalize has run, and no real OTP has been sent. The
+first live run is on Base Sepolia with the 3-minute module. Alerts
+subscriptions (Candide's `Alerts` API) are NOT wired: the owner learns of a
+recovery from the Profile screen's pending-recovery banner, not from an email.
+The managed KYC-guardian path (operator + external signer) still exists beside
+this; the two are separate modes on RecoveryRequest.
+
 ## FP4 completion — recovery (decided July 2026, 2-of-2)
 
 THE BLOCKER: losing the browser device key permanently bricks an account.
