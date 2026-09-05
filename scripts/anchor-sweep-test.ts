@@ -70,7 +70,7 @@ assert.equal(t.pickup?.status, "PAID");
 assert.equal(
   anchorMemoForPickup(t.id, t.pickup),
   senderMemo(user),
-  "legacy anchor pickups must recover the same per-user SEP-10 memo on refresh",
+  "anchor pickups stored without a memo must recover the same per-user SEP-10 memo on refresh",
 );
 
 console.log("ANCHOR SWEEP TEST PASSED — funded payout reaches PAID without client polling and keeps the user memo");

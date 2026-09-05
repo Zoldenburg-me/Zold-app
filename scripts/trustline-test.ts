@@ -1,12 +1,12 @@
 /**
  * Trustline / reserve test — live against Stellar testnet.
  *
- * Stellar refuses to deliver an asset an account does not trust. Our treasury
- * held only XLM and the repo had no `changeTrust` anywhere, so:
+ * Stellar refuses to deliver an asset an account does not trust. A treasury
+ * holding only XLM, with no `changeTrust` in the code, means:
  *
- *   - a CCTP burn would have destroyed USDC on the source chain and minted
- *     nothing on Stellar, with no pre-flight to catch it, and
- *   - an anchor payout had nowhere to receive a refund.
+ *   - a bridge delivering USDC to Stellar would burn on the source chain and
+ *     mint nothing here, with no pre-flight to catch it, and
+ *   - an anchor payout has nowhere to receive a refund.
  *
  * MoneyGram's own setup guide is the same three steps — fund with XLM, add the
  * trustline, acquire the asset — so these check the step that is code.

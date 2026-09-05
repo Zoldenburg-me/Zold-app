@@ -300,12 +300,11 @@ const wrap =
 /**
  * What this deployment can actually do, so the browser can render against it.
  *
- * THE BUG THIS FIXES: the app showed an "Add money" control wired to
- * /api/simulate/sepa-deposit unconditionally, and that route is dev-only — it
- * 403s in production and off a loopback socket. Nothing in any API response
- * told the client which mode it was in, so the only way to find out was to
- * press the button and read the error. Offering an action the server will
- * refuse is exactly what makes a product read as unfinished.
+ * The simulate routes are dev-only — they 403 in production and off a
+ * loopback socket — and without this nothing in any API response tells the
+ * client which mode it is in, so the only way to find out is to press the
+ * button and read the error. Offering an action the server will refuse is
+ * exactly what makes a product read as unfinished.
  *
  * Deliberately NOT per-user, and deliberately public. These are properties of
  * the deployment rather than of an account, and /api/health already publishes
@@ -348,12 +347,10 @@ app.get(
 
 /**
  * Public mid rates, so the marketing page can show the same number the product
- * would quote instead of baking its own constants in.
- *
- * The landing page used to hardcode `1.08 * 129.5` and print "Real exchange
- * rate" above it — the same lie as the quote engine's, in the shop window. No
- * auth: this is a public reference rate, not per-user pricing, and it carries
- * no spread or fee.
+ * would quote instead of baking its own constants in — a hardcoded figure
+ * under a "real exchange rate" label goes stale in the shop window. No auth:
+ * this is a public reference rate, not per-user pricing, and it carries no
+ * spread or fee.
  */
 app.get(
   "/api/rates",
@@ -637,9 +634,9 @@ function passkeySafePlan(
     ...(cosignerAddress ? { cosignerAddress } : {}),
     // No allowance module, no delegate, no spend amounts: nothing moves from
     // the Safe except UserOperations the user's own passkey signs. The policy
-    // record survives only to say whether a co-signing OWNER exists (and to
-    // keep the shape old stored accounts already have); the module address is
-    // retained solely so legacy standing allowances can be found and revoked.
+    // record only says whether a co-signing OWNER exists (and keeps the shape
+    // stored accounts already have); the module address is there so standing
+    // allowances on older Safes can be found and revoked.
     cosignerPolicy: {
       // Keyed on the GATED cosignerAddress (CANDIDE.cosignerEnabled applied),
       // not the raw env var: with the co-signer disabled this plan is a
@@ -779,20 +776,17 @@ app.post(
     }
 
     /**
-     * SEGMENTATION REPLACES THE OLD COUNTRY GATE.
+     * SEGMENTATION, NOT A BARE COUNTRY GATE.
      *
-     * `countryBlock()` used to run here and 403 before anything else. It is now
-     * consulted INSIDE resolveSegment, and the reason is not tidiness: it
-     * answers only "will Monerium serve this residence", so on its own it
-     * refused Indian residents' collections path and refused Nigerians with a
+     * `countryBlock()` is consulted INSIDE resolveSegment rather than run here
+     * first, and the reason is not tidiness: it answers only "will Monerium
+     * serve this residence", so on its own it would refuse Nigerians with a
      * message about Monerium's country policy — a partner's name in front of a
      * user who was never going to use that partner. The resolver asks the three
      * questions separately and returns which of them actually decided.
      *
-     * Back-compatible for callers that send no new fields: an individual with a
-     * single citizenship equal to residence and all-no US answers, which is
-     * what the old body implied. Doing otherwise would break every existing
-     * client and every harness in one commit.
+     * Callers that send no segmentation fields are read as an individual with
+     * a single citizenship equal to residence and all-no US answers.
      */
     const type: "individual" | "company" = accountType === "company" ? "company" : "individual";
     const answers = {
@@ -935,14 +929,11 @@ app.get(
      convert  -> verifies the assertion, submits, credits what ARRIVED
 
    The poller detects deposits and stops there. It runs with nobody present,
-   so it cannot sign, and the previous design pretended otherwise: it called a
-   sweep that always threw and recorded the throw as a refusal, which read to
-   the user like a fault rather than a missing signature.
+   so it cannot sign; a missing signature must never be recorded as a fault.
 
    NON-CUSTODIAL BY CONSTRUCTION. The batch approves the venue and swaps out of
    the user's own Safe, delivering EURe straight back into it. The orchestrator
-   is not in the path and holds nothing at any point — which is also why this
-   needed no owner key to restore after FP4 removed them.
+   is not in the path and holds nothing at any point.
    ========================================================================== */
 const pendingDepositConversions = new Map<string, {
   userId: string;
@@ -1579,8 +1570,8 @@ app.get(
 /**
  * Self-serve identity approval. ONLY where the deployment has already decided
  * every user is approved (KYC_AUTO_APPROVE) or is an explicit simulation —
- * this route briefly ran ungated, which let any session approve its own KYC
- * on any deployment, the exact hole requireOperator exists to close.
+ * ungated, any session could approve its own KYC on any deployment, the exact
+ * hole requireOperator exists to close.
  */
 app.post(
   "/api/users/:id/kyc",
@@ -2002,9 +1993,8 @@ app.post(
       /**
        * In-house path: the address must be linked under a PER-CUSTOMER
        * profile, or Monerium never issues the IBAN — the app's default
-       * profile accepts the link and then sits on the request forever. This
-       * branch existed, was dropped in a rework, and every in-house
-       * activation after that parked at "waiting for activation".
+       * profile accepts the link and then sits on the request forever, and
+       * every in-house activation parks at "waiting for activation".
        */
       if (!profileId && viaApp) {
         profileId =
@@ -2044,21 +2034,14 @@ app.post(
       }
     }
     /**
-     * Wrong-profile links are rebound, not tolerated. Addresses linked while
-     * the per-customer profile branch was missing sit under the app's DEFAULT
-     * profile, where an IBAN request parks forever — and POST /addresses
-     * answers "already linked" without moving the binding, so a retry changes
-     * nothing. This ceremony holds a fresh Safe signature, so unlink and let
-     * the re-link below bind the address where IBANs actually issue.
-     */
-    /**
-     * Wrong-profile bindings are DETECTED and parked, never deleted. The
-     * previous version unlinked the address to re-link it under the right
-     * profile — and Monerium answers every later link attempt for that
-     * address with "Cannot link, please contact support": unlinking BURNS
-     * the address, and a Safe's address cannot be changed. Detection tells
-     * the operator exactly what to raise with Monerium; deletion turned a
-     * stuck account into a bricked one (verified live on 0x9650E5…).
+     * Wrong-profile bindings are DETECTED and parked, never unlinked. An
+     * address linked under the app's DEFAULT profile has its IBAN request park
+     * forever, and POST /addresses answers "already linked" without moving the
+     * binding — but unlinking to re-link BURNS the address: Monerium answers
+     * every later link attempt with "Cannot link, please contact support", and
+     * a Safe's address cannot be changed. Detection tells the operator exactly
+     * what to raise with Monerium; deletion turns a stuck account into a
+     * bricked one (verified live on 0x9650E5…).
      */
     let wrongProfileBinding: string | undefined;
     if (viaApp && profileId) {
@@ -2119,14 +2102,12 @@ app.post(
     /**
      * ADDRESS-MATCHED ONLY — an IBAN is money routing, not decoration.
      *
-     * There used to be a fallback here to "the first IBAN in the snapshot"
-     * for when Monerium had not issued this address's IBAN yet. With app
-     * credentials that snapshot lists EVERY customer's IBAN, so each
-     * activation that outran issuance displayed some OTHER account's IBAN
-     * as its own — and a real sandbox payment sent to "my IBAN" minted into
-     * the other user's Safe (transfer 0a34425a: €22.01 landed in the wrong
-     * account). No IBAN yet must mean iban_pending, never someone else's;
-     * refreshPendingIban polls by address and attributes correctly.
+     * With app credentials the snapshot lists EVERY customer's IBAN, so
+     * falling back to "the first IBAN in the snapshot" when this address's
+     * has not been issued yet displays some OTHER account's IBAN as this one's
+     * — and a payment sent to it mints into the other user's Safe. No IBAN yet
+     * must mean iban_pending, never someone else's; refreshPendingIban polls
+     * by address and attributes correctly.
      */
     const iban =
       snapshot.ibans.find(
@@ -2135,8 +2116,7 @@ app.post(
 
     const updated = store.updateUser(user.id, {
       // What Monerium attributes to THIS address, or nothing. Falling back to
-      // a previously stored value would preserve exactly the mis-attribution
-      // this route used to create.
+      // a previously stored value would preserve a mis-attribution.
       iban,
       ...(viaApp
         ? {}
@@ -2644,9 +2624,9 @@ async function deployerFloat() {
  * Gas balances of every EOA that sends transactions for the platform. Each is
  * a distinct outage when dry, and the errors do not say which wallet is empty:
  * a dry orchestrator fails swaps and the fee leg; a dry deployer fails faucet
- * grants. Name them, so the dashboard can too. The co-signer no longer sends
- * native transactions — Safe debits are UserOperations through the bundler
- * and paymaster — but it stays listed so a residual balance is visible.
+ * grants. Name them, so the dashboard can too. The co-signer sends no native
+ * transactions — Safe debits are UserOperations through the bundler and
+ * paymaster — but it stays listed so a residual balance is visible.
  */
 let operatorGasCache: { at: number; value: { role: string; address: string; eth: number }[] } | null = null;
 async function operatorGas() {
@@ -4013,8 +3993,8 @@ app.post(
       });
     }
     // Claim the authorization before execution. Two parallel submissions of the
-    // same signature both used to clear the CREATED check above, and both could
-    // submit the same spend. claimAuthorization is the atomic boundary: after it
+    // same signature both clear the CREATED check above, and both could submit
+    // the same spend. claimAuthorization is the atomic boundary: after it
     // succeeds once, every other caller sees the authorizedAt marker and stops.
     if (!store.claimAuthorization(transfer.id)) {
       return res.status(409).json({ error: "authorization already submitted for this transfer" });
@@ -4242,10 +4222,10 @@ app.listen(API_PORT, API_HOST, () => {
   if (CUSTODY.requireNonCustodial) {
     console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
   }
-  // Allowances are gone entirely: every debit is a UserOperation the user's
-  // passkey signs for the exact amount and destination. An operator still
-  // setting the old env knobs should hear that they no longer do anything —
-  // silently ignoring them would read as authority that exists but doesn't.
+  // There are no allowances: every debit is a UserOperation the user's
+  // passkey signs for the exact amount and destination. An operator setting
+  // these env knobs should hear that they do nothing — silently ignoring them
+  // would read as authority that exists but doesn't.
   if (
     process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ||
     process.env.CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS ||
@@ -4253,9 +4233,9 @@ app.listen(API_PORT, API_HOST, () => {
     process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT
   ) {
     console.warn(
-      "NOTE: CANDIDE_COSIGNER_*_ALLOWANCE_* env vars are set but co-signer allowances no longer " +
+      "NOTE: CANDIDE_COSIGNER_*_ALLOWANCE_* env vars are set but co-signer allowances do not " +
         "exist — every Safe debit is a UserOperation the user's passkey signs at send time. " +
-        "Legacy standing allowances on old Safes are revoked automatically on the next send.",
+        "Standing allowances on older Safes are revoked automatically on the next send.",
     );
   }
 });
