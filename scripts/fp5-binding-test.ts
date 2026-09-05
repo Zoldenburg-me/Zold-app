@@ -1,9 +1,9 @@
 /**
  * FP5 quote-to-execution binding test.
  *
- * RemitVault removal makes local full-remittance execution require a deployed
- * Safe, which a hardhat-only test does not have. This pins the remaining
- * invariant directly: a quote records the rate it was priced against, and the
+ * Full remittance execution needs a deployed Safe, which a hardhat-only test
+ * does not have. This pins the invariant directly: a quote records the rate it
+ * was priced against, and the
  * executor refuses if the live on-chain rate has moved past tolerance.
  *
  * Own port. Run: npm run fp5:test

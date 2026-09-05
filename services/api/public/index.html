@@ -764,13 +764,9 @@
   /* Two columns, so an odd tile out would sit against a half-width hole.
      The last tile spans instead when the count is odd — :nth-child(odd) on the
      last child is exactly "there is no partner for this one". Add a fourth
-     tile and the rule stops applying on its own.
-
-     This replaces `#m-payment-page { grid-column: 1 / -1 }` from PR #109, which
-     fixed the same hole by naming the tile. Same result today, but it stays on
-     after a fourth tile arrives and follows the id rather than the position —
-     and the dashboard has now grown a tile three times, each by a different
-     hand. Keeping both would have left two rules for one job. */
+     tile and the rule stops applying on its own. Position, not a tile id: a
+     rule naming a tile stays on after a fourth tile arrives, and the dashboard
+     grows tiles by many hands. One rule for one job. */
   .m-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
   .m-tiles > :last-child:nth-child(odd) { grid-column: 1 / -1; }
   .m-tile {
@@ -1063,12 +1059,12 @@
   .m-ref .code { font-size: 32px; font-weight: 400; letter-spacing: 6px; margin: 10px 0 4px; font-variant-numeric: tabular-nums; }
 
   /* ---------- activity + profile ----------
-     Converted to the README's tokens (Aug 2026). The Noir file draws these
-     screens with 40-56px round avatars and 16/14px M3 type, contradicting its
-     OWN written spec — "nothing above 12px, 50% only for status dots" — and the
-     home and send screens built from that spec. The README wins, so the app has
-     one scale rather than two. Activity rows are now literally the dashboard's
-     .m-row: same component, so the two lists cannot drift apart again. */
+     On the README's tokens. The Noir file draws these screens with 40-56px
+     round avatars and 16/14px M3 type, contradicting its OWN written spec —
+     "nothing above 12px, 50% only for status dots" — and the home and send
+     screens built from that spec. The README wins, so the app has one scale
+     rather than two. Activity rows are literally the dashboard's .m-row: same
+     component, so the two lists cannot drift apart. */
   #dashboard.m-on[data-msub="activity"] #m-activity-screen,
   #dashboard.m-on[data-msub="detail"] #m-detail-screen,
   #dashboard.m-on[data-msub="share"] #m-share-screen,
@@ -1187,8 +1183,8 @@
   .m-lede { font-size: 16px; color: var(--m-dim); margin-top: 10px; letter-spacing: .5px; line-height: 1.5; }
 
   /* Option row — the Add funds list, the destination list, the Plus row.
-     On the README's scale, like every other list in the app: it used to be
-     16/14px M3 type, which sat a size above the rows it appears beside. */
+     On the README's scale, like every other list in the app; 16/14px M3 type
+     sits a size above the rows it appears beside. */
   .m-optrow {
     width: 100%; text-align: left; display: flex; gap: 12px; align-items: center;
     padding: 15px 14px; border-radius: 10px; background: var(--m-surface);
@@ -1356,11 +1352,11 @@
             password for anyone to steal or phish.</span>
           </div>
           <button class="btn-primary-lite" id="btn-passkey">Create passkey &amp; open account</button>
-          <!-- Deploying the smart wallet used to change nothing but the button
-               label, so the wait read as a stall — and a deploy failure read as
-               "the passkey failed" even though the passkey was already safely
-               registered. Name each step and its state so a failure points at
-               the step that actually failed. Same .pstep/.pdot structure as
+          <!-- Deploying the smart wallet takes a while, and a bare button label
+               reads as a stall — worse, a deploy failure reads as "the passkey
+               failed" even though the passkey is already safely registered.
+               Name each step and its state so a failure points at the step
+               that actually failed. Same .pstep/.pdot structure as
                #prov-steps; pkStep() indexes these three in order. -->
           <div class="pk-steps hidden" id="pk-steps">
             <div class="pstep"><span class="pdot">✓</span><span class="ptext">Create your passkey</span></div>
@@ -2058,7 +2054,7 @@
         <div id="m-mon-body" style="margin-top:24px"></div>
       </div>
 
-      <!-- Sub-screen header for the legacy cards still reached from the nav. -->
+      <!-- Sub-screen header for the desktop cards still reached from the nav. -->
       <div class="m-head m-subhead">
         <button class="m-iconbtn" id="m-back"><span class="material-symbols-rounded" style="font-size:19px">arrow_back</span></button>
         <div class="m-name" id="m-subtitle">Zold Plus</div>
@@ -2451,7 +2447,7 @@ async function api(path, body, method) {
   // 503 is what the service worker returns when it could not reach us at all.
   setReachable(res.status !== 503);
   // statusText is EMPTY over HTTP/2, so a non-JSON error (a proxy's HTML 502,
-  // a dropped tunnel) used to surface as a blank "Error" with no clue in it.
+  // a dropped tunnel) would otherwise surface as a blank "Error".
   if (!res.ok) throw new Error(data.error || res.statusText || `request failed (HTTP ${res.status})`);
   return data;
 }
@@ -2508,10 +2504,8 @@ function renderUser(u) {
 
 /** The design's three figures, mapped onto what the API reports.
  *
- *  There is ONE balance now: the EURe in the user's Safe. This used to add a
- *  local vault ledger on top, and removing RemitVault removed that ledger and
- *  `vaultBalanceEur` with it — leaving the term in would have added a
- *  permanent zero and read as if a second pot still existed.
+ *  There is ONE balance: the EURe in the user's Safe. Do not add a second
+ *  pot to the arithmetic — a permanent zero reads as if one existed.
  *
  *  So "total" and "available" are the same number, and that is honest rather
  *  than redundant: an in-flight transfer has already moved its EURe out of the
@@ -2596,9 +2590,8 @@ function renderMobile(u = user) {
  * One transfer as an activity row.
  *
  * The dashboard's "recent" list and the Activity screen render the SAME
- * component. They used to be two functions drawing two different row shapes —
- * the design file draws them differently — and the app showed one transfer two
- * ways depending on which screen you were on.
+ * component. The design file draws them differently, but two row shapes show
+ * one transfer two ways depending on which screen you are on.
  */
 function mTxStatus(t) {
   const inFlight = !["PAID", "REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
@@ -3459,9 +3452,9 @@ function mTimeline(t) {
   const cash = t.rail === "cash";
   const steps = [
     { t: "Quote locked", d: `quote ${String(t.quoteId || "").slice(0, 8)}` },
-    /* One funding source now that the vault ledger is gone: the move out of
-       the user's own Safe. DEBIT_STEP in orchestrator.ts is the list — if a
-       third source is ever added there, it has to be matched here too. */
+    /* One funding source: the move out of the user's own Safe. DEBIT_STEP in
+       orchestrator.ts is the list — if another source is ever added there, it
+       has to be matched here too. */
     { t: "Debited from your safe", d: t.txs?.find((x) => x.step.startsWith("safe.transfer"))?.hash?.slice(0, 18) || "waiting" },
     { t: cash ? "Anchor session opened" : "Redeem order placed", d: cash ? (t.pickup?.anchorTransactionId || "—") : (t.sepa?.orderId || t.sepa?.state || "—") },
     { t: cash ? "Converted and funded" : "Sent over SEPA", d: t.txs?.find((x) => x.step.startsWith("liquidity") || x.step.startsWith("bridge."))?.step || (t.sepa?.state ?? "—") },
@@ -3995,11 +3988,6 @@ $("m-card-tile").onclick = () => mobileNav("card");
 $("m-back").onclick = () => mobileNav("home");
 $("m-kyc-banner").onclick = () => enterKycReview(user?.name || "Account");
 
-/* The "set up allowance" repair banner is gone with the allowance model:
-   sends debit through a UserOperation the passkey signs, and that operation
-   revokes any legacy standing allowance as it runs, so there is nothing left
-   to install or repair between sends. */
-
 $("m-iban-banner").onclick = async () => {
   const banner = $("m-iban-banner");
   const title = $("m-iban-banner-title");
@@ -4082,8 +4070,8 @@ function renderFundingActions(u = user) {
   const showSafe = needsIban && needsPasskeySafeSetup(u);
   // Approval is already settled by this point (needsIban requires it), so the
   // remaining step is the same for both paths: one passkey ceremony that links
-  // the Safe and issues the IBAN. "Verify with Monerium" used to send in-house
-  // approved users into Monerium's OAuth, which they don't need.
+  // the Safe and issues the IBAN. In-house approved users do not need
+  // Monerium's OAuth.
   const showActivate = needsIban && !needsPasskeySafeSetup(u);
   row.classList.toggle("hidden", !(showSafe || showActivate));
   $("btn-finish-safe").classList.toggle("hidden", !showSafe);
@@ -4295,16 +4283,15 @@ function renderShellPages() {
   $("set-device").textContent = user.authorizerAddress ? `Bound to ${user.authorizerAddress.slice(0, 10)}…${user.authorizerAddress.slice(-6)}` : "Not bound yet.";
   const safe = user.passkeySafe;
   const cosigner = safe?.cosignerPolicy;
-  /* A legacy account may still carry a standing allowance from the removed
-     co-signer-delegate model; the next send's user-signed operation revokes
-     it. New accounts never have one. */
+  /* An older account may still carry a standing co-signer allowance; the next
+     send's user-signed operation revokes it. New accounts never have one. */
   const legacyStanding = cosigner?.allowances?.some((x) => BigInt(x.amount || "0") > 0n);
   $("set-wallet-policy").textContent = !safe
     ? "Passkey Safe not planned yet."
     : cosigner?.enabled
       ? `Production co-signer · ${safe.threshold}-of-${safe.threshold} Safe · ` +
         (legacyStanding
-          ? "legacy allowance detected — revoked automatically on your next send"
+          ? "standing allowance detected — revoked automatically on your next send"
           : "every movement signed with your passkey")
       : `Passkey-only Safe · every movement signed with your passkey.`;
   renderRecoveryInfo();
@@ -5222,10 +5209,9 @@ const RAILS = {
   sepa: { icon: "🏦", label: "Bank transfer", desc: "Any IBAN · SEPA", eta: "seconds – 1 day" },
 };
 /**
- * India is absent on purpose: its only rail was UPI, which was a mock partner
- * adapter and has been removed. A destination with no live rail would land the
- * user on an empty options screen with no way forward, so it comes back when a
- * licensed partner does.
+ * Only destinations with a live rail are listed. One without would land the
+ * user on an empty options screen with no way forward, so a country appears
+ * when a licensed partner does.
  */
 const DESTS = [
   { code: "KE", flag: "🇰🇪", name: "Kenya", cur: "KES", rails: ["cash"], soon: [["📱", "M-Pesa wallet", "straight to their phone"]] },
@@ -5347,10 +5333,6 @@ const STEP_LABELS = {
   "bridge.xyz.deposit.memo": ["Bridge deposit memo ready", "🏦"],
   "bridge.xyz.deposit.transfer": ["Funding Bridge.xyz transfer", "💵"],
   "bridge.xyz.destination_tx": ["Bridge destination funded", "✅"],
-  "usdc.approve(bridge)": ["Authorizing bridge escrow", "🔏"],
-  "bridge.lockForPayout": ["Locking USDC for Stellar payout", "🌉"],
-  "bridge.settle": ["Escrow settled on-chain", "✅"],
-  "bridge.release": ["Releasing escrow for refund", "↩️"],
   "safe.refundTransfer": ["Refunding your Safe", "💶"],
 };
 

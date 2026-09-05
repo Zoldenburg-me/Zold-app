@@ -235,7 +235,7 @@ export interface User {
     createdAt: string;
     updatedAt: string;
   };
-  /** Legacy payment-page fields. Kept only so existing local db.json files can
+  /** Pre-`paymentPage` fields. Kept only so existing local db.json files can
    *  migrate lazily the next time the handle is saved. New code reads
    *  paymentPage instead. */
   handle?: string;
@@ -326,9 +326,8 @@ export interface Quote {
   receiveEur: number; // sepa rail (0 otherwise)
   /** True market mid from the live feed. A reference we do NOT trade at. */
   midRate: number;
-  /** Measured gap between midRate and fxRate. Not a configured constant: the
-   *  receipt used to assert a flat 0.50% while the mid was a stale hardcoded
-   *  number, so the stated margin and the real one were unrelated. */
+  /** Measured gap between midRate and fxRate. Not a configured constant: an
+   *  asserted flat margin over a stale mid says nothing about the real one. */
   marginBps: number;
   /** What the sender really gets per EUR sent, fixed fee included. At small
    *  amounts the flat fee dominates (EUR 2 to cash loses half to it), and an
@@ -526,7 +525,7 @@ export interface Transfer {
    * UserOperation (Change 2, windows 1-3): the batch approves the venue and
    * delivers the output straight to `recipient`, so the orchestrator never
    * holds the input. `recipient` is the orchestrator only in local dry-run
-   * (the escrow demo pulls from it); in live mode it is the Bridge deposit
+   * (the local demo settles from it); in live mode it is the Bridge deposit
    * address, and once the batch lands the funds are already with the
    * settlement custodian — which is why compensation must not assume it can
    * reverse-swap them.
@@ -535,10 +534,10 @@ export interface Transfer {
    * Did the orchestrator hold this transfer's input funds?
    *
    * Recorded at creation, on EVERY transfer and every rail, because the answer
-   * has regulatory weight and used to be derivable only by replaying which
+   * has regulatory weight and must not be derivable only by replaying which
    * venue was configured and whether a venue call happened to succeed. A
-   * silent fallback from the Safe-executed batch to the plain debit changed
-   * the answer and left no trace; now it names itself.
+   * fallback from the Safe-executed batch to the plain debit changes the
+   * answer, so it names itself.
    *
    *  non-custodial — the user's funds never reach an address we hold a key to.
    *                  The cash-rail batch delivering straight to Bridge, and the
@@ -733,9 +732,9 @@ interface Db {
 
   // ── The organisation domain (docs/business-accounts.md) ───────────────────
   //
-  // A User is now only a login identity; the tenant that holds money is an
-  // Organisation, and a user reaches one through a Member row. Existing
-  // single-user accounts are migrated into a personal org of one on first
+  // A User is only a login identity; the tenant that holds money is an
+  // Organisation, and a user reaches one through a Member row. Users that
+  // predate organisations are migrated into a personal org of one on first
   // start — see migrateUsersToOrganisations().
   organisations: Organisation[];
   members: Member[];
@@ -833,9 +832,9 @@ export function initStore() {
 }
 
 /**
- * Drop sessions that can no longer authenticate anything. They were kept
- * forever, so every request paid for them twice: a linear scan to find the live
- * one, and a full re-serialisation of the file on write.
+ * Drop sessions that can no longer authenticate anything. Kept forever, every
+ * request would pay for them twice: a linear scan to find the live one, and a
+ * full re-serialisation of the file on write.
  */
 function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
   const cutoff = Date.now() - retainMs;
@@ -846,11 +845,12 @@ function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
 }
 
 /**
- * Give every pre-existing user a personal organisation of one.
+ * Give every user created before organisations existed a personal
+ * organisation of one.
  *
- * The old model said a user IS an account. Those users have a real IBAN and a
- * real on-chain address — on Base Sepolia some of them hold credited EUR — so
- * the migration must CARRY THEM FORWARD, not re-issue. The org's EUR account
+ * Those users have a real IBAN and a real on-chain address — on Base Sepolia
+ * some of them hold credited EUR — so the migration must CARRY THEM FORWARD,
+ * not re-issue. The org's EUR account
  * therefore takes the user's existing `iban` and `address` verbatim, and its
  * status is derived from the user's funding state rather than assumed active:
  * a user who never finished provisioning must not acquire an account that

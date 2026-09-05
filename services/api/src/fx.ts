@@ -24,9 +24,8 @@ import type { PayoutRail } from "./store.js";
  *              USD->fiat leg, minus our spread.
  *
  * marginBps is then MEASURED as the gap between them, not asserted. That
- * matters: the receipt used to state a flat "0.50% margin" while the mid was a
- * stale constant 14% off the market, so the stated margin and the real one had
- * nothing to do with each other. If the on-chain rate drifts from the market,
+ * matters: a receipt stating a flat "0.50% margin" over a stale mid says
+ * nothing about the real one. If the on-chain rate drifts from the market,
  * the margin line grows and the drift is visible instead of hidden.
  */
 export interface QuoteRequest {
