@@ -528,8 +528,11 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         error: `${def.name} cannot be funded this way: ${def.needs}`,
       });
     }
+    // `active` is set exactly when Monerium attributed an IBAN to the Safe
+    // (activation), so the status alone is the funded test; the hardhat
+    // harness marks its auto-approved accounts active with no IBAN.
     const caller = store.findUser(ctx.userId);
-    if (!caller?.iban || caller.funding?.status !== "active") {
+    if (caller?.funding?.status !== "active") {
       return res.status(409).json({
         error:
           "Your own account is not funded yet, so it cannot fund this organisation. Add money to your account first.",
