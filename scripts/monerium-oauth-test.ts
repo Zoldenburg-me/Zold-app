@@ -321,7 +321,6 @@ try {
     CANDIDE_COSIGNER_KEY: COSIGNER_KEY,
     CANDIDE_ALLOWANCE_MODULE_ADDRESS: "0x691f59471Bfd2B7d639DCF74671a2d648ED1E331",
     CANDIDE_RECOVERY_GUARDIAN_ADDRESS: "",
-    ALLOW_SIMULATION: "1",
     KYC_AUTO_APPROVE: "0", // the connect path is for pending users
     MG_ANCHOR_DOMAIN: "",
   });
@@ -422,7 +421,7 @@ try {
   });
 
   await t("the user still cannot quote — connecting is not approval", async () => {
-    const r = await call("/api/quotes", { userId, sendEur: 25, rail: "cash" });
+    const r = await call("/api/quotes", { userId, sendEur: 25, rail: "sepa" });
     assert.equal(r.status, 409, "KYC must stay pending until an app IBAN is active");
   });
 
@@ -458,7 +457,7 @@ try {
     assert.equal(me.data.kycStatus, "approved");
     assert.equal(me.data.kyc.provider, "monerium");
     assert.equal(me.data.funding.status, "active");
-    const q = await call("/api/quotes", { userId, sendEur: 25, rail: "cash" });
+    const q = await call("/api/quotes", { userId, sendEur: 25, rail: "sepa" });
     assert.equal(q.status, 201, `quote failed after activation: ${q.data.error ?? ""}`);
   });
 

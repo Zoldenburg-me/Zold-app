@@ -200,7 +200,7 @@
         <div class="logo-badge">Z</div>
         <div>
           <div class="brand-title">Zold Operator Tower</div>
-          <div class="brand-subtitle">Base Sepolia • Candide Safe 2-of-2 • Monerium Whitelabel</div>
+          <div class="brand-subtitle">Base • Candide Safe 2-of-2 • Monerium (OAuth / own API keys)</div>
         </div>
       </div>
       <div class="auth-bar">
@@ -229,7 +229,7 @@
       <div class="stat-card clickable" onclick="jumpToUsers('approved')">
         <div class="stat-label">Active Safes</div>
         <div class="stat-value" id="statSafes" style="color: var(--primary);">--</div>
-        <div class="stat-sub">Deployed on Base Sepolia</div>
+        <div class="stat-sub">Deployed on Base</div>
       </div>
       <div class="stat-card clickable" onclick="jumpToTx('all')">
         <div class="stat-label">Transfers</div>
@@ -244,7 +244,7 @@
       <div class="stat-card">
         <div class="stat-label">Deployer Float</div>
         <div class="stat-value" id="statFloat">--</div>
-        <div class="stat-sub" id="statFloatSub">faucet + gas source</div>
+        <div class="stat-sub" id="statFloatSub">gas source</div>
       </div>
     </div>
 
@@ -438,14 +438,13 @@
       }
     }
 
-    /* The deployer pays gas and the testnet faucet. Its balance dropping below
+    /* The deployer pays gas. Its balance dropping below
        a couple of grants is an outage-in-waiting that otherwise only shows as
        a console warning nobody reads. */
     function floatLow() {
       const d = stats.deployer;
       if (!d) return false;
-      const grant = Number(stats.faucetGrantEur || 0);
-      return (grant > 0 && d.eur < grant * 3) || d.eth < 0.002;
+      return d.eth < 0.002;
     }
 
     function renderFloat() {
@@ -457,8 +456,8 @@
       el.style.color = floatLow() ? 'var(--danger)' : 'var(--text)';
       const gasParts = (stats.operatorGas || []).map(w => `${w.role.split(' ')[0]} ${Number(w.eth).toFixed(3)}`);
       sub.textContent = gasParts.length
-        ? `ETH: ${gasParts.join(' · ')} · faucet €${stats.faucetGrantEur || 0}`
-        : `${Number(d.eth).toFixed(4)} ETH gas · faucet grants €${stats.faucetGrantEur || 0}`;
+        ? `ETH: ${gasParts.join(' · ')}`
+        : `${Number(d.eth).toFixed(4)} ETH gas`;
     }
 
     /* ---------- triage strip ---------- */
@@ -482,7 +481,7 @@
         const d = stats.deployer;
         items.push({
           kind: 'float', label: 'FLOAT', who: 'Deployer wallet',
-          why: `€${Number(d.eur).toFixed(0)} EURe / ${Number(d.eth).toFixed(4)} ETH left — top it up before faucet grants and gas start failing`,
+          why: `€${Number(d.eur).toFixed(0)} EURe / ${Number(d.eth).toFixed(4)} ETH left — top it up before gas starts failing`,
           actions: '',
         });
       }

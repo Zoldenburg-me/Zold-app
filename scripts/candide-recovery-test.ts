@@ -9,7 +9,7 @@
  * assertions can check what actually crossed the wire — the Safe-signed SIWE
  * statement, the new owner set, the guardian signature.
  *
- * Chain and bundler are simulated (ALLOW_SIMULATION): the property under test
+ * Chain and bundler are simulated (LOCAL_HARNESS on hardhat): the property under test
  * is the state machine and its invariants, chiefly that the NEW passkey cannot
  * sign in until the recovery is finalized. The on-chain half (adding the
  * guardian, executing, finalizing) runs against Base Sepolia's 3-minute
@@ -287,7 +287,7 @@ try {
     RECOVERY_SERVICE_URL: STUB,
     RECOVERY_SIMULATED_GRACE_SECONDS: "2",
     RECOVERY_SWEEP_MS: "3600000",
-    ALLOW_SIMULATION: "1",
+    LOCAL_HARNESS: "1",
     KYC_AUTO_APPROVE: "1",
   });
   for (const s = Date.now(); Date.now() - s < 30_000; ) {
