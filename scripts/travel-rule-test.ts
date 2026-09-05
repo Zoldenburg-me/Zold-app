@@ -22,9 +22,13 @@ import {
   sep12CustomerFields,
   sep12PutCustomer,
 } from "../services/api/src/stellar/anchor.js";
-import { senderMemo, senderProfileToSep9, submitSenderProfile } from "../services/api/src/adapters/moneygram.js";
+import {
+  senderDetailsToSep9,
+  senderMemo,
+  submitSenderDetails,
+  type SenderDetails,
+} from "../services/api/src/adapters/moneygram.js";
 import { MONEYGRAM_SEP9_FIELDS, moneygramSep9, toAlpha3 } from "../services/api/src/stellar/sep9.js";
-import type { User } from "../services/api/src/store.js";
 
 const domain = STELLAR.anchorDomain || "testanchor.stellar.org";
 
@@ -40,22 +44,19 @@ const t = async (label: string, fn: () => Promise<void>) => {
 // fixed id would make this test pass for the wrong reason on the second run.
 const RUN_ID = `u-travel-rule-${Date.now()}`;
 
-const baseUser = (overrides: Partial<User> = {}): User =>
-  ({
-    id: RUN_ID,
-    name: "Miriam Zoldenburg",
-    email: "miriam@example.com",
-    country: "DE",
-    kycStatus: "approved",
-    iban: "",
-    address: "0x0000000000000000000000000000000000001001",
-    createdAt: new Date().toISOString(),
-    ...overrides,
-  }) as User;
-
-const fullProfile = {
+// Sender details exist for ONE call and are never stored (the stored profile
+// was removed for data minimisation), so the test builds them per case.
+const namesOnly = (overrides: Partial<SenderDetails> = {}): SenderDetails => ({
+  senderId: RUN_ID,
+  country: "DE",
+  email: "miriam@example.com",
   firstName: "Miriam",
   lastName: "Zoldenburg",
+  ...overrides,
+});
+
+const fullDetails: SenderDetails = {
+  ...namesOnly(),
   birthDate: "1990-04-12",
   address: "12 Beispielstrasse",
   city: "Berlin",
@@ -71,7 +72,7 @@ const fullProfile = {
 console.log(`anchor: ${domain}\n`);
 
 const treasury = await getTreasury();
-const memo = senderMemo(baseUser());
+const memo = senderMemo(RUN_ID);
 const jwt = await sep10Auth(domain, treasury, { memo });
 const declared = await sep12CustomerFields(domain, jwt, treasury.publicKey(), "sep24-customer", memo);
 const required = Object.entries(declared.fields)
@@ -86,32 +87,27 @@ await t("the anchor declares SEP-9 fields, including required ones", async () =>
 });
 
 console.log("the gap this closes:");
-await t("a user with no sender profile is missing required fields", async () => {
-  const missing = missingRequiredFields(declared.fields, senderProfileToSep9(baseUser()));
-  assert.ok(missing.length > 0, "a profileless user should not satisfy the anchor");
-  console.log(`      missing without a profile: ${missing.join(", ")}`);
+await t("a transfer with no sender details is missing required fields", async () => {
+  const missing = missingRequiredFields(declared.fields, senderDetailsToSep9(undefined));
+  assert.ok(missing.length > 0, "no details should not satisfy the anchor");
+  console.log(`      missing without details: ${missing.join(", ")}`);
 });
 
-await t("a complete profile satisfies every required field", async () => {
-  const user = baseUser({ senderProfile: fullProfile } as any);
-  const missing = missingRequiredFields(declared.fields, senderProfileToSep9(user));
+await t("complete details satisfy every required field", async () => {
+  const missing = missingRequiredFields(declared.fields, senderDetailsToSep9(fullDetails));
   assert.deepEqual(missing, [], `still missing: ${missing.join(", ")}`);
 });
 
-await t("a partial profile is still refused, naming what is absent", async () => {
+await t("partial details are still refused, naming what is absent", async () => {
   // Names only — no contact details.
-  const user = baseUser({
-    email: undefined,
-    senderProfile: { firstName: "Miriam", lastName: "Zoldenburg" },
-  } as any);
-  const missing = missingRequiredFields(declared.fields, senderProfileToSep9(user));
-  assert.ok(missing.length > 0, "a name-only profile should not satisfy the anchor");
+  const missing = missingRequiredFields(declared.fields, senderDetailsToSep9(namesOnly({ email: undefined })));
+  assert.ok(missing.length > 0, "name-only details should not satisfy the anchor");
   assert.ok(!missing.includes("first_name"), "first_name was supplied and should not be reported missing");
 });
 
 console.log("SEP-9 mapping:");
-await t("our stored profile maps onto SEP-9 field names the anchor knows", async () => {
-  const mapped = senderProfileToSep9(baseUser({ senderProfile: fullProfile } as any));
+await t("sender details map onto SEP-9 field names the anchor knows", async () => {
+  const mapped = senderDetailsToSep9(fullDetails);
   for (const [k, v] of Object.entries(mapped)) {
     if (v === undefined) continue;
     assert.ok(k in declared.fields, `we would send "${k}", which ${domain} does not declare`);
@@ -122,30 +118,26 @@ await t("our stored profile maps onto SEP-9 field names the anchor knows", async
 });
 
 await t("country falls back to the account country, converted to alpha-3", async () => {
-  const mapped = senderProfileToSep9(
-    baseUser({ country: "FR", senderProfile: { firstName: "A", lastName: "B" } } as any),
-  );
+  const mapped = senderDetailsToSep9(namesOnly({ country: "FR", firstName: "A", lastName: "B" }));
   // The account stores alpha-2; SEP-9 transmits alpha-3.
   assert.equal(mapped.address_country_code, "FRA");
 });
 
 await t("no document images are ever mapped for transmission", async () => {
-  const mapped = senderProfileToSep9(baseUser({ senderProfile: fullProfile } as any));
+  const mapped = senderDetailsToSep9(fullDetails);
   for (const k of ["photo_id_front", "photo_id_back", "photo_proof_residence", "proof_of_liveness"]) {
     assert.equal(mapped[k], undefined, `${k} must never be sent from this store`);
   }
 });
 
 console.log("live transmission:");
-await t("submitSenderProfile refuses rather than transmitting a partial profile", async () => {
-  const user = baseUser({ email: undefined, senderProfile: { firstName: "Miriam", lastName: "Zoldenburg" } } as any);
-  const result = await submitSenderProfile(domain, jwt, treasury.publicKey(), user);
+await t("submitSenderDetails refuses rather than transmitting partial details", async () => {
+  const result = await submitSenderDetails(domain, jwt, treasury.publicKey(), namesOnly({ email: undefined }), memo);
   assert.ok(result.missing.length > 0, "expected a refusal listing missing fields");
 });
 
-await t("a complete profile is accepted by the anchor", async () => {
-  const user = baseUser({ senderProfile: fullProfile } as any);
-  const result = await submitSenderProfile(domain, jwt, treasury.publicKey(), user);
+await t("complete details are accepted by the anchor", async () => {
+  const result = await submitSenderDetails(domain, jwt, treasury.publicKey(), fullDetails, memo);
   assert.deepEqual(result.missing, []);
   const after = await sep12CustomerFields(domain, jwt, treasury.publicKey(), "sep24-customer", memo);
   assert.equal(after.status, "ACCEPTED", `anchor customer status is ${after.status}, expected ACCEPTED`);
@@ -153,8 +145,7 @@ await t("a complete profile is accepted by the anchor", async () => {
 });
 
 await t("each user is a SEPARATE customer at the anchor (memo isolation)", async () => {
-  const other = baseUser({ id: `${RUN_ID}-other` } as any);
-  const otherMemo = senderMemo(other);
+  const otherMemo = senderMemo(`${RUN_ID}-other`);
   assert.notEqual(otherMemo, memo, "two users must not share a SEP-12 memo");
   const otherJwt = await sep10Auth(domain, treasury, { memo: otherMemo });
   const otherView = await sep12CustomerFields(domain, otherJwt, treasury.publicKey(), "sep24-customer", otherMemo);
@@ -171,7 +162,7 @@ await t("each user is a SEPARATE customer at the anchor (memo isolation)", async
 
 await t("the derived memo is a valid SEP-10 positive integer and is stable", async () => {
   assert.match(memo, /^[1-9]\d*$/);
-  assert.equal(senderMemo(baseUser()), memo, "memo must be stable for the same user");
+  assert.equal(senderMemo(RUN_ID), memo, "memo must be stable for the same user");
 });
 
 
@@ -181,21 +172,19 @@ await t("country codes are ISO alpha-3, as SEP-9 and MoneyGram specify", async (
   assert.equal(toAlpha3("DE"), "DEU");
   assert.equal(toAlpha3("US"), "USA");
   assert.equal(toAlpha3("KEN"), "KEN", "an alpha-3 code should pass through");
-  const mapped = senderProfileToSep9(baseUser({ senderProfile: fullProfile } as any));
+  const mapped = senderDetailsToSep9(fullDetails);
   assert.equal(mapped.address_country_code, "DEU", "must not send the alpha-2 form");
 });
 
 await t("an unmappable country is omitted, never guessed", async () => {
   assert.equal(toAlpha3("XX"), undefined);
-  const mapped = senderProfileToSep9(
-    baseUser({ country: "XX", senderProfile: { firstName: "A", lastName: "B" } } as any),
-  );
+  const mapped = senderDetailsToSep9(namesOnly({ country: "XX", firstName: "A", lastName: "B" }));
   assert.equal(mapped.address_country_code, undefined,
     "a country we cannot map must be omitted — a wrong one is worse than none");
 });
 
 await t("the MoneyGram body carries only its nine documented fields", async () => {
-  const body = moneygramSep9(senderProfileToSep9(baseUser({ senderProfile: fullProfile } as any)));
+  const body = moneygramSep9(senderDetailsToSep9(fullDetails));
   for (const k of Object.keys(body)) {
     assert.ok(
       (MONEYGRAM_SEP9_FIELDS as readonly string[]).includes(k),

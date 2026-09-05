@@ -150,7 +150,11 @@ branch and will need a merge.
   per transfer; dry-run (default) keeps the local mock escrow so the
   no-credential demo completes, CCTP_LIVE=1 submits the real Base Sepolia
   burn. Never executed live.
-- Travel Rule / SEP-12 (July 2026): a cash pickup is a money transmission, so
+- Travel Rule / SEP-12 (July 2026) — THE STORED PROFILE IS GONE (Sep 2026, see
+  "Sender profile removed" below); `user.senderProfile` and its two routes no
+  longer exist and the adapter takes per-call `SenderDetails`. The rest of this
+  bullet is kept for what was verified against the anchors:
+  a cash pickup is a money transmission, so
   the anchor needs the FATF originator set about the SENDER. We used to send
   none of it — the SEP-24 withdrawal carried only asset/account/amount and the
   anchor's SEP-12 customer sat at NEEDS_INFO, so a real withdrawal could never
@@ -1469,6 +1473,41 @@ is a product decision to take with eyes open; Candide's Alerts API is still
 not wired, so the owner learns of a started recovery from the Profile banner
 only. Test gap: the harness runs KYC_AUTO_APPROVE=1, so "a pending account
 may enrol" is asserted by reading the route, not by a check.
+
+## Sender profile removed — data minimisation (Sep 2026)
+
+`user.senderProfile` (name, birth date, home address, ID type and number,
+phone, occupation) is DELETED, with POST /api/users/:id/sender-profile and
+GET .../sender-profile/requirements. `stripSenderProfiles()` in store.ts
+removes any row still carrying one on load (the Travel Rule harness wrote
+some into local databases). `npm run pay:test` and `npm run anchor:sweep:test`
+pass; `travelrule:test` is rewritten around the new type but is a LIVE test
+against testanchor and was not run from the sandbox (egress blocked).
+
+WHY: it was the most sensitive data in the system, held in plaintext, for
+exactly one consumer — the Stellar anchor leg of the cash rail — which no
+deployment has ever opened (BRIDGE_LIVE and an anchor are both unset
+everywhere). No page ever wrote it; the only rows came from the test script.
+Collecting identity-document numbers for a rail that cannot run fails GDPR
+data minimisation on its face, and it dragged the impact assessment up from
+"account + financial data" to "identity documents". An earlier review pass
+kept the routes as "external API surface"; that call is reversed here with
+the data cost now clear.
+
+WHAT REPLACES IT: `SenderDetails` in adapters/moneygram.ts — the same text
+fields, HELD FOR ONE CALL and never persisted. `createCashPickupViaAnchor`
+takes `senderId` (memo isolation is kept regardless of details — one treasury
+serves every user, so the per-user SEP-10/SEP-12 memo still matters) and an
+optional `sender`. Nothing collects details yet, so the orchestrator passes
+none and a SEP-12 anchor refuses BEFORE opening a withdrawal, naming the
+fields it wants — the same refusal a profile-less user got before.
+
+WHEN AN ANCHOR IS INTEGRATED: collect the details at send time, for that
+transfer, transmit them, and keep only what the five-year GwG retention
+requires — encrypted, or as a reference into the KYC provider. Not a stored
+profile. The same question returns on the Bridge leg: BRIDGE.onBehalfOf is
+ONE customer for every sender, so Bridge does not know who is sending; that
+is a Travel Rule gap to close per transfer once real money moves that way.
 
 ## FP4 completion — recovery (decided July 2026, 2-of-2)
 
