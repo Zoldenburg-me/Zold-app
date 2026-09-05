@@ -747,6 +747,8 @@ export interface Session {
  * deleting the row, so a recipient who opens a dead link is told which of the
  * two happened.
  */
+import type { StoredDocument } from "./documents.js";
+
 export interface ReceiptShare {
   id: string;
   /** Public path segment. Unguessable, because holding it is the whole auth. */
@@ -780,6 +782,9 @@ interface Db {
   sessions: Session[];
   /** Public shareable receipts, keyed by an unguessable slug. */
   receiptShares: ReceiptShare[];
+  /** Account documents (receipts, statements, balance and ownership letters):
+   *  frozen snapshots under a verification code. See documents.ts. */
+  documents: StoredDocument[];
   /** Monerium issue-order ids already reflected in local receipt state. */
   processedMoneriumOrders: string[];
   /** Monerium webhook delivery ids already accepted. */
@@ -839,6 +844,7 @@ let db: Db = {
   transfers: [],
   sessions: [],
   receiptShares: [],
+  documents: [],
   processedMoneriumOrders: [],
   processedMoneriumWebhooks: [],
   cryptoDeposits: [],
@@ -864,6 +870,7 @@ export function initStore() {
     db = JSON.parse(readFileSync(DB_PATH, "utf8"));
     db.sessions ??= [];
     db.receiptShares ??= [];
+    db.documents ??= [];
     db.processedMoneriumOrders ??= [];
     db.processedMoneriumWebhooks ??= [];
     db.cryptoDeposits ??= [];
@@ -1247,6 +1254,27 @@ export const store = {
   },
   findReceiptShareBySlug(slug: string) {
     return db.receiptShares.find((s) => s.slug === slug);
+  },
+  get documents() {
+    return db.documents;
+  },
+  addDocument(d: StoredDocument) {
+    db.documents.push(d);
+    persist();
+    return d;
+  },
+  updateDocument(id: string, patch: Partial<StoredDocument>) {
+    const d = db.documents.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown document ${id}`);
+    Object.assign(d, patch);
+    persist();
+    return d;
+  },
+  findDocumentByCode(code: string) {
+    return db.documents.find((d) => d.code === code);
+  },
+  documentsForUser(userId: string) {
+    return db.documents.filter((d) => d.userId === userId);
   },
   addReceiptShare(s: ReceiptShare) {
     db.receiptShares.push(s);

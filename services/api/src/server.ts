@@ -80,6 +80,7 @@ import {
 } from "./recovery.js";
 import { submitGuardianRecovery } from "./recovery-signer.js";
 import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
+import { createDocumentsRouter } from "./routes/documents.js";
 import { candideRecoveryEnabled, maskTarget } from "./recovery/candide-guardian.js";
 import {
   abis,
@@ -172,6 +173,8 @@ app.use("/api", (req, res, next) => {
     // A receipt slug is a bearer credential, so looking one up is a guess at a
     // secret and belongs on the tighter bucket with the other guessable things.
     req.path.startsWith("/r/") ||
+    // A document verification code is likewise a bearer credential.
+    req.path.startsWith("/v/") ||
     req.path === "/kyc/review" ||
     // Submitting Monerium API keys is a credential check against a third
     // party; guessing at it belongs on the tight bucket too.
@@ -204,6 +207,7 @@ app.get(["/business", "/business/"], (_req, res) =>
 );
 /** The supplier's invoice view, reached with a one-time link and no account. */
 app.get("/invoice/:token", (_req, res) => res.sendFile(path.join(pub, "invoice.html")));
+app.get("/v/:code", (_req, res) => res.sendFile(path.join(pub, "document.html")));
 
 app.use(express.static(pub));
 
@@ -427,6 +431,9 @@ const withSession = (user: User) => ({ ...publicUser(user), sessionToken: issueS
 // no-session half sits under /recovery, which the limiter above already
 // treats as an auth route.
 app.use("/api", createCandideRecoveryRouter({ requireUserSession, publicUser, withSession }));
+// Account documents: receipts, statements, balance and ownership letters, each
+// verifiable at /v/<code>. The page is the record; the PDF is its print.
+app.use("/api", createDocumentsRouter({ requireUserSession }));
 
 function publicPrivacyPlan(plan: (typeof PRIVACY_BUNDLE.plans)[number]) {
   const grossMarginBps = Math.round(((plan.priceEur - plan.estimatedCostEur) / plan.priceEur) * 10_000);

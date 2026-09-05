@@ -150,7 +150,16 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       if (!/^[A-Za-z]{2}$/.test(country)) {
         return res.status(400).json({ error: "Country must be an alpha-2 code." });
       }
-      patch.address = { ...ctx.org.address, ...b.address, country: country.toUpperCase() };
+      // Only the known fields, as strings — the body is untrusted and the
+      // address is printed verbatim on issued invoices.
+      const next = { ...ctx.org.address, country: country.toUpperCase() };
+      for (const k of ["line1", "line2", "city", "postalCode", "stateOrProvince"] as const) {
+        if (typeof b.address[k] === "string") {
+          const v = b.address[k].trim();
+          if (v) next[k] = v; else delete next[k];
+        }
+      }
+      patch.address = next;
     }
     if (b.reporting && typeof b.reporting === "object") {
       const next = { ...ctx.org.reporting };
