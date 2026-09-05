@@ -708,7 +708,11 @@ function requireCapability(
 
 /** Bumped when the wording of the US questions or the consent text changes,
  *  so a stored answer can be tied to what was actually asked. */
+/** Wording versions: the three separate questions, and the single combined
+ *  one the app asks now. Recorded with every answer so a later reading knows
+ *  what was actually put to the person. */
 const US_QUESTIONS_VERSION = "2026-08-31";
+const US_QUESTION_COMBINED_VERSION = "2026-09-05-combined";
 const CONSENT_VERSION = "2026-08-31";
 
 const BLOCKED_COPY: Record<Extract<Segment, `BLOCKED_${string}`>, string> = {
@@ -741,10 +745,18 @@ app.post(
      * a single citizenship equal to residence and all-no US answers.
      */
     const type: "individual" | "company" = accountType === "company" ? "company" : "individual";
+    // The app asks ONE question (citizen, Green Card or tax resident); older
+    // clients and the harnesses still send the three. Keep whichever shape
+    // was answered rather than translating one into the other.
+    const combined = typeof usAnswers?.usPerson === "boolean";
     const answers = {
-      usCitizen: usAnswers?.usCitizen === true,
-      usGreenCard: usAnswers?.usGreenCard === true,
-      usTaxResident: usAnswers?.usTaxResident === true,
+      ...(combined
+        ? { usPerson: usAnswers.usPerson === true }
+        : {
+            usCitizen: usAnswers?.usCitizen === true,
+            usGreenCard: usAnswers?.usGreenCard === true,
+            usTaxResident: usAnswers?.usTaxResident === true,
+          }),
       ...(type === "company"
         ? { companyUsNexus: usAnswers?.companyUsNexus === true }
         : { companyUsNexus: null }),
@@ -832,7 +844,11 @@ app.post(
         ? { softSignals: { ...(softSignals ?? {}), flaggedAt: new Date().toISOString(), reconfirmationPending: true } }
         : {}),
     });
-    store.addUsAnswers(user.id, { ...answers, answeredAt: new Date().toISOString(), version: US_QUESTIONS_VERSION });
+    store.addUsAnswers(user.id, {
+      ...answers,
+      answeredAt: new Date().toISOString(),
+      version: combined ? US_QUESTION_COMBINED_VERSION : US_QUESTIONS_VERSION,
+    });
     for (const c of Array.isArray(consents) ? consents : []) {
       if (c?.kind !== "zold_terms" && c?.kind !== "partner_share") continue;
       store.addConsent(user.id, {
