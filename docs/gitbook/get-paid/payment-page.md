@@ -26,8 +26,6 @@ The page address is public. Every payment to your page lands at the same place, 
 
 Handles are also short and human. Anyone who knows or guesses yours can find the page. If you want a link only some people can use, send them a [receipt](../send-money/tracking-and-receipts.md) or an [Invoice-Me link](invoice-me-links.md) instead.
 
-## Coming to payment pages
+## Asking for a specific amount
 
-{% hint style="warning" %}
-**Not yet fully live.** The next version of the payment page lets a payer choose how to pay — crypto, or a euro bank transfer to your IBAN — and shows you a private receipt for each payment with who paid, how, and what was credited. Today the page takes USDC on Base only.
-{% endhint %}
+A payment page takes any amount and shows only an address. To ask for a particular sum, with a description, and to offer a bank transfer or payment from another Zold account as well as USDC, create a [payment link](payment-links.md) from the same page.

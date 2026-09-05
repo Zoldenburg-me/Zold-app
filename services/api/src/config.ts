@@ -548,6 +548,65 @@ export const GNOSIS_PAY = {
   partnerId: process.env.GNOSIS_PAY_PARTNER_ID ?? "",
 } as const;
 
+/**
+ * Payment requests (pay links) — an amount somebody asked to be paid.
+ *
+ * The crypto leg quotes a USDC amount from the live EUR/USD mid and the payee
+ * is credited whatever the conversion actually delivers, so the quote carries a
+ * small allowance for venue spread. It is a stated allowance, not a hidden
+ * margin: the public page prints it, and the request records the mid it was
+ * derived from.
+ */
+export const PAYMENT_REQUESTS = {
+  /** How long a quoted USDC amount stays the amount to pay. After this the
+   *  public page re-quotes; every amount ever quoted still matches a deposit. */
+  quoteTtlMs: Number(process.env.PAY_REQUEST_QUOTE_TTL_MS ?? 15 * 60_000),
+  /** Allowance added to the USDC amount so the EURe delivered after the swap
+   *  covers the euro amount asked for. Basis points. */
+  cryptoAllowanceBps: Number(process.env.PAY_REQUEST_CRYPTO_ALLOWANCE_BPS ?? 50),
+  /** A deposit this close under a quoted amount still settles the request in
+   *  full — wallets round, and a cent short is not a dispute. Basis points. */
+  underpayToleranceBps: Number(process.env.PAY_REQUEST_UNDERPAY_TOLERANCE_BPS ?? 50),
+  /** Below this share of a quoted amount a deposit is not attributed to the
+   *  request at all; it stays an ordinary deposit on the account. */
+  partialFloorBps: Number(process.env.PAY_REQUEST_PARTIAL_FLOOR_BPS ?? 2_000),
+  /** Above the quote by more than this, likewise: an over-payment that large
+   *  is somebody else's payment, not generosity. Basis points. */
+  overpayCapBps: Number(process.env.PAY_REQUEST_OVERPAY_CAP_BPS ?? 1_000),
+  /** Default lifetime of a link created from the app. */
+  defaultTtlMs: Number(process.env.PAY_REQUEST_DEFAULT_TTL_MS ?? 7 * 24 * 60 * 60_000),
+  /** Lifetime of a request opened for a merchant checkout session. */
+  checkoutTtlMs: Number(process.env.PAY_REQUEST_CHECKOUT_TTL_MS ?? 60 * 60_000),
+  /** Quotes kept per request; the oldest are dropped once exceeded. */
+  maxQuotes: Number(process.env.PAY_REQUEST_MAX_QUOTES ?? 24),
+  /** How often expiry and our-own-transfer matching run. */
+  sweepMs: Number(process.env.PAY_REQUEST_SWEEP_MS ?? 60_000),
+} as const;
+
+/**
+ * Shopify payments app.
+ *
+ * The app is registered ONCE in a Shopify Partner account; every merchant
+ * installs the same app into their store. `apiKey`/`apiSecret` are that app's
+ * client id and secret. The secret signs every request Shopify sends us
+ * (Shopify-Hmac-Sha256) and the OAuth callback, so without it nothing here can
+ * be trusted and the router reports `unavailable`.
+ *
+ * `shopBaseUrl` exists for the test stub only: in production every call goes
+ * to https://<shop>.myshopify.com.
+ */
+export const SHOPIFY = {
+  apiKey: process.env.SHOPIFY_API_KEY ?? "",
+  apiSecret: process.env.SHOPIFY_API_SECRET ?? "",
+  apiVersion: process.env.SHOPIFY_API_VERSION ?? "2026-07",
+  scopes: process.env.SHOPIFY_SCOPES ?? "write_payment_gateways,write_payment_sessions",
+  shopBaseUrl: process.env.SHOPIFY_SHOP_BASE_URL ?? "",
+  /** The public origin Shopify redirects back to. Falls back to PUBLIC_URL. */
+  appUrl: process.env.SHOPIFY_APP_URL ?? PUBLIC_URL,
+  timeoutMs: Number(process.env.SHOPIFY_TIMEOUT_MS ?? 12_000),
+  enabled: Boolean(process.env.SHOPIFY_API_KEY && process.env.SHOPIFY_API_SECRET),
+} as const;
+
 export interface Deployments {
   eure: `0x${string}`;
   usdc: `0x${string}`;

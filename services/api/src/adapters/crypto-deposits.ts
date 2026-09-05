@@ -34,6 +34,7 @@ import { addrs, eur, usd, publicClient } from "../chain.js";
 import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
 import { midRates } from "../rates.js";
+import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
  *  the real USDC emits the same signature and this path must not depend on our
@@ -92,9 +93,23 @@ function watchedAddresses(): WatchedAddress[] {
     if (user.kycStatus === "approved" && user.paymentPage?.autoConvert && user.paymentPage.depositAddress) {
       add(user.paymentPage.depositAddress, "payment-page");
     }
+    // A payment REQUEST (pay link) is an explicit ask for money at the page
+    // address, so the page is watched while one is open whatever the
+    // auto-convert setting says — otherwise a paid link would go unseen on a
+    // forwarder address. What happens to the money is still decided below.
+    if (user.paymentPage?.depositAddress && hasOpenCryptoRequest(user.id)) {
+      add(user.paymentPage.depositAddress, "payment-page");
+    }
     add(user.address, "safe");
   }
   return out;
+}
+
+function hasOpenCryptoRequest(userId: string): boolean {
+  const now = Date.now();
+  return store
+    .paymentRequestsForUser(userId)
+    .some((r) => r.state === "OPEN" && r.methods.includes("crypto") && Date.parse(r.expiresAt) > now);
 }
 
 /**
@@ -208,19 +223,25 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
 
   try {
     const page = user.paymentPage;
-    if (!page?.autoConvert) throw new Error("payment page has auto-settlement switched off");
+    if (!page) throw new Error("this account has no payment page");
     const blocker = depositConversionBlocker(user, deposit);
     // Settling in USDC is not a blocker, it is a DIFFERENT settlement — the
     // user chose to keep the asset, and that is a completed deposit, not a
-    // refused one.
-    if (page.settlementAsset === "USDC") {
-      return store.updateCryptoDeposit(deposit.id, {
+    // refused one. Auto-settlement OFF is the same outcome by a different
+    // choice: the forwarder has already delivered the USDC to the Safe and
+    // nothing converts it, so the deposit is complete as USDC. It used to be
+    // REFUSED with "auto-settlement switched off", which read as a fault to a
+    // payee whose pay link had just been paid in full.
+    if (page.settlementAsset === "USDC" || !page.autoConvert) {
+      const settled = store.updateCryptoDeposit(deposit.id, {
         state: "CONVERTED",
         creditedUsdc: deposit.amountUsdc ?? 0,
         settlementAsset: "USDC",
         txs,
         reason: undefined,
       });
+      noteDepositSettled(settled);
+      return settled;
     }
     if (blocker) throw new Error(blocker);
 
@@ -318,6 +339,7 @@ export async function settleConvertedDeposit(
     reason: undefined,
   });
   if (settled.invoiceId) recordInvoiceSettlement(settled);
+  noteDepositSettled(settled);
   return settled;
 }
 
@@ -496,7 +518,18 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
 
   store.setCryptoDepositCursor(cursorKey, toBlock);
 
+  // Does this money pay a link? Decided BEFORE conversion, because whether a
+  // deposit is asked-for changes what happens to it when auto-convert is off.
   for (const deposit of fresh) {
+    try {
+      attributeDepositToRequest(deposit);
+    } catch (err: any) {
+      console.error(`crypto-in: could not attribute deposit ${deposit.id} to a request: ${err?.message ?? err}`);
+    }
+  }
+
+  for (const stale of fresh) {
+    const deposit = store.cryptoDeposits.find((d) => d.id === stale.id) ?? stale;
     if (deposit.state !== "DETECTED") continue;
     try {
       await convertDeposit(deposit);
