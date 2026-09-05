@@ -76,6 +76,9 @@
     font-family: var(--font);
     transition: border-color .15s, box-shadow .15s;
   }
+  /* The 100% width above is for text fields; a checkbox or radio inheriting
+     it stretches across the row and pushes its label into a sliver. */
+  input[type="checkbox"], input[type="radio"] { width: auto; }
   input::placeholder { color: var(--faint); }
   input:focus { outline: none; border-color: var(--acc); box-shadow: 0 0 0 3px rgba(237, 24, 141, 0.15); }
   select {
@@ -128,7 +131,7 @@
     --onb-lift: 0 1px 0 rgba(255,255,255,.04) inset;
   }
 
-  #onboard { display: grid; grid-template-columns: 1fr 1.05fr; min-height: 100vh; }
+  #onboard { display: grid; grid-template-columns: 1fr 1.05fr; min-height: 100vh; min-height: 100dvh; }
   .onb-left {
     display: flex; flex-direction: column; padding: 2rem 2.4rem 2.4rem;
     background: var(--side-bg);
@@ -237,17 +240,19 @@
   .onb-addrow input { text-transform: uppercase; max-width: 92px; }
   .onb-qs { margin: 18px 0 6px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
   .onb-qs-h { font-size: 13px; color: var(--faint); margin-bottom: 10px; }
-  .onb-q { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+  /* The question row wraps: the text takes the full width when the Yes/No
+     pair would otherwise squeeze it, and the buttons drop to their own line. */
+  .onb-q { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 10px 0; }
   .onb-q + .onb-q { border-top: 1px solid var(--line); }
-  .onb-q .qt { flex: 1; font-size: 14px; line-height: 1.4; }
-  .onb-q .yn { display: flex; gap: 6px; flex: 0 0 auto; }
+  .onb-q .qt { flex: 1 1 200px; font-size: 14px; line-height: 1.45; }
+  .onb-q .yn { display: flex; gap: 6px; flex: 1 0 auto; justify-content: flex-end; }
   .onb-q .yn button {
-    padding: 6px 12px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13px;
+    padding: 8px 16px; min-width: 64px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13px;
     background: transparent; border: 1px solid var(--line); color: inherit;
   }
   .onb-q .yn button.on { border-color: var(--pink, #ff2d8b); background: rgba(255, 45, 139, .10); }
   .onb-check { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; font-size: 13.5px; line-height: 1.45; }
-  .onb-check input { margin-top: 3px; flex: 0 0 auto; }
+  .onb-check input { width: 18px; height: 18px; margin-top: 2px; flex: 0 0 auto; accent-color: var(--acc); }
 
   /* The blocked screen. Same split as onboarding so it does not read as an
      error page — it is an outcome, not a fault. */
@@ -423,6 +428,14 @@
   /* Below the split, the hero is dropped rather than stacked underneath: on a
      phone it would push the actual form off the first screen, and this is a
      product people will mostly open on a phone. */
+  /* Between the phone breakpoint and the full split the hero column is
+     narrow, so its copy is scaled with it instead of wrapping into a tower. */
+  @media (max-width: 1180px) {
+    .onb-hero-inner { padding: 2rem 1.8rem; }
+    .onb-hero h2 { font-size: 1.75rem; }
+    .onb-hero .tag { margin-bottom: 1.6rem; }
+    .onb-points { gap: 1rem; }
+  }
   @media (max-width: 900px) {
     #onboard, #provisioning { grid-template-columns: 1fr; }
     .onb-hero { display: none; }
@@ -430,6 +443,28 @@
     .onb-form { max-width: 420px; }
     .onb-form h1 { font-size: 1.7rem; }
     .prov-card { padding: 1.6rem 1.3rem; border-radius: 16px; }
+  }
+  /* Phones. Every control reaches 44px so a thumb lands on it, text inputs
+     are 16px so iOS does not zoom the page on focus, and the form is pinned
+     to the top rather than vertically centred — a centred form jumps when the
+     keyboard opens and pushes the field being typed into off screen. */
+  @media (max-width: 600px) {
+    .onb-left { padding: 1rem 1rem calc(1.5rem + env(safe-area-inset-bottom)); }
+    .onb-form { margin: 1.25rem 0 0; max-width: none; }
+    .onb-form h1 { font-size: 1.55rem; }
+    .onb-form .sub { font-size: .9rem; margin-bottom: 1.3rem; }
+    .onb-steps { margin-bottom: 1.4rem; }
+    .onb-form label { margin-top: .9rem; }
+    .onb-form input { font-size: 16px; padding: .8rem .9rem; min-height: 44px; }
+    .onb-seg button, .onb-q .yn button, .onb-addrow .ghost { min-height: 44px; }
+    .onb-q .yn { width: 100%; justify-content: stretch; }
+    .onb-q .yn button { flex: 1; }
+    .onb-addrow input { max-width: none; flex: 1; }
+    .onb-check { font-size: 14px; }
+    .onb-check input { width: 20px; height: 20px; }
+    .btn-primary-lite, .onb-form .ghost.wide { min-height: 48px; }
+    .onb-terms { margin-top: 1.4rem; font-size: .8rem; }
+    .pk-card { padding: .9rem; font-size: .88rem; }
   }
   @media (max-width: 860px) {
     #dashboard { grid-template-columns: 1fr; }
@@ -1302,27 +1337,19 @@
             <button type="button" class="ghost sm" id="cit-add">Add</button>
           </div>
 
-          <!-- The US questions. Separate, explicit, and each stored with its
-               own timestamp — a single "are you a US person?" would be
-               unanswerable by most people who are one. Deliberately NOT
-               pre-answered: an unanswered question and a "no" are different
-               facts, and the API refuses a half-filled set. -->
+          <!-- ONE US question, naming all three grounds — the person answers
+               about themselves without having to know which of the three
+               applies. Deliberately NOT pre-answered: an unanswered question
+               and a "no" are different facts, and the API refuses a missing
+               answer rather than reading silence as a denial. -->
           <div class="onb-qs" id="us-qs">
-            <div class="onb-qs-h">A few required questions</div>
-            <div class="onb-q" data-q="usCitizen">
-              <span class="qt">Are you a US citizen?</span>
-              <span class="yn"><button type="button" data-v="yes">Yes</button><button type="button" data-v="no">No</button></span>
-            </div>
-            <div class="onb-q" data-q="usGreenCard">
-              <span class="qt">Do you hold a US Green Card?</span>
-              <span class="yn"><button type="button" data-v="yes">Yes</button><button type="button" data-v="no">No</button></span>
-            </div>
-            <div class="onb-q" data-q="usTaxResident">
-              <span class="qt">Are you a US tax resident, or otherwise subject to US tax reporting?</span>
+            <div class="onb-qs-h">One required question</div>
+            <div class="onb-q" data-q="usPerson">
+              <span class="qt">Are you a US citizen, a Green Card holder, or a US tax resident?</span>
               <span class="yn"><button type="button" data-v="yes">Yes</button><button type="button" data-v="no">No</button></span>
             </div>
             <div class="onb-q hidden" data-q="companyUsNexus" id="q-company">
-              <span class="qt">Is the company incorporated in the US, or does any owner of 25% or more answer yes above?</span>
+              <span class="qt">Is the company incorporated in the US, or is any owner of 25% or more a US person?</span>
               <span class="yn"><button type="button" data-v="yes">Yes</button><button type="button" data-v="no">No</button></span>
             </div>
           </div>
@@ -4947,7 +4974,7 @@ function setPasskeyButtonBusy(busy, label) {
    ========================================================================== */
 let acctType = "individual";
 let citizenships = [];
-const usAnswers = { usCitizen: null, usGreenCard: null, usTaxResident: null, companyUsNexus: null };
+const usAnswers = { usPerson: null, companyUsNexus: null };
 
 /** Which partner is named in the consent line. Cosmetic and best-effort — the
  *  server assigns the real one. India is named because its path is Xflow's. */
@@ -5014,10 +5041,9 @@ $("btn-continue").onclick = () => {
   if (!citizenships.length) {
     return showErr("create-err", new Error("please add at least one citizenship"));
   }
-  const required = ["usCitizen", "usGreenCard", "usTaxResident",
-    ...(acctType === "company" ? ["companyUsNexus"] : [])];
+  const required = ["usPerson", ...(acctType === "company" ? ["companyUsNexus"] : [])];
   if (required.some((k) => usAnswers[k] === null)) {
-    return showErr("create-err", new Error("please answer each of the required questions"));
+    return showErr("create-err", new Error("please answer the US question — yes or no"));
   }
   if (!$("consent-terms").checked) {
     return showErr("create-err", new Error("please accept the terms to continue"));

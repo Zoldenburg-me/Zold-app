@@ -51,6 +51,20 @@ check("a green card holder is blocked even answering no to citizenship", () => {
   assert.equal(seg(person("FR", ["FR"], { usAnswers: { ...NO_US, usGreenCard: true } })), "BLOCKED_US");
 });
 
+check("the combined question (citizen, Green Card or tax resident) blocks on yes", () => {
+  const d = resolveSegment(person("DE", ["DE"], { usAnswers: { usPerson: true } }));
+  assert.equal(d.segment, "BLOCKED_US");
+  assert.equal(d.reasonCode, "us_answer_person");
+});
+
+check("the combined question answered no is a complete answer on its own", () => {
+  assert.equal(seg(person("DE", ["DE"], { usAnswers: { usPerson: false } })), "EU_FULL");
+});
+
+check("an unanswered US question is refused, not read as no", () => {
+  assert.throws(() => resolveSegment(person("DE", ["DE"], { usAnswers: {} as any })), /answered yes or no/);
+});
+
 check("a declared US tax resident is blocked", () => {
   assert.equal(seg(person("ES", ["ES"], { usAnswers: { ...NO_US, usTaxResident: true } })), "BLOCKED_US");
 });
