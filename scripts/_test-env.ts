@@ -29,12 +29,9 @@
 /**
  * The ports harnesses serve on. The last entry is the one that matters under
  * `npm run check`, which allocates a RANDOM free port for the whole run and
- * passes it down as TRANSF_API_PORT — so a fixed list can never match it.
- *
- * The default this replaces was adaptive (config derives origins from
- * TRANSF_API_PORT). Pinning a static list quietly removed that, and the only
- * symptom was WebAuthn ceremonies failing under `check` while every suite
- * passed when run on its own.
+ * passes it down as TRANSF_API_PORT — so a fixed list can never match it, and
+ * the only symptom of a static list is WebAuthn ceremonies failing under
+ * `check` while every suite passes when run on its own.
  */
 const PORTS = [3000, 3010, 3011, 3012, 3020, 3021, 3030, 3040, 3100];
 const RUN_PORT = process.env.TRANSF_API_PORT;

@@ -125,7 +125,6 @@ Four, deliberately small, no inheritance depth and no proxies.
 |---|---|
 | `AdminTimelock.sol` | M-of-N + delay owner of the others. No single key can raise a cap, grant a role or drain inventory. A separate guardian can pause instantly; only the timelock can un-pause |
 | `FxSwapper.sol` | Swaps at an owner-set rate behind a slippage guard, restricted to approved executors, pausable |
-| `BridgeEscrow.sol` | Locks funds for the bridge leg, refuses reused transfer ids, refunds only to the target bound at lock time |
 | `MockToken.sol` | Local-chain ERC-20 for tests |
 
 #### Base mainnet (chain id 8453) — the token addresses the app uses
@@ -139,8 +138,8 @@ Uniswap v3 through the user's own Safe, and the cash leg goes through Bridge.xyz
 | `EURe` | `0xbf6e2966A9C3D99C9E4D069E04f7Bdb9C8aa762C` | Monerium's own, from their production `/tokens` |
 | `USDC` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | Circle's own; code and symbol verified on-chain |
 
-The `FxSwapper`, `BridgeEscrow` and `AdminTimelock` contracts are local-chain
-fixtures for the test harnesses and are not deployed on any real chain.
+The `FxSwapper` and `AdminTimelock` contracts are local-chain fixtures for the
+test harnesses and are not deployed on any real chain.
 
 Custody is the user's Safe. The only record of a user's euros is the EURe in their own smart account.
 
@@ -408,7 +407,7 @@ services/api/src/
   stellar/             SEP-10 auth, SEP-24 withdrawals, SEP-9 mapping
   bridge/bridgexyz.ts  Bridge.xyz transfer orchestration
   adapters/            monerium, moneygram, crypto deposits, forwarder
-contracts/src/         AdminTimelock, FxSwapper, BridgeEscrow, MockToken
+contracts/src/         AdminTimelock, FxSwapper, MockToken
 services/api/public/   landing + app, no build step
 scripts/               deploy, operations, 30 test harnesses
 ```

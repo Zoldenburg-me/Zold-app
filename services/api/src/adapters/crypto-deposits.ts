@@ -1,23 +1,20 @@
 /**
  * Crypto in — USDC forwarded from a payment page into the merchant Safe.
  *
- * The funding story until now was one-directional: euros arrive by SEPA and
- * Monerium issues EURe to the user's Safe. A crypto-native user holding USDC had
- * no way in at all. This watches payment-page deposit addresses for inbound
+ * Euros arrive by SEPA and Monerium issues EURe to the user's Safe; this is
+ * the other way in. It watches payment-page deposit addresses for inbound
  * USDC and settles into the merchant Safe, so a corridor payout can be funded
  * from crypto without the user first finding a bank.
  *
- * Three separable steps, deliberately:
+ * Two separable steps, deliberately:
  *
- *   detect  — read Transfer logs addressed to the merchant Safe (this file)
- *   sweep   — legacy EURe-settlement path, moving merchant Safe USDC to the
- *             executor so a venue can trade it
- *   convert — swap USDC->EURe into the merchant Safe
+ *   detect  — read Transfer logs addressed to the watched addresses (this file)
+ *   convert — a USER-SIGNED batch swaps USDC->EURe into the merchant Safe;
+ *             settleConvertedDeposit records what actually arrived
  *
- * They are split because only the middle one needs Candide's bundler, which no
- * hardhat node provides. Detection and conversion are therefore testable
- * locally and the sweep is not — the same seam the Safe-funded transfer path
- * has, for the same reason.
+ * Only the swap needs Candide's bundler, which no hardhat node provides, so
+ * detection and settlement are testable locally and the swap is not — the
+ * same seam the Safe-funded transfer path has, for the same reason.
  *
  * WHAT THIS DOES NOT DO
  * - It converts nothing without `user.paymentPage.autoConvert`.
@@ -33,16 +30,8 @@
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
-import {
-  abis,
-  addrs,
-  eur,
-  usd,
-  publicClient,
-  safeEurBalance,
-  orchestratorAddress,
-} from "../chain.js";
-import { liquidityProvider , balanceAfterWrite } from "../liquidity.js";
+import { addrs, eur, usd, publicClient } from "../chain.js";
+import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
 import { midRates } from "../rates.js";
 
@@ -58,11 +47,6 @@ const TRANSFER_EVENT = {
     { indexed: false, name: "value", type: "uint256" },
   ],
 } as const;
-
-/** The one step name that means "this deposit's tokens reached the
- *  orchestrator". Shared by the producer and the resumability check so the two
- *  cannot drift apart. */
-export const SWEEP_STEP = "safe.transfer(usdc->orchestrator)";
 
 interface WatchedAddress {
   user: User;
@@ -114,17 +98,6 @@ function watchedAddresses(): WatchedAddress[] {
 }
 
 /**
- * Refuse to convert at a price the market would not give.
- *
- * The FxSwapper's rate is one WE set, so on a local chain this check is the
- * only thing standing between a mispriced swapper and e-money credited at a
- * fictional rate. Same discipline as FP5's quote binding, applied at the point
- * where the number becomes someone's balance.
- *
- * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), matching what
- * FxSwapper.rate() posts and what the liquidity providers report.
- */
-/**
  * What a USDC deposit was worth in EUR when it arrived, with the provenance to
  * defend the number later.
  *
@@ -155,6 +128,17 @@ async function valueAtReceipt(
   }
 }
 
+/**
+ * Refuse to convert at a price the market would not give.
+ *
+ * The FxSwapper's rate is one WE set, so on a local chain this check is the
+ * only thing standing between a mispriced swapper and e-money credited at a
+ * fictional rate. Same discipline as FP5's quote binding, applied at the point
+ * where the number becomes someone's balance.
+ *
+ * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), matching what
+ * FxSwapper.rate() posts and what the liquidity providers report.
+ */
 async function assertRateSane(rate: bigint): Promise<number> {
   const venue = Number(rate) / 1e6;
   if (!(venue > 0)) throw new Error("venue quoted a zero rate");
@@ -172,24 +156,10 @@ async function assertRateSane(rate: bigint): Promise<number> {
 }
 
 /**
- * Get Safe-held USDC to the executor, which is who the venues trade with today.
- *
- * Returns the step to record, or null if the tokens were already there — the
- * resumable case, where a previous run moved them and died before crediting.
- *
- * Candide Forwarding Address deposits route into the merchant's Safe. The next
- * The API no longer holds merchant Safe owner keys, so this refuses until the
- * settlement path has a Safe-native UserOp or strict policy delegate.
- */
-/**
  * Can this deposit be converted, and if not, why in words the user can act on?
  *
- * REPLACES `sweepToOrchestrator`, which moved the user's USDC to the
- * orchestrator using an API-held Safe owner key. Those keys were removed with
- * FP4 and the function became an unconditional throw, which made auto-convert
- * unreachable code for months — it could only "succeed" on the branch that
- * converts nothing. Nothing sweeps anywhere now: the swap is one user-signed
- * batch out of the user's own Safe, delivering EURe back into it.
+ * Nothing sweeps anywhere: the swap is one user-signed batch out of the user's
+ * own Safe, delivering EURe back into it.
  */
 export function depositConversionBlocker(user: User, deposit: CryptoDeposit): string | null {
   if (deposit.state === "CONVERTED") return "this deposit has already been settled";
@@ -204,21 +174,17 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
     return `${amountUsdc} USDC is below the ${CRYPTO_IN.minUsdc} USDC floor — converting it would cost more than it delivers`;
   }
   /**
-   * No Safe, nothing to sign with.
-   *
-   * The old sweep checked this by reading bytecode and threw "the merchant
-   * Safe is not deployed". Dropping the check would leave such a deposit
-   * sitting at DETECTED telling the user to approve it with a passkey that
-   * has no Safe to act on — a worse message than the one it replaced, because
-   * it asks for something they cannot do. safeDebitBlocker is the same check
-   * the send path uses, so the two cannot drift.
+   * No Safe, nothing to sign with. Without this check the deposit would sit at
+   * DETECTED telling the user to approve it with a passkey that has no Safe
+   * to act on. safeDebitBlocker is the same check the send path uses, so the
+   * two cannot drift.
    */
   const safeBlocker = safeDebitBlocker(user);
   if (safeBlocker) {
-    // Carry the reassurance the old sweep's message had. Someone reading this
-    // has money sitting at an address they own and is being told it cannot be
-    // converted; the first thing they need to know is that it has not gone
-    // anywhere. Losing that sentence would make a solvable state read as a loss.
+    // Someone reading this has money sitting at an address they own and is
+    // being told it cannot be converted; the first thing they need to know is
+    // that it has not gone anywhere. Without that sentence a solvable state
+    // reads as a loss.
     return (
       `${safeBlocker}. Your ${deposit.amountUsdc ?? 0} USDC is still yours at ${user.address} — ` +
       "it simply cannot be converted until the account can sign."
@@ -259,7 +225,7 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
     if (blocker) throw new Error(blocker);
 
     /**
-     * THE SWAP IS NOT PERFORMED HERE, and that is the whole change.
+     * THE SWAP IS NOT PERFORMED HERE.
      *
      * Converting means moving the user's USDC, and the only thing that may do
      * that is a UserOperation their passkey signed. This poller runs with
@@ -268,9 +234,7 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
      *
      * So "auto-convert" means detected automatically and converted on
      * approval, and the deposit says so rather than sitting at DETECTED with
-     * no explanation. Pretending otherwise is what the old code did: it called
-     * a sweep that always threw and recorded the throw as a refusal, which
-     * read like a fault rather than a missing signature.
+     * no explanation — a missing signature must not read like a fault.
      */
     return store.updateCryptoDeposit(deposit.id, {
       state: "DETECTED",

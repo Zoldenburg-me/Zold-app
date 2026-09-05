@@ -301,11 +301,11 @@ function formatBits(mask: number): number {
  * Bit i goes to one position in the vertical strip (column 8, running down the
  * left) and one in the horizontal strip (row 8, running in from the right).
  * Getting this wrong is invisible to a round-trip through our own reader and
- * fatal to a real scanner, which is exactly what happened: the first version
- * transposed the two strips and reversed the bit order along row 8, so the data
- * was perfect and no decoder could tell which mask had been applied. It also
- * walked over the dark module at [size-8][8]; the vertical run below starts at
- * size-7 and leaves it alone.
+ * fatal to a real scanner: transpose the two strips or reverse the bit order
+ * along row 8 and the data is perfect while no decoder can tell which mask
+ * was applied. The vertical run starts at size-7 so it leaves the dark module
+ * at [size-8][8] alone. pay-page-test decodes the output with jsqr for this
+ * reason.
  */
 function placeFormat(g: Grid, mask: number) {
   const size = g.length;

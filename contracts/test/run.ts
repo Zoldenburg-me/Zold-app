@@ -1,5 +1,5 @@
 /**
- * Contract tests for the remaining on-chain contracts after RemitVault removal.
+ * Contract tests for the on-chain contracts (MockToken, FxSwapper, AdminTimelock).
  * Run: npm run test:contracts
  */
 import assert from "node:assert/strict";

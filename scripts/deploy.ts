@@ -17,14 +17,11 @@ import { base, baseSepolia, hardhat, polygon, polygonAmoy } from "viem/chains";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * Load .env before anything reads process.env.
- *
- * This script used to read the environment directly while only the API loaded
- * .env, so a chain and RPC configured there were silently ignored here: you
- * could set TRANSF_CHAIN_ID=84532, run the deploy, and have it go to the local
- * hardhat default instead — the one outcome that looks like success while
- * being completely wrong. config.js does this too, but it is imported lazily
- * further down, which is far too late.
+ * Load .env before anything reads process.env. Otherwise a chain and RPC
+ * configured there are silently ignored here: TRANSF_CHAIN_ID=84532 in .env
+ * and the deploy goes to the local hardhat default instead — the one outcome
+ * that looks like success while being completely wrong. config.js does this
+ * too, but it is imported lazily further down, which is far too late.
  */
 try {
   process.loadEnvFile(path.join(ROOT, ".env"));
@@ -97,11 +94,10 @@ const KEYS = {
 /**
  * Never put hardhat's published keys on a chain anyone else can reach.
  *
- * Checked against the keys we actually resolved, not against the RPC alone.
- * The old form refused every non-local RPC outright, so a deployment with
- * three real keys was blocked, and the documented way past it
- * (ALLOW_DEV_KEYS_ON_EXTERNAL_RPC=1) would also have waved through the real
- * dev keys — the exact thing being guarded against.
+ * Checked against the keys we actually resolved, not against the RPC alone:
+ * refusing every non-local RPC outright would block a deployment with three
+ * real keys, and the way past it (ALLOW_DEV_KEYS_ON_EXTERNAL_RPC=1) would then
+ * also wave through the dev keys — the exact thing being guarded against.
  */
 if (!LOCAL_RPC) {
   const dev = Object.values(DEV_KEYS).map((k) => k.toLowerCase());
@@ -162,10 +158,9 @@ const TIMELOCK_THRESHOLD = Number(process.env.TIMELOCK_THRESHOLD ?? 2);
 /**
  * Seed the swapper at the live EUR/USD mid rather than a constant.
  *
- * This was hardcoded 1_080_000 (1.08) and by July 2026 the real rate was
- * 1.1379, so every fresh deploy was born ~5% stale — and because the quote
- * engine now reads its EUR leg from this contract, a stale seed prices every
- * corridor. DEPLOY_EURUSD_RATE pins it for a reproducible/offline deploy.
+ * A hardcoded seed is born stale, and because the quote engine reads its EUR
+ * leg from this contract, a stale seed prices every corridor.
+ * DEPLOY_EURUSD_RATE pins it for a reproducible/offline deploy.
  *
  * Note the swapper's owner becomes the AdminTimelock below, so changing this
  * afterwards is a governed action, not a redeploy.

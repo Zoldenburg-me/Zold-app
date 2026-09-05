@@ -124,8 +124,7 @@ export interface LiquidityProvider {
    * short-lived — with a real market maker it consumes rate limit and may even
    * be a commitment. A user typing into an amount box needs neither. The rate
    * shown must still come from the PROVIDER rather than a constant, or the
-   * receipt quietly reverts to advertising a price nobody will honour, which is
-   * the bug the live-rates change existed to fix.
+   * receipt quietly advertises a price nobody will honour.
    */
   indicativeRate(side: LiquiditySide): Promise<{ rate: number; raw: bigint }>;
 }
@@ -388,9 +387,8 @@ class RfqLiquidityProvider implements LiquidityProvider {
       // Bebop pays the receiver named at quote time; we quote with the
       // orchestrator as receiver, so anything else is a caller mistake rather
       // than something to paper over by forwarding tokens silently. Checked
-      // BEFORE anything is submitted: this used to be validated after the
-      // settlement, which converted the caller's tokens and then threw — the
-      // worst of both.
+      // BEFORE anything is submitted: validating after the settlement would
+      // convert the caller's tokens and then throw — the worst of both.
       throw new Error(`RFQ quote pays ${orchestratorAddress}, not ${to}`);
     }
     const a = addrs();
@@ -888,7 +886,7 @@ class LifiLiquidityProvider implements LiquidityProvider {
     // Approve what the maker NAMES, not tx.to. They are the same contract today
     // — which is exactly why approving tx.to would work by luck and break
     // silently the day routing moves to a separate settlement contract or
-    // Permit2. Same bug already found and fixed on the Bebop adapter.
+    // Permit2. Same trap as on the Bebop adapter.
     const approveHash = await writeAndWait(orchestratorWallet, {
       address: tokenIn,
       abi: [...erc20Abi],
@@ -1099,8 +1097,7 @@ export class BestExecutionProvider implements LiquidityProvider {
  * Called by every venue after it reads the delivered amount. Surplus is
  * recorded whoever keeps it: under the default the user simply receives it,
  * and under "treasury" the amount is still written down, because a surplus
- * nobody can see is indistinguishable from an undisclosed margin — which is
- * precisely what the live-rates work removed from the receipt.
+ * nobody can see is indistinguishable from an undisclosed margin.
  */
 export function applySurplus(
   quote: LiquidityQuote,
@@ -1131,9 +1128,9 @@ export function providerById(id: LiquidityProviderId): LiquidityProvider {
     case "lifi": return new LifiLiquidityProvider();
     case "best": return new BestExecutionProvider();
     default:
-      // An unknown id used to fall back to FxSwapper — which silently priced
-      // real transfers off our own inventory on any LIQUIDITY_PROVIDER typo,
-      // the exact degradation this seam exists to refuse.
+      // Never fall back to FxSwapper here: that would silently price real
+      // transfers off our own inventory on any LIQUIDITY_PROVIDER typo, the
+      // exact degradation this seam exists to refuse.
       throw new Error(`unknown liquidity provider "${id}" — check LIQUIDITY_PROVIDER/LIQUIDITY_VENUES`);
   }
 }
@@ -1212,16 +1209,10 @@ export async function prepareSafeSwapForTransfer(
  * The Safe-executed swap for an inbound crypto deposit — USDC in, EURe back
  * into the SAME Safe it came from.
  *
- * WHY THIS EXISTS. Conversion used to sweep the user's USDC to the
- * orchestrator and swap from there, which needed an API-held Safe owner key.
- * Removing those keys (FP4) left `sweepToOrchestrator` an unconditional throw,
- * so auto-convert has been unreachable code ever since — it could only
- * "succeed" on the USDC-settlement branch, which converts nothing.
- *
- * This is the same shape the cash rail already uses: one user-signed batch
- * that approves the venue and executes the swap, with the output delivered
- * straight back to the user. The orchestrator never holds the deposit, so the
- * path is non-custodial end to end and needs no owner key to restore.
+ * The same shape the cash rail uses: one user-signed batch that approves the
+ * venue and executes the swap, with the output delivered straight back to the
+ * user. The orchestrator never holds the deposit, so the path is non-custodial
+ * end to end and needs no API-held owner key.
  *
  * RECIPIENT IS THE USER'S OWN SAFE, deliberately. On the cash rail the output
  * goes to a payout destination; here there is no payout — the user is

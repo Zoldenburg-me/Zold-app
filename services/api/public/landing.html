@@ -494,11 +494,10 @@
 
 <script>
 /* The design ships fixed figures. A page that says "mid-market rate" above a
-   frozen number is the exact bug we removed once already: the old landing page
-   hardcoded 1.08 * 129.5 and drifted 14% from the market while still claiming
-   to show the real rate. So pull the live mid from the same endpoint the
-   product quotes from, and if it cannot be reached, say "indicative" rather
-   than present a made-up number as fact. */
+   frozen number drifts from the market while still claiming to show the real
+   rate. So pull the live mid from the same endpoint the product quotes from,
+   and if it cannot be reached, say "indicative" rather than present a made-up
+   number as fact. */
 (function () {
   var SPREAD = 0.005, FEE = 0.99, SEND = 250;
   var fmt = function (n, dp) {

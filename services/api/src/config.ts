@@ -24,12 +24,8 @@ export const PUBLIC_URL = process.env.TRANSF_PUBLIC_URL ?? "";
 export const USING_LOCAL_RPC = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/)/.test(RPC_URL);
 
 /**
- * Which chain we settle on.
- *
- * This used to be `hardhat` everywhere, hardcoded. That matters more than it
- * looks: wallet deployment, signatures and token balances all need the same
- * chain id. Deriving the id from one place removes that whole class of
- * confusion.
+ * Which chain we settle on. Wallet deployment, signatures and token balances
+ * all need the same chain id, so it is derived from this one place.
  *
  * 8453 = Base mainnet (default — the production chain, where Monerium issues
  * the real EURe and Circle the real USDC), 31337 = the local hardhat stack the
@@ -147,12 +143,11 @@ if (KYC.operatorToken && KYC.operatorToken.length < 24) {
 }
 
 /**
- * Bridge.xyz orchestration.
+ * Bridge.xyz orchestration — the cash rail's exit to Stellar.
  *
- * This is the replacement seam for the old direct CCTP burn/mint worker in
- * the cash rail. Without BRIDGE_LIVE=1 the cash rail is CLOSED (no dry-run,
- * no local escrow); BRIDGE_LIVE=1 calls Bridge's
- * Transfer API and waits for the user/orchestrator-side deposit to fund it.
+ * Without BRIDGE_LIVE=1 the cash rail is CLOSED (no dry-run, no local escrow);
+ * BRIDGE_LIVE=1 calls Bridge's Transfer API and waits for the
+ * user/orchestrator-side deposit to fund it.
  */
 export const BRIDGE = {
   live: process.env.BRIDGE_LIVE === "1",
@@ -215,21 +210,21 @@ export const anchorModeEnabled = () => Boolean(STELLAR.anchorDomain);
  *
  * WHY THIS IS ITS OWN BLOCK. "We never take custody" is a claim with
  * regulatory weight (it is roughly the difference between a technical service
- * provider and a payment/crypto-asset service performed on a client's behalf),
- * and it was previously an emergent property of three unrelated settings —
- * which venue was configured, whether Bridge was live, and whether a venue call
- * happened to succeed. A property nobody asserts and nothing records is not a
- * property; it is a coincidence that held last time somebody looked.
+ * provider and a payment/crypto-asset service performed on a client's behalf).
+ * Left implicit it is an emergent property of three unrelated settings —
+ * which venue is configured, whether Bridge is live, and whether a venue call
+ * happens to succeed — and a property nobody asserts and nothing records is
+ * a coincidence that held last time somebody looked.
  *
- * So: every transfer now RECORDS the custody mode it actually ran in
+ * So: every transfer RECORDS the custody mode it actually ran in
  * (`transfer.custody`), and `requireNonCustodial` turns the preference into a
  * refusal.
  *
  * WHY THE REFUSAL IS NOT ON BY DEFAULT, deliberately: with BRIDGE_LIVE unset
  * there is no external deposit address for a batch to deliver into, so the
- * output has nowhere to go but the orchestrator (the local escrow demo pulls
- * from it). Defaulting the refusal on would brick every testnet deployment,
- * including Base Sepolia. The DEFAULT PATH is non-custodial; the
+ * output has nowhere to go but the orchestrator. Defaulting the refusal on
+ * would brick every testnet deployment, including Base Sepolia. The DEFAULT
+ * PATH is non-custodial; the
  * GUARANTEE is opt-in, and a deployment moving real money should set it.
  */
 export const CUSTODY = {
@@ -414,10 +409,10 @@ function assertProductionConfig() {
     if (!process.env.CANDIDE_COSIGNER_ADDRESS || !process.env.CANDIDE_COSIGNER_KEY) {
       fail("CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required before hosted production funding");
     }
-    // A standing allowance is deliberately NOT required (this check used to
-    // demand a positive recurring one). Spend authority is granted per
-    // transfer for the exact debit amount, approved by the user's passkey at
-    // send time — zero standing allowance is the designed resting state.
+    // A standing allowance is deliberately NOT required. Spend authority is
+    // granted per transfer for the exact debit amount, approved by the user's
+    // passkey at send time — zero standing allowance is the designed resting
+    // state.
     if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS) {
       fail("CANDIDE_RECOVERY_GUARDIAN_ADDRESS is required before hosted production funding");
     }
@@ -440,12 +435,10 @@ const DEV_KEYS = {
 /**
  * The keys this server signs with, from the environment.
  *
- * deploy.ts has always been able to take real keys (DEPLOY_*_KEY) while the
- * server could not, so the only way to run against a testnet was to let the
- * hardhat development keys hold the privileged roles. That is not a smaller
- * version of the same risk: the operator roles can move test liquidity, submit
- * payout steps, and perform administrative actions. Public development keys
- * must never hold those powers on a public chain.
+ * The operator roles can move test liquidity, submit payout steps, and
+ * perform administrative actions. Hardhat's public development keys must
+ * never hold those powers on a public chain, so off a local RPC they are
+ * refused unless explicitly allowed.
  *
  * Accepts ORCHESTRATOR_KEY / RAMP_KEY / DEPLOYER_KEY, falling back to the
  * DEPLOY_*_KEY names so one .env serves both the deploy and the server.
@@ -530,22 +523,19 @@ export interface Deployments {
    *  real chain's entry carries the two token addresses and nothing else. */
   timelock?: `0x${string}`;
   swapper?: `0x${string}`;
-  /** Legacy: the removed BridgeEscrow. Present in old entries, never read. */
+  /** Present in older entries, never read. */
   bridge?: `0x${string}`;
 }
 
 /**
- * Contract addresses, keyed by chain id.
- *
- * A single flat set meant deploying to a testnet overwrote the local one, so
- * `npm run dev` and a testnet stack could not coexist — and worse, a stale
- * file would silently point the app at addresses on the wrong chain. Legacy
- * flat files are still read, treated as the local chain.
+ * Contract addresses, keyed by chain id, so `npm run dev` and a testnet stack
+ * can coexist and a stale file cannot point the app at addresses on the wrong
+ * chain. Flat single-chain files are still read, treated as the local chain.
  */
 export function loadDeployments(chainId: number = CHAIN_ID): Deployments {
   const p = path.join(ROOT, "deployments.json");
   const raw = JSON.parse(readFileSync(p, "utf8"));
-  // Legacy shape: addresses at the top level, from before this was per-chain.
+  // Flat single-chain shape: addresses at the top level.
   if (typeof raw.swapper === "string") {
     if (chainId !== 31337) {
       throw new Error(
@@ -553,7 +543,7 @@ export function loadDeployments(chainId: number = CHAIN_ID): Deployments {
           `re-run the deploy for this chain`,
       );
     }
-    const { vault: _abandonedVault, ...rest } = raw;
+    const { vault: _unused, ...rest } = raw; // older files carry a vault address; nothing reads it
     return rest as Deployments;
   }
   const forChain = raw[String(chainId)];
@@ -572,7 +562,7 @@ export function saveDeployments(chainId: number, addresses: Deployments) {
   let raw: Record<string, unknown> = {};
   try {
     const existing = JSON.parse(readFileSync(p, "utf8"));
-    // Migrate a legacy flat file into its chain slot rather than dropping it.
+    // Migrate a flat single-chain file into its chain slot rather than dropping it.
     raw = typeof existing.swapper === "string" ? { "31337": existing } : existing;
   } catch {
     raw = {};
@@ -617,11 +607,11 @@ export const LIQUIDITY = {
    * deployment on either falls back to debiting the full amount to the
    * orchestrator's own address and swapping from there.
    *
-   * That fallback used to be the DEFAULT, which meant the shipped
-   * configuration took possession of every cash-rail transfer unless an
-   * operator knew to change one env var. `best` (over LIQUIDITY_VENUES,
-   * itself defaulting to lifi,dex — both Safe-executable) is now the default,
-   * so the non-custodial path is what runs unless someone opts out.
+   * Defaulting to that fallback would take possession of every cash-rail
+   * transfer unless an operator knew to change one env var. `best` (over
+   * LIQUIDITY_VENUES, itself defaulting to lifi,dex — both Safe-executable)
+   * is the default, so the non-custodial path is what runs unless someone
+   * opts out.
    *
    * Local hardhat has neither LI.FI nor a seeded pool, so `_local-chain.ts`
    * pins fx-swapper explicitly for dev and the harnesses. That is the right
@@ -732,20 +722,6 @@ export const RATES = {
   TIMEOUT_MS: Number(process.env.TRANSF_RATES_TIMEOUT_MS ?? 8_000),
 };
 
-// FX configuration for the launch corridor (EUR -> KES cash pickup).
-//
-// The mid rates are NOT here any more — they come from rates.ts, because the
-// constants that used to live here (EURUSD 1.08, USDINR 87.2, USDKES 129.5)
-// silently went 5-14% stale while the receipt claimed a 0.50% margin over "the
-// real exchange rate". What stays here is our own pricing, which is genuinely
-// ours to set.
-//
-// EUR->USD is deliberately absent too: that leg is whatever the on-chain
-// swapper will really execute at, read from the chain in fx.ts. It used to be
-// hardcoded as 1.08 in THREE places (here twice, plus deploy.ts) with nothing
-// keeping them equal, and FP5's binding check compared only two of them — so
-// editing the quote's copy alone would have promised a rate the swap could not
-// deliver, silently.
 /**
  * Crypto in: USDC arriving at a payment-page deposit address, settled for the
  * owning account.
@@ -785,6 +761,13 @@ export const CRYPTO_IN = {
 };
 
 
+// FX configuration for the launch corridor (EUR -> KES cash pickup).
+//
+// Mid rates are NOT here — they come live from rates.ts, because a hardcoded
+// constant goes stale silently while the receipt keeps claiming a margin over
+// "the real exchange rate". EUR->USD is absent for the same reason: that leg
+// is whatever the liquidity venue will really execute at, read in fx.ts. What
+// stays here is our own pricing, which is genuinely ours to set.
 export const FX = {
   SPREAD_BPS: 50, // our FX spread
   FIXED_FEE_EUR: 0.99,

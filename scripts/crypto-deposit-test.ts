@@ -5,20 +5,16 @@
  * address, and the poller reads the Transfer log it emits. Conversion is real
  * too — the swap settles EURe into the Safe.
  *
- * The middle step is what cannot run here. The swap is now a user-signed batch
+ * The middle step is what cannot run here. The swap is a user-signed batch
  * out of the user's own Safe, which needs Candide's bundler and paymaster, and
  * no hardhat node has either. So these seed the INPUT — USDC arrived, the row
  * is DETECTED — drive the poller for real, and then exercise
  * settleConvertedDeposit directly with EURe minted into the Safe to stand in
  * for the batch having landed.
  *
- * A TRAP THIS TEST FELL INTO, worth not repeating: it used to seed a deposit
- * already carrying SWEEP_STEP with the tokens at the orchestrator — the OUTPUT
- * of the step under test. That made sweepToOrchestrator take its "already
- * swept" early return, so it never reached the `throw` sitting at the end of
- * it since FP4 removed API-held owner keys. The suite stayed green for months
- * while auto-convert was dead code in production. Seed the input, never the
- * output.
+ * Seed the input, never the output of the step under test: a fixture that
+ * already carries the step's result lets its early return skip the code the
+ * test exists to exercise, and the suite stays green over dead code.
  *
  * Run: npm run crypto:test
  */
@@ -241,12 +237,10 @@ try {
     // No Safe is deployed locally, so this is the honest refusal — the money
     // is still the user's, at the destination address.
     check("an undeployed Safe is refused, not converted", d.state === "REFUSED", d.state);
-    // The wording moved deliberately: the refusal now comes from
-    // safeDebitBlocker, the SAME check the send path uses, so a deposit can
-    // never be judged convertible by a rule the send path disagrees with. It
-    // used to be a second, hand-written "Safe is not deployed" string that
-    // could drift. What must survive is the intent — say it is a Safe problem,
-    // and reassure that the money has not gone anywhere.
+    // The refusal comes from safeDebitBlocker, the SAME check the send path
+    // uses, so a deposit can never be judged convertible by a rule the send
+    // path disagrees with. What is asserted is the intent — say it is a Safe
+    // problem, and reassure that the money has not gone anywhere.
     check(
       "and the reason says the money is still theirs",
       /Safe/.test(d.reason ?? "") && /still yours/.test(d.reason ?? ""),
@@ -259,19 +253,9 @@ try {
   const bo = addUser("Crypto Bo", { withSafe: true });
   {
     /**
-     * THIS STEP USED TO TEST A PATH THAT COULD NOT RUN.
-     *
-     * It called convertDeposit on a deposit seeded with a fake SWEEP_STEP row,
-     * which made sweepToOrchestrator take its "already swept" early return and
-     * never reach the `throw` that had sat at the end of it since FP4 removed
-     * API-held owner keys. So the test manufactured the output of the one
-     * broken step and stayed green for months while auto-convert was dead
-     * code in production. Worth remembering when seeding intermediate state:
-     * seed the INPUT, never the output of the thing under test.
-     *
-     * The swap is now a user-signed batch out of the user's own Safe, so the
-     * poller can only park the deposit — and the crediting logic it used to
-     * carry lives in settleConvertedDeposit, which is exercised directly here.
+     * The swap is a user-signed batch out of the user's own Safe, so the
+     * poller can only park the deposit; the crediting logic lives in
+     * settleConvertedDeposit, which is exercised directly here.
      */
     const parked = await convertDeposit(await seedReadyDeposit(bo, 100));
     check("the poller parks it rather than claiming to convert", parked.state === "DETECTED", parked.state);
