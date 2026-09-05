@@ -5,8 +5,9 @@
  *   CREATED -> DEBITED -> SWAPPED -> BRIDGED -> PAYOUT_READY -> PAID
  *                                                (recipient collects cash)
  *
- * Every leg is idempotent at the contract layer (transferId hash), so a crash
- * mid-flow can be resumed without double-spending. Failures auto-compensate:
+ * Every leg records its step before the next runs, and a debit already in
+ * `txs` is refused, so a crash mid-flow cannot double-spend. Failures
+ * auto-compensate:
  * failAndCompensate refunds what is recoverable, and the
  * startup/5-minute sweep retries anything stranded (SEPA and the PAYOUT_*
  * anchor states have their own legs; see executeSepaTransfer/refreshPayout).
@@ -92,12 +93,11 @@ export interface SafeExecution {
  */
 export async function assertQuoteRateBinding(transfer: Transfer): Promise<void> {
   const quote = store.findQuote(transfer.quoteId);
-  if (!quote?.lockedSwapRate) return; // legacy/sepa quotes: nothing to bind
+  if (!quote?.lockedSwapRate) return; // sepa quotes: nothing to bind
   const locked = BigInt(quote.lockedSwapRate);
-  // Ask the provider that will actually fill the swap. Reading the FxSwapper
-  // contract directly compared the quote against the local mock's rate even
-  // when the deployment was pricing through a market maker — the check would
-  // have passed on a number nothing was going to trade at.
+  // Ask the provider that will actually fill the swap, not the FxSwapper
+  // contract: a deployment pricing through a market maker must be checked
+  // against a number something is going to trade at.
   const { raw: live } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
   const driftBps = (live > locked ? live - locked : locked - live) * 10_000n / locked;
   if (driftBps > BigInt(FX.QUOTE_BINDING_BPS)) {
@@ -117,12 +117,11 @@ const failpoint = (step: string) => {
  * The step names for the input-funds leg, in one place.
  *
  * Recovery decides whether any money actually moved by matching these names,
- * so the producer and every consumer have to agree. They did not: the Safe
- * path pushed "safe.transfer(orchestrator)" while compensateTransfer and
- * sweepStrandedTransfers still looked for an old ledger-debit step, so a failed
- * Safe-funded transfer recorded a €0 refund reading "nothing was debited"
- * while the EURe had already left the user's Safe — and the sweep then skipped
- * it forever, because setting `refund` is what marks a transfer as settled.
+ * so the producer and every consumer have to agree. A consumer looking for a
+ * step the producer never writes records a €0 refund reading "nothing was
+ * debited" while the EURe has already left the user's Safe — and the sweep
+ * then skips it forever, because setting `refund` is what marks a transfer as
+ * settled.
  *
  * Anything that adds a third funding source must add its step here.
  */
@@ -437,17 +436,16 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   }
 
   const txs = t.txs;
-  // No escrow to release any more: dry-run never locks anything on chain, and
-  // the live path's funds are with Bridge the moment the deposit lands — which
-  // is why a live failure after that point is MANUAL_REVIEW rather than an
-  // automatic refund. What remains recoverable is whatever the orchestrator
-  // still holds, handled by the reverse swap below.
+  // Dry-run never locks anything on chain, and the live path's funds are with
+  // Bridge the moment the deposit lands — which is why a live failure after
+  // that point is MANUAL_REVIEW rather than an automatic refund. What remains
+  // recoverable is whatever the orchestrator still holds, handled by the
+  // reverse swap below.
 
   // Did a swap actually run? Every venue's step reads liquidity.<venue>.eure-usdc
-  // ("swapper.swapExactIn" is the pre-liquidity-seam legacy name). This used to
-  // match only the fx-swapper's own step, so a dex/rfq/lifi-swapped transfer
-  // read as "still holding EURe" and its refund would have handed back euros
-  // the orchestrator no longer held.
+  // ("swapper.swapExactIn" is the name older transfers in db.json carry). Match
+  // every venue: a dex/rfq/lifi-swapped transfer that read as "still holding
+  // EURe" would be refunded euros the orchestrator no longer holds.
   const swapRan = [...steps].some(
     (s) => s === "swapper.swapExactIn" || (s.startsWith("liquidity.") && s.endsWith(".eure-usdc")),
   );
@@ -479,10 +477,8 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     const rate = await compensationRate(t);
     const eurBack = (t.usdcOut ?? 0) / (Number(rate) / 1e6);
     refundEur = Math.floor((fee + eurBack) * 100) / 100;
-    // Was a ternary on "bridge.lockForPayout" — a step that no longer exists,
-    // so the escrow arm had become unreachable. With BridgeEscrow gone the
-    // swapped USDC sits with the orchestrator until Bridge takes it, and that
-    // is the only place a refund can come from.
+    // The swapped USDC sits with the orchestrator until Bridge takes it, and
+    // that is the only place a refund can come from.
     recoveredFrom = "post-swap USDC";
     const lost = Math.max(0, t.sendEur - refundEur);
     if (lost > 0) deductions = `€${lost.toFixed(2)} conversion round-trip at execution rate`;
@@ -506,10 +502,8 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
        * Reverse the swap and give the euros back. The rate movement of the
        * round trip is worn by the user as an ITEMIZED deduction (both legs at
        * execution prices, the received amount MEASURED as a Safe balance
-       * delta, not read off the quote) — that honesty beats the alternative,
-       * which was parking the money in MANUAL_REVIEW indefinitely: the first
-       * live post-swap failure sat exactly there, 4.57 USDC of a user's €5
-       * stranded on the orchestrator. Reversal failing still parks for
+       * delta, not read off the quote) — that honesty beats parking the money
+       * in MANUAL_REVIEW indefinitely. Reversal failing still parks for
        * review — guessing is the one thing this path must never do.
        */
       try {
@@ -832,26 +826,17 @@ export async function executeTransfer(
       }
     }
     /**
-     * DRY-RUN WRITES NOTHING ON CHAIN, and that is the point.
-     *
-     * There used to be a BridgeEscrow contract here that dry-run locked the
-     * USDC into. It was removed with the CCTP-to-Stellar route: the live path
-     * is Bridge.xyz, which never touched it, so the escrow existed only to give
-     * the credential-less demo an on-chain leg.
-     *
-     * Removing it makes dry-run MORE honest rather than less. That lock
-     * produced a real transaction hash on a real contract, recorded as
-     * "bridge.lockForPayout" — an artifact that reads like a settlement to
+     * DRY-RUN WRITES NOTHING ON CHAIN, and that is the point. A real
+     * transaction hash on a real contract would read like a settlement to
      * anyone scanning the transfer, for money that had reached no bridge at
-     * all. recordBridgePlan already writes "bridge.xyz.dry-run.transfer" with
-     * the plan's idempotency key, which says exactly what happened: a plan was
+     * all. recordBridgePlan writes "bridge.xyz.dry-run.transfer" with the
+     * plan's idempotency key, which says exactly what happened: a plan was
      * recorded, nothing moved. The USDC stays with the orchestrator, which is
      * also what makes compensation a plain reverse swap.
      */
     store.updateTransfer(transfer.id, { state: "BRIDGED", txs });
-    // Both arms now name the step actually recorded in txs, so a FORCE_FAIL_STEP
-    // value can be read straight off a transfer. The dry-run arm used to be
-    // "bridge.lockForPayout", a step that no longer exists.
+    // Both arms name the step actually recorded in txs, so a FORCE_FAIL_STEP
+    // value can be read straight off a transfer.
     failpoint(bridgePlan.mode === "live" ? "bridge.xyz.transfer" : "bridge.xyz.dry-run.transfer");
 
     // 4. Create the cash pickup at the quoted amount — a real SEP-24 anchor
@@ -1008,10 +993,9 @@ export async function executeSepaTransfer(
 
 /** Recipient collected the cash: close the transfer.
  *
- *  There is no escrow to settle any more — the BridgeEscrow contract went with
- *  the CCTP-to-Stellar route. On the live path the funds are Bridge's from the
- *  moment the deposit lands, and in dry-run nothing moved on chain at all, so
- *  collection is a pickup-state change and nothing else. */
+ *  On the live path the funds are Bridge's from the moment the deposit lands,
+ *  and in dry-run nothing moved on chain at all, so collection is a
+ *  pickup-state change and nothing else. */
 export async function settlePickup(transfer: Transfer): Promise<Transfer> {
   if (!["PAYOUT_READY", "PAYOUT_FUNDED"].includes(transfer.state)) {
     throw new Error(`transfer is ${transfer.state}, expected PAYOUT_READY/PAYOUT_FUNDED`);

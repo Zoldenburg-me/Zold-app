@@ -37,8 +37,8 @@ t("an amount_in matching the request is honoured", () => {
 });
 
 t("an amount_in ABOVE the request is refused", () => {
-  // The bug this exists for: the anchor's number drove the payment, so an
-  // anchor reporting 10000 would have been paid 10000.
+  // If the anchor's number drove the payment, an anchor reporting 10000
+  // would be paid 10000.
   assert.throws(
     () => resolvePaymentAmount(5, "10000"),
     /refusing to send more than we authorised/,

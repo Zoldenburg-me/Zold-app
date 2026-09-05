@@ -115,7 +115,7 @@ try {
 
     assert.equal(q.lifi?.approvalAddress, APPROVAL);
     assert.notEqual(q.lifi?.approvalAddress.toLowerCase(), q.lifi?.tx.to.toLowerCase());
-    ok("approval target is the one NAMED, not tx.to — the Bebop bug, kept fixed");
+    ok("approval target is the one NAMED, not tx.to");
 
     assert.equal(q.lifi?.tx.to, DIAMOND);
     assert.ok(q.lifi?.tx.data);

@@ -136,8 +136,8 @@ try {
     assert.equal(nigerian.status, 403);
     assert.equal(nigerian.data.code, "BLOCKED_UNSUPPORTED");
     assert.ok(!/sanction/i.test(JSON.stringify(nigerian.data)), "must not imply a sanction");
-    // The old gate answered with Monerium's country-policy message here, which
-    // named a partner to someone who was never going to use it.
+    // Monerium's country-policy message would name a partner to someone who
+    // was never going to use it.
     assert.ok(!/monerium/i.test(JSON.stringify(nigerian.data)), "must not name a partner");
   });
 

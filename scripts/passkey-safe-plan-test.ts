@@ -60,9 +60,9 @@ assert.equal(
   CANDIDE.recoveryModuleAddress.toLowerCase(),
   "the recovery module must receive the guardian setup call",
 );
-/* The allowance model is gone: deployment installs recovery only, and debits
-   are UserOperations the passkey signs. The source assertion below keeps the
-   allowance setup from quietly returning. */
+/* Deployment installs recovery only; debits are UserOperations the passkey
+   signs. The source assertion below keeps an allowance setup from quietly
+   appearing. */
 const candideSource = readFileSync(path.join(ROOT, "services/api/src/wallet/candide.ts"), "utf8");
 assert.ok(
   !candideSource.includes("passkeySafeAllowanceSetupTransactions"),

@@ -1,15 +1,8 @@
 /**
- * Converting an inbound crypto deposit — the path that was dead.
+ * Converting an inbound crypto deposit.
  *
- * WHAT BROKE, AND WHY THIS EXISTS. Auto-convert used to sweep the user's USDC
- * to the orchestrator with an API-held Safe owner key. FP4 removed those keys
- * and `sweepToOrchestrator` became an unconditional `throw`, so convertDeposit
- * could only complete on the USDC-settlement branch — which converts nothing.
- * The EURe path was unreachable code for months, and every attempt recorded a
- * REFUSED row whose reason read like a fault rather than a missing signature.
- *
- * These cover the shape that replaced it:
- *   - the poller no longer pretends it can convert; it parks the deposit and
+ * These cover:
+ *   - the poller does not pretend it can convert; it parks the deposit and
  *     says a signature is needed;
  *   - a USDC-settling page still completes, because keeping the asset is a
  *     different settlement, not a refusal;
@@ -86,8 +79,8 @@ await check("a ready deposit stays DETECTED and says a signature is needed", asy
   assert.equal(out.state, "DETECTED", "the poller must not claim to have converted");
   assert.match(out.reason!, /passkey/i, "the reason must name the missing signature");
   assert.match(out.reason!, /ready to convert/i);
-  // The old code recorded a throw here, which read as a fault.
-  assert.ok(!/sweep|owner key|allowance module/i.test(out.reason!), "must not surface the old sweep error");
+  // A missing signature must read as a missing signature, not as a fault.
+  assert.ok(!/sweep|owner key|allowance module/i.test(out.reason!), "must not surface an internal error");
 });
 
 await check("a USDC-settling page COMPLETES rather than being refused", async () => {
@@ -204,7 +197,7 @@ const liq = readFileSync("services/api/src/liquidity.ts", "utf8");
 const dep = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
 const srv = readFileSync("services/api/src/server.ts", "utf8");
 
-await check("the dead sweep is gone entirely", () => {
+await check("nothing sweeps the user's USDC to the orchestrator", () => {
   assert.ok(!/sweepToOrchestrator\s*\(/.test(dep.replace(/\*.*sweepToOrchestrator.*/g, "")),
     "sweepToOrchestrator must not be called anywhere");
 });

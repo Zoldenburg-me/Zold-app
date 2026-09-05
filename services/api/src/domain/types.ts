@@ -1,11 +1,10 @@
 /**
  * The organisation-centric domain.
  *
- * The old model said a user IS an account: one `user.iban`, one `user.address`,
- * one balance. That is false for every product we now want — a business has
- * several people and several accounts, and a person with a premium plan has
- * several currencies. So the tenant is an Organisation, money hangs off
- * Accounts, and a User is only a login identity that may belong to many orgs.
+ * A user is NOT an account: a business has several people and several
+ * accounts, and a person with a premium plan has several currencies. So the
+ * tenant is an Organisation, money hangs off Accounts, and a User is only a
+ * login identity that may belong to many orgs.
  *
  * See docs/business-accounts.md for the mapping from Gnosis Business.
  */

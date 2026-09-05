@@ -9,11 +9,11 @@
  * ONLY EUR IS REAL. Monerium issues a genuine IBAN and EURe settles on chain
  * today; that path is exercised end to end. Every other currency here is
  * modelled with `status: "gated"` and a `needs` line naming the partner and the
- * missing piece. This is not caution for its own sake — the repo has already
- * deleted one rail (UPI) that rendered "payment successful" for money that had
- * reached nobody. A currency that has never moved value must not render as if
- * it has, and the only way to keep that true as the list grows is to make
- * liveness a property computed here rather than a flag set per screen.
+ * missing piece. This is not caution for its own sake: a mock rail renders
+ * "payment successful" for money that has reached nobody. A currency that has
+ * never moved value must not render as if it has, and the only way to keep
+ * that true as the list grows is to make liveness a property computed here
+ * rather than a flag set per screen.
  *
  * To make a currency live: give it a provider adapter, then have its entry's
  * `mode` predicate ask that adapter whether it is configured. Do not flip a
@@ -248,7 +248,7 @@ const CURRENCIES: CurrencyDefinition[] = [
     tokenised: false,
     mode: () => false as const,
     needs:
-      "an Indian payout partner (dLocal is the candidate). The previous UPI rail was a mock that minted its own reference numbers and was deleted in Aug 2026; it is not to be rebuilt from history.",
+      "an Indian payout partner (dLocal is the candidate). A UPI rail without one would be a mock minting its own reference numbers, which is not to be built.",
   },
 ];
 

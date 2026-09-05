@@ -2,10 +2,9 @@
  * End-to-end API smoke test: chain up -> deploy -> API up -> create user ->
  * SEPA deposit -> quote -> authorization guard.
  *
- * RemitVault has been abandoned, so hardhat-only local users can no longer
- * execute remittances through a fake ledger. Full remittance execution now
- * requires a deployed Safe/bundler path; local e2e verifies the API refuses to
- * pretend that path ran.
+ * Full remittance execution requires a deployed Safe/bundler path, which
+ * local hardhat cannot provide; local e2e verifies the API refuses to pretend
+ * that path ran.
  * Self-contained: starts and stops its own chain and API. Resets data/db.json
  * (demo data only — the chain state it mirrors dies with the chain anyway).
  * Run: npm run e2e
