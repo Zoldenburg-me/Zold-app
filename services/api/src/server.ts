@@ -79,6 +79,8 @@ import {
   readinessStatus,
 } from "./recovery.js";
 import { submitGuardianRecovery } from "./recovery-signer.js";
+import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
+import { candideRecoveryEnabled, maskTarget } from "./recovery/candide-guardian.js";
 import {
   abis,
   addrs,
@@ -293,6 +295,9 @@ export function capabilities() {
      */
     moneriumApiKeys: moneriumApiKeysAvailable(),
     moneriumEnvironment: moneriumEnvironment(),
+    /** May a user enrol email/SMS recovery, and may a lost device recover
+     *  through it? Needs Candide's recovery service URL. */
+    emailSmsRecovery: candideRecoveryEnabled(),
     moneriumHost: (() => { try { return new URL(MONERIUM.baseUrl).host; } catch { return MONERIUM.baseUrl; } })(),
   };
 }
@@ -336,6 +341,20 @@ const publicUser = (
     User & { [k: string]: any },
 ) => ({
   ...u,
+  // Recovery channel targets are masked on every surface, this one included:
+  // the raw phone number and email exist to receive codes, not to be read
+  // back by whoever holds a session.
+  ...(u.passkeySafe?.candideRecovery
+    ? {
+        passkeySafe: {
+          ...u.passkeySafe,
+          candideRecovery: {
+            ...u.passkeySafe.candideRecovery,
+            channels: u.passkeySafe.candideRecovery.channels.map((c) => ({ ...c, target: maskTarget(c.channel, c.target) })),
+          },
+        },
+      }
+    : {}),
   /**
    * The client is told its capabilities, NOT the rule that produced them.
    *
@@ -403,6 +422,11 @@ const publicUser = (
     : {}),
 });
 const withSession = (user: User) => ({ ...publicUser(user), sessionToken: issueSession(user.id) });
+
+// Email/SMS recovery through Candide's guardian. Mounted at /api so its
+// no-session half sits under /recovery, which the limiter above already
+// treats as an auth route.
+app.use("/api", createCandideRecoveryRouter({ requireUserSession, publicUser, withSession }));
 
 function publicPrivacyPlan(plan: (typeof PRIVACY_BUNDLE.plans)[number]) {
   const grossMarginBps = Math.round(((plan.priceEur - plan.estimatedCostEur) / plan.priceEur) * 10_000);
@@ -3696,6 +3720,17 @@ sweepStrandedTransfers()
   .then((n) => n && console.log(`FP3 sweep: compensated ${n} stranded transfer(s)`))
   .catch((e) => console.error(`FP3 sweep failed: ${e?.message ?? e}`));
 setInterval(() => sweepStrandedTransfers().catch(() => {}), 5 * 60_000).unref();
+// Candide recoveries finalize themselves once the grace period has run, so a
+// user who lost their phone on a Friday is not waiting for a click on Monday.
+if (candideRecoveryEnabled()) {
+  const runRecoverySweep = () =>
+    sweepCandideRecoveries()
+      .then((n) => n && console.log(`recovery sweep: finalized ${n} recover${n === 1 ? "y" : "ies"}`))
+      .catch((e) => console.error(`recovery sweep failed: ${e?.message ?? e}`));
+  setTimeout(runRecoverySweep, 5_000).unref();
+  setInterval(runRecoverySweep, RECOVERY.sweepMs).unref();
+  console.log(`RECOVERY: email/SMS guardian via ${RECOVERY.serviceUrl} (chain ${CANDIDE.chainId}, module ${CANDIDE.recoveryModuleAddress})`);
+}
 sweepAnchorPayouts()
   .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
   .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`));

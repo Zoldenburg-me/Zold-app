@@ -79,6 +79,32 @@ export function readinessStatus(request: RecoveryRequest, now: Date): RecoveryRe
 }
 
 export function publicRecoveryRequest(request: RecoveryRequest) {
-  const { contact, reviewedBy, reviewReason, ...pub } = request;
-  return pub;
+  const { contact, reviewedBy, reviewReason, candide, ...pub } = request;
+  if (!candide) return pub;
+  // The new credential stays private until it is bound, and channel targets
+  // are masked: a recovery id is not a licence to read someone's phone number.
+  const { newPasskey, auths, ...rest } = candide;
+  return {
+    ...pub,
+    candide: {
+      ...rest,
+      newPasskeyRegistered: Boolean(newPasskey),
+      auths: (auths ?? []).map((a) => ({
+        challengeId: a.challengeId,
+        channel: a.channel,
+        target: maskContact(a.channel, a.target),
+        verified: a.verified,
+      })),
+    },
+  };
+}
+
+function maskContact(channel: string, target: string): string {
+  if (channel === "email") {
+    const [local = "", domain = ""] = target.split("@");
+    const head = local.slice(0, Math.min(2, Math.max(1, local.length - 1)));
+    return `${head}${"•".repeat(Math.max(1, local.length - head.length))}@${domain}`;
+  }
+  const digits = target.replace(/\D/g, "");
+  return `${target.startsWith("+") ? "+" : ""}${"•".repeat(Math.max(0, digits.length - 3))}${digits.slice(-3)}`;
 }

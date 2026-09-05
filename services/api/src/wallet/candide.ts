@@ -27,7 +27,7 @@ import {
   type WebauthnPublicKey,
 } from "abstractionkit";
 import { privateKeyToAccount } from "viem/accounts";
-import { encodeFunctionData, hashTypedData } from "viem";
+import { decodeFunctionResult, encodeFunctionData, hashTypedData } from "viem";
 
 /**
  * The only shortcuts left are the HARNESS ones (config.ts): fake challenges
@@ -122,6 +122,9 @@ export interface PasskeySafeDeploymentPlan {
     guardianAddress: `0x${string}`;
     threshold: 1;
   };
+  /** A recovered Safe: its address is fixed and no longer derives from the
+   *  current owner set, so it is addressed rather than computed. */
+  recoveredAt?: string;
 }
 
 export interface BrowserPasskeyAssertion {
@@ -153,13 +156,7 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
   challenge: `0x${string}`;
   userOperation: UserOperationV9;
 }> {
-  const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  const account = plan.cosignerAddress
-    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
-    : smartAccountForPasskey(passkeyOwner);
-  if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
-    throw new Error("passkey Safe plan does not match the deterministic account address");
-  }
+  const { account, passkeyOwner } = accountForPlan(plan);
   if (allowSimulation()) {
     return {
       safeAddress: account.accountAddress as `0x${string}`,
@@ -172,6 +169,9 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
   // user's own passkey signs, so there is no delegate to authorize and no
   // standing spend surface to bound.
   const setup = [...passkeySafeRecoverySetupTransactions(plan)];
+  // enableModule on an address with no code "succeeds" and records a recovery
+  // that does not exist; refuse before the user signs anything.
+  if (setup.length && plan.recovery) await assertRecoveryModuleDeployed(plan.recovery.moduleAddress);
   const deployed = await isDeployed(account.accountAddress);
   if (deployed && !setup.length) {
     return {
@@ -345,13 +345,7 @@ async function prepareSafeExecutionCore(
   token: `0x${string}`,
   buildSetup: (revokeLegacyAllowance?: { delegate: `0x${string}` }) => MetaTransaction[],
 ): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
-  const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  const account = plan.cosignerAddress
-    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
-    : smartAccountForPasskey(passkeyOwner);
-  if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
-    throw new Error("passkey Safe plan does not match the deterministic account address");
-  }
+  const { account, passkeyOwner } = accountForPlan(plan);
   if (allowSimulation()) {
     return {
       safeAddress: account.accountAddress as `0x${string}`,
@@ -372,9 +366,19 @@ async function prepareSafeExecutionCore(
       revokeLegacyAllowance = { delegate: CANDIDE.cosignerAddress };
     }
   }
-  const setup = buildSetup(revokeLegacyAllowance);
+  return sponsoredUserOperation(account, plan, passkeyOwner, buildSetup(revokeLegacyAllowance));
+}
+
+/** Wrap meta-transactions into a paymaster-sponsored UserOperation whose
+ *  EIP-712 hash the passkey signs. */
+async function sponsoredUserOperation(
+  account: SafeAccount,
+  plan: PasskeySafeDeploymentPlan,
+  passkeyOwner: WebauthnPublicKey,
+  txs: MetaTransaction[],
+): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
   const userOperation = await account.createUserOperation(
-    setup,
+    txs,
     CANDIDE.rpcUrl,
     CANDIDE.bundlerUrl,
     { expectedSigners: plan.cosignerAddress ? [passkeyOwner, plan.cosignerAddress] : [passkeyOwner] },
@@ -391,6 +395,51 @@ async function prepareSafeExecutionCore(
     challenge: account.getUserOperationEip712Hash(finalOp, CANDIDE.chainId) as `0x${string}`,
     userOperation: finalOp,
   };
+}
+
+/**
+ * The SafeAccount for a plan. Before recovery the address IS the
+ * counterfactual address of the owner set, so it is re-derived and checked;
+ * after a recovery the owner changed under a fixed address, so the account is
+ * built from the address alone and the derivation would be wrong.
+ */
+export function accountForPlan(plan: PasskeySafeDeploymentPlan): { account: SafeAccount; passkeyOwner: WebauthnPublicKey } {
+  const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
+  if (plan.recoveredAt) {
+    return { account: new SafeAccount(plan.address), passkeyOwner };
+  }
+  const account = plan.cosignerAddress
+    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
+    : smartAccountForPasskey(passkeyOwner);
+  if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
+    throw new Error("passkey Safe plan does not match the deterministic account address");
+  }
+  return { account, passkeyOwner };
+}
+
+/**
+ * A user-signed operation that changes the Safe's own configuration — adding
+ * a recovery guardian, cancelling a recovery — rather than moving tokens.
+ * Same sponsorship and signing path as a transfer; no allowance read, since
+ * nothing here is a spend.
+ */
+export async function prepareSafeSetupOperation(
+  plan: PasskeySafeDeploymentPlan,
+  txs: MetaTransaction[],
+): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
+  if (!txs.length) throw new Error("a Safe setup operation needs at least one transaction");
+  const { account, passkeyOwner } = accountForPlan(plan);
+  if (allowSimulation()) {
+    return {
+      safeAddress: account.accountAddress as `0x${string}`,
+      challenge: "0x1234567890123456789012345678901234567890123456789012345678901234",
+      userOperation: {} as UserOperationV9,
+    };
+  }
+  if (!(await isDeployed(account.accountAddress))) {
+    throw new Error("passkey Safe must be deployed before its configuration can change");
+  }
+  return sponsoredUserOperation(account, plan, passkeyOwner, txs);
 }
 
 /**
@@ -464,10 +513,7 @@ export async function submitPasskeySafeOperation(
   userOperation: UserOperationV9,
   assertion: BrowserPasskeyAssertion,
 ): Promise<string | null> {
-  const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  const account = plan.cosignerAddress
-    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
-    : smartAccountForPasskey(passkeyOwner);
+  const { account, passkeyOwner } = accountForPlan(plan);
   if (plan.cosignerAddress && !CANDIDE.cosignerKey) {
     throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign passkey Safe deployment");
   }
@@ -499,10 +545,7 @@ export async function signMessageAsPasskeySafe(
   message: string,
   assertion: BrowserPasskeyAssertion,
 ): Promise<`0x${string}`> {
-  const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  const account = plan.cosignerAddress
-    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
-    : smartAccountForPasskey(passkeyOwner);
+  const { account, passkeyOwner } = accountForPlan(plan);
   if (account.accountAddress.toLowerCase() !== safeAddress.toLowerCase()) {
     throw new Error("passkey Safe plan does not match the address being linked");
   }
@@ -539,4 +582,177 @@ export async function isDeployed(address: string): Promise<boolean> {
   });
   const { result } = await res.json();
   return typeof result === "string" && result !== "0x";
+}
+
+// ---------------------------------------------------------------------------
+// Social recovery module — what the chain says, and the operations that change it
+
+const GRACE_PERIOD_SECONDS: Record<string, number> = {
+  [SocialRecoveryModuleGracePeriodSelector.After3Minutes.toLowerCase()]: 3 * 60,
+  [SocialRecoveryModuleGracePeriodSelector.After3Days.toLowerCase()]: 3 * 24 * 3600,
+  [SocialRecoveryModuleGracePeriodSelector.After7Days.toLowerCase()]: 7 * 24 * 3600,
+  [SocialRecoveryModuleGracePeriodSelector.After14Days.toLowerCase()]: 14 * 24 * 3600,
+};
+
+/** Grace period of a known SocialRecoveryModule deployment, or null for an
+ *  address that is not one of Candide's four variants. */
+export function recoveryGracePeriodSeconds(moduleAddress: string): number | null {
+  return GRACE_PERIOD_SECONDS[moduleAddress.toLowerCase()] ?? null;
+}
+
+const moduleCodeCache = new Map<string, boolean>();
+
+/**
+ * Does the recovery module have code on the smart-account chain?
+ *
+ * Candide's 3-day, 7-day and 14-day modules are deployed on Base mainnet and
+ * Gnosis but NOT on Base Sepolia, where only the 3-minute test module exists
+ * (verified with eth_getCode). Safe.enableModule on a codeless address does
+ * not revert, so without this check a testnet deployment would record
+ * recovery as active on a module that cannot recover anything.
+ */
+export async function recoveryModuleHasCode(moduleAddress: string): Promise<boolean> {
+  if (allowSimulation()) return true;
+  const key = moduleAddress.toLowerCase();
+  const cached = moduleCodeCache.get(key);
+  if (cached !== undefined) return cached;
+  const has = await isDeployed(moduleAddress);
+  if (has) moduleCodeCache.set(key, true);
+  return has;
+}
+
+export async function assertRecoveryModuleDeployed(moduleAddress: string): Promise<void> {
+  if (await recoveryModuleHasCode(moduleAddress)) return;
+  throw new Error(
+    `recovery module ${moduleAddress} has no code on chain ${CANDIDE.chainId} — on Base Sepolia only the ` +
+      `3-minute test module ${SocialRecoveryModuleGracePeriodSelector.After3Minutes} is deployed; set ` +
+      `CANDIDE_RECOVERY_MODULE_ADDRESS to a module that exists on this chain`,
+  );
+}
+
+const SAFE_READ_ABI = [
+  { type: "function", name: "getOwners", inputs: [], outputs: [{ type: "address[]" }], stateMutability: "view" },
+  { type: "function", name: "getThreshold", inputs: [], outputs: [{ type: "uint256" }], stateMutability: "view" },
+  {
+    type: "function",
+    name: "isModuleEnabled",
+    inputs: [{ name: "module", type: "address" }],
+    outputs: [{ type: "bool" }],
+    stateMutability: "view",
+  },
+] as const;
+
+async function ethCall(to: string, data: `0x${string}`): Promise<`0x${string}`> {
+  const res = await fetch(CANDIDE.rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to, data }, "latest"] }),
+  });
+  const { result, error } = await res.json();
+  if (error) throw new Error(`eth_call ${to} failed: ${error?.message ?? JSON.stringify(error)}`);
+  return result as `0x${string}`;
+}
+
+/** The Safe's current owner set, read from the smart-account chain. */
+export async function safeOwners(safeAddress: string): Promise<`0x${string}`[]> {
+  const raw = await ethCall(safeAddress, encodeFunctionData({ abi: SAFE_READ_ABI, functionName: "getOwners" }));
+  return [...(decodeFunctionResult({ abi: SAFE_READ_ABI, functionName: "getOwners", data: raw }) as readonly string[])] as `0x${string}`[];
+}
+
+export async function safeThreshold(safeAddress: string): Promise<number> {
+  const raw = await ethCall(safeAddress, encodeFunctionData({ abi: SAFE_READ_ABI, functionName: "getThreshold" }));
+  return Number(decodeFunctionResult({ abi: SAFE_READ_ABI, functionName: "getThreshold", data: raw }) as bigint);
+}
+
+export interface RecoveryModuleState {
+  moduleAddress: `0x${string}`;
+  moduleEnabled: boolean;
+  guardians: `0x${string}`[];
+  threshold: number;
+  /** An executed-but-not-finalised recovery, if the module holds one. */
+  pending: { newOwners: `0x${string}`[]; newThreshold: number; executeAfter: number } | null;
+}
+
+/**
+ * Read the Safe's recovery configuration FROM THE CHAIN, never from the
+ * database. A stored "active" is what deployment intended; only the module
+ * knows whether the guardian was really added. Under simulation there is no
+ * chain, so the stored plan is the only answer available and is used as such.
+ */
+export async function readRecoveryState(
+  plan: PasskeySafeDeploymentPlan,
+  extraGuardians: `0x${string}`[] = [],
+): Promise<RecoveryModuleState> {
+  const moduleAddress = (plan.recovery?.moduleAddress ?? CANDIDE.recoveryModuleAddress) as `0x${string}`;
+  if (allowSimulation()) {
+    const guardians = [
+      ...(plan.recovery && plan.recovery.guardianAddress ? [plan.recovery.guardianAddress] : []),
+      ...extraGuardians,
+    ];
+    return {
+      moduleAddress,
+      moduleEnabled: Boolean(plan.recovery) || extraGuardians.length > 0,
+      guardians,
+      threshold: guardians.length ? 1 : 0,
+      pending: null,
+    };
+  }
+  const enabledRaw = await ethCall(
+    plan.address,
+    encodeFunctionData({ abi: SAFE_READ_ABI, functionName: "isModuleEnabled", args: [moduleAddress] }),
+  );
+  const moduleEnabled = decodeFunctionResult({ abi: SAFE_READ_ABI, functionName: "isModuleEnabled", data: enabledRaw }) as boolean;
+  if (!moduleEnabled) return { moduleAddress, moduleEnabled, guardians: [], threshold: 0, pending: null };
+  const srm = new SocialRecoveryModule(moduleAddress);
+  const [guardians, threshold, request] = await Promise.all([
+    srm.getGuardians(CANDIDE.rpcUrl, plan.address),
+    srm.threshold(CANDIDE.rpcUrl, plan.address),
+    srm.getRecoveryRequest(CANDIDE.rpcUrl, plan.address),
+  ]);
+  const executeAfter = Number(request.executeAfter);
+  return {
+    moduleAddress,
+    moduleEnabled,
+    guardians: guardians as `0x${string}`[],
+    threshold: Number(threshold),
+    pending:
+      executeAfter > 0
+        ? { newOwners: request.newOwners as `0x${string}`[], newThreshold: Number(request.newThreshold), executeAfter }
+        : null,
+  };
+}
+
+/**
+ * Add a guardian to the Safe's recovery set: enable the module first when the
+ * Safe has never had one. `threshold` is the number of guardian approvals a
+ * recovery needs afterwards.
+ */
+export function recoveryGuardianSetupTransactions(
+  safeAddress: `0x${string}`,
+  moduleAddress: `0x${string}`,
+  guardianAddress: `0x${string}`,
+  threshold: number,
+  moduleEnabled: boolean,
+): MetaTransaction[] {
+  const srm = new SocialRecoveryModule(moduleAddress);
+  return [
+    ...(moduleEnabled ? [] : [srm.createEnableModuleMetaTransaction(safeAddress)]),
+    srm.createAddGuardianWithThresholdMetaTransaction(guardianAddress, BigInt(threshold)),
+  ];
+}
+
+/** The owner's veto: cancels the recovery the module currently holds. Only
+ *  meaningful before finalisation, which is the whole point of a grace period. */
+export function recoveryCancelTransaction(moduleAddress: `0x${string}`): MetaTransaction {
+  return new SocialRecoveryModule(moduleAddress).createCancelRecoveryMetaTransaction();
+}
+
+/**
+ * Deploy the WebAuthn signer verifier for a passkey, so a recovered Safe's
+ * new owner is a contract that can validate signatures. The factory is
+ * permissionless, so any funded key may send this — it does not need to be
+ * an owner.
+ */
+export function deployWebAuthnVerifierTransaction(owner: WebauthnPublicKey): MetaTransaction {
+  return SafeAccount.createDeployWebAuthnVerifierMetaTransaction(owner.x, owner.y);
 }
