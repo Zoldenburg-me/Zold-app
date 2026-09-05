@@ -58,13 +58,24 @@ export type Capability =
   | "onchain_balance"
   | "xflow_collections";
 
+/**
+ * Two wordings are accepted, and the audit log keeps whichever was asked.
+ *
+ * The COMBINED question — "are you a US citizen, a Green Card holder or a US
+ * tax resident?" — is what the app asks today (`usPerson`). The three
+ * separate questions are still accepted from older clients and from the
+ * harnesses. A caller answers ONE of the two shapes; a combined "no" is not
+ * expanded into three separate denials the person never made.
+ */
 export interface UsPersonAnswers {
+  /** Combined: US citizen, Green Card holder or US tax resident. */
+  usPerson?: boolean;
   /** a) Are you a US citizen? */
-  usCitizen: boolean;
+  usCitizen?: boolean;
   /** b) Do you hold a US Green Card? */
-  usGreenCard: boolean;
+  usGreenCard?: boolean;
   /** c) US tax resident / otherwise FATCA reportable? */
-  usTaxResident: boolean;
+  usTaxResident?: boolean;
   /** d) Companies only: incorporated in the US, or any >=25% beneficial owner
    *     answers yes to a-c. Null for individuals — NOT false, because "not
    *     asked" and "asked and denied" are different facts and the audit log
@@ -164,9 +175,11 @@ export function resolveSegment(input: SegmentInput): SegmentDecision {
   const citizenships = input.citizenships.map((c, i) => assertCountry(c, `Citizenship ${i + 1}`));
 
   const a = input.usAnswers;
-  if (!a || typeof a.usCitizen !== "boolean" || typeof a.usGreenCard !== "boolean" ||
-      typeof a.usTaxResident !== "boolean") {
-    throw new SegmentInputError("The US person questions must each be answered yes or no.");
+  const combined = typeof a?.usPerson === "boolean";
+  const separate = a && typeof a.usCitizen === "boolean" && typeof a.usGreenCard === "boolean" &&
+    typeof a.usTaxResident === "boolean";
+  if (!combined && !separate) {
+    throw new SegmentInputError("The US person question must be answered yes or no.");
   }
   // A company that was never asked question (d) has not answered it. Treating
   // undefined as "no" would record a denial nobody made.
@@ -191,6 +204,7 @@ export function resolveSegment(input: SegmentInput): SegmentDecision {
 
   // 1. US person. Highest precedence: a US citizen resident in Germany is a US
   //    person, and no servable residence changes that.
+  if (a.usPerson) return decide("BLOCKED_US", "us_answer_person");
   if (a.usCitizen) return decide("BLOCKED_US", "us_answer_citizen");
   if (a.usGreenCard) return decide("BLOCKED_US", "us_answer_green_card");
   if (a.usTaxResident) return decide("BLOCKED_US", "us_answer_tax_resident");
