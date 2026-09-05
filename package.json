@@ -47,6 +47,7 @@
     "authorize:test": "tsx scripts/authorize-claim-test.ts",
     "kyc:operator:test": "tsx scripts/kyc-operator-test.ts",
     "recovery:test": "tsx scripts/managed-recovery-test.ts",
+    "recovery:candide:test": "tsx scripts/candide-recovery-test.ts",
     "monerium:oauth:test": "tsx scripts/monerium-oauth-test.ts",
     "monerium:apikeys:test": "tsx scripts/monerium-apikeys-test.ts",
     "travelrule:test": "MG_ANCHOR_DOMAIN=testanchor.stellar.org tsx scripts/travel-rule-test.ts",
@@ -82,6 +83,7 @@
     "@stellar/stellar-sdk": "^16.1.0",
     "abstractionkit": "^0.4.0",
     "express": "^4.19.0",
+    "safe-recovery-service-sdk": "^0.0.4",
     "viem": "^2.21.0"
   },
   "overrides": {
