@@ -35,7 +35,6 @@ Explorer `https://sepolia.basescan.org/address/<addr>`
 |---|---|
 | RemitVault | `0x4783ac4bac0523511215cbe7dea7158a07c2a78a` |
 | FxSwapper | `0x7b19ccdfb4bcc1bbc12daa2e94e5ad694c8613b8` |
-| BridgeEscrow | `0x11cb28ccb5231c9aedfc818221b0fe7d11085e07` |
 | AdminTimelock | `0xe560f041a8175d72558836159573550eaa89f8c4` |
 
 | Token | Address | Note |

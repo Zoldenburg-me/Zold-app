@@ -177,7 +177,7 @@ try {
     const after = await eureBalance(user.address);
     check("EURe arrived back in the Safe", after - before === 100, `${before} -> ${after}`);
     check(
-      "no legacy ledger refund was recorded",
+      "only the Safe refund step was recorded",
       !out.txs.some((x: any) => x.step.includes("vault")),
     );
   }

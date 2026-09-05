@@ -90,13 +90,11 @@ async function main() {
   const wallet = createWalletClient({ account, chain, transport: http(rpc) });
 
   /**
-   * Seed the pair the PROVIDER trades, read from the same place it reads.
-   *
-   * This previously took usdc from CCTP_USDC, which is Circle's real testnet
-   * USDC — a different token from the one the app is deployed against. The
-   * pool built fine and the provider then correctly reported "no pool", because
-   * it asks for addrs().usdc. Seeding a pair nobody trades is worse than not
-   * seeding: it looks done.
+   * Seed the pair the PROVIDER trades, read from the same place it reads
+   * (addrs().usdc). Circle's real testnet USDC is a different token from the
+   * one the app is deployed against; a pool against it builds fine and the
+   * provider correctly reports "no pool". Seeding a pair nobody trades is
+   * worse than not seeding: it looks done.
    *
    * Note what this means on Base Sepolia: addrs().usdc is a MockToken we
    * minted, so a pool against it is as synthetic as the FxSwapper — real pool

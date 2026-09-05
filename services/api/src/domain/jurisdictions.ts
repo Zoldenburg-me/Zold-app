@@ -2,10 +2,10 @@
  * Which invoicing rules apply, and — just as important — how far we actually
  * check them.
  *
- * THE MISTAKE THIS FIXES: the first cut applied German law to everyone. A
- * Polish or Swedish entity was offered "§ 19 UStG Kleinunternehmerregelung" and
- * a 19% rate, and an Indian one was offered German exemptions with no mention
- * of GST. That is worse than offering nothing, because it looks authoritative.
+ * NEVER APPLY GERMAN LAW TO EVERYONE. Offering a Polish or Swedish entity
+ * "§ 19 UStG Kleinunternehmerregelung" and a 19% rate, or an Indian one
+ * German exemptions with no mention of GST, is worse than offering nothing,
+ * because it looks authoritative.
  *
  * THREE RULE SETS, and the difference between them is the difference between
  * what we encode and what we merely carry:

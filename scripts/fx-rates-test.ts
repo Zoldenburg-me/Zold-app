@@ -1,15 +1,10 @@
 /**
  * Live FX rate tests.
  *
- * The bug these exist for: the mid rates were hardcoded (EURUSD 1.08,
- * USDINR 87.2, USDKES 129.5) and drifted 5-14% from the market while the
- * receipt claimed "the real exchange rate" with a 0.50% margin. A EUR->INR
- * quote came out 14.3% under the mid.
- *
- * So the checks that matter are: rates come from the feed, a dead feed REFUSES
+ * The checks that matter: rates come from the feed, a dead feed REFUSES
  * rather than serving something stale, and the quote's EUR leg equals the rate
- * the on-chain swapper will actually execute at — the three copies of 1.08 that
- * nothing kept in sync.
+ * the on-chain swapper will actually execute at — a hardcoded mid drifts from
+ * the market while the receipt keeps claiming "the real exchange rate".
  *
  * Run: npm run fx:test
  */
@@ -57,11 +52,11 @@ try {
     assert.equal(usd, LIVE.USD);
     const inr = await rates.eurPer("INR");
     assert.equal(inr, LIVE.INR);
-    // The old hardcoded EUR->INR was 1.08 * 87.2 = 94.176. If that number can
-    // still come out of the quote engine, nothing was actually fixed.
+    // 94.176 is what a hardcoded 1.08 * 87.2 would produce. If that number
+    // comes out of the quote engine, the feed is not wired in.
     assert.ok(
       Math.abs(inr - 94.176) > 1,
-      `EUR/INR is still the old hardcoded 94.176 — feed not wired in`,
+      `EUR/INR is the hardcoded 94.176 — feed not wired in`,
     );
   });
 

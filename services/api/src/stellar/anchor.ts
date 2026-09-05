@@ -122,8 +122,8 @@ export async function sep24WithdrawLimits(
 // ---------------------------------------------------------------------------
 // SEP-10: challenge -> sign -> JWT
 //
-// JWTs are cached per (domain, account) until shortly before they expire — a
-// pickup used to cost a fresh challenge/sign/exchange round trip every time.
+// JWTs are cached per (domain, account) until shortly before they expire, so
+// a pickup does not cost a fresh challenge/sign/exchange round trip every time.
 
 const jwtCache = new Map<string, { token: string; expMs: number }>();
 

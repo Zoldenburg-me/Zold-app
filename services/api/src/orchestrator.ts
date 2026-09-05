@@ -5,11 +5,11 @@
  *   CREATED -> DEBITED -> SWAPPED -> BRIDGED -> PAYOUT_READY -> PAID
  *                                                (recipient collects cash)
  *
- * Every leg is idempotent (transferId hash), so a crash mid-flow can be
- * resumed without double-spending. Failures auto-compensate: failAndCompensate
- * refunds what is recoverable, and the startup/5-minute sweep retries anything
- * stranded (SEPA and the PAYOUT_* anchor states have their own legs; see
- * executeSepaTransfer/refreshPayout).
+ * Every leg records its step before the next runs, and a debit already in
+ * `txs` is refused, so a crash mid-flow cannot double-spend. Failures
+ * auto-compensate: failAndCompensate refunds what is recoverable, and the
+ * startup/5-minute sweep retries anything stranded (SEPA and the PAYOUT_*
+ * anchor states have their own legs; see executeSepaTransfer/refreshPayout).
  *
  * NO MOCK LEGS. There is no dry-run Bridge, no local escrow, no simulated
  * pickup and no simulated SEPA payout: a rail is live or the transfer is
@@ -91,12 +91,11 @@ export interface SafeExecution {
  */
 export async function assertQuoteRateBinding(transfer: Transfer): Promise<void> {
   const quote = store.findQuote(transfer.quoteId);
-  if (!quote?.lockedSwapRate) return; // legacy/sepa quotes: nothing to bind
+  if (!quote?.lockedSwapRate) return; // sepa quotes: nothing to bind
   const locked = BigInt(quote.lockedSwapRate);
-  // Ask the provider that will actually fill the swap. Reading the FxSwapper
-  // contract directly compared the quote against the local mock's rate even
-  // when the deployment was pricing through a market maker — the check would
-  // have passed on a number nothing was going to trade at.
+  // Ask the provider that will actually fill the swap, not the FxSwapper
+  // contract: a deployment pricing through a market maker must be checked
+  // against a number something is going to trade at.
   const { raw: live } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
   const driftBps = (live > locked ? live - locked : locked - live) * 10_000n / locked;
   if (driftBps > BigInt(FX.QUOTE_BINDING_BPS)) {
@@ -111,12 +110,11 @@ export async function assertQuoteRateBinding(transfer: Transfer): Promise<void> 
  * The step names for the input-funds leg, in one place.
  *
  * Recovery decides whether any money actually moved by matching these names,
- * so the producer and every consumer have to agree. They did not: the Safe
- * path pushed "safe.transfer(orchestrator)" while compensateTransfer and
- * sweepStrandedTransfers still looked for an old ledger-debit step, so a failed
- * Safe-funded transfer recorded a €0 refund reading "nothing was debited"
- * while the EURe had already left the user's Safe — and the sweep then skipped
- * it forever, because setting `refund` is what marks a transfer as settled.
+ * so the producer and every consumer have to agree. A consumer looking for a
+ * step the producer never writes records a €0 refund reading "nothing was
+ * debited" while the EURe has already left the user's Safe — and the sweep
+ * then skips it forever, because setting `refund` is what marks a transfer as
+ * settled.
  *
  * Anything that adds a third funding source must add its step here.
  */
@@ -412,8 +410,8 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
   }
 }
 
-/** Walk a failed transfer backwards: release escrow if locked and return
- * recoverable EURe to the sender's Safe. */
+/** Walk a failed transfer backwards: return recoverable EURe to the sender's
+ * Safe. */
 export async function compensateTransfer(id: string): Promise<Transfer> {
   const t = store.findTransfer(id);
   if (!t) throw new Error(`unknown transfer ${id}`);
@@ -433,10 +431,9 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   const txs = t.txs;
 
   // Did a swap actually run? Every venue's step reads liquidity.<venue>.eure-usdc
-  // ("swapper.swapExactIn" is the pre-liquidity-seam legacy name). This used to
-  // match only the fx-swapper's own step, so a dex/rfq/lifi-swapped transfer
-  // read as "still holding EURe" and its refund would have handed back euros
-  // the orchestrator no longer held.
+  // ("swapper.swapExactIn" is the name older transfers in db.json carry). Match
+  // every venue: a dex/rfq/lifi-swapped transfer that read as "still holding
+  // EURe" would be refunded euros the orchestrator no longer holds.
   const swapRan = [...steps].some(
     (s) => s === "swapper.swapExactIn" || (s.startsWith("liquidity.") && s.endsWith(".eure-usdc")),
   );
@@ -468,7 +465,9 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     const rate = await compensationRate(t);
     const eurBack = (t.usdcOut ?? 0) / (Number(rate) / 1e6);
     refundEur = Math.floor((fee + eurBack) * 100) / 100;
-    recoveredFrom = steps.has("bridge.lockForPayout") ? "released escrow" : "post-swap USDC";
+    // The swapped USDC sits with the orchestrator until Bridge takes it, and
+    // that is the only place a refund can come from.
+    recoveredFrom = "post-swap USDC";
     const lost = Math.max(0, t.sendEur - refundEur);
     if (lost > 0) deductions = `€${lost.toFixed(2)} conversion round-trip at execution rate`;
   }
@@ -491,10 +490,8 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
        * Reverse the swap and give the euros back. The rate movement of the
        * round trip is worn by the user as an ITEMIZED deduction (both legs at
        * execution prices, the received amount MEASURED as a Safe balance
-       * delta, not read off the quote) — that honesty beats the alternative,
-       * which was parking the money in MANUAL_REVIEW indefinitely: the first
-       * live post-swap failure sat exactly there, 4.57 USDC of a user's €5
-       * stranded on the orchestrator. Reversal failing still parks for
+       * delta, not read off the quote) — that honesty beats parking the money
+       * in MANUAL_REVIEW indefinitely. Reversal failing still parks for
        * review — guessing is the one thing this path must never do.
        */
       try {
