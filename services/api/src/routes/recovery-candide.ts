@@ -24,7 +24,7 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { CHAIN_ID, KEYS, RECOVERY, SECURITY } from "../config.js";
+import { CHAIN_ID, HARNESS, KEYS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import {
   CANDIDE,
@@ -229,7 +229,7 @@ export async function finalizeCandideRecovery(
   }
 
   let owners: string[];
-  if (SECURITY.allowSimulation) {
+  if (HARNESS.enabled) {
     owners = finalizeError ? [] : newOwners;
   } else {
     try {
@@ -306,7 +306,7 @@ export async function sweepCandideRecoveries(now = new Date()): Promise<number> 
  * smart-account chain is not the app chain, which only happens locally.
  */
 async function deployVerifierForOwner(owner: { x: bigint; y: bigint }): Promise<string | undefined> {
-  if (SECURITY.allowSimulation) return undefined;
+  if (HARNESS.enabled) return undefined;
   if (BigInt(CHAIN_ID) !== BigInt(CANDIDE.chainId)) return undefined;
   const verifier = passkeyAccountAddress(owner);
   if (await isDeployed(verifier)) return undefined;
@@ -389,7 +389,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const moduleAddress = user.passkeySafe?.candideRecovery?.moduleAddress
         ?? (await assertModuleAgreement(user.passkeySafe?.recovery?.moduleAddress ?? CANDIDE.recoveryModuleAddress));
       await assertRecoveryModuleDeployed(moduleAddress);
-      if (!SECURITY.allowSimulation && !(await isDeployed(plan.address))) {
+      if (!HARNESS.enabled && !(await isDeployed(plan.address))) {
         return res.status(409).json({ error: "the passkey Safe must be deployed before recovery can be set up" });
       }
       prune(pendingChannelRegistrations);
@@ -836,10 +836,10 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         // Every channel is verified: Candide has signed. Execute now — the
         // grace period starts on chain, not when someone remembers to click.
         const executed = await executeRecovery(request.safeAddress, c.newOwners, c.newThreshold ?? 1, result.guardianAddress, result.guardianSignature);
-        // Simulation-only: a test cannot wait for even the 3-minute module.
-        // Ignored everywhere a chain is real, so it can never shorten a
-        // production grace period.
-        const simulatedGrace = SECURITY.allowSimulation ? Number(process.env.RECOVERY_SIMULATED_GRACE_SECONDS ?? "") : NaN;
+        // Harness-only: a test cannot wait for even the 3-minute module.
+        // HARNESS.enabled is false on every real-money chain by construction,
+        // so this can never shorten a production grace period.
+        const simulatedGrace = HARNESS.enabled ? Number(process.env.RECOVERY_SIMULATED_GRACE_SECONDS ?? "") : NaN;
         const grace = Number.isFinite(simulatedGrace) && simulatedGrace >= 0
           ? simulatedGrace
           : c.gracePeriodSeconds ?? recoveryGracePeriodSeconds(request.recoveryModuleAddress) ?? 0;

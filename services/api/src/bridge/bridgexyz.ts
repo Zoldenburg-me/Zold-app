@@ -5,8 +5,9 @@
  * creates a transfer, Bridge returns source deposit instructions, and once the
  * deposit lands Bridge moves funds to the destination rail.
  *
- * Dry-run mode is the default so the local demo can still record the exact
- * Bridge-shaped funding leg without requiring partner credentials.
+ * There is no dry-run: without BRIDGE_LIVE=1 and credentials the cash rail is
+ * closed and createBridgeTransfer refuses, so no transfer ever carries a
+ * fabricated deposit address.
  */
 import { BRIDGE } from "../config.js";
 
@@ -97,24 +98,21 @@ export async function createBridgeTransfer(
     ...(destination.blockchainMemo ? { blockchain_memo: destination.blockchainMemo } : {}),
   };
   const plan: BridgeTransferPlan = {
-    mode: BRIDGE.live ? "live" : "dry-run",
+    mode: "live",
     amountUsdc,
     source,
     destination: dest,
     idempotencyKey,
   };
 
+  // No dry-run. A cash payout either goes through Bridge for real or it does
+  // not happen; a fabricated deposit address on a real chain would send the
+  // swap output nowhere while the transfer reported progress.
   if (!BRIDGE.live) {
-    plan.transferId = `bridge_dry_${zoldTransferId}`;
-    plan.state = "dry_run";
-    plan.sourceDepositInstructions = {
-      payment_rail: source.payment_rail,
-      amount: amountString(amountUsdc),
-      currency: "usdc",
-      from_address: source.from_address,
-      to_address: "bridge-dry-run-deposit-address",
-    };
-    return plan;
+    throw new BridgeTransferError(
+      "the cash rail is closed: BRIDGE_LIVE=1 with BRIDGE_API_KEY and BRIDGE_ON_BEHALF_OF is required",
+      plan,
+    );
   }
 
   if (!BRIDGE.apiKey) throw new BridgeTransferError("BRIDGE_API_KEY is required when BRIDGE_LIVE=1", plan);

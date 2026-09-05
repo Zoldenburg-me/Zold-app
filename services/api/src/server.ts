@@ -8,7 +8,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, KYC, LIQUIDITY, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, SUMSUB, moneriumOAuthEnabled, moneriumSandboxEnabled, sumsubEnabled, SECURITY, STELLAR, TESTNET_FAUCET } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, HARNESS, KYC, LIQUIDITY, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, moneriumOAuthEnabled, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
 import { prepareSafeSwapForTransfer, prepareDepositConversion } from "./liquidity.js";
 import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
@@ -25,8 +25,6 @@ import {
   SHARE_TTL_DAYS,
 } from "./receipt.js";
 import { createQuote, isExpired } from "./fx.js";
-import { faucetFundSafe } from "./faucet.js";
-import { issueIban, simulateSepaDeposit } from "./adapters/monerium.js";
 import {
   decryptToken,
   encryptToken,
@@ -34,7 +32,6 @@ import {
   hasOwnMoneriumCredentials,
   moneriumAccessToken,
   moneriumApiKeysAvailable,
-  moneriumAppClient,
   moneriumEnvironment,
   moneriumLinkAccessToken,
   publicApiKeys,
@@ -45,7 +42,6 @@ import { activatePaymentForwarder } from "./adapters/candide-forwarder.js";
 import {
   checkConnection,
   handleWebhookEvent,
-  provisionFunding,
   refreshPendingIban,
   startDepositPoller,
 } from "./adapters/monerium-sandbox.js";
@@ -55,9 +51,9 @@ import {
   executeTransfer,
   refreshPayout,
   safeDebitBlocker,
-  settlePickup,
   sweepAnchorPayouts,
   sweepStrandedTransfers,
+  cashRailOpen,
 } from "./orchestrator.js";
 import {
   startCryptoDepositPoller,
@@ -117,19 +113,8 @@ import {
   exchangeAuthorizationCode,
   LINK_MESSAGE,
   MoneriumApiError,
-  MoneriumClient,
   moneriumBearerRequest,
 } from "./adapters/monerium-client.js";
-import {
-  createSumsubShareToken,
-  createSumsubWebSdkLink,
-  decisionFromSumsubWebhook,
-  getSumsubApplicant,
-  senderProfileFromSumsubApplicant,
-  sumsubExternalUserId,
-  userIdFromSumsubExternalId,
-  verifySumsubWebhookDigest,
-} from "./adapters/sumsub.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -166,29 +151,7 @@ app.use((req, res, next) => {
 // caller shares one bucket and one client can rate-limit the whole service.
 app.set("trust proxy", SECURITY.trustedProxyHops);
 
-/**
- * Is this request from the loopback interface, with nothing claiming to have
- * forwarded it? Simulation endpoints mint balances and self-approve KYC, so they
- * get this check on top of the config switch: a misconfigured
- * ALLOW_SIMULATION on a hosted box still cannot be reached from outside.
- */
-function isLocalRequest(req: express.Request): boolean {
-  if (req.header("x-forwarded-for") || req.header("forwarded")) return false;
-  const ip = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
-  return ip === "127.0.0.1" || ip === "::1";
-}
 
-function requireSimulationAllowed(req: express.Request, res: express.Response): boolean {
-  if (!SECURITY.allowSimulation) {
-    res.status(403).json({ error: "simulation endpoints are disabled in production" });
-    return false;
-  }
-  if (!isLocalRequest(req)) {
-    res.status(403).json({ error: "simulation endpoints are reachable from localhost only" });
-    return false;
-  }
-  return true;
-}
 
 const hits = new Map<string, { n: number; reset: number }>();
 function rateLimit(key: string, perMin: number): boolean {
@@ -317,16 +280,13 @@ const wrap =
  */
 export function capabilities() {
   return {
-    /** May the browser offer simulated deposits and cash pickups at all? */
-    simulation: SECURITY.allowSimulation,
-    /**
-     * Are deposits real Monerium IBAN transfers? This is the difference
-     * between "Add money" being a button and being a set of bank details the
-     * user transfers to, so the UI needs it alongside the flag above.
-     */
-    sandbox,
-    kycProvider: KYC.provider,
-    sumsub: sumsubEnabled(),
+    /** Deposits are real Monerium IBAN transfers, always: there is no mock. */
+    sandbox: true,
+    /** May the browser offer "sign up / sign in with Monerium" (OAuth)? */
+    moneriumOAuth: moneriumOAuthEnabled(),
+    /** Is the cash (EUR -> KES) corridor open? Bridge live AND an anchor
+     *  configured; the UI hides the corridor rather than quote into a wall. */
+    cashRail: cashRailOpen(),
     /**
      * May a user connect their OWN Monerium app credentials? Needs the
      * encryption key, because the secret is never written in plaintext. The
@@ -571,26 +531,6 @@ function requireKycApproved(user: User, res: express.Response) {
   return false;
 }
 
-function fundableUserPatch(user: User): Partial<User> {
-  const blocked = custodyBlockerBeforeFunding(user);
-  if (blocked) {
-    return {
-      iban: "",
-      funding: {
-        mode: sandbox ? "sandbox" : "mock",
-        status: "error",
-        detail: blocked,
-      },
-    };
-  }
-  if (sandbox) {
-    return { funding: { mode: "sandbox", status: "provisioning" } };
-  }
-  return {
-    iban: user.iban || issueIban(user.id),
-    funding: { mode: "mock", status: "active" },
-  };
-}
 
 /**
  * Refuse to issue an IBAN to an account nobody can get back into.
@@ -602,11 +542,12 @@ function fundableUserPatch(user: User): Partial<User> {
  * it is permanent. Onboarding lets people skip the passkey, which is fine
  * while an account is empty and unacceptable once it can hold money.
  *
- * Gated on allowSimulation so local demos and e2e still run end to end
+ *
+ * HARNESS.enabled (hardhat only) waives it so the suites can fund an account
  * without a real authenticator.
  */
 function custodyBlockerBeforeFunding(user: User): string | null {
-  if (SECURITY.allowSimulation) return null;
+  if (HARNESS.enabled) return null;
   if (!user.passkey?.publicKey) {
     return (
       "a verified passkey is required before an account can be funded — without one there is " +
@@ -719,19 +660,6 @@ function prunePendingMoneriumLinkSignatures(now = Date.now()) {
   }
 }
 
-function queueSandboxProvisioning(user: User) {
-  const blocked = passkeyRequiredBeforeFunding(user);
-  if (blocked) {
-    console.log(`provisioning deferred for ${user.id}: ${blocked}`);
-    store.updateUser(user.id, {
-      funding: { ...(user.funding ?? {}), status: "error", detail: blocked } as User["funding"],
-    });
-    return;
-  }
-  provisionFunding(user).catch((err) =>
-    console.error(`provisioning failed for ${user.id}: ${err?.message ?? err}`),
-  );
-}
 
 /**
  * What a blocked person is told.
@@ -860,25 +788,29 @@ app.post(
       });
     }
     const id = randomUUID();
-    // The real address is set by passkey/co-signer Safe deployment.
-    const kycStatus = KYC.autoApprove ? "approved" : "pending";
+    // The real address is set by passkey/co-signer Safe deployment. Identity
+    // is Monerium's: the account stays pending until a Monerium connection
+    // (OAuth or the user's own API keys) is activated and attributes an IBAN
+    // to the Safe. No locally issued IBAN, and no auto-approval anywhere money
+    // is real — KYC.autoApprove is true only on the hardhat harness chain.
+    const approved = KYC.autoApprove;
     const user: User = {
       id,
       name,
       email,
       country: normaliseCountryCode(String(country)),
-      kycStatus,
-      kyc: {
-        provider: KYC.autoApprove ? "mock" : "manual",
-        checkedAt: KYC.autoApprove ? new Date().toISOString() : undefined,
-      },
-      iban: kycStatus === "approved" && !sandbox ? issueIban(id) : "",
+      kycStatus: approved ? "approved" : "pending",
+      kyc: approved
+        ? { provider: "mock", checkedAt: new Date().toISOString(), reason: "hardhat harness auto-approval" }
+        : { provider: "monerium" },
+      iban: "",
       address: ZERO_ADDRESS,
       wallet: { type: "candide-safe", deployed: false },
-      funding:
-        kycStatus === "approved"
-          ? { mode: sandbox ? "sandbox" : "mock", status: sandbox ? "provisioning" : "active" }
-          : { mode: sandbox ? "sandbox" : "mock", status: "kyc_pending" },
+      // Harness accounts are "funded" with no IBAN: hardhat has no Monerium,
+      // and the suites mint EURe to the Safe directly.
+      funding: approved
+        ? { mode: "sandbox", status: "active", detail: "hardhat harness account — no Monerium IBAN exists on this chain" }
+        : { mode: "sandbox", status: "kyc_pending" },
       createdAt: new Date().toISOString(),
     };
     store.addUser(user);
@@ -920,11 +852,6 @@ app.post(
       softUsSignals: decision.review?.softUsSignals ?? [],
       outcome: "account_created",
     }, user.id));
-    if (sandbox && kycStatus === "approved") {
-      // Wallet deploy (~20s) + Monerium provisioning run in the background;
-      // the UI polls funding status until the IBAN lands.
-      queueSandboxProvisioning(user);
-    }
     res.status(201).json(withSession(user));
   }),
 );
@@ -935,7 +862,7 @@ app.get(
     let user = store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
-    if (sandbox && user.funding?.status === "iban_pending") {
+    if (user.funding?.status === "iban_pending") {
       user = await refreshPendingIban(user);
     }
     const balances = await accountBalances(user.address);
@@ -1591,70 +1518,7 @@ app.get(
   }),
 );
 
-/**
- * Self-serve identity approval. ONLY where the deployment has already decided
- * every user is approved (KYC_AUTO_APPROVE) or is an explicit simulation —
- * ungated, any session could approve its own KYC on any deployment, the exact
- * hole requireOperator exists to close.
- */
-app.post(
-  "/api/users/:id/kyc",
-  wrap(async (req, res) => {
-    const user = store.findUser(req.params.id);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    if (!requireUserSession(req, res, user.id)) return;
-    if (user.kycStatus === "approved") return res.status(409).json({ error: "account is already approved" });
-    if (!KYC.autoApprove && !SECURITY.allowSimulation) {
-      return res.status(403).json({ error: "identity review is operator-only on this deployment" });
-    }
-    const result = await applyKycDecision(user, "approved", "mock", "in-house verification auto-approved");
-    res.json(result);
-  }),
-);
 
-app.post(
-  "/api/users/:id/sumsub/start",
-  wrap(async (req, res) => {
-    const user = store.findUser(req.params.id);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    if (!requireUserSession(req, res, user.id)) return;
-    if (user.kycStatus === "approved") return res.status(409).json({ error: "account is already approved" });
-    if (!sumsubEnabled()) {
-      // Only the deployment-wide auto-approve flips this; in simulation the
-      // explicit route for self-approval is mock-review, not "start sumsub".
-      if (KYC.autoApprove) {
-        const result = await applyKycDecision(user, "approved", "mock", "in-house verification auto-approved");
-        return res.json({ verificationUrl: "", kyc: result.kyc, funding: result.funding, kycStatus: result.kycStatus });
-      }
-      return res.status(503).json({ error: "Sumsub KYC is not configured" });
-    }
-    const base = PUBLIC_URL || `http://${API_HOST}:${API_PORT}`;
-    const externalUserId = sumsubExternalUserId(user.id);
-    const link = await createSumsubWebSdkLink(SUMSUB, {
-      user,
-      successUrl: `${base}/app?kyc=sumsub_success`,
-      rejectUrl: `${base}/app?kyc=sumsub_rejected`,
-    });
-    const updated = store.updateUser(user.id, {
-      kyc: {
-        ...user.kyc,
-        provider: "sumsub",
-        onboardingPath: "new_monerium",
-        reason: "Sumsub identity verification started",
-        sumsub: {
-          ...user.kyc?.sumsub,
-          externalUserId,
-        },
-      },
-      funding: {
-        ...(user.funding ?? { mode: sandbox ? "sandbox" : "mock", status: "kyc_pending" as const }),
-        status: "kyc_pending" as const,
-        detail: "complete Sumsub identity verification",
-      },
-    });
-    res.json({ verificationUrl: link.url, kyc: publicUser(updated).kyc, funding: updated.funding });
-  }),
-);
 
 app.get(
   "/api/privacy-bundles",
@@ -1746,51 +1610,6 @@ app.post(
   }),
 );
 
-app.post(
-  "/api/users/:id/funding-onboarding-path",
-  wrap(async (req, res) => {
-    const user = store.findUser(req.params.id);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    if (!requireUserSession(req, res, user.id)) return;
-    if (user.kycStatus === "approved") {
-      return res.status(409).json({ error: "account is already approved" });
-    }
-    const path = req.body?.path;
-    if (!["existing_monerium", "new_monerium"].includes(path)) {
-      return res.status(400).json({ error: "path must be existing_monerium or new_monerium" });
-    }
-
-    // Only the deployment-wide auto-approve flips this. Simulation mode keeps
-    // its ONE explicit approval route (mock-review) so the KYC gate stays
-    // testable locally — choosing a path is not an identity decision.
-    if (path === "new_monerium" && KYC.autoApprove) {
-      const result = await applyKycDecision(user, "approved", "manual", "in-house identity verification auto-approved");
-      return res.json(result);
-    }
-
-    const updated = store.updateUser(user.id, {
-      kyc: {
-        ...user.kyc,
-        provider: path === "existing_monerium" ? "monerium" : "manual",
-        onboardingPath: path,
-        reason:
-          path === "existing_monerium"
-            ? "existing Monerium account selected; OAuth connection pending"
-            : "standard identity review selected",
-      },
-      funding: {
-        ...(user.funding ?? { mode: sandbox ? "sandbox" : "mock", status: "kyc_pending" as const }),
-        status: "kyc_pending" as const,
-        detail:
-          path === "existing_monerium"
-            ? "connect existing Monerium account"
-            : "identity review required",
-      },
-    });
-    const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
-    res.json({ ...publicUser(updated), ...balances });
-  }),
-);
 
 app.post(
   "/api/users/:id/monerium/connect/start",
@@ -2015,25 +1834,15 @@ app.post(
       profileId =
         pending.profileId ?? user.monerium?.profileId ?? user.funding?.moneriumProfileId;
       /**
-       * In-house path: the address must be linked under a PER-CUSTOMER
-       * profile, or Monerium never issues the IBAN — the app's default
-       * profile accepts the link and then sits on the request forever, and
-       * every in-house activation parks at "waiting for activation".
+       * No whitelabel path: the app never creates Monerium profiles for a
+       * user. The address is linked under the profile the USER's own
+       * connection (OAuth or API keys) exposes, so without one there is
+       * nothing to link to and the route refuses above.
        */
-      if (!profileId && viaApp) {
-        profileId =
-          MONERIUM.profileId ||
-          (await moneriumAppClient().createProfile("personal", user.email ?? user.name))?.id;
-        // Persist NOW: every later step can fail, and a retry that cannot
-        // see the profile would mint another orphan on the Monerium app.
-        if (profileId) {
-          user = store.updateUser(user.id, {
-            funding: {
-              ...(user.funding ?? { mode: "sandbox", status: "provisioning" }),
-              moneriumProfileId: profileId,
-            } as User["funding"],
-          });
-        }
+      if (viaApp) {
+        return res.status(409).json({
+          error: "connect a Monerium account first — sign in with Monerium or add your Monerium API keys — before activating an IBAN",
+        });
       }
       try {
         const { signCount } = await verifyAssertionForChallenge(
@@ -2242,9 +2051,6 @@ app.post(
       )?.iban ?? "";
     const now = new Date().toISOString();
     const wasApproved = user.kycStatus === "approved";
-    // A locally issued mock IBAN is retired: this account is on Monerium now,
-    // and a simulated deposit to a fake IBAN beside a real one is a trap.
-    const retiringMockIban = user.funding?.mode === "mock" && Boolean(user.iban) && !ownIban;
 
     const updated = store.updateUser(user.id, {
       moneriumConnect: undefined,
@@ -2269,21 +2075,19 @@ app.post(
                 reason: "own Monerium API keys connected; activate IBAN with passkey",
               },
             }),
-      ...(ownIban ? { iban: ownIban } : retiringMockIban ? { iban: "" } : {}),
+      ...(ownIban ? { iban: ownIban } : {}),
       funding: {
         ...(user.funding ?? {}),
         mode: "sandbox" as const,
         status: ownIban
           ? ("active" as const)
-          : user.funding?.status === "active" && !retiringMockIban
+          : user.funding?.status === "active"
             ? ("active" as const)
             : ("provisioning" as const),
         moneriumProfileId: profileId,
         detail: ownIban
           ? `IBAN attributed to this account by your Monerium (${moneriumEnvironment()}) account`
-          : retiringMockIban
-            ? "mock IBAN retired — approve the Monerium IBAN with your passkey"
-            : user.funding?.status === "active"
+          : user.funding?.status === "active"
               ? "own Monerium keys connected; the existing IBAN is kept and Monerium calls for this account now use your keys"
               : "own Monerium account connected — approve IBAN issuance with your passkey",
       },
@@ -2347,71 +2151,8 @@ app.delete(
   }),
 );
 
-/**
- * Apply a KYC decision. Shared by the operator seam and the local mock-review
- * endpoint so the two cannot drift — the authorization differs, the effect on
- * the account must not.
- */
-async function applyKycDecision(
-  user: User,
-  decision: "approved" | "rejected" | "manual_review",
-  provider: "mock" | "manual" | "monerium" | "sumsub",
-  reason?: string,
-) {
-  const updated = store.updateUser(user.id, {
-    ...(decision === "approved"
-      ? fundableUserPatch(user)
-      : { funding: { ...user.funding!, status: "kyc_pending" as const } }),
-    kycStatus: decision,
-    kyc: {
-      ...user.kyc,
-      provider,
-      checkedAt: new Date().toISOString(),
-      reason: typeof reason === "string" ? reason : undefined,
-    },
-  });
-  if (sandbox && decision === "approved") queueSandboxProvisioning(updated);
-  const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
-  return { ...publicUser(updated), ...balances };
-}
 
-function readDecision(body: any, res: express.Response): "approved" | "rejected" | "manual_review" | undefined {
-  const decision = body?.decision;
-  if (!["approved", "rejected", "manual_review"].includes(decision)) {
-    res.status(400).json({ error: "decision must be approved, rejected or manual_review" });
-    return undefined;
-  }
-  return decision;
-}
 
-async function shareApprovedSumsubKycWithMonerium(user: User, applicantId: string): Promise<User> {
-  if (!moneriumSandboxEnabled()) return user;
-  const profileId =
-    user.funding?.moneriumProfileId ||
-    user.monerium?.profileId ||
-    MONERIUM.profileId ||
-    (await new MoneriumClient(MONERIUM).createProfile("personal", user.email ?? user.name)).id;
-  const share = await createSumsubShareToken(SUMSUB, applicantId, SUMSUB.moneriumClientId);
-  await new MoneriumClient(MONERIUM).shareKyc(profileId, share.token);
-  return store.updateUser(user.id, {
-    funding: {
-      ...(user.funding ?? { mode: sandbox ? "sandbox" : "mock", status: "kyc_pending" as const }),
-      moneriumProfileId: profileId,
-      detail: "Sumsub KYC shared with Monerium; waiting for Monerium profile review",
-    },
-    monerium: { ...(user.monerium ?? { connectedAt: new Date().toISOString() }), profileId },
-    kyc: {
-      ...user.kyc,
-      provider: "sumsub",
-      sumsub: {
-        ...user.kyc?.sumsub,
-        externalUserId: user.kyc?.sumsub?.externalUserId ?? sumsubExternalUserId(user.id),
-        applicantId,
-        moneriumShare: { profileId, status: "pending", updatedAt: new Date().toISOString() },
-      },
-    },
-  });
-}
 
 /** Refuse a send that would take the account past its daily cap, counting both
  *  funding sources. The arithmetic lives in dailyCapUsage so it can be tested
@@ -2595,30 +2336,6 @@ function adminFunding(deposit: CryptoDeposit) {
   };
 }
 
-/**
- * Operator / provider KYC review — the approval path that survives production.
- *
- * Without this the only way to approve anyone on a hosted deploy is
- * ALLOW_SIMULATION=1, which also re-opens simulated SEPA deposits and cash
- * pickup: you would have to turn on fake money to onboard a real user.
- *
- * A real provider integration (Sumsub/Persona) posts its decision here from
- * its webhook using the same token; it cannot hold a user session, which is
- * why this is not scoped under /users/:id.
- */
-app.post(
-  "/api/kyc/review",
-  wrap(async (req, res) => {
-    if (!requireOperator(req, res)) return;
-    const user = store.findUser(req.body?.userId);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    const decision = readDecision(req.body, res);
-    if (!decision) return;
-    const result = await applyKycDecision(user, decision, "manual", req.body?.reason);
-    console.log(`KYC: ${decision} for ${user.id} by operator`);
-    res.json(result);
-  }),
-);
 
 /**
  * Deployer float for the ops dashboard. The faucet and gas both spend from
@@ -2657,8 +2374,8 @@ async function operatorGas() {
   if (operatorGasCache && Date.now() - operatorGasCache.at < 60_000) return operatorGasCache.value;
   const wallets: { role: string; address: `0x${string}` }[] = [
     { role: "co-signer (userOp counter-signer, no gas needed)", address: (CANDIDE.cosignerAddress || "0x") as `0x${string}` },
-    { role: "orchestrator (swaps, fees, dry-run settlement)", address: orchestratorAddress },
-    { role: "deployer (faucet/gas)", address: deployerWallet.account.address },
+    { role: "orchestrator (swaps, fees)", address: orchestratorAddress },
+    { role: "deployer (gas)", address: deployerWallet.account.address },
   ];
   const value = await Promise.all(
     wallets
@@ -2692,7 +2409,6 @@ app.get(
       activeSafes,
       totalTransfers,
       totalVolumeEur,
-      faucetGrantEur: TESTNET_FAUCET.grantEur || 0,
       deployer: await deployerFloat().catch(() => null),
       operatorGas: await operatorGas().catch(() => null),
     });
@@ -2728,118 +2444,7 @@ app.get(
   }),
 );
 
-app.post(
-  "/api/admin/users/:id/issue-iban",
-  wrap(async (req, res) => {
-    if (!requireOperator(req, res)) return;
-    const user = store.findUser(req.params.id);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    /**
-     * Honesty gates. This route mints a LOCAL display IBAN and marks funding
-     * active. In sandbox mode Monerium issues real, routable IBANs through
-     * the user's passkey ceremony — assigning a fabricated one here would
-     * mask real funding state with an IBAN money can never reach (7 test
-     * accounts carried exactly that). And skipping the custody gate makes an
-     * account look fundable with no passkey Safe to receive anything.
-     */
-    if (moneriumSandboxEnabled()) {
-      return res.status(409).json({
-        error:
-          "this deployment issues real Monerium IBANs — the user activates theirs with a passkey tap " +
-          "(Activate IBAN on their home screen); a manually assigned IBAN would not be routable",
-      });
-    }
-    const custodyBlocked = passkeyRequiredBeforeFunding(user);
-    if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
-    const iban = issueIban(user.id);
-    const updated = store.updateUser(user.id, {
-      iban,
-      funding: { mode: "sandbox", status: "active", detail: "admin manual IBAN assignment" },
-    });
-    res.json(publicUser(updated));
-  }),
-);
 
-app.post(
-  "/api/webhooks/sumsub",
-  wrap(async (req, res) => {
-    const raw = (req as any).rawBody as Buffer | undefined;
-    if (!SUMSUB.webhookSecretKey) return res.status(503).json({ error: "Sumsub webhook secret is not configured" });
-    if (!raw || !verifySumsubWebhookDigest(
-      SUMSUB.webhookSecretKey,
-      raw,
-      req.header("x-payload-digest") ?? undefined,
-      req.header("x-payload-digest-alg") ?? "HMAC_SHA256_HEX",
-    )) {
-      return res.status(401).json({ error: "invalid Sumsub webhook signature" });
-    }
-    const payload = req.body ?? {};
-    const decision = decisionFromSumsubWebhook(payload);
-    if (!decision) return res.json({ ok: true, ignored: payload.type ?? "unknown" });
-    const applicantId = typeof payload.applicantId === "string" ? payload.applicantId : undefined;
-    const externalUserId = typeof payload.externalUserId === "string" ? payload.externalUserId : undefined;
-    const userId = userIdFromSumsubExternalId(externalUserId);
-    let user = (userId ? store.findUser(userId) : undefined) ??
-      store.users.find((u) => u.kyc?.sumsub?.applicantId === applicantId);
-    if (!user) return res.status(404).json({ error: "no local user for Sumsub applicant" });
-
-    user = store.updateUser(user.id, {
-      kyc: {
-        ...user.kyc,
-        provider: "sumsub",
-        onboardingPath: "new_monerium",
-        sumsub: {
-          ...user.kyc?.sumsub,
-          externalUserId: externalUserId ?? user.kyc?.sumsub?.externalUserId ?? sumsubExternalUserId(user.id),
-          applicantId,
-          reviewStatus: payload.reviewStatus,
-          reviewAnswer: payload.reviewResult?.reviewAnswer,
-          reviewedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    if (applicantId) {
-      try {
-        const applicant = await getSumsubApplicant(SUMSUB, applicantId);
-        const senderProfile = senderProfileFromSumsubApplicant(applicant, user);
-        if (senderProfile) user = store.updateUser(user.id, { senderProfile });
-      } catch (err: any) {
-        console.warn(`SUMSUB: applicant ${applicantId} data read failed for ${user.id}: ${err?.message ?? err}`);
-      }
-    }
-
-    const reason = payload.reviewResult?.clientComment || payload.reviewResult?.moderationComment;
-    const result = await applyKycDecision(user, decision, "sumsub", reason);
-    if (decision === "approved" && applicantId) {
-      try {
-        user = await shareApprovedSumsubKycWithMonerium(store.findUser(user.id)!, applicantId);
-      } catch (err: any) {
-        const latest = store.findUser(user.id)!;
-        store.updateUser(user.id, {
-          kyc: {
-            ...latest.kyc,
-            provider: "sumsub",
-            sumsub: {
-              ...latest.kyc?.sumsub,
-              externalUserId: latest.kyc?.sumsub?.externalUserId ?? sumsubExternalUserId(user.id),
-              applicantId,
-              moneriumShare: {
-                profileId: latest.funding?.moneriumProfileId ?? latest.monerium?.profileId ?? MONERIUM.profileId,
-                status: "error",
-                updatedAt: new Date().toISOString(),
-                error: String(err?.message ?? err).slice(0, 240),
-              },
-            },
-          },
-        });
-        console.warn(`SUMSUB: Monerium KYC share failed for ${user.id}: ${err?.message ?? err}`);
-      }
-    }
-    console.log(`SUMSUB: ${decision} for ${user.id} applicant ${applicantId ?? "(unknown)"}`);
-    res.json({ ok: true, userId: user.id, kycStatus: result.kycStatus });
-  }),
-);
 
 app.get(
   "/api/users/:id/recovery",
@@ -3005,25 +2610,6 @@ app.get(
   }),
 );
 
-/** Local demo convenience: the user drives their own KYC decision. Gated on
- *  ALLOW_SIMULATION because it is self-approval — see /api/kyc/review for the
- *  path that works in production. */
-app.post(
-  "/api/users/:id/kyc/mock-review",
-  wrap(async (req, res) => {
-    if (!SECURITY.allowSimulation || !isLocalRequest(req)) {
-      return res.status(403).json({
-        error: "mock KYC review is disabled in production — use POST /api/kyc/review with an operator token",
-      });
-    }
-    const user = store.findUser(req.params.id);
-    if (!user) return res.status(404).json({ error: "user not found" });
-    if (!requireUserSession(req, res, user.id)) return;
-    const decision = readDecision(req.body, res);
-    if (!decision) return;
-    res.json(await applyKycDecision(user, decision, "mock", req.body?.reason));
-  }),
-);
 
 app.delete(
   "/api/session",
@@ -3229,7 +2815,7 @@ app.post(
     // funding error forever and nothing ever issued its IBAN. Record where
     // provisioning actually stands so both the client and a reload know the
     // one remaining step.
-    if (sandbox && updated.kycStatus === "approved" && !updated.iban && updated.funding?.status !== "active") {
+    if (updated.kycStatus === "approved" && !updated.iban && updated.funding?.status !== "active") {
       updated = store.updateUser(user.id, {
         funding: {
           ...(updated.funding ?? {}),
@@ -3239,9 +2825,6 @@ app.post(
         },
       });
     }
-    // Fire-and-forget: the testnet faucet seeds the new Safe with EURe, and
-    // its failure must never fail a deployment that already succeeded.
-    void faucetFundSafe(user.id);
     res.status(201).json({ ...publicUser(updated), deployOpHash: opHash });
   }),
 );
@@ -3283,7 +2866,7 @@ app.post(
 
 async function verifyPasskeyStepUp(user: User, body: any, res: express.Response): Promise<boolean> {
   if (!user.passkey?.publicKey) {
-    if (SECURITY.allowSimulation) return true;
+    if (HARNESS.enabled) return true;
     res.status(409).json({ error: "a verified passkey is required before binding a spending key" });
     return false;
   }
@@ -3317,31 +2900,6 @@ async function verifyPasskeyStepUp(user: User, body: any, res: express.Response)
   }
 }
 
-// --- Funding (mock Monerium SEPA webhook) -----------------------------------
-
-app.post(
-  "/api/simulate/sepa-deposit",
-  wrap(async (req, res) => {
-    if (!requireSimulationAllowed(req, res)) return;
-    if (sandbox) {
-      return res.status(400).json({
-        error:
-          "sandbox mode: make a (simulated) SEPA transfer to the IBAN from the Monerium sandbox portal — deposits are picked up automatically",
-      });
-    }
-    const { iban, amountEur } = req.body ?? {};
-    const amount = Number(amountEur);
-    if (!iban || !(amount > 0)) return res.status(400).json({ error: "iban and amountEur required" });
-    const user = store.findUserByIban(iban);
-    if (!user) return res.status(404).json({ error: "no account with that IBAN" });
-    if (!requireUserSession(req, res, user.id)) return;
-    if (!requireKycApproved(user, res)) return;
-    const ref = `sepa-${randomUUID()}`;
-    const txs = await simulateSepaDeposit(user.address, amount, ref);
-    const balances = await accountBalances(user.address);
-    res.json({ credited: amount, ...balances, paymentRef: ref, ...txs });
-  }),
-);
 
 /**
  * Build a transfer from an open quote, and the authorization the device must
@@ -3498,7 +3056,7 @@ async function buildTransferFromQuote(
       // the readiness blocker but silently never get an execution prepared,
       // and then fail at authorize blaming the user.
       (!user.passkeySafe.cosignerAddress || CANDIDE.cosignerKey) &&
-      !SECURITY.allowSimulation
+      !HARNESS.enabled
     ) {
       try {
         let prepared: Awaited<ReturnType<typeof prepareTransferExecution>> | undefined;
@@ -3704,6 +3262,12 @@ app.post(
   "/api/quotes",
   wrap(async (req, res) => {
     const { userId, sendEur, rail = "cash" } = req.body ?? {};
+    if (rail === "cash" && !cashRailOpen()) {
+      return res.status(503).json({
+        error: "the cash rail is not open on this deployment — Bridge and the payout anchor are not configured",
+        code: "RAIL_CLOSED",
+      });
+    }
     const user = store.findUser(userId);
     if (!user) return res.status(404).json({ error: "user not found" });
     if (!requireUserSession(req, res, user.id)) return;
@@ -4112,7 +3676,7 @@ function verifyWebhookSignature(req: express.Request): boolean {
 app.post(
   "/api/webhooks/monerium",
   wrap(async (req, res) => {
-    if (!sandbox) return res.status(400).json({ error: "monerium sandbox not configured" });
+    if (!sandbox) return res.status(400).json({ error: "Monerium app credentials are not configured, so webhook deliveries cannot be re-read" });
     if (!verifyWebhookSignature(req)) {
       return res.status(401).json({ error: "invalid webhook signature" });
     }
@@ -4133,17 +3697,6 @@ app.post(
   }),
 );
 
-// Simulate the recipient collecting cash at a MoneyGram agent.
-app.post(
-  "/api/simulate/pickup",
-  wrap(async (req, res) => {
-    if (!requireSimulationAllowed(req, res)) return;
-    const t = store.findTransfer(req.body?.transferId);
-    if (!t) return res.status(404).json({ error: "transfer not found" });
-    if (!requireUserSession(req, res, t.userId)) return;
-    res.json(await settlePickup(t));
-  }),
-);
 
 app.use(((err, _req, res, _next) => {
   console.error(err);
@@ -4210,7 +3763,7 @@ if (sandbox) {
       console.error(`monerium sandbox auth FAILED — check .env credentials: ${err.message}`);
     });
 } else {
-  console.log("monerium: mock mode (set MONERIUM_CLIENT_ID for OAuth, plus MONERIUM_CLIENT_SECRET for app-level API calls)");
+  console.log("monerium: no app credentials (MONERIUM_CLIENT_SECRET unset) — accounts connect by OAuth or their own API keys");
   if (moneriumApiKeysAvailable()) {
     // Users may still connect their OWN Monerium keys; their deposits and
     // redeem orders are polled on those. The poller does nothing until

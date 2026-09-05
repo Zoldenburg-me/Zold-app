@@ -7,10 +7,13 @@
  *
  * Every leg records its step before the next runs, and a debit already in
  * `txs` is refused, so a crash mid-flow cannot double-spend. Failures
- * auto-compensate:
- * failAndCompensate refunds what is recoverable, and the
+ * auto-compensate: failAndCompensate refunds what is recoverable, and the
  * startup/5-minute sweep retries anything stranded (SEPA and the PAYOUT_*
  * anchor states have their own legs; see executeSepaTransfer/refreshPayout).
+ *
+ * NO MOCK LEGS. There is no dry-run Bridge, no local escrow, no simulated
+ * pickup and no simulated SEPA payout: a rail is live or the transfer is
+ * refused before anything leaves the user's Safe.
  */
 import { BRIDGE, FX } from "./config.js";
 import { moneriumLiveFor } from "./adapters/monerium-connection.js";
@@ -50,13 +53,8 @@ import {
   type BrowserPasskeyAssertion,
   type PasskeySafeDeploymentPlan,
 } from "./wallet/candide.js";
-import {
-  createCashPickup,
-  createCashPickupViaAnchor,
-  completePickup,
-  fundAndRefreshAnchorPickup,
-} from "./adapters/moneygram.js";
-import { anchorModeEnabled, SECURITY } from "./config.js";
+import { createCashPickupViaAnchor, fundAndRefreshAnchorPickup } from "./adapters/moneygram.js";
+import { anchorModeEnabled, HARNESS } from "./config.js";
 
 /**
  * FP4: the user's device signature over this payment's exact terms. The
@@ -107,11 +105,6 @@ export async function assertQuoteRateBinding(transfer: Transfer): Promise<void> 
   }
 }
 
-/** Test hook: FORCE_FAIL_STEP=<step> makes the orchestrator throw right
- *  after that step commits — used to exercise the compensation path. */
-const failpoint = (step: string) => {
-  if (process.env.FORCE_FAIL_STEP === step) throw new Error(`forced failure after ${step}`);
-};
 
 /**
  * The step names for the input-funds leg, in one place.
@@ -258,7 +251,6 @@ async function debitInputFunds(
   const moveHash = await submitSafeExecution(user, execution);
   txs.push({ step: DEBIT_STEP.safe, hash: moveHash });
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
-  failpoint("safe.transfer");
 }
 
 /**
@@ -289,7 +281,6 @@ async function debitSafeFundedSepaFee(
     txs.push({ step: DEBIT_STEP.safeFee, hash: feeHash });
   }
   store.updateTransfer(transfer.id, { state: "DEBITED", txs });
-  failpoint("safe.transfer.fee");
 }
 
 export function safeDebitBlocker(user: User): string | null {
@@ -332,7 +323,7 @@ async function submitSafeExecution(user: User, execution: SafeExecution | undefi
   if (!passkeySafeExecutionReady(user)) {
     throw new Error(safeDebitBlocker(user) ?? "Safe debit is not configured for this account");
   }
-  if (SECURITY.allowSimulation) {
+  if (HARNESS.enabled) {
     return "0xmock-safe-execution-hash";
   }
   if (!execution) {
@@ -345,19 +336,21 @@ async function submitSafeExecution(user: User, execution: SafeExecution | undefi
 }
 
 function bridgeDestination(): { toAddress: string; blockchainMemo?: string } {
-  if (BRIDGE.destinationAddress) {
-    return {
-      toAddress: BRIDGE.destinationAddress,
-      ...(BRIDGE.destinationMemo ? { blockchainMemo: BRIDGE.destinationMemo } : {}),
-    };
-  }
-  if (BRIDGE.live) {
+  if (!BRIDGE.destinationAddress) {
     throw new Error(
-      "BRIDGE_LIVE=1 requires BRIDGE_DESTINATION_ADDRESS until MoneyGram anchor payment instructions are wired into Bridge",
+      "BRIDGE_DESTINATION_ADDRESS is required for the cash rail until MoneyGram anchor payment instructions are wired into Bridge",
     );
   }
-  return { toAddress: "bridge-dry-run-stellar-destination" };
+  return {
+    toAddress: BRIDGE.destinationAddress,
+    ...(BRIDGE.destinationMemo ? { blockchainMemo: BRIDGE.destinationMemo } : {}),
+  };
 }
+
+/** Both halves of the cash rail must be live: Bridge moves the USDC to
+ *  Stellar, the anchor pays it out. Either missing means the rail is closed,
+ *  and a closed rail refuses before anything is debited. */
+export const cashRailOpen = () => BRIDGE.live && anchorModeEnabled();
 
 function recordBridgePlan(txs: Transfer["txs"], plan: BridgeTransferPlan) {
   txs.push({ step: `bridge.xyz.${plan.mode}.transfer`, hash: plan.transferId ?? plan.idempotencyKey });
@@ -436,11 +429,6 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   }
 
   const txs = t.txs;
-  // Dry-run never locks anything on chain, and the live path's funds are with
-  // Bridge the moment the deposit lands — which is why a live failure after
-  // that point is MANUAL_REVIEW rather than an automatic refund. What remains
-  // recoverable is whatever the orchestrator still holds, handled by the
-  // reverse swap below.
 
   // Did a swap actually run? Every venue's step reads liquidity.<venue>.eure-usdc
   // ("swapper.swapExactIn" is the name older transfers in db.json carry). Match
@@ -683,6 +671,11 @@ export async function executeTransfer(
   const txs = transfer.txs;
 
   try {
+    if (!cashRailOpen()) {
+      throw new Error(
+        "the cash rail is closed on this deployment (BRIDGE_LIVE and the payout anchor must both be configured) — nothing was debited",
+      );
+    }
     let expectedOut: bigint;
     let usdcOut: number;
     if (execution?.batch) {
@@ -762,12 +755,9 @@ export async function executeTransfer(
       });
     }
 
-    // 3. Ask Bridge.xyz to fund the Stellar side. In dry-run mode we record
-    //    Bridge-shaped deposit instructions and nothing moves on chain, so the
-    //    no-credential demo completes with the USDC still at the orchestrator.
-    //    BRIDGE_LIVE=1 calls the Bridge Transfer API; once Bridge reports
-    //    destination funding, refunds must reconcile Bridge + anchor state
-    //    instead of assuming funds stayed local.
+    // 3. Ask Bridge.xyz to fund the Stellar side (Bridge Transfer API). Once
+    //    Bridge reports destination funding, refunds must reconcile Bridge +
+    //    anchor state instead of assuming funds stayed local.
     let bridgePlan: BridgeTransferPlan;
     try {
       const destination = bridgeDestination();
@@ -797,7 +787,7 @@ export async function executeTransfer(
       throw err;
     }
 
-    if (bridgePlan.mode === "live") {
+    {
       const depositAddress = bridgePlan.sourceDepositInstructions?.to_address;
       if (!depositAddress || !/^0x[a-fA-F0-9]{40}$/.test(depositAddress)) {
         throw new Error("Bridge did not return a Base deposit address; cannot fund transfer");
@@ -825,53 +815,28 @@ export async function executeTransfer(
         txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
       }
     }
-    /**
-     * DRY-RUN WRITES NOTHING ON CHAIN, and that is the point. A real
-     * transaction hash on a real contract would read like a settlement to
-     * anyone scanning the transfer, for money that had reached no bridge at
-     * all. recordBridgePlan writes "bridge.xyz.dry-run.transfer" with the
-     * plan's idempotency key, which says exactly what happened: a plan was
-     * recorded, nothing moved. The USDC stays with the orchestrator, which is
-     * also what makes compensation a plain reverse swap.
-     */
     store.updateTransfer(transfer.id, { state: "BRIDGED", txs });
-    // Both arms name the step actually recorded in txs, so a FORCE_FAIL_STEP
-    // value can be read straight off a transfer.
-    failpoint(bridgePlan.mode === "live" ? "bridge.xyz.transfer" : "bridge.xyz.dry-run.transfer");
 
-    // 4. Create the cash pickup at the quoted amount — a real SEP-24 anchor
-    //    withdrawal when an anchor is configured, the mock otherwise.
+    // 4. Open the cash pickup at the anchor. The anchor withdraws USDC and does
+    //    its own FX to cash at the counter — passing the KES figure here would
+    //    ask it for ~130x the value. usdcOut is what the bridge leg holds.
     let pickup;
-    if (anchorModeEnabled()) {
-      try {
-        // The anchor withdraws USDC and does its own FX to cash at the
-        // counter — passing the KES figure here would ask it for ~130x the
-        // value. usdcOut is what the bridge leg actually holds.
-        pickup = await createCashPickupViaAnchor(transfer.id, {
-          amountAsset: transfer.usdcOut ?? usd.fromUnits(expectedOut),
-          payoutKes: transfer.receiveKes,
-          recipientName: transfer.recipientName,
-          recipientPhone: transfer.recipientPhone ?? "",
-          sender: user,
-        });
-      } catch (err: any) {
-        // Fail closed: a failed real payout must not masquerade as success.
-        if (!SECURITY.allowMockFallback) {
-          return failAndCompensate(
-            transfer.id,
-            new Error(`anchor payout failed: ${String(err?.message ?? err).slice(0, 200)} (set ALLOW_MOCK_FALLBACK=1 to simulate instead)`),
-            txs,
-          );
-        }
-        console.error(`anchor pickup failed, mock fallback allowed: ${err?.message ?? err}`);
-      }
+    try {
+      pickup = await createCashPickupViaAnchor(transfer.id, {
+        amountAsset: transfer.usdcOut ?? usd.fromUnits(expectedOut),
+        payoutKes: transfer.receiveKes,
+        recipientName: transfer.recipientName,
+        recipientPhone: transfer.recipientPhone ?? "",
+        sender: user,
+      });
+    } catch (err: any) {
+      // Fail closed: a failed real payout must not masquerade as success.
+      return failAndCompensate(
+        transfer.id,
+        new Error(`anchor payout failed: ${String(err?.message ?? err).slice(0, 200)}`),
+        txs,
+      );
     }
-    pickup ??= createCashPickup(
-      transfer.id,
-      transfer.receiveKes,
-      transfer.recipientName,
-      transfer.recipientPhone ?? "",
-    );
     const storedPickup = {
         referenceCode: pickup.referenceCode,
         provider: pickup.provider,
@@ -905,8 +870,9 @@ export async function executeTransfer(
  * SEPA (bank payout) rail:
  *   CREATED -> DEBITED -> PAYOUT_SUBMITTED -> PAID
  * The payout amount remains in the user's Safe for Monerium to redeem; only
- * the fee leg is moved before placing the order. If the real order is rejected,
- * the payout falls back to a simulated SEPA leg only when explicitly allowed.
+ * the fee leg is moved before placing the order — and only once the account
+ * has a Monerium connection to place it on. A rejected order fails closed and
+ * refunds the fee; nothing is ever marked paid without a real order.
  */
 export async function executeSepaTransfer(
   transfer: Transfer,
@@ -926,11 +892,19 @@ export async function executeSepaTransfer(
       country: user.country || "DE",
     };
 
-    await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs, execution);
-
     // Real for the deployment (app credentials) OR for this user (their own
     // connected account): a redeem from a connected account is a real order.
-    if (moneriumLiveFor(user)) {
+    // Checked BEFORE the fee debit — a fee taken for a payout that cannot be
+    // placed would only have to be refunded.
+    if (!moneriumLiveFor(user)) {
+      throw new Error(
+        "no Monerium connection for this account — sign in with Monerium or add your Monerium API keys before sending",
+      );
+    }
+
+    await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs, execution);
+
+    {
       try {
         const order = await redeemToIban(
           user,
@@ -950,63 +924,28 @@ export async function executeSepaTransfer(
           },
         });
       } catch (err: any) {
-        // Fail closed unless simulation fallback is explicitly allowed.
-        if (!SECURITY.allowMockFallback) {
-          return failAndCompensate(
-            transfer.id,
-            new Error(`redeem order failed: ${String(err?.message ?? err).slice(0, 200)} (set ALLOW_MOCK_FALLBACK=1 to simulate instead)`),
-            txs,
-          );
-        }
-        return store.updateTransfer(transfer.id, {
-          state: "PAID",
-          sepa: {
-            mode: "mock",
-            state: "simulated",
-            detail: `real redeem unavailable: ${String(err?.message ?? err).slice(0, 180)}`,
-          },
-        });
+        // Fail closed: the fee moved, so this refunds it rather than pretend.
+        return failAndCompensate(
+          transfer.id,
+          new Error(`redeem order failed: ${String(err?.message ?? err).slice(0, 200)}`),
+          txs,
+        );
       }
     }
-
-    // No Monerium configured at all. Only a simulation-permitted stack may
-    // mark this PAID — on a real deployment the fee debit above genuinely
-    // moved money, and reporting PAID with a mock payout is the exact
-    // fake-success class the sibling fail-closed branch exists to prevent.
-    if (!SECURITY.allowSimulation && !SECURITY.allowMockFallback) {
-      return failAndCompensate(
-        transfer.id,
-        new Error(
-          "no SEPA payout backend is configured (MONERIUM_CLIENT_ID unset) — refusing to simulate a payout on a non-simulation deployment",
-        ),
-        txs,
-      );
-    }
-    return store.updateTransfer(transfer.id, {
-      state: "PAID",
-      sepa: { mode: "mock", state: "processed", detail: "simulated SEPA payout" },
-    });
   } catch (err: any) {
     return failAndCompensate(transfer.id, err, txs);
   }
 }
 
-/** Recipient collected the cash: close the transfer.
- *
- *  On the live path the funds are Bridge's from the moment the deposit lands,
- *  and in dry-run nothing moved on chain at all, so collection is a
- *  pickup-state change and nothing else. */
+/** The anchor reported the recipient collected the cash: close the transfer.
+ *  Only reachable from refreshPayout, on the anchor's own PAID status. */
 export async function settlePickup(transfer: Transfer): Promise<Transfer> {
   if (!["PAYOUT_READY", "PAYOUT_FUNDED"].includes(transfer.state)) {
     throw new Error(`transfer is ${transfer.state}, expected PAYOUT_READY/PAYOUT_FUNDED`);
   }
-  const txs = [...transfer.txs];
-  const pickup = completePickup(transfer.id);
-  const stored = pickup ?? transfer.pickup!;
   return store.updateTransfer(transfer.id, {
     state: "PAID",
-    txs,
-    pickup: { ...stored, status: "PAID" },
+    pickup: { ...transfer.pickup!, status: "PAID" },
   });
 }
 

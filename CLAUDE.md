@@ -19,6 +19,79 @@ here marked VERIFIED was checked against a live chain, API or bytecode — if yo
 contradict one, re-test before rewriting it, and say what you ran.
 
 
+## MAINNET-READY — the training wheels are gone (Sep 2026)
+
+READ THIS BEFORE ANY SECTION BELOW THAT MENTIONS mock IBANs, simulated
+deposits, `/api/simulate/*`, ALLOW_SIMULATION, ALLOW_MOCK_FALLBACK,
+KYC_AUTO_APPROVE, the mock-review route, Sumsub, `new_monerium`, whitelabel
+profile creation, provisionFunding, the testnet faucet, the BridgeEscrow
+dry-run leg, `moneygram-mock` pickups, FORCE_FAIL_STEP, or `funding.mode ===
+"mock"`. ALL OF IT IS DELETED (branch claude/mainnet-ready). Those sections
+are kept as history of why the invariants exist; the code paths do not.
+
+WHAT A DEPLOYMENT IS NOW:
+ - Defaults are Base mainnet (8453, https://mainnet.base.org) and Monerium
+   PRODUCTION (api.monerium.app, chain name `base`). Candide's chain follows
+   TRANSF_CHAIN_ID and its public bundler/paymaster are addressed by that id
+   (8453 answers eth_supportedEntryPoints — checked). Uniswap v3 defaults are
+   the Base MAINNET Factory/SwapRouter02/QuoterV2, verified with eth_getCode.
+   Stellar defaults to the public network. `deployments.json` on a real chain
+   holds ONLY Monerium's EURe and Circle's USDC (`npm run deploy` verifies code
+   at both and deploys nothing; DEPLOY_USDC_ADDRESS overrides). FxSwapper,
+   BridgeEscrow and AdminTimelock are hardhat-only fixtures; `swapper`/`bridge`
+   are optional in the Deployments type and `swapperAddress()` throws off
+   hardhat. NO 8453 ENTRY EXISTS YET — run `npm run deploy` with
+   TRANSF_CHAIN_ID=8453 and real operator keys before `npm run api` there.
+ - IDENTITY IS MONERIUM'S. Onboarding = account → passkey (REQUIRED, the skip
+   is gone) → Safe deployed → the gate offers exactly two routes: "Sign up or
+   sign in with Monerium" (OAuth) or "Add Monerium API keys" (the connector
+   from the previous section, inline in the gate) → "Activate IBAN with
+   passkey". Approval happens ONLY in /monerium/activate (address-matched IBAN
+   on the connected account) or at api-keys connect when the account already
+   attributes an IBAN to the Safe. POST /api/users always creates `pending`
+   with no IBAN. `viaApp` activation (the app creating a profile for the user)
+   returns 409. /api/kyc/review, applyKycDecision, /funding-onboarding-path,
+   /sumsub/*, /webhooks/sumsub, /admin/users/:id/issue-iban are gone.
+ - MONEY ONLY MOVES FOR REAL. submitSafeExecution has no fake hash; candide.ts
+   has no fake challenges and isDeployed() always asks the RPC. The SEPA rail
+   refuses BEFORE the fee debit when the user has no Monerium connection and
+   fails closed (refund) when the redeem is refused. The cash rail is CLOSED
+   unless `cashRailOpen()` (BRIDGE_LIVE + an anchor): /api/quotes answers 503
+   RAIL_CLOSED, executeTransfer throws before any debit, the app hides the
+   corridor (capabilities.cashRail). createBridgeTransfer throws when not live.
+   The anchor is the only pickup source; a failed anchor payout compensates.
+ - /api/health capabilities are now { sandbox: true, moneriumOAuth,
+   moneriumApiKeys, moneriumEnvironment, moneriumHost, cashRail }. `simulation`,
+   `kycProvider` and `sumsub` are gone; the UI's `caps` default matches.
+ - PRODUCTION CHECKS ADDED: real-money chain id, MONERIUM_BASE_URL ===
+   api.monerium.app, a Monerium production chain name, at least one connection
+   path (OAuth client or token-encryption key), LIFI_CHAIN_ID === chain, and a
+   refusal if any removed variable (ALLOW_SIMULATION, ALLOW_MOCK_FALLBACK,
+   TESTNET_FAUCET_EUR, KYC_PROVIDER, SUMSUB_APP_TOKEN) or KYC_AUTO_APPROVE=1
+   is still set.
+
+THE ONE HARNESS SEAM THAT STAYS, and why: the hardhat chain (31337) has no
+Monerium, so the test suites cannot approve an account through activation.
+`KYC.autoApprove` honours KYC_AUTO_APPROVE=1 ONLY when IS_LOCAL_CHAIN (31337)
+and not production; every other chain ignores it and production refuses it.
+Likewise `mirrorOrder` mints the hardhat MockToken when Monerium issues no EURe
+on the chain AND the chain is 31337 (webhook/reconcile suites); on any other
+chain such an order is logged and NOT recorded. Both are inert on real money
+by construction, not by configuration.
+
+DELETED SUITES (they tested the removed paths): e2e, fp3, kyc, kyc-ui,
+kyc-operator, bridge-dryrun, faucet, sumsub-kyc. draft-execution-test now mints
+MockToken EURe to the Safe instead of calling the deleted simulate route.
+`npm run check` no longer runs e2e; the remaining suites cover the seams.
+
+NOT DONE HERE, deliberately: no mainnet deploy was run (needs funded operator
+keys the user holds), no real Monerium production OAuth app is registered (the
+redirect URI must be registered at monerium.app first), Bridge/anchor live
+credentials are unset so the cash rail is closed on mainnet, and the JSON file
+store still needs ALLOW_PLAINTEXT_STORE=1 to be acknowledged. The other agent's
+in-progress index.html work in the main checkout was not touched by this
+branch and will need a merge.
+
 ## Naming (decided July 2026)
 - **Zoldenburg** = the company / infra brand (B2B, legal, footer). Old-Swiss-
   bank gravitas.
@@ -1479,7 +1552,7 @@ wastes an hour on errors that look like bugs.
 
 | | `npm run dev` | `npm run api` |
 |---|---|---|
-| chain | local hardhat 31337 | whatever TRANSF_CHAIN_ID says (84532) |
+| chain | local hardhat 31337 | whatever TRANSF_CHAIN_ID says (8453 by default) |
 | database | `data/db.dev.json`, **WIPED every start** | `data/db.json`, preserved |
 | passkey Safe deploy | **IMPOSSIBLE** | works |
 

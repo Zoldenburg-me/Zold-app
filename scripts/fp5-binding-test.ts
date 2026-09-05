@@ -120,7 +120,7 @@ try {
     chain: hardhat,
     transport: http(RPC),
   });
-  const { swapper, timelock } = loadDeployments();
+  const { swapper, timelock } = loadDeployments() as { swapper: `0x${string}`; timelock: `0x${string}` };
   assert.ok(timelock, "deployments.json should record the AdminTimelock address");
   const setRate = encodeFunctionData({
     abi: [{ type: "function", name: "setRate", stateMutability: "nonpayable", inputs: [{ name: "_rate", type: "uint256" }], outputs: [] }] as const,

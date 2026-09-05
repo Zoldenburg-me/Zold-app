@@ -329,7 +329,6 @@ try {
     CANDIDE_COSIGNER_KEY: COSIGNER_KEY,
     CANDIDE_ALLOWANCE_MODULE_ADDRESS: "0x691f59471Bfd2B7d639DCF74671a2d648ED1E331",
     CANDIDE_RECOVERY_GUARDIAN_ADDRESS: "",
-    ALLOW_SIMULATION: "1",
     KYC_AUTO_APPROVE: "0",
     MG_ANCHOR_DOMAIN: "",
   });
@@ -343,7 +342,7 @@ try {
   await t("health advertises the connector and which Monerium environment keys must come from", async () => {
     const h = await call("/api/health");
     assert.equal(h.data.capabilities.moneriumApiKeys, true);
-    assert.equal(h.data.capabilities.sandbox, false, "no app secret: the deployment itself is in mock mode");
+    assert.equal(h.data.capabilities.sandbox, true, "deposits are always real Monerium transfers now — there is no mock mode");
     assert.ok(["sandbox", "production", "custom"].includes(h.data.capabilities.moneriumEnvironment));
     assert.equal(h.data.capabilities.moneriumHost, `127.0.0.1:${STUB_PORT}`);
   });
@@ -408,7 +407,7 @@ try {
   });
 
   await t("the user still cannot quote — connecting is not approval", async () => {
-    const r = await call("/api/quotes", { userId, sendEur: 25, rail: "cash" });
+    const r = await call("/api/quotes", { userId, sendEur: 25, rail: "sepa" });
     assert.equal(r.status, 409);
   });
 
