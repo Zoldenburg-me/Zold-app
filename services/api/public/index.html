@@ -2091,6 +2091,12 @@
           <span class="material-symbols-rounded ch">chevron_right</span>
         </button>
 
+        <button class="m-optrow" id="m-pf-links" style="margin-top:8px">
+          <span class="material-symbols-rounded ic">request_quote</span>
+          <span class="tx"><span class="t">Payment links</span><span class="d" id="m-pf-links-sub">Ask for an amount by link</span></span>
+          <span class="material-symbols-rounded ch">chevron_right</span>
+        </button>
+
         <div class="m-seclabel">Security</div>
         <div class="m-rows" id="m-pf-security"></div>
         <button class="m-optrow" id="m-pf-documents" style="margin-top:8px">
@@ -2105,6 +2111,18 @@
         </button>
 
         <button class="m-cta" id="m-pf-signout" style="background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink);min-height:48px;font-size:14px">Sign out</button>
+      </div>
+
+      <!-- ================= Payment links =================
+           A request for a specific amount against the payment page. The code
+           in the link is the credential; the page at /pay/<handle>/<code>
+           offers USDC, a SEPA transfer with the code as reference, or paying
+           from another Zold account, and shows the payer when it lands. -->
+      <div class="m-screen" id="m-links-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="home"><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Payment links</div>
+        <div class="m-lede">Ask for an amount. The link shows how to pay — USDC, a bank transfer with a reference, or from another Zold account — and this screen shows you when it lands.</div>
+        <div id="m-links-body" style="margin-top:24px"></div>
       </div>
 
       <!-- ================= Statements & documents =================
@@ -2269,6 +2287,7 @@
           transfer into your smart account.
         </div>
         <div class="error hidden" id="handle-err"></div>
+        <button class="ghost wide" id="btn-links" style="margin-top:.6rem">Payment links — ask for an amount</button>
       </div>
 
       <div class="card">
@@ -2748,7 +2767,8 @@ function mobileNav(target) {
   const sub = { add: "add", bank: "bank", crypto: "crypto", send: "pay", pay: "pay", country: "country",
     method: "method", amount: "amount", recipient: "recipient", progress: "progress",
     plus: "plus", bundle: "bundle", payment: "payment", activity: "activity", detail: "detail",
-    share: "share", profile: "profile", card: "card", monerium: "monerium", recovery: "recovery", documents: "documents" }[target];
+    share: "share", profile: "profile", card: "card", monerium: "monerium", recovery: "recovery", documents: "documents",
+    links: "links" }[target];
   shell.dataset.msub = sub || "home";
   if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
   else switchView("dashboard");
@@ -2756,7 +2776,7 @@ function mobileNav(target) {
   const navFor = { add: "add", bank: "add", crypto: "add", send: "send", pay: "send", country: "send", method: "send",
     amount: "send", recipient: "send", progress: "send", plus: "home", bundle: "home", payment: "home",
     card: "home", home: "home", activity: "activity", detail: "activity", share: "activity",
-    profile: "profile", monerium: "profile", recovery: "profile", documents: "profile" }[target];
+    profile: "profile", monerium: "profile", recovery: "profile", documents: "profile", links: "home" }[target];
   document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
   if (sub === "bundle") $("m-subtitle").textContent = "Zold Plus";
@@ -2772,6 +2792,7 @@ function mobileNav(target) {
   if (sub === "monerium") renderMoneriumScreen();
   if (sub === "recovery") renderRecoveryScreen();
   if (sub === "documents") renderDocumentsScreen();
+  if (sub === "links") renderLinksScreen();
   $("dashboard").querySelector(".main").scrollTop = 0;
 }
 
@@ -3456,7 +3477,10 @@ function toRecipient() {
     <div class="m-field"><label>Full name</label><input id="m-rec-name" value="${esc(pre?.name || "")}" placeholder="${cash ? "Joseph Otieno" : "Elena Weber"}" /></div>
     ${cash
       ? `<div class="m-field"><label>Mobile number</label><input id="m-rec-phone" inputmode="tel" value="${esc(pre?.id || "")}" placeholder="+254 7xx xxx xxx" /></div>`
-      : `<div class="m-field"><label>IBAN</label><input id="m-rec-iban" value="${esc(pre?.id || "")}" placeholder="DE89 3704 0044 0532 0130 00" /></div>`}`;
+      : `<div class="m-field"><label>IBAN</label><input id="m-rec-iban" value="${esc(pre?.id || "")}" placeholder="DE89 3704 0044 0532 0130 00" /></div>`}
+    ${!cash && pre?.reference
+      ? `<div class="m-field"><label>Reference — the payee matches the payment on this</label><input id="m-rec-ref" value="${esc(pre.reference)}" maxlength="140" /></div>`
+      : ""}`;
   const q = mSend.quote;
   $("m-sum-send").textContent = `€${fmt(q.sendEur)}`;
   $("m-sum-recv").textContent = cash ? `${fmt(q.receiveKes)} ${d.cur}` : `€${fmt(q.receiveEur)}`;
@@ -3489,7 +3513,8 @@ async function submitMobileSend() {
       recipientPhone: cash ? ($("m-rec-phone").value || "").trim() : undefined,
       recipientIban: cash ? undefined : ($("m-rec-iban").value || "").trim(),
     };
-    const created = await api("/api/transfers", { quoteId: mSend.quote.id, ...recipient });
+    const reference = !cash ? ($("m-rec-ref")?.value || "").trim() : "";
+    const created = await api("/api/transfers", { quoteId: mSend.quote.id, ...recipient, ...(reference ? { reference } : {}) });
     mSend.transfer = created;
     mSend.rec = recipient;
     renderProgress(created);
@@ -4010,6 +4035,93 @@ async function renderDocumentsScreen() {
       open(d);
     } catch (e) { showErr("m-doc-err", e); } finally { busy(false); }
   };
+}
+
+/* ---------- payment links ---------- */
+let linksOpen = null; // id of the link whose detail is expanded
+
+async function renderLinksScreen() {
+  const el = $("m-links-body");
+  el.innerHTML = `<div class="m-lede" style="font-size:13px">Loading…</div>`;
+  let data;
+  try { data = await api(`/api/users/${user.id}/payment-requests`); }
+  catch (e) { el.innerHTML = `<div class="m-err">${esc(e.message)}</div>`; return; }
+  const methods = data.methods || [];
+  const can = (m) => !!methods.find((x) => x.method === m)?.available;
+  const needs = methods.filter((m) => !m.available).map((m) => `${m.method === "crypto" ? "USDC" : "Bank transfer"} is off until you ${m.needs}.`);
+  const money = (n) => n === undefined || n === null ? "Any amount" : `€${fmt(n)}`;
+  const icon = (r) => r.state === "PAID" ? "task_alt" : r.state === "OPEN" ? "schedule" : "block";
+  const rows = data.requests || [];
+  const check = (id, label, on) => `<label style="display:flex;gap:10px;align-items:center;padding:10px 0;font-size:13.5px;${on ? "" : "color:var(--m-faint)"}">
+      <input type="checkbox" id="${id}" ${on ? "checked" : "disabled"} style="width:18px;height:18px;accent-color:var(--m-pink)" />${label}</label>`;
+  el.innerHTML = `
+    <div class="m-seclabel">New link</div>
+    <div class="m-field"><label>Amount in EUR — leave empty and the payer chooses</label><input id="m-lk-amount" inputmode="decimal" placeholder="40.00" /></div>
+    <div class="m-field"><label>What it is for</label><input id="m-lk-desc" maxlength="140" placeholder="Invoice 2026-014" /></div>
+    <div class="m-seclabel" style="margin-top:12px">Ways to pay</div>
+    ${check("m-lk-crypto", "USDC to your payment page", can("crypto"))}
+    ${check("m-lk-bank", "Bank transfer with a reference, or from another Zold account", can("bank"))}
+    ${needs.length ? `<div class="m-lede" style="font-size:12.5px">${needs.map(esc).join(" ")}</div>` : ""}
+    <button class="m-cta" id="m-lk-create" style="margin-top:12px" ${can("crypto") || can("bank") ? "" : "disabled"}>Create link</button>
+    <div class="m-err hidden" id="m-lk-err" style="margin-top:12px"></div>
+    <div class="m-seclabel" style="margin-top:24px">Your links</div>
+    <div class="m-rows" id="m-lk-list">${rows.length ? rows.map((r) => `
+      <button class="m-secrow" data-lk="${esc(r.id)}" style="width:100%;text-align:left;background:none;border:0;color:inherit;font:inherit;cursor:pointer">
+        <span class="material-symbols-rounded">${icon(r)}</span>
+        <div style="flex:1;min-width:0"><div class="t">${esc(money(r.amountEur))}${r.description ? ` · ${esc(r.description)}` : ""}</div>
+          <div class="d">${esc(r.state.toLowerCase())}${r.paidEur ? ` · €${fmt(r.paidEur)} received` : ""} · ${esc(new Date(r.createdAt).toLocaleDateString())}${r.source?.kind === "shopify" ? " · Shopify" : ""}</div></div>
+        <span class="material-symbols-rounded" style="color:var(--m-faint)">${linksOpen === r.id ? "expand_less" : "expand_more"}</span>
+      </button>
+      ${linksOpen === r.id ? linkDetail(r) : ""}`).join("") : `<div class="m-lede" style="font-size:13px">No links yet.</div>`}</div>`;
+
+  $("m-lk-create").onclick = async () => {
+    clearErr("m-lk-err");
+    const raw = ($("m-lk-amount").value || "").replace(",", ".").trim();
+    const methodsWanted = [];
+    if ($("m-lk-crypto").checked) methodsWanted.push("crypto");
+    if ($("m-lk-bank").checked) methodsWanted.push("bank");
+    try {
+      const r = await api(`/api/users/${user.id}/payment-requests`, {
+        ...(raw ? { amountEur: Number(raw) } : {}),
+        description: $("m-lk-desc").value,
+        methods: methodsWanted,
+      });
+      linksOpen = r.id;
+      renderLinksScreen();
+    } catch (e) { showErr("m-lk-err", e); }
+  };
+  el.querySelectorAll("[data-lk]").forEach((b) => {
+    b.onclick = () => { linksOpen = linksOpen === b.dataset.lk ? null : b.dataset.lk; renderLinksScreen(); };
+  });
+  el.querySelectorAll("[data-lk-copy]").forEach((b) => {
+    b.onclick = async () => {
+      try { await navigator.clipboard.writeText(b.dataset.lkCopy); b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy link"), 1200); } catch {}
+    };
+  });
+  el.querySelectorAll("[data-lk-cancel]").forEach((b) => {
+    b.onclick = async () => {
+      try { await api(`/api/users/${user.id}/payment-requests/${b.dataset.lkCancel}/cancel`, {}); renderLinksScreen(); }
+      catch (e) { showErr("m-lk-err", e); }
+    };
+  });
+}
+
+/** One link, expanded: the URL, its status and every payment against it. */
+function linkDetail(r) {
+  const pays = (r.payments || []).map((p) => `<div class="m-row"><span class="k">${p.method === "crypto" ? `${p.amountUsdc ?? ""} USDC` : "Bank transfer"}${p.payerName ? ` · ${esc(p.payerName)}` : ""}</span>
+      <span class="v">€${fmt(p.amountEur)}${p.kind === "partial" ? " (partial)" : ""}${p.settledEur !== undefined ? ` · settled €${fmt(p.settledEur)}${p.settledAsset === "USDC" ? " held as USDC" : ""}` : p.method === "crypto" ? " · not converted yet" : ""}</span></div>`).join("");
+  return `<div style="padding:8px 4px 16px">
+    <div class="m-shlink" style="word-break:break-all;font-family:var(--m-mono);font-size:12px">${esc(r.url)}</div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="m-cta" data-lk-copy="${esc(r.url)}" style="min-height:40px;font-size:13px">Copy link</button>
+      <button class="m-cta quiet" onclick="window.open('${esc(r.url)}','_blank','noopener')" style="min-height:40px;font-size:13px;background:transparent;border:1px solid var(--m-line-strong)">Open</button>
+    </div>
+    <div class="m-lede" style="font-size:12.5px;margin-top:10px">Pays into ${r.methods.includes("crypto") ? "your payment page (USDC)" : ""}${r.methods.length === 2 ? " or " : ""}${r.methods.includes("bank") ? "your IBAN with reference " + esc(r.code) : ""}.
+      ${r.state === "OPEN" ? `Open until ${esc(new Date(r.expiresAt).toLocaleString())}.` : ""}</div>
+    ${pays ? `<div class="m-rows" style="margin-top:8px">${pays}</div>` : `<div class="m-lede" style="font-size:12.5px;margin-top:8px">Nothing received yet.</div>`}
+    ${r.source?.kind === "shopify" ? `<div class="m-lede" style="font-size:12.5px;margin-top:8px">Shopify checkout at ${esc(r.source.shop || "")}${r.source.resolvedAt ? " — the store has been told." : r.source.resolveError ? ` — the store could not be told: ${esc(r.source.resolveError)}` : ""}</div>` : ""}
+    ${r.state === "OPEN" && !(r.payments || []).length ? `<button class="m-cta quiet" data-lk-cancel="${esc(r.id)}" style="margin-top:10px;min-height:40px;font-size:13px;background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink)">Cancel this link</button>` : ""}
+  </div>`;
 }
 
 /* ---------- Email / SMS recovery (Candide guardian) ---------- */
@@ -5478,6 +5590,8 @@ $("btn-dash-kyc-refresh").onclick = async () => {
 $("btn-recovery-start").onclick = startRecoveryRequest;
 $("m-pf-recovery").onclick = () => mobileNav("recovery");
 $("m-pf-documents").onclick = () => mobileNav("documents");
+$("m-pf-links").onclick = () => mobileNav("links");
+$("btn-links").onclick = () => mobileNav("links");
 $("m-det-receipt").onclick = async () => {
   const t = detailTransfer;
   if (!t) return;
@@ -5517,6 +5631,33 @@ $("link-signin").onclick = async (ev) => {
 	  } catch (e) { showErr("create-err", e); }
 		};
 
+/**
+ * /app?pay=<handle>/<code> — "Open in Zold" from a payment request page.
+ *
+ * Reads the public request and enters the SEPA send flow with the payee's
+ * account, the amount and the reference filled in. Filled in, not hidden: the
+ * IBAN is what the device signs a commitment over, so it stays on screen.
+ */
+async function handlePayDeepLink() {
+  const qs = new URLSearchParams(location.search);
+  const target = qs.get("pay");
+  if (!target || !user) return;
+  history.replaceState(null, "", location.pathname);
+  const [handle, code] = target.split("/");
+  if (!handle || !code) return;
+  try {
+    const p = await api(`/api/pay/${encodeURIComponent(handle)}/${encodeURIComponent(code)}`);
+    const b = p.methods?.bank;
+    if (!b) throw new Error("this request cannot be paid from a Zold account — it takes crypto only");
+    if (p.state !== "OPEN") throw new Error(`this payment request is ${p.state.toLowerCase()}`);
+    const amount = p.outstandingEur ?? Number(qs.get("amount") || 0);
+    $("m-amount").value = amount > 0 ? String(amount) : "";
+    startSend("sepa", { rail: "sepa", name: b.holder, id: b.iban, reference: b.reference });
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
 async function resumeSession() {
   if (!sessionToken) return;
   try {
@@ -5524,6 +5665,7 @@ async function resumeSession() {
     renderUser(u);
     if (kycApproved(user)) enterDashboard(user.name);
     else enterKycReview(user.name);
+    if (kycApproved(user)) await handlePayDeepLink();
   } catch {
     sessionToken = null;
     localStorage.removeItem("zold-session");

@@ -25,6 +25,7 @@
 ## Get paid
 
 * [Your payment page](get-paid/payment-page.md)
+* [Payment links](get-paid/payment-links.md)
 * [Invoice-Me links](get-paid/invoice-me-links.md)
 
 ## Business
@@ -36,6 +37,7 @@
 * [Payments and approvals](business/payments-and-approvals.md)
 * [Bulk payments](business/bulk-payments.md)
 * [Imported wallets](business/imported-wallets.md)
+* [Shopify](business/shopify.md)
 
 ## Invoicing
 

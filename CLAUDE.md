@@ -1423,6 +1423,100 @@ address; a receipt for a transfer that has not moved money.
 NOT PROVEN: Monerium order data on real statement lines (needs a connected
 production account) and the printed PDF's look in a real print dialog.
 
+## Payment links + Shopify — the checkout, picked up again (Sep 2026)
+
+`npm run paylinks:test` (70 checks: builders offline, then routes and the
+crypto attribution on a hardhat chain) and `npm run shopify:test` (24 checks,
+stub Shopify, no chain). Code: `payment-requests.ts` (domain, pure),
+`routes/payment-requests.ts` (owner + payer routes, attribution hooks, sweep),
+`shopify/{hmac,admin,types}.ts` + `routes/shopify.ts`, `public/pay-request.html`
+(the payer's page at `/pay/<handle>/<code>`). UI: Profile -> Payment links in
+the app; the Shopify view in `/business`. GitBook: get-paid/payment-links.md,
+business/shopify.md.
+
+WHERE THE OLD CHECKOUT STANDS. `tonyzil/pay-with-zold` (on disk
+`zold-checkout`) is the merchant OAuth/PKCE handoff written in July against an
+API that has since changed under it (RemitVault gone, execution assertions,
+Monerium-only identity); its ADR 0001 already argued the checkout belongs on
+the app origin. The "Revolut Pay with link" ask is answered HERE, in core, as
+PAYMENT REQUESTS against the existing payment page, not by reviving that repo.
+Its PKCE handoff remains the shape for a partner who needs a code exchange
+(Mony), and nothing here replaces it.
+
+A PAYMENT REQUEST is one ask against the payment page: an amount (or "payer
+chooses"), a description, a 15-char Crockford code that IS the credential
+(look-alikes folded on read), the ways to pay, and what arrived. Three ways,
+each attributed differently, and the difference is the whole design:
+ - crypto: USDC to the page's ONE address, so attribution is BY AMOUNT. Every
+   open request quotes a USDC figure unique among that payee's open quotes
+   (nudged by a micro-unit on collision); a deposit matches the closest quote,
+   full beats partial beats over, ties to the older request. Over 10% above a
+   quote is NOT that payment (it would swallow the short payment of a bigger
+   request — the test that found this had a 60% partial booked as an
+   over-payment of a tip jar). Below 20% of a quote is not attributed either.
+   Every quote ever shown stays valid; quotes issued AFTER the money arrived
+   cannot be what the payer saw and are skipped.
+ - bank: SEPA to the payee's IBAN with the code as reference; matched from the
+   Monerium issue order's memo (hooked into pollDepositsOnce, idempotent on
+   order id). Our OWN PAID payouts carrying the code are matched by the sweep,
+   and Monerium's view of that same credit MERGES onto the row (amount within
+   a cent inside a day, as documents.ts does) instead of doubling it.
+ - zold: not a rail. "Open in Zold" is `/app?pay=<handle>/<code>`, which enters
+   the SEPA send flow with IBAN, amount and reference filled in — the same
+   money as `bank`, without typing. There is still no on-chain Zold-to-Zold
+   transfer; the page says so rather than implying one.
+
+RULES THAT CARRY WEIGHT:
+ - The page address is watched while a crypto request is OPEN whatever
+   `autoConvert` says — a paid link on a forwarder address was otherwise never
+   seen. And auto-convert OFF now settles a page deposit as USDC (the forwarder
+   already delivered it; nothing converts it) instead of REFUSING with
+   "auto-settlement switched off", which read as a fault to a payee whose link
+   had just been paid. convert-deposit-test's expectation was changed to match.
+ - `settledEur`/`settledAsset` on a payment say what the payee HOLDS. A crypto
+   payment is PAID for the merchant the moment the deposit is attributed, and
+   settles in EUR only when the user-signed conversion runs; the two are
+   separate fields so neither is overstated.
+ - The public projection is an allowlist. A crypto-only link leaks no IBAN,
+   legal name, email, id or KYC state (test greps the JSON). A link offering
+   bank transfer DOES carry the IBAN and the account holder's legal name — a
+   SEPA transfer cannot be made without them and Verification of Payee compares
+   the name — and the owner chose to offer it; the doc says so.
+ - The code under someone else's handle is a 404: a code pasted under another
+   handle must not make a page impersonate a payee. `/api/pay/<h>/<code>` is on
+   the tight rate bucket like `/r/` and `/v/`.
+ - No delete on requests. Cancel only while unpaid; a paid one is a record.
+ - The crypto figure = live mid × (1 + 50 bps allowance), rounded UP to the
+   micro-unit; the allowance is printed on the page and stored on the quote,
+   never folded into the number. midRates() unavailable => the request is still
+   created, and the page says crypto cannot be quoted right now.
+
+SHOPIFY is a payments app ("offsite" flow) riding on the same requests:
+session POST (HMAC over the RAW body, key = app secret) -> a crypto-only
+request for the session's EUR amount, one hour, `test` carried -> 201 with the
+page as redirect_url (Shopify retries; the same id gets the same page) ->
+paid hook calls paymentSessionResolve on the store's Payments Apps API ->
+Shopify's nextAction.redirectUrl is stored as returnUrl and the page's "Return
+to the store" goes through `/api/shopify/return/<code>`. Install is OAuth from
+the business dashboard (state nonce in memory, query HMAC checked, token
+encrypted with purpose `shopify`, paymentsAppConfigure ready:true; the payee
+is the org's EUR account's backingUserId else the installer, and must have a
+payment page). REFUSED, each with a merchant-readable message through the
+mutation: non-EUR (422), kind=authorization (422 + paymentSessionReject),
+refund/capture/void (201 ack, then the matching *SessionReject — refunds are
+manual because the sending address is often an exchange's, not the buyer's).
+A failed resolve is recorded on the request and retried by the sweep.
+
+NOT PROVEN, and the surface looks more finished than it is: no Shopify app is
+registered — a payments app must be approved into Shopify's Payments Apps
+program in the Partner Dashboard before any store can install it, and nobody
+has started that; the GraphQL shapes are from their docs, exercised only
+against the stub. SHOPIFY_API_KEY unset => `/api/health` capabilities.shopify
+is false and the dashboard says why. No real bank-transfer attribution has run
+(needs a Monerium production connection and a real memo). The `?pay=` deep link
+only fires for an already signed-in, approved user. The payer page was checked
+against fixture payloads in a browser, not against a live request.
+
 ## Email / SMS recovery — Candide's guardian (Sep 2026)
 
 `npm run recovery:candide:test` (25 checks, stub service, simulated chain).

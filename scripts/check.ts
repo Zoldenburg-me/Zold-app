@@ -19,6 +19,8 @@ const scripts = [
   "recovery:test",
   "recovery:candide:test",
   "documents:test",
+  "paylinks:test",
+  "shopify:test",
   "monerium:oauth:test",
   "monerium:apikeys:test",
   "sepa:test",
