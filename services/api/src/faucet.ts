@@ -10,9 +10,8 @@
  *  - refuses production mode and every chain where EURe is real money,
  *    regardless of configuration — the deployer would be sending real euros;
  *  - disabled unless TESTNET_FAUCET_EUR is set to a positive amount;
- *  - one grant per account, claimed synchronously before the first await
- *    (the authorize-race lesson), so a double deployment completion cannot
- *    pay twice;
+ *  - one grant per account, claimed synchronously before the first await,
+ *    so a double deployment completion cannot pay twice;
  *  - a dry deployer or an RPC failure logs and skips — a faucet problem must
  *    never break onboarding, which worked before the faucet existed.
  */

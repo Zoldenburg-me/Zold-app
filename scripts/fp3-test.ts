@@ -1,8 +1,8 @@
 /**
  * FP3 local API guard.
  *
- * After RemitVault removal, a hardhat-only user has a counterfactual Safe but
- * no Candide bundler/paymaster to deploy or execute it. The API must fail
+ * A hardhat-only user has a counterfactual Safe but no Candide
+ * bundler/paymaster to deploy or execute it. The API must fail
  * before pretending a local remittance moved funds. The detailed Safe refund
  * compensation path is pinned by `safe-funded-recovery-test.ts`, which seeds
  * the post-Safe-spend state directly.

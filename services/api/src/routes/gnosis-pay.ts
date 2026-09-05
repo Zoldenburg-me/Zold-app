@@ -12,9 +12,9 @@
  * directly — their API is not CORS-open to our origin, and putting the token
  * through a server we control keeps it out of a cross-origin request.
  *
- * WHAT IS DELIBERATELY ABSENT in this first cut (docs/gnosis-pay-permissionless
- * -integration.md, PR sequence): signup, terms, KYC, phone OTP, Safe deploy,
- * card creation and funding. This is the auth + read-only foundation. Adding
+ * WHAT IS DELIBERATELY ABSENT (docs/gnosis-pay-permissionless-integration.md,
+ * PR sequence): signup, terms, KYC, phone OTP, Safe deploy, card creation and
+ * funding. This is the auth + read-only foundation. Adding
  * the write paths before the read paths are stable is how a half-onboarded
  * user ends up stuck between two systems with no way back.
  */

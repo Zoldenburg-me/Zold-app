@@ -2,11 +2,10 @@
  * Anchor withdrawal tests — live, against the configured anchor (Stellar's
  * public test anchor by default; no signup, no credentials).
  *
- * The cash rail used to open a SEP-24 withdrawal with no amount at all, and
- * the orchestrator passed the recipient's KES figure where the anchor's asset
- * amount belongs — off by the whole exchange rate, masked only because the
- * value was never sent. These check that the amount is real, correct, and
- * validated against what the anchor will actually accept.
+ * A SEP-24 withdrawal must carry the anchor's ASSET amount, not the
+ * recipient's KES figure — the two differ by the whole exchange rate. These
+ * check that the amount is real, correct, and validated against what the
+ * anchor will actually accept.
  *
  * Run: npm run anchor:test
  */
@@ -206,7 +205,7 @@ await t("the anchor reports the amount we asked for", async () => {
   // The anchor echoes the requested amount once the session exists. Some
   // anchors only populate it after the interactive flow, so treat a missing
   // value as "not yet known" rather than a failure — but a WRONG value is a
-  // failure, since that is the bug this file exists for.
+  // failure.
   const echoed = (status as any).amountIn ?? (status as any).amount_in;
   if (echoed !== undefined && echoed !== null && echoed !== "") {
     assert.equal(Number(echoed), within, "anchor echoed a different amount than requested");

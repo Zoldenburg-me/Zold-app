@@ -3,10 +3,9 @@
  *
  * A cash pickup is a money transmission: the anchor hands cash to a person at
  * a counter, and its licence obliges it to know who sent it. MoneyGram's
- * anchor requires the FATF originator set as SEP-9 fields. We used to send
- * NONE of them — the SEP-24 withdrawal carried only asset, account and amount,
- * so the anchor's SEP-12 customer sat at NEEDS_INFO and the withdrawal could
- * never complete. The user would still have been shown a pickup reference.
+ * anchor requires the FATF originator set as SEP-9 fields. Without them the
+ * anchor's SEP-12 customer sits at NEEDS_INFO and the withdrawal can never
+ * complete — while the user is still shown a pickup reference.
  *
  * These run against the real anchor (testanchor by default, no signup), so the
  * required-field list is the anchor's own, not our guess.

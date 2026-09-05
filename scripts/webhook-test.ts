@@ -1,10 +1,10 @@
 /**
  * Monerium webhook regression test.
  *
- * The receiver used to credit whatever address and amount the request body
- * stated, with no authentication — an unauthenticated mint for anyone who
- * could reach the port. It now reads only an order id from the body and
- * re-reads that order from Monerium, so a forged payload buys nothing.
+ * The receiver reads only an order id from the body and re-reads that order
+ * from Monerium, so a forged payload buys nothing — crediting whatever the
+ * body states would be an unauthenticated mint for anyone who could reach
+ * the port.
  *
  * This runs the API in sandbox mode against a stub Monerium server (so no
  * credentials are needed) and asserts:
@@ -323,8 +323,8 @@ try {
     assert.equal(first.data.outcome, "unavailable");
 
     // Monerium recovers and retries the SAME delivery id, as its retry policy
-    // does. Previously the id had been marked processed and this was dropped
-    // as a duplicate, so the deposit never landed by this path.
+    // does. A 503 must not consume the delivery id, or the retry is dropped as
+    // a duplicate and the deposit never lands by this path.
     unavailable.delete("real-9");
     orders.set("real-9", {
       id: "real-9", kind: "issue", state: "processed", meta: { state: "processed" },
