@@ -15,17 +15,12 @@ const scripts = [
   "test:contracts",
   "webauthn:selftest",
   "authorize:test",
-  "kyc:test",
   "country:policy:test",
-  "sumsub:kyc:test",
-  "kyc:operator:test",
   "recovery:test",
-  "kyc:ui:test",
   "monerium:oauth:test",
   "monerium:apikeys:test",
   "sepa:test",
   "receipt:test",
-  "fp3:test",
   "fp4:test",
   "passkey-safe:test",
   "execution:test",
@@ -44,8 +39,6 @@ const scripts = [
   "trustline:test",
   "anchor:sweep:test",
   "refund:guard:test",
-  "bridge:dryrun",
-  "e2e",
 ];
 
 async function freePort(): Promise<number> {

@@ -8,9 +8,9 @@ Everything Zold talks to, what it needs from us, and whether getting it costs a 
 |---|---|
 | ✅ Have it (sandbox) | Monerium, Candide, Stellar |
 | 🟢 Self-serve — no call, ~10 min each | RPC provider, LI.FI, rates feed, Stripe standard |
-| 🔴 Needs a form/email first | Monerium **production**, **Sumsub** — plus Bridge (bank rails) and MoneyGram (cash) |
+| 🔴 Needs a form/email first | Monerium **production** OAuth app — plus Bridge (bank rails) and MoneyGram (cash) |
 
-Only **two** are hard blockers: Monerium production and Sumsub. Everything else is either self-serve or optional. Full call list in §1.
+Only **one** is a hard blocker: the Monerium production OAuth app (identity and IBANs are Monerium's; there is no separate KYC provider). Everything else is either self-serve or optional. Full call list in §1.
 
 ---
 
@@ -21,7 +21,6 @@ Only **two** are hard blockers: Monerium production and Sumsub. Everything else 
 | # | Who | What we need | Blocking? | Start here | Lead time |
 |---|---|---|---|---|---|
 | 1 | **Monerium** (production) | Real e-money relationship. Sandbox → live EUR IBANs | ✅ **YES** — no EUR in or out without it | Existing sandbox contact | Weeks–months (regulated) |
-| 2 | **Sumsub** (KYC) | Live KYC. **Decided — the only provider Monerium supports** | ✅ **YES** — cannot go live on a mock | sumsub.com, self-serve signup + sandbox | Days |
 | 3 | **Bridge** (bridge.xyz) | Stablecoin → **bank** payouts: ACH, SEPA, SPEI, Pix, LatAm | ⚠️ Optional — covers **bank** rails in one integration (replaces dLocal) | bridge.xyz contact form | Weeks (enterprise) |
 | 4 | **MoneyGram** | Cash-pickup partner agreement | ⚠️ **No substitute on this list** — cash pickup, not a bank rail | Via Stellar anchor programme | Months, hard |
 | 5 | **Stripe** | Card acceptance for Zold Plus / Privacy Bundle subs | ❌ No — nothing to bill yet | **Standard account is self-serve** — no call | Same day |
@@ -97,7 +96,7 @@ Two categories that do **not** substitute for each other. Bank rails need the re
 
 | Need | Status | Notes |
 |---|---|---|
-| **KYC — Sumsub** | ✅ **Chosen.** Not integrated yet | Forced choice: the only provider Monerium supports, so it is not a shortlist. Today KYC is a mock — `KYC_AUTO_APPROVE` self-approves locally and **cannot go live**. Sign up self-serve, wire it, and delete the mock path |
+| **KYC** | ✅ **Monerium's** | Removed as a separate concern (Sep 2026): the user signs up or signs in with Monerium (OAuth) or adds their own Monerium API keys; the account is approved when Monerium attributes an IBAN to its Safe. No mock, no Sumsub, no operator approval |
 | **eSIM / VPN fulfilment** | ❌ Not chosen | Privacy Bundle sells these; fulfilment is manual today. Kokio, Mysterium — credentials pending |
 
 ---
@@ -141,7 +140,10 @@ TRUSTED_PROXY_HOPS                must be explicit
 CANDIDE_COSIGNER_ADDRESS + KEY    required before hosted funding
 CANDIDE_RECOVERY_GUARDIAN_ADDRESS required before hosted funding
 CANDIDE_CHAIN_ID == TRANSF_CHAIN_ID
-ALLOW_SIMULATION / ALLOW_MOCK_FALLBACK   forbidden
+TRANSF_CHAIN_ID                  must be a mainnet chain (8453)
+MONERIUM_BASE_URL                must be https://api.monerium.app
+MONERIUM_OAUTH_CLIENT_ID and/or MONERIUM_TOKEN_ENCRYPTION_KEY   one connection path
+ALLOW_SIMULATION / ALLOW_MOCK_FALLBACK / KYC_AUTO_APPROVE / TESTNET_FAUCET_EUR / SUMSUB_*   removed; refused if set
 ```
 
 ---
@@ -156,8 +158,7 @@ Two things worth saying plainly before anyone counts this as done:
 **Fastest unblock, in order:**
 
 1. Real RPC key (10 min, self-serve) → deploy a Safe on Base Sepolia → prove one send to PAID
-2. Sumsub sandbox (30 min, self-serve — forced choice, Monerium supports no other)
-3. dLocal sandbox (self-serve) instead of waiting on MoneyGram
-4. Monerium production + Bridge conversations in parallel — those clocks run regardless
+2. dLocal sandbox (self-serve) instead of waiting on MoneyGram
+3. Monerium production OAuth app + Bridge conversations in parallel — those clocks run regardless
 
 Steps 1–3 need **zero calls**.
