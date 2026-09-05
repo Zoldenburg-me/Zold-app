@@ -20,7 +20,7 @@
  * boolean.
  */
 
-import { SECURITY, moneriumSandboxEnabled } from "../config.js";
+import { MONERIUM, moneriumOAuthEnabled } from "../config.js";
 import type {
   Account,
   AccountIdentifier,
@@ -73,14 +73,11 @@ export interface CurrencyDefinition {
    * Is the rail usable in this deployment, and on what? A predicate, not a
    * constant, so the answer tracks configuration instead of documentation.
    *
-   * THREE answers, not two. A rail can be open against the real provider
-   * ("live"), open against a locally-issued mock that only means anything on a
-   * dev chain ("mock"), or not open at all (false). Collapsing mock into live
-   * would let a local demo read as a real rail; collapsing it into closed would
-   * make the whole product unreachable in development, which is how the mock
-   * path stops being exercised at all.
+   * Two answers: open against the real provider ("live") or not open (false).
+   * The former "mock" answer — a locally issued IBAN on a dev chain — is gone
+   * with the mock path; nothing renders a rail that cannot move money.
    */
-  mode: () => "live" | "mock" | false;
+  mode: () => "live" | false;
   /** Named partner + missing piece, shown verbatim when gated. */
   needs: string;
 }
@@ -99,25 +96,28 @@ const CURRENCIES: CurrencyDefinition[] = [
     ],
     provider: "monerium",
     tokenised: true,
-    // The only rail that opens anywhere today. Both halves of the Monerium
-    // credential are needed — a client id alone opens nothing. Failing that, a
-    // genuinely local deployment issues a mock IBAN and settles on its own
-    // chain: real machinery, no real money, and labelled as such everywhere.
-    mode: () => (moneriumSandboxEnabled() ? "live" : SECURITY.allowSimulation ? "mock" : false),
+    // Open when a user can bring a Monerium account: by OAuth (an OAuth client
+    // id) or with their own API keys (needs the encryption key that stores the
+    // secret). App-level credentials alone open nothing for a user any more.
+    mode: () => (moneriumOAuthEnabled() || Boolean(MONERIUM.tokenEncryptionKey) ? "live" : false),
     token: {
       symbol: "EURe",
       issuer: "Monerium EMI ehf — an e-money institution licensed by the Central Bank of Iceland",
       decimals: 18,
       // The chain the app runs on. Monerium's production /tokens also lists
       // ethereum, gnosis, polygon, arbitrum and linea.
-      contracts: { "base-sepolia": "0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85" },
+      // From Monerium's own /tokens (production and sandbox), Sep 2026.
+      contracts: {
+        base: "0xbf6e2966A9C3D99C9E4D069E04f7Bdb9C8aa762C",
+        "base-sepolia": "0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85",
+      },
       backing:
         "Euro deposits held as e-money by a licensed issuer. This is the one instrument here that " +
         "carries a REDEMPTION RIGHT AT PAR against a named, regulated counterparty — EURe is an " +
         "e-money token under MiCA, not a collateral-backed peg. That difference is the reason this " +
         "column exists: it is what separates EURe from ZCHF, and neither label tells you on its own.",
     },
-    needs: "Monerium credentials (MONERIUM_CLIENT_ID / MONERIUM_CLIENT_SECRET)",
+    needs: "a Monerium connection path (MONERIUM_OAUTH_CLIENT_ID and/or MONERIUM_TOKEN_ENCRYPTION_KEY)",
   },
   {
     code: "USD",
@@ -295,9 +295,6 @@ export interface CurrencyAvailability {
   };
 }
 
-export const MOCK_WARNING =
-  "This deployment issues a locally-generated IBAN and settles on its own chain. The machinery is real; the money is not.";
-
 /** What the client should render in an "open an account" list. */
 export function currencyAvailability(): CurrencyAvailability[] {
   return CURRENCIES.map((c) => {
@@ -311,7 +308,6 @@ export function currencyAvailability(): CurrencyAvailability[] {
       countries: c.countries,
       available: mode !== false,
       ...(mode ? { mode } : {}),
-      ...(mode === "mock" ? { mockWarning: MOCK_WARNING } : {}),
       ...(mode === false ? { needs: c.needs } : {}),
       // Shown whether or not the rail is open. A currency whose token is real
       // and liquid but whose ACCOUNT does not exist is a genuinely different

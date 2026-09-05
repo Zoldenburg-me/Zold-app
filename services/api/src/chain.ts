@@ -9,7 +9,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { defineChain } from "viem";
-import { hardhat, polygon, polygonAmoy } from "viem/chains";
+import { base, baseSepolia, hardhat, polygon, polygonAmoy } from "viem/chains";
 import {
   CHAIN_ID,
   KEYS,
@@ -29,6 +29,8 @@ import type { PayoutRail } from "./store.js";
  */
 export const chain = (() => {
   switch (CHAIN_ID) {
+    case base.id: return base;
+    case baseSepolia.id: return baseSepolia;
     case hardhat.id: return hardhat;
     case polygonAmoy.id: return polygonAmoy;
     case polygon.id: return polygon;
@@ -77,7 +79,7 @@ export async function assertChainMatches(): Promise<void> {
  * fails outright, because a mismatch there is never intentional.
  */
 export function warnIfSmartAccountChainDiffers(): void {
-  const candideChainId = Number(process.env.CANDIDE_CHAIN_ID ?? 11155111);
+  const candideChainId = Number(process.env.CANDIDE_CHAIN_ID ?? CHAIN_ID);
   if (candideChainId === CHAIN_ID) return;
   console.warn(
     `WARNING: app chain is ${CHAIN_ID} but CANDIDE_CHAIN_ID is ${candideChainId}. ` +
@@ -102,6 +104,21 @@ export const deployerWallet = wallet(KEYS.deployer);
 export const orchestratorWallet = wallet(KEYS.orchestrator);
 export const rampWallet = wallet(KEYS.ramp);
 export const orchestratorAddress = orchestratorWallet.account.address;
+
+/**
+ * The FxSwapper is a LOCAL venue: our own inventory at an owner-set rate, the
+ * only option on hardhat. Real chains carry no deployment of it, so asking
+ * for its address there is a configuration error, named as one.
+ */
+export function swapperAddress(): `0x${string}` {
+  const a = addrs().swapper;
+  if (!a) {
+    throw new Error(
+      `no FxSwapper is deployed on chain ${CHAIN_ID} — LIQUIDITY_PROVIDER=fx-swapper is a local venue; use best/lifi/dex`,
+    );
+  }
+  return a;
+}
 
 export const abis = {
   MockToken: loadAbi("MockToken"),
@@ -231,7 +248,7 @@ export function paymentAuthorizationTypedData(args: {
  */
 export async function swapperRate(): Promise<{ rate: number; raw: bigint }> {
   const raw = (await publicClient.readContract({
-    address: addrs().swapper,
+    address: swapperAddress(),
     abi: abis.FxSwapper,
     functionName: "rate",
     args: [],
