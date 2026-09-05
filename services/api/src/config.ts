@@ -119,7 +119,33 @@ export const RECOVERY = {
   guardianSignerUrl: process.env.RECOVERY_GUARDIAN_SIGNER_URL ?? "",
   guardianSignerToken: process.env.RECOVERY_GUARDIAN_SIGNER_TOKEN ?? "",
   guardianSignerTimeoutMs: Math.max(1000, Number(process.env.RECOVERY_GUARDIAN_SIGNER_TIMEOUT_MS ?? 10_000)),
+  /**
+   * Candide's Safe Recovery Service — the email/SMS guardian.
+   *
+   * Candide acts as a guardian on the user's Safe and signs a recovery only
+   * after the user passes an OTP on EVERY channel they registered. The URL is
+   * issued by Candide on request; unset means the feature reports
+   * `unavailable` and every route refuses, rather than pointing at a public
+   * host that does not exist.
+   */
+  serviceUrl: (process.env.RECOVERY_SERVICE_URL ?? "").replace(/\/+$/, ""),
+  /** SIWE domain/uri the service expects in registration statements. The
+   *  SDK's defaults are what their service verifies; override only if Candide
+   *  says so. */
+  siweDomain: process.env.RECOVERY_SIWE_DOMAIN ?? "",
+  siweUri: process.env.RECOVERY_SIWE_URI ?? "",
+  /** How often finalizable recoveries are swept. */
+  sweepMs: Math.max(10_000, Number(process.env.RECOVERY_SWEEP_MS ?? 60_000)),
 };
+
+/**
+ * The 3-minute SocialRecoveryModule is a TEST FIXTURE: it exists so a
+ * recovery can be exercised end to end without waiting three days, and it
+ * is the only variant deployed on Base Sepolia. On a chain where money is
+ * real, a 3-minute grace period gives the owner no window to cancel a
+ * hijacked recovery. Refuse to boot with it in production.
+ */
+export const RECOVERY_MODULE_3_MINUTES = "0x949d01d424bE050D09C16025dd007CB59b3A8c66";
 
 // A guessable operator token is worse than none: it is a remote approval
 // switch for every account. Refuse to start rather than serve one.
@@ -360,6 +386,12 @@ function assertProductionConfig() {
   }
   if (RECOVERY.managedKycGuardian && !RECOVERY.guardianSignerUrl) {
     fail("RECOVERY_GUARDIAN_SIGNER_URL is required in production when managed KYC recovery is enabled");
+  }
+  if ((process.env.CANDIDE_RECOVERY_MODULE_ADDRESS ?? "").toLowerCase() === RECOVERY_MODULE_3_MINUTES.toLowerCase()) {
+    fail("CANDIDE_RECOVERY_MODULE_ADDRESS is the 3-minute test module — use the 3/7/14-day module in production");
+  }
+  if (RECOVERY.serviceUrl) {
+    try { requireExplicitHttpsUrl("RECOVERY_SERVICE_URL", RECOVERY.serviceUrl); } catch (e: any) { fail(e.message); }
   }
   if (RECOVERY.guardianSignerUrl) {
     try { requireExplicitHttpsUrl("RECOVERY_GUARDIAN_SIGNER_URL", RECOVERY.guardianSignerUrl); } catch (e: any) { fail(e.message); }

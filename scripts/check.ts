@@ -20,6 +20,7 @@ const scripts = [
   "sumsub:kyc:test",
   "kyc:operator:test",
   "recovery:test",
+  "recovery:candide:test",
   "kyc:ui:test",
   "monerium:oauth:test",
   "monerium:apikeys:test",
