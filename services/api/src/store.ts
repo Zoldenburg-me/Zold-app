@@ -442,6 +442,9 @@ export interface CryptoDeposit {
   realisedGainEur?: number;
   /** The invoice this payment settles, tying Beleg to Zahlung. */
   invoiceId?: string;
+  /** The payment request (pay link) this deposit was matched to by amount.
+   *  Set by payment-requests.ts; absent for money nobody asked for. */
+  paymentRequestId?: string;
   state: "DETECTED" | "CONVERTED" | "REFUSED";
   /** Why it was refused, in words a support person can act on. */
   reason?: string;
@@ -747,6 +750,10 @@ export interface Session {
  * deleting the row, so a recipient who opens a dead link is told which of the
  * two happened.
  */
+import type { StoredDocument } from "./documents.js";
+import type { PaymentRequest } from "./payment-requests.js";
+import type { ShopifyConnection } from "./shopify/types.js";
+
 export interface ReceiptShare {
   id: string;
   /** Public path segment. Unguessable, because holding it is the whole auth. */
@@ -780,6 +787,15 @@ interface Db {
   sessions: Session[];
   /** Public shareable receipts, keyed by an unguessable slug. */
   receiptShares: ReceiptShare[];
+  /** Account documents (receipts, statements, balance and ownership letters):
+   *  frozen snapshots under a verification code. See documents.ts. */
+  documents: StoredDocument[];
+  /** Payment requests (pay links): an amount somebody asked to be paid, the
+   *  ways it can be paid, and what arrived against it. See payment-requests.ts. */
+  paymentRequests: PaymentRequest[];
+  /** Shopify stores connected to an organisation as a payments app. The access
+   *  token is encrypted at rest and never leaves this process. */
+  shopifyConnections: ShopifyConnection[];
   /** Monerium issue-order ids already reflected in local receipt state. */
   processedMoneriumOrders: string[];
   /** Monerium webhook delivery ids already accepted. */
@@ -839,6 +855,9 @@ let db: Db = {
   transfers: [],
   sessions: [],
   receiptShares: [],
+  documents: [],
+  paymentRequests: [],
+  shopifyConnections: [],
   processedMoneriumOrders: [],
   processedMoneriumWebhooks: [],
   cryptoDeposits: [],
@@ -864,6 +883,9 @@ export function initStore() {
     db = JSON.parse(readFileSync(DB_PATH, "utf8"));
     db.sessions ??= [];
     db.receiptShares ??= [];
+    db.documents ??= [];
+    db.paymentRequests ??= [];
+    db.shopifyConnections ??= [];
     db.processedMoneriumOrders ??= [];
     db.processedMoneriumWebhooks ??= [];
     db.cryptoDeposits ??= [];
@@ -1254,6 +1276,91 @@ export const store = {
   },
   findReceiptShareBySlug(slug: string) {
     return db.receiptShares.find((s) => s.slug === slug);
+  },
+  get documents() {
+    return db.documents;
+  },
+  addDocument(d: StoredDocument) {
+    db.documents.push(d);
+    persist();
+    return d;
+  },
+  updateDocument(id: string, patch: Partial<StoredDocument>) {
+    const d = db.documents.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown document ${id}`);
+    Object.assign(d, patch);
+    persist();
+    return d;
+  },
+  findDocumentByCode(code: string) {
+    return db.documents.find((d) => d.code === code);
+  },
+  documentsForUser(userId: string) {
+    return db.documents.filter((d) => d.userId === userId);
+  },
+
+  // ── Payment requests (pay links) ──────────────────────────────────────────
+  //
+  // No delete. A request somebody may have paid against is a record; the
+  // owner cancels it (state CANCELLED) and a visitor is told so rather than
+  // getting a 404 that reads like a typo.
+  get paymentRequests() {
+    return db.paymentRequests;
+  },
+  addPaymentRequest(r: PaymentRequest) {
+    db.paymentRequests.push(r);
+    persist();
+    return r;
+  },
+  updatePaymentRequest(id: string, patch: Partial<PaymentRequest>) {
+    const r = db.paymentRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown payment request ${id}`);
+    Object.assign(r, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return r;
+  },
+  findPaymentRequest(id: string) {
+    return db.paymentRequests.find((r) => r.id === id);
+  },
+  /** Codes are stored normalised (upper-case, no hyphens); compare the same way. */
+  findPaymentRequestByCode(code: string) {
+    const norm = code.replace(/-/g, "").toUpperCase();
+    return db.paymentRequests.find((r) => r.code === norm);
+  },
+  paymentRequestsForUser(userId: string) {
+    return db.paymentRequests.filter((r) => r.userId === userId);
+  },
+  findPaymentRequestBySource(kind: string, externalId: string) {
+    return db.paymentRequests.find((r) => r.source?.kind === kind && r.source.externalId === externalId);
+  },
+
+  // ── Shopify connections ───────────────────────────────────────────────────
+  get shopifyConnections() {
+    return db.shopifyConnections;
+  },
+  addShopifyConnection(c: ShopifyConnection) {
+    db.shopifyConnections.push(c);
+    persist();
+    return c;
+  },
+  updateShopifyConnection(id: string, patch: Partial<ShopifyConnection>) {
+    const c = db.shopifyConnections.find((x) => x.id === id);
+    if (!c) throw new Error(`unknown Shopify connection ${id}`);
+    Object.assign(c, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return c;
+  },
+  removeShopifyConnection(id: string) {
+    const i = db.shopifyConnections.findIndex((x) => x.id === id);
+    if (i >= 0) db.shopifyConnections.splice(i, 1);
+    persist();
+  },
+  findShopifyConnectionByShop(shop: string) {
+    const s = shop.trim().toLowerCase();
+    return db.shopifyConnections.find((c) => c.shop === s);
+  },
+  shopifyConnectionsForOrg(orgId: string) {
+    return db.shopifyConnections.filter((c) => c.orgId === orgId);
   },
   addReceiptShare(s: ReceiptShare) {
     db.receiptShares.push(s);

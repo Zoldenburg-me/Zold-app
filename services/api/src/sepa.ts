@@ -23,7 +23,9 @@ const SEPA_ALLOWED = /[^A-Za-z0-9/\-?:().,'+ ]/g;
 export const SEPA_REMITTANCE_MAX = 140;
 
 /** Our own tag, so a payment is still traceable back to a transfer. */
-const TAG = "Zold";
+/** What the payee reads next to our transfer id on their statement. Kept
+ *  short: every character here is one fewer for the payer's own reference. */
+const TAG = "Powered by Zold";
 
 /**
  * Fold a string into the SEPA Latin subset.
@@ -57,9 +59,8 @@ function stripReservedSlashes(s: string): string {
 /**
  * Build the remittance line for a payout.
  *
- * With no reference this is unchanged from before — `Zold <transfer id>` — so
- * payouts that are not merchant checkouts keep the string their operators are
- * used to seeing.
+ * With no reference the line is `Powered by Zold <transfer id>`, so a payee
+ * sees who sent it and an operator can find the transfer from the statement.
  *
  * With one, the reference leads (it is what the payee reconciles on) and a
  * short form of our transfer id trails, kept whole rather than truncated: an

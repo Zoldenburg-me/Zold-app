@@ -278,6 +278,7 @@ const VIEWS = [
   { id: "accounts", label: "Accounts", section: "" },
   { id: "payments", label: "Payments", section: "Money", capability: "transfers.drafts" },
   { id: "invoices", label: "Invoices", section: "Money", capability: "invoices" },
+  { id: "shopify", label: "Shopify", section: "Money" },
   { id: "contacts", label: "Contacts", section: "Money" },
   { id: "wallets", label: "Wallets", section: "Treasury" },
   { id: "ledger", label: "Transactions", section: "Books", capability: "ledger.transactions" },
@@ -492,6 +493,54 @@ RENDER.invoices = async () => {
       : `<div class="empty">No invoices yet.</div>`) + `</div>`;
 };
 
+/**
+ * Shopify — Zold as a payments app on the merchant's store.
+ *
+ * Crypto only, sale only, refunds by hand: every one of those limits is
+ * printed here rather than discovered by a customer at checkout. The endpoint
+ * list is what goes into the Partner Dashboard's payments-app configuration.
+ */
+RENDER.shopify = async () => {
+  const d = await api(`/api/orgs/${org.id}/shopify`);
+  const pill = (r) => r.state === "PAID" ? "ok" : r.state === "OPEN" ? "warn" : "mut";
+  let html = `<div class="card"><div class="h"><div><h2>Shopify</h2>
+    <div class="desc">Customers pay a EUR order in USDC on your payment page; the order is marked paid the moment the deposit is seen. Bank transfer is not offered at checkout (too slow for a session), refunds are made by you from Zold, and manual capture is not supported.</div></div></div>`;
+  if (!d.available) {
+    html += `<div class="banner warn"><b>Not available on this deployment.</b> ${esc(d.reason || "")}
+      A Shopify payments app has to be registered in a Partner account and approved into Shopify's Payments Apps program before any store can install it; nobody has done that yet.</div>`;
+  } else {
+    html += `<label>Store domain</label>
+      <div style="display:flex;gap:.6rem"><input id="sh-shop" placeholder="my-store.myshopify.com" style="flex:1" />
+      <button data-act="shopify-connect">Connect store</button></div>
+      <div class="desc" style="margin-top:.4rem">You are sent to Shopify to approve the app; the store's access token is stored encrypted and never shown.</div>`;
+  }
+  html += `</div>`;
+  html += `<div class="card"><div class="h"><div><h2>Connected stores</h2></div></div>` +
+    (d.connections.length ? `<table><thead><tr><th>Store</th><th>Pays into</th><th>Status</th><th>Installed</th><th></th></tr></thead><tbody>` +
+      d.connections.map((c) => `<tr>
+        <td><b>${esc(c.shop)}</b></td>
+        <td class="mono">@${esc(c.payeeHandle || "—")}</td>
+        <td>${c.ready ? `<span class="pill ok">ready</span>` : `<span class="pill warn">not configured</span>${c.configureError ? `<div class="desc">${esc(c.configureError)}</div>` : ""}`}</td>
+        <td class="desc">${esc(new Date(c.installedAt).toLocaleDateString())}${c.lastSessionAt ? `<br>last checkout ${esc(new Date(c.lastSessionAt).toLocaleString())}` : ""}</td>
+        <td class="row-actions"><button class="ghost sm" data-act="shopify-disconnect" data-id="${esc(c.id)}">Disconnect</button></td>
+      </tr>`).join("") + `</tbody></table>`
+      : `<div class="empty">No store connected.</div>`) + `</div>`;
+  html += `<div class="card"><div class="h"><div><h2>Checkouts</h2><div class="desc">Every payment session a connected store has sent. "Told" means Shopify has marked the order paid.</div></div></div>` +
+    (d.requests.length ? `<table><thead><tr><th>When</th><th>Store</th><th>Amount</th><th>State</th><th>Store told</th><th></th></tr></thead><tbody>` +
+      d.requests.map((r) => `<tr>
+        <td class="desc">${esc(new Date(r.createdAt).toLocaleString())}${r.test ? ` <span class="pill warn">test</span>` : ""}</td>
+        <td>${esc(r.shop)}</td>
+        <td><b>€${Number(r.amountEur ?? 0).toFixed(2)}</b>${r.payments?.length ? `<div class="desc">${r.payments.map((p) => `${p.amountUsdc ?? ""} USDC${p.settledEur !== undefined ? ` → €${p.settledEur}` : " (not converted)"}`).join("<br>")}</div>` : ""}</td>
+        <td><span class="pill ${pill(r)}">${esc(r.state.toLowerCase())}</span></td>
+        <td>${r.resolvedAt ? `<span class="pill ok">yes</span>` : r.state === "PAID" ? `<span class="pill bad">no</span>${r.resolveError ? `<div class="desc">${esc(r.resolveError)}</div>` : ""}` : `<span class="pill mut">—</span>`}</td>
+        <td class="row-actions"><a href="${esc(r.url)}" target="_blank" rel="noopener"><button class="ghost sm">Page</button></a></td>
+      </tr>`).join("") + `</tbody></table>`
+      : `<div class="empty">No checkouts yet.</div>`) + `</div>`;
+  html += `<div class="card"><div class="h"><div><h2>Partner Dashboard settings</h2><div class="desc">Paste these into the app's payments extension. Supported currency: EUR. Payment method type: offsite.</div></div></div>
+    <table><tbody>${Object.entries(d.endpoints).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join("")}</tbody></table></div>`;
+  return html;
+};
+
 RENDER.ledger = async () => {
   if (!cap("ledger.transactions").allowed) return gateHtml("ledger.transactions");
   const { entries } = await api(`/api/orgs/${org.id}/ledger`);
@@ -572,6 +621,15 @@ RENDER.settings = async () => {
     <button data-act="save-org">Save</button></div>
     <label>Name</label><input id="s-name" value="${esc(org.name)}" />
     <label>Legal name</label><input id="s-legal" value="${esc(org.legalName || "")}" />
+    <label>Registered address</label>
+    <input id="s-addr1" value="${esc(org.address?.line1 || "")}" placeholder="Street and number" />
+    <input id="s-addr2" value="${esc(org.address?.line2 || "")}" placeholder="Address line 2 (optional)" style="margin-top:.4rem" />
+    <div style="display:flex;gap:.6rem;margin-top:.4rem">
+      <div style="width:130px"><label>Postcode</label><input id="s-zip" value="${esc(org.address?.postalCode || "")}" /></div>
+      <div style="flex:1"><label>City</label><input id="s-city" value="${esc(org.address?.city || "")}" /></div>
+      <div style="width:90px"><label>Country</label><input id="s-country" value="${esc(org.address?.country || "")}" placeholder="DE" maxlength="2" /></div>
+    </div>
+    <div class="desc" style="margin-top:.3rem">Printed on every invoice you issue. The country decides which invoicing rules apply.</div>
     <label>Tax ID</label><input id="s-tax" value="${esc(org.taxId || "")}" />
     <label>Notification email</label><input id="s-notify" value="${esc(org.notificationEmail || "")}" />
     <label>Reporting currency ${cap("settings.reportingCurrency").allowed ? "" : "— included in a paid plan"}</label>
@@ -914,6 +972,17 @@ function dialog(title, bodyHtml, onSubmit) {
 }
 
 const ACTIONS = {
+  async "shopify-connect"() {
+    const shop = ($("#sh-shop").value || "").trim().toLowerCase();
+    const r = await api(`/api/orgs/${org.id}/shopify/install`, { method: "POST", body: { shop } });
+    location.href = r.authorizeUrl;
+  },
+  async "shopify-disconnect"(el) {
+    if (!confirm("Disconnect this store? Customers can no longer pick Zold at its checkout.")) return;
+    await api(`/api/orgs/${org.id}/shopify/${el.dataset.id}`, { method: "DELETE" });
+    toast("Store disconnected.");
+    render();
+  },
   async upgrade(el) {
     const r = await api(`/api/orgs/${org.id}/plan`, { method: "POST", body: { plan: el.dataset.plan } });
     if (r.note) toast(r.note);
@@ -1135,6 +1204,11 @@ const ACTIONS = {
     const body = {
       name: $("#s-name").value, legalName: $("#s-legal").value,
       taxId: $("#s-tax").value, notificationEmail: $("#s-notify").value,
+      address: {
+        line1: $("#s-addr1").value, line2: $("#s-addr2").value,
+        postalCode: $("#s-zip").value, city: $("#s-city").value,
+        country: $("#s-country").value,
+      },
     };
     const cur = $("#s-currency");
     if (cur && !cur.disabled && cur.value !== org.reporting.currency) {
@@ -1337,6 +1411,13 @@ async function boot() {
     .join("");
   $("#org-select").onchange = async (e) => { await loadOrg(e.target.value); view = "overview"; render(); };
   await loadOrg(org.id);
+  // Deep links: /business?view=shopify after a store install, with the
+  // outcome in the query so the redirect from Shopify lands on an answer.
+  const qs = new URLSearchParams(location.search);
+  if (qs.get("view") && (VIEWS.some((v) => v.id === qs.get("view")) || RENDER[qs.get("view")])) view = qs.get("view");
+  if (qs.get("error")) toast(qs.get("error"), true);
+  if (qs.get("shop")) toast(`Connected ${qs.get("shop")}.`);
+  if (qs.toString()) history.replaceState(null, "", location.pathname);
   $("#app").classList.remove("hidden");
   render();
 }

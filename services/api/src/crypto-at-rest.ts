@@ -25,7 +25,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 /** Named so a key is never accidentally shared across two kinds of secret. */
-export type EncryptionPurpose = "monerium" | "pan" | "bank_account";
+export type EncryptionPurpose = "monerium" | "pan" | "bank_account" | "shopify";
 
 export class EncryptionUnavailableError extends Error {}
 

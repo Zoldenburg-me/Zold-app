@@ -91,11 +91,13 @@ await check("a USDC-settling page COMPLETES rather than being refused", async ()
   assert.equal(out.creditedUsdc, 500);
 });
 
-await check("auto-settlement off is a refusal, and says so plainly", async () => {
+await check("auto-settlement off COMPLETES as USDC — the forwarder already delivered it", async () => {
   const u = mkUser({ paymentPage: { handle: "u", autoConvert: false, settlementAsset: "EURE" } });
   const out = await convertDeposit(mkDeposit(u.id));
-  assert.equal(out.state, "REFUSED");
-  assert.match(out.reason!, /auto-settlement switched off/i);
+  assert.equal(out.state, "CONVERTED", "a deposit nothing converts is complete, not refused");
+  assert.equal(out.settlementAsset, "USDC");
+  assert.equal(out.creditedUsdc, 500);
+  assert.equal(out.creditedEur, undefined, "no euro credit was invented");
 });
 
 console.log("\nThe blocker names what a user can act on");
