@@ -2,423 +2,193 @@
 
 # Zold
 
-Cross-border payments on stablecoin rails, built by **Zoldenburg**.
+**Global accounts for people and businesses whose money crosses borders.**
+Built and operated by Zoldenburg.
 
-Euros arrive by SEPA transfer to a per-user IBAN and land on-chain as EURe in
-the user's own Safe smart account. They leave as a SEPA transfer to any IBAN, or
-as cash collected at a MoneyGram counter. Every route is quoted against a live
-mid-market feed with the fee and measured FX margin shown before the user
-signs, and every transfer is tracked through an explicit state machine to `PAID`.
+A global account is a set of local accounts under one roof. Each one is
+denominated in the currency of a place, carries the identifier locals use, and
+pays out on that place's own rail. You hold them all in one smart wallet that
+only you can operate, and you move between them at a live, visible rate.
 
-The account is non-custodial. The user's passkey is an owner of their Safe, a
-second key generated in their browser authorises each payment over its exact
-terms, and neither can be replaced by the server.
+**Euros are open today.** You get a euro IBAN. Money that arrives by bank
+transfer is held as EURe, a regulated euro e-money token, in a wallet whose
+keys are yours. From there you pay any bank account in the SEPA area, get paid
+by link, page or invoice, take crypto and settle it in euros, and keep the
+books.
+
+The product documentation lives in [docs/gitbook](docs/gitbook/README.md).
 
 ---
 
-## System at a glance
+## What you get
+
+### An account that is yours
+
+- **A real euro IBAN**, issued through Monerium, an e-money institution
+  licensed in the European Economic Area. Bank transfers arrive as EURe,
+  backed one-for-one and redeemable at par.
+- **A smart wallet on Base** whose owner is a passkey on your device. Every
+  payment is signed by you at the moment you send it. Zold cannot move your
+  money without you and cannot replace your keys.
+- **Recovery by email or phone.** Lose the device and you recover the wallet
+  with a new passkey after a one-time code on every channel you registered,
+  with a waiting period during which the rightful owner can cancel.
+- **Prices before you sign.** Every transfer and conversion is quoted against
+  a live mid-market rate. The fee and the measured margin are on screen before
+  you approve, and the rate you approve is the rate you get. If Zold cannot get
+  a fresh rate it refuses to quote rather than guess.
+
+### Send money
+
+- **SEPA bank transfer to any IBAN**, free of Zold fees, with a remittance
+  reference the payee can reconcile on.
+- **Tracking and receipts.** Every payment moves through named states you can
+  watch, and every completed one has a receipt you can share by link, choosing
+  which details the link exposes.
+- **Pay from an invoice.** A supplier's invoice becomes a payment with the
+  right amount, IBAN and reference already filled in.
+
+### Get paid
+
+- **Your payment page** at `/pay/<your handle>`: one address that takes USDC
+  on most EVM networks and lands it in your wallet, with a QR code and an
+  "open in wallet" link. Switch auto-convert on and incoming crypto is turned
+  into euros with your passkey.
+- **Payment links.** Ask for a fixed amount or let the payer choose, by crypto
+  or by bank transfer with a reference that matches the payment to the link.
+- **Invoice-Me links.** Send a supplier a link; they fill in their invoice and
+  bank details, and you pay it from the same screen.
+- **Statements and documents.** Account statements, transfer receipts, balance
+  confirmations and proof of ownership, each printable to PDF and carrying a
+  verification code anyone can check at `/v/<code>`.
+
+### For businesses
+
+- **Organisations, members and roles.** Owners, admins, payers and viewers,
+  with an organisation that can never lose its last owner.
+- **Payments that go through review.** A draft is prepared by one person and
+  approved by another before it can be sent, and a payee whose bank details
+  changed after approval is held rather than paid.
+- **Bulk payments** from a file, executed as one batch, each line with its own
+  signature.
+- **Address book** with bank accounts and wallets, and imported wallets you
+  hold elsewhere shown read-only beside your Zold accounts.
+- **Invoicing that follows your country's rules.** German invoices are checked
+  against the statutory mandatory details and VAT treatment; EU invoices follow
+  the VAT Directive; everywhere else you set the rules and Zold prints them.
+- **Bookkeeping**: transactions, tags, a chart of accounts with rules, cost
+  basis, and CSV export for your accountant's software.
+- **Shopify.** Offer Zold as a payment method on your store. A customer places
+  the order, pays the USDC figure shown on the thank-you page, and the order is
+  marked paid in Shopify the moment the payment is seen.
+- **Gnosis Pay card.** Connect your own Gnosis Pay account and see your card,
+  balances and card transactions inside Zold.
+- **Privacy Bundle** for accounts that want less of their activity visible.
+
+---
+
+## Coming soon
+
+| | |
+|---|---|
+| **Cash pickup** | Send euros, a relative collects local currency at a MoneyGram counter. |
+| **US dollar account** | A US account and routing number that receives ACH and wire and pays out to any US bank. |
+| **More currencies** | GBP, CHF, NGN and KES accounts, each on its own local rail. |
+| **Shopify in-checkout** | Zold as a native payment method inside Shopify's checkout, with no pending order. |
+| **Cards** | Spend your balance with a card issued for your Zold account. |
+
+---
+
+## How it works
 
 ```
-                    ┌──────────────────────────────────────────────┐
-   SEPA in ───────► │  Monerium  ──EURe──►  user's Safe (ERC-4337)  │
-   USDC in ───────► │                       passkey + co-signer 2/2 │
-                    └────────────────────┬─────────────────────────┘
-                                         │ device-signed EIP-712
-                                         ▼
-                              ┌─────────────────────┐
-                              │    orchestrator     │  state machine per rail
-                              └──────┬───────┬──────┘
-                                     │       │
-                    SEPA rail ◄──────┘       └──────► FX rail
-                          │                                │
-              Monerium redeem                     liquidity venue
-              (burn EURe → SEPA)                  (EURe → USDC)
-                          │                                │
-                          ▼                                ▼
-                    payee's bank                Bridge.xyz → Stellar
-                                                           │
-                                                           ▼
-                                                  MoneyGram anchor
-                                                    (SEP-10/12/24)
-                                                           │
-                                                           ▼
-                                                   cash at a counter
+   bank transfer ──► Monerium ──EURe──►  your Safe on Base  ◄──USDC── payment page
+                                          passkey-owned              (any EVM network,
+                                                │                     via forwarding)
+                                    signed by you, per payment
+                                                │
+                     ┌──────────────────────────┼──────────────────────────┐
+                     ▼                          ▼                          ▼
+             SEPA to any IBAN         USDC ⇄ EURe conversion       statements, receipts,
+           (Monerium redeem)         (best price across venues)    invoices, bookkeeping
 ```
 
-The normal identity-review path can be backed by Sumsub. Sumsub stores document
-images and liveness media; this app stores only the Sumsub applicant reference,
-review result, and extracted text fields needed for Travel Rule and partner
-handoff. Approved Sumsub applicants can be shared to Monerium through Sumsub's
-share-token flow, and MoneyGram receives only the documented SEP-9 text fields.
-Bridge still needs its hosted KYC link or direct Customers API requirements.
-
-Chain selection is configuration, not code: `TRANSF_CHAIN_ID` resolves the
-chain and `deployments.json` is keyed by chain id, so several deployments
-coexist without overwriting each other. The default is Base mainnet (8453)
-against Monerium's production EURe and Circle's USDC; Base Sepolia (84532) with
-`MONERIUM_BASE_URL` pointed at the sandbox is the testnet configuration.
-
----
-
-## Capability status
-
-Stated precisely, because partners and operators need to know which legs have
-carried value and which have not.
-
-| Capability | Status |
-|---|---|
-| Residency gate at account creation | **Live** — Monerium's residency tiers, enforced before anything else |
-| Identity | **Monerium's** — an account is approved when its Monerium connection (OAuth sign-in, or the user's own API keys) attributes an IBAN to the Safe. No in-house review, no third-party KYC provider, no auto-approval. |
-| IBAN issuance, SEPA deposit → EURe in Safe | **Live** — Monerium, EIP-1271 ownership |
-| Safe deployment, gas-sponsored, passkey-owned | **Live** — Candide bundler + paymaster |
-| Passkey auth, WebAuthn assertion verified server-side | **Live** |
-| Device-key payment authorisation (EIP-712) | **Live** — verified before any debit |
-| Live FX quoting, measured margin, fail-closed on stale | **Live** |
-| SEPA payout (Monerium redeem, normalised reference) | **Live** |
-| Managed recovery (guardian, delay, operator approval) | **Live** |
-| Inbound USDC → EURe conversion | Integrated; no production deposit converted |
-| Liquidity venues (LI.FI, CoW, Uniswap v3, RFQ, best-execution) | Quoting live; no venue has executed a settlement |
-| Bridge.xyz Base → Stellar funding | Integration seam built; the cash rail is **closed** until `BRIDGE_LIVE=1` with credentials — there is no dry-run |
-| Stellar payout leg | Ledger half proven on-chain; anchor attribution not yet exercised |
-| MoneyGram cash pickup | Protocol complete (SEP-10/12/24); requires a partner agreement |
-
-Two constraints worth naming directly:
-
-- **`debited → bridged → paid` has not run end to end.** Each leg is covered by
-  its own suite; the composition is not yet proven.
-- **The cash rail is gated on a MoneyGram partner agreement**, not on
-  engineering. Stellar's public test anchor never publishes a withdrawal
-  account, so the anchor-attribution half runs first against MoneyGram's own
-  anchor. Everything up to that point is built and tested.
+- **Money is regulated money.** EURe is Monerium's e-money; USDC is Circle's
+  fully reserved dollar. Your IBAN is a real IBAN, provided with Monerium
+  through a licensed bank in the SEPA area.
+- **The wallet is a Safe smart account**, deployed gas-free, owned by your
+  passkey. Signing happens on your device with WebAuthn; the server verifies
+  and never holds an owner key.
+- **Conversions go to the best price.** Zold quotes every configured venue in
+  parallel, settles at the best one, checks every price against an independent
+  live mid before it binds, and records which venue won and why.
+- **Deposits are forwarded.** The payment page address routes USDC from any
+  supported EVM network into your wallet on Base.
+- **Documents are verifiable.** Every statement and receipt is a signed
+  snapshot; the verifier re-checks the signature and the chain on every visit.
 
 ---
 
-## Architecture
+## Security
 
-### Layers
-
-| Layer | Responsibility |
-|---|---|
-| `server.ts` | HTTP surface — 51 routes, session and KYC gating, rate limits, origin allowlist |
-| `orchestrator.ts` | Transfer state machines, authorisation checks, compensation |
-| `fx.ts` · `rates.ts` | Quoting: live mids, measured margin, refuses stale |
-| `liquidity.ts` · `dex.ts` | Venue abstraction and best-execution routing |
-| `wallet/candide.ts` | Safe derivation, ERC-4337 deployment, EIP-1271/EIP-712 signing |
-| `stellar/` · `bridge/` | Anchor protocol and cross-chain USDC movement |
-| `adapters/` | One module per external provider, each behind a stable interface |
-| `store.ts` | Persistence and atomic claims |
-| `config.ts` | Configuration and the production readiness gate |
-
-### The adapter rule
-
-Every external service sits behind an interface, and the modules above it never
-learn which implementation is in use. `liquidity.ts` is the reference case: one
-`LiquidityProvider` interface, six implementations, one factory. Adding a venue
-touches one file, and the router quotes every configured venue in parallel and
-settles at the best price rather than a configured default.
-
-### Contracts
-
-Four, deliberately small, no inheritance depth and no proxies.
-
-| Contract | Role |
-|---|---|
-| `AdminTimelock.sol` | M-of-N + delay owner of the others. No single key can raise a cap, grant a role or drain inventory. A separate guardian can pause instantly; only the timelock can un-pause |
-| `FxSwapper.sol` | Swaps at an owner-set rate behind a slippage guard, restricted to approved executors, pausable |
-| `MockToken.sol` | Local-chain ERC-20 for tests |
-
-#### Base mainnet (chain id 8453) — the token addresses the app uses
-
-Nothing of ours is deployed on a real chain. `npm run deploy` there records the
-two real tokens in `deployments.json` and stops; liquidity comes from LI.FI /
-Uniswap v3 through the user's own Safe, and the cash leg goes through Bridge.xyz.
-
-| Asset | Address | Source |
-|---|---|---|
-| `EURe` | `0xbf6e2966A9C3D99C9E4D069E04f7Bdb9C8aa762C` | Monerium's own, from their production `/tokens` |
-| `USDC` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | Circle's own; code and symbol verified on-chain |
-
-The `FxSwapper` and `AdminTimelock` contracts are local-chain fixtures for the
-test harnesses and are not deployed on any real chain.
-
-Custody is the user's Safe. The only record of a user's euros is the EURe in their own smart account.
+- The passkey is the wallet owner. A payment needs your signature over its
+  exact amount and destination, so a stolen session cannot change either.
+- Secrets at rest are encrypted: Monerium tokens and API keys, Shopify store
+  tokens. None of them ever appears in an API response.
+- Rate limits and an origin allowlist on every authentication route, and a
+  production readiness gate that refuses to start on an incomplete
+  configuration.
+- Recovery cannot be used to spend: a recovered credential gains control only
+  after the waiting period the module enforces, and the previous owner can
+  cancel during it.
+- See [ARCHITECTURE.md](ARCHITECTURE.md) for the platform design, [INTEGRATORS.md](INTEGRATORS.md) for every external dependency and the credentials each one needs, [SECURITY.md](SECURITY.md) for the security policy.
 
 ---
 
-## End-to-end flow
+## Run it
 
-### 1 — Account and passkey
-
-`POST /api/users` creates the account. The browser then registers a WebAuthn
-credential: the server issues a challenge bound to the account, parses the CBOR
-attestation, and stores the COSE public key (`webauthn.ts`). Every later sign-in
-verifies the assertion signature, the RP ID hash and the counter before a
-session is issued. Re-registering a passkey requires a step-up from the current
-credential, so a stolen session cannot silently replace it.
-
-From the passkey, `wallet/candide.ts` derives the Safe address
-deterministically — the address exists before anything is deployed.
-
-### 2 — Residency and identity
-
-Account creation is gated on residency before anything else runs
-(`country-policy.ts`). Only countries in Monerium's supported residency tiers
-pass; their `prohibited` tier and any country absent from their reference are
-refused, with common aliases and names normalised so the check cannot be evaded
-by spelling. This is a product gate aligned to what the issuer will support —
-not a substitute for sanctions screening, wallet screening, source-of-funds
-checks, partner corridor rules or legal review, and it needs re-syncing against
-Monerium's reference before launch.
-
-Note it constrains **who may hold an account**, not where money may be sent;
-payout corridors are governed separately by the rails and their partners.
-
-Past that gate, IBAN issuance, deposits, device binding, quoting and transfers
-all fail closed until the account is approved — and identity is Monerium's.
-After the passkey is registered and the smart wallet deployed, the account is
-connected to Monerium in one of two ways, and approved when that connection
-attributes an IBAN to the Safe:
-
-- **Sign up or sign in with Monerium** — OAuth Authorization Code + PKCE
-  (S256). Monerium verifies the person and issues the IBAN. Per-user tokens are
-  AES-256-GCM encrypted at rest, never returned by any endpoint. The app links
-  its own Safe under the user's profile and requests an IBAN there.
-- **Add your own Monerium API keys** — for testing against your own account:
-  paste the client id and secret of an app created in your Monerium account.
-  The pair is verified against Monerium before anything is stored, the secret
-  is encrypted with the same key as the OAuth tokens and never returned, and
-  activation, deposit polling and SEPA redeems for that account run on those
-  keys — the app's own credentials cannot see a profile they do not own.
-  `npm run monerium:apikeys:test` drives it against a stub that answers only to
-  the user's own token.
-
-There is no in-house identity review, no Sumsub, no operator approval and no
-whitelabel provisioning any more. The app never creates a Monerium profile for
-a user.
-
-For cash payouts the sender's FATF originator data is collected and mapped to
-SEP-9 field names (`stellar/sep9.ts`). Each user gets a distinct SEP-12 customer
-via a derived memo, so one treasury account never attributes one user's identity
-to another's payout.
-
-### 3 — Wallet deployment
-
-The Safe is deployed through an ERC-4337 UserOperation via Candide's bundler,
-with the paymaster covering gas — the user pays nothing and needs no native
-token. Owner actions are **2-of-2**: the passkey and a co-signer. Base's RIP-7212
-P256 precompile verifies passkey signatures natively, so no verifier contract is
-required.
-
-Candide's `SocialRecoveryModule` is installed at deployment with a guardian.
-Recovery requires operator identity approval and the module delay must elapse
-before a separate signer service acts; the API never holds the guardian key.
-Every debit is a UserOperation the user's passkey signs at send time — an
-ERC-20 transfer, or on the cash rail a batched fee+approve+swap whose output
-goes straight to the payout destination. The co-signer only counter-signs
-those operations; no allowance, delegate, or standing spend authority exists,
-so the API cannot move funds without the user, architecturally.
-
-### 4 — Device spending key
-
-A secp256k1 key is generated in the browser and never leaves it — the server
-learns only the address (`public/device.js`). It is encrypted at rest with a
-secret only the authenticator can produce: WebAuthn PRF → HKDF → AES-GCM, with
-only the ciphertext in local storage.
-
-Registration is trust-on-first-use, and only the current key can rotate itself.
-
-> Where PRF is unsupported by the authenticator, the key is stored unwrapped and
-> reported as `protection: "none"`. Treat PRF as a per-device capability to
-> detect and surface, not a guarantee.
-
-### 5 — Funding
-
-Monerium issues an IBAN bound to the Safe, ownership proven by EIP-1271 — the
-IBAN belongs to the contract wallet. An inbound SEPA transfer mints EURe
-directly to the Safe.
-
-The webhook takes only an order id and re-reads that order from Monerium, so a
-forged payload buys nothing; an HMAC gate with delivery-id deduplication and a
-staleness window sits on top. A reconciler compares Monerium's processed orders
-against what was mirrored, plus on-chain invariants, every 15 minutes. It
-reports drift and never repairs — a system that silently mints to make two
-ledgers agree is worse than the disagreement.
-
-Accounts may also opt into inbound USDC conversion: a poller reads ERC-20
-Transfer logs, prices through the same liquidity seam the corridor uses, and
-refuses — recording the reason — below the dust floor, off a live-mid check, or
-without an approved account.
-
-### 6 — Quote
-
-`POST /api/quotes`. `rates.ts` fetches live EUR mids on a 10-minute cache and
-**refuses to quote rather than serve a stale rate**. The EUR→USD leg is read
-from the venue that would actually fill it, so a quote cannot promise a rate the
-settlement will not honour. `marginBps` is *measured* between the mid and what
-is delivered, not asserted.
-
-The quote is locked for ten minutes and records `lockedSwapRate` for binding at
-execution.
-
-### 7 — Authorisation
-
-`POST /api/transfers` fixes the exact terms. A `destinationCommitment` — a
-keccak hash over the rail, the payout identifier and the recipient name — binds
-*who* is paid into the signature, so the payee cannot be swapped after signing.
-
-The device signs an EIP-712 `PaymentAuthorization` (domain `TransF Safe
-Transfer`, `verifyingContract` = the user's Safe) covering account, amount,
-destination, transfer id and deadline. Before signing, the browser recomputes
-the commitment independently and refuses if the server's terms name a different
-recipient.
-
-On the SEPA rail the Monerium redeem message is signed in the same step: both
-signatures are collected while the user is present, so nothing is signed blind
-later.
-
-`POST /api/transfers/:id/authorize` claims the submission atomically before any
-`await`, closing a double-submit window.
-
-### 8 — Execution
-
-`orchestrator.ts` runs the state machine:
-
-```
-CREATED → DEBITED → SWAPPED → BRIDGED → PAYOUT_DETAILS_PENDING
-        → PAYOUT_FUNDING_PENDING → PAYOUT_FUNDED → PAYOUT_READY
-        → PAYOUT_SUBMITTED → PAID
-                    ↘ MANUAL_REVIEW · FAILED · REFUNDED
-```
-
-Before anything moves: `assertDeviceAuthorization` verifies the signature, and
-`assertQuoteRateBinding` refuses and auto-refunds if the executable rate has
-drifted beyond `QUOTE_BINDING_BPS` from the quote.
-
-**SEPA rail.** Only the fee moves out of the Safe; the redeem burns the payout
-directly from it. `sepa.ts` folds the remittance reference into the SEPA Latin
-subset — accents decomposed, reserved forms stripped, truncated at the scheme's
-140 characters — so the payee reconciles against their own handle.
-
-**FX rail.** The full amount moves to the orchestrator, then:
-`liquidity.ts` swaps EURe→USDC at the best available venue price, with every
-quote's implied rate checked against the independent mid and refused beyond a
-band. Positive slippage is measured and attributed to the user by default.
-`bridge/bridgexyz.ts` creates the hosted Bridge transfer and returns deposit
-instructions for Stellar-side settlement. `stellar/anchor.ts` authenticates over
-SEP-10, submits per-transfer sender details over SEP-12 (nothing collects them
-yet, so a SEP-12 anchor refuses and names the gaps), opens a SEP-24 withdrawal, and
-pays the anchor's account with its memo — refusing to fund if the Stellar
-recipient lacks a trustline for the asset.
-
-**Failure.** Compensation releases escrow and re-credits at current rates with
-itemised deductions, reaching `REFUNDED`. Stranded transfers are swept at
-startup and every five minutes. A duplicate-transfer revert is never
-auto-refunded — it goes to `MANUAL_REVIEW`.
-
-### 9 — Last mile
-
-- **SEPA** — funds land in the payee's account, carrying the sender's reference.
-- **Cash** — the recipient collects at any MoneyGram agent with the reference
-  number and photo ID.
-
-The client polls `refresh-payout`; the app's timeline reads the transfer's real
-state rather than advancing on a timer.
-
----
-
-## Security model
-
-| Control | Effect |
-|---|---|
-| Passkey as Safe owner, 2-of-2 with co-signer | Owner actions and every debit need both signatures; no allowance or standing spend authority exists |
-| Device key, EIP-712 per payment | A stolen session cannot change the amount or the payee |
-| `destinationCommitment` covers the recipient name | The payout identity is signed, not just the account |
-| `AdminTimelock` M-of-N + delay | No single key can change protocol parameters |
-| Guardian recovery, operator-approved, delayed | A lost passkey is recoverable without a custodial key |
-| Fail-closed production gate | The process refuses to start on incomplete configuration |
-| Origin allowlist, per-IP and per-credential rate limits | Ceremony and login abuse bounded |
-
-Two properties are stated rather than implied:
-
-- **Device authorisation is verified in the API process**, not by a contract.
-  The server cannot forge a signature, but it is the component performing the
-  check.
-- **The API does not store user Safe owner keys.** Accounts must activate a
-  passkey-owned Safe before funding, and every Safe debit is a UserOperation
-  the passkey signs at send time.
-
----
-
-## Operating it
-
-Requires Node 22 or newer.
+Node 22 or newer.
 
 ```sh
 npm install
-npm run compile          # contracts
-npm run test:contracts   # 9 tests against a throwaway chain
-npm run check            # contracts, typecheck, focused harnesses (local hardhat)
-npm run api              # run against the configured chain
+npm run check        # typecheck, contracts and every focused test suite
+npm run api          # run against the configured chain (Base mainnet by default)
 ```
 
-`/` is the landing page, `/app` the account.
+`/` is the landing page, `/app` the account, `/business` the organisation
+dashboard, `/pay/<handle>` a payment page, `/invoice/<token>` an invoice,
+`/r/<slug>` a shared receipt, `/v/<code>` a document verification.
 
-Configuration lives in `.env`; `.env.example` documents every variable.
-`config.ts` enforces a production readiness gate at startup and refuses to run
-on an incomplete configuration — a non-mainnet chain, a Monerium base URL other
-than production, no Monerium connection path (neither OAuth client nor key
-encryption key), any of the removed mock/simulation/faucet/Sumsub variables
-still set, missing operator token, unacknowledged datastore, absent webhook
-secret, non-explicit origins or proxy hops, missing co-signer or recovery
-guardian, or a smart-account chain that disagrees with the app chain.
-
-Operational tooling:
-
-```sh
-npm run reconcile        # ledger + on-chain invariant drift report
-npm run monerium:check   # verify issuer configuration
-npm run stellar:check    # full anchor protocol run
-npm run dex:setup        # pool inspection and setup
-```
-
-See [INTEGRATORS.md](INTEGRATORS.md) for every external dependency and the
-credentials each requires, and [ARCHITECTURE.md](ARCHITECTURE.md) for the
-platform design and commercial reasoning.
-
----
-
-## Repository map
+Configuration lives in `.env`; `.env.example` documents every variable. Chain
+selection is configuration: `TRANSF_CHAIN_ID` picks the chain and
+`deployments.json` is keyed by it. The Shopify app project is in
+[shopify-app](shopify-app/README.md).
 
 ```
 services/api/src/
-  server.ts            HTTP API, session and KYC gating, static UI
-  orchestrator.ts      transfer state machines, authorisation, compensation
-  fx.ts  rates.ts      quoting; live mids, measured margin, fail-closed
-  liquidity.ts  dex.ts venue interface, best-execution routing, surplus
-  chain.ts             chain resolution, EIP-712 terms, commitments
-  store.ts             persistence, atomic authorisation claims
-  config.ts            configuration + production readiness gate
-  reconcile.ts         issuer/chain drift detection
-  sepa.ts              remittance reference normalisation
-  country-policy.ts    residency gate at account creation
-  webauthn.ts          challenge, attestation, assertion verification
-  recovery.ts          guardian recovery orchestration
-  pay.ts  qr.ts        payment pages and QR encoding
-  wallet/candide.ts    Safe derivation, ERC-4337 deployment, signing
-  stellar/             SEP-10 auth, SEP-24 withdrawals, SEP-9 mapping
-  bridge/bridgexyz.ts  Bridge.xyz transfer orchestration
-  adapters/            monerium, moneygram, crypto deposits, forwarder
-contracts/src/         AdminTimelock, FxSwapper, MockToken
-services/api/public/   landing + app, no build step
-scripts/               deploy, operations, 30 test harnesses
+  server.ts              HTTP API, sessions, static UI
+  orchestrator.ts        transfer state machines and compensation
+  fx.ts  rates.ts        quoting against live mids
+  liquidity.ts  dex.ts   venues and best-execution routing
+  wallet/candide.ts      Safe deployment and signing
+  documents.ts           statements, receipts, verification
+  payment-requests.ts    payment links and attribution
+  domain/                organisations, accounts, invoices, ledger
+  routes/                orgs, business, documents, payment requests, shopify, recovery
+  adapters/              monerium, crypto deposits, forwarding, gnosis pay
+  public/                landing, app, business dashboard, invoice, pay pages
+shopify-app/             Shopify app config and checkout extension
+contracts/src/           AdminTimelock, FxSwapper, MockToken
+docs/gitbook/            product documentation
+scripts/                 deploy, operations, test suites
 ```
 
 ---
+
+## Two names
+
+**Zold** is the app. **Zoldenburg** is the company that builds and operates it.
 
 ## License
 
 [Apache-2.0](LICENSE). Security policy in [SECURITY.md](SECURITY.md).
-
-This repository is software that defaults to real networks and a real e-money
-issuer. It is not an audited, licensed, or operated financial service — see
-SECURITY.md for what that means before you deploy it anywhere real.
