@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { FX } from "./config.js";
+import { FX, railFeeEur } from "./config.js";
 import { store, type Quote } from "./store.js";
 import { eurPer, usdPer } from "./rates.js";
 import { liquidityProvider } from "./liquidity.js";
@@ -65,9 +65,9 @@ export async function createQuote(userId: string, req: QuoteRequest): Promise<Qu
 
   let quote: Quote;
   const sendEur = req.sendEur ?? 0;
-  const fee = FX.FIXED_FEE_EUR;
+  const fee = railFeeEur(req.rail);
   const convertible = sendEur - fee;
-  if (convertible <= 0) throw new Error("amount below fixed fee");
+  if (convertible <= 0) throw new Error(fee > 0 ? `amount must exceed the €${fee} fee` : "amount must be positive");
   if (req.rail === "sepa") {
     quote = {
       ...base,
