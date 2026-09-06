@@ -149,17 +149,14 @@ export interface StoredDocument {
 // ---------------------------------------------------------------------------
 // holder
 
-/** The person on the letterhead. Address lines come from the Travel Rule
- *  profile where one exists; a missing address prints as absent, never as
- *  a placeholder that looks like data. */
+/** The person on the letterhead. Zold holds no postal address for an
+ *  account — the stored Travel Rule profile that once carried one was
+ *  removed for data minimisation, and Monerium keeps the KYC record — so
+ *  the address block is the account country alone. A missing address
+ *  prints as absent, never as a placeholder that looks like data. */
 export function holderBlock(user: User): HolderBlock {
-  const p = user.senderProfile;
   const lines: string[] = [];
-  if (p?.address) lines.push(p.address);
-  const cityLine = [p?.postalCode, p?.city].filter(Boolean).join(" ");
-  if (cityLine) lines.push(cityLine);
-  if (p?.addressCountryCode) lines.push(p.addressCountryCode.toUpperCase());
-  else if (user.country) lines.push(user.country.toUpperCase());
+  if (user.country) lines.push(user.country.toUpperCase());
   const iban = user.iban || undefined;
   return {
     name: user.name,

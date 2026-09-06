@@ -827,7 +827,10 @@ export async function executeTransfer(
         payoutKes: transfer.receiveKes,
         recipientName: transfer.recipientName,
         recipientPhone: transfer.recipientPhone ?? "",
-        sender: user,
+        // No originator details: nothing collects them per transfer yet, and
+        // the stored sender profile is gone (data minimisation). A SEP-12
+        // anchor refuses inside, naming what it needs.
+        senderId: user.id,
       });
     } catch (err: any) {
       // Fail closed: a failed real payout must not masquerade as success.

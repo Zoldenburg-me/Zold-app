@@ -8,7 +8,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { STELLAR, anchorModeEnabled } from "../config.js";
-import { store, type User } from "../store.js";
+import { store } from "../store.js";
 import {
   fetchAnchorInfo,
   getTreasury,
@@ -66,7 +66,7 @@ export function anchorMemoForPickup(
   if (pickup?.anchorMemo) return pickup.anchorMemo;
   const transfer = store.findTransfer(transferId);
   const user = transfer ? store.findUser(transfer.userId) : undefined;
-  return user ? senderMemo(user) : undefined;
+  return user ? senderMemo(user.id) : undefined;
 }
 
 /**
@@ -77,14 +77,48 @@ export function anchorMemoForPickup(
  */
 
 /**
- * Map our stored sender profile onto SEP-9 field names.
+ * FATF Travel Rule originator data for ONE cash pickup — who is sending.
+ *
+ * HELD FOR THE CALL, NEVER PERSISTED. This replaced a stored
+ * `user.senderProfile` (Sep 2026): identity-document numbers, birth date and
+ * home address kept in a plaintext file for a rail no deployment has ever
+ * opened, which fails data minimisation on its face. When an anchor is
+ * actually integrated, collect these at send time for that transfer,
+ * transmit them, and keep only what retention law requires — encrypted.
+ * Document images stay out of scope; they belong with a KYC provider.
+ */
+export interface SenderDetails {
+  /** The account id. Used only to derive the per-user SEP-10/SEP-12 memo. */
+  senderId: string;
+  /** Account country (ISO alpha-2): the fallback for address_country_code. */
+  country?: string;
+  /** Account email: the fallback for email_address. */
+  email?: string;
+  firstName: string;
+  lastName: string;
+  birthDate?: string; // ISO yyyy-mm-dd
+  address?: string;
+  city?: string;
+  postalCode?: string;
+  stateOrProvince?: string;
+  addressCountryCode?: string; // ISO 3166-1 alpha-2 or alpha-3
+  idType?: "passport" | "drivers_license" | "id_card";
+  idNumber?: string;
+  idCountryCode?: string;
+  mobileNumber?: string;
+  emailAddress?: string;
+  occupation?: string;
+}
+
+/**
+ * Map sender details onto SEP-9 field names.
  *
  * SEP-9 is the vocabulary every Stellar anchor shares, so this mapping is what
  * makes a MoneyGram switch a config change rather than a rewrite. Only text
- * fields: document images belong with a KYC provider.
+ * fields: document images belong with a KYC provider. No details map to
+ * nothing — the anchor then names what it requires and the pickup refuses.
  */
-export function senderProfileToSep9(user: User): Record<string, string | undefined> {
-  const p = user.senderProfile;
+export function senderDetailsToSep9(p: SenderDetails | undefined): Record<string, string | undefined> {
   if (!p) return {};
   return {
     first_name: p.firstName,
@@ -97,12 +131,12 @@ export function senderProfileToSep9(user: User): Record<string, string | undefin
     // SEP-9 (and MoneyGram explicitly) want alpha-3: "USA", "DEU". The rest of
     // the app stores alpha-2, so convert — and omit rather than guess if the
     // code is one we cannot map.
-    address_country_code: toAlpha3(p.addressCountryCode ?? user.country),
+    address_country_code: toAlpha3(p.addressCountryCode ?? p.country),
     id_type: p.idType,
     id_number: p.idNumber,
     id_country_code: toAlpha3(p.idCountryCode),
     mobile_number: p.mobileNumber,
-    email_address: p.emailAddress ?? user.email,
+    email_address: p.emailAddress ?? p.email,
     occupation: p.occupation,
   };
 }
@@ -116,8 +150,8 @@ export function senderProfileToSep9(user: User): Record<string, string | undefin
  * transmitting none. SEP-10 requires a positive integer, so we derive one
  * deterministically from the user id.
  */
-export function senderMemo(user: User): string {
-  const digest = createHash("sha256").update(`sep12:${user.id}`).digest();
+export function senderMemo(userId: string): string {
+  const digest = createHash("sha256").update(`sep12:${userId}`).digest();
   // 52 bits keeps it inside a safe integer and comfortably inside uint64.
   const n = digest.readUIntBE(0, 6);
   return String(n === 0 ? 1 : n);
@@ -131,14 +165,14 @@ export function senderMemo(user: User): string {
  * produces a withdrawal that can never complete, and the user would be told
  * their cash is on the way.
  */
-export async function submitSenderProfile(
+export async function submitSenderDetails(
   homeDomain: string,
   jwt: string,
   account: string,
-  user: User,
-  memo = senderMemo(user),
+  sender: SenderDetails | undefined,
+  memo: string,
 ): Promise<{ status?: string; missing: string[]; channel: "sep12" | "sep24" }> {
-  const supplied = senderProfileToSep9(user);
+  const supplied = senderDetailsToSep9(sender);
   // Not every anchor takes customer data over SEP-12 — MoneyGram takes it in
   // the SEP-24 body instead. When there is no KYC server, there is nothing to
   // pre-submit, and the SEP-24 path carries the fields.
@@ -160,8 +194,13 @@ export async function createCashPickupViaAnchor(
     payoutKes: number;
     recipientName: string;
     recipientPhone: string;
-    /** Sender, for the anchor's Travel Rule obligation. */
-    sender?: User;
+    /** The sending account's id — derives the memo that keeps this user a
+     *  separate customer at the anchor, whether or not details are sent. */
+    senderId: string;
+    /** Originator data for the anchor's Travel Rule obligation, collected
+     *  for THIS pickup. Nothing collects it yet, so a SEP-12 anchor refuses
+     *  below, naming the fields it wants. */
+    sender?: SenderDetails;
   },
 ): Promise<CashPickup> {
   if (!anchorModeEnabled()) throw new Error("anchor mode not configured");
@@ -191,24 +230,25 @@ export async function createCashPickupViaAnchor(
   const treasury = await getTreasury();
   // Authenticate as this specific user (account + memo) so the withdrawal and
   // its KYC record belong to them, not to a shared custodial identity.
-  const memo = args.sender ? senderMemo(args.sender) : undefined;
-  const jwt = await sep10Auth(domain, treasury, memo ? { memo } : undefined);
+  const memo = senderMemo(args.senderId);
+  const jwt = await sep10Auth(domain, treasury, { memo });
 
   // Travel Rule: tell the anchor who is sending, before asking it to pay out.
-  if (args.sender) {
-    const kyc = await submitSenderProfile(domain, jwt, treasury.publicKey(), args.sender, memo);
-    if (kyc.missing.length) {
-      throw new Error(
-        `anchor requires sender details we do not hold: ${kyc.missing.join(", ")} — ` +
-          `complete the sender profile before a cash payout`,
-      );
-    }
+  // With no details the anchor's own required list comes back as missing and
+  // the pickup refuses here rather than opening a withdrawal that can never
+  // complete.
+  const kyc = await submitSenderDetails(domain, jwt, treasury.publicKey(), args.sender, memo);
+  if (kyc.missing.length) {
+    throw new Error(
+      `anchor requires sender details we do not hold: ${kyc.missing.join(", ")} — ` +
+        `they must be collected for this transfer before a cash payout`,
+    );
   }
 
   // MoneyGram reads customer info from the interactive POST body (SEP-12 above
   // is what Stellar's test anchor uses). Send its documented subset so the
   // webview arrives pre-filled instead of asking the user to retype it.
-  const sep9 = args.sender ? moneygramSep9(senderProfileToSep9(args.sender)) : undefined;
+  const sep9 = args.sender ? moneygramSep9(senderDetailsToSep9(args.sender)) : undefined;
   const wd = await sep24InitiateWithdraw(
     domain,
     jwt,
