@@ -264,6 +264,17 @@
 
   #onboard:has(#onb-step2:not(.hidden)) .hero-1 { display: none; }
   #onboard:has(#onb-step2:not(.hidden)) .hero-2 { display: block; }
+  .onb-hero-inner.hero-3 { display: none; }
+  #onboard:has(#onb-step3:not(.hidden)) .hero-1 { display: none; }
+  #onboard:has(#onb-step3:not(.hidden)) .hero-3 { display: block; }
+  /* The signup email, shown where the recovery step registers it. Read-only
+     on purpose: recovery looks the account up by the address on the account,
+     so the registered channel must be that address and not a second one. */
+  .onb-form .onb-static {
+    padding: .82rem .9rem; border-radius: 12px; font-size: .95rem;
+    background: var(--onb-field); border: 1px solid var(--onb-line); color: var(--onb-ink);
+    overflow-wrap: anywhere;
+  }
   .onb-hero h2 {
     font-size: 2.15rem; font-weight: 700; letter-spacing: -.03em; line-height: 1.15;
     color: #fff; margin-bottom: .6rem;
@@ -1311,15 +1322,15 @@
     <div class="onb-left">
       <div class="onb-logo"><span class="tri">▽</span> Zold</div>
       <div class="onb-form">
-        <div class="onb-steps"><span class="dot active" id="ostep1"></span><span class="dot" id="ostep2"></span></div>
+        <div class="onb-steps"><span class="dot active" id="ostep1"></span><span class="dot" id="ostep2"></span><span class="dot" id="ostep3"></span></div>
 
         <div id="onb-step1">
           <h1>Open your account</h1>
           <div class="sub">A euro account with your own IBAN, so money can reach you the ordinary way. Takes about a minute.</div>
           <label>Full name</label>
           <input id="name" placeholder="Miriam Zoldenburg" />
-          <label>Email</label>
-          <input id="email" type="email" placeholder="miriam@example.com" />
+          <label>Email <span class="onb-hint">— how a lost device gets the account back</span></label>
+          <input id="email" type="email" autocomplete="email" placeholder="miriam@example.com" />
           <label>Account type</label>
           <div class="onb-seg" id="acct-type">
             <button type="button" class="on" data-acct="individual">Individual</button>
@@ -1418,6 +1429,37 @@
           <div class="onb-note">The passkey is the account: it signs in, it approves every payment, and it is what Monerium's IBAN is bound to. Without one nothing can be issued.</div>
           <div class="error hidden" id="pk-err"></div>
         </div>
+
+        <!-- Step 3: recovery, before the Monerium gate. The smart wallet now
+             has an address money can reach, and the only thing that can spend
+             from it is the passkey on this device. Drawn only when /api/health
+             says the deployment has Candide's service — offerRecoveryEnrolment()
+             resolves without showing this when it does not, because an
+             unavailable step drawn as a promise is the thing this app does not
+             do. The email is the one given at signup and is verified HERE, by
+             Candide's code; Zold sends nothing. -->
+        <div id="onb-step3" class="hidden">
+          <h1>If you lose this device</h1>
+          <div class="sub">Your passkey exists only here. Register your email so a lost phone is not a lost account: a code to it, then a waiting period you can cancel from this device, moves the account to a new passkey.</div>
+          <div id="rec-intro">
+            <label>Recovery email</label>
+            <div class="onb-static" id="rec-email"></div>
+            <button class="btn-primary-lite" id="btn-rec-register">Register with my passkey</button>
+            <button class="ghost wide" id="btn-rec-skip">Skip for now</button>
+            <div class="onb-note">Two passkey approvals: one signs the registration, one adds the guardian to your smart wallet. If you skip, nothing can recover this account until you set it up from your profile.</div>
+          </div>
+          <div id="rec-otp" class="hidden">
+            <label>Code sent to <span id="rec-target"></span></label>
+            <input id="rec-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
+            <button class="btn-primary-lite" id="btn-rec-confirm">Confirm</button>
+            <button class="ghost wide" id="btn-rec-restart">Start over</button>
+          </div>
+          <div id="rec-done" class="hidden">
+            <div class="pk-card"><span class="pk-ic">✓</span><span id="rec-done-text"></span></div>
+            <button class="btn-primary-lite" id="btn-rec-continue">Continue</button>
+          </div>
+          <div class="error hidden" id="rec-err"></div>
+        </div>
       </div>
     </div>
     <!-- No mock balance here on purpose. A made-up €40,206.20 is the first
@@ -1458,9 +1500,9 @@
         </div>
       </div>
 
-      <!-- Step 2: why the passkey matters. Deliberately makes no promise about
-           recovering a lost device — the guardian ceremony is not a finished
-           product flow, and onboarding is the worst place to imply otherwise. -->
+      <!-- Step 2: why the passkey matters. Says nothing about losing the
+           device: that is step 3's subject, and only where the deployment can
+           actually offer it. -->
       <div class="onb-hero-inner hero-2">
         <h2>Only this device can spend it.</h2>
         <div class="tag">Your passkey is the account's signature. It is created here, it stays here, and it is what every payment is checked against.</div>
@@ -1490,6 +1532,43 @@
         <div class="onb-foot">
           Keep this device. A passkey lives on the device that created it, so
           setting one up on your everyday phone or laptop is the right choice.
+        </div>
+      </div>
+
+      <!-- Step 3: recovery, stated at its real strength and no more. Candide
+           holds the one guardian key; the waiting period is the module's, on
+           chain; and nothing here tells the owner a recovery began — the
+           Profile screen does, which is why the foot says to keep the device. -->
+      <div class="onb-hero-inner hero-3">
+        <h2>A lost phone is not a lost account.</h2>
+        <div class="tag">Recovery is a guardian on your smart wallet, run by Candide, that can move the account to a new passkey only after a code on every registered channel and a waiting period.</div>
+        <div class="onb-points">
+          <div class="onb-point">
+            <span class="pi">✉️</span>
+            <span>
+              <span class="pt">A code, then a wait</span>
+              <span class="pd">Whoever starts a recovery must pass a code on every channel you registered. Then the on-chain waiting period runs before anything changes.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">✋</span>
+            <span>
+              <span class="pt">You can stop it</span>
+              <span class="pd">While the wait runs, this device can cancel the recovery with one passkey approval. It shows on your profile.</span>
+            </span>
+          </div>
+          <div class="onb-point">
+            <span class="pi">🚫</span>
+            <span>
+              <span class="pt">Zold cannot do it alone</span>
+              <span class="pd">The guardian key is Candide's, the waiting period is enforced on chain, and Zold holds no key that can move your account.</span>
+            </span>
+          </div>
+        </div>
+        <div class="onb-foot">
+          Someone who controls your mailbox can start a recovery. The waiting
+          period is what lets you stop one, so keep this device and look at
+          your profile if anything seems off.
         </div>
       </div>
     </div>
@@ -4904,6 +4983,7 @@ function renderKycGate(u, needsChoice) {
   const rejected = u.kycStatus === "rejected";
   const approved = kycApproved(u);
   const walletReady = !needsPasskeySafeSetup(u) && !!u.passkeySafe;
+  const recoveryActive = u.passkeySafe?.candideRecovery?.guardianStatus === "active";
 
   // At the gate nothing is running yet, so there is nothing to report on.
   gate.classList.toggle("hidden", !!needsChoice);
@@ -4934,6 +5014,11 @@ function renderKycGate(u, needsChoice) {
   const steps = [
     { t: "Account created", d: "Your passkey is registered", state: "done" },
     { t: "Smart wallet deployed", d: walletReady ? "Your account exists on-chain" : "Approve the deployment with your passkey", state: walletReady ? "done" : "now" },
+    // Only where the deployment can offer it. Not "now" when skipped: nothing
+    // is waiting on it, and the pulse belongs to the step that is.
+    ...(caps.emailSmsRecovery ? [{ t: "Recovery set up",
+      d: recoveryActive ? "Email registered, guardian on your smart wallet" : "Skipped — set it up from your profile; until then a lost device loses the account",
+      state: recoveryActive ? "done" : "" }] : []),
     { t: "Monerium connected", d: connected ? (u.monerium?.method === "api_keys" ? "Your own API keys" : "Signed in with Monerium") : "Sign in, or add your API keys", state: connected ? "done" : "now" },
     { t: "IBAN activated", d: rejected ? "Not approved" : approved ? "Funding and sending are open" : "One passkey confirmation",
       state: rejected ? "bad" : approved ? "done" : "now" },
@@ -5243,7 +5328,8 @@ $("btn-continue").onclick = () => {
   const name = $("name").value.trim();
   if (!name) return showErr("create-err", new Error("please enter your name"));
   const email = $("email").value.trim();
-  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+  if (!email) return showErr("create-err", new Error("please enter your email — it is how a lost device gets this account back"));
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return showErr("create-err", new Error("that email doesn't look right"));
   }
   const country = ($("country").value.trim() || "").toUpperCase();
@@ -5265,7 +5351,7 @@ $("btn-continue").onclick = () => {
   }
   pendingInfo = {
     name,
-    email: email || undefined,
+    email,
     country,
     accountType: acctType,
     citizenships: [...citizenships],
@@ -5469,6 +5555,91 @@ function pkStep(i, state) {
   el.querySelector(".pdot").textContent = state === "fail" ? "✕" : "✓";
 }
 
+/* ---------- Onboarding step 3: recovery enrolment ---------- */
+
+/* Is there recovery work left that onboarding should offer? True only where
+   the deployment has the service, the Safe is active and the guardian is not
+   yet on it. */
+function recoveryEnrolmentPending(u = user) {
+  return !!(caps.emailSmsRecovery && u?.passkeySafe?.status === "active"
+    && u.passkeySafe.candideRecovery?.guardianStatus !== "active");
+}
+
+/* Runs right after the smart wallet is active and before the Monerium gate.
+   Same three calls the Profile screen makes (channel -> signature -> OTP,
+   then guardian), against the email given at signup. Resolves true when the
+   guardian is on the Safe, false when skipped or unavailable; it never
+   throws, because a recovery failure must not stop the account it protects
+   from being finished — the Profile screen keeps the same controls. */
+function offerRecoveryEnrolment() {
+  if (!recoveryEnrolmentPending() || !user?.email) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const panes = ["rec-intro", "rec-otp", "rec-done"];
+    const show = (id) => panes.forEach((x) => $(x).classList.toggle("hidden", x !== id));
+    $("onb-step2").classList.add("hidden");
+    $("onb-step3").classList.remove("hidden");
+    $("ostep2").className = "dot done";
+    $("ostep3").className = "dot active";
+    $("rec-email").textContent = user.email;
+    clearErr("rec-err");
+    show("rec-intro");
+    let otp = null; // { submitTo } while a code is outstanding
+    const finish = (enrolled) => {
+      $("onb-step3").classList.add("hidden");
+      $("ostep3").className = "dot done";
+      resolve(enrolled);
+    };
+    $("btn-rec-skip").onclick = () => finish(false);
+    $("btn-rec-continue").onclick = () => finish(user.passkeySafe?.candideRecovery?.guardianStatus === "active");
+    $("btn-rec-restart").onclick = () => { otp = null; clearErr("rec-err"); show("rec-intro"); };
+    $("btn-rec-register").onclick = async () => {
+      clearErr("rec-err");
+      const b = $("btn-rec-register");
+      b.disabled = true;
+      b.textContent = "Approve with your passkey…";
+      try {
+        const prep = await api(`/api/users/${user.id}/recovery/candide/channels`, { channel: "email", target: user.email });
+        const sig = await passkeySignPrepared(prep);
+        const sent = await api(prep.submitTo, sig);
+        otp = { submitTo: sent.submitTo };
+        $("rec-target").textContent = sent.target;
+        $("rec-code").value = "";
+        show("rec-otp");
+        $("rec-code").focus();
+      } catch (e) { showErr("rec-err", e); }
+      finally { b.disabled = false; b.textContent = "Register with my passkey"; }
+    };
+    $("btn-rec-confirm").onclick = async () => {
+      if (!otp) return;
+      clearErr("rec-err");
+      const b = $("btn-rec-confirm");
+      b.disabled = true;
+      b.textContent = "Checking the code…";
+      try {
+        const r = await api(otp.submitTo, { otp: $("rec-code").value.trim() });
+        otp = null;
+        user = { ...user, ...r, recovery: undefined, next: undefined };
+        if (r.next === "guardian") {
+          b.textContent = "Approve the guardian with your passkey…";
+          const prep = await api(`/api/users/${user.id}/recovery/candide/guardian`, {});
+          const done = prep.challenge ? await api(prep.submitTo, await passkeySignPrepared(prep)) : prep;
+          user = { ...user, ...done, recovery: undefined, status: undefined, opHash: undefined };
+        }
+        const active = user.passkeySafe?.candideRecovery?.guardianStatus === "active";
+        $("rec-done-text").innerHTML = active
+          ? `<b>Recovery is on.</b> A code to ${esc(user.email)} plus the waiting period can move this account to a new passkey. You can add a phone number from your profile.`
+          : `<b>Your email is registered</b>, but the guardian is not on your smart wallet yet, so no recovery can run. One passkey approval from your profile finishes it.`;
+        show("rec-done");
+      } catch (e) {
+        showErr("rec-err", e);
+        // Five wrong codes end the registration server-side; the only way on
+        // is to start over, and the button for that is on this pane.
+        if (!otp) show("rec-intro");
+      } finally { b.disabled = false; b.textContent = "Confirm"; }
+    };
+  });
+}
+
 async function createAccount(withPasskey) {
   clearErr("pk-err");
   try {
@@ -5550,6 +5721,11 @@ async function createAccount(withPasskey) {
         if (needsPasskeySafeSetup(user)) setPasskeyButtonBusy(false, "Finish smart wallet");
         else setPasskeyButtonBusy(false, "Create passkey & open account");
       }
+      // Step 3, while the account is still pending at the Monerium gate:
+      // the wallet exists and only this device can spend from it, so this
+      // is the moment to give it a way back. Resolves at once where the
+      // deployment has no recovery service.
+      if (!needsPasskeySafeSetup(user)) await offerRecoveryEnrolment();
     }
     const displayName = pendingInfo?.name || user.name || "Account";
     if (!kycApproved(user)) return enterKycReview(displayName);
