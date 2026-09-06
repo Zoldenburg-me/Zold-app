@@ -52,6 +52,12 @@ function payToken() {
 
 /** LHV's BIC, only beside an Estonian IBAN it applies to (documents.ts holds
  *  the same rule; duplicated here to keep this module free of that import). */
+/** What the payer-facing projection needs from this deployment. Exported so
+ *  the Shopify order lookup renders the SAME projection the pay page does. */
+export function payerContext(req: express.Request, quote?: CryptoQuote) {
+  return { chainId: CHAIN_ID, token: payToken(), bicFor, baseUrl: baseUrlFor(req), quote };
+}
+
 const bicFor = (iban?: string) => (iban && /^EE/i.test(iban.replace(/\s/g, "")) ? "LHVBEE22" : undefined);
 
 /** Amounts this payee has quoted on requests still open — the set a new quote
@@ -73,7 +79,7 @@ async function liveMid() {
  * unavailable is not fatal here: the request is still created and the page
  * says crypto cannot be quoted right now, which is the truth.
  */
-async function ensureQuote(r: PaymentRequest, amountEur: number | undefined): Promise<{ request: PaymentRequest; quote?: CryptoQuote }> {
+export async function ensureQuote(r: PaymentRequest, amountEur: number | undefined): Promise<{ request: PaymentRequest; quote?: CryptoQuote }> {
   if (!r.methods.includes("crypto") || amountEur === undefined || effectiveState(r) !== "OPEN") return { request: r };
   const existing = currentQuote(r, amountEur);
   if (existing) return { request: r, quote: existing };
@@ -235,13 +241,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     return { r, user };
   };
 
-  const publicCtx = (req: express.Request, quote?: CryptoQuote) => ({
-    chainId: CHAIN_ID,
-    token: payToken(),
-    bicFor,
-    baseUrl: baseUrlFor(req),
-    quote,
-  });
+  const publicCtx = (req: express.Request, quote?: CryptoQuote) => payerContext(req, quote);
 
   router.get(
     "/pay/:handle/:code",
