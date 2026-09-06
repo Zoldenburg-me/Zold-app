@@ -103,6 +103,7 @@ export function validateLine(
 
   return {
     contactId: input.contactId,
+    ...(input.invoiceId ? { invoiceId: input.invoiceId } : {}),
     destination,
     asset,
     amount,
