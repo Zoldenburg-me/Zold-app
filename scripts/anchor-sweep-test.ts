@@ -69,7 +69,7 @@ assert.equal(t.state, "PAID");
 assert.equal(t.pickup?.status, "PAID");
 assert.equal(
   anchorMemoForPickup(t.id, t.pickup),
-  senderMemo(user),
+  senderMemo(user.id),
   "anchor pickups stored without a memo must recover the same per-user SEP-10 memo on refresh",
 );
 

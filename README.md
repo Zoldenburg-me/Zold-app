@@ -305,7 +305,8 @@ quote's implied rate checked against the independent mid and refused beyond a
 band. Positive slippage is measured and attributed to the user by default.
 `bridge/bridgexyz.ts` creates the hosted Bridge transfer and returns deposit
 instructions for Stellar-side settlement. `stellar/anchor.ts` authenticates over
-SEP-10, submits the sender profile over SEP-12, opens a SEP-24 withdrawal, and
+SEP-10, submits per-transfer sender details over SEP-12 (nothing collects them
+yet, so a SEP-12 anchor refuses and names the gaps), opens a SEP-24 withdrawal, and
 pays the anchor's account with its memo — refusing to fund if the Stellar
 recipient lacks a trustline for the asset.
 

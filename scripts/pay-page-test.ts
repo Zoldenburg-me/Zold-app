@@ -47,7 +47,6 @@ const user: any = {
   country: "DE",
   kycStatus: "approved",
   kyc: { provider: "mock", applicantId: "app_123" },
-  senderProfile: { firstName: "Miriam", lastName: "Zoldenburg", idNumber: "X1234567" },
   iban: "DE89370400440532013000",
   address: "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1",
   authorizerAddress: "0xcccc216C328AAa6a384DD422c4eA005cEd7F73f1",
@@ -140,7 +139,6 @@ check("and leaks no account data — this is the security-relevant one", () => {
     "miriam@example.com",
     "DE89370400440532013000",
     "app_123",
-    "X1234567",
     "secret",
     "Miriam Zoldenburg", // the legal name, as distinct from the chosen display name
     "approved",
