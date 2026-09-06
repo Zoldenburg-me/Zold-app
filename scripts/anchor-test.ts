@@ -237,6 +237,7 @@ await t("a corridor-sized amount is refused by the max check", async () => {
         payoutKes: 13778,
         recipientName: "Joseph Otieno",
         recipientPhone: "+254700000000",
+        senderId: "anchor-test-sender",
       }),
     /exceeds the anchor's .* maximum/,
     "an over-limit withdrawal must be refused before opening a session",
@@ -254,6 +255,7 @@ await t("a zero amount is refused", async () => {
         payoutKes: 0,
         recipientName: "X",
         recipientPhone: "+254700000000",
+        senderId: "anchor-test-sender",
       }),
     /non-positive/,
   );
