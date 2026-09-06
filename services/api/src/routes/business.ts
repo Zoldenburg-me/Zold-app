@@ -42,6 +42,8 @@ import {
   newLinkToken,
   supplierView,
   validateLines,
+  assertPayable,
+  paymentReference,
 } from "../domain/invoices.js";
 import { CoaError, applyRules, TX_TYPES, validateChartAccount } from "../domain/coa.js";
 import {
@@ -61,7 +63,7 @@ import {
   type InvoiceDraft,
   type VatTreatment,
 } from "../domain/invoicing.js";
-import { ibanChecksumValid, normaliseIban } from "../domain/contacts.js";
+import { ContactError, ibanChecksumValid, normaliseIban, validateBankAccount, validateWallet } from "../domain/contacts.js";
 import {
   EU_MEMBER_STATES,
   jurisdictionFor,
@@ -308,6 +310,48 @@ export function createBusinessRouter(
   };
 
   /** Re-check a draft against the address book and park it if anything moved. */
+  /**
+   * An invoice in PAYING follows its transfer, never the other way round: the
+   * transfer is the money, the invoice row is bookkeeping. Derived on read,
+   * like a draft's execution state, so a row cannot claim PAID while the
+   * payout sits in MANUAL_REVIEW.
+   */
+  const syncInvoicePayment = (invoice: Invoice): Invoice => {
+    if (invoice.state !== "PAYING") return invoice;
+    const transfer = invoice.payment?.transferId ? store.findTransfer(invoice.payment.transferId) : undefined;
+    if (transfer) {
+      if (transfer.state === "PAID") {
+        return store.updateInvoice(invoice.id, {
+          state: "PAID",
+          payment: { ...invoice.payment, paidAt: transfer.updatedAt },
+        });
+      }
+      if (transfer.state === "FAILED" || transfer.state === "REFUNDED") {
+        return store.updateInvoice(invoice.id, {
+          state: "SUBMITTED",
+          payment: { ...invoice.payment, draftId: undefined, transferId: undefined },
+        });
+      }
+      return invoice;
+    }
+    const draft = invoice.payment?.draftId ? store.findDraft(invoice.payment.draftId) : undefined;
+    if (!draft || draft.state === "FAILED" || draft.state === "REJECTED") {
+      return store.updateInvoice(invoice.id, {
+        state: "SUBMITTED",
+        payment: { ...invoice.payment, draftId: undefined },
+      });
+    }
+    return invoice;
+  };
+
+  const releaseInvoicesOf = (draftId: string) => {
+    for (const inv of store.invoices) {
+      if (inv.state === "PAYING" && inv.payment?.draftId === draftId && !inv.payment.transferId) {
+        store.updateInvoice(inv.id, { state: "SUBMITTED", payment: { ...inv.payment, draftId: undefined } });
+      }
+    }
+  };
+
   const reconcileDrift = (draft: DraftPayment): DraftPayment => {
     const drifted = findDriftedLines(draft, contactsById(draft.orgId));
     if (!drifted.length) return draft;
@@ -584,7 +628,7 @@ export function createBusinessRouter(
     // A half-created batch consumes quotes and leaves transfers nobody asked
     // for, so every line is checked first and the whole draft is refused if any
     // one of them cannot be paid.
-    const plans: { lineId: string; iban: string; name: string; sendEur: number }[] = [];
+    const plans: { lineId: string; iban: string; name: string; sendEur: number; invoiceId?: string }[] = [];
     const problems: { lineId: string; reason: string }[] = [];
 
     for (const line of checked.lines) {
@@ -628,7 +672,7 @@ export function createBusinessRouter(
         });
         continue;
       }
-      plans.push({ lineId: line.id, iban: bank.iban, name: bank.holderName, sendEur });
+      plans.push({ lineId: line.id, iban: bank.iban, name: bank.holderName, sendEur, invoiceId: line.invoiceId });
     }
 
     if (problems.length) {
@@ -683,13 +727,18 @@ export function createBusinessRouter(
     }[] = [];
 
     for (const plan of plans) {
+      // A line that pays an invoice carries the supplier's invoice number as
+      // the remittance text — the one string their bookkeeping matches on.
+      const invoice = plan.invoiceId ? store.findInvoice(plan.invoiceId) : undefined;
       let built;
       try {
         const quote = await createQuote(user.id, { rail: "sepa", sendEur: plan.sendEur });
         built = await buildTransferFromQuote(quote, {
           recipientName: plan.name,
           recipientIban: plan.iban,
-          reference: `${ctx.org.name} ${claimed.id.slice(0, 8)}`.slice(0, 140),
+          reference: invoice
+            ? paymentReference(invoice, ctx.org.name)
+            : `${ctx.org.name} ${claimed.id.slice(0, 8)}`.slice(0, 140),
         });
       } catch (err) {
         built = { ok: false as const, status: 500, body: { error: (err as Error).message } };
@@ -701,6 +750,9 @@ export function createBusinessRouter(
         // The draft goes to FAILED rather than back to REVIEWED so that a retry
         // is a deliberate re-draft instead of a second batch on top of the
         // first.
+        // Invoices this draft was paying go back to SUBMITTED so they can be
+        // paid again by a fresh draft; the failed one is not their payment.
+        releaseInvoicesOf(claimed.id);
         store.updateDraft(claimed.id, {
           state: "FAILED",
           transferIds: authorizations.map((a) => a.transferId),
@@ -722,6 +774,11 @@ export function createBusinessRouter(
         });
       }
 
+      if (invoice && invoice.state === "PAYING") {
+        store.updateInvoice(invoice.id, {
+          payment: { ...invoice.payment, transferId: built.transfer.id },
+        });
+      }
       authorizations.push({
         lineId: plan.lineId,
         transferId: built.transfer.id,
@@ -819,6 +876,7 @@ export function createBusinessRouter(
       invoices: store
         .invoicesOf(ctx.org.id)
         .filter((i) => i.state !== "DELETED")
+        .map(syncInvoicePayment)
         .map((i) => ({ ...i, linkTokenHash: undefined, overdue: isOverdue(i) })),
     });
   });
@@ -874,6 +932,126 @@ export function createBusinessRouter(
       if (err instanceof InvoiceError) return res.status(409).json({ error: err.message });
       throw err;
     }
+  });
+
+  /**
+   * Pay an incoming invoice: one draft, one line, built from what the supplier
+   * gave. The supplier lands in the address book (or is matched to an existing
+   * contact by IBAN, then by name) so the line carries a fingerprint and the
+   * four-eyes review applies exactly as to any other payment. The invoice
+   * moves to PAYING and follows its transfer from there.
+   */
+  r.post("/:orgId/invoices/:invoiceId/pay", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "drafts.create")) return;
+    const invoice = store.findInvoice(String(req.params.invoiceId));
+    if (!invoice || invoice.orgId !== ctx.org.id) return res.status(404).json({ error: "no such invoice" });
+
+    let bank: ReturnType<typeof assertPayable>;
+    try {
+      bank = assertPayable(syncInvoicePayment(invoice));
+    } catch (err) {
+      if (err instanceof InvoiceError) return res.status(409).json({ error: err.message });
+      throw err;
+    }
+
+    const accountId = typeof req.body?.accountId === "string" ? req.body.accountId : undefined;
+    const account = accountId
+      ? store.findAccount(accountId)
+      : store.accountsOf(ctx.org.id).find((a) => a.currency === invoice.currency);
+    if (!account || account.orgId !== ctx.org.id) {
+      return res.status(400).json({ error: `This organisation has no ${invoice.currency} account to pay from.` });
+    }
+
+    // The supplier as a contact. Match on IBAN first (the same account under a
+    // renamed company is the same payee), then on name; otherwise create one.
+    const iban = normaliseIban(bank.iban);
+    const contacts = store.contactsOf(ctx.org.id);
+    let contact = contacts.find((c) => c.bankAccounts.some((b) => b.iban && normaliseIban(b.iban) === iban));
+    let bankAccountId = contact?.bankAccounts.find((b) => b.iban && normaliseIban(b.iban) === iban)?.id;
+    const supplierName = invoice.supplier?.orgName?.trim() || bank.holderName;
+    const now = new Date().toISOString();
+    if (!contact) {
+      contact = contacts.find((c) => c.name.trim().toLowerCase() === supplierName.toLowerCase());
+    }
+    if (!bankAccountId) {
+      const bankAccount = {
+        id: `cb_${randomUUID()}`,
+        ...validateBankAccount({
+          currency: invoice.currency as never,
+          country: iban.slice(0, 2),
+          holderName: bank.holderName,
+          iban,
+          bic: bank.bic,
+        }),
+      };
+      bankAccountId = bankAccount.id;
+      if (contact) {
+        contact = store.updateContact(contact.id, { bankAccounts: [...contact.bankAccounts, bankAccount], updatedAt: now });
+      } else {
+        contact = store.addContact({
+          id: `con_${randomUUID()}`,
+          orgId: ctx.org.id,
+          name: supplierName,
+          email: invoice.supplier?.email,
+          wallets: [],
+          bankAccounts: [bankAccount],
+          notes: `Added from invoice ${invoice.supplier?.invoiceNumber ?? invoice.id}`,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+
+    if (!contact || !bankAccountId) {
+      return res.status(500).json({ error: "could not resolve the supplier's bank account" });
+    }
+    let line;
+    try {
+      line = {
+        id: `dl_${randomUUID()}`,
+        ...validateLine(
+          {
+            contactId: contact.id,
+            invoiceId: invoice.id,
+            destination: { kind: "bank", bankAccountId, displayName: bank.holderName },
+            asset: invoice.currency,
+            amount: invoice.total,
+            note: `Invoice ${invoice.supplier?.invoiceNumber ?? ""} · ${supplierName}`.trim(),
+            tags: [],
+          },
+          contact,
+        ),
+      };
+    } catch (err) {
+      if (badRequest(res, err)) return;
+      throw err;
+    }
+    const draft = store.addDraft({
+      id: `dft_${randomUUID()}`,
+      orgId: ctx.org.id,
+      source: { kind: "account", accountId: account.id },
+      state: "DRAFT",
+      lines: [line],
+      createdByMemberId: ctx.member.id,
+      activity: [activity(ctx.member.id, "created", `Pays invoice ${invoice.supplier?.invoiceNumber ?? invoice.id}`)],
+      createdAt: now,
+      updatedAt: now,
+    });
+    const updated = store.updateInvoice(invoice.id, {
+      state: "PAYING",
+      payment: { ...invoice.payment, draftId: draft.id },
+    });
+    res.status(201).json({
+      invoice: { ...updated, linkTokenHash: undefined },
+      draft,
+      contact,
+      note: can(ctx.org, "transfers.approvals").allowed
+        ? "A draft was created. A second person reviews it, then the account holder signs it."
+        : "A draft was created. The account holder signs it to send.",
+    });
   });
 
   /** Mark an invoice settled outside the platform (manual reconciliation). */
@@ -1473,16 +1651,47 @@ export function createInvoiceLinkRouter(): express.Router {
         },
         lines,
         total,
-        payTo: req.body?.payTo,
+        payTo: parsePayTo(req.body?.payTo, invoice.currency),
         dueDate: typeof req.body?.dueDate === "string" ? req.body.dueDate : invoice.dueDate,
         submittedAt: new Date().toISOString(),
       });
       res.json({ invoice: supplierView(updated, payorName(updated), issuerExtras(updated)) });
     } catch (err) {
-      if (err instanceof InvoiceError) return res.status(400).json({ error: err.message });
+      if (err instanceof InvoiceError || err instanceof ContactError) return res.status(400).json({ error: err.message });
       throw err;
     }
   });
 
   return r;
+}
+
+/**
+ * Where the supplier wants the money. A bank account is validated like an
+ * address-book entry (IBAN checksum included) so that "Pay" later never
+ * fails on a typo the supplier made; a wallet is shape-checked. Absent is
+ * allowed — the payor can still ask — but a half-filled block is refused.
+ */
+function parsePayTo(raw: unknown, currency: string): Invoice["payTo"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const p = raw as Record<string, any>;
+  if (p.kind === "bank") {
+    const b = p.bank ?? p;
+    const iban = typeof b.iban === "string" ? normaliseIban(b.iban) : "";
+    if (!iban) throw new InvoiceError("Bank details need an IBAN.");
+    return {
+      kind: "bank",
+      bank: validateBankAccount({
+        currency: currency as never,
+        country: typeof b.country === "string" && b.country.length === 2 ? b.country.toUpperCase() : iban.slice(0, 2),
+        holderName: b.holderName ?? b.holder,
+        iban,
+        bic: typeof b.bic === "string" && b.bic.trim() ? b.bic.toUpperCase().replace(/\s+/g, "") : undefined,
+      }),
+    };
+  }
+  if (p.kind === "wallet") {
+    const w = validateWallet({ chainId: p.chainId, address: p.address, label: "invoice" } as never);
+    return { kind: "wallet", chainId: w.chainId, address: w.address };
+  }
+  throw new InvoiceError('payTo.kind must be "bank" or "wallet".');
 }

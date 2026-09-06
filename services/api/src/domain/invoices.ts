@@ -39,6 +39,36 @@ export function assertTransition(from: InvoiceState, to: InvoiceState) {
   }
 }
 
+/**
+ * The remittance text for paying an incoming invoice: the supplier's own
+ * invoice number first, because that is what their bookkeeping matches on,
+ * then who paid. Falls back to the payer's name alone when the invoice has
+ * no number. SEPA folding and the 140-char limit are applied downstream.
+ */
+export function paymentReference(invoice: Pick<Invoice, "supplier">, payerName: string): string {
+  const number = invoice.supplier?.invoiceNumber?.trim();
+  return (number ? `Invoice ${number} ${payerName}` : payerName).trim().slice(0, 140);
+}
+
+/** The draft that pays an invoice may be created only from SUBMITTED, and
+ *  only when the supplier gave a bank account the SEPA rail can reach. */
+export function assertPayable(invoice: Invoice): { iban: string; holderName: string; bic?: string } {
+  if (invoice.direction === "outgoing") throw new InvoiceError("This invoice was issued by you; there is nothing to pay.");
+  if (invoice.state === "PAYING") throw new InvoiceError("A payment for this invoice is already under way.");
+  if (invoice.state === "PAID" || invoice.state === "RECONCILED") throw new InvoiceError("This invoice is already paid.");
+  if (invoice.state !== "SUBMITTED") throw new InvoiceError(`An invoice in ${invoice.state} cannot be paid — the supplier has not submitted it.`);
+  if (invoice.currency !== "EUR") throw new InvoiceError(`Only EUR invoices can be paid today; this one is in ${invoice.currency}.`);
+  const bank = invoice.payTo?.kind === "bank" ? invoice.payTo.bank : undefined;
+  if (!bank?.iban) {
+    throw new InvoiceError(
+      invoice.payTo?.kind === "wallet"
+        ? "The supplier gave only a wallet address. Paying a wallet from an issued account is not wired; ask them for an IBAN."
+        : "The supplier gave no bank account. Ask them for an IBAN.",
+    );
+  }
+  return { iban: bank.iban, holderName: bank.holderName, bic: bank.bic };
+}
+
 export function newLinkToken(): { token: string; hash: string } {
   const token = randomBytes(32).toString("base64url");
   return { token, hash: hashToken(token) };
