@@ -18,7 +18,7 @@
  *     plausible-looking number is worse than a missing one: the recipient has
  *     no way to check it and every reason to believe it.
  */
-import { CHAIN_ID, FX, MONERIUM, moneriumSandboxEnabled } from "./config.js";
+import { CHAIN_ID, FX, MONERIUM, moneriumSandboxEnabled, railFeeEur } from "./config.js";
 import type { Quote, ReceiptShareFields, Transfer, User } from "./store.js";
 
 /** A value the sender chose not to publish. Carries no value, by construction. */
@@ -347,7 +347,7 @@ export function buildReceipt(args: {
   const rows: ReceiptRow[] = [];
 
   const sentEur = eur(t.sendEur);
-  const receivedEur = eur(t.receiveEur ?? Math.max(0, t.sendEur - FX.FIXED_FEE_EUR));
+  const receivedEur = eur(t.receiveEur ?? Math.max(0, t.sendEur - railFeeEur(t.rail)));
   const receivedKes = kes(t.receiveKes ?? 0);
   const received = sepa ? receivedEur : receivedKes;
 
@@ -385,7 +385,9 @@ export function buildReceipt(args: {
       // is reportable as-is. Presenting the flat fee without it understated what
       // the transfer cost, which is the whole reason the measurement exists.
       const margin = quote.marginBps ? ` · ${(quote.marginBps / 100).toFixed(2)}%` : "";
-      push("Zold fee", `${eur(quote.fixedFeeEur ?? FX.FIXED_FEE_EUR)}${margin}`, { mono: true, tone: "muted" });
+      const feeEur = quote.fixedFeeEur ?? railFeeEur(t.rail);
+      // A free rail prints no fee row: "Zold fee €0.00" reads as a fee.
+      if (feeEur > 0 || quote.marginBps) push("Zold fee", `${eur(feeEur)}${margin}`, { mono: true, tone: "muted" });
     }
   }
 
