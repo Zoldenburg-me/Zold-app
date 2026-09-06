@@ -374,6 +374,9 @@ export type DraftState =
 export interface DraftLine {
   id: string;
   contactId?: string;
+  /** Set when the line pays an incoming invoice: the invoice number becomes
+   *  the SEPA reference and the invoice follows the transfer's state. */
+  invoiceId?: string;
   /** Resolved at save time. Kept alongside contactId so a later change to the
    *  contact is *detectable* (-> INVALID_DATA) rather than invisible. */
   destination: {
@@ -536,6 +539,8 @@ export interface Invoice {
     bank?: Omit<ContactBankAccount, "id">;
   };
   payment?: {
+    /** The draft that pays this invoice, from "Pay" on the invoice. */
+    draftId?: string;
     transferId?: string;
     txHash?: string;
     paidAt?: string;
