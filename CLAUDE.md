@@ -1375,6 +1375,31 @@ Monerium is Gnosis-native. Base Sepolia was chosen for testing because gas is
 production. If CoW-on-Gnosis is the liquidity route, Gnosis is the natural
 production chain — not Base, not Polygon. Decide it deliberately.
 
+## Pay from invoice (Sep 2026)
+
+An incoming Invoice-Me invoice is PAID THROUGH A DRAFT, not by a second
+payment path. `POST /orgs/:id/invoices/:id/pay` turns a SUBMITTED EUR invoice
+whose supplier gave an IBAN into one draft line (`DraftLine.invoiceId`) on the
+org's EUR account; review and the device signature apply exactly as to any
+other draft. At execution the line's remittance text is
+`paymentReference()` — `Invoice <supplier's number> <org name>` — because the
+supplier's bookkeeping matches on THEIR number, and the transfer id lands on
+`invoice.payment`. The invoice's state is DERIVED from its transfer on read
+(`syncInvoicePayment`): PAYING -> PAID when the transfer is PAID, back to
+SUBMITTED when the transfer or the draft fails, so a fresh draft can pay it.
+The supplier is matched to a contact by IBAN, then by name, else created,
+so the line carries a fingerprint and INVALID_DATA works. The supplier form
+now collects account holder, IBAN and BIC (validated with the address-book
+rules at submission, so a typo is the supplier's to fix, not a payment
+failure weeks later); a wallet-only invoice records and "Pay" says to ask
+for an IBAN. Reconcile (manual) stays for invoices paid elsewhere.
+Checks: draft:test 7/7 new, business:test 2 new. NOT PROVEN: the
+PAYING -> PAID follow-through on a real transfer (needs a Safe on Base Sepolia).
+
+THE BOUNDARY, decided with the user: Zold pays from an invoice and keeps the
+record (statement, receipt, reference); invoicing software creates invoices,
+chases them and books them. Do not extend the issued-invoice module further.
+
 ## Account documents — statement, receipt, balance, ownership (Sep 2026)
 
 `npm run documents:test` (13 checks: pure builders offline, then the routes on

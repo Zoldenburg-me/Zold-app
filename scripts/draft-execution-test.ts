@@ -20,13 +20,19 @@ import { newDevice, registerDevice, signTerms } from "./device.js";
 const PIN = { USD: 1.1379, INR: 109.87, KES: 147.53 };
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify(PIN);
 process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(PIN.USD * 1e6));
+// SEPA is free by default; pin a fee so the fee-arithmetic refusal is exercised.
+process.env.SEPA_FEE_EUR ??= "0.99";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
 const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
 const RPC_PORT = new URL(RPC_URL).port || "8545";
 const API = `http://127.0.0.1:${API_PORT}`;
-const bin = (name: string) => path.join(ROOT, "node_modules/.bin", name);
+// tsx is run from its cli module, not the .bin shell wrapper: the wrapper is
+// a separate process that cannot relay a kill, so the API it started would
+// outlive the test and hold the port. Same shape as the other suites.
+const bin = (name: string) =>
+  name === "tsx" ? path.join(ROOT, "node_modules/tsx/dist/cli.mjs") : path.join(ROOT, "node_modules/.bin", name);
 
 const children: ChildProcess[] = [];
 function spawnBg(cmd: string, args: string[]) {
@@ -124,23 +130,23 @@ for (const [name, url] of [
 }
 
 try {
-  console.log("1/6 starting local chain…");
+  console.log("1/7 starting local chain…");
   spawnBg(process.execPath, [bin("hardhat"), "node", "--port", RPC_PORT]);
   await waitForRpc(RPC_URL);
 
-  console.log("2/6 deploying contracts…");
+  console.log("2/7 deploying contracts…");
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
     cwd: ROOT,
     stdio: "ignore",
   });
   assert.equal(dep.status, 0, "deploy failed");
 
-  console.log("3/6 starting API…");
+  console.log("3/7 starting API…");
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   spawnBg(process.execPath, [bin("tsx"), "services/api/src/server.ts"]);
   await waitFor(`${API}/api/health`);
 
-  console.log("4/6 funding an account and binding its device key…");
+  console.log("4/7 funding an account and binding its device key…");
   const owner = await ok("POST", "/api/users", { body: { name: "Owner", email: "owner@example.com", country: "DE" } });
   const ownerToken: string = owner.sessionToken;
   // No simulated deposits exist any more: fund the local Safe by minting the
@@ -163,7 +169,7 @@ try {
     device,
   );
 
-  console.log("5/6 building an organisation, contacts and a draft…");
+  console.log("5/7 building an organisation, contacts and a draft…");
   const org = (
     await ok("POST", "/api/orgs", {
       token: ownerToken,
@@ -272,7 +278,7 @@ try {
     })
   ).draft;
 
-  console.log("6/6 review and execute…");
+  console.log("6/7 review and execute…");
 
   // On a plan WITH approvals, a draft cannot be sent until it is reviewed.
   await ok("POST", `/api/orgs/${org.id}/plan/trial`, { token: ownerToken });
@@ -409,6 +415,8 @@ try {
     assert.equal(walletLine.after.draft.state, "REVIEWED", "and the draft is untouched");
   });
 
+  // SEPA is free by default; this suite pins SEPA_FEE_EUR so the fee
+  // arithmetic in the refusal is exercised.
   const tiny = await preflight([line(contact, "0.20")]);
   check("a line that would not exceed the fee is refused with the arithmetic", () => {
     assert.equal(tiny.r.status, 422);
@@ -429,6 +437,100 @@ try {
     assert.equal(mixed.r.data.problems.length, 1);
   });
 
+  console.log("7/7 pay from invoice…");
+  // The supplier fills the Invoice-Me link with an IBAN; the org pays it with
+  // one click, which is a draft like any other — same review, same signature.
+  const link = await ok("POST", `/api/orgs/${org.id}/invoices`, { token: ownerToken, body: { currency: "EUR" } });
+  const badIban = await call("POST", `/api/invoice-links/${link.linkToken}/submit`, {
+    body: {
+      supplier: { orgName: "Supplier Ltd", email: "billing@supplier.example", invoiceNumber: "R-2026-017" },
+      lines: [{ description: "Consulting", quantity: "1", unitPrice: "150.00" }],
+      payTo: { kind: "bank", bank: { holderName: "Supplier Ltd", iban: "DE89370400440532013001" } },
+    },
+  });
+  check("a mistyped IBAN is refused at submission, not discovered at payment", () => {
+    assert.equal(badIban.status, 400);
+    assert.match(badIban.data.error, /IBAN/i);
+  });
+  const submitted = await ok("POST", `/api/invoice-links/${link.linkToken}/submit`, {
+    body: {
+      supplier: { orgName: "Supplier Ltd", email: "billing@supplier.example", invoiceNumber: "R-2026-017" },
+      lines: [{ description: "Consulting", quantity: "1", unitPrice: "150.00" }],
+      payTo: { kind: "bank", bank: { holderName: "Supplier Ltd", iban: "DE89 3704 0044 0532 0130 00", bic: "cobadeffxxx" } },
+    },
+  });
+  check("the supplier's bank details are normalised and stored on the invoice", () => {
+    assert.equal(submitted.invoice.state, "SUBMITTED");
+    assert.equal(submitted.invoice.payTo.kind, "bank");
+    assert.equal(submitted.invoice.payTo.bank.iban, "DE89370400440532013000");
+    assert.equal(submitted.invoice.payTo.bank.bic, "COBADEFFXXX");
+    assert.equal(submitted.invoice.total, "150.00");
+  });
+
+  const invoiceId = submitted.invoice.id;
+  const paid = await ok("POST", `/api/orgs/${org.id}/invoices/${invoiceId}/pay`, { token: ownerToken, body: {} });
+  check("Pay creates one draft line from the invoice, on the org's EUR account", () => {
+    assert.equal(paid.invoice.state, "PAYING");
+    assert.equal(paid.invoice.payment.draftId, paid.draft.id);
+    assert.equal(paid.draft.state, "DRAFT");
+    assert.equal(paid.draft.source.accountId, funded.account.id);
+    assert.equal(paid.draft.lines.length, 1);
+    assert.equal(paid.draft.lines[0].amount, "150.00");
+    assert.equal(paid.draft.lines[0].asset, "EUR");
+    assert.equal(paid.draft.lines[0].invoiceId, invoiceId);
+    assert.equal(paid.draft.lines[0].destination.kind, "bank");
+    assert.ok(paid.draft.lines[0].destination.fingerprint, "the line carries a fingerprint like any address-book payment");
+  });
+  check("the supplier is matched to the existing contact by IBAN, not duplicated", () => {
+    assert.equal(paid.contact.id, contact.id);
+    assert.equal(paid.draft.lines[0].contactId, contact.id);
+    assert.equal(paid.draft.lines[0].destination.bankAccountId, contact.bankAccounts[0].id);
+  });
+  const again = await call("POST", `/api/orgs/${org.id}/invoices/${invoiceId}/pay`, { token: ownerToken, body: {} });
+  check("paying the same invoice twice is refused while the first payment is under way", () => {
+    assert.equal(again.status, 409);
+    assert.match(again.data.error, /already under way/i);
+  });
+  const listed = await ok("GET", `/api/orgs/${org.id}/invoices`, { token: ownerToken });
+  check("the invoice list shows it PAYING with the draft attached", () => {
+    const row = listed.invoices.find((i: any) => i.id === invoiceId);
+    assert.equal(row.state, "PAYING");
+    assert.equal(row.payment.draftId, paid.draft.id);
+  });
+
+  // A wallet-only invoice: recorded, but "Pay" says what is missing.
+  const link2 = await ok("POST", `/api/orgs/${org.id}/invoices`, { token: ownerToken, body: { currency: "EUR" } });
+  const walletOnly = await ok("POST", `/api/invoice-links/${link2.linkToken}/submit`, {
+    body: {
+      supplier: { orgName: "Chain Vendor", email: "ops@vendor.example", invoiceNumber: "CV-9" },
+      lines: [{ description: "Node hosting", quantity: "1", unitPrice: "40.00" }],
+      payTo: { kind: "wallet", address: "0x2222222222222222222222222222222222222222", chainId: 8453 },
+    },
+  });
+  const noIban = await call("POST", `/api/orgs/${org.id}/invoices/${walletOnly.invoice.id}/pay`, { token: ownerToken, body: {} });
+  check("a wallet-only invoice cannot be paid from the account and says to ask for an IBAN", () => {
+    assert.equal(noIban.status, 409);
+    assert.match(noIban.data.error, /IBAN/);
+  });
+
+  // A new supplier with an unknown IBAN becomes a contact of their own.
+  const link3 = await ok("POST", `/api/orgs/${org.id}/invoices`, { token: ownerToken, body: { currency: "EUR" } });
+  const fresh = await ok("POST", `/api/invoice-links/${link3.linkToken}/submit`, {
+    body: {
+      supplier: { orgName: "Neue Werkstatt GmbH", email: "buero@werkstatt.example", invoiceNumber: "2026-0042" },
+      lines: [{ description: "Repair", quantity: "2", unitPrice: "30.00" }],
+      payTo: { kind: "bank", bank: { holderName: "Neue Werkstatt GmbH", iban: "FR7630006000011234567890189" } },
+    },
+  });
+  const paidFresh = await ok("POST", `/api/orgs/${org.id}/invoices/${fresh.invoice.id}/pay`, { token: ownerToken, body: {} });
+  check("an unknown supplier lands in the address book with the invoice's bank account", () => {
+    assert.notEqual(paidFresh.contact.id, contact.id);
+    assert.equal(paidFresh.contact.name, "Neue Werkstatt GmbH");
+    assert.equal(paidFresh.contact.bankAccounts[0].iban, "FR7630006000011234567890189");
+    assert.equal(paidFresh.contact.bankAccounts[0].country, "FR");
+    assert.equal(paidFresh.draft.lines[0].amount, "60.00");
+  });
+
   console.log(`\nDRAFT EXECUTION TEST PASSED — ${passed}/${passed} checks.`);
   console.log("Draft execution is the same code path as a direct transfer, refuses as a whole,");
   console.log("and moves nothing without the account holder's device.\n");
@@ -436,5 +538,7 @@ try {
   console.log("passkey Safe, which needs an ERC-4337 bundler — local hardhat has none, which is");
   console.log("why e2e asserts the same refusal. Prove it on Base Sepolia (npm run api).\n");
 } finally {
-  for (const c of children) c.kill("SIGKILL");
+  // SIGTERM, not SIGKILL: tsx forwards a TERM to the server it runs; a KILL
+  // stops at the process that received it.
+  for (const c of children) c.kill("SIGTERM");
 }
