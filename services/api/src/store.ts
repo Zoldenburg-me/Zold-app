@@ -1168,12 +1168,19 @@ export const store = {
   findUserByCredential(credentialId: string) {
     return db.users.find((u) => u.passkey?.credentialId === credentialId);
   },
+  /** Every account carrying this email, case-insensitively. Signup uses it to
+   *  refuse a second account on an address that already has a passkey; rows
+   *  without one are onboarding that stopped before a credential existed and
+   *  may be started over. */
+  usersByEmail(email: string) {
+    const needle = email.trim().toLowerCase();
+    if (!needle) return [];
+    return db.users.filter((u) => (u.email ?? "").trim().toLowerCase() === needle);
+  },
   /** Case-insensitive email match. Prefers an account that can actually be
    *  recovered when the same address was used more than once. */
   findUserByEmail(email: string) {
-    const needle = email.trim().toLowerCase();
-    if (!needle) return undefined;
-    const matches = db.users.filter((u) => (u.email ?? "").trim().toLowerCase() === needle);
+    const matches = store.usersByEmail(email);
     return (
       matches.find((u) => u.passkeySafe?.candideRecovery?.guardianStatus === "active") ??
       matches.find((u) => u.passkeySafe?.status === "active") ??

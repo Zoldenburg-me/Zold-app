@@ -1569,6 +1569,49 @@ recovery from the Profile screen's pending-recovery banner, not from an email.
 The managed KYC-guardian path (operator + external signer) still exists beside
 this; the two are separate modes on RecoveryRequest.
 
+## Email required + recovery in onboarding (Sep 2026)
+
+Branch claude/email-onboarding-flow. `npm run recovery:candide:test` carries
+the signup checks (28); `npm run onboarding:test` still passes with emails on
+every signup.
+
+WHAT CHANGED, and the one-line reason for each:
+ - **POST /api/users requires an email.** It is a CHANNEL, not an identity —
+   Monerium still owns KYC and the passkey is still the login. It exists so a
+   device that no longer has the passkey can name its account (Candide
+   recovery resolves an email to an account) and so the OS passkey picker
+   shows something that does not collide the way "Miriam" does. Nothing
+   verifies it at signup and nothing claims to: it is verified where it is
+   used, by Candide's OTP.
+ - **One CLAIMABLE account per email.** A second signup on an address that
+   already has a passkey is 409 `EMAIL_IN_USE` (case-insensitive). A row with
+   no passkey is onboarding that died before a credential existed — nothing
+   can sign in to it — so that address may be reused rather than locked by
+   one failed ceremony. `store.usersByEmail()` is the lookup;
+   `findUserByEmail()` still prefers the enrolled/active row for recovery.
+ - **Recovery enrolment is onboarding step 3**, between "smart wallet
+   deployed" and the Monerium gate, registering the signup email (read-only
+   there: the channel must be the address the account carries or recovery's
+   lookup finds nothing). Same three calls as the Profile screen, then the
+   guardian op. Drawn ONLY when /api/health says `emailSmsRecovery`;
+   otherwise `offerRecoveryEnrolment()` resolves without showing anything.
+   A "Skip for now" exists and says what it costs; the gate checklist then
+   shows "Recovery set up" as skipped (not pulsing — nothing is working on
+   it) and Profile keeps the same controls.
+ - **The enrolment gate moved from KYC-approved to Safe-active.** Recovery
+   guards the Safe, and the Safe has an address money can reach the moment
+   it is deployed, before any IBAN exists. A pending account at the Monerium
+   gate may therefore enrol; a rejected one keeps the right to recover what
+   it holds.
+
+NOT DONE, on purpose: no mail transport (still), so the address is never
+written to by Zold; IBAN activation is NOT refused for an account without
+recovery — that gate would be the analogue of "no IBAN before a passkey" and
+is a product decision to take with eyes open; Candide's Alerts API is still
+not wired, so the owner learns of a started recovery from the Profile banner
+only. Test gap: the harness runs KYC_AUTO_APPROVE=1, so "a pending account
+may enrol" is asserted by reading the route, not by a check.
+
 ## FP4 completion — recovery (decided July 2026, 2-of-2)
 
 THE BLOCKER: losing the browser device key permanently bricks an account.

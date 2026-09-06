@@ -378,9 +378,12 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (!candideRecoveryEnabled()) {
         return res.status(503).json({ error: "email/SMS recovery is not available on this deployment — RECOVERY_SERVICE_URL is unset" });
       }
-      if (user.kycStatus !== "approved") {
-        return res.status(409).json({ error: `KYC ${user.kycStatus}; recovery can be set up once the account is approved` });
-      }
+      // Gated on the SAFE, not on KYC. Recovery guards the Safe, and the Safe
+      // has an address money can reach the moment it is deployed, before any
+      // IBAN exists — so enrolment runs in onboarding right after deployment,
+      // while the account is still pending at the Monerium gate. activePlan()
+      // is the check; a rejected account keeps the right to recover what it
+      // holds.
       const plan = activePlan(user);
       const { channel, target } = normaliseChannelTarget(req.body?.channel, req.body?.target);
       if (user.passkeySafe?.candideRecovery?.channels.some((c) => c.channel === channel && c.target === target)) {

@@ -314,7 +314,9 @@ try {
   });
 
   await t("another account cannot read or revoke the holder's documents", async () => {
-    const other = await call("/api/users", { name: "Someone Else", country: "DE" });
+    const other = await call("/api/users", { name: "Someone Else", email: "else@example.com", country: "DE" });
+    assert.equal(other.status, 201, JSON.stringify(other.data));
+    assert.ok(other.data.sessionToken, "the second account must have its own session, or this check tests nothing");
     const r = await call(`/api/users/${userId}/documents`, undefined, undefined, other.data.sessionToken);
     assert.equal(r.status, 403, JSON.stringify(r.data));
   });

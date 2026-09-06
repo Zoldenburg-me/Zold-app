@@ -320,6 +320,25 @@ try {
   }
   const safeAddress: string = (await call(`/api/users/${userId}`)).data.address;
 
+  // Signup rules that exist for recovery's sake: the email is what a lost
+  // device names, so it must exist and must resolve to ONE claimable account.
+  await t("signup refuses an account with no email", async () => {
+    const r = await call("/api/users", { name: "No Email", country: "DE" }, undefined, "");
+    assert.equal(r.status, 400, JSON.stringify(r.data));
+    assert.match(r.data.error, /email/);
+  });
+  await t("signup refuses a second claimable account on the same email, case-insensitively", async () => {
+    const r = await call("/api/users", { name: "Second Rosa", email: EMAIL.toUpperCase(), country: "DE" }, undefined, "");
+    assert.equal(r.status, 409, JSON.stringify(r.data));
+    assert.equal(r.data.code, "EMAIL_IN_USE");
+  });
+  await t("an abandoned signup with no passkey does not lock its email", async () => {
+    const first = await call("/api/users", { name: "Abandoned", email: "abandoned@example.com", country: "DE" }, undefined, "");
+    assert.equal(first.status, 201, JSON.stringify(first.data));
+    const again = await call("/api/users", { name: "Abandoned Again", email: "abandoned@example.com", country: "DE" }, undefined, "");
+    assert.equal(again.status, 201, JSON.stringify(again.data));
+  });
+
   await t("recovery reports available with no channels and no guardian", async () => {
     const r = await call(`/api/users/${userId}/recovery/candide`);
     assert.equal(r.status, 200, JSON.stringify(r.data));

@@ -122,7 +122,7 @@ try {
   });
 
   const sanctioned = await signup({
-    name: "S", country: "DE", citizenships: ["RU"], accountType: "individual", usAnswers: NO_US,
+    name: "S", email: "s@example.com", country: "DE", citizenships: ["RU"], accountType: "individual", usAnswers: NO_US,
   });
   check("a sanctioned citizenship is refused with the country wording", () => {
     assert.equal(sanctioned.status, 403);
@@ -130,7 +130,7 @@ try {
   });
 
   const nigerian = await signup({
-    name: "N", country: "NG", citizenships: ["NG"], accountType: "individual", usAnswers: NO_US,
+    name: "N", email: "n@example.com", country: "NG", citizenships: ["NG"], accountType: "individual", usAnswers: NO_US,
   });
   check("a Nigerian resident is UNSUPPORTED and is never called sanctioned", () => {
     assert.equal(nigerian.status, 403);
@@ -170,7 +170,7 @@ try {
   });
 
   const br = await signup({
-    name: "Ana", country: "BR", citizenships: ["BR"], accountType: "individual", usAnswers: NO_US,
+    name: "Ana", email: "ana@example.com", country: "BR", citizenships: ["BR"], accountType: "individual", usAnswers: NO_US,
   });
   check("a Brazilian resident gets an account with no card", () => {
     assert.equal(br.data.segment.value, "ONCHAIN_NO_CARD");
@@ -180,7 +180,7 @@ try {
   console.log("\nThe segment is not the client's to set");
 
   const forged = await signup({
-    name: "Forger", country: "IN", citizenships: ["IN"], accountType: "individual",
+    name: "Forger", email: "forger@example.com", country: "IN", citizenships: ["IN"], accountType: "individual",
     usAnswers: NO_US, segment: { value: "EU_FULL" },
   });
   check("a segment in the signup body is ignored", () => {
