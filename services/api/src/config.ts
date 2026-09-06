@@ -595,11 +595,37 @@ export const PAYMENT_REQUESTS = {
  * `shopBaseUrl` exists for the test stub only: in production every call goes
  * to https://<shop>.myshopify.com.
  */
+/**
+ * TWO WAYS INTO A SHOPIFY STORE, and only one of them is open to us today.
+ *  - `payments-app`: Zold is a payment method inside checkout (offsite
+ *    payments app). Needs Shopify's Payments Apps program approval before any
+ *    store can install it; nobody has been granted that.
+ *  - `custom-app` (default): the store offers a MANUAL payment method named
+ *    Zold, we receive the orders/create webhook, open a payment request for
+ *    the order, and mark the order paid through the Admin API when the
+ *    deposit is attributed. Installable on one store by custom distribution
+ *    with no Shopify review, which is why it is the default.
+ */
+const SHOPIFY_MODE = ((): "payments-app" | "custom-app" => {
+  const m = (process.env.SHOPIFY_MODE ?? "custom-app").trim();
+  if (m !== "payments-app" && m !== "custom-app") throw new Error(`SHOPIFY_MODE must be payments-app or custom-app, got ${m}`);
+  return m;
+})();
+
 export const SHOPIFY = {
   apiKey: process.env.SHOPIFY_API_KEY ?? "",
   apiSecret: process.env.SHOPIFY_API_SECRET ?? "",
   apiVersion: process.env.SHOPIFY_API_VERSION ?? "2026-07",
-  scopes: process.env.SHOPIFY_SCOPES ?? "write_payment_gateways,write_payment_sessions",
+  mode: SHOPIFY_MODE,
+  scopes: process.env.SHOPIFY_SCOPES ?? (SHOPIFY_MODE === "payments-app" ? "write_payment_gateways,write_payment_sessions" : "read_orders,write_orders"),
+  /** custom-app: an order is ours when one of its payment gateway names
+   *  contains this (case-insensitive). The merchant names the manual method. */
+  manualGateway: (process.env.SHOPIFY_MANUAL_GATEWAY ?? "zold").trim().toLowerCase(),
+  /** custom-app: how long an order's payment request stays open. A manual-
+   *  payment order waits for the buyer, so this is longer than a checkout
+   *  session; after it the order is still there, but a late deposit lands on
+   *  the page unattributed and the merchant marks the order paid by hand. */
+  orderTtlMs: Number(process.env.SHOPIFY_ORDER_TTL_MS ?? 24 * 60 * 60_000),
   shopBaseUrl: process.env.SHOPIFY_SHOP_BASE_URL ?? "",
   /** The public origin Shopify redirects back to. Falls back to PUBLIC_URL. */
   appUrl: process.env.SHOPIFY_APP_URL ?? PUBLIC_URL,
