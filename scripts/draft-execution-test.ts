@@ -20,13 +20,19 @@ import { newDevice, registerDevice, signTerms } from "./device.js";
 const PIN = { USD: 1.1379, INR: 109.87, KES: 147.53 };
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify(PIN);
 process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(PIN.USD * 1e6));
+// SEPA is free by default; pin a fee so the fee-arithmetic refusal is exercised.
+process.env.SEPA_FEE_EUR ??= "0.99";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);
 const RPC_URL = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
 const RPC_PORT = new URL(RPC_URL).port || "8545";
 const API = `http://127.0.0.1:${API_PORT}`;
-const bin = (name: string) => path.join(ROOT, "node_modules/.bin", name);
+// tsx is run from its cli module, not the .bin shell wrapper: the wrapper is
+// a separate process that cannot relay a kill, so the API it started would
+// outlive the test and hold the port. Same shape as the other suites.
+const bin = (name: string) =>
+  name === "tsx" ? path.join(ROOT, "node_modules/tsx/dist/cli.mjs") : path.join(ROOT, "node_modules/.bin", name);
 
 const children: ChildProcess[] = [];
 function spawnBg(cmd: string, args: string[]) {
@@ -409,6 +415,8 @@ try {
     assert.equal(walletLine.after.draft.state, "REVIEWED", "and the draft is untouched");
   });
 
+  // SEPA is free by default; this suite pins SEPA_FEE_EUR so the fee
+  // arithmetic in the refusal is exercised.
   const tiny = await preflight([line(contact, "0.20")]);
   check("a line that would not exceed the fee is refused with the arithmetic", () => {
     assert.equal(tiny.r.status, 422);
@@ -530,5 +538,7 @@ try {
   console.log("passkey Safe, which needs an ERC-4337 bundler — local hardhat has none, which is");
   console.log("why e2e asserts the same refusal. Prove it on Base Sepolia (npm run api).\n");
 } finally {
-  for (const c of children) c.kill("SIGKILL");
+  // SIGTERM, not SIGKILL: tsx forwards a TERM to the server it runs; a KILL
+  // stops at the process that received it.
+  for (const c of children) c.kill("SIGTERM");
 }
