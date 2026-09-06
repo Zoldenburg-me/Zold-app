@@ -2474,9 +2474,9 @@
               <div class="qrow"><span>Fixed fee</span><span class="dotfill"></span><span id="q-fee"></span></div>
               <div class="qrow total"><span id="total-label">Recipient gets</span><span class="val" id="q-recv"></span></div>
               <!-- What the sender actually gets per EUR, fee included. Without
-                   it a small send looks like a broken rate: the EUR 0.99 fee is
-                   a fifth of a EUR 5 transfer, so the itemised rows all look
-                   fine while the outcome does not. -->
+                   it a small send on a rail with a fee looks like a broken
+                   rate: a €0.99 fee is a fifth of a €5 transfer, so the
+                   itemised rows all look fine while the outcome does not. -->
               <div class="qrow" id="row-effective"><span id="q-eff-label">Effective rate</span><span class="dotfill"></span><span id="q-eff"></span></div>
               <div class="row2" style="margin-top:.9rem" id="recipient-row">
                 <div><label style="margin-top:0">Recipient name</label><input id="rec-name" placeholder="Joseph Otieno" /></div>
@@ -3527,7 +3527,7 @@ function renderQuote(q) {
        ["Your rate", `${fmt(q.fxRate, 2)} ${d.cur}`],
        ["FX margin", `${fmt((q.marginBps ?? 0) / 100, 2)}%`],
        ["Fee", `€${fmt(q.fixedFeeEur)}`]]
-    : [["You send", `€${fmt(q.sendEur)}`], ["Fee", `€${fmt(q.fixedFeeEur)}`]];
+    : [["You send", `€${fmt(q.sendEur)}`], ...(q.fixedFeeEur > 0 ? [["Fee", `€${fmt(q.fixedFeeEur)}`]] : [["Fee", "None"]])];
   $("m-quote-status").textContent = "";
   $("m-quote-rows").innerHTML = rows.map(([k, v]) => `<div class="m-qrow"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
   $("m-quote-recv").textContent = cash ? `${fmt(q.receiveKes)} ${d.cur}` : `€${fmt(q.receiveEur)}`;
@@ -6028,7 +6028,7 @@ async function selectDest(d) {
         <span class="oi">${m.icon}</span>
         <span class="om">
           <span class="ol">${m.label} ${i === 0 ? '<span class="badge">RECOMMENDED</span>' : ""}</span>
-          <span class="od">${m.desc} · ${m.eta} · fee €${fmt(q.fixedFeeEur)}</span>
+          <span class="od">${m.desc} · ${m.eta} · ${q.fixedFeeEur > 0 ? `fee €${fmt(q.fixedFeeEur)}` : "no fee"}</span>
         </span>
         <span class="ov"><span class="oa">${recvOf(q)}</span><br/><span class="of">recipient gets</span></span>`;
       el.onclick = () => selectOption(q);
@@ -6063,7 +6063,7 @@ function selectOption(q) {
     // Measured against the live mid, not a constant we assert.
     $("q-margin").textContent = `${fmt((q.marginBps ?? 0) / 100, 2)}% margin`;
   }
-  $("q-fee").textContent = `€${fmt(q.fixedFeeEur)}`;
+  $("q-fee").textContent = q.fixedFeeEur > 0 ? `€${fmt(q.fixedFeeEur)}` : "None";
   $("total-label").textContent = "Recipient gets";
   $("q-recv").textContent = recvOf(q);
   /* Effective rate = what actually arrives per EUR sent, fee included. Shown

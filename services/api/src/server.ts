@@ -8,7 +8,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, HARNESS, KYC, LIQUIDITY, MONERIUM, PAYMENT_REQUESTS, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, moneriumOAuthEnabled, moneriumSandboxEnabled, SECURITY, STELLAR } from "./config.js";
+import { anchorModeEnabled, API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, HARNESS, KYC, LIQUIDITY, MONERIUM, PAYMENT_REQUESTS, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, moneriumOAuthEnabled, moneriumSandboxEnabled, SECURITY, STELLAR, railFeeEur } from "./config.js";
 import { prepareSafeSwapForTransfer, prepareDepositConversion } from "./liquidity.js";
 import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
@@ -3053,7 +3053,7 @@ async function buildTransferFromQuote(
       updatedAt: createdAt,
     };
     if (transfer.rail === "sepa" && transfer.recipientIban) {
-      const payoutEur = transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR;
+      const payoutEur = transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa");
       const redeem = moneriumRedeemMessage(payoutEur, transfer.recipientIban, createdAt);
       transfer.moneriumRedeem = {
         ...redeem,
@@ -3110,7 +3110,7 @@ async function buildTransferFromQuote(
           };
     const debitWei =
       transfer.rail === "sepa"
-        ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR)))
+        ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa"))))
         : amountWei;
     if (
       debitWei > 0n &&
@@ -3151,7 +3151,7 @@ async function buildTransferFromQuote(
                   "BRIDGE_LIVE=1 requires BRIDGE_DESTINATION_ADDRESS until MoneyGram anchor payment instructions are wired into Bridge",
                 );
               }
-              const convertEur = transfer.sendEur - FX.FIXED_FEE_EUR;
+              const convertEur = transfer.sendEur - railFeeEur("cash");
               const rate = Number(quote.lockedSwapRate ?? "0") / 1e6;
               if (!(rate > 0)) throw new Error("no locked swap rate to size the Bridge transfer");
               bridgeAmountUsdc = Math.floor(convertEur * rate * 100) / 100;
@@ -3345,8 +3345,9 @@ app.post(
       return res.status(400).json({ error: "rail must be cash or sepa" });
     }
     const amount = Number(sendEur);
-    if (!(amount > FX.FIXED_FEE_EUR)) {
-      return res.status(400).json({ error: `amount must exceed the €${FX.FIXED_FEE_EUR} fee` });
+    const railFee = railFeeEur(rail);
+    if (!(amount > railFee)) {
+      return res.status(400).json({ error: railFee > 0 ? `amount must exceed the €${railFee} fee` : "amount must be positive" });
     }
     if (amount > FX.DAILY_CAP_EUR) {
       return res.status(400).json({ error: `amount exceeds daily cap of €${FX.DAILY_CAP_EUR}` });
