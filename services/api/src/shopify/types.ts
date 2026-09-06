@@ -17,10 +17,18 @@ export interface ShopifyConnection {
   scope: string;
   installedByUserId: string;
   installedAt: string;
-  /** Set once paymentsAppConfigure(ready: true) was accepted by Shopify. Until
-   *  then the store cannot offer the method at checkout. */
+  /** How this store was connected — see SHOPIFY_MODE in config.ts. Absent
+   *  on rows written before the custom-app path existed: those are
+   *  payments-app installs. */
+  mode?: "payments-app" | "custom-app";
+  /** payments-app: set once paymentsAppConfigure(ready: true) was accepted by
+   *  Shopify. custom-app: set once the orders webhook subscription exists.
+   *  Until then the store cannot pay through Zold. */
   configuredAt?: string;
   configureError?: string;
+  /** custom-app: the Admin API id of our orders/create subscription, so
+   *  disconnecting can remove it. */
+  webhookSubscriptionId?: string;
   /** The last payment session Shopify sent, for the dashboard. */
   lastSessionAt?: string;
   updatedAt: string;
