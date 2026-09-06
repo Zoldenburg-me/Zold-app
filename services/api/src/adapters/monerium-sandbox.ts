@@ -22,6 +22,7 @@ import { HARNESS } from "../config.js";
 import { abis, addrs, deployerWallet, eur, writeAndWait } from "../chain.js";
 import { keccak256, toHex } from "viem";
 import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
+import { attributeMoneriumOrder } from "../routes/payment-requests.js";
 
 /**
  * The APP's client (MONERIUM_CLIENT_ID/SECRET). Anything about ONE user goes
@@ -299,6 +300,9 @@ export async function pollDepositsOnce(): Promise<number> {
     }
     for (const order of list) {
       if (await mirrorOrder(order)) credited++;
+      // A payer who wrote a pay-link code on their transfer: the order's memo
+      // carries it. Idempotent, so re-seeing an order records nothing twice.
+      attributeMoneriumOrder(order);
     }
   }
   /**
@@ -319,6 +323,7 @@ export async function pollDepositsOnce(): Promise<number> {
       }
       for (const order of list) {
         if (await mirrorOrder(order)) credited++;
+        attributeMoneriumOrder(order);
       }
     }
   }

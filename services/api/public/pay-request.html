@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pay · Zold</title>
+<!-- A payment request is shared out of a chat window into a preview card, so
+     nothing per-request is in the markup: the page loads it by code. -->
+<meta name="robots" content="noindex" />
+<style>
+  :root {
+    --bg: #0a0a0c; --card: #121216; --row: #17171c; --border: #24242b; --border2: #2e2e37;
+    --text: #f4f4f6; --muted: #a7a7b2; --faint: #6e6e7a; --pink: #ff2d78; --ok: #5ee9a4; --warn: #f5c451;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); min-height: 100vh;
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: flex-start; justify-content: center; padding: 1.5rem;
+  }
+  .wrap { width: 100%; max-width: 440px; }
+  .brand { display: flex; align-items: center; gap: .5rem; justify-content: center; margin-bottom: 1.25rem; }
+  .brand .mark { color: var(--pink); font-size: 1.1rem; }
+  .brand .name { font-weight: 700; letter-spacing: -.01em; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem; }
+  .who { display: flex; align-items: center; gap: .8rem; margin-bottom: 1rem; }
+  .avatar {
+    width: 44px; height: 44px; border-radius: 50%; flex: none;
+    background: var(--pink); color: #fff; font-weight: 700; font-size: 1.15rem;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .dn { font-size: 1rem; font-weight: 650; }
+  .hd { color: var(--faint); font-size: .78rem; font-family: ui-monospace, Menlo, monospace; }
+  .amt { font-size: 2.1rem; font-weight: 700; letter-spacing: -.02em; margin: .2rem 0 .1rem; font-variant-numeric: tabular-nums; }
+  .desc { color: var(--muted); font-size: .9rem; line-height: 1.45; }
+  .status { display: inline-flex; align-items: center; gap: .4rem; border-radius: 999px; padding: .25rem .65rem; font-size: .72rem; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; background: var(--row); border: 1px solid var(--border2); color: var(--muted); margin-top: .8rem; }
+  .status.ok { color: var(--ok); border-color: rgba(94,233,164,.35); }
+  .status.warn { color: var(--warn); border-color: rgba(245,196,81,.35); }
+  .status .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .status.live .dot { animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }
+  .tabs { display: flex; gap: .4rem; margin: 1.2rem 0 1rem; }
+  .tab { flex: 1; background: var(--row); border: 1px solid var(--border2); color: var(--muted); border-radius: 10px; padding: .6rem .5rem; font-size: .82rem; font-weight: 600; cursor: pointer; }
+  .tab.on { color: var(--text); border-color: var(--pink); }
+  .pane { display: none; }
+  .pane.on { display: block; }
+  .qrbox { background: #fff; border-radius: 12px; padding: .6rem; width: 216px; margin: 0 auto 1rem; }
+  .qrbox img { display: block; width: 200px; height: 200px; }
+  .lbl { font-size: .66rem; font-weight: 700; letter-spacing: .07em; color: var(--faint); margin: .8rem 0 .3rem; }
+  .val {
+    background: var(--row); border: 1px solid var(--border2); border-radius: 10px;
+    padding: .6rem .7rem; font-family: ui-monospace, Menlo, monospace; font-size: .8rem;
+    word-break: break-all; line-height: 1.5; color: var(--text); display: flex; justify-content: space-between; gap: .6rem; align-items: center;
+  }
+  .val.big { font-size: 1.05rem; font-weight: 650; }
+  .val button { width: auto; margin: 0; padding: .3rem .6rem; font-size: .72rem; background: var(--card); color: var(--muted); border: 1px solid var(--border2); flex: none; }
+  button {
+    width: 100%; margin-top: .6rem; padding: .75rem; border-radius: 10px; border: 0;
+    background: var(--pink); color: #fff; font-weight: 650; font-size: .9rem; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  button.ghost { background: var(--row); color: var(--text); border: 1px solid var(--border2); }
+  button:disabled { opacity: .5; cursor: default; filter: none; }
+  input {
+    width: 100%; background: var(--row); border: 1px solid var(--border2); color: var(--text); border-radius: 10px;
+    padding: .7rem .75rem; font: inherit; font-size: 1rem;
+  }
+  .note { margin-top: .9rem; font-size: .74rem; color: var(--faint); line-height: 1.55; }
+  .note strong { color: var(--muted); font-weight: 600; }
+  .missing { text-align: center; padding: 1rem 0; }
+  .missing h1 { font-size: 1.05rem; margin: 0 0 .4rem; }
+  .missing p { color: var(--faint); font-size: .84rem; margin: 0; }
+  .hidden { display: none !important; }
+  .foot { text-align: center; margin-top: 1rem; font-size: .7rem; color: var(--faint); }
+  .foot a { color: var(--faint); }
+  .pay { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: .8rem; }
+  .pay .row { display: flex; justify-content: space-between; font-size: .82rem; color: var(--muted); padding: .25rem 0; }
+  .pay .row b { color: var(--text); font-weight: 600; }
+  .test { background: rgba(245,196,81,.12); color: var(--warn); border: 1px solid rgba(245,196,81,.35); border-radius: 8px; padding: .5rem .7rem; font-size: .76rem; margin-bottom: .8rem; }
+  .err { color: #ff8aa8; font-size: .8rem; margin-top: .6rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><span class="mark">▽</span><span class="name">Zold</span></div>
+
+  <div class="card">
+    <div id="loading" class="missing"><p>Loading…</p></div>
+
+    <div id="notfound" class="missing hidden">
+      <h1>No such payment request</h1>
+      <p>This link does not point at a payment request. Check the address you were given.</p>
+    </div>
+
+    <div id="req" class="hidden">
+      <div class="test hidden" id="test">Test checkout. This request was opened by a store in test mode. Any payment made here is real money.</div>
+      <div class="who">
+        <div class="avatar" id="avatar">?</div>
+        <div style="min-width:0">
+          <div class="dn" id="dn"></div>
+          <div class="hd" id="hd"></div>
+        </div>
+      </div>
+      <div class="amt" id="amt"></div>
+      <div class="desc" id="desc"></div>
+      <div class="status" id="status"><span class="dot"></span><span id="status-text"></span></div>
+
+      <div id="paid" class="hidden">
+        <div class="pay" id="paylist"></div>
+        <a id="return" class="hidden"><button>Return to the store</button></a>
+      </div>
+
+      <div id="open">
+        <div id="amount-ask" class="hidden">
+          <div class="lbl">AMOUNT TO PAY (EUR)</div>
+          <input id="amount-in" inputmode="decimal" placeholder="25.00" />
+          <button id="amount-go">Continue</button>
+          <div class="err hidden" id="amount-err"></div>
+        </div>
+
+        <div id="methods" class="hidden">
+          <div class="tabs" id="tabs"></div>
+
+          <div class="pane" id="pane-crypto">
+            <div class="qrbox"><img id="qr" alt="QR code of the receiving address" /></div>
+            <div class="lbl">SEND EXACTLY</div>
+            <div class="val big"><span id="usdc"></span><button data-copy="usdc">Copy</button></div>
+            <div class="lbl">TO THIS ADDRESS</div>
+            <div class="val"><span id="addr"></span><button data-copy="addr">Copy</button></div>
+            <button id="open-wallet" class="ghost">Open in wallet</button>
+            <p class="note" id="crypto-note"></p>
+            <p class="note"><strong>Network and token matter.</strong> Send <strong id="tok">USDC</strong> on <strong id="chain">this network</strong> only.
+              Another token or network will not reach this request. The payment is matched by amount, so send the exact figure shown.</p>
+          </div>
+
+          <div class="pane" id="pane-bank">
+            <div class="lbl">BENEFICIARY</div>
+            <div class="val"><span id="holder"></span><button data-copy="holder">Copy</button></div>
+            <div class="lbl">IBAN</div>
+            <div class="val"><span id="iban"></span><button data-copy="iban">Copy</button></div>
+            <div id="bic-row" class="hidden"><div class="lbl">BIC</div><div class="val"><span id="bic"></span></div></div>
+            <div class="lbl">REFERENCE — WRITE THIS ON THE TRANSFER</div>
+            <div class="val big"><span id="ref"></span><button data-copy="ref">Copy</button></div>
+            <div class="lbl">AMOUNT</div>
+            <div class="val"><span id="bank-amt"></span></div>
+            <p class="note">A SEPA transfer with this reference is matched to this request when it lands. Without the reference it still arrives, but has to be matched by hand.
+              The IBAN and SEPA service are provided by AS LHV Pank; the e-money is issued by Monerium. Zold is software.</p>
+          </div>
+
+          <div class="pane" id="pane-zold">
+            <p class="desc" style="margin-top:.4rem">Have a Zold account? Pay from your balance. The app opens with the amount, the account and the reference filled in; you approve with your passkey.</p>
+            <a id="zold-link"><button>Open in Zold</button></a>
+            <p class="note">Today this sends a euro transfer to the payee's account with the reference attached — the same rail as a bank transfer, without any typing.</p>
+          </div>
+        </div>
+        <a id="cancel" class="hidden"><button class="ghost">Cancel and return to the store</button></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">Zoldenburg · <a href="/">zold</a></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const show = (id) => $(id).classList.remove("hidden");
+const hide = (id) => $(id).classList.add("hidden");
+const CHAINS = { 1: "Ethereum", 137: "Polygon", 100: "Gnosis", 8453: "Base", 84532: "Base Sepolia", 80002: "Polygon Amoy", 31337: "local chain" };
+const chainName = (id) => CHAINS[id] || `chain ${id}`;
+const eur = (n) => `€${Number(n).toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const [, , handle, code] = location.pathname.split("/").map(decodeURIComponent);
+const API = `/api/pay/${encodeURIComponent(handle)}/${encodeURIComponent(code)}`;
+let req = null;
+let amountEur = null; // for open-amount requests, what the payer typed
+let tab = null;
+
+function copyable() {
+  document.querySelectorAll("[data-copy]").forEach((b) => {
+    b.onclick = async () => {
+      const el = $(b.dataset.copy);
+      try { await navigator.clipboard.writeText(el.dataset.raw ?? el.textContent); } catch { return; }
+      b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200);
+    };
+  });
+}
+
+function render(p) {
+  req = p;
+  hide("loading"); show("req");
+  const label = p.displayName || p.handle;
+  $("avatar").textContent = label.trim()[0].toUpperCase();
+  $("dn").textContent = label;
+  $("hd").textContent = `@${p.handle}`;
+  document.title = `Pay ${label} · Zold`;
+  $("test").classList.toggle("hidden", !p.test);
+  $("amt").textContent = p.amountEur !== undefined ? eur(p.amountEur) : (amountEur ? eur(amountEur) : "Any amount");
+  $("desc").textContent = p.description || (p.merchantNote || "");
+  if (p.description && p.merchantNote) $("desc").textContent = `${p.description} · ${p.merchantNote}`;
+
+  const st = $("status");
+  st.className = "status";
+  const paid = p.paidEur || 0;
+  if (p.state === "PAID") { st.classList.add("ok"); $("status-text").textContent = `Paid ${eur(paid)}`; }
+  else if (p.state === "EXPIRED") { st.classList.add("warn"); $("status-text").textContent = "Expired"; }
+  else if (p.state === "CANCELLED") { st.classList.add("warn"); $("status-text").textContent = "Cancelled by the payee"; }
+  else if (paid > 0 && p.outstandingEur > 0) { st.classList.add("warn", "live"); $("status-text").textContent = `${eur(paid)} received · ${eur(p.outstandingEur)} outstanding`; }
+  else if (paid > 0) { st.classList.add("ok"); $("status-text").textContent = `${eur(paid)} received so far`; }
+  else { st.classList.add("live"); $("status-text").textContent = "Awaiting payment"; }
+
+  const open = p.state === "OPEN";
+  $("open").classList.toggle("hidden", !open);
+  $("paid").classList.toggle("hidden", !(p.payments || []).length);
+  $("paylist").innerHTML = (p.payments || []).map((x) => `<div class="row">
+      <span>${x.method === "crypto" ? `USDC ${x.amountUsdc ?? ""}` : "Bank transfer"} · ${new Date(x.at).toLocaleString()}</span>
+      <b>${eur(x.amountEur)}${x.kind === "partial" ? " (partial)" : x.kind === "over" ? " (over)" : ""}</b></div>`).join("");
+  if (p.returnUrl && p.state === "PAID") { $("return").href = p.returnUrl; show("return"); } else hide("return");
+  if (p.cancelUrl && open) { $("cancel").href = p.cancelUrl; show("cancel"); } else hide("cancel");
+  if (!open) return;
+
+  // Open-amount request with no amount yet: ask first.
+  const needsAmount = p.amountEur === undefined && !amountEur;
+  $("amount-ask").classList.toggle("hidden", !needsAmount);
+  $("methods").classList.toggle("hidden", needsAmount);
+  if (needsAmount) return;
+
+  const tabs = [];
+  if (p.methods.crypto) tabs.push(["crypto", "Crypto (USDC)"]);
+  if (p.methods.bank) tabs.push(["bank", "Bank transfer"], ["zold", "Zold account"]);
+  if (!tab || !tabs.some(([id]) => id === tab)) tab = tabs[0]?.[0];
+  $("tabs").innerHTML = tabs.map(([id, t]) => `<button class="tab${id === tab ? " on" : ""}" data-tab="${id}">${t}</button>`).join("");
+  $("tabs").querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => { tab = b.dataset.tab; render(req); }; });
+  document.querySelectorAll(".pane").forEach((el) => el.classList.toggle("on", el.id === `pane-${tab}`));
+
+  const c = p.methods.crypto;
+  if (c) {
+    $("qr").src = c.qrUrl;
+    $("addr").textContent = c.address;
+    $("tok").textContent = c.token.symbol;
+    $("chain").textContent = chainName(c.chainId);
+    if (c.amountUsdc !== undefined) {
+      $("usdc").textContent = `${c.amountUsdc} ${c.token.symbol}`;
+      $("usdc").dataset.raw = String(c.amountUsdc);
+      $("open-wallet").disabled = false;
+      $("open-wallet").onclick = () => { location.href = c.uri; };
+      const until = new Date(c.validUntil);
+      $("crypto-note").innerHTML = `Priced at <strong>${c.rate.toFixed(4)} USD/EUR</strong> (live mid) plus a <strong>${(c.allowanceBps / 100).toFixed(2)}%</strong> conversion allowance. This figure holds until ${until.toLocaleTimeString()}, then the page re-prices; any amount this page has shown still counts. The payee is credited what the conversion actually delivers.`;
+    } else {
+      $("usdc").textContent = "No live rate right now";
+      delete $("usdc").dataset.raw;
+      $("open-wallet").disabled = true;
+      $("crypto-note").textContent = "The EUR/USD rate feed is unavailable, so no crypto amount can be quoted. Pay by bank transfer, or try again shortly.";
+    }
+  }
+  const b = p.methods.bank;
+  if (b) {
+    $("holder").textContent = b.holder;
+    $("iban").textContent = b.iban.replace(/(.{4})/g, "$1 ").trim();
+    $("iban").dataset.raw = b.iban;
+    $("bic-row").classList.toggle("hidden", !b.bic);
+    $("bic").textContent = b.bic || "";
+    $("ref").textContent = b.reference;
+    const target = p.amountEur !== undefined ? p.outstandingEur : amountEur;
+    $("bank-amt").textContent = target ? eur(target) : "Any amount";
+    const u = new URL(b.appUrl);
+    if (amountEur && p.amountEur === undefined) u.searchParams.set("amount", String(amountEur));
+    $("zold-link").href = u.toString();
+  }
+  copyable();
+}
+
+async function load() {
+  try {
+    const res = await fetch(API);
+    if (!res.ok) throw new Error("not found");
+    render(await res.json());
+  } catch {
+    hide("loading"); show("notfound");
+  }
+}
+
+$("amount-go").onclick = async () => {
+  hide("amount-err");
+  const n = Number(($("amount-in").value || "").replace(",", "."));
+  if (!(n > 0)) { $("amount-err").textContent = "Enter an amount."; show("amount-err"); return; }
+  amountEur = Math.round(n * 100) / 100;
+  if (req.methods.crypto) {
+    try {
+      const res = await fetch(`${API}/quote`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ amountEur }) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || "could not quote");
+      render(body);
+    } catch (e) { $("amount-err").textContent = e.message; show("amount-err"); }
+  } else render(req);
+};
+
+load();
+// The page is the payer's receipt while they wait: re-read until the request
+// leaves OPEN, and re-price the crypto amount when its window lapses.
+setInterval(async () => {
+  if (!req || req.state !== "OPEN") return;
+  try {
+    const res = await fetch(API);
+    if (!res.ok) return;
+    const p = await res.json();
+    const changed = JSON.stringify(p.payments) !== JSON.stringify(req.payments) || p.state !== req.state
+      || p.methods?.crypto?.amountUsdc !== req.methods?.crypto?.amountUsdc;
+    if (changed) {
+      if (amountEur && req.amountEur === undefined && req.methods.crypto) { return; } // keep the payer's own quote on screen
+      render(p);
+    }
+  } catch { /* offline; try again next tick */ }
+}, 5000);
+</script>
+</body>
+</html>
