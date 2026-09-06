@@ -87,11 +87,20 @@ export interface RequestPayment {
 
 export interface PaymentRequestSource {
   kind: "app" | "api" | "shopify";
-  /** Merchant-side id (Shopify payment session id). Unique per kind. */
+  /** Merchant-side id (Shopify payment session id, or the order gid in
+   *  custom-app mode). Unique per kind. */
   externalId?: string;
   shop?: string;
+  /** payments-app mode: the checkout session we answer with paymentSessionResolve. */
   sessionGid?: string;
   sessionKind?: string;
+  /** custom-app mode: the ORDER we mark paid through the Admin API. Exactly
+   *  one of sessionGid / orderGid is set on a Shopify request. */
+  orderGid?: string;
+  /** The order's display name ("#3107"), for the buyer and the merchant. */
+  orderName?: string;
+  /** Shopify's order status page — where the buyer lands afterwards. */
+  orderStatusUrl?: string;
   cancelUrl?: string;
   /** Where the payer goes once the merchant has been told. Set when the
    *  merchant's system answers the settlement call. */
@@ -598,7 +607,10 @@ export function publicPaymentRequest(
       ? {
           returnUrl: `${ctx.baseUrl}/api/shopify/return/${displayCode(r.code)}`,
           ...(r.source.cancelUrl ? { cancelUrl: `${ctx.baseUrl}/api/shopify/cancel/${displayCode(r.code)}` } : {}),
-          merchantNote: `Checkout at ${r.source.shop ?? "a Shopify store"}. The store is told the moment your payment is seen.`,
+          ...(r.source.orderName ? { orderName: r.source.orderName } : {}),
+          merchantNote: r.source.orderGid
+            ? `Order ${r.source.orderName ?? ""} at ${r.source.shop ?? "a Shopify store"}. The order is marked paid the moment your payment is seen.`.replace(/\s+/g, " ")
+            : `Checkout at ${r.source.shop ?? "a Shopify store"}. The store is told the moment your payment is seen.`,
         }
       : {}),
   };

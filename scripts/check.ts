@@ -21,6 +21,7 @@ const scripts = [
   "documents:test",
   "paylinks:test",
   "shopify:test",
+  "shopify:orders:test",
   "monerium:oauth:test",
   "monerium:apikeys:test",
   "sepa:test",

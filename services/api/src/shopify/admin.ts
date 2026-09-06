@@ -66,8 +66,29 @@ export async function graphql<T = any>(
   query: string,
   variables: Record<string, unknown>,
 ): Promise<T> {
+  return graphqlAt(`${shopBase(shop)}/payments_apps/api/${SHOPIFY.apiVersion}/graphql.json`, accessToken, query, variables);
+}
+
+/** The ordinary Admin API (orders, webhooks, metafields) — the custom-app
+ *  path. Same auth, different endpoint, and NOT gated on the Payments Apps
+ *  program. */
+export async function adminGraphql<T = any>(
+  shop: string,
+  accessToken: string,
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<T> {
+  return graphqlAt(`${shopBase(shop)}/admin/api/${SHOPIFY.apiVersion}/graphql.json`, accessToken, query, variables);
+}
+
+async function graphqlAt<T = any>(
+  url: string,
+  accessToken: string,
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<T> {
   const res = await withTimeout((signal) =>
-    fetch(`${shopBase(shop)}/payments_apps/api/${SHOPIFY.apiVersion}/graphql.json`, {
+    fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -176,4 +197,54 @@ export async function paymentsAppConfigure(shop: string, token: string, external
     }`, { externalHandle, ready });
   firstUserError(data?.paymentsAppConfigure, "paymentsAppConfigure");
   return data?.paymentsAppConfigure?.paymentsAppConfiguration;
+}
+
+// ── Custom-app mode: orders, webhooks, metafields (Admin API) ─────────────
+
+/** Subscribe the store to a topic at our URL. Shopify answers "address for
+ *  this topic has already been taken" when the same subscription exists,
+ *  which for us is success — a reinstall must not fail on its own leftovers. */
+export async function webhookSubscriptionCreate(shop: string, token: string, topic: string, callbackUrl: string): Promise<{ id?: string }> {
+  const data = await adminGraphql(shop, token, `
+    mutation Subscribe($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) {
+      webhookSubscriptionCreate(topic: $topic, webhookSubscription: $sub) {
+        webhookSubscription { id } userErrors { field message }
+      }
+    }`, { topic, sub: { callbackUrl, format: "JSON" } });
+  const payload = data?.webhookSubscriptionCreate;
+  const errs: { message: string }[] = payload?.userErrors ?? [];
+  if (errs.length && !errs.some((e) => /already been taken/i.test(e.message))) {
+    throw new ShopifyApiError(`webhookSubscriptionCreate: ${errs.map((e) => e.message).join("; ")}`, 409, errs);
+  }
+  return { id: payload?.webhookSubscription?.id ? String(payload.webhookSubscription.id) : undefined };
+}
+
+export async function webhookSubscriptionDelete(shop: string, token: string, id: string): Promise<void> {
+  const data = await adminGraphql(shop, token, `
+    mutation Unsubscribe($id: ID!) {
+      webhookSubscriptionDelete(id: $id) { deletedWebhookSubscriptionId userErrors { field message } }
+    }`, { id });
+  firstUserError(data?.webhookSubscriptionDelete, "webhookSubscriptionDelete");
+}
+
+/** The merchant's "Mark as paid" button, pressed by us once the deposit is
+ *  attributed. Only valid for an order whose payment is pending, which is
+ *  exactly the state a manual payment method leaves it in. */
+export async function orderMarkAsPaid(shop: string, token: string, orderGid: string): Promise<{ financialStatus?: string }> {
+  const data = await adminGraphql(shop, token, `
+    mutation MarkPaid($input: OrderMarkAsPaidInput!) {
+      orderMarkAsPaid(input: $input) { order { id displayFinancialStatus } userErrors { field message } }
+    }`, { input: { id: orderGid } });
+  firstUserError(data?.orderMarkAsPaid, "orderMarkAsPaid");
+  return { financialStatus: data?.orderMarkAsPaid?.order?.displayFinancialStatus };
+}
+
+/** Leave the payment's facts on the order where the merchant looks for them:
+ *  a `zold.payment` JSON metafield with the asset, amount and transaction. */
+export async function orderSetPaymentMetafield(shop: string, token: string, orderGid: string, payment: Record<string, unknown>): Promise<void> {
+  const data = await adminGraphql(shop, token, `
+    mutation Note($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) { metafields { id } userErrors { field message } }
+    }`, { metafields: [{ ownerId: orderGid, namespace: "zold", key: "payment", type: "json", value: JSON.stringify(payment) }] });
+  firstUserError(data?.metafieldsSet, "metafieldsSet");
 }
