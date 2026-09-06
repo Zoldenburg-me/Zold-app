@@ -1557,6 +1557,82 @@ is false and the dashboard says why. No real bank-transfer attribution has run
 only fires for an already signed-in, approved user. The payer page was checked
 against fixture payloads in a browser, not against a live request.
 
+## Shopify custom-app mode — the path that needs no approval (Sep 2026)
+
+`npm run shopify:orders:test` (20 checks, stub Shopify Admin API, no chain).
+`SHOPIFY_MODE` in config.ts selects the shape; `custom-app` is the DEFAULT
+because it is the only one a store can install today. The payments-app suite
+pins `SHOPIFY_MODE=payments-app` explicitly.
+
+WHY IT EXISTS: a Keycard founder's email (Sep 2026) named the real wall —
+Shopify's approved-provider list (Coinbase Commerce was dropped from it), and
+weeks-to-months KYB with every crypto PSP on it, because a PSP is a
+counterparty holding the merchant's money. Our payments-app router is queued
+behind that same list, and Shopify vets a payments app's regulatory standing;
+Zoldenburg holds no MiCA transfer licence, so that approval is UNCERTAIN, not
+merely slow. The custom-app path sidesteps both: a custom-distribution app is
+installed on one store with no Shopify review, and a Zold payment page needs
+only an active passkey Safe (server.ts /api/users/:id/handle), so a merchant
+who keeps USDC hands nobody a passport. Monerium's KYB enters only for euros.
+
+THE SHAPE: the store offers a MANUAL payment method whose name contains
+`SHOPIFY_MANUAL_GATEWAY` ("zold"); orders/create (HMAC over the raw body, same
+header as the session webhooks) opens a crypto-only payment request sized
+from `total_price` with `source.orderGid`/`orderName`/`orderStatusUrl`; the
+thank-you page extension in `shopify-app/` polls
+`GET /api/shopify/orders/<shop>/<order id>` (CORS-open, the same allowlisted
+projection as the pay page, 404 `pending:true` while the webhook is in
+flight); the attributed deposit runs `orderMarkAsPaid` through the ADMIN API
+(`adminGraphql`, `/admin/api/<v>/graphql.json` — not the payments_apps
+endpoint) and writes a `zold.payment` JSON metafield best-effort. Install in
+this mode subscribes ORDERS_CREATE + ORDERS_CANCELLED itself; disconnect
+deletes the subscription.
+
+RULES, each with a check:
+ - A WEBHOOK IS ALWAYS 200. Shopify retries a failing delivery for two days
+   and then drops the subscription, so an order we ignore (other gateway, not
+   pending, non-EUR, no payment page) is acknowledged with `ignored`, never
+   refused. Only a forged signature (401) or an unconnected store (404) fails.
+ - THE ORDER GID IS THE IDEMPOTENCY KEY (`source.externalId`). A redelivery
+   opens nothing; a TOML-declared duplicate subscription is therefore harmless.
+ - THE SHOP IN THE LOOKUP URL MUST MATCH THE ORDER'S SHOP, or a page could be
+   made to show one store's order under another's name.
+ - A REINSTALL KEEPS THE SUBSCRIPTION ID. Shopify answers "address for this
+   topic has already been taken" with no id; the first cut overwrote the
+   stored id with undefined and disconnect then deleted nothing.
+ - orders/cancelled closes an UNPAID request only.
+ - `SHOPIFY_ORDER_TTL_MS` (24h default) is longer than the 1h checkout
+   session because a manual-payment order waits for the buyer; after it a
+   deposit lands on the page unattributed and the merchant marks by hand.
+
+THE ONE THING THE MODE CANNOT HIDE: the order exists before the money does
+(inventory held, abandoned pending orders). The dashboard and the GitBook
+page say so. Payment customization functions and an admin order block are
+the next steps if the thank-you block proves out; neither is built.
+
+PARKED (Sep 2026, user's call) — PRIVACY OF THE MERCHANT'S BOOK. One Safe per
+account means anyone who ever paid a merchant can open that address in an
+explorer and read every incoming payment, the EURe balance and every SEPA
+burn. Per-order forwarding addresses do NOT fix it (they forward into the
+same Safe one hop later). The acceptable fix is stealth Safes — a fresh Safe
+with a fresh derived owner per payment, never consolidated on chain, each
+converting and redeeming to the IBAN on its own (Fluidkey runs this shape on
+Base; their bank leg is Bridge/EURC, ours would be Monerium). It is weeks of
+work, needs a PRF-derived key tree with its own backup path (Candide guardian
+recovery restores the passkey Safe, not derived keys) and Monerium multi-
+address linking exercised. Custodial omnibus and mixers were both rejected.
+DO NOT put the current Shopify path in front of a privacy-sensitive merchant
+(Keycard) until this exists; everything built here sits above the address
+layer and survives unchanged when the address becomes fresh per order.
+
+NOT PROVEN: `shopify-app/` (app TOML + React checkout UI extension, targets
+purchase.thank-you.block.render and customer-account.order-status.block.render,
+`network_access = true`, an `api_base` setting) has NOT been built with the
+Shopify CLI or run in a real checkout — package versions and the
+`api.orderConfirmation` / `api.order` names are from the docs, not a run. No
+real store has installed the app. The GitBook page presents the manual-method
+path as live and the in-checkout method as not yet available.
+
 ## Email / SMS recovery — Candide's guardian (Sep 2026)
 
 `npm run recovery:candide:test` (25 checks, stub service, simulated chain).

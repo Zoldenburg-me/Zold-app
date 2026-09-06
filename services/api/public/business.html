@@ -518,42 +518,58 @@ RENDER.invoices = async () => {
  */
 RENDER.shopify = async () => {
   const d = await api(`/api/orgs/${org.id}/shopify`);
+  const custom = d.mode === "custom-app";
   const pill = (r) => r.state === "PAID" ? "ok" : r.state === "OPEN" ? "warn" : "mut";
   let html = `<div class="card"><div class="h"><div><h2>Shopify</h2>
-    <div class="desc">Customers pay a EUR order in USDC on your payment page; the order is marked paid the moment the deposit is seen. Bank transfer is not offered at checkout (too slow for a session), refunds are made by you from Zold, and manual capture is not supported.</div></div></div>`;
+    <div class="desc">${custom
+      ? `Your store offers a manual payment method named <b>${esc(d.manualGateway || "Zold")}</b>. When a customer places an order with it, Zold opens a crypto payment for the order total, shows it on the thank-you page (with the Zold extension installed) or by link, and marks the order paid in Shopify the moment the USDC deposit is seen. The order exists before the money does: unpaid orders stay "payment pending" for ${esc(String(d.orderTtlHours || 24))} hours and are yours to cancel.`
+      : `Customers pay a EUR order in USDC on your payment page; the order is marked paid the moment the deposit is seen. Bank transfer is not offered at checkout (too slow for a session), refunds are made by you from Zold, and manual capture is not supported.`}</div></div></div>`;
   if (!d.available) {
     html += `<div class="banner warn"><b>Not available on this deployment.</b> ${esc(d.reason || "")}
-      A Shopify payments app has to be registered in a Partner account and approved into Shopify's Payments Apps program before any store can install it; nobody has done that yet.</div>`;
+      ${custom
+        ? `A Shopify app (custom distribution is enough — no Shopify review) has to be created in a Partner account and its key and secret set on this deployment.`
+        : `A Shopify payments app has to be registered in a Partner account and approved into Shopify's Payments Apps program before any store can install it; nobody has done that yet.`}</div>`;
   } else {
     html += `<label>Store domain</label>
       <div style="display:flex;gap:.6rem"><input id="sh-shop" placeholder="my-store.myshopify.com" style="flex:1" />
       <button data-act="shopify-connect">Connect store</button></div>
-      <div class="desc" style="margin-top:.4rem">You are sent to Shopify to approve the app; the store's access token is stored encrypted and never shown.</div>`;
+      <div class="desc" style="margin-top:.4rem">You are sent to Shopify to approve the app; the store's access token is stored encrypted and never shown.${custom ? " Connecting subscribes Zold to the store's new-order webhook." : ""}</div>`;
   }
   html += `</div>`;
   html += `<div class="card"><div class="h"><div><h2>Connected stores</h2></div></div>` +
     (d.connections.length ? `<table><thead><tr><th>Store</th><th>Pays into</th><th>Status</th><th>Installed</th><th></th></tr></thead><tbody>` +
       d.connections.map((c) => `<tr>
-        <td><b>${esc(c.shop)}</b></td>
+        <td><b>${esc(c.shop)}</b><div class="desc">${esc(c.mode)}</div></td>
         <td class="mono">@${esc(c.payeeHandle || "—")}</td>
-        <td>${c.ready ? `<span class="pill ok">ready</span>` : `<span class="pill warn">not configured</span>${c.configureError ? `<div class="desc">${esc(c.configureError)}</div>` : ""}`}</td>
-        <td class="desc">${esc(new Date(c.installedAt).toLocaleDateString())}${c.lastSessionAt ? `<br>last checkout ${esc(new Date(c.lastSessionAt).toLocaleString())}` : ""}</td>
+        <td>${c.ready ? `<span class="pill ok">${c.mode === "custom-app" ? "webhook subscribed" : "ready"}</span>` : `<span class="pill warn">not configured</span>${c.configureError ? `<div class="desc">${esc(c.configureError)}</div>` : ""}`}</td>
+        <td class="desc">${esc(new Date(c.installedAt).toLocaleDateString())}${c.lastSessionAt ? `<br>last order ${esc(new Date(c.lastSessionAt).toLocaleString())}` : ""}</td>
         <td class="row-actions"><button class="ghost sm" data-act="shopify-disconnect" data-id="${esc(c.id)}">Disconnect</button></td>
       </tr>`).join("") + `</tbody></table>`
       : `<div class="empty">No store connected.</div>`) + `</div>`;
-  html += `<div class="card"><div class="h"><div><h2>Checkouts</h2><div class="desc">Every payment session a connected store has sent. "Told" means Shopify has marked the order paid.</div></div></div>` +
-    (d.requests.length ? `<table><thead><tr><th>When</th><th>Store</th><th>Amount</th><th>State</th><th>Store told</th><th></th></tr></thead><tbody>` +
+  html += `<div class="card"><div class="h"><div><h2>${custom ? "Orders" : "Checkouts"}</h2><div class="desc">${custom ? `Every order a connected store sent on the Zold method. "Marked paid" means Zold pressed Mark as paid on the order in Shopify.` : `Every payment session a connected store has sent. "Told" means Shopify has marked the order paid.`}</div></div></div>` +
+    (d.requests.length ? `<table><thead><tr><th>When</th><th>Store</th><th>Amount</th><th>State</th><th>${custom ? "Marked paid" : "Store told"}</th><th></th></tr></thead><tbody>` +
       d.requests.map((r) => `<tr>
         <td class="desc">${esc(new Date(r.createdAt).toLocaleString())}${r.test ? ` <span class="pill warn">test</span>` : ""}</td>
-        <td>${esc(r.shop)}</td>
+        <td>${esc(r.shop)}${r.orderName ? `<div class="mono">${esc(r.orderName)}</div>` : ""}</td>
         <td><b>€${Number(r.amountEur ?? 0).toFixed(2)}</b>${r.payments?.length ? `<div class="desc">${r.payments.map((p) => `${p.amountUsdc ?? ""} USDC${p.settledEur !== undefined ? ` → €${p.settledEur}` : " (not converted)"}`).join("<br>")}</div>` : ""}</td>
         <td><span class="pill ${pill(r)}">${esc(r.state.toLowerCase())}</span></td>
         <td>${r.resolvedAt ? `<span class="pill ok">yes</span>` : r.state === "PAID" ? `<span class="pill bad">no</span>${r.resolveError ? `<div class="desc">${esc(r.resolveError)}</div>` : ""}` : `<span class="pill mut">—</span>`}</td>
         <td class="row-actions"><a href="${esc(r.url)}" target="_blank" rel="noopener"><button class="ghost sm">Page</button></a></td>
       </tr>`).join("") + `</tbody></table>`
-      : `<div class="empty">No checkouts yet.</div>`) + `</div>`;
-  html += `<div class="card"><div class="h"><div><h2>Partner Dashboard settings</h2><div class="desc">Paste these into the app's payments extension. Supported currency: EUR. Payment method type: offsite.</div></div></div>
-    <table><tbody>${Object.entries(d.endpoints).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join("")}</tbody></table></div>`;
+      : `<div class="empty">${custom ? "No orders yet." : "No checkouts yet."}</div>`) + `</div>`;
+  if (custom) {
+    html += `<div class="card"><div class="h"><div><h2>Set up the store</h2><div class="desc">Three steps in Shopify, in this order. Scopes the app asks for: <span class="mono">${esc(d.scopes || "")}</span>.</div></div></div>
+      <ol class="desc" style="line-height:1.7;padding-left:1.2rem">
+        <li><b>Payment method.</b> Settings → Payments → Manual payment methods → Create custom payment method. Name it so that it contains "<b>${esc(d.manualGateway || "zold")}</b>" (that is how Zold recognises its orders). Restrict the store's checkout currency to EUR: a non-EUR order is ignored.</li>
+        <li><b>Connect the store</b> above. Zold subscribes to the store's orders/create and orders/cancelled webhooks at the URL below; no manual webhook setup is needed.</li>
+        <li><b>Thank-you page</b> (recommended). Install the Zold checkout extension from the <span class="mono">shopify-app/</span> project and add its block to the Thank you and Order status pages in the checkout editor, with its "Zold API origin" setting pointing at this deployment. Without it, add the pay link below to the order-confirmation email template instead.</li>
+      </ol>
+      <table><tbody>${Object.entries(d.endpoints).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join("")}</tbody></table>
+      <div class="desc" style="margin-top:.6rem">Limits, stated plainly: the buyer pays after placing the order, so inventory is held while an order waits; refunds are made by you from Zold; a payment that arrives after ${esc(String(d.orderTtlHours || 24))} hours lands on your payment page unattributed and the order is marked paid by hand.</div></div>`;
+  } else {
+    html += `<div class="card"><div class="h"><div><h2>Partner Dashboard settings</h2><div class="desc">Paste these into the app's payments extension. Supported currency: EUR. Payment method type: offsite.</div></div></div>
+      <table><tbody>${Object.entries(d.endpoints).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join("")}</tbody></table></div>`;
+  }
   return html;
 };
 

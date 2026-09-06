@@ -26,6 +26,9 @@ process.env.TRANSF_DB_PATH = path.join(os.tmpdir(), `zold-shopify-test-${process
 process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1379, INR: 109.87, KES: 147.53 });
 process.env.SHOPIFY_API_KEY = "zold-app-key";
 process.env.SHOPIFY_API_SECRET = "shpss_test_secret";
+// This suite is the PAYMENTS-APP contract; the custom-app (orders webhook)
+// path has its own, scripts/shopify-orders-test.ts.
+process.env.SHOPIFY_MODE = "payments-app";
 process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "test-encryption-key";
 process.env.TRANSF_PUBLIC_URL = "";
 
