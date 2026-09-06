@@ -17,7 +17,7 @@ import {
   type SessionResolver,
 } from "./org-context.js";
 import { can, limitsFor } from "../domain/plans.js";
-import { FX } from "../config.js";
+import { FX, railFeeEur } from "../config.js";
 import { createQuote } from "../fx.js";
 import { accountBalances } from "../chain.js";
 import { CURRENCY_REGISTRY, accountIsSpendable } from "../domain/accounts.js";
@@ -658,10 +658,13 @@ export function createBusinessRouter(
       const sendEur = Number(line.amount);
       // createQuote refuses these too, but refusing here keeps the whole batch
       // atomic instead of failing halfway through.
-      if (!(sendEur > FX.FIXED_FEE_EUR)) {
+      const sepaFee = railFeeEur("sepa");
+      if (!(sendEur > sepaFee)) {
         problems.push({
           lineId: line.id,
-          reason: `€${line.amount} does not exceed the €${FX.FIXED_FEE_EUR} fee, so nothing would arrive.`,
+          reason: sepaFee > 0
+            ? `€${line.amount} does not exceed the €${sepaFee} fee, so nothing would arrive.`
+            : `€${line.amount} is not a positive amount.`,
         });
         continue;
       }
