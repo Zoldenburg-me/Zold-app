@@ -28,7 +28,9 @@ Once submitted, the invoice is **timestamped and locked**. Neither side can edit
 
 ## Pay it
 
-The submitted invoice appears under **Invoices** with its state. Open it and press **Pay**. The bank details or wallet address come from the invoice, so nothing is retyped, and the invoice number becomes the payment reference. On a Business plan with approvals switched on, paying an invoice creates a draft that goes through [review](../business/payments-and-approvals.md) like any other payment.
+The submitted invoice appears under **Invoices** with its state. Press **Pay**. The supplier's bank details come from the invoice, so nothing is retyped; the supplier lands in your [address book](../business/address-book.md), and their invoice number becomes the payment reference so their bookkeeping matches it without asking. Paying an invoice creates a draft like any other payment: on a Business plan with approvals switched on it goes through [review](../business/payments-and-approvals.md), and the account holder signs it to send.
+
+Pay needs an IBAN. An invoice where the supplier gave only a wallet address is kept on record, and you can mark it as paid elsewhere once you have settled it another way.
 
 ## States
 
@@ -37,7 +39,7 @@ The submitted invoice appears under **Invoices** with its state. Open it and pre
 | Link created | Waiting for the supplier |
 | Submitted | Invoice received, ready to pay |
 | Paying | A payment is in progress |
-| Paid | Paid from Zold |
+| Paid | Paid from Zold — set when the payment has settled |
 | Reconciled | Matched to a transaction in your books |
 | Deleted | Removed before anyone was paid |
 

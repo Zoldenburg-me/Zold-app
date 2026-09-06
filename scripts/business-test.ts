@@ -42,6 +42,8 @@ import {
   DraftError,
 } from "../services/api/src/domain/drafts.js";
 import {
+  assertPayable,
+  paymentReference,
   assertDeletable,
   hashToken,
   newLinkToken,
@@ -501,6 +503,24 @@ check("a submitted invoice is locked", () => {
   const view = supplierView(invoice(), "Test GmbH");
   assert.equal(view.editable, false);
   assert.equal(supplierView(invoice({ state: "LINK_CREATED" }), "X").editable, true);
+});
+
+check("the payment reference leads with the supplier's invoice number", () => {
+  assert.equal(paymentReference({ supplier: { orgName: "S", email: "e", invoiceNumber: " R-17 " } }, "Acme GmbH"), "Invoice R-17 Acme GmbH");
+  assert.equal(paymentReference({ supplier: undefined }, "Acme GmbH"), "Acme GmbH");
+});
+
+check("only a SUBMITTED EUR invoice with an IBAN is payable, and each refusal names the gap", () => {
+  const base = { id: "i", orgId: "o", linkTokenHash: "h", lines: [], currency: "EUR", total: "1.00", createdByMemberId: "m", createdAt: "t", updatedAt: "t" };
+  const bank = { kind: "bank" as const, bank: { currency: "EUR" as const, country: "DE", holderName: "S", iban: "DE89370400440532013000" } };
+  assert.equal(assertPayable({ ...base, state: "SUBMITTED", payTo: bank } as any).iban, "DE89370400440532013000");
+  assert.throws(() => assertPayable({ ...base, state: "PAYING", payTo: bank } as any), /already under way/);
+  assert.throws(() => assertPayable({ ...base, state: "PAID", payTo: bank } as any), /already paid/);
+  assert.throws(() => assertPayable({ ...base, state: "LINK_CREATED", payTo: bank } as any), /not submitted/);
+  assert.throws(() => assertPayable({ ...base, state: "SUBMITTED", currency: "USD", payTo: bank } as any), /Only EUR/);
+  assert.throws(() => assertPayable({ ...base, state: "SUBMITTED", payTo: { kind: "wallet", address: "0x1", chainId: 1 } } as any), /ask them for an IBAN/i);
+  assert.throws(() => assertPayable({ ...base, state: "SUBMITTED" } as any), /no bank account/);
+  assert.throws(() => assertPayable({ ...base, state: "SUBMITTED", direction: "outgoing", payTo: bank } as any), /issued by you/);
 });
 
 check("an invoice with a payment against it cannot be deleted", () => {
