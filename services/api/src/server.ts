@@ -8,7 +8,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, HARNESS, KYC, LIQUIDITY, MONERIUM, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, moneriumOAuthEnabled, moneriumSandboxEnabled, SECURITY } from "./config.js";
+import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, HARNESS, KYC, LIQUIDITY, MONERIUM, PAYMENT_REQUESTS, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, moneriumOAuthEnabled, moneriumSandboxEnabled, SECURITY, railFeeEur } from "./config.js";
 import { prepareSafeSwapForTransfer, prepareDepositConversion } from "./liquidity.js";
 import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
@@ -77,6 +77,9 @@ import {
 } from "./recovery.js";
 import { submitGuardianRecovery } from "./recovery-signer.js";
 import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
+import { createDocumentsRouter } from "./routes/documents.js";
+import { createPaymentRequestRouter, onPaymentRequestPaid, sweepPaymentRequests } from "./routes/payment-requests.js";
+import { createShopifyRouter, resolveShopifyRequest, shopifyAvailable } from "./routes/shopify.js";
 import { candideRecoveryEnabled, maskTarget } from "./recovery/candide-guardian.js";
 import {
   abis,
@@ -169,6 +172,13 @@ app.use("/api", (req, res, next) => {
     // A receipt slug is a bearer credential, so looking one up is a guess at a
     // secret and belongs on the tighter bucket with the other guessable things.
     req.path.startsWith("/r/") ||
+    // A document verification code is likewise a bearer credential.
+    req.path.startsWith("/v/") ||
+    // A payment-request code (/pay/<handle>/<code>) is one too; the bare
+    // /pay/<handle> page is public by design and stays on the general bucket.
+    /^\/pay\/[^/]+\/[^/]+/.test(req.path) ||
+    // Shopify's session webhooks are HMAC-signed; a forged one is a guess.
+    req.path.startsWith("/shopify/") ||
     req.path === "/kyc/review" ||
     // Submitting Monerium API keys is a credential check against a third
     // party; guessing at it belongs on the tight bucket too.
@@ -201,6 +211,7 @@ app.get(["/business", "/business/"], (_req, res) =>
 );
 /** The supplier's invoice view, reached with a one-time link and no account. */
 app.get("/invoice/:token", (_req, res) => res.sendFile(path.join(pub, "invoice.html")));
+app.get("/v/:code", (_req, res) => res.sendFile(path.join(pub, "document.html")));
 
 app.use(express.static(pub));
 
@@ -284,6 +295,10 @@ export function capabilities() {
     /** Is the cash (EUR -> KES) corridor open? Bridge live AND an anchor
      *  configured; the UI hides the corridor rather than quote into a wall. */
     cashRail: cashRailOpen(),
+    /** Is a Shopify payments app registered for this deployment? Without one
+     *  the dashboard's Shopify card says so instead of offering a connect
+     *  button that can only fail. */
+    shopify: shopifyAvailable().available,
     /**
      * May a user connect their OWN Monerium app credentials? Needs the
      * encryption key, because the secret is never written in plaintext. The
@@ -424,6 +439,15 @@ const withSession = (user: User) => ({ ...publicUser(user), sessionToken: issueS
 // no-session half sits under /recovery, which the limiter above already
 // treats as an auth route.
 app.use("/api", createCandideRecoveryRouter({ requireUserSession, publicUser, withSession }));
+// Account documents: receipts, statements, balance and ownership letters, each
+// verifiable at /v/<code>. The page is the record; the PDF is its print.
+app.use("/api", createDocumentsRouter({ requireUserSession }));
+// Payment requests (pay links): an amount asked for at /pay/<handle>/<code>,
+// payable by USDC, by SEPA with the code as reference, or from another Zold
+// account. Shopify rides on the same requests as a payments app.
+app.use("/api", createPaymentRequestRouter(requireUserSession));
+app.use("/api", createShopifyRouter(requireSession));
+onPaymentRequestPaid(resolveShopifyRequest);
 
 function publicPrivacyPlan(plan: (typeof PRIVACY_BUNDLE.plans)[number]) {
   const grossMarginBps = Math.round(((plan.priceEur - plan.estimatedCostEur) / plan.priceEur) * 10_000);
@@ -1286,6 +1310,11 @@ app.get(
  *  and renders its own not-found, so a bad link still gets a real page. */
 app.get("/pay/:handle", (_req, res) => {
   res.sendFile(path.join(pub, "pay.html"));
+});
+/** A payment REQUEST against that page: amount, description, the ways to pay
+ *  and the live status. The code in the URL is the credential. */
+app.get("/pay/:handle/:code", (_req, res) => {
+  res.sendFile(path.join(pub, "pay-request.html"));
 });
 
 /* ---------------------------------------------------------------------------
@@ -2930,7 +2959,7 @@ async function buildTransferFromQuote(
       updatedAt: createdAt,
     };
     if (transfer.rail === "sepa" && transfer.recipientIban) {
-      const payoutEur = transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR;
+      const payoutEur = transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa");
       const redeem = moneriumRedeemMessage(payoutEur, transfer.recipientIban, createdAt);
       transfer.moneriumRedeem = {
         ...redeem,
@@ -2987,7 +3016,7 @@ async function buildTransferFromQuote(
           };
     const debitWei =
       transfer.rail === "sepa"
-        ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR)))
+        ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa"))))
         : amountWei;
     if (
       debitWei > 0n &&
@@ -3028,7 +3057,7 @@ async function buildTransferFromQuote(
                   "BRIDGE_LIVE=1 requires BRIDGE_DESTINATION_ADDRESS until MoneyGram anchor payment instructions are wired into Bridge",
                 );
               }
-              const convertEur = transfer.sendEur - FX.FIXED_FEE_EUR;
+              const convertEur = transfer.sendEur - railFeeEur("cash");
               const rate = Number(quote.lockedSwapRate ?? "0") / 1e6;
               if (!(rate > 0)) throw new Error("no locked swap rate to size the Bridge transfer");
               bridgeAmountUsdc = Math.floor(convertEur * rate * 100) / 100;
@@ -3222,8 +3251,9 @@ app.post(
       return res.status(400).json({ error: "rail must be cash or sepa" });
     }
     const amount = Number(sendEur);
-    if (!(amount > FX.FIXED_FEE_EUR)) {
-      return res.status(400).json({ error: `amount must exceed the €${FX.FIXED_FEE_EUR} fee` });
+    const railFee = railFeeEur(rail);
+    if (!(amount > railFee)) {
+      return res.status(400).json({ error: railFee > 0 ? `amount must exceed the €${railFee} fee` : "amount must be positive" });
     }
     if (amount > FX.DAILY_CAP_EUR) {
       return res.status(400).json({ error: `amount exceeds daily cap of €${FX.DAILY_CAP_EUR}` });
@@ -3676,6 +3706,15 @@ if (candideRecoveryEnabled()) {
   setInterval(runRecoverySweep, RECOVERY.sweepMs).unref();
   console.log(`RECOVERY: email/SMS guardian via ${RECOVERY.serviceUrl} (chain ${CANDIDE.chainId}, module ${CANDIDE.recoveryModuleAddress})`);
 }
+// Pay links: expire what is past its date, book our own SEPA payouts that
+// carry a code, retry telling a merchant about a paid checkout.
+setInterval(
+  () =>
+    sweepPaymentRequests()
+      .then((r) => (r.expired || r.matched) && console.log(`pay-request sweep: ${r.expired} expired, ${r.matched} matched`))
+      .catch((e) => console.error(`pay-request sweep failed: ${e?.message ?? e}`)),
+  PAYMENT_REQUESTS.sweepMs,
+).unref();
 sweepAnchorPayouts()
   .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
   .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`));

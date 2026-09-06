@@ -15,7 +15,7 @@
  * pickup and no simulated SEPA payout: a rail is live or the transfer is
  * refused before anything leaves the user's Safe.
  */
-import { BRIDGE, FX } from "./config.js";
+import { BRIDGE, FX, railFeeEur } from "./config.js";
 import { moneriumLiveFor } from "./adapters/monerium-connection.js";
 import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
@@ -147,7 +147,7 @@ function safeMovedEur(t: Transfer): number {
   const steps = new Set(t.txs.map((x) => x.step));
   if (steps.has(DEBIT_STEP.safe)) return t.sendEur;
   if (steps.has(DEBIT_STEP.safeFee)) {
-    const payoutEur = t.receiveEur ?? t.sendEur - FX.FIXED_FEE_EUR;
+    const payoutEur = t.receiveEur ?? t.sendEur - railFeeEur("sepa");
     return Math.max(0, Math.round((t.sendEur - payoutEur) * 100) / 100);
   }
   return 0;
@@ -453,7 +453,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   let refundEur: number;
   let recoveredFrom: string;
   let deductions = "none";
-  const fee = FX.FIXED_FEE_EUR;
+  const fee = railFeeEur(t.rail);
   if (!swapRan) {
     // Still holding the debited EURe in full.
     refundEur = t.sendEur;
@@ -886,7 +886,7 @@ export async function executeSepaTransfer(
   const txs = transfer.txs;
 
   try {
-    const payoutEur = transfer.receiveEur ?? transfer.sendEur - FX.FIXED_FEE_EUR;
+    const payoutEur = transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa");
     const [firstName, ...rest] = transfer.recipientName.trim().split(/\s+/);
     const counterpart = {
       iban: transfer.recipientIban!,

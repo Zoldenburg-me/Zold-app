@@ -1379,6 +1379,184 @@ Monerium is Gnosis-native. Base Sepolia was chosen for testing because gas is
 production. If CoW-on-Gnosis is the liquidity route, Gnosis is the natural
 production chain — not Base, not Polygon. Decide it deliberately.
 
+## Pay from invoice (Sep 2026)
+
+An incoming Invoice-Me invoice is PAID THROUGH A DRAFT, not by a second
+payment path. `POST /orgs/:id/invoices/:id/pay` turns a SUBMITTED EUR invoice
+whose supplier gave an IBAN into one draft line (`DraftLine.invoiceId`) on the
+org's EUR account; review and the device signature apply exactly as to any
+other draft. At execution the line's remittance text is
+`paymentReference()` — `Invoice <supplier's number> <org name>` — because the
+supplier's bookkeeping matches on THEIR number, and the transfer id lands on
+`invoice.payment`. The invoice's state is DERIVED from its transfer on read
+(`syncInvoicePayment`): PAYING -> PAID when the transfer is PAID, back to
+SUBMITTED when the transfer or the draft fails, so a fresh draft can pay it.
+The supplier is matched to a contact by IBAN, then by name, else created,
+so the line carries a fingerprint and INVALID_DATA works. The supplier form
+now collects account holder, IBAN and BIC (validated with the address-book
+rules at submission, so a typo is the supplier's to fix, not a payment
+failure weeks later); a wallet-only invoice records and "Pay" says to ask
+for an IBAN. Reconcile (manual) stays for invoices paid elsewhere.
+Checks: draft:test 7/7 new, business:test 2 new. NOT PROVEN: the
+PAYING -> PAID follow-through on a real transfer (needs a Safe on Base Sepolia).
+
+THE BOUNDARY, decided with the user: Zold pays from an invoice and keeps the
+record (statement, receipt, reference); invoicing software creates invoices,
+chases them and books them. Do not extend the issued-invoice module further.
+
+## Fees — SEPA is free (Sep 2026)
+
+`FX.FIXED_FEE_EUR` is gone. Fees are per rail through `railFeeEur(rail)`:
+`SEPA_FEE_EUR` defaults to 0 (Monerium charges nothing for the redeem, so
+neither do we), `CASH_FEE_EUR` to 0.99 on the closed cash corridor, both env-
+overridable. Conversions carry no Zold fee. Consequences: the SEPA fee debit
+leg (`DEBIT_STEP.safeFee`) runs only when the fee is positive, quotes and the
+app print no fee row at zero, and the receipt omits "Zold fee" rather than
+printing €0.00. safe-funded-recovery-test pins `SEPA_FEE_EUR=0.99` for its
+"only the fee comes back" case, which needs a fee to move.
+
+## Account documents — statement, receipt, balance, ownership (Sep 2026)
+
+`npm run documents:test` (13 checks: pure builders offline, then the routes on
+a hardhat chain with a harness Safe). Code: `documents.ts` (builders, canonical
+digest, signing, parties text), `routes/documents.ts` (routes + verifier),
+`public/document.html` (the printable sheet and the live verdict). Profile ->
+"Statements & documents"; transaction detail -> "Transfer receipt (PDF)".
+
+MODELLED ON REBIND'S RECEIPT (a Monerium-based app; the user's own receipt was
+the reference): holder block, IBAN + BIC, a DATE / IBAN / NAME / MEMO / AMOUNT
+table, and the Monerium legal footer. Their PDF's producer is Chromium, so
+theirs is a browser print too — ours is the same: the page at `/v/<code>` IS
+the record, the PDF is its print. No PDF library.
+
+THE PROPERTY: every document is a frozen snapshot under a 15-char Crockford
+verification code, signed by the server's document key (EIP-191 over the
+canonical digest; `DOCUMENT_SIGNING_KEY`, else the orchestrator key), and the
+verifier RE-CHECKS on every visit — signature, balance re-read from the chain
+at the stated block, statement reconciliation, and the Safe's EIP-1271
+signature on a proof of ownership. A revoked document fails verification
+rather than vanishing. Codes are on the auth rate bucket (`/v/`), like slugs.
+
+WHO IS WHO, from Monerium's own terms (personal and business ToS, s. 1.1, 4,
+5, 6): Monerium is the e-money issuer; the IBAN and the SEPA payment services
+are provided by AS LHV Pank, Tallinn (the IBAN is Estonian, BIC LHVBEE22 —
+confirmed on the reference receipt); e-money is redeemable at par, safeguarded,
+NOT a bank deposit and NOT deposit-guarantee covered; Zold is software. ONE
+footer paragraph (`PARTIES.footer`) carries that, once per document, in the
+shape of Rebind's two-line footer; the first cut restated it in every body
+and was trimmed on the user's call. The bank-details screen was also
+corrected: it used to call Monerium the bank.
+
+STATEMENT SOURCES, in order of authority: chain balances at the period's
+boundary blocks (binary search over block timestamps), Monerium orders for the
+counterparty name/IBAN/memo, our transfer records. Duplicates across sources
+are the same money seen twice and are merged by amount within a day. A
+statement that does not reconcile SAYS SO with the delta rather than refusing;
+a statement without a Monerium connection says its lines carry ledger data
+only. Proof of ownership is framed as proof of CONTROL (the Safe signs a
+message naming the account, the code and the day); the issuer's word is
+Monerium's own account history, and the document says so.
+
+REFUSED: any document for an account whose account of record is the zero
+address; a receipt for a transfer that has not moved money.
+
+NOT PROVEN: Monerium order data on real statement lines (needs a connected
+production account) and the printed PDF's look in a real print dialog.
+
+## Payment links + Shopify — the checkout, picked up again (Sep 2026)
+
+`npm run paylinks:test` (70 checks: builders offline, then routes and the
+crypto attribution on a hardhat chain) and `npm run shopify:test` (24 checks,
+stub Shopify, no chain). Code: `payment-requests.ts` (domain, pure),
+`routes/payment-requests.ts` (owner + payer routes, attribution hooks, sweep),
+`shopify/{hmac,admin,types}.ts` + `routes/shopify.ts`, `public/pay-request.html`
+(the payer's page at `/pay/<handle>/<code>`). UI: Profile -> Payment links in
+the app; the Shopify view in `/business`. GitBook: get-paid/payment-links.md,
+business/shopify.md.
+
+WHERE THE OLD CHECKOUT STANDS. `tonyzil/pay-with-zold` (on disk
+`zold-checkout`) is the merchant OAuth/PKCE handoff written in July against an
+API that has since changed under it (RemitVault gone, execution assertions,
+Monerium-only identity); its ADR 0001 already argued the checkout belongs on
+the app origin. The "Revolut Pay with link" ask is answered HERE, in core, as
+PAYMENT REQUESTS against the existing payment page, not by reviving that repo.
+Its PKCE handoff remains the shape for a partner who needs a code exchange
+(Mony), and nothing here replaces it.
+
+A PAYMENT REQUEST is one ask against the payment page: an amount (or "payer
+chooses"), a description, a 15-char Crockford code that IS the credential
+(look-alikes folded on read), the ways to pay, and what arrived. Three ways,
+each attributed differently, and the difference is the whole design:
+ - crypto: USDC to the page's ONE address, so attribution is BY AMOUNT. Every
+   open request quotes a USDC figure unique among that payee's open quotes
+   (nudged by a micro-unit on collision); a deposit matches the closest quote,
+   full beats partial beats over, ties to the older request. Over 10% above a
+   quote is NOT that payment (it would swallow the short payment of a bigger
+   request — the test that found this had a 60% partial booked as an
+   over-payment of a tip jar). Below 20% of a quote is not attributed either.
+   Every quote ever shown stays valid; quotes issued AFTER the money arrived
+   cannot be what the payer saw and are skipped.
+ - bank: SEPA to the payee's IBAN with the code as reference; matched from the
+   Monerium issue order's memo (hooked into pollDepositsOnce, idempotent on
+   order id). Our OWN PAID payouts carrying the code are matched by the sweep,
+   and Monerium's view of that same credit MERGES onto the row (amount within
+   a cent inside a day, as documents.ts does) instead of doubling it.
+ - zold: not a rail. "Open in Zold" is `/app?pay=<handle>/<code>`, which enters
+   the SEPA send flow with IBAN, amount and reference filled in — the same
+   money as `bank`, without typing. There is still no on-chain Zold-to-Zold
+   transfer; the page says so rather than implying one.
+
+RULES THAT CARRY WEIGHT:
+ - The page address is watched while a crypto request is OPEN whatever
+   `autoConvert` says — a paid link on a forwarder address was otherwise never
+   seen. And auto-convert OFF now settles a page deposit as USDC (the forwarder
+   already delivered it; nothing converts it) instead of REFUSING with
+   "auto-settlement switched off", which read as a fault to a payee whose link
+   had just been paid. convert-deposit-test's expectation was changed to match.
+ - `settledEur`/`settledAsset` on a payment say what the payee HOLDS. A crypto
+   payment is PAID for the merchant the moment the deposit is attributed, and
+   settles in EUR only when the user-signed conversion runs; the two are
+   separate fields so neither is overstated.
+ - The public projection is an allowlist. A crypto-only link leaks no IBAN,
+   legal name, email, id or KYC state (test greps the JSON). A link offering
+   bank transfer DOES carry the IBAN and the account holder's legal name — a
+   SEPA transfer cannot be made without them and Verification of Payee compares
+   the name — and the owner chose to offer it; the doc says so.
+ - The code under someone else's handle is a 404: a code pasted under another
+   handle must not make a page impersonate a payee. `/api/pay/<h>/<code>` is on
+   the tight rate bucket like `/r/` and `/v/`.
+ - No delete on requests. Cancel only while unpaid; a paid one is a record.
+ - The crypto figure = live mid × (1 + 50 bps allowance), rounded UP to the
+   micro-unit; the allowance is printed on the page and stored on the quote,
+   never folded into the number. midRates() unavailable => the request is still
+   created, and the page says crypto cannot be quoted right now.
+
+SHOPIFY is a payments app ("offsite" flow) riding on the same requests:
+session POST (HMAC over the RAW body, key = app secret) -> a crypto-only
+request for the session's EUR amount, one hour, `test` carried -> 201 with the
+page as redirect_url (Shopify retries; the same id gets the same page) ->
+paid hook calls paymentSessionResolve on the store's Payments Apps API ->
+Shopify's nextAction.redirectUrl is stored as returnUrl and the page's "Return
+to the store" goes through `/api/shopify/return/<code>`. Install is OAuth from
+the business dashboard (state nonce in memory, query HMAC checked, token
+encrypted with purpose `shopify`, paymentsAppConfigure ready:true; the payee
+is the org's EUR account's backingUserId else the installer, and must have a
+payment page). REFUSED, each with a merchant-readable message through the
+mutation: non-EUR (422), kind=authorization (422 + paymentSessionReject),
+refund/capture/void (201 ack, then the matching *SessionReject — refunds are
+manual because the sending address is often an exchange's, not the buyer's).
+A failed resolve is recorded on the request and retried by the sweep.
+
+NOT PROVEN, and the surface looks more finished than it is: no Shopify app is
+registered — a payments app must be approved into Shopify's Payments Apps
+program in the Partner Dashboard before any store can install it, and nobody
+has started that; the GraphQL shapes are from their docs, exercised only
+against the stub. SHOPIFY_API_KEY unset => `/api/health` capabilities.shopify
+is false and the dashboard says why. No real bank-transfer attribution has run
+(needs a Monerium production connection and a real memo). The `?pay=` deep link
+only fires for an already signed-in, approved user. The payer page was checked
+against fixture payloads in a browser, not against a live request.
+
 ## Email / SMS recovery — Candide's guardian (Sep 2026)
 
 `npm run recovery:candide:test` (25 checks, stub service, simulated chain).
@@ -1758,8 +1936,9 @@ RP-ID-scoped and the FP4 device key lives in one origin's localStorage, so a
 user onboarded there has both halves in one place.
 SEPA remittance reference (July 2026): POST /api/transfers takes an optional
 `reference` on the sepa rail and it rides on the payment, so a payee reconciles
-against their own handle instead of our uuid. The memo used to be hardcoded to
-`Zold <transfer.id>` — a merchant could see that Zold sent money but not which
+against their own handle instead of our uuid. Without one the line reads
+`Powered by Zold <transfer.id>` (Sep 2026: the tag was "Zold"). A bare id meant
+a merchant could see that Zold sent money but not which
 of their users it was for, which is the manual step the checkout exists to
 remove. services/api/src/sepa.ts folds it into the SEPA Latin subset (accents
 decomposed, so "Müller" arrives as "Muller" not "M ller"), strips the reserved
