@@ -14,11 +14,11 @@ Every cost is on the quote before you approve. A quote shows the fee, and for a 
 | --- | --- |
 | Receiving a bank transfer | Free |
 | Receiving a crypto deposit | Free; the sender pays their own network fee |
-| SEPA bank transfer out | Fixed fee per transfer, shown on the quote |
+| SEPA bank transfer out | Free |
 | Cash pickup | Fixed fee per transfer plus the exchange-rate margin, both shown on the quote |
 | Receiving ACH or wire to your USD account | Free |
 | ACH or wire payout | Fixed fee per transfer, shown on the quote |
-| Euro ↔ dollar conversion | Margin shown on the quote |
+| Euro ↔ dollar conversion | No Zold fee; you get the venue's rate, shown on the quote |
 | Network (gas) fees | Paid by Zold. You never need to hold ETH |
 | Plans | Starter is free; Premium and Business are priced in Settings → Plan |
 

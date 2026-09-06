@@ -1400,6 +1400,17 @@ THE BOUNDARY, decided with the user: Zold pays from an invoice and keeps the
 record (statement, receipt, reference); invoicing software creates invoices,
 chases them and books them. Do not extend the issued-invoice module further.
 
+## Fees — SEPA is free (Sep 2026)
+
+`FX.FIXED_FEE_EUR` is gone. Fees are per rail through `railFeeEur(rail)`:
+`SEPA_FEE_EUR` defaults to 0 (Monerium charges nothing for the redeem, so
+neither do we), `CASH_FEE_EUR` to 0.99 on the closed cash corridor, both env-
+overridable. Conversions carry no Zold fee. Consequences: the SEPA fee debit
+leg (`DEBIT_STEP.safeFee`) runs only when the fee is positive, quotes and the
+app print no fee row at zero, and the receipt omits "Zold fee" rather than
+printing €0.00. safe-funded-recovery-test pins `SEPA_FEE_EUR=0.99` for its
+"only the fee comes back" case, which needs a fee to move.
+
 ## Account documents — statement, receipt, balance, ownership (Sep 2026)
 
 `npm run documents:test` (13 checks: pure builders offline, then the routes on

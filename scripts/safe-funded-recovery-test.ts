@@ -28,6 +28,10 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RPC = "http://127.0.0.1:8549";
 process.env.TRANSF_RPC_URL = RPC;
+// SEPA is free by default, so the fee leg this suite exercises would not exist.
+// Pin a fee for the run: the property under test is that ONLY the fee comes
+// back, which needs a fee to move in the first place.
+process.env.SEPA_FEE_EUR ??= "0.99";
 process.env.MONERIUM_CLIENT_ID = "";
 process.env.MONERIUM_CLIENT_SECRET = "";
 process.env.MG_ANCHOR_DOMAIN = "";
@@ -221,7 +225,7 @@ try {
     const { FX } = await import("../services/api/src/config.js");
     const user = await seedUser("Safe Sepa Fee", 0);
     const sendEur = 40;
-    const payoutEur = sendEur - FX.FIXED_FEE_EUR;
+    const payoutEur = sendEur - FX.SEPA_FEE_EUR;
     // Same rounding the orchestrator applies — 40 - 39.01 is not exactly 0.99 in floats.
     const feeEur = Math.round((sendEur - payoutEur) * 100) / 100;
     // Only the fee ever reaches the orchestrator on this rail.
