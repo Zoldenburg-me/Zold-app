@@ -43,6 +43,7 @@
     "documents:test": "tsx scripts/documents-test.ts",
     "paylinks:test": "tsx scripts/payment-requests-test.ts",
     "shopify:test": "tsx scripts/shopify-test.ts",
+    "shopify:orders:test": "tsx scripts/shopify-orders-test.ts",
     "monerium:oauth:test": "tsx scripts/monerium-oauth-test.ts",
     "monerium:apikeys:test": "tsx scripts/monerium-apikeys-test.ts",
     "travelrule:test": "MG_ANCHOR_DOMAIN=testanchor.stellar.org tsx scripts/travel-rule-test.ts",

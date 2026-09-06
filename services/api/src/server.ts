@@ -8,7 +8,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, HARNESS, KYC, LIQUIDITY, MONERIUM, PAYMENT_REQUESTS, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, moneriumOAuthEnabled, moneriumSandboxEnabled, SECURITY, railFeeEur } from "./config.js";
+import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, HARNESS, KYC, LIQUIDITY, MONERIUM, PAYMENT_REQUESTS, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, moneriumOAuthEnabled, moneriumSandboxEnabled, SECURITY, SHOPIFY, railFeeEur } from "./config.js";
 import { prepareSafeSwapForTransfer, prepareDepositConversion } from "./liquidity.js";
 import { createBridgeTransfer } from "./bridge/bridgexyz.js";
 import { countryBlock, normaliseCountryCode } from "./country-policy.js";
@@ -299,6 +299,10 @@ export function capabilities() {
      *  the dashboard's Shopify card says so instead of offering a connect
      *  button that can only fail. */
     shopify: shopifyAvailable().available,
+    /** Which Shopify shape this deployment runs — `custom-app` (manual
+     *  payment method + orders webhook, installable today) or `payments-app`
+     *  (a checkout payment method, needs Shopify's program approval). */
+    shopifyMode: SHOPIFY.mode,
     /**
      * May a user connect their OWN Monerium app credentials? Needs the
      * encryption key, because the secret is never written in plaintext. The
