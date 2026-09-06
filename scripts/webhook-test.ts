@@ -171,7 +171,7 @@ try {
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  const user = await api("/api/users", { name: "Webhook Target", country: "DE" });
+  const user = await api("/api/users", { name: "Webhook Target", email: "webhook@example.com", country: "DE" });
   token = user.sessionToken;
   await registerDevice(api, user.id, newDevice());
   const balance = async () => (await api(`/api/users/${user.id}`)).balanceEur;
