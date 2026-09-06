@@ -22,16 +22,16 @@ const check = (label: string, fn: () => void) => {
 console.log("SEPA remittance reference");
 
 check("no reference keeps the previous string, so non-checkout payouts read the same", () => {
-  assert.equal(paymentMemo(ID), `Zold ${ID}`);
+  assert.equal(paymentMemo(ID), `Powered by Zold ${ID}`);
 });
 
 check("blank and whitespace-only references are treated as absent", () => {
-  assert.equal(paymentMemo(ID, ""), `Zold ${ID}`);
-  assert.equal(paymentMemo(ID, "   "), `Zold ${ID}`);
+  assert.equal(paymentMemo(ID, ""), `Powered by Zold ${ID}`);
+  assert.equal(paymentMemo(ID, "   "), `Powered by Zold ${ID}`);
 });
 
 check("the payer's reference leads; our short id trails", () => {
-  assert.equal(paymentMemo(ID, "mony-user-8412/topup-77af"), "mony-user-8412/topup-77af Zold 7494cd64");
+  assert.equal(paymentMemo(ID, "mony-user-8412/topup-77af"), "mony-user-8412/topup-77af Powered by Zold 7494cd64");
 });
 
 check("accents are folded, not blanked — Muller, never M ller", () => {
@@ -51,9 +51,9 @@ check("the allowed punctuation survives", () => {
 });
 
 check("reserved slash forms are stripped — a bank may read /X/ as a field marker", () => {
-  assert.equal(paymentMemo(ID, "/leading"), "leading Zold 7494cd64");
-  assert.equal(paymentMemo(ID, "trailing/"), "trailing Zold 7494cd64");
-  assert.equal(paymentMemo(ID, "a//b"), "a/b Zold 7494cd64");
+  assert.equal(paymentMemo(ID, "/leading"), "leading Powered by Zold 7494cd64");
+  assert.equal(paymentMemo(ID, "trailing/"), "trailing Powered by Zold 7494cd64");
+  assert.equal(paymentMemo(ID, "a//b"), "a/b Powered by Zold 7494cd64");
 });
 
 check("output never exceeds the 140-character scheme limit", () => {
@@ -64,23 +64,23 @@ check("output never exceeds the 140-character scheme limit", () => {
 
 check("when it must truncate, the id stays whole — half an id identifies nothing", () => {
   const memo = paymentMemo(ID, "y".repeat(400));
-  assert.ok(memo.endsWith(" Zold 7494cd64"), memo);
+  assert.ok(memo.endsWith(" Powered by Zold 7494cd64"), memo);
 });
 
 check("a reference at exactly the limit still leaves the id intact", () => {
   const memo = paymentMemo(ID, "z".repeat(SEPA_REMITTANCE_MAX));
   assert.ok(memo.length <= SEPA_REMITTANCE_MAX);
-  assert.ok(memo.endsWith(" Zold 7494cd64"), memo);
+  assert.ok(memo.endsWith(" Powered by Zold 7494cd64"), memo);
 });
 
 check("a reference that is only unsupported characters falls back to the plain tag", () => {
   // Not silently sending an empty remittance line: the payout is still ours.
-  assert.equal(paymentMemo(ID, "€€€"), `Zold ${ID}`);
+  assert.equal(paymentMemo(ID, "€€€"), `Powered by Zold ${ID}`);
 });
 
 check("truncation does not leave a dangling slash at the cut", () => {
   const memo = paymentMemo(ID, "w".repeat(120) + "/" + "w".repeat(60));
-  assert.ok(!/\/ Zold/.test(memo), memo);
+  assert.ok(!/\/ Powered by Zold/.test(memo), memo);
   assert.ok(memo.length <= SEPA_REMITTANCE_MAX);
 });
 

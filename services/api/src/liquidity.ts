@@ -1,5 +1,5 @@
 import { encodeFunctionData } from "viem";
-import { FX, LIQUIDITY } from "./config.js";
+import { FX, LIQUIDITY, railFeeEur } from "./config.js";
 import {
   abis,
   addrs,
@@ -1145,7 +1145,7 @@ export async function executeTransferLiquidity(transfer: Transfer): Promise<Liqu
     ? hydrateQuote(transfer.liquidity)
     : await liquidityProvider().quote(
         "EURE_TO_USDC",
-        eur.toWei(transfer.sendEur - FX.FIXED_FEE_EUR),
+        eur.toWei(transfer.sendEur - railFeeEur("cash")),
         transfer.quoteId,
         storedQuote?.expiresAt ?? new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
       );
@@ -1162,7 +1162,7 @@ export async function prepareTransferLiquidity(transfer: Transfer): Promise<NonN
   const storedQuote = store.findQuote(transfer.quoteId);
   const quote = await liquidityProvider().quote(
     "EURE_TO_USDC",
-    eur.toWei(transfer.sendEur - FX.FIXED_FEE_EUR),
+    eur.toWei(transfer.sendEur - railFeeEur("cash")),
     transfer.quoteId,
     storedQuote?.expiresAt ?? new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
   );
@@ -1190,7 +1190,7 @@ export async function prepareSafeSwapForTransfer(
   const storedQuote = store.findQuote(transfer.quoteId);
   const plan = await provider.safeSwapPlan(
     "EURE_TO_USDC",
-    eur.toWei(transfer.sendEur - FX.FIXED_FEE_EUR),
+    eur.toWei(transfer.sendEur - railFeeEur("cash")),
     transfer.quoteId,
     storedQuote?.expiresAt ?? new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
     ctx,
