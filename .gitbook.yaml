@@ -1,0 +1,8 @@
+# GitBook Git Sync configuration.
+# The user-facing documentation lives in docs/gitbook/; everything else in
+# docs/ is engineering decision history and is not published.
+root: ./docs/gitbook/
+
+structure:
+  readme: README.md
+  summary: SUMMARY.md
