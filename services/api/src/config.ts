@@ -860,14 +860,26 @@ export const CRYPTO_IN = {
 // is whatever the liquidity venue will really execute at, read in fx.ts. What
 // stays here is our own pricing, which is genuinely ours to set.
 export const FX = {
-  SPREAD_BPS: 50, // our FX spread
-  FIXED_FEE_EUR: 0.99,
+  SPREAD_BPS: 50, // our FX spread on the cash corridor
+  /**
+   * Fees are PER RAIL, and SEPA is free. Monerium charges nothing for the
+   * redeem, so neither do we; the only fee in the product is on the cash
+   * corridor (closed until a partner is live). Conversions carry no fee
+   * either — the venue's rate is the whole price. Env-overridable so a fee
+   * can be introduced without a deploy, and read through railFeeEur() so no
+   * code path can pick up the wrong rail's number.
+   */
+  SEPA_FEE_EUR: Math.max(0, Number(process.env.SEPA_FEE_EUR ?? 0)),
+  CASH_FEE_EUR: Math.max(0, Number(process.env.CASH_FEE_EUR ?? 0.99)),
   QUOTE_TTL_MS: 10 * 60 * 1000,
   DAILY_CAP_EUR: 2500,
   // FP5: max on-chain rate drift between quote and execution before the
   // transfer is rejected and refunded (bps).
   QUOTE_BINDING_BPS: 50,
 };
+
+/** The fixed fee for a rail, in EUR. Zero on SEPA. */
+export const railFeeEur = (rail: string): number => (rail === "cash" ? FX.CASH_FEE_EUR : FX.SEPA_FEE_EUR);
 
 const boolEnv = (key: string) => process.env[key] === "1";
 
