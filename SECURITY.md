@@ -8,8 +8,9 @@ You can expect an acknowledgement within a few days. There is no bug bounty.
 
 ## What this codebase is, honestly
 
-This is a working prototype that runs against **testnets and sandboxes**
-(Base Sepolia, Monerium sandbox, Stellar testnet). It has had adversarial
+This is a working prototype whose defaults are **mainnet and production**
+(Base, Monerium production, the public Stellar network); testnets and
+sandboxes are selected by configuration. It has had adversarial
 review passes and carries real security machinery — server-side WebAuthn,
 device-signed EIP-712 payment authorization, 2-of-2 passkey + co-signer
 Safes, user-signed UserOperation debits, an M-of-N timelock over contract
@@ -18,8 +19,9 @@ operated as a licensed financial service.
 
 Known limitations are documented where they live rather than hidden:
 
-- `data/db.json` is plaintext local storage and holds sender-profile PII;
-  a real deployment must keep PII with the KYC provider.
+- `data/db.json` is plaintext local storage (names, emails, IBANs, transfer
+  records); a real deployment needs an encrypted store, and identity stays
+  with Monerium.
 - Several external legs are proven only as far as their sandboxes allow;
   the code and docs say explicitly which halves have never run against
   the real counterparty.

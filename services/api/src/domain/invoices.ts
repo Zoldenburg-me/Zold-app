@@ -94,7 +94,7 @@ export function validateLines(input: unknown): { lines: InvoiceLine[]; total: st
   if (input.length > 200) {
     throw new InvoiceError("An invoice is limited to 200 lines.");
   }
-  let total = 0;
+  let totalCents = 0;
   const lines: InvoiceLine[] = input.map((raw, i) => {
     const r = raw as Record<string, unknown>;
     const description = String(r.description ?? "").trim();
@@ -107,11 +107,13 @@ export function validateLines(input: unknown): { lines: InvoiceLine[]; total: st
     if (!AMOUNT_RE.test(unitPrice)) {
       throw new InvoiceError(`Line ${i + 1} has an unusable unit price.`);
     }
-    const amount = (Number(quantity) * Number(unitPrice)).toFixed(2);
-    total += Number(amount);
-    return { description, quantity, unitPrice, amount };
+    // Integer cents, rounded once per line: summing floats drifts against
+    // what the supplier's own software computed.
+    const cents = Math.round(Number(quantity) * Number(unitPrice) * 100);
+    totalCents += cents;
+    return { description, quantity, unitPrice, amount: (cents / 100).toFixed(2) };
   });
-  return { lines, total: total.toFixed(2) };
+  return { lines, total: (totalCents / 100).toFixed(2) };
 }
 
 /**

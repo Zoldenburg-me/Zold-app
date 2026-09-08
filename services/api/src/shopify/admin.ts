@@ -167,7 +167,7 @@ export async function voidSessionReject(shop: string, token: string, gid: string
 
 /** Mark the app ready (or not) for this store. Until `ready: true` is
  *  accepted, the store cannot offer the method at checkout. */
-export async function paymentsAppConfigure(shop: string, token: string, externalHandle: string, ready: boolean) {
+export async function paymentsAppConfigure(shop: string, token: string, externalHandle: string | undefined, ready: boolean) {
   const data = await graphql(shop, token, `
     mutation Configure($externalHandle: String, $ready: Boolean!) {
       paymentsAppConfigure(externalHandle: $externalHandle, ready: $ready) {

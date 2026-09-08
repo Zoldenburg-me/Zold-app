@@ -14,6 +14,7 @@
  * Run: npm run trustline:test
  */
 import "./_test-env.js";
+import "./_stellar-testnet.js";
 import assert from "node:assert/strict";
 import { Asset, Keypair } from "@stellar/stellar-sdk";
 import { STELLAR } from "../services/api/src/config.js";

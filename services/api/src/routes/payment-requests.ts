@@ -6,6 +6,7 @@
  * the bottom are what the crypto poller and the Monerium order poller call
  * when money shows up; they hold no network of their own.
  */
+import { wrap } from "./util.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
@@ -37,10 +38,6 @@ import {
 
 type SessionCheck = (req: express.Request, res: express.Response, userId: string) => unknown;
 
-const wrap =
-  (fn: (req: express.Request, res: express.Response) => Promise<unknown>) =>
-  (req: express.Request, res: express.Response, next: express.NextFunction) =>
-    fn(req, res).catch(next);
 
 export function baseUrlFor(req: express.Request): string {
   return PUBLIC_URL || `${req.protocol}://${req.get("host")}`;

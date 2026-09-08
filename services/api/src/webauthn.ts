@@ -22,34 +22,49 @@ const sha256 = (b: Buffer | string) => createHash("sha256").update(b).digest();
 // ---------------------------------------------------------------------------
 // minimal CBOR decoder (enough for attestation objects / COSE keys)
 
-function cborDecode(buf: Buffer, offset = 0): { value: any; offset: number } {
+const CBOR_MAX_DEPTH = 8;
+
+/**
+ * Every length is checked against the bytes that remain BEFORE it is used:
+ * this decoder runs on attacker-supplied bytes from an unauthenticated login
+ * request, and a header claiming 2^32 elements must fail in one comparison,
+ * not in a loop that allocates until the process dies.
+ */
+function cborDecode(buf: Buffer, offset = 0, depth = 0): { value: any; offset: number } {
+  if (depth > CBOR_MAX_DEPTH) throw new Error("cbor: nesting too deep");
+  if (offset >= buf.length) throw new Error("cbor: truncated");
   const first = buf[offset];
   const major = first >> 5;
   const info = first & 0x1f;
   let len = 0;
   let o = offset + 1;
+  const need = (n: number) => { if (o + n > buf.length) throw new Error("cbor: truncated"); };
   if (info < 24) len = info;
-  else if (info === 24) { len = buf[o]; o += 1; }
-  else if (info === 25) { len = buf.readUInt16BE(o); o += 2; }
-  else if (info === 26) { len = buf.readUInt32BE(o); o += 4; }
-  else if (info === 27) { len = Number(buf.readBigUInt64BE(o)); o += 8; }
+  else if (info === 24) { need(1); len = buf[o]; o += 1; }
+  else if (info === 25) { need(2); len = buf.readUInt16BE(o); o += 2; }
+  else if (info === 26) { need(4); len = buf.readUInt32BE(o); o += 4; }
+  else if (info === 27) { need(8); len = Number(buf.readBigUInt64BE(o)); o += 8; }
   else throw new Error(`cbor: unsupported additional info ${info}`);
 
   switch (major) {
     case 0: return { value: len, offset: o };
     case 1: return { value: -1 - len, offset: o };
-    case 2: return { value: buf.subarray(o, o + len), offset: o + len };
-    case 3: return { value: buf.subarray(o, o + len).toString("utf8"), offset: o + len };
+    case 2: need(len); return { value: buf.subarray(o, o + len), offset: o + len };
+    case 3: need(len); return { value: buf.subarray(o, o + len).toString("utf8"), offset: o + len };
     case 4: {
+      // Each element needs at least one byte, so a count past the remaining
+      // bytes is a lie whatever the elements are.
+      need(len);
       const arr: any[] = [];
-      for (let i = 0; i < len; i++) { const r = cborDecode(buf, o); arr.push(r.value); o = r.offset; }
+      for (let i = 0; i < len; i++) { const r = cborDecode(buf, o, depth + 1); arr.push(r.value); o = r.offset; }
       return { value: arr, offset: o };
     }
     case 5: {
+      need(len * 2);
       const map = new Map<any, any>();
       for (let i = 0; i < len; i++) {
-        const k = cborDecode(buf, o); o = k.offset;
-        const v = cborDecode(buf, o); o = v.offset;
+        const k = cborDecode(buf, o, depth + 1); o = k.offset;
+        const v = cborDecode(buf, o, depth + 1); o = v.offset;
         map.set(k.value, v.value);
       }
       return { value: map, offset: o };
@@ -89,13 +104,18 @@ export interface AuthData {
   key?: StoredKey;
 }
 
+/** The fixed 37-byte head: rpIdHash, flags, sign counter. */
+function parseAuthDataHeader(data: Buffer): AuthData {
+  if (data.length < 37) throw new Error("webauthn: authenticator data too short");
+  return { rpIdHash: data.subarray(0, 32), flags: data[32], signCount: data.readUInt32BE(33) };
+}
+
 export function parseAuthData(data: Buffer): AuthData {
-  const rpIdHash = data.subarray(0, 32);
-  const flags = data[32];
-  const signCount = data.readUInt32BE(33);
-  const out: AuthData = { rpIdHash, flags, signCount };
-  if (flags & 0x40) { // attested credential data present
+  const out = parseAuthDataHeader(data);
+  if (out.flags & 0x40) { // attested credential data present
+    if (data.length < 55) throw new Error("webauthn: attested credential data truncated");
     const credLen = data.readUInt16BE(53);
+    if (55 + credLen > data.length) throw new Error("webauthn: credential id truncated");
     out.credentialId = data.subarray(55, 55 + credLen);
     const cose = cborDecode(data, 55 + credLen);
     out.key = coseToJwk(cose.value);
@@ -257,7 +277,9 @@ async function verifyAssertionBytes(
   requireUserVerification: boolean,
 ): Promise<{ signCount: number }> {
   const authData = b64urlToBuf(authenticatorDataB64);
-  const parsed = parseAuthData(authData);
+  // An assertion carries no credential to register, so nothing past the
+  // header is decoded — the CBOR decoder never runs on a login request.
+  const parsed = parseAuthDataHeader(authData);
   if (!parsed.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");
   if (!(parsed.flags & 0x01)) throw new Error("webauthn: user presence not asserted");
   // A step-up gates a money-moving or key-binding action, so presence (someone
@@ -267,7 +289,9 @@ async function verifyAssertionBytes(
   if (requireUserVerification && !(parsed.flags & 0x04)) {
     throw new Error("webauthn: user verification required for this action");
   }
-  if (storedCount > 0 && parsed.signCount > 0 && parsed.signCount <= storedCount) {
+  // Once an authenticator has reported a counter it must keep advancing; a
+  // regression to zero is the clone case, not a counter-less device.
+  if (storedCount > 0 && parsed.signCount <= storedCount) {
     throw new Error("webauthn: sign counter did not advance (possible clone)");
   }
   const sigRaw = b64urlToBuf(signatureB64);

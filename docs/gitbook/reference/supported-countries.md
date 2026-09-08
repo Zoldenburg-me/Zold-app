@@ -34,6 +34,6 @@ The list of countries our euro issuer serves is theirs and changes on their time
 | United Kingdom | Faster Payments | GBP | Not yet fully live |
 | Switzerland | Swiss IBAN | CHF | Not yet fully live |
 | Nigeria | NIP bank transfer (NUBAN) | NGN | Not yet fully live |
-| India | UPI | INR | Not yet fully live |
+| India | Bank or wallet payout, partner to be contracted | INR | Not yet fully live |
 
 The send flow shows only destinations that are open. Nothing on that list is a promise of a corridor that has not moved money.
