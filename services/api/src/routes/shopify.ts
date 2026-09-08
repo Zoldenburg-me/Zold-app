@@ -30,6 +30,7 @@
  *    to whichever address happened to send the funds is how exchange hot
  *    wallets get refunded instead of customers.
  */
+import { wrap } from "./util.js";
 import express from "express";
 import { randomBytes, randomUUID } from "node:crypto";
 import { MONERIUM, PAYMENT_REQUESTS, SHOPIFY } from "../config.js";
@@ -52,10 +53,9 @@ import {
 } from "../shopify/admin.js";
 import type { ShopifyConnection } from "../shopify/types.js";
 
-const wrap =
-  (fn: (req: express.Request, res: express.Response) => Promise<unknown>) =>
-  (req: express.Request, res: express.Response, next: express.NextFunction) =>
-    fn(req, res).catch(next);
+/** Only an absolute https URL is followed; anything else lands on our page. */
+const httpsOr = (url: string | undefined, fallback: string) =>
+  url && /^https:\/\//i.test(url) ? url : fallback;
 
 /** Pending installs: our nonce → who started it. In memory on purpose; an
  *  install that outlives a restart simply starts again. */
@@ -260,7 +260,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // Best effort: tell the store the method is gone. A failure here does
       // not keep the connection — the merchant asked to disconnect.
       try {
-        await paymentsAppConfigure(c.shop, tokenOf(c), undefined as unknown as string, false);
+        await paymentsAppConfigure(c.shop, tokenOf(c), undefined, false);
       } catch {
         /* the token may already be revoked; disconnecting is still right */
       }
@@ -390,7 +390,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         }
         fresh = store.findPaymentRequest(r.id)!;
       }
-      res.redirect(fresh.source.returnUrl ?? `${page}?notice=store-pending`);
+      res.redirect(httpsOr(fresh.source.returnUrl, `${page}?notice=store-pending`));
     }),
   );
 
@@ -403,7 +403,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (r.state === "OPEN" && r.payments.length === 0) {
         store.updatePaymentRequest(r.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
       }
-      res.redirect(r.source.cancelUrl ?? `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`);
+      res.redirect(httpsOr(r.source.cancelUrl, `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`));
     }),
   );
 

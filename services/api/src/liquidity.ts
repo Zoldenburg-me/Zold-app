@@ -15,6 +15,30 @@ import { assertPriceSane, bestPool, erc20Abi, quoteExactInputSingle, rate6dp, ro
 import type { Transfer } from "./store.js";
 import { store } from "./store.js";
 
+/**
+ * A venue's calldata is executed with the orchestrator's key or, in a batch,
+ * the user's passkey. Whatever the API answered is therefore a transaction we
+ * are about to sign: the target and the approval spender must be contracts we
+ * named in config, and a token swap carries no native value.
+ */
+function assertVenueTarget(
+  venue: string,
+  allowed: string[],
+  to: string | undefined,
+  spender: string | undefined,
+  value: unknown,
+): void {
+  const ok = (addr?: string) => !!addr && allowed.includes(addr.toLowerCase());
+  if (!allowed.length) {
+    throw new Error(`${venue}: no settlement contracts are configured, so its calldata cannot be executed — refusing`);
+  }
+  if (!ok(to)) throw new Error(`${venue} named ${to} as the call target, which is not a configured ${venue} contract — refusing`);
+  if (!ok(spender)) throw new Error(`${venue} asked for an approval to ${spender}, which is not a configured ${venue} contract — refusing`);
+  if (value !== undefined && value !== null && value !== "" && BigInt(String(value)) !== 0n) {
+    throw new Error(`${venue} calldata carries native value on a token swap — refusing`);
+  }
+}
+
 const MAX_SLIPPAGE_BPS = 30n;
 
 export type LiquiditySide = "EURE_TO_USDC" | "USDC_TO_EURE";
@@ -339,6 +363,16 @@ class RfqLiquidityProvider implements LiquidityProvider {
     // The maker's expiry wins when it is sooner than ours — executing past it
     // is a guaranteed revert.
     const makerExpiry = body.expiry ? new Date(Number(body.expiry) * 1000).toISOString() : null;
+    const raw = rate6dp(
+      side === "EURE_TO_USDC" ? amountIn : expectedOut,
+      side === "EURE_TO_USDC" ? expectedOut : amountIn,
+    );
+    // A maker's price is checked against the independent mid like a pool's:
+    // otherwise the rate-binding check would compare the maker to itself.
+    await assertPriceSane(Number(raw) / 1e6, "RFQ maker");
+    if (body.tx) {
+      assertVenueTarget("Bebop", LIQUIDITY.BEBOP_CONTRACTS, body.tx.to, body.approvalTarget ?? body.tx.to, body.tx.value);
+    }
     return {
       provider: "rfq",
       side,
@@ -352,19 +386,15 @@ class RfqLiquidityProvider implements LiquidityProvider {
       // BOTH sides (like dex/lifi): on the reverse side amountIn is 6dp and
       // expectedOut 18dp, and the naive ratio produced a ~1e30 number that
       // made every downstream sanity check refuse.
-      rate: rate6dp(
-        side === "EURE_TO_USDC" ? amountIn : expectedOut,
-        side === "EURE_TO_USDC" ? expectedOut : amountIn,
-      ),
+      rate: raw,
       expiresAt:
         makerExpiry && Date.parse(makerExpiry) < Date.parse(expiresAt) ? makerExpiry : expiresAt,
       rfq: {
         quoteId: String(body.quoteId ?? ""),
         tx: body.tx ?? null,
-        // Bebop returns this separately from tx.to. They are the same contract
-        // today, so approving tx.to happens to work — and would break silently
-        // the moment they differ (a separate settlement contract, or Permit2
-        // instead of a standard approval). Approve what the maker names.
+        // Bebop returns this separately from tx.to. Approve what the maker
+        // names; when it names nothing, tx.to — both checked against
+        // BEBOP_CONTRACTS above, so neither can be an arbitrary address.
         approvalTarget: body.approvalTarget ?? body.tx?.to,
       },
     };
@@ -393,10 +423,14 @@ class RfqLiquidityProvider implements LiquidityProvider {
     }
     const a = addrs();
     const token = quote.side === "EURE_TO_USDC" ? a.eure : a.usdc;
-    // Approve the address the maker nominated, not the tx target. Bebop
-    // returns approvalTarget separately; the two coincide today, so approving
-    // tx.to works by luck rather than by contract.
+    const tokenOut = quote.side === "EURE_TO_USDC" ? a.usdc : a.eure;
     const spender = (quote.rfq?.approvalTarget ?? tx.to) as `0x${string}`;
+    // Re-checked at execution: the quote may have been stored before the
+    // allowlist changed, and this is the moment the calldata is signed.
+    assertVenueTarget("Bebop", LIQUIDITY.BEBOP_CONTRACTS, tx.to, spender, tx.value);
+    const balanceOf = (owner: `0x${string}`) =>
+      publicClient.readContract({ address: tokenOut, abi: erc20Abi, functionName: "balanceOf", args: [owner] }) as Promise<bigint>;
+    const before = await balanceOf(to);
     const approveHash = await writeAndWait(orchestratorWallet, {
       address: token,
       abi: abis.MockToken,
@@ -410,9 +444,15 @@ class RfqLiquidityProvider implements LiquidityProvider {
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
     if (receipt.status !== "success") throw new Error("RFQ settlement reverted");
+    // Measured, not copied from the quote: a fill at the maker's minimum is
+    // still a fill, and the transfer must settle against what arrived.
+    const delivered = (await balanceAfterWrite(tokenOut, to, before)) - before;
+    if (delivered < quote.minOut) {
+      throw new Error(`RFQ settlement delivered ${delivered} below the quoted floor ${quote.minOut} — refusing to settle`);
+    }
     return {
       quote,
-      amountOut: quote.expectedOut,
+      amountOut: delivered,
       txs: [
         { step: `${quote.tokenIn.toLowerCase()}.approve(rfq-settlement)`, hash: approveHash },
         {
@@ -476,9 +516,9 @@ class RfqLiquidityProvider implements LiquidityProvider {
 /**
  * CoW Protocol — intent-based liquidity, no inventory on either side.
  *
- * Why this exists alongside the RFQ provider: Bebop does not list EURe (tested
- * against Monerium's production addresses on Base, Polygon and Gnosis — all
- * "TokenNotSupported"), and has no testnet at all. CoW does quote EURe, at
+ * Why this exists alongside the RFQ provider: Bebop lists EURe only on
+ * Ethereum (Monerium is a market maker there; Base, Polygon and Gnosis answer
+ * "TokenNotSupported") and has no testnet at all. CoW does quote EURe, at
  * essentially the mid rate, on Gnosis where Monerium is native and EURe
  * liquidity is deepest.
  *
@@ -543,6 +583,11 @@ class CowLiquidityProvider implements LiquidityProvider {
     // validTo is when the order stops being fillable — sooner than our window
     // means ours is a promise the solver will not keep.
     const validTo = q.validTo ? new Date(Number(q.validTo) * 1000).toISOString() : null;
+    const raw = rate6dp(
+      side === "EURE_TO_USDC" ? amountIn : expectedOut,
+      side === "EURE_TO_USDC" ? expectedOut : amountIn,
+    );
+    await assertPriceSane(Number(raw) / 1e6, "CoW quote");
     return {
       provider: "cow",
       side,
@@ -553,10 +598,7 @@ class CowLiquidityProvider implements LiquidityProvider {
       expectedOut,
       minOut,
       // Same 6dp convention as the swapper, oriented USDC-per-EURe both sides.
-      rate: rate6dp(
-        side === "EURE_TO_USDC" ? amountIn : expectedOut,
-        side === "EURE_TO_USDC" ? expectedOut : amountIn,
-      ),
+      rate: raw,
       expiresAt: validTo && Date.parse(validTo) < Date.parse(expiresAt) ? validTo : expiresAt,
       cow: {
         orderId: String(body.id ?? ""),
@@ -571,8 +613,8 @@ class CowLiquidityProvider implements LiquidityProvider {
     throw new Error(
       "CoW execution is not wired yet: placing an order needs an EIP-712 signature " +
         "over CoW's order struct, and a decision about who signs it (the user's Safe " +
-        "with the user present, or the orchestrator). Quoting works; use " +
-        "LIQUIDITY_PROVIDER=fx-swapper to settle.",
+        "with the user present, or the orchestrator). Quoting works; settle on a " +
+        "venue that executes (dex, lifi, or best over both).",
     );
   }
 
@@ -692,7 +734,10 @@ class DexLiquidityProvider implements LiquidityProvider {
       ],
     });
 
-    const delivered = (await balanceOf(to)) - before;
+    // Read past replica lag: a stale pre-swap balance here would report a
+    // landed swap as unswapped, and compensation would refund EURe this side
+    // no longer holds.
+    const delivered = (await balanceAfterWrite(tokenOut, to, before)) - before;
     if (delivered < quote.minOut) {
       throw new Error(
         `dex swap delivered ${delivered} below the quoted floor ${quote.minOut} — refusing to settle`,
@@ -820,6 +865,7 @@ class LifiLiquidityProvider implements LiquidityProvider {
     if (!estimate?.toAmount || !estimate?.toAmountMin) throw new Error("LI.FI quote has no amounts — refusing");
     if (!tx?.to || !tx?.data) throw new Error("LI.FI quote carries no executable transaction — refusing");
     if (!estimate?.approvalAddress) throw new Error("LI.FI quote names no approval target — refusing");
+    assertVenueTarget("LI.FI", LIQUIDITY.LIFI_CONTRACTS, tx.to, estimate.approvalAddress, tx.value);
 
     // The token it actually priced, not the one we hoped for. LI.FI resolves
     // symbols, and settling into a token we do not hold would be silent.
@@ -876,6 +922,14 @@ class LifiLiquidityProvider implements LiquidityProvider {
       throw new Error("liquidity quote expired, request a new transfer");
     }
     if (!quote.lifi) throw new Error("lifi execution requires a lifi quote — refusing to re-quote at execution time");
+    if (to.toLowerCase() !== orchestratorAddress.toLowerCase()) {
+      // The route was quoted with the orchestrator as sender and no toAddress,
+      // so LI.FI delivers to the orchestrator whatever `to` says. Refuse before
+      // submitting rather than converting the tokens and then reporting a
+      // failed delivery.
+      throw new Error(`lifi quote delivers to ${orchestratorAddress}, not ${to} — request a quote for that recipient`);
+    }
+    assertVenueTarget("LI.FI", LIQUIDITY.LIFI_CONTRACTS, quote.lifi.tx.to, quote.lifi.approvalAddress, quote.lifi.tx.value);
     const a = addrs();
     const tokenIn = quote.side === "EURE_TO_USDC" ? a.eure : a.usdc;
 
@@ -899,11 +953,13 @@ class LifiLiquidityProvider implements LiquidityProvider {
       data: quote.lifi.tx.data,
       ...(quote.lifi.tx.value ? { value: BigInt(quote.lifi.tx.value) } : {}),
     } as any);
-    await publicClient.waitForTransactionReceipt({ hash: swapHash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
+    if (receipt.status !== "success") throw new Error("lifi route reverted");
 
-    // Measured. LI.FI's slippage bound is enforced inside its own contract, but
-    // what the rest of the transfer settles against is what actually arrived.
-    const delivered = (await balanceOf(to)) - before;
+    // Measured, past replica lag. LI.FI's slippage bound is enforced inside
+    // its own contract, but what the rest of the transfer settles against is
+    // what actually arrived.
+    const delivered = (await balanceAfterWrite(quote.lifi.toToken, to, before)) - before;
     if (delivered < quote.minOut) {
       throw new Error(`lifi swap delivered ${delivered} below the quoted floor ${quote.minOut} — refusing to settle`);
     }

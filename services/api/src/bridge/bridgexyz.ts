@@ -9,6 +9,9 @@
  * closed and createBridgeTransfer refuses, so no transfer ever carries a
  * fabricated deposit address.
  */
+// Every call carries a timeout: a Bridge request that hangs past the
+// stranded-transfer sweep would let the sweep refund a transfer whose
+// deposit is still being confirmed.
 import { BRIDGE } from "../config.js";
 
 export interface BridgeTransferDestination {
@@ -125,6 +128,7 @@ export async function createBridgeTransfer(
     destination: dest,
   };
   const res = await fetch(apiPath("/v0/transfers"), {
+      signal: AbortSignal.timeout(20_000),
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -155,6 +159,7 @@ export async function getBridgeTransfer(bridgeTransferId: string): Promise<{
 }> {
   if (!BRIDGE.apiKey) throw new Error("BRIDGE_API_KEY is required to read Bridge transfers");
   const res = await fetch(apiPath(`/v0/transfers/${encodeURIComponent(bridgeTransferId)}`), {
+      signal: AbortSignal.timeout(20_000),
     headers: { "Api-Key": BRIDGE.apiKey },
   });
   const data = await res.json().catch(async () => ({ error: await res.text().catch(() => "") }));

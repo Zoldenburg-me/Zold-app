@@ -1,10 +1,13 @@
 /**
- * Minimal REST client for the Monerium API (v2), targeting the sandbox.
+ * Minimal REST client for the Monerium API (v2); production by default,
+ * the sandbox when the base URL says so.
  * Docs: https://docs.monerium.com/api/
  *
  * Auth: OAuth2 client-credentials; the token is cached and refreshed on
  * expiry. All calls send the v2 Accept header.
  */
+// Every call carries a timeout: a redeem that hangs past the sweep window
+// is the double-payout case the orchestrator guards against.
 
 /** A non-2xx response from Monerium, carrying the status so callers can tell
  *  "this order does not exist" from "Monerium is briefly unreachable". */
@@ -52,6 +55,7 @@ export class MoneriumClient {
       return this.token.value;
     }
     const res = await fetch(`${this.cfg.baseUrl}/auth/token`, {
+      signal: AbortSignal.timeout(15_000),
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -71,6 +75,7 @@ export class MoneriumClient {
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const token = await this.accessToken();
     const res = await fetch(`${this.cfg.baseUrl}${path}`, {
+      signal: AbortSignal.timeout(15_000),
       method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -103,10 +108,6 @@ export class MoneriumClient {
     return this.request<any>("GET", "/profiles");
   }
 
-  /** Whitelabel plans: create a per-customer profile. */
-  createProfile(kind: "personal" | "corporate", name: string) {
-    return this.request<any>("POST", "/profiles", { kind, name });
-  }
 
   /**
    * Link a wallet address. `signature` must be the user's signature over the
@@ -139,10 +140,10 @@ export class MoneriumClient {
    * Orders, optionally scoped to one profile.
    *
    * WITHOUT a profile this returns only the app's DEFAULT profile's orders —
-   * not every order the app can see. Since we create a profile per user, an
-   * unscoped call cannot see a single customer deposit: the euros arrive
-   * on-chain, Monerium marks the order processed, and we credit nothing.
-   * Always pass the profile you care about.
+   * not every order the app can see. A user's deposit lands under THEIR
+   * profile, so an unscoped call cannot see it: the euros arrive on-chain,
+   * Monerium marks the order processed, and we credit nothing. Always pass
+   * the profile you care about.
    */
   orders(profileId?: string) {
     const q = profileId ? `?profile=${encodeURIComponent(profileId)}` : "";
@@ -206,6 +207,7 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
   redirectUri: string;
 }): Promise<MoneriumTokenResponse> {
   const res = await fetch(`${cfg.baseUrl}/auth/token`, {
+    signal: AbortSignal.timeout(15_000),
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: oauthTokenBody({
@@ -228,6 +230,7 @@ export async function refreshAuthorizationToken(
   refreshToken: string,
 ): Promise<MoneriumTokenResponse> {
   const res = await fetch(`${cfg.baseUrl}/auth/token`, {
+    signal: AbortSignal.timeout(15_000),
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: oauthTokenBody({
@@ -252,6 +255,7 @@ export async function moneriumBearerRequest<T>(
   body?: unknown,
 ): Promise<T> {
   const res = await fetch(`${baseUrl}${path}`, {
+    signal: AbortSignal.timeout(15_000),
     method,
     headers: {
       authorization: `Bearer ${accessToken}`,

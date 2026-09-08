@@ -1,22 +1,16 @@
 /**
  * Field-level encryption at rest.
  *
- * EXTRACTED, NOT REINVENTED. The scheme here is byte-for-byte the one that has
- * been protecting Monerium OAuth tokens in server.ts — AES-256-GCM, random
- * 12-byte IV, key derived by SHA-256 over the configured secret, serialised as
- * `iv.tag.ciphertext` in base64url. Keeping the format identical means existing
- * ciphertext stays readable and there is one scheme to review rather than two.
- *
- * WHY IT MOVED. India onboarding stores a PAN and an Indian bank account.
- * Those are exactly as sensitive as an OAuth token and were about to be
- * protected by a second, hand-rolled copy of this code — which is how two
- * schemes drift and one of them turns out to reuse an IV.
+ * AES-256-GCM, random 12-byte IV, key derived by SHA-256 over the configured
+ * secret, serialised as `iv.tag.ciphertext` in base64url — the scheme that
+ * has protected Monerium OAuth tokens since they were first stored, kept
+ * byte-identical so existing ciphertext stays readable and there is one
+ * scheme to review rather than two.
  *
  * PURPOSE-SEPARATED KEYS. Each caller names its purpose, and the purpose is
- * mixed into the derived key. A PAN ciphertext therefore cannot be decrypted by
- * the Monerium key path even if the same secret is configured for both, so a
- * leak of one context does not become a leak of the other. `monerium` derives
- * exactly as before so nothing already written becomes unreadable.
+ * mixed into the derived key, so a leak of one context does not become a leak
+ * of the other even when the same secret is configured for both. `monerium`
+ * derives exactly as before so nothing already written becomes unreadable.
  *
  * WHAT THIS IS NOT. It is not a KMS, there is no key rotation, and the secret
  * lives in the environment. That is a real limitation and it is written down in
@@ -25,7 +19,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 /** Named so a key is never accidentally shared across two kinds of secret. */
-export type EncryptionPurpose = "monerium" | "pan" | "bank_account" | "shopify";
+export type EncryptionPurpose = "monerium" | "shopify";
 
 export class EncryptionUnavailableError extends Error {}
 
@@ -65,17 +59,4 @@ export function decryptField(purpose: EncryptionPurpose, secret: string, value: 
     decipher.update(Buffer.from(ct64, "base64url")),
     decipher.final(),
   ]).toString("utf8");
-}
-
-/**
- * The last four characters, for rendering a stored secret without decrypting
- * it into a response.
- *
- * A PAN or an account number has to be recognisable to its owner — "is this
- * the right one?" — without the value leaving the server. Stored beside the
- * ciphertext at write time; the plaintext is never read back to produce it.
- */
-export function last4(value: string): string {
-  const s = String(value).trim();
-  return s.length <= 4 ? s : s.slice(-4);
 }

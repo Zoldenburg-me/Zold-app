@@ -1,15 +1,17 @@
 /**
- * Monerium sandbox integration (real API calls against api.monerium.dev).
+ * Monerium integration (real API calls; production by default, the sandbox
+ * when MONERIUM_BASE_URL points at api.monerium.dev).
  *
- * Activates when MONERIUM_CLIENT_ID/SECRET are set in .env. What it does:
+ * Activates when MONERIUM_CLIENT_ID/SECRET are set, or per user when they
+ * connected their own account (OAuth or API keys). What it does:
  *
- *  1. Provisioning: for each new user — create (or reuse) a Monerium profile,
- *     link the user's wallet address with a signed ownership declaration, and
- *     request a personal IBAN. IBAN issuance can be async; we poll for it.
+ *  1. Activation: link the user's Safe with a signed ownership declaration
+ *     under the connected profile and request the IBAN. Issuance can be
+ *     async; we poll for it.
  *  2. Deposits: polls Monerium `issue` orders (EURe minted after a SEPA
- *     transfer arrives in sandbox). Local demo chains mint the mock EURe
- *     directly into the user's Safe; non-local Monerium runs read the Safe's
- *     real EURe balance.
+ *     transfer arrives). The EURe lands in the Safe; nothing is mirrored on a
+ *     real chain. The hardhat harness (31337) mints MockToken instead, since
+ *     Monerium issues nothing there.
  *
  * Webhooks (order.updated / iban.updated) are the production path; polling is
  * used here because local dev has no public URL.
@@ -168,6 +170,10 @@ export type MirrorOutcome = "recorded" | "duplicate" | "ignored" | "unavailable"
  */
 async function mirrorOrder(order: MoneriumOrder): Promise<boolean> {
   if (order.kind !== "issue" || !isProcessed(order)) return false;
+  // Monerium issues several currencies and links one address on six chains;
+  // only an EURe issue on OUR chain is a euro deposit to this account.
+  if (order.chain !== MONERIUM.chain) return false;
+  if (String(order.currency ?? "eur").toLowerCase() !== "eur") return false;
   if (store.isOrderProcessed(order.id)) return false;
   const user = store.findUserByAddress(order.address);
   if (!user) return false;
@@ -235,13 +241,12 @@ export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
 }
 
 /**
- * Every profile we have issued an account on, plus the app's default.
+ * Every profile a user's account is attributed to, plus the app's default.
  *
- * We create a profile per user, and Monerium scopes /orders to one profile at
- * a time — so "all our orders" means asking once per profile. Derived from our
- * own users rather than from Monerium's profile list: that list holds 50+
- * abandoned shells from earlier runs, and polling each one every cycle would
- * be pointless traffic.
+ * Monerium scopes /orders to one profile at a time — so "all our orders"
+ * means asking once per profile. Derived from our own users rather than from
+ * Monerium's profile list, which holds abandoned shells from earlier runs
+ * that would be pointless traffic to poll.
  */
 function ourProfileIds(): (string | undefined)[] {
   const ids = new Set<string>();

@@ -13,7 +13,8 @@
  *
  * NO MOCK LEGS. There is no dry-run Bridge, no local escrow, no simulated
  * pickup and no simulated SEPA payout: a rail is live or the transfer is
- * refused before anything leaves the user's Safe.
+ * refused before anything leaves the user's Safe. (`safeSwap.mode` keeps a
+ * "dry-run" literal only for rows written before the rail was closed.)
  */
 import { BRIDGE, FX, railFeeEur } from "./config.js";
 import { moneriumLiveFor } from "./adapters/monerium-connection.js";
@@ -21,6 +22,7 @@ import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
+import { MoneriumApiError } from "./adapters/monerium-client.js";
 import { paymentMemo } from "./sepa.js";
 import { createBridgeTransfer, BridgeTransferError, type BridgeTransferPlan } from "./bridge/bridgexyz.js";
 import {
@@ -29,7 +31,6 @@ import {
   liquidityProvider,
   prepareTransferLiquidity,
   serializeExecution,
-  waitForAllowanceVisibility,
   balanceAfterWrite,
 } from "./liquidity.js";
 import {
@@ -43,7 +44,6 @@ import {
   paymentAuthorizationTypedData,
   publicClient,
   returnEureToSafe,
-  swapperRate,
   transferIdHash,
   writeAndWait,
 } from "./chain.js";
@@ -81,7 +81,7 @@ export interface SafeExecution {
    * delivered straight to `recipient`. The orchestrator then measures what
    * arrived there instead of executing a swap of its own.
    */
-  batch?: { recipient: `0x${string}`; mode: "dry-run" | "live" };
+  batch?: { recipient: `0x${string}`; mode: "live" };
 }
 
 /**
@@ -395,7 +395,7 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
       txs,
     });
   }
-  if (txs.some((x) => x.step === "bridge.xyz.destination_tx" || x.step === "bridge.xyz.deposit.funded")) {
+  if (txs.some((x) => FUNDS_AT_BRIDGE_STEPS.has(x.step))) {
     return store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error: `${failed.error}; funds already reached Bridge (deposit funded or destination paid), so automatic local refund is unsafe until Bridge/anchor state is reconciled`,
@@ -410,6 +410,19 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
   }
 }
 
+/** Steps after which USDC is with Bridge and nothing local can be reversed:
+ *  the plain deposit transfer as much as the batch delivery or the
+ *  destination payment. */
+const FUNDS_AT_BRIDGE_STEPS = new Set([
+  "bridge.xyz.deposit.transfer",
+  "bridge.xyz.deposit.funded",
+  "bridge.xyz.destination_tx",
+]);
+
+/** Transfers whose execute*() is running right now, so the stranded-transfer
+ *  sweep does not refund a transfer whose live call is merely slow. */
+const executing = new Set<string>();
+
 /** Walk a failed transfer backwards: return recoverable EURe to the sender's
  * Safe. */
 export async function compensateTransfer(id: string): Promise<Transfer> {
@@ -420,6 +433,27 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   if (!user) throw new Error(`unknown user for transfer ${id}`);
   const steps = new Set(t.txs.map((x) => x.step));
   const now = () => new Date().toISOString();
+
+  // A refund transaction already on record means the process stopped between
+  // the chain write and the REFUNDED write. Refunding again would pay twice.
+  if (steps.has("safe.refundTransfer")) {
+    return store.updateTransfer(id, {
+      state: "REFUNDED",
+      refund: {
+        amountEur: 0,
+        recoveredFrom: "refund transaction already on record",
+        deductions: "amount not recorded — the process stopped between the refund transaction and this record; see the safe.refundTransfer hash",
+        at: now(),
+      },
+    });
+  }
+  // USDC that reached Bridge is not ours to reverse, whichever leg put it there.
+  if ([...steps].some((s) => FUNDS_AT_BRIDGE_STEPS.has(s))) {
+    return store.updateTransfer(id, {
+      state: "MANUAL_REVIEW",
+      error: `${t.error ?? "transfer failed"}; USDC already reached Bridge's deposit address, so nothing local can be refunded until Bridge/anchor state is reconciled`,
+    });
+  }
 
   if (!inputFundsMoved(t.txs)) {
     // Nothing moved — FAILED is the whole story.
@@ -523,6 +557,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
         if (feeBack > 0) {
           const feeHash = await returnEureToSafe(user.address, feeBack);
           txs.push({ step: "safe.refundTransfer", hash: feeHash });
+          store.updateTransfer(id, { txs }); // on record before anything else can fail
         }
         const total = Math.floor((eurBack + feeBack) * 100) / 100;
         const lost = Math.max(0, safeMovedEur(t) - total);
@@ -559,6 +594,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
         : deductions;
     const refundHash = await returnEureToSafe(user.address, safeRefundEur);
     txs.push({ step: "safe.refundTransfer", hash: refundHash });
+    store.updateTransfer(id, { txs }); // on record before anything else can fail
     console.log(
       `FP3: returned €${safeRefundEur} to ${user.name}'s Safe for transfer ${t.id} (Safe-funded)`,
     );
@@ -593,11 +629,7 @@ async function compensationRate(t: Transfer): Promise<bigint> {
     const rate = BigInt(quote.lockedSwapRate);
     if (rate > 0n) return rate;
   }
-  try {
-    return (await liquidityProvider().indicativeRate("EURE_TO_USDC")).raw;
-  } catch {
-    return (await swapperRate()).raw;
-  }
+  return (await liquidityProvider().indicativeRate("EURE_TO_USDC")).raw;
 }
 
 /** Recovery sweep: compensate FAILED transfers that moved money, and
@@ -612,6 +644,7 @@ export async function sweepStrandedTransfers(): Promise<number> {
         n++;
       } else if (
         ["DEBITED", "SWAPPED", "BRIDGED"].includes(t.state) &&
+        !executing.has(t.id) &&
         Date.now() - Date.parse(t.updatedAt) > STALE_MS
       ) {
         store.updateTransfer(t.id, { state: "FAILED", error: "stranded mid-flow — auto-compensating" });
@@ -667,8 +700,8 @@ export async function executeTransfer(
   execution?: SafeExecution,
 ): Promise<Transfer> {
   const a = addrs();
-  const tid = transferIdHash(transfer.id);
   const txs = transfer.txs;
+  executing.add(transfer.id);
 
   try {
     if (!cashRailOpen()) {
@@ -721,6 +754,18 @@ export async function executeTransfer(
         // mis-refunding it as unswapped.
         throw new Error(
           `Safe swap batch delivered ${delivered} to ${recipient}, below the signed floor ${minOut}`,
+        );
+      }
+      // The live Bridge transfer was sized from the locked rate at creation;
+      // the batch only guarantees the venue floor. An under-funded deposit
+      // must not be recorded as funded and sent to the anchor.
+      const bridgeUnits =
+        transfer.safeSwap?.mode === "live" && transfer.safeSwap.bridgeAmountUsdc !== undefined
+          ? usd.toUnits(transfer.safeSwap.bridgeAmountUsdc)
+          : 0n;
+      if (delivered < bridgeUnits) {
+        throw new Error(
+          `Safe swap batch delivered ${delivered} USDC units to Bridge, below the ${bridgeUnits} the Bridge transfer was created for — the payout would be under-funded`,
         );
       }
       expectedOut = delivered;
@@ -866,6 +911,8 @@ export async function executeTransfer(
     });
   } catch (err: any) {
     return failAndCompensate(transfer.id, err, txs);
+  } finally {
+    executing.delete(transfer.id);
   }
 }
 
@@ -883,6 +930,7 @@ export async function executeSepaTransfer(
   auth: PaymentAuthorization,
   execution?: SafeExecution,
 ): Promise<Transfer> {
+  executing.add(transfer.id);
   const txs = transfer.txs;
 
   try {
@@ -927,7 +975,17 @@ export async function executeSepaTransfer(
           },
         });
       } catch (err: any) {
-        // Fail closed: the fee moved, so this refunds it rather than pretend.
+        // A 4xx is Monerium refusing: the fee moved, so refund it rather than
+        // pretend. Anything else (timeout, 5xx, reset) may have placed the
+        // order — refunding then pays twice, so hold for review instead.
+        const refused = err instanceof MoneriumApiError && err.status < 500;
+        if (!refused) {
+          return store.updateTransfer(transfer.id, {
+            state: "MANUAL_REVIEW",
+            error: `redeem order outcome unknown: ${String(err?.message ?? err).slice(0, 200)}; Monerium may have accepted it, so no automatic refund`,
+            txs,
+          });
+        }
         return failAndCompensate(
           transfer.id,
           new Error(`redeem order failed: ${String(err?.message ?? err).slice(0, 200)}`),
@@ -937,6 +995,8 @@ export async function executeSepaTransfer(
     }
   } catch (err: any) {
     return failAndCompensate(transfer.id, err, txs);
+  } finally {
+    executing.delete(transfer.id);
   }
 }
 
@@ -1008,6 +1068,15 @@ async function refreshPayoutUnlocked(
     const latest = store.findTransfer(transfer.id);
     const maybePaid =
       err instanceof AnchorPaymentUncertainError || !!latest?.pickup?.anchorPaymentHash;
+    // A transport failure says nothing about the payout; the next refresh
+    // asks again. Only the anchor's own verdict may fail the transfer.
+    const transient =
+      err instanceof TypeError ||
+      /fetch failed|ECONN|ETIMEDOUT|timed? ?out|aborted|socket hang up|\b5\d\d\b/i.test(String(err?.message ?? err));
+    if (transient && !maybePaid) {
+      console.error(`refreshPayout: transient anchor error for ${transfer.id}, state unchanged: ${err?.message ?? err}`);
+      return transfer;
+    }
     if (maybePaid) {
       return store.updateTransfer(transfer.id, {
         state: "MANUAL_REVIEW",

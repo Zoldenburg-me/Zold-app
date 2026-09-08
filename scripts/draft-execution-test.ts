@@ -5,7 +5,7 @@
  * one proves the wiring: a reviewed draft becomes N real transfers, each with
  * its own device authorization, and NOTHING moves until each is signed.
  *
- * Self-contained — starts and stops its own chain and API, like e2e.
+ * Self-contained — starts and stops its own chain and API.
  * Run: npm run draft:test
  */
 // Must be first: pins the chain/keys before config.js reads the environment.
@@ -326,8 +326,7 @@ try {
   // ── The batch, against the same wall a direct transfer hits ──────────────
   //
   // A passkey Safe needs an ERC-4337 bundler, and local hardhat has none, so no
-  // real transfer can be created here — e2e asserts the same refusal rather
-  // than a send. What IS provable, and what matters, is that draft execution
+  // real transfer can be created here. What IS provable, and what matters, is that draft execution
   // goes through the SAME code path: it must fail identically to a direct
   // POST /api/transfers, not more permissively.
   const batch = await call("POST", `/api/orgs/${org.id}/drafts/${draft.id}/execute`, {
@@ -535,8 +534,8 @@ try {
   console.log("Draft execution is the same code path as a direct transfer, refuses as a whole,");
   console.log("and moves nothing without the account holder's device.\n");
   console.log("NOT PROVEN HERE: a batch that actually creates transfers. That needs an active");
-  console.log("passkey Safe, which needs an ERC-4337 bundler — local hardhat has none, which is");
-  console.log("why e2e asserts the same refusal. Prove it on Base Sepolia (npm run api).\n");
+  console.log("passkey Safe, which needs an ERC-4337 bundler — local hardhat has none.");
+  console.log("Prove it on Base Sepolia (npm run api).\n");
 } finally {
   // SIGTERM, not SIGKILL: tsx forwards a TERM to the server it runs; a KILL
   // stops at the process that received it.

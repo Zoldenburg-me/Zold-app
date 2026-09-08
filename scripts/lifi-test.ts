@@ -33,6 +33,8 @@ process.env.LIQUIDITY_INDICATIVE_TTL_MS = "400";
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify({ USD: 1.1379, INR: 109.87, KES: 147.53 });
 process.env.ALLOW_FIXED_RATES = "1";
 process.env.DEX_MAX_MID_DEVIATION_BPS = "300";
+// The stub's Diamond and its deliberately different approval spender.
+process.env.LIFI_CONTRACTS = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE,0x4444444444444444444444444444444444444444";
 
 const { addrs } = await import("../services/api/src/chain.js");
 const EURE = addrs().eure;

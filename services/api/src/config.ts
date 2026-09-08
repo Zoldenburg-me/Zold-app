@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,7 +9,7 @@ const initialPort = process.env.TRANSF_API_PORT ?? process.env.PORT;
 try {
   process.loadEnvFile(path.join(ROOT, ".env"));
 } catch {
-  // no .env — mock mode
+  // no .env — every setting comes from the environment
 }
 if (initialPort) process.env.TRANSF_API_PORT = initialPort;
 
@@ -70,8 +70,6 @@ export const MONERIUM = {
   // production names are ethereum/gnosis/polygon/base/arbitrum/linea; the
   // sandbox uses testnet names (basesepolia, sepolia, ...).
   chain: process.env.MONERIUM_CHAIN ?? "base",
-  // Optional: pin a profile id instead of creating/discovering one.
-  profileId: process.env.MONERIUM_PROFILE_ID ?? "",
   // How often to poll for incoming EURe issue orders (webhooks need a public
   // URL; polling works for local dev).
   pollMs: Number(process.env.MONERIUM_POLL_MS ?? 15_000),
@@ -294,8 +292,8 @@ export const SECURITY = {
   jsonBodyLimit: process.env.JSON_BODY_LIMIT ?? "64kb",
   /** Opaque bearer session lifetime. Default: 24 hours. */
   sessionTtlMs: Number(process.env.SESSION_TTL_MS ?? 24 * 60 * 60 * 1000),
-  /** Keep provider/chain internals out of hosted API responses — same
-   *  local-only test as the simulation switch, for the same reason. */
+  /** Keep provider/chain internals out of hosted API responses; a local
+   *  stack is the one place a stack trace helps more than it leaks. */
   exposeInternalErrors: process.env.NODE_ENV !== "production" && LOOKS_LOCAL,
 };
 
@@ -367,7 +365,7 @@ function assertProductionConfig() {
   if (moneriumOAuthEnabled() && !MONERIUM.tokenEncryptionKey) {
     fail("MONERIUM_TOKEN_ENCRYPTION_KEY is required in production when Monerium OAuth is configured");
   }
-  if (moneriumSandboxEnabled() || PUBLIC_URL) {
+  if (moneriumSandboxEnabled() || moneriumOAuthEnabled() || PUBLIC_URL) {
     if (!process.env.MONERIUM_REDIRECT_URI && LOOKS_HOSTED) {
       fail("MONERIUM_REDIRECT_URI must be explicit for hosted production");
     }
@@ -601,8 +599,6 @@ export const SHOPIFY = {
   apiVersion: process.env.SHOPIFY_API_VERSION ?? "2026-07",
   scopes: process.env.SHOPIFY_SCOPES ?? "write_payment_gateways,write_payment_sessions",
   shopBaseUrl: process.env.SHOPIFY_SHOP_BASE_URL ?? "",
-  /** The public origin Shopify redirects back to. Falls back to PUBLIC_URL. */
-  appUrl: process.env.SHOPIFY_APP_URL ?? PUBLIC_URL,
   timeoutMs: Number(process.env.SHOPIFY_TIMEOUT_MS ?? 12_000),
   enabled: Boolean(process.env.SHOPIFY_API_KEY && process.env.SHOPIFY_API_SECRET),
 } as const;
@@ -612,6 +608,7 @@ export interface Deployments {
   usdc: `0x${string}`;
   /** Local-only: the FxSwapper venue and the AdminTimelock that owns it. A
    *  real chain's entry carries the two token addresses and nothing else. */
+  /** Written by the hardhat deploy, never read. */
   timelock?: `0x${string}`;
   swapper?: `0x${string}`;
   /** Present in older entries, never read. */
@@ -645,21 +642,6 @@ export function loadDeployments(chainId: number = CHAIN_ID): Deployments {
     );
   }
   return forChain as Deployments;
-}
-
-/** Merge a fresh deployment into the per-chain file, leaving other chains alone. */
-export function saveDeployments(chainId: number, addresses: Deployments) {
-  const p = path.join(ROOT, "deployments.json");
-  let raw: Record<string, unknown> = {};
-  try {
-    const existing = JSON.parse(readFileSync(p, "utf8"));
-    // Migrate a flat single-chain file into its chain slot rather than dropping it.
-    raw = typeof existing.swapper === "string" ? { "31337": existing } : existing;
-  } catch {
-    raw = {};
-  }
-  raw[String(chainId)] = addresses;
-  writeFileSync(p, JSON.stringify(raw, null, 2) + "\n");
 }
 
 export function loadAbi(contract: string): any[] {
@@ -715,6 +697,11 @@ export const LIQUIDITY = {
   BEBOP_BASE_URL: process.env.BEBOP_BASE_URL ?? "https://api.bebop.xyz",
   BEBOP_API_KEY: process.env.BEBOP_API_KEY ?? "",
   BEBOP_TIMEOUT_MS: Number(process.env.BEBOP_TIMEOUT_MS ?? 8_000),
+  /** Settlement contracts a Bebop quote may name as call target or approval
+   *  spender. A maker's calldata runs with our (or the user's) signature, so
+   *  it is checked against this list, never trusted. Empty = RFQ execution
+   *  refused. */
+  BEBOP_CONTRACTS: (process.env.BEBOP_CONTRACTS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
   /** Nominal EURe size used to probe an indicative rate for receipts. */
   PROBE_EUR: Number(process.env.LIQUIDITY_PROBE_EUR ?? 100),
   /** How long an indicative (display-only) rate may be reused. */
@@ -780,6 +767,11 @@ export const LIQUIDITY = {
   LIFI_SLIPPAGE: Number(process.env.LIFI_SLIPPAGE ?? 0.005),
   /** Chain to route on. The app chain; EURe exists on 1/100/137/8453/42161/59144. */
   LIFI_CHAIN_ID: Number(process.env.LIFI_CHAIN_ID ?? CHAIN_ID),
+  /** Contracts a LI.FI route may call or be approved for (default: the LI.FI
+   *  Diamond). Same reason as BEBOP_CONTRACTS: routing is delegated, the
+   *  calldata is not. */
+  LIFI_CONTRACTS: (process.env.LIFI_CONTRACTS ?? "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE")
+    .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
 
   /**
    * Best execution. With more than one venue wired, picking one by config means
@@ -850,7 +842,6 @@ export const CRYPTO_IN = {
    *  range it will refuse. The cursor catches up over several ticks instead. */
   maxBlockSpan: BigInt(process.env.CRYPTO_IN_MAX_BLOCK_SPAN ?? 5_000),
 };
-
 
 // FX configuration for the launch corridor (EUR -> KES cash pickup).
 //

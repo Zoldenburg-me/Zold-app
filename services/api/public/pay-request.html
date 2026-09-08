@@ -188,8 +188,8 @@ function copyable() {
 function render(p) {
   req = p;
   hide("loading"); show("req");
-  const label = p.displayName || p.handle;
-  $("avatar").textContent = label.trim()[0].toUpperCase();
+  const label = p.displayName || p.handle || "?";
+  $("avatar").textContent = (label.trim()[0] || "?").toUpperCase();
   $("dn").textContent = label;
   $("hd").textContent = `@${p.handle}`;
   document.title = `Pay ${label} · Zold`;

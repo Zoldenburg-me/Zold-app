@@ -1,10 +1,9 @@
 /**
- * MoneyGram Ramps adapter (mock mode).
- *
- * Production shape: SEP-10 auth + SEP-24 withdrawal on Stellar — we bridge
- * USDC from Base to Stellar, initiate a withdrawal, and MoneyGram returns a
- * reference code the recipient presents at any agent location for cash.
- * Here we mock the API surface the orchestrator codes against.
+ * Cash pickup through a Stellar anchor (MoneyGram Access, or Stellar's test
+ * anchor): SEP-10 auth as the treasury with a per-user memo, SEP-12 sender
+ * details where the anchor takes them, a SEP-24 withdrawal, and the on-ledger
+ * payment to the anchor's account. The reference the recipient presents at
+ * the counter comes from the anchor, never from here.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { STELLAR, anchorModeEnabled } from "../config.js";
@@ -51,12 +50,6 @@ export interface CashPickup {
 
 const pickups = new Map<string, CashPickup>(); // transferId -> pickup
 
-
-export function getPickup(transferId: string): CashPickup | undefined {
-  return pickups.get(transferId);
-}
-
-
 /** Return the memo this pickup must use for every SEP-10 call. Stored pickups
  *  from before this field existed can recover it from the transfer's user. */
 export function anchorMemoForPickup(
@@ -68,13 +61,6 @@ export function anchorMemoForPickup(
   const user = transfer ? store.findUser(transfer.userId) : undefined;
   return user ? senderMemo(user.id) : undefined;
 }
-
-/**
- * Anchor mode: real SEP-10 auth + SEP-24 interactive withdrawal against the
- * configured anchor home domain (Stellar test anchor by default; MoneyGram's
- * domain in production). Returns the anchor's transaction id as the pickup
- * reference plus the interactive URL the recipient completes.
- */
 
 /**
  * FATF Travel Rule originator data for ONE cash pickup — who is sending.
@@ -185,6 +171,11 @@ export async function submitSenderDetails(
   return { status: put.status, missing: [], channel: "sep12" };
 }
 
+/**
+ * SEP-10 auth + SEP-24 interactive withdrawal against the configured anchor
+ * home domain. Returns the anchor's transaction id as the pickup reference
+ * plus the interactive URL the recipient completes.
+ */
 export async function createCashPickupViaAnchor(
   transferId: string,
   args: {
@@ -279,10 +270,11 @@ export async function createCashPickupViaAnchor(
  * Re-read an anchor-backed pickup's status from the anchor. Returns the
  * updated pickup, or undefined when this transfer isn't anchor-backed.
  *
- * Note what this does and doesn't mean: SEP-24 withdrawals only complete once
- * the asset is actually sent to the anchor's account with its memo, and we do
- * not do that yet — so a real anchor will sit at pending_user_transfer_start.
- * Surfacing that truthfully beats reporting a payout that hasn't happened.
+ * A SEP-24 withdrawal only completes once the asset is sent to the anchor's
+ * account with its memo; fundAndRefreshAnchorPickup does that once the anchor
+ * publishes an account. Until then the anchor reports
+ * pending_user_transfer_start, and surfacing that truthfully beats reporting
+ * a payout that has not happened.
  */
 export async function refreshAnchorPickup(
   transferId: string,

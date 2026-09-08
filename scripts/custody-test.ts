@@ -17,7 +17,7 @@
  *      production inheriting it.
  *
  * The recording and refusal paths that ride on this are exercised end to end
- * by draft:test and e2e, which drive a real API.
+ * by draft:test, which drives a real API.
  *
  * No chain, no network.
  *

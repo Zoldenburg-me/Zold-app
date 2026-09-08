@@ -59,17 +59,6 @@ export async function moneriumEure(
   }
 }
 
-/** Same lookup, but a failure to reach Monerium is an error rather than a null. */
-export async function requireMoneriumEure(
-  baseUrl: string,
-  chainId: number,
-): Promise<MoneriumToken> {
-  const tokens = await allTokens(baseUrl);
-  const t = tokens.find((x) => x.chainId === chainId);
-  if (!t) throw new Error(`Monerium issues no EUR token on chain ${chainId}`);
-  return t;
-}
-
 /** Chains where Monerium issues EURe, for error messages and diagnostics. */
 export async function moneriumEvmChains(baseUrl: string) {
   return (await allTokens(baseUrl)).map((t) => `${t.chain} (${t.chainId})`);
