@@ -21,7 +21,9 @@
  *
  * Run: npm run stellar:payout:live
  */
-import "./_test-env.js";
+// Testnet pinned, and NOT _test-env: that helper switches production posture
+// off, which a script that submits a real payment must never inherit.
+import "./_stellar-testnet.js";
 import { Asset, BASE_FEE, Horizon, Keypair, Memo, Networks, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { STELLAR } from "../services/api/src/config.js";
 import { getTreasury, sep10Auth } from "../services/api/src/stellar/anchor.js";
@@ -41,7 +43,7 @@ const HOME = process.env.MG_ANCHOR_DOMAIN || "testanchor.stellar.org";
  */
 const CODE = process.env.STELLAR_LIVE_ASSET || "native";
 const AMOUNT = process.env.STELLAR_LIVE_AMOUNT || "1";
-const HORIZON = STELLAR.horizon || "https://horizon-testnet.stellar.org";
+const HORIZON = STELLAR.horizon;
 const SEP6 = `https://${HOME}/sep6`;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -73,7 +75,7 @@ async function waitFor(jwt: string, id: string, leave: string[], budgetMs = 120_
 
 const treasury: Keypair = await getTreasury();
 const server = new Horizon.Server(HORIZON);
-const passphrase = STELLAR.networkPassphrase || Networks.TESTNET;
+const passphrase = STELLAR.networkPassphrase;
 
 console.log(`anchor ${HOME} · asset ${CODE} · amount ${AMOUNT}`);
 console.log(`treasury ${treasury.publicKey()}\n`);

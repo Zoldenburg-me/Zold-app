@@ -50,20 +50,18 @@ try {
     rates.resetRateCache();
     const usd = await rates.eurPer("USD");
     assert.equal(usd, LIVE.USD);
-    const inr = await rates.eurPer("INR");
-    assert.equal(inr, LIVE.INR);
-    // 94.176 is what a hardcoded 1.08 * 87.2 would produce. If that number
+    const kes = await rates.eurPer("KES");
+    assert.equal(kes, LIVE.KES);
+    // 139.86 is what a hardcoded 1.08 * 129.5 would produce. If that number
     // comes out of the quote engine, the feed is not wired in.
     assert.ok(
-      Math.abs(inr - 94.176) > 1,
-      `EUR/INR is the hardcoded 94.176 — feed not wired in`,
+      Math.abs(kes - 139.86) > 1,
+      `EUR/KES is the hardcoded 139.86 — feed not wired in`,
     );
   });
 
   await t("USD legs are derived from the EUR legs", async () => {
     rates.resetRateCache();
-    const usdInr = await rates.usdPer("INR");
-    assert.ok(Math.abs(usdInr - LIVE.INR / LIVE.USD) < 1e-9, `got ${usdInr}`);
     const usdKes = await rates.usdPer("KES");
     assert.ok(Math.abs(usdKes - LIVE.KES / LIVE.USD) < 1e-9, `got ${usdKes}`);
   });
@@ -94,7 +92,7 @@ try {
   await t("a feed missing a currency we quote is refused", async () => {
     rates.resetRateCache();
     mode = "missing";
-    await assert.rejects(() => rates.eurPer("USD"), /INR/);
+    await assert.rejects(() => rates.eurPer("USD"), /KES/);
     mode = "ok";
   });
 
@@ -122,7 +120,7 @@ try {
     rates.resetRateCache();
     mode = "500"; // feed is down; the pin must not need it
     process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1379, INR: 109.87, KES: 147.53 });
-    assert.equal(await rates.eurPer("INR"), 109.87);
+    assert.equal(await rates.eurPer("KES"), 147.53);
     delete process.env.TRANSF_RATES_FIXED;
     mode = "ok";
   });
@@ -132,9 +130,9 @@ try {
     process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1, INR: 100, KES: 140 });
     process.env.NODE_ENV = "production";
     // A frozen rate in production is the original bug wearing a different hat.
-    await assert.rejects(() => rates.eurPer("INR"), /set in production/);
+    await assert.rejects(() => rates.eurPer("KES"), /set in production/);
     process.env.ALLOW_FIXED_RATES = "1";
-    assert.equal(await rates.eurPer("INR"), 100, "explicit override should work");
+    assert.equal(await rates.eurPer("KES"), 140, "explicit override should work");
     delete process.env.ALLOW_FIXED_RATES;
     delete process.env.NODE_ENV;
     delete process.env.TRANSF_RATES_FIXED;
@@ -143,7 +141,7 @@ try {
   await t("a pinned set missing a currency is refused, not half-used", async () => {
     rates.resetRateCache();
     process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1, INR: 100 }); // no KES
-    await assert.rejects(() => rates.eurPer("INR"), /missing a valid KES/);
+    await assert.rejects(() => rates.eurPer("KES"), /missing a valid KES/);
     delete process.env.TRANSF_RATES_FIXED;
   });
 

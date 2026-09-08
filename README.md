@@ -45,12 +45,10 @@ terms, and neither can be replaced by the server.
                                                    cash at a counter
 ```
 
-The normal identity-review path can be backed by Sumsub. Sumsub stores document
-images and liveness media; this app stores only the Sumsub applicant reference,
-review result, and extracted text fields needed for Travel Rule and partner
-handoff. Approved Sumsub applicants can be shared to Monerium through Sumsub's
-share-token flow, and MoneyGram receives only the documented SEP-9 text fields.
-Bridge still needs its hosted KYC link or direct Customers API requirements.
+Identity is Monerium's. An account is approved only when a connected Monerium
+account (OAuth, or the user's own API keys) attributes an IBAN to the user's
+Safe address; this app holds no identity documents and runs no review of its
+own. Bridge still needs its hosted KYC link or direct Customers API requirements.
 
 Chain selection is configuration, not code: `TRANSF_CHAIN_ID` resolves the
 chain and `deployments.json` is keyed by chain id, so several deployments
@@ -99,7 +97,7 @@ Two constraints worth naming directly:
 
 | Layer | Responsibility |
 |---|---|
-| `server.ts` | HTTP surface — 51 routes, session and KYC gating, rate limits, origin allowlist |
+| `server.ts` | HTTP surface — the account, transfer and Monerium routes; session and KYC gating, rate limits, origin allowlist (the org, document, payment-link, Shopify and recovery routers mount beside it) |
 | `orchestrator.ts` | Transfer state machines, authorisation checks, compensation |
 | `fx.ts` · `rates.ts` | Quoting: live mids, measured margin, refuses stale |
 | `liquidity.ts` · `dex.ts` | Venue abstraction and best-execution routing |
@@ -119,7 +117,7 @@ settles at the best price rather than a configured default.
 
 ### Contracts
 
-Four, deliberately small, no inheritance depth and no proxies.
+Three, deliberately small, no inheritance depth and no proxies.
 
 | Contract | Role |
 |---|---|
@@ -196,10 +194,12 @@ There is no in-house identity review, no Sumsub, no operator approval and no
 whitelabel provisioning any more. The app never creates a Monerium profile for
 a user.
 
-For cash payouts the sender's FATF originator data is collected and mapped to
-SEP-9 field names (`stellar/sep9.ts`). Each user gets a distinct SEP-12 customer
-via a derived memo, so one treasury account never attributes one user's identity
-to another's payout.
+For cash payouts the anchor needs the sender's FATF originator data as SEP-9
+fields (`stellar/sep9.ts`). Nothing collects it yet — a SEP-12 anchor refuses
+and names the gaps — and when it is collected it is per transfer, never a
+stored profile. Each user gets a distinct SEP-12 customer via a derived memo,
+so one treasury account never attributes one user's identity to another's
+payout.
 
 ### 3 — Wallet deployment
 
@@ -299,8 +299,11 @@ directly from it. `sepa.ts` folds the remittance reference into the SEPA Latin
 subset — accents decomposed, reserved forms stripped, truncated at the scheme's
 140 characters — so the payee reconciles against their own handle.
 
-**FX rail.** The full amount moves to the orchestrator, then:
-`liquidity.ts` swaps EURe→USDC at the best available venue price, with every
+**FX rail.** By default one user-signed batch takes the fee, approves the
+venue and swaps, delivering the USDC straight to Bridge's deposit address so
+the orchestrator never holds the input; only a venue that cannot serve a Safe
+falls back to a plain debit with the orchestrator swapping after.
+`liquidity.ts` prices EURe→USDC at the best available venue price, with every
 quote's implied rate checked against the independent mid and refused beyond a
 band. Positive slippage is measured and attributed to the user by default.
 `bridge/bridgexyz.ts` creates the hosted Bridge transfer and returns deposit
@@ -310,8 +313,9 @@ yet, so a SEP-12 anchor refuses and names the gaps), opens a SEP-24 withdrawal, 
 pays the anchor's account with its memo — refusing to fund if the Stellar
 recipient lacks a trustline for the asset.
 
-**Failure.** Compensation releases escrow and re-credits at current rates with
-itemised deductions, reaching `REFUNDED`. Stranded transfers are swept at
+**Failure.** Compensation returns what the orchestrator still holds to the
+Safe, reverse-swapping at execution rates with itemised deductions, reaching
+`REFUNDED`; money that already reached Bridge is never refunded automatically. Stranded transfers are swept at
 startup and every five minutes. A duplicate-transfer revert is never
 auto-refunded — it goes to `MANUAL_REVIEW`.
 
@@ -356,8 +360,8 @@ Requires Node 22 or newer.
 ```sh
 npm install
 npm run compile          # contracts
-npm run test:contracts   # 9 tests against a throwaway chain
-npm run check            # contracts, typecheck, focused harnesses (local hardhat)
+npm run test:contracts   # 6 tests against a throwaway chain
+npm run check            # contracts, typecheck, focused harnesses (offline); check:live adds the Stellar suites
 npm run api              # run against the configured chain
 ```
 
@@ -407,10 +411,10 @@ services/api/src/
   wallet/candide.ts    Safe derivation, ERC-4337 deployment, signing
   stellar/             SEP-10 auth, SEP-24 withdrawals, SEP-9 mapping
   bridge/bridgexyz.ts  Bridge.xyz transfer orchestration
-  adapters/            monerium, moneygram, crypto deposits, forwarder
+  adapters/            monerium (client, connection, sandbox, tokens), moneygram, crypto deposits, candide forwarder, gnosis pay
 contracts/src/         AdminTimelock, FxSwapper, MockToken
 services/api/public/   landing + app, no build step
-scripts/               deploy, operations, 30 test harnesses
+scripts/               deploy, operations, ~40 test harnesses
 ```
 
 ---

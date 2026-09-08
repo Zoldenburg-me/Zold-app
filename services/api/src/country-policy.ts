@@ -40,9 +40,7 @@ for (const code of Object.keys(MONERIUM_RESIDENCY_TIERS)) {
 
 export function normaliseCountryCode(country: string): string {
   const trimmed = country.trim().toUpperCase();
-  if (COUNTRY_ALIASES[trimmed]) return COUNTRY_ALIASES[trimmed];
-  if (/^[A-Z]{2}$/.test(trimmed)) return trimmed;
-  return trimmed;
+  return COUNTRY_ALIASES[trimmed] ?? trimmed;
 }
 
 export function moneriumResidencyTier(country: string): MoneriumResidencyTier | null {

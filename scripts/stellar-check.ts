@@ -5,6 +5,7 @@
  * SEP-24 interactive withdrawal — the exact protocol MoneyGram Ramps speaks.
  * Run: npm run stellar:check
  */
+import "./_stellar-testnet.js";
 import { STELLAR } from "../services/api/src/config.js";
 import {
   getTreasury,

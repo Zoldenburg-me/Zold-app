@@ -320,16 +320,3 @@ export async function finalizeRecovery(moduleAddress: string, recoveryRequestId:
   }
 }
 
-/** Candide's view of the Safe's recoveries at the current nonce, for status
- *  reads. Empty when nothing is in flight. */
-export async function recoveryRequestsFor(
-  moduleAddress: string,
-  safeAddress: string,
-  status: "PENDING" | "EXECUTED" | "FINALIZED",
-): Promise<RecoveryByGuardianRequest[]> {
-  try {
-    return await byGuardian(moduleAddress).getRecoveryRequestsForLatestNonce(CANDIDE.rpcUrl, safeAddress, status);
-  } catch (err) {
-    return translate(err, "could not read recovery state from the guardian service");
-  }
-}
