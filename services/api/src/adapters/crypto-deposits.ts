@@ -240,6 +240,16 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
         txs,
         reason: undefined,
       });
+      /**
+       * Record it on the invoice even though nothing converted. Settling in
+       * USDC is still an event the books need: the receivable is discharged
+       * and an asset is acquired at its euro value on receipt. Only the
+       * disposal has not happened yet, so the row carries no conversion and no
+       * realised gain — absent, not zero, because zero would be a claim.
+       * Leaving this out meant the default configuration (auto-convert off)
+       * wrote no invoice settlement at all.
+       */
+      if (settled.invoiceId) recordInvoiceSettlement(settled);
       noteDepositSettled(settled);
       return settled;
     }
@@ -523,6 +533,13 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
   for (const deposit of fresh) {
     try {
       attributeDepositToRequest(deposit);
+      /**
+       * A deposit straight to the Safe is written CONVERTED, so its conversion
+       * has already been and gone by the time attribution hands it an invoice.
+       * Record here rather than let that case silently lose its settlement.
+       */
+      const linked = store.findCryptoDeposit(deposit.txHash, deposit.logIndex);
+      if (linked?.state === "CONVERTED" && linked.invoiceId) recordInvoiceSettlement(linked);
     } catch (err: any) {
       console.error(`crypto-in: could not attribute deposit ${deposit.id} to a request: ${err?.message ?? err}`);
     }
