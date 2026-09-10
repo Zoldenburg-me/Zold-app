@@ -35,6 +35,7 @@ import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
 import { midRates } from "../rates.js";
 import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
+import { buildCryptoSettlement, withSettlement } from "../domain/invoices.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
  *  the real USDC emits the same signature and this path must not depend on our
@@ -154,7 +155,7 @@ async function valueAtReceipt(
  * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), matching what
  * FxSwapper.rate() posts and what the liquidity providers report.
  */
-async function assertRateSane(rate: bigint): Promise<number> {
+async function assertRateSane(rate: bigint): Promise<{ venue: number; mid: number }> {
   const venue = Number(rate) / 1e6;
   if (!(venue > 0)) throw new Error("venue quoted a zero rate");
   const mid = (await midRates()).eur.USD;
@@ -167,7 +168,7 @@ async function assertRateSane(rate: bigint): Promise<number> {
         `the market would not give`,
     );
   }
-  return venue;
+  return { venue, mid };
 }
 
 /**
@@ -296,7 +297,7 @@ export async function settleConvertedDeposit(
   balanceBeforeWei: bigint,
   txs: CryptoDeposit["txs"],
 ): Promise<CryptoDeposit> {
-  const venueRate = await assertRateSane(quote.rate);
+  const { venue: venueRate, mid: midRate } = await assertRateSane(quote.rate);
   const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, balanceBeforeWei);
   const receivedWei = after - balanceBeforeWei;
 
@@ -344,6 +345,7 @@ export async function settleConvertedDeposit(
     settlementAsset: "EURE",
     provider: quote.provider,
     rate: venueRate,
+    midRate,
     ...(realisedGainEur === undefined ? {} : { realisedGainEur }),
     txs,
     reason: undefined,
@@ -369,24 +371,11 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
   if (!deposit.invoiceId) return;
   const invoice = store.invoices.find((i) => i.id === deposit.invoiceId);
   if (!invoice) return;
-  const receiptTx = deposit.txHash;
-  const conversionTx = deposit.txs.find((t) => t.step.includes("usdc->eure"))?.hash;
-  const settlement = {
-    depositId: deposit.id,
-    receivedAsset: deposit.token,
-    receivedAmount: deposit.token === "USDC" ? deposit.amountUsdc ?? 0 : deposit.amountEur ?? 0,
-    receiptTxHash: receiptTx,
-    ...(deposit.receipt ? { receiptAmountEur: deposit.receipt.amountEur, receiptRate: deposit.receipt.rate, receiptRateProvider: deposit.receipt.rateProvider } : {}),
-    ...(conversionTx ? { conversionTxHash: conversionTx } : {}),
-    ...(deposit.creditedEur === undefined ? {} : { creditedEur: deposit.creditedEur }),
-    ...(deposit.realisedGainEur === undefined ? {} : { realisedGainEur: deposit.realisedGainEur }),
-    at: new Date().toISOString(),
-  };
-  const existing = invoice.settlements ?? [];
   store.updateInvoice(invoice.id, {
-    settlements: [...existing.filter((x) => x.depositId !== deposit.id), settlement],
+    settlements: withSettlement(invoice.settlements, buildCryptoSettlement(deposit)),
   });
 }
+
 
 /**
  * One scan of the chain for inbound USDC, followed by conversion of whatever
