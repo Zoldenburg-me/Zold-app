@@ -199,6 +199,49 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
   check("without a live quote the crypto method is offered with no amount, not a made-up one", withBank.methods.crypto !== undefined && withBank.methods.crypto?.amountUsdc === undefined);
 }
 
+{
+  const inv = await import("../services/api/src/domain/invoices.js");
+  const dep: any = {
+    id: "dep-1", token: "USDC", txHash: "0xfeed", amountUsdc: 1000, state: "CONVERTED",
+    settlementAsset: "EURE", creditedEur: 872.5, realisedGainEur: -6.31, provider: "lifi",
+    rate: 1.1461, midRate: 1.1379, detectedAt: now.toISOString(),
+    receipt: { amountEur: 878.81, rate: 1.1379, rateProvider: "open.er-api.com", rateAsOf: "2026-09-10", ratedAt: now.toISOString(), blockTimestamp: now.toISOString() },
+    txs: [{ step: "usdc->eure", hash: "0xswap" }],
+  };
+  const c = inv.buildCryptoSettlement(dep) as any;
+  check("a crypto settlement carries the wallet tx, the euro value at receipt and the rate's source",
+    c.receiptTxHash === "0xfeed" && c.receiptAmountEur === 878.81 && c.receiptRateProvider === "open.er-api.com" && c.receiptRateAsOf === "2026-09-10");
+  check("and the conversion carries its venue, its rate, the mid it was checked against and the swap tx",
+    c.conversion.venue === "lifi" && c.conversion.rate === 1.1461 && c.conversion.midRate === 1.1379 && c.conversion.txHash === "0xswap");
+  // 1000 USDC is 878.81 EUR at the mid and 872.52 at the venue's 1.1461, so the
+  // venue kept 6.29 — signed as a cost, and NOT the 6.31 that receipt-minus-
+  // credit would have reported, because that also contains market movement.
+  check("the spread is measured against the mid and signed as a cost, not inferred from receipt-minus-credit",
+    c.conversion.spreadEur === 6.29, `${c.conversion.spreadEur}`);
+  const held = inv.buildCryptoSettlement({ ...dep, state: "CONVERTED", settlementAsset: "USDC", creditedEur: undefined, realisedGainEur: undefined }) as any;
+  check("an asset still held has a receipt and NO conversion block — that is the true position, not a half-filled row",
+    held.conversion === undefined && held.realisedGainEur === undefined && held.receiptAmountEur === 878.81);
+
+  const order = { id: "ord-9", kind: "issue", amount: "878.81", memo: "Rechnung RE-2026-0042 danke",
+    meta: { state: "processed", processedAt: now.toISOString() },
+    counterpart: { details: { firstName: "Ada", lastName: "Payer" }, identifier: { iban: "DE02120300000000202051" } } };
+  const b = inv.buildBankSettlement(order as any, "invoice-number");
+  check("a bank settlement carries the counterparty, their IBAN, the memo and how it was matched",
+    b.method === "bank" && b.counterpartyName === "Ada Payer" && b.counterpartyIban === "DE02120300000000202051" &&
+      b.memo === "Rechnung RE-2026-0042 danke" && b.matchedOn === "invoice-number" && b.amountEur === 878.81);
+  const mk = (number: string) => ({ issued: { number } }) as any;
+  check("a credit naming the invoice number matches it", inv.orderNamesInvoice(order as any, mk("RE-2026-0042")));
+  check("punctuation and case do not stop it", inv.orderNamesInvoice({ ...order, memo: "re 2026 0042" } as any, mk("RE-2026-0042")));
+  check("a short number is NEVER matched — booking a stranger's money against a customer's invoice is worse than missing one",
+    !inv.orderNamesInvoice({ ...order, memo: "invoice 14 paid" } as any, mk("14")));
+  check("and an unrelated memo does not match", !inv.orderNamesInvoice({ ...order, memo: "Miete September" } as any, mk("RE-2026-0042")));
+
+  const twice = inv.withSettlement(inv.withSettlement([], b), b);
+  check("one payment can never appear twice, however often the poller re-sees it", twice.length === 1);
+  check("but an invoice settled by two different payments keeps both",
+    inv.withSettlement([b], { ...b, ref: "monerium:ord-10", orderId: "ord-10" }).length === 2);
+}
+
 // ---------------------------------------------------------------------------
 console.log("2/4 chain + routes…");
 try {
@@ -352,11 +395,40 @@ try {
     usdLink.body.latestQuote?.amountUsdc > 1000 && usdLink.body.latestQuote.amountUsdc < 1010, JSON.stringify(usdLink.body.latestQuote));
 
   const invAfter = store.findInvoice(theirs)!;
-  const st = (invAfter.settlements ?? [])[0];
+  const st0 = (invAfter.settlements ?? [])[0];
+  const st = st0?.method === "bank" ? undefined : st0;
   check("and the settlement is recorded even though auto-convert is off, because acquiring the asset is itself the event the books need",
-    Boolean(st) && st.depositId === dInv.id && st.receivedAsset === "USDC" && st.receivedAmount === qInv, JSON.stringify(invAfter.settlements));
-  check("with no conversion and no realised gain — absent, not zero, because nothing has been disposed of yet",
-    st.conversionTxHash === undefined && st.realisedGainEur === undefined && st.receiptTxHash === dInv.txHash);
+    Boolean(st) && st!.depositId === dInv.id && st!.receivedAsset === "USDC" && st!.receivedAmount === qInv, JSON.stringify(invAfter.settlements));
+  check("it carries the wallet transaction and the euro value at receipt, with the rate and whose feed it came from",
+    st!.receiptTxHash === dInv.txHash && st!.receiptAmountEur === dInv.receipt?.amountEur &&
+      st!.receiptRate === dInv.receipt?.rate && st!.receiptRateProvider === dInv.receipt?.rateProvider &&
+      st!.receiptRateAsOf === dInv.receipt?.rateAsOf, JSON.stringify(st));
+  check("with no conversion block and no realised gain — absent, not zero, because nothing has been disposed of yet",
+    st!.conversion === undefined && st!.realisedGainEur === undefined);
+
+  // A customer who just paid the invoice by bank transfer, quoting its number —
+  // the ordinary case, and the one nothing tied to the document before.
+  const bankPaid = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0777" }));
+  const sepaOrder = {
+    id: "ord-direct-1", kind: "issue", amount: "25.00", address: owner,
+    memo: "RE-2026-0777 Danke fuer Ihre Arbeit",
+    meta: { state: "processed", processedAt: new Date().toISOString() },
+    counterpart: { details: { firstName: "Ada", lastName: "Payer" }, identifier: { iban: "DE02120300000000202051" } },
+  };
+  routes.attributeMoneriumOrderToInvoice(sepaOrder as any);
+  routes.attributeMoneriumOrderToInvoice(sepaOrder as any); // the poller re-sees every order
+  const bankInv = store.findInvoice(bankPaid)!;
+  const bs: any = (bankInv.settlements ?? [])[0];
+  check("a plain SEPA credit quoting the invoice number lands on that invoice, with the payer, their IBAN and the memo",
+    (bankInv.settlements ?? []).length === 1 && bs?.method === "bank" && bs.counterpartyName === "Ada Payer" &&
+      bs.counterpartyIban === "DE02120300000000202051" && bs.matchedOn === "invoice-number" && bs.amountEur === 25,
+    JSON.stringify(bankInv.settlements));
+  const unrelated = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0888" }));
+  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-2", memo: "Miete September" } as any);
+  check("a credit naming no invoice touches none of them", (store.findInvoice(unrelated)!.settlements ?? []).length === 0);
+  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-3", address: `0x${"99".repeat(20)}` } as any);
+  check("and a credit to an address we do not know is ignored rather than guessed at",
+    (store.findInvoice(bankPaid)!.settlements ?? []).length === 1);
 
   const openReq = await call("POST", `/api/users/${miriam.id}/payment-requests`, { methods: ["crypto"], description: "tip jar" }, miriam.id);
   check("an open-amount link has no quote until the payer names an amount", openReq.status === 201 && openReq.body.amountEur === undefined && !openReq.body.latestQuote);

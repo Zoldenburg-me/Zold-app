@@ -10,7 +10,13 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
-import { payableEur } from "../domain/invoices.js";
+import {
+  buildBankSettlement,
+  orderNamesInvoice,
+  payableEur,
+  withSettlement,
+  type MoneriumOrderLike,
+} from "../domain/invoices.js";
 import { addrs } from "../chain.js";
 import { midRates } from "../rates.js";
 import {
@@ -455,6 +461,53 @@ export function noteDepositSettled(deposit: CryptoDeposit): void {
 
 /** A processed Monerium issue order was seen for an account: does its memo
  *  name one of that account's open requests? Called by the Monerium poller. */
+/**
+ * Put a SEPA credit onto an invoice.
+ *
+ * Idempotent on the order id, so re-seeing an order in a later poll records
+ * nothing twice — the poller walks the same list repeatedly by design.
+ */
+function recordBankSettlement(
+  invoiceId: string,
+  order: MoneriumOrderLike,
+  matchedOn: "payment-link" | "invoice-number",
+): void {
+  const invoice = store.invoices.find((i) => i.id === invoiceId);
+  if (!invoice) return;
+  store.updateInvoice(invoice.id, {
+    settlements: withSettlement(invoice.settlements, buildBankSettlement(order, matchedOn)),
+  });
+}
+
+/**
+ * A SEPA credit whose reference names one of this account's own invoices.
+ *
+ * The everyday way an invoice gets paid: the bank details are printed on the
+ * sheet and the payer writes the invoice number. Nothing else ties that money
+ * to the document, so without this a direct transfer leaves the invoice looking
+ * unpaid while the euro sits in the account.
+ *
+ * Only OUTGOING invoices of the org that owns the credited address, and only
+ * ones not already settled. See `orderNamesInvoice` for why a short number is
+ * deliberately not matched at all.
+ */
+export function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike): void {
+  if ((order.kind ?? "issue") !== "issue") return;
+  if ((order.meta?.state ?? order.state) !== "processed") return;
+  const address = String(order.address ?? "").toLowerCase();
+  if (!address) return;
+  const user = store.users.find((u) => (u.address ?? "").toLowerCase() === address);
+  if (!user) return;
+  const orgIds = new Set(store.organisationsForUser(user.id).map((o) => o.org.id));
+  for (const invoice of store.invoices) {
+    if (invoice.direction !== "outgoing" || !orgIds.has(invoice.orgId)) continue;
+    if (invoice.state === "DELETED" || invoice.state === "RECONCILED") continue;
+    if (!orderNamesInvoice(order, invoice)) continue;
+    recordBankSettlement(invoice.id, order, "invoice-number");
+    return;
+  }
+}
+
 export function attributeMoneriumOrder(order: any): PaymentRequest | undefined {
   if (order?.kind !== "issue") return undefined;
   const user = store.findUserByAddress(String(order.address ?? ""));
@@ -462,7 +515,13 @@ export function attributeMoneriumOrder(order: any): PaymentRequest | undefined {
   for (const r of store.paymentRequestsForUser(user.id)) {
     if (r.state !== "OPEN" && r.state !== "PAID") continue;
     const payment = matchMoneriumOrder(order, r, user.address);
-    if (payment) return record(r, payment);
+    if (payment) {
+      const saved = record(r, payment);
+      // A link raised for an invoice puts its bank credit on the invoice too,
+      // the same way an attributed crypto deposit does.
+      if (saved.invoiceId) recordBankSettlement(saved.invoiceId, order, "payment-link");
+      return saved;
+    }
   }
   return undefined;
 }

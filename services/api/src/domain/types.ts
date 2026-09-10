@@ -490,21 +490,88 @@ export interface InvoiceParty {
  * absent rather than zero when the receipt could not be valued: an unknown
  * basis gives an unknown gain, and zero would be a claim.
  */
-export interface InvoiceSettlement {
+export interface InvoiceSettlementCommon {
+  /** Idempotency key: the deposit id, or the Monerium order id. */
+  ref: string;
+  /** What this payment put against the invoice, in euro. */
+  amountEur: number;
+  at: string;
+}
+
+/**
+ * A crypto payment of an invoice, with everything the two events need.
+ *
+ * The receipt block is the ACQUISITION — what arrived, on which transaction,
+ * what it was worth in euro at that moment and on whose published rate. The
+ * conversion block is the DISPOSAL, and it is absent while the asset is still
+ * held, which is a real state and not a missing field.
+ *
+ * `spreadEur` is the only honest fee figure available: the venue's rate against
+ * the independent mid at the same instant, in euro. It is NOT
+ * `receiptAmountEur - creditedEur` — that difference also contains whatever the
+ * market did between receipt and conversion, and calling market movement a fee
+ * would misstate both numbers. Network gas is not deducted from the payee, so
+ * it is not a fee either and does not appear here.
+ */
+export interface CryptoInvoiceSettlement extends InvoiceSettlementCommon {
+  /** Absent on rows written before invoices could be paid by bank. */
+  method?: "crypto";
   depositId: string;
   receivedAsset: "USDC" | "EURE";
   receivedAmount: number;
+  /** The wallet transaction that delivered it. */
   receiptTxHash: string;
-  /** EUR value at receipt, with the rate and whose feed it came from. */
+  /** When the chain says it arrived, which is not when we noticed. */
+  receiptAt?: string;
+  /** EUR value at receipt, and the published rate it came from. */
   receiptAmountEur?: number;
   receiptRate?: number;
   receiptRateProvider?: string;
-  /** The user-signed swap, when one was needed. */
-  conversionTxHash?: string;
-  creditedEur?: number;
+  receiptRateAsOf?: string;
+  /** The user-signed conversion, once it has happened. */
+  conversion?: {
+    txHash?: string;
+    /** Which venue filled it. */
+    venue?: string;
+    /** The rate it actually filled at. */
+    rate?: number;
+    /** The independent mid at that moment, so the spread is checkable. */
+    midRate?: number;
+    /**
+     * The venue's spread against that mid, in euro, signed as a COST: positive
+     * means the venue's price was worse than the mid and that much euro did not
+     * arrive. Negative means it beat the mid, which happens and is not hidden.
+     */
+    spreadEur?: number;
+    creditedEur?: number;
+  };
+  /** Credited minus the receipt value. Absent, never zero, when the basis is
+   *  unknown — an unknown basis gives an unknown gain and zero is a claim. */
   realisedGainEur?: number;
-  at: string;
 }
+
+/** A SEPA credit that paid an invoice: the bank facts, and no conversion,
+ *  because euro arriving as euro is not an exchange. */
+export interface BankInvoiceSettlement extends InvoiceSettlementCommon {
+  method: "bank";
+  /** The Monerium issue order behind the credit. */
+  orderId: string;
+  counterpartyName?: string;
+  counterpartyIban?: string;
+  /** The payment reference the payer wrote — how it was matched. */
+  memo?: string;
+  /** How this credit was tied to the invoice: the payer quoted a pay-link code,
+   *  or wrote the invoice number on the transfer. */
+  matchedOn: "payment-link" | "invoice-number";
+}
+
+/**
+ * How an invoice was paid. Discriminated so that impossible records cannot be
+ * written: a bank credit with a conversion rate, or a crypto receipt with a
+ * counterparty IBAN, are not merely discouraged, they do not typecheck.
+ */
+export type InvoiceSettlement = CryptoInvoiceSettlement | BankInvoiceSettlement;
+
 
 export interface Invoice {
   id: string;

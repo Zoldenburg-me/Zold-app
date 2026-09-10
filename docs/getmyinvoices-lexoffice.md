@@ -825,3 +825,51 @@ is what makes a dollar invoice payable in USDC.
 NOT DONE: no UI raises the link from the invoice screen yet — the field is
 there, the button is not. And the invoice page still shows bank details only,
 so a payer sees crypto on the pay page rather than on the document.
+
+## DONE — a full settlement record per payment (10 Sep 2026)
+
+`npm run paylinks:test` 81 -> 96, `npm run convert:test` 20 -> 21. business,
+invoicing, draft, documents, pay, shopify, shopify:orders, webhook and
+reconcile all pass.
+
+`InvoiceSettlement` is now a DISCRIMINATED UNION, and that is the point: a bank
+credit carrying a conversion rate, or a crypto receipt carrying a counterparty
+IBAN, do not merely fail review — they do not typecheck.
+
+**Crypto.** The wallet transaction, what arrived and in what, the euro value at
+receipt with the rate, its provider and its publication date, and the chain's
+own timestamp for arrival. Then a separate `conversion` block: the swap
+transaction, the venue, the rate it filled at, the independent mid it was
+checked against, and the realised gain. The conversion block is ABSENT while
+the asset is still held — a true position on the balance sheet, not a
+half-filled row.
+
+**The fee figure is the venue's spread against that mid, signed as a cost.** It
+is deliberately NOT `receiptAmountEur - creditedEur`: that difference also
+contains whatever the market did between receipt and conversion, and calling
+market movement a fee misstates both numbers. `midRate` is now persisted on the
+deposit at conversion so the spread is CHECKABLE rather than asserted. Network
+gas is not deducted from the payee, so it is not a fee and is not listed; the
+screen says so rather than leaving a reader to wonder.
+
+**Bank.** A SEPA credit now lands on the invoice with the counterparty's name
+and IBAN, the memo they wrote, the Monerium order id, and how it was matched.
+Two routes: the payer quoted a pay-link code, or — the ordinary case, and the
+one nothing handled before — they wrote the INVOICE NUMBER on a plain transfer,
+which is what is printed beside the bank details on the sheet.
+
+That matcher is deliberately conservative. An invoice number under six
+characters is never matched, because "14" appears in a date, an address and
+another invoice's number. A missed match leaves a credit to be reconciled by
+hand; a wrong match books a stranger's money against a customer's invoice and
+closes it. Those are not equally bad.
+
+Everything is idempotent on the deposit id or order id, because the poller
+re-reads the same orders by design.
+
+**Shown to the ORG only.** The supplier's view of an invoice goes through an
+allowlist that a new field cannot leak into by default, so the customer's copy
+carries none of this — they have no business seeing our venue spread.
+
+NOT PROVEN: no real Monerium credit has been matched to an invoice number, and
+no real swap has produced a spread figure. Both need a production connection.

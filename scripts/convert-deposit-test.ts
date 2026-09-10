@@ -171,19 +171,32 @@ await check("the receipt is stamped at DETECTION, not recomputed later", () => {
     "the chain's own timestamp must be recorded alongside the rate's");
 });
 
+// The builder moved to domain/invoices.ts when bank credits gained a settlement
+// record of their own; the properties are unchanged, so the checks follow it.
 await check("an invoice settlement carries the whole thread", () => {
-  const src = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
-  const fn = src.slice(src.indexOf("export function recordInvoiceSettlement"));
-  for (const field of ["receiptTxHash", "conversionTxHash", "creditedEur", "realisedGainEur", "receiptAmountEur"]) {
-    assert.ok(fn.slice(0, 1800).includes(field), `settlement must carry ${field}`);
+  const src = readFileSync("services/api/src/domain/invoices.ts", "utf8");
+  const fn = src.slice(src.indexOf("export function buildCryptoSettlement"));
+  const body = fn.slice(0, 2600);
+  for (const field of ["receiptTxHash", "receiptAmountEur", "receiptRateProvider", "creditedEur", "realisedGainEur"]) {
+    assert.ok(body.includes(field), `settlement must carry ${field}`);
   }
+  assert.match(body, /conversion:\s*\{/, "the disposal must be its own block, absent while the asset is held");
+  assert.match(body, /txHash/, "the conversion must carry its transaction");
 });
 
 await check("settlements append rather than replace", () => {
-  const src = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
-  const fn = src.slice(src.indexOf("export function recordInvoiceSettlement"));
-  assert.match(fn.slice(0, 1800), /existing\.filter\(\(x\) => x\.depositId !== deposit\.id\)/,
+  const src = readFileSync("services/api/src/domain/invoices.ts", "utf8");
+  const fn = src.slice(src.indexOf("export function withSettlement"));
+  assert.match(fn.slice(0, 600), /filter\(\(x\) => settlementRef\(x\) !== settlementRef\(s\)\)/,
     "an invoice can be paid more than once; overwriting would erase the earlier payments");
+});
+
+await check("the fee reported is the venue's spread against the mid, never receipt-minus-credit", () => {
+  const src = readFileSync("services/api/src/domain/invoices.ts", "utf8");
+  const fn = src.slice(src.indexOf("export function buildCryptoSettlement"), src.indexOf("export function buildBankSettlement"));
+  assert.match(fn, /deposit\.midRate/, "the spread must be measured against an independent mid");
+  assert.ok(!/receipt\.amountEur\s*-\s*.*credited/.test(fn),
+    "receipt minus credit also contains market movement; calling that a fee misstates both numbers");
 });
 
 await check("the invoice link is explicit, never inferred from amounts", () => {
