@@ -237,3 +237,64 @@ That is not a free pass. We are the issuer of record, and XML a third party
 derived from fields it extracted is not the same artifact as an e-invoice we
 issued. Worth one question to GetMyInvoices about whether their conversion is
 meant to be relied on that way. Worth nothing more until they answer.
+
+## The bank feed — recommendation
+
+**Push transactions into GetMyInvoices, and do not build a Lexware Office bank
+feed at all.** Let the file hop into Lexware Office stay whatever the
+bookkeeper already does for an unconnectable bank.
+
+The reasoning, shortest first.
+
+**We cannot automate their side whatever we build.** Lexware Office has no
+bank resource in its public API. Every route into it ends with a human
+dropping a file into an offline account. Building a Lexware-Office-shaped CSV
+exporter would not remove that step, it would only move which tool produces
+the file. There is no version of this where the bank half is hands-free, and
+the honest thing is to stop trying to make one.
+
+**GetMyInvoices is where the matching happens, and that is the part worth
+having.** `POST /bankAccounts/{uid}/transactions/{uid}/assign` links a
+document to a transaction. We know which transfer paid which invoice —
+`invoice.payment.transferId` records it at execution time — and that knowledge
+is the single most valuable thing we can hand a bookkeeper. Push transactions
+straight into Lexware Office instead and the link is thrown away, so someone
+re-derives it by matching amounts against dates. Pushing to GetMyInvoices is
+the only route that carries it across.
+
+**It is one integration, and most of it exists.** The transaction builder is
+`sevdesk-monerium`'s `mapping.ts` with a different sink.
+
+Ask WeLoveAccounting one question before any of this: **do you already import
+MT-940 for clients whose banks are not connectable?** If the answer is yes,
+there is no gap to close and the whole second lane costs them nothing new.
+
+Fallback if GetMyInvoices does not work out: a Lexware Office CSV download in
+the business dashboard. Their CSV import is documented and the column mapping
+is set up once. Prefer CSV over MT-940 for that fallback — MT-940 carries
+opening and closing balance fields per statement, and a balance we compute
+wrongly is worse than no file, whereas the CSV import is transactions only.
+
+### What makes it correct rather than merely working
+
+- **Own the handover state.** Remember what has already been pushed, per
+  account, so a re-run does not double-book. `sevdesk-monerium` already keeps
+  exactly this (which order became which row, last block scanned per address)
+  and it is the reason re-running there is safe.
+- **Settled money only.** `placed`, `pending` and `rejected` orders are not
+  bank movements. Unchanged from the sevDesk rules.
+- **Two questions that are the accountant's to answer, not ours.**
+
+  *Do wallet-to-wallet EURe movements belong in the bank feed at all?* They are
+  real movements in the business's account with no bank analogue. We can book
+  them as bank lines, or report them separately. Their call.
+
+  *How should a USDC receipt be booked?* A EUR bank account cannot hold a USDC
+  line, and calling USDC "USD" on a custom account would be a mislabel we would
+  have introduced. This is the one place where Zold has more to offer than a
+  bank feed can express: `InvoiceSettlement` already records what arrived, its
+  EUR value at receipt and whose rate that came from, the conversion
+  transaction, what was actually credited, and the realised gain — with the
+  gain absent rather than zero when the basis is unknown, because zero would be
+  a claim. A bank feed flattens all of that into one euro number. Ask them what
+  they want to see before deciding which fields to send.
