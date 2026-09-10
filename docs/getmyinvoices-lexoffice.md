@@ -392,3 +392,57 @@ standalone because it needs only Monerium and a chain. This needs
 `invoice.payment.transferId`, which exists only here, and that link is the
 whole value of stage 4. Port the mapping rather than depending on the sibling
 repo.
+
+## How Lexware Office handles incoming invoices today
+
+Read from their help centre and developer docs on 10 Sep 2026. Four routes in,
+and the accountant's GetMyInvoices sync is a fifth.
+
+1. **Direct upload** in the app, several files at once. The main route.
+2. **A dedicated inbox address** ending `@inbox.lexware.email`, configured
+   under Settings → Belegempfang. Attachments mailed there are uploaded
+   automatically, and up to 20 supplier addresses can be authorised to send
+   straight in. Their help presents this as an XL-package feature.
+3. **The mobile app**, by photo or by sharing an attachment out of the phone's
+   mail client.
+4. **The public API** — `POST /vouchers` with type `purchaseinvoice`, a
+   bookkeeping voucher for preliminary accounting, with the receipt file
+   attached through the Files endpoint. Voucher types include `salesinvoice`,
+   `purchaseinvoice` and both credit-note variants.
+
+**E-invoicing is the part that matters to us.** Receiving has been mandatory in
+Germany since 1 January 2025 and Lexware Office does it: XRechnung 3.0.1 and
+later, ZUGFeRD 2.0 and later. On upload it **validates the file for technical
+validity and machine-readability and rejects anything outdated or defective**.
+XML gets rendered into a readable visualisation. The extracted data comes from
+the machine-readable part, and their own guidance is that the machine-readable
+part is what the law treats as binding — if it disagrees with the visible
+document, ask the supplier for a corrected file rather than editing the fields.
+
+### Three consequences for us
+
+**It confirms leaving the incoming lane alone.** Incoming invoices already have
+four working routes plus the accountant's own collection. Building a sixth for
+documents they capture well would be effort spent where there is no problem.
+Stage 3 stays outgoing-only, and now for a better reason than the missing
+supplier file.
+
+**A broken e-invoice is worse than no e-invoice.** This is the finding worth
+keeping. A plain PDF is accepted as an ordinary receipt today, and the
+obligation to *issue* structured invoices only phases in from 2027. But the
+moment we emit ZUGFeRD, a slightly wrong file is **refused at upload** where
+the plain PDF would have gone through. So the e-invoicing work in CLAUDE.md
+must not ship half-done: an invalid file does not degrade gracefully, it
+bounces, and it bounces at the customer's end where we cannot see it.
+
+**The email route needs no API key at all.** A customer could give us their
+`@inbox.lexware.email` address and we would mail invoices straight in — no
+credential, no GetMyInvoices, no integration. We cannot take it today because
+Zold has no mail transport, and this repo does not fake one. Worth recording as
+the cheapest possible path the day a transport exists.
+
+None of this changes the bank feed decision. Lexware Office's API still has no
+bank resource, and GetMyInvoices is still the only place documents and
+transactions meet. `POST /vouchers` does mean the document lane could go direct
+to Lexware Office if GetMyInvoices licensing turns awkward — a fallback worth
+knowing about, not a reason to change route.
