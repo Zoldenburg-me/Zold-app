@@ -608,3 +608,84 @@ machinery, sits inside the boundary, and stays.
 The decision that needs taking, and it is the user's not ours: whether the
 issued-invoice module is capped as above, or sunset before the 2027 mandate
 makes keeping it a promise we have to fund.
+
+## EUR invoice, crypto payment — two events, and Lexware Office cannot hold them
+
+Not tax advice. What follows is what the sources say and what the code already
+records; the booking treatment is the accountant's call.
+
+**The user is right that it is two events, and the German basis is specific.**
+The BMF letter of 6 March 2025 (replacing the 2022 one) treats crypto assets as
+non-depreciable intangible **economic assets**, not currency: short-term
+holdings in current assets under other assets, long-term in fixed assets, with
+the acquisition value being the market rate at acquisition. Every disposal or
+exchange is a business receipt — coin-to-coin swaps and paying a supplier
+invoice in crypto included, both realising the gain since acquisition.
+
+So a EUR invoice settled in USDC is:
+
+1. **Settlement and acquisition.** The receivable is discharged and a USDC
+   asset is acquired at its EUR market value at that moment.
+2. **Disposal.** When that USDC is converted to EUR, that is a disposal, and
+   the difference from the acquisition value is a taxable gain or loss.
+
+Often a third: the EUR value at receipt need not equal the invoice amount, so
+there is a difference on the receivable as well.
+
+**One correction to the framing, and it matters.** Both transactions belong in
+the **books**, not in the invoice body. The invoice stays a EUR document
+stating the EUR consideration and the VAT on it — that is what § 14 asks for
+and the crypto leg does not change the VAT base. Restating an issued invoice
+around the payment asset invites exactly the § 14c problem the invoicing module
+was built to make unrepresentable. Note the payment reference on it if useful;
+do not rebuild the tax figures around it.
+
+### Lexware Office cannot represent this, and it is not close
+
+Two limits, both from their own material:
+
+- **No foreign currency at all.** Bookkeeping is EUR-only and an invoice cannot
+  even be issued in another currency. Their PayPal guidance tells users to make
+  PayPal do the conversion so that only euros arrive. Moot for crypto anyway,
+  which is not a currency in tax terms — but it shows the shape of the product.
+- **No custom accounts, in any version.** Their own tax-adviser help page says
+  individual accounts cannot be created, existing ones cannot be renamed, and
+  sub-accounts and cost centres are unavailable. The chart of accounts is
+  deliberately narrow because "each additional flexibility in account selection
+  leads to a loss in automation", and a complete SKR03/SKR04 is in no version.
+  The suggested workaround for a missing account is the "To Review" category,
+  which is a parking bucket, not a treatment.
+
+So there is no account to hold a USDC position and no way to make one, and no
+mechanism to book a realised gain against it. **This is a fit problem between
+crypto receipts and the customer's chosen tool, and it exists whether or not
+Zold integrates with anything.** Worth saying to them in those words, early.
+
+### What this changes for us
+
+**The EURe-only feed was the right call, and now for a stronger reason.** USDC
+is not a currency, so a bank account is structurally the wrong instrument for
+it. Nothing to revisit there.
+
+**But the disclosure written above is no longer sufficient.** "The realised FX
+gain is absorbed, not shown" was framed as something to tell the accountant. If
+that gain is taxable business income, then absorbed and unshown means taxable
+income missing from the books. That is not a footnote, it is the customer's
+compliance gap, and it needs a deliverable rather than a caveat.
+
+**The deliverable is a crypto settlement statement, and we are unusually well
+placed to produce one.** `InvoiceSettlement` already records what arrived, its
+EUR value at receipt, whose rate that was, the conversion transaction, what was
+actually credited, and the realised gain — with the gain **absent rather than
+zero** when the basis is unknown, because zero would be a claim. That is
+precisely the two-event story an accountant needs to make two manual bookings.
+Nobody else holds it: the exchange sees one leg, the bank sees the other, and
+Lexware Office sees neither.
+
+So the document lane gains a third artifact beside receipts and statements, and
+it is the one with the clearest reason to exist. It is also squarely inside the
+agreed boundary: keeping the record, not booking it.
+
+**Ask WeLoveAccounting how they handle crypto receipts today.** They may have a
+manual process already, and its shape should decide the report's columns. If
+they have none, they need to know before a period closes rather than after.
