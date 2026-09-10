@@ -483,3 +483,64 @@ producing the file and letting someone download it is keeping the record. A
 opened — is invoicing software, which the boundary says we do not build. There
 is no mail transport here anyway, and this is a good reason not to add one for
 this purpose.
+
+## Invoice integrity — three gaps found while answering the delivery question
+
+Not tax advice, and the app already says so on every screen that touches this.
+What follows is what the code does, checked on 10 Sep 2026, set against what
+the standards ask for.
+
+**First, what is NOT the gap.** "The customer could edit the PDF" is true of
+every invoice ever sent and is not what the law is worried about. § 14 Abs. 1
+UStG asks for authenticity of origin, integrity of content and legibility
+across the retention period, and it explicitly allows these to be guaranteed by
+an internal control procedure producing a reliable audit trail. No qualified
+signature is required. This is why every German business emails plain PDFs
+quite legally. The real question is what OUR side guarantees, and there the
+answer is weaker than it should be.
+
+**Gap 1 — an issued invoice can be deleted.** An outgoing invoice is written
+in state `SUBMITTED` ("issued and locked", says the comment). The transition
+table allows `SUBMITTED → DELETED`, and `assertDeletable` blocks only when a
+payment exists. So an invoice that has been issued, numbered and sent to a
+customer can be deleted as long as nobody has paid it yet. Under GoBD an issued
+record must not be removable; the correction path is a cancellation or a credit
+note, which leaves both documents standing. The deletion is soft, but a row
+flipped to `DELETED` and hidden from every read is a deletion as far as an
+audit is concerned.
+
+Fix: refuse the transition for `direction: "outgoing"`. Keep it for
+`LINK_CREATED`, where discarding an unused Invoice-Me link is legitimate.
+
+**Gap 2 — invoice numbers are neither unique nor monotonic.** There is no
+uniqueness check on `issued.number` anywhere. The number series `next` is
+settable to any positive integer through the invoicing profile, including
+backwards. So the same number can be issued twice. § 14 Abs. 4 Nr. 4 wants a
+consecutive number assigned **once** by the issuer, and duplicates are exactly
+what a reader of the books cannot resolve.
+
+Fix: refuse to issue a number the org has already used, and refuse to set the
+series below the highest number already issued.
+
+**Gap 3 — there is no artifact, and nothing is signed.** This is the deep one.
+Today the record is a database row plus a live rendering. The document someone
+shows in 2032 will be produced by 2032's code from 2026's data. The frozen
+`issued` snapshot protects the data, which was the right call and is why this
+is a gap rather than a disaster — but it does not protect the rendering, and
+GoBD asks for reproducibility in the original form.
+
+The asymmetry is the tell: `documents.ts` already signs statements, receipts,
+balance confirmations and proofs of ownership over a canonical digest, hands
+out a verification code, and **re-checks the signature on every visit** to
+`/v/<code>`. Our receipts are verifiable and our invoices are not.
+
+Fix, and it rides on stage 2: render the invoice at issue, store that artifact,
+sign its hash with the document key that already exists, give it a verification
+code, and let the existing verifier re-check it. Then an invoice is exactly as
+provable as a receipt already is, and the accountant, the customer and a
+Betriebsprüfer can all check it rather than trust it.
+
+**Order to do them in.** Gaps 1 and 2 are small, independent of everything else
+in this document, and they are live defects in shipped code — do them first and
+on their own. Gap 3 waits for the server-side render, which now has a third
+reason to exist.
