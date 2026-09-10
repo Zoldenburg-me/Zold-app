@@ -283,21 +283,42 @@ wrongly is worse than no file, whereas the CSV import is transactions only.
   and it is the reason re-running there is safe.
 - **Settled money only.** `placed`, `pending` and `rejected` orders are not
   bank movements. Unchanged from the sevDesk rules.
-- **Two questions that are the accountant's to answer, not ours.**
+- **EURe ONLY. No USDC in the feed** (decided 10 Sep 2026, user's call). The
+  GetMyInvoices custom bank account is a EUR account, every transaction we push
+  carries `currencyCode: EUR`, and the sources are Monerium orders plus
+  on-chain EURe transfers. A EUR account cannot hold a USDC line, and labelling
+  USDC as "USD" to make it fit would be a mislabel we invented — see the UPI
+  rule. This also removes the hardest modelling question from the first build.
 
-  *Do wallet-to-wallet EURe movements belong in the bank feed at all?* They are
-  real movements in the business's account with no bank analogue. We can book
-  them as bank lines, or report them separately. Their call.
+  **A USDC movement is REPORTED, NOT BOOKED**, exactly as an unmatched on-chain
+  movement already is in `sevdesk-monerium`. Excluded is not the same as
+  hidden, and silently dropping money the business received is the one failure
+  this whole design exists to avoid.
 
-  *How should a USDC receipt be booked?* A EUR bank account cannot hold a USDC
-  line, and calling USDC "USD" on a custom account would be a mislabel we would
-  have introduced. This is the one place where Zold has more to offer than a
-  bank feed can express: `InvoiceSettlement` already records what arrived, its
-  EUR value at receipt and whose rate that came from, the conversion
-  transaction, what was actually credited, and the realised gain — with the
-  gain absent rather than zero when the basis is unknown, because zero would be
-  a claim. A bank feed flattens all of that into one euro number. Ask them what
-  they want to see before deciding which fields to send.
+  Three consequences to disclose to the accountant rather than let them find:
+
+  *Money enters the books when it becomes euros, not when the customer paid.*
+  A converted crypto payment reaches the feed as the EURe inflow from the swap,
+  so the euro amount is right but the date is the conversion date. If they
+  recognise revenue on the receipt date, they need the payment record beside
+  the feed.
+
+  *The realised FX gain is absorbed, not shown.* `InvoiceSettlement` holds what
+  arrived, its EUR value at receipt and whose rate that came from, the
+  conversion transaction, what was credited, and the gain — with the gain
+  absent rather than zero when the basis is unknown, because zero would be a
+  claim. An EUR-only feed flattens all of that into the converted amount. The
+  data is not lost, it is just not in this pipe.
+
+  *An unconverted USDC balance is invisible to the books.* With auto-convert
+  off, USDC sits in the account and never becomes a feed line at all. That is a
+  real holding missing from their view, and they must be told, not left to
+  notice.
+
+- **One question that is still theirs, not ours.** Do wallet-to-wallet EURe
+  movements belong in the bank feed at all? They are real movements in the
+  business's account with no bank analogue. We can book them as bank lines or
+  report them separately. Their call.
 
 ## Plan
 
@@ -309,9 +330,10 @@ them can delete a whole stage.
 
 - To WeLoveAccounting: do you already import MT-940 for clients whose banks
   are not connectable? If yes, the bank lane needs no more than stage 1.
-- To WeLoveAccounting: how do you want a USDC receipt and a wallet-to-wallet
-  EURe movement booked? Their answer decides which fields we send, and it is
-  an accounting judgement, not ours.
+- To WeLoveAccounting: do wallet-to-wallet EURe movements belong in the feed,
+  or should they be reported separately? An accounting judgement, not ours.
+  USDC is no longer a question — the feed is EUR only, and how that is handled
+  is a disclosure to them rather than something we are asking.
 - To GetMyInvoices support: does the Lexware Office export carry bank
   transactions, or documents only? Their help pages are written for end users
   and are not a specification.
