@@ -873,3 +873,93 @@ carries none of this — they have no business seeing our venue spread.
 
 NOT PROVEN: no real Monerium credit has been matched to an invoice number, and
 no real swap has produced a spread figure. Both need a production connection.
+
+## How a forwarder deposit is matched to an invoice — and where it breaks
+
+Asked on 10 Sep 2026, specifically about repeated sales at the same price and
+about Shopify. Traced through the code; the constants below are the shipped
+defaults.
+
+**There is ONE deposit address per payee**, not per order.
+`forwardingSalt(userId, handle)` derives it from the payment page, so every
+order that page ever takes is paid to the same address. An ERC-20 transfer
+carries no memo, so the address tells us who was paid and nothing about what
+for. **Attribution is therefore by AMOUNT.**
+
+Each open request is quoted `ceil(cents × mid × 1.005)` in USDC micro-units,
+and on a collision with another of that payee's open quotes the amount is
+nudged **by one micro-unit** until it is unique. Matching then walks every open
+crypto request, scores each quote, and prefers full over partial over
+over-payment; within a tier the closest quote wins, and an exact tie goes to
+the OLDER request.
+
+### The numbers that decide whether this holds
+
+| | |
+|---|---|
+| Separation between two colliding quotes | 0.000001 USDC |
+| "Full payment" window either side (50 bps) | ~0.14 USDC on a €25 order |
+| Not this payment, below (20% floor) | under ~5.7 USDC |
+| Not this payment, above (10% cap) | over ~31.4 USDC |
+
+**The uniqueness is real but its margin is a micro-unit, while the tolerance
+band around it is a hundred thousand times wider.** So it holds exactly as long
+as the payer sends the exact quoted figure, and stops holding the moment
+anything perturbs the amount. Four ways that happens, in rising order of how
+likely they are on a store:
+
+1. **A rounded amount.** A payer who types 28.59 instead of 28.589738 sits
+   inside both quotes' full-payment windows. Nearest wins, and an exact tie
+   resolves to the older request — a deterministic wrong answer, not a
+   coin-flip.
+2. **An exchange withdrawal fee.** Funding from an exchange deducts an
+   arbitrary amount. Three per cent short is outside the full window and inside
+   the 20% floor, so it books as a PARTIAL of whichever quote is nearest, and
+   with identical prices "nearest" means very little. The order then sits open
+   awaiting a remainder — and the next identical order's payment can be read as
+   that remainder.
+3. **Reuse across time.** `openQuotedAmounts` only reserves amounts from
+   requests that are currently OPEN. Once one is paid or expires it stops
+   reserving, so a later order for the same product is quoted the same base
+   figure with no nudge. A late payment intended for the closed order then
+   matches the new open one.
+4. **Shopify is the adversarial case by construction**: identical product
+   prices, many concurrent sessions, a 24-hour order TTL, and buyers paying
+   from wherever they like.
+
+### The fix: one address per request
+
+The mechanism is already in the API we call. `forwarding_getAddress` takes an
+optional `salt`, and ours is currently `transf:payment-page:<userId>:<handle>`.
+Deriving it per request instead — the request code is already a unique
+15-character credential — gives every order its own deposit address, and
+attribution becomes exact. The amount would then decide only whether a payment
+is full or short, which is what a tolerance is actually for.
+
+**The earlier rejection of per-order addresses does not apply here.** CLAUDE.md
+turned them down as a PRIVACY fix, correctly: they forward into the same Safe
+one hop later, so the merchant's book stays readable on chain. That is a
+different problem with a different answer, and it should not be read as having
+settled this one.
+
+What it costs, from Candide's own docs and constraints:
+
+- **500 active forwarding addresses per account** (`-32013` past that).
+  Refreshing an existing one does not count. So concurrent open orders are
+  capped unless expired ones are recycled or the cap is raised — worth asking
+  them before designing around it.
+- **Activation has a TTL** and must be re-issued from the backend with the
+  bearer account key, which must never reach a client.
+- **There is no webhook.** Arrival is polled via
+  `forwarding_getForwardsByRecipient`. Our watcher currently polls chain
+  transfers to the one page address, so it would need to follow the forwards
+  API or watch many addresses.
+- **Each forward carries relayer and bridge fees** (`forwarding_estimateOutput`).
+  Per-order addresses multiply that, and on small orders it should be measured
+  before it is assumed to be negligible.
+
+### One cheap fix worth doing regardless
+
+Widen the amount reservation to recently CLOSED requests, not only open ones.
+That removes failure 3 on its own, costs nothing, and is worth having even
+after per-request addresses land.
