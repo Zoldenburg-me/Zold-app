@@ -1,0 +1,14 @@
+{
+  "name": "zold-shopify-app",
+  "private": true,
+  "description": "Zold checkout UI extension for Shopify (thank-you and order-status pages). Backend lives in ../services/api.",
+  "scripts": {
+    "dev": "shopify app dev",
+    "deploy": "shopify app deploy",
+    "info": "shopify app info"
+  },
+  "workspaces": ["extensions/*"],
+  "devDependencies": {
+    "@shopify/cli": "^3.80.0"
+  }
+}
