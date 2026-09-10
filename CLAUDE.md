@@ -1875,6 +1875,39 @@ REVERTS; do not treat `dock()` as "close the card" until the refund window shuts
 LICENSE GATE: Aqua is `LicenseRef-Degensoft-Aqua-Source-1.1`, © Degensoft Ltd —
 source-available, not open source. A CardApp needs a licensing conversation.
 
+THE ISSUER QUESTION IS SETTLED, and the answer reframes the pitch: **BAANX, THE
+COMPANY BEHIND THE 1INCH CARD, ALREADY SELLS NON-CUSTODIAL.** They run the
+MetaMask Card (funds stay in the user's wallet on Linea, user-set caps, a
+contract authorises in under five seconds), they list custodial and
+non-custodial as two tiers of one platform across EVM and Solana, and they
+shipped the first non-custodial on-chain card with Tezos in 2024. Ledger,
+Exodus, Trust Wallet and 1inch all run Crypto Life cards there — 1inch is on
+the custodial tier of a platform that sells the other one. Also live: Gnosis
+Pay (user's own Safe on Gnosis + Monerium EURe + a personal IBAN — our exact
+stack, on Visa, in the EEA), Kulipa (issuer processor sends the auth, Kulipa
+moves funds to an on-chain escrow, then clears — pull-at-auth, proven), Rain
+(Visa principal member, per-customer contract the customer owns), Immersve
+(Mastercard principal member, on-chain funding contracts).
+
+SO THE GATE MOVED. Every one of those binds the card to THE PROVIDER'S wallet on
+THE PROVIDER'S chain — MetaMask's smart account on Linea, a Gnosis Pay Safe on
+Gnosis that reads view-only in Safe{Wallet} because their modules own it, a Rain
+contract, Immersve's Funds Storage. "Non-custodial" currently means your keys,
+our wallet, our chain. THAT is the hole Aqua fills and the only part 1inch would
+own. Latency is no longer the open question (under five seconds, precedented);
+the open question is commercial.
+
+AND THE SECURITY ARGUMENT HAS AN INCIDENT BEHIND IT: 1 Jun 2026, attackers
+exploited the Zodiac Delay + Roles modules on Gnosis Pay's card Safes (missing
+status check in a static call), ~$1.5m extracted, Gnosis covered it. Those
+modules sit ON THE USER'S WALLET. Aqua installs nothing on the wallet — an
+ERC-20 allowance and 80 lines with no owner. Corollary to design around: Aqua
+has NO delay mechanism, so the auth-vs-user-withdrawal race is unhandled unless
+you pull at authorisation. Do not "fix" that by adding a delay module.
+
+COUNTERPARTY TIMING: Exodus is acquiring Baanx for $175m, expected to close
+early 2026 subject to US/UK/EU approval.
+
 ## Roadmap (agreed priority)
 0. Payout partners secured (July 2026): **dLocal** (crypto product:
    stablecoin-funded payouts, 60+ markets — UPI/India, M-Pesa/Kenya, PIX/
