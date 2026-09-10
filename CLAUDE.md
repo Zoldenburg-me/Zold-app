@@ -1840,6 +1840,41 @@ ask them in writing. It does not cover USDC or in-flight transfers, does not
 restore the Safe, and "submit ID and wait" is not a recovery path to put in
 front of someone whose salary is in the account.
 
+## 1inch Aqua — a card primitive wearing an AMM costume (Sep 2026)
+
+PROPOSAL ONLY, nothing built: `docs/1inch-aqua-card.md`. The pitch is that
+1inch Card is custodial (Baanx holds, Monavate issues) and Aqua is the thing
+that fixes it, with Zold supplying the Safe and the EURe/IBAN leg.
+
+WHAT AQUA IS, having read the 80-line `Aqua.sol` rather than the marketing:
+one mapping the source itself comments "aka makers' allowances", keyed
+maker -> app -> strategyHash -> token -> balance, and four verbs — `ship`
+(grant), `dock` (revoke), `pull` (spend, `msg.sender` IS the app), `push`
+(return). No owner, no pause, no upgrade, never holds a token, no signature
+scheme — so a Safe can be a maker. It is a revocable scoped spending-rights
+registry; the AMM is one app on top.
+
+VERIFIED ON CHAIN (eth_getCode + selector search in the deployed bytecode):
+ - `0x1111113ccf1426a8e30e2bff5e005d929bf6a90a` is live on Base mainnet AND
+   Gnosis, identical 11,240-byte deterministic deploy, carrying the ship/dock/
+   pull/push/rawBalances selectors.
+ - THE ADDRESS IN 1INCH'S OWN DEVELOPER-RELEASE BLOG POST IS A DIFFERENT
+   CONTRACT. `0x499943e74fb0ce105688beee8ef2abec5d936d31` is also live on Base
+   (12,504 bytes) with the same ABI — the Nov 2025 preview. Two registries,
+   same interface, one chain; ship to the wrong one and the virtual balances
+   sit where no app reads them. Pin the repo address, not the announcement's.
+ - NOT ON BASE SEPOLIA (empty code). The LI.FI wall again: this cannot be
+   exercised on our test chain. Fork Base mainnet or work on Base/Gnosis.
+
+TWO TRAPS TO NOT REDISCOVER: `ship()` checks NEITHER the wallet balance NOR the
+ERC-20 approval, so a virtual balance is a ceiling and not a reserve — which is
+why the auth-vs-clearing tier design in the doc exists rather than being a
+footnote. And `push()` requires an ACTIVE strategy, so a refund to a docked card
+REVERTS; do not treat `dock()` as "close the card" until the refund window shuts.
+
+LICENSE GATE: Aqua is `LicenseRef-Degensoft-Aqua-Source-1.1`, © Degensoft Ltd —
+source-available, not open source. A CardApp needs a licensing conversation.
+
 ## Roadmap (agreed priority)
 0. Payout partners secured (July 2026): **dLocal** (crypto product:
    stablecoin-funded payouts, 60+ markets — UPI/India, M-Pesa/Kenya, PIX/
