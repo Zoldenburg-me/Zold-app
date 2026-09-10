@@ -579,6 +579,33 @@ export interface Invoice {
     grossCents: number;
     /** Per-rate breakdown — §14 Abs. 4 Nr. 8 wants the split, not just a total. */
     buckets: { rate: number; netCents: number; vatCents: number }[];
+    /**
+     * What the amounts above are denominated in. Absent on rows issued before
+     * invoices could be written in anything but euro, and read as EUR.
+     */
+    currency?: string;
+    /**
+     * The euro restatement of a foreign-currency invoice, at the rate that was
+     * live when it was issued.
+     *
+     * Frozen with the rest of the document rather than recomputed, and present
+     * for a reason beyond convenience: § 16 Abs. 6 UStG requires the TAX amount
+     * on a German invoice to be given in euro even when the consideration is
+     * written in another currency. Its absence is why an invoice in a currency
+     * we cannot price is refused instead of issued.
+     */
+    conversion?: {
+      from: string;
+      to: string;
+      /** Units of `from` per 1 `to`. */
+      rate: number;
+      rateProvider: string;
+      rateAsOf: string;
+      netCents: number;
+      vatCents: number;
+      grossCents: number;
+      buckets: { rate: number; netCents: number; vatCents: number }[];
+    };
     purchaseOrder?: string;
     paymentTerms?: string;
     notes?: string;

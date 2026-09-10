@@ -10,6 +10,7 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
+import { payableEur } from "../domain/invoices.js";
 import { addrs } from "../chain.js";
 import { midRates } from "../rates.js";
 import {
@@ -110,7 +111,7 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
  * An invoice already settled is refused rather than quietly given a second
  * collection route: two live ways to pay one invoice is how it gets paid twice.
  */
-function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined): void {
+function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined) {
   const invoice = store.findInvoice(invoiceId);
   if (!invoice) throw new PaymentRequestError("no such invoice", 404);
   if (!orgId || invoice.orgId !== orgId) {
@@ -126,6 +127,7 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined):
   if (invoice.state === "PAID" || invoice.state === "RECONCILED") {
     throw new PaymentRequestError("that invoice is already settled", 409);
   }
+  return invoice;
 }
 
 export async function createPaymentRequest(
@@ -143,7 +145,34 @@ export async function createPaymentRequest(
 ): Promise<PaymentRequest> {
   const handle = user.paymentPage?.handle;
   if (!handle) throw new PaymentRequestError("claim a payment page before creating a payment link", 409);
-  if (input.invoiceId) assertInvoiceCollectable(input.invoiceId, orgId);
+  /**
+   * A link for an invoice collects THAT invoice's amount.
+   *
+   * Derived from the document rather than retyped, and a different figure is
+   * refused: a €10 link against a €1,000 invoice would mark it paid in full for
+   * a hundredth of the money. An invoice written in another currency is
+   * collected as the euro amount frozen on it at issue — a short payment is
+   * still recorded as partial by the ordinary matching, so nothing here
+   * prevents paying in instalments.
+   */
+  let amountEur = input.amountEur;
+  if (input.invoiceId) {
+    const invoice = assertInvoiceCollectable(input.invoiceId, orgId);
+    const due = payableEur(invoice);
+    if (due === undefined) {
+      throw new PaymentRequestError("that invoice has no issued amount to collect", 409);
+    }
+    if (amountEur !== undefined && Math.round(amountEur * 100) !== Math.round(due * 100)) {
+      const face = invoice.issued?.currency ?? "EUR";
+      throw new PaymentRequestError(
+        `that invoice is for €${due.toFixed(2)}` +
+          (face === "EUR" ? "" : ` (${face} ${(invoice.issued!.grossCents / 100).toFixed(2)} at the rate frozen when it was issued)`) +
+          `, not €${amountEur.toFixed(2)}`,
+        409,
+      );
+    }
+    amountEur = due;
+  }
   const now = new Date().toISOString();
   let code = newRequestCode();
   while (store.findPaymentRequestByCode(code)) code = newRequestCode();
@@ -153,7 +182,7 @@ export async function createPaymentRequest(
     userId: user.id,
     ...(orgId ? { orgId } : {}),
     handle,
-    ...(input.amountEur !== undefined ? { amountEur: input.amountEur } : {}),
+    ...(amountEur !== undefined ? { amountEur } : {}),
     currency: "EUR",
     ...(input.description ? { description: input.description } : {}),
     methods: input.methods,

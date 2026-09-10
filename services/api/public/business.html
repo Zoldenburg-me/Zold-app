@@ -888,6 +888,11 @@ RENDER["invoice-new"] = async () => {
       <div><label>Invoice date</label><input id="inv-issue" type="date" value="${esc(invoiceDraft.issueDate || today)}" /></div>
       <div><label>Date of supply</label><input id="inv-supply" type="date" value="${esc(invoiceDraft.supplyDate || today)}" /></div>
       <div><label>Purchase order (optional)</label><input id="inv-po" value="${esc(invoiceDraft.purchaseOrder || "")}" /></div>
+      <div><label>Currency</label><input id="inv-currency" maxlength="3" style="text-transform:uppercase"
+        value="${esc(invoiceDraft.currency || "EUR")}" placeholder="EUR" />
+        <div class="desc">The invoice is written in this currency. It is still collected in euro, at the
+          rate on the day it is issued, and that rate is printed on the document. Currencies without
+          cents (JPY, KWD) are refused rather than rounded.</div></div>
     </div>
   </div>
 
@@ -945,6 +950,7 @@ function readInvoiceEditor() {
   invoiceDraft.issueDate = val("inv-issue");
   invoiceDraft.supplyDate = val("inv-supply");
   invoiceDraft.purchaseOrder = val("inv-po");
+  invoiceDraft.currency = val("inv-currency").toUpperCase() || "EUR";
   $("#inv-lines")?.querySelectorAll("input").forEach((el) => {
     invoiceDraft.lines[Number(el.dataset.li)][el.dataset.lf] = el.value;
   });
@@ -964,6 +970,8 @@ async function refreshInvoiceCheck() {
   try {
     const r = await api(`/api/orgs/${org.id}/invoicing/check`, { method: "POST", body: invoiceDraft });
     const t = r.totals;
+    const cur = r.preview?.currency ?? "EUR";
+    const conv = r.preview?.conversion;
     const rows = (list, cls) => list.map((i) => `<div class="issue">
       <span class="pill ${cls}">${cls === "bad" ? "required" : "check"}</span>
       <div><div>${esc(i.message)}</div>${i.legalBasis ? `<div class="desc">${esc(i.legalBasis)}</div>` : ""}</div></div>`).join("");
@@ -977,8 +985,9 @@ async function refreshInvoiceCheck() {
             ? "Kleinunternehmer (§ 19 UStG / § 34a UStDV)" : "Small business scheme",
         }[r.regime])}</div></div>
       <div style="text-align:right"><div class="desc">Total</div>
-        <div style="font-size:1.3rem; font-weight:600">${fmtEur(t.grossCents)}</div>
-        <div class="desc">net ${fmtEur(t.netCents)}${t.vatCents ? ` · VAT ${fmtEur(t.vatCents)}` : " · no VAT"}</div></div></div>
+        <div style="font-size:1.3rem; font-weight:600">${fmtMoney(t.grossCents, cur)}</div>
+        <div class="desc">net ${fmtMoney(t.netCents, cur)}${t.vatCents ? ` · VAT ${fmtMoney(t.vatCents, cur)}` : " · no VAT"}</div>
+        ${conv ? `<div class="desc">collected as ${fmtMoney(conv.grossCents, conv.to)} · 1 ${esc(conv.to)} = ${esc(String(conv.rate))} ${esc(conv.from)}</div>` : ""}</div></div>
       ${rows(r.errors, "bad")}${rows(r.warnings, "warn")}
       ${r.ok && !r.warnings.length ? `<div class="desc">Every mandatory field is present.</div>` : ""}`;
   } catch (e) {
@@ -986,8 +995,15 @@ async function refreshInvoiceCheck() {
   }
 }
 
-const fmtEur = (cents) =>
-  new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format((cents ?? 0) / 100);
+const fmtEur = (cents) => fmtMoney(cents, "EUR");
+const fmtMoney = (cents, currency = "EUR") => {
+  try {
+    return new Intl.NumberFormat("de-DE", { style: "currency", currency }).format((cents ?? 0) / 100);
+  } catch {
+    // An unknown code must not blank the panel while someone is still typing it.
+    return `${((cents ?? 0) / 100).toFixed(2)} ${currency}`;
+  }
+};
 
 // ── actions ────────────────────────────────────────────────────────────────
 

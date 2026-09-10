@@ -92,6 +92,10 @@
   .totals td { padding: 5px 0; }
   .totals td.num { text-align: right; font-variant-numeric: tabular-nums; padding-left: 28px; }
   .totals tr.grand td { border-top: 1px solid var(--ink); padding-top: 9px; font-size: 15px; font-weight: 600; }
+  /* The euro restatement of a foreign-currency invoice: separated from the
+     document's own figures so the two are never read as one column. */
+  .totals tr.conv td { border-top: 1px dashed var(--rule, #bbb); padding-top: 9px; font-size: 11.5px; color: var(--ink-soft); }
+  .totals tr.conv .basis { display: block; color: var(--faint); font-size: 10.5px; }
 
   .vat-note { margin-top: 22px; padding: 11px 13px; border-left: 3px solid var(--ink); background: #f6f6f9; font-size: 12px; }
   .vat-note .basis { color: var(--ink-soft); font-size: 11px; margin-top: 2px; }
@@ -164,13 +168,17 @@ const L = {
         taxNumber: "Steuernummer", description: "Bezeichnung", qty: "Menge", unit: "Einzelpreis",
         rate: "USt.", amount: "Betrag", net: "Nettobetrag", vat: "Umsatzsteuer", gross: "Gesamtbetrag",
         terms: "Zahlungsbedingungen", bank: "Bankverbindung", po: "Bestellnummer", due: "Fällig am",
-        from: "Rechnungssteller", to: "Rechnungsempfänger" },
+        from: "Rechnungssteller", to: "Rechnungsempfänger",
+        converted: "Umrechnungskurs:", payIn: "Zahlbar in",
+        convBasis: "Der Steuerbetrag ist gemäß § 16 Abs. 6 UStG zusätzlich in Euro angegeben." },
   en: { invoice: "Invoice", number: "Invoice number", issueDate: "Invoice date",
         supplyDate: "Date of supply", supplyPeriod: "Period of supply", vatId: "VAT ID",
         taxNumber: "Tax number", description: "Description", qty: "Qty", unit: "Unit price",
         rate: "VAT", amount: "Amount", net: "Net", vat: "VAT", gross: "Total",
         terms: "Payment terms", bank: "Bank details", po: "Purchase order", due: "Due",
-        from: "From", to: "To" },
+        from: "From", to: "To",
+        converted: "Rate of exchange:", payIn: "Payable in",
+        convBasis: "The tax amount is also stated in euro, as § 16 Abs. 6 UStG requires." },
 };
 
 const addressOf = (p) => [
@@ -207,6 +215,10 @@ function renderIssued(inv) {
   ].filter(Boolean);
 
   const exempt = d.vatTreatment?.kind === "exempt";
+  /** The document's own currency, and its euro restatement when it has one.
+   *  Rows issued before invoices could be denominated in anything are EUR. */
+  const cur = d.currency ?? "EUR";
+  const conv = d.conversion;
 
   return `
   <div class="sheet" id="sheet">
@@ -252,12 +264,22 @@ function renderIssued(inv) {
     </table>
 
     <div class="totals"><table>
-      <tr><td>${esc(lab("net"))}</td><td class="num">${money(d.netCents)}</td></tr>
+      <tr><td>${esc(lab("net"))}</td><td class="num">${money(d.netCents, cur)}</td></tr>
       ${(d.buckets ?? []).filter((b) => b.rate > 0).map((b) =>
-        `<tr><td>${esc(lab("vat"))} ${b.rate} % ${esc(bilingual ? "auf / on" : "auf")} ${money(b.netCents)}</td>
-             <td class="num">${money(b.vatCents)}</td></tr>`).join("")}
-      <tr class="grand"><td>${esc(lab("gross"))}</td><td class="num">${money(d.grossCents)}</td></tr>
+        `<tr><td>${esc(lab("vat"))} ${b.rate} % ${esc(bilingual ? "auf / on" : "auf")} ${money(b.netCents, cur)}</td>
+             <td class="num">${money(b.vatCents, cur)}</td></tr>`).join("")}
+      <tr class="grand"><td>${esc(lab("gross"))}</td><td class="num">${money(d.grossCents, cur)}</td></tr>
+      ${conv ? `
+      <tr class="conv"><td colspan="2">${esc(lab("converted"))} 1 ${esc(conv.to)} = ${esc(conv.rate.toLocaleString("de-DE", { maximumFractionDigits: 6 }))} ${esc(conv.from)}
+        <span class="basis">${esc(conv.rateProvider)}${conv.rateAsOf && conv.rateAsOf !== "unknown" ? `, ${esc(conv.rateAsOf)}` : ""}</span></td></tr>
+      ${(conv.buckets ?? []).filter((b) => b.rate > 0).map((b) =>
+        `<tr><td>${esc(lab("vat"))} ${b.rate} % ${esc(bilingual ? "in / in" : "in")} ${esc(conv.to)}</td>
+             <td class="num">${money(b.vatCents, conv.to)}</td></tr>`).join("")}
+      <tr><td>${esc(lab("gross"))} ${esc(bilingual ? "in / in" : "in")} ${esc(conv.to)}</td><td class="num">${money(conv.grossCents, conv.to)}</td></tr>
+      ` : ""}
     </table></div>
+    ${conv ? `<div class="vat-note"><div>${esc(lab("payIn"))} ${money(conv.grossCents, conv.to)}.</div>
+      <div class="basis">${esc(lab("convBasis"))}</div></div>` : ""}
 
     ${d.vatNote ? `<div class="vat-note"><div>${esc(d.vatNote)}</div>
       ${d.vatTreatment?.reason ? `<div class="basis">${esc(reasonBasis(d.vatTreatment.reason))}</div>` : ""}</div>` : ""}
