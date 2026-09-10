@@ -298,3 +298,75 @@ wrongly is worse than no file, whereas the CSV import is transactions only.
   gain absent rather than zero when the basis is unknown, because zero would be
   a claim. A bank feed flattens all of that into one euro number. Ask them what
   they want to see before deciding which fields to send.
+
+## Plan
+
+Five stages. Each ends in something provable, and the order is chosen so the
+work that needs nobody's permission happens while the questions are out.
+
+**Stage 0 — the three questions, sent today.** They cost nothing and one of
+them can delete a whole stage.
+
+- To WeLoveAccounting: do you already import MT-940 for clients whose banks
+  are not connectable? If yes, the bank lane needs no more than stage 1.
+- To WeLoveAccounting: how do you want a USDC receipt and a wallet-to-wallet
+  EURe movement booked? Their answer decides which fields we send, and it is
+  an accounting judgement, not ours.
+- To GetMyInvoices support: does the Lexware Office export carry bank
+  transactions, or documents only? Their help pages are written for end users
+  and are not a specification.
+
+Also needed from the user, and worth starting now because it may involve the
+accountant's licence: a GetMyInvoices account with API access, and one custom
+bank account created in their UI. There is no endpoint that creates one.
+
+**Stage 1 — the bank lane, offline and provable.** Port `mapping.ts` from
+`sevdesk-monerium` and write a GetMyInvoices client beside the existing
+adapters. Monerium orders and on-chain transfers become transactions; the
+handover state records what has already been pushed so a re-run is safe.
+Ships with `npm run gmi:test` against a stub, wired into `check.ts` like every
+other suite. No credential, no chain, no network. This is the largest piece
+and it is unblocked.
+
+**Stage 2 — server-side rendering of the invoice page.** The one real
+infrastructure decision in this plan, and it should be taken deliberately
+rather than absorbed. There are no PDF bytes anywhere today, and the document
+lane cannot start without them. Render the existing page headlessly so the
+pushed document is byte-identical to the one the customer received, rather
+than adding a second generator that can drift from it. It is a new heavyweight
+dependency in the deployment, which is the argument against, and the argument
+for is that the alternative puts two renderings of one legal document into the
+world.
+
+**Stage 3 — the document lane.** Push outgoing invoices, then receipts and
+statements. Per-org GetMyInvoices API key, encrypted at rest with a new
+`crypto-at-rest` purpose, exactly as the Monerium API-keys connector already
+does — the same route shape, the same refusal to store a pair before it has
+been verified, the same stripping from every response. Without a key the
+feature reports `unavailable` in `/api/health` capabilities and every route
+refuses, as Shopify and the Monerium connector already do. Incoming invoices
+wait on the supplier file-upload question and are out of scope until it is
+answered.
+
+**Stage 4 — the matching, which is the reason for all of it.** Assign the
+pushed document to the pushed transaction using the transfer-to-invoice link
+we already hold. Only meaningful once stages 1 and 3 both run.
+
+**Stage 5 — prove it against one real account, one period.** Nothing above
+this line has touched a real credential. Expect to find bugs here; the Shopify
+and anchor work both did. Until this stage runs, the feature is described as
+built and unproven, and the dashboard says so.
+
+### Two notes for whoever picks this up
+
+**It does not breach the invoicing boundary.** That boundary says Zold pays
+from an invoice and keeps the record, while invoicing software creates,
+chases and books. Exporting a record we already hold to the customer's
+accountant is keeping the record and handing it over. It is not chasing and
+not booking, and this plan must not grow into either.
+
+**Where it lives: in this repo, not a sibling.** `sevdesk-monerium` is
+standalone because it needs only Monerium and a chain. This needs
+`invoice.payment.transferId`, which exists only here, and that link is the
+whole value of stage 4. Port the mapping rather than depending on the sibling
+repo.
