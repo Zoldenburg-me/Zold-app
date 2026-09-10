@@ -283,6 +283,57 @@ try {
   const stray = store.cryptoDeposits.find((d) => d.amountUsdc === 3.21)!;
   check("money nobody asked for is recorded as an ordinary deposit, attributed to no link", stray && !stray.paymentRequestId && store.findPaymentRequest(r1.id)!.payments.length === 1);
 
+  // ── a link raised FOR an invoice carries it all the way to the settlement ──
+  // The two events of a crypto-settled euro invoice (an asset acquired at its
+  // euro value on receipt, then disposed of) are only auditable if the deposit
+  // knows which invoice it paid. That used to need a human to link it by hand.
+  const orgId = randomUUID();
+  store.addOrganisation({
+    id: orgId, type: "personal", name: "Miriam Zoldenburg", plan: "starter",
+    reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "fifo" },
+    verifications: {}, createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  store.addMember({
+    id: randomUUID(), orgId, userId: miriam.id, email: miriam.email, role: "owner",
+    status: "active", createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  const mkInvoice = (over: any = {}) => {
+    const id = `inv_${randomUUID()}`;
+    store.addInvoice({
+      id, orgId, direction: "outgoing", state: "SUBMITTED", linkTokenHash: randomBytes(16).toString("hex"),
+      lines: [{ description: "Design work", quantity: "1", unitPrice: "25.00", amount: "25.00" }],
+      currency: "EUR", total: "25.00", createdByMemberId: "m", createdAt: nowIso, updatedAt: nowIso,
+      ...over,
+    } as any);
+    return id;
+  };
+
+  const theirs = mkInvoice();
+  const incoming = mkInvoice({ direction: "incoming" });
+  const settledAlready = mkInvoice({ state: "PAID" });
+  const otherOrg = mkInvoice({ orgId: randomUUID() });
+
+  const bad = async (invoiceId: string) =>
+    (await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 25, methods: ["crypto"], invoiceId }, miriam.id)).status;
+  check("a link cannot collect for an invoice from a supplier — that is a bill, paid from a draft", (await bad(incoming)) === 409);
+  check("nor for an invoice that is already settled — two live ways to pay one invoice is how it gets paid twice", (await bad(settledAlready)) === 409);
+  check("nor for another organisation's invoice", (await bad(otherOrg)) === 403);
+  check("nor for an invoice that does not exist", (await bad(`inv_${randomUUID()}`)) === 404);
+
+  const forInvoice = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 25, methods: ["crypto"], invoiceId: theirs }, miriam.id);
+  check("a link raised for an invoice the org issued is created and carries it", forInvoice.status === 201 && forInvoice.body.invoiceId === theirs, JSON.stringify(forInvoice.body));
+  const qInv = forInvoice.body.latestQuote.amountUsdc as number;
+  await mintUsdc(owner, qInv);
+  await pollCryptoDepositsOnce();
+  const dInv = store.cryptoDeposits.find((d) => d.paymentRequestId === forInvoice.body.id)!;
+  check("the invoice rides onto the deposit on attribution — nobody linked it by hand", dInv?.invoiceId === theirs, JSON.stringify({ id: dInv?.id, invoiceId: dInv?.invoiceId }));
+  const invAfter = store.findInvoice(theirs)!;
+  const st = (invAfter.settlements ?? [])[0];
+  check("and the settlement is recorded even though auto-convert is off, because acquiring the asset is itself the event the books need",
+    Boolean(st) && st.depositId === dInv.id && st.receivedAsset === "USDC" && st.receivedAmount === qInv, JSON.stringify(invAfter.settlements));
+  check("with no conversion and no realised gain — absent, not zero, because nothing has been disposed of yet",
+    st.conversionTxHash === undefined && st.realisedGainEur === undefined && st.receiptTxHash === dInv.txHash);
+
   const openReq = await call("POST", `/api/users/${miriam.id}/payment-requests`, { methods: ["crypto"], description: "tip jar" }, miriam.id);
   check("an open-amount link has no quote until the payer names an amount", openReq.status === 201 && openReq.body.amountEur === undefined && !openReq.body.latestQuote);
   const quoted = await call("POST", `/api/pay/miriam/${openReq.body.code}/quote`, { amountEur: 12 });
@@ -330,7 +381,8 @@ try {
   check("and the sweep writes it down", swept2.expired === 1 && store.findPaymentRequest(soon.body.id)!.state === "EXPIRED");
 
   const list = await call("GET", `/api/users/${miriam.id}/payment-requests`, undefined, miriam.id);
-  check("the owner's list carries every link, newest first, with what the payee can offer", list.body.requests.length === 7 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt));
+  // 8, not 12: the four refused invoice links left no row behind.
+  check("the owner's list carries every link, newest first, with what the payee can offer — and nothing a refusal created", list.body.requests.length === 8 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt), `${list.body.requests.length}`);
 
   server.close();
   console.log(`\nPAYMENT REQUESTS TEST PASSED — ${passed} checks`);

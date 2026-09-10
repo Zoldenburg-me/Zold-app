@@ -751,3 +751,34 @@ record on, and the fix is small.
 Worth deciding at the same time: whether business orgs should default
 `autoConvert` on, with the prompt-conversion reasoning stated where the toggle
 lives rather than buried in a config comment.
+
+## DONE — the invoice now rides through to the settlement (10 Sep 2026)
+
+`npm run paylinks:test` is 78 checks, up from 70. Typecheck clean; convert,
+pay, shopify, shopify:orders, business, invoicing and draft all still pass.
+
+- **`PaymentRequest.invoiceId`.** A link can be raised for an invoice the org
+  ISSUED. Refused with a reason otherwise: a supplier's invoice is a bill and
+  is paid from a draft (409); one already settled is refused rather than given
+  a second live way to be paid, which is how an invoice gets paid twice (409);
+  another organisation's is 403; a missing one is 404. A refused creation
+  leaves no row behind, which the owner-list count asserts (8, not 12).
+- **It rides onto the deposit on attribution**, so the settlement is written by
+  the conversion itself. It never overwrites an id the deposit already carries:
+  a manual link is a deliberate act, and attribution is a guess by amount.
+- **Owner projection only.** The public page is an allowlist and an invoice id
+  has no business on a payer's page.
+- **The USDC branch now records too, and this was the bug that mattered.** With
+  auto-convert off — the default — a settled deposit wrote no invoice
+  settlement at all, so linking it would have achieved nothing. Settling in
+  USDC is still the event the books need: the receivable is discharged and the
+  asset is acquired at its euro value on receipt. The row carries no conversion
+  and no realised gain, absent rather than zero, because nothing has been
+  disposed of yet.
+- **A deposit straight to the Safe is written CONVERTED**, so its conversion is
+  over before attribution hands it an invoice. Recorded at that call site
+  rather than silently lost.
+
+NOT DONE, deliberately: no UI raises an invoice-linked payment link yet — the
+API takes `invoiceId` and nothing in the dashboard passes one. And auto-convert
+still defaults off, left alone on the user's call that Candide will cover it.
