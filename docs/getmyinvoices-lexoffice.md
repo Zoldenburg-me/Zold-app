@@ -544,3 +544,67 @@ Betriebsprüfer can all check it rather than trust it.
 in this document, and they are live defects in shipped code — do them first and
 on their own. Gap 3 waits for the server-side render, which now has a third
 reason to exist.
+
+## Should we be issuing invoices at all? — the honest answer
+
+Asked on 10 Sep 2026, after the three integrity gaps surfaced. It is the right
+question and it deserves a straight answer rather than a defence of work
+already done.
+
+**GetMyInvoices cannot make invoices.** It collects them — portals, mailboxes,
+scans. There is no creation endpoint in the spec and no such feature in the
+product. So that particular swap is not on the table.
+
+**Lexware Office can, and does it better than we will.** It creates invoices,
+numbers them, keeps them under GoBD, and already emits XRechnung and ZUGFeRD —
+the 2027 obligation that CLAUDE.md lists as the next real piece of invoicing
+work is, for them, shipped. The accountant already has it.
+
+### Correcting something I argued earlier in this document
+
+I wrote that an issued invoice "exists nowhere but here, so Zold is its only
+source, which is exactly why it is the half worth pushing." That is circular.
+It exists only here **because we generated it**. Issue it from Lexware Office
+and Lexware Office has it, and there is nothing for us to push. The argument
+justifies the integration only if the invoicing itself is already justified,
+and it cannot be used to justify the invoicing.
+
+### What is genuinely ours, whatever we decide
+
+- **Bank movements.** Monerium orders and on-chain EURe transfers. Nobody else
+  has these and no accounting product can derive them. This is the real
+  contribution and it is untouched by any of the above.
+- **Receipts, statements and payment records.** Payment pages, Shopify orders,
+  the whole `/v/<code>` family. These are already signed over a canonical
+  digest and re-verified on every visit, so they are *already* the thing the
+  invoices are not.
+
+### Recommendation
+
+**Cap the issued-invoice module. Do not deepen it.**
+
+1. **Fix gaps 1 and 2 anyway** — deletable issued invoices and non-unique
+   numbers. They are live defects, they are cheap, and a vanished invoice or a
+   duplicated number is harmful whatever the strategy turns out to be.
+2. **Do not build gap 3's archive-and-sign stack for invoices, and do not
+   chase EN 16931.** That road ends with us maintaining a German invoicing
+   product. Signing receipts was worth it because receipts are ours alone;
+   signing invoices is worth it only if we intend to compete here.
+3. **Push receipts and statements into GetMyInvoices, not invoices.** They are
+   already correct and already verifiable, and they are the documents the
+   accountant genuinely cannot get anywhere else.
+4. **Customers with an accountant should invoice from Lexware Office.** Zold
+   contributes the bank feed and the payment records, which is precisely what
+   the agreed boundary says: pay from an invoice, keep the record.
+5. **Say plainly what the module is for.** It serves someone with no accounting
+   software. It does not do e-invoicing and, under this recommendation, will
+   not. Nobody should plan a 2027 German B2B business on it, and the screen
+   should say so before they do.
+
+**This is only about OUTGOING invoices.** Invoice-Me and pay-from-invoice are
+untouched: a supplier filling in a form so the org can pay them is payment
+machinery, sits inside the boundary, and stays.
+
+The decision that needs taking, and it is the user's not ours: whether the
+issued-invoice module is capped as above, or sunset before the 2027 mandate
+makes keeping it a promise we have to fund.
