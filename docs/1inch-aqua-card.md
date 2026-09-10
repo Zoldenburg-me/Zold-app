@@ -154,7 +154,82 @@ strategy as collateral. That turns the card into a genuine credit product and
 Aqua into the collateral registry. Interesting, not for v1.
 
 
-## 6. What each party builds, and why the incumbent says yes
+## 6. Does an issuer allow this? Yes — and 1inch's own partner already sells it
+
+This was the first question asked of the proposal and it is the right one. The
+permission gate is already open, and the market has walked through it. Five live
+precedents, checked September 2026:
+
+- **Baanx — the company behind the 1inch Card — runs the MetaMask Card, and it
+  is non-custodial.** Funds stay in the user's wallet on Linea, the user sets the
+  spending caps, and a smart contract authorises at the terminal in under five
+  seconds. Baanx describes itself as the market leader in non-custodial cards,
+  offers **custodial and non-custodial as two options on the same platform**
+  across EVM and Solana, and shipped its first non-custodial on-chain card with
+  Tezos in 2024. Ledger, Exodus, Trust Wallet and 1inch all run Crypto Life cards
+  on that platform. **1inch is sitting on the custodial tier of a platform that
+  sells the non-custodial one.**
+- **Gnosis Pay** — a Visa card in the EEA spending from the user's own Safe on
+  Gnosis Chain, funded with Monerium EURe against a personal IBAN. That is Zold's
+  exact stack, in production, today.
+- **Kulipa** — for self-custodial wallets the issuer processor sends the
+  authorisation request and Kulipa moves the funds into an on-chain escrow, then
+  clears with the scheme. That is Tier A above, running on Visa and Mastercard.
+- **Rain** — a Visa principal member. Each customer gets a smart contract they own
+  and can withdraw from; Rain underwrites a credit line against that collateral.
+- **Immersve** — a Mastercard principal member, on-chain funding contracts,
+  permissionless withdrawal.
+
+So "will an issuer let a card spend from the user's own wallet" is settled. The
+real gates are different, and they are worth stating precisely because they are
+what the conversation is actually about:
+
+1. **You need a programme manager who has already built the non-custodial
+   authorisation path.** Short list, and Baanx is on it and already contracted
+   with 1inch. Nobody is inventing this from scratch with a bank.
+2. **Every one of them binds the card to the provider's own wallet, on the
+   provider's own chain.** MetaMask Card spends from a MetaMask smart account on
+   Linea. Gnosis Pay spends from a purpose-built Gnosis Pay Safe on Gnosis, which
+   shows as *view-only* in Safe{Wallet} because their modules own it. Rain spends
+   from a Rain contract, Immersve from their Funds Storage. **Today
+   "non-custodial" means: your keys, our wallet, our chain.**
+3. **Latency is answered, not open.** Under five seconds at the terminal, per
+   Baanx's own MetaMask material. That retires the biggest question in §5.
+4. **Regulatory position is unchanged.** The programme manager owns KYC and the
+   BIN sponsor owns the money leg. Non-custody moves neither.
+5. **Counterparty timing.** Exodus is acquiring Baanx for $175m, expected to close
+   in early 2026 subject to US, UK and EU approval. A conversation with Baanx in
+   2026 is a conversation with a company mid-acquisition.
+
+**Gate 2 is the hole, and it is where Aqua stops being a nice idea and becomes
+the differentiator.** Aqua is a neutral, ownerless registry deployed
+deterministically across thirteen-plus chains, and anything that can call it can
+grant against it — including a Safe the user already has, on a chain the user
+already uses. It is the one piece of this that 1inch owns outright and that no
+competitor can adopt without adopting 1inch's contract. The ask to Baanx is not
+"invent something". It is **"point the non-custodial authorisation path you
+already built for MetaMask at Aqua instead of at one wallet vendor's own
+framework."**
+
+**The security argument got sharper too.** On 1 June 2026 attackers exploited the
+Zodiac Delay and Roles modules on Gnosis Pay's card Safes; roughly $1.5m was
+extracted and Gnosis covered user losses. The root cause was a missing status
+check in a static call — in a module installed on the user's own wallet. Aqua
+installs nothing on the user's wallet. It holds an ERC-20 allowance and eighty
+lines of accounting with no owner, no pause and no upgrade path. That is a
+strictly smaller surface than the incumbent design, and there is now an incident
+to point at rather than an argument to make.
+
+**A fourth tier, and why we still prefer Tier A.** Gnosis Pay's Delay Module
+imposes a three-minute delay on the user's *non-card* transactions, which closes
+the double-spend race between an authorisation and the user's own outbound
+transfer without pulling anything at authorisation. Aqua has **no delay
+mechanism**, so that race is real and unhandled: either pull at authorisation
+(Tier A) or install a delay module and accept the surface that just cost Gnosis
+$1.5m. That is the reason Tier A is the default and not merely the safe choice.
+
+
+## 7. What each party builds, and why the incumbent says yes
 
 **1inch builds one contract: `CardApp.sol`.** No protocol change. Sketch, using
 the real interface:
@@ -233,7 +308,7 @@ leaves the ecosystem becomes aggregator flow. Cashback stops being a custodial
 credit and becomes a `push()` that expands the user's own limit.
 
 
-## 7. Five things Aqua does that are not swaps
+## 8. Five things Aqua does that are not swaps
 
 The user's constraint was "not a swap product". Each of these is a surface Zold
 already ships, where Aqua replaces a database promise with a chain-enforced one.
@@ -263,7 +338,7 @@ For completeness: Aqua as a *swap* venue drops into Zold's existing
 what this document is about.
 
 
-## 8. Verified, and not verified
+## 9. Verified, and not verified
 
 **VERIFIED on chain, Sep 2026, `eth_getCode` plus selector search in the deployed
 bytecode:**
@@ -293,10 +368,10 @@ bytecode:**
   Ltd — source-available, not open source. A CardApp built on it needs a
   licensing conversation. That gate is also the reason to open the conversation,
   which suits a pitch.
-- **No card network will let an unlicensed party sit in the authorization path.**
-  The `onlyProcessor` role is a licensed entity, and Tier A's latency budget is
-  theirs to confirm against their own stand-in rules. We cannot answer that from
-  outside.
+- **Latency for Tier A on *our* chains.** Baanx authorises the MetaMask Card in
+  under five seconds on Linea, so the shape is precedented — but nobody has run a
+  pull-at-authorisation against Aqua on Base or Gnosis. The `onlyProcessor` role
+  is a licensed entity and the budget is still theirs to confirm.
 - **Nothing here has run.** No CardApp exists. No `ship()` has been called from a
   Zold Safe. No authorization has ever been settled this way by anyone.
 - **Approval rate is a commercial risk even when it is not a loss.** A
@@ -312,13 +387,19 @@ bytecode:**
   directly. Confirm before quoting them back at them.
 
 
-## 9. The ask
+## 10. The ask
 
-One conversation, with three people in the room: Aqua's authors, whoever owns
-the card relationship at 1inch, and Monavate. The question on the table is
-whether the processor can tolerate Tier A's authorization latency. Everything
-else in this document follows from that one answer, and nothing else needs to be
-decided first.
+The question is no longer whether a card can spend from a wallet the user
+controls. Baanx answered that for MetaMask, Gnosis Pay answered it for Visa in
+the EEA on the same Monerium rail we already run, and Kulipa answered it by
+pulling into escrow at authorisation exactly as Tier A describes.
+
+The open question is narrower and it is commercial, not technical: **will Baanx
+point the non-custodial path they already sell at a registry 1inch owns and a
+wallet 1inch does not?** One conversation, three people in the room — Aqua's
+authors, whoever owns the card relationship at 1inch, and Baanx. Everything
+technical here is precedented. The only unprecedented part is the wallet being
+neutral, which is precisely the part 1inch would own.
 
 1inch advertised bounties of up to $100,000 for contributions on the Aqua
 developer release, and runs a separate Aqua security bounty on HackenProof. A

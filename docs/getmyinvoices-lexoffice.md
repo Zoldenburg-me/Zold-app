@@ -963,3 +963,69 @@ What it costs, from Candide's own docs and constraints:
 Widen the amount reservation to recently CLOSED requests, not only open ones.
 That removes failure 3 on its own, costs nothing, and is worth having even
 after per-request addresses land.
+
+## Pulling the funds instead — the strongest version, and what it costs
+
+Proposed 10 Sep 2026: only accept crypto through WalletConnect, and PULL the
+funds rather than waiting for a transfer. It does solve matching, and the best
+form of it is better than plain WalletConnect.
+
+**Use EIP-3009, not approve + transferFrom.** Circle's USDC implements
+`receiveWithAuthorization`: the payer signs an off-chain authorization naming
+the recipient, the value, a validity window, and a **32-byte nonce that WE
+choose**. No prior approval, no gas for them. Set that nonce from the payment
+request code and **the payment carries its own identifier** — attribution stops
+being inferred from the amount and becomes exact by construction. The `receive`
+variant additionally requires the caller to be the recipient, so the submission
+cannot be front-run.
+
+VERIFIED ON CHAIN today, with a control, because "the docs say USDC supports
+it" is a claim and not evidence:
+
+| token | `authorizationState(address,bytes32)` | verdict |
+|---|---|---|
+| USDC, Base mainnet | returns a bool | EIP-3009 present |
+| USDC, Base Sepolia | returns a bool | EIP-3009 present |
+| WETH, Base Sepolia (control) | returns `0x` | absent, as expected |
+| EURe, Base Sepolia (Monerium) | reverts | **absent** |
+
+So the trick works for USDC on both the chain we test on and the one we would
+ship on, and NOT for EURe — which is fine, because the pay page quotes USDC,
+but it means this is not a general answer for every asset we might accept.
+
+### What it costs, and this is the whole decision
+
+**It turns away exchange-funded buyers.** Someone holding USDC on Coinbase can
+only withdraw to an address; they cannot sign anything, ever. A pull-only page
+has nothing to offer them. That is not a technical gap to close later — it is
+the population the design excludes, and how big it is depends entirely on the
+merchant:
+
+- a crypto-native audience (the Keycard case) is mostly self-custody, and
+  pull-only would cost close to nothing;
+- a general Shopify store is not, and pull-only would silently lose orders that
+  currently complete.
+
+Three smaller costs, none decisive:
+
+- **We pay the gas**, and an authorization that fails on submit (funds moved,
+  window expired) costs us that gas for nothing. Simulate before submitting;
+  the nonce makes each authorization single-use anyway.
+- **Smart-contract wallets cannot sign one.** EIP-3009 verifies an ECDSA
+  signature, so a Safe-based payer falls back to a plain transfer — which is
+  the very case pull was meant to remove.
+- It does not touch the SEPA path, which is matched by memo and already works.
+
+### Recommendation
+
+**Make signed pull the primary path, and keep send-to-address as the fallback**
+— they are complementary rather than alternatives, and per-request forwarding
+addresses are what makes the fallback safe. On the pull path the amount no
+longer has to be unique, so the micro-unit nudge and most of the amount-matching
+machinery simply do not apply, which is a real simplification of the code that
+is hardest to reason about today.
+
+Going pull-ONLY is defensible for a crypto-native merchant and is a commercial
+decision rather than a technical one. It should be taken with the exchange
+question answered — ask a merchant what their buyers actually use — not on the
+appeal of having one code path.
