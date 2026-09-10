@@ -782,3 +782,46 @@ pay, shopify, shopify:orders, business, invoicing and draft all still pass.
 NOT DONE, deliberately: no UI raises an invoice-linked payment link yet — the
 API takes `invoiceId` and nothing in the dashboard passes one. And auto-convert
 still defaults off, left alone on the user's call that Candide will cover it.
+
+## DONE — invoices in any currency, settled in euro, payable in crypto (10 Sep 2026)
+
+`npm run invoicing:test` 40 -> 48, `npm run paylinks:test` 78 -> 81. business,
+draft and documents unchanged and passing. The A4 sheet was rendered in a
+browser against a USD fixture and checked for `CSS1Compat`, dark-on-white and
+no horizontal scroll.
+
+**Denomination.** The issue route no longer hardcodes euro. `currency` on the
+draft is normalised and frozen onto `issued`, so an invoice keeps saying what
+it said. A currency with no cents (JPY) or three (KWD) is REFUSED by name,
+because everything here computes in integer hundredths and applying that to
+those would be wrong by a factor of a hundred or ten, silently, on a tax
+document.
+
+**§ 16 Abs. 6 UStG is why the euro column is not optional.** A German invoice
+may state its amounts in a foreign currency, but the TAX amount must also be
+given in euro, and an invoice without it costs the RECIPIENT their input-tax
+deduction. So the restatement is computed at issue, frozen with the rate, its
+provider and its date, and PRINTED. A rate feed that is unavailable leaves the
+conversion absent and `checkCompliance` then refuses the invoice — the failure
+is a refusal, never a document with a missing column.
+
+Converted PER RATE BUCKET and summed, never by converting the totals: net plus
+tax has to equal gross in both currencies, and two independently rounded totals
+do not reliably agree. Same discipline the VAT rounding already used.
+
+**An EU issuer is told what this is not.** A non-euro member state converts into
+its own currency under its own rules, and we encoded Germany, not 26 others. So
+under EU the euro figure is shown and the gap is named in `notVerified`; the
+German paragraph is never cited at a Polish entity.
+
+**Settlement and crypto.** A payment link raised for an invoice collects the
+euro amount FROZEN on the document, not today's rate — the customer agreed to
+pay what they were shown. A different amount is refused: a €10 link against a
+€1,000 invoice would mark it paid in full for a hundredth of the money. A short
+payment is still recorded as partial by the ordinary matching, so instalments
+are unaffected. The existing crypto quote then runs off that euro figure, which
+is what makes a dollar invoice payable in USDC.
+
+NOT DONE: no UI raises the link from the invoice screen yet — the field is
+there, the button is not. And the invoice page still shows bank details only,
+so a payer sees crypto on the pay page rather than on the document.

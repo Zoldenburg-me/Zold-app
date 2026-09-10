@@ -427,6 +427,123 @@ export interface Party {
   taxNumber?: string;
 }
 
+/**
+ * Denominating an invoice in something other than the settlement currency.
+ *
+ * The invoice may be written in the customer's currency; the money still
+ * arrives in euro (or as USDC quoted from euro), because that is the only rail
+ * that exists. So a foreign-currency invoice carries BOTH: its own face
+ * amounts, and the euro restatement, at a rate frozen when it was issued.
+ *
+ * § 16 Abs. 6 UStG is the reason this is not merely a convenience. A German
+ * invoice may state its amounts in a foreign currency, but the TAX AMOUNT must
+ * also be given in euro. An invoice denominated in dollars showing only a
+ * dollar tax figure is missing something the law requires, and the damage lands
+ * on the recipient's input-tax deduction, not on the issuer. So the conversion
+ * is computed and printed, and a currency we cannot price is REFUSED rather
+ * than issued without it.
+ */
+
+/**
+ * Currencies whose minor unit is not 1/100.
+ *
+ * Everything here computes in integer minor units at two decimals. Applying
+ * that to a currency with none (JPY) or three (KWD) would be wrong by a factor
+ * of a hundred or ten, silently, on a tax document. Refused by name instead —
+ * the list does not need to be exhaustive to be safe, because anything it does
+ * not know is still checked against the rate feed and these are the codes a
+ * user is plausibly going to reach for.
+ */
+export const NON_CENTESIMAL_CURRENCIES: Record<string, number> = {
+  JPY: 0, KRW: 0, VND: 0, CLP: 0, ISK: 0, HUF: 0, TWD: 0, PYG: 0, RWF: 0,
+  UGX: 0, XAF: 0, XOF: 0, XPF: 0, DJF: 0, GNF: 0, KMF: 0, VUV: 0,
+  BHD: 3, IQD: 3, JOD: 3, KWD: 3, LYD: 3, OMR: 3, TND: 3,
+};
+
+const CURRENCY_RE = /^[A-Z]{3}$/;
+
+/** The currency an invoice is settled and taxed in. Everything converts to it. */
+export const SETTLEMENT_CURRENCY = "EUR";
+
+/**
+ * Normalise and refuse what we cannot represent.
+ *
+ * Refusing loudly here is the point: an unpriceable or non-centesimal currency
+ * that slipped through would produce a document with wrong numbers on it, and
+ * a wrong tax document is worse than no document.
+ */
+export function normaliseInvoiceCurrency(raw: unknown): string {
+  const code = String(raw ?? "").trim().toUpperCase();
+  if (!code) return SETTLEMENT_CURRENCY;
+  if (!CURRENCY_RE.test(code)) {
+    throw new InvoiceComplianceError(`"${code}" is not a three-letter currency code.`);
+  }
+  const minor = NON_CENTESIMAL_CURRENCIES[code];
+  if (minor !== undefined) {
+    throw new InvoiceComplianceError(
+      `${code} is written with ${minor} decimal places and this invoice builder works in ` +
+        `hundredths. Issuing in ${code} would put wrong figures on a tax document, so it is ` +
+        `refused rather than approximated.`,
+    );
+  }
+  return code;
+}
+
+export interface InvoiceConversion {
+  /** The invoice's own currency. */
+  from: string;
+  /** Always the settlement currency; named so the document can say it. */
+  to: string;
+  /** Units of `from` per 1 `to` — the shape the rate feed publishes. */
+  rate: number;
+  rateProvider: string;
+  rateAsOf: string;
+  /** The same totals in `to`, minor units. */
+  netCents: number;
+  vatCents: number;
+  grossCents: number;
+  buckets: VatBucket[];
+}
+
+/**
+ * Restate totals in the settlement currency.
+ *
+ * Converted PER RATE BUCKET and summed, never by converting the totals — the
+ * same discipline `computeTotals` applies to VAT rounding, and for the same
+ * reason: net plus tax has to equal gross in both currencies, and two
+ * independently rounded totals do not reliably agree.
+ */
+export function convertTotals(
+  totals: InvoiceTotals,
+  from: string,
+  rate: number,
+  rateProvider: string,
+  rateAsOf: string,
+): InvoiceConversion {
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new InvoiceComplianceError(`The ${from} rate is not a positive number.`);
+  }
+  const conv = (minor: number) => Math.round(minor / rate);
+  const buckets = totals.buckets.map((b) => ({
+    rate: b.rate,
+    netCents: conv(b.netCents),
+    vatCents: conv(b.vatCents),
+  }));
+  const netCents = buckets.reduce((s, b) => s + b.netCents, 0);
+  const vatCents = buckets.reduce((s, b) => s + b.vatCents, 0);
+  return {
+    from,
+    to: SETTLEMENT_CURRENCY,
+    rate,
+    rateProvider,
+    rateAsOf,
+    netCents,
+    vatCents,
+    grossCents: netCents + vatCents,
+    buckets,
+  };
+}
+
 export interface InvoiceDraft {
   number?: string;
   issueDate?: string;
@@ -441,6 +558,11 @@ export interface InvoiceDraft {
   discountNote?: string;
   /** Set for a self-billed invoice; the word "Gutschrift" then becomes mandatory. */
   selfBilled?: boolean;
+  /** ISO 4217. Defaults to the settlement currency. */
+  currency?: string;
+  /** The settlement-currency restatement, resolved before the check runs. Its
+   *  ABSENCE on a foreign-currency invoice is itself a compliance error. */
+  conversion?: InvoiceConversion;
 }
 
 export type IssueSeverity = "error" | "warning";
@@ -497,6 +619,8 @@ export function checkCompliance(
 ): ComplianceReport {
   const totals = computeTotals(draft.lines, draft.treatment);
   const issues: ComplianceIssue[] = [];
+  /** The jurisdiction's own named gaps, plus any this invoice adds. */
+  const notVerified = [...jur.notVerified];
   const add = (
     severity: IssueSeverity,
     field: string,
@@ -530,6 +654,43 @@ export function checkCompliance(
     : kleinbetrag
       ? "kleinbetrag"
       : "standard";
+
+  /**
+   * Foreign currency: the tax amount must ALSO be stated in euro.
+   *
+   * § 16 Abs. 6 UStG for a German issuer. The consideration may be written in
+   * the customer's currency, but the tax figure has to appear in euro too, and
+   * an invoice that omits it costs the RECIPIENT their input-tax deduction —
+   * the same asymmetry that makes every other § 14 field an error rather than a
+   * warning. We compute the restatement before this runs, so the check is that
+   * it actually arrived: a rate feed that was unavailable must stop the invoice,
+   * not produce one with a missing euro column.
+   *
+   * Under EU the euro figure is still shown, but the conversion a non-euro
+   * member state requires is its own and we have not encoded 26 of them — so it
+   * is reported as a gap rather than presented as satisfied. Under GENERIC no
+   * tax claim is made at all.
+   */
+  const currency = draft.currency ?? SETTLEMENT_CURRENCY;
+  if (currency !== SETTLEMENT_CURRENCY) {
+    if (!draft.conversion) {
+      add(
+        "error",
+        "currency",
+        `This invoice is written in ${currency}, so the tax amount must also be shown in ` +
+          `${SETTLEMENT_CURRENCY} — and no rate was available to work it out. It has not been issued.`,
+        basis("§ 16 Abs. 6 UStG", "Art. 230 VAT Directive"),
+      );
+    } else if (draft.conversion.from !== currency) {
+      add("error", "currency", `The ${SETTLEMENT_CURRENCY} restatement was computed from ${draft.conversion.from}, not ${currency}.`);
+    }
+    if (jur.ruleSet === "EU") {
+      notVerified.push(
+        `conversion into a non-euro member state's own currency — only the ${SETTLEMENT_CURRENCY} ` +
+          "restatement is computed, and national conversion rules are not encoded",
+      );
+    }
+  }
 
   // ── Always required, in every regime ─────────────────────────────────────
   if (!has(draft.issuer.name)) {
@@ -747,7 +908,7 @@ export function checkCompliance(
       ruleSet: jur.ruleSet,
       verification: jur.verification,
       basis: jur.basis,
-      notVerified: jur.notVerified,
+      notVerified,
     },
     issues,
     errors,

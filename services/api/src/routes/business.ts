@@ -46,14 +46,19 @@ import {
   paymentReference,
 } from "../domain/invoices.js";
 import { CoaError, applyRules, TX_TYPES, validateChartAccount } from "../domain/coa.js";
+import { midRates } from "../rates.js";
 import {
   DEFAULT_DISPLAY,
   DEFAULT_SERIES,
   EXEMPTION_REASONS,
   InvoiceComplianceError,
+  SETTLEMENT_CURRENCY,
   checkCompliance,
+  computeTotals,
+  convertTotals,
   formatInvoiceNumber,
   fromCents,
+  normaliseInvoiceCurrency,
   normaliseVatId,
   reasonForRuleSet,
   taxNumberLooksValid,
@@ -137,6 +142,8 @@ function draftDueDate(org: Organisation, issueDate: string): string | undefined 
  */
 function draftFrom(org: Organisation, body: Record<string, any>): InvoiceDraft {
   const inv = org.invoicing ?? {};
+  // Refuses an unrepresentable code before anything else is computed.
+  const currency = normaliseInvoiceCurrency(body.currency);
   const jur = jurisdictionFor(org.address?.country);
   const custom = customReasonsOf(org);
   const known = (id: string) =>
@@ -228,7 +235,39 @@ function draftFrom(org: Organisation, body: Record<string, any>): InvoiceDraft {
     lines: Array.isArray(body.lines) ? body.lines : [],
     treatment,
     selfBilled: body.selfBilled === true,
+    currency,
   };
+}
+
+/**
+ * Attach the settlement-currency restatement to a foreign-currency draft.
+ *
+ * The rate is fetched ONCE, here, and frozen onto the document: an invoice is a
+ * statement about a moment, and a euro figure re-derived later from whatever a
+ * feed says then is not the figure the customer was given. A feed that is
+ * unavailable leaves the conversion absent, and `checkCompliance` then refuses
+ * the invoice — which is the right outcome, because § 16 Abs. 6 wants the euro
+ * tax amount and we would otherwise be issuing without it.
+ */
+async function withConversion(draft: InvoiceDraft): Promise<InvoiceDraft> {
+  const currency = draft.currency ?? SETTLEMENT_CURRENCY;
+  if (currency === SETTLEMENT_CURRENCY) return draft;
+  let totals;
+  try {
+    totals = computeTotals(draft.lines, draft.treatment);
+  } catch {
+    // Lines that do not compute are reported by checkCompliance in its own
+    // words; converting nothing is not this function's problem to describe.
+    return draft;
+  }
+  try {
+    const rates = await midRates();
+    const rate = rates.eur[currency];
+    if (!rate) return draft;
+    return { ...draft, conversion: convertTotals(totals, currency, rate, rates.provider, rates.asOf) };
+  } catch {
+    return draft;
+  }
 }
 
 const badRequest = (res: express.Response, err: unknown) => {
@@ -1242,15 +1281,25 @@ export function createBusinessRouter(
    * The editor calls this as the user types, so the missing-field list appears
    * while it can still be fixed rather than at the moment of issuing.
    */
-  r.post("/:orgId/invoicing/check", (req, res) => {
+  r.post("/:orgId/invoicing/check", async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.read")) return;
     try {
-      const draft = draftFrom(ctx.org, req.body ?? {});
+      // Converted here too, or the live panel would show a missing-euro-amount
+      // error against every foreign-currency draft while it is being typed.
+      const draft = await withConversion(draftFrom(ctx.org, req.body ?? {}));
       const report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
-      res.json({ ...report, preview: { number: draft.number, totals: report.totals } });
+      res.json({
+        ...report,
+        preview: {
+          number: draft.number,
+          totals: report.totals,
+          currency: draft.currency ?? SETTLEMENT_CURRENCY,
+          ...(draft.conversion ? { conversion: draft.conversion } : {}),
+        },
+      });
     } catch (err) {
       if (err instanceof InvoiceComplianceError) {
         return res.status(400).json({ error: err.message });
@@ -1266,7 +1315,7 @@ export function createBusinessRouter(
    * acceptance is recorded on the document — "we told you and you said yes" is
    * only meaningful if it is written down.
    */
-  r.post("/:orgId/invoicing/issue", (req, res) => {
+  r.post("/:orgId/invoicing/issue", async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
@@ -1274,7 +1323,7 @@ export function createBusinessRouter(
 
     let draft;
     try {
-      draft = draftFrom(ctx.org, req.body ?? {});
+      draft = await withConversion(draftFrom(ctx.org, req.body ?? {}));
     } catch (err) {
       if (err instanceof InvoiceComplianceError) {
         return res.status(400).json({ error: err.message });
@@ -1315,7 +1364,7 @@ export function createBusinessRouter(
         unitPrice: l.unitPriceNet,
         amount: fromCents(l.netCents),
       })),
-      currency: "EUR",
+      currency: draft.currency ?? SETTLEMENT_CURRENCY,
       total: fromCents(report.totals.grossCents),
       dueDate: draftDueDate(ctx.org, draft.issueDate!),
       supplier: {
@@ -1336,6 +1385,10 @@ export function createBusinessRouter(
         vatCents: report.totals.vatCents,
         grossCents: report.totals.grossCents,
         buckets: report.totals.buckets,
+        // The document's own currency, and its settlement-currency restatement
+        // at the rate that was live when it was issued. Frozen, never re-derived.
+        currency: draft.currency ?? SETTLEMENT_CURRENCY,
+        ...(draft.conversion ? { conversion: draft.conversion } : {}),
         purchaseOrder: str(req.body?.purchaseOrder),
         paymentTerms: str(req.body?.paymentTerms) ?? ctx.org.invoicing?.paymentTermsNote,
         notes: str(req.body?.notes),
