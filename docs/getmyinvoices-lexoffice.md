@@ -168,3 +168,72 @@ API with a real key. The endpoint names and field lists above are read from
 the live specification and can be relied on; the claim that the Lexware Office
 sync is documents-only is read from vendor help pages and should be confirmed
 with GMI support before it is designed around.
+
+## Does the invoicing module need to change? — yes, in three places
+
+Checked against the code on 10 Sep 2026, not from memory.
+
+**1. We produce no file, and that is the only real blocker.**
+`POST /documents` requires `fileName` and base64 `fileContent`. Our invoice is
+an HTML page that the *browser* prints; `documents.ts` says so outright ("the
+page is the record; the PDF is its print") and there is no PDF library and no
+PDF generation anywhere in `services/api/src`. So there are no bytes to send.
+
+The fix that agrees with the decision already taken is to render the same page
+headlessly and push that print, so the pushed document is the one the customer
+received rather than a second rendering that could drift from it. Reaching for
+a PDF library instead would give us two generators of the same document, which
+is how the copy in the accountant's books stops matching the copy in the
+customer's inbox.
+
+**2. Incoming invoices carry no VAT and no supplier document.**
+The Invoice-Me line is `{description, quantity, unitPrice, amount}` — there is
+no tax rate on it anywhere, and `Invoice` has no attachment field at all. So
+for an incoming invoice we hold neither the rate the bookkeeper needs to book
+it nor the supplier's own PDF. Anything we pushed would be a Zold-rendered
+representation of someone else's invoice, which is not the document §14 makes
+the supplier responsible for and not what the recipient's Vorsteuerabzug hangs
+on.
+
+Two honest ways out, and the first is small:
+
+- add a file upload to the supplier's Invoice-Me form, so we hold *their*
+  document and push that. This is what makes the incoming lane worth having at
+  all, given the accountant's entire GetMyInvoices setup exists to collect
+  incoming invoices.
+- or push only outgoing invoices and let their existing email and portal
+  collection catch the incoming ones, which it already does well.
+
+Do not paper over it by pushing the form rendering and letting OCR fill in a
+rate. That puts a number nobody checked into someone's tax return.
+
+**3. Mapping details, none of which need a model change.**
+
+- `direction` lands on their enum directly: `outgoing` → `SALES_INVOICE`,
+  `incoming` → `INCOMING_INVOICE`. Both exist, along with `CREDIT_NOTE`,
+  `RECEIPT` and `STATEMENT` for the account documents.
+- Use `taxRates`, not `vat`. Their spec says `vat` "will be deprecated soon".
+- `issued.buckets` is already the per-rate split they want. Nothing to add;
+  §14 Abs. 4 Nr. 8 made us compute it anyway.
+- Their `lineItems` example uses plain numbers (`unit_net_price: 200`). We
+  hold integer cents and round VAT once per rate bucket precisely so the total
+  does not drift. Send exact decimals and check their echoed `grossAmount`
+  against our `grossCents` rather than trusting the round trip.
+- Send `runOCR: false` wherever we know the figures. Letting OCR re-derive a
+  total we hold exactly is how a one-cent disagreement gets into the books.
+- Counterparties map to their `/companies` resource, which has a create
+  endpoint, so `issued.recipient` becomes a company id rather than free text.
+
+## One thing worth knowing about e-invoicing
+
+Their download endpoint offers `ORIGINAL`, `EMBEDDED-XML`, `CII-XML` and
+`UBL-XML`, and will embed ZUGFeRD/Factur-X XML "even if the original PDF was
+not ZUGFeRD-compliant". Their upload's own `fileName` example is an XRechnung
+XML. So GetMyInvoices both accepts and manufactures the EN 16931 formats that
+CLAUDE.md lists as the next real piece of invoicing work, with the obligation
+to *issue* phasing in from 2027.
+
+That is not a free pass. We are the issuer of record, and XML a third party
+derived from fields it extracted is not the same artifact as an e-invoice we
+issued. Worth one question to GetMyInvoices about whether their conversion is
+meant to be relied on that way. Worth nothing more until they answer.
