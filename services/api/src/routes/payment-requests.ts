@@ -99,14 +99,51 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
  * merchant integrations (Shopify), which is why it is exported: one code path
  * decides what a request looks like.
  */
+/**
+ * May this request collect for this invoice?
+ *
+ * Only an invoice the payee's own organisation ISSUED. Collecting against
+ * someone else's invoice would attach a stranger's payment to their books, and
+ * collecting against an incoming one is backwards — that is a bill to pay, and
+ * paying it is a draft, not a payment link.
+ *
+ * An invoice already settled is refused rather than quietly given a second
+ * collection route: two live ways to pay one invoice is how it gets paid twice.
+ */
+function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined): void {
+  const invoice = store.findInvoice(invoiceId);
+  if (!invoice) throw new PaymentRequestError("no such invoice", 404);
+  if (!orgId || invoice.orgId !== orgId) {
+    throw new PaymentRequestError("that invoice belongs to another organisation", 403);
+  }
+  if (invoice.direction !== "outgoing") {
+    throw new PaymentRequestError(
+      "that is an invoice from a supplier, not one you issued — pay it from a draft instead",
+      409,
+    );
+  }
+  if (invoice.state === "DELETED") throw new PaymentRequestError("that invoice was deleted", 409);
+  if (invoice.state === "PAID" || invoice.state === "RECONCILED") {
+    throw new PaymentRequestError("that invoice is already settled", 409);
+  }
+}
+
 export async function createPaymentRequest(
   user: User,
-  input: { amountEur?: number; description?: string; methods: ("crypto" | "bank")[]; expiresAt: string; test?: boolean },
+  input: {
+    amountEur?: number;
+    description?: string;
+    methods: ("crypto" | "bank")[];
+    expiresAt: string;
+    test?: boolean;
+    invoiceId?: string;
+  },
   source: PaymentRequestSource,
   orgId?: string,
 ): Promise<PaymentRequest> {
   const handle = user.paymentPage?.handle;
   if (!handle) throw new PaymentRequestError("claim a payment page before creating a payment link", 409);
+  if (input.invoiceId) assertInvoiceCollectable(input.invoiceId, orgId);
   const now = new Date().toISOString();
   let code = newRequestCode();
   while (store.findPaymentRequestByCode(code)) code = newRequestCode();
@@ -122,6 +159,7 @@ export async function createPaymentRequest(
     methods: input.methods,
     state: "OPEN",
     ...(input.test ? { test: true } : {}),
+    ...(input.invoiceId ? { invoiceId: input.invoiceId } : {}),
     cryptoQuotes: [],
     payments: [],
     source,
@@ -354,7 +392,16 @@ export function attributeDepositToRequest(deposit: CryptoDeposit): PaymentReques
     ...(settled && deposit.settlementAsset === "USDC" ? { settledEur: deposit.receipt?.amountEur, settledAsset: "USDC" } : {}),
     at: deposit.receipt?.blockTimestamp ?? deposit.detectedAt,
   });
-  store.updateCryptoDeposit(deposit.id, { paymentRequestId: saved.id });
+  /**
+   * Carry the invoice onto the deposit, so the settlement record is written by
+   * the conversion itself rather than waiting for someone to link it by hand.
+   * Never overwrite one the deposit already carries: a manual link is a
+   * deliberate act and this attribution is a guess by amount.
+   */
+  store.updateCryptoDeposit(deposit.id, {
+    paymentRequestId: saved.id,
+    ...(saved.invoiceId && !deposit.invoiceId ? { invoiceId: saved.invoiceId } : {}),
+  });
   return saved;
 }
 
