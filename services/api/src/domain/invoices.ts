@@ -170,6 +170,26 @@ export function isOverdue(invoice: Invoice, now = new Date()): boolean {
 
 /** Deletion is legal only while nobody has been paid, and never after submit
  *  once a payment is in flight. */
+/**
+ * What this invoice is payable as, in the settlement currency.
+ *
+ * An invoice written in dollars is still collected in euro or in USDC quoted
+ * from euro, because that is the only rail there is. The euro figure is the one
+ * FROZEN at issue, never recomputed from today's rate: the customer agreed to
+ * pay what the document told them, and re-deriving it later would quietly move
+ * the amount due between the invoice being read and being paid.
+ *
+ * Returns undefined for an invoice that was never issued through the outgoing
+ * path, which therefore has no frozen figures to collect against.
+ */
+export function payableEur(invoice: Invoice): number | undefined {
+  const issued = invoice.issued;
+  if (!issued) return undefined;
+  const cents = issued.conversion ? issued.conversion.grossCents : issued.grossCents;
+  if (!Number.isFinite(cents)) return undefined;
+  return Math.round(cents) / 100;
+}
+
 export function assertDeletable(invoice: Invoice) {
   if (invoice.payment?.transferId || invoice.payment?.paidAt) {
     throw new InvoiceError(

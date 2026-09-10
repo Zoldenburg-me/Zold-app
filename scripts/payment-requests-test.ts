@@ -297,13 +297,21 @@ try {
     id: randomUUID(), orgId, userId: miriam.id, email: miriam.email, role: "owner",
     status: "active", createdAt: nowIso, updatedAt: nowIso,
   } as any);
-  const mkInvoice = (over: any = {}) => {
+  const issuedSnapshot = (grossCents: number, over: any = {}) => ({
+    number: "RE-2026-0001", issueDate: nowIso.slice(0, 10),
+    issuer: { name: "Miriam Zoldenburg" }, recipient: { name: "A Customer" },
+    vatTreatment: { kind: "exempt", reason: "kleinunternehmer" },
+    netCents: grossCents, vatCents: 0, grossCents,
+    buckets: [{ rate: 0, netCents: grossCents, vatCents: 0 }],
+    currency: "EUR", ...over,
+  });
+  const mkInvoice = (over: any = {}, issued: any = issuedSnapshot(2500)) => {
     const id = `inv_${randomUUID()}`;
     store.addInvoice({
       id, orgId, direction: "outgoing", state: "SUBMITTED", linkTokenHash: randomBytes(16).toString("hex"),
       lines: [{ description: "Design work", quantity: "1", unitPrice: "25.00", amount: "25.00" }],
       currency: "EUR", total: "25.00", createdByMemberId: "m", createdAt: nowIso, updatedAt: nowIso,
-      ...over,
+      issued, ...over,
     } as any);
     return id;
   };
@@ -327,6 +335,22 @@ try {
   await pollCryptoDepositsOnce();
   const dInv = store.cryptoDeposits.find((d) => d.paymentRequestId === forInvoice.body.id)!;
   check("the invoice rides onto the deposit on attribution — nobody linked it by hand", dInv?.invoiceId === theirs, JSON.stringify({ id: dInv?.id, invoiceId: dInv?.invoiceId }));
+  // An invoice written in dollars is still collected in euro, at the rate frozen
+  // on the document — and the crypto quote follows from that euro figure.
+  const inUsd = mkInvoice({ currency: "USD", total: "1000.00" }, issuedSnapshot(100_000, {
+    currency: "USD",
+    conversion: { from: "USD", to: "EUR", rate: 1.1379, rateProvider: "test", rateAsOf: "2026-09-10",
+      netCents: 87_881, vatCents: 0, grossCents: 87_881, buckets: [{ rate: 0, netCents: 87_881, vatCents: 0 }] },
+  }));
+  const wrongAmount = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 1000, methods: ["crypto"], invoiceId: inUsd }, miriam.id);
+  check("a link cannot collect a different amount than the invoice says — €10 against a €1,000 invoice would mark it paid in full",
+    wrongAmount.status === 409 && /878\.81/.test(wrongAmount.body.error ?? ""), JSON.stringify(wrongAmount.body));
+  const usdLink = await call("POST", `/api/users/${miriam.id}/payment-requests`, { methods: ["crypto"], invoiceId: inUsd }, miriam.id);
+  check("a USD invoice is collected as the euro amount frozen on it, not its face value",
+    usdLink.status === 201 && usdLink.body.amountEur === 878.81, JSON.stringify(usdLink.body));
+  check("and the crypto quote follows from that euro figure, so a dollar invoice is payable in USDC",
+    usdLink.body.latestQuote?.amountUsdc > 1000 && usdLink.body.latestQuote.amountUsdc < 1010, JSON.stringify(usdLink.body.latestQuote));
+
   const invAfter = store.findInvoice(theirs)!;
   const st = (invAfter.settlements ?? [])[0];
   check("and the settlement is recorded even though auto-convert is off, because acquiring the asset is itself the event the books need",
@@ -381,8 +405,8 @@ try {
   check("and the sweep writes it down", swept2.expired === 1 && store.findPaymentRequest(soon.body.id)!.state === "EXPIRED");
 
   const list = await call("GET", `/api/users/${miriam.id}/payment-requests`, undefined, miriam.id);
-  // 8, not 12: the four refused invoice links left no row behind.
-  check("the owner's list carries every link, newest first, with what the payee can offer — and nothing a refusal created", list.body.requests.length === 8 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt), `${list.body.requests.length}`);
+  // 9, not 14: the five refused invoice links left no row behind.
+  check("the owner's list carries every link, newest first, with what the payee can offer — and nothing a refusal created", list.body.requests.length === 9 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt), `${list.body.requests.length}`);
 
   server.close();
   console.log(`\nPAYMENT REQUESTS TEST PASSED — ${passed} checks`);
