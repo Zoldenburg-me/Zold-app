@@ -446,3 +446,40 @@ bank resource, and GetMyInvoices is still the only place documents and
 transactions meet. `POST /vouchers` does mean the document lane could go direct
 to Lexware Office if GetMyInvoices licensing turns awkward — a fallback worth
 knowing about, not a reason to change route.
+
+## How an outgoing invoice is made and delivered today
+
+Read from the code on 10 Sep 2026, because it changes what stage 2 is worth.
+
+The org opens the business dashboard, presses **Issue invoice**, fills the
+editor and posts to `/invoicing/issue`. Warnings are not silent: a confirm
+dialog lists them and the acceptance is recorded on the document. On success
+the browser shows a **`prompt()` dialog containing a link** —
+"Invoice <number> issued. Send your customer this link:" — and the org copies
+it out and sends it themselves, by whatever means they already use.
+
+The customer opens `/invoice/<token>`, which serves the white A4 sheet. The
+only output control on that page is one button: **Print / PDF**, calling
+`window.print()`.
+
+So neither side ever receives a file from us. Both print. There is no send, no
+attachment, no delivery record, and nothing knows whether the customer opened
+it. The delivery interface is a browser prompt dialog.
+
+**This is why the incoming/outgoing split is not arbitrary.** A supplier's
+invoice reaches the customer by email and their existing collection catches it.
+An invoice the org *issues* exists nowhere but here — it is not in any mailbox,
+because it left rather than arrived. Zold is its only source, which is exactly
+why it is the half worth pushing.
+
+**And it doubles the value of stage 2.** Rendering the page server-side was
+justified as the thing that unblocks the accountant lane. The same work
+produces a real PDF the org can attach to an email instead of pasting a link
+out of a prompt dialog. One piece of infrastructure, two problems.
+
+Where the boundary sits, since this is exactly the direction that erodes it:
+producing the file and letting someone download it is keeping the record. A
+**send** — mailing it to the customer, chasing it, tracking whether it was
+opened — is invoicing software, which the boundary says we do not build. There
+is no mail transport here anyway, and this is a good reason not to add one for
+this purpose.
