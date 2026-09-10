@@ -689,3 +689,65 @@ agreed boundary: keeping the record, not booking it.
 **Ask WeLoveAccounting how they handle crypto receipts today.** They may have a
 manual process already, and its shape should decide the report's columns. If
 they have none, they need to know before a period closes rather than after.
+
+## How that flow is actually wired today — traced, not assumed
+
+The described flow is "issue an invoice in USDC with a EUR rate attached,
+customer pays USDC, it converts as it lands". Traced through the code on
+10 Sep 2026, the pieces exist but **they are three separate things a human
+joins by hand**, and one of the joints is what makes the tax record complete.
+
+**You cannot issue an invoice in USDC.** The issue route hardcodes
+`currency: "EUR"`. That is the correct behaviour and should stay — the invoice
+is the EUR document. What quotes in USDC is a **payment request**: a EUR amount
+with the crypto figure derived from the live mid plus a 50 bps allowance, the
+allowance printed on the page rather than folded into the number. That is a
+payment instruction, not an invoice, and the split is right.
+
+**But the issued invoice page offers SEPA only.** It renders bank details and
+tells the customer to use the invoice number as the reference. There is no
+crypto option on it, and `payment-requests.ts` has no invoice field at all. So
+"issue an invoice, get paid in USDC" is not one flow — it is an invoice plus a
+separately created payment link that happens to carry the same amount.
+
+**Conversion is not automatic by default.** `autoConvert` defaults to `false`.
+With it on, the poller runs every 15s, refuses a venue rate too far from the
+live mid, and leaves anything under 1 USDC unconverted rather than letting a
+swap eat a dust transfer. With it off the deposit settles as USDC and simply
+sits — no disposal, no realised gain, and an asset position that still belongs
+on the balance sheet.
+
+**The deposit-to-invoice link is MANUAL**, through
+`POST /api/users/:id/crypto-deposits/:depositId/invoice`. Nothing sets it
+automatically. `recordInvoiceSettlement` fires only for deposits somebody
+remembered to link.
+
+### What is genuinely good here
+
+The settlement record itself is right, and its comments already carry the
+reasoning. The receipt valuation is captured at receipt (amount, rate,
+provider) — the acquisition basis. The conversion writes the transaction, what
+was credited and the realised gain, "recorded as a FACT at the moment it is
+known, never recomputed", because a gain re-derived later from whatever a feed
+reports then is not the gain that occurred. It is absent rather than zero when
+the basis is unknown. Settlements append rather than replace, since one invoice
+can be settled by several payments.
+
+The code even states the tax argument for the user's instinct: the realised
+gain is "near zero when the conversion follows the receipt promptly, which is
+the tax argument for converting promptly at all". Converting on landing is the
+right reflex. It does not remove the second event, it makes it small — both
+still get booked.
+
+### The one defect worth fixing for this flow
+
+**Carry the invoice through.** A payment request raised for an invoice should
+hold its id, and pass it to the deposit on attribution, so the settlement lands
+on the invoice without anyone remembering. Today the two-event record — the
+whole reason we can serve an accountant that Lexware Office cannot — exists
+only where someone did the linking by hand. That is a thin thread to hang a tax
+record on, and the fix is small.
+
+Worth deciding at the same time: whether business orgs should default
+`autoConvert` on, with the prompt-conversion reasoning stated where the toggle
+lives rather than buried in a config comment.
