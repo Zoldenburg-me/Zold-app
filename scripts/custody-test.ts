@@ -116,8 +116,11 @@ check("_local-chain.ts pins fx-swapper with ??=, so a harness can still override
   );
 });
 
-check("server.ts records custody on the transfer rather than inferring it later", () => {
-  const src = readFileSync("services/api/src/server.ts", "utf8");
+check("the transfer builder records custody rather than inferring it later", () => {
+  // transfers/build.ts is the ONE path that creates a transfer — the direct
+  // route and draft execution both go through it — so the custody record has
+  // one place to be written and one place to check for.
+  const src = readFileSync("services/api/src/transfers/build.ts", "utf8");
   assert.match(src, /transfer\.custody = custody;/, "custody is never persisted");
   assert.match(src, /CUSTODY\.requireNonCustodial && custody\.mode === "orchestrator"/, "no refusal path");
 });
