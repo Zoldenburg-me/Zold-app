@@ -272,10 +272,6 @@ export interface CurrencyAvailability {
   provider: AccountProvider;
   countries: string[];
   available: boolean;
-  /** "live" against the real provider, or "mock" on a local deployment. */
-  mode?: "live" | "mock";
-  /** Present when mock. Says plainly that no real money moves. */
-  mockWarning?: string;
   /** Present only when unavailable. Names the partner and the missing piece. */
   needs?: string;
   /**
@@ -345,19 +341,6 @@ export function defaultLabel(currency: CurrencyCode): string {
   return `${CURRENCY_REGISTRY[currency].name} account`;
 }
 
-/**
- * Format a minor-unit-safe amount for display. Takes a decimal string, never a
- * float — a balance that has been through a double is not a balance.
- */
-export function formatAmount(amount: string, currency: CurrencyCode): string {
-  const def = CURRENCY_REGISTRY[currency];
-  const n = Number(amount);
-  if (!Number.isFinite(n)) return `${def.symbol}—`;
-  return `${def.symbol}${n.toLocaleString("en-GB", {
-    minimumFractionDigits: def.decimals,
-    maximumFractionDigits: def.decimals,
-  })}`;
-}
 
 /**
  * Is this account usable for money movement right now? Both the row and the

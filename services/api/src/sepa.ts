@@ -22,9 +22,9 @@ const SEPA_ALLOWED = /[^A-Za-z0-9/\-?:().,'+ ]/g;
 
 export const SEPA_REMITTANCE_MAX = 140;
 
-/** Our own tag, so a payment is still traceable back to a transfer. */
-/** What the payee reads next to our transfer id on their statement. Kept
- *  short: every character here is one fewer for the payer's own reference. */
+/** What the payee reads next to our transfer id on their statement, so a
+ *  payment is still traceable back to a transfer. Kept short: every character
+ *  here is one fewer for the payer's own reference. */
 const TAG = "Powered by Zold";
 
 /**

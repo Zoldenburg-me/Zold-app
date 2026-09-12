@@ -218,8 +218,9 @@ await check("the conversion batch carries NO fee", () => {
 });
 
 await check("both routes are capability-gated", () => {
-  const seg = srv.slice(srv.indexOf("/crypto-deposits/:depositId/convert/prepare"),
-                        srv.indexOf("Travel Rule originator data"));
+  const end = srv.indexOf("Turn auto-settlement of payment-page crypto");
+  assert.ok(end > 0, "the auto-convert route's docstring anchors the end of the convert routes");
+  const seg = srv.slice(srv.indexOf("/crypto-deposits/:depositId/convert/prepare"), end);
   assert.equal((seg.match(/requireCapability\(user, "onchain_balance", res\)/g) || []).length, 2,
     "prepare and convert must both check the capability");
 });

@@ -162,6 +162,7 @@ try {
     MONERIUM_CLIENT_ID: "stub",
     MONERIUM_CLIENT_SECRET: "stub",
     MONERIUM_BASE_URL: `http://127.0.0.1:${STUB_PORT}`,
+    MONERIUM_CHAIN: "sepolia", // the stub issues on sepolia; the chain filter must see the same name
     MONERIUM_POLL_MS: "3600000", // don't let the poller race the assertions
     MONERIUM_WEBHOOK_SECRET: "",
     MG_ANCHOR_DOMAIN: "",

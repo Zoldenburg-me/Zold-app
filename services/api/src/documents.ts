@@ -30,7 +30,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { keccak256, toBytes, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { CHAIN_ID, KEYS, PUBLIC_URL } from "./config.js";
+import { IS_PRODUCTION, CHAIN_ID, KEYS, PUBLIC_URL } from "./config.js";
 import type { Transfer, User } from "./store.js";
 import { paymentMemo } from "./sepa.js";
 
@@ -209,9 +209,10 @@ export function linesFromMoneriumOrders(orders: MoneriumOrderLike[], safeAddress
     .filter((l) => Number.isFinite(l.amountEur) && l.amountEur > 0 && l.at);
 }
 
-/** Money that actually left on the SEPA rail: a transfer whose fee debit or
- *  payout is on record. CREATED and FAILED transfers moved nothing. */
-const SEPA_LEFT_STATES = new Set(["DEBITED", "PAYOUT_SUBMITTED", "PAID", "MANUAL_REVIEW"]);
+/** A SEPA payout on record: the redeem was placed or completed. DEBITED and
+ *  MANUAL_REVIEW have moved the fee at most, so booking the full payout for
+ *  them would state money that never left. */
+const SEPA_LEFT_STATES = new Set(["PAYOUT_SUBMITTED", "PAID"]);
 
 export function linesFromTransfers(transfers: Transfer[]): StatementLine[] {
   const out: StatementLine[] = [];
@@ -351,7 +352,13 @@ export function snapshotDigest(snapshot: DocumentSnapshot): Hex {
  *  EIP-191 message naming the digest, so any Ethereum tool can recover the
  *  signer and a reader can compare it with the address printed on the page. */
 function documentSigner() {
-  const key = (process.env.DOCUMENT_SIGNING_KEY as `0x${string}` | undefined) ?? KEYS.orchestrator;
+  const configured = process.env.DOCUMENT_SIGNING_KEY as `0x${string}` | undefined;
+  // Off production the orchestrator key stands in; on production a hot money
+  // key must not double as the attestation key.
+  if (!configured && IS_PRODUCTION) {
+    throw new Error("DOCUMENT_SIGNING_KEY is required in production — the orchestrator key must not sign documents");
+  }
+  const key = configured ?? KEYS.orchestrator;
   return privateKeyToAccount(key);
 }
 
@@ -403,5 +410,3 @@ export function publicDocument(doc: StoredDocument) {
   const { id, userId, ...pub } = doc;
   return { ...pub, url: documentUrl(doc.code) };
 }
-
-export const shortHash = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 12);

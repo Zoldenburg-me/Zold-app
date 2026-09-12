@@ -172,6 +172,10 @@ export function forgetUserClient(userId: string) {
  * Throws when the user has no connection; callers wanting the app fallback
  * use `moneriumClientFor` / `moneriumLinkAccessToken`.
  */
+/** Refreshes in flight, per user: two requests inside the refresh window must
+ *  not both spend a refresh token Monerium may rotate. */
+const refreshing = new Map<string, Promise<string>>();
+
 export async function moneriumAccessToken(user: User): Promise<string> {
   const keyed = apiKeyClient(user);
   if (keyed) return keyed.bearerToken();
@@ -181,29 +185,38 @@ export async function moneriumAccessToken(user: User): Promise<string> {
     user.monerium.expiresAt &&
     Date.now() > Date.parse(user.monerium.expiresAt) - 60_000
   ) {
-    const refreshed = await refreshAuthorizationToken(
-      {
-        baseUrl: MONERIUM.baseUrl,
-        clientId: MONERIUM.oauthClientId,
-        clientSecret: MONERIUM.clientSecret,
-      },
-      decryptToken(user.monerium.refreshTokenEnc),
-    );
-    const next = store.updateUser(user.id, {
-      monerium: {
-        ...user.monerium,
-        accessTokenEnc: encryptToken(refreshed.access_token),
-        refreshTokenEnc: refreshed.refresh_token
-          ? encryptToken(refreshed.refresh_token)
-          : user.monerium.refreshTokenEnc,
-        expiresAt: refreshed.expires_in
-          ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
-          : user.monerium.expiresAt,
-      },
-    });
-    return decryptToken(next.monerium!.accessTokenEnc!);
+    const inFlight = refreshing.get(user.id);
+    if (inFlight) return inFlight;
+    const p = refreshOnce(user).finally(() => refreshing.delete(user.id));
+    refreshing.set(user.id, p);
+    return p;
   }
   return decryptToken(user.monerium.accessTokenEnc);
+}
+
+async function refreshOnce(user: User): Promise<string> {
+  const current = user.monerium!;
+  const refreshed = await refreshAuthorizationToken(
+    {
+      baseUrl: MONERIUM.baseUrl,
+      clientId: MONERIUM.oauthClientId,
+      clientSecret: MONERIUM.clientSecret,
+    },
+    decryptToken(current.refreshTokenEnc!),
+  );
+  const next = store.updateUser(user.id, {
+    monerium: {
+      ...current,
+      accessTokenEnc: encryptToken(refreshed.access_token),
+      refreshTokenEnc: refreshed.refresh_token
+        ? encryptToken(refreshed.refresh_token)
+        : current.refreshTokenEnc,
+      expiresAt: refreshed.expires_in
+        ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
+        : current.expiresAt,
+    },
+  });
+  return decryptToken(next.monerium!.accessTokenEnc!);
 }
 
 let appClientCache: MoneriumClient | null = null;

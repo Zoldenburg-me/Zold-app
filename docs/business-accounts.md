@@ -116,7 +116,7 @@ and is the same rule the rest of the repo follows: a rail that has never moved
 money must not render as if it has. `accounts.ts` holds the registry and it is
 the single place a currency becomes live.
 
-`ImportedWallet` (+ `WalletGroup`) is the Gnosis half: an address we watch and
+`ImportedWallet` is the Gnosis half: an address we watch and
 book, never sign for. `custody: "external"` is stored on the row, and the
 signing paths assert it.
 

@@ -73,30 +73,6 @@ export function sanitise(data: Record<string, unknown>): Record<string, unknown>
   return out;
 }
 
-export interface AuditSink {
-  append(entry: AuditEntry): void;
-  list(userId?: string, limit?: number): AuditEntry[];
-}
-
-/**
- * Build the log over whatever store is passed in.
- *
- * Injected rather than importing the store, so the tests exercise the real
- * redaction and ordering against an array instead of a file, and so nothing
- * here can reach for a user record it should not read.
- */
-export function createAuditLog(rows: AuditEntry[], persist: () => void): AuditSink {
-  return {
-    append(entry) {
-      rows.push(entry);
-      persist();
-    },
-    list(userId, limit = 200) {
-      const filtered = userId ? rows.filter((r) => r.userId === userId) : rows;
-      return filtered.slice(-limit).reverse();
-    },
-  };
-}
 
 export function auditEntry(
   kind: AuditKind,

@@ -11,6 +11,13 @@ function run(cmd: string): string {
 }
 
 function autoSync() {
+  // Only main is ever fast-forwarded: on a feature branch this would silently
+  // move the checkout onto main's history.
+  const branch = run("git rev-parse --abbrev-ref HEAD");
+  if (branch !== "main") {
+    console.log(`[Auto-Sync] On ${branch || "an unknown branch"}, not main. Skipping.`);
+    return;
+  }
   const fetchRes = run("git fetch origin main");
   const localHead = run("git rev-parse HEAD");
   const remoteHead = run("git rev-parse origin/main");

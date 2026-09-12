@@ -28,6 +28,10 @@ process.env.BEBOP_BASE_URL = `http://127.0.0.1:${PORT}`;
 process.env.BEBOP_CHAIN = "polygon";
 process.env.BEBOP_TIMEOUT_MS = "1500";
 process.env.LIQUIDITY_INDICATIVE_TTL_MS = "400";
+// The stub maker quotes 1.20 against a pinned mid of 1.1379: wide enough to
+// prove the price is the maker's, inside the (widened) sanity band.
+process.env.DEX_MAX_MID_DEVIATION_BPS = "1000";
+process.env.BEBOP_CONTRACTS = "0x3333333333333333333333333333333333333333";
 // The provider reads token addresses from deployments; point it at a fixed set
 // so the test needs no chain.
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify({ USD: 1.1379, INR: 109.87, KES: 147.53 });

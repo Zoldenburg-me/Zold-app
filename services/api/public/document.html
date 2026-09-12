@@ -110,7 +110,7 @@ function holder(h, extra = []) {
     ...(h.bic ? [["BIC", h.bic]] : []),
     ["Currency", "EUR"],
     ["Account of record", short(h.safeAddress)],
-    ["Chain", `Base (${h.chainId})`],
+    ["Chain", { 8453: "Base", 84532: "Base Sepolia", 31337: "local hardhat" }[h.chainId] ? `${{ 8453: "Base", 84532: "Base Sepolia", 31337: "local hardhat" }[h.chainId]} (${h.chainId})` : `chain ${h.chainId}`],
     ...extra,
   ];
   return `<div class="holder">

@@ -3,10 +3,9 @@
  *
  * WHY THIS EXISTS. The FxSwapper holds inventory we fund, which does not scale
  * past a demo — the whole point of the liquidity seam is to stop carrying a
- * treasury. The two venues tried before both dead-ended: Bebop returns
- * TokenNotSupported for EURe on every chain we care about and publishes no
- * testnet, and CoW quotes well on Gnosis but cannot execute without deciding
- * who signs the order. Uniswap v3 is the one venue that both lists our tokens
+ * treasury. The two venues tried before both dead-ended here: Bebop lists
+ * EURe only on Ethereum and publishes no testnet, and CoW quotes well on
+ * Gnosis but cannot execute without deciding who signs the order. Uniswap v3 is the one venue that both lists our tokens
  * and can be exercised on a testnet, because the pool is just a contract.
  *
  * On mainnet the counterparty is everyone else's liquidity, so there is no
