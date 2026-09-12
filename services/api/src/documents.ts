@@ -27,7 +27,7 @@
  *      name, IBAN, memo. The statement is honest about which lines carry it;
  *   3. our transfer records — recipient, fee, memo, state.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { keccak256, toBytes, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { IS_PRODUCTION, CHAIN_ID, KEYS, PUBLIC_URL } from "./config.js";
