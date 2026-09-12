@@ -38,6 +38,7 @@ import {
   assertDeletable,
   assertTransition as assertInvoiceTransition,
   hashToken,
+  tokenMatches,
   isOverdue,
   newLinkToken,
   supplierView,
@@ -223,7 +224,7 @@ function draftFrom(org: Organisation, body: Record<string, any>): InvoiceDraft {
       body.supplyPeriod?.from && body.supplyPeriod?.to
         ? { from: String(body.supplyPeriod.from), to: String(body.supplyPeriod.to) }
         : undefined,
-    issuer: { ...issuerParty(org), ...(body.issuerOverride ?? {}) },
+    issuer: issuerParty(org),
     recipient,
     lines: Array.isArray(body.lines) ? body.lines : [],
     treatment,
@@ -309,7 +310,6 @@ export function createBusinessRouter(
     };
   };
 
-  /** Re-check a draft against the address book and park it if anything moved. */
   /**
    * An invoice in PAYING follows its transfer, never the other way round: the
    * transfer is the money, the invoice row is bookkeeping. Derived on read,
@@ -352,6 +352,7 @@ export function createBusinessRouter(
     }
   };
 
+  /** Re-check a draft against the address book and park it if anything moved. */
   const reconcileDrift = (draft: DraftPayment): DraftPayment => {
     const drifted = findDriftedLines(draft, contactsById(draft.orgId));
     if (!drifted.length) return draft;
@@ -386,26 +387,27 @@ export function createBusinessRouter(
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.create")) return;
 
-    const source = req.body?.source;
-    if (
-      !source ||
-      (source.kind === "account" && !store.findAccount(String(source.accountId))) ||
-      (source.kind === "wallet" && !store.findImportedWallet(String(source.walletId))) ||
-      !["account", "wallet"].includes(source.kind)
-    ) {
+    // The funding source is resolved INSIDE this org and stored as an id only:
+    // an account or wallet id from another org must not be accepted, and the
+    // body must not be spread into the row.
+    const raw = req.body?.source;
+    const source: DraftPayment["source"] | undefined =
+      raw?.kind === "account" && store.accountsOf(ctx.org.id).some((a) => a.id === String(raw.accountId))
+        ? { kind: "account", accountId: String(raw.accountId) }
+        : raw?.kind === "wallet" && store.importedWalletsOf(ctx.org.id).some((w) => w.id === String(raw.walletId))
+          ? { kind: "wallet", walletId: String(raw.walletId) }
+          : undefined;
+    if (!source) {
       return res
         .status(400)
-        .json({ error: "A draft needs a funding source: an account or an imported wallet." });
+        .json({ error: "A draft needs a funding source: an account or an imported wallet of this organisation." });
     }
 
     try {
       const contacts = contactsById(ctx.org.id);
       const lines = (req.body?.lines ?? []).map((l: Record<string, unknown>) => ({
         id: `dl_${randomUUID()}`,
-        ...validateLine(
-          l as never,
-          typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined,
-        ),
+        ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
       if (!lines.length) return res.status(400).json({ error: "A draft needs at least one line." });
 
@@ -443,18 +445,23 @@ export function createBusinessRouter(
     }
     try {
       const contacts = contactsById(ctx.org.id);
-      const lines = (req.body?.lines ?? draft.lines).map((l: Record<string, unknown>) => ({
+      const replaced = Array.isArray(req.body?.lines);
+      const lines = (replaced ? req.body.lines : draft.lines).map((l: Record<string, unknown>) => ({
         id: typeof l.id === "string" ? l.id : `dl_${randomUUID()}`,
-        ...validateLine(
-          l as never,
-          typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined,
-        ),
+        ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
       const updated = store.updateDraft(draft.id, {
         lines,
         // Re-pointing the lines is exactly how INVALID_DATA is resolved.
         state: "DRAFT",
         invalidLineIds: undefined,
+        // Whoever replaces the lines authored what is now in them, so they
+        // become the drafter four-eyes measures against. Without this, B could
+        // rewrite A's €1 draft into €9,000 to B's contact and then review it.
+        ...(replaced ? { createdByMemberId: ctx.member.id } : {}),
+        reviewedByMemberId: undefined,
+        reviewedAt: undefined,
+        rejectedReason: undefined,
         activity: [...draft.activity, activity(ctx.member.id, "edited")],
       });
       res.json({ draft: updated, totals: totalsByAsset(updated) });
@@ -584,7 +591,8 @@ export function createBusinessRouter(
     // An imported wallet is read-only: we build the transactions, its owner
     // signs them. Saying so is the point; silently doing nothing would not be.
     if (checked.source.kind === "wallet") {
-      const wallet = store.findImportedWallet(checked.source.walletId);
+      const walletId = checked.source.walletId;
+      const wallet = store.importedWalletsOf(ctx.org.id).find((w) => w.id === walletId);
       return res.status(200).json({
         unsigned: true,
         wallet: wallet
@@ -846,11 +854,14 @@ export function createBusinessRouter(
       notes: req.query.notes ? String(req.query.notes) : "Notes",
       tags: req.query.tags ? String(req.query.tags) : "Tags",
     };
+    if (typeof req.body !== "string") {
+      return res.status(415).json({ error: "Send the CSV as text (content-type text/csv), not JSON." });
+    }
     try {
       const knownTags = new Set(
         store.ledgerOf(ctx.org.id).flatMap((e) => e.tags),
       );
-      const result = importCsv(String(req.body ?? ""), mapping, {
+      const result = importCsv(req.body, mapping, {
         maxRows: limitsFor(ctx.org).bulkCsvRows,
         knownTags,
       });
@@ -922,6 +933,7 @@ export function createBusinessRouter(
   r.delete("/:orgId/invoices/:invoiceId", (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.manage")) return;
     const invoice = store.findInvoice(String(req.params.invoiceId));
     if (!invoice || invoice.orgId !== ctx.org.id) {
@@ -968,22 +980,23 @@ export function createBusinessRouter(
       return res.status(400).json({ error: `This organisation has no ${invoice.currency} account to pay from.` });
     }
 
-    // The supplier as a contact. Match on IBAN first (the same account under a
-    // renamed company is the same payee), then on name; otherwise create one.
+    // The supplier as a contact. Match on IBAN only: the same account under a
+    // renamed company is the same payee. NEVER by name — the name is the
+    // supplier's own claim through the link, and attaching a stranger's IBAN
+    // to a trusted contact because they typed its name is the classic
+    // invoice-fraud move. An unknown IBAN gets a new contact the reviewer sees
+    // as new.
     const iban = normaliseIban(bank.iban);
     const contacts = store.contactsOf(ctx.org.id);
     let contact = contacts.find((c) => c.bankAccounts.some((b) => b.iban && normaliseIban(b.iban) === iban));
     let bankAccountId = contact?.bankAccounts.find((b) => b.iban && normaliseIban(b.iban) === iban)?.id;
     const supplierName = invoice.supplier?.orgName?.trim() || bank.holderName;
     const now = new Date().toISOString();
-    if (!contact) {
-      contact = contacts.find((c) => c.name.trim().toLowerCase() === supplierName.toLowerCase());
-    }
     if (!bankAccountId) {
       const bankAccount = {
         id: `cb_${randomUUID()}`,
         ...validateBankAccount({
-          currency: invoice.currency as never,
+          currency: invoice.currency,
           country: iban.slice(0, 2),
           holderName: bank.holderName,
           iban,
@@ -991,9 +1004,7 @@ export function createBusinessRouter(
         }),
       };
       bankAccountId = bankAccount.id;
-      if (contact) {
-        contact = store.updateContact(contact.id, { bankAccounts: [...contact.bankAccounts, bankAccount], updatedAt: now });
-      } else {
+      {
         contact = store.addContact({
           id: `con_${randomUUID()}`,
           orgId: ctx.org.id,
@@ -1061,6 +1072,7 @@ export function createBusinessRouter(
   r.post("/:orgId/invoices/:invoiceId/reconcile", (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.manage")) return;
     const invoice = store.findInvoice(String(req.params.invoiceId));
     if (!invoice || invoice.orgId !== ctx.org.id) {
@@ -1189,11 +1201,12 @@ export function createBusinessRouter(
       if (iban && !ibanChecksumValid(iban)) {
         return res.status(400).json({ error: `${iban} is not a valid IBAN.`, field: "bank.iban" });
       }
+      const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
       next.bank = {
-        holder: b.bank.holder?.trim() || undefined,
+        holder: text(b.bank.holder) || undefined,
         iban: iban || undefined,
-        bic: b.bank.bic?.toUpperCase().replace(/\s+/g, "") || undefined,
-        bankName: b.bank.bankName?.trim() || undefined,
+        bic: text(b.bank.bic).toUpperCase().replace(/\s+/g, "") || undefined,
+        bankName: text(b.bank.bankName) || undefined,
       };
     }
     if (b.numberSeries && typeof b.numberSeries === "object") {
@@ -1296,6 +1309,13 @@ export function createBusinessRouter(
     }
 
     const series = ctx.org.invoicing?.numberSeries ?? DEFAULT_SERIES;
+    // §14 Abs. 4 Nr. 4: one number, once. A caller may supply its own number,
+    // so uniqueness is checked against what this org has issued rather than
+    // assumed from the series.
+    if (store.invoicesOf(ctx.org.id).some((i) => i.issued?.number === draft.number)) {
+      return res.status(409).json({ error: `Invoice number ${draft.number} has already been issued.` });
+    }
+    const numberSupplied = typeof req.body?.number === "string" && req.body.number.trim() !== "";
     const now = new Date();
     const { token, hash } = newLinkToken();
     const display: Record<string, boolean> = {
@@ -1355,9 +1375,11 @@ export function createBusinessRouter(
     // Burn the number only once the invoice exists: §14 Abs. 4 Nr. 4 wants each
     // number assigned once, and advancing before the write would leave a gap
     // pointing at an invoice that was never issued.
-    store.updateOrganisation(ctx.org.id, {
-      invoicing: { ...(ctx.org.invoicing ?? {}), numberSeries: { ...series, next: series.next + 1 } },
-    });
+    if (!numberSupplied) {
+      store.updateOrganisation(ctx.org.id, {
+        invoicing: { ...(ctx.org.invoicing ?? {}), numberSeries: { ...series, next: series.next + 1 } },
+      });
+    }
 
     res.status(201).json({
       invoice: { ...invoice, linkTokenHash: undefined },
@@ -1425,17 +1447,25 @@ export function createBusinessRouter(
     const direction = ["in", "out", "both"].includes(String(req.body?.direction))
       ? (String(req.body.direction) as "in" | "out" | "both")
       : "both";
+    const walletId = req.body?.walletId ? String(req.body.walletId) : undefined;
+    if (walletId && !store.importedWalletsOf(ctx.org.id).some((w) => w.id === walletId)) {
+      return res.status(400).json({ error: "No such imported wallet on this organisation." });
+    }
+    const contactId = req.body?.contactId ? String(req.body.contactId) : undefined;
+    if (contactId && !store.contactsOf(ctx.org.id).some((c) => c.id === contactId)) {
+      return res.status(400).json({ error: "No such contact on this organisation." });
+    }
 
     res.status(201).json({
       rule: store.addAccountRule({
         id: `rule_${randomUUID()}`,
         orgId: ctx.org.id,
-        scope: scope as never,
+        scope: scope as "default" | "wallet" | "asset" | "contact",
         match: {
           txType: req.body?.txType ? String(req.body.txType) : undefined,
-          walletId: req.body?.walletId ? String(req.body.walletId) : undefined,
+          walletId,
           asset: req.body?.asset ? String(req.body.asset) : undefined,
-          contactId: req.body?.contactId ? String(req.body.contactId) : undefined,
+          contactId,
         },
         direction,
         accountCode,
@@ -1491,7 +1521,11 @@ export function createBusinessRouter(
 
     const patch: Record<string, unknown> = {};
     if (req.body?.accountCode !== undefined) {
-      patch.accountCode = String(req.body.accountCode);
+      const code = String(req.body.accountCode);
+      if (!store.chartOf(ctx.org.id).some((c) => c.code === code)) {
+        return res.status(400).json({ error: `No account with code ${code}.` });
+      }
+      patch.accountCode = code;
       // A human set it, so a later rule run must not overwrite it.
       patch.accountCodeAuto = false;
     }
@@ -1585,7 +1619,7 @@ export function createInvoiceLinkRouter(): express.Router {
     }
     if (invoice.linkPasswordHash) {
       const supplied = String(req.header("x-invoice-password") ?? req.body?.password ?? "");
-      if (!supplied || hashToken(supplied) !== invoice.linkPasswordHash) {
+      if (!supplied || !tokenMatches(supplied, invoice.linkPasswordHash)) {
         res.status(401).json({ error: "This invoice link is password protected.", passwordRequired: true });
         return undefined;
       }

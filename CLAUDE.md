@@ -1763,6 +1763,121 @@ profile. The same question returns on the Bridge leg: BRIDGE.onBehalfOf is
 ONE customer for every sender, so Bridge does not know who is sending; that
 is a Travel Rule gap to close per transfer once real money moves that way.
 
+## Review and cleanup pass (Sep 2026) — attack surface, dormant code, stale text
+
+Five parallel read-only review agents swept the tree (core API/auth, routes +
+domain, money movement, browser code, scripts/docs); every finding was
+verified against the code before acting, and the deletions below were grepped
+across services/, scripts/, public/ and docs/ first. `npm run typecheck` and
+the offline suites pass; see the commit for the list. Rule applied to
+comments: rationale stays, comments describing removed code go.
+
+SECURITY FIXES, each a real hole, in rough order of weight:
+ - **Monerium OAuth login-CSRF.** The callback bound the code to whoever owned
+   the `state`, so an attacker could start a connect on THEIR account, send
+   the victim the consent link, and receive the victim's tokens (then activate
+   under the victim's profile). connect/start now sets an HttpOnly SameSite=Lax
+   nonce cookie scoped to /api/monerium/oauth and the callback requires it;
+   monerium:oauth:test asserts the cookie-less callback is refused. Consequence:
+   the connect must start in the browser that finishes it (the checkout repo
+   proxies, so it is unaffected; a cross-origin fetch would not carry the
+   cookie).
+ - **Activation approved on the POSTs succeeding**, not on the address-matched
+   IBAN — a "duplicate" answer on both proved nothing. Approval now requires
+   the IBAN; iban_pending resolves through refreshPendingIban.
+ - **Hand-rolled CBOR decoder had no bounds**: a 5-byte header claiming 2^32
+   elements hung the event loop from one unauthenticated login. Every length
+   is checked before use, nesting is capped, and an ASSERTION never runs the
+   decoder at all (only the 37-byte header is parsed). Counter regression to 0
+   after a positive stored counter is now the clone case and refused.
+ - **Venue calldata was executed unchecked.** LI.FI's/Bebop's `tx.to`,
+   approval spender and value went straight into the user-signed batch or the
+   orchestrator's key — a spoofed venue answer could name the EURe contract
+   and drain the Safe. `LIFI_CONTRACTS` (default: the Diamond) and
+   `BEBOP_CONTRACTS` (default empty = RFQ execution refused) allowlist both,
+   value must be 0. RFQ and CoW quotes now pass `assertPriceSane` like pools.
+ - **Compensation blind spots**: the plain deposit transfer to Bridge was not
+   in the "funds at Bridge" guard, so a later failure reverse-swapped USDC we
+   no longer held; a refund tx already on record was not recognised (crash
+   between the chain write and the REFUNDED write refunded twice); a SEPA
+   redeem that TIMED OUT was refunded as if refused (Monerium may have placed
+   it); the stranded-transfer sweep could refund a transfer whose live call was
+   merely slow (no HTTP timeouts anywhere on the money path) and the late
+   write then completed the payout. Fixed: `FUNDS_AT_BRIDGE_STEPS`, the
+   `safe.refundTransfer` check, MoneriumApiError-4xx-only refunds, an
+   in-flight set the sweep skips, `AbortSignal.timeout` on every Bridge,
+   anchor and Monerium fetch, and `store.updateTransfer` refusing to move a
+   REFUNDED/PAID transfer backwards. dex/lifi/rfq execute() measure delivery
+   with `balanceAfterWrite` (replica-lag safe) and RFQ no longer copies
+   expectedOut as the amount out. The batch path refuses when the swap
+   delivered less than the Bridge transfer was created for.
+ - **Org routes**: an admin could deactivate an owner (the owner check sat
+   inside the role branch); four-eyes was defeatable by editing another
+   person's draft lines and then reviewing them (PATCH now makes the editor the
+   drafter); paying an invoice merged the supplier's self-declared name into a
+   TRUSTED contact and attached the supplier's IBAN to it (classic invoice
+   fraud — now IBAN-match only, else a new contact); a draft's funding source
+   accepted another org's wallet id; invite acceptance did not check the
+   session's email against the invited one; the Invoice-Me password compared
+   with `!==` and sat on the general rate bucket; the crypto-deposit → invoice
+   link read any org's invoice by id.
+ - **Admin dashboard stored XSS**: rows carried `onclick="...('${jsonArg(u)}')"`
+   and encodeURIComponent leaves `'`, so a signup name closed the JS string;
+   the operator token sat in localStorage beside it. Rows now carry ids and a
+   delegated listener; the token is sessionStorage.
+ - Smaller: operator-token compares are constant-time everywhere; connect
+   redirectUri is allowlisted (the configured URI or the callback on a trusted
+   origin); signup/transfer inputs are typed and capped, softSignals no longer
+   spreads the body; /admin and /invoice-links are on the auth bucket; a
+   deployment claim is taken BEFORE the await; share URLs never come from the
+   Host header; Shopify return/cancel redirects must be https; recovery's
+   no-session OTP has an attempt counter and start no longer returns the
+   holder's name; the service worker caches only shell paths (a slug or code
+   path is a credential); `api()` in the app refuses paths outside /api/;
+   `isDeployed` treats an RPC error as an error, not "not deployed".
+
+DELETED (all unreferenced by grep): wallet groups (route, store, type, field),
+`Contact.defaultAccountCodeIn/Out`, `invoicing.jurisdiction` on the org,
+`US_PHONE_PREFIXES`, `formatAmount`, `formatEur`, `LABELS`, `discountNote`,
+`InvoiceLineInput.unit`, the CurrencyAvailability "mock" arm and its banner,
+`passkeyRequiredBeforeFunding`, `rampWallet`, `saveDeployments`,
+`MONERIUM_PROFILE_ID`, `SHOPIFY_APP_URL`, `rateCacheStatus`, `AuditSink`/
+`createAuditLog`, the `pan`/`bank_account` encryption purposes and `last4`,
+INR from the required rate set, `safeThreshold`, `recoveryRequestsFor`,
+`requireMoneriumEure`, `shortHash`, `getPickup`, `createProfile`, the batch
+dry-run branch (a cash transfer cannot exist while the rail is closed), the
+admin page's KYC review / issue-IBAN buttons (routes gone), the `.kyc-pick`
+CSS, `hardhat.fork.config.js`, `STELLAR_SOROBAN_RPC`. Four copies of `wrap`
+became routes/util.ts; `hashToken`/`ADDRESS_RE` have one home each.
+
+DELIBERATELY KEPT: the parked desktop UI; `getBridgeTransfer` and the
+`pickup.bridge*` fields; the reference routes nothing calls yet (currencies,
+plans, payment-request methods, Gnosis Pay config/transactions, account rules,
+ledger patch, monthly balance, CSV import) — they are API surface with domain
+tests, now with their org-scoping holes closed; the legacy "mock" literals on
+`funding.mode`/`sepa.mode`/`safeSwap.mode` for rows written before those paths
+were removed (typed as legacy, no longer rendered as live).
+
+ALSO: `npm run check` is now OFFLINE and `check:live` adds the three Stellar
+suites, each of which imports `scripts/_stellar-testnet.ts` (pins testnet,
+refuses the public passphrase — config defaults to pubnet, and with a real
+treasury secret in .env `trustline:test` would have submitted mainnet
+changeTrust ops). `stellar:payout:live` no longer imports `_test-env`.
+`dex:setup --fix` refuses on a real-money chain without
+DEX_SETUP_ALLOW_MAINNET=1 and picks the position manager per chain. The
+contract suite allocates a free port. `eur-proof` runs against the sandbox
+only. Invoice citations follow the issued rule set (DE paragraphs, EU
+Directive articles, nothing for GENERIC) — the UStG leak CLAUDE.md said was
+fixed had survived in invoice.html.
+
+UNPROVEN, stated: the OAuth cookie binding against real Monerium (one browser
+run); the venue allowlists against real LI.FI/Bebop responses (the stubs are
+shaped from a captured response); every timeout value (chosen, not measured);
+draft signing from /business on a passkey Safe still lacks the execution and
+redeem assertions the app performs, so it fails at /authorize as before —
+recorded, not fixed, because it needs the ceremony code shared between the two
+pages.
+
 ## FP4 completion — recovery (decided July 2026, 2-of-2)
 
 THE BLOCKER: losing the browser device key permanently bricks an account.

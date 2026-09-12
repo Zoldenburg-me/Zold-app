@@ -109,9 +109,6 @@ export const US_TERRITORIES: readonly string[] = [
  */
 export const COLLECTIONS_ONLY: readonly string[] = ["IN"];
 
-/** Telephone country codes that indicate a US number. Soft signal only. */
-export const US_PHONE_PREFIXES: readonly string[] = ["+1"];
-
 /** Does a partner exist that will open an on-chain account for this residence?
  *  Asks Monerium's own policy rather than holding a second opinion. */
 export function moneriumWillServe(residence: string): boolean {

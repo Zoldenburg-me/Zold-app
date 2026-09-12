@@ -18,7 +18,8 @@
  *     plausible-looking number is worse than a missing one: the recipient has
  *     no way to check it and every reason to believe it.
  */
-import { CHAIN_ID, FX, MONERIUM, moneriumSandboxEnabled, railFeeEur } from "./config.js";
+import { CHAIN_ID, MONERIUM, moneriumSandboxEnabled, railFeeEur } from "./config.js";
+import { moneriumLiveFor } from "./adapters/monerium-connection.js";
 import type { Quote, ReceiptShareFields, Transfer, User } from "./store.js";
 
 /** A value the sender chose not to publish. Carries no value, by construction. */
@@ -219,7 +220,7 @@ function routeRate(rate: string, tokenIn: string, tokenOut: string): string {
  * not run is not drawn, and a leg that ran in simulation carries `simulated` so
  * the page can say so rather than let a dry run read as a settlement.
  */
-export function receiptRoute(t: Transfer, fields: ReceiptShareFields): ReceiptHop[] {
+export function receiptRoute(t: Transfer, fields: ReceiptShareFields, sender?: User): ReceiptHop[] {
   const hops: ReceiptHop[] = [];
   const step = (prefix: string) => t.txs?.find((x) => x.step.startsWith(prefix));
   const onBase = BASE_CHAINS.has(CHAIN_ID);
@@ -292,7 +293,9 @@ export function receiptRoute(t: Transfer, fields: ReceiptShareFields): ReceiptHo
       ...(fields.showRef && t.moneriumRedeem?.memo
         ? { ref: t.moneriumRedeem.memo }
         : { withheld: true as const }),
-      ...(moneriumSandboxEnabled() ? {} : { simulated: true as const }),
+      // Live for the SENDER: an account on its own Monerium keys placed a
+      // real redeem even where the deployment holds no app credentials.
+      ...((sender ? moneriumLiveFor(sender) : moneriumSandboxEnabled()) ? {} : { simulated: true as const }),
     });
   }
 
@@ -394,7 +397,7 @@ export function buildReceipt(args: {
   push("Delivered via", sepa ? "SEPA credit transfer" : t.pickup?.provider || "Cash pickup", { tone: "muted" });
   if (t.refund) push("Refunded", `${eur(t.refund.amountEur)} · ${t.refund.deductions}`, { tone: "muted" });
 
-  const route = fields.route ? receiptRoute(t, fields) : undefined;
+  const route = fields.route ? receiptRoute(t, fields, args.sender) : undefined;
   const parties = {
     from: nameFor(fields.sender, sender.name),
     to: nameFor(fields.recipient, t.recipientName),

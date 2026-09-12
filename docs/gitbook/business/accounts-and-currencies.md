@@ -59,7 +59,7 @@ A naira account gives you a NUBAN and pays by NIP bank transfer. The settlement 
 ### Indian rupee
 
 {% hint style="warning" %}
-**Not yet fully live.** INR payouts by UPI open with an Indian payout partner.
+**Not yet fully live.** INR payouts open with an Indian payout partner.
 {% endhint %}
 
 ## The token column

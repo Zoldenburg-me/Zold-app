@@ -95,6 +95,8 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
   r.use((req, res, next) => {
     const session = requireSession(req, res);
     if (!session) return;
+    // Resolved once here; every handler below reads it from res.locals.
+    res.locals.session = session;
     const user = store.findUser(session.userId);
     const segment = user?.segment?.value ?? "EU_FULL";
     if (!can(segment, "gnosis_pay")) {
@@ -109,8 +111,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
 
   /** What this deployment can do, so the client renders a real state. */
   r.get("/config", (req, res) => {
-    const session = requireSession(req, res);
-    if (!session) return;
+    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
     const user = store.findUser(session.userId);
     res.json({
       chainId: GNOSIS_PAY.siweChainId,
@@ -126,8 +127,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
    * signature against the session that issued the nonce.
    */
   r.post("/siwe/start", async (req, res) => {
-    const session = requireSession(req, res);
-    if (!session) return;
+    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
     const address = String(req.body?.address ?? "").trim();
     if (!ADDRESS.test(address)) {
       return res.status(400).json({ error: "address must be an EVM address" });
@@ -151,8 +151,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
 
   /** Finish SIWE. The token is RETURNED to the browser, never stored here. */
   r.post("/siwe/verify", async (req, res) => {
-    const session = requireSession(req, res);
-    if (!session) return;
+    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
     const user = store.findUser(session.userId);
     if (!user) return res.status(404).json({ error: "no such account" });
 
@@ -178,8 +177,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
    *  render anything at all, and three round trips to show one screen is three
    *  chances to render half of it. */
   r.get("/account", async (req, res) => {
-    const session = requireSession(req, res);
-    if (!session) return;
+    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
     const jwt = tokenOf(req, res);
     if (!jwt) return;
     try {
@@ -214,8 +212,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
   });
 
   r.get("/transactions", async (req, res) => {
-    const session = requireSession(req, res);
-    if (!session) return;
+    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
     const jwt = tokenOf(req, res);
     if (!jwt) return;
     try {
@@ -229,8 +226,7 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
   /** Forget the connection. Only status is held, so this is a status delete —
    *  it does NOT close the user's Gnosis Pay account, and says so. */
   r.delete("/connection", (req, res) => {
-    const session = requireSession(req, res);
-    if (!session) return;
+    const session = res.locals.session as NonNullable<ReturnType<typeof requireSession>>;
     store.updateUser(session.userId, { gnosisPay: undefined });
     res.json({
       disconnected: true,

@@ -228,7 +228,7 @@ async function main() {
   /**
    * Off hardhat, the deployment IS the two real token addresses and nothing
    * else. The FxSwapper (our own inventory, not Safe-executable) and the
-   * BridgeEscrow (the removed dry-run leg) are local fixtures; production
+   * AdminTimelock are local fixtures; production
    * liquidity comes from LI.FI / Uniswap through the user's own Safe, and the
    * cash leg goes through Bridge.xyz. Deploying mock USDC on a real chain, as
    * this script used to, would have pointed every rail at a token nobody holds.

@@ -318,6 +318,7 @@ try {
     MONERIUM_CLIENT_ID: "stub-app-without-secret",
     MONERIUM_CLIENT_SECRET: "",
     MONERIUM_BASE_URL: STUB,
+    MONERIUM_CHAIN: "sepolia", // the stub issues on sepolia; the chain filter must see the same name
     MONERIUM_AUTH_URL: `${STUB}/auth`,
     MONERIUM_REDIRECT_URI: `${API}/api/monerium/oauth/callback`,
     MONERIUM_TOKEN_ENCRYPTION_KEY: ENC_KEY,

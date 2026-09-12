@@ -8,10 +8,11 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, HARNESS, KYC, LIQUIDITY, MONERIUM, PAYMENT_REQUESTS, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, moneriumOAuthEnabled, moneriumSandboxEnabled, SECURITY, SHOPIFY, railFeeEur } from "./config.js";
+import { API_HOST, API_PORT, IS_PRODUCTION, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, FX, HARNESS, KYC, LIQUIDITY, MONERIUM, PAYMENT_REQUESTS, PRIVACY_BUNDLE, PUBLIC_URL, RECOVERY, moneriumOAuthEnabled, moneriumSandboxEnabled, SECURITY, SHOPIFY, railFeeEur } from "./config.js";
 import { prepareSafeSwapForTransfer, prepareDepositConversion } from "./liquidity.js";
 import { createBridgeTransfer } from "./bridge/bridgexyz.js";
-import { countryBlock, normaliseCountryCode } from "./country-policy.js";
+import { normaliseCountryCode } from "./country-policy.js";
+import { ibanChecksumValid, normaliseIban } from "./domain/contacts.js";
 import { resolveSegment, capabilitiesFor, can, type Segment } from "./domain/segments.js";
 import { auditEntry, redact } from "./audit.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertion, verifyAssertionForChallenge, verifyRegistration } from "./webauthn.js";
@@ -26,7 +27,6 @@ import {
 } from "./receipt.js";
 import { createQuote, isExpired } from "./fx.js";
 import {
-  decryptToken,
   encryptToken,
   forgetUserClient,
   hasOwnMoneriumCredentials,
@@ -58,6 +58,7 @@ import {
 import {
   startCryptoDepositPoller,
   depositConversionBlocker,
+  assertRateSane,
   settleConvertedDeposit,
   recordInvoiceSettlement,
 } from "./adapters/crypto-deposits.js";
@@ -138,7 +139,7 @@ app.use((req, res, next) => {
   if (origin && SECURITY.origins.includes(origin)) {
     res.setHeader("access-control-allow-origin", origin);
     res.setHeader("access-control-allow-headers", "content-type, authorization");
-    res.setHeader("access-control-allow-methods", "GET, POST");
+    res.setHeader("access-control-allow-methods", "GET, POST, DELETE");
     if (req.method === "OPTIONS") return res.status(204).end();
   } else if (origin && req.method !== "GET" && req.method !== "OPTIONS") {
     return res.status(403).json({ error: "origin not allowed" });
@@ -179,7 +180,11 @@ app.use("/api", (req, res, next) => {
     /^\/pay\/[^/]+\/[^/]+/.test(req.path) ||
     // Shopify's session webhooks are HMAC-signed; a forged one is a guess.
     req.path.startsWith("/shopify/") ||
-    req.path === "/kyc/review" ||
+    // Operator routes take a bearer secret; guessing at it is guessing at a
+    // credential.
+    req.path.startsWith("/admin") ||
+    // An Invoice-Me link token and its optional password are bearer secrets.
+    req.path.startsWith("/invoice-links/") ||
     // Submitting Monerium API keys is a credential check against a third
     // party; guessing at it belongs on the tight bucket too.
     (req.path.endsWith("/monerium/api-keys") && req.method === "POST") ||
@@ -255,7 +260,7 @@ const pendingTransferExecutions = new Map<string, {
   userOperation: PendingPasskeySafeDeployment;
   /** Present when the operation is a full fee+approve+swap batch: where the
    *  swap output is delivered, so execution can measure and settle there. */
-  batch?: { recipient: `0x${string}`; mode: "dry-run" | "live" };
+  batch?: { recipient: `0x${string}`; mode: "live" };
 }>();
 
 function prunePendingTransferExecutions(now = Date.now()) {
@@ -265,28 +270,45 @@ function prunePendingTransferExecutions(now = Date.now()) {
 }
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
+const sha256Hex = (v: string) => createHash("sha256").update(v).digest("hex");
+
+/** One cookie value, from the raw header — no cookie middleware is loaded. */
+function cookieValue(req: express.Request, name: string): string | undefined {
+  for (const part of (req.header("cookie") ?? "").split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (k === name) return decodeURIComponent(rest.join("="));
+  }
+  return undefined;
+}
+const CONNECT_COOKIE = "zold_monerium_connect";
+
+/** The configured Monerium redirect URI, or the callback on a trusted origin. */
+function allowedRedirectUri(candidate: string): boolean {
+  if (!candidate) return false;
+  if (candidate === MONERIUM.redirectUri) return true;
+  try {
+    const url = new URL(candidate);
+    return SECURITY.origins.includes(url.origin) && url.pathname === "/api/monerium/oauth/callback";
+  } catch {
+    return false;
+  }
+}
+
 const wrap =
   (fn: express.Handler): express.Handler =>
   (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
 
 /**
- * What this deployment can actually do, so the browser can render against it.
- *
- * The simulate routes are dev-only — they 403 in production and off a
- * loopback socket — and without this nothing in any API response tells the
- * client which mode it is in, so the only way to find out is to press the
- * button and read the error. Offering an action the server will refuse is
- * exactly what makes a product read as unfinished.
+ * What this deployment can actually do, so the browser can render against it
+ * instead of offering an action the server will refuse.
  *
  * Deliberately NOT per-user, and deliberately public. These are properties of
  * the deployment rather than of an account, and /api/health already publishes
- * the contract addresses. Nothing here is exploitable either: the simulate
- * routes are gated on this flag AND on a loopback socket with no forwarding
- * headers, so learning the flag's value buys nothing a single refused request
- * would not have revealed.
+ * the contract addresses; every flag here is one refused request away from
+ * being learned anyway.
  */
-export function capabilities() {
+function capabilities() {
   return {
     /** Deposits are real Monerium IBAN transfers, always: there is no mock. */
     sandbox: true,
@@ -562,11 +584,9 @@ function requireKycApproved(user: User, res: express.Response) {
  *
  * An IBAN is the point of no return: once it exists, money can arrive, and an
  * account whose only credential is a session token becomes unreachable the
- * moment that token is gone. Worse, the spending key is bound on-chain and
- * only the CURRENT key may rotate it, so a lost browser is not a lockout —
- * it is permanent. Onboarding lets people skip the passkey, which is fine
- * while an account is empty and unacceptable once it can hold money.
- *
+ * moment that token is gone. Signup requires a passkey, but an account whose
+ * Safe never activated is the same hole reached later, so this is checked
+ * again where money starts.
  *
  * HARNESS.enabled (hardhat only) waives it so the suites can fund an account
  * without a real authenticator.
@@ -589,15 +609,6 @@ function custodyBlockerBeforeFunding(user: User): string | null {
     return "activate the passkey Safe before funding this account";
   }
   return null;
-}
-
-function passkeyRequiredBeforeFunding(user: User): string | null {
-  const blocked = custodyBlockerBeforeFunding(user);
-  if (!blocked) return null;
-  return (
-    blocked +
-    (blocked.includes("passkey Safe") ? "" : " — complete the passkey Safe setup first")
-  );
 }
 
 function passkeySafePlan(
@@ -687,18 +698,6 @@ function prunePendingMoneriumLinkSignatures(now = Date.now()) {
 
 
 /**
- * What a blocked person is told.
- *
- * PLAIN, AND NOT A REASON. Each line says what Zold cannot offer and stops
- * there. It does not cite a rule, a country policy or a partner, because the
- * user cannot act on any of that and because naming the rule tells someone
- * which answer to change. The internal reasonCode goes to the audit log.
- *
- * No legal advice, and no implication that the user has done something wrong —
- * which is why the unsupported case says the residence is not served rather
- * than anything about the person.
- */
-/**
  * The single gate in front of every partner call.
  *
  * ENFORCED IN CODE, NOT IN THE UI. Hiding a button is a presentation choice
@@ -731,8 +730,6 @@ function requireCapability(
   return false;
 }
 
-/** Bumped when the wording of the US questions or the consent text changes,
- *  so a stored answer can be tied to what was actually asked. */
 /** Wording versions: the three separate questions, and the single combined
  *  one the app asks now. Recorded with every answer so a later reading knows
  *  what was actually put to the person. */
@@ -740,6 +737,18 @@ const US_QUESTIONS_VERSION = "2026-08-31";
 const US_QUESTION_COMBINED_VERSION = "2026-09-05-combined";
 const CONSENT_VERSION = "2026-08-31";
 
+/**
+ * What a blocked person is told.
+ *
+ * PLAIN, AND NOT A REASON. Each line says what Zold cannot offer and stops
+ * there. It does not cite a rule, a country policy or a partner, because the
+ * user cannot act on any of that and because naming the rule tells someone
+ * which answer to change. The internal reasonCode goes to the audit log.
+ *
+ * No legal advice, and no implication that the user has done something wrong —
+ * which is why the unsupported case says the residence is not served rather
+ * than anything about the person.
+ */
 const BLOCKED_COPY: Record<Extract<Segment, `BLOCKED_${string}`>, string> = {
   BLOCKED_US: "Zold is not available to US persons.",
   BLOCKED_SANCTIONED: "Zold is not available in your country.",
@@ -751,7 +760,10 @@ app.post(
   wrap(async (req, res) => {
     const { name, country, email, citizenships, accountType, usAnswers, consents,
       companyIncorporationCountry, softSignals } = req.body ?? {};
-    if (!name || !country) return res.status(400).json({ error: "name, email and country required" });
+    if (typeof name !== "string" || !name.trim() || typeof country !== "string" || !country) {
+      return res.status(400).json({ error: "name, email and country required" });
+    }
+    if (name.trim().length > 120) return res.status(400).json({ error: "name is too long" });
     /**
      * EMAIL IS REQUIRED, and it is a channel, not an identity. Identity is
      * Monerium's; the passkey is the login. The email exists so the account
@@ -856,7 +868,7 @@ app.post(
     const approved = KYC.autoApprove;
     const user: User = {
       id,
-      name,
+      name: name.trim(),
       email: emailNorm,
       country: normaliseCountryCode(String(country)),
       kycStatus: approved ? "approved" : "pending",
@@ -889,7 +901,17 @@ app.post(
         ? { companyIncorporationCountry: normaliseCountryCode(String(companyIncorporationCountry)) }
         : {}),
       ...(decision.review
-        ? { softSignals: { ...(softSignals ?? {}), flaggedAt: new Date().toISOString(), reconfirmationPending: true } }
+        ? {
+            softSignals: {
+              // Only the three signals the resolver knows; the body is not
+              // spread into the row.
+              ...(softSignals?.usPhoneCode === true ? { usPhoneCode: true } : {}),
+              ...(softSignals?.usMailingAddress === true ? { usMailingAddress: true } : {}),
+              ...(softSignals?.usIpAtSignup === true ? { usIpAtSignup: true } : {}),
+              flaggedAt: new Date().toISOString(),
+              reconfirmationPending: true,
+            },
+          }
         : {}),
     });
     store.addUsAnswers(user.id, {
@@ -901,8 +923,8 @@ app.post(
       if (c?.kind !== "zold_terms" && c?.kind !== "partner_share") continue;
       store.addConsent(user.id, {
         kind: c.kind,
-        ...(c.partner ? { partner: String(c.partner) } : {}),
-        version: String(c.version ?? CONSENT_VERSION),
+        ...(typeof c.partner === "string" && c.partner ? { partner: c.partner.slice(0, 80) } : {}),
+        version: typeof c.version === "string" && c.version ? c.version.slice(0, 40) : CONSENT_VERSION,
         at: new Date().toISOString(),
         ...(req.ip ? { ip: req.ip } : {}),
       });
@@ -984,16 +1006,22 @@ app.post(
       return res.json({ deposit: store.cryptoDeposits.find((d) => d.id === deposit.id) });
     }
     const invoice = store.invoices.find((i) => i.id === String(invoiceId ?? ""));
-    if (!invoice) return res.status(404).json({ error: "invoice not found" });
+    // An invoice belongs to an organisation; only an active member of that
+    // organisation may tie a payment to it. The id is not a capability.
+    const member = invoice
+      ? store.membersOf(invoice.orgId).some((m) => m.userId === user.id && m.status === "active")
+      : false;
+    if (!invoice || !member) return res.status(404).json({ error: "invoice not found" });
 
     const linked = store.updateCryptoDeposit(deposit.id, { invoiceId: invoice.id });
     // Already converted? Then the whole thread is known now and belongs on the
     // invoice immediately, rather than waiting for a conversion that happened
     // before the link existed.
     if (linked.state === "CONVERTED") recordInvoiceSettlement(linked);
+    const after = store.invoices.find((i) => i.id === invoice.id)!;
     res.json({
       deposit: store.cryptoDeposits.find((d) => d.id === deposit.id),
-      invoice: store.invoices.find((i) => i.id === invoice.id),
+      invoice: { ...after, linkTokenHash: undefined, linkPasswordHash: undefined },
     });
   }),
 );
@@ -1121,6 +1149,14 @@ app.post(
     // Measure BEFORE submitting: the credited amount is the balance delta, not
     // anything the quote promised.
     const before = eur.toWei(await accountBalances(user.address).then((b) => b.safeBalanceEur));
+    // The rate sanity check runs BEFORE the user-signed swap lands: after it,
+    // a rate-feed outage would leave the EURe in the Safe with the deposit
+    // still marked ready to convert.
+    try {
+      await assertRateSane(BigInt(pending.quote.rate));
+    } catch (err: any) {
+      return res.status(503).json({ error: String(err?.message ?? err) });
+    }
     let opHash: string | null = null;
     try {
       opHash = await submitPasskeySafeOperation(pending.plan, pending.userOperation, {
@@ -1145,17 +1181,6 @@ app.post(
   }),
 );
 
-/**
- * Travel Rule originator data — who is sending the money.
- *
- * The cash rail hands money to a stranger at a counter, and the anchor's
- * licence obliges it to know who funded that. MoneyGram requires these as
- * SEP-9 fields; without them a SEP-12 customer sits at NEEDS_INFO and the
- * withdrawal can never complete.
- *
- * Deliberately text-only: no document images. Those belong with a KYC
- * provider, and this store is plaintext JSON on disk.
- */
 /**
  * Turn auto-settlement of payment-page crypto on or off.
  *
@@ -1332,7 +1357,8 @@ app.get("/pay/:handle/:code", (_req, res) => {
 
 /** The sender's own view of the share, with the URL to hand out. */
 function shareResponse(req: express.Request, share: ReceiptShare) {
-  const base = PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+  // The Host header is caller-controlled; the first trusted origin is not.
+  const base = PUBLIC_URL || SECURITY.origins[0] || `${req.protocol}://${req.get("host")}`;
   return {
     slug: share.slug,
     url: `${base}/r/${share.slug}`,
@@ -1604,24 +1630,44 @@ app.post(
     }
     const state = randomBytes(24).toString("base64url");
     const codeVerifier = randomBytes(48).toString("base64url");
-    const redirectUri =
-      typeof req.body?.redirectUri === "string" && req.body.redirectUri.startsWith("http")
-        ? req.body.redirectUri
-        : MONERIUM.redirectUri;
+    // The redirect target is ours or nothing: the configured URI, or the
+    // callback path on an origin this deployment already trusts for passkeys.
+    // Monerium's exact-match registration is not the only thing between a
+    // body-supplied URL and the token exchange.
+    const requested = typeof req.body?.redirectUri === "string" ? req.body.redirectUri : "";
+    const redirectUri = allowedRedirectUri(requested) ? requested : MONERIUM.redirectUri;
+    // The browser that started this connection is the only one that may
+    // finish it. Without the nonce cookie, an attacker could start a connect
+    // on THEIR account, send the victim the consent link, and have the
+    // victim's Monerium tokens land on the attacker's account.
+    const nonce = randomBytes(24).toString("base64url");
+    const approved = user.kycStatus === "approved";
     store.updateUser(user.id, {
       kyc: { ...user.kyc, provider: "monerium", onboardingPath: "existing_monerium" },
-      funding: {
-        ...(user.funding ?? { mode: "sandbox", status: "kyc_pending" as const }),
-        status: "kyc_pending" as const,
-        detail: "connect existing Monerium account",
-      },
+      // A live account re-connecting keeps its funding state; only a pending
+      // one is (re)marked as waiting on Monerium.
+      ...(approved
+        ? {}
+        : {
+            funding: {
+              ...(user.funding ?? { mode: "sandbox", status: "kyc_pending" as const }),
+              status: "kyc_pending" as const,
+              detail: "connect existing Monerium account",
+            },
+          }),
       moneriumConnect: {
         state,
         codeVerifier,
         redirectUri,
+        nonceHash: sha256Hex(nonce),
         createdAt: new Date().toISOString(),
       },
     });
+    res.setHeader(
+      "set-cookie",
+      `${CONNECT_COOKIE}=${nonce}; Path=/api/monerium/oauth; Max-Age=600; HttpOnly; SameSite=Lax` +
+        (IS_PRODUCTION || PUBLIC_URL.startsWith("https://") ? "; Secure" : ""),
+    );
     const params = new URLSearchParams({
       response_type: "code",
       client_id: MONERIUM.oauthClientId,
@@ -1645,6 +1691,12 @@ app.get(
     if (Date.now() - Date.parse(user.moneriumConnect.createdAt) > 10 * 60_000) {
       store.updateUser(user.id, { moneriumConnect: undefined });
       return res.status(410).json({ error: "OAuth state expired; start Monerium connect again" });
+    }
+    const nonce = cookieValue(req, CONNECT_COOKIE);
+    if (!nonce || sha256Hex(nonce) !== user.moneriumConnect.nonceHash) {
+      return res.status(400).json({
+        error: "this Monerium connection was started in a different browser — start it again from the app",
+      });
     }
 
     const token = await exchangeAuthorizationCode(
@@ -1929,7 +1981,11 @@ app.post(
       // What Monerium attributes to THIS address, or nothing. Falling back to
       // a previously stored value would preserve a mis-attribution.
       iban,
-      ...(viaApp
+      // Approval is the address-matched IBAN, not the POSTs succeeding: a
+      // "duplicate" answer on both proves nothing about THIS address, and an
+      // IBAN not yet issued is iban_pending, which refreshPendingIban resolves
+      // and approves when it lands.
+      ...(viaApp || !iban
         ? {}
         : {
             kycStatus: "approved" as const,
@@ -2152,24 +2208,29 @@ async function assertDailyCap(
   return true;
 }
 
+/** Constant-time operator-token check; false when no token is configured. */
+function isOperator(req: express.Request): boolean {
+  const expected = KYC.operatorToken;
+  if (!expected) return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(bearerToken(req) ?? "");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /**
  * Operator authentication. Deliberately NOT a user session: a user must never
- * be able to approve their own KYC, which is exactly what the session-scoped
- * mock-review endpoint allows. Fails closed when no token is configured, so an
- * unset secret means no approval path rather than an open one.
+ * be able to act as the operator on their own account. Fails closed when no
+ * token is configured, so an unset secret means no operator path rather than
+ * an open one.
  */
 function requireOperator(req: express.Request, res: express.Response): boolean {
-  const expected = KYC.operatorToken;
-  if (!expected) {
+  if (!KYC.operatorToken) {
     res.status(503).json({
       error: "no KYC operator token configured — set KYC_OPERATOR_TOKEN to enable operator review",
     });
     return false;
   }
-  const provided = bearerToken(req) ?? "";
-  const a = Buffer.from(expected);
-  const b = Buffer.from(provided);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+  if (!isOperator(req)) {
     res.status(401).json({ error: "operator authorization required" });
     return false;
   }
@@ -2316,10 +2377,9 @@ function adminFunding(deposit: CryptoDeposit) {
 
 
 /**
- * Deployer float for the ops dashboard. The faucet and gas both spend from
- * this address, and running it dry fails silently at onboarding time — the
- * faucet logs "top it up" to a console nobody watches. 60s cache: the
- * dashboard polls every 10s and two RPC reads per tick would be rude.
+ * Deployer float for the ops dashboard: the address that pays deployments and
+ * verifier setups, and runs dry silently. 60s cache: the dashboard polls every
+ * 10s and two RPC reads per tick would be rude.
  */
 let deployerFloatCache: { at: number; value: { address: string; eur: number; eth: number } } | null = null;
 async function deployerFloat() {
@@ -2342,10 +2402,10 @@ async function deployerFloat() {
 /**
  * Gas balances of every EOA that sends transactions for the platform. Each is
  * a distinct outage when dry, and the errors do not say which wallet is empty:
- * a dry orchestrator fails swaps and the fee leg; a dry deployer fails faucet
- * grants. Name them, so the dashboard can too. The co-signer sends no native
- * transactions — Safe debits are UserOperations through the bundler and
- * paymaster — but it stays listed so a residual balance is visible.
+ * a dry orchestrator fails swaps and the fee leg; a dry deployer fails Safe
+ * verifier deployments. Name them, so the dashboard can too. The co-signer
+ * sends no native transactions — Safe debits are UserOperations through the
+ * bundler and paymaster — but it stays listed so a residual balance is visible.
  */
 let operatorGasCache: { at: number; value: { role: string; address: string; eth: number }[] } | null = null;
 async function operatorGas() {
@@ -2408,8 +2468,12 @@ app.get(
     if (!requireOperator(req, res)) return;
     // Paginated, newest first: one leaked operator token should not dump the
     // whole ops ledger in a single request.
-    const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 200)));
-    const offset = Math.max(0, Number(req.query.offset ?? 0));
+    const asInt = (v: unknown, fallback: number) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.trunc(n) : fallback;
+    };
+    const limit = Math.min(500, Math.max(1, asInt(req.query.limit, 200)));
+    const offset = Math.max(0, asInt(req.query.offset, 0));
     const entries = [
       ...store.transfers.map(adminTransfer),
       ...store.cryptoDeposits.map(adminFunding),
@@ -2522,8 +2586,7 @@ app.post(
   wrap(async (req, res) => {
     const request = store.findRecoveryRequest(req.params.id);
     if (!request) return res.status(404).json({ error: "recovery request not found" });
-    const operator = bearerToken(req) && KYC.operatorToken && bearerToken(req) === KYC.operatorToken;
-    if (!operator && !requireUserSession(req, res, request.userId)) return;
+    if (!isOperator(req) && !requireUserSession(req, res, request.userId)) return;
     if (["FINALIZED", "CANCELED", "EXPIRED", "GUARDIAN_SUBMITTED"].includes(request.status)) {
       return res.status(409).json({ error: `recovery request is ${request.status}` });
     }
@@ -2572,8 +2635,7 @@ app.get(
   wrap(async (req, res) => {
     const request = store.findRecoveryRequest(req.params.id);
     if (!request) return res.status(404).json({ error: "recovery request not found" });
-    const operator = bearerToken(req) && KYC.operatorToken && bearerToken(req) === KYC.operatorToken;
-    if (!operator && !requireUserSession(req, res, request.userId)) return;
+    if (!isOperator(req) && !requireUserSession(req, res, request.userId)) return;
     const status = readinessStatus(request, new Date());
     const latest = status === request.status ? request : store.updateRecoveryRequest(request.id, { status });
     res.json({
@@ -2776,12 +2838,14 @@ app.post(
         ...balances,
       });
     }
+    // Claimed BEFORE the await: two parallel submits of one signature must
+    // not both send the deployment operation.
+    pendingPasskeySafeDeployments.delete(req.params.requestId);
     const opHash = await submitPasskeySafeOperation(user.passkeySafe, pending.userOperation, {
       authenticatorData: b64urlToBuf(authenticatorData),
       clientDataJSON: b64urlToBuf(clientDataJSON),
       signature: b64urlToBuf(signature),
     });
-    pendingPasskeySafeDeployments.delete(req.params.requestId);
     let updated = store.updateUser(user.id, {
       address: user.passkeySafe.address,
       wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
@@ -3038,7 +3102,7 @@ async function buildTransferFromQuote(
     ) {
       try {
         let prepared: Awaited<ReturnType<typeof prepareTransferExecution>> | undefined;
-        let batch: { recipient: `0x${string}`; mode: "dry-run" | "live" } | undefined;
+        let batch: { recipient: `0x${string}`; mode: "live" } | undefined;
         // Cash rail: try the full fee+approve+swap batch first (Change 2,
         // windows 1-3) — one signature, atomic, and the orchestrator never
         // holds the input. Falls back to the plain user-signed debit when the
@@ -3046,25 +3110,23 @@ async function buildTransferFromQuote(
         // the venue is down; the fallback still never moves without the user.
         if (transfer.rail === "cash") {
           try {
-            // Where the output lands is the destination the payout leg names:
-            // the Bridge deposit address in live mode, the orchestrator in
-            // dry-run (the local demo settles from it).
-            let recipient = orchestratorAddress;
-            let mode: "dry-run" | "live" = "dry-run";
-            let bridgeAmountUsdc: number | undefined;
-            if (BRIDGE.live) {
-              if (!BRIDGE.destinationAddress) {
-                // Same refusal bridgeDestination() gives at execute — refuse
-                // here rather than posting Bridge a transfer with an empty
-                // to_address and discovering it one leg later.
-                throw new Error(
-                  "BRIDGE_LIVE=1 requires BRIDGE_DESTINATION_ADDRESS until MoneyGram anchor payment instructions are wired into Bridge",
-                );
-              }
-              const convertEur = transfer.sendEur - railFeeEur("cash");
-              const rate = Number(quote.lockedSwapRate ?? "0") / 1e6;
-              if (!(rate > 0)) throw new Error("no locked swap rate to size the Bridge transfer");
-              bridgeAmountUsdc = Math.floor(convertEur * rate * 100) / 100;
+            // A cash transfer exists only while the rail is open (BRIDGE_LIVE
+            // and an anchor — /api/quotes refuses otherwise), so the output
+            // always lands at Bridge's deposit address for this transfer.
+            if (!BRIDGE.destinationAddress) {
+              // Same refusal bridgeDestination() gives at execute — refuse
+              // here rather than posting Bridge a transfer with an empty
+              // to_address and discovering it one leg later.
+              throw new Error(
+                "BRIDGE_LIVE=1 requires BRIDGE_DESTINATION_ADDRESS until MoneyGram anchor payment instructions are wired into Bridge",
+              );
+            }
+            const convertEur = transfer.sendEur - railFeeEur("cash");
+            const rate = Number(quote.lockedSwapRate ?? "0") / 1e6;
+            if (!(rate > 0)) throw new Error("no locked swap rate to size the Bridge transfer");
+            const bridgeAmountUsdc = Math.floor(convertEur * rate * 100) / 100;
+            let recipient: `0x${string}`;
+            {
               const bridgePlan = await createBridgeTransfer(
                 transfer.id,
                 bridgeAmountUsdc,
@@ -3081,7 +3143,6 @@ async function buildTransferFromQuote(
                 throw new Error("Bridge returned no Base deposit address for the swap to deliver into");
               }
               recipient = deposit as `0x${string}`;
-              mode = "live";
             }
             const swap = await prepareSafeSwapForTransfer(transfer, {
               executor: user.address as `0x${string}`,
@@ -3101,31 +3162,19 @@ async function buildTransferFromQuote(
                 approval: { spender: swap.plan.approval.spender, amount: convertWei },
                 call: swap.plan.call,
               });
-              batch = { recipient, mode };
-              // Live: the batch delivers straight to Bridge's deposit address,
-              // so the input never reaches an address we hold a key to.
-              // Dry-run: there IS no external destination, so the output lands
-              // at the orchestrator for the local demo to settle from —
-              // still a batch, still user-signed, but custodial, and it says so.
-              custody =
-                mode === "live"
-                  ? { mode: "non-custodial", feeToOrchestrator: true }
-                  : {
-                      mode: "orchestrator",
-                      reason:
-                        "BRIDGE_LIVE is not set, so the swap has no external deposit address to " +
-                        "deliver into and the output lands at the orchestrator",
-                      feeToOrchestrator: true,
-                    };
+              batch = { recipient, mode: "live" };
+              // The batch delivers straight to Bridge's deposit address, so
+              // the input never reaches an address we hold a key to.
+              custody = { mode: "non-custodial", feeToOrchestrator: true };
               transfer.liquidity = swap.serialized;
               transfer.safeSwap = {
                 recipient,
-                mode,
+                mode: "live",
                 // The amount the live Bridge transfer was created with. Execute
                 // must re-create with EXACTLY this body — the idempotency key
                 // is shared, and an idempotent replay with a different amount
                 // is either rejected or silently ignored.
-                ...(bridgeAmountUsdc !== undefined ? { bridgeAmountUsdc } : {}),
+                bridgeAmountUsdc,
               };
             }
             if (!swap) {
@@ -3280,13 +3329,18 @@ app.post(
       store.updateQuote(quote.id, { status: "EXPIRED" });
       return res.status(410).json({ error: "quote expired, request a new one" });
     }
-    if (!recipientName) {
-      return res.status(400).json({ error: "recipientName required" });
+    if (typeof recipientName !== "string" || !recipientName.trim() || recipientName.length > 140) {
+      return res.status(400).json({ error: "recipientName required (up to 140 characters)" });
     }
-    if (quote.rail === "sepa" && !recipientIban) {
-      return res.status(400).json({ error: "recipientIban required for bank payout" });
+    if (quote.rail === "sepa") {
+      if (typeof recipientIban !== "string" || !recipientIban.trim()) {
+        return res.status(400).json({ error: "recipientIban required for bank payout" });
+      }
+      if (!ibanChecksumValid(normaliseIban(recipientIban))) {
+        return res.status(400).json({ error: "recipientIban is not a valid IBAN" });
+      }
     }
-    if (quote.rail === "cash" && !recipientPhone) {
+    if (quote.rail === "cash" && (typeof recipientPhone !== "string" || !recipientPhone.trim() || recipientPhone.length > 32)) {
       return res.status(400).json({ error: "recipientPhone required for cash pickup" });
     }
     // Remittance reference: carried to the payee on the SEPA rail so they can
@@ -3384,7 +3438,6 @@ app.post(
   }),
 );
 
-// Monerium webhook receiver (production path; polling covers local dev).
 /**
  * Register the device key that may authorize transfers from this account.
  * The browser generates the key, keeps the private half, and sends only the
@@ -3604,24 +3657,13 @@ app.post(
 );
 
 /**
- * Verify the shared-secret HMAC on a Monerium webhook.
- *
- * Returns true when no secret is configured — the endpoint is still safe in
- * that case because handleWebhookEvent re-reads the order from Monerium and
- * ignores everything else in the body. Set MONERIUM_WEBHOOK_SECRET to also
- * keep strangers from making us do the lookup.
- *
- * Monerium signs `${webhook-id}.${webhook-timestamp}.${rawBody}` with the
- * base64-decoded `whsec_...` secret and sends `webhook-signature: v1,<base64>`.
- */
-/**
  * The signed timestamp is what stops a captured delivery being replayed years
  * later. Delivery-id dedupe only rejects ids we have already seen, so it does
  * nothing for a capture we never received. Accepts both the ISO-8601 and the
  * unix-seconds forms, since we have not seen a real Monerium delivery yet.
  * MONERIUM_WEBHOOK_TOLERANCE_SEC=0 disables the check.
  */
-export function withinReplayWindow(
+function withinReplayWindow(
   timestamp: string,
   toleranceSec = SECURITY.webhookToleranceSec,
   now = Date.now(),
@@ -3635,6 +3677,19 @@ export function withinReplayWindow(
   return Math.abs(now - sentMs) <= toleranceSec * 1000;
 }
 
+/**
+ * Verify the shared-secret HMAC on a Monerium webhook.
+ *
+ * Returns true when no secret is configured — the endpoint is still safe in
+ * that case because handleWebhookEvent re-reads the order from Monerium and
+ * ignores everything else in the body. Set MONERIUM_WEBHOOK_SECRET to also
+ * keep strangers from making us do the lookup.
+ *
+ * Monerium signs `${webhook-id}.${webhook-timestamp}.${rawBody}` with the
+ * base64-decoded `whsec_...` secret and sends `webhook-signature: v1,<base64>`.
+ * The Standard Webhooks format allows several space-separated signatures
+ * during a key rotation; any one matching is enough.
+ */
 function verifyWebhookSignature(req: express.Request): boolean {
   const secret = SECURITY.moneriumWebhookSecret;
   if (!secret) return true;
@@ -3646,10 +3701,14 @@ function verifyWebhookSignature(req: express.Request): boolean {
   if (!withinReplayWindow(timestamp)) return false;
   const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
   const signed = Buffer.concat([Buffer.from(`${id}.${timestamp}.`), raw]);
-  const expected = `v1,${createHmac("sha256", key).update(signed).digest("base64")}`;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(provided);
-  return a.length === b.length && timingSafeEqual(a, b);
+  const expected = Buffer.from(`v1,${createHmac("sha256", key).update(signed).digest("base64")}`);
+  return provided
+    .split(" ")
+    .filter(Boolean)
+    .some((candidate) => {
+      const b = Buffer.from(candidate);
+      return expected.length === b.length && timingSafeEqual(expected, b);
+    });
 }
 
 app.post(
