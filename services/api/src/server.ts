@@ -63,6 +63,41 @@ import {
   recordInvoiceSettlement,
 } from "./adapters/crypto-deposits.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from "./pay.js";
+import {
+  type PendingPasskeySafeDeployment,
+  pendingMoneriumLinkSignatures,
+  pendingPasskeySafeDeployments,
+  pendingTransferExecutions,
+  prunePendingMoneriumLinkSignatures,
+  prunePendingPasskeySafeDeployments,
+  prunePendingTransferExecutions,
+} from "./http/pending.js";
+import { AUTH_WINDOW_SEC, buildTransferFromQuote } from "./transfers/build.js";
+import { capabilities } from "./capabilities.js";
+import { publicUser, withSession } from "./users/public-user.js";
+import {
+  activatePasskeySafePlan,
+  passkeySafeChallenge,
+  passkeySafePlan,
+} from "./wallet/passkey-safe-plan.js";
+import { apiRateLimit, originPolicy, rateLimit } from "./http/policy.js";
+import {
+  bearerToken,
+  cookieValue,
+  issueSession,
+  requireSession,
+  requireUserSession,
+  tokenHash,
+} from "./http/sessions.js";
+import {
+  assertDailyCap,
+  custodyBlockerBeforeFunding,
+  isOperator,
+  operatorLabel,
+  requireCapability,
+  requireKycApproved,
+  requireOperator,
+} from "./http/guards.js";
 import { qrSvg } from "./qr.js";
 import { createOrgRouter } from "./routes/orgs.js";
 import { createBusinessRouter, createInvoiceLinkRouter } from "./routes/business.js";
@@ -126,76 +161,16 @@ app.use(express.json({
   },
 }));
 
-/** How long a device signature stays submittable (FP4). */
-const AUTH_WINDOW_SEC = 15 * 60;
-
-// ---------------------------------------------------------------------------
-// FP1: origin policy + per-IP rate limiting (dependency-free)
-
-// State-changing requests from foreign origins are refused outright; allowed
-// origins get explicit CORS headers, everyone else gets none.
-app.use((req, res, next) => {
-  const origin = req.header("origin");
-  if (origin && SECURITY.origins.includes(origin)) {
-    res.setHeader("access-control-allow-origin", origin);
-    res.setHeader("access-control-allow-headers", "content-type, authorization");
-    res.setHeader("access-control-allow-methods", "GET, POST, DELETE");
-    if (req.method === "OPTIONS") return res.status(204).end();
-  } else if (origin && req.method !== "GET" && req.method !== "OPTIONS") {
-    return res.status(403).json({ error: "origin not allowed" });
-  }
-  next();
-});
+// FP1: origin policy + per-IP rate limiting live in http/policy.ts — the
+// outermost thing every request passes through, readable in one place.
+app.use(originPolicy);
 
 // Where the client address comes from. Default 0 = the socket peer, correct
 // only with nothing in front; behind a proxy that address is the proxy, so every
 // caller shares one bucket and one client can rate-limit the whole service.
 app.set("trust proxy", SECURITY.trustedProxyHops);
 
-
-
-const hits = new Map<string, { n: number; reset: number }>();
-function rateLimit(key: string, perMin: number): boolean {
-  const now = Date.now();
-  const h = hits.get(key);
-  if (!h || h.reset < now) {
-    hits.set(key, { n: 1, reset: now + 60_000 });
-    if (hits.size > 10_000) for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
-    return true;
-  }
-  return ++h.n <= perMin;
-}
-app.use("/api", (req, res, next) => {
-  const ip = req.ip ?? "?";
-  const authRoute =
-    req.path.startsWith("/passkey") ||
-    req.path.startsWith("/recovery") ||
-    // A receipt slug is a bearer credential, so looking one up is a guess at a
-    // secret and belongs on the tighter bucket with the other guessable things.
-    req.path.startsWith("/r/") ||
-    // A document verification code is likewise a bearer credential.
-    req.path.startsWith("/v/") ||
-    // A payment-request code (/pay/<handle>/<code>) is one too; the bare
-    // /pay/<handle> page is public by design and stays on the general bucket.
-    /^\/pay\/[^/]+\/[^/]+/.test(req.path) ||
-    // Shopify's session webhooks are HMAC-signed; a forged one is a guess.
-    req.path.startsWith("/shopify/") ||
-    // Operator routes take a bearer secret; guessing at it is guessing at a
-    // credential.
-    req.path.startsWith("/admin") ||
-    // An Invoice-Me link token and its optional password are bearer secrets.
-    req.path.startsWith("/invoice-links/") ||
-    // Submitting Monerium API keys is a credential check against a third
-    // party; guessing at it belongs on the tight bucket too.
-    (req.path.endsWith("/monerium/api-keys") && req.method === "POST") ||
-    (req.path === "/users" && req.method === "POST");
-  const ok = authRoute
-    ? rateLimit(`a:${ip}`, SECURITY.authRateLimitPerMin)
-    : rateLimit(`g:${ip}`, SECURITY.rateLimitPerMin);
-  if (!ok) return res.status(429).json({ error: "rate limited — slow down" });
-  next();
-});
-
+app.use("/api", apiRateLimit);
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../public");
 /**
  * Landing page at /, the app at /app.
@@ -237,49 +212,10 @@ app.use("/api/orgs", createBusinessRouter(requireSession, buildTransferFromQuote
 app.use("/api/invoice-links", createInvoiceLinkRouter());
 app.use("/api/gnosis-pay", createGnosisPayRouter(requireSession));
 
-type PendingPasskeySafeDeployment = Awaited<ReturnType<typeof preparePasskeySafeDeployment>>["userOperation"];
-const pendingPasskeySafeDeployments = new Map<string, { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }>();
-const pendingMoneriumLinkSignatures = new Map<string, {
-  userId: string;
-  expiresAt: number;
-  challenge: string;
-  profileId?: string;
-}>();
-/**
- * Per-transfer Safe executions awaiting the send-time passkey ceremony: the
- * UserOperation that will move this transfer's exact debit out of the user's
- * Safe. Keyed by TRANSFER id; dies with its authorization window. Held in
- * memory on purpose — a restart only means the user re-creates the transfer,
- * the same recovery as an expired authorization; nothing durable is lost.
- */
-const pendingTransferExecutions = new Map<string, {
-  userId: string;
-  expiresAt: number;
-  challenge: string;
-  plan: NonNullable<User["passkeySafe"]>;
-  userOperation: PendingPasskeySafeDeployment;
-  /** Present when the operation is a full fee+approve+swap batch: where the
-   *  swap output is delivered, so execution can measure and settle there. */
-  batch?: { recipient: `0x${string}`; mode: "live" };
-}>();
-
-function prunePendingTransferExecutions(now = Date.now()) {
-  for (const [id, pending] of pendingTransferExecutions) {
-    if (pending.expiresAt < now) pendingTransferExecutions.delete(id);
-  }
-}
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
 const sha256Hex = (v: string) => createHash("sha256").update(v).digest("hex");
 
-/** One cookie value, from the raw header — no cookie middleware is loaded. */
-function cookieValue(req: express.Request, name: string): string | undefined {
-  for (const part of (req.header("cookie") ?? "").split(";")) {
-    const [k, ...rest] = part.trim().split("=");
-    if (k === name) return decodeURIComponent(rest.join("="));
-  }
-  return undefined;
-}
 const CONNECT_COOKIE = "zold_monerium_connect";
 
 /** The configured Monerium redirect URI, or the callback on a trusted origin. */
@@ -299,46 +235,6 @@ const wrap =
   (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
 
-/**
- * What this deployment can actually do, so the browser can render against it
- * instead of offering an action the server will refuse.
- *
- * Deliberately NOT per-user, and deliberately public. These are properties of
- * the deployment rather than of an account, and /api/health already publishes
- * the contract addresses; every flag here is one refused request away from
- * being learned anyway.
- */
-function capabilities() {
-  return {
-    /** Deposits are real Monerium IBAN transfers, always: there is no mock. */
-    sandbox: true,
-    /** May the browser offer "sign up / sign in with Monerium" (OAuth)? */
-    moneriumOAuth: moneriumOAuthEnabled(),
-    /** Is the cash (EUR -> KES) corridor open? Bridge live AND an anchor
-     *  configured; the UI hides the corridor rather than quote into a wall. */
-    cashRail: cashRailOpen(),
-    /** Is a Shopify payments app registered for this deployment? Without one
-     *  the dashboard's Shopify card says so instead of offering a connect
-     *  button that can only fail. */
-    shopify: shopifyAvailable().available,
-    /** Which Shopify shape this deployment runs — `custom-app` (manual
-     *  payment method + orders webhook, installable today) or `payments-app`
-     *  (a checkout payment method, needs Shopify's program approval). */
-    shopifyMode: SHOPIFY.mode,
-    /**
-     * May a user connect their OWN Monerium app credentials? Needs the
-     * encryption key, because the secret is never written in plaintext. The
-     * environment tells the browser which portal the keys must come from —
-     * sandbox keys against production, or the reverse, fail as "wrong secret".
-     */
-    moneriumApiKeys: moneriumApiKeysAvailable(),
-    moneriumEnvironment: moneriumEnvironment(),
-    /** May a user enrol email/SMS recovery, and may a lost device recover
-     *  through it? Needs Candide's recovery service URL. */
-    emailSmsRecovery: candideRecoveryEnabled(),
-    moneriumHost: (() => { try { return new URL(MONERIUM.baseUrl).host; } catch { return MONERIUM.baseUrl; } })(),
-  };
-}
 
 app.get(
   "/api/health",
@@ -373,94 +269,6 @@ app.get(
 
 const sandbox = moneriumSandboxEnabled();
 
-/** Never send payment-page deposit keys, OAuth state, or encrypted tokens to the client. */
-const publicUser = (
-  { moneriumConnect, monerium, passkey, paymentPage, segment, usPersonAnswers, ...u }:
-    User & { [k: string]: any },
-) => ({
-  ...u,
-  // Recovery channel targets are masked on every surface, this one included:
-  // the raw phone number and email exist to receive codes, not to be read
-  // back by whoever holds a session.
-  ...(u.passkeySafe?.candideRecovery
-    ? {
-        passkeySafe: {
-          ...u.passkeySafe,
-          candideRecovery: {
-            ...u.passkeySafe.candideRecovery,
-            channels: u.passkeySafe.candideRecovery.channels.map((c) => ({ ...c, target: maskTarget(c.channel, c.target) })),
-          },
-        },
-      }
-    : {}),
-  /**
-   * The client is told its capabilities, NOT the rule that produced them.
-   *
-   * `reasonCode` and the raw US answers are stripped: the first tells someone
-   * which answer to change, and the second is theirs but has no business being
-   * echoed back on every read. `gate` IS sent, because a gated segment must be
-   * able to say what is missing.
-   */
-  ...(segment
-    ? {
-        segment: {
-          value: segment.value,
-          capabilities: capabilitiesFor(segment.value),
-          ...(segment.gate ? { gate: segment.gate } : {}),
-        },
-      }
-    : {}),
-  ...(paymentPage
-    ? {
-        paymentPage: {
-          handle: paymentPage.handle,
-          displayName: paymentPage.displayName,
-          depositAddress: paymentPage.depositAddress,
-          recipientAddress: paymentPage.recipientAddress,
-          forwarder: paymentPage.forwarder
-            ? {
-                provider: paymentPage.forwarder.provider,
-                destinationChainId: paymentPage.forwarder.destinationChainId,
-                sourceChainIds: paymentPage.forwarder.sourceChainIds,
-                active: paymentPage.forwarder.active,
-                expiresAt: paymentPage.forwarder.expiresAt,
-              }
-            : undefined,
-          supportedTokens: paymentPage.supportedTokens,
-          settlementAsset: paymentPage.settlementAsset,
-          autoConvert: paymentPage.autoConvert,
-          createdAt: paymentPage.createdAt,
-          updatedAt: paymentPage.updatedAt,
-        },
-      }
-    : {}),
-  ...(passkey
-    ? {
-        passkey: {
-          credentialId: passkey.credentialId,
-          rpId: passkey.rpId,
-          createdAt: passkey.createdAt,
-        },
-      }
-    : {}),
-  ...(monerium
-    ? {
-        monerium: {
-          connectedAt: monerium.connectedAt,
-          method: monerium.method ?? (monerium.accessTokenEnc ? "oauth" : undefined),
-          profileId: monerium.profileId,
-          profiles: monerium.profiles,
-          ibans: monerium.ibans,
-          addresses: monerium.addresses,
-          // Client id, environment and when it was verified. Never the secret,
-          // and never its ciphertext.
-          ...(monerium.apiKeys ? { apiKeys: publicApiKeys(monerium.apiKeys) } : {}),
-        },
-      }
-    : {}),
-});
-const withSession = (user: User) => ({ ...publicUser(user), sessionToken: issueSession(user.id) });
-
 // Email/SMS recovery through Candide's guardian. Mounted at /api so its
 // no-session half sits under /recovery, which the limiter above already
 // treats as an auth route.
@@ -488,19 +296,6 @@ function nextMonthlyRenewal() {
   const d = new Date();
   d.setUTCMonth(d.getUTCMonth() + 1);
   return d.toISOString();
-}
-
-function tokenHash(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-function issueSession(userId: string) {
-  const token = randomBytes(32).toString("base64url");
-  const nowMs = Date.now();
-  const now = new Date(nowMs).toISOString();
-  const expiresAt = new Date(nowMs + SECURITY.sessionTtlMs).toISOString();
-  store.addSession({ id: randomUUID(), userId, tokenHash: tokenHash(token), createdAt: now, lastUsedAt: now, expiresAt });
-  return token;
 }
 
 function base64url(buf: Buffer) {
@@ -532,202 +327,6 @@ async function readMoneriumAccountSnapshot(user: User, accessToken?: string) {
   const ibans = Array.isArray(ibanRes) ? ibanRes : (ibanRes?.ibans ?? []);
   const addresses = Array.isArray(addressRes) ? addressRes : (addressRes?.addresses ?? []);
   return { context, profiles, ibans, addresses };
-}
-
-function bearerToken(req: express.Request): string | undefined {
-  const h = req.header("authorization") ?? "";
-  const m = h.match(/^Bearer\s+(.+)$/i);
-  return m?.[1];
-}
-
-function requireSession(req: express.Request, res: express.Response) {
-  const token = bearerToken(req);
-  if (!token) {
-    res.status(401).json({ error: "authorization required" });
-    return undefined;
-  }
-  const session = store.findSessionByTokenHash(tokenHash(token));
-  if (!session) {
-    res.status(401).json({ error: "invalid session" });
-    return undefined;
-  }
-  if (session.revokedAt || Date.now() >= Date.parse(session.expiresAt)) {
-    res.status(401).json({ error: "session expired" });
-    return undefined;
-  }
-  store.touchSession(session.id);
-  return session;
-}
-
-function requireUserSession(req: express.Request, res: express.Response, userId: string) {
-  const session = requireSession(req, res);
-  if (!session) return undefined;
-  if (session.userId !== userId) {
-    res.status(403).json({ error: "forbidden" });
-    return undefined;
-  }
-  return session;
-}
-
-function requireKycApproved(user: User, res: express.Response) {
-  if (user.kycStatus === "approved") return true;
-  res.status(409).json({
-    error: `KYC ${user.kycStatus}; account funding and transfers are disabled until KYC is approved`,
-    kycStatus: user.kycStatus,
-  });
-  return false;
-}
-
-
-/**
- * Refuse to issue an IBAN to an account nobody can get back into.
- *
- * An IBAN is the point of no return: once it exists, money can arrive, and an
- * account whose only credential is a session token becomes unreachable the
- * moment that token is gone. Signup requires a passkey, but an account whose
- * Safe never activated is the same hole reached later, so this is checked
- * again where money starts.
- *
- * HARNESS.enabled (hardhat only) waives it so the suites can fund an account
- * without a real authenticator.
- */
-function custodyBlockerBeforeFunding(user: User): string | null {
-  if (HARNESS.enabled) return null;
-  if (!user.passkey?.publicKey) {
-    return (
-      "a verified passkey is required before an account can be funded — without one there is " +
-      "no way to sign back in, and a lost device key cannot be replaced"
-    );
-  }
-  if (!user.passkeySafe) {
-    return "a passkey Safe plan is required before an account can be funded";
-  }
-  if (
-    user.passkeySafe.status !== "active" ||
-    user.address.toLowerCase() !== user.passkeySafe.address.toLowerCase()
-  ) {
-    return "activate the passkey Safe before funding this account";
-  }
-  return null;
-}
-
-function passkeySafePlan(
-  user: User,
-  publicKey: NonNullable<NonNullable<User["passkey"]>["publicKey"]>,
-): User["passkeySafe"] | undefined {
-  if (!publicKey || publicKey.alg !== "ES256") return undefined;
-  const cosignerAddress =
-    CANDIDE.cosignerEnabled && /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.cosignerAddress)
-      ? (CANDIDE.cosignerAddress as `0x${string}`)
-      : undefined;
-  const owner = webauthnOwnerFromJwk(publicKey.jwk);
-  if (!owner) return undefined;
-  const account = cosignerAddress
-    ? smartAccountForPasskeyCosigner(owner, cosignerAddress)
-    : smartAccountForPasskey(owner);
-  const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
-    ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)
-    : undefined;
-  return {
-    address: account.accountAddress as `0x${string}`,
-    status: "planned",
-    threshold: cosignerAddress ? 2 : 1,
-    ...(cosignerAddress ? { cosignerAddress } : {}),
-    // No allowance module, no delegate, no spend amounts: nothing moves from
-    // the Safe except UserOperations the user's own passkey signs. The policy
-    // record only says whether a co-signing OWNER exists (and keeps the shape
-    // stored accounts already have); the module address is there so standing
-    // allowances on older Safes can be found and revoked.
-    cosignerPolicy: {
-      // Keyed on the GATED cosignerAddress (CANDIDE.cosignerEnabled applied),
-      // not the raw env var: with the co-signer disabled this plan is a
-      // 1-of-1 Safe, and recording enabled:true would make the UI describe a
-      // co-signer that is not in the owner set.
-      enabled: Boolean(cosignerAddress),
-      allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-      allowancePeriodMinutes: "0",
-      allowances: [],
-    },
-    passkeyPublicKey: webauthnOwnerToStore(owner),
-    ...(recoveryGuardianAddress
-      ? {
-          recovery: {
-            moduleAddress: CANDIDE.recoveryModuleAddress,
-            guardianAddress: recoveryGuardianAddress,
-            threshold: 1,
-            status: "planned",
-          },
-        }
-      : {}),
-    createdAt: new Date().toISOString(),
-    previousAddress: user.address,
-  };
-}
-
-function activatePasskeySafePlan(plan: NonNullable<User["passkeySafe"]>): User["passkeySafe"] {
-  return {
-    ...plan,
-    status: "active",
-    ...(plan.recovery
-      ? {
-          recovery: {
-            ...plan.recovery,
-            status: "active",
-            enabledAt: new Date().toISOString(),
-          },
-        }
-      : {}),
-  };
-}
-
-function passkeySafeChallenge(challenge: `0x${string}`): string {
-  return bufToB64url(Buffer.from(challenge.slice(2), "hex"));
-}
-
-function prunePendingPasskeySafeDeployments(now = Date.now()) {
-  for (const [id, pending] of pendingPasskeySafeDeployments) {
-    if (pending.expiresAt < now) pendingPasskeySafeDeployments.delete(id);
-  }
-}
-
-function prunePendingMoneriumLinkSignatures(now = Date.now()) {
-  for (const [id, pending] of pendingMoneriumLinkSignatures) {
-    if (pending.expiresAt < now) pendingMoneriumLinkSignatures.delete(id);
-  }
-}
-
-
-/**
- * The single gate in front of every partner call.
- *
- * ENFORCED IN CODE, NOT IN THE UI. Hiding a button is a presentation choice
- * that a crafted request walks straight past; this is the check that actually
- * decides. An IN_COLLECTIONS account cannot reach Monerium, a Safe, a card or
- * an on-chain balance no matter what it POSTs, because every one of those
- * routes asks here first.
- *
- * A user with no segment is a pre-existing account from before segmentation.
- * They are treated as EU_FULL rather than refused: they were created under the
- * old country gate, which already required a Monerium-servable residence, and
- * locking them out of their own funded account would be a worse failure than
- * the one this guards. `npm run segments:test` covers the resolver; this
- * fallback is the migration seam and is deliberately narrow.
- */
-function requireCapability(
-  user: User,
-  capability: Parameters<typeof can>[1],
-  res: express.Response,
-): boolean {
-  const segment: Segment = user.segment?.value ?? "EU_FULL";
-  if (can(segment, capability)) return true;
-  store.audit(auditEntry("partner.call_refused", { segment, capability }, user.id));
-  res.status(403).json({
-    error: "This is not part of your account.",
-    code: "CAPABILITY_UNAVAILABLE",
-    capability,
-    ...(user.segment?.gate ? { gate: user.segment.gate } : {}),
-  });
-  return false;
 }
 
 /** Wording versions: the three separate questions, and the single combined
@@ -2188,60 +1787,6 @@ app.delete(
 
 
 
-/** Refuse a send that would take the account past its daily cap, counting both
- *  funding sources. The arithmetic lives in dailyCapUsage so it can be tested
- *  without standing up the HTTP layer. */
-async function assertDailyCap(
-  user: User,
-  sendEur: number,
-  res: express.Response,
-): Promise<boolean> {
-  const { capEur, usedEur, fromSafeEur } = await dailyCapUsage(user);
-  if (usedEur + sendEur > capEur) {
-    res.status(400).json({
-      error:
-        `amount exceeds the daily cap of €${capEur.toFixed(2)} ` +
-        `(already used €${usedEur.toFixed(2)} today from the Safe: €${fromSafeEur.toFixed(2)})`,
-    });
-    return false;
-  }
-  return true;
-}
-
-/** Constant-time operator-token check; false when no token is configured. */
-function isOperator(req: express.Request): boolean {
-  const expected = KYC.operatorToken;
-  if (!expected) return false;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(bearerToken(req) ?? "");
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-/**
- * Operator authentication. Deliberately NOT a user session: a user must never
- * be able to act as the operator on their own account. Fails closed when no
- * token is configured, so an unset secret means no operator path rather than
- * an open one.
- */
-function requireOperator(req: express.Request, res: express.Response): boolean {
-  if (!KYC.operatorToken) {
-    res.status(503).json({
-      error: "no KYC operator token configured — set KYC_OPERATOR_TOKEN to enable operator review",
-    });
-    return false;
-  }
-  if (!isOperator(req)) {
-    res.status(401).json({ error: "operator authorization required" });
-    return false;
-  }
-  return true;
-}
-
-function operatorLabel(req: express.Request): string {
-  const token = bearerToken(req) ?? "";
-  return `operator:${createHash("sha256").update(token).digest("hex").slice(0, 12)}`;
-}
-
 function recoveryPublicList(userId: string) {
   const now = new Date();
   return store.recoveryRequestsForUser(userId)
@@ -2941,348 +2486,6 @@ async function verifyPasskeyStepUp(user: User, body: any, res: express.Response)
     return false;
   }
 }
-
-
-/**
- * Build a transfer from an open quote, and the authorization the device must
- * sign for it.
- *
- * Extracted from POST /api/transfers unchanged so that draft execution can
- * create transfers through the SAME code path. A second, parallel construction
- * would be the classic way for one caller to quietly skip a balance check, a
- * daily cap, or the destination commitment.
- *
- * Returns a discriminated result rather than writing to a response: it has two
- * callers now, and only one of them owns an HTTP response. The `res` it passes
- * to requireKycApproved / assertDailyCap is a collector whose
- * `.status(x).json(y)` evaluates to the failure result itself, so every
- * refusal below reads exactly as it did when this was a route.
- */
-type TransferBuildFailure = { ok: false; status: number; body: any };
-type TransferBuildResult =
-  | { ok: true; transfer: Transfer; authorization: any }
-  | TransferBuildFailure;
-
-function responseCollector() {
-  const out: TransferBuildFailure = { ok: false, status: 500, body: undefined };
-  const res: any = {
-    status(code: number) {
-      out.status = code;
-      return res;
-    },
-    json(body: any) {
-      out.body = body;
-      return out;
-    },
-  };
-  return { res, out };
-}
-
-async function buildTransferFromQuote(
-  quote: Quote,
-  recipient: {
-    recipientName: string;
-    recipientPhone?: string;
-    recipientIban?: string;
-    reference?: string;
-  },
-): Promise<TransferBuildResult> {
-  const { res, out } = responseCollector();
-  const { recipientName, recipientPhone, recipientIban, reference } = recipient;
-    const user = store.findUser(quote.userId)!;
-    if (!requireKycApproved(user, res)) return out;
-    const balances = await accountBalances(user.address);
-    const fundingSource: Transfer["fundingSource"] = "safe";
-    if (balances.safeBalanceEur < quote.sendEur) {
-      return res.status(400).json({
-        error: `insufficient Safe balance (€${balances.safeBalanceEur.toFixed(2)})`,
-      });
-    }
-    const debitBlocker = safeDebitBlocker(user);
-    if (fundingSource === "safe" && debitBlocker) {
-      return res.status(409).json({
-        error: debitBlocker,
-        safeBalanceEur: balances.safeBalanceEur,
-      });
-    }
-    if (!(await assertDailyCap(user, quote.sendEur, res))) return out;
-
-    const createdAt = new Date().toISOString();
-    const transfer: Transfer = {
-      id: randomUUID(),
-      userId: user.id,
-      quoteId: quote.id,
-      rail: quote.rail,
-      recipientName,
-      recipientPhone,
-      recipientIban,
-      reference: reference || undefined,
-      state: "CREATED" as const,
-      sendEur: quote.sendEur,
-      receiveKes: quote.receiveKes,
-      receiveEur: quote.receiveEur,
-      fundingSource,
-      txs: [],
-      createdAt,
-      updatedAt: createdAt,
-    };
-    if (transfer.rail === "sepa" && transfer.recipientIban) {
-      const payoutEur = transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa");
-      const redeem = moneriumRedeemMessage(payoutEur, transfer.recipientIban, createdAt);
-      transfer.moneriumRedeem = {
-        ...redeem,
-        memo: paymentMemo(transfer.id, transfer.reference),
-      };
-    }
-    // The account must be bound to a device key before it can spend.
-    const authorizer = user.authorizerAddress;
-    if (!authorizer) {
-      return res.status(409).json({
-        error: "no device key registered for this account — POST /api/users/:id/authorizer first",
-      });
-    }
-    if (!store.consumeQuote(quote.id)) {
-      return res.status(409).json({ error: "quote already consumed" });
-    }
-    // Fix the exact terms the device is asked to sign. Nothing moves until a
-    // matching signature comes back to /authorize. The destination commitment
-    // binds the payout target into the signature (see destinationCommitment):
-    // the device signs *who* is paid, not only how much.
-    const amountWei = eur.toWei(transfer.sendEur);
-    const deadline = Math.floor(Date.now() / 1000) + AUTH_WINDOW_SEC;
-    const destination = destinationCommitment(transfer.rail, {
-      phone: transfer.recipientPhone,
-      iban: transfer.recipientIban,
-      name: transfer.recipientName,
-    });
-    transfer.auth = { to: orchestratorAddress, amountWei: amountWei.toString(), destination, deadline };
-    // The user-signed debit: a UserOperation moving this transfer's exact
-    // amount (the fee alone on the SEPA rail — the payout burns straight from
-    // the Safe) to the orchestrator's working address. The passkey signs its
-    // hash at send time, so the chain enforces amount and destination; no
-    // allowance and no server-relayable spend authority exists at any point.
-    let safeExecution:
-      | { credentialId: string; challenge: string; amountEur: number; token: "EURE" }
-      | undefined;
-    /**
-     * Which custody mode this transfer will actually run in, recorded on the
-     * transfer itself. Starts at the honest worst case and is narrowed only
-     * when a Safe-executed batch is genuinely prepared — so a venue outage or
-     * a missing config leaves the truthful answer behind rather than an
-     * optimistic one nobody revisited.
-     *
-     * The SEPA rail is already non-custodial for the principal: Monerium's
-     * redeem burns the payout straight from the Safe and only the fee moves.
-     */
-    let custody: NonNullable<Transfer["custody"]> =
-      transfer.rail === "sepa"
-        ? { mode: "non-custodial", feeToOrchestrator: transfer.sendEur > (transfer.receiveEur ?? 0) }
-        : {
-            mode: "orchestrator",
-            reason: "no Safe-executed swap batch was prepared for this transfer",
-            feeToOrchestrator: true,
-          };
-    const debitWei =
-      transfer.rail === "sepa"
-        ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa"))))
-        : amountWei;
-    if (
-      debitWei > 0n &&
-      user.passkey?.credentialId &&
-      user.passkeySafe?.status === "active" &&
-      user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
-      // A 2-of-2 Safe needs the co-signer KEY to counter-sign; a passkey-only
-      // Safe needs nothing beyond the user's assertion. Deliberately the same
-      // condition as the orchestrator's passkeySafeExecutionReady: requiring
-      // more here (the address env var, say) would create transfers that pass
-      // the readiness blocker but silently never get an execution prepared,
-      // and then fail at authorize blaming the user.
-      (!user.passkeySafe.cosignerAddress || CANDIDE.cosignerKey) &&
-      !HARNESS.enabled
-    ) {
-      try {
-        let prepared: Awaited<ReturnType<typeof prepareTransferExecution>> | undefined;
-        let batch: { recipient: `0x${string}`; mode: "live" } | undefined;
-        // Cash rail: try the full fee+approve+swap batch first (Change 2,
-        // windows 1-3) — one signature, atomic, and the orchestrator never
-        // holds the input. Falls back to the plain user-signed debit when the
-        // configured venue cannot serve a Safe executor (FxSwapper, CoW) or
-        // the venue is down; the fallback still never moves without the user.
-        if (transfer.rail === "cash") {
-          try {
-            // A cash transfer exists only while the rail is open (BRIDGE_LIVE
-            // and an anchor — /api/quotes refuses otherwise), so the output
-            // always lands at Bridge's deposit address for this transfer.
-            if (!BRIDGE.destinationAddress) {
-              // Same refusal bridgeDestination() gives at execute — refuse
-              // here rather than posting Bridge a transfer with an empty
-              // to_address and discovering it one leg later.
-              throw new Error(
-                "BRIDGE_LIVE=1 requires BRIDGE_DESTINATION_ADDRESS until MoneyGram anchor payment instructions are wired into Bridge",
-              );
-            }
-            const convertEur = transfer.sendEur - railFeeEur("cash");
-            const rate = Number(quote.lockedSwapRate ?? "0") / 1e6;
-            if (!(rate > 0)) throw new Error("no locked swap rate to size the Bridge transfer");
-            const bridgeAmountUsdc = Math.floor(convertEur * rate * 100) / 100;
-            let recipient: `0x${string}`;
-            {
-              const bridgePlan = await createBridgeTransfer(
-                transfer.id,
-                bridgeAmountUsdc,
-                {
-                  paymentRail: BRIDGE.destinationRail,
-                  currency: BRIDGE.destinationCurrency,
-                  toAddress: BRIDGE.destinationAddress,
-                  blockchainMemo: BRIDGE.destinationMemo || undefined,
-                },
-                { sourceAddress: user.address },
-              );
-              const deposit = bridgePlan.sourceDepositInstructions?.to_address;
-              if (!deposit || !/^0x[a-fA-F0-9]{40}$/.test(deposit)) {
-                throw new Error("Bridge returned no Base deposit address for the swap to deliver into");
-              }
-              recipient = deposit as `0x${string}`;
-            }
-            const swap = await prepareSafeSwapForTransfer(transfer, {
-              executor: user.address as `0x${string}`,
-              recipient,
-            });
-            if (swap) {
-              const convertWei = swap.plan.approval.amount;
-              // Equality is the legitimate zero-fee shape; only a convert
-              // amount EXCEEDING the signed debit total is incoherent.
-              if (convertWei > debitWei) throw new Error("swap amount exceeds the authorized debit total");
-              prepared = await prepareTransferBatchExecution(user.passkeySafe, {
-                token: addrs().eure,
-                feeTo: orchestratorAddress,
-                // Exact by construction: fee + convert always equals the
-                // debited total, whatever floating-point did to the euros.
-                feeAmount: debitWei - convertWei,
-                approval: { spender: swap.plan.approval.spender, amount: convertWei },
-                call: swap.plan.call,
-              });
-              batch = { recipient, mode: "live" };
-              // The batch delivers straight to Bridge's deposit address, so
-              // the input never reaches an address we hold a key to.
-              custody = { mode: "non-custodial", feeToOrchestrator: true };
-              transfer.liquidity = swap.serialized;
-              transfer.safeSwap = {
-                recipient,
-                mode: "live",
-                // The amount the live Bridge transfer was created with. Execute
-                // must re-create with EXACTLY this body — the idempotency key
-                // is shared, and an idempotent replay with a different amount
-                // is either rejected or silently ignored.
-                bridgeAmountUsdc,
-              };
-            }
-            if (!swap) {
-              custody = {
-                mode: "orchestrator",
-                reason:
-                  `the configured liquidity venue (${LIQUIDITY.PROVIDER}) cannot be executed by the ` +
-                  "user's Safe, so the input is debited to the orchestrator and swapped from there",
-                feeToOrchestrator: true,
-              };
-            }
-          } catch (err: any) {
-            custody = {
-              mode: "orchestrator",
-              reason: `Safe-executed batch unavailable: ${err?.message ?? err}`,
-              feeToOrchestrator: true,
-            };
-            console.error(
-              `Safe swap batch unavailable for ${transfer.id} (falling back to plain debit): ${err?.message ?? err}`,
-            );
-          }
-        }
-        prepared ??= await prepareTransferExecution(
-          user.passkeySafe,
-          addrs().eure,
-          orchestratorAddress,
-          debitWei,
-        );
-        prunePendingTransferExecutions();
-        const challenge = passkeySafeChallenge(prepared.challenge);
-        pendingTransferExecutions.set(transfer.id, {
-          userId: user.id,
-          expiresAt: deadline * 1000,
-          challenge,
-          plan: user.passkeySafe,
-          userOperation: prepared.userOperation,
-          ...(batch ? { batch } : {}),
-        });
-        safeExecution = {
-          credentialId: user.passkey.credentialId,
-          challenge,
-          amountEur: eur.fromWei(debitWei),
-          token: "EURE",
-        };
-      } catch (err: any) {
-        // The transfer is still created: without an execution the debit will
-        // refuse with a precise reason, which beats failing creation for a
-        // bundler hiccup. Say why here so the refusal is diagnosable.
-        console.error(
-          `Safe execution preparation failed for ${transfer.id}: ${err?.message ?? err}`,
-        );
-      }
-    }
-    /**
-     * Turn the preference into a guarantee where an operator asked for one.
-     *
-     * REQUIRE_NON_CUSTODIAL=1 means this deployment has promised it does not
-     * take possession of client funds, so a fallback to the orchestrator is a
-     * broken promise, not a degraded mode — refuse and name the cause rather
-     * than moving money in a way the deployment says it does not.
-     *
-     * This spends the quote (consumed above). That is acceptable precisely
-     * because every cause here is a deployment-wide condition — the venue
-     * cannot serve a Safe, Bridge is not live — so it fails on the first
-     * transfer and is fixed once, not intermittently for one unlucky user.
-     */
-    if (CUSTODY.requireNonCustodial && custody.mode === "orchestrator") {
-      return res.status(409).json({
-        error:
-          "refusing to create this transfer: REQUIRE_NON_CUSTODIAL=1 but it would route the sender's " +
-          `funds through the orchestrator — ${custody.reason ?? "no Safe-executed batch was prepared"}`,
-        custody,
-      });
-    }
-    transfer.custody = custody;
-    store.addTransfer(transfer);
-    return {
-      ok: true as const,
-      transfer,
-      authorization: {
-        authorizer,
-        safeExecution,
-        typedData: paymentAuthorizationTypedData({
-          account: user.address,
-          amountWei,
-          to: orchestratorAddress,
-          transferId: transferIdHash(transfer.id),
-          destination,
-          deadline,
-        }),
-        moneriumRedeem: transfer.moneriumRedeem
-          ? {
-              amount: transfer.moneriumRedeem.amount,
-              iban: transfer.moneriumRedeem.iban,
-              issuedAt: transfer.moneriumRedeem.issuedAt,
-              message: transfer.moneriumRedeem.message,
-              memo: transfer.moneriumRedeem.memo,
-              credentialId: user.passkey?.credentialId,
-              challenge: user.passkeySafe?.status === "active"
-                ? passkeySafeChallenge(safeMessageHash(user.address, transfer.moneriumRedeem.message))
-                : undefined,
-            }
-          : undefined,
-        submitTo: `/api/transfers/${transfer.id}/authorize`,
-      },
-    };
-}
-
 // --- Quotes & transfers ------------------------------------------------------
 
 app.post(
