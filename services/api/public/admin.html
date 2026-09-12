@@ -222,9 +222,9 @@
         <div class="stat-sub">Accounts registered</div>
       </div>
       <div class="stat-card clickable" onclick="jumpToUsers('pending')">
-        <div class="stat-label">Pending KYC</div>
+        <div class="stat-label">Pending at Monerium</div>
         <div class="stat-value" id="statPending" style="color: var(--warning);">--</div>
-        <div class="stat-sub">Awaiting review</div>
+        <div class="stat-sub">Not yet activated</div>
       </div>
       <div class="stat-card clickable" onclick="jumpToUsers('approved')">
         <div class="stat-label">Active Safes</div>
@@ -271,7 +271,7 @@
         <div class="panel-title">Accounts <span class="panel-count" id="usersCount"></span></div>
         <div class="filter-tabs" id="userFilterTabs">
           <button class="tab-btn active" data-filter="all">All</button>
-          <button class="tab-btn" data-filter="pending">Pending KYC</button>
+          <button class="tab-btn" data-filter="pending">Pending</button>
           <button class="tab-btn" data-filter="approved">Approved</button>
           <button class="tab-btn" data-filter="rejected">Rejected</button>
           <button class="tab-btn" data-filter="no-iban">No IBAN</button>
@@ -370,13 +370,17 @@
     const authText = document.getElementById('authText');
     const searchInput = document.getElementById('searchInput');
 
+    // The operator token is kept for this tab only: it is the remote
+    // approval switch for every account, and any same-origin script can read
+    // localStorage.
     tokenInput.addEventListener('input', () => {
-      localStorage.setItem('zold_operator_token', tokenInput.value);
+      sessionStorage.setItem('zold_operator_token', tokenInput.value);
       loadDashboard();
     });
+    localStorage.removeItem('zold_operator_token');
 
-    if (localStorage.getItem('zold_operator_token')) {
-      tokenInput.value = localStorage.getItem('zold_operator_token');
+    if (sessionStorage.getItem('zold_operator_token')) {
+      tokenInput.value = sessionStorage.getItem('zold_operator_token');
     }
 
     async function fetchApi(path, options = {}) {
@@ -485,20 +489,21 @@
           actions: '',
         });
       }
+      // Identity is Monerium's: nothing here approves, rejects or issues. The
+      // rows name where each account is stuck so support can help it along.
       for (const u of allUsers) {
         if (u.kycStatus === 'pending' || u.kycStatus === 'manual_review') {
           items.push({
-            kind: 'kyc', label: 'KYC', who: u.name || u.id, why: `${u.kycStatus.replace('_', ' ')} since ${fmtWhen(u.createdAt)}`,
-            actions: `<button class="btn btn-approve" onclick="reviewKyc('${u.id}', 'approved')">Approve</button>
-                      <button class="btn btn-reject" onclick="reviewKyc('${u.id}', 'rejected')">Reject</button>`,
+            kind: 'kyc', label: 'Monerium', who: u.name || u.id, why: `${u.kycStatus.replace('_', ' ')} since ${fmtWhen(u.createdAt)} — activates with a passkey once Monerium attributes an IBAN`,
+            actions: `<button class="btn-icon" data-inspect-user="${escapeHtml(u.id)}" title="View JSON">🔍</button>`,
           });
         } else if (u.kycStatus === 'approved' && !u.iban) {
           items.push({
             kind: 'iban', label: 'IBAN', who: u.name || u.id,
             why: (u.passkeySafe?.status === 'active' || u.wallet?.deployed)
-              ? 'approved, Safe deployed, no IBAN — user activates with a passkey tap, or assign manually'
+              ? 'approved, Safe deployed, no IBAN yet — Monerium issues it; the user activates with a passkey tap'
               : 'approved but smart wallet not finished — user must complete onboarding first',
-            actions: `<button class="btn btn-iban" onclick="issueIban('${u.id}')">Issue IBAN</button>`,
+            actions: `<button class="btn-icon" data-inspect-user="${escapeHtml(u.id)}" title="View JSON">🔍</button>`,
           });
         }
       }
@@ -507,13 +512,13 @@
           items.push({
             kind: 'tx', label: t.state, who: t.user?.name || t.user?.id || 'unknown',
             why: `${railLabel(t)} · ${amountLabel(t)} · ${t.statusDetail || t.error || ''}`,
-            actions: `<button class="btn-icon" onclick="inspectEncodedTransaction('${jsonArg(t)}')">🔍</button>`,
+            actions: `<button class="btn-icon" data-inspect-tx="${escapeHtml(t.id)}">🔍</button>`,
           });
         } else if (isStale(t)) {
           items.push({
             kind: 'stale', label: 'STUCK', who: t.user?.name || t.user?.id || 'unknown',
             why: `${railLabel(t)} · ${amountLabel(t)} · in ${t.state} since ${fmtWhen(t.updatedAt || t.createdAt)}`,
-            actions: `<button class="btn-icon" onclick="inspectEncodedTransaction('${jsonArg(t)}')">🔍</button>`,
+            actions: `<button class="btn-icon" data-inspect-tx="${escapeHtml(t.id)}">🔍</button>`,
           });
         }
       }
@@ -608,7 +613,7 @@
                 <span class="user-id">${escapeHtml(u.id)}</span>
               </div>
             </td>
-            <td><strong>${escapeHtml(u.country || 'DE')}</strong></td>
+            <td><strong>${escapeHtml(u.country || '—')}</strong></td>
             <td><span class="badge ${kycBadgeClass}">${escapeHtml(u.kycStatus)}</span></td>
             <td>
               <span class="code-pill">${escapeHtml(shortAddr)}</span>
@@ -621,13 +626,7 @@
             <td style="color: var(--text-muted); font-size: 12px;">${new Date(u.createdAt).toLocaleDateString()}</td>
             <td>
               <div class="actions-cell">
-                ${u.kycStatus !== 'approved' ? `
-                  <button class="btn btn-approve" onclick="reviewKyc('${u.id}', 'approved')">Approve</button>
-                  <button class="btn btn-reject" onclick="reviewKyc('${u.id}', 'rejected')">Reject</button>
-                ` : `
-                  ${!u.iban ? `<button class="btn btn-iban" onclick="issueIban('${u.id}')">Issue IBAN</button>` : ''}
-                `}
-                <button class="btn-icon" onclick="inspectEncodedUser('${jsonArg(u)}')" title="View JSON">🔍</button>
+                <button class="btn-icon" data-inspect-user="${escapeHtml(u.id)}" title="View JSON">🔍</button>
               </div>
             </td>
           </tr>
@@ -726,35 +725,11 @@
             <td><div class="route-stack">${routeChips(t)}</div></td>
             <td style="color: var(--text-muted); font-size: 12px;">${updated ? new Date(updated).toLocaleString() : 'Unknown'}</td>
             <td>
-              <button class="btn-icon" onclick="inspectEncodedTransaction('${jsonArg(t)}')" title="View route JSON">${routeCount ? '⛓' : '🔍'}</button>
+              <button class="btn-icon" data-inspect-tx="${escapeHtml(t.id)}" title="View route JSON">${routeCount ? '⛓' : '🔍'}</button>
             </td>
           </tr>
         `;
       }).join('');
-    }
-
-    async function reviewKyc(userId, decision) {
-      if (!confirm(`Are you sure you want to set KYC to ${decision}?`)) return;
-      const res = await fetchApi('/api/kyc/review', {
-        method: 'POST',
-        body: JSON.stringify({ userId, decision, reason: 'operator manual decision via dashboard' })
-      });
-      if (res.ok) {
-        loadDashboard();
-      } else {
-        const err = await res.json();
-        alert(`Error: ${err.error || 'Failed to update KYC'}`);
-      }
-    }
-
-    async function issueIban(userId) {
-      const res = await fetchApi(`/api/admin/users/${userId}/issue-iban`, { method: 'POST' });
-      if (res.ok) {
-        loadDashboard();
-      } else {
-        const err = await res.json();
-        alert(`Error: ${err.error || 'Failed to issue IBAN'}`);
-      }
     }
 
     function inspectUser(user) {
@@ -763,19 +738,29 @@
       document.getElementById('modalOverlay').classList.add('open');
     }
 
-    function inspectEncodedUser(encoded) {
-      inspectUser(JSON.parse(decodeURIComponent(encoded)));
-    }
-
     function inspectTransaction(tx) {
       document.getElementById('modalTitle').textContent = `Transaction: ${tx.id}`;
       document.getElementById('modalJson').textContent = JSON.stringify(tx, null, 2);
       document.getElementById('modalOverlay').classList.add('open');
     }
 
-    function inspectEncodedTransaction(encoded) {
-      inspectTransaction(JSON.parse(decodeURIComponent(encoded)));
-    }
+    // Rows carry ids, never JSON: an inline handler built from a user's
+    // name is an injection point (encodeURIComponent leaves the quote
+    // characters that close a JS string), and the operator token lives on
+    // this page.
+    document.addEventListener('click', (ev) => {
+      const u = ev.target.closest('[data-inspect-user]');
+      if (u) {
+        const user = allUsers.find((x) => x.id === u.dataset.inspectUser);
+        if (user) inspectUser(user);
+        return;
+      }
+      const t = ev.target.closest('[data-inspect-tx]');
+      if (t) {
+        const tx = allTransactions.find((x) => x.id === t.dataset.inspectTx);
+        if (tx) inspectTransaction(tx);
+      }
+    });
 
     function closeModal() {
       document.getElementById('modalOverlay').classList.remove('open');
@@ -810,11 +795,9 @@
     }
 
     function escapeHtml(str) {
-      return String(str ?? '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    function jsonArg(obj) {
-      return encodeURIComponent(JSON.stringify(obj));
+      return String(str ?? '')
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     }
 
     loadDashboard();

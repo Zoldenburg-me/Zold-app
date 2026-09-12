@@ -4,6 +4,11 @@
  * Some integration tests spin up a local API, Hardhat node, and stub provider.
  * Use free ports by default so `npm run check` does not fail just because a
  * developer has the demo API running on :3000.
+ *
+ * `npm run check` is OFFLINE: everything here runs against local hardhat and
+ * stubs. The suites that reach Stellar testnet and a real anchor run under
+ * `npm run check:live` (CHECK_LIVE=1), so a clean machine without egress can
+ * still get a green check that means what it says.
  */
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
@@ -38,13 +43,19 @@ const scripts = [
   "webhook:test",
   "reconcile:test",
   "anchor:config:test",
-  "anchor:test",
   "anchor:safety",
-  "travelrule:test",
-  "trustline:test",
   "anchor:sweep:test",
   "refund:guard:test",
+  "business:test",
+  "invoicing:test",
+  "custody:test",
+  "segments:test",
+  "gnosispay:test",
+  "onboarding:test",
+  "pay:test",
 ];
+const liveScripts = ["anchor:test", "travelrule:test", "trustline:test"];
+if (process.env.CHECK_LIVE === "1") scripts.push(...liveScripts);
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {

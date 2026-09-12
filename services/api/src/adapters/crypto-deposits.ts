@@ -21,8 +21,8 @@
  * - It watches the payment page's configured forwarding recipient. In
  *   production that should be the merchant Safe, reached through Candide's
  *   forwarding address rather than an API-held payment-page owner key.
- * - It credits nothing for an account that is not KYC-approved. The output is
- *   e-money, so the same gate that gates a SEPA deposit gates this.
+ * - A deposit is RECORDED for every account; the user-signed conversion to
+ *   e-money is what the KYC gate stands in front of.
  * - It does not screen the SENDING address. An unsolicited transfer from an
  *   unknown counterparty is a source-of-funds question that belongs with a
  *   compliance provider, and nothing here answers it.
@@ -154,7 +154,7 @@ async function valueAtReceipt(
  * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), matching what
  * FxSwapper.rate() posts and what the liquidity providers report.
  */
-async function assertRateSane(rate: bigint): Promise<number> {
+export async function assertRateSane(rate: bigint): Promise<number> {
   const venue = Number(rate) / 1e6;
   if (!(venue > 0)) throw new Error("venue quoted a zero rate");
   const mid = (await midRates()).eur.USD;

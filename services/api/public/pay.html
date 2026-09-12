@@ -133,8 +133,8 @@ async function load() {
     hide("loading");
     show("payee");
 
-    const label = p.displayName || p.handle;
-    $("avatar").textContent = label.trim()[0].toUpperCase();
+    const label = p.displayName || p.handle || "?";
+    $("avatar").textContent = (label.trim()[0] || "?").toUpperCase();
     $("dn").textContent = label;
     $("hd").textContent = `@${p.handle}`;
     document.title = `Pay ${label} · Zold`;

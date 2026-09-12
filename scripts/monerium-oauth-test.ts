@@ -236,8 +236,9 @@ const stub = createServer((req, res) => {
   });
 });
 
-async function call(pathname: string, body?: any, method?: string) {
-  const headers: Record<string, string> = {};
+let connectCookie = "";
+async function call(pathname: string, body?: any, method?: string, extra: Record<string, string> = {}) {
+  const headers: Record<string, string> = { ...extra };
   if (body) headers["content-type"] = "application/json";
   if (token) headers.authorization = `Bearer ${token}`;
   const res = await fetch(API + pathname, {
@@ -249,6 +250,9 @@ async function call(pathname: string, body?: any, method?: string) {
   const text = await res.text();
   let data: any = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  // The browser that starts a connect carries its nonce cookie to the callback.
+  const setCookie = res.headers.get("set-cookie") ?? "";
+  if (setCookie.startsWith("zold_monerium_connect=")) connectCookie = setCookie.split(";")[0];
   return { status: res.status, data, location: res.headers.get("location") };
 }
 
@@ -310,6 +314,7 @@ try {
     MONERIUM_CLIENT_ID: "stub-client",
     MONERIUM_CLIENT_SECRET: "",
     MONERIUM_BASE_URL: STUB,
+    MONERIUM_CHAIN: "sepolia", // the stub issues on sepolia; the chain filter must see the same name
     MONERIUM_AUTH_URL: `${STUB}/auth`,
     MONERIUM_REDIRECT_URI: `${API}/api/monerium/oauth/callback`,
     MONERIUM_TOKEN_ENCRYPTION_KEY: ENC_KEY,
@@ -383,8 +388,15 @@ try {
 
   const state = new URL(redirectUrl).searchParams.get("state")!;
 
-  await t("the callback exchanges the code and the stub's PKCE check passes", async () => {
+  await t("a callback from a browser that did not start the connect is refused (login CSRF)", async () => {
+    assert.ok(connectCookie, "connect/start must set the nonce cookie");
     const r = await call(`/api/monerium/oauth/callback?state=${encodeURIComponent(state)}&code=${AUTH_CODE}`, undefined, "GET");
+    assert.equal(r.status, 400, `expected the cookie-less callback to be refused: ${JSON.stringify(r.data)}`);
+    assert.equal(seen.grantTypes.includes("authorization_code"), false, "no code exchange may happen without the nonce");
+  });
+
+  await t("the callback exchanges the code and the stub's PKCE check passes", async () => {
+    const r = await call(`/api/monerium/oauth/callback?state=${encodeURIComponent(state)}&code=${AUTH_CODE}`, undefined, "GET", { cookie: connectCookie });
     assert.equal(r.status, 302, `callback did not redirect: ${JSON.stringify(r.data)}`);
     assert.match(r.location ?? "", /monerium=connected/);
     assert.equal(seen.grantTypes.includes("authorization_code"), true);
@@ -409,7 +421,7 @@ try {
   });
 
   await t("the state is single-use — replaying the callback is refused", async () => {
-    const r = await call(`/api/monerium/oauth/callback?state=${encodeURIComponent(state)}&code=${AUTH_CODE}`, undefined, "GET");
+    const r = await call(`/api/monerium/oauth/callback?state=${encodeURIComponent(state)}&code=${AUTH_CODE}`, undefined, "GET", { cookie: connectCookie });
     assert.equal(r.status, 400, "a consumed OAuth state must not be reusable");
   });
 

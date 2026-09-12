@@ -14,6 +14,7 @@
  * with the account contract. A document that verifies is one whose facts
  * this server stands behind now, not one it merely printed once.
  */
+import { wrap } from "./util.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, HARNESS, SECURITY } from "../config.js";
@@ -239,10 +240,6 @@ const pendingOwnershipSignatures = new Map<string, { userId: string; documentId:
 
 export function createDocumentsRouter(deps: DocumentsDeps) {
   const router = express.Router();
-  const wrap =
-    (fn: (req: express.Request, res: express.Response) => Promise<unknown>) =>
-    (req: express.Request, res: express.Response, next: express.NextFunction) =>
-      Promise.resolve(fn(req, res)).catch(next);
 
   const userFor = (req: express.Request, res: express.Response): User | undefined => {
     const user = store.findUser(req.params.id);

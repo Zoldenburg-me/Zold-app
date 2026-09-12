@@ -102,7 +102,6 @@ function wallet(key: `0x${string}`) {
 
 export const deployerWallet = wallet(KEYS.deployer);
 export const orchestratorWallet = wallet(KEYS.orchestrator);
-export const rampWallet = wallet(KEYS.ramp);
 export const orchestratorAddress = orchestratorWallet.account.address;
 
 /**
@@ -284,13 +283,11 @@ export async function accountBalances(user: `0x${string}`): Promise<{
 /**
  * Return EURe the orchestrator is holding to a user's Safe.
  *
- * This is the refund leg for a Safe-funded transfer: the euros were taken out
- * of the user's own Safe, so that is where they go back. Deliberately NOT
- * Safe-funded debit can only have happened where the Safe held the token in
- * the first place, so the same move is always available in reverse.
- *
- * This mints nothing, which is why it works off a
- * local chain: it hands back the very tokens that were moved.
+ * The refund leg for a Safe-funded transfer: the euros were taken out of the
+ * user's own Safe, so that is where they go back. A Safe-funded debit can only
+ * have happened where the Safe held the token, so the reverse move is always
+ * available. Nothing is minted, which is why it works off a local chain: it
+ * hands back the very tokens that were moved.
  */
 export async function returnEureToSafe(
   userSafe: `0x${string}`,

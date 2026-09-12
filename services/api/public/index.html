@@ -354,14 +354,6 @@
   .kyc-status .kt { margin-top: .2rem; font-size: .95rem; font-weight: 700; }
   .kyc-status .kd { margin-top: .25rem; font-size: .8rem; color: var(--muted); }
 
-  .kyc-pick { display: flex; flex-direction: column; gap: .55rem; margin-bottom: 1.2rem; }
-  .kyc-pick button {
-    width: 100%; text-align: left; display: flex; flex-direction: column; gap: .2rem;
-    padding: .9rem 1rem; border-radius: 14px; background: rgba(255,255,255,.03);
-    border: 1px solid var(--onb-line); color: var(--text); font-weight: 600; font-size: .92rem;
-  }
-  .kyc-pick button:hover { background: rgba(255,255,255,.06); filter: none; }
-  .kyc-pick button span { font-weight: 400; font-size: .82rem; color: var(--onb-sub); }
 
   /* ---------- app shell ---------- */
   #dashboard { display: none; grid-template-columns: 210px 1fr 375px; min-height: 100vh; }
@@ -1714,7 +1706,7 @@
       <div class="topbar">
         <h1 id="view-title">Dashboard</h1>
         <div class="search">⌕ Search…</div>
-        <div class="net-chip">local demo</div>
+        <div class="net-chip">wallet</div>
       </div>
 
       <section class="view active" id="view-dashboard">
@@ -2611,6 +2603,11 @@ window.setReachable = setReachable;
  * means POST and no body means GET, which covers every call but DELETE.
  */
 async function api(path, body, method) {
+  // Every call carries the session token, so the path must be ours: a
+  // `submitTo` from a response is followed only under /api/.
+  if (typeof path !== "string" || !path.startsWith("/api/")) {
+    throw new Error("refusing to call a path outside this app's API");
+  }
   const headers = {};
   if (body) headers["content-type"] = "application/json";
   if (sessionToken) headers.authorization = `Bearer ${sessionToken}`;
@@ -2633,7 +2630,11 @@ async function api(path, body, method) {
   setReachable(res.status !== 503);
   // statusText is EMPTY over HTTP/2, so a non-JSON error (a proxy's HTML 502,
   // a dropped tunnel) would otherwise surface as a blank "Error".
-  if (!res.ok) throw new Error(data.error || res.statusText || `request failed (HTTP ${res.status})`);
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText || `request failed (HTTP ${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 const showErr = (id, e) => { const el = $(id); el.textContent = e.message; el.classList.remove("hidden"); };
@@ -4004,9 +4005,8 @@ function renderProfileScreen() {
     };
   });
 
-  /* Every row here reports real state. "Not set" is the honest answer for an
-     account that skipped the passkey, and it is worth showing rather than
-     hiding, because funding refuses without one outside simulation. */
+  /* Every row here reports real state. "Not set" on the passkey row means an
+     account whose registration never completed; funding refuses without one. */
   const safe = u.passkeySafe;
   const security = [
     { icon: "fingerprint", t: "Passkey", d: "Signs in and approves payments", st: u.passkey?.credentialId ? "Registered" : "Not set" },
@@ -4172,6 +4172,9 @@ async function renderLinksScreen() {
   el.querySelectorAll("[data-lk]").forEach((b) => {
     b.onclick = () => { linksOpen = linksOpen === b.dataset.lk ? null : b.dataset.lk; renderLinksScreen(); };
   });
+  el.querySelectorAll("[data-lk-open]").forEach((b) => {
+    b.onclick = () => { const u = safeUrl(b.dataset.lkOpen); if (u) window.open(u, "_blank", "noopener"); };
+  });
   el.querySelectorAll("[data-lk-copy]").forEach((b) => {
     b.onclick = async () => {
       try { await navigator.clipboard.writeText(b.dataset.lkCopy); b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy link"), 1200); } catch {}
@@ -4193,7 +4196,7 @@ function linkDetail(r) {
     <div class="m-shlink" style="word-break:break-all;font-family:var(--m-mono);font-size:12px">${esc(r.url)}</div>
     <div style="display:flex;gap:8px;margin-top:8px">
       <button class="m-cta" data-lk-copy="${esc(r.url)}" style="min-height:40px;font-size:13px">Copy link</button>
-      <button class="m-cta quiet" onclick="window.open('${esc(r.url)}','_blank','noopener')" style="min-height:40px;font-size:13px;background:transparent;border:1px solid var(--m-line-strong)">Open</button>
+      <button class="m-cta quiet" data-lk-open="${esc(r.url)}" style="min-height:40px;font-size:13px;background:transparent;border:1px solid var(--m-line-strong)">Open</button>
     </div>
     <div class="m-lede" style="font-size:12.5px;margin-top:10px">Pays into ${r.methods.includes("crypto") ? "your payment page (USDC)" : ""}${r.methods.length === 2 ? " or " : ""}${r.methods.includes("bank") ? "your IBAN with reference " + esc(r.code) : ""}.
       ${r.state === "OPEN" ? `Open until ${esc(new Date(r.expiresAt).toLocaleString())}.` : ""}</div>
@@ -4661,8 +4664,9 @@ $("m-usd-cta").onclick = () => {
 
 /**
  * What this deployment lets the browser do. Defaults are the SAFE ones: with
- * no answer from /api/health we assume no simulation, so a failed probe hides
- * a control the server might refuse rather than offering one it will.
+ * no answer from /api/health every optional rail reads as closed, so a failed
+ * probe hides a control the server might refuse rather than offering one it
+ * will.
  */
 let caps = { sandbox: true, cashRail: false, moneriumOAuth: false, moneriumApiKeys: false, moneriumEnvironment: "production", moneriumHost: "api.monerium.app", emailSmsRecovery: false };
 
@@ -4820,11 +4824,11 @@ async function renderPrivacyBundle() {
     const disabled = !p.marginProtected || isActive;
     const label = isActive ? "Selected" : p.marginProtected ? "Add" : "Paused";
     return `<div class="plan ${isActive ? "active" : ""}">
-      <div class="pn">${p.name}</div>
+      <div class="pn">${esc(p.name)}</div>
       <div class="pp">€${fmt(p.priceEur)}/mo</div>
-      <div class="pd">${p.esimGb} GB eSIM · ${p.vpnGb} GB VPN · ${p.vpnDevices} devices</div>
-      <div class="pm">${p.esimRegion} coverage · monthly allowance</div>
-      <button class="${isActive ? "ghost" : ""}" data-plan="${p.id}" ${disabled ? "disabled" : ""}>${label}</button>
+      <div class="pd">${esc(p.esimGb)} GB eSIM · ${esc(p.vpnGb)} GB VPN · ${esc(p.vpnDevices)} devices</div>
+      <div class="pm">${esc(p.esimRegion)} coverage · monthly allowance</div>
+      <button class="${isActive ? "ghost" : ""}" data-plan="${esc(p.id)}" ${disabled ? "disabled" : ""}>${label}</button>
     </div>`;
   }).join("");
   document.querySelectorAll("[data-plan]").forEach((b) => {
@@ -4878,7 +4882,10 @@ async function refresh() {
     await loadTransfers();
     await loadRecoveryInfo();
     renderRecoveryInfo();
-  } catch {}
+  } catch (e) {
+    // A 401 means the session is gone; frozen numbers would say otherwise.
+    if (e?.status === 401) return signOut();
+  }
   // Conversion happens on the server's poll, not on a user action, so the
   // panel has to be re-read rather than updated optimistically.
   await refreshCryptoDeposits();
@@ -4908,7 +4915,7 @@ function renderShellPages() {
   $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
   $("acct-kyc-chip").className = user.kycStatus === "approved" ? "chip ok" : user.kycStatus === "rejected" ? "chip err" : "chip review";
   const funding = user.funding || {};
-  $("acct-funding").textContent = user.iban || funding.detail || `${funding.mode || "mock"} · ${funding.status || "active"}`;
+  $("acct-funding").textContent = user.iban || funding.detail || `${funding.mode || "sandbox"} · ${funding.status || "active"}`;
   $("acct-funding-chip").textContent = (funding.status || "ACTIVE").toUpperCase();
   $("acct-funding-chip").className = funding.status === "error" ? "chip err" : funding.status === "active" || user.iban ? "chip ok" : "chip pend";
   $("acct-authorizer").textContent = user.authorizerAddress || "Registered when you send from this browser.";
@@ -4952,6 +4959,14 @@ function provStep(i, state) {
 }
 
 function enterDashboard(name) {
+  provisioningGen++;
+  let invite = null;
+  try { invite = sessionStorage.getItem("zold-invite"); sessionStorage.removeItem("zold-invite"); } catch {}
+  if (invite) {
+    api("/api/orgs/invites/accept", { token: invite })
+      .then(() => location.replace("/business"))
+      .catch((e) => alert(`The invitation could not be accepted: ${e.message}`));
+  }
   $("onboard").style.display = "none";
   $("provisioning").style.display = "none";
   $("kyc-review").style.display = "none";
@@ -5080,7 +5095,9 @@ async function startMoneriumConnect(errorId = "kyc-err") {
   try {
     const redirectUri = `${location.origin}/api/monerium/oauth/callback`;
     const connect = await api(`/api/users/${user.id}/monerium/connect/start`, { redirectUri });
-    location.href = connect.redirectUrl;
+    const target = safeUrl(connect.redirectUrl);
+    if (!target) throw new Error("Monerium returned an unusable sign-in address");
+    location.href = target;
   } catch (e) { showErr(errorId, e); }
 }
 
@@ -5179,7 +5196,11 @@ async function finishDashboardSmartWallet() {
   } catch (e) { showErr("dep-err", e); }
 }
 
+let provisioningGen = 0;
 function enterProvisioning(name) {
+  // Leaving the screen invalidates the poll: a tick from an earlier entry
+  // must not yank the user back after "Continue without finishing".
+  const gen = ++provisioningGen;
   $("onboard").style.display = "none";
   $("provisioning").style.display = "grid";
   provStep(0, "done");
@@ -5203,13 +5224,15 @@ function enterProvisioning(name) {
   };
 
   const tick = async () => {
+    if (gen !== provisioningGen) return;
     let u = user;
     try { u = await api(`/api/users/${user.id}`); user = u; } catch {}
+    if (gen !== provisioningGen) return;
     if (!kycApproved(u)) return enterKycReview(name);
     const f = u.funding || {};
     const detail = (f.detail || "").toLowerCase();
 
-    if (u.iban || f.status === "active" || f.mode === "mock") {
+    if (u.iban || f.status === "active") {
       provStep(1, "done"); provStep(2, "done"); provStep(3, "done");
       $("btn-prov-iban").classList.add("hidden");
       setTimeout(() => enterDashboard(name), 900);
@@ -5400,7 +5423,10 @@ async function registerPasskey(u) {
         name: pendingInfo.email || pendingInfo.name,
         displayName: pendingInfo.name,
       },
-      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      // P-256 only: the passkey becomes the Safe's owner and Candide's
+      // WebAuthn owner needs a P-256 key; an RS256 credential registers and
+      // then fails at Safe deployment.
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }],
       authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
       timeout: 60000,
       // FP4: ask for the PRF extension so this passkey can encrypt the
@@ -5769,7 +5795,7 @@ $("m-pf-documents").onclick = () => mobileNav("documents");
 $("m-pf-links").onclick = () => mobileNav("links");
 $("btn-links").onclick = () => mobileNav("links");
 $("m-det-receipt").onclick = async () => {
-  const t = detailTransfer;
+  const t = hist.find((x) => x.id === mDetailId);
   if (!t) return;
   try {
     const d = await api(`/api/users/${user.id}/documents/receipt`, { transferId: t.id });
@@ -5849,6 +5875,14 @@ async function resumeSession() {
   }
 }
 loadCapabilities();
+// An invitation link lands here; it is redeemed once a session exists, so a
+// person who first has to create an account keeps the token through signup.
+{
+  const invite = new URLSearchParams(location.search).get("invite");
+  if (invite) {
+    try { sessionStorage.setItem("zold-invite", invite); } catch {}
+  }
+}
 resumeSession();
 
 
@@ -5967,11 +6001,12 @@ $("btn-add-contact").onclick = () => {
   renderContacts();
 };
 
-$("btn-signout").onclick = () => {
+function signOut() {
   localStorage.removeItem("zold-session");
   localStorage.removeItem("zoll-session");
   location.reload();
-};
+}
+$("btn-signout").onclick = signOut;
 
 /* ---------- destination-first send flow ---------- */
 let rail = "cash";
@@ -6088,7 +6123,6 @@ function selectOption(q) {
 $("back-dest").onclick = () => showSendStep("dest");
 $("back-options").onclick = () => showSendStep("options");
 
-/* quote fetching + rendering now lives in the destination flow above */
 
 /* ---------- transfer + animated timeline ---------- */
 const STEP_LABELS = {
@@ -6097,7 +6131,6 @@ const STEP_LABELS = {
   "swapper.swapExactIn": ["Swapping EURe → USDC", "🔁"],
   "liquidity.fx-swapper.eure-usdc": ["Routing EURe → USDC liquidity", "🔁"],
   "liquidity.fx-swapper.usdc-eure": ["Routing USDC → EURe liquidity", "🔁"],
-  "eure.approve(swapper)": ["Authorizing FX swap", "🔏"],
   "bridge.xyz.dry-run.transfer": ["Planning Bridge.xyz transfer", "🌉"],
   "bridge.xyz.deposit.funded": ["Bridge deposit funded by your signed batch", "🌉"],
   "bridge.xyz.live.transfer": ["Creating Bridge.xyz transfer", "🌉"],
@@ -6111,10 +6144,8 @@ const STEP_LABELS = {
 /** Synthetic (off-chain) steps appended after the tx steps per rail. */
 function sepaSteps(t) {
   const s = t.sepa || {};
-  if (s.mode === "sandbox") {
-    return [["Monerium redeem order placed", `order ${s.orderId || "…"} · ${s.state}`, "🔥"]];
-  }
-  return [["SEPA payout (simulated)", s.detail || "", "🏦"]];
+  if (!s.mode) return [];
+  return [["Monerium redeem order placed", `order ${s.orderId || "…"} · ${s.state}`, "🔥"]];
 }
 function stepEl(title, detail, icon) {
   const el = document.createElement("div");
@@ -6210,7 +6241,7 @@ function renderSepaResult(t) {
   const s = t.sepa || {};
   $("sepa-box").classList.remove("hidden");
   if (t.state === "PAID") {
-    $("sepa-status").textContent = s.mode === "sandbox" ? "SEPA payout processed" : "SEPA payout simulated";
+    $("sepa-status").textContent = "SEPA payout processed";
     $("sepa-note").textContent =
       `${t.recipientName} receives €${fmt(t.receiveEur)} → ${t.recipientIban}` +
       (s.detail ? ` · ${s.detail}` : "");
@@ -6416,8 +6447,8 @@ function renderContacts() {
   if (!list) return;
   list.innerHTML = contacts.length
     ? contacts.map((c) => `<div class="contact-card">
-        <div><div class="cn">${c.name}</div><div class="cd">${c.destination}</div></div>
-        <button class="ghost" data-contact="${c.id}">Remove</button>
+        <div><div class="cn">${esc(c.name)}</div><div class="cd">${esc(c.destination)}</div></div>
+        <button class="ghost" data-contact="${esc(c.id)}">Remove</button>
       </div>`).join("")
     : '<div class="empty">No saved contacts yet</div>';
   document.querySelectorAll("[data-contact]").forEach((b) => {
@@ -6439,9 +6470,6 @@ function renderContacts() {
  * window) leaves the app working exactly as it did before, just without
  * offline start-up.
  *
- * Kept inside this script rather than a second one on purpose: kyc:ui:test
- * parses out the last classic script before </body> and evaluates it, so a
- * sibling <script> block breaks that check for no benefit.
  */
 (function () {
   if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {

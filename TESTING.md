@@ -11,21 +11,22 @@ npm run compile
 ## Level 0 — automated checks (5 min, no accounts needed)
 
 ```sh
-npm run test:contracts   # 9 Solidity tests: FX access/slippage, escrow, AdminTimelock governance
-npm run e2e              # full corridor: cash pickup + SEPA exit
+npm run test:contracts   # 6 Solidity tests: FX access/slippage, AdminTimelock governance
 npm run audit:deps       # npm advisory scan
-npm run check            # everything: the two above plus ~30 focused harnesses (35 suites)
+npm run check            # everything offline: contracts, typecheck, ~40 focused harnesses
+npm run check:live       # the same plus the Stellar testnet / test-anchor suites
 ```
 
 `npm run check` is the one that matters before pushing — it allocates a random
 free port for the whole run, which is why a suite passing on its own is weaker
-evidence than it looks. Note it is not fully deterministic: `trustline:test`
-reaches MoneyGram's real anchor and fails if that host is unreachable.
+evidence than it looks. It is offline; `check:live` adds `anchor:test`,
+`travelrule:test` and `trustline:test`, which reach Stellar testnet and the
+test anchor and fail if those hosts are unreachable.
 
-Both must end green (`9 tests passed`, `E2E PASSED`). The e2e boots its own
-chain + API, so stop `npm run dev` first if it's running (it will tell you).
+The suites that boot their own chain + API refuse to start while `npm run dev`
+holds their ports, and say so.
 
-## Level 1 — the app in mock mode (10 min, no accounts needed)
+## Level 1 — the app on local hardhat (10 min, no accounts needed)
 
 ```sh
 npm run dev              # then open http://localhost:3000/app
@@ -33,12 +34,12 @@ npm run dev              # then open http://localhost:3000/app
 
 `/` serves the landing page; the app is at `/app`.
 
-1. **Onboarding** — enter a name, "Open my account". The setup screen steps
-   through instantly in mock mode and lands on the dashboard. You get an IBAN
-   (mock-issued) and a real Candide Safe smart-account address (computed
-   offline, same tech as production).
-2. **Add money** — deposit €250. Watch the balance: a real ERC-20 mint to the
-   account's Safe address on the local chain.
+1. **Onboarding** — enter a name and email, create a passkey, "Open my
+   account". The harness chain auto-approves and lands on the dashboard with a
+   real Candide Safe smart-account address (computed offline, same tech as
+   production) and no IBAN: hardhat has no Monerium.
+2. **Add money** — mint MockToken EURe to the Safe address from hardhat
+   account 0 (the token owner); the balance reads straight from the Safe.
 3. **🇰🇪 Cash pickup / 🏦 Bank transfer** — quoting works end to end, but the
    SEND ITSELF REFUSES on local hardhat by design: every debit is a
    UserOperation the passkey signs through Candide's bundler, which does not
@@ -46,8 +47,8 @@ npm run dev              # then open http://localhost:3000/app
    transfers can be executed"). Executed sends need `npm run api` against Base
    Sepolia with a deployed, funded Safe — see Level 2.
 
-KYC-gated mode: start the API with `KYC_AUTO_APPROVE=0`. A new account should
-land on the Identity review screen instead of the provisioning spinner. The
+The Monerium gate: on any chain but hardhat a new account lands on the
+"Connect Monerium" screen instead of the provisioning spinner. The
 screen asks whether the user already has a Monerium account. Choosing the
 existing-account path records that branch for the upcoming OAuth build; choosing
 the new-account path continues the normal identity-review state. The dashboard
@@ -62,15 +63,15 @@ account becomes `approved`.
 2. `cp .env.example .env`, fill `MONERIUM_CLIENT_ID` / `MONERIUM_CLIENT_SECRET`.
 3. `npm run monerium:check` — must print `auth ok`.
 4. `npm run dev` → create a user. The onboarding steps now run for real
-   (~30s): Safe deployed gasless on Sepolia via Candide's public bundler,
+   (~30s): Safe deployed gasless on Base Sepolia via Candide's public bundler,
    address linked to Monerium via EIP-1271, real sandbox IBAN issued.
 5. Fund it: log into the sandbox portal → *Receive* → simulate a SEPA
-   transfer to the user's IBAN. Real test EURe mints to the Safe on Sepolia;
+   transfer to the user's IBAN. Real test EURe mints to the Safe on Base Sepolia;
    the balance reads straight from the Safe within ~15s.
 6. **Real exit flow**: after a portal deposit, a 🏦 Bank transfer places a
    real Monerium redeem order (watch `sepa.orderId` on the transfer, state
-   PAYOUT_SUBMITTED → PAID). Without a portal deposit it falls back to a
-   simulated payout and records Monerium's actual rejection on the transfer.
+   PAYOUT_SUBMITTED → PAID). Without a portal deposit the redeem is refused
+   and the transfer fails closed, recording Monerium's actual rejection.
 
 ### Stellar anchor (the MoneyGram protocol, live)
 
@@ -96,8 +97,8 @@ Stellar variables the code understands:
   fails at startup.
 - `STELLAR_TREASURY_SECRET` — treasury signer for SEP-10 auth and on-ledger
   SEP-24 payment
-- `STELLAR_HORIZON`, `STELLAR_SOROBAN_RPC`, `STELLAR_PASSPHRASE`,
-  `STELLAR_FRIENDBOT` — default to public Stellar testnet endpoints
+- `STELLAR_HORIZON`, `STELLAR_PASSPHRASE`, `STELLAR_FRIENDBOT` — default to
+  the PUBLIC network; the harnesses pin testnet themselves (`_stellar-testnet.ts`)
 
 The treasury must hold the anchor asset and have the required trustline.
 `testanchor.stellar.org` can use `native` with no trustline for protocol
@@ -105,23 +106,19 @@ tests, but production MoneyGram/USDC requires the partner-confirmed asset.
 
 ### Bridge.xyz funding (Base USDC -> Stellar-side USDC)
 
-```sh
-npm run bridge:dryrun    # prints the Bridge transfer plan, moves nothing
-```
-
-To execute for real: set `BRIDGE_LIVE=1`, `BRIDGE_API_KEY`,
-`BRIDGE_ON_BEHALF_OF`, and the Bridge-approved Stellar destination fields
-(`BRIDGE_DESTINATION_ADDRESS`, optional `BRIDGE_DESTINATION_MEMO`). The local
-demo keeps using escrow in dry-run mode.
+The cash rail is closed unless `BRIDGE_LIVE=1`, `BRIDGE_API_KEY`,
+`BRIDGE_ON_BEHALF_OF`, the Bridge-approved Stellar destination fields
+(`BRIDGE_DESTINATION_ADDRESS`, optional `BRIDGE_DESTINATION_MEMO`) and an
+anchor (`MG_ANCHOR_DOMAIN`) are all set. There is no dry-run: `/api/quotes`
+answers `RAIL_CLOSED` and the app hides the corridor.
 
 ## Known limitations (by design, MVP)
 
-- Settlement chain is a local Hardhat node; EURe/USDC there are mocks.
+- On local hardhat EURe/USDC are MockTokens and no passkey Safe can deploy
+  (no ERC-4337 bundler), so sends refuse there by design.
 - No user Safe owner keys are stored server-side: every debit is signed by
   the user's passkey at send time.
-- The MoneyGram payout is a protocol-shaped mock unless pointed at a real
-  anchor.
-- Fresh `npm run dev` resets the local chain + demo users (`data/db.json`).
+- Fresh `npm run dev` resets the local chain + demo users (`data/db.dev.json`).
 
 ## Liquidity venues
 
