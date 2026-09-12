@@ -18,16 +18,30 @@
  * Bump SHELL_CACHE when the shell changes; activate deletes every other cache
  * this origin owns, so an old shell cannot outlive a deploy.
  */
-const SHELL_CACHE = "zold-shell-v1";
+const SHELL_CACHE = "zold-shell-v2";
 
 /**
  * The device key and the vendored crypto matter most here. If /device.js or
  * /vendor/* is missing the send flow cannot sign at all, so they are cached up
  * front rather than on first use.
+ *
+ * The app's stylesheet and its per-screen scripts are shell too: /app is a
+ * shell of markup that draws nothing without them, so caching the page and not
+ * its code would give an offline start-up a blank screen.
  */
 const SHELL = [
   "/app",
   "/",
+  "/app.css",
+  "/app/core.js",
+  "/app/dashboard.js",
+  "/app/transactions.js",
+  "/app/profile.js",
+  "/app/recovery.js",
+  "/app/monerium.js",
+  "/app/onboarding.js",
+  "/app/send.js",
+  "/app/pwa.js",
   "/device.js",
   "/vendor/crypto-shim.js",
   "/vendor/secp256k1.js",
