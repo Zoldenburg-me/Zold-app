@@ -167,28 +167,33 @@ function rateLimit(key: string, perMin: number): boolean {
 }
 app.use("/api", (req, res, next) => {
   const ip = req.ip ?? "?";
+  // Express routes case-insensitively by default, so /api/R/<slug> serves the
+  // receipt route while req.path reads "/R/…" — a case-sensitive classifier
+  // would file every such request under the roomy general bucket, giving a
+  // credential scanner 15x the guess rate just by upper-casing one letter.
+  const p = req.path.toLowerCase();
   const authRoute =
-    req.path.startsWith("/passkey") ||
-    req.path.startsWith("/recovery") ||
+    p.startsWith("/passkey") ||
+    p.startsWith("/recovery") ||
     // A receipt slug is a bearer credential, so looking one up is a guess at a
     // secret and belongs on the tighter bucket with the other guessable things.
-    req.path.startsWith("/r/") ||
+    p.startsWith("/r/") ||
     // A document verification code is likewise a bearer credential.
-    req.path.startsWith("/v/") ||
+    p.startsWith("/v/") ||
     // A payment-request code (/pay/<handle>/<code>) is one too; the bare
     // /pay/<handle> page is public by design and stays on the general bucket.
-    /^\/pay\/[^/]+\/[^/]+/.test(req.path) ||
+    /^\/pay\/[^/]+\/[^/]+/.test(p) ||
     // Shopify's session webhooks are HMAC-signed; a forged one is a guess.
-    req.path.startsWith("/shopify/") ||
+    p.startsWith("/shopify/") ||
     // Operator routes take a bearer secret; guessing at it is guessing at a
     // credential.
-    req.path.startsWith("/admin") ||
+    p.startsWith("/admin") ||
     // An Invoice-Me link token and its optional password are bearer secrets.
-    req.path.startsWith("/invoice-links/") ||
+    p.startsWith("/invoice-links/") ||
     // Submitting Monerium API keys is a credential check against a third
     // party; guessing at it belongs on the tight bucket too.
-    (req.path.endsWith("/monerium/api-keys") && req.method === "POST") ||
-    (req.path === "/users" && req.method === "POST");
+    (p.endsWith("/monerium/api-keys") && req.method === "POST") ||
+    (p === "/users" && req.method === "POST");
   const ok = authRoute
     ? rateLimit(`a:${ip}`, SECURITY.authRateLimitPerMin)
     : rateLimit(`g:${ip}`, SECURITY.rateLimitPerMin);

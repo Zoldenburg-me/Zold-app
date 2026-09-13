@@ -208,7 +208,10 @@ export function validateCreate(body: any, user: User, now = new Date()): CreateI
   if (b.amountEur !== undefined && b.amountEur !== null && b.amountEur !== "") {
     const n = Number(b.amountEur);
     if (!Number.isFinite(n) || n <= 0) throw new PaymentRequestError("amountEur must be a positive number");
-    if (Math.round(n * 100) !== n * 100) throw new PaymentRequestError("amountEur has at most two decimals");
+    // Tolerance, not equality: n*100 is not float-exact for ~9% of valid
+    // two-decimal amounts (1.10 * 100 === 110.00000000000001), and an exact
+    // compare refused them all as "more than two decimals".
+    if (Math.abs(n * 100 - Math.round(n * 100)) > 1e-6) throw new PaymentRequestError("amountEur has at most two decimals");
     if (n > 1_000_000) throw new PaymentRequestError("amountEur is above the €1,000,000 ceiling");
     amountEur = n;
   }

@@ -27,7 +27,6 @@ import { paymentMemo } from "./sepa.js";
 import { createBridgeTransfer, BridgeTransferError, type BridgeTransferPlan } from "./bridge/bridgexyz.js";
 import {
   executeTransferLiquidity,
-  liquidityAmountOutUnits,
   liquidityProvider,
   prepareTransferLiquidity,
   serializeExecution,
@@ -791,7 +790,12 @@ export async function executeTransfer(
       const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
       txs.push(...liquidity.txs);
       expectedOut = liquidity.amountOut;
-      usdcOut = liquidityAmountOutUnits(liquidity.quote);
+      // MEASURED, like the batch path above — never the quote's expectedOut.
+      // A venue may legally fill anywhere down to minOut; recording the
+      // quoted number here would fund Bridge with the measured delivery but
+      // ask the anchor (and size a refund reversal) from a larger number the
+      // orchestrator never received.
+      usdcOut = usd.fromUnits(liquidity.amountOut);
       store.updateTransfer(transfer.id, {
         state: "SWAPPED",
         txs,

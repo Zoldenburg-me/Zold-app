@@ -356,10 +356,11 @@ class RfqLiquidityProvider implements LiquidityProvider {
     if (!leg?.amount) throw new Error(`RFQ quote missing buyTokens entry for ${buy}`);
     const expectedOut = BigInt(leg.amount);
     // Prefer the maker's own minimumAmount; fall back to our slippage bound so
-    // a maker that omits it cannot leave the swap unprotected.
-    const minOut = leg.minimumAmount
-      ? BigInt(leg.minimumAmount)
-      : (expectedOut * (10_000n - MAX_SLIPPAGE_BPS)) / 10_000n;
+    // a maker that omits it cannot leave the swap unprotected. A "0" counts as
+    // omitted: it is truthy as a string, and taking it literally would set the
+    // fill floor to nothing.
+    const makerMin = leg.minimumAmount ? BigInt(leg.minimumAmount) : 0n;
+    const minOut = makerMin > 0n ? makerMin : (expectedOut * (10_000n - MAX_SLIPPAGE_BPS)) / 10_000n;
     // The maker's expiry wins when it is sooner than ours — executing past it
     // is a guaranteed revert.
     const makerExpiry = body.expiry ? new Date(Number(body.expiry) * 1000).toISOString() : null;
@@ -1318,10 +1319,6 @@ export function serializeExecution(e: LiquidityExecution): NonNullable<Transfer[
     executedAt: new Date().toISOString(),
     txHash: e.txs.at(-1)?.hash,
   };
-}
-
-export function liquidityAmountOutUnits(q: LiquidityQuote): number {
-  return q.tokenOut === "USDC" ? usd.fromUnits(q.expectedOut) : eur.fromWei(q.expectedOut);
 }
 
 function hydrateQuote(q: NonNullable<Transfer["liquidity"]>): LiquidityQuote {

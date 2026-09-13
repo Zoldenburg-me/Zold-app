@@ -263,7 +263,10 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (effectiveState(hit.r) !== "OPEN") return res.status(409).json({ error: `this request is ${effectiveState(hit.r).toLowerCase()}` });
       if (!hit.r.methods.includes("crypto")) return res.status(409).json({ error: "this request does not take crypto" });
       const n = Number(req.body?.amountEur);
-      if (!Number.isFinite(n) || n <= 0 || Math.round(n * 100) !== n * 100) {
+      // Tolerance, not equality: n*100 is not float-exact for ~9% of valid
+      // two-decimal amounts (1.10 * 100 === 110.00000000000001) — an exact
+      // compare 400'd a payer typing €1.10 into the amount box.
+      if (!Number.isFinite(n) || n <= 0 || Math.abs(n * 100 - Math.round(n * 100)) > 1e-6) {
         return res.status(400).json({ error: "amountEur must be a positive amount with at most two decimals" });
       }
       if (hit.r.amountEur !== undefined && n !== hit.r.amountEur) {

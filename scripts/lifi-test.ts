@@ -20,7 +20,7 @@
  *
  * Run: npm run lifi:test
  */
-import "./_test-env.js";
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 
@@ -35,6 +35,11 @@ process.env.ALLOW_FIXED_RATES = "1";
 process.env.DEX_MAX_MID_DEVIATION_BPS = "300";
 // The stub's Diamond and its deliberately different approval spender.
 process.env.LIFI_CONTRACTS = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE,0x4444444444444444444444444444444444444444";
+// Deployments are keyed by chain id; without a pin this inherits the
+// production default (8453), which has no entry on a fresh clone. Pin the
+// local chain, whose entry every harness run writes. Same pin the shopify
+// suites use.
+process.env.TRANSF_CHAIN_ID = "31337";
 
 const { addrs } = await import("../services/api/src/chain.js");
 const EURE = addrs().eure;

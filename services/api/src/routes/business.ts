@@ -354,6 +354,14 @@ export function createBusinessRouter(
 
   /** Re-check a draft against the address book and park it if anything moved. */
   const reconcileDrift = (draft: DraftPayment): DraftPayment => {
+    // Only states the machine allows into INVALID_DATA. Running the check
+    // from a terminal or executing draft — reachable via a replayed submit or
+    // execute call after a routine contact edit — flipped an EXECUTED draft
+    // back to an editable state, and an already-paid batch could then be
+    // executed a second time.
+    if (draft.state !== "DRAFT" && draft.state !== "PENDING_REVIEW" && draft.state !== "REVIEWED") {
+      return draft;
+    }
     const drifted = findDriftedLines(draft, contactsById(draft.orgId));
     if (!drifted.length) return draft;
     return store.updateDraft(draft.id, {
@@ -446,10 +454,17 @@ export function createBusinessRouter(
     try {
       const contacts = contactsById(ctx.org.id);
       const replaced = Array.isArray(req.body?.lines);
-      const lines = (replaced ? req.body.lines : draft.lines).map((l: Record<string, unknown>) => ({
-        id: typeof l.id === "string" ? l.id : `dl_${randomUUID()}`,
-        ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
-      }));
+      // Lines the caller did NOT send are kept verbatim — never re-run through
+      // validateLine, which stamps a fresh fingerprint from the contact AS IT
+      // STANDS NOW. Re-baselining untouched lines on a body-less PATCH
+      // laundered an address-book edit past the drift check while leaving the
+      // original drafter on record for four-eyes to measure against.
+      const lines = replaced
+        ? req.body.lines.map((l: Record<string, unknown>) => ({
+            id: typeof l.id === "string" ? l.id : `dl_${randomUUID()}`,
+            ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
+          }))
+        : draft.lines;
       const updated = store.updateDraft(draft.id, {
         lines,
         // Re-pointing the lines is exactly how INVALID_DATA is resolved.
@@ -1351,7 +1366,10 @@ export function createBusinessRouter(
         issuer: draft.issuer,
         recipient: draft.recipient,
         vatTreatment: draft.treatment,
-        vatNote: vatNoteFor(draft.treatment, ctx.org.invoicing?.language ?? "de"),
+        // customReasonsOf matters: checkCompliance above validated the note
+        // WITH the org's custom exemption reasons, and freezing the snapshot
+        // without them dropped the statutory note for exactly those invoices.
+        vatNote: vatNoteFor(draft.treatment, ctx.org.invoicing?.language ?? "de", customReasonsOf(ctx.org)),
         netCents: report.totals.netCents,
         vatCents: report.totals.vatCents,
         grossCents: report.totals.grossCents,

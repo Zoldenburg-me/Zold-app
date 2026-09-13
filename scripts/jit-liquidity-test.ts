@@ -17,7 +17,7 @@
  *
  * Run: npm run jit:test
  */
-import "./_test-env.js";
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 
@@ -35,6 +35,12 @@ process.env.BEBOP_CONTRACTS = "0x3333333333333333333333333333333333333333";
 // The provider reads token addresses from deployments; point it at a fixed set
 // so the test needs no chain.
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify({ USD: 1.1379, INR: 109.87, KES: 147.53 });
+// Deployments are keyed by chain id, and without a pin this inherits the
+// production default (8453), which has no entry on a fresh clone — the suite
+// then fails before the first check. The local-chain entry is what every
+// harness run writes, so it is the one address set `npm run check` can rely
+// on. Same pin the shopify suites use.
+process.env.TRANSF_CHAIN_ID = "31337";
 
 // The real deployed token addresses, read the same way the provider does.
 // No RPC is needed: quote() only talks to the maker, and the execute() paths
