@@ -21,7 +21,7 @@
  * owner has to cancel from their still-working device.
  */
 import express from "express";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { CHAIN_ID, HARNESS, KEYS, RECOVERY, SECURITY } from "../config.js";
@@ -110,6 +110,39 @@ function prune<T extends { expiresAt: number }>(map: Map<string, T>, now = Date.
 function newCandideRequest(r: RecoveryRequest): RecoveryRequest {
   store.addRecoveryRequest(r);
   return r;
+}
+
+/**
+ * The bearer secret that authorises the no-session half of a recovery.
+ *
+ * The request id alone used to be the only capability, and that id (plus a
+ * fresh WebAuthn register challenge) was handed to ANYONE who POSTed the
+ * account's email or Safe address to /recovery/candide. An attacker could
+ * therefore bind THEIR OWN passkey to a victim's open request, or claim the
+ * session /finalize hands out, without holding any of the victim's factors.
+ * So a request now carries a secret: returned in plaintext only in the
+ * creation response, stored only as a hash, and required to advance the
+ * request (bind the passkey, submit an OTP, finalize).
+ */
+function newRecoverySecret(): { secret: string; hash: string } {
+  const secret = randomBytes(32).toString("base64url");
+  return { secret, hash: createHash("sha256").update(secret).digest("hex") };
+}
+
+function recoverySecretMatches(request: RecoveryRequest, provided: string | undefined): boolean {
+  const hash = request.candide?.secretHash;
+  if (!hash || !provided) return false;
+  const got = createHash("sha256").update(provided).digest("hex");
+  const a = Buffer.from(got, "hex");
+  const b = Buffer.from(hash, "hex");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function providedRecoverySecret(req: express.Request): string | undefined {
+  const header = req.get("x-recovery-secret");
+  if (header) return header;
+  const body = (req.body as any)?.recoverySecret;
+  return typeof body === "string" ? body : undefined;
 }
 const passkeySafeChallenge = (h: `0x${string}`) => bufToB64url(Buffer.from(h.slice(2), "hex"));
 
@@ -731,7 +764,56 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         .find((r) => r.mode === "candide" && ["PASSKEY_PENDING", "OTP_PENDING", "GRACE_PERIOD"].includes(r.status) && Date.now() < Date.parse(r.expiresAt));
       const grace = recoveryGracePeriodSeconds(c.moduleAddress) ?? 0;
       const now = new Date();
-      const request: RecoveryRequest = open ?? newCandideRequest({
+
+      // Resume vs. supersede. The secret held by the browser that created the
+      // open request is what tells the two apart:
+      //  - caller HAS the secret       -> resume the same request.
+      //  - caller lacks it, and the
+      //    request has not yet executed -> supersede it: cancel the old,
+      //    PASSKEY_PENDING/OTP_PENDING     start fresh with a new secret and a
+      //                                    new passkey slot. Neither state has
+      //                                    bound anything only the real owner
+      //                                    could produce (OTPs still go to the
+      //                                    owner's channels), so this cannot
+      //                                    take an account over — but it stops
+      //                                    a stranger's stale request from
+      //                                    locking the owner out for the 14-day
+      //                                    TTL, which requiring the secret with
+      //                                    no escape hatch would have done.
+      //  - lacks it, request in
+      //    GRACE_PERIOD                 -> a recovery is already executing on
+      //                                    chain; do not supersede. Return the
+      //                                    masked status with no secret and no
+      //                                    way to drive it; the owner's
+      //                                    grace-period cancel is the control.
+      const resuming = open ? recoverySecretMatches(open, providedRecoverySecret(req)) : false;
+      const canSupersede = open ? open.status === "PASSKEY_PENDING" || open.status === "OTP_PENDING" : false;
+
+      if (open && !resuming && !canSupersede) {
+        // GRACE_PERIOD held by someone else — reveal only that it exists.
+        return res.status(409).json({
+          ...publicRequest(open),
+          error: "a recovery for this account is already in its waiting period; continue it on the device that started it, or let the account owner cancel it",
+        });
+      }
+
+      if (open && !resuming && canSupersede) {
+        store.updateRecoveryRequest(open.id, {
+          status: "CANCELED",
+          canceledAt: now.toISOString(),
+          cancelReason: "superseded by a new recovery attempt",
+        });
+      }
+
+      const reuse = open && resuming ? open : null;
+      let secret: string | undefined;
+      let request: RecoveryRequest;
+      if (reuse) {
+        request = reuse;
+      } else {
+        const s = newRecoverySecret();
+        secret = s.secret;
+        request = newCandideRequest({
           id: randomUUID(),
           userId: user.id,
           safeAddress: user.passkeySafe!.address,
@@ -743,20 +825,24 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           guardianAddress: c.guardianAddress,
           recoveryModuleAddress: c.moduleAddress,
           factors: { kyc: "passed", otp: "pending", liveness: "pending", manualReview: "pending" },
-          candide: { gracePeriodSeconds: grace },
+          candide: { gracePeriodSeconds: grace, secretHash: s.hash },
         });
+      }
       const out: Record<string, unknown> = {
         ...publicRequest(request),
         channels: c.channels.map((ch) => ({ channel: ch.channel, target: maskTarget(ch.channel, ch.target) })),
         gracePeriodSeconds: grace,
       };
+      // The secret goes over the wire exactly once, on creation. A resume does
+      // not re-issue it — the browser resuming already holds it.
+      if (secret) out.recoverySecret = secret;
       if (request.status === "PASSKEY_PENDING") {
         out.registerChallenge = issueChallenge("register", `recovery:${request.id}`);
         out.rpId = SECURITY.rpId;
         out.userHandle = user.id;
         out.submitTo = `/api/recovery/candide/${request.id}/passkey`;
       }
-      res.status(open ? 200 : 201).json(out);
+      res.status(reuse ? 200 : 201).json(out);
     }),
   );
 
@@ -765,6 +851,9 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
     wrap(async (req, res) => {
       const request = requestFor(req, res);
       if (!request) return;
+      if (!recoverySecretMatches(request, providedRecoverySecret(req))) {
+        return res.status(403).json({ error: "this recovery must be continued on the device that started it" });
+      }
       if (request.status !== "PASSKEY_PENDING") {
         return res.status(409).json({ ...publicRequest(request), error: `recovery is ${request.status}` });
       }
@@ -820,6 +909,9 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
     wrap(async (req, res) => {
       const request = requestFor(req, res);
       if (!request) return;
+      if (!recoverySecretMatches(request, providedRecoverySecret(req))) {
+        return res.status(403).json({ error: "this recovery must be continued on the device that started it" });
+      }
       const c = request.candide;
       if (request.status !== "OTP_PENDING" || !c?.serviceRequestId || !c.auths || !c.newOwners || !c.newPasskey) {
         return res.status(409).json({ ...publicRequest(request), error: `recovery is ${request.status}` });
@@ -838,7 +930,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
 
       const result = await submitSignatureChallenge(c.serviceRequestId, challengeId, req.body?.otp);
       if (!result.success) {
-        store.updateRecoveryRequest(request.id, { candide: { ...c, otpAttempts: (c.otpAttempts ?? 0) + 1 } });
+        // Re-read after the await and increment from the CURRENT counter, not
+        // the entry-time snapshot: concurrent wrong-code submissions each held
+        // a stale `c` and last-writer-wins recorded only one attempt, letting
+        // the 5-attempt cancel be outrun. A stale snapshot could also clobber a
+        // GRACE_PERIOD patch written by a concurrent success.
+        const fresh = store.findRecoveryRequest(request.id)?.candide ?? c;
+        store.updateRecoveryRequest(request.id, { candide: { ...fresh, otpAttempts: (fresh.otpAttempts ?? 0) + 1 } });
         return res.status(400).json({ error: "the code was not accepted" });
       }
       const auths = c.auths.map((a) => (a.challengeId === challengeId ? { ...a, verified: true } : a));
@@ -892,6 +990,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
     wrap(async (req, res) => {
       const request = requestFor(req, res);
       if (!request) return;
+      // Finalize binds the new passkey AND hands this browser a session, so it
+      // is gated on the same secret as every other advancing step: without it,
+      // anyone who knew the id could poll for the grace period to elapse and
+      // take the session.
+      if (!recoverySecretMatches(request, providedRecoverySecret(req))) {
+        return res.status(403).json({ error: "this recovery must be continued on the device that started it" });
+      }
       if (request.status === "FINALIZED") return res.json(publicRequest(request));
       if (request.status !== "GRACE_PERIOD") {
         return res.status(409).json({ ...publicRequest(request), error: `recovery is ${request.status}` });

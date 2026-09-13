@@ -289,6 +289,11 @@ try {
     RECOVERY_SWEEP_MS: "3600000",
     LOCAL_HARNESS: "1",
     KYC_AUTO_APPROVE: "1",
+    // This suite drives the whole recovery flow, including the extra
+    // start/resume/refusal cases the bearer-secret change added, over the
+    // tight auth bucket. Raise it so the test exercises the state machine
+    // rather than the rate limiter (whose own coverage lives in its own suite).
+    AUTH_RATE_LIMIT_PER_MIN: "200",
   });
   for (const s = Date.now(); Date.now() - s < 30_000; ) {
     try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}
@@ -436,13 +441,15 @@ try {
   console.log("4/4 recovery from a device with no passkey…");
   const newPasskey = await makePasskey("replacement");
   let recovery: any;
+  let recoverySecret = "";
+  const mergeSecret = (body: any) => ({ ...body, recoverySecret });
 
   await t("an unknown email gets a generic refusal", async () => {
     const r = await call("/api/recovery/candide", { email: "nobody@example.com" }, undefined, "");
     assert.equal(r.status, 404);
   });
 
-  await t("starting recovery names the channels (masked) and issues a passkey registration challenge", async () => {
+  await t("starting recovery names the channels (masked) and issues a passkey registration challenge and a one-time secret", async () => {
     const r = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
     assert.equal(r.status, 201, JSON.stringify(r.data));
     assert.equal(r.data.status, "PASSKEY_PENDING");
@@ -450,17 +457,40 @@ try {
     assert.ok(!r.text.includes(EMAIL) && !r.text.includes(PHONE), "targets are masked on the public surface");
     assert.ok(r.data.registerChallenge, "a WebAuthn registration challenge bound to this recovery");
     assert.equal(r.data.userHandle, userId);
+    assert.ok(typeof r.data.recoverySecret === "string" && r.data.recoverySecret.length >= 32, "a one-time bearer secret");
+    assert.ok(!("secretHash" in (r.data.candide ?? {})), "the secret's hash never leaves the server");
     recovery = r.data;
+    recoverySecret = r.data.recoverySecret;
   });
 
-  await t("starting again returns the same open recovery rather than a second one", async () => {
+  await t("a fresh start without the secret SUPERSEDES the open request rather than resuming it", async () => {
     const r = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.notEqual(r.data.id, recovery.id, "a new request id");
+    assert.ok(r.data.recoverySecret, "a new secret for the new request");
+    // The superseded request is dead: its old secret can no longer advance it.
+    const stale = await call(`/api/recovery/candide/${recovery.id}/passkey`, mergeSecret(newPasskey.register(recovery.registerChallenge)), undefined, "");
+    assert.ok(stale.status === 409 || stale.status === 410 || stale.status === 403, JSON.stringify(stale.data));
+    recovery = r.data;
+    recoverySecret = r.data.recoverySecret;
+  });
+
+  await t("resuming WITH the secret returns the same open request", async () => {
+    const r = await call("/api/recovery/candide", { email: EMAIL, recoverySecret }, undefined, "");
     assert.equal(r.status, 200);
     assert.equal(r.data.id, recovery.id);
+    assert.ok(!r.data.recoverySecret, "a resume does not re-issue the secret");
+    recovery = { ...recovery, ...r.data };
+  });
+
+  await t("advancing without the secret is refused even with the right request id", async () => {
+    const r = await call(recovery.submitTo, newPasskey.register(recovery.registerChallenge), undefined, "");
+    assert.equal(r.status, 403, JSON.stringify(r.data));
+    assert.equal(seen.signatureRequests.length, 0, "no OTPs are requested for an unauthenticated caller");
   });
 
   await t("registering the new passkey asks Candide for OTPs on every channel with the new owner set", async () => {
-    const r = await call(recovery.submitTo, newPasskey.register(recovery.registerChallenge), undefined, "");
+    const r = await call(recovery.submitTo, mergeSecret(newPasskey.register(recovery.registerChallenge)), undefined, "");
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "OTP_PENDING");
     assert.equal(r.data.candide.auths.length, 2);
@@ -481,7 +511,7 @@ try {
   });
 
   await t("one verified channel is not enough — nothing executes", async () => {
-    const r = await call(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[0].challengeId, otp: OTP }, undefined, "");
+    const r = await call(`/api/recovery/candide/${recovery.id}/otp`, mergeSecret({ challengeId: recovery.candide.auths[0].challengeId, otp: OTP }), undefined, "");
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "OTP_PENDING");
     assert.equal(r.data.candide.auths[0].verified, true);
@@ -489,13 +519,13 @@ try {
   });
 
   await t("a wrong code on the second channel is refused", async () => {
-    const r = await call(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[1].challengeId, otp: "999999" }, undefined, "");
+    const r = await call(`/api/recovery/candide/${recovery.id}/otp`, mergeSecret({ challengeId: recovery.candide.auths[1].challengeId, otp: "999999" }), undefined, "");
     assert.equal(r.status, 400);
     assert.equal(seen.creates.length, 0);
   });
 
   await t("the last channel verified: Candide signs, the recovery is created and executed, the grace period starts", async () => {
-    const r = await call(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[1].challengeId, otp: OTP }, undefined, "");
+    const r = await call(`/api/recovery/candide/${recovery.id}/otp`, mergeSecret({ challengeId: recovery.candide.auths[1].challengeId, otp: OTP }), undefined, "");
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "GRACE_PERIOD");
     assert.ok(r.data.candide.finalizeAfter);
@@ -508,8 +538,14 @@ try {
     recovery = r.data;
   });
 
-  await t("finalizing inside the grace period is refused", async () => {
+  await t("finalizing without the secret is refused even after the grace period is entered", async () => {
     const r = await call(`/api/recovery/candide/${recovery.id}/finalize`, {}, undefined, "");
+    assert.equal(r.status, 403, JSON.stringify(r.data));
+    assert.equal(seen.finalizes.length, 0);
+  });
+
+  await t("finalizing inside the grace period is refused", async () => {
+    const r = await call(`/api/recovery/candide/${recovery.id}/finalize`, mergeSecret({}), undefined, "");
     assert.equal(r.status, 425, JSON.stringify(r.data));
     assert.equal(seen.finalizes.length, 0);
   });
@@ -517,7 +553,7 @@ try {
   await new Promise((r) => setTimeout(r, 2500));
 
   await t("after the grace period, finalization binds the new passkey and signs this browser in", async () => {
-    const r = await call(`/api/recovery/candide/${recovery.id}/finalize`, {}, undefined, "");
+    const r = await call(`/api/recovery/candide/${recovery.id}/finalize`, mergeSecret({}), undefined, "");
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "FINALIZED");
     assert.equal(seen.finalizes.length, 1);

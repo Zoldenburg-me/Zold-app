@@ -683,6 +683,9 @@ export interface RecoveryRequest {
     gracePeriodSeconds?: number;
     /** Wrong codes so far on the no-session OTP route. */
     otpAttempts?: number;
+    /** SHA-256 of the bearer secret that authorises the no-session recovery
+     *  routes. The plaintext is returned once, at creation, and never stored. */
+    secretHash?: string;
     finalizeAfter?: string;
     verifierDeployTxHash?: string;
     finalizeAttempts?: number;

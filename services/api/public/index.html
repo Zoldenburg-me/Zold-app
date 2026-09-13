@@ -4372,6 +4372,10 @@ async function recoveryCancelOnChain() {
 /* ---------- lost device: recover from the onboarding page ---------- */
 let rcState = null;
 let rcEmail = "";
+// The bearer secret the server hands back once, when this browser starts the
+// recovery. Every advancing call (passkey, otp, finalize) must carry it, so a
+// stranger who only knows the email cannot drive or hijack the request.
+let rcSecret = "";
 
 function showRecoverPanel(on) {
   $("onb-step1").classList.toggle("hidden", on);
@@ -4402,7 +4406,7 @@ function renderRecoverState() {
         clearErr("rc-err");
         const i = Number(b.dataset.rcConfirm);
         try {
-          rcState = await api(`/api/recovery/candide/${r.id}/otp`, { challengeId: auths[i].challengeId, otp: $(`rc-code-${i}`).value });
+          rcState = await api(`/api/recovery/candide/${r.id}/otp`, { challengeId: auths[i].challengeId, otp: $(`rc-code-${i}`).value, recoverySecret: rcSecret });
           renderRecoverState();
         } catch (e) { showErr("rc-err", e); }
       };
@@ -4420,7 +4424,7 @@ function renderRecoverState() {
     $("btn-rc-finalize").onclick = async () => {
       clearErr("rc-err");
       try {
-        const done = await api(`/api/recovery/candide/${r.id}/finalize`, {});
+        const done = await api(`/api/recovery/candide/${r.id}/finalize`, { recoverySecret: rcSecret });
         rcState = done;
         if (done.account) { renderUser(done.account); showRecoverPanel(false); enterDashboard(done.account.name); return; }
         renderRecoverState();
@@ -4448,6 +4452,9 @@ async function recoverStart() {
   try {
     if (!window.PublicKeyCredential) throw new Error("passkeys aren't supported in this browser");
     let r = await api("/api/recovery/candide", { email: rcEmail });
+    // Keep the one-time secret for the rest of this flow. A fresh start always
+    // returns one; a resume of a request this browser already holds does not.
+    if (r.recoverySecret) rcSecret = r.recoverySecret;
     if (r.status === "PASSKEY_PENDING") {
       // The new owner: a passkey made on THIS device. P-256 only — it has to
       // be able to own a Safe.
@@ -4466,6 +4473,7 @@ async function recoverStart() {
         credentialId: cred.id,
         attestation: b64url(cred.response.attestationObject),
         clientDataJSON: b64url(cred.response.clientDataJSON),
+        recoverySecret: rcSecret,
       });
     }
     rcState = r;
@@ -5802,7 +5810,7 @@ $("m-det-receipt").onclick = async () => {
     window.open(d.url, "_blank", "noopener");
   } catch (e) { $("m-det-error").textContent = e.message; $("m-det-error").classList.remove("hidden"); }
 };
-$("link-recover").onclick = (ev) => { ev.preventDefault(); rcState = null; showRecoverPanel(true); renderRecoverState(); };
+$("link-recover").onclick = (ev) => { ev.preventDefault(); rcState = null; rcSecret = ""; showRecoverPanel(true); renderRecoverState(); };
 $("link-rc-back").onclick = (ev) => { ev.preventDefault(); showRecoverPanel(false); };
 $("btn-rc-start").onclick = recoverStart;
 

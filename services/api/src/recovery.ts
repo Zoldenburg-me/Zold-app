@@ -83,7 +83,9 @@ export function publicRecoveryRequest(request: RecoveryRequest) {
   if (!candide) return pub;
   // The new credential stays private until it is bound, and channel targets
   // are masked: a recovery id is not a licence to read someone's phone number.
-  const { newPasskey, auths, ...rest } = candide;
+  // secretHash never leaves the server — it is the bearer secret's stored
+  // hash, and even the hash is not something a public projection should carry.
+  const { newPasskey, auths, secretHash, ...rest } = candide;
   return {
     ...pub,
     candide: {
