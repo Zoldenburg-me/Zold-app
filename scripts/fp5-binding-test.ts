@@ -81,7 +81,11 @@ try {
     midRate: 1,
     marginBps: 0,
     effectiveRate: 1,
-    lockedSwapRate: "1151100",
+    // The rate _local-chain.ts pins for the deploy (DEPLOY_EURUSD_RATE), so
+    // the quote matches the seeded swapper exactly. The old value 1151100
+    // relied on the LIVE euro staying within 50 bps of 1.1511 — a test that
+    // would have started failing the day the market moved.
+    lockedSwapRate: "1137900",
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
     createdAt: now,
   };

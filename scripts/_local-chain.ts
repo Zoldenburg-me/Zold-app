@@ -63,6 +63,20 @@ for (const [role, key] of Object.entries(DEV_KEYS)) {
 // A real Monerium chain name would send provisioning at the wrong network.
 process.env.MONERIUM_CHAIN = "sepolia";
 
+/**
+ * Seed the local FxSwapper at a pinned EUR/USD instead of the live feed.
+ *
+ * deploy.ts falls back to fetching the live mid when DEPLOY_EURUSD_RATE is
+ * unset, which made every harness that deploys without its own pin reach
+ * open.er-api.com — on an egress-restricted machine `npm run check` died in
+ * the first deploying suite, despite its OFFLINE contract. 1.1379 is the
+ * value every pinning suite already uses (1137900 = round(1.1379e6)), so a
+ * suite whose own `??=` now loses to this one still gets the number its
+ * assertions were written against. fx-rates-test keeps production posture on
+ * purpose and does not import this module.
+ */
+process.env.DEPLOY_EURUSD_RATE ??= "1137900";
+
 
 
 /**
