@@ -25,8 +25,10 @@ Known limitations are documented where they live rather than hidden:
 - Several external legs are proven only as far as their sandboxes allow;
   the code and docs say explicitly which halves have never run against
   the real counterparty.
-- The launch gate in `CLAUDE.md` lists what must be finished before this
-  should ever hold real funds. Read it before deploying anything.
+- The launch gate in `docs/notes/identity-and-security.md` lists what must be
+  finished before this should ever hold real funds, and "What has never run"
+  in `CLAUDE.md` lists which legs are still unproven. Read both before
+  deploying anything.
 
 Do not point this at mainnet with real keys and real money. If you fork it
 to build something real: get an audit, get a compliance relationship with
