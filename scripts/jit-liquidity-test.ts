@@ -192,6 +192,13 @@ try {
   });
 
   await t("indicative rates are cached — typing in the amount box is not a quote storm", async () => {
+    // A cold window: wait past the TTL so whatever a prior check left is stale,
+    // then three rapid calls must collapse to a single maker hit. liquidity
+    // provider instances are now memoised process-wide (so the cache actually
+    // survives between the many fresh liquidityProvider() calls real code
+    // makes), so the cold window is established by the TTL, not by a new
+    // instance.
+    await new Promise((r) => setTimeout(r, 500)); // past LIQUIDITY_INDICATIVE_TTL_MS
     hits = 0;
     await p.indicativeRate("EURE_TO_USDC");
     await p.indicativeRate("EURE_TO_USDC");
@@ -200,15 +207,12 @@ try {
   });
 
   await t("the indicative cache expires so a stale maker price is not shown", async () => {
-    // Its own provider instance: the previous check leaves a warm cache, and
-    // reusing it here made this test's result depend on how fast that one ran.
-    const fresh = liquidityProvider();
-    hits = 0;
-    await fresh.indicativeRate("EURE_TO_USDC");
-    assert.equal(hits, 1, "first call should reach the maker");
+    // Prove expiry without assuming a cold cache: after the TTL lapses, the
+    // next call MUST refetch, whatever the cache held going in.
     await new Promise((r) => setTimeout(r, 500)); // past LIQUIDITY_INDICATIVE_TTL_MS
-    await fresh.indicativeRate("EURE_TO_USDC");
-    assert.equal(hits, 2, `cache should have lapsed, got ${hits} calls`);
+    const before = hits;
+    await p.indicativeRate("EURE_TO_USDC");
+    assert.equal(hits, before + 1, `a call after the TTL must refetch, got ${hits - before}`);
   });
 
   await t("an rfq quote survives the prepare -> execute round trip", async () => {

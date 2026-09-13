@@ -1174,9 +1174,7 @@ export function applySurplus(
   return { amountOut, surplus: { amount: raw.toString(), keptBy: "user" } };
 }
 
-/** One venue by id. Separate from liquidityProvider() so best execution can
- *  dispatch to the venue that actually priced a quote. */
-export function providerById(id: LiquidityProviderId): LiquidityProvider {
+function constructProvider(id: LiquidityProviderId): LiquidityProvider {
   switch (id) {
     case "fx-swapper": return new FxSwapperLiquidityProvider();
     case "rfq": return new RfqLiquidityProvider();
@@ -1190,6 +1188,32 @@ export function providerById(id: LiquidityProviderId): LiquidityProvider {
       // exact degradation this seam exists to refuse.
       throw new Error(`unknown liquidity provider "${id}" — check LIQUIDITY_PROVIDER/LIQUIDITY_VENUES`);
   }
+}
+
+/**
+ * Provider instances are MEMOISED, not rebuilt per call.
+ *
+ * Each provider carries a short-lived indicative-rate cache on the instance
+ * (RfqLiquidityProvider.indicative, CoW's, Dex's, LiFi's, Best's). A fresh
+ * instance per call — which liquidityProvider()/providerById() used to hand
+ * back — made every one of those caches dead: fx.ts (per quote),
+ * assertQuoteRateBinding (per execution) and compensationRate each triggered
+ * a full live venue quote, so a burst of quotes became a burst of upstream
+ * calls — the exact rate-limited-feed outage the cache exists to prevent
+ * (CoW 429s after two quotes seconds apart). Config is frozen at first import,
+ * so one instance per id for the process's life is correct.
+ */
+const providerInstances = new Map<LiquidityProviderId, LiquidityProvider>();
+
+/** One venue by id. Separate from liquidityProvider() so best execution can
+ *  dispatch to the venue that actually priced a quote. */
+export function providerById(id: LiquidityProviderId): LiquidityProvider {
+  let p = providerInstances.get(id);
+  if (!p) {
+    p = constructProvider(id);
+    providerInstances.set(id, p);
+  }
+  return p;
 }
 
 export function liquidityProvider(): LiquidityProvider {
