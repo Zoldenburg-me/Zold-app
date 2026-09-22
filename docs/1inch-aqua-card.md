@@ -1,5 +1,14 @@
 # 1inch Card, non-custodial, on Aqua — a proposal
 
+> **Read `docs/1inch-aqua-incubator-application.md` first (11 Sep 2026).** It
+> corrects this file: Kulipa (§6, §11) is defunct since 29 Jul 2026; Baanx and
+> Monavate are owned by Exodus since 1 May 2026 (via receivership, not the
+> $175m deal); Immersve withdrawals are not permissionless and Immersve has no
+> EEA issuer since Dec 2025; Marqeta's JIT timeout is published (3 s); Aqua IS
+> on Ethereum Sepolia (§10 says no testnet — that was Base Sepolia only); the
+> "11,240 bytes" figures are hex length, the code is 5,619 bytes. The
+> structure below still stands.
+
 Status: **proposal, nothing built.** Written Sep 2026 against the Aqua developer
 whitepaper (Version: Developer Preview 1.0), the deployed `Aqua.sol` source, and
 `eth_getCode` probes of the live registries. Every claim marked VERIFIED below
@@ -229,7 +238,108 @@ mechanism**, so that race is real and unhandled: either pull at authorisation
 $1.5m. That is the reason Tier A is the default and not merely the safe choice.
 
 
-## 7. What each party builds, and why the incumbent says yes
+## 7. Whose contract does the pulling? The integration question
+
+Yes — a card programme has to accept Aqua as the thing it pulls from, and none of
+them do today. This is the hardest part of the proposal, harder than any contract
+work, and it is worth sizing precisely rather than waving at.
+
+**How big the change actually is.** Immersve's Universal EVM funding contract
+already has an approval mode. Read from their source, not their docs:
+
+```solidity
+function directSpendDebit(address spender, uint256 amount, bytes32 idempotencyKey) external {
+    _requireFundingMode(FundingMode.APPROVAL);
+    _requireFundsAdmin(msg.sender);
+    SafeERC20.safeTransferFrom(_token, spender, address(this), amount);
+    ...
+}
+```
+
+So a Mastercard principal member already ships the exact mechanic: the cardholder
+keeps the money in their own wallet, grants an ERC-20 approval, and the programme
+pulls at spend time with an idempotency key and a reversal window. Moving that to
+Aqua is one call — `AQUA.pull(maker, strategyHash, token, amount, address(this))`
+in place of `safeTransferFrom`, with the contract inheriting `AquaApp`. Their
+idempotency keys, reversal window, refunds, pause and roles are all untouched.
+
+One line in principle. A contract change, an audit and a product decision in
+practice, and it is theirs to make, not ours.
+
+**What they get for making it.** Their approval mode today is a blanket ERC-20
+allowance to their own contract: one number, no per-card limit on chain, no way
+to revoke one card without revoking all of them, and no accounting if the same
+balance is meant to back anything else. Aqua gives three ceilings instead of one,
+a per-card virtual balance, a `dock()` that kills one card without touching the
+approval, and separate accounting so a card cannot eat a committed payroll.
+
+**And the counter-argument, which their engineer will make and which is fair.**
+For one card with one limit, a raw approval to their own contract is simpler and
+Aqua is a dependency on a third party for accounting they could keep in their own
+storage. Aqua only earns its place when several spending rights sit over one
+balance, and when the accounting should be neutral rather than the card
+programme's private ledger. That is the argument to win, and it is not won by
+asserting it.
+
+### The consequence nobody can design around: `dock()` forces Tier A
+
+Aqua's revoke is unconditional and immediate. `dock()` zeroes the virtual balance
+and any later `pull()` underflows and reverts, and the card programme cannot delay
+it, veto it or see it coming. That is excellent for the cardholder and a genuine
+problem for the issuer, because a cardholder can spend at a terminal and dock
+before clearing.
+
+Gnosis Pay's three-minute Delay Module exists precisely to close this race — its
+defined term in their terms of service says so, "in order to avoid
+double-spending" — and Aqua reopens it. There is no module to add, because Aqua's
+`dock()` is called on Aqua by the user directly and nothing the CardApp does can
+slow it. Note that Gnosis Pay ALREADY reserves at authorisation (their lifecycle
+docs: on approval "money is immediately deducted … and moved to hold account on
+chain"), so for that programme Tier A is not a new settlement model, only a new
+place to pull from.
+
+**Therefore pull-at-authorisation is not the preferred tier for an Aqua card, it
+is the only safe one.** §5's Tier B stops being available the moment the funding
+source is Aqua. State that up front in any conversation, because it is the sort of
+thing that gets discovered after a contract is signed.
+
+### Three routes, and only one of them is a pitch
+
+1. **1inch directs its own programme.** This is why this proposal is addressed to
+   1inch and not to Rain or Immersve. 1inch is Baanx's *client*, and a client can
+   specify a funding source where a peer asking a competitor to adopt their
+   protocol cannot. Baanx has already built the non-custodial authorisation path,
+   so the ask is "point it at Aqua", not "build non-custodial".
+2. **Just-in-time funding, where nobody has to accept Aqua at all.** Marqeta's
+   Gateway JIT Funding — documented as available in Europe — inverts the flow: the
+   platform sends a synchronous message asking permission to fund each
+   transaction, and our gateway answers. The funding source is then our business
+   and invisible to them; at clearing Marqeta performs a JIT Unload and a Partner
+   Funds Load, which is where the money is actually delivered. Aqua appears in
+   nobody's contract but ours. The trade is that we take on programme-manager
+   obligations and need a BIN sponsor, so it is the heavier route commercially and
+   the lighter one technically.
+   CAVEAT, and it is the number that decides the architecture: **Marqeta does not
+   publish the gateway response timeout.** If it is around a second, no chain
+   settles a pull inside it — Base blocks are 2s, Gnosis 5s — so the gateway must
+   decide on a state read and pull immediately afterwards, leaving a few seconds
+   of exposure per transaction. Get that number before designing anything.
+3. **Take a programme as-is and put Aqua elsewhere.** Going with Gnosis Pay or
+   Rain unchanged means their wallet on their chain, and Aqua adds nothing to the
+   card — except on Gnosis Pay, where it turns out the card Safe can be an Aqua
+   maker with nobody's permission, because the user can queue arbitrary
+   transactions through the Delay Module. That is worked out in full in
+   `docs/aqua-on-gnosis-pay.md`, including the reserve rule that keeps the card
+   working and the finding that an Aqua pull bypasses their three-minute delay.
+   Aqua also adds nothing to the card itself there. It still earns its place on §9's other uses: mandates, invoice
+   pre-authorisation, employee limits, refund reserves. Smaller claim, available
+   today, no partner has to agree to anything.
+
+Route 1 is the pitch. Route 2 needs no permission but needs a licence
+relationship. Route 3 is what happens if both stall, and it is not a failure.
+
+
+## 8. What each party builds, and why the incumbent says yes
 
 **1inch builds one contract: `CardApp.sol`.** No protocol change. Sketch, using
 the real interface:
@@ -308,7 +418,7 @@ leaves the ecosystem becomes aggregator flow. Cashback stops being a custodial
 credit and becomes a `push()` that expands the user's own limit.
 
 
-## 8. Five things Aqua does that are not swaps
+## 9. Five things Aqua does that are not swaps
 
 The user's constraint was "not a swap product". Each of these is a surface Zold
 already ships, where Aqua replaces a database promise with a chain-enforced one.
@@ -338,7 +448,7 @@ For completeness: Aqua as a *swap* venue drops into Zold's existing
 what this document is about.
 
 
-## 9. Verified, and not verified
+## 10. Verified, and not verified
 
 **VERIFIED on chain, Sep 2026, `eth_getCode` plus selector search in the deployed
 bytecode:**
@@ -387,7 +497,7 @@ bytecode:**
   directly. Confirm before quoting them back at them.
 
 
-## 10. The ask
+## 11. The ask
 
 The question is no longer whether a card can spend from a wallet the user
 controls. Baanx answered that for MetaMask, Gnosis Pay answered it for Visa in
