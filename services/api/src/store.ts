@@ -1234,6 +1234,32 @@ export const store = {
     persist();
   },
   /**
+   * Add a transfer only if it still fits under the daily cap — atomically.
+   *
+   * THE HOLE THIS CLOSES. The cap was checked in buildTransferFromQuote and
+   * the row that *reserves* it was written several awaits later, after a
+   * balance read and (on the cash rail) Bridge and liquidity-venue calls. Two
+   * requests fired in parallel therefore both read a usage figure neither had
+   * written to yet, and both created a full-cap transfer: a control worth
+   * nothing against the one caller who sends two requests instead of one.
+   *
+   * Same idiom as claimAuthorization — nothing yields between the read and the
+   * write, so the second caller sees the first caller's row. `used` is passed
+   * in as a function rather than a number so it is recomputed HERE, inside the
+   * synchronous window, and not carried in stale from before the awaits.
+   */
+  addTransferWithinCap(
+    t: Transfer,
+    capEur: number,
+    used: () => number,
+  ): { ok: true } | { ok: false; usedEur: number; capEur: number } {
+    const usedEur = used();
+    if (usedEur + t.sendEur > capEur) return { ok: false, usedEur, capEur };
+    db.transfers.push(t);
+    persist();
+    return { ok: true };
+  },
+  /**
    * Claim the one and only authorization submission for a transfer.
    *
    * Deliberately synchronous: an Express handler runs uninterrupted until its
@@ -1436,7 +1462,22 @@ export const store = {
       (d) => d.txHash.toLowerCase() === txHash.toLowerCase() && d.logIndex === logIndex,
     );
   },
+  /**
+   * Record a deposit, once.
+   *
+   * Idempotent on (txHash, logIndex) — the chain's own identity for a
+   * transfer — because the poller's dedupe check and this write are separated
+   * by an await (the receipt's rate lookup), and the poll runs on a bare
+   * setInterval that does not wait for the previous tick. Two overlapping
+   * scans of one window both passed the check and both pushed, double-counting
+   * one payment: twice on the payee's payment link, twice in creditedUsdc.
+   * Returning the existing row makes the loser of that race a no-op.
+   */
   addCryptoDeposit(d: CryptoDeposit) {
+    const existing = db.cryptoDeposits.find(
+      (x) => x.txHash.toLowerCase() === d.txHash.toLowerCase() && x.logIndex === d.logIndex,
+    );
+    if (existing) return existing;
     db.cryptoDeposits.push(d);
     persist();
     return d;

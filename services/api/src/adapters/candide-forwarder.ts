@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { CHAIN_ID, FORWARDING, IS_PRODUCTION } from "../config.js";
+import { partnerTimeout } from "../http.js";
 
 const addressRe = /^0x[0-9a-fA-F]{40}$/;
 
@@ -41,6 +42,7 @@ async function forwardingRpc<T>(
     headers.authorization = `Bearer ${FORWARDING.accountApiKey}`;
   }
   const res = await fetch(FORWARDING.rpcUrl, {
+    signal: partnerTimeout(),
     method: "POST",
     headers,
     body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params: [params] }),

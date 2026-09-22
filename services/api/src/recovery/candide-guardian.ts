@@ -28,6 +28,7 @@ import {
 } from "safe-recovery-service-sdk";
 import { RECOVERY } from "../config.js";
 import { CANDIDE, recoveryGracePeriodSeconds } from "../wallet/candide.js";
+import { partnerTimeout } from "../http.js";
 
 export type RecoveryChannel = "email" | "sms";
 
@@ -153,7 +154,7 @@ async function fetchNetworkConfig(
   chainId: bigint,
 ): Promise<{ moduleAddress: string; sponsorships?: { execution?: { enabled: boolean }; finalization?: { enabled: boolean } } }> {
   const url = `${serviceUrl}/v1/config/getNetworkConfig?${new URLSearchParams({ chainId: String(Number(chainId)) })}`;
-  const res = await fetch(url, { headers: { "content-type": "application/json" } });
+  const res = await fetch(url, { signal: partnerTimeout(), headers: { "content-type": "application/json" } });
   const body: any = await res.json().catch(() => ({}));
   if (!res.ok || typeof body?.moduleAddress !== "string") {
     throw new CandideGuardianError(
