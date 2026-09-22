@@ -56,11 +56,16 @@ const mkUser = (over: any = {}) => {
   store.addUser(u);
   return u;
 };
+/** Every fixture gets its OWN transaction. (txHash, logIndex) is the chain's
+ *  identity for a transfer and the store now enforces it — two deposits
+ *  sharing one hash is a thing that cannot happen on chain, and a fixture that
+ *  did it was testing a shape the poller would never produce. */
+let depositSeq = 0;
 const mkDeposit = (userId: string, over: any = {}) => {
   const d: any = {
     id: `d-${Math.random().toString(16).slice(2)}`,
     userId, chainId: 31337, token: "USDC",
-    txHash: "0x" + "ab".repeat(32), logIndex: 0,
+    txHash: "0x" + String(++depositSeq).padStart(64, "a"), logIndex: 0,
     amountUnits: "500000000", amountUsdc: 500,
     state: "DETECTED", txs: [],
     detectedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
