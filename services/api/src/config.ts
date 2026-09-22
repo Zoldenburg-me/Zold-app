@@ -848,15 +848,34 @@ export const RATES = {
  * credit e-money off an on-chain event, so an operator needs to be able to stop
  * it without a deploy.
  */
+/**
+ * A number from the environment, or a refusal naming the variable.
+ *
+ * `Number("2 ")` is 2 but `Number("two")` is NaN, and a NaN that reaches
+ * `BigInt(...)` throws a bare RangeError from inside the deposit poller —
+ * a typo in one env var surfacing as a crash loop in the scanner, several
+ * layers from the cause. Boot is the place to say it.
+ */
+function envNumber(name: string, fallback: number, opts: { min?: number } = {}): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new Error(`${name} must be a number, got "${raw}"`);
+  if (opts.min !== undefined && n < opts.min) {
+    throw new Error(`${name} must be at least ${opts.min}, got ${n}`);
+  }
+  return n;
+}
+
 export const CRYPTO_IN = {
   enabled: process.env.CRYPTO_IN_ENABLED !== "0",
-  pollMs: Number(process.env.CRYPTO_IN_POLL_MS ?? 15_000),
+  pollMs: envNumber("CRYPTO_IN_POLL_MS", 15_000, { min: 250 }),
   /**
    * Below this, converting costs more than it delivers — a dust transfer would
    * be eaten by the swap and leave the user with a confusing €0.00 credit. Left
    * in place and recorded rather than converted.
    */
-  minUsdc: Number(process.env.CRYPTO_IN_MIN_USDC ?? 1),
+  minUsdc: envNumber("CRYPTO_IN_MIN_USDC", 1, { min: 0 }),
   /**
    * How far the venue's rate may sit from the live mid before we refuse.
    *
@@ -865,16 +884,16 @@ export const CRYPTO_IN = {
    * could credit e-money at a price no market would give — the exact failure
    * the live-rates work existed to end.
    */
-  maxDriftBps: Number(process.env.CRYPTO_IN_MAX_DRIFT_BPS ?? 100),
+  maxDriftBps: envNumber("CRYPTO_IN_MAX_DRIFT_BPS", 100, { min: 0 }),
   /**
    * Blocks to wait before treating a deposit as real. A reorg that unwinds the
    * incoming transfer after we have settled it leaves a false receipt. Zero on
    * hardhat, where a mined block is final and waiting would just hang the tests.
    */
-  confirmations: Number(process.env.CRYPTO_IN_CONFIRMATIONS ?? (IS_LOCAL_CHAIN ? 0 : 2)),
+  confirmations: envNumber("CRYPTO_IN_CONFIRMATIONS", IS_LOCAL_CHAIN ? 0 : 2, { min: 0 }),
   /** Cap on a single getLogs span, so a long outage cannot ask an RPC for a
    *  range it will refuse. The cursor catches up over several ticks instead. */
-  maxBlockSpan: BigInt(process.env.CRYPTO_IN_MAX_BLOCK_SPAN ?? 5_000),
+  maxBlockSpan: BigInt(envNumber("CRYPTO_IN_MAX_BLOCK_SPAN", 5_000, { min: 1 })),
 };
 
 

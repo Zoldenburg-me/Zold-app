@@ -386,8 +386,31 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
  * REFUSED row someone can act on; a deposit we never recorded because the
  * cursor ran ahead is money that silently vanished.
  */
+let scanning = false;
+
 export async function pollCryptoDepositsOnce(): Promise<number> {
   if (!CRYPTO_IN.enabled) return 0;
+  /**
+   * One scan at a time.
+   *
+   * setInterval does not wait for an async tick to finish, and a scan is a
+   * getBlockNumber, two getLogs over up to 5,000 blocks, a getBlock per
+   * distinct block and a rate lookup per USDC log — comfortably longer than
+   * the 15s default interval on a busy window or a slow RPC. Two overlapping
+   * scans read the same cursor and rescan the same range; addCryptoDeposit is
+   * idempotent so nothing is double-recorded any more, but doing the work
+   * twice is still wasted RPC and wasted third-party rate calls.
+   */
+  if (scanning) return 0;
+  scanning = true;
+  try {
+    return await scanCryptoDeposits();
+  } finally {
+    scanning = false;
+  }
+}
+
+async function scanCryptoDeposits(): Promise<number> {
   const watched = watchedAddresses();
   if (watched.length === 0) return 0;
   const cursorKey = `${CHAIN_ID}:safe-funding-v1`;
@@ -485,9 +508,15 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
               log.blockNumber != null ? blockTimes.get(log.blockNumber) : undefined,
             )
           : undefined;
-      fresh.push(
-        store.addCryptoDeposit({
-          id: randomUUID(),
+      /**
+       * addCryptoDeposit is idempotent on (txHash, logIndex) and returns the
+       * row that already existed rather than a second one. Compare the id back
+       * so a deposit another pass already recorded is not attributed to a
+       * payment link or converted a second time.
+       */
+      const depositId = randomUUID();
+      const recorded = store.addCryptoDeposit({
+          id: depositId,
           userId: user.id,
           chainId: CHAIN_ID,
           token: token.token,
@@ -510,8 +539,8 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
           txs: [],
           detectedAt: now,
           updatedAt: now,
-        }),
-      );
+      });
+      if (recorded.id === depositId) fresh.push(recorded);
     }
   }
 

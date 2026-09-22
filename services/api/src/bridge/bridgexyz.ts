@@ -10,6 +10,7 @@
  * fabricated deposit address.
  */
 import { BRIDGE } from "../config.js";
+import { partnerTimeout } from "../http.js";
 
 export interface BridgeTransferDestination {
   paymentRail: string;
@@ -125,6 +126,7 @@ export async function createBridgeTransfer(
     destination: dest,
   };
   const res = await fetch(apiPath("/v0/transfers"), {
+    signal: partnerTimeout(),
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -155,6 +157,7 @@ export async function getBridgeTransfer(bridgeTransferId: string): Promise<{
 }> {
   if (!BRIDGE.apiKey) throw new Error("BRIDGE_API_KEY is required to read Bridge transfers");
   const res = await fetch(apiPath(`/v0/transfers/${encodeURIComponent(bridgeTransferId)}`), {
+    signal: partnerTimeout(),
     headers: { "Api-Key": BRIDGE.apiKey },
   });
   const data = await res.json().catch(async () => ({ error: await res.text().catch(() => "") }));

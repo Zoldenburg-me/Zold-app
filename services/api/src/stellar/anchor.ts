@@ -22,6 +22,7 @@ import {
   WebAuth,
 } from "@stellar/stellar-sdk";
 import { IS_PRODUCTION, ROOT, STELLAR, STELLAR_TESTNET_PASSPHRASE } from "../config.js";
+import { partnerTimeout } from "../http.js";
 
 // ---------------------------------------------------------------------------
 // Treasury account (auto-provisioned on testnet via friendbot)
@@ -41,7 +42,7 @@ export async function getTreasury(): Promise<Keypair> {
   }
   const kp = Keypair.random();
   // Fund on testnet so the account exists on-ledger.
-  const res = await fetch(`${STELLAR.friendbot}?addr=${kp.publicKey()}`);
+  const res = await fetch(`${STELLAR.friendbot}?addr=${kp.publicKey()}`, { signal: partnerTimeout() });
   if (!res.ok) throw new Error(`friendbot funding failed (${res.status})`);
   mkdirSync(path.dirname(TREASURY_PATH), { recursive: true });
   writeFileSync(
@@ -64,7 +65,7 @@ export interface AnchorInfo {
 }
 
 export async function fetchAnchorInfo(homeDomain: string): Promise<AnchorInfo> {
-  const res = await fetch(`https://${homeDomain}/.well-known/stellar.toml`);
+  const res = await fetch(`https://${homeDomain}/.well-known/stellar.toml`, { signal: partnerTimeout() });
   if (!res.ok) throw new Error(`stellar.toml fetch failed for ${homeDomain} (${res.status})`);
   const toml = await res.text();
   const get = (key: string) => toml.match(new RegExp(`^${key}\\s*=\\s*"([^"]+)"`, "m"))?.[1];
@@ -105,7 +106,7 @@ export async function sep24WithdrawLimits(
   assetCode: string,
 ): Promise<WithdrawLimits> {
   const info = await fetchAnchorInfo(homeDomain);
-  const res = await fetch(`${info.transferServerSep24}/info`);
+  const res = await fetch(`${info.transferServerSep24}/info`, { signal: partnerTimeout() });
   if (!res.ok) throw new Error(`SEP-24 info failed (${res.status})`);
   const data = (await res.json()) as { withdraw?: Record<string, any> };
   const entry = data.withdraw?.[assetCode];
@@ -213,7 +214,7 @@ async function sep10Exchange(homeDomain: string, keypair: Keypair, options: Sep1
   if (sendHomeDomain) url.searchParams.set("home_domain", homeDomain);
   if (options.memo) url.searchParams.set("memo", options.memo);
   if (options.clientDomain) url.searchParams.set("client_domain", options.clientDomain);
-  const chRes = await fetch(url);
+  const chRes = await fetch(url, { signal: partnerTimeout() });
   if (!chRes.ok) throw new Error(`SEP-10 challenge failed (${chRes.status}): ${await chRes.text()}`);
   const { transaction, network_passphrase } = (await chRes.json()) as {
     transaction: string;
@@ -242,6 +243,7 @@ async function sep10Exchange(homeDomain: string, keypair: Keypair, options: Sep1
   }
 
   const tokRes = await fetch(info.webAuthEndpoint, {
+    signal: partnerTimeout(),
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ transaction: tx.toXDR() }),
@@ -308,7 +310,7 @@ export async function sep12CustomerFields(
     url.searchParams.set("memo", memo);
     url.searchParams.set("memo_type", "id");
   }
-  const res = await fetch(url, { headers: { authorization: `Bearer ${jwt}` } });
+  const res = await fetch(url, { signal: partnerTimeout(), headers: { authorization: `Bearer ${jwt}` } });
   if (!res.ok) throw new Error(`SEP-12 GET /customer failed (${res.status}): ${await res.text()}`);
   const data = (await res.json()) as any;
   return {
@@ -359,6 +361,7 @@ export async function sep12PutCustomer(
     if (typeof v === "string" && v.trim() !== "") body[k] = v.trim();
   }
   const res = await fetch(`${kycServerOf(info, homeDomain)}/customer`, {
+    signal: partnerTimeout(),
     method: "PUT",
     headers: { "content-type": "application/json", authorization: `Bearer ${jwt}` },
     body: JSON.stringify(body),
@@ -392,6 +395,7 @@ export async function sep24InitiateWithdraw(
 ): Promise<Sep24Withdrawal> {
   const info = await fetchAnchorInfo(homeDomain);
   const res = await fetch(`${info.transferServerSep24}/transactions/withdraw/interactive`, {
+    signal: partnerTimeout(),
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${jwt}` },
     body: JSON.stringify({
@@ -424,6 +428,7 @@ export async function sep24GetTransaction(
 ): Promise<Sep24Status> {
   const info = await fetchAnchorInfo(homeDomain);
   const res = await fetch(`${info.transferServerSep24}/transaction?id=${id}`, {
+    signal: partnerTimeout(),
     headers: { authorization: `Bearer ${jwt}` },
   });
   if (!res.ok) throw new Error(`SEP-24 status failed (${res.status}): ${await res.text()}`);
@@ -466,7 +471,7 @@ export interface AccountReserves {
 
 /** Live base reserve, rather than a hardcoded 0.5 that a protocol change breaks. */
 export async function baseReserveXlm(): Promise<number> {
-  const res = await fetch(`${STELLAR.horizon}/ledgers?order=desc&limit=1`);
+  const res = await fetch(`${STELLAR.horizon}/ledgers?order=desc&limit=1`, { signal: partnerTimeout() });
   if (!res.ok) throw new Error(`Horizon ledgers failed (${res.status})`);
   const rec = (await res.json()) as any;
   const stroops = rec?._embedded?.records?.[0]?.base_reserve_in_stroops;

@@ -44,6 +44,7 @@ const scripts = [
   "trustline:test",
   "anchor:sweep:test",
   "refund:guard:test",
+  "tx:audit:test",
 ];
 
 async function freePort(): Promise<number> {
