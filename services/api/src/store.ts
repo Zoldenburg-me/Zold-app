@@ -825,6 +825,9 @@ const DB_PATH = process.env.TRANSF_DB_PATH
   : path.join(ROOT, "data", "db.json");
 const DATA_DIR = path.dirname(DB_PATH);
 
+/** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
+const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
+
 let db: Db = {
   users: [],
   quotes: [],
@@ -1234,30 +1237,55 @@ export const store = {
     persist();
   },
   /**
-   * Add a transfer only if it still fits under the daily cap — atomically.
+   * Hold part of the daily cap for a transfer that is still being prepared.
    *
-   * THE HOLE THIS CLOSES. The cap was checked in buildTransferFromQuote and
-   * the row that *reserves* it was written several awaits later, after a
-   * balance read and (on the cash rail) Bridge and liquidity-venue calls. Two
-   * requests fired in parallel therefore both read a usage figure neither had
-   * written to yet, and both created a full-cap transfer: a control worth
-   * nothing against the one caller who sends two requests instead of one.
+   * THE HOLE THIS CLOSES, twice over. The cap was first only CHECKED in
+   * buildTransferFromQuote and the row that reserves it written several awaits
+   * later, so two parallel requests both read a usage figure neither had
+   * written to and both created a full-cap transfer. Checking again at the
+   * write closed that race but refused AFTER the slow work — on the cash rail
+   * after a live Bridge transfer had been created, leaving an unfunded
+   * transfer at Bridge for every refusal. A hold taken BEFORE any partner is
+   * called gives both properties: the second request is refused while nothing
+   * outside this process has been touched, and the first one's figure is
+   * counted from the moment it starts preparing.
    *
    * Same idiom as claimAuthorization — nothing yields between the read and the
-   * write, so the second caller sees the first caller's row. `used` is passed
-   * in as a function rather than a number so it is recomputed HERE, inside the
-   * synchronous window, and not carried in stale from before the awaits.
+   * write. `used` is a function so it is recomputed inside that window, and it
+   * must include `heldEurToday` (safeFundedEurToday does). Holds live in
+   * memory like pendingTransferExecutions: a restart drops them along with the
+   * requests that took them.
    */
-  addTransferWithinCap(
-    t: Transfer,
+  holdDailyCap(
+    userId: string,
+    eur: number,
     capEur: number,
     used: () => number,
-  ): { ok: true } | { ok: false; usedEur: number; capEur: number } {
+  ): { ok: true; holdId: string } | { ok: false; usedEur: number; capEur: number } {
     const usedEur = used();
-    if (usedEur + t.sendEur > capEur) return { ok: false, usedEur, capEur };
+    if (usedEur + eur > capEur) return { ok: false, usedEur, capEur };
+    const holdId = randomUUID();
+    capHolds.set(holdId, { userId, eur, day: new Date().toISOString().slice(0, 10) });
+    return { ok: true, holdId };
+  },
+  /** Euros held for transfers still being prepared, for one user and UTC day. */
+  heldEurToday(userId: string, day = new Date().toISOString().slice(0, 10)): number {
+    let sum = 0;
+    for (const h of capHolds.values()) if (h.userId === userId && h.day === day) sum += h.eur;
+    return sum;
+  },
+  /**
+   * Turn a hold into the transfer row that replaces it. Push and release
+   * happen together so the amount is never uncounted in between.
+   */
+  addTransferUnderHold(t: Transfer, holdId: string) {
+    if (!capHolds.delete(holdId)) throw new Error(`no cap hold ${holdId} — the transfer was not reserved`);
     db.transfers.push(t);
     persist();
-    return { ok: true };
+  },
+  /** Drop a hold whose transfer was refused or failed. A no-op once committed. */
+  releaseCapHold(holdId: string) {
+    capHolds.delete(holdId);
   },
   /**
    * Claim the one and only authorization submission for a transfer.

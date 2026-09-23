@@ -2924,6 +2924,26 @@ async function buildTransferFromQuote(
     reference?: string;
   },
 ): Promise<TransferBuildResult> {
+  // Whatever way preparation ends — refusal, thrown error or success — a cap
+  // hold it took must not outlive it. Releasing a committed hold is a no-op.
+  const hold: { id?: string } = {};
+  try {
+    return await prepareTransferFromQuote(quote, recipient, hold);
+  } finally {
+    if (hold.id) store.releaseCapHold(hold.id);
+  }
+}
+
+async function prepareTransferFromQuote(
+  quote: Quote,
+  recipient: {
+    recipientName: string;
+    recipientPhone?: string;
+    recipientIban?: string;
+    reference?: string;
+  },
+  hold: { id?: string },
+): Promise<TransferBuildResult> {
   const { res, out } = responseCollector();
   const { recipientName, recipientPhone, recipientIban, reference } = recipient;
     const user = store.findUser(quote.userId)!;
@@ -2978,6 +2998,28 @@ async function buildTransferFromQuote(
         error: "no device key registered for this account — POST /api/users/:id/authorizer first",
       });
     }
+    /**
+     * Hold the cap BEFORE anything leaves this process.
+     *
+     * assertDailyCap above refuses early with a useful message, but it ran
+     * before the balance read, so it cannot hold against a parallel request.
+     * The hold can: nothing yields between counting and recording it. And it
+     * is taken before the quote is consumed and, on the cash rail, before a
+     * live Bridge transfer is created — a refusal here leaves no spent quote
+     * and no unfunded transfer at Bridge behind it.
+     */
+    const held = store.holdDailyCap(user.id, transfer.sendEur, FX.DAILY_CAP_EUR, () =>
+      safeFundedEurToday(user.id),
+    );
+    if (!held.ok) {
+      return res.status(409).json({
+        error:
+          `amount exceeds the daily cap of €${held.capEur.toFixed(2)} ` +
+          `(€${held.usedEur.toFixed(2)} already committed today) — ` +
+          "another transfer is being prepared or was created today",
+      });
+    }
+    hold.id = held.holdId;
     if (!store.consumeQuote(quote.id)) {
       return res.status(409).json({ error: "quote already consumed" });
     }
@@ -3202,27 +3244,8 @@ async function buildTransferFromQuote(
       });
     }
     transfer.custody = custody;
-    /**
-     * Reserve the cap in the same breath as writing the row.
-     *
-     * assertDailyCap above ran BEFORE the balance read and, on the cash rail,
-     * before Bridge and the liquidity venue were called — seconds of awaits
-     * during which a second request reads the same usage figure and creates a
-     * second full-cap transfer. The check there stays (it refuses early and
-     * with a useful message); this is the one that actually holds, because
-     * nothing yields between counting and pushing.
-     */
-    const reserved = store.addTransferWithinCap(transfer, FX.DAILY_CAP_EUR, () =>
-      safeFundedEurToday(user.id),
-    );
-    if (!reserved.ok) {
-      return res.status(409).json({
-        error:
-          `amount exceeds the daily cap of €${reserved.capEur.toFixed(2)} ` +
-          `(€${reserved.usedEur.toFixed(2)} already committed today) — ` +
-          "another transfer was created while this one was being prepared",
-      });
-    }
+    // The hold taken before any partner call becomes this row, in one step.
+    store.addTransferUnderHold(transfer, held.holdId);
     return {
       ok: true as const,
       transfer,

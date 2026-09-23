@@ -131,6 +131,7 @@ const transfer = (id: string, sendEur: number, over: Partial<Transfer> = {}): Tr
 });
 
 const usedByCapUser = () =>
+  store.heldEurToday("cap-user") +
   store.transfers
     .filter(
       (t) =>
@@ -177,8 +178,15 @@ await check("two open requests for the same euro amount get distinguishable USDC
   );
 });
 
+/** What buildTransferFromQuote does: hold the cap, then commit the row. */
+const addUnderCap = (t: Transfer) => {
+  const held = store.holdDailyCap(t.userId, t.sendEur, FX.DAILY_CAP_EUR, usedByCapUser);
+  if (held.ok) store.addTransferUnderHold(t, held.holdId);
+  return held;
+};
+
 await check("a transfer that fits under the cap is written", () => {
-  const res = store.addTransferWithinCap(transfer("t-fits", 100), FX.DAILY_CAP_EUR, usedByCapUser);
+  const res = addUnderCap(transfer("t-fits", 100));
   assert.equal(res.ok, true);
   assert.ok(store.findTransfer("t-fits"), "the transfer was accepted but not persisted");
 });
@@ -302,21 +310,13 @@ await check("an equidistant tie goes to the OLDER request", () => {
 
 await check("a transfer landing exactly ON the cap is allowed", () => {
   store.transfers.length = 0;
-  const res = store.addTransferWithinCap(
-    transfer("t-on-cap", FX.DAILY_CAP_EUR),
-    FX.DAILY_CAP_EUR,
-    usedByCapUser,
-  );
+  const res = addUnderCap(transfer("t-on-cap", FX.DAILY_CAP_EUR));
   assert.equal(res.ok, true, "the cap is exclusive where it should be inclusive");
 });
 
 await check("one cent over the cap is refused", () => {
   store.transfers.length = 0;
-  const res = store.addTransferWithinCap(
-    transfer("t-over-cap", FX.DAILY_CAP_EUR + 0.01),
-    FX.DAILY_CAP_EUR,
-    usedByCapUser,
-  );
+  const res = addUnderCap(transfer("t-over-cap", FX.DAILY_CAP_EUR + 0.01));
   assert.equal(res.ok, false);
   assert.equal(store.findTransfer("t-over-cap"), undefined, "a refused transfer was still written");
 });
@@ -328,30 +328,55 @@ await check("two transfers prepared in parallel cannot both reserve the whole ca
   const half = FX.DAILY_CAP_EUR * 0.6; // two of these exceed the cap
   // Each "request" does its slow work (a balance read, a venue call) and only
   // then writes its row — which is exactly the window the audit found open.
-  const race = (id: string) =>
-    new Promise<boolean>((resolve) =>
-      setTimeout(
-        () => resolve(store.addTransferWithinCap(transfer(id, half), FX.DAILY_CAP_EUR, usedByCapUser).ok),
-        0,
-      ),
-    );
+  // The hold is taken up front, the slow work happens, then the row is
+  // written — so the second request must be refused while the first is still
+  // preparing, before it could have called Bridge.
+  const race = async (id: string) => {
+    const held = store.holdDailyCap("cap-user", half, FX.DAILY_CAP_EUR, usedByCapUser);
+    await new Promise((r) => setTimeout(r, 5));
+    if (!held.ok) return false;
+    store.addTransferUnderHold(transfer(id, half), held.holdId);
+    return true;
+  };
   const [a, b] = await Promise.all([race("race-a"), race("race-b")]);
   assert.equal([a, b].filter(Boolean).length, 1, "both concurrent transfers reserved the full cap");
   assert.equal(usedByCapUser(), half, "the cap ledger does not match the transfers that were written");
 });
 
 await check("transfer creation RESERVES the cap rather than only checking it", () => {
-  // The unit test above proves the primitive. This proves the call site uses
-  // it: the defect was that the cap was read seconds (and several network
-  // round-trips) before the row that reserves it was written, so a bare
-  // store.addTransfer here would reopen the race with the primitive intact.
+  // The unit tests above prove the primitive. This proves the call site uses
+  // it, and uses it EARLY: the hold must be taken before the quote is spent
+  // and before Bridge is asked for a transfer, or a cap refusal leaves an
+  // unfunded Bridge transfer behind (the finding this replaced).
   const src = readFileSync("services/api/src/server.ts", "utf8");
-  assert.match(src, /store\.addTransferWithinCap\(/, "transfer creation no longer reserves the cap atomically");
+  const hold = src.indexOf("store.holdDailyCap(");
+  assert.ok(hold > 0, "transfer creation no longer holds the cap");
+  assert.ok(hold < src.indexOf("store.consumeQuote(quote.id)"), "the quote is consumed before the cap is held");
+  assert.ok(hold < src.indexOf("await createBridgeTransfer("), "Bridge is called before the cap is held");
+  assert.match(src, /store\.addTransferUnderHold\(/, "the row is not written under the hold");
+  assert.match(src, /finally \{\s*if \(hold\.id\) store\.releaseCapHold\(hold\.id\)/, "a refused or failed preparation keeps its hold");
   assert.doesNotMatch(
     src,
     /\bstore\.addTransfer\(/,
     "a non-reserving store.addTransfer is back on the transfer-creation path",
   );
+});
+
+await check("a released hold frees the cap; a committed one cannot be released twice", () => {
+  store.transfers.length = 0;
+  const a = store.holdDailyCap("cap-user", FX.DAILY_CAP_EUR, FX.DAILY_CAP_EUR, usedByCapUser);
+  assert.equal(a.ok, true);
+  const blocked = store.holdDailyCap("cap-user", 1, FX.DAILY_CAP_EUR, usedByCapUser);
+  assert.equal(blocked.ok, false, "a second hold fit beside a full-cap hold that is still preparing");
+  store.releaseCapHold((a as { holdId: string }).holdId);
+  assert.equal(usedByCapUser(), 0, "a released hold still counts against the cap");
+  const b = store.holdDailyCap("cap-user", 10, FX.DAILY_CAP_EUR, usedByCapUser);
+  assert.equal(b.ok, true, "the cap stayed taken after the refused transfer released it");
+  const id = (b as { holdId: string }).holdId;
+  store.addTransferUnderHold(transfer("t-held", 10), id);
+  store.releaseCapHold(id); // what the finally block does after success
+  assert.equal(usedByCapUser(), 10, "committing a hold counted the amount twice, or releasing it uncounted the row");
+  assert.throws(() => store.addTransferUnderHold(transfer("t-held-2", 10), id), /no cap hold/);
 });
 
 await check("a deposit recorded twice by overlapping scans is stored once", () => {
