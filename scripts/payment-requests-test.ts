@@ -235,6 +235,15 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
   check("a short number is NEVER matched — booking a stranger's money against a customer's invoice is worse than missing one",
     !inv.orderNamesInvoice({ ...order, memo: "invoice 14 paid" } as any, mk("14")));
   check("and an unrelated memo does not match", !inv.orderNamesInvoice({ ...order, memo: "Miete September" } as any, mk("RE-2026-0042")));
+  check("a longer number is not a match for its own prefix — INV-1000's payment must not close INV-100",
+    !inv.orderNamesInvoice({ ...order, memo: "Invoice INV-1000" } as any, mk("INV-100")));
+  check("nor the other way round once a series outgrows its padding",
+    !inv.orderNamesInvoice({ ...order, memo: "RE-2026-10000" } as any, mk("RE-2026-1000")));
+  check("a number glued to other letters is not a match either",
+    !inv.orderNamesInvoice({ ...order, memo: "XRE20260042" } as any, mk("RE-2026-0042")));
+  check("but the number at the very start or end of the memo still is",
+    inv.orderNamesInvoice({ ...order, memo: "RE-2026-0042" } as any, mk("RE-2026-0042")) &&
+      inv.orderNamesInvoice({ ...order, memo: "Zahlung RE2026 0042." } as any, mk("RE-2026-0042")));
 
   const twice = inv.withSettlement(inv.withSettlement([], b), b);
   check("one payment can never appear twice, however often the poller re-sees it", twice.length === 1);
@@ -340,6 +349,12 @@ try {
     id: randomUUID(), orgId, userId: miriam.id, email: miriam.email, role: "owner",
     status: "active", createdAt: nowIso, updatedAt: nowIso,
   } as any);
+  // Her personal org's EUR account IS her Safe — what the store migration writes.
+  store.addAccount({
+    id: `acc_${randomUUID()}`, orgId, currency: "EUR", label: "EUR account", status: "active",
+    provider: "monerium", identifier: {}, address: owner, backingUserId: miriam.id,
+    createdAt: nowIso, updatedAt: nowIso,
+  } as any);
   const issuedSnapshot = (grossCents: number, over: any = {}) => ({
     number: "RE-2026-0001", issueDate: nowIso.slice(0, 10),
     issuer: { name: "Miriam Zoldenburg" }, recipient: { name: "A Customer" },
@@ -429,6 +444,39 @@ try {
   routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-3", address: `0x${"99".repeat(20)}` } as any);
   check("and a credit to an address we do not know is ignored rather than guessed at",
     (store.findInvoice(bankPaid)!.settlements ?? []).length === 1);
+  const twoA = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0901" }));
+  const twoB = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0902" }));
+  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-4", memo: "RE-2026-0901 und RE-2026-0902" } as any);
+  check("a credit naming two invoices is booked on neither — it cannot be split by guessing",
+    (store.findInvoice(twoA)!.settlements ?? []).length === 0 && (store.findInvoice(twoB)!.settlements ?? []).length === 0);
+
+  // A business org Miriam is only a MEMBER of: its account is someone else's Safe.
+  const bizOrg = randomUUID();
+  store.addOrganisation({
+    id: bizOrg, type: "business", name: "Somebody GmbH", plan: "business",
+    reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "fifo" },
+    verifications: {}, createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  store.addMember({
+    id: randomUUID(), orgId: bizOrg, userId: miriam.id, email: miriam.email, role: "viewer",
+    status: "active", createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  store.addAccount({
+    id: `acc_${randomUUID()}`, orgId: bizOrg, currency: "EUR", label: "EUR account", status: "active",
+    provider: "monerium", identifier: {}, address: `0x${"77".repeat(20)}`, backingUserId: randomUUID(),
+    createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  const bizInv = mkInvoice({ orgId: bizOrg }, issuedSnapshot(2500, { number: "SG-2026-0555" }));
+  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-5", memo: "SG-2026-0555" } as any);
+  check("money reaching a member's own Safe does not close the company's invoice it quotes",
+    (store.findInvoice(bizInv)!.settlements ?? []).length === 0);
+  let refusedStatus: number | undefined;
+  try {
+    await routes.createPaymentRequest(miriam, { methods: ["crypto"], expiresAt: new Date(Date.now() + 3_600_000).toISOString(), invoiceId: bizInv }, { kind: "app" } as any, bizOrg);
+  } catch (err: any) {
+    refusedStatus = err?.status;
+  }
+  check("and a member cannot raise a link that collects the company's invoice into their own Safe", refusedStatus === 403, String(refusedStatus));
 
   const openReq = await call("POST", `/api/users/${miriam.id}/payment-requests`, { methods: ["crypto"], description: "tip jar" }, miriam.id);
   check("an open-amount link has no quote until the payer names an amount", openReq.status === 201 && openReq.body.amountEur === undefined && !openReq.body.latestQuote);

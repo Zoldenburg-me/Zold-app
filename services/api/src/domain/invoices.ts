@@ -310,13 +310,23 @@ export interface MoneriumOrderLike {
  */
 export const MIN_MATCHABLE_INVOICE_NUMBER = 6;
 
+/**
+ * The number must stand on its own in the memo, not merely appear inside it.
+ *
+ * A plain substring test booked a payment for INV-1000 against INV-100, and one
+ * for RE-2026-10000 against RE-2026-1000 — the number of one invoice is a prefix
+ * of a later one whenever the series outgrows its padding (and padding can be
+ * set as low as 1). So the number's letters and digits must appear in order,
+ * with any punctuation or spacing between them ("re 2026 0042" still names
+ * RE-2026-0042), and with NO letter or digit directly before or after.
+ */
 export function orderNamesInvoice(order: MoneriumOrderLike, invoice: Invoice): boolean {
   const number = invoice.issued?.number;
   if (!number) return false;
-  const norm = (v: string) => v.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-  const n = norm(number);
-  if (n.length < MIN_MATCHABLE_INVOICE_NUMBER) return false;
-  return norm(order.memo ?? "").includes(n);
+  const chars = number.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (chars.length < MIN_MATCHABLE_INVOICE_NUMBER) return false;
+  const pattern = new RegExp(`(?<![A-Z0-9])${chars.split("").join("[^A-Z0-9]*")}(?![A-Z0-9])`);
+  return pattern.test((order.memo ?? "").toUpperCase());
 }
 
 /** Append a settlement, replacing any earlier row with the same ref. One

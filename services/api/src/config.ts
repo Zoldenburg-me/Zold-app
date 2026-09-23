@@ -856,11 +856,16 @@ export const RATES = {
  * a typo in one env var surfacing as a crash loop in the scanner, several
  * layers from the cause. Boot is the place to say it.
  */
-function envNumber(name: string, fallback: number, opts: { min?: number } = {}): number {
+export function envNumber(
+  name: string,
+  fallback: number,
+  opts: { min?: number; integer?: boolean } = {},
+): number {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
   const n = Number(raw);
   if (!Number.isFinite(n)) throw new Error(`${name} must be a number, got "${raw}"`);
+  if (opts.integer && !Number.isInteger(n)) throw new Error(`${name} must be a whole number, got ${n}`);
   if (opts.min !== undefined && n < opts.min) {
     throw new Error(`${name} must be at least ${opts.min}, got ${n}`);
   }
