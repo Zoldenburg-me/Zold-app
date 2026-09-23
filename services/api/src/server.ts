@@ -47,6 +47,7 @@ import {
 } from "./adapters/monerium-sandbox.js";
 import {
   dailyCapUsage,
+  safeFundedEurToday,
   executeSepaTransfer,
   executeTransfer,
   refreshPayout,
@@ -2987,6 +2988,26 @@ async function buildTransferFromQuote(
     reference?: string;
   },
 ): Promise<TransferBuildResult> {
+  // Whatever way preparation ends — refusal, thrown error or success — a cap
+  // hold it took must not outlive it. Releasing a committed hold is a no-op.
+  const hold: { id?: string } = {};
+  try {
+    return await prepareTransferFromQuote(quote, recipient, hold);
+  } finally {
+    if (hold.id) store.releaseCapHold(hold.id);
+  }
+}
+
+async function prepareTransferFromQuote(
+  quote: Quote,
+  recipient: {
+    recipientName: string;
+    recipientPhone?: string;
+    recipientIban?: string;
+    reference?: string;
+  },
+  hold: { id?: string },
+): Promise<TransferBuildResult> {
   const { res, out } = responseCollector();
   const { recipientName, recipientPhone, recipientIban, reference } = recipient;
     const user = store.findUser(quote.userId)!;
@@ -3041,6 +3062,28 @@ async function buildTransferFromQuote(
         error: "no device key registered for this account — POST /api/users/:id/authorizer first",
       });
     }
+    /**
+     * Hold the cap BEFORE anything leaves this process.
+     *
+     * assertDailyCap above refuses early with a useful message, but it ran
+     * before the balance read, so it cannot hold against a parallel request.
+     * The hold can: nothing yields between counting and recording it. And it
+     * is taken before the quote is consumed and, on the cash rail, before a
+     * live Bridge transfer is created — a refusal here leaves no spent quote
+     * and no unfunded transfer at Bridge behind it.
+     */
+    const held = store.holdDailyCap(user.id, transfer.sendEur, FX.DAILY_CAP_EUR, () =>
+      safeFundedEurToday(user.id),
+    );
+    if (!held.ok) {
+      return res.status(409).json({
+        error:
+          `amount exceeds the daily cap of €${held.capEur.toFixed(2)} ` +
+          `(€${held.usedEur.toFixed(2)} already committed today) — ` +
+          "another transfer is being prepared or was created today",
+      });
+    }
+    hold.id = held.holdId;
     if (!store.consumeQuote(quote.id)) {
       return res.status(409).json({ error: "quote already consumed" });
     }
@@ -3250,7 +3293,8 @@ async function buildTransferFromQuote(
       });
     }
     transfer.custody = custody;
-    store.addTransfer(transfer);
+    // The hold taken before any partner call becomes this row, in one step.
+    store.addTransferUnderHold(transfer, held.holdId);
     return {
       ok: true as const,
       transfer,
@@ -3736,8 +3780,14 @@ app.post(
 );
 
 
-app.use(((err, _req, res, _next) => {
+app.use(((err, _req, res, next) => {
   console.error(err);
+  // A handler that already began answering cannot be given a 500 body: setting
+  // headers twice throws inside the error handler itself, which express can
+  // only answer by destroying the socket — the caller sees a truncated
+  // response and no error at all. Hand those to express's default handler,
+  // which closes the connection properly.
+  if (res.headersSent) return next(err);
   const detail = String(err?.shortMessage ?? err?.message ?? err);
   res.status(500).json({ error: SECURITY.exposeInternalErrors ? detail : "internal server error" });
 }) as express.ErrorRequestHandler);
@@ -3873,4 +3923,29 @@ app.listen(API_PORT, API_HOST, () => {
         "Standing allowances on older Safes are revoked automatically on the next send.",
     );
   }
+});
+
+/**
+ * Last-resort diagnostics for the two ways this process dies silently.
+ *
+ * Node's default for an unhandled rejection is to terminate, which is the
+ * right posture here — pending Safe executions live in memory and a process
+ * in an unknown state must not keep signing — but the default report can be
+ * a bare stack with no indication that a payments API just went down. These
+ * handlers change nothing about WHETHER we exit; they make sure the reason is
+ * in the log before we do, and that a supervisor sees a non-zero code.
+ *
+ * Deliberately NOT swallowing: an API that keeps serving after an unhandled
+ * rejection in a money path is the failure mode this codebase refuses
+ * everywhere else.
+ */
+process.on("unhandledRejection", (reason: any) => {
+  console.error(
+    `FATAL unhandled promise rejection — the API is exiting: ${reason?.stack ?? reason?.message ?? reason}`,
+  );
+  process.exit(1);
+});
+process.on("uncaughtException", (err) => {
+  console.error(`FATAL uncaught exception — the API is exiting: ${err?.stack ?? err?.message ?? err}`);
+  process.exit(1);
 });

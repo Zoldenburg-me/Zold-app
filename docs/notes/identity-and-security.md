@@ -268,6 +268,21 @@ refuses. Code: `recovery/candide-guardian.ts` (SDK wrapper, fail-closed),
 `routes/recovery-candide.ts` (both halves), recovery-module reads and setup
 ops in `wallet/candide.ts`.
 
+WHAT IT COSTS (call with Marc at Candide, 10 Sep 2026 — numbers from them, no
+contract signed):
+ - Bundler/paymaster free plan: 2,500 MAINNET UserOps, 90-day trial. Then
+   $399/mo to stay in production.
+ - The email/SMS recovery service is PRICED SEPARATELY at $600/mo for the
+   server that holds the guardian key. It is NOT included in the $399.
+ - So recovery costs more than the whole rest of the account infrastructure,
+   and it is the one feature we cannot run ourselves without becoming the
+   guardian — which puts a key that can rotate a user's Safe owner on our own
+   server, the custody position this design exists to avoid.
+ - 2,500 UserOps is the number to plan the trial around. Onboarding alone
+   spends several per user (Safe deploy, guardian add, each send is one more),
+   so the trial is worth roughly a few hundred real users, not thousands.
+   Count them before the 90 days start rather than after.
+
 WHAT IT IS: Candide holds ONE guardian key and adds it to the user's Safe via
 the SocialRecoveryModule. Enrolment registers an email or phone against the
 Safe — a SIWE statement the SAFE signs (EIP-1271, a passkey ceremony), then an
