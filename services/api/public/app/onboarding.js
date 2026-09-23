@@ -2,9 +2,7 @@
  * Onboarding: the account form, the passkey step, staged provisioning, the
  * Monerium gate, and recovery enrolment as step 3.
  *
- * Ends with the page's two entry points — loadCapabilities() and
- * resumeSession(). Both begin by awaiting a fetch, so everything they touch
- * afterwards is resolved long after the remaining scripts have parsed.
+ * Declares resumeSession(); app/main.js is what calls it.
  */
 /* ---------- onboarding flow: create -> staged provisioning -> dashboard */
 function provStep(i, state) {
@@ -928,13 +926,3 @@ async function resumeSession() {
     localStorage.removeItem("zoll-session");
   }
 }
-loadCapabilities();
-// An invitation link lands here; it is redeemed once a session exists, so a
-// person who first has to create an account keeps the token through signup.
-{
-  const invite = new URLSearchParams(location.search).get("invite");
-  if (invite) {
-    try { sessionStorage.setItem("zold-invite", invite); } catch {}
-  }
-}
-resumeSession();

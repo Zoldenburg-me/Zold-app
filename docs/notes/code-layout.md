@@ -58,6 +58,19 @@ THE TWO BROWSER DECISIONS, which differ on purpose:
 shell of markup that draws nothing without them, so caching the page and not
 its code would give an offline start-up a blank screen.
 
+Two follow-ups from review (`zold-shell-v3`):
+- **The entry points moved to `app/main.js`, loaded last.** They sat at the
+  end of `onboarding.js` on the theory that an awaited fetch outlasts parsing.
+  It need not: the event loop runs while the parser waits on a later external
+  script, so `/api/session` could resolve before `send.js` ran, `renderUser()`
+  threw on `renderAutoConvert`, and `resumeSession`'s catch deleted the stored
+  session. Anything that awaits and then renders belongs in `main.js`.
+- **Page code is network-first in the service worker.** It used to be inline
+  in HTML, which is network-first; as separate `.js`/`.css` files it fell into
+  the cache-first branch, so a deploy served fresh markup with stale handlers
+  until someone bumped `SHELL_CACHE`. Only `/vendor/*`, icons and the manifest
+  stay cache-first.
+
 NOT SPLIT, deliberately: `orchestrator.ts` (1,095) is the money path and is
 meant to be read top to bottom — fragmenting it to hit a line count would cost
 more than it buys; `config.ts` (946) is the one place an operator sees every
