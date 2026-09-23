@@ -157,7 +157,9 @@ function safeMovedEur(t: Transfer): number {
  * transfers released their reservation. */
 export function safeFundedEurToday(userId: string, now = new Date()): number {
   const day = now.toISOString().slice(0, 10);
-  return store.transfers
+  // Transfers still being prepared hold their share of the cap before their
+  // row exists — see store.holdDailyCap.
+  return store.heldEurToday(userId, day) + store.transfers
     .filter(
       (t) =>
         t.userId === userId &&
