@@ -199,6 +199,58 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
   check("without a live quote the crypto method is offered with no amount, not a made-up one", withBank.methods.crypto !== undefined && withBank.methods.crypto?.amountUsdc === undefined);
 }
 
+{
+  const inv = await import("../services/api/src/domain/invoices.js");
+  const dep: any = {
+    id: "dep-1", token: "USDC", txHash: "0xfeed", amountUsdc: 1000, state: "CONVERTED",
+    settlementAsset: "EURE", creditedEur: 872.5, realisedGainEur: -6.31, provider: "lifi",
+    rate: 1.1461, midRate: 1.1379, detectedAt: now.toISOString(),
+    receipt: { amountEur: 878.81, rate: 1.1379, rateProvider: "open.er-api.com", rateAsOf: "2026-09-10", ratedAt: now.toISOString(), blockTimestamp: now.toISOString() },
+    txs: [{ step: "usdc->eure", hash: "0xswap" }],
+  };
+  const c = inv.buildCryptoSettlement(dep) as any;
+  check("a crypto settlement carries the wallet tx, the euro value at receipt and the rate's source",
+    c.receiptTxHash === "0xfeed" && c.receiptAmountEur === 878.81 && c.receiptRateProvider === "open.er-api.com" && c.receiptRateAsOf === "2026-09-10");
+  check("and the conversion carries its venue, its rate, the mid it was checked against and the swap tx",
+    c.conversion.venue === "lifi" && c.conversion.rate === 1.1461 && c.conversion.midRate === 1.1379 && c.conversion.txHash === "0xswap");
+  // 1000 USDC is 878.81 EUR at the mid and 872.52 at the venue's 1.1461, so the
+  // venue kept 6.29 — signed as a cost, and NOT the 6.31 that receipt-minus-
+  // credit would have reported, because that also contains market movement.
+  check("the spread is measured against the mid and signed as a cost, not inferred from receipt-minus-credit",
+    c.conversion.spreadEur === 6.29, `${c.conversion.spreadEur}`);
+  const held = inv.buildCryptoSettlement({ ...dep, state: "CONVERTED", settlementAsset: "USDC", creditedEur: undefined, realisedGainEur: undefined }) as any;
+  check("an asset still held has a receipt and NO conversion block — that is the true position, not a half-filled row",
+    held.conversion === undefined && held.realisedGainEur === undefined && held.receiptAmountEur === 878.81);
+
+  const order = { id: "ord-9", kind: "issue", amount: "878.81", memo: "Rechnung RE-2026-0042 danke",
+    meta: { state: "processed", processedAt: now.toISOString() },
+    counterpart: { details: { firstName: "Ada", lastName: "Payer" }, identifier: { iban: "DE02120300000000202051" } } };
+  const b = inv.buildBankSettlement(order as any, "invoice-number");
+  check("a bank settlement carries the counterparty, their IBAN, the memo and how it was matched",
+    b.method === "bank" && b.counterpartyName === "Ada Payer" && b.counterpartyIban === "DE02120300000000202051" &&
+      b.memo === "Rechnung RE-2026-0042 danke" && b.matchedOn === "invoice-number" && b.amountEur === 878.81);
+  const mk = (number: string) => ({ issued: { number } }) as any;
+  check("a credit naming the invoice number matches it", inv.orderNamesInvoice(order as any, mk("RE-2026-0042")));
+  check("punctuation and case do not stop it", inv.orderNamesInvoice({ ...order, memo: "re 2026 0042" } as any, mk("RE-2026-0042")));
+  check("a short number is NEVER matched — booking a stranger's money against a customer's invoice is worse than missing one",
+    !inv.orderNamesInvoice({ ...order, memo: "invoice 14 paid" } as any, mk("14")));
+  check("and an unrelated memo does not match", !inv.orderNamesInvoice({ ...order, memo: "Miete September" } as any, mk("RE-2026-0042")));
+  check("a longer number is not a match for its own prefix — INV-1000's payment must not close INV-100",
+    !inv.orderNamesInvoice({ ...order, memo: "Invoice INV-1000" } as any, mk("INV-100")));
+  check("nor the other way round once a series outgrows its padding",
+    !inv.orderNamesInvoice({ ...order, memo: "RE-2026-10000" } as any, mk("RE-2026-1000")));
+  check("a number glued to other letters is not a match either",
+    !inv.orderNamesInvoice({ ...order, memo: "XRE20260042" } as any, mk("RE-2026-0042")));
+  check("but the number at the very start or end of the memo still is",
+    inv.orderNamesInvoice({ ...order, memo: "RE-2026-0042" } as any, mk("RE-2026-0042")) &&
+      inv.orderNamesInvoice({ ...order, memo: "Zahlung RE2026 0042." } as any, mk("RE-2026-0042")));
+
+  const twice = inv.withSettlement(inv.withSettlement([], b), b);
+  check("one payment can never appear twice, however often the poller re-sees it", twice.length === 1);
+  check("but an invoice settled by two different payments keeps both",
+    inv.withSettlement([b], { ...b, ref: "monerium:ord-10", orderId: "ord-10" }).length === 2);
+}
+
 // ---------------------------------------------------------------------------
 console.log("2/4 chain + routes…");
 try {
@@ -283,6 +335,149 @@ try {
   const stray = store.cryptoDeposits.find((d) => d.amountUsdc === 3.21)!;
   check("money nobody asked for is recorded as an ordinary deposit, attributed to no link", stray && !stray.paymentRequestId && store.findPaymentRequest(r1.id)!.payments.length === 1);
 
+  // ── a link raised FOR an invoice carries it all the way to the settlement ──
+  // The two events of a crypto-settled euro invoice (an asset acquired at its
+  // euro value on receipt, then disposed of) are only auditable if the deposit
+  // knows which invoice it paid. That used to need a human to link it by hand.
+  const orgId = randomUUID();
+  store.addOrganisation({
+    id: orgId, type: "personal", name: "Miriam Zoldenburg", plan: "starter",
+    reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "fifo" },
+    verifications: {}, createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  store.addMember({
+    id: randomUUID(), orgId, userId: miriam.id, email: miriam.email, role: "owner",
+    status: "active", createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  // Her personal org's EUR account IS her Safe — what the store migration writes.
+  store.addAccount({
+    id: `acc_${randomUUID()}`, orgId, currency: "EUR", label: "EUR account", status: "active",
+    provider: "monerium", identifier: {}, address: owner, backingUserId: miriam.id,
+    createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  const issuedSnapshot = (grossCents: number, over: any = {}) => ({
+    number: "RE-2026-0001", issueDate: nowIso.slice(0, 10),
+    issuer: { name: "Miriam Zoldenburg" }, recipient: { name: "A Customer" },
+    vatTreatment: { kind: "exempt", reason: "kleinunternehmer" },
+    netCents: grossCents, vatCents: 0, grossCents,
+    buckets: [{ rate: 0, netCents: grossCents, vatCents: 0 }],
+    currency: "EUR", ...over,
+  });
+  const mkInvoice = (over: any = {}, issued: any = issuedSnapshot(2500)) => {
+    const id = `inv_${randomUUID()}`;
+    store.addInvoice({
+      id, orgId, direction: "outgoing", state: "SUBMITTED", linkTokenHash: randomBytes(16).toString("hex"),
+      lines: [{ description: "Design work", quantity: "1", unitPrice: "25.00", amount: "25.00" }],
+      currency: "EUR", total: "25.00", createdByMemberId: "m", createdAt: nowIso, updatedAt: nowIso,
+      issued, ...over,
+    } as any);
+    return id;
+  };
+
+  const theirs = mkInvoice();
+  const incoming = mkInvoice({ direction: "incoming" });
+  const settledAlready = mkInvoice({ state: "PAID" });
+  const otherOrg = mkInvoice({ orgId: randomUUID() });
+
+  const bad = async (invoiceId: string) =>
+    (await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 25, methods: ["crypto"], invoiceId }, miriam.id)).status;
+  check("a link cannot collect for an invoice from a supplier — that is a bill, paid from a draft", (await bad(incoming)) === 409);
+  check("nor for an invoice that is already settled — two live ways to pay one invoice is how it gets paid twice", (await bad(settledAlready)) === 409);
+  check("nor for another organisation's invoice", (await bad(otherOrg)) === 403);
+  check("nor for an invoice that does not exist", (await bad(`inv_${randomUUID()}`)) === 404);
+
+  const forInvoice = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 25, methods: ["crypto"], invoiceId: theirs }, miriam.id);
+  check("a link raised for an invoice the org issued is created and carries it", forInvoice.status === 201 && forInvoice.body.invoiceId === theirs, JSON.stringify(forInvoice.body));
+  const qInv = forInvoice.body.latestQuote.amountUsdc as number;
+  await mintUsdc(owner, qInv);
+  await pollCryptoDepositsOnce();
+  const dInv = store.cryptoDeposits.find((d) => d.paymentRequestId === forInvoice.body.id)!;
+  check("the invoice rides onto the deposit on attribution — nobody linked it by hand", dInv?.invoiceId === theirs, JSON.stringify({ id: dInv?.id, invoiceId: dInv?.invoiceId }));
+  // An invoice written in dollars is still collected in euro, at the rate frozen
+  // on the document — and the crypto quote follows from that euro figure.
+  const inUsd = mkInvoice({ currency: "USD", total: "1000.00" }, issuedSnapshot(100_000, {
+    currency: "USD",
+    conversion: { from: "USD", to: "EUR", rate: 1.1379, rateProvider: "test", rateAsOf: "2026-09-10",
+      netCents: 87_881, vatCents: 0, grossCents: 87_881, buckets: [{ rate: 0, netCents: 87_881, vatCents: 0 }] },
+  }));
+  const wrongAmount = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 1000, methods: ["crypto"], invoiceId: inUsd }, miriam.id);
+  check("a link cannot collect a different amount than the invoice says — €10 against a €1,000 invoice would mark it paid in full",
+    wrongAmount.status === 409 && /878\.81/.test(wrongAmount.body.error ?? ""), JSON.stringify(wrongAmount.body));
+  const usdLink = await call("POST", `/api/users/${miriam.id}/payment-requests`, { methods: ["crypto"], invoiceId: inUsd }, miriam.id);
+  check("a USD invoice is collected as the euro amount frozen on it, not its face value",
+    usdLink.status === 201 && usdLink.body.amountEur === 878.81, JSON.stringify(usdLink.body));
+  check("and the crypto quote follows from that euro figure, so a dollar invoice is payable in USDC",
+    usdLink.body.latestQuote?.amountUsdc > 1000 && usdLink.body.latestQuote.amountUsdc < 1010, JSON.stringify(usdLink.body.latestQuote));
+
+  const invAfter = store.findInvoice(theirs)!;
+  const st0 = (invAfter.settlements ?? [])[0];
+  const st = st0?.method === "bank" ? undefined : st0;
+  check("and the settlement is recorded even though auto-convert is off, because acquiring the asset is itself the event the books need",
+    Boolean(st) && st!.depositId === dInv.id && st!.receivedAsset === "USDC" && st!.receivedAmount === qInv, JSON.stringify(invAfter.settlements));
+  check("it carries the wallet transaction and the euro value at receipt, with the rate and whose feed it came from",
+    st!.receiptTxHash === dInv.txHash && st!.receiptAmountEur === dInv.receipt?.amountEur &&
+      st!.receiptRate === dInv.receipt?.rate && st!.receiptRateProvider === dInv.receipt?.rateProvider &&
+      st!.receiptRateAsOf === dInv.receipt?.rateAsOf, JSON.stringify(st));
+  check("with no conversion block and no realised gain — absent, not zero, because nothing has been disposed of yet",
+    st!.conversion === undefined && st!.realisedGainEur === undefined);
+
+  // A customer who just paid the invoice by bank transfer, quoting its number —
+  // the ordinary case, and the one nothing tied to the document before.
+  const bankPaid = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0777" }));
+  const sepaOrder = {
+    id: "ord-direct-1", kind: "issue", amount: "25.00", address: owner,
+    memo: "RE-2026-0777 Danke fuer Ihre Arbeit",
+    meta: { state: "processed", processedAt: new Date().toISOString() },
+    counterpart: { details: { firstName: "Ada", lastName: "Payer" }, identifier: { iban: "DE02120300000000202051" } },
+  };
+  routes.attributeMoneriumOrderToInvoice(sepaOrder as any);
+  routes.attributeMoneriumOrderToInvoice(sepaOrder as any); // the poller re-sees every order
+  const bankInv = store.findInvoice(bankPaid)!;
+  const bs: any = (bankInv.settlements ?? [])[0];
+  check("a plain SEPA credit quoting the invoice number lands on that invoice, with the payer, their IBAN and the memo",
+    (bankInv.settlements ?? []).length === 1 && bs?.method === "bank" && bs.counterpartyName === "Ada Payer" &&
+      bs.counterpartyIban === "DE02120300000000202051" && bs.matchedOn === "invoice-number" && bs.amountEur === 25,
+    JSON.stringify(bankInv.settlements));
+  const unrelated = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0888" }));
+  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-2", memo: "Miete September" } as any);
+  check("a credit naming no invoice touches none of them", (store.findInvoice(unrelated)!.settlements ?? []).length === 0);
+  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-3", address: `0x${"99".repeat(20)}` } as any);
+  check("and a credit to an address we do not know is ignored rather than guessed at",
+    (store.findInvoice(bankPaid)!.settlements ?? []).length === 1);
+  const twoA = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0901" }));
+  const twoB = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0902" }));
+  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-4", memo: "RE-2026-0901 und RE-2026-0902" } as any);
+  check("a credit naming two invoices is booked on neither — it cannot be split by guessing",
+    (store.findInvoice(twoA)!.settlements ?? []).length === 0 && (store.findInvoice(twoB)!.settlements ?? []).length === 0);
+
+  // A business org Miriam is only a MEMBER of: its account is someone else's Safe.
+  const bizOrg = randomUUID();
+  store.addOrganisation({
+    id: bizOrg, type: "business", name: "Somebody GmbH", plan: "business",
+    reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "fifo" },
+    verifications: {}, createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  store.addMember({
+    id: randomUUID(), orgId: bizOrg, userId: miriam.id, email: miriam.email, role: "viewer",
+    status: "active", createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  store.addAccount({
+    id: `acc_${randomUUID()}`, orgId: bizOrg, currency: "EUR", label: "EUR account", status: "active",
+    provider: "monerium", identifier: {}, address: `0x${"77".repeat(20)}`, backingUserId: randomUUID(),
+    createdAt: nowIso, updatedAt: nowIso,
+  } as any);
+  const bizInv = mkInvoice({ orgId: bizOrg }, issuedSnapshot(2500, { number: "SG-2026-0555" }));
+  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-5", memo: "SG-2026-0555" } as any);
+  check("money reaching a member's own Safe does not close the company's invoice it quotes",
+    (store.findInvoice(bizInv)!.settlements ?? []).length === 0);
+  let refusedStatus: number | undefined;
+  try {
+    await routes.createPaymentRequest(miriam, { methods: ["crypto"], expiresAt: new Date(Date.now() + 3_600_000).toISOString(), invoiceId: bizInv }, { kind: "app" } as any, bizOrg);
+  } catch (err: any) {
+    refusedStatus = err?.status;
+  }
+  check("and a member cannot raise a link that collects the company's invoice into their own Safe", refusedStatus === 403, String(refusedStatus));
+
   const openReq = await call("POST", `/api/users/${miriam.id}/payment-requests`, { methods: ["crypto"], description: "tip jar" }, miriam.id);
   check("an open-amount link has no quote until the payer names an amount", openReq.status === 201 && openReq.body.amountEur === undefined && !openReq.body.latestQuote);
   const quoted = await call("POST", `/api/pay/miriam/${openReq.body.code}/quote`, { amountEur: 12 });
@@ -330,7 +525,8 @@ try {
   check("and the sweep writes it down", swept2.expired === 1 && store.findPaymentRequest(soon.body.id)!.state === "EXPIRED");
 
   const list = await call("GET", `/api/users/${miriam.id}/payment-requests`, undefined, miriam.id);
-  check("the owner's list carries every link, newest first, with what the payee can offer", list.body.requests.length === 7 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt));
+  // 9, not 14: the five refused invoice links left no row behind.
+  check("the owner's list carries every link, newest first, with what the payee can offer — and nothing a refusal created", list.body.requests.length === 9 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt), `${list.body.requests.length}`);
 
   server.close();
   console.log(`\nPAYMENT REQUESTS TEST PASSED — ${passed} checks`);

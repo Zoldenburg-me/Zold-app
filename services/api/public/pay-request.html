@@ -185,6 +185,14 @@ function copyable() {
   });
 }
 
+const safeUrl = (u) => {
+  if (typeof u !== "string" || u.trim() === "") return null;
+  try {
+    const parsed = new URL(u.trim());
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
+  } catch { return null; }
+};
+
 function render(p) {
   req = p;
   hide("loading"); show("req");
@@ -214,8 +222,14 @@ function render(p) {
   $("paylist").innerHTML = (p.payments || []).map((x) => `<div class="row">
       <span>${x.method === "crypto" ? `USDC ${x.amountUsdc ?? ""}` : "Bank transfer"} · ${new Date(x.at).toLocaleString()}</span>
       <b>${eur(x.amountEur)}${x.kind === "partial" ? " (partial)" : x.kind === "over" ? " (over)" : ""}</b></div>`).join("");
-  if (p.returnUrl && p.state === "PAID") { $("return").href = p.returnUrl; show("return"); } else hide("return");
-  if (p.cancelUrl && open) { $("cancel").href = p.cancelUrl; show("cancel"); } else hide("cancel");
+  // Same guard index.html applies to anchor links. Both of these come from
+  // the merchant's store by way of Shopify, so "javascript:" in one is script
+  // execution on a page a stranger opened to pay someone. The server now drops
+  // a non-http(s) URL before storing it; this also covers rows stored before
+  // that guard existed.
+  const back = safeUrl(p.returnUrl), off = safeUrl(p.cancelUrl);
+  if (back && p.state === "PAID") { $("return").href = back; show("return"); } else hide("return");
+  if (off && open) { $("cancel").href = off; show("cancel"); } else hide("cancel");
   if (!open) return;
 
   // Open-amount request with no amount yet: ask first.

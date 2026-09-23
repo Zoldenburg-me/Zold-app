@@ -418,6 +418,13 @@ export interface CryptoDeposit {
   /** The venue that filled it and the rate it filled at, for the receipt. */
   provider?: string;
   rate?: number;
+  /**
+   * The independent mid the venue's rate was checked against, at the instant of
+   * the swap. Kept so the spread we report is CHECKABLE rather than asserted —
+   * a venue rate with nothing to compare it to says nothing about what the
+   * conversion cost.
+   */
+  midRate?: number;
   txs: { step: string; hash: string }[];
   detectedAt: string;
   updatedAt: string;
@@ -812,6 +819,9 @@ const DB_PATH = process.env.TRANSF_DB_PATH
   ? path.resolve(process.env.TRANSF_DB_PATH)
   : path.join(ROOT, "data", "db.json");
 const DATA_DIR = path.dirname(DB_PATH);
+
+/** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
+const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
 
 let db: Db = {
   users: [],
@@ -1220,6 +1230,57 @@ export const store = {
     persist();
   },
   /**
+   * Hold part of the daily cap for a transfer that is still being prepared.
+   *
+   * THE HOLE THIS CLOSES, twice over. The cap was first only CHECKED in
+   * buildTransferFromQuote and the row that reserves it written several awaits
+   * later, so two parallel requests both read a usage figure neither had
+   * written to and both created a full-cap transfer. Checking again at the
+   * write closed that race but refused AFTER the slow work — on the cash rail
+   * after a live Bridge transfer had been created, leaving an unfunded
+   * transfer at Bridge for every refusal. A hold taken BEFORE any partner is
+   * called gives both properties: the second request is refused while nothing
+   * outside this process has been touched, and the first one's figure is
+   * counted from the moment it starts preparing.
+   *
+   * Same idiom as claimAuthorization — nothing yields between the read and the
+   * write. `used` is a function so it is recomputed inside that window, and it
+   * must include `heldEurToday` (safeFundedEurToday does). Holds live in
+   * memory like pendingTransferExecutions: a restart drops them along with the
+   * requests that took them.
+   */
+  holdDailyCap(
+    userId: string,
+    eur: number,
+    capEur: number,
+    used: () => number,
+  ): { ok: true; holdId: string } | { ok: false; usedEur: number; capEur: number } {
+    const usedEur = used();
+    if (usedEur + eur > capEur) return { ok: false, usedEur, capEur };
+    const holdId = randomUUID();
+    capHolds.set(holdId, { userId, eur, day: new Date().toISOString().slice(0, 10) });
+    return { ok: true, holdId };
+  },
+  /** Euros held for transfers still being prepared, for one user and UTC day. */
+  heldEurToday(userId: string, day = new Date().toISOString().slice(0, 10)): number {
+    let sum = 0;
+    for (const h of capHolds.values()) if (h.userId === userId && h.day === day) sum += h.eur;
+    return sum;
+  },
+  /**
+   * Turn a hold into the transfer row that replaces it. Push and release
+   * happen together so the amount is never uncounted in between.
+   */
+  addTransferUnderHold(t: Transfer, holdId: string) {
+    if (!capHolds.delete(holdId)) throw new Error(`no cap hold ${holdId} — the transfer was not reserved`);
+    db.transfers.push(t);
+    persist();
+  },
+  /** Drop a hold whose transfer was refused or failed. A no-op once committed. */
+  releaseCapHold(holdId: string) {
+    capHolds.delete(holdId);
+  },
+  /**
    * Claim the one and only authorization submission for a transfer.
    *
    * Deliberately synchronous: an Express handler runs uninterrupted until its
@@ -1429,7 +1490,22 @@ export const store = {
       (d) => d.txHash.toLowerCase() === txHash.toLowerCase() && d.logIndex === logIndex,
     );
   },
+  /**
+   * Record a deposit, once.
+   *
+   * Idempotent on (txHash, logIndex) — the chain's own identity for a
+   * transfer — because the poller's dedupe check and this write are separated
+   * by an await (the receipt's rate lookup), and the poll runs on a bare
+   * setInterval that does not wait for the previous tick. Two overlapping
+   * scans of one window both passed the check and both pushed, double-counting
+   * one payment: twice on the payee's payment link, twice in creditedUsdc.
+   * Returning the existing row makes the loser of that race a no-op.
+   */
   addCryptoDeposit(d: CryptoDeposit) {
+    const existing = db.cryptoDeposits.find(
+      (x) => x.txHash.toLowerCase() === d.txHash.toLowerCase() && x.logIndex === d.logIndex,
+    );
+    if (existing) return existing;
     db.cryptoDeposits.push(d);
     persist();
     return d;

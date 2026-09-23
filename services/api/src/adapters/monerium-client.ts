@@ -9,6 +9,8 @@
 // Every call carries a timeout: a redeem that hangs past the sweep window
 // is the double-payout case the orchestrator guards against.
 
+import { partnerTimeout } from "../http.js";
+
 /** A non-2xx response from Monerium, carrying the status so callers can tell
  *  "this order does not exist" from "Monerium is briefly unreachable". */
 export class MoneriumApiError extends Error {
@@ -55,7 +57,7 @@ export class MoneriumClient {
       return this.token.value;
     }
     const res = await fetch(`${this.cfg.baseUrl}/auth/token`, {
-      signal: AbortSignal.timeout(15_000),
+      signal: partnerTimeout(),
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -75,7 +77,7 @@ export class MoneriumClient {
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const token = await this.accessToken();
     const res = await fetch(`${this.cfg.baseUrl}${path}`, {
-      signal: AbortSignal.timeout(15_000),
+      signal: partnerTimeout(),
       method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -207,7 +209,7 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
   redirectUri: string;
 }): Promise<MoneriumTokenResponse> {
   const res = await fetch(`${cfg.baseUrl}/auth/token`, {
-    signal: AbortSignal.timeout(15_000),
+    signal: partnerTimeout(),
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: oauthTokenBody({
@@ -230,7 +232,7 @@ export async function refreshAuthorizationToken(
   refreshToken: string,
 ): Promise<MoneriumTokenResponse> {
   const res = await fetch(`${cfg.baseUrl}/auth/token`, {
-    signal: AbortSignal.timeout(15_000),
+    signal: partnerTimeout(),
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: oauthTokenBody({
@@ -255,7 +257,7 @@ export async function moneriumBearerRequest<T>(
   body?: unknown,
 ): Promise<T> {
   const res = await fetch(`${baseUrl}${path}`, {
-    signal: AbortSignal.timeout(15_000),
+    signal: partnerTimeout(),
     method,
     headers: {
       authorization: `Bearer ${accessToken}`,

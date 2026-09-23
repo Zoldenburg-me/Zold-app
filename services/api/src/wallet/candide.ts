@@ -38,6 +38,7 @@ import { decodeFunctionResult, encodeFunctionData, hashTypedData } from "viem";
  * real.
  */
 import { HARNESS } from "../config.js";
+import { partnerTimeout } from "../http.js";
 const allowSimulation = () => HARNESS.enabled;
 
 const COSIGNER_ENABLED =
@@ -579,6 +580,7 @@ export async function signMessageAsPasskeySafe(
 export async function isDeployed(address: string): Promise<boolean> {
   if (allowSimulation()) return true;
   const res = await fetch(CANDIDE.rpcUrl, {
+    signal: partnerTimeout(),
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getCode", params: [address, "latest"] }),
@@ -653,6 +655,7 @@ const SAFE_READ_ABI = [
 
 async function ethCall(to: string, data: `0x${string}`): Promise<`0x${string}`> {
   const res = await fetch(CANDIDE.rpcUrl, {
+    signal: partnerTimeout(),
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to, data }, "latest"] }),

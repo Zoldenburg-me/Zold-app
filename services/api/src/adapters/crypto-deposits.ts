@@ -35,6 +35,7 @@ import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
 import { midRates } from "../rates.js";
 import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
+import { buildCryptoSettlement, withSettlement } from "../domain/invoices.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
  *  the real USDC emits the same signature and this path must not depend on our
@@ -154,7 +155,7 @@ async function valueAtReceipt(
  * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), matching what
  * FxSwapper.rate() posts and what the liquidity providers report.
  */
-export async function assertRateSane(rate: bigint): Promise<number> {
+export async function assertRateSane(rate: bigint): Promise<{ venue: number; mid: number }> {
   const venue = Number(rate) / 1e6;
   if (!(venue > 0)) throw new Error("venue quoted a zero rate");
   const mid = (await midRates()).eur.USD;
@@ -167,7 +168,7 @@ export async function assertRateSane(rate: bigint): Promise<number> {
         `the market would not give`,
     );
   }
-  return venue;
+  return { venue, mid };
 }
 
 /**
@@ -240,6 +241,16 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
         txs,
         reason: undefined,
       });
+      /**
+       * Record it on the invoice even though nothing converted. Settling in
+       * USDC is still an event the books need: the receivable is discharged
+       * and an asset is acquired at its euro value on receipt. Only the
+       * disposal has not happened yet, so the row carries no conversion and no
+       * realised gain — absent, not zero, because zero would be a claim.
+       * Leaving this out meant the default configuration (auto-convert off)
+       * wrote no invoice settlement at all.
+       */
+      if (settled.invoiceId) recordInvoiceSettlement(settled);
       noteDepositSettled(settled);
       return settled;
     }
@@ -286,7 +297,7 @@ export async function settleConvertedDeposit(
   balanceBeforeWei: bigint,
   txs: CryptoDeposit["txs"],
 ): Promise<CryptoDeposit> {
-  const venueRate = await assertRateSane(quote.rate);
+  const { venue: venueRate, mid: midRate } = await assertRateSane(quote.rate);
   const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, balanceBeforeWei);
   const receivedWei = after - balanceBeforeWei;
 
@@ -334,6 +345,7 @@ export async function settleConvertedDeposit(
     settlementAsset: "EURE",
     provider: quote.provider,
     rate: venueRate,
+    midRate,
     ...(realisedGainEur === undefined ? {} : { realisedGainEur }),
     txs,
     reason: undefined,
@@ -359,24 +371,11 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
   if (!deposit.invoiceId) return;
   const invoice = store.invoices.find((i) => i.id === deposit.invoiceId);
   if (!invoice) return;
-  const receiptTx = deposit.txHash;
-  const conversionTx = deposit.txs.find((t) => t.step.includes("usdc->eure"))?.hash;
-  const settlement = {
-    depositId: deposit.id,
-    receivedAsset: deposit.token,
-    receivedAmount: deposit.token === "USDC" ? deposit.amountUsdc ?? 0 : deposit.amountEur ?? 0,
-    receiptTxHash: receiptTx,
-    ...(deposit.receipt ? { receiptAmountEur: deposit.receipt.amountEur, receiptRate: deposit.receipt.rate, receiptRateProvider: deposit.receipt.rateProvider } : {}),
-    ...(conversionTx ? { conversionTxHash: conversionTx } : {}),
-    ...(deposit.creditedEur === undefined ? {} : { creditedEur: deposit.creditedEur }),
-    ...(deposit.realisedGainEur === undefined ? {} : { realisedGainEur: deposit.realisedGainEur }),
-    at: new Date().toISOString(),
-  };
-  const existing = invoice.settlements ?? [];
   store.updateInvoice(invoice.id, {
-    settlements: [...existing.filter((x) => x.depositId !== deposit.id), settlement],
+    settlements: withSettlement(invoice.settlements, buildCryptoSettlement(deposit)),
   });
 }
+
 
 /**
  * One scan of the chain for inbound USDC, followed by conversion of whatever
@@ -387,8 +386,31 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
  * REFUSED row someone can act on; a deposit we never recorded because the
  * cursor ran ahead is money that silently vanished.
  */
+let scanning = false;
+
 export async function pollCryptoDepositsOnce(): Promise<number> {
   if (!CRYPTO_IN.enabled) return 0;
+  /**
+   * One scan at a time.
+   *
+   * setInterval does not wait for an async tick to finish, and a scan is a
+   * getBlockNumber, two getLogs over up to 5,000 blocks, a getBlock per
+   * distinct block and a rate lookup per USDC log — comfortably longer than
+   * the 15s default interval on a busy window or a slow RPC. Two overlapping
+   * scans read the same cursor and rescan the same range; addCryptoDeposit is
+   * idempotent so nothing is double-recorded any more, but doing the work
+   * twice is still wasted RPC and wasted third-party rate calls.
+   */
+  if (scanning) return 0;
+  scanning = true;
+  try {
+    return await scanCryptoDeposits();
+  } finally {
+    scanning = false;
+  }
+}
+
+async function scanCryptoDeposits(): Promise<number> {
   const watched = watchedAddresses();
   if (watched.length === 0) return 0;
   const cursorKey = `${CHAIN_ID}:safe-funding-v1`;
@@ -486,9 +508,15 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
               log.blockNumber != null ? blockTimes.get(log.blockNumber) : undefined,
             )
           : undefined;
-      fresh.push(
-        store.addCryptoDeposit({
-          id: randomUUID(),
+      /**
+       * addCryptoDeposit is idempotent on (txHash, logIndex) and returns the
+       * row that already existed rather than a second one. Compare the id back
+       * so a deposit another pass already recorded is not attributed to a
+       * payment link or converted a second time.
+       */
+      const depositId = randomUUID();
+      const recorded = store.addCryptoDeposit({
+          id: depositId,
           userId: user.id,
           chainId: CHAIN_ID,
           token: token.token,
@@ -511,8 +539,8 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
           txs: [],
           detectedAt: now,
           updatedAt: now,
-        }),
-      );
+      });
+      if (recorded.id === depositId) fresh.push(recorded);
     }
   }
 
@@ -523,6 +551,13 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
   for (const deposit of fresh) {
     try {
       attributeDepositToRequest(deposit);
+      /**
+       * A deposit straight to the Safe is written CONVERTED, so its conversion
+       * has already been and gone by the time attribution hands it an invoice.
+       * Record here rather than let that case silently lose its settlement.
+       */
+      const linked = store.findCryptoDeposit(deposit.txHash, deposit.logIndex);
+      if (linked?.state === "CONVERTED" && linked.invoiceId) recordInvoiceSettlement(linked);
     } catch (err: any) {
       console.error(`crypto-in: could not attribute deposit ${deposit.id} to a request: ${err?.message ?? err}`);
     }

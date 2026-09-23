@@ -260,7 +260,11 @@ chain names — is in `docs/notes/roadmap-and-partners.md`.
    than a reseller; Base and Polygon both covered). The catch: **USDC/USDT only,
    no EURe**, so a card puts EUR/USD FX between a balance and a spend — which
    disappears on the *recipient* side. They run their own KYC, so it is a second
-   identity relationship, not a reuse of Monerium's.
+   identity relationship, not a reuse of Monerium's. Read the 1inch Aqua
+   sections of `docs/notes/roadmap-and-partners.md` before relying on this:
+   Immersve withdrawals are NOT permissionless, the Bank of Lithuania cut its
+   EEA issuer channel (Dec 2025), Kulipa is dead, and Exodus now owns Baanx and
+   Monavate. Proposal only; nothing card-side is built.
 
 Parked deliberately: NEAR Intents, Metastable, Flexa/AMP (wrong market).
 

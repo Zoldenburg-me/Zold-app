@@ -14,7 +14,15 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { Invoice, InvoiceLine, InvoiceState } from "./types.js";
+import type {
+  BankInvoiceSettlement,
+  CryptoInvoiceSettlement,
+  Invoice,
+  InvoiceLine,
+  InvoiceSettlement,
+  InvoiceState,
+} from "./types.js";
+import type { CryptoDeposit } from "../store.js";
 
 export class InvoiceError extends Error {}
 
@@ -172,6 +180,169 @@ export function isOverdue(invoice: Invoice, now = new Date()): boolean {
 
 /** Deletion is legal only while nobody has been paid, and never after submit
  *  once a payment is in flight. */
+/**
+ * What this invoice is payable as, in the settlement currency.
+ *
+ * An invoice written in dollars is still collected in euro or in USDC quoted
+ * from euro, because that is the only rail there is. The euro figure is the one
+ * FROZEN at issue, never recomputed from today's rate: the customer agreed to
+ * pay what the document told them, and re-deriving it later would quietly move
+ * the amount due between the invoice being read and being paid.
+ *
+ * Returns undefined for an invoice that was never issued through the outgoing
+ * path, which therefore has no frozen figures to collect against.
+ */
+export function payableEur(invoice: Invoice): number | undefined {
+  const issued = invoice.issued;
+  if (!issued) return undefined;
+  const cents = issued.conversion ? issued.conversion.grossCents : issued.grossCents;
+  if (!Number.isFinite(cents)) return undefined;
+  return Math.round(cents) / 100;
+}
+
+/**
+ * Build the settlement record for a crypto payment.
+ *
+ * Everything here is a FACT already stored on the deposit — nothing is
+ * recomputed from a rate feed at read time, because a value re-derived later
+ * from whatever a provider reports then is not the value that applied.
+ *
+ * The conversion block appears only once the asset has actually been converted.
+ * While it is absent the invoice reads correctly as "paid, asset still held",
+ * which is a real position on the balance sheet rather than an incomplete row.
+ */
+export function buildCryptoSettlement(deposit: CryptoDeposit): CryptoInvoiceSettlement {
+  const received = deposit.token === "USDC" ? deposit.amountUsdc ?? 0 : deposit.amountEur ?? 0;
+  const converted = deposit.state === "CONVERTED" && deposit.settlementAsset === "EURE";
+  /**
+   * The venue's spread against the independent mid, in euro — the only fee
+   * figure we can state honestly. Requires both rates; absent otherwise rather
+   * than guessed, and never inferred from the receipt-to-credit difference,
+   * which also contains market movement.
+   */
+  const spreadEur =
+    converted && deposit.rate && deposit.midRate && deposit.amountUsdc
+      ? Math.round((deposit.amountUsdc / deposit.midRate - deposit.amountUsdc / deposit.rate) * 100) / 100
+      : undefined;
+  return {
+    method: "crypto",
+    ref: `deposit:${deposit.id}`,
+    depositId: deposit.id,
+    amountEur: deposit.creditedEur ?? deposit.receipt?.amountEur ?? 0,
+    receivedAsset: deposit.token,
+    receivedAmount: received,
+    receiptTxHash: deposit.txHash,
+    ...(deposit.receipt?.blockTimestamp ? { receiptAt: deposit.receipt.blockTimestamp } : {}),
+    ...(deposit.receipt
+      ? {
+          receiptAmountEur: deposit.receipt.amountEur,
+          receiptRate: deposit.receipt.rate,
+          receiptRateProvider: deposit.receipt.rateProvider,
+          receiptRateAsOf: deposit.receipt.rateAsOf,
+        }
+      : {}),
+    ...(converted
+      ? {
+          conversion: {
+            ...(deposit.txs.find((t) => t.step.includes("usdc->eure"))?.hash
+              ? { txHash: deposit.txs.find((t) => t.step.includes("usdc->eure"))!.hash }
+              : {}),
+            ...(deposit.provider ? { venue: deposit.provider } : {}),
+            ...(deposit.rate ? { rate: deposit.rate } : {}),
+            ...(deposit.midRate ? { midRate: deposit.midRate } : {}),
+            ...(spreadEur === undefined ? {} : { spreadEur }),
+            ...(deposit.creditedEur === undefined ? {} : { creditedEur: deposit.creditedEur }),
+          },
+        }
+      : {}),
+    ...(deposit.realisedGainEur === undefined ? {} : { realisedGainEur: deposit.realisedGainEur }),
+    at: deposit.receipt?.blockTimestamp ?? deposit.detectedAt,
+  };
+}
+
+/** Build the settlement record for a SEPA credit. */
+export function buildBankSettlement(
+  order: MoneriumOrderLike,
+  matchedOn: BankInvoiceSettlement["matchedOn"],
+): BankInvoiceSettlement {
+  const d = order.counterpart?.details ?? {};
+  const name = d.name ?? ([d.firstName, d.lastName].filter(Boolean).join(" ") || undefined);
+  return {
+    method: "bank",
+    ref: `monerium:${order.id}`,
+    orderId: order.id,
+    amountEur: Number(order.amount),
+    ...(name ? { counterpartyName: name } : {}),
+    ...(order.counterpart?.identifier?.iban ? { counterpartyIban: order.counterpart.identifier.iban } : {}),
+    ...(order.memo ? { memo: order.memo } : {}),
+    matchedOn,
+    at: order.meta?.processedAt ?? new Date().toISOString(),
+  };
+}
+
+/** The subset of a Monerium order these builders read. */
+export interface MoneriumOrderLike {
+  id: string;
+  kind?: string;
+  amount: string;
+  address?: string;
+  memo?: string;
+  meta?: { state?: string; processedAt?: string };
+  state?: string;
+  counterpart?: {
+    details?: { name?: string; firstName?: string; lastName?: string };
+    identifier?: { iban?: string };
+  };
+}
+
+/**
+ * Does this SEPA credit name an invoice by its number?
+ *
+ * The everyday way an invoice gets paid: bank details on the sheet, the invoice
+ * number in the reference. Matched on the normalised number appearing in the
+ * normalised memo.
+ *
+ * DELIBERATELY CONSERVATIVE. A short number would match half the memos in a
+ * ledger — "14" appears in a date, an address and another invoice's number — so
+ * anything under six characters is not matched at all, and the payer's own
+ * pay-link code remains the reliable route. A missed match leaves the credit
+ * unattributed and someone reconciles it by hand; a wrong match books a
+ * stranger's money against a customer's invoice and closes it. Those are not
+ * equally bad.
+ */
+export const MIN_MATCHABLE_INVOICE_NUMBER = 6;
+
+/**
+ * The number must stand on its own in the memo, not merely appear inside it.
+ *
+ * A plain substring test booked a payment for INV-1000 against INV-100, and one
+ * for RE-2026-10000 against RE-2026-1000 — the number of one invoice is a prefix
+ * of a later one whenever the series outgrows its padding (and padding can be
+ * set as low as 1). So the number's letters and digits must appear in order,
+ * with any punctuation or spacing between them ("re 2026 0042" still names
+ * RE-2026-0042), and with NO letter or digit directly before or after.
+ */
+export function orderNamesInvoice(order: MoneriumOrderLike, invoice: Invoice): boolean {
+  const number = invoice.issued?.number;
+  if (!number) return false;
+  const chars = number.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (chars.length < MIN_MATCHABLE_INVOICE_NUMBER) return false;
+  const pattern = new RegExp(`(?<![A-Z0-9])${chars.split("").join("[^A-Z0-9]*")}(?![A-Z0-9])`);
+  return pattern.test((order.memo ?? "").toUpperCase());
+}
+
+/** Append a settlement, replacing any earlier row with the same ref. One
+ *  invoice can legitimately be settled by several payments; one payment must
+ *  never appear twice. */
+export function withSettlement(existing: InvoiceSettlement[] | undefined, s: InvoiceSettlement): InvoiceSettlement[] {
+  return [...(existing ?? []).filter((x) => settlementRef(x) !== settlementRef(s)), s];
+}
+
+/** Rows written before `ref` existed are keyed by their deposit id. */
+export function settlementRef(s: InvoiceSettlement): string {
+  return s.ref ?? (s.method === "bank" ? `monerium:${s.orderId}` : `deposit:${s.depositId}`);
+}
+
 export function assertDeletable(invoice: Invoice) {
   if (invoice.payment?.transferId || invoice.payment?.paidAt) {
     throw new InvoiceError(
