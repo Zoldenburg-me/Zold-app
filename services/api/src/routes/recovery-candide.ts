@@ -63,6 +63,7 @@ import {
 } from "../recovery/candide-guardian.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertionForChallenge, verifyRegistration } from "../webauthn.js";
 import { publicRecoveryRequest } from "../recovery.js";
+import { ADDRESS_RE } from "../domain/contacts.js";
 
 export interface CandideRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -105,7 +106,6 @@ function prune<T extends { expiresAt: number }>(map: Map<string, T>, now = Date.
   for (const [id, entry] of map) if (entry.expiresAt < now) map.delete(id);
 }
 
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
 function newCandideRequest(r: RecoveryRequest): RecoveryRequest {
   store.addRecoveryRequest(r);
@@ -124,7 +124,7 @@ function fail(res: express.Response, err: unknown) {
 // ---------------------------------------------------------------------------
 // public projections
 
-export function publicCandideRecovery(user: User) {
+function publicCandideRecovery(user: User) {
   const c = user.passkeySafe?.candideRecovery;
   const moduleAddress = c?.moduleAddress ?? user.passkeySafe?.recovery?.moduleAddress ?? CANDIDE.recoveryModuleAddress;
   const grace = recoveryGracePeriodSeconds(moduleAddress);
@@ -754,7 +754,6 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         out.registerChallenge = issueChallenge("register", `recovery:${request.id}`);
         out.rpId = SECURITY.rpId;
         out.userHandle = user.id;
-        out.displayName = user.name;
         out.submitTo = `/api/recovery/candide/${request.id}/passkey`;
       }
       res.status(open ? 200 : 201).json(out);
@@ -829,9 +828,19 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const auth = c.auths.find((a) => a.challengeId === challengeId);
       if (!auth) return res.status(404).json({ error: "unknown challenge for this recovery" });
       if (auth.verified) return res.status(409).json({ error: "that channel is already verified" });
+      // Bounded like enrolment: past the limit the request is canceled, so a
+      // guesser must start over (and the owner sees a canceled attempt), while
+      // Candide's own throttle stays the outer bound.
+      if ((c.otpAttempts ?? 0) >= OTP_MAX_ATTEMPTS) {
+        store.updateRecoveryRequest(request.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "too many wrong codes" });
+        return res.status(429).json({ error: "too many wrong codes — this recovery is canceled; start again" });
+      }
 
       const result = await submitSignatureChallenge(c.serviceRequestId, challengeId, req.body?.otp);
-      if (!result.success) return res.status(400).json({ error: "the code was not accepted" });
+      if (!result.success) {
+        store.updateRecoveryRequest(request.id, { candide: { ...c, otpAttempts: (c.otpAttempts ?? 0) + 1 } });
+        return res.status(400).json({ error: "the code was not accepted" });
+      }
       const auths = c.auths.map((a) => (a.challengeId === challengeId ? { ...a, verified: true } : a));
       let patch: Partial<RecoveryRequest> = { candide: { ...c, auths } };
 

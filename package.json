@@ -3,7 +3,7 @@
   "license": "Apache-2.0",
   "version": "0.1.0",
   "private": true,
-  "description": "Zoldenburg \u2014 cross-border remittance infrastructure (Zoll app: stablecoin in, local payout rails out)",
+  "description": "Zoldenburg \u2014 cross-border remittance infrastructure (Zold app: stablecoin in, local payout rails out)",
   "type": "module",
   "scripts": {
     "dev": "tsx scripts/dev.ts",
@@ -25,6 +25,7 @@
     "country:policy:test": "tsx scripts/country-policy-test.ts",
     "audit:deps": "npm audit",
     "check": "tsx scripts/check.ts",
+    "check:live": "CHECK_LIVE=1 tsx scripts/check.ts",
     "fp5:test": "tsx scripts/fp5-binding-test.ts",
     "fp4:test": "tsx scripts/device-key-test.ts",
     "passkey-safe:test": "tsx scripts/passkey-safe-plan-test.ts",

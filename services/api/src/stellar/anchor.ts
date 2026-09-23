@@ -8,6 +8,8 @@
  * protocol code, and production MoneyGram is a config change:
  * MG_ANCHOR_DOMAIN + a partner-onboarded account + asset USDC.
  */
+// Every call carries a timeout: an anchor or Horizon request that hangs
+// would stall a payout refresh for the process's lifetime.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import {

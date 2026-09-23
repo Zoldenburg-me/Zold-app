@@ -17,7 +17,7 @@
  */
 import { createPublicClient, createWalletClient, http, parseAbi, formatUnits, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { LIQUIDITY } from "../services/api/src/config.js";
+import { IS_REAL_MONEY_CHAIN, LIQUIDITY } from "../services/api/src/config.js";
 import { addrs, chain } from "../services/api/src/chain.js";
 import { eurPer } from "../services/api/src/rates.js";
 import { bestPool } from "../services/api/src/dex.js";
@@ -25,8 +25,24 @@ import { bestPool } from "../services/api/src/dex.js";
 process.loadEnvFile?.(".env");
 
 const FIX = process.argv.includes("--fix");
-const POSITION_MANAGER = (process.env.DEX_POSITION_MANAGER ??
-  "0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2") as `0x${string}`;
+// Per chain: Uniswap's NonfungiblePositionManager differs between Base
+// Sepolia and Base mainnet, and approving the wrong one hands tokens to an
+// address that never mints anything.
+const POSITION_MANAGERS: Record<number, `0x${string}`> = {
+  84532: "0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2",
+  8453: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1",
+};
+const POSITION_MANAGER = (process.env.DEX_POSITION_MANAGER ?? POSITION_MANAGERS[chain.id] ?? "") as `0x${string}`;
+if (!POSITION_MANAGER) {
+  console.error(`no position manager known for chain ${chain.id} — set DEX_POSITION_MANAGER`);
+  process.exit(1);
+}
+// A test fixture pool is seeded with tokens we mint; on a real-money chain the
+// same command approves and deposits REAL EURe/USDC. Ask for that explicitly.
+if (FIX && IS_REAL_MONEY_CHAIN && process.env.DEX_SETUP_ALLOW_MAINNET !== "1") {
+  console.error(`REFUSING --fix on chain ${chain.id}: this mints a position with real tokens. Set DEX_SETUP_ALLOW_MAINNET=1 to do it deliberately.`);
+  process.exit(1);
+}
 /** fee -> tickSpacing, from the v3 factory defaults. */
 const TICK_SPACING: Record<number, number> = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
 const FEE = Number(process.env.DEX_SETUP_FEE ?? 500);
@@ -206,7 +222,7 @@ async function main() {
     // recomputes the amounts owed for it and ROUNDS UP, so an allowance set to
     // exactly the desired amount can come up a wei short and the position
     // manager reverts with a bare "STF". Costs nothing: the pull is still
-    // capped at amountDesired, and this is a throwaway testnet key.
+    // capped at amountDesired.
     const h = await wallet.writeContract({
       address: t as `0x${string}`, abi: [...erc20], functionName: "approve",
       args: [POSITION_MANAGER, ((amt as bigint) * 12n) / 10n], chain, account,
@@ -220,9 +236,11 @@ async function main() {
     args: [{
       token0, token1, fee: FEE, tickLower, tickUpper,
       amount0Desired: amount0, amount1Desired: amount1,
-      // Full-range and we are the only LP, so slippage floors are 0 here on
-      // purpose: there is no one to front-run an empty pool's first mint.
-      amount0Min: 0n, amount1Min: 0n,
+      // Zero floors only for an EMPTY pool's first mint, where nobody can
+      // front-run. Adding to an existing pool takes a 0.5% floor, because a
+      // pool anyone can trade against can move between quote and mint.
+      amount0Min: existing ? (amount0 * 995n) / 1000n : 0n,
+      amount1Min: existing ? (amount1 * 995n) / 1000n : 0n,
       recipient: account.address,
       deadline: BigInt(Math.floor(Date.now() / 1000) + 1800),
     }], chain, account,

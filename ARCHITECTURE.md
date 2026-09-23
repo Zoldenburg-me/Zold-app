@@ -1,12 +1,12 @@
 # Zold — On-Chain Remittance Platform: Architecture
 
-Status: Architecture v0.3 (August 2026 — Base Sepolia / Main Alignment)
+Status: Architecture v0.4 (September 2026 — Base mainnet defaults)
 
 ## 1. Product model
 
 Self-custodial remittance platform & borderless account layer:
 
-- **Primary Smart Account** — every user gets a counterfactual **Candide Safe 2-of-2 Smart Account** (ERC-4337) on **Base Sepolia** (Chain ID `84532`).
+- **Primary Smart Account** — every user gets a counterfactual **Candide Safe Smart Account** (ERC-4337) on **Base** (Chain ID `8453` by default; `TRANSF_CHAIN_ID` selects Base Sepolia `84532` for testing).
   - **Signers**: 2-of-2 multisig configuration (User Passkey + App Co-signer key).
   - **Gas Sponsorship**: ERC-4337 Paymaster sponsors UserOperations.
   - **Recovery**: Account recovery module enabled before real funds are received.
@@ -25,16 +25,16 @@ Self-custodial remittance platform & borderless account layer:
 
 | Currency | Token | Settlement Rail | Notes |
 |---|---|---|---|
-| EUR | `EURe` (`0x29F37F...`) | Monerium SEPA | Primary launch currency token on Base Sepolia. Issued by Monerium (EU EMI, MiCA compliant). |
-| USD | `USDC` (`0xf94c01...`) | Bridge.xyz / MoneyGram | Core settlement backbone for cross-border and cash rails. |
+| EUR | `EURe` | Monerium SEPA | Primary launch currency token. Issued by Monerium (EU EMI, MiCA compliant); the address per chain is read from Monerium's `/tokens`. |
+| USD | `USDC` | Bridge.xyz / MoneyGram | Core settlement backbone for cross-border and cash rails. Circle's USDC on the chain in use; `deployments.json` records it. |
 
 ---
 
 ## 3. Settlement & Liquidity Layer
 
-- **Base Sepolia (84532)**: Primary EVM settlement chain for Monerium EURe issuing and Candide Safe smart accounts.
-- **Stellar (Chain 27)**: Payout rail for MoneyGram Ramps cash pickups (SEP-10 authentication, SEP-12 KYC customer registration, SEP-24 interactive withdrawal).
-- **Bridge.xyz**: Licensed transfer seam moving USDC from Base to Stellar (dry-run records the plan; BRIDGE_LIVE=1 calls their Transfer API).
+- **Base (8453)**: Primary EVM settlement chain for Monerium EURe issuing and Candide Safe smart accounts; Base Sepolia (84532) for testing.
+- **Stellar**: Payout rail for MoneyGram Ramps cash pickups (SEP-10 authentication, SEP-12 KYC customer registration, SEP-24 interactive withdrawal).
+- **Bridge.xyz**: Licensed transfer seam moving USDC from Base to Stellar. The cash rail is closed unless BRIDGE_LIVE=1 and an anchor are configured; there is no dry-run.
 - **Multi-Venue FX Execution**:
   - `liquidity.ts` presents a unified `LiquidityProvider` interface for executing FX swaps.
   - **Implementations**: `FxSwapper` (local inventory), Bebop RFQ (JIT PMM quotes), CoW Protocol, Uniswap v3, and LI.FI.
@@ -62,8 +62,8 @@ All contracts are minimal, un-proxied, and governed:
    - Transact ions require a signed `PaymentAuthorization` typed data structure signed by the user's bound device key.
    - Server-side verification (`assertDeviceAuthorization` in `orchestrator.ts`) enforces rate limits, recipient binding, and quote validity.
 3. **Compliance & Travel Rule**:
-   - **Sumsub KYC**: Direct identity review handoff. Document data and liveness stay with Sumsub; Zold stores applicant reference and extracted text fields.
-   - **Travel Rule (SEP-9 / SEP-12)**: Originator text fields mapped and PUT to anchor before opening MoneyGram cash withdrawals.
+   - **Identity is Monerium's**: approval is an IBAN attributed to the Safe by a connected Monerium account; Zold stores no identity documents.
+   - **Travel Rule (SEP-9 / SEP-12)**: Originator text fields, collected per transfer (not yet wired), mapped and PUT to the anchor before opening MoneyGram cash withdrawals.
 
 ---
 
@@ -72,4 +72,4 @@ All contracts are minimal, un-proxied, and governed:
 - **Web Application & PWA**: `/app` dashboard for managing balances, making sends, and tracking activity.
 - **Payment Pages**: `/pay/<handle>` custom payment links for receiving funds.
 - **Shareable Receipts**: `/r/<slug>` shareable transaction receipts with privacy protection.
-- **Deployment Health**: `/api/health` exposes active deployment capabilities (`simulation`, `sandbox`).
+- **Deployment Health**: `/api/health` exposes active deployment capabilities (`moneriumOAuth`, `moneriumApiKeys`, `cashRail`, `emailSmsRecovery`, `shopify`).

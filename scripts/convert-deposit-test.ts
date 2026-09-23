@@ -19,9 +19,14 @@
  */
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
-process.env.TRANSF_DB_PATH = "/tmp/db.convert-test.json";
+// A fresh store per run. The fixed /tmp path used to carry the previous run's
+// deposits forward, and the fixture hashes restart at 1 each run — so once the
+// store deduplicated on (txHash, logIndex), run two got run one's rows back.
+process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-convert-")), "db.json");
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify({ USD: 1.1379, KES: 147.53, INR: 109.87 });
 process.env.ALLOW_FIXED_RATES = "1";
 
@@ -236,8 +241,9 @@ await check("the conversion batch carries NO fee", () => {
 });
 
 await check("both routes are capability-gated", () => {
-  const seg = srv.slice(srv.indexOf("/crypto-deposits/:depositId/convert/prepare"),
-                        srv.indexOf("Travel Rule originator data"));
+  const end = srv.indexOf("Turn auto-settlement of payment-page crypto");
+  assert.ok(end > 0, "the auto-convert route's docstring anchors the end of the convert routes");
+  const seg = srv.slice(srv.indexOf("/crypto-deposits/:depositId/convert/prepare"), end);
   assert.equal((seg.match(/requireCapability\(user, "onchain_balance", res\)/g) || []).length, 2,
     "prepare and convert must both check the capability");
 });

@@ -11,7 +11,7 @@
  *   1. NO STALE FALLBACK. If the feed cannot be reached and the cache has aged
  *      out, quoting fails. Serving a stale rate is how a sender is quietly
  *      quoted last month's market; refusing is visible and recoverable.
- *   2. The feed only supplies the FIAT legs (USD->INR, USD->KES) that a payout
+ *   2. The feed only supplies the FIAT legs (USD->KES) that a payout
  *      partner settles. The EUR->USD leg is whatever the on-chain swapper will
  *      actually execute at, read from the chain — see fx.ts. A feed rate we
  *      cannot trade at is a promise we cannot keep.
@@ -35,14 +35,17 @@ let inFlight: Promise<MidRates> | null = null;
  * Pinned rates for tests and offline demos: TRANSF_RATES_FIXED='{"USD":1.14,…}'.
  *
  * A rate that does not move is exactly the thing this module exists to
- * prevent, so it is fail-closed in production the way ALLOW_MOCK_FALLBACK is.
- * A hosted deploy that inherits this env var by accident would quote a frozen
- * rate and look completely healthy doing it.
+ * prevent, so it is refused in production unless ALLOW_FIXED_RATES=1 says so
+ * deliberately. A hosted deploy that inherits this env var by accident would
+ * quote a frozen rate and look completely healthy doing it.
  */
 function pinned(): MidRates | null {
   const raw = process.env.TRANSF_RATES_FIXED;
   if (!raw) return null;
-  if (process.env.NODE_ENV === "production" && process.env.ALLOW_FIXED_RATES !== "1") {
+  // Read at call time, not import time: the same two signals config.ts uses,
+  // but a harness can flip them per case.
+  const production = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
+  if (production && process.env.ALLOW_FIXED_RATES !== "1") {
     throw new RateUnavailableError(
       "TRANSF_RATES_FIXED is set in production — a frozen rate quotes real money at a " +
         "made-up price. Unset it, or set ALLOW_FIXED_RATES=1 to override deliberately.",
@@ -61,7 +64,7 @@ function pinned(): MidRates | null {
 }
 
 /** Currencies every quote path needs; a response missing one is unusable. */
-const REQUIRED = ["USD", "INR", "KES"] as const;
+const REQUIRED = ["USD", "KES"] as const;
 
 export class RateUnavailableError extends Error {
   constructor(detail: string) {
@@ -166,17 +169,4 @@ export async function usdPer(code: string): Promise<number> {
 export function resetRateCache(): void {
   cache = null;
   inFlight = null;
-}
-
-/** For /api/health and the startup log — never throws. */
-export function rateCacheStatus() {
-  return cache
-    ? {
-        provider: cache.provider,
-        asOf: cache.asOf,
-        ageMs: Date.now() - cache.fetchedAt,
-        fresh: fresh(cache),
-        eur: cache.eur,
-      }
-    : { provider: null, asOf: null, ageMs: null, fresh: false, eur: {} };
 }

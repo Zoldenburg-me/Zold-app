@@ -9,9 +9,8 @@
  * WHY THIS IS NEEDED AT ALL. `.env` is the operator's file and now legitimately
  * carries the hosted deployment — NODE_ENV=production and the zoldhq.com
  * WebAuthn origin. `process.loadEnvFile` fills anything unset, so without this
- * every harness silently inherits that: simulate routes 403 at the production
- * guard instead of reaching the guard under test, pinned test rates are refused
- * as "set in production", and passkey ceremonies are checked against an origin
+ * every harness silently inherits that: pinned test rates are refused as
+ * "set in production", and passkey ceremonies are checked against an origin
  * no test ever serves from.
  *
  * SET, never delete. Deleting only lets loadEnvFile put the operator's value
@@ -20,8 +19,8 @@
  *
  * The historical default was NODE_ENV unset; "test" is equivalent everywhere,
  * because the code only ever compares against "production". Harnesses that
- * genuinely want production posture (fx-rates-test, kyc-operator-test) set it
- * themselves, and an explicit child env still wins.
+ * genuinely want production posture (fx-rates-test) set it themselves, and an
+ * explicit child env still wins.
  *
  * MUST be the first import in any harness that uses it, or config.js is
  * evaluated with the operator's values already frozen in.
@@ -66,8 +65,8 @@ process.env.RECOVERY_MANAGED_KYC_GUARDIAN = "0";
  * receives an IBAN, so any harness that funds an account fails with a missing
  * iban rather than anything about KYC. Empty restores the inferred default
  * (auto-approve when LOOKS_LOCAL), which is what harnesses were written
- * against. kyc-test and kyc-operator-test set "0" in their own child env and
- * still win.
+ * against. A harness that wants the gate sets "0" in its own child env and
+ * still wins.
  *
  * Deliberately NOT handled: ALLOW_PLAINTEXT_STORE (only read under
  * NODE_ENV=production, which is pinned away here) and MONERIUM_REDIRECT_URI

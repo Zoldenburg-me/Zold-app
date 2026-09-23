@@ -13,7 +13,6 @@ import type {
   LedgerEntry,
   Member,
   Organisation,
-  WalletGroup,
 } from "./domain/types.js";
 import { DEFAULT_CHART, DEFAULT_RULES } from "./domain/coa.js";
 import { defaultLabel, initialStatusFor } from "./domain/accounts.js";
@@ -107,28 +106,6 @@ export interface User {
     createdAt: string;
   };
   /**
-   * Public payment page, e.g. `alice` serving /pay/alice.
-   *
-   * A payment page has its own deposit address. It must not point at the
-   * user's main account: the settlement rule belongs to the page, and generic
-   * transfers into the user's wallet must not be swept or converted just
-   * because a public payment link exists.
-   */
-  /**
-   * A Gnosis Pay card account the user has CONNECTED — theirs, not ours.
-   *
-   * Status only. No JWT is ever stored here: it is a bearer credential for a
-   * third party's financial account, the browser holds it for the length of a
-   * session, and this process keeps nothing that could be replayed. What is
-   * here exists so the Card view can say where the user got to without asking
-   * them to sign in again just to render a heading.
-   *
-   * `asOf` is load-bearing rather than decorative: permissionless mode has NO
-   * webhooks, so every figure is a snapshot from the last time the user opened
-   * the view. Presenting it without a timestamp would imply a liveness the
-   * integration cannot provide.
-   */
-  /**
    * Which path this account takes. Decided once by resolveSegment on the
    * server, at signup.
    *
@@ -189,6 +166,13 @@ export interface User {
     at: string;
     ip?: string;
   }[];
+  /**
+   * A Gnosis Pay card account the user has CONNECTED — theirs, not ours.
+   * Status only, never the JWT: that is a bearer credential for a third
+   * party's financial account and stays in the browser. `asOf` is
+   * load-bearing: permissionless mode has no webhooks, so every figure is a
+   * snapshot from the last time the user opened the view.
+   */
   gnosisPay?: {
     connectedAddress: `0x${string}`;
     userId?: string;
@@ -198,6 +182,12 @@ export interface User {
     cardCount?: number;
     asOf: string;
   };
+  /**
+   * Public payment page, e.g. `alice` serving /pay/alice. It has its own
+   * deposit address: the settlement rule belongs to the page, and transfers
+   * into the user's main wallet must not be swept just because a public
+   * payment link exists.
+   */
   paymentPage?: {
     handle: string;
     displayName?: string;
@@ -235,7 +225,8 @@ export interface User {
   handle?: string;
   payDisplayName?: string;
   autoConvert?: boolean;
-  /** mock: IBAN issued locally. sandbox states track Monerium provisioning. */
+  /** `sandbox` states track Monerium provisioning. `mock` survives only on rows
+   *  written before locally issued IBANs were removed. */
   funding?: {
     mode: "mock" | "sandbox";
     status: "kyc_pending" | "active" | "provisioning" | "iban_pending" | "error";
@@ -250,6 +241,9 @@ export interface User {
     state: string;
     codeVerifier: string;
     redirectUri: string;
+    /** sha256 of the nonce cookie set at connect/start; the callback must
+     *  arrive from the same browser. */
+    nonceHash?: string;
     createdAt: string;
   };
   monerium?: {
@@ -327,7 +321,7 @@ export interface Quote {
    *  amounts the flat fee dominates (EUR 2 to cash loses half to it), and an
    *  itemised fee alone made that look like a broken exchange rate. */
   effectiveRate: number;
-  /** FP5: the on-chain FxSwapper rate (tokenOut units per 1e18 tokenIn) this
+  /** FP5: the liquidity venue's rate (tokenOut units per 1e18 tokenIn) this
    *  quote's economics assume. Execution refuses to swap if the live rate has
    *  drifted past tolerance — binds quoted price to settlement price. */
   lockedSwapRate?: string;
@@ -525,16 +519,6 @@ export interface Transfer {
     txHash?: string;
   };
   /**
-   * Set when this transfer's debit and swap ride in ONE user-signed
-   * UserOperation (Change 2, windows 1-3): the batch approves the venue and
-   * delivers the output straight to `recipient`, so the orchestrator never
-   * holds the input. `recipient` is the orchestrator only in local dry-run
-   * (the local demo settles from it); in live mode it is the Bridge deposit
-   * address, and once the batch lands the funds are already with the
-   * settlement custodian — which is why compensation must not assume it can
-   * reverse-swap them.
-   */
-  /**
    * Did the orchestrator hold this transfer's input funds?
    *
    * Recorded at creation, on EVERY transfer and every rail, because the answer
@@ -561,6 +545,15 @@ export interface Transfer {
     /** The fee always lands at the orchestrator; stated, not hidden. */
     feeToOrchestrator?: boolean;
   };
+  /**
+   * Set when this transfer's debit and swap ride in ONE user-signed
+   * UserOperation (Change 2, windows 1-3): the batch approves the venue and
+   * delivers the output straight to `recipient`, so the orchestrator never
+   * holds the input. `recipient` is the Bridge deposit address ("dry-run" survives only on
+   * rows written before the rail was closed without BRIDGE_LIVE), and once the batch lands the funds are already with the
+   * settlement custodian — which is why compensation must not assume it can
+   * reverse-swap them.
+   */
   safeSwap?: {
     recipient: `0x${string}`;
     mode: "dry-run" | "live";
@@ -596,7 +589,8 @@ export interface Transfer {
     bridgeDepositMemo?: string;
     bridgeDestinationTxHash?: string;
   };
-  /** SEPA payout leg: a real Monerium redeem order in sandbox, or a mock. */
+  /** SEPA payout leg: a Monerium redeem order (`sandbox` is the historical
+   *  literal for it). `mock` survives only on rows from the removed mock path. */
   sepa?: { mode: "sandbox" | "mock"; orderId?: string; state: string; detail?: string };
   error?: string;
   /** FP3: automated compensation after failure. Refund amount depends on
@@ -694,6 +688,8 @@ export interface RecoveryRequest {
     recoveryRequestId?: string;
     executedAt?: string;
     gracePeriodSeconds?: number;
+    /** Wrong codes so far on the no-session OTP route. */
+    otpAttempts?: number;
     finalizeAfter?: string;
     verifierDeployTxHash?: string;
     finalizeAttempts?: number;
@@ -801,7 +797,6 @@ interface Db {
   members: Member[];
   accounts: Account[];
   importedWallets: ImportedWallet[];
-  walletGroups: WalletGroup[];
   contacts: Contact[];
   drafts: DraftPayment[];
   invoices: Invoice[];
@@ -847,7 +842,6 @@ let db: Db = {
   members: [],
   accounts: [],
   importedWallets: [],
-  walletGroups: [],
   contacts: [],
   drafts: [],
   invoices: [],
@@ -875,7 +869,6 @@ export function initStore() {
     db.members ??= [];
     db.accounts ??= [];
     db.importedWallets ??= [];
-    db.walletGroups ??= [];
     db.contacts ??= [];
     db.drafts ??= [];
     db.invoices ??= [];
@@ -1311,6 +1304,13 @@ export const store = {
   updateTransfer(id: string, patch: Partial<Transfer>) {
     const t = db.transfers.find((x) => x.id === id);
     if (!t) throw new Error(`unknown transfer ${id}`);
+    // REFUNDED and PAID are final. A slow live leg finishing after the sweep
+    // refunded the transfer must not move it back and complete a payout the
+    // sender was already repaid for; the late write keeps its other fields.
+    if ((t.state === "REFUNDED" || t.state === "PAID") && patch.state && patch.state !== t.state) {
+      console.error(`store: refusing to move transfer ${id} from ${t.state} to ${patch.state}`);
+      patch = { ...patch, state: undefined };
+    }
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
     persist();
     return t;
@@ -1554,9 +1554,6 @@ export const store = {
   get importedWallets() {
     return db.importedWallets;
   },
-  get walletGroups() {
-    return db.walletGroups;
-  },
   get chartAccounts() {
     return db.chartAccounts;
   },
@@ -1600,8 +1597,11 @@ export const store = {
     return db.members.find((m) => m.id === id);
   },
   /** The membership joining this user to this org, active or not. */
+  /** A re-invited person can carry a deactivated row beside a live one; the
+   *  live one is the membership. */
   memberFor(orgId: string, userId: string) {
-    return db.members.find((m) => m.orgId === orgId && m.userId === userId);
+    const rows = db.members.filter((m) => m.orgId === orgId && m.userId === userId);
+    return rows.find((m) => m.status !== "deactivated") ?? rows[0];
   },
   findMemberByInviteHash(tokenHash: string) {
     return db.members.find((m) => m.invite?.tokenHash === tokenHash);
@@ -1746,15 +1746,6 @@ export const store = {
     db.importedWallets = db.importedWallets.filter((w) => w.id !== id);
     persist();
     return db.importedWallets.length < before;
-  },
-
-  addWalletGroup(g: WalletGroup) {
-    db.walletGroups.push(g);
-    persist();
-    return g;
-  },
-  walletGroupsOf(orgId: string) {
-    return db.walletGroups.filter((g) => g.orgId === orgId);
   },
 
   chartOf(orgId: string) {

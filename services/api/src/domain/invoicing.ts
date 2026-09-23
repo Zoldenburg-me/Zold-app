@@ -264,17 +264,11 @@ export function fromCents(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
-export function formatEur(cents: number): string {
-  return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" })
-    .format(cents / 100);
-}
-
 export class InvoiceComplianceError extends Error {}
 
 export interface InvoiceLineInput {
   description: string;
   quantity: string;
-  unit?: string;
   unitPriceNet: string;
   /** Per-line rate, so one invoice can mix 19% and 7%. Ignored when exempt. */
   vatRate?: VatRate;
@@ -554,8 +548,6 @@ export interface InvoiceDraft {
   recipient: Party;
   lines: InvoiceLineInput[];
   treatment: VatTreatment;
-  /** Agreed reductions (Skonto etc.) — §14 Abs. 4 Nr. 7 wants these stated. */
-  discountNote?: string;
   /** Set for a self-billed invoice; the word "Gutschrift" then becomes mandatory. */
   selfBilled?: boolean;
   /** ISO 4217. Defaults to the settlement currency. */
@@ -984,28 +976,3 @@ export const DEFAULT_DISPLAY: InvoiceDisplayOptions = {
   footer: true,
   bilingual: false,
 };
-
-/** Labels the document renders, so DE/EN stays in one place. */
-export const LABELS = {
-  invoice: { de: "Rechnung", en: "Invoice" },
-  creditNote: { de: "Gutschrift", en: "Credit note" },
-  number: { de: "Rechnungsnummer", en: "Invoice number" },
-  issueDate: { de: "Rechnungsdatum", en: "Invoice date" },
-  supplyDate: { de: "Leistungsdatum", en: "Date of supply" },
-  supplyPeriod: { de: "Leistungszeitraum", en: "Period of supply" },
-  from: { de: "Rechnungssteller", en: "From" },
-  to: { de: "Rechnungsempfänger", en: "To" },
-  vatId: { de: "USt-IdNr.", en: "VAT ID" },
-  taxNumber: { de: "Steuernummer", en: "Tax number" },
-  description: { de: "Bezeichnung", en: "Description" },
-  quantity: { de: "Menge", en: "Qty" },
-  unitPrice: { de: "Einzelpreis", en: "Unit price" },
-  rate: { de: "USt.", en: "VAT" },
-  lineTotal: { de: "Betrag", en: "Amount" },
-  net: { de: "Nettobetrag", en: "Net" },
-  vat: { de: "Umsatzsteuer", en: "VAT" },
-  gross: { de: "Gesamtbetrag", en: "Total" },
-  paymentTerms: { de: "Zahlungsbedingungen", en: "Payment terms" },
-  bank: { de: "Bankverbindung", en: "Bank details" },
-  purchaseOrder: { de: "Bestellnummer", en: "Purchase order" },
-} as const;

@@ -79,9 +79,9 @@ delegate to constrain.
 
 ALSO IMPLEMENTED (Aug 2026): Change 2 windows 1-3 — the cash-rail send is ONE
 user-signed batch: fee transfer -> venue approval -> swap, atomic, with the
-output delivered straight to the destination the payout leg names (the Bridge
-deposit address in live mode; the orchestrator only in local dry-run, where
-the escrow demo pulls from it). The orchestrator never holds the input: a
+output delivered straight to the destination the payout leg names, Bridge's
+deposit address (the rail is closed without Bridge, so there is no other
+destination). The orchestrator never holds the input: a
 failed batch reverts entirely and nothing leaves the Safe. The venue half is a
 `safeSwapPlan` capability on the liquidity seam — Uniswap builds calldata
 offline against the same quoted pool and floor; LI.FI and Bebop are quoted
@@ -91,8 +91,8 @@ the counterparty and the question is Change 3's, not a custody window) and
 CoW does not execute, so those venues fall back to the plain user-signed
 debit with the orchestrator swapping after.
 
-What custody remains on the cash rail: the dry-run demo's escrow leg, the
-fx-swapper fallback path, and the fee itself (revenue, not client money).
+What custody remains on the cash rail: the fx-swapper fallback path, and the
+fee itself (revenue, not client money).
 
 Scheduled transfer:
 
@@ -120,9 +120,9 @@ Prefer a small policy delegate contract that enforces:
 account has a registered passkey. This prevents a stolen bearer session from
 binding the first spending key without also satisfying the user's authenticator.
 
-Local/demo accounts without passkeys are still allowed when simulation mode is
-enabled so CLI and browser demo flows continue to work. Production rejects
-authorizer binding without a verified passkey.
+The hardhat harness (chain 31337) waives the passkey requirement so the
+suites can fund an account without an authenticator. Everywhere else,
+authorizer binding without a verified passkey is refused.
 
 ## Migration Plan
 
@@ -152,7 +152,6 @@ authorizer binding without a verified passkey.
 Before real funds, production startup should fail unless:
 
 - `NODE_ENV=production`
-- `KYC_AUTO_APPROVE=0`
 - strict `WEBAUTHN_ORIGINS`
 - `KYC_OPERATOR_TOKEN`
 - `MONERIUM_WEBHOOK_SECRET`

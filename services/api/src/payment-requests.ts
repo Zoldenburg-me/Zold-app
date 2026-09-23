@@ -22,8 +22,8 @@
  *   zold    another Zold account paying from its balance. Today that is a SEPA
  *           payout into the payee's IBAN with the code as reference — the same
  *           rail as `bank`, started from the app with everything prefilled.
- *           There is no on-chain Zold-to-Zold rail yet (see CLAUDE.md, Pay
- *           hub), so this does not pretend to be one.
+ *           There is no on-chain Zold-to-Zold rail yet (see the Pay hub notes
+ *           in docs/notes/app-and-chains.md), so this does not pretend to be one.
  *
  * WHAT IS NOT HERE. No money moves in this file. Matching records that a
  * payment arrived; conversion of a USDC deposit to EURe is the user-signed
@@ -33,7 +33,7 @@
  * record says which asset is actually held.
  */
 import { randomBytes } from "node:crypto";
-import { PAYMENT_REQUESTS } from "./config.js";
+import { MONERIUM, PAYMENT_REQUESTS } from "./config.js";
 import type { CryptoDeposit, Transfer, User } from "./store.js";
 
 export type PaymentMethod = "crypto" | "bank";
@@ -408,11 +408,15 @@ export function matchDepositToRequests(
  *  the payee's account and its memo carries the code. Amount comes from the
  *  order, never from the request: the payer may have sent a different sum. */
 export function matchMoneriumOrder(
-  order: { id: string; kind: string; amount: string; address: string; memo?: string; meta?: { state?: string; processedAt?: string }; counterpart?: any; state?: string },
+  order: { id: string; kind: string; amount: string; address: string; chain?: string; currency?: string; memo?: string; meta?: { state?: string; processedAt?: string }; counterpart?: any; state?: string },
   request: PaymentRequest,
   payeeAddress: string,
 ): Omit<RequestPayment, "id"> | undefined {
   if (order.kind !== "issue") return undefined;
+  // A GBPe issue on another chain is not a euro paid to this link. Absent
+  // fields (pure fixtures) pass; a real order always carries both.
+  if (order.chain && order.chain !== MONERIUM.chain) return undefined;
+  if (order.currency && order.currency.toLowerCase() !== "eur") return undefined;
   const state = order.meta?.state ?? order.state;
   if (state !== "processed") return undefined;
   if (String(order.address).toLowerCase() !== payeeAddress.toLowerCase()) return undefined;

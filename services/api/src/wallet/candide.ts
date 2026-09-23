@@ -2,13 +2,13 @@
  * Candide smart wallets (AbstractionKit, Safe-based ERC-4337 accounts).
  *
  * Every user gets a Safe smart account whose address is computed offline and
- * deterministically from their owner key — the same address on every EVM
- * chain. That address is the user's identity and token balance account, and
+ * deterministically from their passkey's public key — the same address on
+ * every EVM chain. That address is the user's identity and token balance account, and
  * the address Monerium links the IBAN to.
  *
  * For Monerium to verify ownership of a contract wallet it calls EIP-1271 on
  * the address, so the Safe must actually be deployed on the chain Monerium
- * checks (Sepolia in sandbox). Deployment is gasless via Candide's public
+ * checks (Base by default; CANDIDE_CHAIN_ID follows TRANSF_CHAIN_ID). Deployment is gasless via Candide's public
  * bundler + paymaster and is centralized in the passkey Safe deployment route.
  */
 import {
@@ -504,7 +504,10 @@ export async function readCosignerTokenAllowance(
         ? 0n
         : current.spent;
     return { amount: current.amount, remaining: current.amount > spent ? current.amount - spent : 0n };
-  } catch {
+  } catch (err: any) {
+    // Not silent: a skipped read means a legacy standing allowance the
+    // co-signer key alone can spend may go un-revoked this send.
+    console.error(`candide: could not read the co-signer allowance for ${safeAddress}; revoke skipped this send: ${err?.message ?? err}`);
     return null;
   }
 }
@@ -582,7 +585,13 @@ export async function isDeployed(address: string): Promise<boolean> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getCode", params: [address, "latest"] }),
   });
-  const { result } = await res.json();
+  const body = await res.json().catch(() => null);
+  // An RPC failure must not read as "not deployed": that flips a deployed
+  // Safe's operation to init mode and blames the user for the refusal.
+  if (!res.ok || !body || body.error) {
+    throw new Error(`eth_getCode failed (${res.status}): ${JSON.stringify(body?.error ?? body ?? "").slice(0, 160)}`);
+  }
+  const { result } = body;
   return typeof result === "string" && result !== "0x";
 }
 
@@ -660,11 +669,6 @@ async function ethCall(to: string, data: `0x${string}`): Promise<`0x${string}`> 
 export async function safeOwners(safeAddress: string): Promise<`0x${string}`[]> {
   const raw = await ethCall(safeAddress, encodeFunctionData({ abi: SAFE_READ_ABI, functionName: "getOwners" }));
   return [...(decodeFunctionResult({ abi: SAFE_READ_ABI, functionName: "getOwners", data: raw }) as readonly string[])] as `0x${string}`[];
-}
-
-export async function safeThreshold(safeAddress: string): Promise<number> {
-  const raw = await ethCall(safeAddress, encodeFunctionData({ abi: SAFE_READ_ABI, functionName: "getThreshold" }));
-  return Number(decodeFunctionResult({ abi: SAFE_READ_ABI, functionName: "getThreshold", data: raw }) as bigint);
 }
 
 export interface RecoveryModuleState {

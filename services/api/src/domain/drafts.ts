@@ -60,10 +60,8 @@ const AMOUNT_RE = /^\d+(\.\d{1,18})?$/;
  * came from is supplied. Pass the contact whenever there is one — a line saved
  * without a fingerprint can never be found to have drifted.
  */
-export function validateLine(
-  input: Partial<DraftLine>,
-  contact?: Contact,
-): Omit<DraftLine, "id"> {
+export function validateLine(raw: unknown, contact?: Contact): Omit<DraftLine, "id"> {
+  const input = (raw && typeof raw === "object" ? raw : {}) as Partial<DraftLine>;
   const amount = String(input.amount ?? "").trim();
   if (!AMOUNT_RE.test(amount) || Number(amount) <= 0) {
     throw new DraftError(
@@ -320,7 +318,10 @@ export function importCsv(
           destination: {
             kind: "wallet",
             address: (cells[idx.address] ?? "").trim() as `0x${string}`,
-            chainId: 0, // filled by the caller from the funding source
+            // A CSV carries no chain id. 0 means unknown; the client sets it
+            // before the line is saved, and an unknown chain never matches a
+            // contact wallet, so such a line cannot pass drift checks.
+            chainId: 0,
             displayName:
               idx.name >= 0 && cells[idx.name]?.trim()
                 ? cells[idx.name].trim()

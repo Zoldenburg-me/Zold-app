@@ -42,6 +42,7 @@
  *    to whichever address happened to send the funds is how exchange hot
  *    wallets get refunded instead of customers.
  */
+import { wrap } from "./util.js";
 import express from "express";
 import { randomBytes, randomUUID } from "node:crypto";
 import { MONERIUM, PAYMENT_REQUESTS, SHOPIFY } from "../config.js";
@@ -82,7 +83,8 @@ import type { ShopifyConnection } from "../shopify/types.js";
  * the app's anchor links since the hardening pass; the payer-facing path never
  * got it.
  *
- * http(s) only, and parseable. Anything else is dropped rather than repaired:
+ * https only (main's review pass chose the same bar), and parseable. Anything
+ * else is dropped rather than repaired:
  * the fallbacks at the two call sites (the pay page itself) are correct
  * destinations, so losing a malformed one costs the buyer nothing.
  */
@@ -94,13 +96,8 @@ export function externalHttpUrl(raw: unknown): string | undefined {
   } catch {
     return undefined;
   }
-  return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : undefined;
+  return u.protocol === "https:" ? u.toString() : undefined;
 }
-
-const wrap =
-  (fn: (req: express.Request, res: express.Response) => Promise<unknown>) =>
-  (req: express.Request, res: express.Response, next: express.NextFunction) =>
-    fn(req, res).catch(next);
 
 /** Pending installs: our nonce → who started it. In memory on purpose; an
  *  install that outlives a restart simply starts again. */
@@ -355,7 +352,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // not keep the connection — the merchant asked to disconnect.
       try {
         if ((c.mode ?? "payments-app") === "payments-app") {
-          await paymentsAppConfigure(c.shop, tokenOf(c), undefined as unknown as string, false);
+          await paymentsAppConfigure(c.shop, tokenOf(c), undefined, false);
         } else if (c.webhookSubscriptionId) {
           await webhookSubscriptionDelete(c.shop, tokenOf(c), c.webhookSubscriptionId);
         }
