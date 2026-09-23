@@ -17,7 +17,15 @@
  * A timeout raises `TimeoutError`, which every one of these call sites already
  * treats as the partner being unavailable — the same path as a 5xx.
  */
-export const PARTNER_TIMEOUT_MS = Number(process.env.PARTNER_HTTP_TIMEOUT_MS ?? 30_000);
+import { envNumber } from "./config.js";
+
+/**
+ * Validated at boot like the CRYPTO_IN_* numbers: `AbortSignal.timeout` throws
+ * a RangeError on NaN or a fraction, so a typo here ("30s") would otherwise
+ * surface as every Monerium, Bridge and Candide call failing at the moment it
+ * is made, several layers from the cause.
+ */
+export const PARTNER_TIMEOUT_MS = envNumber("PARTNER_HTTP_TIMEOUT_MS", 30_000, { min: 1, integer: true });
 
 /** `AbortSignal.timeout(PARTNER_TIMEOUT_MS)`, named so a call site reads as a
  *  deliberate bound rather than a magic number. */
