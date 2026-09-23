@@ -53,6 +53,7 @@ const scripts = [
   "gnosispay:test",
   "onboarding:test",
   "pay:test",
+  "tx:audit:test",
 ];
 const liveScripts = ["anchor:test", "travelrule:test", "trustline:test"];
 if (process.env.CHECK_LIVE === "1") scripts.push(...liveScripts);

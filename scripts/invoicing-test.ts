@@ -21,11 +21,14 @@ import {
   EXEMPTION_REASONS,
   InvoiceComplianceError,
   KLEINBETRAG_LIMIT_CENTS,
+  SETTLEMENT_CURRENCY,
   checkCompliance,
   computeTotals,
+  convertTotals,
   formatInvoiceNumber,
   fromCents,
   isEuCountry,
+  normaliseInvoiceCurrency,
   normaliseVatId,
   taxNumberLooksValid,
   toCents,
@@ -605,6 +608,84 @@ check("an unknown reason is refused rather than printed blank", () => {
   );
   assert.equal(r.ok, false);
   assert.ok(r.errors.some((e) => /not a known exemption reason/.test(e.message)));
+});
+
+// ── Foreign currency ────────────────────────────────────────────────────────
+
+check("a currency code is normalised, and a blank one means the settlement currency", () => {
+  assert.equal(normaliseInvoiceCurrency(" usd "), "USD");
+  assert.equal(normaliseInvoiceCurrency(""), SETTLEMENT_CURRENCY);
+  assert.equal(normaliseInvoiceCurrency(undefined), SETTLEMENT_CURRENCY);
+});
+
+check("a currency with no cents is refused, not approximated — it would be wrong by a factor of a hundred", () => {
+  assert.throws(() => normaliseInvoiceCurrency("JPY"), /decimal places/);
+  assert.throws(() => normaliseInvoiceCurrency("KWD"), /decimal places/);
+  assert.throws(() => normaliseInvoiceCurrency("EURO"), /three-letter/);
+});
+
+check("the euro restatement is converted per rate bucket, so net plus tax equals gross in BOTH currencies", () => {
+  const totals = computeTotals(
+    [
+      { description: "Design", quantity: "1", unitPriceNet: "1000.00", vatRate: 19 },
+      { description: "Print", quantity: "3", unitPriceNet: "33.33", vatRate: 7 },
+    ],
+    { kind: "standard", rate: 19 },
+  );
+  const conv = convertTotals(totals, "USD", 1.1379, "test", "2026-09-10");
+  assert.equal(totals.netCents + totals.vatCents, totals.grossCents);
+  assert.equal(conv.netCents + conv.vatCents, conv.grossCents, "the converted column has to add up too");
+  assert.equal(conv.buckets.reduce((s, b) => s + b.vatCents, 0), conv.vatCents);
+  assert.equal(conv.to, SETTLEMENT_CURRENCY);
+  assert.equal(conv.from, "USD");
+  // 1000 USD net at 1.1379 is 878.81 EUR, not 1000.
+  assert.equal(conv.buckets.find((b) => b.rate === 19)!.netCents, Math.round(100_000 / 1.1379));
+});
+
+check("a rate that is not a positive number is refused rather than producing a nonsense column", () => {
+  const totals = computeTotals([{ description: "x", quantity: "1", unitPriceNet: "10.00", vatRate: 19 }], { kind: "standard", rate: 19 });
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => convertTotals(totals, "USD", bad, "t", "d"), InvoiceComplianceError);
+  }
+});
+
+check("a German invoice in a foreign currency with NO euro restatement is refused — § 16 Abs. 6 wants the tax amount in euro", () => {
+  const r = checkCompliance(draft({ currency: "USD" }), jurisdictionFor("DE"));
+  assert.equal(r.ok, false);
+  const e = r.errors.find((x) => x.field === "currency");
+  assert.ok(e, JSON.stringify(r.errors));
+  assert.match(e!.message, /must also be shown in EUR/);
+  assert.equal(e!.legalBasis, "§ 16 Abs. 6 UStG");
+});
+
+check("with the restatement attached it passes, and a euro invoice never needed one", () => {
+  const totals = computeTotals(draft().lines, draft().treatment);
+  const conversion = convertTotals(totals, "USD", 1.1379, "test", "2026-09-10");
+  const withConv = checkCompliance(draft({ currency: "USD", conversion }), jurisdictionFor("DE"));
+  assert.equal(withConv.ok, true, withConv.errors.map((e) => e.message).join("; "));
+  assert.equal(checkCompliance(draft(), jurisdictionFor("DE")).ok, true);
+});
+
+check("a restatement computed from a different currency than the invoice is refused", () => {
+  const totals = computeTotals(draft().lines, draft().treatment);
+  const wrong = convertTotals(totals, "GBP", 0.84, "test", "2026-09-10");
+  const r = checkCompliance(draft({ currency: "USD", conversion: wrong }), jurisdictionFor("DE"));
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.some((e) => /computed from GBP, not USD/.test(e.message)));
+});
+
+check("an EU issuer is told the euro figure is not its own national conversion — we encoded Germany, not 26 others", () => {
+  const totals = computeTotals(draft({ issuer: { ...draft().issuer, country: "PL" } }).lines, draft().treatment);
+  const conversion = convertTotals(totals, "USD", 1.1379, "test", "2026-09-10");
+  const pl = checkCompliance(
+    draft({ issuer: { ...draft().issuer, country: "PL" }, currency: "USD", conversion }),
+    jurisdictionFor("PL"),
+  );
+  assert.ok(
+    pl.jurisdiction.notVerified.some((n) => /non-euro member state's own currency/.test(n)),
+    JSON.stringify(pl.jurisdiction.notVerified),
+  );
+  assert.ok(!pl.errors.some((e) => /§ 16 Abs. 6/.test(e.legalBasis ?? "")), "no German paragraph at a Polish entity");
 });
 
 console.log(`\n${passed} checks passed${process.exitCode ? " (with failures above)" : ""}\n`);

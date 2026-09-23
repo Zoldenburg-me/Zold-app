@@ -20,6 +20,7 @@ import {
   DEFAULT_SERIES,
   EXEMPTION_REASONS,
   InvoiceComplianceError,
+  SETTLEMENT_CURRENCY,
   checkCompliance,
   fromCents,
   normaliseVatId,
@@ -35,7 +36,7 @@ import type { Organisation } from "../../domain/types.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import {
   customReasonsOf, draftDueDate, draftFrom, issuerParty,
-  jurisdictionOf, str, } from "./shared.js";
+  jurisdictionOf, str, withConversion, } from "./shared.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -193,15 +194,25 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
    * The editor calls this as the user types, so the missing-field list appears
    * while it can still be fixed rather than at the moment of issuing.
    */
-  r.post("/:orgId/invoicing/check", (req, res) => {
+  r.post("/:orgId/invoicing/check", async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.read")) return;
     try {
-      const draft = draftFrom(ctx.org, req.body ?? {});
+      // Converted here too, or the live panel would show a missing-euro-amount
+      // error against every foreign-currency draft while it is being typed.
+      const draft = await withConversion(draftFrom(ctx.org, req.body ?? {}));
       const report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
-      res.json({ ...report, preview: { number: draft.number, totals: report.totals } });
+      res.json({
+        ...report,
+        preview: {
+          number: draft.number,
+          totals: report.totals,
+          currency: draft.currency ?? SETTLEMENT_CURRENCY,
+          ...(draft.conversion ? { conversion: draft.conversion } : {}),
+        },
+      });
     } catch (err) {
       if (err instanceof InvoiceComplianceError) {
         return res.status(400).json({ error: err.message });
@@ -217,7 +228,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
    * acceptance is recorded on the document — "we told you and you said yes" is
    * only meaningful if it is written down.
    */
-  r.post("/:orgId/invoicing/issue", (req, res) => {
+  r.post("/:orgId/invoicing/issue", async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
@@ -225,7 +236,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
 
     let draft;
     try {
-      draft = draftFrom(ctx.org, req.body ?? {});
+      draft = await withConversion(draftFrom(ctx.org, req.body ?? {}));
     } catch (err) {
       if (err instanceof InvoiceComplianceError) {
         return res.status(400).json({ error: err.message });
@@ -273,7 +284,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
         unitPrice: l.unitPriceNet,
         amount: fromCents(l.netCents),
       })),
-      currency: "EUR",
+      currency: draft.currency ?? SETTLEMENT_CURRENCY,
       total: fromCents(report.totals.grossCents),
       dueDate: draftDueDate(ctx.org, draft.issueDate!),
       supplier: {
@@ -294,6 +305,10 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
         vatCents: report.totals.vatCents,
         grossCents: report.totals.grossCents,
         buckets: report.totals.buckets,
+        // The document's own currency, and its settlement-currency restatement
+        // at the rate that was live when it was issued. Frozen, never re-derived.
+        currency: draft.currency ?? SETTLEMENT_CURRENCY,
+        ...(draft.conversion ? { conversion: draft.conversion } : {}),
         purchaseOrder: str(req.body?.purchaseOrder),
         paymentTerms: str(req.body?.paymentTerms) ?? ctx.org.invoicing?.paymentTermsNote,
         notes: str(req.body?.notes),
