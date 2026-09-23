@@ -22,6 +22,7 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -422,6 +423,23 @@ await check("the deposit scanner refuses to run two scans at once", () => {
     /if \(scanning\) return 0;/,
     "the single-flight guard is gone — setInterval does not wait for the previous tick",
   );
+});
+
+await check("a malformed partner timeout refuses at boot, not at the first partner call", () => {
+  // Imported in a child process because the value is read once at import and
+  // this process already has it. A typo that reached AbortSignal.timeout would
+  // throw a RangeError on every Monerium, Bridge and Candide call instead.
+  const load = (value: string) =>
+    spawnSync(process.execPath, ["--import", "tsx", "-e", 'await import("./services/api/src/http.ts")'], {
+      env: { ...process.env, PARTNER_HTTP_TIMEOUT_MS: value },
+      encoding: "utf8",
+    });
+  for (const bad of ["30s", "1.5", "0"]) {
+    const r = load(bad);
+    assert.notEqual(r.status, 0, `PARTNER_HTTP_TIMEOUT_MS=${bad} was accepted`);
+    assert.match(r.stderr, /PARTNER_HTTP_TIMEOUT_MS/, `the refusal for ${bad} does not name the variable`);
+  }
+  assert.equal(load("45000").status, 0, "a valid timeout was refused");
 });
 
 hung.close();

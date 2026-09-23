@@ -117,11 +117,21 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
  * An invoice already settled is refused rather than quietly given a second
  * collection route: two live ways to pay one invoice is how it gets paid twice.
  */
-function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined) {
+function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, payee: User) {
   const invoice = store.findInvoice(invoiceId);
   if (!invoice) throw new PaymentRequestError("no such invoice", 404);
   if (!orgId || invoice.orgId !== orgId) {
     throw new PaymentRequestError("that invoice belongs to another organisation", 403);
+  }
+  // The link pays into the PAYEE's Safe, so that Safe must be the one behind
+  // the organisation's account — otherwise any member could raise a link that
+  // routes a customer's payment for the company's invoice into their own
+  // account and still close the invoice.
+  if (!orgsBackedBy(payee.id).has(invoice.orgId)) {
+    throw new PaymentRequestError(
+      "that invoice's organisation is not paid into your account — only the person whose account backs it can collect it",
+      403,
+    );
   }
   if (invoice.direction !== "outgoing") {
     throw new PaymentRequestError(
@@ -134,6 +144,18 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined) 
     throw new PaymentRequestError("that invoice is already settled", 409);
   }
   return invoice;
+}
+
+/**
+ * The organisations whose account is this user's own Safe.
+ *
+ * Membership is not enough to tie money to an organisation's books: a viewer or
+ * a payer on a business org holds their own Safe, and money reaching it is
+ * theirs, not the company's. `Account.backingUserId` records whose Safe an
+ * account actually is.
+ */
+function orgsBackedBy(userId: string): Set<string> {
+  return new Set(store.accounts.filter((a) => a.backingUserId === userId).map((a) => a.orgId));
 }
 
 export async function createPaymentRequest(
@@ -163,7 +185,7 @@ export async function createPaymentRequest(
    */
   let amountEur = input.amountEur;
   if (input.invoiceId) {
-    const invoice = assertInvoiceCollectable(input.invoiceId, orgId);
+    const invoice = assertInvoiceCollectable(input.invoiceId, orgId, user);
     const due = payableEur(invoice);
     if (due === undefined) {
       throw new PaymentRequestError("that invoice has no issued amount to collect", 409);
@@ -487,8 +509,8 @@ function recordBankSettlement(
  * to the document, so without this a direct transfer leaves the invoice looking
  * unpaid while the euro sits in the account.
  *
- * Only OUTGOING invoices of the org that owns the credited address, and only
- * ones not already settled. See `orderNamesInvoice` for why a short number is
+ * Only OUTGOING invoices of an org whose account is the credited Safe, only
+ * ones not already settled, and only when exactly one invoice is named. See `orderNamesInvoice` for why a short number is
  * deliberately not matched at all.
  */
 export function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike): void {
@@ -498,13 +520,27 @@ export function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike): void 
   if (!address) return;
   const user = store.users.find((u) => (u.address ?? "").toLowerCase() === address);
   if (!user) return;
-  const orgIds = new Set(store.organisationsForUser(user.id).map((o) => o.org.id));
-  for (const invoice of store.invoices) {
-    if (invoice.direction !== "outgoing" || !orgIds.has(invoice.orgId)) continue;
-    if (invoice.state === "DELETED" || invoice.state === "RECONCILED") continue;
-    if (!orderNamesInvoice(order, invoice)) continue;
-    recordBankSettlement(invoice.id, order, "invoice-number");
-    return;
+  // Only organisations whose account IS the credited Safe. A member's personal
+  // Safe receiving a payment that quotes the company's invoice number is the
+  // member's money, and must not close the company's invoice.
+  const orgIds = orgsBackedBy(user.id);
+  const named = store.invoices.filter(
+    (invoice) =>
+      invoice.direction === "outgoing" &&
+      orgIds.has(invoice.orgId) &&
+      invoice.state !== "DELETED" &&
+      invoice.state !== "PAID" &&
+      invoice.state !== "RECONCILED" &&
+      orderNamesInvoice(order, invoice),
+  );
+  if (named.length === 1) {
+    recordBankSettlement(named[0].id, order, "invoice-number");
+  } else if (named.length > 1) {
+    // One credit quoting several numbers cannot be split by guessing; leave it
+    // for a person rather than book all of it against whichever came first.
+    console.warn(
+      `invoice attribution: Monerium order ${order.id} names ${named.length} invoices — left unattributed`,
+    );
   }
 }
 
