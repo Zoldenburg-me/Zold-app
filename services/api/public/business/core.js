@@ -74,8 +74,15 @@ export function gateHtml(id) {
 // ── navigation ─────────────────────────────────────────────────────────────
 
 
-export const fmtEur = (cents) =>
-  new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format((cents ?? 0) / 100);
+export const fmtMoney = (cents, currency = "EUR") => {
+  try {
+    return new Intl.NumberFormat("de-DE", { style: "currency", currency }).format((cents ?? 0) / 100);
+  } catch {
+    // An unknown code must not blank the panel while someone is still typing it.
+    return `${((cents ?? 0) / 100).toFixed(2)} ${currency}`;
+  }
+};
+export const fmtEur = (cents) => fmtMoney(cents, "EUR");
 
 // ── actions ────────────────────────────────────────────────────────────────
 
