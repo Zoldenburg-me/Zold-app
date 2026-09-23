@@ -1266,8 +1266,8 @@
 <script type="module" src="/device.js"></script>
 <!-- The app, split by screen. CLASSIC scripts, not modules: they share one
      scope exactly as the single inline script they were cut from did, so
-     LOAD ORDER IS LOAD-BEARING — core first, and no file calls forward into
-     one loaded after it. app/core.js says more. -->
+     LOAD ORDER IS LOAD-BEARING — core first, main last, and no file calls
+     forward into one loaded after it. app/core.js says more. -->
 <script src="/app/core.js"></script>
 <script src="/app/dashboard.js"></script>
 <script src="/app/transactions.js"></script>
@@ -1277,5 +1277,6 @@
 <script src="/app/onboarding.js"></script>
 <script src="/app/send.js"></script>
 <script src="/app/pwa.js"></script>
+<script src="/app/main.js"></script>
 </body>
 </html>

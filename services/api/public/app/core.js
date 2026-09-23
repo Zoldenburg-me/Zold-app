@@ -6,7 +6,9 @@
  * scripts, not modules, so they share one scope exactly as the single inline
  * script they were cut from did — but a file may only call into files loaded
  * BEFORE it at parse time. Every file after this one holds declarations and
- * event wiring; nothing calls forward.
+ * event wiring; nothing calls forward. The one exception is app/main.js, which
+ * loads LAST and is the only file that starts anything that reaches across
+ * files — anything that awaits and then renders belongs there, not earlier.
  */
 const $ = (id) => document.getElementById(id);
 let user = null, quote = null, transfer = null, poll = null;
