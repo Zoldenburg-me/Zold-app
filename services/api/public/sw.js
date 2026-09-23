@@ -112,7 +112,10 @@ self.addEventListener("fetch", (event) => {
            * costs one cache write per navigation and removes that whole class
            * of staleness.
            */
-          if (response.ok) {
+          // Only the shell paths: a receipt slug, a document code or a
+          // payment-link path is a credential, and CacheStorage keys are
+          // readable by any same-origin script.
+          if (response.ok && SHELL.includes(url.pathname)) {
             const cache = await caches.open(SHELL_CACHE);
             cache.put(url.pathname, response.clone());
           }

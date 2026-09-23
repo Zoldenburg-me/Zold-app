@@ -24,7 +24,7 @@ Destination **Kenya**, method **Cash pickup (MoneyGram)**.
 
 ## Your details as the sender
 
-International cash transfers are money transmission, and the payout partner is required to know who sent the money. The first time you send cash, Zold asks for your sender profile: name, date of birth, address and an ID document number. It is stored once and reused; you are asked again only if the partner's requirements change.
+International cash transfers are money transmission, and the payout partner is required to know who sent the money. When cash pickup opens, Zold will ask for the sender details the partner requires at the moment you send, for that transfer only; nothing is kept as a stored profile.
 
 ## Speed
 

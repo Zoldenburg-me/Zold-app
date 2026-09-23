@@ -2,6 +2,7 @@
  * Contract tests for the on-chain contracts (MockToken, FxSwapper, AdminTimelock).
  * Run: npm run test:contracts
  */
+import { createServer } from "node:net";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -12,7 +13,19 @@ import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const RPC = "http://127.0.0.1:8546";
+// A free port, so the suite never deploys against some other node that
+// happens to be listening on a fixed one.
+const PORT: number = await new Promise((resolve, reject) => {
+  const s = createServer();
+  s.once("error", reject);
+  s.listen(0, "127.0.0.1", () => {
+    const a = s.address();
+    if (!a || typeof a === "string") { s.close(); reject(new Error("no free port")); return; }
+    const port = a.port;
+    s.close(() => resolve(port));
+  });
+});
+const RPC = `http://127.0.0.1:${PORT}`;
 
 const pk = {
   deployer: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
@@ -209,7 +222,7 @@ async function main() {
 
 const node = spawn(
   process.execPath,
-  [path.join(ROOT, "node_modules/.bin/hardhat"), "node", "--port", "8546"],
+  [path.join(ROOT, "node_modules/.bin/hardhat"), "node", "--port", String(PORT)],
   { cwd: ROOT, stdio: "ignore" },
 );
 

@@ -245,6 +245,7 @@ await check("a merchant URL that is not http(s) is dropped rather than rendered"
     "data:text/html,<script>alert(1)</script>",
     "vbscript:msgbox(1)",
     "file:///etc/passwd",
+    "http://shop.example/thank_you", // https only, as the review pass on main decided
     "/relative/path",
     "",
     undefined,
