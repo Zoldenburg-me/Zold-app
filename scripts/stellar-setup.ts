@@ -28,7 +28,7 @@ const fix = process.argv.includes("--fix");
 const domain = STELLAR.anchorDomain;
 
 if (!anchorModeEnabled()) {
-  console.log("MG_ANCHOR_DOMAIN is unset — cash payouts are mocked, no Stellar account needed.");
+  console.log("MG_ANCHOR_DOMAIN is unset — the cash rail is closed, no Stellar account needed.");
   console.log("Set it (testanchor.stellar.org, or MoneyGram's domain) and re-run.");
   process.exit(0);
 }

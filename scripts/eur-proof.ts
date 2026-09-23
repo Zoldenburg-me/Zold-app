@@ -1,10 +1,9 @@
 /**
  * EUR corridor proof — against the real Monerium sandbox, not a stub.
  *
- * Everything else in this repo proves the EUR path against mocks: e2e credits
- * the Safe with a local shortcut, the webhook test uses a stub Monerium, and
- * `simulateSepaDeposit` never touches a bank. Those prove our code is
- * self-consistent. They cannot prove that a euro arriving at a real IBAN
+ * Everything else in this repo proves the EUR path against stubs: the harness
+ * mints MockToken to the Safe and the webhook test uses a stub Monerium. Those
+ * prove our code is self-consistent. They cannot prove that a euro arriving at a real IBAN
  * becomes EURe on the sandbox chain, that we record the right amount, or that
  * a redeem burns it again and sends SEPA out.
  *
@@ -27,12 +26,14 @@
  *      npm run eur:proof -- --address 0x...   (a specific one)
  */
 import { createPublicClient, http, formatUnits, getAddress } from "viem";
-import { MONERIUM, moneriumSandboxEnabled } from "../services/api/src/config.js";
+import { MONERIUM, RPC_URL, moneriumSandboxEnabled } from "../services/api/src/config.js";
 import { MoneriumClient } from "../services/api/src/adapters/monerium-client.js";
 import { initStore, store, type User } from "../services/api/src/store.js";
 import { redeemToIban } from "../services/api/src/adapters/monerium-sandbox.js";
 
-const RPC = process.env.CANDIDE_RPC_URL ?? "https://ethereum-sepolia-rpc.publicnode.com";
+// The configured chain, never a hardcoded testnet: reading balances elsewhere
+// reports "the mint did not land" against the wrong ledger.
+const RPC = process.env.CANDIDE_RPC_URL ?? RPC_URL;
 /** Where a proof redeem is sent. Monerium's own sandbox sample counterpart. */
 const PAYOUT_IBAN = process.env.EUR_PROOF_IBAN ?? "DK5000400440116243";
 const REDEEM_EUR = Number(process.env.EUR_PROOF_REDEEM_EUR ?? 1);
@@ -52,6 +53,12 @@ const eur = (n: number) => `EUR ${n.toFixed(2)}`;
 
 if (!moneriumSandboxEnabled()) {
   console.error("No Monerium credentials — set MONERIUM_CLIENT_ID / MONERIUM_CLIENT_SECRET in .env.");
+  process.exit(1);
+}
+// A real redeem is placed below. Against production that is real money to
+// Monerium's sample IBAN, so the proof runs against the sandbox only.
+if (!/monerium\.dev/.test(MONERIUM.baseUrl)) {
+  console.error(`REFUSING: MONERIUM_BASE_URL is ${MONERIUM.baseUrl}; this proof places a redeem and runs only against api.monerium.dev.`);
   process.exit(1);
 }
 
@@ -109,7 +116,7 @@ console.log("1. Account and IBAN");
 
 // Pick by what MONERIUM knows, not by database order. `npm run dev` wipes
 // data/db.json, so the newest local user is often one that was never
-// provisioned — it carries a mock IBAN and looks provisioned from here.
+// provisioned and looks provisioned from here.
 const ibanRes = (await api.ibans()) as any;
 const ibans: any[] = Array.isArray(ibanRes) ? ibanRes : (ibanRes?.ibans ?? []);
 const onMonerium = new Map<string, any>(

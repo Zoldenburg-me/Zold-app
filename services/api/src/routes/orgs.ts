@@ -7,7 +7,7 @@
  */
 
 import express from "express";
-import { randomBytes, createHash, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { store } from "../store.js";
 import {
   publicMember,
@@ -29,18 +29,17 @@ import {
 import {
   TRIAL_DAYS,
   effectivePlan,
+  limitsFor,
   plansFor,
   trialIsActive,
   trialPlanFor,
 } from "../domain/plans.js";
 import { ROLES, type OrgType, type Organisation, type Role } from "../domain/types.js";
-import { ContactError, validateBankAccount, validateWallet } from "../domain/contacts.js";
+import { ADDRESS_RE, ContactError, validateBankAccount, validateWallet } from "../domain/contacts.js";
+import { hashToken } from "../domain/invoices.js";
 import { wouldOrphanOrg } from "../domain/roles.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
-
-const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
 
 export function createOrgRouter(requireSession: SessionResolver): express.Router {
   const r = express.Router();
@@ -237,8 +236,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!requirePermission(ctx, res, "org.billing")) return;
 
     const plan = String(req.body?.plan ?? "");
-    const allowed = plansFor(ctx.org.type).map((p) => p.id);
-    if (!allowed.includes(plan as never)) {
+    const allowed: string[] = plansFor(ctx.org.type).map((p) => p.id);
+    if (!allowed.includes(plan)) {
       return res.status(400).json({
         error: `A ${ctx.org.type} organisation can hold ${allowed.join(" or ")}.`,
       });
@@ -333,14 +332,19 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!member || member.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such member" });
     }
+    // Checked before either field: an admin deactivating an owner is the
+    // same escalation as demoting one, reached through the other field.
+    if (member.role === "owner" && ctx.member.role !== "owner") {
+      return res.status(403).json({ error: "Only an owner can change an owner." });
+    }
     const next: { role?: Role; status?: string } = {};
     if (req.body?.role !== undefined) {
       const role = String(req.body.role) as Role;
       if (!ROLES.includes(role)) {
         return res.status(400).json({ error: `Role must be one of ${ROLES.join(", ")}.` });
       }
-      if ((role === "owner" || member.role === "owner") && ctx.member.role !== "owner") {
-        return res.status(403).json({ error: "Only an owner can change an owner's role." });
+      if (role === "owner" && ctx.member.role !== "owner") {
+        return res.status(403).json({ error: "Only an owner can make another owner." });
       }
       next.role = role;
     }
@@ -348,6 +352,11 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       const status = String(req.body.status);
       if (!["active", "deactivated"].includes(status)) {
         return res.status(400).json({ error: "Status must be active or deactivated." });
+      }
+      // An invited row has no login behind it; activating it by hand would
+      // make a member nobody can be, and strand the invitee's own accept.
+      if (status === "active" && !member.userId) {
+        return res.status(409).json({ error: "That person has not accepted their invitation yet." });
       }
       next.status = status;
     }
@@ -367,7 +376,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     res.json({ member: publicMember(store.updateMember(member.id, patch)) });
   });
 
-  /** Accept an invitation. Binds the invited email to the calling session. */
+  /** Accept an invitation. The invitation was addressed to an email, so the
+   *  accepting session must belong to an account carrying that email — the
+   *  token alone is a link anyone could have been forwarded. */
   r.post("/invites/accept", (req, res) => {
     const session = requireSession(req, res);
     if (!session) return;
@@ -383,7 +394,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         error: "That invitation has expired. Invitations last 3 days — ask for a new one.",
       });
     }
-    if (store.memberFor(member.orgId, session.userId)) {
+    const user = store.findUser(session.userId);
+    if (!user?.email || user.email.trim().toLowerCase() !== member.email.toLowerCase()) {
+      return res.status(403).json({ error: "This invitation was sent to a different email address." });
+    }
+    const existing = store.memberFor(member.orgId, session.userId);
+    if (existing && existing.status !== "deactivated") {
       return res.status(409).json({ error: "You are already on this organisation." });
     }
     const accepted = store.updateMember(member.id, {
@@ -408,7 +424,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       currencies: currencyAvailability(),
       // What a second account would cost, so the UI can show the ceiling
       // before the user hits it rather than after.
-      canOpenMore: accounts.length < (publicOrg(ctx.org).limits.accounts as number),
+      canOpenMore: accounts.length < limitsFor(ctx.org).accounts,
     });
   });
 
@@ -588,13 +604,13 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         orgId: ctx.org.id,
         name,
         email: typeof req.body?.email === "string" ? req.body.email.trim() : undefined,
-        wallets: (req.body?.wallets ?? []).map((w: unknown) => ({
+        wallets: (Array.isArray(req.body?.wallets) ? req.body.wallets : []).map((w: unknown) => ({
           id: `cw_${randomUUID()}`,
-          ...validateWallet(w as never),
+          ...validateWallet(w),
         })),
-        bankAccounts: (req.body?.bankAccounts ?? []).map((b: unknown) => ({
+        bankAccounts: (Array.isArray(req.body?.bankAccounts) ? req.body.bankAccounts : []).map((b: unknown) => ({
           id: `cb_${randomUUID()}`,
-          ...validateBankAccount(b as never),
+          ...validateBankAccount(b),
         })),
         notes: typeof req.body?.notes === "string" ? req.body.notes : undefined,
         createdAt: now,
@@ -623,16 +639,10 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       }
       if (typeof req.body?.email === "string") patch.email = req.body.email.trim();
       if (typeof req.body?.notes === "string") patch.notes = req.body.notes;
-      if (typeof req.body?.defaultAccountCodeIn === "string") {
-        patch.defaultAccountCodeIn = req.body.defaultAccountCodeIn;
-      }
-      if (typeof req.body?.defaultAccountCodeOut === "string") {
-        patch.defaultAccountCodeOut = req.body.defaultAccountCodeOut;
-      }
       if (Array.isArray(req.body?.wallets)) {
         patch.wallets = req.body.wallets.map((w: Record<string, unknown>) => ({
           id: typeof w.id === "string" ? w.id : `cw_${randomUUID()}`,
-          ...validateWallet(w as never),
+          ...validateWallet(w),
         }));
       }
       if (Array.isArray(req.body?.bankAccounts)) {
@@ -641,7 +651,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         // that draft rather than silently re-targeting the payment.
         patch.bankAccounts = req.body.bankAccounts.map((b: Record<string, unknown>) => ({
           id: typeof b.id === "string" ? b.id : `cb_${randomUUID()}`,
-          ...validateBankAccount(b as never),
+          ...validateBankAccount(b),
         }));
       }
       res.json({ contact: store.updateContact(contact.id, patch) });
@@ -669,10 +679,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "wallets.read")) return;
-    res.json({
-      wallets: store.importedWalletsOf(ctx.org.id),
-      groups: store.walletGroupsOf(ctx.org.id),
-    });
+    res.json({ wallets: store.importedWalletsOf(ctx.org.id) });
   });
 
   /**
@@ -716,7 +723,6 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       chainId,
       label: String(req.body?.label ?? "").trim() || `${kind.toUpperCase()} ${address.slice(0, 8)}`,
       kind,
-      groupId: typeof req.body?.groupId === "string" ? req.body.groupId : undefined,
       custody: "external",
       sync: { status: "pending" },
       createdAt: new Date().toISOString(),
@@ -737,22 +743,6 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     store.removeImportedWallet(wallet.id);
     res.json({ deleted: true });
-  });
-
-  r.post("/:orgId/wallet-groups", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "wallets.manage")) return;
-    const name = String(req.body?.name ?? "").trim();
-    if (name.length < 1) return res.status(400).json({ error: "A group needs a name." });
-    res.status(201).json({
-      group: store.addWalletGroup({
-        id: `wg_${randomUUID()}`,
-        orgId: ctx.org.id,
-        name,
-        createdAt: new Date().toISOString(),
-      }),
-    });
   });
 
   return r;

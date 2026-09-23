@@ -9,6 +9,9 @@
  * closed and createBridgeTransfer refuses, so no transfer ever carries a
  * fabricated deposit address.
  */
+// Every call carries a timeout: a Bridge request that hangs past the
+// stranded-transfer sweep would let the sweep refund a transfer whose
+// deposit is still being confirmed.
 import { BRIDGE } from "../config.js";
 import { partnerTimeout } from "../http.js";
 

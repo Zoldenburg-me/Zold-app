@@ -1,10 +1,13 @@
 /**
- * Minimal REST client for the Monerium API (v2), targeting the sandbox.
+ * Minimal REST client for the Monerium API (v2); production by default,
+ * the sandbox when the base URL says so.
  * Docs: https://docs.monerium.com/api/
  *
  * Auth: OAuth2 client-credentials; the token is cached and refreshed on
  * expiry. All calls send the v2 Accept header.
  */
+// Every call carries a timeout: a redeem that hangs past the sweep window
+// is the double-payout case the orchestrator guards against.
 
 import { partnerTimeout } from "../http.js";
 
@@ -107,10 +110,6 @@ export class MoneriumClient {
     return this.request<any>("GET", "/profiles");
   }
 
-  /** Whitelabel plans: create a per-customer profile. */
-  createProfile(kind: "personal" | "corporate", name: string) {
-    return this.request<any>("POST", "/profiles", { kind, name });
-  }
 
   /**
    * Link a wallet address. `signature` must be the user's signature over the
@@ -143,10 +142,10 @@ export class MoneriumClient {
    * Orders, optionally scoped to one profile.
    *
    * WITHOUT a profile this returns only the app's DEFAULT profile's orders —
-   * not every order the app can see. Since we create a profile per user, an
-   * unscoped call cannot see a single customer deposit: the euros arrive
-   * on-chain, Monerium marks the order processed, and we credit nothing.
-   * Always pass the profile you care about.
+   * not every order the app can see. A user's deposit lands under THEIR
+   * profile, so an unscoped call cannot see it: the euros arrive on-chain,
+   * Monerium marks the order processed, and we credit nothing. Always pass
+   * the profile you care about.
    */
   orders(profileId?: string) {
     const q = profileId ? `?profile=${encodeURIComponent(profileId)}` : "";

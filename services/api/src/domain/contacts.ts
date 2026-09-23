@@ -14,7 +14,7 @@ export class ContactError extends Error {}
 
 const IBAN_RE = /^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/;
 const BIC_RE = /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+export const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
 /** ISO 7064 mod-97-10. A checksum is cheap and catches the transposed digit
  *  that is the common way an IBAN is wrong. */
@@ -45,9 +45,8 @@ export function requiredBankFields(currency: CurrencyCode): string[] {
   ) as string[];
 }
 
-export function validateBankAccount(
-  input: Partial<ContactBankAccount>,
-): Omit<ContactBankAccount, "id"> {
+export function validateBankAccount(raw: unknown): Omit<ContactBankAccount, "id"> {
+  const input = (raw && typeof raw === "object" ? raw : {}) as Partial<ContactBankAccount>;
   const currency = input.currency;
   if (!isCurrencyCode(currency)) {
     throw new ContactError(
@@ -139,9 +138,8 @@ export function validateBankAccount(
   return out;
 }
 
-export function validateWallet(
-  input: Partial<ContactWallet>,
-): Omit<ContactWallet, "id"> {
+export function validateWallet(raw: unknown): Omit<ContactWallet, "id"> {
+  const input = (raw && typeof raw === "object" ? raw : {}) as Partial<ContactWallet>;
   const address = String(input.address ?? "").trim();
   if (!ADDRESS_RE.test(address)) {
     throw new ContactError(`${address || "(empty)"} is not an EVM address.`);

@@ -216,6 +216,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 let token = localStorage.getItem("zold-session") || localStorage.getItem("zoll-session");
+let invoiceInputListener = null;
 let orgs = [];
 let org = null;          // the full org payload, including `capabilities`
 let view = "overview";
@@ -232,11 +233,11 @@ async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
     headers: {
-      ...(opts.body && !opts.raw ? { "content-type": "application/json" } : {}),
+      ...(opts.body ? { "content-type": "application/json" } : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(opts.headers || {}),
     },
-    body: opts.raw ? opts.body : opts.body ? JSON.stringify(opts.body) : undefined,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const text = await res.text();
   let data = {};
@@ -351,11 +352,7 @@ RENDER.overview = async () => {
 
 RENDER.accounts = async () => {
   const { accounts, currencies } = await api(`/api/orgs/${org.id}/accounts`);
-  const mock = currencies.find((c) => c.mode === "mock");
-  let html = mock
-    ? `<div class="banner warn">This deployment is in <b>mock mode</b>. ${esc(mock.mockWarning)}</div>`
-    : "";
-  html += `<div class="card"><div class="h"><div><h2>Your accounts</h2>
+  let html = `<div class="card"><div class="h"><div><h2>Your accounts</h2>
     <div class="desc">An account holds one currency and pays out on that currency's local rail.</div></div>
     <button data-act="open-account">Open an account</button></div>`;
 
@@ -395,9 +392,7 @@ RENDER.accounts = async () => {
              .map(([ch, a]) => `${esc(ch)} ${esc(a.slice(0, 10))}…${esc(a.slice(-4))}`).join("<br>")}</div>`
         : `<span class="desc">—</span>`}</td>
       <td>${c.available
-        ? c.mode === "mock"
-          ? `<span class="pill warn">mock</span><div class="desc" style="margin-top:.3rem">${esc(c.mockWarning)}</div>`
-          : `<span class="pill ok">live</span>`
+        ? `<span class="pill ok">live</span>`
         : `<span class="pill mut">not open</span><div class="desc" style="margin-top:.3rem">${esc(c.needs)}</div>`}</td>
     </tr>`).join("") + `</tbody></table>
     <div class="desc" style="margin-top:.7rem">A settlement token existing is not the same as an
@@ -1002,7 +997,10 @@ function readInvoiceEditor() {
     invoiceDraft.lines[Number(el.dataset.li)][el.dataset.lf] = el.value;
   });
   if (invoiceDraft.vat.kind === "standard") {
-    invoiceDraft.vat.rate = Number($("#inv-rate")?.value ?? 19);
+    // No silent default: a missing rate is refused by the check, never
+    // quietly read as Germany's 19.
+    const rate = $("#inv-rate")?.value;
+    invoiceDraft.vat.rate = rate === undefined || rate === "" ? undefined : Number(rate);
   } else {
     invoiceDraft.vat.reason = $("#inv-reason")?.value ?? invoiceDraft.vat.reason;
     invoiceDraft.vat.note = $("#inv-note")?.value ?? invoiceDraft.vat.note;
@@ -1070,6 +1068,7 @@ const ACTIONS = {
   async "shopify-connect"() {
     const shop = ($("#sh-shop").value || "").trim().toLowerCase();
     const r = await api(`/api/orgs/${org.id}/shopify/install`, { method: "POST", body: { shop } });
+    if (!/^https:\/\//i.test(String(r.authorizeUrl))) return toast("Shopify returned an unusable install address", true);
     location.href = r.authorizeUrl;
   },
   async "shopify-disconnect"(el) {
@@ -1304,7 +1303,15 @@ const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/account-rules/apply`, { method: "POST" });
     toast(`${r.changed} transaction(s) re-mapped. ${r.note}`);
   },
-  async "export-ledger"() { location.href = `/api/orgs/${org.id}/export/ledger.csv`; },
+  async "export-ledger"() {
+    // The route reads the bearer header, which a navigation cannot carry.
+    const res = await fetch(`/api/orgs/${org.id}/export/ledger.csv`, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) return toast("Export failed", true);
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: "transactions.csv" });
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  },
   async "save-org"() {
     const body = {
       name: $("#s-name").value, legalName: $("#s-legal").value,
@@ -1399,7 +1406,10 @@ const ACTIONS = {
     if (!r.authorizations?.length) return toast(r.note || "Nothing to sign.");
 
     const lib = await window.__deviceLib;
-    const credentialId = localStorage.getItem("zold-credential-id") || undefined;
+    // The passkey that wraps this browser's device key, from the session —
+    // nothing writes it to storage.
+    const me = await api("/api/session");
+    const credentialId = me.passkey?.credentialId || undefined;
     let signed = 0;
     const failures = [];
     for (const a of r.authorizations) {
@@ -1448,12 +1458,16 @@ async function render() {
     $("#view").innerHTML = await (RENDER[view] ?? RENDER.overview)();
     if (view === "invoice-new") {
       refreshInvoiceCheck();
-      // Debounced so typing an address is not a request per keystroke.
+      // Debounced so typing an address is not a request per keystroke, and
+      // re-armed per render so listeners do not pile up on the persistent
+      // #view element.
       let t;
+      invoiceInputListener?.abort();
+      invoiceInputListener = new AbortController();
       $("#view").addEventListener("input", () => {
         clearTimeout(t);
         t = setTimeout(refreshInvoiceCheck, 400);
-      });
+      }, { signal: invoiceInputListener.signal });
       $("#inv-contact")?.addEventListener("change", async (e) => {
         if (!e.target.value) return;
         const { contacts } = await api(`/api/orgs/${org.id}/contacts`);
@@ -1496,7 +1510,7 @@ async function boot() {
     $("#no-orgs").classList.remove("hidden");
     $("#new-org-go").onclick = async () => {
       try {
-        const r = await api("/api/orgs", {
+        await api("/api/orgs", {
           method: "POST",
           body: {
             name: $("#new-org-name").value,

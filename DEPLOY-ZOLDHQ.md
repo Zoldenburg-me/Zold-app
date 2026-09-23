@@ -1,11 +1,12 @@
 # Deploying Zold at zoldhq.com (Cloudflare Tunnel)
 
-Testnet only. `db.json` still holds senderProfile PII and remains acknowledged
-as plaintext local storage; user Safe owner keys are no longer stored by the
-API. The tunnel is chosen deliberately so that database stays on the Mac and
-never lands on a public host.
+Testnet only. `db.json` is plaintext local storage (acknowledged with
+ALLOW_PLAINTEXT_STORE=1); user Safe owner keys are not stored by the API. The
+tunnel is chosen deliberately so that database stays on the Mac and never
+lands on a public host.
 
-Chain is Base Sepolia (84532), Monerium chain `basesepolia`, Bridge.xyz dry-run.
+Chain is Base Sepolia (84532), Monerium chain `basesepolia`; the cash rail is
+closed (no BRIDGE_LIVE, no anchor).
 
 ## Shape
 
@@ -66,7 +67,7 @@ the switch that arms those checks the day `NODE_ENV=production` is set.
 
 | var | value | why |
 |---|---|---|
-| `KYC_AUTO_APPROVE` | `0` | new users start pending; set explicitly, not inferred |
+| `KYC_AUTO_APPROVE` | unset | honoured on hardhat only; off 31337 every new user is pending until a Monerium IBAN activates |
 | `RP_ID` | `zoldhq.com` | **apex, not a subdomain** — see below |
 | `WEBAUTHN_ORIGINS` | `https://zoldhq.com` | ceremonies are refused from anywhere else |
 | `TRUSTED_PROXY_HOPS` | `1` | cloudflared forwards the client IP; without this every visitor shares one rate-limit bucket |
@@ -121,9 +122,8 @@ deployment points at Base Sepolia, testanchor and Monerium sandbox, so
 declaring production is a false claim about the environment.
 
 Nothing is lost by omitting it. `LOOKS_LOCAL` is already false off chain 31337,
-so the simulate routes and internal error text are off either way — verified:
-simulate-deposit returns 404 and a new user lands in `pending`. The one thing
-that did depend on it, KYC gating, is now set explicitly above.
+so internal error text is off either way, and a new user lands in `pending`
+until Monerium attributes an IBAN.
 
 Be precise about what omitting it does: `assertProductionConfig()` begins
 `if (!IS_PRODUCTION) return`, so the ENTIRE production block is skipped — not
@@ -173,10 +173,10 @@ Consequences:
 
 ## What end-to-end means here
 
-The simulate routes and self-serve KYC are off, so the run exercises the real
-path: account → operator KYC approval
-(`KYC_OPERATOR_TOKEN`) → passkey → real Monerium IBAN → real SEPA deposit →
-EURe minted on Base Sepolia → send. There is no mock deposit shortcut.
+The run exercises the real path: account → passkey → Safe → connect Monerium
+(OAuth or own API keys) → activate IBAN with the passkey → real SEPA deposit →
+EURe minted on Base Sepolia → send. Approval is Monerium's IBAN, not an
+operator's; there is no mock deposit shortcut.
 
 What protects you is `LOOKS_LOCAL` being false on chain 84532, not a
 `NODE_ENV` flag.

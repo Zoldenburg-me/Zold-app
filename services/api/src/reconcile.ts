@@ -18,6 +18,7 @@
  *                a forged webhook delivery would have produced before the
  *                receiver stopped trusting request bodies.
  */
+import { usersWithOwnCredentials } from "./adapters/monerium-connection.js";
 import { moneriumSandboxEnabled } from "./config.js";
 import { store } from "./store.js";
 import { listProcessedIssueOrders } from "./adapters/monerium-sandbox.js";
@@ -51,7 +52,9 @@ export async function reconcile(): Promise<ReconcileReport> {
 
   // --- mirror seam: Monerium's deposits vs the ones we credited ------------
   let moneriumOrders: Awaited<ReturnType<typeof listProcessedIssueOrders>> = [];
-  if (moneriumSandboxEnabled()) {
+  // App credentials OR any account on its own keys: listProcessedIssueOrders
+  // already walks both, so an API-keys-only deployment is reconciled too.
+  if (moneriumSandboxEnabled() || usersWithOwnCredentials().length > 0) {
     moneriumOrders = await listProcessedIssueOrders();
     const known = new Map(moneriumOrders.map((o) => [o.id, o]));
 

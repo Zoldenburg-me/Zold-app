@@ -42,7 +42,8 @@ export type VerificationStatus =
 export interface Verification {
   capability: VerifiableCapability;
   status: VerificationStatus;
-  /** Who actually holds the identity record. `null` while unverified. */
+  /** Who actually holds the identity record. `null` while unverified.
+   *  "sumsub" survives only for rows written before that path was removed. */
   provider: "monerium" | "sumsub" | "manual" | null;
   /** The provider's own id for this applicant, so a support question is
    *  answerable without re-deriving it. */
@@ -113,9 +114,6 @@ export interface Organisation {
     /** The rate this org normally charges. A number, not a German 19|7 union —
      *  see VatRate. Only consulted when not a small business. */
     defaultVatRate?: number;
-    /** Which jurisdiction's rules were applied, resolved from the org address.
-     *  Stored on issue so a later move does not restate old invoices. */
-    jurisdiction?: string;
     /** Rules the org added because its country needs something we do not
      *  encode. Always presented as user-supplied, never as validated. */
     customReasons?: {
@@ -284,7 +282,6 @@ export interface ImportedWallet {
   chainId: number;
   label: string;
   kind: WalletKind;
-  groupId?: string;
   /**
    * Always "external". Stored rather than implied so that a signing path can
    * assert on the row itself: we never hold a key for an imported wallet, and
@@ -298,13 +295,6 @@ export interface ImportedWallet {
     cursor?: string;
     error?: string;
   };
-  createdAt: string;
-}
-
-export interface WalletGroup {
-  id: string;
-  orgId: string;
-  name: string;
   createdAt: string;
 }
 
@@ -346,9 +336,6 @@ export interface Contact {
   email?: string;
   wallets: ContactWallet[];
   bankAccounts: ContactBankAccount[];
-  /** Account-rule automation: default COA code for money in / money out. */
-  defaultAccountCodeIn?: string;
-  defaultAccountCodeOut?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;

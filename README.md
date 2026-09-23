@@ -151,7 +151,8 @@ Node 22 or newer.
 
 ```sh
 npm install
-npm run check        # typecheck, contracts and every focused test suite
+npm run check        # typecheck, contracts and every offline test suite
+npm run check:live   # the same plus the Stellar testnet and test-anchor suites
 npm run api          # run against the configured chain (Base mainnet by default)
 ```
 
