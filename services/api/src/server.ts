@@ -177,8 +177,14 @@ app.use("/api", createTransferRouter({ requireUserSession }));
 // Monerium's deposit webhook: an order id and nothing else is believed.
 app.use("/api", createMoneriumWebhookRouter());
 
-app.use(((err, _req, res, _next) => {
+app.use(((err, _req, res, next) => {
   console.error(err);
+  // A handler that already began answering cannot be given a 500 body: setting
+  // headers twice throws inside the error handler itself, which express can
+  // only answer by destroying the socket — the caller sees a truncated
+  // response and no error at all. Hand those to express's default handler,
+  // which closes the connection properly.
+  if (res.headersSent) return next(err);
   const detail = String(err?.shortMessage ?? err?.message ?? err);
   res.status(500).json({ error: SECURITY.exposeInternalErrors ? detail : "internal server error" });
 }) as express.ErrorRequestHandler);
@@ -314,4 +320,29 @@ app.listen(API_PORT, API_HOST, () => {
         "Standing allowances on older Safes are revoked automatically on the next send.",
     );
   }
+});
+
+/**
+ * Last-resort diagnostics for the two ways this process dies silently.
+ *
+ * Node's default for an unhandled rejection is to terminate, which is the
+ * right posture here — pending Safe executions live in memory and a process
+ * in an unknown state must not keep signing — but the default report can be
+ * a bare stack with no indication that a payments API just went down. These
+ * handlers change nothing about WHETHER we exit; they make sure the reason is
+ * in the log before we do, and that a supervisor sees a non-zero code.
+ *
+ * Deliberately NOT swallowing: an API that keeps serving after an unhandled
+ * rejection in a money path is the failure mode this codebase refuses
+ * everywhere else.
+ */
+process.on("unhandledRejection", (reason: any) => {
+  console.error(
+    `FATAL unhandled promise rejection — the API is exiting: ${reason?.stack ?? reason?.message ?? reason}`,
+  );
+  process.exit(1);
+});
+process.on("uncaughtException", (err) => {
+  console.error(`FATAL uncaught exception — the API is exiting: ${err?.stack ?? err?.message ?? err}`);
+  process.exit(1);
 });

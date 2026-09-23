@@ -20,13 +20,18 @@ import {
   DEFAULT_SERIES,
   EXEMPTION_REASONS,
   InvoiceComplianceError,
+  SETTLEMENT_CURRENCY,
+  computeTotals,
+  convertTotals,
   formatInvoiceNumber,
+  normaliseInvoiceCurrency,
   normaliseVatId,
   type ExemptionReasonId,
   type InvoiceDraft,
   type VatTreatment,
 } from "../../domain/invoicing.js";
 import { createQuote } from "../../fx.js";
+import { midRates } from "../../rates.js";
 
 export const str = (v: unknown): string | undefined =>
   typeof v === "string" && v.trim() ? v.trim() : undefined;
@@ -84,6 +89,8 @@ export function draftDueDate(org: Organisation, issueDate: string): string | und
  */
 export function draftFrom(org: Organisation, body: Record<string, any>): InvoiceDraft {
   const inv = org.invoicing ?? {};
+  // Refuses an unrepresentable code before anything else is computed.
+  const currency = normaliseInvoiceCurrency(body.currency);
   const jur = jurisdictionFor(org.address?.country);
   const custom = customReasonsOf(org);
   const known = (id: string) =>
@@ -175,7 +182,39 @@ export function draftFrom(org: Organisation, body: Record<string, any>): Invoice
     lines: Array.isArray(body.lines) ? body.lines : [],
     treatment,
     selfBilled: body.selfBilled === true,
+    currency,
   };
+}
+
+/**
+ * Attach the settlement-currency restatement to a foreign-currency draft.
+ *
+ * The rate is fetched ONCE, here, and frozen onto the document: an invoice is a
+ * statement about a moment, and a euro figure re-derived later from whatever a
+ * feed says then is not the figure the customer was given. A feed that is
+ * unavailable leaves the conversion absent, and `checkCompliance` then refuses
+ * the invoice — which is the right outcome, because § 16 Abs. 6 wants the euro
+ * tax amount and we would otherwise be issuing without it.
+ */
+export async function withConversion(draft: InvoiceDraft): Promise<InvoiceDraft> {
+  const currency = draft.currency ?? SETTLEMENT_CURRENCY;
+  if (currency === SETTLEMENT_CURRENCY) return draft;
+  let totals;
+  try {
+    totals = computeTotals(draft.lines, draft.treatment);
+  } catch {
+    // Lines that do not compute are reported by checkCompliance in its own
+    // words; converting nothing is not this function's problem to describe.
+    return draft;
+  }
+  try {
+    const rates = await midRates();
+    const rate = rates.eur[currency];
+    if (!rate) return draft;
+    return { ...draft, conversion: convertTotals(totals, currency, rate, rates.provider, rates.asOf) };
+  } catch {
+    return draft;
+  }
 }
 
 export const badRequest = (res: express.Response, err: unknown) => {

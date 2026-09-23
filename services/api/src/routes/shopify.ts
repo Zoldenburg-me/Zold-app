@@ -70,9 +70,34 @@ import {
 } from "../shopify/admin.js";
 import type { ShopifyConnection } from "../shopify/types.js";
 
-/** Only an absolute https URL is followed; anything else lands on our page. */
-const httpsOr = (url: string | undefined, fallback: string) =>
-  url && /^https:\/\//i.test(url) ? url : fallback;
+/**
+ * A merchant-supplied URL we will put in an href or a 302, or nothing.
+ *
+ * Every one of these arrives from Shopify — `cancel_url` out of the session
+ * body, `order_status_url` off the order, `redirectUrl` out of
+ * paymentSessionResolve — and all three end up either as `href` on the payer's
+ * page or as the target of a redirect from our own origin. An HMAC proves the
+ * body came from the app's shared secret; it does not make the strings inside
+ * it safe, and `javascript:` in an href is script execution on the page a
+ * stranger opened to pay someone. index.html has had this guard (safeUrl) for
+ * the app's anchor links since the hardening pass; the payer-facing path never
+ * got it.
+ *
+ * https only (main's review pass chose the same bar), and parseable. Anything
+ * else is dropped rather than repaired:
+ * the fallbacks at the two call sites (the pay page itself) are correct
+ * destinations, so losing a malformed one costs the buyer nothing.
+ */
+export function externalHttpUrl(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || !raw) return undefined;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  return u.protocol === "https:" ? u.toString() : undefined;
+}
 
 /** Pending installs: our nonce → who started it. In memory on purpose; an
  *  install that outlives a restart simply starts again. */
@@ -149,7 +174,7 @@ export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
     }
     const result = await paymentSessionResolve(connection.shop, tokenOf(connection), r.source.sessionGid!);
     store.updatePaymentRequest(r.id, {
-      source: { ...r.source, resolvedAt: new Date().toISOString(), resolveAttempts: attempts, resolveError: undefined, ...(result.redirectUrl ? { returnUrl: result.redirectUrl } : {}) },
+      source: { ...r.source, resolvedAt: new Date().toISOString(), resolveAttempts: attempts, resolveError: undefined, ...(externalHttpUrl(result.redirectUrl) ? { returnUrl: externalHttpUrl(result.redirectUrl)! } : {}) },
     });
     console.log(`shopify: resolved session for ${displayCode(r.code)} at ${connection.shop}`);
   } catch (err: any) {
@@ -403,7 +428,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           shop: c.shop,
           sessionGid: gid,
           sessionKind: String(b.kind ?? "sale"),
-          ...(typeof b.payment_method?.data?.cancel_url === "string" ? { cancelUrl: b.payment_method.data.cancel_url } : {}),
+          ...(externalHttpUrl(b.payment_method?.data?.cancel_url) ? { cancelUrl: externalHttpUrl(b.payment_method?.data?.cancel_url)! } : {}),
         },
         c.orgId,
       );
@@ -493,7 +518,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           shop: c.shop,
           orderGid,
           ...(orderName ? { orderName } : {}),
-          ...(typeof o.order_status_url === "string" ? { orderStatusUrl: o.order_status_url, returnUrl: o.order_status_url } : {}),
+          ...(externalHttpUrl(o.order_status_url) ? { orderStatusUrl: externalHttpUrl(o.order_status_url)!, returnUrl: externalHttpUrl(o.order_status_url)! } : {}),
         },
         c.orgId,
       );
@@ -582,7 +607,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         }
         fresh = store.findPaymentRequest(r.id)!;
       }
-      res.redirect(httpsOr(fresh.source.returnUrl, `${page}?notice=store-pending`));
+      res.redirect(externalHttpUrl(fresh.source.returnUrl) ?? `${page}?notice=store-pending`);
     }),
   );
 
@@ -595,7 +620,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (r.state === "OPEN" && r.payments.length === 0) {
         store.updatePaymentRequest(r.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
       }
-      res.redirect(httpsOr(r.source.cancelUrl, `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`));
+      res.redirect(externalHttpUrl(r.source.cancelUrl) ?? `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`);
     }),
   );
 

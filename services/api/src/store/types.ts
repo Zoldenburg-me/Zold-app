@@ -408,6 +408,13 @@ export interface CryptoDeposit {
   /** The venue that filled it and the rate it filled at, for the receipt. */
   provider?: string;
   rate?: number;
+  /**
+   * The independent mid the venue's rate was checked against, at the instant of
+   * the swap. Kept so the spread we report is CHECKABLE rather than asserted —
+   * a venue rate with nothing to compare it to says nothing about what the
+   * conversion cost.
+   */
+  midRate?: number;
   txs: { step: string; hash: string }[];
   detectedAt: string;
   updatedAt: string;

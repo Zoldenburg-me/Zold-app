@@ -5,7 +5,7 @@
  * so the shell can dispatch without knowing what exists. Every renderer reads
  * the live `org` from core.js and writes only the DOM.
  */
-import { $, api, cap, esc, fmtEur, gateHtml, org, orgs, toast, token, view } from "./core.js";
+import { $, api, cap, esc, fmtEur, fmtMoney, gateHtml, org, orgs, toast, token, view } from "./core.js";
 import { render } from "./shell.js";
 
 
@@ -163,6 +163,52 @@ export function invoiceActions(i) {
   return "";
 }
 
+/**
+ * How an invoice was actually paid, for the books.
+ *
+ * Every figure here is one recorded at the time it happened, not recomputed:
+ * the wallet transaction, the euro value at receipt with the rate and whose
+ * feed it came from, the conversion with the venue's rate against the mid, and
+ * the spread that difference represents. An asset still held shows a receipt
+ * and no conversion, which is the true position rather than a half-filled row.
+ *
+ * Shown to the ORG only. The supplier's view of an invoice is a separate
+ * allowlist and none of this is in it.
+ */
+function settlementRows(list) {
+  if (!list?.length) return "";
+  const n = (v, d = 2) => (v === undefined || v === null ? "—" : Number(v).toFixed(d));
+  const tx = (h) => (h ? `<span class="mono" title="${esc(h)}">${esc(h.slice(0, 10))}…${esc(h.slice(-6))}</span>` : "—");
+  return `<div class="card"><div class="h"><div><h2>How it was paid</h2>
+    <div class="desc">Recorded when it happened. These are the figures your accountant books
+      against, and they are not recalculated later from today's rates.</div></div></div>
+    ${list.map((p) => p.method === "bank" ? `
+      <div class="issue"><span class="pill mut">SEPA</span><div>
+        <div>€${esc(n(p.amountEur))} from ${esc(p.counterpartyName || "an unnamed payer")}</div>
+        <div class="desc">${esc(p.counterpartyIban || "no IBAN given")}${p.memo ? ` · “${esc(p.memo)}”` : ""}</div>
+        <div class="desc">matched on ${esc(p.matchedOn === "payment-link" ? "the payment link code" : "the invoice number")}
+          · order ${esc(p.orderId)} · ${esc((p.at || "").slice(0, 10))}</div>
+      </div></div>` : `
+      <div class="issue"><span class="pill mut">${esc(p.receivedAsset || "crypto")}</span><div>
+        <div>${esc(n(p.receivedAmount, 6))} ${esc(p.receivedAsset)} received · tx ${tx(p.receiptTxHash)}</div>
+        <div class="desc">worth €${esc(n(p.receiptAmountEur))} at receipt
+          ${p.receiptRate ? `· 1 EUR = ${esc(n(p.receiptRate, 4))} USD` : ""}
+          ${p.receiptRateProvider ? `· ${esc(p.receiptRateProvider)}` : ""}
+          ${p.receiptRateAsOf ? `· ${esc(p.receiptRateAsOf)}` : ""}</div>
+        ${p.conversion ? `<div class="desc">converted at ${esc(n(p.conversion.rate, 4))}
+            ${p.conversion.midRate ? `against a mid of ${esc(n(p.conversion.midRate, 4))}` : ""}
+            ${p.conversion.venue ? `· ${esc(p.conversion.venue)}` : ""}
+            ${p.conversion.spreadEur === undefined ? "" : `· spread €${esc(n(p.conversion.spreadEur))}`}
+            ${p.conversion.txHash ? `· tx ${tx(p.conversion.txHash)}` : ""}</div>
+          <div class="desc">credited €${esc(n(p.conversion.creditedEur))}${
+            p.realisedGainEur === undefined ? " · gain not measurable, so none is claimed"
+              : ` · realised ${p.realisedGainEur >= 0 ? "gain" : "loss"} €${esc(n(Math.abs(p.realisedGainEur)))}`}</div>`
+          : `<div class="desc">still held as ${esc(p.receivedAsset)} — acquired, not yet disposed of, so there is no gain to report yet</div>`}
+      </div></div>`).join("")}
+    <div class="desc" style="margin-top:.6rem">Network fees are not deducted from what you receive, so
+      they are not shown as a cost here.</div></div>`;
+}
+
 RENDER.invoices = async () => {
   if (!cap("invoices").allowed) return gateHtml("invoices");
   const { invoices } = await api(`/api/orgs/${org.id}/invoices`);
@@ -185,7 +231,8 @@ RENDER.invoices = async () => {
           ${i.supplier?.invoiceNumber ? `<div class="desc">#${esc(i.supplier.invoiceNumber)}</div>` : ""}</td>
         <td class="mono">${esc(i.total)} ${esc(i.currency)}</td>
         <td class="desc">${esc(i.dueDate || "—")}</td>
-        <td class="row-actions">${invoiceActions(i)}</td></tr>`).join("") + `</tbody></table>`
+        <td class="row-actions">${invoiceActions(i)}</td></tr>
+        ${i.settlements?.length ? `<tr><td colspan="5">${settlementRows(i.settlements)}</td></tr>` : ""}`).join("") + `</tbody></table>`
       : `<div class="empty">No invoices yet.</div>`) + `</div>`;
 };
 
@@ -569,6 +616,11 @@ RENDER["invoice-new"] = async () => {
       <div><label>Invoice date</label><input id="inv-issue" type="date" value="${esc(invoiceDraft.issueDate || today)}" /></div>
       <div><label>Date of supply</label><input id="inv-supply" type="date" value="${esc(invoiceDraft.supplyDate || today)}" /></div>
       <div><label>Purchase order (optional)</label><input id="inv-po" value="${esc(invoiceDraft.purchaseOrder || "")}" /></div>
+      <div><label>Currency</label><input id="inv-currency" maxlength="3" style="text-transform:uppercase"
+        value="${esc(invoiceDraft.currency || "EUR")}" placeholder="EUR" />
+        <div class="desc">The invoice is written in this currency. It is still collected in euro, at the
+          rate on the day it is issued, and that rate is printed on the document. Currencies without
+          cents (JPY, KWD) are refused rather than rounded.</div></div>
     </div>
   </div>
 
@@ -626,6 +678,7 @@ export function readInvoiceEditor() {
   invoiceDraft.issueDate = val("inv-issue");
   invoiceDraft.supplyDate = val("inv-supply");
   invoiceDraft.purchaseOrder = val("inv-po");
+  invoiceDraft.currency = val("inv-currency").toUpperCase() || "EUR";
   $("#inv-lines")?.querySelectorAll("input").forEach((el) => {
     invoiceDraft.lines[Number(el.dataset.li)][el.dataset.lf] = el.value;
   });
@@ -648,6 +701,8 @@ export async function refreshInvoiceCheck() {
   try {
     const r = await api(`/api/orgs/${org.id}/invoicing/check`, { method: "POST", body: invoiceDraft });
     const t = r.totals;
+    const cur = r.preview?.currency ?? "EUR";
+    const conv = r.preview?.conversion;
     const rows = (list, cls) => list.map((i) => `<div class="issue">
       <span class="pill ${cls}">${cls === "bad" ? "required" : "check"}</span>
       <div><div>${esc(i.message)}</div>${i.legalBasis ? `<div class="desc">${esc(i.legalBasis)}</div>` : ""}</div></div>`).join("");
@@ -661,8 +716,9 @@ export async function refreshInvoiceCheck() {
             ? "Kleinunternehmer (§ 19 UStG / § 34a UStDV)" : "Small business scheme",
         }[r.regime])}</div></div>
       <div style="text-align:right"><div class="desc">Total</div>
-        <div style="font-size:1.3rem; font-weight:600">${fmtEur(t.grossCents)}</div>
-        <div class="desc">net ${fmtEur(t.netCents)}${t.vatCents ? ` · VAT ${fmtEur(t.vatCents)}` : " · no VAT"}</div></div></div>
+        <div style="font-size:1.3rem; font-weight:600">${fmtMoney(t.grossCents, cur)}</div>
+        <div class="desc">net ${fmtMoney(t.netCents, cur)}${t.vatCents ? ` · VAT ${fmtMoney(t.vatCents, cur)}` : " · no VAT"}</div>
+        ${conv ? `<div class="desc">collected as ${fmtMoney(conv.grossCents, conv.to)} · 1 ${esc(conv.to)} = ${esc(String(conv.rate))} ${esc(conv.from)}</div>` : ""}</div></div>
       ${rows(r.errors, "bad")}${rows(r.warnings, "warn")}
       ${r.ok && !r.warnings.length ? `<div class="desc">Every mandatory field is present.</div>` : ""}`;
   } catch (e) {

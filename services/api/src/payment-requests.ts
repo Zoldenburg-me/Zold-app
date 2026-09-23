@@ -22,8 +22,8 @@
  *   zold    another Zold account paying from its balance. Today that is a SEPA
  *           payout into the payee's IBAN with the code as reference — the same
  *           rail as `bank`, started from the app with everything prefilled.
- *           There is no on-chain Zold-to-Zold rail yet (see CLAUDE.md, Pay
- *           hub), so this does not pretend to be one.
+ *           There is no on-chain Zold-to-Zold rail yet (see the Pay hub notes
+ *           in docs/notes/app-and-chains.md), so this does not pretend to be one.
  *
  * WHAT IS NOT HERE. No money moves in this file. Matching records that a
  * payment arrived; conversion of a USDC deposit to EURe is the user-signed
@@ -127,6 +127,16 @@ export interface PaymentRequest {
   state: PaymentRequestState;
   /** A merchant test-mode session. Carried and shown; never settled by fiat. */
   test?: boolean;
+  /**
+   * The outgoing invoice this request collects, when it was raised for one.
+   *
+   * It rides through to the deposit on attribution so the settlement lands on
+   * the invoice without anyone linking it by hand. That record is the only
+   * place the two events of a crypto-settled euro invoice are held together —
+   * the asset acquired at its euro value on receipt, and its later disposal —
+   * so hanging it on someone remembering was the wrong thread to use.
+   */
+  invoiceId?: string;
   cryptoQuotes: CryptoQuote[];
   payments: RequestPayment[];
   source: PaymentRequestSource;
@@ -183,6 +193,9 @@ export interface CreateInput {
   methods: PaymentMethod[];
   expiresAt: string;
   test?: boolean;
+  /** An outgoing invoice this request collects. Shape only — existence and
+   *  ownership are checked where the store is available. */
+  invoiceId?: string;
 }
 
 /** Which methods this payee can actually offer, with the reason for each gap.
@@ -241,7 +254,20 @@ export function validateCreate(body: any, user: User, now = new Date()): CreateI
   } else {
     expiresAt = new Date(now.getTime() + PAYMENT_REQUESTS.defaultTtlMs).toISOString();
   }
-  return { amountEur, description, methods, expiresAt, ...(b.test === true ? { test: true } : {}) };
+  let invoiceId: string | undefined;
+  if (b.invoiceId !== undefined && b.invoiceId !== null && b.invoiceId !== "") {
+    if (typeof b.invoiceId !== "string") throw new PaymentRequestError("invoiceId must be a string");
+    invoiceId = b.invoiceId.trim();
+    if (!invoiceId) throw new PaymentRequestError("invoiceId must not be blank");
+  }
+  return {
+    amountEur,
+    description,
+    methods,
+    expiresAt,
+    ...(b.test === true ? { test: true } : {}),
+    ...(invoiceId ? { invoiceId } : {}),
+  };
 }
 
 // ── Crypto quotes ────────────────────────────────────────────────────────────
@@ -636,6 +662,9 @@ export function ownerPaymentRequest(r: PaymentRequest, baseUrl: string) {
     methods: r.methods,
     state: effectiveState(r),
     test: r.test,
+    /** Owner's view only. The public projection is an allowlist and an invoice
+     *  id has no business on a payer's page. */
+    invoiceId: r.invoiceId,
     payments: r.payments,
     source: r.source,
     latestQuote: r.cryptoQuotes[r.cryptoQuotes.length - 1],

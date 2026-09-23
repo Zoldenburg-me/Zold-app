@@ -14,6 +14,7 @@
  * The row shapes are in ./store/types.ts and the file-backed database in
  * ./store/db.ts; both are re-exported here, so importers are unchanged.
  */
+import { randomUUID } from "node:crypto";
 import { db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
 import type {
   Account,
@@ -42,6 +43,9 @@ import type {
 
 export * from "./store/types.js";
 export { initStore } from "./store/db.js";
+
+/** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
+const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
 
 export const store = {
   get users() {
@@ -206,6 +210,57 @@ export const store = {
   addTransfer(t: Transfer) {
     db.transfers.push(t);
     persist();
+  },
+  /**
+   * Hold part of the daily cap for a transfer that is still being prepared.
+   *
+   * THE HOLE THIS CLOSES, twice over. The cap was first only CHECKED in
+   * buildTransferFromQuote and the row that reserves it written several awaits
+   * later, so two parallel requests both read a usage figure neither had
+   * written to and both created a full-cap transfer. Checking again at the
+   * write closed that race but refused AFTER the slow work — on the cash rail
+   * after a live Bridge transfer had been created, leaving an unfunded
+   * transfer at Bridge for every refusal. A hold taken BEFORE any partner is
+   * called gives both properties: the second request is refused while nothing
+   * outside this process has been touched, and the first one's figure is
+   * counted from the moment it starts preparing.
+   *
+   * Same idiom as claimAuthorization — nothing yields between the read and the
+   * write. `used` is a function so it is recomputed inside that window, and it
+   * must include `heldEurToday` (safeFundedEurToday does). Holds live in
+   * memory like pendingTransferExecutions: a restart drops them along with the
+   * requests that took them.
+   */
+  holdDailyCap(
+    userId: string,
+    eur: number,
+    capEur: number,
+    used: () => number,
+  ): { ok: true; holdId: string } | { ok: false; usedEur: number; capEur: number } {
+    const usedEur = used();
+    if (usedEur + eur > capEur) return { ok: false, usedEur, capEur };
+    const holdId = randomUUID();
+    capHolds.set(holdId, { userId, eur, day: new Date().toISOString().slice(0, 10) });
+    return { ok: true, holdId };
+  },
+  /** Euros held for transfers still being prepared, for one user and UTC day. */
+  heldEurToday(userId: string, day = new Date().toISOString().slice(0, 10)): number {
+    let sum = 0;
+    for (const h of capHolds.values()) if (h.userId === userId && h.day === day) sum += h.eur;
+    return sum;
+  },
+  /**
+   * Turn a hold into the transfer row that replaces it. Push and release
+   * happen together so the amount is never uncounted in between.
+   */
+  addTransferUnderHold(t: Transfer, holdId: string) {
+    if (!capHolds.delete(holdId)) throw new Error(`no cap hold ${holdId} — the transfer was not reserved`);
+    db.transfers.push(t);
+    persist();
+  },
+  /** Drop a hold whose transfer was refused or failed. A no-op once committed. */
+  releaseCapHold(holdId: string) {
+    capHolds.delete(holdId);
   },
   /**
    * Claim the one and only authorization submission for a transfer.
@@ -417,7 +472,22 @@ export const store = {
       (d) => d.txHash.toLowerCase() === txHash.toLowerCase() && d.logIndex === logIndex,
     );
   },
+  /**
+   * Record a deposit, once.
+   *
+   * Idempotent on (txHash, logIndex) — the chain's own identity for a
+   * transfer — because the poller's dedupe check and this write are separated
+   * by an await (the receipt's rate lookup), and the poll runs on a bare
+   * setInterval that does not wait for the previous tick. Two overlapping
+   * scans of one window both passed the check and both pushed, double-counting
+   * one payment: twice on the payee's payment link, twice in creditedUsdc.
+   * Returning the existing row makes the loser of that race a no-op.
+   */
   addCryptoDeposit(d: CryptoDeposit) {
+    const existing = db.cryptoDeposits.find(
+      (x) => x.txHash.toLowerCase() === d.txHash.toLowerCase() && x.logIndex === d.logIndex,
+    );
+    if (existing) return existing;
     db.cryptoDeposits.push(d);
     persist();
     return d;
