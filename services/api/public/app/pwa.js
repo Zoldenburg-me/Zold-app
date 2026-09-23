@@ -1,7 +1,7 @@
 /**
  * The service worker, and telling the truth about the network.
  *
- * LAST, and self-contained. Everything here is wrapped so that a failure to
+ * Self-contained, and loaded just before app/main.js. Everything here is wrapped so that a failure to
  * register — an insecure origin, a browser without service workers, a private
  * window — leaves the app working exactly as it did, just without offline
  * start-up.
