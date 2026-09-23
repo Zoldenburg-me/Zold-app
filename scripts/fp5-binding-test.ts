@@ -19,8 +19,13 @@ import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
 import { loadDeployments } from "../services/api/src/config.js";
 import { eur } from "../services/api/src/chain.js";
+import { liquidityProvider } from "../services/api/src/liquidity.js";
 import { assertQuoteRateBinding } from "../services/api/src/orchestrator.js";
 import { initStore, store, type Quote, type Transfer } from "../services/api/src/store.js";
+
+// Pin the swapper seed. Unpinned, deploy.ts seeds at the live EUR/USD mid,
+// which makes this OFFLINE suite depend on the network and on the day's rate.
+process.env.DEPLOY_EURUSD_RATE ??= "1137900";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RPC = process.env.TRANSF_RPC_URL ?? "http://127.0.0.1:8545";
@@ -67,6 +72,10 @@ try {
   initStore();
 
   console.log("2/3 quote records the locked rate...");
+  // Record the rate the way fx.ts does: whatever the filling provider reports
+  // at quote time. A literal here was the live mid on the day it was written,
+  // and failed the 50 bps binding as soon as the market moved.
+  const { raw: lockedSwapRate } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
   const now = new Date().toISOString();
   const quote: Quote = {
     id: "q-fp5",
@@ -81,7 +90,7 @@ try {
     midRate: 1,
     marginBps: 0,
     effectiveRate: 1,
-    lockedSwapRate: "1151100",
+    lockedSwapRate: String(lockedSwapRate),
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
     createdAt: now,
   };
