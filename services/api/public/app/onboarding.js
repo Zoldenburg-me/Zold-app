@@ -842,6 +842,7 @@ $("btn-dash-kyc-refresh").onclick = async () => {
   if (kycApproved(user)) enterDashboard(user.name);
 };
 $("btn-recovery-start").onclick = startRecoveryRequest;
+$("btn-remove-cosigner").onclick = () => removeCosigner("cosigner-err");
 $("m-pf-recovery").onclick = () => mobileNav("recovery");
 $("m-pf-documents").onclick = () => mobileNav("documents");
 $("m-pf-links").onclick = () => mobileNav("links");

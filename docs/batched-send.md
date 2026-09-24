@@ -35,7 +35,7 @@ const calls: MetaTransaction[] = [
 ];
 
 const userOp = await account.createUserOperation(calls, rpcUrl, bundlerUrl, {
-  expectedSigners: [passkeyOwner, cosignerAddress],
+  expectedSigners: [passkeyOwner],
 });
 // one passkey ceremony over account.getUserOperationEip712Hash(userOp, chainId)
 ```

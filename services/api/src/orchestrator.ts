@@ -289,8 +289,8 @@ export function safeDebitBlocker(user: User): string | null {
   if (activePasskeySafe(user)) {
     return passkeySafeExecutionReady(user)
       ? null
-      : "This account's Safe has a co-signing owner but no co-signer service is configured — " +
-        "set CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY so send approvals can be counter-signed";
+      : "This account's Safe is a legacy 2-of-2 with a co-signing owner, and no co-signer key is configured — " +
+        "set CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY so it can send, then remove the co-signer";
   }
   return (
     "Safe-held funds need an active passkey Safe before transfers can be executed — " +
@@ -306,8 +306,8 @@ function activePasskeySafe(user: User): boolean {
 }
 
 /** Can this account's send-time UserOperation actually be completed?
- *  A passkey-only Safe needs nothing but the user's assertion; a 2-of-2 Safe
- *  additionally needs the co-signer key to counter-sign. */
+ *  A passkey-only Safe needs nothing but the user's assertion; a legacy 2-of-2
+ *  Safe additionally needs the co-signer key until its user removes it. */
 function passkeySafeExecutionReady(user: User): boolean {
   if (!activePasskeySafe(user) || !user.passkeySafe) return false;
   if (!user.passkeySafe.cosignerAddress) return true;
@@ -318,8 +318,8 @@ function passkeySafeExecutionReady(user: User): boolean {
  * The user-approved debit of one transfer: a UserOperation, prepared at
  * transfer creation for the exact token/amount/destination, whose hash the
  * user's passkey signed at send time. This process cannot produce that
- * signature — it can only counter-sign (where the co-signer is an owner) and
- * relay. No execution means no debit; there is no server-side fallback path.
+ * signature — it can only relay it (and counter-sign on a legacy 2-of-2
+ * Safe). No execution means no debit; there is no server-side fallback path.
  */
 async function submitSafeExecution(user: User, execution: SafeExecution | undefined): Promise<string> {
   if (!passkeySafeExecutionReady(user)) {
