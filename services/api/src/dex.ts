@@ -163,7 +163,7 @@ export async function assertPriceSane(
  *
  * Always this orientation regardless of trade direction, matching FxSwapper's
  * single `rate()`; otherwise the reverse leg would report a reciprocal and
- * FP5's binding check would compare two different things.
+ * the quote-binding check would compare two different things.
  */
 export function rate6dp(eureWei: bigint, usdcUnits: bigint): bigint {
   if (eureWei <= 0n) throw new Error("cannot derive a rate from a zero EURe amount");

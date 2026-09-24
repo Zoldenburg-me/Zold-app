@@ -13,7 +13,7 @@
 const $ = (id) => document.getElementById(id);
 let user = null, quote = null, transfer = null, poll = null;
 
-/* FP4: the device module (ESM) loads after this classic script — hand it a
+/* The device module (ESM) loads after this classic script — hand it a
    resolver so send-time code can await the crypto library. */
 const deviceLib = new Promise((resolve) => { window.__deviceLibReady = resolve; });
 let sessionToken = localStorage.getItem("zold-session")

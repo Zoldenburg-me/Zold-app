@@ -1,5 +1,5 @@
 /**
- * FP4 device-key tests (headless).
+ * Device-key tests (headless).
  *
  * Covers the parts of services/api/public/device.js that don't need a real
  * authenticator: EIP-712 digest parity with viem, signature recovery, and
@@ -11,7 +11,7 @@
  * returns a PRF result at all, and that it returns the SAME 32 bytes across
  * ceremonies (if it didn't, the key would be unrecoverable after reload).
  *
- * Run: npm run fp4:test
+ * Run: npm run device-key:test
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
@@ -152,5 +152,5 @@ await t("the cached address is readable while the key stays locked", async () =>
   assert.equal(await dev.deviceAddress("some-credential-id"), expected);
 });
 
-console.log(`\nFP4 DEVICE-KEY TEST PASSED — ${pass}/${pass}`);
+console.log(`\nDEVICE-KEY TEST PASSED — ${pass}/${pass}`);
 console.log("note: PRF availability and cross-ceremony stability need a real browser");

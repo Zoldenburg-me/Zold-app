@@ -245,7 +245,7 @@ export interface Account {
    */
   address?: `0x${string}`;
   /**
-   * The User whose Safe funds this account and whose FP4 device key authorises
+   * The User whose Safe funds this account and whose device key authorises
    * its debits.
    *
    * Spending authority lives with a device key held in one person's browser, so

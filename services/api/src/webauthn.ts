@@ -1,5 +1,5 @@
 /**
- * Server-side WebAuthn verification (FP2 of the red-team fixes).
+ * Server-side WebAuthn verification.
  *
  * Dependency-free implementation of the two ceremonies:
  *  - registration: parse attestationObject (CBOR) -> authData -> COSE public

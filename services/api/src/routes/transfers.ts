@@ -43,7 +43,7 @@ export interface TransferDeps {
  * it on-chain.
  */
 /**
- * FP4: submit the device signature for a CREATED transfer and execute it.
+ * Submit the device signature for a CREATED transfer and execute it.
  * The terms were fixed at creation, so the signature covers exactly what the
  * orchestrator submits — it cannot re-price or redirect the payment.
  */

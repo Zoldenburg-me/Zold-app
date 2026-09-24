@@ -1,5 +1,5 @@
 /**
- * Refund guard test: on a non-local RPC, FP3 compensation must not pretend a
+ * Refund guard test: on a non-local RPC, failure compensation must not pretend a
  * Safe refund happened when the chain call cannot be verified.
  */
 // Must be first: pins chain, keys and a throwaway database.

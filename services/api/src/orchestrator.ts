@@ -57,7 +57,7 @@ import { createCashPickupViaAnchor, fundAndRefreshAnchorPickup } from "./adapter
 import { anchorModeEnabled, HARNESS } from "./config.js";
 
 /**
- * FP4: the user's device signature over this payment's exact terms. The
+ * The user's device signature over this payment's exact terms. The
  * backend cannot produce one — it can only relay a spend the device approved.
  */
 export interface PaymentAuthorization {
@@ -85,8 +85,8 @@ export interface SafeExecution {
 }
 
 /**
- * FP5: verify the live on-chain swap rate hasn't drifted past tolerance from
- * the rate the quote assumed. Throws (→ FP3 compensation) if it has, so a
+ * Quote binding: verify the live on-chain swap rate hasn't drifted past tolerance from
+ * the rate the quote assumed. Throws (→ compensation) if it has, so a
  * transfer never settles at economics the user didn't agree to.
  */
 export async function assertQuoteRateBinding(transfer: Transfer): Promise<void> {
@@ -375,7 +375,7 @@ function cashPayoutState(pickup: NonNullable<Transfer["pickup"]>): TransferState
 }
 
 /**
- * FP3: mark FAILED, then immediately attempt compensation. The refund the
+ * Mark FAILED, then immediately attempt compensation. The refund the
  * user gets depends on how far the transfer got — costs already incurred
  * (conversion round-trips at the prevailing rate) are itemized on the refund.
  */
@@ -564,7 +564,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
         const total = Math.floor((eurBack + feeBack) * 100) / 100;
         const lost = Math.max(0, safeMovedEur(t) - total);
         console.log(
-          `FP3: reverse-swapped and returned €${total} to ${user.name}'s Safe for transfer ${t.id} (post-swap)`,
+          `Compensation: reverse-swapped and returned €${total} to ${user.name}'s Safe for transfer ${t.id} (post-swap)`,
         );
         return store.updateTransfer(id, {
           state: "REFUNDED",
@@ -598,7 +598,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     txs.push({ step: "safe.refundTransfer", hash: refundHash });
     store.updateTransfer(id, { txs }); // on record before anything else can fail
     console.log(
-      `FP3: returned €${safeRefundEur} to ${user.name}'s Safe for transfer ${t.id} (Safe-funded)`,
+      `Compensation: returned €${safeRefundEur} to ${user.name}'s Safe for transfer ${t.id} (Safe-funded)`,
     );
     return store.updateTransfer(id, {
       state: "REFUNDED",

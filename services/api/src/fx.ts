@@ -39,7 +39,7 @@ async function corridorRates(fiat: "KES") {
   // fill the swap — the local swapper or a market maker over RFQ. Reading the
   // swapper contract directly here would keep quoting the mock's price after a
   // deployment switched to RFQ, which looks completely healthy while being
-  // wrong. FP5 re-checks the rate against the same provider at execution.
+  // wrong. The quote binding re-checks the rate against the same provider at execution.
   const { rate, raw } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
   const usdFiat = await usdPer(fiat); // live: what a partner settles at
   const marketMid = await eurPer(fiat); // live: true EUR->fiat mid, reference only

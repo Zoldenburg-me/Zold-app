@@ -28,7 +28,7 @@ export interface User {
   /** Candide Safe smart-account address — the user's identity and balance
    *  account, and the address Monerium attaches the IBAN to. */
   address: `0x${string}`;
-  /** FP4: the device key allowed to authorize debits from this account. We
+  /** The device key allowed to authorize debits from this account. We
    *  store only its address — the private half stays in the user's browser. */
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
@@ -317,7 +317,7 @@ export interface Quote {
    *  amounts the flat fee dominates (EUR 2 to cash loses half to it), and an
    *  itemised fee alone made that look like a broken exchange rate. */
   effectiveRate: number;
-  /** FP5: the liquidity venue's rate (tokenOut units per 1e18 tokenIn) this
+  /** Quote binding: the liquidity venue's rate (tokenOut units per 1e18 tokenIn) this
    *  quote's economics assume. Execution refuses to swap if the live rate has
    *  drifted past tolerance — binds quoted price to settlement price. */
   lockedSwapRate?: string;
@@ -455,7 +455,7 @@ export interface Transfer {
    * the full send on the FX rails, the fee alone on SEPA.
    */
   fundingSource?: "safe";
-  /** FP4: the terms the device is asked to authorize. Fixed when the transfer
+  /** The terms the device is asked to authorize. Fixed when the transfer
    *  is created so the signature covers exactly what gets submitted; the
    *  transfer cannot leave CREATED until a matching signature arrives. */
   auth?: {
@@ -589,7 +589,7 @@ export interface Transfer {
    *  literal for it). `mock` survives only on rows from the removed mock path. */
   sepa?: { mode: "sandbox" | "mock"; orderId?: string; state: string; detail?: string };
   error?: string;
-  /** FP3: automated compensation after failure. Refund amount depends on
+  /** Automated compensation after failure. Refund amount depends on
    *  which step failed — costs incurred up to that point are itemized. */
   refund?: {
     amountEur: number;

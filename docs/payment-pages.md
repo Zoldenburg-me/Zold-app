@@ -44,7 +44,7 @@ every derived account, which means deriving the keys **client-side** from
 something only they hold (a wallet signature is the usual seed).
 
 Doing stealth server-side would be easy and wrong: it would put a key for every
-stealth account in `db.json`, next to the one `user.privateKey` that FP4 exists
+stealth account in `db.json`, next to the one `user.privateKey` that the device key exists
 to remove. Payment pages therefore must not create API-held deposit owner keys;
 they use a forwarding address whose recipient is the deployed merchant Safe.
 
