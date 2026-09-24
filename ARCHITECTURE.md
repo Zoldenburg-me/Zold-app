@@ -36,9 +36,34 @@ Self-custodial remittance platform & borderless account layer:
 - **Stellar**: Payout rail for MoneyGram Ramps cash pickups (SEP-10 authentication, SEP-12 KYC customer registration, SEP-24 interactive withdrawal).
 - **Bridge.xyz**: Licensed transfer seam moving USDC from Base to Stellar. The cash rail is closed unless BRIDGE_LIVE=1 and an anchor are configured; there is no dry-run.
 - **Multi-Venue FX Execution**:
-  - `liquidity.ts` presents a unified `LiquidityProvider` interface for executing FX swaps.
-  - **Implementations**: `FxSwapper` (local inventory), Bebop RFQ (JIT PMM quotes), CoW Protocol, Uniswap v3, and LI.FI.
+  - `liquidity.ts` is the seam: it chooses a venue, persists the quote that priced a transfer, and dispatches execution back to the venue that quoted it.
+  - **Implementations**, one per file under `liquidity/`: `fx-swapper.ts` (local inventory), `rfq.ts` (Bebop PMM), `cow.ts` (quote-only), `uniswap.ts` (Uniswap v3), `lifi.ts` (aggregator), `best.ts` (best execution across the rest). The contract they share is `liquidity/contract.ts`.
   - **Live FX Rates**: `rates.ts` fetches live mid-rates (10-min cache) with fail-closed bounds checking.
+
+---
+
+## 3a. Code layout
+
+The API is a set of router factories that `server.ts` mounts; `server.ts` itself
+is wiring and owns authentication, so a route module cannot acquire a second way
+to decide who is calling.
+
+| Directory | What is in it |
+|---|---|
+| `services/api/src/http/` | The layer every request passes through: origin policy and rate buckets (`policy.ts`), sessions (`sessions.ts`), the guards a route runs before it acts (`guards.ts`), and the in-flight ceremony maps (`pending.ts`). |
+| `services/api/src/routes/` | One router per subject. `business/` splits the organisation surface again by subject. |
+| `services/api/src/domain/` | Rules with no HTTP and no chain: plans, roles, drafts, invoices, invoicing, jurisdictions, ledger, segments. |
+| `services/api/src/adapters/` | Third parties: Monerium, Gnosis Pay, MoneyGram, crypto deposits, the Candide forwarder. |
+| `services/api/src/liquidity/` | One file per FX venue, behind the seam in `liquidity.ts`. |
+| `services/api/src/store/` | `types.ts` is the row shapes, `db.ts` the JSON file and its migrations; `store.ts` is the methods and the seam. |
+| `services/api/src/transfers/` | `build.ts` — the ONE path that creates a transfer, shared by the direct route and draft execution. |
+| `services/api/src/wallet/`, `stellar/`, `bridge/`, `shopify/`, `recovery/` | The chain, anchor, bridge, merchant and guardian integrations. |
+| `services/api/public/app/` | The app's browser code, one file per screen group, loaded as ordered classic scripts (they share one scope). |
+| `services/api/public/business/` | The org dashboard, as ES modules. `core.js` owns the shared state and is the only module that writes it. |
+
+Two files stay deliberately whole. `orchestrator.ts` is the money path and is
+meant to be read top to bottom; `config.ts` is one place an operator can see
+every setting and every production refusal.
 
 ---
 

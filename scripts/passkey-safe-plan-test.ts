@@ -77,6 +77,8 @@ assert.equal(webauthnOwnerFromJwk({ ...jwk, crv: "P-384" }), null);
 
 const deploymentSources = [
   "services/api/src/server.ts",
+  "services/api/src/routes/auth.ts",
+  "services/api/src/wallet/passkey-safe-plan.ts",
   "services/api/src/adapters/monerium-sandbox.ts",
   "services/api/src/wallet/candide.ts",
 ];
@@ -84,10 +86,18 @@ for (const rel of deploymentSources) {
   const source = readFileSync(path.join(ROOT, rel), "utf8");
   assert.ok(!source.includes("deploySmartAccount"), `${rel} must not expose an alternate Safe deployment helper`);
 }
+// The route lives in the auth router (the Safe's owner IS the passkey, so the
+// ceremony and the deployment are one flow); server.ts mounts that router
+// under /api. Check both halves, or a mounted-nowhere router would still pass.
+const authSource = readFileSync(path.join(ROOT, "services/api/src/routes/auth.ts"), "utf8");
+assert.ok(
+  authSource.includes('"/users/:id/passkey-safe/deployment"'),
+  "the passkey Safe deployment route must remain present",
+);
 const serverSource = readFileSync(path.join(ROOT, "services/api/src/server.ts"), "utf8");
 assert.ok(
-  serverSource.includes('"/api/users/:id/passkey-safe/deployment"'),
-  "the passkey Safe deployment route must remain present",
+  /app\.use\("\/api", createAuthRouter\(/.test(serverSource),
+  "the auth router must stay mounted under /api",
 );
 
 console.log("PASSKEY SAFE PLAN TEST PASSED");

@@ -210,7 +210,7 @@ await check("the fee reported is the venue's spread against the mid, never recei
 });
 
 await check("the invoice link is explicit, never inferred from amounts", () => {
-  const src = readFileSync("services/api/src/server.ts", "utf8");
+  const src = readFileSync("services/api/src/routes/crypto-deposits.ts", "utf8");
   const route = src.slice(src.indexOf("/crypto-deposits/:depositId/invoice"));
   assert.match(route.slice(0, 2000), /req\.body\?\.invoiceId/,
     "the account holder names the invoice — matching by amount and date guesses");
@@ -220,7 +220,8 @@ console.log("\nThe wiring that makes it non-custodial");
 
 const liq = readFileSync("services/api/src/liquidity.ts", "utf8");
 const dep = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
-const srv = readFileSync("services/api/src/server.ts", "utf8");
+// The deposit routes left server.ts in the modularity pass.
+const srv = readFileSync("services/api/src/routes/crypto-deposits.ts", "utf8");
 
 await check("nothing sweeps the user's USDC to the orchestrator", () => {
   assert.ok(!/sweepToOrchestrator\s*\(/.test(dep.replace(/\*.*sweepToOrchestrator.*/g, "")),
@@ -241,9 +242,12 @@ await check("the conversion batch carries NO fee", () => {
 });
 
 await check("both routes are capability-gated", () => {
-  const end = srv.indexOf("Turn auto-settlement of payment-page crypto");
-  assert.ok(end > 0, "the auto-convert route's docstring anchors the end of the convert routes");
-  const seg = srv.slice(srv.indexOf("/crypto-deposits/:depositId/convert/prepare"), end);
+  // Bounded by the next route's PATH, searched from the start: the old anchor
+  // was a docstring phrase, which a file header can repeat above the routes.
+  const start = srv.indexOf("/crypto-deposits/:depositId/convert/prepare");
+  const end = srv.indexOf("/auto-convert", start);
+  assert.ok(start > 0 && end > start, "the auto-convert route anchors the end of the convert routes");
+  const seg = srv.slice(start, end);
   assert.equal((seg.match(/requireCapability\(user, "onchain_balance", res\)/g) || []).length, 2,
     "prepare and convert must both check the capability");
 });
