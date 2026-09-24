@@ -224,3 +224,59 @@ redeem assertions the app performs, so it fails at /authorize as before —
 recorded, not fixed, because it needs the ceremony code shared between the two
 pages.
 
+
+## External pen test (Strix, Sep 2026) — what it found, what was already closed
+
+A white-box assessment reported nine findings. Its fixes lived in the
+tester's working tree, not in this repo, so each was re-derived here against
+main as of `dcd5a9a`. Status per finding:
+
+1. **Recovery hijack (High)** — someone who named the victim registered their
+   own passkey on the open ceremony, and the victim's OTP then recovered onto
+   it. ALREADY CLOSED on main by `4cb06a3` (merged the same day, likely after
+   the test ran): the starting browser gets a per-request secret, every by-id
+   route requires it, a stranger's start supersedes only a PASSKEY_PENDING
+   request, and one past that is a 409. `recovery:candide:test` covers the
+   hijack. What remains is griefing, not takeover: an attacker who reaches
+   OTP_PENDING blocks the owner's own start until it expires. The report's
+   "notify enrolled channels on start" would make that visible; not built.
+2. **Invite seat takeover (High)** — acceptance matched `user.email`, which
+   signup never verifies. `/api/orgs/invites/accept` now also needs
+   `emailIsProven` (domain/roles.ts): a Candide email recovery channel with
+   `verifiedAt` for that exact address — the one place a code was sent to it.
+   Onboarding offers exactly that enrolment for the signup email, so the
+   normal path is unchanged; someone who skipped it gets 403 EMAIL_UNVERIFIED
+   and is told how to prove it. THE COST: on a deployment without
+   RECOVERY_SERVICE_URL nobody can accept an invitation at all. The harness (`KYC.autoApprove`, 31337 only) skips it, like the
+   rest of up-front identity. A product-level email verification would be the
+   cleaner proof; it needs a mail transport, which does not exist.
+3. **Cross-store Shopify collision (High)** — `findPaymentRequestBySource`
+   now takes the shop, at all three call sites. Two-store regression in
+   `shopify:orders:test` (fails on the old store, passes on the new).
+4. **Order-id enumeration (High)** — `GET /api/shopify/cancel/:code` no
+   longer mutates: it only redirects. A request the buyer abandons stays OPEN
+   until its checkout window (default 1h) runs out. NOT FIXED: the order
+   lookup still hands the pay-page URL (and so the code) to anyone naming shop
+   + sequential order id; the extension needs it to render the link. With
+   cancel inert the code reads a page and re-quotes, nothing more. The real fix
+   is verifying the checkout extension's Shopify session token on that route.
+5. **Timelock keys co-located (Medium)** — `scripts/deploy.ts` already deploys
+   FxSwapper and AdminTimelock on hardhat only; off hardhat it records token
+   addresses and returns. An OLD local `deployments.json` for 84532 may still
+   hold a swapper/timelock from before that change; if so, those contracts are
+   governed by server keys and should be dropped from the file.
+6. **Handle claim race (Medium)** — `POST /users/:id/handle` re-checks the
+   handle with nothing awaited between the check and the write.
+7. **Duplicate email accounts (Low)** — the one-passkeyed-account-per-email
+   rule is re-asserted at first passkey registration, not only at signup.
+8. **Crypto-deposit convert encoding (Low)** — the assertion is decoded from
+   base64url to bytes before `submitPasskeySafeOperation`, as transfers do.
+   Untyped `req.body` is why tsc never saw it. Still unproven live (no bundler
+   locally).
+9. **No CSP (Low)** — `securityHeaders` adds a same-origin CSP
+   (`'unsafe-inline'` for scripts remains while pages bootstrap inline),
+   `frame-ancestors 'none'`, X-Frame-Options, COOP and a Permissions-Policy.
+
+Also from its recommendations: `/api/pay/:handle/qr.svg` was shadowed by
+`/pay/:handle/:code` (mounted first) and always 404'd; the code route now
+passes `qr.svg` on.

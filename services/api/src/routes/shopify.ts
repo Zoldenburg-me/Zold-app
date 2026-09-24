@@ -397,7 +397,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const base = baseUrlFor(req);
       const pageUrl = (r: PaymentRequest) => `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`;
       // Shopify retries; the same session must get the same page.
-      const existing = store.findPaymentRequestBySource("shopify", sessionId);
+      const existing = store.findPaymentRequestBySource("shopify", sessionId, c.shop);
       if (existing) return res.status(201).json({ redirect_url: pageUrl(existing) });
       if (String(b.currency ?? "").toUpperCase() !== "EUR") {
         return res.status(422).json({ error: `Zold settles in EUR; this store presented ${b.currency}. Restrict the payment method to EUR in the store's payment settings.` });
@@ -478,7 +478,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const o = req.body ?? {};
       const orderGid = String(o.admin_graphql_api_id ?? (o.id ? `gid://shopify/Order/${o.id}` : ""));
       if (!orderGid) return res.status(400).json({ error: "the order has no id" });
-      const existing = store.findPaymentRequestBySource("shopify", orderGid);
+      const existing = store.findPaymentRequestBySource("shopify", orderGid, c.shop);
       if (topic === "orders/cancelled") {
         if (existing && effectiveState(existing) === "OPEN" && existing.payments.length === 0) {
           store.updatePaymentRequest(existing.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
@@ -540,10 +540,9 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
     const shop = normaliseShop(shopRaw);
     const gid = orderGidOf(orderRaw);
     if (!isValidShopDomain(shop) || !gid) return undefined;
-    const r = store.findPaymentRequestBySource("shopify", gid);
-    // The shop in the URL must be the shop the order belongs to, or a page
-    // could be made to show one store's order under another's name.
-    return r && r.source.shop === shop ? r : undefined;
+    // The shop in the URL is part of the key: order ids are per-store
+    // sequences, so the same number names a different order at every store.
+    return store.findPaymentRequestBySource("shopify", gid, shop);
   };
 
   /**
@@ -617,9 +616,10 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const r = requestFromCode(String(req.params.code ?? ""));
       const base = baseUrlFor(req);
       if (!r) return res.status(404).send("no such checkout");
-      if (r.state === "OPEN" && r.payments.length === 0) {
-        store.updatePaymentRequest(r.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
-      }
+      // A GET that anyone holding the code can follow — and the code travels
+      // in the pay-page URL the order lookup hands out — must not change
+      // state. The request stays OPEN until its checkout window runs out;
+      // Shopify's own cancel is what abandons the session.
       res.redirect(externalHttpUrl(r.source.cancelUrl) ?? `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`);
     }),
   );

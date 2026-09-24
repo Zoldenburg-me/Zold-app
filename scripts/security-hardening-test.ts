@@ -87,6 +87,14 @@ await check("every response says no-referrer and nosniff", async () => {
   assert.equal(r.headers.get("referrer-policy"), "no-referrer");
   assert.equal(r.headers.get("x-content-type-options"), "nosniff");
 });
+await check("every response carries a same-origin CSP and refuses to be framed", async () => {
+  const r = await fetch(`${base}/api/invoice-links/nothing`);
+  const csp = r.headers.get("content-security-policy") ?? "";
+  for (const d of ["default-src 'self'", "connect-src 'self'", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'"]) {
+    assert.ok(csp.includes(d), `CSP lacks ${d}: ${csp}`);
+  }
+  assert.equal(r.headers.get("x-frame-options"), "DENY");
+});
 
 console.log("invoice-link password");
 const now = new Date().toISOString();
