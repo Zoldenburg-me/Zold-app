@@ -174,7 +174,8 @@ await check("an expired Gnosis Pay session surfaces as 401 from THEM, with their
 
 await check("no JWT is persisted anywhere in the user record", async () => {
   const { readFileSync } = await import("node:fs");
-  const src = readFileSync("services/api/src/store.ts", "utf8");
+  // The User shape lives in store/types.ts; store.ts is the methods over it.
+  const src = readFileSync("services/api/src/store/types.ts", "utf8");
   const block = src.slice(src.indexOf("gnosisPay?: {"), src.indexOf("paymentPage?: {"));
   assert.ok(block.length > 0, "gnosisPay state not found in the store");
   assert.ok(!/jwt|token/i.test(block), "the stored Gnosis Pay state must not carry a credential");

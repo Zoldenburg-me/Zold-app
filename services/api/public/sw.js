@@ -15,19 +15,35 @@
  * vendored crypto. That is what makes the installed app open instantly, and
  * none of it says anything about anyone's money.
  *
- * Bump SHELL_CACHE when the shell changes; activate deletes every other cache
- * this origin owns, so an old shell cannot outlive a deploy.
+ * Pages and page code are refetched on every online load, so an edit to them
+ * needs no bump. Bump SHELL_CACHE when the SHELL list itself changes or a
+ * vendored file does; activate deletes every other cache this origin owns.
  */
-const SHELL_CACHE = "zold-shell-v1";
+const SHELL_CACHE = "zold-shell-v3";
 
 /**
  * The device key and the vendored crypto matter most here. If /device.js or
  * /vendor/* is missing the send flow cannot sign at all, so they are cached up
  * front rather than on first use.
+ *
+ * The app's stylesheet and its per-screen scripts are shell too: /app is a
+ * shell of markup that draws nothing without them, so caching the page and not
+ * its code would give an offline start-up a blank screen.
  */
 const SHELL = [
   "/app",
   "/",
+  "/app.css",
+  "/app/core.js",
+  "/app/dashboard.js",
+  "/app/transactions.js",
+  "/app/profile.js",
+  "/app/recovery.js",
+  "/app/monerium.js",
+  "/app/onboarding.js",
+  "/app/send.js",
+  "/app/pwa.js",
+  "/app/main.js",
   "/device.js",
   "/vendor/crypto-shim.js",
   "/vendor/secp256k1.js",
@@ -133,7 +149,41 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Shell assets: cache first, and keep whatever the network returns.
+  /**
+   * Page code: network first, cache as the offline fallback.
+   *
+   * The app, business and admin pages keep their code in separate .js/.css
+   * files, and the HTML that uses them is fetched network-first above. Serving
+   * that code cache-first would pair a fresh page with whatever script was
+   * cached first — new markup, old handlers — until someone remembered to bump
+   * SHELL_CACHE. Same reasoning as the navigate branch: a deploy must be picked
+   * up without a version bump, and offline must still open.
+   *
+   * /vendor/* stays cache-first below: pinned third-party crypto, never edited
+   * in place.
+   */
+  if (/\.(?:js|css)$/.test(url.pathname) && !url.pathname.startsWith("/vendor/")) {
+    event.respondWith(
+      (async () => {
+        try {
+          const response = await fetch(request);
+          if (response.ok) {
+            const cache = await caches.open(SHELL_CACHE);
+            cache.put(request, response.clone());
+          }
+          return response;
+        } catch (err) {
+          const cached = await caches.match(request);
+          if (cached) return cached;
+          throw err;
+        }
+      })(),
+    );
+    return;
+  }
+
+  // Everything else (vendored crypto, icons, manifest): cache first, and keep
+  // whatever the network returns.
   event.respondWith(
     (async () => {
       const cached = await caches.match(request);

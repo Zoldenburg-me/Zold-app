@@ -349,7 +349,9 @@ await check("transfer creation RESERVES the cap rather than only checking it", (
   // it, and uses it EARLY: the hold must be taken before the quote is spent
   // and before Bridge is asked for a transfer, or a cap refusal leaves an
   // unfunded Bridge transfer behind (the finding this replaced).
-  const src = readFileSync("services/api/src/server.ts", "utf8");
+  // buildTransferFromQuote is the ONE path that builds a transfer; the
+  // modularity pass moved it out of server.ts.
+  const src = readFileSync("services/api/src/transfers/build.ts", "utf8");
   const hold = src.indexOf("store.holdDailyCap(");
   assert.ok(hold > 0, "transfer creation no longer holds the cap");
   assert.ok(hold < src.indexOf("store.consumeQuote(quote.id)"), "the quote is consumed before the cap is held");

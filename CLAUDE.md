@@ -17,6 +17,7 @@ ran.
 | touch payment links, Shopify, receipts or the card | `docs/notes/payments-and-checkout.md` |
 | touch the mobile UI, the PWA, chain selection or deployments | `docs/notes/app-and-chains.md` |
 | wonder why a guard looks arbitrary | `docs/notes/review-passes.md` |
+| look for a file that moved, or move one | `docs/notes/code-layout.md` |
 | talk to a payout, card or funding partner | `docs/notes/roadmap-and-partners.md` |
 | pick up someone else's branch | Multi-agent workflow, below |
 
@@ -58,11 +59,32 @@ THREE RULES OVERRIDE CONVENIENCE:
   `ALLOW_MOCK_FALLBACK`, no faucet, no mock IBANs. `/api/health` publishes
   `capabilities: { sandbox, moneriumOAuth, moneriumApiKeys, moneriumEnvironment,
   moneriumHost, cashRail, shopify, shopifyMode, emailSmsRecovery }` (verified
-  against `capabilities()` in server.ts), and the UI renders a control only
+  against `capabilities()` in capabilities.ts), and the UI renders a control only
   where the API would accept it.
 - **The one harness seam that stays**: `KYC_AUTO_APPROVE=1` is honoured only on
   chain 31337 and refused in production; `mirrorOrder` mints the hardhat
   MockToken only on 31337. Inert on real money by construction, not config.
+
+## Where the code lives
+
+The modularity pass (Sep 2026) split the five big files; every move was a MOVE
+(no behaviour change). Full table and reasoning: `docs/notes/code-layout.md`.
+
+- `server.ts` is wiring only (~320 lines): routers under `routes/`, the shared
+  HTTP layer under `http/`, and **`transfers/build.ts` is the ONE path that
+  builds a transfer** — the business router is handed it, never rebuilds it.
+- `store.ts` holds the methods; row shapes in `store/types.ts`, the file-backed
+  db in `store/db.ts`. Still the only thing that touches the database object.
+- `liquidity.ts` is the seam; one file per venue in `liquidity/`.
+  `liquidity/best.ts` takes its venue resolver as an argument (no cycle).
+- `public/app/*.js` are **classic scripts sharing one scope**: every file but
+  the last holds declarations and wiring only, and NOTHING CALLS FORWARD into a
+  later file. `public/business/*.js` are **ES modules**; `core.js` owns the
+  shared state and exports setters.
+- **server.ts still owns authentication**: every router is a factory taking
+  `requireUserSession`.
+- Four suites grep source text (custody, passkey-safe-plan, gnosis-pay,
+  passkey-safe's mount check). Moving code means moving their greps.
 
 ## Invariants
 

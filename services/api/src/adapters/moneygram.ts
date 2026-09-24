@@ -5,7 +5,7 @@
  * payment to the anchor's account. The reference the recipient presents at
  * the counter comes from the anchor, never from here.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { STELLAR, anchorModeEnabled } from "../config.js";
 import { store } from "../store.js";
 import {
