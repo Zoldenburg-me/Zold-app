@@ -218,7 +218,7 @@ async function prepareTransferFromQuote(
       user.passkey?.credentialId &&
       user.passkeySafe?.status === "active" &&
       user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
-      // A 2-of-2 Safe needs the co-signer KEY to counter-sign; a passkey-only
+      // A legacy 2-of-2 Safe needs the co-signer KEY to counter-sign; a passkey-only
       // Safe needs nothing beyond the user's assertion. Deliberately the same
       // condition as the orchestrator's passkeySafeExecutionReady: requiring
       // more here (the address env var, say) would create transfers that pass

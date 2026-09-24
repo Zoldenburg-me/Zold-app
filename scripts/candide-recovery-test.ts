@@ -23,7 +23,8 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { privateKeyToAccount } from "viem/accounts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -270,7 +271,7 @@ try {
 
   console.log("2/4 API with a stub Candide recovery service…");
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
-  bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
+  const apiEnv: Record<string, string> = {
     TRANSF_API_PORT: String(API_PORT),
     TRANSF_RPC_URL: RPC_URL,
     PORT: String(API_PORT),
@@ -281,7 +282,8 @@ try {
     MG_ANCHOR_DOMAIN: "",
     CANDIDE_CHAIN_ID: "31337",
     CANDIDE_RPC_URL: RPC_URL,
-    CANDIDE_COSIGNER_ENABLED: "0",
+    CANDIDE_COSIGNER_ADDRESS: "",
+    CANDIDE_COSIGNER_KEY: "",
     CANDIDE_RECOVERY_GUARDIAN_ADDRESS: "",
     CANDIDE_RECOVERY_MODULE_ADDRESS: MODULE,
     RECOVERY_SERVICE_URL: STUB,
@@ -289,11 +291,16 @@ try {
     RECOVERY_SWEEP_MS: "3600000",
     LOCAL_HARNESS: "1",
     KYC_AUTO_APPROVE: "1",
-  });
-  for (const s = Date.now(); Date.now() - s < 30_000; ) {
-    try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}
-    await new Promise((r) => setTimeout(r, 300));
-  }
+  };
+  let api = bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], apiEnv);
+  const waitForApi = async () => {
+    for (const s = Date.now(); Date.now() - s < 30_000; ) {
+      try { if ((await fetch(`${API}/api/health`)).ok) return; } catch {}
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    throw new Error("API did not come up");
+  };
+  await waitForApi();
 
   const health = await call("/api/health");
   assert.equal(health.data.capabilities?.emailSmsRecovery, true, "capability must be published when the service URL is set");
@@ -567,6 +574,69 @@ try {
   await t("cancel refuses when the module holds no pending recovery", async () => {
     const r = await call(`/api/users/${userId}/recovery/candide/cancel`, {});
     assert.equal(r.status, 409);
+  });
+
+  /* ---- Legacy 2-of-2 Safe: removing the co-signer ---------------------
+     No API path creates a 2-of-2 Safe any more, so seed one: stop the API,
+     rewrite this account's plan as a Safe that still lists the co-signer, and
+     restart with the co-signer key the removal needs. Chain and bundler are
+     simulated here (the harness); the removeOwner calldata is covered by
+     passkey-safe:test, and no removal has run on a real chain. */
+  console.log("then: a legacy 2-of-2 Safe removing its co-signer…");
+  const COSIGNER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;
+  const COSIGNER = privateKeyToAccount(COSIGNER_KEY).address;
+  await new Promise<void>((r) => { api.once("exit", () => r()); api.kill("SIGTERM"); });
+  {
+    const dbPath = process.env.TRANSF_DB_PATH!;
+    const db = JSON.parse(readFileSync(dbPath, "utf8"));
+    const u = db.users.find((x: any) => x.id === userId);
+    u.passkeySafe = { ...u.passkeySafe, threshold: 2, cosignerAddress: COSIGNER, cosignerPolicy: { ...(u.passkeySafe.cosignerPolicy ?? {}), enabled: true } };
+    writeFileSync(dbPath, JSON.stringify(db));
+  }
+  api = bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
+    ...apiEnv,
+    CANDIDE_COSIGNER_ADDRESS: COSIGNER,
+    CANDIDE_COSIGNER_KEY: COSIGNER_KEY,
+  });
+  await waitForApi();
+
+  await t("a legacy 2-of-2 account reports its co-signer", async () => {
+    const me = await call(`/api/users/${userId}`);
+    assert.equal(me.status, 200, JSON.stringify(me.data));
+    assert.equal(me.data.passkeySafe.cosignerAddress, COSIGNER);
+    assert.equal(me.data.passkeySafe.threshold, 2);
+  });
+
+  await t("removing the co-signer needs the account's session", async () => {
+    const r = await call(`/api/users/${userId}/passkey-safe/cosigner-removal`, {}, undefined, "");
+    assert.equal(r.status, 401, JSON.stringify(r.data));
+  });
+
+  let removal: any;
+  await t("the removal is prepared as a passkey-signed Safe operation", async () => {
+    const r = await call(`/api/users/${userId}/passkey-safe/cosigner-removal`, {});
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.ok(r.data.challenge, "a challenge for the passkey");
+    assert.equal(r.data.cosignerAddress, COSIGNER);
+    removal = r.data;
+  });
+
+  await t("after the passkey signs, the passkey is the Safe's only owner", async () => {
+    const r = await call(removal.submitTo, await newPasskey.assert(removal.challenge));
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    assert.equal(r.data.passkeySafe.cosignerAddress, undefined, "the co-signer is gone from the plan");
+    assert.equal(r.data.passkeySafe.threshold, 1);
+    assert.equal(r.data.passkeySafe.cosignerPolicy.enabled, false);
+    assert.ok(r.data.passkeySafe.cosignerRemovedAt);
+    assert.equal(r.data.passkeySafe.address, safeAddress, "the Safe keeps its address");
+  });
+
+  await t("a used removal request cannot be replayed, and a 1-of-1 Safe has nothing to remove", async () => {
+    const replay = await call(removal.submitTo, await newPasskey.assert(removal.challenge));
+    assert.equal(replay.status, 404, JSON.stringify(replay.data));
+    const again = await call(`/api/users/${userId}/passkey-safe/cosigner-removal`, {});
+    assert.equal(again.status, 409, JSON.stringify(again.data));
+    assert.match(again.data.error, /no co-signer/);
   });
 
   console.log(`\nCANDIDE RECOVERY TEST PASSED — ${pass}/${pass}`);
