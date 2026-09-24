@@ -245,9 +245,12 @@ await check("the order lookup answers CORS-open with the pay-page projection, th
   assert.equal(r.body.state, "OPEN");
   assert.ok(r.body.methods.crypto?.address, "no deposit address");
   assert.ok(r.body.methods.crypto?.amountUsdc > 146, "no USDC figure");
-  assert.match(r.body.pageUrl, new RegExp(`^${API}/pay/keycard/[0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5}$`));
+  assert.equal(r.body.pageUrl, `${API}/api/shopify/orders/${SHOP}/${o1.id}/pay`);
   const text = JSON.stringify(r.body);
-  for (const secret of ["EE123456789012345678", "shop@example.com", merchant.id, "buyer@example.com", TOKEN]) assert.ok(!text.includes(secret), `leaked ${secret}`);
+  const code = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!.code;
+  const shown = `${code.slice(0, 5)}-${code.slice(5, 10)}-${code.slice(10)}`;
+  assert.equal(r.body.code, undefined, "the lookup handed out the payment code");
+  for (const secret of ["EE123456789012345678", "shop@example.com", merchant.id, "buyer@example.com", TOKEN, code, shown]) assert.ok(!text.includes(secret), `leaked ${secret}`);
 });
 await check("the lookup accepts the gid form too, and an order we do not know is a 404 marked pending", async () => {
   assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${encodeURIComponent(o1.admin_graphql_api_id)}`)).status, 200);

@@ -563,9 +563,14 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (!r || !user) return res.status(404).json({ error: "no payment request for this order yet", pending: true });
       const { request, quote } = await ensureQuote(r, r.amountEur);
       const base = baseUrlFor(req);
+      // Order ids are sequential, so this answer goes to anyone who can count.
+      // It carries no payment code: not `code`, and not the return/cancel/page
+      // URLs built from it. The page link is the order's own /pay route.
+      const { code: _code, returnUrl: _ret, cancelUrl: _cancel, ...payer } =
+        publicPaymentRequest(request, user, payerContext(req, quote));
       res.json({
-        ...publicPaymentRequest(request, user, payerContext(req, quote)),
-        pageUrl: `${base}/pay/${encodeURIComponent(request.handle)}/${displayCode(request.code)}`,
+        ...payer,
+        pageUrl: `${base}/api/shopify/orders/${encodeURIComponent(r.source.shop!)}/${r.source.orderGid!.split("/").pop()}/pay`,
         ...(r.source.orderName ? { orderName: r.source.orderName } : {}),
       });
     }),
