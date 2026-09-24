@@ -432,7 +432,7 @@ function renderShellPages() {
   $("acct-address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — not deployed` : (user.address || "—");
   document.querySelector('[data-copy="acct-address"]')?.classList.toggle("hidden", !!plannedSafe);
   $("acct-owner").textContent = user.passkeySafe?.status === "active"
-    ? `passkey${user.passkeySafe?.cosignerPolicy?.enabled ? " + co-signer" : ""}`
+    ? `passkey${user.passkeySafe?.cosignerAddress ? " + Zold co-signer (legacy)" : ""}`
     : "passkey setup required";
   $("acct-kyc").textContent = kycCopy(user.kycStatus, user)[1];
   $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
@@ -451,12 +451,11 @@ function renderShellPages() {
   const legacyStanding = cosigner?.allowances?.some((x) => BigInt(x.amount || "0") > 0n);
   $("set-wallet-policy").textContent = !safe
     ? "Passkey Safe not planned yet."
-    : cosigner?.enabled
-      ? `Production co-signer · ${safe.threshold}-of-${safe.threshold} Safe · ` +
-        (legacyStanding
-          ? "standing allowance detected — revoked automatically on your next send"
-          : "every movement signed with your passkey")
-      : `Passkey-only Safe · every movement signed with your passkey.`;
+    : safe.cosignerAddress
+      ? "Legacy 2-of-2 Safe · Zold's co-signer must counter-sign every movement until you remove it" +
+        (legacyStanding ? " · standing allowance detected — revoked automatically on your next send" : "")
+      : `Passkey-only Safe · you are its only owner and sign every movement with your passkey.`;
+  $("btn-remove-cosigner")?.classList.toggle("hidden", !safe?.cosignerAddress || safe.status !== "active");
   renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
     ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`

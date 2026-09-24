@@ -904,6 +904,7 @@
 
         <div class="m-seclabel">Security</div>
         <div class="m-rows" id="m-pf-security"></div>
+        <div class="error hidden" id="m-pf-sec-err"></div>
         <button class="m-optrow" id="m-pf-documents" style="margin-top:8px">
           <span class="material-symbols-rounded ic">description</span>
           <span class="tx"><span class="t">Statements &amp; documents</span><span class="d">Statement, balance confirmation, proof of ownership</span></span>
@@ -1157,7 +1158,8 @@
             <h2>Security</h2>
             <div class="setting-row"><div><div class="st">Passkey</div><div class="sd" id="set-passkey">—</div></div></div>
             <div class="setting-row"><div><div class="st">Device spending key</div><div class="sd" id="set-device">—</div></div></div>
-            <div class="setting-row"><div><div class="st">Wallet policy</div><div class="sd" id="set-wallet-policy">—</div></div></div>
+            <div class="setting-row"><div><div class="st">Wallet policy</div><div class="sd" id="set-wallet-policy">—</div></div><button class="ghost hidden" id="btn-remove-cosigner">Remove co-signer</button></div>
+            <div class="error hidden" id="cosigner-err"></div>
             <div class="setting-row"><div><div class="st">Recovery</div><div class="sd" id="set-recovery">—</div></div><button class="ghost" id="btn-recovery-start">Start</button></div>
             <div class="error hidden" id="recovery-err"></div>
             <div class="setting-row"><div><div class="st">Session</div><div class="sd">Stored only in this browser.</div></div><button class="ghost" id="btn-signout">Sign out</button></div>

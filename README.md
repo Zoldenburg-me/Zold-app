@@ -2,148 +2,130 @@
 
 # Zold
 
-**Global accounts for people and businesses whose money crosses borders.**
-Built and operated by Zoldenburg.
+A self-custodial euro account for people and businesses whose money crosses
+borders. Built and operated by Zoldenburg.
 
-A global account is a set of local accounts under one roof. Each one is
-denominated in the currency of a place, carries the identifier locals use, and
-pays out on that place's own rail. You hold them all in one smart wallet that
-only you can operate, and you move between them at a live, visible rate.
+You get a euro IBAN through Monerium. Bank transfers arrive as EURe (Monerium's
+regulated euro e-money token) in a Safe smart account on Base whose owner is a
+passkey on your device, and that passkey is its only owner. Every payment is a
+user operation you sign at send time; the server can prepare a debit but holds
+no key that can make or block one.
 
-**Euros are open today.** You get a euro IBAN. Money that arrives by bank
-transfer is held as EURe, a regulated euro e-money token, in a wallet whose
-keys are yours. From there you pay any bank account in the SEPA area, get paid
-by link, page or invoice, take crypto and settle it in euros, and keep the
-books.
+Product documentation for users: [docs/gitbook](docs/gitbook/README.md).
 
-The product documentation lives in [docs/gitbook](docs/gitbook/README.md).
-
----
-
-## What you get
-
-### An account that is yours
-
-- **A real euro IBAN**, issued through Monerium, an e-money institution
-  licensed in the European Economic Area. Bank transfers arrive as EURe,
-  backed one-for-one and redeemable at par.
-- **A smart wallet on Base** whose owner is a passkey on your device. Every
-  payment is signed by you at the moment you send it. Zold cannot move your
-  money without you and cannot replace your keys.
-- **Recovery by email or phone.** Lose the device and you recover the wallet
-  with a new passkey after a one-time code on every channel you registered,
-  with a waiting period during which the rightful owner can cancel.
-- **Prices before you sign.** Every transfer and conversion is quoted against
-  a live mid-market rate. The fee and the measured margin are on screen before
-  you approve, and the rate you approve is the rate you get. If Zold cannot get
-  a fresh rate it refuses to quote rather than guess.
-
-### Send money
-
-- **SEPA bank transfer to any IBAN**, free of Zold fees, with a remittance
-  reference the payee can reconcile on.
-- **Tracking and receipts.** Every payment moves through named states you can
-  watch, and every completed one has a receipt you can share by link, choosing
-  which details the link exposes.
-- **Pay from an invoice.** A supplier's invoice becomes a payment with the
-  right amount, IBAN and reference already filled in.
-
-### Get paid
-
-- **Your payment page** at `/pay/<your handle>`: one address that takes USDC
-  on most EVM networks and lands it in your wallet, with a QR code and an
-  "open in wallet" link. Switch auto-convert on and incoming crypto is turned
-  into euros with your passkey.
-- **Payment links.** Ask for a fixed amount or let the payer choose, by crypto
-  or by bank transfer with a reference that matches the payment to the link.
-- **Invoice-Me links.** Send a supplier a link; they fill in their invoice and
-  bank details, and you pay it from the same screen.
-- **Statements and documents.** Account statements, transfer receipts, balance
-  confirmations and proof of ownership, each printable to PDF and carrying a
-  verification code anyone can check at `/v/<code>`.
-
-### For businesses
-
-- **Organisations, members and roles.** Owners, admins, payers and viewers,
-  with an organisation that can never lose its last owner.
-- **Payments that go through review.** A draft is prepared by one person and
-  approved by another before it can be sent, and a payee whose bank details
-  changed after approval is held rather than paid.
-- **Bulk payments** from a file, executed as one batch, each line with its own
-  signature.
-- **Address book** with bank accounts and wallets, and imported wallets you
-  hold elsewhere shown read-only beside your Zold accounts.
-- **Invoicing that follows your country's rules.** German invoices are checked
-  against the statutory mandatory details and VAT treatment; EU invoices follow
-  the VAT Directive; everywhere else you set the rules and Zold prints them.
-- **Bookkeeping**: transactions, tags, a chart of accounts with rules, cost
-  basis, and CSV export for your accountant's software.
-- **Shopify.** Offer Zold as a payment method on your store. A customer places
-  the order, pays the USDC figure shown on the thank-you page, and the order is
-  marked paid in Shopify the moment the payment is seen.
-- **Gnosis Pay card.** Connect your own Gnosis Pay account and see your card,
-  balances and card transactions inside Zold.
-- **Privacy Bundle** for accounts that want less of their activity visible.
-
----
-
-## Coming soon
+## Status
 
 | | |
 |---|---|
-| **Cash pickup** | Send euros, a relative collects local currency at a MoneyGram counter. |
-| **US dollar account** | A US account and routing number that receives ACH and wire and pays out to any US bank. |
-| **More currencies** | GBP, CHF, NGN and KES accounts, each on its own local rail. |
-| **Shopify in-checkout** | Zold as a native payment method inside Shopify's checkout, with no pending order. |
-| **Cards** | Spend your balance with a card issued for your Zold account. |
+| **Open** | Euro IBAN (Monerium OAuth or your own Monerium API keys), SEPA payouts via Monerium redeem (no Zold fee), USDC ⇄ EURe conversion, payment page, payment links, Invoice-Me links, receipts, verifiable documents, business organisations with four-eyes drafts, invoicing, bookkeeping, Gnosis Pay card view |
+| **Closed** | Cash pickup (Bridge.xyz → Stellar → MoneyGram). Quotes answer `503 RAIL_CLOSED` until `BRIDGE_LIVE=1` and an anchor are configured |
+| **Not built** | USD account, other currencies, own card, Shopify in-checkout payment method |
+| **Never run on real money** | No mainnet deploy, no executed swap, no live Bridge/CCTP transfer, no registered Monerium production OAuth app, no Shopify app install, no Candide recovery call, no mail transport |
 
----
+The running deployment is Base Sepolia (84532). The default chain is Base
+mainnet (8453), which has no entry in `deployments.json` yet.
 
-## How it works
+## Architecture
 
 ```
-   bank transfer ──► Monerium ──EURe──►  your Safe on Base  ◄──USDC── payment page
-                                          passkey-owned              (any EVM network,
-                                                │                     via forwarding)
-                                    signed by you, per payment
-                                                │
-                     ┌──────────────────────────┼──────────────────────────┐
-                     ▼                          ▼                          ▼
-             SEPA to any IBAN         USDC ⇄ EURe conversion       statements, receipts,
-           (Monerium redeem)         (best price across venues)    invoices, bookkeeping
+                      ┌──────────── browser ────────────┐
+                      │ /app  /business  /pay  /r  /v   │  passkey (WebAuthn)
+                      └───────────────┬─────────────────┘  signs every userOp
+                                      │ HTTPS
+┌─────────────────────────────────────▼──────────────────────────────────────┐
+│ server.ts  wiring + authentication                                          │
+│   http/        origin policy, rate buckets, sessions, guards                │
+│   routes/      one router factory per subject, handed requireUserSession    │
+├────────────────────────────────────────────────────────────────────────────┤
+│ transfers/build.ts   the ONE path that creates a transfer                   │
+│ orchestrator.ts      transfer state machine, compensation, sweeps           │
+│ fx.ts  rates.ts      quotes, bound to an independent live mid               │
+│ liquidity.ts         venue seam → liquidity/{lifi,rfq,uniswap,cow,best,…}  │
+│ domain/              orgs, roles, plans, drafts, invoices, ledger (no I/O)  │
+│ store.ts             the only code that touches the database               │
+├────────────────────────────────────────────────────────────────────────────┤
+│ wallet/     Candide Safe (ERC-4337, bundler + paymaster)                    │
+│ adapters/   Monerium, Gnosis Pay, MoneyGram, crypto deposits, forwarder     │
+│ bridge/  stellar/  shopify/  recovery/                                      │
+└──────┬──────────────────┬──────────────────┬───────────────────┬───────────┘
+       ▼                  ▼                  ▼                   ▼
+   Base (Safe,        Monerium          FX venues           Bridge.xyz /
+   EURe, USDC)     (IBAN, redeem)    (LI.FI, Bebop, …)   Stellar (closed)
 ```
 
-- **Money is regulated money.** EURe is Monerium's e-money; USDC is Circle's
-  fully reserved dollar. Your IBAN is a real IBAN, provided with Monerium
-  through a licensed bank in the SEPA area.
-- **The wallet is a Safe smart account**, deployed gas-free, owned by your
-  passkey. Signing happens on your device with WebAuthn; the server verifies
-  and never holds an owner key.
-- **Conversions go to the best price.** Zold quotes every configured venue in
-  parallel, settles at the best one, checks every price against an independent
-  live mid before it binds, and records which venue won and why.
-- **Deposits are forwarded.** The payment page address routes USDC from any
-  supported EVM network into your wallet on Base.
-- **Documents are verifiable.** Every statement and receipt is a signed
-  snapshot; the verifier re-checks the signature and the chain on every visit.
+### How a SEPA payment flows
 
----
+1. `POST /api/quotes` prices the payment against a live mid (`fx.ts`,
+   `rates.ts`). No rate, no quote.
+2. `POST /api/transfers` calls `transfers/build.ts`, which prepares the Safe
+   user operation that *is* the debit. Its token, amount and destination are
+   fixed in the hash.
+3. The browser signs that hash with the passkey. The chain enforces what was
+   signed.
+4. `orchestrator.ts` submits the userOp and redeems EURe to the IBAN through
+   Monerium, recording each state and tx hash. A 4xx refusal refunds; a timeout
+   or anything ambiguous goes to `MANUAL_REVIEW`.
 
-## Security
+A conversion follows the same path, with `liquidity.ts` picking the venue:
+every venue's quote is checked against the independent mid, venue calldata is
+allowlisted, and the amount received is measured as a balance delta.
 
-- The passkey is the wallet owner. A payment needs your signature over its
-  exact amount and destination, so a stolen session cannot change either.
-- Secrets at rest are encrypted: Monerium tokens and API keys, Shopify store
-  tokens. None of them ever appears in an API response.
-- Rate limits and an origin allowlist on every authentication route, and a
-  production readiness gate that refuses to start on an incomplete
-  configuration.
-- Recovery cannot be used to spend: a recovered credential gains control only
-  after the waiting period the module enforces, and the previous owner can
-  cancel during it.
-- See [ARCHITECTURE.md](ARCHITECTURE.md) for the platform design, [INTEGRATORS.md](INTEGRATORS.md) for every external dependency and the credentials each one needs, [SECURITY.md](SECURITY.md) for the security policy.
+### Directory map
 
----
+```
+services/api/src/
+  server.ts            wiring and authentication (~350 lines)
+  config.ts            every setting and every production refusal
+  capabilities.ts      what /api/health tells the UI it may offer
+  orchestrator.ts      transfer state machine and compensation (the money path)
+  fx.ts  rates.ts      quoting and live mid-rates
+  liquidity.ts         venue seam; one venue per file in liquidity/
+  store.ts             data access; row shapes in store/types.ts, file db in store/db.ts
+  http/                policy.ts, sessions.ts, guards.ts, pending.ts
+  routes/              auth, users, transfers, monerium, orgs, business/, documents,
+                       payment-requests, payment-page, receipt-shares, shopify,
+                       gnosis-pay, crypto-deposits, recovery-*, admin, pages
+  transfers/build.ts   builds a transfer from a quote (direct send and draft execution)
+  domain/              plans, roles, drafts, invoices, invoicing, jurisdictions, ledger, coa
+  wallet/              Candide Safe deployment, signing, passkey Safe plan
+  adapters/            monerium-*, gnosis-pay, moneygram, crypto-deposits, candide-forwarder
+  bridge/  stellar/    cash rail (closed)
+  shopify/  recovery/  merchant and guardian integrations
+  documents.ts  receipt.ts  reconcile.ts  webauthn.ts  crypto-at-rest.ts
+
+services/api/public/
+  index.html + app/*.js       the account app (/app): classic scripts sharing one scope;
+                              main.js loads last and holds everything that awaits then renders
+  business.html + business/   organisation dashboard (/business): ES modules, core.js owns state
+  landing, pay, pay-request, invoice, receipt, document, admin pages
+  sw.js                       service worker (page code network-first)
+
+contracts/src/        FxSwapper, AdminTimelock, MockToken (local hardhat fixtures only)
+shopify-app/          Shopify app config and checkout extension
+scripts/              deploy, dev chain, operations, and every test suite
+docs/                 design docs; docs/notes/ holds the decision history
+```
+
+### Rules the code depends on
+
+- **No debit without a user signature, and no Zold key on the Safe.** The
+  passkey is the only owner and signs every user operation. There is no
+  allowance. (Safes deployed earlier as 2-of-2 with a Zold co-signer keep
+  working until their user removes it from Settings.)
+- **Fail closed.** No rate, no quote; no venue, no trade; no Monerium
+  connection, no SEPA send.
+- **Nothing is shown as real that has not moved real money.** Closed rails are
+  hidden or labelled, never simulated.
+- **Three authority checks**: session (who), member and role (may they, here),
+  plan capability (did the org buy it). A draft's reviewer may not be its
+  drafter.
+- **Nothing deletes an org, account, invoice or ledger row.** Gating is a
+  read-time filter.
+- **Public projections are allowlists**, redacted on the server.
+
+The reasoning behind each rule is in [docs/notes/](docs/notes/). Platform
+design: [ARCHITECTURE.md](ARCHITECTURE.md). External dependencies and their
+credentials: [INTEGRATORS.md](INTEGRATORS.md).
 
 ## Run it
 
@@ -151,45 +133,34 @@ Node 22 or newer.
 
 ```sh
 npm install
-npm run check        # typecheck, contracts and every offline test suite
-npm run check:live   # the same plus the Stellar testnet and test-anchor suites
-npm run api          # run against the configured chain (Base mainnet by default)
+cp .env.example .env    # every variable is documented there
+npm run check           # typecheck, contracts and every offline test suite
 ```
 
-`/` is the landing page, `/app` the account, `/business` the organisation
-dashboard, `/pay/<handle>` a payment page, `/invoice/<token>` an invoice,
-`/r/<slug>` a shared receipt, `/v/<code>` a document verification.
+| | `npm run dev` | `npm run api` |
+|---|---|---|
+| chain | local hardhat (31337) | `TRANSF_CHAIN_ID` (default 8453) |
+| database | `data/db.dev.json`, wiped every start | `data/db.json`, kept |
+| passkey Safe deploy | not possible (no bundler/paymaster) | works |
 
-Configuration lives in `.env`; `.env.example` documents every variable. Chain
-selection is configuration: `TRANSF_CHAIN_ID` picks the chain and
-`deployments.json` is keyed by it. The Shopify app project is in
-[shopify-app](shopify-app/README.md).
+Sending a payment end to end needs `npm run api` against Base Sepolia with a
+funded, deployed Safe. Before `npm run api` on a new chain, run
+`npm run deploy` with real operator keys.
 
-```
-services/api/src/
-  server.ts              HTTP API, sessions, static UI
-  orchestrator.ts        transfer state machines and compensation
-  fx.ts  rates.ts        quoting against live mids
-  liquidity.ts  dex.ts   venues and best-execution routing
-  wallet/candide.ts      Safe deployment and signing
-  documents.ts           statements, receipts, verification
-  payment-requests.ts    payment links and attribution
-  domain/                organisations, accounts, invoices, ledger
-  routes/                orgs, business, documents, payment requests, shopify, recovery
-  adapters/              monerium, crypto deposits, forwarding, gnosis pay
-  public/                landing, app, business dashboard, invoice, pay pages
-shopify-app/             Shopify app config and checkout extension
-contracts/src/           AdminTimelock, FxSwapper, MockToken
-docs/gitbook/            product documentation
-scripts/                 deploy, operations, test suites
-```
+Pages: `/` landing, `/app` account, `/business` organisations,
+`/pay/<handle>` payment page, `/invoice/<token>` invoice, `/r/<slug>` shared
+receipt, `/v/<code>` document verification.
 
----
+### Tests
 
-## Two names
+`npm run check` is offline and is the one to run. `npm run check:live` adds the
+Stellar testnet suites. Each suite also runs alone (`npm run fx:test`,
+`npm run business:test`, …); [TESTING.md](TESTING.md) covers manual end-to-end testing.
 
-**Zold** is the app. **Zoldenburg** is the company that builds and operates it.
+## Names
+
+**Zold** is the app. **Zoldenburg** is the company.
 
 ## License
 
-[Apache-2.0](LICENSE). Security policy in [SECURITY.md](SECURITY.md).
+[Apache-2.0](LICENSE). Security policy: [SECURITY.md](SECURITY.md).
