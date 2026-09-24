@@ -86,6 +86,16 @@ export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+/**
+ * The invoice as its own org sees it. Neither hash leaves the server: the link
+ * token hash is a lookup key, and a password hash — even a salted one — is
+ * something to brute-force offline.
+ */
+export function ownerInvoiceView<T extends Invoice>(i: T): Omit<T, "linkTokenHash" | "linkPasswordHash"> {
+  const { linkTokenHash: _t, linkPasswordHash: _p, ...rest } = i;
+  return rest;
+}
+
 /** Constant-time compare, so a token cannot be recovered a byte at a time. */
 export function tokenMatches(token: string, hash: string): boolean {
   const a = Buffer.from(hashToken(token), "hex");

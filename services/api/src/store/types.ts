@@ -154,6 +154,7 @@ export interface User {
     partner?: string;
     version: string;
     at: string;
+    /** Legacy: written before Sep 2026, never written now, never sent. */
     ip?: string;
   }[];
   /**

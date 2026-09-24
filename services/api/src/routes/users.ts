@@ -250,7 +250,8 @@ export function createUserRouter(deps: UserDeps) {
           ...(typeof c.partner === "string" && c.partner ? { partner: c.partner.slice(0, 80) } : {}),
           version: typeof c.version === "string" && c.version ? c.version.slice(0, 40) : CONSENT_VERSION,
           at: new Date().toISOString(),
-          ...(req.ip ? { ip: req.ip } : {}),
+          // No IP: the consent is tied to the account that gave it, and an
+          // address stored here was echoed to the operator's user list.
         });
       }
       store.audit(auditEntry("segment.decided", {
