@@ -29,7 +29,7 @@ import { createCryptoDepositRouter } from "./routes/crypto-deposits.js";
 import { createPaymentPageRouter } from "./routes/payment-page.js";
 import { createReceiptShareRouter } from "./routes/receipt-shares.js";
 import { capabilities } from "./capabilities.js";
-import { publicUser, withSession } from "./users/public-user.js";
+import { publicUser } from "./users/public-user.js";
 import { apiRateLimit, originPolicy, securityHeaders } from "./http/policy.js";
 import {
   requireSession,
@@ -137,7 +137,7 @@ const sandbox = moneriumSandboxEnabled();
 // Email/SMS recovery through Candide's guardian. Mounted at /api so its
 // no-session half sits under /recovery, which the limiter above already
 // treats as an auth route.
-app.use("/api", createCandideRecoveryRouter({ requireUserSession, publicUser, withSession }));
+app.use("/api", createCandideRecoveryRouter({ requireUserSession, publicUser }));
 // Account documents: receipts, statements, balance and ownership letters, each
 // verifiable at /v/<code>. The page is the record; the PDF is its print.
 app.use("/api", createDocumentsRouter({ requireUserSession }));

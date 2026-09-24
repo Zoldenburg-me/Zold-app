@@ -663,6 +663,11 @@ export interface RecoveryRequest {
    * still has the right to cancel.
    */
   candide?: {
+    /** sha256 (hex) of the per-request secret handed ONCE to the browser that
+     *  started the recovery. Every by-id route requires the secret: the id is
+     *  not a capability, and knowing the account's email is not either. Never
+     *  on the public projection. */
+    accessHash?: string;
     newPasskey?: {
       credentialId: string;
       publicKey: { jwk: JsonWebKey; alg: "ES256" | "RS256" };

@@ -83,7 +83,7 @@ window.setReachable = setReachable;
  * `method` is explicit only where the verb is not implied by the body: a body
  * means POST and no body means GET, which covers every call but DELETE.
  */
-async function api(path, body, method) {
+async function api(path, body, method, extraHeaders) {
   // Every call carries the session token, so the path must be ours: a
   // `submitTo` from a response is followed only under /api/.
   if (typeof path !== "string" || !path.startsWith("/api/")) {
@@ -92,6 +92,7 @@ async function api(path, body, method) {
   const headers = {};
   if (body) headers["content-type"] = "application/json";
   if (sessionToken) headers.authorization = `Bearer ${sessionToken}`;
+  if (extraHeaders) Object.assign(headers, extraHeaders);
   let res;
   try {
     res = await fetch(path, {
