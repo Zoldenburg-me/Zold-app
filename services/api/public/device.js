@@ -1,5 +1,5 @@
 /**
- * FP4 device key (browser side).
+ * Device key (browser side).
  *
  * The key that authorizes payments lives here — generated in this browser,
  * never sent anywhere. The server learns only the address, and it signs over
@@ -22,7 +22,7 @@
  * Not every authenticator supports PRF. When it isn't available we fall back
  * to storing the key unprotected and label it that way (`protection: "none"`)
  * rather than pretending — an unwrapped key is still enough to stop the
- * server spending, which is the FP4 property; it just doesn't survive someone
+ * server spending, which is the point of the device key; it just doesn't survive someone
  * with access to this browser profile.
  *
  * Crypto is vendored @noble/secp256k1 + @noble/hashes (audited, no build

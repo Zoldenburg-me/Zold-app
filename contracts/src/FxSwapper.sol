@@ -2,8 +2,7 @@
 pragma solidity ^0.8.24;
 
 /// A raw ERC-20 interface rather than OpenZeppelin's SafeERC20, DELIBERATELY.
-/// Recorded here because an audit flagged it (issue #120, FLAW-04) and the
-/// answer is a decision, not an oversight.
+/// Recorded here because it looks like an oversight and is a decision.
 ///
 /// The complaint has two halves and only one of them applies:
 ///

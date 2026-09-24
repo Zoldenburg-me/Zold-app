@@ -55,7 +55,7 @@ export interface AuthDeps {
 }
 
 
-// --- Passkeys (FP2: full WebAuthn verification) ------------------------------
+// --- Passkeys (full WebAuthn verification) -----------------------------------
 // Registration parses and verifies the attestation (challenge, origin,
 // rpIdHash) and stores the COSE public key + sign counter. Login verifies the
 // assertion signature server-side before a session is issued.
