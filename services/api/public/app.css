@@ -229,6 +229,8 @@
   .onb-q .yn button.on { border-color: var(--pink, #ff2d8b); background: rgba(255, 45, 139, .10); }
   .onb-check { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; font-size: 13.5px; line-height: 1.45; }
   .onb-check input { width: 18px; height: 18px; margin-top: 2px; flex: 0 0 auto; accent-color: var(--acc); }
+  .onb-check a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--onb-line); }
+  .onb-check a:hover { border-bottom-color: var(--acc); }
 
   /* The blocked screen. Same split as onboarding so it does not read as an
      error page — it is an outcome, not a fault. */
@@ -358,6 +360,7 @@
   .nav a.active { color: var(--text); background: var(--row); }
   .nav a:hover { color: var(--text); }
   .side .foot { margin-top: auto; color: var(--faint); font-size: .76rem; padding: .5rem .6rem; }
+  .side .foot a { color: inherit; }
 
   .main { padding: 1.25rem 1.5rem; min-width: 0; }
   .topbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.2rem; }

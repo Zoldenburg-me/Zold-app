@@ -17,7 +17,7 @@
 <!-- Material Symbols, as the design specifies. display=block so an icon never
      flashes as its ligature text before the font arrives. -->
 <link rel="stylesheet" href="/vendor/fonts/material-symbols.css" />
-<title>Zold — send money home</title>
+<title>Zold — your euro account</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23ed188d'/%3E%3Cpath d='M30 66 L54 30 L58 66 M46 30 L74 22' stroke='white' stroke-width='7' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/app.css">
 </head>
@@ -52,7 +52,7 @@
 
         <div id="onb-step1">
           <h1>Open your account</h1>
-          <div class="sub">A euro account with your own IBAN, so money can reach you the ordinary way. Takes about a minute.</div>
+          <div class="sub">A euro account with your own IBAN, so money can reach you the ordinary way.</div>
           <label>Full name</label>
           <input id="name" placeholder="Miriam Zoldenburg" />
           <label>Email <span class="onb-hint">— how a lost device gets the account back</span></label>
@@ -63,10 +63,10 @@
             <button type="button" data-acct="company">Company</button>
           </div>
           <label>Country of residence</label>
-          <input id="country" value="DE" placeholder="DE" />
+          <input id="country" placeholder="DE" maxlength="2" autocomplete="country" />
           <div class="hidden" id="incorp-wrap">
             <label>Country of incorporation</label>
-            <input id="incorp-country" placeholder="DE" />
+            <input id="incorp-country" placeholder="DE" maxlength="2" />
           </div>
           <label>Citizenship <span class="onb-hint">— add every one you hold</span></label>
           <div class="onb-chips" id="cit-chips"></div>
@@ -94,11 +94,15 @@
 
           <!-- Two consents, separate, neither pre-ticked. The partner is named
                dynamically because the user is consenting to a NAMED recipient;
-               "our partners" is not the consent that was asked for. -->
+               "our partners" is not the consent that was asked for. Gnosis Pay
+               is not named: the card is connected later, and Gnosis Pay runs
+               its own KYC — Zold sends it nothing at signup. There is no
+               standalone terms page yet, so the link goes to the notes that
+               exist rather than to "#". -->
           <label class="onb-check"><input type="checkbox" id="consent-terms" />
-            <span>I accept Zold's <a href="#">Terms of use</a> and <a href="#">Privacy policy</a>.</span></label>
+            <span>I accept Zold's <a href="/#notes" target="_blank" rel="noopener">terms and legal notes</a>.</span></label>
           <label class="onb-check"><input type="checkbox" id="consent-partner" />
-            <span>I agree that Zold may share my identity details with <b id="partner-name">Monerium and Gnosis Pay</b>, who open and run the account.</span></label>
+            <span>I agree that Zold may share my details with <b id="partner-name">Monerium</b>, who verifies my identity and issues my IBAN.</span></label>
 
           <button class="btn-primary-lite" id="btn-continue">Continue</button>
           <div class="error hidden" id="create-err"></div>
@@ -147,7 +151,7 @@
           <div class="pk-steps hidden" id="pk-steps">
             <div class="pstep"><span class="pdot">✓</span><span class="ptext">Create your passkey</span></div>
             <div class="pstep"><span class="pdot">✓</span><span class="ptext">Deploy your smart wallet <span class="pwhy">— approve with the passkey, we cover the fee</span></span></div>
-            <div class="pstep"><span class="pdot">✓</span><span class="ptext">Connect Monerium <span class="pwhy">— sign in, or add your API keys, once the wallet exists</span></span></div>
+            <div class="pstep"><span class="pdot">✓</span><span class="ptext">Connect Monerium <span class="pwhy">— your identity check and IBAN</span></span></div>
           </div>
           <!-- No "later": the API refuses to issue an IBAN to an account with no
                passkey (custodyBlockerBeforeFunding), and there is no mock IBAN
@@ -194,8 +198,8 @@
     <div class="onb-hero">
       <!-- Step 1: what the account is. -->
       <div class="onb-hero-inner hero-1">
-        <h2>A euro account that reaches home.</h2>
-        <div class="tag">Money arrives by normal bank transfer and leaves as cash or a bank payment, with the rate and fee shown before you send.</div>
+        <h2>A euro account only you control.</h2>
+        <div class="tag">Money arrives by normal bank transfer and leaves as a SEPA payment, with the amount and any fee shown before you approve.</div>
         <div class="onb-points">
           <div class="onb-point">
             <span class="pi">🏦</span>
@@ -205,10 +209,10 @@
             </span>
           </div>
           <div class="onb-point">
-            <span class="pi">🇰🇪</span>
+            <span class="pi">🇪🇺</span>
             <span>
-              <span class="pt">Cash pickup or bank transfer</span>
-              <span class="pd">Send to a counter in Kenya, or to any IBAN in Europe.</span>
+              <span class="pt">Pay any IBAN in Europe</span>
+              <span class="pd">SEPA payouts with no Zold fee. Other countries open as payout partners sign.</span>
             </span>
           </div>
           <div class="onb-point">
@@ -433,14 +437,12 @@
         <a href="#" data-view="contacts">◔ Contacts</a>
         <a href="#" data-view="settings">⚙ Settings</a>
       </nav>
-      <div class="foot">? Need help<br/><span style="opacity:.6">🦄 by Zoldenburg</span></div>
+      <div class="foot"><a href="mailto:support@zoldhq.com">Need help?</a><br/><span style="opacity:.6">🦄 by Zoldenburg</span></div>
     </aside>
 
     <main class="main">
       <div class="topbar">
         <h1 id="view-title">Dashboard</h1>
-        <div class="search">⌕ Search…</div>
-        <div class="net-chip">wallet</div>
       </div>
 
       <section class="view active" id="view-dashboard">
@@ -564,8 +566,7 @@
             <span class="m-tag soon">SOON</span>
             <div style="font-size:13.5px;font-weight:600">USD accounts</div>
           </div>
-          <div class="body">A second balance, US routing details, USDC in and out.</div>
-          <button class="cta" id="m-usd-cta">Notify me</button>
+          <div class="body">A second balance with US routing details. Not open yet — there is no waiting list to join.</div>
         </div>
 
         <div class="m-sec">
@@ -669,7 +670,6 @@
           <div class="m-perk"><span class="material-symbols-rounded">vpn_lock</span><div><div class="t">Mysterium VPN</div><div class="d">Unlimited, device to node</div></div></div>
           <div class="m-perk"><span class="material-symbols-rounded">sim_card</span><div><div class="t">Kokio eSIM</div><div class="d">20 GB data in 120 countries</div></div></div>
           <div class="m-perk"><span class="material-symbols-rounded">percent</span><div><div class="t">No FX margin</div><div class="d">First €2,000 sent each month</div></div></div>
-          <div class="m-perk"><span class="material-symbols-rounded">savings</span><div><div class="t">Vault boost</div><div class="d">2.1% on savings, paid daily</div></div></div>
         </div>
         <button class="m-cta" disabled>Coming soon</button>
         <!-- Two of those perks ship today under a different name, so the real
@@ -1165,7 +1165,7 @@
           <div class="card">
             <h2>Privacy bundle</h2>
             <div class="setting-row"><div><div class="st">Traffic routing</div><div class="sd">VPN traffic should go device to Mysterium nodes, not through Zold.</div></div></div>
-            <div class="setting-row"><div><div class="st">Data stored</div><div class="sd">Billing status and aggregate allowance only in this demo.</div></div></div>
+            <div class="setting-row"><div><div class="st">Data stored</div><div class="sd">Billing status and aggregate allowance only.</div></div></div>
             <div class="setting-row"><div><div class="st">Live fulfillment</div><div class="sd" id="set-privacy-live">Pending partner credentials.</div></div></div>
           </div>
         </div>
