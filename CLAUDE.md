@@ -21,7 +21,9 @@ ran.
 | talk to a payout, card or funding partner | `docs/notes/roadmap-and-partners.md` |
 | pick up someone else's branch | Multi-agent workflow, below |
 
-Design docs (not history): `docs/business-accounts.md`,
+Architecture (read from code, Sep 2026): `docs/architecture/product-architecture.md`
+(what exists, with status per feature) and `docs/architecture/technical-architecture.md`
+(how it is built, route catalogue). Design docs (not history): `docs/business-accounts.md`,
 `docs/gnosis-pay-permissionless-integration.md`, `docs/payment-pages.md`,
 `docs/privacy-bundle.md`, `docs/gitbook/`.
 
