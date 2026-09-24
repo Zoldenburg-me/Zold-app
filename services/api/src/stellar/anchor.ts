@@ -1,12 +1,10 @@
 /**
  * Stellar anchor client — SEP-10 (web auth) + SEP-24 (interactive withdraw).
  *
- * This IS the MoneyGram Ramps protocol: MoneyGram is a Stellar anchor
- * speaking exactly these SEPs from its own home domain, gated on partner
- * onboarding. Pointed at Stellar's public test anchor (testanchor.stellar.org)
- * the same code runs live today with no signup — so the integration is real
- * protocol code, and production MoneyGram is a config change:
- * MG_ANCHOR_DOMAIN + a partner-onboarded account + asset USDC.
+ * MoneyGram Ramps uses these SEPs from its own home domain, gated on partner
+ * onboarding. The same code runs against Stellar's public test anchor
+ * (testanchor.stellar.org) with no signup. Production MoneyGram needs
+ * MG_ANCHOR_DOMAIN, a partner-onboarded account and asset USDC.
  */
 // Every call carries a timeout: an anchor or Horizon request that hangs
 // would stall a payout refresh for the process's lifetime.
@@ -658,13 +656,12 @@ function stellarAmount(amount: number): string {
 const STROOP = 1e-7;
 
 /**
- * Decide what to actually pay the anchor.
+ * Decide what to pay the anchor.
  *
- * The anchor echoes `amount_in` once the session firms up, and it is tempting
- * to just send that. But it is a remote-supplied number driving an outbound
- * payment, and we already validated `requested` against the anchor's own
- * published limits — so an `amount_in` that disagrees is a disagreement to
- * surface, not to silently honour. We never send more than we intended to.
+ * The anchor echoes `amount_in` once the session firms up. Don't just send it:
+ * it is a remote-supplied number driving an outbound payment, and `requested`
+ * was already validated against the anchor's published limits. An `amount_in`
+ * above `requested` throws; we never send more than we intended.
  */
 export function resolvePaymentAmount(requested: number, amountIn?: string): number {
   if (!(requested > 0)) throw new Error("payment amount must be positive");

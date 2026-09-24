@@ -1,12 +1,3 @@
-/**
- * The shapes the store holds.
- *
- * Types only — no state, no file, no behaviour — so that a module needing to
- * name a User or a Transfer does not pull in the database with it. The rules
- * that live in these comments are the record of why a field exists; keep them
- * with the field.
- */
-
 export type KycStatus = "pending" | "approved" | "rejected" | "manual_review";
 
 export interface User {
@@ -101,13 +92,11 @@ export interface User {
     createdAt: string;
   };
   /**
-   * Which path this account takes. Decided once by resolveSegment on the
-   * server, at signup.
+   * Which path this account takes, decided once by resolveSegment at signup.
    *
-   * IMMUTABLE FROM THE CLIENT — no route accepts it in a body, and the only
-   * writer is the signup path or an explicit admin action, which records itself
-   * in the audit log. A segment a client could set is a segment a client could
-   * set to EU_FULL.
+   * No route accepts it in a body: a client that could set it could set
+   * EU_FULL. The only writers are the signup path and an admin action, which
+   * records itself in the audit log.
    */
   segment?: {
     value: import("../domain/segments.js").Segment;
@@ -163,11 +152,10 @@ export interface User {
     ip?: string;
   }[];
   /**
-   * A Gnosis Pay card account the user has CONNECTED — theirs, not ours.
-   * Status only, never the JWT: that is a bearer credential for a third
-   * party's financial account and stays in the browser. `asOf` is
-   * load-bearing: permissionless mode has no webhooks, so every figure is a
-   * snapshot from the last time the user opened the view.
+   * A Gnosis Pay card account the user connected (theirs, not ours). Status
+   * only. The JWT is a bearer credential for a third party's account and stays
+   * in the browser. Permissionless mode has no webhooks, so every figure is a
+   * snapshot as of `asOf`, the last time the user opened the view.
    */
   gnosisPay?: {
     connectedAddress: `0x${string}`;
@@ -343,13 +331,12 @@ export type TransferState =
 /**
  * One inbound crypto transfer seen at a user's account.
  *
- * Recorded BEFORE anything is moved or credited, so a crash between detection
- * and conversion leaves a record to resume from rather than a deposit nobody
- * knows arrived. `txHash` + `logIndex` is the natural identity of an ERC-20
- * transfer and is what makes reprocessing a no-op.
+ * Recorded before anything is moved or credited, so a crash between detection
+ * and conversion leaves a record to resume from. `txHash` + `logIndex`
+ * identifies an ERC-20 transfer and makes reprocessing a no-op.
  *
- * REFUSED is a resting state, not a failure to retry: the euros were never
- * credited and the tokens are still the user's, sitting where they landed.
+ * REFUSED is a resting state, not something to retry: nothing was credited and
+ * the tokens are still the user's, where they landed.
  */
 export interface CryptoDeposit {
   id: string;
@@ -363,20 +350,18 @@ export interface CryptoDeposit {
   amountEur?: number;
   amountUsdc?: number;
   /**
-   * What this was worth in EUR AT THE MOMENT OF RECEIPT — the acquisition
-   * value, and the number the whole tax treatment rests on.
+   * EUR value at the moment of receipt: the acquisition value the tax
+   * treatment rests on.
    *
-   * A German company has no private sphere (§8 Abs. 2 KStG), so crypto arriving
+   * A German company has no private sphere (§8 Abs. 2 KStG), so crypto taken
    * as payment is a Betriebseinnahme at its EUR value on the day, and that
-   * value becomes the cost basis. Converting later is a disposal (Tausch)
-   * whose gain is measured against exactly this figure. Without it recorded at
-   * receipt there is nothing to measure against and nothing to show.
+   * value is the cost basis. A later conversion is a disposal (Tausch) whose
+   * gain is measured against this figure, so it must be recorded at receipt.
    *
-   * THE RATE'S SOURCE IS STORED, NOT JUST THE RATE. The 2025 BMF update on
+   * The rate's source is stored with the rate: the 2025 BMF update on
    * Aufzeichnungspflichten wants a rate from a recognised source applied
-   * consistently — "1.1379" alone proves nothing, "1.1379 from <provider> as
-   * of <date>" is a record. `ratedAt` is when we read it, `asOf` is when the
-   * provider says it was published; they differ and both matter.
+   * consistently. `ratedAt` is when we read it, `asOf` is when the provider
+   * says it was published; the two differ.
    */
   receipt?: {
     amountEur: number;
@@ -415,10 +400,8 @@ export interface CryptoDeposit {
   provider?: string;
   rate?: number;
   /**
-   * The independent mid the venue's rate was checked against, at the instant of
-   * the swap. Kept so the spread we report is CHECKABLE rather than asserted —
-   * a venue rate with nothing to compare it to says nothing about what the
-   * conversion cost.
+   * The independent mid the venue's rate was checked against at the time of
+   * the swap. Stored so the reported spread can be checked.
    */
   midRate?: number;
   txs: { step: string; hash: string }[];
@@ -517,11 +500,10 @@ export interface Transfer {
   /**
    * Did the orchestrator hold this transfer's input funds?
    *
-   * Recorded at creation, on EVERY transfer and every rail, because the answer
-   * has regulatory weight and must not be derivable only by replaying which
-   * venue was configured and whether a venue call happened to succeed. A
-   * fallback from the Safe-executed batch to the plain debit changes the
-   * answer, so it names itself.
+   * Recorded at creation on every transfer and rail. The answer has regulatory
+   * weight, so it must not depend on replaying which venue was configured and
+   * whether a venue call succeeded. A fallback from the Safe-executed batch to
+   * the plain debit changes the answer, so it records itself.
    *
    *  non-custodial — the user's funds never reach an address we hold a key to.
    *                  The cash-rail batch delivering straight to Bridge, and the
@@ -530,9 +512,8 @@ export interface Transfer {
    *  orchestrator   — the input was debited to the orchestrator's own address
    *                  and swapped from there. `reason` says why that path ran.
    *
-   * The fee is excluded from this judgement on purpose: it is revenue at the
-   * moment it moves, not client funds in transit. `feeToOrchestrator` records
-   * it anyway rather than leaving it to be discovered.
+   * The fee is excluded: it is revenue when it moves, not client funds in
+   * transit. `feeToOrchestrator` records it anyway.
    */
   custody?: {
     mode: "non-custodial" | "orchestrator";
@@ -663,10 +644,9 @@ export interface RecoveryRequest {
    * still has the right to cancel.
    */
   candide?: {
-    /** sha256 (hex) of the per-request secret handed ONCE to the browser that
-     *  started the recovery. Every by-id route requires the secret: the id is
-     *  not a capability, and knowing the account's email is not either. Never
-     *  on the public projection. */
+    /** sha256 (hex) of the per-request secret given once to the browser that
+     *  started the recovery. Every by-id route requires the secret; neither the
+     *  id nor the account's email is enough. Not on the public projection. */
     accessHash?: string;
     newPasskey?: {
       credentialId: string;

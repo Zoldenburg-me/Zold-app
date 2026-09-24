@@ -1,14 +1,13 @@
 /**
  * The operator dashboard.
  *
- * READ ONLY. Every route behind it is a read, and the KYC-review and
- * issue-IBAN buttons went with their routes when identity became Monerium's.
+ * Read only: every route behind it is a read. KYC review and IBAN issue belong
+ * to Monerium.
  *
- * TWO THINGS HERE ARE SECURITY, NOT STYLE. The operator token lives in
- * sessionStorage, not localStorage, so it does not outlive the tab. And rows
- * carry ids for a DELEGATED listener rather than an inline onclick built from
- * row data — a signup name containing a quote used to close the JS string in
- * an onclick attribute, which is stored XSS sitting beside that token.
+ * Two security details. The operator token lives in sessionStorage so it does
+ * not outlive the tab. Rows carry ids for a delegated listener; don't build an
+ * inline onclick from row data, since a signup name containing a quote can
+ * close the JS string (stored XSS next to that token).
  */
 let allUsers = [];
 let allTransactions = [];

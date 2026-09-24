@@ -81,8 +81,8 @@ function renderKycGate(u, needsChoice) {
   const steps = [
     { t: "Account created", d: "Your passkey is registered", state: "done" },
     { t: "Smart wallet deployed", d: walletReady ? "Your account exists on-chain" : "Approve the deployment with your passkey", state: walletReady ? "done" : "now" },
-    // Only where the deployment can offer it. Not "now" when skipped: nothing
-    // is waiting on it, and the pulse belongs to the step that is.
+    // Only where the deployment offers it. Not "now" when skipped, since
+    // nothing waits on it.
     ...(caps.emailSmsRecovery ? [{ t: "Recovery set up",
       d: recoveryActive ? "Email registered, guardian on your smart wallet" : "Skipped — set it up from your profile; until then a lost device loses the account",
       state: recoveryActive ? "done" : "" }] : []),
@@ -90,9 +90,7 @@ function renderKycGate(u, needsChoice) {
     { t: "IBAN activated", d: rejected ? "Not approved" : approved ? "Funding and sending are open" : "One passkey confirmation",
       state: rejected ? "bad" : approved ? "done" : "now" },
   ];
-  /* Only the FIRST unfinished step is "in progress". Nothing is working on
-     step three while step two is still waiting on you, and two things pulsing
-     at once says the opposite. */
+  /* Only the first unfinished step is "in progress"; later steps wait on it. */
   let running = false;
   $("kyc-steps").innerHTML = steps.map((s) => {
     let state = s.state;
@@ -331,18 +329,15 @@ function setPasskeyButtonBusy(busy, label) {
 }
 
 /* ==========================================================================
-   ONBOARDING STEP 1 — identity basics
+   Onboarding step 1: identity basics
    --------------------------------------------------------------------------
-   The backend decides the path; this screen only collects. It deliberately
-   does NOT branch on country, because a client that knows the rules is a
-   client that can be read to learn them — and because two copies of a rule
-   set drift. The only thing the UI derives locally is which partner to NAME
-   in the consent line, and that is cosmetic: the server records the consent
-   with the partner the segment actually assigns.
+   The backend decides the path; this screen only collects. It does not branch
+   on country: rules shipped to the client can be read, and two copies of a
+   rule set drift. The UI only picks which partner to name in the consent line,
+   and the server records consent with the partner the segment assigns.
 
-   Nothing here is pre-answered. An unanswered US question and a "no" are
-   different facts, and the API refuses a half-filled set rather than reading
-   silence as a denial.
+   Nothing is pre-answered. An unanswered US question is not a "no", and the
+   API refuses a half-filled set.
    ========================================================================== */
 let acctType = "individual";
 let citizenships = [];
@@ -455,9 +450,8 @@ function showBlocked(code, _serverMessage) {
     code === "BLOCKED_US" ? "Zold is not available to US persons"
     : code === "BLOCKED_SANCTIONED" ? "Zold is not available in your country"
     : "Zold cannot open an account for you yet";
-  // The server's message IS the title, so repeating it here said the same
-  // sentence twice. The body carries the thing the user actually wants to know
-  // next: that nothing was created and nothing was shared.
+  // The title already says what the server's message says; the body states
+  // that nothing was created or shared.
   $("blocked-body").textContent =
     "Nothing has been created, and none of your details have been shared with anyone.";
 }

@@ -2,10 +2,10 @@
  * Incoming invoices: the Invoice-Me link a supplier fills in, paying one, and
  * reconciling one paid elsewhere.
  *
- * AN INVOICE IS PAID THROUGH A DRAFT, never by a second payment path. The
- * supplier is matched to a contact BY IBAN, then by name, else created — never
- * by merging a supplier's self-declared details into a trusted contact, which
- * is how invoice fraud works.
+ * An invoice is paid through a draft; there is no second payment path. The
+ * supplier is matched to a contact by IBAN, else a new contact is created.
+ * Self-declared supplier details are never merged into a trusted contact
+ * (that is how invoice fraud works).
  */
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -112,7 +112,7 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
   /**
    * Pay an incoming invoice: one draft, one line, built from what the supplier
    * gave. The supplier lands in the address book (or is matched to an existing
-   * contact by IBAN, then by name) so the line carries a fingerprint and the
+   * contact by IBAN) so the line carries a fingerprint and the
    * four-eyes review applies exactly as to any other payment. The invoice
    * moves to PAYING and follows its transfer from there.
    */
@@ -141,11 +141,10 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
     }
 
     // The supplier as a contact. Match on IBAN only: the same account under a
-    // renamed company is the same payee. NEVER by name — the name is the
-    // supplier's own claim through the link, and attaching a stranger's IBAN
-    // to a trusted contact because they typed its name is the classic
-    // invoice-fraud move. An unknown IBAN gets a new contact the reviewer sees
-    // as new.
+    // renamed company is the same payee. Don't match by name: the name is the
+    // supplier's own claim, and attaching their IBAN to a trusted contact of
+    // that name is classic invoice fraud. An unknown IBAN gets a new contact,
+    // which the reviewer sees as new.
     const iban = normaliseIban(bank.iban);
     const contacts = store.contactsOf(ctx.org.id);
     let contact = contacts.find((c) => c.bankAccounts.some((b) => b.iban && normaliseIban(b.iban) === iban));
@@ -264,10 +263,9 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
   /**
    * What the issuer looks like on paper, plus the reference data the editor
    * needs: the VAT rates, the exemption reasons with their statutes, and the
-   * optional blocks that may be switched off. Mandatory §14 fields are NOT in
-   * the display map — an invoice generator whose settings can produce an
-   * invalid document is a trap, and the person it catches is the customer who
-   * loses their input-tax deduction.
+   * optional blocks that may be switched off. Mandatory §14 fields are not in
+   * the display map, so settings cannot produce an invalid invoice (which
+   * would cost the customer their input-tax deduction).
    */
 
   return r;

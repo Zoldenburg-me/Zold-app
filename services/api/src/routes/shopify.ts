@@ -1,46 +1,42 @@
 /**
  * /api/shopify/* and /api/orgs/:orgId/shopify — Zold as a Shopify payments app.
  *
- * THE SHAPE. Shopify's "offsite" payments-app flow: the buyer picks Zold at
- * checkout, Shopify POSTs a payment session to us, we answer with a redirect
- * to the pay page for a payment request sized from the session, the buyer
- * pays USDC there, and the moment the deposit is attributed we call
- * paymentSessionResolve on the store's Payments Apps API. Shopify then marks
- * the order paid and hands back the URL the buyer should land on.
+ * Shopify's "offsite" payments-app flow: the buyer picks Zold at checkout,
+ * Shopify POSTs a payment session to us, we redirect to the pay page for a
+ * payment request sized from the session, the buyer pays USDC there, and once
+ * the deposit is attributed we call paymentSessionResolve on the store's
+ * Payments Apps API. Shopify then marks the order paid and returns the URL the
+ * buyer lands on.
  *
- * TWO MODES (SHOPIFY_MODE, config.ts), one router:
- *  - `payments-app` is the shape above. It needs Shopify's Payments Apps
- *    program approval before ANY store can install it, and nobody has that.
- *  - `custom-app` (default) is the shape that works today: the store offers a
- *    MANUAL payment method named Zold, Shopify sends us orders/create, we open
- *    a payment request sized from the order, the buyer pays on the thank-you
- *    page (the checkout extension in shopify-app/ renders the request there)
- *    or from the pay link, and when the deposit is attributed we press the
- *    merchant's "Mark as paid" for them through the Admin API
- *    (orderMarkAsPaid) and leave the facts on a `zold.payment` metafield.
- *    The order exists BEFORE the money does — that is the whole difference,
- *    and the one thing this mode cannot hide.
+ * Two modes (SHOPIFY_MODE, config.ts), one router:
+ *  - `payments-app` is the flow above. It needs Shopify's Payments Apps
+ *    program approval before any store can install it, and we do not have it.
+ *  - `custom-app` (default): the store offers a manual payment method named
+ *    Zold, Shopify sends us orders/create, we open a payment request sized
+ *    from the order, the buyer pays on the thank-you page (the checkout
+ *    extension in shopify-app/ renders the request there) or from the pay
+ *    link, and when the deposit is attributed we mark the order paid through
+ *    the Admin API (orderMarkAsPaid) and record the details on a
+ *    `zold.payment` metafield. The order exists before the money does.
  *
- * WHAT IS REAL AND WHAT IS NOT, stated here because the surface looks
- * finished:
- *  - Both modes' request/response contracts, HMAC verification, request →
- *    settle, and the refund/capture/void rejections are built to Shopify's
- *    documented shapes and proven against a stub (npm run shopify:test,
+ * Status:
+ *  - Both modes' request/response contracts, HMAC verification, request ->
+ *    settle, and the refund/capture/void rejections follow Shopify's
+ *    documented shapes and are tested against a stub (npm run shopify:test,
  *    npm run shopify:orders:test).
  *  - No real store has installed the app in either mode. The payments-app
- *    approval is a partner-side step nobody has started; the custom-app path
- *    needs one custom-distribution install on a real store to be proven.
- *  - Crypto only. A checkout needs an answer within the session's life, and
- *    a SEPA transfer does not arrive in an hour, so bank payment is not
- *    offered on a checkout request (it remains available on ordinary links).
+ *    approval has not been started; the custom-app path needs one
+ *    custom-distribution install on a real store.
+ *  - Crypto only. A checkout needs an answer within the session's life and a
+ *    SEPA transfer takes longer, so bank payment is not offered on a checkout
+ *    request (ordinary links still offer it).
  *  - Sale only. `kind: authorization` (manual capture) is refused with a
- *    merchant-readable reason; there is no hold-then-capture on a chain
- *    transfer the buyer makes from their own wallet.
- *  - Refunds are manual. A refund session is acknowledged and then REJECTED
- *    with a merchant message: the merchant pays the buyer back from Zold
- *    themselves (the buyer's address is on the deposit record). Auto-refunding
- *    to whichever address happened to send the funds is how exchange hot
- *    wallets get refunded instead of customers.
+ *    merchant-readable reason; a chain transfer from the buyer's own wallet
+ *    cannot be held and captured.
+ *  - Refunds are manual. A refund session is acknowledged and then rejected
+ *    with a merchant message; the merchant pays the buyer back from Zold (the
+ *    buyer's address is on the deposit record). Don't auto-refund to the
+ *    sending address: it may be an exchange hot wallet, not the customer.
  */
 import { wrap } from "./util.js";
 import express from "express";

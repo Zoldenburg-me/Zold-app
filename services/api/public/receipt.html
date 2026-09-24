@@ -279,8 +279,6 @@ function render(r) {
     const ref = h.withheld
       ? `<div class="href redact">${BLOCK}${BLOCK} · withheld by sender</div>`
       : h.ref ? `<div class="href">${esc(h.ref)}</div>` : "";
-    /* A leg that never settled is labelled, not quietly drawn like one that
-       did. This is the difference between a route and a diagram of one. */
     const sim = h.simulated ? '<span class="badge sim">simulated</span>' : "";
     return `<div class="hop">
       <div class="hicon"><div class="hbox">${icon}</div><div class="line"></div></div>

@@ -1,24 +1,20 @@
 /**
  * CoW Protocol — intent-based liquidity, no inventory on either side.
  *
- * Why this exists alongside the RFQ provider: Bebop lists EURe only on
- * Ethereum (Monerium is a market maker there; Base, Polygon and Gnosis answer
- * "TokenNotSupported") and has no testnet at all. CoW does quote EURe, at
- * essentially the mid rate, on Gnosis where Monerium is native and EURe
- * liquidity is deepest.
+ * Alongside the RFQ provider because Bebop lists EURe only on Ethereum
+ * (Monerium market-makes there; Base, Polygon and Gnosis answer
+ * "TokenNotSupported") and has no testnet. CoW quotes EURe near the mid rate
+ * on Gnosis, where Monerium is native and EURe liquidity is deepest.
  *
- * The model differs from RFQ in a way that matters here. There is no
- * transaction to submit: you sign an ORDER and solvers compete to fill it. So
- * `execute` places the order and returns; settlement happens when a solver
- * picks it up, which is asynchronous and not guaranteed within any deadline.
- * The signature is EIP-1271, so the user's Safe — or the orchestrator — can
- * sign without an EOA.
+ * Unlike RFQ there is no transaction to submit: you sign an order and solvers
+ * compete to fill it. So `execute` places the order and returns; settlement is
+ * asynchronous with no guaranteed deadline. The signature is EIP-1271, so the
+ * user's Safe or the orchestrator can sign without an EOA.
  *
- * NOT WIRED FOR EXECUTION YET. quote() is live and correct; execute() refuses,
- * because placing an order needs an EIP-712 signature over CoW's order struct
- * and a decision about who signs (the Safe, with the user present, or the
- * orchestrator). Quoting is useful on its own — it prices the corridor without
- * committing to anything.
+ * Not wired for execution yet. quote() is live; execute() refuses, because
+ * placing an order needs an EIP-712 signature over CoW's order struct and a
+ * decision about who signs (the Safe with the user present, or the
+ * orchestrator). Quoting alone prices the corridor.
  */
 import { LIQUIDITY } from "../config.js";
 import { addrs, eur, orchestratorAddress, usd } from "../chain.js";

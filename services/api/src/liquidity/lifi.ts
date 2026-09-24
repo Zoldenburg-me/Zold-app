@@ -1,22 +1,17 @@
 /**
- * LI.FI — aggregated liquidity, and the venue intended for production.
+ * LI.FI: aggregated liquidity, the venue intended for production.
  *
- * WHY THIS OVER A HAND-ROLLED POOL ADAPTER. A DexLiquidityProvider can only
- * ever see the pools it was taught about; an aggregator sees the market. Tested
- * live rather than assumed: 100 EURe -> USDC returned executable quotes on
- * Gnosis (1.1493), Base (1.1506) and Polygon (1.1491) against a live mid of
- * ~1.1511 — 4 to 17bps — routed through Nordstern Finance, Fly and Bitget.
- * None of those would have been in a hardcoded venue list.
+ * A DexLiquidityProvider sees only the pools it was configured with; an
+ * aggregator sees the market. 100 EURe -> USDC quoted on Gnosis (1.1493),
+ * Base (1.1506) and Polygon (1.1491) against a live mid of ~1.1511 (4 to
+ * 17bps), routed through Nordstern Finance, Fly and Bitget.
  *
- * WHY `dex` STAYS. LI.FI lists Base Sepolia but returns "No available quotes"
- * there even for WETH/USDC, which has real Uniswap depth — so this adapter can
- * only ever be exercised with real money on a mainnet, the same gap that left
- * the Bebop adapter correct and unrun. The Uniswap path remains the one that
- * can be proven locally. Neither replaces the other.
+ * `dex` stays too. LI.FI lists Base Sepolia but returns "No available quotes"
+ * there even for WETH/USDC, so this adapter can only run with real money on a
+ * mainnet (as with Bebop). The Uniswap path is the one testable locally.
  *
- * Fail-closed throughout, and one guard that matters more here than anywhere
- * else: we are trusting a third party's routing, so the price it returns is
- * still checked against the independent live mid before we bind to it.
+ * Fail-closed throughout. The price from third-party routing is still checked
+ * against the independent live mid before we bind to it.
  */
 import { LIQUIDITY } from "../config.js";
 import { addrs, eur, orchestratorAddress, orchestratorWallet, publicClient, usd, writeAndWait } from "../chain.js";
@@ -143,10 +138,9 @@ export class LifiLiquidityProvider implements LiquidityProvider {
       publicClient.readContract({ address: quote.lifi!.toToken, abi: erc20Abi, functionName: "balanceOf", args: [owner] }) as Promise<bigint>;
     const before = await balanceOf(to);
 
-    // Approve what the maker NAMES, not tx.to. They are the same contract today
-    // — which is exactly why approving tx.to would work by luck and break
-    // silently the day routing moves to a separate settlement contract or
-    // Permit2. Same trap as on the Bebop adapter.
+    // Approve the address the maker names. Don't use tx.to: it is the same
+    // contract today, but would break with no error once routing moves to a
+    // separate settlement contract or Permit2. Same as the Bebop adapter.
     const approveHash = await writeAndWait(orchestratorWallet, {
       address: tokenIn,
       abi: [...erc20Abi],

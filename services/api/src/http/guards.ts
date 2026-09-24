@@ -2,10 +2,9 @@
  * The checks a route runs before it does anything: KYC state, segment
  * capability, custody readiness, the daily cap, and the operator token.
  *
- * ENFORCED IN CODE, NOT IN THE UI. Hiding a button is a presentation choice
- * that a crafted request walks straight past; these are the checks that
- * actually decide, which is why they live beside the session module rather
- * than inside any one route file.
+ * These are the enforcing checks; the UI hiding a button does not stop a
+ * crafted request. They sit beside the session module so every route shares
+ * them.
  */
 import type express from "express";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -58,20 +57,16 @@ export function custodyBlockerBeforeFunding(user: User): string | null {
 }
 
 /**
- * The single gate in front of every partner call.
+ * The gate in front of every partner call.
  *
- * ENFORCED IN CODE, NOT IN THE UI. Hiding a button is a presentation choice
- * that a crafted request walks straight past; this is the check that actually
- * decides. An IN_COLLECTIONS account cannot reach Monerium, a Safe, a card or
- * an on-chain balance no matter what it POSTs, because every one of those
- * routes asks here first.
+ * Enforced here, not in the UI. An IN_COLLECTIONS account cannot reach
+ * Monerium, a Safe, a card or an on-chain balance whatever it POSTs, because
+ * each of those routes checks here first.
  *
- * A user with no segment is a pre-existing account from before segmentation.
- * They are treated as EU_FULL rather than refused: they were created under the
- * old country gate, which already required a Monerium-servable residence, and
- * locking them out of their own funded account would be a worse failure than
- * the one this guards. `npm run segments:test` covers the resolver; this
- * fallback is the migration seam and is deliberately narrow.
+ * A user with no segment predates segmentation and is treated as EU_FULL: the
+ * old country gate already required a Monerium-servable residence, and
+ * refusing would lock them out of a funded account. `npm run segments:test`
+ * covers the resolver; this fallback is the migration seam and stays narrow.
  */
 export function requireCapability(
   user: User,
@@ -120,10 +115,9 @@ export function isOperator(req: express.Request): boolean {
 }
 
 /**
- * Operator authentication. Deliberately NOT a user session: a user must never
- * be able to act as the operator on their own account. Fails closed when no
- * token is configured, so an unset secret means no operator path rather than
- * an open one.
+ * Operator authentication, separate from user sessions so a user cannot act
+ * as the operator on their own account. With no token configured there is no
+ * operator path.
  */
 export function requireOperator(req: express.Request, res: express.Response): boolean {
   if (!KYC.operatorToken) {

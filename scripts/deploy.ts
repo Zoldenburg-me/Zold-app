@@ -94,10 +94,9 @@ const KEYS = {
 /**
  * Never put hardhat's published keys on a chain anyone else can reach.
  *
- * Checked against the keys we actually resolved, not against the RPC alone:
- * refusing every non-local RPC outright would block a deployment with three
- * real keys, and the way past it (ALLOW_DEV_KEYS_ON_EXTERNAL_RPC=1) would then
- * also wave through the dev keys — the exact thing being guarded against.
+ * Checked against the resolved keys, not the RPC alone. Refusing every
+ * non-local RPC would block a deployment with real keys, and the override
+ * (ALLOW_DEV_KEYS_ON_EXTERNAL_RPC=1) would then let the dev keys through too.
  */
 if (!LOCAL_RPC) {
   const dev = Object.values(DEV_KEYS).map((k) => k.toLowerCase());
@@ -226,12 +225,12 @@ async function main() {
     );
   }
   /**
-   * Off hardhat, the deployment IS the two real token addresses and nothing
+   * Off hardhat, the deployment is the two real token addresses and nothing
    * else. The FxSwapper (our own inventory, not Safe-executable) and the
-   * AdminTimelock are local fixtures; production
-   * liquidity comes from LI.FI / Uniswap through the user's own Safe, and the
-   * cash leg goes through Bridge.xyz. Deploying mock USDC on a real chain, as
-   * this script used to, would have pointed every rail at a token nobody holds.
+   * AdminTimelock are local fixtures; production liquidity comes from LI.FI /
+   * Uniswap through the user's own Safe, and the cash leg goes through
+   * Bridge.xyz. Don't deploy mock USDC here: every rail would point at a token
+   * nobody holds.
    */
   if (CHAIN_ID !== hardhat.id) {
     const usdcAddr = (process.env.DEPLOY_USDC_ADDRESS as `0x${string}` | undefined) ?? KNOWN_USDC[CHAIN_ID];

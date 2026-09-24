@@ -415,15 +415,13 @@ RENDER.settings = async () => {
 
 // ── Invoicing: profile and the issue editor ────────────────────────────────
 //
-// Two rules shape this screen, and both come from the tax code rather than from
-// taste:
-//  - You may choose which OPTIONAL blocks appear. Everything § 14 UStG requires
-//    is always rendered; a settings screen that can switch off a mandatory
-//    field is a trap, and it springs on the customer, who loses their
-//    input-tax deduction.
-//  - Charging VAT and not charging it are a single either/or with a REASON
-//    attached, never a rate box you can zero out. Showing tax you do not owe
-//    makes you liable for it (§ 14c UStG).
+// Two rules from the tax code shape this screen:
+//  - Only optional blocks can be toggled. Everything § 14 UStG requires is
+//    always rendered; if a mandatory field could be switched off, the
+//    customer would lose their input-tax deduction.
+//  - Charging VAT or not is an either/or with a reason attached, never a rate
+//    box that can be zeroed. Showing tax you do not owe makes you liable for
+//    it (§ 14c UStG).
 
 export let invoiceDraft = null;
 export const setInvoiceDraft = (v) => { invoiceDraft = v; };
@@ -431,10 +429,10 @@ export const setInvoiceDraft = (v) => { invoiceDraft = v; };
 /**
  * What rules apply and how far we check them.
  *
- * The verification level is the honest part: "statutory" means we encoded the
- * paragraphs, "directive" means only the EU baseline and not the member state's
- * own rules, "structural" means no tax law at all. Rendered wherever an invoice
- * is issued so `ok` is never read as more than it is.
+ * Verification levels: "statutory" means we encoded the paragraphs,
+ * "directive" means only the EU baseline without the member state's own rules,
+ * "structural" means no tax law at all. Rendered wherever an invoice is issued
+ * so `ok` is not over-read.
  */
 export function jurisdictionBanner(j, disclaimer, notVerified) {
   const tone = { statutory: "ok", directive: "warn", structural: "bad" }[j.verification] ?? "mut";

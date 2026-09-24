@@ -1,18 +1,17 @@
 /**
  * The store: every read and write of persisted state goes through here.
  *
- * ONE SEAM. Nothing outside this file touches the database object, so the JSON
- * file behind it is replaceable in one place — and every write persists before
- * it returns, so a crash cannot leave a change in memory only.
+ * Nothing outside this file touches the database object, so the JSON file
+ * behind it can be replaced in one place. Every write persists before it
+ * returns, so a crash cannot leave a change only in memory.
  *
- * NOTHING DELETES. There is deliberately no method to remove an organisation,
- * an account, an invoice or a ledger row. Plan gating is a READ-TIME FILTER: a
- * downgraded org keeps its chart of accounts, its tags and its history, and
- * the API refuses to serve them. That promise is only true if no code path
- * exists to delete on downgrade, so none does.
+ * Nothing deletes: there is no method to remove an organisation, account,
+ * invoice or ledger row. Plan gating is a read-time filter. A downgraded org
+ * keeps its chart of accounts, tags and history and the API just does not serve
+ * them, which holds only while no delete path exists. Don't add one.
  *
  * The row shapes are in ./store/types.ts and the file-backed database in
- * ./store/db.ts; both are re-exported here, so importers are unchanged.
+ * ./store/db.ts; both are re-exported here.
  */
 import { randomUUID } from "node:crypto";
 import { db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
@@ -87,9 +86,9 @@ export const store = {
     return rows.slice(-limit).reverse();
   },
   /**
-   * Set the segment. The ONLY writer, and it refuses to be a silent overwrite:
-   * a segment already decided can be changed only by an explicit admin action,
-   * so a second signup-path call cannot quietly re-segment an existing account.
+   * Set the segment. The only writer. Once a segment is decided only an admin
+   * action can change it, so a second signup-path call cannot re-segment an
+   * existing account.
    */
   setSegment(
     id: string,
@@ -214,18 +213,15 @@ export const store = {
   /**
    * Hold part of the daily cap for a transfer that is still being prepared.
    *
-   * THE HOLE THIS CLOSES, twice over. The cap was first only CHECKED in
-   * buildTransferFromQuote and the row that reserves it written several awaits
-   * later, so two parallel requests both read a usage figure neither had
-   * written to and both created a full-cap transfer. Checking again at the
-   * write closed that race but refused AFTER the slow work — on the cash rail
-   * after a live Bridge transfer had been created, leaving an unfunded
-   * transfer at Bridge for every refusal. A hold taken BEFORE any partner is
-   * called gives both properties: the second request is refused while nothing
-   * outside this process has been touched, and the first one's figure is
-   * counted from the moment it starts preparing.
+   * Checking the cap in buildTransferFromQuote and writing the reserving row
+   * several awaits later let two parallel requests each create a full-cap
+   * transfer. Checking again at the write refuses too late: on the cash rail,
+   * after a live Bridge transfer exists, leaving it unfunded. A hold taken
+   * before any partner is called refuses the second request while nothing
+   * outside this process has been touched, and counts the first from the
+   * moment it starts preparing.
    *
-   * Same idiom as claimAuthorization — nothing yields between the read and the
+   * Same idiom as claimAuthorization: nothing yields between the read and the
    * write. `used` is a function so it is recomputed inside that window, and it
    * must include `heldEurToday` (safeFundedEurToday does). Holds live in
    * memory like pendingTransferExecutions: a restart drops them along with the

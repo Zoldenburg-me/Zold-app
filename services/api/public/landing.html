@@ -443,10 +443,8 @@
 
 <script>
   /* Hero rotator: Zold -> your own IBAN -> smart money.
-     The first phrase is already in the markup, so this only ever REPLACES a
-     visible word — nothing is blank before JS runs. Honours
-     prefers-reduced-motion by leaving the static first phrase in place, which
-     is a complete headline on its own rather than a degraded one. */
+     The first phrase is in the markup, so nothing is blank before JS runs.
+     With prefers-reduced-motion the static first phrase stays. */
   (function () {
     var el = document.getElementById("rot-word");
     if (!el) return;

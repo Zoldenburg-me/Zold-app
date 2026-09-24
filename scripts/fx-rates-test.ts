@@ -1,10 +1,9 @@
 /**
  * Live FX rate tests.
  *
- * The checks that matter: rates come from the feed, a dead feed REFUSES
- * rather than serving something stale, and the quote's EUR leg equals the rate
- * the on-chain swapper will actually execute at — a hardcoded mid drifts from
- * the market while the receipt keeps claiming "the real exchange rate".
+ * Checks that rates come from the feed, that a dead feed refuses instead of
+ * serving a stale rate, and that the quote's EUR leg equals the rate the
+ * on-chain swapper executes at.
  *
  * Run: npm run fx:test
  */

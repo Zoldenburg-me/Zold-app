@@ -2,13 +2,11 @@
  * Operator step: create and seed a EURe/USDC pool so the DEX provider has
  * something to trade against on a testnet.
  *
- * THIS IS A TEST FIXTURE, NOT A TREASURY. On mainnet the counterparty is
- * everyone else's liquidity and we carry nothing — that is the entire point of
- * moving off the FxSwapper. But nobody has made a EURe market on Base Sepolia
- * (checked: no pool at any fee tier, while WETH/USDC has real depth), so the
- * only way to exercise a real swap here is to post both sides ourselves. Every
- * number the DEX provider reports on this chain is therefore ours, not a
- * market's. Do not read a testnet quote as evidence of real pricing.
+ * A test fixture, not a treasury. On mainnet the counterparty is public
+ * liquidity and we carry nothing. Base Sepolia has no EURe pool at any fee
+ * tier, so to exercise a real swap we post both sides ourselves. Every price
+ * the DEX provider reports on this chain is ours; a testnet quote says
+ * nothing about real pricing.
  *
  *   npm run dex:setup          report what exists and what is missing
  *   npm run dex:setup -- --fix create the pool and mint a full-range position
@@ -162,13 +160,10 @@ async function main() {
     );
   }
   /**
-   * A token we OWN is a different problem from a token we do not.
-   *
-   * addrs().usdc on a testnet deploy is our own MockToken, so a shortfall is
-   * not something to send anyone to a faucet for — we can mint it. Saying
-   * "faucet.circle.com" here sent the operator looking for a token that was
-   * never the one the app trades. Minting is honest for a fixture as long as
-   * it is stated: it is our token on our side of a pool nobody else uses.
+   * addrs().usdc on a testnet deploy is our own MockToken, so mint the
+   * shortfall. Circle's faucet gives a different token from the one the app
+   * trades. The mint is logged as a fixture: our token, on our side of a pool
+   * nobody else uses.
    */
   const mintable = FIX ? await ownedMock(pub, usdc, account.address) : false;
   if (haveUsdc < needUsdc && mintable) {

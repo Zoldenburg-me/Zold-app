@@ -1,30 +1,29 @@
 /**
  * Which Monerium credentials act for a given user.
  *
- * Three sources, resolved in one place so the rest of the code asks "give me
- * a client for this user" and never picks a credential itself:
+ * Three sources, resolved here so the rest of the code asks for "a client for
+ * this user" and never picks a credential itself:
  *
- *  1. `api_keys` — the user's OWN Monerium app (client id + secret created in
- *     their Monerium account's developer section). Client-credentials grant.
- *     The token acts as that account's owner: its profiles, its IBANs, its
- *     orders. This is the "test with my own account" connector.
- *  2. `oauth` — the Authorization Code + PKCE connect flow. Per-user access and
+ *  1. `api_keys`: the user's own Monerium app (client id + secret from their
+ *     Monerium developer section). Client-credentials grant; the token acts as
+ *     that account's owner (its profiles, IBANs, orders).
+ *  2. `oauth`: the Authorization Code + PKCE connect flow. Per-user access and
  *     refresh tokens, refreshed here when they expire.
- *  3. The APP's credentials from .env — MONERIUM_CLIENT_ID/SECRET — for
- *     accounts approved in-house that have no connection of their own.
+ *  3. The app's credentials from .env (MONERIUM_CLIENT_ID/SECRET), for
+ *     accounts approved in-house with no connection of their own.
  *
- * WHY THIS MATTERS FOR (1): the address the app links and the IBAN it requests
- * live under the USER's Monerium profile, which the app's own credentials
- * cannot see. So activation, deposit polling and the SEPA redeem must all run
- * on the user's client, or the IBAN issues and no deposit is ever credited —
- * the same blind spot `MoneriumClient.orders()` documents for unscoped calls.
+ * For (1), the linked address and requested IBAN live under the user's
+ * Monerium profile, which the app's credentials cannot see. Activation,
+ * deposit polling and the SEPA redeem must run on the user's client, or the
+ * IBAN issues and no deposit is credited (see `MoneriumClient.orders()` on
+ * unscoped calls).
  *
- * SECRETS. The client secret is a bearer credential for a financial account.
- * It is encrypted at rest with the same AES-256-GCM scheme the OAuth tokens
- * use (`crypto-at-rest.ts`, purpose `monerium`), stored only after Monerium
- * has accepted it once, and never returned by any endpoint — not even its
+ * The client secret is a bearer credential for a financial account. It is
+ * encrypted at rest with the OAuth tokens' AES-256-GCM scheme
+ * (`crypto-at-rest.ts`, purpose `monerium`), stored only after Monerium has
+ * accepted it once, and never returned by any endpoint, not even as
  * ciphertext. Without MONERIUM_TOKEN_ENCRYPTION_KEY the connector is off and
- * says so, rather than writing a secret to db.json in plaintext.
+ * says so; it never writes the secret to db.json in plaintext.
  */
 import { MONERIUM, moneriumSandboxEnabled } from "../config.js";
 import { decryptField, encryptField } from "../crypto-at-rest.js";
@@ -72,11 +71,9 @@ export function hasOwnMoneriumCredentials(user: User): boolean {
 }
 
 /**
- * Is Monerium REAL for this user — will a SEPA redeem be placed and deposits
- * polled — as opposed to the local mock? True when the deployment holds app
- * credentials, or when the user connected their own account either way. A
- * connected account is a real account; mock-PAYING a payout from it would be
- * the fake this project does not keep.
+ * Whether Monerium is live for this user: a SEPA redeem will be placed and
+ * deposits polled. True when the deployment holds app credentials, or the user
+ * connected their own account by either method.
  */
 export function moneriumLiveFor(user: User): boolean {
   return moneriumSandboxEnabled() || hasOwnMoneriumCredentials(user);

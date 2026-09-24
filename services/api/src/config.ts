@@ -39,15 +39,13 @@ export const IS_LOCAL_CHAIN = CHAIN_ID === 31337;
 export const USING_LOCAL_API_HOST = API_HOST === "127.0.0.1" || API_HOST === "localhost" || API_HOST === "::1";
 
 /**
- * Does this process actually look like a developer laptop?
+ * Whether this process looks like a developer laptop.
  *
- * A loopback bind alone does NOT mean local: the standard hosted shape is a
- * reverse proxy on :443 forwarding to 127.0.0.1:3000, so `API_HOST` says
- * nothing about who can reach the port. Anything that relaxes a control for
- * "local dev" — simulated deposits, auto-KYC, internal error text — has to see
- * the whole picture agree: loopback API, local RPC, and the hardhat chain id.
- * A hosted deploy pointed at a testnet then cannot inherit a dev-only default
- * by forgetting to set NODE_ENV.
+ * A loopback bind alone does not mean local: a hosted deploy usually runs a
+ * reverse proxy on :443 forwarding to 127.0.0.1:3000. Anything that relaxes a
+ * control for local dev (auto-KYC, internal error text) needs all three:
+ * loopback API, local RPC and the hardhat chain id. That way a hosted testnet
+ * deploy without NODE_ENV set does not get dev-only defaults.
  */
 export const LOOKS_LOCAL = USING_LOCAL_API_HOST && USING_LOCAL_RPC && IS_LOCAL_CHAIN;
 const LOOKS_HOSTED = Boolean(PUBLIC_URL) || !LOOKS_LOCAL;
@@ -109,10 +107,9 @@ export const HARNESS = {
  */
 export const KYC = {
   /**
-   * HARNESS ONLY. The local hardhat chain (31337) has no Monerium, so the test
-   * suites approve accounts up front with KYC_AUTO_APPROVE=1. The flag is
-   * ignored on every other chain — there is no auto-approval on a chain where
-   * money is real — and refused outright in production mode below.
+   * Test harness only. The local hardhat chain (31337) has no Monerium, so the
+   * test suites approve accounts up front with KYC_AUTO_APPROVE=1. The flag is
+   * ignored on every other chain and refused in production mode below.
    */
   autoApprove: process.env.KYC_AUTO_APPROVE === "1" && HARNESS.enabled,
   /**
@@ -150,11 +147,10 @@ export const RECOVERY = {
 };
 
 /**
- * The 3-minute SocialRecoveryModule is a TEST FIXTURE: it exists so a
- * recovery can be exercised end to end without waiting three days, and it
- * is the only variant deployed on Base Sepolia. On a chain where money is
- * real, a 3-minute grace period gives the owner no window to cancel a
- * hijacked recovery. Refuse to boot with it in production.
+ * The 3-minute SocialRecoveryModule is a test fixture, so a recovery can run
+ * end to end without waiting three days. It is the only variant deployed on
+ * Base Sepolia. With real money, 3 minutes gives the owner no time to cancel
+ * a hijacked recovery, so production refuses to boot with it.
  */
 export const RECOVERY_MODULE_3_MINUTES = "0x949d01d424bE050D09C16025dd007CB59b3A8c66";
 
@@ -229,31 +225,24 @@ export const STELLAR = {
 export const anchorModeEnabled = () => Boolean(STELLAR.anchorDomain);
 
 /**
- * Custody posture — whether the orchestrator is ever allowed to hold a user's
- * input funds.
+ * Custody posture: whether the orchestrator may ever hold a user's input funds.
  *
- * WHY THIS IS ITS OWN BLOCK. "We never take custody" is a claim with
- * regulatory weight (it is roughly the difference between a technical service
- * provider and a payment/crypto-asset service performed on a client's behalf).
- * Left implicit it is an emergent property of three unrelated settings —
- * which venue is configured, whether Bridge is live, and whether a venue call
- * happens to succeed — and a property nobody asserts and nothing records is
- * a coincidence that held last time somebody looked.
+ * "We never take custody" has regulatory weight (roughly the line between a
+ * technical service provider and a payment/crypto-asset service). Otherwise it
+ * depends on three unrelated settings: the configured venue, whether Bridge is
+ * live, and whether a venue call succeeds. So every transfer records the
+ * custody mode it ran in (`transfer.custody`), and `requireNonCustodial` turns
+ * the preference into a refusal.
  *
- * So: every transfer RECORDS the custody mode it actually ran in
- * (`transfer.custody`), and `requireNonCustodial` turns the preference into a
- * refusal.
- *
- * WHY THE REFUSAL IS NOT ON BY DEFAULT, deliberately: with BRIDGE_LIVE unset
- * there is no external deposit address for a batch to deliver into, so the
- * output has nowhere to go but the orchestrator. Defaulting the refusal on
- * would brick every testnet deployment, including Base Sepolia. The DEFAULT
- * PATH is non-custodial; the
- * GUARANTEE is opt-in, and a deployment moving real money should set it.
+ * The refusal is off by default: with BRIDGE_LIVE unset there is no external
+ * deposit address, so a batch's output can only go to the orchestrator, and
+ * turning it on would break every testnet deployment including Base Sepolia.
+ * The default path is non-custodial; a deployment moving real money should set
+ * REQUIRE_NON_CUSTODIAL=1.
  */
 export const CUSTODY = {
   /** Refuse to create a transfer that would route the user's funds through the
-   *  orchestrator, instead of silently falling back to it. */
+   *  orchestrator. */
   requireNonCustodial: process.env.REQUIRE_NON_CUSTODIAL === "1",
 } as const;
 
@@ -439,10 +428,8 @@ function assertProductionConfig() {
     // No co-signer is required: Safes are passkey-only (1-of-1). The
     // CANDIDE_COSIGNER_* pair is needed only while a legacy 2-of-2 Safe still
     // lists it as an owner; server.ts names any such account at startup.
-    // A standing allowance is deliberately NOT required. Spend authority is
-    // granted per transfer for the exact debit amount, approved by the user's
-    // passkey at send time — zero standing allowance is the designed resting
-    // state.
+    // No standing allowance is required either: the user's passkey approves
+    // each transfer for its exact debit amount at send time.
     if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS) {
       fail("CANDIDE_RECOVERY_GUARDIAN_ADDRESS is required before hosted production funding");
     }
@@ -521,22 +508,18 @@ export const FORWARDING = {
 };
 
 /**
- * Gnosis Pay — permissionless card integration.
+ * Gnosis Pay, permissionless card integration.
  *
- * NO API KEY EXISTS for permissionless mode: the user signs in with SIWE and
- * Gnosis Pay returns a JWT scoped to them. So there is nothing to gate on, and
- * unlike every other partner here this one is configured by default — the
- * honest default is the real base URL, because a blank one would make the
- * feature look unavailable when it is simply unconfigured for no reason.
+ * Permissionless mode has no API key: the user signs in with SIWE and Gnosis
+ * Pay returns a JWT scoped to them. There is nothing to gate on, so unlike the
+ * other partners this one defaults to the real base URL.
  *
- * `partnerId` is deliberately optional and unset. It belongs to partner mode,
- * which brings webhooks and card-activity attribution and which we do not
- * have; sending one we were not issued would be claiming a relationship that
- * does not exist.
+ * `partnerId` stays unset. It belongs to partner mode (webhooks, card-activity
+ * attribution), which we have not been granted.
  *
- * siweChainId is 100 (Gnosis Chain) and is NOT derived from CHAIN_ID. Gnosis
- * Pay's account lives on their chain regardless of where Zold runs, and
- * deriving it would silently produce a message they reject.
+ * siweChainId is 100 (Gnosis Chain). Don't derive it from CHAIN_ID: the Gnosis
+ * Pay account lives on their chain wherever Zold runs, and they reject a SIWE
+ * message for any other chain.
  */
 export const GNOSIS_PAY = {
   baseUrl: process.env.GNOSIS_PAY_BASE_URL ?? "https://api.gnosispay.com",
@@ -568,8 +551,7 @@ export const PAYMENT_REQUESTS = {
   /** Below this share of a quoted amount a deposit is not attributed to the
    *  request at all; it stays an ordinary deposit on the account. */
   partialFloorBps: Number(process.env.PAY_REQUEST_PARTIAL_FLOOR_BPS ?? 2_000),
-  /** Above the quote by more than this, likewise: an over-payment that large
-   *  is somebody else's payment, not generosity. Basis points. */
+  /** Above the quote by more than this, not attributed either. Basis points. */
   overpayCapBps: Number(process.env.PAY_REQUEST_OVERPAY_CAP_BPS ?? 1_000),
   /** Default lifetime of a link created from the app. */
   defaultTtlMs: Number(process.env.PAY_REQUEST_DEFAULT_TTL_MS ?? 7 * 24 * 60 * 60_000),
@@ -683,39 +665,31 @@ export function loadAbi(contract: string): any[] {
 /**
  * Where the EURe<->USDC leg gets its liquidity.
  *
- * "fx-swapper" is the local mock: our own inventory at an owner-set rate, fine
- * for demos and the only thing that works on hardhat. "rfq" is just-in-time
- * liquidity from a market maker (Bebop), where the price is an executable
- * quote rather than a number we chose — which is the point, because a rate you
- * cannot actually trade at is a promise you cannot keep.
+ * "fx-swapper" is the local mock: our own inventory at an owner-set rate, and
+ * the only venue that works on hardhat. "rfq" is just-in-time liquidity from a
+ * market maker (Bebop), priced by an executable quote.
  *
- * BEBOP_API_KEY is effectively required on the chains that matter: ethereum
- * and arbitrum answer every unauthenticated request with UnknownError (tested
- * with a USDC->WETH control), and EURe is TokenNotSupported on the chains the
- * public endpoint does serve. Request access via Bebop's contact form and set
+ * BEBOP_API_KEY is effectively required: ethereum and arbitrum answer every
+ * unauthenticated request with UnknownError (checked with a USDC->WETH
+ * control), and EURe is TokenNotSupported on the chains the public endpoint
+ * serves. Request access via Bebop's contact form and set
  * BEBOP_CHAIN=ethereum before adding rfq to the venue list.
  */
 export const LIQUIDITY = {
   /**
-   * THE DEFAULT IS A CUSTODY DECISION, not a pricing one.
+   * The default is a custody decision.
    *
-   * Only venues that implement `safeSwapPlan` can be executed BY THE USER'S
-   * SAFE — the batch that approves the venue and delivers the output straight
-   * to the payout destination, so the orchestrator never holds the input.
-   * FxSwapper cannot (its inventory is `onlyTrader`) and CoW refuses, so a
-   * deployment on either falls back to debiting the full amount to the
-   * orchestrator's own address and swapping from there.
+   * Only venues that implement `safeSwapPlan` can be executed by the user's
+   * Safe: one batch approves the venue and delivers the output straight to the
+   * payout destination, so the orchestrator never holds the input. FxSwapper
+   * cannot (its inventory is `onlyTrader`) and CoW refuses, so on either the
+   * full amount is debited to the orchestrator, which swaps from there.
    *
-   * Defaulting to that fallback would take possession of every cash-rail
-   * transfer unless an operator knew to change one env var. `best` (over
-   * LIQUIDITY_VENUES, itself defaulting to lifi,dex — both Safe-executable)
-   * is the default, so the non-custodial path is what runs unless someone
-   * opts out.
+   * `best` over LIQUIDITY_VENUES (default lifi,dex, both Safe-executable) is
+   * the default, so the non-custodial path runs unless someone opts out.
    *
    * Local hardhat has neither LI.FI nor a seeded pool, so `_local-chain.ts`
-   * pins fx-swapper explicitly for dev and the harnesses. That is the right
-   * shape: the weaker mode is opted INTO by the local demo rather than
-   * inherited by production.
+   * pins fx-swapper for dev and the harnesses. Keep that opt-in local only.
    */
   PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "best") as "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best",
   // Bebop's chain slug, e.g. "polygon", "base", "ethereum".
@@ -773,18 +747,15 @@ export const LIQUIDITY = {
    */
   DEX_MAX_MID_DEVIATION_BPS: BigInt(process.env.DEX_MAX_MID_DEVIATION_BPS ?? 300),
   /**
-   * LI.FI — the production venue.
+   * LI.FI, the production venue.
    *
-   * Tested, not assumed: EURe->USDC quotes executable on Gnosis (1.1493), Base
-   * (1.1506) and Polygon (1.1491) against a live mid of ~1.1511, routed through
-   * Nordstern Finance / Fly / Bitget — venues a hand-rolled Uniswap adapter
-   * would never see. That routing breadth is the whole argument for an
-   * aggregator over a single pool.
+   * EURe->USDC quotes were executable on Gnosis (1.1493), Base (1.1506) and
+   * Polygon (1.1491) against a live mid of ~1.1511, routed through Nordstern
+   * Finance / Fly / Bitget, venues a single Uniswap adapter would not reach.
    *
-   * It CANNOT be exercised on a testnet: it lists Base Sepolia but answers
+   * It cannot be exercised on a testnet: it lists Base Sepolia but answers
    * "No available quotes" even for WETH/USDC, which has real Uniswap depth
-   * there. So `dex` stays as the locally-provable path and this is the one that
-   * ships. Keep both.
+   * there. `dex` is the path we can test locally; this one ships. Keep both.
    */
   LIFI_BASE_URL: process.env.LIFI_BASE_URL ?? "https://li.quest",
   LIFI_API_KEY: process.env.LIFI_API_KEY ?? "",
@@ -800,24 +771,20 @@ export const LIQUIDITY = {
     .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
 
   /**
-   * Best execution. With more than one venue wired, picking one by config means
-   * quietly settling at a worse price whenever the other is better — and having
-   * an aggregator alongside a single-pool adapter makes that likely rather than
-   * theoretical. `best` quotes every venue below in parallel and takes the
-   * largest out for the same in.
+   * Best execution. With more than one venue wired, picking one by config
+   * settles at a worse price whenever the other is better. `best` quotes every
+   * venue below in parallel and takes the largest out for the same in.
    */
   VENUES: (process.env.LIQUIDITY_VENUES ?? "lifi,dex")
     .split(",").map((s) => s.trim()).filter(Boolean),
   /**
-   * Who keeps positive slippage — the difference between what a venue quoted
-   * and what it actually delivered.
+   * Who keeps positive slippage: the difference between what a venue quoted
+   * and what it delivered.
    *
-   * Default "user", and that default is load-bearing. The receipt reports
-   * marginBps MEASURED between the live mid and what we deliver; silently
-   * pocketing surplus would make that number understate what we take, which is
-   * the exact dishonesty the live-rates work existed to remove. "treasury" is
-   * available but records the amount on the transfer so it stays visible and
-   * can be reflected in the margin rather than hidden in it.
+   * Default "user". The receipt reports marginBps measured between the live
+   * mid and what we deliver; keeping surplus unrecorded would make that number
+   * understate what we take. "treasury" records the amount on the transfer so
+   * it can be reflected in the margin.
    */
   SURPLUS_POLICY: (process.env.LIQUIDITY_SURPLUS_POLICY ?? "user") as "user" | "treasury",
 };
@@ -876,10 +843,9 @@ export const CRYPTO_IN = {
   /**
    * How far the venue's rate may sit from the live mid before we refuse.
    *
-   * This is the same discipline as the quote binding, for the same reason:
-   * the FxSwapper's rate is one WE set, so without an independent check we
-   * could credit e-money at a price no market would give — the exact failure
-   * the live-rates work existed to end.
+   * Same check as the quote binding: the FxSwapper's rate is one we set, so
+   * without an independent mid we could credit e-money at a price no market
+   * would give.
    */
   maxDriftBps: envNumber("CRYPTO_IN_MAX_DRIFT_BPS", 100, { min: 0 }),
   /**
@@ -895,11 +861,9 @@ export const CRYPTO_IN = {
 
 // FX configuration for the launch corridor (EUR -> KES cash pickup).
 //
-// Mid rates are NOT here — they come live from rates.ts, because a hardcoded
-// constant goes stale silently while the receipt keeps claiming a margin over
-// "the real exchange rate". EUR->USD is absent for the same reason: that leg
-// is whatever the liquidity venue will really execute at, read in fx.ts. What
-// stays here is our own pricing, which is genuinely ours to set.
+// Mid rates come live from rates.ts; a hardcoded constant goes stale while the
+// receipt still claims a margin over the market rate. EUR->USD is whatever the
+// liquidity venue executes at, read in fx.ts. Only our own pricing lives here.
 export const FX = {
   SPREAD_BPS: 50, // our FX spread on the cash corridor
   /**

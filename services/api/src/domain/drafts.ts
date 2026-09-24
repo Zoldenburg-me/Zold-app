@@ -1,15 +1,12 @@
 /**
  * Draft payments: create → submit for review → reviewed → execute.
  *
- * The workflow exists because a business payment has more than one person in
- * it. Two rules carry the weight:
+ * A business payment involves more than one person. Two rules:
  *
- *  - FOUR EYES. The reviewer may not be the drafter (roles.ts enforces it).
- *    Without that, review is a button the same person presses twice.
- *  - INVALID_DATA. If the contact behind a line moved after the draft was
- *    saved, the draft STOPS instead of retargeting. A payment that silently
- *    follows an edited address book is how money reaches the wrong account
- *    with a complete and innocent-looking audit trail.
+ *  - Four eyes: the reviewer may not be the drafter (roles.ts enforces it).
+ *  - INVALID_DATA: if the contact behind a line changed after the draft was
+ *    saved, the draft stops. It must not follow an edited address book, or
+ *    money reaches the wrong account with a clean-looking audit trail.
  */
 
 import { destinationFingerprint } from "./contacts.js";

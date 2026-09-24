@@ -2,11 +2,9 @@
  * What every screen on the dashboard needs: the DOM helpers, the escaping, the
  * session-bearing api(), the plan-capability lookup, and the shared state.
  *
- * THE STATE LIVES HERE AND ONLY THIS MODULE WRITES IT. `org`, `view` and the
- * rest are read all over the dashboard, and an ES module export is a LIVE
- * binding — so every read stays a plain `org`, and the handful of places that
- * reassign call a setter instead. That is what makes splitting a single shared
- * scope into modules a move rather than a rewrite.
+ * Only this module writes the state. `org`, `view` and the rest are read
+ * everywhere; an ES module export is a live binding, so reads stay a plain
+ * `org` and the few places that reassign call a setter.
  */
 import { render } from "./shell.js";
 

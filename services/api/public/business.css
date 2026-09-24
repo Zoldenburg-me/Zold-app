@@ -100,9 +100,8 @@
   .pill.bad { background: rgba(244,67,108,.14); color: var(--red); }
   .pill.mut { background: var(--row); color: var(--muted); }
 
-  /* An upgrade prompt shown IN PLACE of a gated feature, never a hidden nav
-     item: hiding a feature makes the product look unfinished, and offering an
-     action the API will refuse is worse. */
+  /* Upgrade prompt shown in place of a gated feature. Don't hide the nav item
+     or offer an action the API will refuse. */
   .gate { border: 1px dashed var(--border2); border-radius: var(--radius); padding: 1.5rem 1.3rem; text-align: center; background: var(--panel2); }
   .gate h3 { font-family: var(--display); font-size: 1rem; margin-bottom: .35rem; }
   .gate p { color: var(--muted); font-size: .86rem; max-width: 460px; margin: 0 auto .9rem; }
