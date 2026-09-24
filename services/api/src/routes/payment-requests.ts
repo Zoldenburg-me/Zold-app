@@ -337,6 +337,9 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
 
   router.get(
     "/pay/:handle/:code",
+    // /pay/:handle/qr.svg belongs to the payment-page router, mounted after
+    // this one; without this it read as an unknown code and every QR 404'd.
+    (req, _res, next) => (req.params.code === "qr.svg" ? next("route") : next()),
     wrap(async (req, res) => {
       const hit = resolvePublic(req, res);
       if (!hit) return;

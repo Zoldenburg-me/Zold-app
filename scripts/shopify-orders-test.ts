@@ -185,7 +185,7 @@ const o1 = order();
 await check("orders/create for a pending EUR order on the Zold method opens a crypto-only request sized from the order, with the order's name, status URL and a day-long window", async () => {
   const r = await webhook("orders/create", o1);
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id)!;
+  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
   assert.ok(req, "no request opened");
   assert.equal(req.amountEur, 129);
   assert.deepEqual(req.methods, ["crypto"]);
@@ -211,19 +211,19 @@ await check("an order paid another way is acknowledged and ignored", async () =>
   const r = await webhook("orders/create", o);
   assert.equal(r.status, 200);
   assert.equal(r.body.ignored, "not a Zold order");
-  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id), undefined);
+  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP), undefined);
 });
 await check("a Zold order that is not pending (already marked paid by hand) is ignored", async () => {
   const o = order({ financial_status: "paid" });
   assert.equal((await webhook("orders/create", o)).status, 200);
-  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id), undefined);
+  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP), undefined);
 });
 await check("a non-EUR order is acknowledged (so the subscription survives) but opens nothing", async () => {
   const o = order({ currency: "USD" });
   const r = await webhook("orders/create", o);
   assert.equal(r.status, 200);
   assert.match(String(r.body.ignored), /currency USD/);
-  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id), undefined);
+  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP), undefined);
 });
 await check("a mis-signed webhook is a 401 and a stranger store a 404", async () => {
   assert.equal((await webhook("orders/create", order(), SHOP, "wrong-secret")).status, 401);
@@ -232,7 +232,7 @@ await check("a mis-signed webhook is a 401 and a stranger store a 404", async ()
 await check("a test order carries the test flag", async () => {
   const o = order({ test: true });
   await webhook("orders/create", o);
-  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id)!.test, true);
+  assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!.test, true);
 });
 
 console.log("\nThank-you page lookup");
@@ -262,7 +262,7 @@ await check("an order id under another shop's name is a 404 — a page cannot be
 await check("the email-template pay link redirects to the order's pay page", async () => {
   const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay`);
   assert.equal(r.status, 302);
-  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id)!;
+  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
   assert.ok(r.location.endsWith(`/pay/keycard/${req.code.slice(0, 5)}-${req.code.slice(5, 10)}-${req.code.slice(10)}`), r.location);
 });
 
@@ -277,7 +277,7 @@ const payRequest = (req: any) => {
   return attributeDepositToRequest(d);
 };
 await check("the buyer's USDC deposit marks the request PAID, the order is marked paid through the Admin API exactly once, and the facts land on a zold.payment metafield", async () => {
-  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id)!;
+  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
   const paid = payRequest(req)!;
   assert.equal(paid.state, "PAID");
   assert.ok(await until(() => Boolean(store.findPaymentRequest(req.id)!.source.resolvedAt)), `not resolved: ${store.findPaymentRequest(req.id)!.source.resolveError}`);
@@ -293,7 +293,7 @@ await check("the buyer's USDC deposit marks the request PAID, the order is marke
 await check("the lookup now reports PAID and the return link sends the buyer to Shopify's order status page", async () => {
   const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}`);
   assert.equal(r.body.state, "PAID");
-  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id)!;
+  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
   const back = await call("GET", `/api/shopify/return/${req.code}`);
   assert.equal(back.status, 302);
   assert.equal(back.location, o1.order_status_url);
@@ -301,7 +301,7 @@ await check("the lookup now reports PAID and the return link sends the buyer to 
 await check("a mark-as-paid the store refused is recorded and retried by the sweep", async () => {
   const o = order();
   await webhook("orders/create", o);
-  const req = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id)!;
+  const req = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!;
   failNextMarkPaid = true;
   payRequest(req);
   assert.ok(await until(() => Boolean(store.findPaymentRequest(req.id)!.source.resolveError)), "no error recorded");
@@ -315,11 +315,35 @@ await check("a mark-as-paid the store refused is recorded and retried by the swe
 await check("orders/cancelled closes an unpaid request but leaves a paid one alone", async () => {
   const o = order();
   await webhook("orders/create", o);
-  const open = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id)!;
+  const open = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!;
   assert.equal((await webhook("orders/cancelled", o)).status, 200);
   assert.equal(store.findPaymentRequest(open.id)!.state, "CANCELLED");
   assert.equal((await webhook("orders/cancelled", o1)).status, 200);
-  assert.equal(store.findPaymentRequest(store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id)!.id)!.state, "PAID");
+  assert.equal(store.findPaymentRequest(store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!.id)!.state, "PAID");
+});
+
+console.log("\nTwo stores, one order number");
+const SHOP_B = "other-merchant.myshopify.com";
+await check("a second store's orders/cancelled and orders/create for the SAME order id neither cancel nor swallow the first store's open request", async () => {
+  const first = store.findShopifyConnectionByShop(SHOP)!;
+  store.addShopifyConnection({ ...first, id: randomUUID(), shop: SHOP_B });
+  const o = order();
+  await webhook("orders/create", o);
+  const victim = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!;
+  assert.equal(victim.state, "OPEN");
+  // Shopify order ids are per-store sequences: store B can deliver the same one.
+  const cancelled = await webhook("orders/cancelled", o, SHOP_B);
+  assert.equal(cancelled.status, 200);
+  assert.equal(cancelled.body.cancelled, false, "store B's webhook found store A's request");
+  assert.equal(store.findPaymentRequest(victim.id)!.state, "OPEN", "store B cancelled store A's request");
+  const created = await webhook("orders/create", o, SHOP_B);
+  assert.equal(created.status, 200);
+  assert.notEqual(created.body.code, undefined, "store B's order was deduped against store A's");
+  assert.notEqual(created.body.code.replace(/-/g, ""), victim.code, "store B was handed store A's payment code");
+  const own = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP_B)!;
+  assert.notEqual(own.id, victim.id);
+  assert.equal(own.source.shop, SHOP_B);
+  store.removeShopifyConnection(store.findShopifyConnectionByShop(SHOP_B)!.id);
 });
 
 console.log("\nDashboard");

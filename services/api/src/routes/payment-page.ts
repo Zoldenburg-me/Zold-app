@@ -102,9 +102,19 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
           error: "deploy and activate the passkey Safe before activating a payment page",
         });
       }
-      const now = new Date().toISOString();
-      const existing = user.paymentPage;
       const forwarder = await activatePaymentForwarder({ userId: user.id, handle, recipient: user.address });
+      // The check above ran before two awaits. A second account can claim the
+      // same handle in that window, and findUserByHandle returns the earlier
+      // row — so the later write would silently lose /pay/:handle to whoever
+      // got there first. Re-check with nothing awaited between here and the
+      // write, which is the same synchronous-claim shape as claimAuthorization.
+      const raced = store.findUserByHandle(handle);
+      if (raced && raced.id !== user.id) {
+        return res.status(409).json({ error: `"${handle}" is already taken` });
+      }
+      const now = new Date().toISOString();
+      const fresh = store.findUser(user.id)!;
+      const existing = fresh.paymentPage;
       const tokens = [
         { chainId: CHAIN_ID, symbol: "EURE" as const, address: addrs().eure, decimals: 18 },
         { chainId: CHAIN_ID, symbol: "USDC" as const, address: addrs().usdc, decimals: 6 },
