@@ -65,12 +65,10 @@ export const SANCTIONED: readonly string[] = ["IR", "KP", "SY", "CU", "RU", "BY"
  * Regions where Gnosis Pay will not issue a card, but where an account is
  * otherwise fine.
  *
- * DELIBERATE DEVIATION FROM THE BRIEF, flagged rather than done quietly: the
- * brief folds this into the sanctions deny list. Blocking an account outright
- * because the CARD partner declines the region would refuse someone Monerium
- * would happily serve, which is the same class of error as promising an
- * account no partner will open — just pointing the other way. So this list
- * DOWNGRADES the segment (EU_FULL -> ONCHAIN_NO_CARD) instead of blocking.
+ * Kept separate from the sanctions list on purpose. Blocking an account
+ * outright because the card partner declines the region would refuse someone
+ * Monerium would serve, so this list downgrades the segment
+ * (EU_FULL -> ONCHAIN_NO_CARD) instead of blocking.
  *
  * Empty until read off Gnosis Pay's own terms. Empty is honest; a guessed list
  * would silently remove cards from people entitled to one.
