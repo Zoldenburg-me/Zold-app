@@ -30,7 +30,7 @@ import { createPaymentPageRouter } from "./routes/payment-page.js";
 import { createReceiptShareRouter } from "./routes/receipt-shares.js";
 import { capabilities } from "./capabilities.js";
 import { publicUser, withSession } from "./users/public-user.js";
-import { apiRateLimit, originPolicy } from "./http/policy.js";
+import { apiRateLimit, originPolicy, securityHeaders } from "./http/policy.js";
 import {
   requireSession,
   requireUserSession,
@@ -65,6 +65,7 @@ app.use(express.json({
 
 // FP1: origin policy + per-IP rate limiting live in http/policy.ts — the
 // outermost thing every request passes through, readable in one place.
+app.use(securityHeaders);
 app.use(originPolicy);
 
 // Where the client address comes from. Default 0 = the socket peer, correct

@@ -16,10 +16,11 @@ import {
   assertDeletable,
   assertPayable,
   assertTransition as assertInvoiceTransition,
-  hashToken,
+  ownerInvoiceView,
   isOverdue,
   newLinkToken,
 } from "../../domain/invoices.js";
+import { hashPassword, passwordProblem } from "../../domain/passwords.js";
 import { normaliseIban, validateBankAccount } from "../../domain/contacts.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { can } from "../../domain/plans.js";
@@ -48,7 +49,7 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
         .invoicesOf(ctx.org.id)
         .filter((i) => i.state !== "DELETED")
         .map(syncInvoicePayment)
-        .map((i) => ({ ...i, linkTokenHash: undefined, overdue: isOverdue(i) })),
+        .map((i) => ({ ...ownerInvoiceView(i), overdue: isOverdue(i) })),
     });
   });
 
@@ -59,16 +60,18 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.manage")) return;
 
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (password) {
+      const problem = passwordProblem(password, [ctx.org.name]);
+      if (problem) return res.status(400).json({ error: `Link password refused: ${problem}` });
+    }
     const { token, hash } = newLinkToken();
     const now = new Date().toISOString();
     const invoice = store.addInvoice({
       id: `inv_${randomUUID()}`,
       orgId: ctx.org.id,
       linkTokenHash: hash,
-      linkPasswordHash:
-        typeof req.body?.password === "string" && req.body.password
-          ? hashToken(req.body.password)
-          : undefined,
+      linkPasswordHash: password ? hashPassword(password) : undefined,
       state: "LINK_CREATED",
       lines: [],
       currency: String(req.body?.currency ?? ctx.org.reporting.currency).toUpperCase(),
@@ -79,7 +82,7 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       updatedAt: now,
     });
     res.status(201).json({
-      invoice: { ...invoice, linkTokenHash: undefined },
+      invoice: ownerInvoiceView(invoice),
       // Returned once. We store only the hash, so this cannot be recovered.
       linkToken: token,
       linkPath: `/invoice/${token}`,
@@ -216,7 +219,7 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
       payment: { ...invoice.payment, draftId: draft.id },
     });
     res.status(201).json({
-      invoice: { ...updated, linkTokenHash: undefined },
+      invoice: ownerInvoiceView(updated),
       draft,
       contact,
       note: can(ctx.org, "transfers.approvals").allowed
@@ -238,7 +241,7 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
     try {
       assertInvoiceTransition(invoice.state, "RECONCILED");
       res.json({
-        invoice: store.updateInvoice(invoice.id, {
+        invoice: ownerInvoiceView(store.updateInvoice(invoice.id, {
           state: "RECONCILED",
           payment: {
             ...invoice.payment,
@@ -248,7 +251,7 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
               note: typeof req.body?.note === "string" ? req.body.note : undefined,
             },
           },
-        }),
+        })),
       });
     } catch (err) {
       if (err instanceof InvoiceError) return res.status(409).json({ error: err.message });

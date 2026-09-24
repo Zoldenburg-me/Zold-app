@@ -6,7 +6,9 @@
  * to Invoice later must be chosen into it rather than leaking by default.
  *
  * The token and its optional password are bearer secrets, so both compare in
- * constant time and this router sits on the tight rate bucket.
+ * constant time and this router sits on the tight rate bucket. The password is
+ * human-chosen, so its wrong guesses are also counted per link, across every
+ * source address.
  */
 import express from "express";
 import { store } from "../../store.js";
@@ -16,11 +18,16 @@ import {
   assertTransition as assertInvoiceTransition,
   hashToken,
   supplierView,
-  tokenMatches,
   validateLines,
 } from "../../domain/invoices.js";
+import { passwordMatches } from "../../domain/passwords.js";
+import { recordFailure, tooManyFailures } from "../../http/policy.js";
 import { parsePayTo } from "./shared.js";
 import type { Invoice } from "../../domain/types.js";
+
+/** Wrong passwords one link absorbs, from any number of addresses, per window. */
+const PASSWORD_FAILURES_MAX = 10;
+const PASSWORD_FAILURE_WINDOW_MS = 15 * 60_000;
 
 export function createInvoiceLinkRouter(): express.Router {
   const r = express.Router();
@@ -36,9 +43,19 @@ export function createInvoiceLinkRouter(): express.Router {
       return undefined;
     }
     if (invoice.linkPasswordHash) {
+      const key = `invoice-pw:${invoice.id}`;
+      if (tooManyFailures(key, PASSWORD_FAILURES_MAX)) {
+        res.status(429).json({ error: "Too many wrong passwords for this link. Try again in 15 minutes." });
+        return undefined;
+      }
       const supplied = String(req.header("x-invoice-password") ?? req.body?.password ?? "");
-      if (!supplied || !tokenMatches(supplied, invoice.linkPasswordHash)) {
+      if (!supplied) {
         res.status(401).json({ error: "This invoice link is password protected.", passwordRequired: true });
+        return undefined;
+      }
+      if (supplied.length > 256 || !passwordMatches(supplied, invoice.linkPasswordHash)) {
+        recordFailure(key, PASSWORD_FAILURE_WINDOW_MS);
+        res.status(401).json({ error: "That password is not right.", passwordRequired: true });
         return undefined;
       }
     }

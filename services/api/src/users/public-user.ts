@@ -18,6 +18,9 @@ export const publicUser = (
     User & { [k: string]: any },
 ) => ({
   ...u,
+  // Consent rows written before Sep 2026 carry the caller's IP. It is never
+  // sent: the admin user list renders this same projection for every account.
+  ...(u.consents ? { consents: u.consents.map(({ ip: _ip, ...c }: { ip?: string }) => c) } : {}),
   // Recovery channel targets are masked on every surface, this one included:
   // the raw phone number and email exist to receive codes, not to be read
   // back by whoever holds a session.
