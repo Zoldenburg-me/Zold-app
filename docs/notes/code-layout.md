@@ -9,8 +9,8 @@ The repo was five files with everything in them. `npm run check`'s offline
 suites are green across the whole pass (33 of them on a machine with no
 egress), the browser halves were driven in a real Chromium, and every move was
 checked to be a MOVE: the concatenation of the split files is the text that was
-there. Nothing below changes behaviour. Branch
-`claude/code-modularity-refactor-tq5p7x`.
+there. Nothing below changes behaviour. Landed on main as PR #190
+(`claude/modularity-on-main`, superseding #186); both branches are deleted.
 
 | was | is |
 |---|---|
