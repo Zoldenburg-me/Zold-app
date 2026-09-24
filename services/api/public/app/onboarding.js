@@ -353,7 +353,7 @@ const usAnswers = { usPerson: null, companyUsNexus: null };
 function partnerLabel(country) {
   const cc = (country || "").trim().toUpperCase();
   if (cc === "IN") return "Xflow";
-  return "Monerium and Gnosis Pay";
+  return "Monerium";
 }
 
 function renderCitizenships() {

@@ -4,9 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Zold — Bank on Chain</title>
-<meta name="description" content="Bank on Chain. Personal and business accounts with their own IBAN, euros held in a smart account you control, and local payouts over SEPA, PIX, wallets, mobile money and cash pickup." />
+<meta name="description" content="Personal and business euro accounts with their own IBAN, held in a smart account only your passkey can spend from, with free SEPA payouts." />
 <meta property="og:title" content="Zold — Bank on Chain" />
-<meta property="og:description" content="Personal and business accounts. Deposit by IBAN, hold your balance in a smart account you control, and spend locally through the rail the recipient already uses." />
+<meta property="og:description" content="Personal and business euro accounts. Get paid by IBAN or USDC, hold euros in a smart account you control, and pay out over SEPA." />
 <meta property="og:type" content="website" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 18'%3E%3Cpath d='M1.6 1.4 L18.4 1.4 L10 16.2 Z' fill='none' stroke='%23ed188d' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/vendor/fonts/text.css" />
@@ -58,7 +58,7 @@
     <div style="position:absolute; inset:-140px 0 auto; height:820px; pointer-events:none; background:radial-gradient(52% 48% at 50% 30%, rgba(237,24,141,.30), rgba(237,24,141,.07) 55%, transparent 72%); animation:zpulse 9s ease-in-out infinite"></div>
     <div style="position:relative; max-width:1140px; margin:0 auto">
       <div style="display:inline-flex; align-items:center; gap:8px; padding:6px 13px 6px 9px; border:1px solid rgba(237,24,141,.35); border-radius:999px; font-size:12px; color:#e8a9cd; background:rgba(237,24,141,.07)">
-        <span style="width:6px; height:6px; border-radius:50%; background:#3dd68c; box-shadow:0 0 8px #3dd68c"></span><span>Live on Base · Monerium IBAN<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
+        <span class="js-net-dot" style="width:6px; height:6px; border-radius:50%; background:#f5a623; box-shadow:0 0 8px #f5a623"></span><span><span class="js-net">Base</span> · Monerium IBAN<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
       </div>
 
       <!-- Hero headline: a fixed line plus a rotating one.
@@ -71,11 +71,11 @@
 
       <div class="rot" aria-live="polite" style="position:relative; margin:14px 0 0; height:1.25em; font-size:clamp(22px,3.4vw,38px); line-height:1.25; font-weight:600; letter-spacing:-.03em">
         <!-- Invisible sizer: reserves the width of the longest phrase. -->
-        <span class="rot-sizer" aria-hidden="true" style="visibility:hidden; white-space:nowrap">smart money</span>
+        <span class="rot-sizer" aria-hidden="true" style="visibility:hidden; white-space:nowrap">your own IBAN</span>
         <span id="rot-word" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; white-space:nowrap; background:linear-gradient(90deg,#c084fc,#ed188d); -webkit-background-clip:text; background-clip:text; color:transparent; transition:opacity .32s ease, transform .32s ease">Zold</span>
       </div>
 
-      <p style="margin:20px auto 0; max-width:650px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Deposit by IBAN, hold your euros in a smart account you control, and spend locally through the rail people already use: SEPA, PIX, mobile money, wallets, cash pickup and more.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
+      <p style="margin:20px auto 0; max-width:650px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Get paid to your own IBAN or in USDC, hold euros in a smart account only your passkey can spend from, and pay any IBAN in Europe over SEPA with no Zold fee. More countries open as payout partners sign.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
 
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:30px">
         <a href="/app" style="display:inline-flex; align-items:center; height:46px; padding:0 26px; border-radius:999px; background:#ed188d; color:#fff; font-size:14.5px; font-weight:600; box-shadow:0 10px 34px rgba(237,24,141,.4)" class="pill">Open a personal account</a>
@@ -93,7 +93,7 @@
             <span style="width:9px; height:9px; border-radius:50%; background:#2c2c33"></span>
           </div>
           <div style="flex:1; max-width:280px; height:20px; border-radius:6px; background:#141419; border:1px solid #232328; display:flex; align-items:center; padding:0 8px; font-size:10.5px; color:#5b5b66">app.zold.money</div>
-          <span style="font-size:10.5px; color:#5b5b66; border:1px solid #232328; border-radius:999px; padding:2px 8px">local demo</span>
+          <span style="font-size:10.5px; color:#5b5b66; border:1px solid #232328; border-radius:999px; padding:2px 8px">illustration</span>
         </div>
 
         <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:1px; background:#1a1a1f">
@@ -112,20 +112,20 @@
 
           <div style="background:#101014; padding:clamp(16px,2.4vw,24px)">
             <div style="display:flex; align-items:center; justify-content:space-between; gap:10px">
-              <span style="font-size:11.5px; font-weight:600; color:#8a8a94">Send · Local payout, Brazil</span>
+              <span style="font-size:11.5px; font-weight:600; color:#8a8a94">Send · SEPA bank payout</span>
               <span style="font-size:10.5px; color:#f5a623; border:1px solid rgba(245,166,35,.32); background:rgba(245,166,35,.08); border-radius:999px; padding:2px 8px">quote <span class="js-expiry">9:02</span></span>
             </div>
             <div style="margin-top:12px; font-size:clamp(26px,3.4vw,34px); font-weight:600; letter-spacing:-.035em; color:#fbf9fc">€<span style="color:#ed188d">250.00</span></div>
             <div style="margin-top:14px; display:grid; gap:0; font-size:12.5px">
-              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94" id="r-mid-label">Mid-market rate</span><span style="font-variant-numeric:tabular-nums"><span id="r-mid">6.1050</span></span></div>
-              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Your rate <span style="font-size:10px; color:#e8a9cd; border:1px solid rgba(237,24,141,.3); border-radius:4px; padding:1px 5px">0.50%</span></span><span style="font-variant-numeric:tabular-nums"><span id="r-rate">6.0745</span></span></div>
-              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Fixed fee</span><span>€0.99</span></div>
-              <div style="display:flex; justify-content:space-between; align-items:baseline; padding:11px 0 0; border-top:1px solid #2c2c33"><span style="color:#ededf0; font-weight:600">Marina Silva receives</span><span style="font-size:17px; font-weight:600; color:#3dd68c; font-variant-numeric:tabular-nums">BRL <span id="r-out">1,512</span></span></div>
+              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">To</span><span style="font-variant-numeric:tabular-nums">DE89 3704 … 3000</span></div>
+              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Exchange</span><span>none, euro to euro</span></div>
+              <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Zold fee</span><span>€0.00</span></div>
+              <div style="display:flex; justify-content:space-between; align-items:baseline; padding:11px 0 0; border-top:1px solid #2c2c33"><span style="color:#ededf0; font-weight:600">Anna Schmidt receives</span><span style="font-size:17px; font-weight:600; color:#3dd68c; font-variant-numeric:tabular-nums">€250.00</span></div>
             </div>
             <div style="margin-top:16px; padding-top:14px; border-top:1px solid #1c1c21; display:flex; align-items:center; gap:10px; flex-wrap:wrap">
               <span id="st-dot" style="width:7px; height:7px; border-radius:50%; background:#f5a623; box-shadow:0 0 9px #f5a623"></span>
               <span id="st-label" style="font-size:12px; font-weight:600; letter-spacing:.08em; color:#f5a623">QUOTED</span>
-              <span id="st-note" style="font-size:11.5px; color:#5b5b66">rate locked for 10 minutes</span>
+              <span id="st-note" style="font-size:11.5px; color:#5b5b66">quote holds for 10 minutes</span>
             </div>
             <div style="margin-top:10px; height:3px; border-radius:2px; background:#1c1c21; overflow:hidden"><div id="st-bar" style="height:100%; width:25%; background:linear-gradient(90deg,#ed188d,#3dd68c); transition:width .6s ease"></div></div>
           </div>
@@ -138,8 +138,8 @@
 
   <section id="rails" style="padding:clamp(56px,8vw,96px) 24px; text-align:center">
     <div style="max-width:900px; margin:0 auto">
-      <h2 style="margin:0; font-size:clamp(28px,4.4vw,48px); line-height:1.04; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">One account, local spending everywhere.</h2>
-      <p style="margin:16px auto 0; max-width:620px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Euros arrive over SEPA to your own IBAN and land in a smart account you control<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">1</a>. From there the local-spend layer can route to the method that fits each jurisdiction: bank transfer, real-time payment, wallet, mobile money or cash pickup.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
+      <h2 style="margin:0; font-size:clamp(28px,4.4vw,48px); line-height:1.04; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">One account. Money in, money out.</h2>
+      <p style="margin:16px auto 0; max-width:620px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Euros arrive over SEPA to your own IBAN, or as USDC on Base, and land in a smart account you control.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">1</a> They leave as a SEPA payment to any European IBAN. Cash pickup and other countries are built but stay closed until a payout partner is signed.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">2,3</a></p>
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:clamp(18px,3vw,38px); margin-top:clamp(34px,5vw,52px)">
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
           <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#e8a9cd; box-shadow:inset 0 1px 0 rgba(255,255,255,.05)"><i class="ph ph-bank"></i></span>
@@ -154,16 +154,16 @@
           <span style="font-size:11.5px; color:#8a8a94">SEPA</span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:19px; font-weight:700; color:#cfcfd8">PIX</span>
-          <span style="font-size:11.5px; color:#8a8a94">Brazil<a href="#notes" style="color:#ed188d; font-size:9px; vertical-align:super">3</a></span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-currency-circle-dollar"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">USDC on Base</span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-device-mobile"></i></span>
-          <span style="font-size:11.5px; color:#8a8a94">Mobile money</span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-credit-card"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">Card via Gnosis Pay</span>
         </div>
-        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-wallet"></i></span>
-          <span style="font-size:11.5px; color:#8a8a94">Wallets</span>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px; opacity:.5">
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-hand-coins"></i></span>
+          <span style="font-size:11.5px; color:#8a8a94">Cash pickup · soon</span>
         </div>
       </div>
     </div>
@@ -223,23 +223,19 @@
         <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Your euros</span>
       </div>
       <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
-        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#8a8a94">MoneyGram</span>
-        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Cash pickup</span>
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
-        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:18px; font-weight:700; letter-spacing:-.02em; color:#8a8a94">Noah</span>
-        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Local spend</span>
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
         <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#8a8a94">Safe</span>
         <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Smart accounts</span>
       </div>
       <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
-        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#8a8a94">SEPA Instant</span>
-        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Euro transfers</span>
+        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#8a8a94">Base</span>
+        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Network</span>
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:140px; min-height:146px">
+        <span style="display:flex; align-items:center; justify-content:center; width:140px; height:80px; font-size:17px; font-weight:600; letter-spacing:-.02em; color:#8a8a94">Gnosis Pay</span>
+        <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Card</span>
       </div>
     </div>
-    <p style="margin:clamp(26px,3.4vw,38px) auto 0; max-width:70ch; font-size:12.5px; line-height:1.65; color:#8a8a94"><span style="color: rgb(237, 237, 240); font-weight: 600;">Zold is not a bank.</span> Your euros are issued and held as e-money by Monerium ehf., supervised by the Central Bank of Iceland .<a href="#notes" style="color: rgb(237, 24, 141); font-size: 10px; vertical-align: super;">1</a> <a href="#notes" style="color: rgb(232, 169, 205);">Full notes</a>.</p>
+    <p style="margin:clamp(26px,3.4vw,38px) auto 0; max-width:70ch; font-size:12.5px; line-height:1.65; color:#8a8a94"><span style="color:#ededf0; font-weight:600">Zold is not a bank.</span> Your euros are issued and held as e-money by Monerium ehf., supervised by the Central Bank of Iceland.<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super">1</a> <a href="#notes" style="color:#e8a9cd">Full notes</a>.</p>
   </section>
 
   <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
@@ -248,12 +244,12 @@
     <div style="position:absolute; left:50%; top:38%; width:min(900px,110%); height:640px; transform:translate(-50%,-40%); background:radial-gradient(46% 46% at 50% 50%, rgba(237,24,141,.26), transparent 70%); pointer-events:none"></div>
     <div style="position:relative; max-width:1080px; margin:0 auto">
       <h2 style="margin:0; font-size:clamp(28px,4.4vw,48px); line-height:1.05; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">Nothing moves without your approval.</h2>
-      <p style="margin:16px auto 0; max-width:500px; font-size:15.5px; line-height:1.6; color:#9a9aa5">The quote, the recipient and the amount are signed together. If a leg fails, the state machine says so.</p>
+      <p style="margin:16px auto 0; max-width:500px; font-size:15.5px; line-height:1.6; color:#9a9aa5">The amount and the recipient are signed together. If a step fails, you see which one and where your money is.</p>
 
       <div style="display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:clamp(20px,4vw,44px); margin-top:clamp(36px,5vw,56px)">
         <div style="display:grid; gap:14px; min-width:190px; text-align:left">
           <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-fingerprint"></i></span>Passkey login</div>
-          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 8.5s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-shield-check"></i></span>Safe ownership checks</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 8.5s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-shield-check"></i></span>Your passkey owns the account</div>
           <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7.8s ease-in-out infinite"><span style="color:#f5a623; font-size:16px"><i class="ph ph-timer"></i></span>Quote expiry</div>
         </div>
 
@@ -263,11 +259,11 @@
             <div style="padding:14px 18px 20px">
               <div style="font-size:11px; letter-spacing:.12em; color:#5b5b66">APPROVE PAYOUT</div>
               <div style="margin-top:12px; font-size:30px; font-weight:600; letter-spacing:-.035em; color:#fbf9fc">€250.00</div>
-              <div style="margin-top:3px; font-size:12.5px; color:#8a8a94">PIX payout · São Paulo</div>
+              <div style="margin-top:3px; font-size:12.5px; color:#8a8a94">SEPA payout · Berlin</div>
               <div style="margin-top:16px; display:grid; gap:0; font-size:12px">
-                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Recipient</span><span>Marina Silva</span></div>
-                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">They receive</span><span style="color:#3dd68c">BRL 1,512</span></div>
-                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Fee</span><span>€0.99</span></div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Recipient</span><span>Anna Schmidt</span></div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">They receive</span><span style="color:#3dd68c">€250.00</span></div>
+                <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Zold fee</span><span>€0.00</span></div>
                 <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Quote expires</span><span class="js-expiry" style="color:#f5a623">9:02</span></div>
               </div>
               <div style="margin-top:16px; display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:12px; border:1px solid rgba(237,24,141,.3); background:rgba(237,24,141,.08)">
@@ -280,8 +276,8 @@
         </div>
 
         <div style="display:grid; gap:14px; min-width:190px; text-align:left">
-          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 8.2s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-signature"></i></span>Recipient commitment</div>
-          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7.4s ease-in-out infinite"><span style="color:#f5a623; font-size:16px"><i class="ph ph-magnifying-glass"></i></span>Manual review state</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 8.2s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-signature"></i></span>Recipient fixed at signing</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7.4s ease-in-out infinite"><span style="color:#f5a623; font-size:16px"><i class="ph ph-magnifying-glass"></i></span>Stuck payments flagged, not guessed</div>
           <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 9s ease-in-out infinite"><span style="color:#3dd68c; font-size:16px"><i class="ph ph-arrow-u-up-left"></i></span>Refund on failure</div>
         </div>
       </div>
@@ -356,73 +352,88 @@
     <div style="position:relative">
       <span style="display:inline-flex; align-items:center; justify-content:center; width:72px; height:72px; border-radius:20px; border:1px solid rgba(237,24,141,.35); background:linear-gradient(160deg,#1b1b22,#0d0d11); box-shadow:0 0 44px rgba(237,24,141,.3); font-size:26px; color:#ed188d">▽</span>
       <h2 style="margin:24px 0 0; font-size:clamp(28px,4.6vw,52px); line-height:1.04; font-weight:600; letter-spacing:-.045em; color:#fbf9fc">Get started with Zold.</h2>
-      <p style="margin:14px auto 0; max-width:440px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Open an account with Monerium, get an IBAN, and send.</p>
+      <p style="margin:14px auto 0; max-width:440px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Create a passkey, connect Monerium for your IBAN, and send.</p>
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:28px">
         <a href="/app" style="display:inline-flex; align-items:center; height:46px; padding:0 28px; border-radius:999px; background:#ed188d; color:#fff; font-size:14.5px; font-weight:600; box-shadow:0 10px 34px rgba(237,24,141,.4)" class="pill">Launch app</a>
-        <a href="#account" style="display:inline-flex; align-items:center; height:46px; padding:0 24px; border-radius:999px; border:1px solid #2c2c33; font-size:14.5px; color:#ededf0" class="ghost">Architecture</a>
+        <a href="/business" style="display:inline-flex; align-items:center; height:46px; padding:0 24px; border-radius:999px; border:1px solid #2c2c33; font-size:14.5px; color:#ededf0" class="ghost">Business account</a>
       </div>
     </div>
   </section>
 
+  <!-- Footer. Plain language on purpose: every note says what is live and what
+       is not, in words a customer reads, and the legal facts about Monerium
+       stay verbatim because they are the regulated part. There are no Terms,
+       Privacy or Imprint pages yet, so the footer does not link to any. -->
   <footer style="border-top:1px solid #1c1c21; padding:clamp(34px,5vw,54px) 24px 48px">
     <div style="max-width:1080px; margin:0 auto">
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:32px 40px">
         <div style="max-width:34ch">
           <span style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:600; letter-spacing:-.02em"><span style="color:#ed188d">▽</span>Zold <span style="font-weight:400; color:#5b5b66">by Zoldenburg</span></span>
-          <p style="margin:12px 0 0; font-size:13px; line-height:1.6; color:#8a8a94">Euros in, local spending out. A personal IBAN, e-money held in your own smart account, and one visible fee on every route. Zold is not a bank.</p>
+          <p style="margin:12px 0 0; font-size:13px; line-height:1.6; color:#8a8a94">A euro account with your own IBAN, held in a smart account only you can spend from. Zold is software, not a bank.</p>
         </div>
         <div>
           <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#5b5b66">PRODUCT</div>
           <div style="display:grid; gap:9px; margin-top:14px; font-size:13.5px">
-            <a href="/app" style="color:#8a8a94">Personal</a>
-            <a href="/business" style="color:#8a8a94">Business</a>
-            <a href="#rails" style="color:#8a8a94">Rails</a>
-            <a href="#account" style="color:#8a8a94">Your money</a>
+            <a href="/app" style="color:#8a8a94">Personal account</a>
+            <a href="/business" style="color:#8a8a94">Business account</a>
+            <a href="#rails" style="color:#8a8a94">Money in and out</a>
             <a href="#approval" style="color:#8a8a94">Approvals</a>
           </div>
         </div>
         <div>
-          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#5b5b66">LEGAL</div>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#5b5b66">CONTACT</div>
           <div style="display:grid; gap:9px; margin-top:14px; font-size:13.5px">
-            <a href="#notes" style="color:#8a8a94">Terms of service</a>
-            <a href="#notes" style="color:#8a8a94">Privacy policy</a>
-            <a href="#notes" style="color:#8a8a94">Disclaimer</a>
-            <a href="#notes" style="color:#8a8a94">Imprint</a>
+            <a href="mailto:support@zoldhq.com" style="color:#8a8a94">support@zoldhq.com</a>
+            <a href="#notes" style="color:#8a8a94">Legal notes</a>
+            <a href="#cookies" style="color:#8a8a94">Cookies and storage</a>
           </div>
         </div>
         <div>
           <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#5b5b66">STATUS</div>
           <div style="display:grid; gap:9px; margin-top:14px; font-size:13.5px; color:#8a8a94">
-            <span style="display:flex; align-items:center; gap:8px"><span style="width:6px; height:6px; border-radius:50%; background:#3dd68c"></span>Live on Base</span>
-            <span style="display:flex; align-items:center; gap:8px"><span style="width:6px; height:6px; border-radius:50%; background:#f5a623"></span>Corridors opening one at a time</span>
+            <span style="display:flex; align-items:center; gap:8px"><span class="js-net-dot" style="width:6px; height:6px; border-radius:50%; background:#f5a623"></span><span class="js-net">Base</span></span>
+            <span style="display:flex; align-items:center; gap:8px"><span style="width:6px; height:6px; border-radius:50%; background:#3dd68c"></span>SEPA payouts open</span>
+            <span style="display:flex; align-items:center; gap:8px"><span style="width:6px; height:6px; border-radius:50%; background:#5b5b66"></span>Cash pickup not open yet</span>
           </div>
         </div>
       </div>
 
       <div id="notes" style="margin-top:clamp(30px,4vw,44px); padding-top:24px; border-top:1px solid #1c1c21; display:grid; gap:16px; max-width:78ch">
         <div>
-          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">PROTOTYPE STATUS — CAPITAL AT RISK</div>
-          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94">Zold is early-stage software. Availability, custody and payout behaviour are under active development, balances shown in this page's screens are illustrative, and nothing here is an offer of a regulated payment service or financial advice.</p>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">EARLY SOFTWARE</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94">Zold is early and still changing. The screens on this page are illustrations, not real balances. Nothing here is financial advice or an offer of a regulated payment service. Money held on chain is not covered by any deposit insurance scheme.</p>
         </div>
         <div>
-          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR EURO ACCOUNTS AND BANK PAYOUTS</div>
-          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">1</sup> Your IBAN is issued and your euros are held as e-money (EURe) by Monerium ehf. (registered in Iceland No. 550512-1060), authorised as an Electronic Money Institution and as a Virtual Asset Service Provider by the Financial Supervisory Authority of the Central Bank of Iceland under Act No. 17/2013 governing the issuance of electronic money and Act No. 18/2018 governing measures for countering money laundering. SEPA payouts are executed as Monerium redemption orders. Zold is software, holds no licence of its own, and is not separately regulated in any jurisdiction.</p>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">YOUR EUROS AND YOUR IBAN</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">1</sup> Your IBAN is issued and your euros are held as e-money (EURe) by Monerium ehf. (registered in Iceland No. 550512-1060), authorised as an Electronic Money Institution and as a Virtual Asset Service Provider by the Financial Supervisory Authority of the Central Bank of Iceland under Act No. 17/2013 governing the issuance of electronic money and Act No. 18/2018 governing measures for countering money laundering. Your identity check is done by Monerium, not by Zold. SEPA payouts are Monerium redemption orders. Zold is software, holds no licence of its own, and is not regulated in any jurisdiction.</p>
         </div>
         <div>
-          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CASH PICKUP</div>
-          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">2</sup> Cash pickup is implemented against the SEP-10 / SEP-24 anchor protocol and verified against a public test anchor. No commercial payout agreement is in place; the cash corridor stays closed until a licensed partner is live, and nothing is shown as sent that was not. Cash pickup is a money transmission, so sender identity data is provided to the anchor before a withdrawal opens, and a payout is refused rather than opened when required details are missing. FX rates are indicative and refreshed from a rate endpoint where available; a quote locks a rate for ten minutes and expires rather than repricing silently.</p>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">CASH PICKUP</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">2</sup> Cash pickup is built and has been tested against a public test service, but no payout partner is signed. Until one is, it stays closed and the app does not offer it.</p>
         </div>
         <div>
-          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR LOCAL SPEND THROUGH NOAH</div>
-          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">3</sup> Noah integration is the planned local-spend expansion layer. Noah's public docs describe crypto-to-fiat payouts across 60+ countries, 120+ fiat currencies, and local payment methods including bank transfer, real-time payment systems such as PIX, UPI and SPEI, mobile money, digital wallets and cash pickup. Production availability depends on Noah approval, live channel queries, per-country dynamic forms, limits, KYC/KYB reliance or hosted onboarding, and corridor-specific legal review.</p>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">OTHER COUNTRIES</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">3</sup> Today money leaves by SEPA to European IBANs. Payouts to other countries depend on partners we are talking to but have not signed. The app only lists destinations it can actually price and pay.</p>
         </div>
         <div>
-          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR CUSTODY AND APPROVALS</div>
-          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">4</sup> Each account is a Safe smart account whose only owner is the passkey registered at onboarding; deployment gas is sponsored. Every payout is signed with that passkey against its exact amount and recipient, and Zold holds no key that can move or block your funds. Accounts opened before this change may still have a Zold co-signer as a second owner until their holder removes it in the app. Recovery runs through a guardian service after a waiting period during which you can cancel it. Assets held on chain are not covered by any government or private deposit insurance scheme.</p>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">WHO CAN MOVE YOUR MONEY</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">4</sup> Your account is a Safe smart account, and the passkey on your device is its only owner. Every payment is signed by that passkey for one amount to one recipient. Zold's server prepares the payment and pays the network fee, but holds no key that can move or block your money. Accounts opened before this change may still have a Zold co-signer as a second owner until their holder removes it in the app. If you lose the device, recovery by email, where offered, moves the account to a new passkey after a waiting period you can cancel.</p>
         </div>
         <div>
-          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">FOR BUSINESS ACCOUNTS</div>
-          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">5</sup> Members, roles, payment approvals, invoices, the address book, the chart of accounts and CSV export are implemented. Accounts are modelled in several currencies, but <strong style="color:#cfcfd8; font-weight:600">only the euro account is open</strong>: USD and GBP need an account provider that has not been granted, and KES and INR need a local payout partner that is not contracted. Each currency states in the app what it is waiting on rather than appearing as though it works. An organisation does not yet get a payment account of its own — until it does, a business account is funded from a member's personal account, which the app says explicitly before you do it. Cards are not built. Free and paid plans are described in-app; the paid plan is not yet chargeable and the 30-day trial is granted on request. Downgrading pauses paid features and deletes nothing.</p>
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">BUSINESS ACCOUNTS</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94"><sup style="color:#ed188d">5</sup> Team members, roles, payment approvals, invoices, the address book, the chart of accounts and CSV export work today. <strong style="color:#cfcfd8; font-weight:600">Only the euro account is open.</strong> USD and GBP wait on an account provider, and KES and INR on a local payout partner; the app says which, rather than looking as if they work. A company does not yet get its own payment account, so a business account is funded from a member's personal account, and the app tells you before you do it. There are no cards for business yet. The paid plan cannot be charged yet; the 30-day trial is given on request. Downgrading pauses paid features and deletes nothing.</p>
+        </div>
+        <div id="cookies">
+          <div style="font-size:11px; font-weight:600; letter-spacing:.14em; color:#8a8a94">COOKIES AND STORAGE</div>
+          <p style="margin:8px 0 0; font-size:12px; line-height:1.65; color:#8a8a94">Zold uses no analytics, advertising or tracking, and loads no third-party scripts or fonts. It stores only what the service needs to work, so there is nothing to opt in or out of:</p>
+          <ul style="margin:8px 0 0; padding-left:18px; font-size:12px; line-height:1.65; color:#8a8a94">
+            <li><b style="color:#cfcfd8; font-weight:600">zold_monerium_connect</b> (cookie): set only while you connect Monerium, deleted after 10 minutes. It makes sure the Monerium sign-in finishes in the browser that started it.</li>
+            <li><b style="color:#cfcfd8; font-weight:600">Sign-in session</b> (browser storage): keeps you signed in until you sign out.</li>
+            <li><b style="color:#cfcfd8; font-weight:600">Device key</b> (browser storage): part of how this device approves payments. Do not clear this site's data unless you have set up recovery.</li>
+            <li><b style="color:#cfcfd8; font-weight:600">Saved contacts and selected organisation</b> (browser storage): conveniences that never leave this browser.</li>
+            <li><b style="color:#cfcfd8; font-weight:600">App cache</b> (service worker): the app's own files, so it opens offline.</li>
+            <li><b style="color:#cfcfd8; font-weight:600">Notice dismissed</b> (browser storage): remembers that you closed the cookie notice.</li>
+          </ul>
         </div>
         <p style="margin:6px 0 0; font-size:12px; color:#5b5b66">© 2026 Zoldenburg. All rights reserved.</p>
       </div>
@@ -431,7 +442,7 @@
 </div>
 
 <script>
-  /* Hero rotator: Zold -> spend local -> smart money.
+  /* Hero rotator: Zold -> your own IBAN -> smart money.
      The first phrase is already in the markup, so this only ever REPLACES a
      visible word — nothing is blank before JS runs. Honours
      prefers-reduced-motion by leaving the static first phrase in place, which
@@ -440,7 +451,7 @@
     var el = document.getElementById("rot-word");
     if (!el) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    var phrases = ["Zold", "spend local", "smart money"];
+    var phrases = ["Zold", "your own IBAN", "smart money"];
     var i = 0;
     setInterval(function () {
       el.style.opacity = "0";
@@ -464,10 +475,10 @@
   (function () {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     var steps = [
-      { label: "QUOTED", note: "rate locked for 10 minutes", color: "#f5a623", pct: "25%" },
-      { label: "SIGNED", note: "passkey approved this payout", color: "#ed188d", pct: "50%" },
-      { label: "SENT", note: "euros redeemed, payout dispatched", color: "#ed188d", pct: "78%" },
-      { label: "PAID", note: "collected \u00b7 ref 8F42-QK19", color: "#3dd68c", pct: "100%" }
+      { label: "QUOTED", note: "quote holds for 10 minutes", color: "#f5a623", pct: "25%" },
+      { label: "SIGNED", note: "your passkey approved this payment", color: "#ed188d", pct: "50%" },
+      { label: "SENT", note: "Monerium is sending it over SEPA", color: "#ed188d", pct: "78%" },
+      { label: "PAID", note: "arrived at the recipient's bank", color: "#3dd68c", pct: "100%" }
     ];
     var i = 0, secs = 542;
     var dot = document.getElementById("st-dot"), label = document.getElementById("st-label");
@@ -491,37 +502,27 @@
 </script>
 
 <script>
-/* The design ships fixed figures. A page that says "mid-market rate" above a
-   frozen number drifts from the market while still claiming to show the real
-   rate. So pull the live mid from the same endpoint the product quotes from,
-   and if it cannot be reached, say "indicative" rather than present a made-up
-   number as fact. */
+/* Name the chain this deployment actually runs on. A hardcoded "Live on Base"
+   read as mainnet while the running deployment was a testnet, so the badge
+   asks /api/health and only goes green on a real-money chain. If the API is
+   unreachable the neutral "Base" stays, in amber, rather than a claim. */
 (function () {
-  var SPREAD = 0.005, FEE = 0.99, SEND = 250;
-  var fmt = function (n, dp) {
-    return n.toLocaleString("en", { minimumFractionDigits: dp, maximumFractionDigits: dp });
-  };
-  var $ = function (id) { return document.getElementById(id); };
-  fetch("/api/rates")
+  var NAMES = { 8453: "Live on Base", 84532: "Base Sepolia testnet", 31337: "Local test chain" };
+  fetch("/api/health")
     .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error(String(r.status))); })
     .then(function (d) {
-      var mid = d && d.eur && d.eur.BRL;
-      if (!mid) {
-        var label = $("r-mid-label");
-        if (label) label.textContent = "Mid-market rate (indicative)";
-        return;
-      }
-      var all = mid * (1 - SPREAD);
-      if ($("r-mid")) $("r-mid").textContent = fmt(mid, 4);
-      if ($("r-rate")) $("r-rate").textContent = fmt(all, 4);
-      if ($("r-out")) $("r-out").textContent = fmt((SEND - FEE) * all, 0);
+      if (!d || typeof d.chainId !== "number") return;
+      var name = NAMES[d.chainId] || ("Chain " + d.chainId);
+      var colour = d.realMoney ? "#3dd68c" : "#f5a623";
+      document.querySelectorAll(".js-net").forEach(function (el) { el.textContent = name; });
+      document.querySelectorAll(".js-net-dot").forEach(function (el) {
+        el.style.background = colour;
+        if (el.style.boxShadow) el.style.boxShadow = "0 0 8px " + colour;
+      });
     })
-    .catch(function () {
-      /* Unreachable: mark the figures as indicative instead of asserting them. */
-      var l = $("r-mid-label");
-      if (l) l.textContent = "Mid-market rate (indicative)";
-    });
+    .catch(function () { /* keep the neutral default */ });
 })();
 </script>
+<script src="/cookie-notice.js" defer></script>
 </body>
 </html>
