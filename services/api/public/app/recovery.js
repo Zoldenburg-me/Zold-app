@@ -182,6 +182,22 @@ async function recoveryCancelOnChain() {
 /* ---------- lost device: recover from the onboarding page ---------- */
 let rcState = null;
 let rcEmail = "";
+/* The per-request secret the API hands out once when a recovery starts. It is
+   what lets THIS browser drive the request (the id alone is not enough), so it
+   is kept per email to survive a reload mid-recovery. */
+let rcSecret = "";
+const RC_SECRET_KEY = "zold-recovery-secret";
+function rcSaved(email) {
+  try { return JSON.parse(localStorage.getItem(RC_SECRET_KEY) || "{}")[email.toLowerCase()] || ""; } catch { return ""; }
+}
+function rcSave(email, secret) {
+  try {
+    const all = JSON.parse(localStorage.getItem(RC_SECRET_KEY) || "{}");
+    if (secret) all[email.toLowerCase()] = secret; else delete all[email.toLowerCase()];
+    localStorage.setItem(RC_SECRET_KEY, JSON.stringify(all));
+  } catch { /* private mode: the recovery still works in this tab */ }
+}
+const rcApi = (path, body, method) => api(path, body, method, rcSecret ? { "x-recovery-secret": rcSecret } : undefined);
 
 function showRecoverPanel(on) {
   $("onb-step1").classList.toggle("hidden", on);
@@ -212,7 +228,7 @@ function renderRecoverState() {
         clearErr("rc-err");
         const i = Number(b.dataset.rcConfirm);
         try {
-          rcState = await api(`/api/recovery/candide/${r.id}/otp`, { challengeId: auths[i].challengeId, otp: $(`rc-code-${i}`).value });
+          rcState = await rcApi(`/api/recovery/candide/${r.id}/otp`, { challengeId: auths[i].challengeId, otp: $(`rc-code-${i}`).value });
           renderRecoverState();
         } catch (e) { showErr("rc-err", e); }
       };
@@ -230,18 +246,19 @@ function renderRecoverState() {
     $("btn-rc-finalize").onclick = async () => {
       clearErr("rc-err");
       try {
-        const done = await api(`/api/recovery/candide/${r.id}/finalize`, {});
-        rcState = done;
-        if (done.account) { renderUser(done.account); showRecoverPanel(false); enterDashboard(done.account.name); return; }
+        // No session comes back: once finalized, the new passkey signs in
+        // through the ordinary login, which the FINALIZED state offers.
+        rcState = await rcApi(`/api/recovery/candide/${r.id}/finalize`, {});
         renderRecoverState();
       } catch (e) { showErr("rc-err", e); }
     };
     if (!ready && until) setTimeout(async () => {
-      try { rcState = await api(`/api/recovery/candide/${r.id}`); renderRecoverState(); } catch { /* keep the screen */ }
+      try { rcState = await rcApi(`/api/recovery/candide/${r.id}`); renderRecoverState(); } catch { /* keep the screen */ }
     }, Math.min(60000, Math.max(2000, until.getTime() - Date.now() + 1000)));
     return;
   }
   if (r.status === "FINALIZED") {
+    rcSave(rcEmail, "");
     st.innerHTML = `<label>Recovered</label><div class="sub">This device's passkey now owns the account. Sign in with it.</div>
       <button class="btn-primary-lite" id="btn-rc-signin">Sign in with your new passkey</button>`;
     $("btn-rc-signin").onclick = () => { showRecoverPanel(false); $("link-signin").click(); };
@@ -257,7 +274,9 @@ async function recoverStart() {
   btn.disabled = true;
   try {
     if (!window.PublicKeyCredential) throw new Error("passkeys aren't supported in this browser");
-    let r = await api("/api/recovery/candide", { email: rcEmail });
+    rcSecret = rcSaved(rcEmail);
+    let r = await api("/api/recovery/candide", { email: rcEmail, ...(rcSecret ? { recoverySecret: rcSecret } : {}) });
+    if (r.recoverySecret) { rcSecret = r.recoverySecret; rcSave(rcEmail, rcSecret); }
     if (r.status === "PASSKEY_PENDING") {
       // The new owner: a passkey made on THIS device. P-256 only — it has to
       // be able to own a Safe.
@@ -272,7 +291,7 @@ async function recoverStart() {
           extensions: { prf: {} },
         },
       });
-      r = await api(r.submitTo, {
+      r = await rcApi(r.submitTo, {
         credentialId: cred.id,
         attestation: b64url(cred.response.attestationObject),
         clientDataJSON: b64url(cred.response.clientDataJSON),
