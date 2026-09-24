@@ -19,9 +19,17 @@
  * start a recovery — that is what the channels are for — but cannot sign in
  * or spend before the grace period has run, which is the window the rightful
  * owner has to cancel from their still-working device.
+ *
+ * THE ID IS NOT A CAPABILITY. Starting needs only an email, so whoever starts
+ * a request is handed a random secret ONCE (stored hashed on the request) and
+ * every by-id route requires it in `x-recovery-secret`. A second caller who
+ * names the same email never learns the id of a request someone else started
+ * and cannot drive it. Finalisation hands out NO session: the new passkey is
+ * bound to the account and signs in through the ordinary passkey login, which
+ * is proof of the new credential rather than of having seen an id.
  */
 import express from "express";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { CHAIN_ID, HARNESS, KEYS, RECOVERY, SECURITY } from "../config.js";
@@ -68,7 +76,6 @@ import { ADDRESS_RE } from "../domain/contacts.js";
 export interface CandideRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
   publicUser: (user: User) => Record<string, unknown>;
-  withSession: (user: User) => Record<string, unknown>;
 }
 
 type Assertion = { authenticatorData: string; clientDataJSON: string; signature: string };
@@ -110,6 +117,28 @@ function prune<T extends { expiresAt: number }>(map: Map<string, T>, now = Date.
 function newCandideRequest(r: RecoveryRequest): RecoveryRequest {
   store.addRecoveryRequest(r);
   return r;
+}
+
+const RECOVERY_SECRET_HEADER = "x-recovery-secret";
+const hashSecret = (secret: string) => createHash("sha256").update(secret, "utf8").digest("hex");
+
+/** The caller's per-request secret, from the header (or, on start, the body). */
+function presentedSecret(req: express.Request): string {
+  const h = req.get(RECOVERY_SECRET_HEADER);
+  if (typeof h === "string" && h) return h;
+  const b = req.body?.recoverySecret;
+  return typeof b === "string" ? b : "";
+}
+
+/** Constant-time check of a presented secret against the request's hash. A
+ *  request with no hash (created before secrets existed) matches nothing:
+ *  the sweep still finalizes it, and its new passkey signs in normally. */
+function secretMatches(r: RecoveryRequest, secret: string): boolean {
+  const stored = r.candide?.accessHash;
+  if (!stored || !secret || secret.length > 256) return false;
+  const a = Buffer.from(hashSecret(secret), "hex");
+  const b = Buffer.from(stored, "hex");
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 const passkeySafeChallenge = (h: `0x${string}`) => bufToB64url(Buffer.from(h.slice(2), "hex"));
 
@@ -703,7 +732,9 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
 
   const requestFor = (req: express.Request, res: express.Response): RecoveryRequest | undefined => {
     const r = store.findRecoveryRequest(req.params.id);
-    if (!r || r.mode !== "candide") {
+    // A wrong or missing secret reads exactly like an unknown id: no oracle
+    // for which ids exist.
+    if (!r || r.mode !== "candide" || !secretMatches(r, presentedSecret(req))) {
       res.status(404).json({ error: "recovery not found" });
       return undefined;
     }
@@ -726,11 +757,26 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         return res.status(404).json({ error: "no account with email or SMS recovery set up matches that" });
       }
       const c = user.passkeySafe!.candideRecovery!;
-      const open = store
+      const now = new Date();
+      let open = store
         .recoveryRequestsForUser(user.id)
         .find((r) => r.mode === "candide" && ["PASSKEY_PENDING", "OTP_PENDING", "GRACE_PERIOD"].includes(r.status) && Date.now() < Date.parse(r.expiresAt));
+      // Only the browser that started a request may resume it. Anyone else who
+      // names the account gets no id: a request with nothing invested yet
+      // (PASSKEY_PENDING) is superseded by a fresh one of their own, which
+      // still needs every OTP channel; one past that point is refused.
+      if (open && !secretMatches(open, presentedSecret(req))) {
+        if (open.status !== "PASSKEY_PENDING") {
+          return res.status(409).json({
+            error: "a recovery for this account is already in progress — continue it in the browser that started it, or wait for it to finish or expire",
+            code: "RECOVERY_IN_PROGRESS",
+          });
+        }
+        store.updateRecoveryRequest(open.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "superseded by a new recovery start" });
+        open = undefined;
+      }
       const grace = recoveryGracePeriodSeconds(c.moduleAddress) ?? 0;
-      const now = new Date();
+      const secret = open ? undefined : randomBytes(32).toString("base64url");
       const request: RecoveryRequest = open ?? newCandideRequest({
           id: randomUUID(),
           userId: user.id,
@@ -743,10 +789,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           guardianAddress: c.guardianAddress,
           recoveryModuleAddress: c.moduleAddress,
           factors: { kyc: "passed", otp: "pending", liveness: "pending", manualReview: "pending" },
-          candide: { gracePeriodSeconds: grace },
+          candide: { gracePeriodSeconds: grace, accessHash: hashSecret(secret!) },
         });
       const out: Record<string, unknown> = {
         ...publicRequest(request),
+        // Returned once, at creation; the caller sends it back in the
+        // x-recovery-secret header on every step.
+        ...(secret ? { recoverySecret: secret } : {}),
         channels: c.channels.map((ch) => ({ channel: ch.channel, target: maskTarget(ch.channel, ch.target) })),
         gracePeriodSeconds: grace,
       };
@@ -900,10 +949,11 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (updated.status !== "FINALIZED") {
         return res.status(502).json({ ...publicRequest(updated), error: updated.candide?.finalizeError ?? "not finalized yet" });
       }
-      // The new passkey is bound; hand this browser a session so the user
-      // lands in their account instead of at a sign-in prompt.
-      const user = store.findUser(updated.userId)!;
-      res.json({ ...publicRequest(updated), account: deps.withSession(user) });
+      // No session here. The new passkey is now the account's passkey, and
+      // signing in with it (the ordinary login) is the proof of the new
+      // credential; a session keyed on this route would be keyed on knowing
+      // a secret that sat in a browser, not on holding the authenticator.
+      res.json(publicRequest(updated));
     }),
   );
 

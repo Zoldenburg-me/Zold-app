@@ -222,8 +222,8 @@ const stub = createServer((req, res) => {
   });
 });
 
-async function call(pathname: string, body?: any, method?: string, bearer = token) {
-  const headers: Record<string, string> = {};
+async function call(pathname: string, body?: any, method?: string, bearer = token, extra: Record<string, string> = {}) {
+  const headers: Record<string, string> = { ...extra };
   if (body) headers["content-type"] = "application/json";
   if (bearer) headers.authorization = `Bearer ${bearer}`;
   const res = await fetch(API + pathname, { method: method ?? (body ? "POST" : "GET"), ...(body ? { body: JSON.stringify(body) } : {}), headers });
@@ -436,6 +436,10 @@ try {
   console.log("4/4 recovery from a device with no passkey…");
   const newPasskey = await makePasskey("replacement");
   let recovery: any;
+  let secret = "";
+  /** A no-session recovery call from the browser that started it. */
+  const rc = (pathname: string, body?: any, method?: string, s = secret) =>
+    call(pathname, body, method, "", s ? { "x-recovery-secret": s } : {});
 
   await t("an unknown email gets a generic refusal", async () => {
     const r = await call("/api/recovery/candide", { email: "nobody@example.com" }, undefined, "");
@@ -450,17 +454,52 @@ try {
     assert.ok(!r.text.includes(EMAIL) && !r.text.includes(PHONE), "targets are masked on the public surface");
     assert.ok(r.data.registerChallenge, "a WebAuthn registration challenge bound to this recovery");
     assert.equal(r.data.userHandle, userId);
+    assert.match(r.data.recoverySecret ?? "", /^[A-Za-z0-9_-]{40,}$/, "a per-request secret, handed out once");
+    assert.ok(!r.text.includes("accessHash"), "the stored hash is not on the public surface");
     recovery = r.data;
+    secret = r.data.recoverySecret;
   });
 
-  await t("starting again returns the same open recovery rather than a second one", async () => {
-    const r = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
-    assert.equal(r.status, 200);
+  await t("the starting browser resumes its own request with its secret; no second secret is issued", async () => {
+    const r = await call("/api/recovery/candide", { email: EMAIL, recoverySecret: secret }, undefined, "");
+    assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.id, recovery.id);
+    assert.equal(r.data.recoverySecret, undefined);
+  });
+
+  await t("the id alone does not drive a request: no secret, or a wrong one, reads as not found", async () => {
+    const none = await rc(`/api/recovery/candide/${recovery.id}`, undefined, undefined, "");
+    assert.equal(none.status, 404, JSON.stringify(none.data));
+    const wrong = await rc(`/api/recovery/candide/${recovery.id}`, undefined, undefined, "not-the-secret");
+    assert.equal(wrong.status, 404, JSON.stringify(wrong.data));
+    const ok = await rc(`/api/recovery/candide/${recovery.id}`);
+    assert.equal(ok.status, 200, JSON.stringify(ok.data));
+    assert.ok(!ok.text.includes("accessHash"));
+  });
+
+  await t("a second caller naming the email never gets the first request's id; they get their own, and the first is superseded", async () => {
+    const other = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
+    assert.equal(other.status, 201, JSON.stringify(other.data));
+    assert.notEqual(other.data.id, recovery.id);
+    assert.ok(!other.text.includes(recovery.id), "the first request's id is not disclosed");
+    assert.ok(other.data.recoverySecret && other.data.recoverySecret !== secret);
+    // The superseded request is dead: its own passkey step refuses.
+    const stale = await rc(recovery.submitTo, newPasskey.register(recovery.registerChallenge));
+    assert.equal(stale.status, 409, JSON.stringify(stale.data));
+    assert.equal(stale.data.status, "CANCELED");
+    // The one without its secret cannot register a passkey on the new request either.
+    const hijack = await rc(other.data.submitTo, newPasskey.register(other.data.registerChallenge), undefined, secret);
+    assert.equal(hijack.status, 404, JSON.stringify(hijack.data));
+    recovery = other.data;
+    secret = other.data.recoverySecret;
+    // The hijack attempt consumed nothing: resume re-issues a register challenge.
+    const resumed = await call("/api/recovery/candide", { email: EMAIL, recoverySecret: secret }, undefined, "");
+    assert.equal(resumed.status, 200, JSON.stringify(resumed.data));
+    recovery = { ...recovery, ...resumed.data };
   });
 
   await t("registering the new passkey asks Candide for OTPs on every channel with the new owner set", async () => {
-    const r = await call(recovery.submitTo, newPasskey.register(recovery.registerChallenge), undefined, "");
+    const r = await rc(recovery.submitTo, newPasskey.register(recovery.registerChallenge));
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "OTP_PENDING");
     assert.equal(r.data.candide.auths.length, 2);
@@ -480,8 +519,14 @@ try {
     assert.equal(r.status, 404, JSON.stringify(r.data));
   });
 
+  await t("a caller without the secret cannot submit codes", async () => {
+    const r = await rc(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[0].challengeId, otp: OTP }, undefined, "");
+    assert.equal(r.status, 404, JSON.stringify(r.data));
+    assert.equal(seen.signatureSubmits.length, 0, "nothing reached Candide");
+  });
+
   await t("one verified channel is not enough — nothing executes", async () => {
-    const r = await call(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[0].challengeId, otp: OTP }, undefined, "");
+    const r = await rc(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[0].challengeId, otp: OTP });
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "OTP_PENDING");
     assert.equal(r.data.candide.auths[0].verified, true);
@@ -489,13 +534,13 @@ try {
   });
 
   await t("a wrong code on the second channel is refused", async () => {
-    const r = await call(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[1].challengeId, otp: "999999" }, undefined, "");
+    const r = await rc(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[1].challengeId, otp: "999999" });
     assert.equal(r.status, 400);
     assert.equal(seen.creates.length, 0);
   });
 
   await t("the last channel verified: Candide signs, the recovery is created and executed, the grace period starts", async () => {
-    const r = await call(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[1].challengeId, otp: OTP }, undefined, "");
+    const r = await rc(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[1].challengeId, otp: OTP });
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "GRACE_PERIOD");
     assert.ok(r.data.candide.finalizeAfter);
@@ -508,23 +553,51 @@ try {
     recovery = r.data;
   });
 
+  await t("a caller who knows only the email cannot obtain a GRACE_PERIOD request's id", async () => {
+    const r = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
+    assert.equal(r.status, 409, JSON.stringify(r.data));
+    assert.equal(r.data.code, "RECOVERY_IN_PROGRESS");
+    assert.ok(!r.text.includes(recovery.id), "no id on the refusal");
+    assert.equal(r.data.recoverySecret, undefined);
+    const bySafe = await call("/api/recovery/candide", { safeAddress }, undefined, "");
+    assert.equal(bySafe.status, 409, JSON.stringify(bySafe.data));
+    assert.ok(!bySafe.text.includes(recovery.id));
+  });
+
   await t("finalizing inside the grace period is refused", async () => {
-    const r = await call(`/api/recovery/candide/${recovery.id}/finalize`, {}, undefined, "");
+    const r = await rc(`/api/recovery/candide/${recovery.id}/finalize`, {});
     assert.equal(r.status, 425, JSON.stringify(r.data));
     assert.equal(seen.finalizes.length, 0);
   });
 
   await new Promise((r) => setTimeout(r, 2500));
 
-  await t("after the grace period, finalization binds the new passkey and signs this browser in", async () => {
-    const r = await call(`/api/recovery/candide/${recovery.id}/finalize`, {}, undefined, "");
+  await t("after the grace period, a caller holding only the id gets neither finalization nor a session", async () => {
+    const none = await rc(`/api/recovery/candide/${recovery.id}/finalize`, {}, undefined, "");
+    assert.equal(none.status, 404, JSON.stringify(none.data));
+    const wrong = await rc(`/api/recovery/candide/${recovery.id}/finalize`, {}, undefined, "guessed");
+    assert.equal(wrong.status, 404, JSON.stringify(wrong.data));
+    assert.ok(!none.text.includes("sessionToken") && !wrong.text.includes("sessionToken"));
+    assert.equal(seen.finalizes.length, 0, "nothing reached Candide");
+  });
+
+  await t("after the grace period, finalization binds the new passkey and hands out NO session", async () => {
+    const r = await rc(`/api/recovery/candide/${recovery.id}/finalize`, {});
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.status, "FINALIZED");
     assert.equal(seen.finalizes.length, 1);
     assert.equal(seen.finalizes[0].id, "rec-1");
-    assert.ok(r.data.account?.sessionToken, "a session for the recovering browser");
-    assert.equal(r.data.account.id, userId);
-    token = r.data.account.sessionToken;
+    assert.equal(r.data.account, undefined, "no account payload");
+    assert.ok(!r.text.includes("sessionToken"), "no bearer session from the no-session route");
+  });
+
+  await t("the recovering browser signs in by proving the new passkey through the ordinary login", async () => {
+    const c = await call("/api/webauthn/challenge", { purpose: "login" }, undefined, "");
+    const r = await call("/api/passkey/login", await newPasskey.assert(c.data.challenge), undefined, "");
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.id, userId);
+    assert.ok(r.data.sessionToken);
+    token = r.data.sessionToken;
   });
 
   await t("the lost device's sessions are revoked and its spending key unbound", async () => {
