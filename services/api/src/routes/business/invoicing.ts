@@ -30,7 +30,7 @@ import {
   vatNoteFor,
   } from "../../domain/invoicing.js";
 import { EU_MEMBER_STATES, validateCustomReason } from "../../domain/jurisdictions.js";
-import { newLinkToken } from "../../domain/invoices.js";
+import { newLinkToken, ownerInvoiceView } from "../../domain/invoices.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
@@ -335,7 +335,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     }
 
     res.status(201).json({
-      invoice: { ...invoice, linkTokenHash: undefined },
+      invoice: ownerInvoiceView(invoice),
       linkToken: token,
       linkPath: `/invoice/${token}`,
       warnings: report.warnings,

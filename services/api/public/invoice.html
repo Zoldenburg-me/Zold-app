@@ -1,9 +1,7 @@
 <!DOCTYPE html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/vendor/fonts/text.css" />
 <title>Rechnung · Zold</title>
 
 <style>
@@ -440,12 +438,12 @@ function render(inv) {
   else renderSubmitted(inv);
 }
 
-function renderPassword() {
+function renderPassword(message) {
   $("#content").innerHTML = `<div class="panel">
     <h2>This link is password protected</h2>
     <label>Password</label><input id="f-pw" type="password" />
     <div style="margin-top:1rem"><button id="pw-go">Open</button></div>
-    <div id="err"></div></div>`;
+    <div id="err">${password && message ? `<div class="err">${esc(message)}</div>` : ""}</div></div>`;
   $("#pw-go").onclick = async () => {
     password = $("#f-pw").value;
     try { await boot(); } catch (e) { $("#err").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
@@ -457,7 +455,7 @@ async function boot() {
   try {
     data = await api(`/api/invoice-links/${encodeURIComponent(token)}`);
   } catch (e) {
-    if (e.passwordRequired) return renderPassword();
+    if (e.passwordRequired) return renderPassword(e.message);
     $("#content").innerHTML = `<div class="err">${esc(e.message)}</div>`;
     return;
   }

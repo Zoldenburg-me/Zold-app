@@ -225,7 +225,7 @@ submit mainnet ops).
 | area | suites |
 |---|---|
 | money path | `fx:test` `jit:test` `best:test` `dex:test` `lifi:test` `custody:test` `execution:test` `fp5:test` `sepa:test` `refund:guard:test` |
-| identity | `webauthn:selftest` `fp4:test` `authorize:test` `passkey-safe:test` `recovery:test` `recovery:candide:test` `monerium:oauth:test` `monerium:apikeys:test` `webhook:test` |
+| identity | `webauthn:selftest` `security:test` `fp4:test` `authorize:test` `passkey-safe:test` `recovery:test` `recovery:candide:test` `monerium:oauth:test` `monerium:apikeys:test` `webhook:test` |
 | business | `business:test` `draft:test` `invoicing:test` `documents:test` |
 | payments | `paylinks:test` `shopify:test` `shopify:orders:test` `receipt:test` `pay:test` `crypto:test` `convert:test` |
 | ops | `reconcile:test` `anchor:*:test` `country:policy:test` `segments:test` `onboarding:test` `gnosispay:test` |

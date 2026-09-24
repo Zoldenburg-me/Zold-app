@@ -224,7 +224,7 @@ export const ACTIONS = {
   "new-invoice": () => dialog("Create an invoice link",
     `<label>Currency</label><input id="d-cur" value="${esc(org.reporting.currency)}" />
      <label>Due date</label><input id="d-due" type="date" />
-     <label>Password (optional)</label><input id="d-pw" placeholder="Adds a second factor to the link" />`,
+     <label>Password (optional)</label><input id="d-pw" type="password" autocomplete="new-password" minlength="12" placeholder="12+ characters — send it separately from the link" />`,
     async () => {
       const r = await api(`/api/orgs/${org.id}/invoices`, {
         method: "POST",
