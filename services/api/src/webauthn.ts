@@ -154,6 +154,11 @@ export type ChallengePurpose = "register" | "login" | "step_up";
 
 const challenges = new Map<string, { purpose: ChallengePurpose; binding?: string; exp: number }>();
 const CHALLENGE_TTL_MS = 5 * 60_000;
+/** Login challenges are minted without a session, so the store is bounded:
+ *  past the cap the oldest outstanding challenge is dropped (a Map iterates in
+ *  insertion order), which costs a flooder's victims a retry, not the process
+ *  its memory. */
+const MAX_CHALLENGES = 50_000;
 
 function pruneChallenges(now = Date.now()) {
   for (const [k, v] of challenges) if (v.exp < now) challenges.delete(k);
@@ -173,6 +178,7 @@ function pruneChallenges(now = Date.now()) {
  */
 export function issueChallenge(purpose: ChallengePurpose, binding?: string): string {
   pruneChallenges();
+  while (challenges.size >= MAX_CHALLENGES) challenges.delete(challenges.keys().next().value!);
   const c = randomBytes(32).toString("base64url");
   challenges.set(c, { purpose, binding, exp: Date.now() + CHALLENGE_TTL_MS });
   return c;

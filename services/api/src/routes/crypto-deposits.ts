@@ -33,6 +33,7 @@ import {
   submitPasskeySafeOperation,
 } from "../wallet/candide.js";
 import { verifyAssertionForChallenge } from "../webauthn.js";
+import { ownerInvoiceView } from "../domain/invoices.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface CryptoDepositDeps {
@@ -102,7 +103,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       const after = store.invoices.find((i) => i.id === invoice.id)!;
       res.json({
         deposit: store.cryptoDeposits.find((d) => d.id === deposit.id),
-        invoice: { ...after, linkTokenHash: undefined, linkPasswordHash: undefined },
+        invoice: ownerInvoiceView(after),
       });
     }),
   );

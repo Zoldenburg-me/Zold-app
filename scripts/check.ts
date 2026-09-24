@@ -47,6 +47,7 @@ const scripts = [
   "anchor:sweep:test",
   "refund:guard:test",
   "business:test",
+  "security:test",
   "invoicing:test",
   "custody:test",
   "segments:test",
