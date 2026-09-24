@@ -32,7 +32,7 @@ import {
   prepareTransferBatchExecution,
   submitPasskeySafeOperation,
 } from "../wallet/candide.js";
-import { verifyAssertionForChallenge } from "../webauthn.js";
+import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { ownerInvoiceView } from "../domain/invoices.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
@@ -241,10 +241,12 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       }
       let opHash: string | null = null;
       try {
+        // The browser sends base64url; the Safe signature needs the bytes,
+        // exactly as the transfer path decodes them.
         opHash = await submitPasskeySafeOperation(pending.plan, pending.userOperation, {
-          authenticatorData: a.authenticatorData,
-          clientDataJSON: a.clientDataJSON,
-          signature: a.signature,
+          authenticatorData: b64urlToBuf(a.authenticatorData),
+          clientDataJSON: b64urlToBuf(a.clientDataJSON),
+          signature: b64urlToBuf(a.signature),
         });
       } catch (err: any) {
         const reason = String(err?.shortMessage ?? err?.message ?? err);

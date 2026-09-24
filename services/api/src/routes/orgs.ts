@@ -37,7 +37,8 @@ import {
 import { ROLES, type OrgType, type Organisation, type Role } from "../domain/types.js";
 import { ADDRESS_RE, ContactError, validateBankAccount, validateWallet } from "../domain/contacts.js";
 import { hashToken } from "../domain/invoices.js";
-import { wouldOrphanOrg } from "../domain/roles.js";
+import { emailIsProven, wouldOrphanOrg } from "../domain/roles.js";
+import { KYC } from "../config.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 
@@ -377,8 +378,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
   });
 
   /** Accept an invitation. The invitation was addressed to an email, so the
-   *  accepting session must belong to an account carrying that email — the
-   *  token alone is a link anyone could have been forwarded. */
+   *  accepting session must belong to an account that has PROVEN it controls
+   *  that email — the token alone is a link anyone could have been forwarded,
+   *  and the account's email field is whatever was typed at signup. */
   r.post("/invites/accept", (req, res) => {
     const session = requireSession(req, res);
     if (!session) return;
@@ -397,6 +399,16 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const user = store.findUser(session.userId);
     if (!user?.email || user.email.trim().toLowerCase() !== member.email.toLowerCase()) {
       return res.status(403).json({ error: "This invitation was sent to a different email address." });
+    }
+    // Typing the address at signup proves nothing; a code sent to it does.
+    // KYC.autoApprove is the harness seam (hardhat 31337 only, refused in
+    // production) that approves test identities up front.
+    if (!emailIsProven(user, member.email) && !KYC.autoApprove) {
+      return res.status(403).json({
+        error:
+          "Confirm you own this email first: add it as your email recovery channel (Settings → Recovery), enter the code it receives, then open the invitation again.",
+        code: "EMAIL_UNVERIFIED",
+      });
     }
     const existing = store.memberFor(member.orgId, session.userId);
     if (existing && existing.status !== "deactivated") {
