@@ -436,9 +436,9 @@ function assertProductionConfig() {
     if (!process.env.TRUSTED_PROXY_HOPS) {
       fail("TRUSTED_PROXY_HOPS must be explicit for hosted production");
     }
-    if (!process.env.CANDIDE_COSIGNER_ADDRESS || !process.env.CANDIDE_COSIGNER_KEY) {
-      fail("CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY are required before hosted production funding");
-    }
+    // No co-signer is required: Safes are passkey-only (1-of-1). The
+    // CANDIDE_COSIGNER_* pair is needed only while a legacy 2-of-2 Safe still
+    // lists it as an owner; server.ts names any such account at startup.
     // A standing allowance is deliberately NOT required. Spend authority is
     // granted per transfer for the exact debit amount, approved by the user's
     // passkey at send time — zero standing allowance is the designed resting

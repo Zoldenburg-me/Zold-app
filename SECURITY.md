@@ -12,7 +12,7 @@ This is a working prototype whose defaults are **mainnet and production**
 (Base, Monerium production, the public Stellar network); testnets and
 sandboxes are selected by configuration. It has had adversarial
 review passes and carries real security machinery — server-side WebAuthn,
-device-signed EIP-712 payment authorization, 2-of-2 passkey + co-signer
+device-signed EIP-712 payment authorization, passkey-owned (1-of-1)
 Safes, user-signed UserOperation debits, an M-of-N timelock over contract
 admin — but it has **not** been professionally audited, and it is **not**
 operated as a licensed financial service.

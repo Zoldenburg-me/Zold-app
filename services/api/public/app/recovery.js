@@ -23,6 +23,20 @@ async function passkeySignPrepared(prepared) {
   };
 }
 
+/* Retire the legacy co-signer from a 2-of-2 Safe: one passkey approval, after
+   which the passkey is the only owner and Zold can neither co-sign nor block
+   a movement of this account's funds. Only Safes deployed before the co-signer
+   was retired ever show this. */
+async function removeCosigner(errId) {
+  clearErr(errId);
+  if (!confirm("Remove Zold's co-signer from your smart account? Your passkey becomes its only owner. This cannot be undone from the app.")) return;
+  try {
+    const prep = await api(`/api/users/${user.id}/passkey-safe/cosigner-removal`, {});
+    const done = await api(prep.submitTo, await passkeySignPrepared(prep));
+    renderUser({ ...user, ...done, opHash: undefined });
+  } catch (e) { showErr(errId, e); }
+}
+
 let recoveryScreen = null;   // last GET /recovery/candide
 let recoveryOtpStage = null; // { submitTo, channel, target } while a code is outstanding
 
