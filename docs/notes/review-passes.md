@@ -254,12 +254,18 @@ main as of `dcd5a9a`. Status per finding:
    now takes the shop, at all three call sites. Two-store regression in
    `shopify:orders:test` (fails on the old store, passes on the new).
 4. **Order-id enumeration (High)** — `GET /api/shopify/cancel/:code` no
-   longer mutates: it only redirects. A request the buyer abandons stays OPEN
-   until its checkout window (default 1h) runs out. NOT FIXED: the order
-   lookup still hands the pay-page URL (and so the code) to anyone naming shop
-   + sequential order id; the extension needs it to render the link. With
-   cancel inert the code reads a page and re-quotes, nothing more. The real fix
-   is verifying the checkout extension's Shopify session token on that route.
+   longer mutates: it only redirects, and the signed `orders/cancelled`
+   webhook is the only thing that cancels a Shopify request. A checkout the
+   buyer abandons stays OPEN until its window (default 1h) runs out. The order
+   lookup no longer returns the code or any URL built from it (`code`,
+   `returnUrl`, `cancelUrl`); its `pageUrl` is the order's own `/pay` route.
+   The 404 is already the same for "no request yet" and "not a Zold order"
+   (the webhook opens nothing for the latter), and `/shopify/` sits on the
+   tight rate bucket. STILL OPEN: that `/pay` route 302s to the pay page, so
+   the code is still one redirect away from anyone naming shop + order id.
+   With cancel inert it reads a page and re-quotes, nothing more. The fix is a
+   short-lived per-order token in the email link and the checkout extension's
+   session token on the lookup.
 5. **Timelock keys co-located (Medium)** — `scripts/deploy.ts` already deploys
    FxSwapper and AdminTimelock on hardhat only; off hardhat it records token
    addresses and returns. An OLD local `deployments.json` for 84532 may still
