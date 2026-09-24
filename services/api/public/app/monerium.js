@@ -181,14 +181,9 @@ $("m-addr").onclick = async () => {
   setTimeout(() => { icon.textContent = "content_copy"; }, 1400);
 };
 
-/* USD accounts: a waitlist with nothing behind it would be a lie, so the
-   button states plainly that there is no list yet. */
+/* USD accounts: no waitlist exists, so there is no "notify me" button — the
+   notice says so and can only be dismissed. */
 $("m-usd-x").onclick = () => $("m-usd").classList.add("hidden");
-$("m-usd-cta").onclick = () => {
-  const b = $("m-usd-cta");
-  b.textContent = "Not open yet";
-  b.disabled = true;
-};
 
 /**
  * What this deployment lets the browser do. Defaults are the SAFE ones: with

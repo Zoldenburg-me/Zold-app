@@ -1,5 +1,5 @@
 import express from "express";
-import { API_HOST, API_PORT, BRIDGE, CRYPTO_IN, CUSTODY, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY } from "./config.js";
+import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY } from "./config.js";
 import { initStore, store } from "./store.js";
 import {
   moneriumApiKeysAvailable,
@@ -105,7 +105,9 @@ app.get(
   "/api/health",
   wrap(async (_req, res) => {
     const block = await publicClient.getBlockNumber();
-    res.json({ ok: true, block: Number(block), contracts: addrs(), capabilities: capabilities() });
+    // chainId and realMoney let the landing page name the network it runs on
+    // instead of hardcoding "Live on Base" over a testnet deployment.
+    res.json({ ok: true, chainId: CHAIN_ID, realMoney: IS_REAL_MONEY_CHAIN, block: Number(block), contracts: addrs(), capabilities: capabilities() });
   }),
 );
 
