@@ -1,5 +1,11 @@
 # Zold — On-Chain Remittance Platform: Architecture
 
+> **Superseded (2026-09-24).** This page predates the removal of the allowance
+> model and lists hardhat fixtures as governing contracts. Read
+> [`docs/architecture/product-architecture.md`](docs/architecture/product-architecture.md)
+> and [`docs/architecture/technical-architecture.md`](docs/architecture/technical-architecture.md),
+> which were written from a line-by-line read of the code.
+
 Status: Architecture v0.4 (September 2026 — Base mainnet defaults)
 
 ## 1. Product model
