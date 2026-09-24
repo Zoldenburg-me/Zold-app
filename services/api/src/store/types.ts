@@ -668,6 +668,11 @@ export interface RecoveryRequest {
      *  not a capability, and knowing the account's email is not either. Never
      *  on the public projection. */
     accessHash?: string;
+    /** sha256 (hex) of the single-use ticket handed to the browser that
+     *  registered `newPasskey`. Every OTP submission requires it, so channel
+     *  codes can only confirm a credential that browser created. Cleared once
+     *  every code is accepted. Never on the public projection. */
+    otpTicketHash?: string;
     newPasskey?: {
       credentialId: string;
       publicKey: { jwk: JsonWebKey; alg: "ES256" | "RS256" };
