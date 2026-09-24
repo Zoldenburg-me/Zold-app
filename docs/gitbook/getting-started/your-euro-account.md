@@ -22,7 +22,7 @@ EURe is an electronic-money token. It is issued by Monerium EMI ehf., an e-money
 
 ## Your smart wallet
 
-Your wallet is a Safe smart account on the Base network. Its owners are your passkey and a Zold co-signer, and both must sign an owner-level change. Every payment you make is a transaction your passkey signs at send time; there is no standing permission for Zold to move funds.
+Your wallet is a Safe smart account on the Base network. Its only owner is your passkey: Zold holds no key that can move your funds or stop you from moving them. (Accounts opened before this change may still list a Zold co-signer as a second owner; you can remove it under Settings.) Every payment you make is a transaction your passkey signs at send time; there is no standing permission for Zold to move funds.
 
 Gas is paid by Zold. You never need to hold ETH or any other token to use your account.
 
