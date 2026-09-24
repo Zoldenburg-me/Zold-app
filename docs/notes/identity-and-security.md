@@ -288,7 +288,7 @@ front of someone whose salary is in the account.
 
 ## Email / SMS recovery — Candide's guardian (Sep 2026)
 
-`npm run recovery:candide:test` (25 checks, stub service, simulated chain).
+`npm run recovery:candide:test` (39 checks, stub service, simulated chain).
 Access to Candide's Safe Recovery Service is arranged; `RECOVERY_SERVICE_URL`
 is the switch, and without it the feature reports `unavailable` and every route
 refuses. Code: `recovery/candide-guardian.ts` (SDK wrapper, fail-closed),
@@ -325,6 +325,27 @@ RULES THAT CARRY WEIGHT, each with a check:
    recovery — that is what they are for — but cannot sign in or spend before
    the grace period has run, which is the rightful owner's window to cancel.
    Finalisation reads `getOwners()` from the chain before binding anything.
+ - **A recovery id is not a capability, and finalisation hands out no
+   session** (fixed 24 Sep 2026, found by reading the code, never exercised
+   live). Before: `POST /recovery/candide` returned the open request — id
+   included — to ANY caller who named the email, even in GRACE_PERIOD, and
+   `/finalize` (no session, no proof of the new passkey) returned a live
+   bearer session once the grace period ran. So anyone who knew the email
+   could race the 60 s sweep and walk into the account without ever holding
+   the OTP channels or the new passkey. Now: the starting browser gets a
+   random `recoverySecret` once (stored as `candide.accessHash`, sha256,
+   never on the public projection) and every by-id route (`/passkey`, `/otp`,
+   `/finalize`, `GET /:id`) requires it in `x-recovery-secret`; a wrong or
+   missing one is a 404, same as an unknown id. A second start without the
+   secret supersedes a PASSKEY_PENDING request (nothing invested yet; the new
+   one still needs every OTP) and gets 409 RECOVERY_IN_PROGRESS, with no id,
+   for OTP_PENDING or GRACE_PERIOD. `/finalize` returns the request only; the
+   recovering browser signs in with the new passkey through the ordinary
+   `/api/passkey/login`, which proves the authenticator instead of possession
+   of a string. Requests created before the fix carry no hash: nobody can
+   drive them by id, the sweep still finalizes them, and their new passkey
+   signs in normally. The web client keeps the secret per email in
+   localStorage (`zold-recovery-secret`) so a reload can resume.
  - **Module agreement.** Candide recovers through ONE module per chain
    (`getNetworkConfig().moduleAddress`); a guardian added to any other module
    is a guardian in no module, so enrolment refuses on mismatch.

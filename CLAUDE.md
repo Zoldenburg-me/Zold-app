@@ -140,6 +140,9 @@ Each of these was a bug once. The reasoning is in `docs/notes/`.
 - **A recovery's new credential lives on the RecoveryRequest** until the chain
   confirms the new owner, so whoever holds the OTP channels cannot sign in or
   spend during the grace period.
+- **A recovery id is not a capability.** Candide recovery's by-id routes need
+  the per-request secret handed to the starting browser, and `/finalize` issues
+  no session — the new passkey signs in through the ordinary login.
 - **PRF is a per-authenticator capability, not a design guarantee.** Real
   hardware reported no PRF support, so the device key was stored unwrapped:
   anything that can read localStorage can spend there. Detect and surface it.
