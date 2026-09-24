@@ -1,19 +1,14 @@
 /**
- * Service worker — app shell only.
+ * Service worker: app shell only.
  *
- * THE RULE THIS FILE EXISTS TO ENFORCE: nothing under /api/ is ever cached.
+ * Nothing under /api/ is ever cached. A stale balance, quote or transfer state
+ * is worse than an error (a quote locks a rate for ten minutes and binds to
+ * execution, so a cached one shows a price the server will refuse). API
+ * requests go to the network or fail with the 503 below, which the UI renders
+ * as "can't reach Zold".
  *
- * Everything this product shows about money is time-sensitive in a way that
- * makes a stale copy worse than an error. A balance can have moved. A quote
- * locks a rate for ten minutes and binds to execution, so replaying a cached
- * one would show a price the server will refuse. A transfer's state is the
- * whole point of the state machine. So API requests go to the network or they
- * fail honestly — see the 503 below, which is what the UI renders as "can't
- * reach Zold" rather than showing a number nobody can stand behind.
- *
- * What IS cached is the shell: the HTML, the device-key module and the
- * vendored crypto. That is what makes the installed app open instantly, and
- * none of it says anything about anyone's money.
+ * The shell is cached: the HTML, the device-key module and the vendored
+ * crypto. That makes the installed app open instantly and holds no money data.
  *
  * Pages and page code are refetched on every online load, so an edit to them
  * needs no bump. Bump SHELL_CACHE when the SHELL list itself changes or a

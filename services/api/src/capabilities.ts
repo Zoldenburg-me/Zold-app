@@ -13,13 +13,12 @@ import { shopifyAvailable } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
 
 /**
- * What this deployment can actually do, so the browser can render against it
- * instead of offering an action the server will refuse.
+ * What this deployment can do, so the browser only offers actions the server
+ * will accept.
  *
- * Deliberately NOT per-user, and deliberately public. These are properties of
- * the deployment rather than of an account, and /api/health already publishes
- * the contract addresses; every flag here is one refused request away from
- * being learned anyway.
+ * Public and not per-user: these are properties of the deployment, and each
+ * flag can be learned from a single refused request anyway. /api/health
+ * already publishes the contract addresses.
  */
 export function capabilities() {
   return {

@@ -1,14 +1,11 @@
 /**
- * Session issue and check — the one place that decides who is calling.
+ * Session issue and check: the only place that decides who is calling.
  *
- * Extracted from server.ts so route modules can be mounted as factories that
- * take `requireSession`/`requireUserSession` rather than reaching for the app.
- * The rule that made server.ts the single owner of authentication survives the
- * move: this module owns the decision, and a route module still cannot acquire
- * a second way to make it.
+ * Route modules are factories that take `requireSession`/`requireUserSession`
+ * from here; they must not add a second way to authenticate.
  *
  * Tokens are never stored. Only a SHA-256 hash reaches the store, so a leaked
- * database does not hand anyone a live session.
+ * database does not yield a live session.
  */
 import type express from "express";
 import { createHash, randomBytes, randomUUID } from "node:crypto";

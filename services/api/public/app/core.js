@@ -1,14 +1,12 @@
 /**
- * The pieces every screen needs: the DOM helper, the module-level state, the
- * escaping that guards innerHTML, and api().
+ * What every screen needs: the DOM helper, module-level state, the escaping
+ * that guards innerHTML, and api().
  *
- * FIRST IN THE LOAD ORDER, and that order is load-bearing. These are classic
- * scripts, not modules, so they share one scope exactly as the single inline
- * script they were cut from did — but a file may only call into files loaded
- * BEFORE it at parse time. Every file after this one holds declarations and
- * event wiring; nothing calls forward. The one exception is app/main.js, which
- * loads LAST and is the only file that starts anything that reaches across
- * files — anything that awaits and then renders belongs there, not earlier.
+ * Loads first, and the order matters. These are classic scripts sharing one
+ * scope, and a file may only call into files loaded before it at parse time.
+ * Files after this one hold declarations and event wiring; nothing calls
+ * forward. app/main.js loads last and is the only file that starts work across
+ * files, so anything that awaits and then renders goes there.
  */
 const $ = (id) => document.getElementById(id);
 let user = null, quote = null, transfer = null, poll = null;
@@ -33,14 +31,13 @@ const fmt = (n, dp = 2) => Number(n).toLocaleString("en", { minimumFractionDigit
    partner (anchor error text, anchor URLs) — neither is markup. */
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-/* Only ever render a link the partner gave us if it is really a web URL —
-   "javascript:" in an href is a script, not a destination.
+/* Render a partner link only if it is an http(s) URL: "javascript:" in an
+   href runs a script.
 
-   Parsed with NO base, so a partner link has to be absolute. Resolving against
-   location.origin instead turned every non-URL into a valid same-origin href:
-   String(undefined) is the literal "undefined", so a missing moreInfoUrl became
-   "<origin>/undefined", the caller's falsy check passed, and a dead "details"
-   link rendered. Anything that is not a non-empty string is not a link. */
+   Parsed with no base, so the link must be absolute. Don't resolve against
+   location.origin: a missing moreInfoUrl becomes "<origin>/undefined", passes
+   the caller's falsy check, and renders a dead link. A value that is not a
+   non-empty string is not a link. */
 const safeUrl = (u) => {
   if (typeof u !== "string" || u.trim() === "") return null;
   try {
@@ -67,11 +64,9 @@ const kycCopy = (status = "pending", u = user) => {
 /**
  * Show or clear the offline bar.
  *
- * `navigator.onLine` is not enough on its own: it reports whether the device
- * has a network interface, not whether Zold answers. A dead server on a live
- * wifi is the case that actually happens, and it is indistinguishable to the
- * user from a broken app unless we say so. So the bar is driven by BOTH — the
- * interface going away, and any API call failing to reach us.
+ * `navigator.onLine` only reports a network interface, not whether Zold
+ * answers, and a dead server on live wifi looks like a broken app. So the bar
+ * shows when the interface goes away or when an API call fails to reach us.
  */
 function setReachable(ok) {
   const bar = document.getElementById("offline-bar");

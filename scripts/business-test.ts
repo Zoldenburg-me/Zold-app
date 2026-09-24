@@ -1,10 +1,9 @@
 /**
  * The organisation domain, proved without a chain or a network.
  *
- * Everything here is pure logic over domain/, so it runs offline and fast. The
- * checks are chosen to pin the rules that are easy to regress and expensive to
- * regress silently: plan gating that must never delete, four-eyes review,
- * address-book drift, and a gated currency that must not read as live.
+ * Pure logic over domain/, so it runs offline and fast. The checks pin rules
+ * that are easy to break unnoticed: plan gating never deletes, four-eyes
+ * review, address-book drift, and a gated currency must not read as live.
  *
  *   npm run business:test
  */
@@ -215,17 +214,14 @@ check("a gated currency is recorded, not silently opened", () => {
 });
 
 check("a shown token never implies we hold it", () => {
-  // CHF and NGN exist in the list because their TOKENS are real — ZCHF and
-  // cNGN, both verified on chain. That is the exact shape most likely to
-  // mislead: a currency with a live, liquid token and no account behind it.
-  // So every token carries heldByUs, and it must be false wherever we custody
-  // nothing, no matter how real the token is.
+  // CHF and NGN are listed because their tokens (ZCHF and cNGN) are real and
+  // verified on chain, but no account backs them. Every token carries
+  // heldByUs, which must be false wherever we custody nothing.
   const list = currencyAvailability();
   for (const c of list) {
     if (!c.token) continue;
-    // heldByUs must track whether the rail is actually open. A token shown for
-    // a closed rail claiming to be held is the precise lie this guards: the
-    // token being real is not evidence that we have any.
+    // heldByUs must track whether the rail is open. A real token on a closed
+    // rail must not be shown as held.
     assert.equal(
       c.token.heldByUs, c.available,
       `${c.code}: heldByUs=${c.token.heldByUs} but available=${c.available} — a token can only be ` +

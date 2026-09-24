@@ -1,33 +1,29 @@
 /**
- * Which invoicing rules apply, and — just as important — how far we actually
- * check them.
+ * Which invoicing rules apply, and how far we check them.
  *
- * NEVER APPLY GERMAN LAW TO EVERYONE. Offering a Polish or Swedish entity
- * "§ 19 UStG Kleinunternehmerregelung" and a 19% rate, or an Indian one
- * German exemptions with no mention of GST, is worse than offering nothing,
- * because it looks authoritative.
+ * Don't apply German law to everyone. Offering a Polish or Swedish entity
+ * "§ 19 UStG Kleinunternehmerregelung" and a 19% rate, or an Indian one German
+ * exemptions with no mention of GST, looks authoritative and is wrong.
  *
- * THREE RULE SETS, and the difference between them is the difference between
- * what we encode and what we merely carry:
+ * Three rule sets:
  *
- *   DE       statutory  — actual German paragraphs are encoded and enforced.
- *   EU       directive  — the VAT Directive baseline every member state shares
+ *   DE       statutory  - German paragraphs are encoded and enforced.
+ *   EU       directive  - the VAT Directive baseline every member state shares
  *                         (Art. 226 particulars, Art. 196 reverse charge,
  *                         Art. 138 intra-community, Art. 146 export). National
- *                         additions are NOT encoded, because there are 26 other
- *                         sets of them and we have verified none.
- *   GENERIC  structural — the document is checked for internal coherence only:
- *                         both parties, a number, dates, and arithmetic that
- *                         adds up. NO tax law is checked. India's GST, US sales
- *                         tax, UK VAT and everything else land here.
+ *                         additions are not encoded; none of the other 26 sets
+ *                         has been verified.
+ *   GENERIC  structural - internal coherence only: both parties, a number,
+ *                         dates, and arithmetic that adds up. No tax law is
+ *                         checked. India's GST, US sales tax, UK VAT and
+ *                         everything else land here.
  *
- * Every report says which of these ran, so "valid" never means more than it
- * should. A rule set is a claim about our own coverage, not about the law.
+ * Every report says which one ran, so "valid" never claims more coverage than
+ * we have.
  *
- * DELIBERATELY NOT SHIPPED: a table of VAT rates per country. Rates change by
- * statute and we would be asserting 27 numbers we have not checked; an org sets
- * its own rates instead, and outside Germany we validate that a rate is a
- * plausible percentage rather than pretending to know the right one.
+ * There is no per-country VAT rate table: rates change by statute and we have
+ * not checked them. An org sets its own rates; outside Germany we only check
+ * that a rate is a plausible percentage.
  */
 
 /** ISO 3166-1 alpha-2 for the 27 EU member states. Membership is stable enough

@@ -1,36 +1,32 @@
 /**
- * Pin the local-test SECURITY POSTURE. Nothing else — no chain, no RPC, no DB.
+ * Pin the local-test security posture. No chain, RPC or DB.
  *
- * Split out from _local-chain.ts because the harnesses that need this are not
- * the same set that need a local chain: anchor/trustline/travel-rule talk to
- * real testnets on purpose and must NOT be pinned to 31337, but they still must
- * not inherit the operator's hosted posture.
+ * Separate from _local-chain.ts because anchor/trustline/travel-rule talk to
+ * real testnets and must not be pinned to 31337, but must still not inherit
+ * the operator's hosted posture.
  *
- * WHY THIS IS NEEDED AT ALL. `.env` is the operator's file and now legitimately
- * carries the hosted deployment — NODE_ENV=production and the zoldhq.com
- * WebAuthn origin. `process.loadEnvFile` fills anything unset, so without this
- * every harness silently inherits that: pinned test rates are refused as
- * "set in production", and passkey ceremonies are checked against an origin
- * no test ever serves from.
+ * `.env` is the operator's file and carries the hosted deployment
+ * (NODE_ENV=production, the zoldhq.com WebAuthn origin). `process.loadEnvFile`
+ * fills anything unset, so without this every harness inherits it: pinned
+ * test rates are refused as "set in production", and passkey ceremonies are
+ * checked against an origin no test serves from.
  *
- * SET, never delete. Deleting only lets loadEnvFile put the operator's value
- * back — in this process on the next call, and in any child we spawn. That is
- * the same trap the DEPLOY_*_KEY handling hit.
+ * Set values, don't delete them: loadEnvFile would put the operator's value
+ * back, in this process on the next call and in any child we spawn (same
+ * problem as DEPLOY_*_KEY).
  *
- * The historical default was NODE_ENV unset; "test" is equivalent everywhere,
- * because the code only ever compares against "production". Harnesses that
- * genuinely want production posture (fx-rates-test) set it themselves, and an
- * explicit child env still wins.
+ * NODE_ENV "test" behaves like unset, since the code only compares against
+ * "production". Harnesses that want production posture (fx-rates-test) set it
+ * themselves, and an explicit child env still wins.
  *
- * MUST be the first import in any harness that uses it, or config.js is
- * evaluated with the operator's values already frozen in.
+ * Must be the first import in any harness that uses it, or config.js is
+ * evaluated with the operator's values.
  */
 /**
- * The ports harnesses serve on. The last entry is the one that matters under
- * `npm run check`, which allocates a RANDOM free port for the whole run and
- * passes it down as TRANSF_API_PORT — so a fixed list can never match it, and
- * the only symptom of a static list is WebAuthn ceremonies failing under
- * `check` while every suite passes when run on its own.
+ * The ports harnesses serve on. `npm run check` allocates a random free port
+ * for the run and passes it as TRANSF_API_PORT, so RUN_PORT is added too.
+ * Without it, WebAuthn ceremonies fail under `check` while every suite passes
+ * on its own.
  */
 const PORTS = [3000, 3010, 3011, 3012, 3020, 3021, 3030, 3040, 3100];
 const RUN_PORT = process.env.TRANSF_API_PORT;
@@ -43,18 +39,16 @@ process.env.WEBAUTHN_ORIGINS = [...new Set([...PORTS.map(String), ...(RUN_PORT ?
 ]).join(",");
 
 /**
- * Operator GATES — values whose mere presence changes whether a request is
- * accepted. These must be neutral by default or a harness ends up testing the
- * operator's deployment instead of the guard it was written for:
- * reconcile-test posts an unsigned webhook on purpose, and a secret inherited
- * from .env rejects it before the reconciler is ever reached.
+ * Operator gates: values whose presence changes whether a request is
+ * accepted. They must be neutral here, or a harness tests the operator's
+ * deployment. For example, reconcile-test posts an unsigned webhook, and a
+ * secret inherited from .env rejects it before the reconciler runs.
  *
- * Deliberately NOT cleared: MONERIUM_CLIENT_ID/SECRET and
- * MONERIUM_TOKEN_ENCRYPTION_KEY. Those are permissive rather than gating, and
- * the harnesses that care already set their own — clearing them here would
- * break sandbox-mode tests that expect credentials to exist.
+ * Not cleared: MONERIUM_CLIENT_ID/SECRET and MONERIUM_TOKEN_ENCRYPTION_KEY.
+ * They permit rather than gate, the harnesses that care set their own, and
+ * clearing them breaks sandbox-mode tests that expect credentials.
  *
- * A harness that wants a secret still sets it in its own child env, which wins.
+ * A harness that wants a secret sets it in its own child env, which wins.
  */
 process.env.MONERIUM_WEBHOOK_SECRET = "";
 process.env.TRUSTED_PROXY_HOPS = "0";

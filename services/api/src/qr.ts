@@ -1,27 +1,23 @@
 /**
  * A minimal QR encoder, so a payment page can show a scannable code.
  *
- * Written rather than installed: the repo has four runtime dependencies and a
- * payment page is not a reason to add a fifth, particularly one that would
- * also need vendoring into the browser bundle. Rendering server-side as SVG
- * means one implementation and nothing new on the client.
+ * In-house to avoid a fifth runtime dependency that would also need vendoring
+ * into the browser bundle. It renders server-side as SVG, so nothing new runs
+ * on the client.
  *
- * SCOPE, deliberately narrow — byte mode, error-correction level L, versions
- * 1 to 6 (up to 134 bytes). It stops short of version 7, which is where the
- * format gains an 18-bit version-information block: more spec surface for no
- * gain here, because the only thing this encodes is a 42-character address
- * (version 3, less than half the budget).
+ * Scope: byte mode, error-correction level L, versions 1 to 6 (up to 134
+ * bytes). Version 7 adds an 18-bit version-information block, which is not
+ * needed: the only payload is a 42-character address (version 3).
  *
- * A full EIP-681 URI with an amount runs to ~135 bytes and therefore does NOT
- * fit — measured, not guessed. That is fine, because the URI is a link on the
- * page rather than the QR payload (see pay.ts for why), but anything passing a
- * URI here gets a loud throw rather than a code that will not scan.
+ * A full EIP-681 URI with an amount is ~135 bytes and does not fit. The URI is
+ * a link on the page, not the QR payload (see pay.ts), and passing one here
+ * throws.
  *
- * VERIFICATION: `npm run pay:test` reads the finished matrix back through the
- * same module ordering and reconstructs the payload, which proves the
- * bitstream, padding, masking and placement agree with each other. It does NOT
- * prove the module ordering matches the spec — only an independent decoder or
- * a phone can do that. Check one before this is put in front of users.
+ * Verification: `npm run pay:test` reads the matrix back through the same
+ * module ordering and reconstructs the payload, which shows bitstream,
+ * padding, masking and placement agree with each other. It does not show the
+ * module ordering matches the spec; only an independent decoder or a phone
+ * can. Check one before this is put in front of users.
  */
 
 /** Byte-mode capacity at EC level L, indexed by version. */

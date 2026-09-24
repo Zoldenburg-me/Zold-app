@@ -1,23 +1,19 @@
 import "./_test-env.js";
 /**
- * Pin a test run to the local hardhat chain. Import this FIRST, before
+ * Pin a test run to the local hardhat chain. Import this first, before
  * anything else, in any script that spins up its own node.
  *
  *     import "./_local-chain.js";   // must be the first import
  *     import { ... } from "...";
  *
- * Why a module rather than a few lines at the top of each test: ES module
- * imports are hoisted and evaluated before the importing module's body runs.
- * Setting these in the body is too late — config.js has already read the
- * environment and frozen CHAIN_ID, so an in-process import quietly keeps
- * whatever .env said. Spawned child processes get the corrected values and
- * in-process code does not, which shows up as a test deploying locally and
- * then calling contract addresses from a completely different chain.
+ * It is a module because ES imports are hoisted: setting these in the test
+ * body is too late, since config.js has already read the environment and
+ * frozen CHAIN_ID. Child processes would then see the local values while
+ * in-process code calls contract addresses from another chain.
  *
- * What it defends against: deploy.ts loads .env now, so a developer's real
- * settings — a testnet chain id, a remote RPC, funded operator keys — would
- * otherwise leak into tests that run their own chain. Tests must not depend
- * on .env being empty.
+ * deploy.ts loads .env, so without this a developer's testnet chain id,
+ * remote RPC and funded operator keys would leak into tests that run their
+ * own chain.
  */
 
 import path from "node:path";
@@ -30,16 +26,13 @@ process.env.LOCAL_HARNESS = "1";
 process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:8545";
 
 /**
- * LIQUIDITY_PROVIDER now defaults to `best` (over lifi,dex) because those are
- * the venues the user's own Safe can execute — the non-custodial path. Neither
- * exists on local hardhat: LI.FI answers 404 on testnets and there is no
- * EURe/USDC pool until `dex:setup` seeds one. So the local chain opts INTO
- * FxSwapper explicitly.
+ * LIQUIDITY_PROVIDER defaults to `best` (over lifi,dex), the venues a user's
+ * Safe can execute. Neither exists on local hardhat: LI.FI answers 404 on
+ * testnets and there is no EURe/USDC pool until `dex:setup` seeds one. So the
+ * local chain opts into FxSwapper here.
  *
- * The direction matters. Production inherits the non-custodial default and the
- * local demo names its exception; the other way round is how a custodial path
- * ended up shipping as the default in the first place. Set with ??= so a
- * harness that wants a specific venue (dex/lifi/rfq tests) still wins.
+ * Keep the opt-in local: production must inherit the non-custodial default.
+ * ??= lets a harness that wants a specific venue (dex/lifi/rfq tests) win.
  */
 process.env.LIQUIDITY_PROVIDER ??= "fx-swapper";
 

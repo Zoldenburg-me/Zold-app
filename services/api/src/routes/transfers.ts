@@ -1,10 +1,9 @@
 /**
- * Quotes and transfers — the money path's HTTP surface.
+ * Quotes and transfers: the money path's HTTP surface.
  *
- * The transfer is BUILT in transfers/build.ts, which draft execution also
- * calls; these routes own the request shape, the reads, and the send-time
- * authorization. Keeping the builder out of here is what stops a second,
- * weaker way of creating a transfer growing beside the first.
+ * Transfers are built in transfers/build.ts, which draft execution also
+ * calls; these routes own the request shape, the reads and the send-time
+ * authorization. Don't build transfers here: there must be one builder.
  */
 import express from "express";
 import { wrap } from "./util.js";
@@ -260,16 +259,14 @@ export function createTransferRouter(deps: TransferDeps) {
       }
       let user = store.findUser(transfer.userId)!;
       if (!requireKycApproved(user, res)) return;
-      // User-signed execution: when creation prepared one, this transfer can
-      // only debit through it — the UserOperation the passkey approves IS the
-      // movement, and there is no server-side authority to fall back on.
-      // Verified BEFORE the authorization is claimed (a bad assertion must not
-      // consume the one-shot claim) and BEFORE the redeem assertion: the client
-      // performs the execution ceremony first, so on authenticators with a real
-      // signature counter the redeem assertion carries the HIGHER count —
-      // verifying it first would store that count and make the execution
-      // assertion read as a cloned-authenticator regression, failing every
-      // Safe-funded SEPA send on counter-incrementing hardware.
+      // User-signed execution: when creation prepared one, the transfer can
+      // only debit through the UserOperation the passkey approves.
+      // Verified before the authorization is claimed (a bad assertion must not
+      // consume the one-shot claim) and before the redeem assertion. The
+      // client runs the execution ceremony first, so on authenticators with a
+      // signature counter the redeem assertion has the higher count; checking
+      // it first would make the execution assertion look like a cloned
+      // authenticator and fail every Safe-funded SEPA send.
       prunePendingTransferExecutions();
       const pendingExecution = pendingTransferExecutions.get(transfer.id);
       if (pendingExecution && pendingExecution.userId !== user.id) {

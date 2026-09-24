@@ -1,14 +1,13 @@
 /**
  * Crypto in: what arrived at the payment page, and turning it into euros.
  *
- * THE POLLER DETECTS, IT DOES NOT SIGN. It runs with nobody present, so a
- * deposit sits as detected until the holder is there to authorise the
- * conversion — a missing signature is not a fault and must never be recorded
- * as one.
+ * The poller detects and does not sign. It runs with nobody present, so a
+ * deposit stays detected until the holder authorises the conversion. A
+ * missing signature is not a fault and must not be recorded as one.
  *
- * NON-CUSTODIAL BY CONSTRUCTION. The conversion batch approves the venue and
- * swaps out of the user's own Safe, delivering EURe straight back into it.
- * The orchestrator is not in the path and holds nothing at any point.
+ * Non-custodial: the conversion batch approves the venue and swaps out of the
+ * user's own Safe, delivering EURe back into it. The orchestrator is not in
+ * the path and holds nothing.
  */
 import express from "express";
 import { wrap } from "./util.js";
@@ -52,10 +51,8 @@ const pendingDepositConversions = new Map<string, {
 /**
  * Tie a payment to the invoice it settles.
  *
- * Deliberately explicit rather than inferred. Matching an incoming amount to
- * an open invoice by value and date guesses, and a guess written into the
- * books as a fact is worse than an unlinked payment someone has to look at.
- * The account holder says which invoice this was.
+ * The account holder names the invoice. Don't infer it from amount and date:
+ * a wrong guess in the books is worse than an unlinked payment.
  */
 /**
  * Turn auto-settlement of payment-page crypto on or off.

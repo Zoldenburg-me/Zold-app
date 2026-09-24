@@ -1,33 +1,27 @@
 /**
  * Which path an account takes, decided once, on the server.
  *
- * `resolveSegment` is PURE — no store, no network, no clock. Everything it
- * needs arrives in the input. That is what makes it exhaustively testable, and
- * it is the only reason a rule this consequential can be trusted: a resolver
- * that reads a database is a resolver nobody can enumerate.
+ * `resolveSegment` is pure: no store, no network, no clock. Everything it
+ * needs arrives in the input, so it can be tested exhaustively.
  *
- * PRECEDENCE IS THE DESIGN. The order below is not stylistic; each rule
- * overrides everything under it, and reordering them changes who gets an
- * account:
+ * Order matters. Each rule overrides everything under it, and reordering them
+ * changes who gets an account:
  *
- *   1. US person        — a legal exclusion, and it overrides every other fact
+ *   1. US person        - a legal exclusion; overrides every other fact,
  *                         including a servable residence.
- *   2. Sanctions        — residence OR citizenship, short explicit list.
- *   3. Collections-only — India, which OVERRIDES the issuer's own view
- *                         (Monerium rates IN servable; we decline anyway).
- *   4. EU full          — allow list, minus card-prohibited regions.
- *   5. On-chain, no card— whoever Monerium will actually serve.
- *   6. Unsupported      — nobody will serve this residence.
+ *   2. Sanctions        - residence or citizenship, short explicit list.
+ *   3. Collections-only - India. Overrides the issuer's view (Monerium rates
+ *                         IN servable; we decline anyway).
+ *   4. EU full          - allow list, minus card-prohibited regions.
+ *   5. On-chain, no card- whoever Monerium will serve.
+ *   6. Unsupported      - nobody will serve this residence.
  *
- * WHY (6) EXISTS AND IS NOT "SANCTIONED". Monerium prohibits residences that
- * carry no sanction at all — Nigeria among them. Filing those under
- * BLOCKED_SANCTIONED would be false, and would tell a Nigerian user something
- * about themselves that is not true. It gets its own segment and its own reason
- * code, and the UI copy for it says only what Zold cannot offer.
+ * (6) is separate from sanctions: Monerium prohibits some residences that carry
+ * no sanction (Nigeria among them), and BLOCKED_SANCTIONED would misdescribe
+ * them. The UI copy for it says only what Zold cannot offer.
  *
- * THE REASON CODE IS INTERNAL. It is written to the audit log and never
- * rendered: publishing the rule that fired tells someone which answer to change
- * to get a different outcome.
+ * The reason code is internal: written to the audit log, never rendered, so
+ * it does not tell someone which answer to change.
  */
 
 import {
@@ -106,11 +100,10 @@ export interface SegmentDecision {
   reasonCode: string;
   capabilities: Capability[];
   /**
-   * Set when the segment is real but cannot be opened in this deployment.
-   * IN_COLLECTIONS is gated today: Xflow onboards only platforms incorporated
-   * in India, and Zoldenburg UG is not one. Modelled the same way a gated
-   * currency is — the request is recognised and recorded, the path is named,
-   * and nothing pretends to work.
+   * Set when the segment exists but cannot be opened in this deployment.
+   * IN_COLLECTIONS is gated: Xflow onboards only platforms incorporated in
+   * India, and Zoldenburg UG is not one. Like a gated currency, the request is
+   * recorded and the missing path named.
    */
   gate?: { reason: string; needs: string };
   /**

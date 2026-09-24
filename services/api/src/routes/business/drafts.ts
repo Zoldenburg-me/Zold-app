@@ -1,19 +1,17 @@
 /**
  * Draft payments: compose, edit, submit, review, execute.
  *
- * FOUR EYES. The reviewer may not be the drafter, whatever their role, or
- * review is a button the same person presses twice. Editing another person's
- * lines makes the editor the drafter, which is the same hole reached sideways.
+ * Four eyes: the reviewer may not be the drafter, whatever their role.
+ * Editing another person's lines makes the editor the drafter.
  *
- * ALL-OR-NOTHING AT EXECUTION. Every line is planned before anything is
- * created — wallet destinations, gated currencies, sub-fee and over-cap
- * amounts all refuse up front — and the balance is checked as a TOTAL, because
- * N lines that each fit can still overdraw together.
+ * All-or-nothing at execution: every line is planned before anything is
+ * created (wallet destinations, gated currencies, sub-fee and over-cap amounts
+ * all refuse up front), and the balance is checked as a total, because N lines
+ * that each fit can still overdraw together.
  *
- * INVALID_DATA. A draft whose payee changed after it was saved is HELD, not
- * retargeted. The fingerprint is recomputed at review AND again at execution:
- * the gap between approval and execution is exactly where an address-book edit
- * lands.
+ * INVALID_DATA: a draft whose payee changed after it was saved is held, not
+ * retargeted. The fingerprint is recomputed at review and again at execution,
+ * because an address-book edit can land between approval and execution.
  */
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -241,16 +239,14 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
    * Execute a reviewed draft: one transfer per line, each needing its own
    * device signature.
    *
-   * NOTHING MOVES HERE. This endpoint creates transfers and hands back the
-   * authorizations the device must sign; a transfer with no signature can never
-   * debit anything. That property is what makes the partial-failure path below
-   * safe.
+   * No money moves here. This endpoint creates transfers and returns the
+   * authorizations the device must sign; an unsigned transfer cannot debit
+   * anything, which is what makes the partial-failure path below safe.
    *
-   * The claim is synchronous — same shape as the transfer authorization claim,
-   * and for the same reason: two parallel submissions of one draft must not
-   * both pass the state check. Drift is re-checked immediately before, because
-   * the gap between approval and execution is exactly where an address-book
-   * edit lands.
+   * The claim is synchronous, like the transfer authorization claim, so two
+   * parallel submissions of one draft cannot both pass the state check. Drift
+   * is re-checked just before, since an address-book edit can land between
+   * approval and execution.
    */
   r.post("/:orgId/drafts/:draftId/execute", async (req, res) => {
     const ctx = ctxOf(req, res);
@@ -269,8 +265,8 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
       });
     }
 
-    // An imported wallet is read-only: we build the transactions, its owner
-    // signs them. Saying so is the point; silently doing nothing would not be.
+    // An imported wallet is read-only: we build the transactions and its
+    // owner signs them. The response says so explicitly.
     if (checked.source.kind === "wallet") {
       const walletId = checked.source.walletId;
       const wallet = store.importedWalletsOf(ctx.org.id).find((w) => w.id === walletId);
@@ -395,10 +391,9 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
     }
 
     // ── Claim, then create ────────────────────────────────────────────────
-    // Which states may be sent from depends on the plan. An org WITH approvals
-    // must go through review — that is what it bought. An org without them has
-    // no review step at all, so requiring REVIEWED there would make every draft
-    // permanently unsendable.
+    // Which states may be sent from depends on the plan. An org with
+    // approvals must go through review. An org without them has no review
+    // step, so requiring REVIEWED there would make every draft unsendable.
     const approvals = can(ctx.org, "transfers.approvals").allowed;
     const claimable: DraftState[] = approvals ? ["REVIEWED"] : ["DRAFT", "REVIEWED"];
     const claimed = store.claimDraftExecution(checked.id, claimable);
@@ -504,9 +499,8 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
   /**
    * One draft, with its execution state derived from its transfers.
    *
-   * Derived rather than stored: the transfers are the truth, and a draft row
-   * that says EXECUTED while a transfer sits in MANUAL_REVIEW would be a
-   * comfortable lie.
+   * Derived, not stored, because the transfers are the source of truth: a
+   * stored EXECUTED could disagree with a transfer sitting in MANUAL_REVIEW.
    */
   r.get("/:orgId/drafts/:draftId", (req, res) => {
     const ctx = ctxOf(req, res);
@@ -550,8 +544,8 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
         lines: result.lines,
         rejected: result.rejected,
         newTags: result.newTags,
-        // Rejected rows are reported, never dropped silently: a bulk file that
-        // quietly loses rows pays fewer people than the operator believes.
+        // Rejected rows are always reported. A bulk file that loses rows
+        // without saying so pays fewer people than the operator expects.
         summary: `${result.lines.length} row(s) ready, ${result.rejected.length} rejected.`,
       });
     } catch (err) {

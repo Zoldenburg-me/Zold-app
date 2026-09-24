@@ -2,15 +2,13 @@
  * Bookkeeping over the ledger: FIFO tax lots, realised gain/loss, the monthly
  * closing-balance report, and CSV export.
  *
- * Gnosis Business computed cost basis FIFO and said more methods were coming.
- * We implement FIFO only and say so — `Organisation.reporting.costBasisMethod`
- * is typed to one value rather than offering a dropdown that silently computes
- * FIFO whatever you pick.
+ * Cost basis is FIFO only (as in Gnosis Business), so
+ * `Organisation.reporting.costBasisMethod` is typed to that one value. Don't
+ * offer a method picker until other methods are implemented.
  *
- * Everything here works in decimal strings converted through Number only at the
- * arithmetic boundary. Balances are money; the moment one round-trips through a
- * float and back it stops being reconcilable, which is the whole reason the
- * reconciler exists.
+ * Values are decimal strings, converted through Number only at the arithmetic
+ * boundary. A balance that round-trips through a float stops being
+ * reconcilable.
  */
 
 import type { LedgerEntry } from "./types.js";

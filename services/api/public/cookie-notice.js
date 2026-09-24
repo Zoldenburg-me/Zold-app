@@ -2,8 +2,8 @@
  * Cookie and storage notice. Shared by the landing page, the personal app and
  * the business dashboard.
  *
- * A NOTICE, NOT A CONSENT PROMPT, on purpose. Everything Zold stores is
- * strictly necessary for a service the person asked for:
+ * A notice, not a consent prompt: everything Zold stores is strictly
+ * necessary for a service the person asked for:
  *   - one cookie, `zold_monerium_connect` (HttpOnly, 10 minutes, only while
  *     connecting Monerium: it binds the OAuth callback to this browser);
  *   - localStorage: the session, the device key, saved contacts and the
@@ -11,14 +11,13 @@
  *   - the service worker's cache of the app's own files.
  * There is no analytics, advertising or tracking of any kind, and fonts are
  * self-hosted. Strictly necessary storage needs no consent under ePrivacy
- * Art. 5(3) / TTDSG §25(2), only information. An "Accept / Reject" pair would
- * reject nothing, which is the kind of control that looks real and is not.
- * If a non-essential cookie is ever added, this must become a real consent
- * prompt that blocks it until accepted.
+ * Art. 5(3) / TTDSG §25(2), only information, and a "Reject" button would
+ * reject nothing. If a non-essential cookie is ever added, this must become a
+ * consent prompt that blocks it until accepted.
  *
  * The full list lives in the landing page's notes (#cookies); keep the two in
- * step. Dismissal is remembered in localStorage, itself necessary storage; if
- * storage is blocked the notice simply shows again next time.
+ * step. Dismissal is remembered in localStorage (itself necessary storage); if
+ * storage is blocked the notice shows again next time.
  */
 (function () {
   var KEY = "zold-cookie-notice";

@@ -192,18 +192,16 @@ export type AccountProvider =
   | "dlocal"
   | "yellowcard"
   /**
-   * No candidate has been identified at all — distinct from a named partner we
-   * have not contracted with. "iron, not granted" and "nobody yet" are
-   * different states, and collapsing them would let a currency look one email
-   * away from working when no one has looked for a provider.
+   * No candidate identified yet. Keep this separate from a named partner we
+   * have not contracted with, or a currency with no provider at all looks one
+   * email away from working.
    */
   | "none";
 
 /**
- * `gated` is a first-class resting state, not an error: the currency is real,
- * the partner is named, and we simply cannot open it yet. It exists so the UI
- * can show an honest "not available yet, needs X" instead of a mock that looks
- * live. Only EUR reaches `active` today.
+ * `gated` is a normal resting state: the currency is real and the partner is
+ * named, but we cannot open it yet. The UI shows "not available yet, needs X"
+ * for it. Only EUR reaches `active` today.
  */
 export type AccountStatus =
   | "gated"
@@ -283,9 +281,9 @@ export interface ImportedWallet {
   label: string;
   kind: WalletKind;
   /**
-   * Always "external". Stored rather than implied so that a signing path can
-   * assert on the row itself: we never hold a key for an imported wallet, and
-   * a future issued-wallet row must not silently inherit signing rights.
+   * Always "external". Stored so a signing path can assert on the row: we
+   * hold no key for an imported wallet, and a future issued-wallet row must
+   * not inherit signing rights by default.
    */
   custody: "external";
   sync: {
@@ -344,9 +342,9 @@ export interface Contact {
 // ── Draft payments (create -> review -> execute) ────────────────────────────
 
 /**
- * `INVALID_DATA` is Gnosis's state and worth keeping: a draft whose saved
- * recipient changed under it must stop rather than retarget silently. It is not
- * a failure — it is a draft asking to be re-pointed at the current address.
+ * `INVALID_DATA` (from Gnosis): the saved recipient changed after the draft
+ * was made, so the draft stops until it is re-pointed at the current address.
+ * It is not a failure state.
  */
 export type DraftState =
   | "DRAFT"
@@ -466,16 +464,14 @@ export interface InvoiceParty {
 /**
  * An on-chain payment that settled an invoice.
  *
- * Written when the payment is converted, so the invoice carries the whole
- * thread: what arrived, in what, on which transaction; what it was worth in
- * EUR at that moment and on whose rate; which transaction converted it; and
- * what actually landed. An auditor asking how an invoice was paid should not
- * have to match amounts against timestamps to find out.
+ * Written when the payment is converted. It records what arrived, in what, on
+ * which transaction; its EUR value then and whose rate gave it; the converting
+ * transaction; and what landed. An auditor can see how the invoice was paid
+ * without matching amounts to timestamps.
  *
- * `creditedEur` is what ARRIVED, measured as a balance delta — not what any
- * quote promised. `realisedGainEur` is that minus the receipt value, and is
- * absent rather than zero when the receipt could not be valued: an unknown
- * basis gives an unknown gain, and zero would be a claim.
+ * `creditedEur` is what arrived, measured as a balance delta, not a quoted
+ * amount. `realisedGainEur` is that minus the receipt value. It is absent when
+ * the receipt could not be valued: an unknown basis gives an unknown gain.
  */
 export interface InvoiceSettlementCommon {
   /** Idempotency key: the deposit id, or the Monerium order id. */
@@ -486,19 +482,17 @@ export interface InvoiceSettlementCommon {
 }
 
 /**
- * A crypto payment of an invoice, with everything the two events need.
+ * A crypto payment of an invoice, with what both events need.
  *
- * The receipt block is the ACQUISITION — what arrived, on which transaction,
- * what it was worth in euro at that moment and on whose published rate. The
- * conversion block is the DISPOSAL, and it is absent while the asset is still
- * held, which is a real state and not a missing field.
+ * The receipt block is the acquisition: what arrived, on which transaction,
+ * its euro value at that moment and whose published rate gave it. The
+ * conversion block is the disposal; it is absent while the asset is still held.
  *
- * `spreadEur` is the only honest fee figure available: the venue's rate against
- * the independent mid at the same instant, in euro. It is NOT
- * `receiptAmountEur - creditedEur` — that difference also contains whatever the
- * market did between receipt and conversion, and calling market movement a fee
- * would misstate both numbers. Network gas is not deducted from the payee, so
- * it is not a fee either and does not appear here.
+ * `spreadEur` is the fee figure: the venue's rate against the independent mid
+ * at the same instant, in euro. Don't compute it as
+ * `receiptAmountEur - creditedEur`: that also includes market movement between
+ * receipt and conversion. Network gas is not deducted from the payee, so it is
+ * not a fee and does not appear here.
  */
 export interface CryptoInvoiceSettlement extends InvoiceSettlementCommon {
   /** Absent on rows written before invoices could be paid by bank. */
@@ -609,9 +603,8 @@ export interface Invoice {
   // ── Outgoing invoices (§14 UStG) ─────────────────────────────────────────
   /**
    * Frozen at issue. Both parties, the VAT treatment and the display choices
-   * are snapshotted so the document is reproducible: an invoice is a statement
-   * about a moment, and re-rendering it from today's org profile would quietly
-   * rewrite history the tax office may later ask about.
+   * are snapshotted so the document is reproducible. Re-rendering from today's
+   * org profile would change an issued invoice the tax office may ask about.
    */
   issued?: {
     number: string;

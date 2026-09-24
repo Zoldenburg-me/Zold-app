@@ -1,29 +1,25 @@
 /**
  * Device key (browser side).
  *
- * The key that authorizes payments lives here — generated in this browser,
- * never sent anywhere. The server learns only the address, and it signs over
- * the payment's exact terms: amount, payee commitment and deadline, so nothing
- * can be swapped after the user approves it.
+ * The key that authorizes payments is generated in this browser and never
+ * sent anywhere. The server learns only the address. The key signs the
+ * payment's exact terms (amount, payee commitment, deadline), so nothing can
+ * be swapped after the user approves.
  *
- * WHERE THAT IS ENFORCED matters: assertDeviceAuthorization() in
- * orchestrator.ts verifies the signature in the API process, not in bytecode.
- * The server cannot FORGE one, but it is the thing checking. Do not read the
- * paragraph below as a guarantee against a compromised server; it is a
- * guarantee against a stolen session and a swapped payee.
+ * assertDeviceAuthorization() in orchestrator.ts verifies the signature in
+ * the API process, not in bytecode. The server cannot forge a signature but
+ * it is the one checking, so this protects against a stolen session and a
+ * swapped payee, not against a compromised server.
  *
  * The key is encrypted at rest with a secret only the passkey can produce:
  * WebAuthn's PRF extension derives 32 bytes from the authenticator for a
  * fixed salt, HKDF turns that into an AES-GCM key, and only the ciphertext
- * touches localStorage. Face ID / fingerprint / screen lock is therefore a
- * real gate — without the authenticator the stored blob is inert, and every
- * payment needs a fresh ceremony to unwrap.
+ * touches localStorage. Without the authenticator the stored blob is useless,
+ * and every payment needs a fresh ceremony to unwrap.
  *
- * Not every authenticator supports PRF. When it isn't available we fall back
- * to storing the key unprotected and label it that way (`protection: "none"`)
- * rather than pretending — an unwrapped key is still enough to stop the
- * server spending, which is the point of the device key; it just doesn't survive someone
- * with access to this browser profile.
+ * Not every authenticator supports PRF. Without it the key is stored
+ * unprotected and labelled `protection: "none"`. That still stops the server
+ * spending, but not someone with access to this browser profile.
  *
  * Crypto is vendored @noble/secp256k1 + @noble/hashes (audited, no build
  * step; see /vendor). Signing is RFC6979 deterministic with low-s enforced,
@@ -39,14 +35,13 @@ const KEY_SLOT = "zold-device-key";
  *  Read the old name once and carry it forward. */
 const LEGACY_KEY_SLOT = "zoll-device-key";
 /**
- * Fixed PRF input: same salt must yield the same wrapping key every time.
+ * Fixed PRF input: the same salt must yield the same wrapping key every time.
  *
- * DO NOT rename this string. It is not a label — it is an input to the key
- * derivation, so changing it derives a different AES key and every device key
- * already wrapped on a user's authenticator becomes undecryptable. It keeps the
- * old spelling through the Zoll -> Zold rename for exactly that reason; a new
- * spelling would need a versioned migration that unwraps with the old salt
- * first, not a search-and-replace.
+ * Don't rename this string. It is an input to the key derivation, so a change
+ * derives a different AES key and every device key already wrapped on a
+ * user's authenticator becomes undecryptable. That is why it keeps the old
+ * spelling after the Zoll -> Zold rename. A new spelling needs a versioned
+ * migration that unwraps with the old salt first.
  */
 const PRF_SALT = new TextEncoder().encode("zoll/device-key/v1");
 
