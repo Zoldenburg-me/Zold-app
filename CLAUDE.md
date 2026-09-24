@@ -159,6 +159,10 @@ Each of these was a bug once. The reasoning is in `docs/notes/`.
 - **Slugs, verification codes and payment codes are credentials**: auth rate
   bucket, never cached by the service worker, and a code under the wrong handle
   is a 404.
+- **A merchant-side id is never a global key.** Shopify order and session ids
+  are per-store sequences; every lookup by one carries the shop
+  (`findPaymentRequestBySource(kind, id, shop)`), or one store's signed
+  webhook cancels or dedupes against another's request.
 - **Documents are frozen snapshots, re-verified on every visit.** A revoked one
   fails verification rather than vanishing.
 
