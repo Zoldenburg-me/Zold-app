@@ -9,19 +9,25 @@ each decision below is in [docs/notes/](docs/notes/).
 
 Every user gets a **Candide Safe smart account** (ERC-4337) on the chain
 `TRANSF_CHAIN_ID` selects. It is deployed through a bundler and sponsored by a
-paymaster, so the user never holds gas. `wallet/passkey-safe-plan.ts` decides
-the owner set:
+paymaster, so the user never holds gas. `wallet/passkey-safe-plan.ts` plans
+it **1-of-1: the user's passkey is the only owner.** Zold holds no key that can
+move funds or block the user from moving them.
 
-| | owners | when |
-|---|---|---|
-| **1-of-1** | the user's passkey | no co-signer configured |
-| **2-of-2** | the user's passkey + the Zold co-signer key | `CANDIDE_COSIGNER_ADDRESS` and `CANDIDE_COSIGNER_KEY` set — required in hosted production (`config.ts` refuses to start without them) |
+**Legacy 2-of-2 Safes.** Until September 2026 hosted production planned Safes
+as 2-of-2 with a Zold co-signer. The co-signer could not start a debit, but the
+user could not move funds — or add a key of their own — without Zold's
+counter-signature. That was retired:
 
-In both cases **no debit happens without the user's passkey**. The co-signer
-can only counter-sign a user operation the passkey has already signed; it
-cannot start one. A 2-of-2 Safe also means the user cannot move funds without
-Zold's counter-signature — that is a real dependency on the service, not only
-a safety property.
+- New plans never include the co-signer, and production no longer requires
+  `CANDIDE_COSIGNER_*`.
+- An existing 2-of-2 Safe keeps working while `CANDIDE_COSIGNER_KEY` is set
+  (without it, its funds cannot move); the API names such accounts at startup.
+- The user removes the co-signer from Settings: one passkey-signed
+  `removeOwner(prev, cosigner, 1)` operation
+  (`POST /api/users/:id/passkey-safe/cosigner-removal`), which the co-signer
+  counter-signs one last time. The plan is updated only after the chain shows
+  the co-signer gone and threshold 1.
+- A Candide recovery installs only the new passkey, so recovery also drops it.
 
 There is **no allowance module and no standing spend authority**. The plan
 records an empty allowance list so allowances left on older Safes can be found
@@ -42,7 +48,9 @@ and revoked.
 - A guardian module on the Safe with a delay (`RECOVERY_DELAY_HOURS`, default
   72) during which the current owner can cancel.
 - Managed recovery: a guardian signer service (`RECOVERY_GUARDIAN_SIGNER_URL`)
-  acts for users whose identity Monerium approved.
+  acts for users whose identity Monerium approved. It installs the new owner
+  alone at threshold 1, but nothing updates the stored plan after it
+  executes — that path is not wired end to end.
 - Email/SMS recovery: Candide's Safe Recovery Service is the guardian and
   signs after a one-time code on each registered channel. It is wired but has
   never been called against the real service.
@@ -66,7 +74,7 @@ A send carries **two signatures**, checked in two places:
 2. **Passkey → user operation hash.** `POST /api/transfers` prepares the Safe
    user operation that *is* the debit, for the exact token, amount and
    destination. The passkey signs its hash at send time; the chain enforces
-   it. The server relays it (and counter-signs on a 2-of-2 Safe).
+   it. The server relays it (and counter-signs on a legacy 2-of-2 Safe).
 
 A stolen session therefore cannot change the amount or the destination, and
 the server cannot produce a debit on its own.

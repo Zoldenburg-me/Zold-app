@@ -27,7 +27,6 @@ import { createServer } from "node:http";
 import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { privateKeyToAccount } from "viem/accounts";
 
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -46,8 +45,6 @@ const AUTH_CODE = "stub-auth-code";
 const PROFILE_ID = "profile-existing-user";
 const EXISTING_IBAN = "GB33BUKB20201555555555";
 const APP_IBAN = "IS140159260076545510730339";
-const COSIGNER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;
-const COSIGNER_ADDRESS = privateKeyToAccount(COSIGNER_KEY).address;
 
 let token = "";
 const children: ChildProcess[] = [];
@@ -321,9 +318,10 @@ try {
     MONERIUM_POLL_MS: "3600000",
     CANDIDE_CHAIN_ID: "31337",
     CANDIDE_RPC_URL: RPC_URL,
-    CANDIDE_COSIGNER_ENABLED: "0",
-    CANDIDE_COSIGNER_ADDRESS: COSIGNER_ADDRESS,
-    CANDIDE_COSIGNER_KEY: COSIGNER_KEY,
+    // Blank on purpose: a passkey-only Safe links to Monerium with no
+    // co-signer key at all (it used to be demanded here regardless).
+    CANDIDE_COSIGNER_ADDRESS: "",
+    CANDIDE_COSIGNER_KEY: "",
     CANDIDE_ALLOWANCE_MODULE_ADDRESS: "0x691f59471Bfd2B7d639DCF74671a2d648ED1E331",
     CANDIDE_RECOVERY_GUARDIAN_ADDRESS: "",
     KYC_AUTO_APPROVE: "0", // the connect path is for pending users
