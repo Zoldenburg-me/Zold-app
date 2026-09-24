@@ -83,7 +83,7 @@ export function publicRecoveryRequest(request: RecoveryRequest) {
   if (!candide) return pub;
   // The new credential stays private until it is bound, and channel targets
   // are masked: a recovery id is not a licence to read someone's phone number.
-  const { newPasskey, auths, accessHash: _accessHash, ...rest } = candide;
+  const { newPasskey, auths, accessHash: _accessHash, otpTicketHash: _otpTicketHash, ...rest } = candide;
   return {
     ...pub,
     candide: {
