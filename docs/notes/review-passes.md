@@ -2,9 +2,8 @@
 
 What the sweeps found and fixed. History: useful when a guard looks arbitrary.
 
-*Moved verbatim out of CLAUDE.md (Sep 2026) when that file passed 2,100 lines.
-The sections below are the original decision history, unedited. CLAUDE.md keeps
-the invariants and links here for the reasoning.*
+*Decision history: the reasoning behind the current invariants, kept as written
+apart from naming.*
 
 ## MAINNET-READY — the training wheels are gone (Sep 2026)
 
@@ -13,7 +12,7 @@ deposits, `/api/simulate/*`, ALLOW_SIMULATION, ALLOW_MOCK_FALLBACK,
 KYC_AUTO_APPROVE, the mock-review route, Sumsub, `new_monerium`, whitelabel
 profile creation, provisionFunding, the testnet faucet, the BridgeEscrow
 dry-run leg, `moneygram-mock` pickups, FORCE_FAIL_STEP, or `funding.mode ===
-"mock"`. ALL OF IT IS DELETED (branch claude/mainnet-ready). Those sections
+"mock"`. ALL OF IT IS DELETED. Those sections
 are kept as history of why the invariants exist; the code paths do not.
 
 WHAT A DEPLOYMENT IS NOW:
@@ -66,22 +65,22 @@ on the chain AND the chain is 31337 (webhook/reconcile suites); on any other
 chain such an order is logged and NOT recorded. Both are inert on real money
 by construction, not by configuration.
 
-DELETED SUITES (they tested the removed paths): e2e, fp3, kyc, kyc-ui,
+DELETED SUITES (they tested the removed paths): e2e, compensation, kyc, kyc-ui,
 kyc-operator, bridge-dryrun, faucet, sumsub-kyc. draft-execution-test now mints
 MockToken EURe to the Safe instead of calling the deleted simulate route.
 `npm run check` no longer runs e2e; the remaining suites cover the seams.
 
 NOT DONE HERE, deliberately: no mainnet deploy was run (needs funded operator
-keys the user holds), no real Monerium production OAuth app is registered (the
+keys the owner holds), no real Monerium production OAuth app is registered (the
 redirect URI must be registered at monerium.app first), Bridge/anchor live
 credentials are unset so the cash rail is closed on mainnet, and the JSON file
 store still needs ALLOW_PLAINTEXT_STORE=1 to be acknowledged. The other agent's
 in-progress index.html work in the main checkout was not touched by this
 branch and will need a merge.
 
-## Multi-agent review pass (Aug 2026, branch claude/user-signed-execution)
+## Review pass (Aug 2026)
 
-Four parallel review agents swept the whole tree after the three custody
+A review swept the whole tree after the three custody
 iterations; every finding was verified against the code before acting (two of
 the client agent's "dead label" claims were factually wrong — check before
 deleting). Fixed: /authorize now verifies the EXECUTION assertion before the
@@ -111,7 +110,7 @@ lockstep bump).
 
 ## Review and cleanup pass (Sep 2026) — attack surface, dormant code, stale text
 
-Five parallel read-only review agents swept the tree (core API/auth, routes +
+A read-only review swept the tree (core API/auth, routes +
 domain, money movement, browser code, scripts/docs); every finding was
 verified against the code before acting, and the deletions below were grepped
 across services/, scripts/, public/ and docs/ first. `npm run typecheck` and

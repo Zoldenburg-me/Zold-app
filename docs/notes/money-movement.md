@@ -2,9 +2,8 @@
 
 Read before touching a quote, a swap, a debit, the cash rail or the Stellar leg.
 
-*Moved verbatim out of CLAUDE.md (Sep 2026) when that file passed 2,100 lines.
-The sections below are the original decision history, unedited. CLAUDE.md keeps
-the invariants and links here for the reasoning.*
+*Decision history: the reasoning behind the current invariants, kept as written
+apart from naming.*
 
 ## Custody — the non-custodial path is the DEFAULT now (Aug 2026)
 
@@ -80,7 +79,7 @@ exists in LI.FI. Approve what the maker NAMES.
  - Intent-based: you sign an order, solvers compete to fill it. No inventory on
    either side, which is the whole point.
  - `signingScheme: eip1271` — a Safe can sign the order itself. Same shape as
-   the FP4 recovery plan.
+   the recovery plan.
  - RATE LIMITED, hard. Two quotes seconds apart returned 429 pointing at their
    Discord for a custom limit. indicativeRate() is cached for exactly this
    reason; the 60s default may still be too aggressive with real users, and a

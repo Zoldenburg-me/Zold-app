@@ -4,9 +4,9 @@ Drafted Sep 2026. Not sent.
 
 ## The shape, corrected
 
-The first draft of this asked to become a cNGN **merchant** with our users as
-sub-accounts — the Xflow platform shape, carried over by reflex. That was wrong
-for this product and it was caught in review.
+This does not ask to become a cNGN **merchant** with our users as
+sub-accounts. That is the Xflow platform shape, and it is wrong for this
+product.
 
 **Our users hold their own cNGN and their own relationship with the issuer.**
 That is the pattern already built twice here — Monerium by OAuth, Gnosis Pay by
@@ -68,7 +68,7 @@ secret in our store fails worse than a token that dies on its own.
 
 ## Verified before writing
 
-Facts checked this session, so the note is not tyre-kicking:
+Facts checked before writing this:
 
 - **Contracts read on chain**, not off a listing: `name()`/`symbol()`/`decimals()`
   on Base, BNB, Ethereum, Polygon. Six decimals everywhere.

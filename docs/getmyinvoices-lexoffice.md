@@ -936,8 +936,8 @@ Deriving it per request instead — the request code is already a unique
 attribution becomes exact. The amount would then decide only whether a payment
 is full or short, which is what a tolerance is actually for.
 
-**The earlier rejection of per-order addresses does not apply here.** CLAUDE.md
-turned them down as a PRIVACY fix, correctly: they forward into the same Safe
+**The earlier rejection of per-order addresses does not apply here.** They
+were turned down earlier as a PRIVACY fix, correctly: they forward into the same Safe
 one hop later, so the merchant's book stays readable on chain. That is a
 different problem with a different answer, and it should not be read as having
 settled this one.
