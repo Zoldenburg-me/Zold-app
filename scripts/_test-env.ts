@@ -58,6 +58,10 @@ process.env.WEBAUTHN_ORIGINS = [...new Set([...PORTS.map(String), ...(RUN_PORT ?
  */
 process.env.MONERIUM_WEBHOOK_SECRET = "";
 process.env.TRUSTED_PROXY_HOPS = "0";
+// Every suite plays many users from one loopback address, and the challenge
+// route now shares the tight auth bucket. security-hardening-test.ts sets the
+// production value back and asserts the 429 itself.
+process.env.AUTH_RATE_LIMIT_PER_MIN = "1000";
 process.env.RECOVERY_MANAGED_KYC_GUARDIAN = "0";
 
 /**

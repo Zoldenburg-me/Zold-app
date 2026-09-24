@@ -60,6 +60,7 @@
     "best:test": "tsx scripts/best-execution-test.ts",
     "dex:setup": "tsx scripts/dex-setup.ts",
     "business:test": "tsx scripts/business-test.ts",
+    "security:test": "tsx scripts/security-hardening-test.ts",
     "draft:test": "tsx scripts/draft-execution-test.ts",
     "invoicing:test": "tsx scripts/invoicing-test.ts",
     "custody:test": "tsx scripts/custody-test.ts",
