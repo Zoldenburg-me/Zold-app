@@ -1,19 +1,15 @@
 /**
- * The local-account registry — the single place a currency becomes real.
+ * The local-account registry: the one place that decides whether a currency
+ * is live.
  *
- * "Global (local) accounts" is the product: an organisation holds an account
- * denominated in the currency of a place, with an identifier locals recognise
- * (an IBAN in Germany, a sort code in the UK, an M-Pesa number in Kenya) and a
- * payout rail that settles there.
+ * An organisation holds an account denominated in the currency of a place,
+ * with an identifier locals recognise (an IBAN in Germany, a sort code in the
+ * UK, an M-Pesa number in Kenya) and a payout rail that settles there.
  *
- * ONLY EUR IS REAL. Monerium issues a genuine IBAN and EURe settles on chain
- * today; that path is exercised end to end. Every other currency here is
- * modelled with `status: "gated"` and a `needs` line naming the partner and the
- * missing piece. This is not caution for its own sake: a mock rail renders
- * "payment successful" for money that has reached nobody. A currency that has
- * never moved value must not render as if it has, and the only way to keep
- * that true as the list grows is to make liveness a property computed here
- * rather than a flag set per screen.
+ * Only EUR is live: Monerium issues the IBAN and EURe settles on chain. Every
+ * other currency has `status: "gated"` and a `needs` line naming the partner
+ * and the missing piece. A mock rail shows "payment successful" for money that
+ * reached nobody, so liveness is computed here, not flagged per screen.
  *
  * To make a currency live: give it a provider adapter, then have its entry's
  * `mode` predicate ask that adapter whether it is configured. Do not flip a
@@ -43,21 +39,18 @@ export interface CurrencyDefinition {
   /** Countries where this is the local account. Informational. */
   countries: string[];
   provider: AccountProvider;
-  /** Whether the settled currency has an on-chain token leg WE CUSTODY. This
-   *  is about us, not about the token existing: ZCHF and cNGN are real and
-   *  liquid and we hold neither, so both are false. */
+  /** Whether we custody an on-chain token leg for this currency. ZCHF and
+   *  cNGN tokens exist and are liquid, but we hold neither, so both are false. */
   tokenised: boolean;
   /**
-   * A settlement token that exists for this currency, whether or not we touch
-   * it. Present so the product can SHOW a currency honestly — "this token is
-   * real, here is who issues it, and here is what we still lack" — instead of
-   * either hiding it or implying we support it.
+   * A settlement token that exists for this currency, whether or not we use
+   * it. Lets the UI show who issues it and what we still lack, without
+   * implying we support it.
    *
-   * Addresses are VERIFIED ON CHAIN (name/symbol/decimals read from the
-   * contract), not copied from a listing page. `backing` is the sentence that
-   * matters most for a holder, because these differ in kind: e-money with a
-   * redemption right against a licensed issuer is not the same instrument as a
-   * crypto-collateralised peg, and a UI that renders both as "CHF" hides that.
+   * Addresses were verified on chain (name/symbol/decimals read from the
+   * contract). `backing` tells a holder what kind of instrument it is: e-money
+   * with a redemption right against a licensed issuer differs from a
+   * crypto-collateralised peg, even if both display as "CHF".
    */
   token?: {
     symbol: string;
@@ -70,12 +63,8 @@ export interface CurrencyDefinition {
     backing: string;
   };
   /**
-   * Is the rail usable in this deployment, and on what? A predicate, not a
-   * constant, so the answer tracks configuration instead of documentation.
-   *
-   * Two answers: open against the real provider ("live") or not open (false).
-   * The former "mock" answer — a locally issued IBAN on a dev chain — is gone
-   * with the mock path; nothing renders a rail that cannot move money.
+   * Whether the rail is usable in this deployment: "live" (open against the
+   * real provider) or false. A predicate so it tracks configuration.
    */
   mode: () => "live" | false;
   /** Named partner + missing piece, shown verbatim when gated. */
@@ -209,8 +198,8 @@ const CURRENCIES: CurrencyDefinition[] = [
       issuer: "Wrapped CBDC, under the Africa Stablecoin Consortium",
       decimals: 6,
       // Verified on chain: name() "cNGN", symbol() "cNGN", decimals() 6 on all
-      // four. Addresses were taken from a third-party listing and then CHECKED
-      // against the contracts, because a listing page is a claim.
+      // four. Addresses came from a third-party listing and were checked
+      // against the contracts.
       contracts: {
         base: "0x46C85152bFe9f96829aA94755D9f915F9B10EF5F",
         bnb: "0xa8AEA66B361a8d53e8865c62D142167Af28Af058",
@@ -305,10 +294,8 @@ export function currencyAvailability(): CurrencyAvailability[] {
       available: mode !== false,
       ...(mode ? { mode } : {}),
       ...(mode === false ? { needs: c.needs } : {}),
-      // Shown whether or not the rail is open. A currency whose token is real
-      // and liquid but whose ACCOUNT does not exist is a genuinely different
-      // state from one with no token at all, and flattening the two is how a
-      // list of currencies stops carrying information.
+      // Shown whether or not the rail is open: a currency with a liquid token
+      // but no account is a different state from one with no token at all.
       ...(c.token ? { token: { ...c.token, heldByUs: c.tokenised } } : {}),
     };
   });
@@ -317,10 +304,9 @@ export function currencyAvailability(): CurrencyAvailability[] {
 /**
  * The status a freshly requested account should take.
  *
- * A gated account is still CREATED — the org asked for it, the row records
- * that, and it flips to provisioning the day the partner is wired. Refusing to
- * store the request would lose the demand signal and make the UI lie in the
- * other direction ("you have no accounts").
+ * A gated account is still created: the row records that the org asked for
+ * it, and it moves to provisioning once the partner is wired. Refusing it
+ * would lose the demand signal and show "you have no accounts".
  */
 export function initialStatusFor(currency: CurrencyCode): {
   status: AccountStatus;

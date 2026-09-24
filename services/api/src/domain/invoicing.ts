@@ -1,33 +1,26 @@
 /**
  * Invoice compliance, per jurisdiction.
  *
- * NOT TAX ADVICE, and the app says so wherever this surfaces. What this module
- * does is narrower and worth stating precisely: it encodes the *content* rules
- * for an invoice so the software cannot quietly produce a document that is
- * missing a mandatory field or that shows tax it does not owe. Whether a given
- * transaction is actually exempt is the user's call with their accountant; we
- * make the consequence of that call correct on paper.
+ * Not tax advice, and the app says so wherever this surfaces. This module
+ * encodes the content rules for an invoice, so the software cannot issue a
+ * document that is missing a mandatory field or shows tax it does not owe.
+ * Whether a transaction is exempt is the user's call with their accountant.
  *
- * WHICH rules apply comes from jurisdictions.ts, driven by the issuing entity's
- * country — Germany gets encoded paragraphs, other EU states get the VAT
- * Directive baseline plus whatever national rules they add themselves, and
- * everywhere else gets structural checks and an honest statement that no tax law
- * was applied. Every report carries the verification level so that "ok" never
- * claims more coverage than we have.
+ * Which rules apply comes from jurisdictions.ts, by the issuing entity's
+ * country: Germany gets encoded paragraphs, other EU states the VAT Directive
+ * baseline plus their own national rules, and everywhere else structural checks
+ * and a statement that no tax law was applied. Every report carries the
+ * verification level, so "ok" never claims more coverage than we have.
  *
- * THE RULE THAT DRIVES THE DESIGN — §14c UStG: if you show a VAT amount you did
- * not owe, you owe it anyway (unrichtiger Steuerausweis), and the recipient
- * cannot deduct it. So "exempt" and "a VAT amount" are made IMPOSSIBLE TO
- * COMBINE by the type, not merely discouraged in the UI: VatTreatment is a
- * discriminated union, and the exempt arm has no rate and no tax field to fill.
+ * §14c UStG drives the design: a VAT amount shown but not owed is owed anyway
+ * (unrichtiger Steuerausweis), and the recipient cannot deduct it. So
+ * VatTreatment is a discriminated union whose exempt arm has no rate and no tax
+ * field; the type makes "exempt" and "a VAT amount" impossible to combine.
  *
- * The other rule worth knowing: a missing mandatory field costs the RECIPIENT
- * their input-tax deduction until the issuer sends a corrected invoice. The
- * damage lands on the customer, not on the person who made the mistake, which
- * is exactly why this is validated before the document is issued rather than
- * left to be discovered.
+ * A missing mandatory field costs the recipient their input-tax deduction until
+ * the issuer sends a corrected invoice, so it is validated before issue.
  *
- * Sources checked Aug 2026: §14 Abs. 4 UStG (ten mandatory details), §33 UStDV
+ * Sources: §14 Abs. 4 UStG (ten mandatory details), §33 UStDV
  * (Kleinbetragsrechnung, €250 gross), §34a UStDV (Kleinunternehmer invoice
  * contents, new 2025), §19 UStG (thresholds raised 2025 to €25,000 prior year /
  * €100,000 current), §13b UStG and Art. 196 MwStSystRL (reverse charge),
@@ -174,8 +167,7 @@ export const EXEMPTION_REASONS: Record<ExemptionReasonId, ExemptionReason> = {
     label: "Small business scheme (national)",
     labelEn: "Small business scheme (national)",
     legalBasis: "EU VAT Directive Art. 282–292, as implemented nationally",
-    // Left empty on purpose: the note that satisfies the law differs per member
-    // state, and inventing one would be the most confident kind of wrong.
+    // The required note differs per member state; the user writes it.
     invoiceNote: "",
     invoiceNoteEn: "",
     requiresIssuerVatId: false,
@@ -319,9 +311,8 @@ export function computeTotals(
       throw new InvoiceComplianceError(`Line ${i + 1} has a negative unit price.`);
     }
     const netCents = Math.round(unitCents * qty);
-    // When exempt, EVERY line is 0% whatever the line says — the treatment is a
-    // property of the invoice, and letting a stray line rate through is the
-    // §14c mistake in miniature.
+    // When exempt, every line is 0% whatever the line says. The treatment
+    // belongs to the invoice; a stray line rate would be a §14c error.
     const appliedRate: VatRate = treatment.kind === "exempt" ? 0 : (line.vatRate ?? treatment.rate);
     // Plausibility only. WHICH rates are permitted is a question about the
     // issuer's country, answered in checkCompliance — Germany allows 19 and 7,
@@ -422,31 +413,26 @@ export interface Party {
 }
 
 /**
- * Denominating an invoice in something other than the settlement currency.
+ * Invoices denominated in a currency other than the settlement currency.
  *
- * The invoice may be written in the customer's currency; the money still
- * arrives in euro (or as USDC quoted from euro), because that is the only rail
- * that exists. So a foreign-currency invoice carries BOTH: its own face
- * amounts, and the euro restatement, at a rate frozen when it was issued.
+ * The invoice may be written in the customer's currency, but the money arrives
+ * in euro (or as USDC quoted from euro), the only rail that exists. So a
+ * foreign-currency invoice carries its own face amounts and the euro
+ * restatement, at a rate frozen at issue.
  *
- * § 16 Abs. 6 UStG is the reason this is not merely a convenience. A German
- * invoice may state its amounts in a foreign currency, but the TAX AMOUNT must
- * also be given in euro. An invoice denominated in dollars showing only a
- * dollar tax figure is missing something the law requires, and the damage lands
- * on the recipient's input-tax deduction, not on the issuer. So the conversion
- * is computed and printed, and a currency we cannot price is REFUSED rather
- * than issued without it.
+ * § 16 Abs. 6 UStG: a German invoice may state amounts in a foreign currency,
+ * but the tax amount must also be given in euro, or the recipient loses the
+ * input-tax deduction. So the conversion is printed, and a currency we cannot
+ * price is refused.
  */
 
 /**
  * Currencies whose minor unit is not 1/100.
  *
- * Everything here computes in integer minor units at two decimals. Applying
- * that to a currency with none (JPY) or three (KWD) would be wrong by a factor
- * of a hundred or ten, silently, on a tax document. Refused by name instead —
- * the list does not need to be exhaustive to be safe, because anything it does
- * not know is still checked against the rate feed and these are the codes a
- * user is plausibly going to reach for.
+ * Everything here computes in integer minor units at two decimals, which is
+ * wrong by a factor of 100 for a currency with none (JPY) or 10 for one with
+ * three (KWD). Refused by name. The list need not be exhaustive: unknown codes
+ * are still checked against the rate feed.
  */
 export const NON_CENTESIMAL_CURRENCIES: Record<string, number> = {
   JPY: 0, KRW: 0, VND: 0, CLP: 0, ISK: 0, HUF: 0, TWD: 0, PYG: 0, RWF: 0,
@@ -460,11 +446,9 @@ const CURRENCY_RE = /^[A-Z]{3}$/;
 export const SETTLEMENT_CURRENCY = "EUR";
 
 /**
- * Normalise and refuse what we cannot represent.
- *
- * Refusing loudly here is the point: an unpriceable or non-centesimal currency
- * that slipped through would produce a document with wrong numbers on it, and
- * a wrong tax document is worse than no document.
+ * Normalise the currency code and refuse what we cannot represent. An
+ * unpriceable or non-centesimal currency would put wrong numbers on a tax
+ * document.
  */
 export function normaliseInvoiceCurrency(raw: unknown): string {
   const code = String(raw ?? "").trim().toUpperCase();
@@ -597,9 +581,8 @@ const has = (v?: string) => Boolean(v && v.trim());
 /**
  * Check a draft against the content rules and report every problem at once.
  *
- * Errors block issuing; warnings are things that are legal but likely wrong.
- * Both carry the statute — a validator that says "invalid" without saying which
- * rule it is applying cannot be checked by the person it is judging.
+ * Errors block issuing; warnings are legal but likely wrong. Both carry the
+ * statute so the user can check the rule being applied.
  */
 export function checkCompliance(
   draft: InvoiceDraft,
@@ -621,12 +604,9 @@ export function checkCompliance(
   ) => issues.push({ severity, field, message, legalBasis });
 
   /**
-   * Pick the citation for the rule set actually in force.
-   *
-   * Quoting "§ 14 Abs. 4 UStG" at a Polish or Indian entity would be
-   * confidently wrong, so a German paragraph is only cited under the DE rule
-   * set, the Directive article under EU, and nothing at all under GENERIC —
-   * where we are not applying tax law and should not imply that we are.
+   * Pick the citation for the rule set in force: a German paragraph under DE,
+   * the Directive article under EU, and nothing under GENERIC, where no tax
+   * law is applied.
    */
   const basis = (de: string, eu?: string) =>
     jur.ruleSet === "DE" ? de : jur.ruleSet === "EU" ? eu : undefined;
@@ -648,20 +628,16 @@ export function checkCompliance(
       : "standard";
 
   /**
-   * Foreign currency: the tax amount must ALSO be stated in euro.
+   * Foreign currency: the tax amount must also be stated in euro.
    *
-   * § 16 Abs. 6 UStG for a German issuer. The consideration may be written in
-   * the customer's currency, but the tax figure has to appear in euro too, and
-   * an invoice that omits it costs the RECIPIENT their input-tax deduction —
-   * the same asymmetry that makes every other § 14 field an error rather than a
-   * warning. We compute the restatement before this runs, so the check is that
-   * it actually arrived: a rate feed that was unavailable must stop the invoice,
-   * not produce one with a missing euro column.
+   * § 16 Abs. 6 UStG for a German issuer. Omitting it costs the recipient their
+   * input-tax deduction, so it is an error like any other § 14 field. The
+   * restatement is computed before this runs; this checks it arrived, so an
+   * unavailable rate feed stops the invoice.
    *
-   * Under EU the euro figure is still shown, but the conversion a non-euro
-   * member state requires is its own and we have not encoded 26 of them — so it
-   * is reported as a gap rather than presented as satisfied. Under GENERIC no
-   * tax claim is made at all.
+   * Under EU the euro figure is shown, but each non-euro member state's own
+   * conversion rule is not encoded, so it is reported as a gap. Under GENERIC
+   * no tax claim is made.
    */
   const currency = draft.currency ?? SETTLEMENT_CURRENCY;
   if (currency !== SETTLEMENT_CURRENCY) {
@@ -926,9 +902,9 @@ export interface NumberSeries {
 export const DEFAULT_SERIES: NumberSeries = { prefix: "RE-{YYYY}-", next: 1, padding: 4 };
 
 /**
- * Render the next number. §14 Abs. 4 Nr. 4 asks for a number that is unique and
- * assigned once; it does NOT require a gapless run, and per-year series are
- * explicitly allowed, which is why {YYYY} is a template rather than a hack.
+ * Render the next number. §14 Abs. 4 Nr. 4 requires a number that is unique
+ * and assigned once. It does not require a gapless run, and per-year series
+ * ({YYYY}) are allowed.
  */
 export function formatInvoiceNumber(series: NumberSeries, when: Date): string {
   const prefix = series.prefix
@@ -941,12 +917,9 @@ export function formatInvoiceNumber(series: NumberSeries, when: Date): string {
 // ── Which optional blocks the issuer wants on the document ──────────────────
 
 /**
- * Fields the user may switch on and off.
- *
- * Deliberately only the OPTIONAL ones. Everything §14 requires is rendered
- * unconditionally — an invoice generator whose settings can produce an invalid
- * document is a trap, and the person who springs it is the customer who loses
- * their input-tax deduction.
+ * Fields the user may switch on and off: optional ones only. Everything §14
+ * requires is always rendered, so no setting can produce an invalid invoice
+ * (which would cost the customer their input-tax deduction).
  */
 export interface InvoiceDisplayOptions {
   logo: boolean;

@@ -1,22 +1,16 @@
 /**
- * Public shareable receipts — `zold.to/r/<slug>`.
+ * Public shareable receipts: `zold.to/r/<slug>`.
  *
- * A recipient opens this without an account, so the page is built from a
- * payload assembled here and nowhere else. Two rules shape the whole module:
+ * A recipient opens this without an account, so the page is built only from
+ * the payload assembled here.
  *
- *  1. REDACTION HAPPENS HERE. A field the sender withheld is never put in the
- *     response, not even to be hidden by CSS — the browser cannot leak what it
- *     was never sent. Withheld fields become `{ withheld: true }` with no
- *     value, so the page can still draw the row honestly (the design shows
- *     redaction rather than pretending the field does not exist) without ever
- *     holding the secret.
+ *  1. Redaction happens here. A withheld field is never in the response, so
+ *     the browser cannot leak it. It becomes `{ withheld: true }` with no
+ *     value, which lets the page draw a redacted row.
  *
- *  2. NOTHING IS INVENTED. Every row and every route hop is read off the
- *     transfer, its quote, and the deployment's own configuration. Where the
- *     transfer has no answer the row is absent, and where a leg ran in
- *     simulation the hop says so. A receipt is the one screen where a
- *     plausible-looking number is worse than a missing one: the recipient has
- *     no way to check it and every reason to believe it.
+ *  2. Every row and route hop is read off the transfer, its quote and the
+ *     deployment's configuration. With no answer the row is absent; a leg that
+ *     ran in simulation says so. The recipient cannot check these figures.
  */
 import { CHAIN_ID, MONERIUM, moneriumSandboxEnabled, railFeeEur } from "./config.js";
 import { moneriumLiveFor } from "./adapters/monerium-connection.js";
@@ -71,14 +65,12 @@ export interface ReceiptPayload {
 /**
  * An unguessable slug, shaped like the design's `8842-1170`.
  *
- * The design's own example is eight digits. That is 10^8 — a few hours of
- * requests to enumerate every receipt anyone has ever shared, and each hit
- * returns a real name, a real amount and often a bank account. So the SHAPE is
- * kept (three hyphenated groups read and dictate well) and the entropy is not:
- * 15 characters of Crockford base32 is ~74 bits, which is not searchable.
+ * The design's eight digits (10^8) can be enumerated in hours, and each hit
+ * returns a name, an amount and often a bank account. We keep the hyphenated
+ * groups but use 15 characters of Crockford base32 (~74 bits).
  *
- * Ambiguous glyphs are excluded so a slug survives being read aloud or copied
- * off a screenshot.
+ * Ambiguous glyphs are excluded so a slug can be read aloud or copied off a
+ * screenshot.
  */
 const SLUG_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
 
@@ -135,15 +127,12 @@ function nameParts(full: string): { first: string; last: string } {
 /**
  * A name at the granularity the sender picked.
  *
- * Returned in parts rather than as one pre-joined string. The page has to draw
- * `Amina ▒▒▒▒▒` — a visible half beside a redaction block — and encoding that as
- * a single string means inventing a sentinel, which either collides with real
- * names or hides an invisible character in the payload. Parts say which half is
- * missing and carry nothing of the half that is.
+ * Returned in parts so the page can draw `Amina ▒▒▒▒▒` (a visible half beside
+ * a redaction block) without a sentinel character in a joined string. The
+ * withheld half is not sent.
  *
- * A person with a single-word name has no second half to withhold. Falling back
- * to the whole name there would publish it under a label promising otherwise,
- * so that case redacts entirely rather than quietly over-sharing.
+ * A single-word name has no second half, so it is withheld entirely; showing
+ * the whole name would contradict the chosen setting.
  */
 export interface ReceiptName {
   first?: string;
@@ -176,11 +165,9 @@ function accountFor(mode: ReceiptShareFields["account"], value?: string): Maybe<
 /**
  * What the page is allowed to claim.
  *
- * A shared link outlives the moment it was made, so the hero cannot say
- * "Delivered" because it was sharing-worthy at the time — it reads the
- * transfer's current state every request. In-flight and failed transfers say so
- * plainly; a recipient chasing money is exactly who a falsely green receipt
- * hurts most.
+ * A shared link outlives the moment it was made, so the status is read from
+ * the transfer's current state on every request. In-flight and failed
+ * transfers are labelled as such.
  */
 export function receiptStatus(t: Transfer): ReceiptPayload["status"] {
   if (t.state === "PAID") return { label: "Delivered", tone: "mint", settled: true };

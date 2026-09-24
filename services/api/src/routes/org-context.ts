@@ -1,16 +1,14 @@
 /**
  * Request context for everything under /api/orgs/:orgId.
  *
- * THREE checks, and all three must pass. They are separate because they answer
- * different questions and collapsing any two of them opens a hole:
+ * Three separate checks, all of which must pass. Don't merge any two:
  *
  *   1. session   — who is this?            (server.ts owns it)
  *   2. member    — may they reach this org, and as what role?
- *   3. capability— did the ORGANISATION buy this feature?
+ *   3. capability— did the organisation buy this feature?
  *
- * A viewer on a Business plan must not be able to send money (2 catches it),
- * and an owner on Starter must not reach the chart of accounts (3 catches it).
- * A single `isAuthorised` flag would let either through.
+ * A viewer on a Business plan must not send money (2 catches it), and an
+ * owner on Starter must not reach the chart of accounts (3 catches it).
  */
 
 import type express from "express";

@@ -1,15 +1,11 @@
 /**
- * State a business row does NOT store, derived on read.
+ * State a business row does not store, derived on read.
  *
- * DERIVED RATHER THAN STORED, and that is the rule these exist to keep. The
- * transfers are the truth: a draft row claiming EXECUTED while one of its
- * transfers sits in MANUAL_REVIEW would be a comfortable lie, and a background
- * sweep keeping a copy honest is one more thing to drift. An invoice follows
- * its transfer for the same reason — the transfer is the money, the invoice
- * row is bookkeeping.
+ * The transfers are the source of truth. A stored draft state could say
+ * EXECUTED while a transfer sits in MANUAL_REVIEW, and a sync sweep would be
+ * one more thing to drift. An invoice follows its transfer the same way.
  *
- * They were closures inside the router factory and are plain functions now:
- * they only ever needed the store, and the four route modules all need them.
+ * Plain functions over the store, shared by the four route modules.
  */
 import { store } from "../../store.js";
 import { activity, findDriftedLines } from "../../domain/drafts.js";
@@ -21,11 +17,7 @@ export const contactsById = (orgId: string) =>
 
 /**
  * A draft's execution state, derived from the transfers it created.
- *
- * Derived rather than stored: the transfers are the truth. A draft row that
- * said EXECUTED while one of its transfers sat in MANUAL_REVIEW would be a
- * comfortable lie, and a background sweep to keep a copy honest is one more
- * thing to drift. Pure — it returns a view and writes nothing.
+ * Returns a view and writes nothing.
  */
 export const withExecutionState = (draft: DraftPayment) => {
   if (draft.state !== "EXECUTING" || !draft.transferIds?.length) return draft;

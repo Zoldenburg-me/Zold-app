@@ -1,14 +1,12 @@
 /**
- * Shopify payments app — install, session, settlement, and the things we
- * refuse — against a stub Shopify. No chain, no network.
+ * Shopify payments app (install, session, settlement, refusals) against a
+ * stub Shopify. No chain, no network.
  *
- * WHAT THIS EXISTS TO CATCH: the two signatures (body HMAC on sessions, query
- * HMAC on the OAuth callback) are what stand between a stranger and "mark this
- * order paid"; the store's token must never cross the API; a session must be
- * idempotent because Shopify retries; and a paid request must reach
- * paymentSessionResolve exactly once, with a retry path when the store did not
- * answer. The stub records every mutation it is sent so each of those is
- * asserted, not assumed.
+ * Covers: the two signatures (body HMAC on sessions, query HMAC on the OAuth
+ * callback) that stop a stranger marking an order paid; the store's token
+ * never crossing the API; idempotent sessions, since Shopify retries; and a
+ * paid request reaching paymentSessionResolve exactly once, with a retry path
+ * when the store did not answer. The stub records every mutation it receives.
  *
  * Run: npm run shopify:test
  */

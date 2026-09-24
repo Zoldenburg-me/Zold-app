@@ -1,20 +1,14 @@
 /**
  * Live FX mid rates.
  *
- * Never hardcode these. A constant drifts silently while the receipt keeps
- * telling the sender it is using "the real exchange rate" — a number that is
- * wrong by 14% and labelled honest is worse than one that is openly a mock,
- * so the rate comes from a feed.
+ * Don't hardcode these. A constant drifts (one was once 14% off) while the
+ * receipt still tells the sender it is "the real exchange rate".
  *
- * Two rules follow from that:
- *
- *   1. NO STALE FALLBACK. If the feed cannot be reached and the cache has aged
- *      out, quoting fails. Serving a stale rate is how a sender is quietly
- *      quoted last month's market; refusing is visible and recoverable.
- *   2. The feed only supplies the FIAT legs (USD->KES) that a payout
- *      partner settles. The EUR->USD leg is whatever the on-chain swapper will
- *      actually execute at, read from the chain — see fx.ts. A feed rate we
- *      cannot trade at is a promise we cannot keep.
+ *   1. No stale fallback. If the feed is unreachable and the cache has aged
+ *      out, quoting fails, so a sender is never quoted last month's market.
+ *   2. The feed only supplies the fiat legs (USD->KES) that a payout partner
+ *      settles. The EUR->USD leg is the on-chain swapper's executable rate,
+ *      read from the chain (see fx.ts), since we cannot trade at a feed rate.
  */
 import { RATES } from "./config.js";
 
@@ -34,10 +28,9 @@ let inFlight: Promise<MidRates> | null = null;
 /**
  * Pinned rates for tests and offline demos: TRANSF_RATES_FIXED='{"USD":1.14,…}'.
  *
- * A rate that does not move is exactly the thing this module exists to
- * prevent, so it is refused in production unless ALLOW_FIXED_RATES=1 says so
- * deliberately. A hosted deploy that inherits this env var by accident would
- * quote a frozen rate and look completely healthy doing it.
+ * Refused in production unless ALLOW_FIXED_RATES=1. A hosted deploy that
+ * inherits this env var by accident would quote a frozen rate and still look
+ * healthy.
  */
 function pinned(): MidRates | null {
   const raw = process.env.TRANSF_RATES_FIXED;

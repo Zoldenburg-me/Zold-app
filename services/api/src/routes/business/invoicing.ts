@@ -2,15 +2,14 @@
  * Issuing invoices: the org's issuer profile, the compliance check, and the
  * document itself.
  *
- * NOT TAX ADVICE, and the app says so on every screen that touches this. What
- * the code guarantees is narrower: it cannot produce a document missing a
- * mandatory field, and cannot show tax the issuer does not owe.
+ * Not tax advice; the app says so on every screen that touches this. The code
+ * guarantees only that a document has every mandatory field and shows no tax
+ * the issuer does not owe.
  *
- * THE RULE SET COMES FROM THE ISSUER'S COUNTRY, not the customer's. German
- * paragraphs are quoted only under DE, the VAT Directive article under EU, and
- * nothing under GENERIC — citing "§ 14 Abs. 4 UStG" at an Indian entity would
- * be confidently wrong. Every report carries its verification level so `ok`
- * never claims more coverage than we have.
+ * The rule set comes from the issuer's country. German paragraphs are quoted
+ * only under DE, the VAT Directive article under EU, and nothing under GENERIC
+ * ("§ 14 Abs. 4 UStG" is wrong for an Indian entity). Every report carries its
+ * verification level so `ok` claims no more coverage than we have.
  */
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -224,9 +223,8 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
   /**
    * Issue an outgoing invoice.
    *
-   * Refuses on any compliance ERROR. Warnings can be accepted, but the
-   * acceptance is recorded on the document — "we told you and you said yes" is
-   * only meaningful if it is written down.
+   * Refuses on any compliance error. Warnings can be accepted, and the
+   * acceptance is recorded on the document.
    */
   r.post("/:orgId/invoicing/issue", async (req, res) => {
     const ctx = ctxOf(req, res);

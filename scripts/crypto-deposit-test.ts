@@ -1,20 +1,18 @@
 /**
  * Crypto in — USDC arriving at a payment page settles into the user's Safe.
  *
- * Detection runs against a real chain: USDC really moves on-chain to a watched
- * address, and the poller reads the Transfer log it emits. Conversion is real
- * too — the swap settles EURe into the Safe.
+ * Detection runs against a real chain: USDC moves on-chain to a watched
+ * address and the poller reads the Transfer log. Conversion settles EURe into
+ * the Safe.
  *
- * The middle step is what cannot run here. The swap is a user-signed batch
- * out of the user's own Safe, which needs Candide's bundler and paymaster, and
- * no hardhat node has either. So these seed the INPUT — USDC arrived, the row
- * is DETECTED — drive the poller for real, and then exercise
- * settleConvertedDeposit directly with EURe minted into the Safe to stand in
- * for the batch having landed.
+ * The swap itself cannot run here: it is a user-signed batch out of the
+ * user's Safe, which needs Candide's bundler and paymaster, and hardhat has
+ * neither. So these seed the input (USDC arrived, row DETECTED), drive the
+ * poller, then call settleConvertedDeposit directly with EURe minted into the
+ * Safe to stand in for the landed batch.
  *
  * Seed the input, never the output of the step under test: a fixture that
- * already carries the step's result lets its early return skip the code the
- * test exists to exercise, and the suite stays green over dead code.
+ * already carries the result lets an early return skip the code under test.
  *
  * Run: npm run crypto:test
  */
@@ -237,10 +235,9 @@ try {
     // No Safe is deployed locally, so this is the honest refusal — the money
     // is still the user's, at the destination address.
     check("an undeployed Safe is refused, not converted", d.state === "REFUSED", d.state);
-    // The refusal comes from safeDebitBlocker, the SAME check the send path
-    // uses, so a deposit can never be judged convertible by a rule the send
-    // path disagrees with. What is asserted is the intent — say it is a Safe
-    // problem, and reassure that the money has not gone anywhere.
+    // The refusal comes from safeDebitBlocker, the check the send path uses,
+    // so both paths agree on what is spendable. The assertion checks intent:
+    // it names a Safe problem and says the money has not moved.
     check(
       "and the reason says the money is still theirs",
       /Safe/.test(d.reason ?? "") && /still yours/.test(d.reason ?? ""),

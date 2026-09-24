@@ -3,16 +3,14 @@
  *
  * Authenticated half (`/users/:id/documents/*`): the holder creates a
  * receipt, a statement, a balance confirmation or a proof of ownership. Each
- * becomes a StoredDocument under a verification code and is signed by the
- * server's document key. Proof of ownership can additionally be signed by
- * the holder's own Safe in one passkey ceremony, which is the part nobody can
- * produce from a screenshot.
+ * becomes a StoredDocument under a verification code, signed by the server's
+ * document key. Proof of ownership can also be signed by the holder's own Safe
+ * in one passkey ceremony.
  *
  * Public half (`/v/:code`): anyone holding a code reads the frozen snapshot
- * and a LIVE verdict — the server signature is re-verified, a balance letter
- * is re-read from the chain at its block, and a Safe signature is checked
- * with the account contract. A document that verifies is one whose facts
- * this server stands behind now, not one it merely printed once.
+ * and a verdict computed on each visit: the server signature is re-verified, a
+ * balance letter is re-read from the chain at its block, and a Safe signature
+ * is checked with the account contract.
  */
 import { wrap } from "./util.js";
 import express from "express";
@@ -150,10 +148,9 @@ export async function buildStatement(user: User, from: Date, to: Date): Promise<
 }
 
 /**
- * A receipt is a PROOF OF PAYMENT — what someone hands to a tax office or a
- * landlord — so it exists only once the payout has settled (PAID: Monerium
- * processed the redeem). A payment that is submitted but not yet processed
- * is a statement line, not a proof.
+ * A receipt is proof of payment (for a tax office or a landlord), so it is
+ * issued only once the payout is PAID (Monerium processed the redeem). A
+ * submitted but unprocessed payment is only a statement line.
  */
 export function buildReceipt(user: User, transfer: Transfer): ReceiptSnapshot {
   if (transfer.rail !== "sepa") throw new Error("receipts are issued for SEPA payments");

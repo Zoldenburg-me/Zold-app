@@ -325,10 +325,10 @@ try {
 
   // ── The batch, against the same wall a direct transfer hits ──────────────
   //
-  // A passkey Safe needs an ERC-4337 bundler, and local hardhat has none, so no
-  // real transfer can be created here. What IS provable, and what matters, is that draft execution
-  // goes through the SAME code path: it must fail identically to a direct
-  // POST /api/transfers, not more permissively.
+  // A passkey Safe needs an ERC-4337 bundler, which local hardhat lacks, so no
+  // real transfer can be created here. What we can check is that draft
+  // execution takes the same code path: it must fail exactly as a direct
+  // POST /api/transfers does.
   const batch = await call("POST", `/api/orgs/${org.id}/drafts/${draft.id}/execute`, {
     token: ownerToken,
   });

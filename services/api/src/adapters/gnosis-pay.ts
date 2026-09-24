@@ -1,34 +1,26 @@
 /**
- * Gnosis Pay — permissionless integration.
+ * Gnosis Pay, permissionless integration.
  *
- * WHAT THIS IS, and the line not to blur: Gnosis Pay issues the card, owns the
- * KYC and owns the card Safe. Zold shows the user their own connected card
- * account. In permissionless mode there are NO webhooks and no attribution of
- * card activity back to Zold, so nothing here may be presented as "Zold's
- * card" — see docs/gnosis-pay-permissionless-integration.md, Non-Goals.
+ * Gnosis Pay issues the card and owns the KYC and the card Safe. Zold shows
+ * the user their own connected card account. Permissionless mode has no
+ * webhooks and no attribution of card activity to Zold, so nothing here may
+ * be presented as Zold's card (docs/gnosis-pay-permissionless-integration.md,
+ * Non-Goals).
  *
- * THE CHAIN CONSTRAINT: Gnosis Pay's account and card Safe live on Gnosis
- * Chain (100), and the SIWE message must name that chain. Zold's app chain is
- * something else today, which is exactly why the user's own wallet signs
- * rather than their Zold passkey Safe: an EIP-1271 signature is only
- * verifiable where the contract is deployed, and the Zold Safe is not deployed
- * on 100. Verified separately that Gnosis Chain DOES have the RIP-7212 P256
- * precompile, so a passkey Safe there is possible later — that is a deliberate
- * next step, not a missing one.
+ * Chain: Gnosis Pay's account and card Safe live on Gnosis Chain (100), and
+ * the SIWE message must name that chain. So the user's own wallet signs, not
+ * their Zold passkey Safe: an EIP-1271 signature only verifies where the
+ * contract is deployed, and the Zold Safe is not deployed on 100. Gnosis Chain
+ * has the RIP-7212 P256 precompile, so a passkey Safe there is possible later.
  *
- * TWO THINGS THE INTEGRATION DOC GOT WRONG, both found by reading the live
- * OpenAPI spec and calling the endpoint, and both silently fatal:
- *  1. GET /auth/nonce returns `text/plain`, NOT JSON. Parsing it as JSON throws
- *     on a response that was perfectly fine.
- *  2. That same response sets a `siwe` cookie, and the challenge is verified
- *     against it. Fetch the nonce server-side without carrying the cookie
- *     forward and every signature is rejected as if the user signed wrong.
+ * Two corrections to the integration doc, from the live OpenAPI spec:
+ *  1. GET /auth/nonce returns `text/plain`, not JSON.
+ *  2. That response sets a `siwe` cookie and the challenge is verified against
+ *     it. Without carrying the cookie forward, every signature is rejected.
  *
- * NO JWT IS EVER PERSISTED. The token is a bearer credential for somebody
- * else's card account; it is returned to the browser and passed back per
- * request, and this process keeps nothing. Only non-sensitive derived status
- * (which address is connected, the Safe address, KYC state) is stored, so the
- * Card view can say where the user is without holding the credential.
+ * The JWT is never persisted. It is a bearer credential for the user's card
+ * account, returned to the browser and passed back per request. Only derived
+ * status (connected address, Safe address, KYC state) is stored.
  */
 import { GNOSIS_PAY } from "../config.js";
 

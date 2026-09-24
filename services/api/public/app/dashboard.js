@@ -52,14 +52,12 @@ function renderUser(u) {
 
 /** The design's three figures, mapped onto what the API reports.
  *
- *  There is ONE balance: the EURe in the user's Safe. Do not add a second
- *  pot to the arithmetic — a permanent zero reads as if one existed.
+ *  There is one balance: the EURe in the user's Safe. Don't add a second pot
+ *  to the arithmetic; a permanent zero reads as if one existed.
  *
- *  So "total" and "available" are the same number, and that is honest rather
- *  than redundant: an in-flight transfer has already moved its EURe out of the
- *  Safe, so the Safe balance is both what the account holds and what it can
- *  spend. "In flight" is summed from transfers that have left CREATED but not
- *  reached a terminal state; nothing on-chain reports it, so it is derived. */
+ *  "Total" and "available" are the same number because an in-flight transfer
+ *  has already moved its EURe out of the Safe. "In flight" is summed from
+ *  transfers past CREATED but not yet terminal; nothing on-chain reports it. */
 function mobileFigures(u) {
   const safe = u.safeBalanceEur ?? u.balanceEur ?? 0;
   const live = ["DEBITED", "SWAPPED", "BRIDGED", "PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING",
@@ -304,18 +302,16 @@ function renderCryptoScreen() {
    --------------------------------------------------------------------------
    A user never sees a feature their segment does not include.
    --------------------------------------------------------------------------
-   THIS IS PRESENTATION ONLY, and saying so matters: hiding a control is a
-   courtesy, not a control. Every one of these features is ALSO refused by the
-   capability guard on the server, so a crafted request gets a 403 rather than
-   a surprise. If this function ever became the only check, the segment would
-   be decorative — see requireCapability in server.ts.
+   Presentation only. Every feature hidden here is also refused by the
+   server's capability guard (requireCapability in server.ts), so a crafted
+   request gets a 403. Don't make this the only check.
 
-   The client is handed `capabilities`, never the rule that produced them: a
-   reader who learns the rule learns which answer to change.
+   The client gets `capabilities`, never the rule that produced them, so a
+   reader cannot learn which input to change.
    ========================================================================== */
 const HAS = (cap) => (user?.segment?.capabilities ?? [
   // A pre-segmentation account keeps everything, matching the server's
-  // migration fallback. Narrow and deliberate.
+  // migration fallback.
   "monerium", "gnosis_pay", "safe", "card", "onchain_balance",
 ]).includes(cap);
 
@@ -341,9 +337,6 @@ function applySegment() {
     if (el) el.classList.toggle("hidden", !HAS("monerium") && !HAS("onchain_balance"));
   }
 
-  // A gated segment gets ONE honest panel instead of a dashboard of controls
-  // that would all refuse. It names what is missing rather than saying
-  // "coming soon", which promises a date nobody has.
   let panel = $("segment-gate");
   if (gate) {
     if (!panel) {
@@ -370,16 +363,13 @@ function applySegment() {
    --------------------------------------------------------------------------
    "Auto-convert" cannot mean unattended. Moving the user's USDC is a
    UserOperation their passkey signs, and the poller that spots the deposit
-   runs with nobody present. So the honest shape is: detected automatically,
-   converted when the account holder approves — and the screen says exactly
-   that rather than leaving a payment sitting there unexplained.
+   runs with nobody present. So deposits are detected automatically and
+   converted when the account holder approves, and the screen says so.
 
-   THE NUDGE IS DELIBERATE. A German company books crypto income at its EUR
-   value on the day it arrives, and converting later realises a gain or loss
-   against that value. Converting promptly keeps that difference near zero, so
-   a pending conversion is worth surfacing rather than letting it age quietly.
-   The screen does not explain the tax reasoning — that is not the UI's job —
-   it just does not hide the pending state.
+   Pending conversions are surfaced prominently. A German company books crypto
+   income at its EUR value on the day it arrives, and converting later realises
+   a gain or loss against that value; converting promptly keeps it near zero.
+   The UI does not explain the tax reasoning.
    ========================================================================== */
 let depositsCache = [];
 
@@ -435,10 +425,9 @@ async function renderDeposits() {
  * Convert one deposit: prepare the batch, sign its hash with the passkey,
  * submit.
  *
- * ONE DEPOSIT AT A TIME, deliberately. Each conversion is its own disposal
- * with its own rate and its own transaction, which is what keeps the record
- * traceable one-to-one. Batching several into one swap would save a signature
- * and lose the thread between a payment and what it became.
+ * One deposit at a time. Each conversion is its own disposal with its own rate
+ * and transaction, so each payment traces one-to-one to what it became. Don't
+ * batch several into one swap to save a signature.
  */
 async function convertDeposit(depositId, btn) {
   const label = btn?.textContent;
@@ -488,24 +477,21 @@ async function convertDeposit(depositId, btn) {
 }
 
 /* ==========================================================================
-   CARD — a CONNECTED Gnosis Pay account, not a Zold card
+   CARD — a connected Gnosis Pay account, not a Zold card
    --------------------------------------------------------------------------
    Gnosis Pay issues the card, holds its KYC and owns the card Safe. In
    permissionless mode there are no webhooks and no attribution of card
-   activity back to Zold, so two rules apply to everything drawn here:
+   activity back to Zold, so:
 
-     1. Never imply Zold issued it. The provenance line is not decoration and
-        is rendered on every state, including the error ones.
-     2. Every figure carries WHEN it was read. There is nothing pushing
-        updates, so a balance with no timestamp claims a liveness that does
-        not exist — the same reason imported-wallet screens say the ledger is
-        empty rather than drawing zeros.
+     1. Never imply Zold issued it. The provenance line is rendered on every
+        state, including errors.
+     2. Every figure shows when it was read. Nothing pushes updates, so a
+        balance without a timestamp would look live when it is not.
 
-   The JWT lives in this page's memory ONLY. It is a bearer credential for the
-   user's account with a third party; it is never written to localStorage (an
-   XSS then owns their card account for an hour) and never persisted server
-   side. A reload means signing in again, and the screen says so rather than
-   failing mysteriously.
+   The JWT lives in this page's memory only. It is a bearer credential for the
+   user's third-party account: never write it to localStorage (an XSS would own
+   their card account for an hour) and never persist it server side. A reload
+   means signing in again, and the screen says so.
 
    The signature comes from the user's own browser wallet. Zold's passkey Safe
    cannot sign here yet: an EIP-1271 signature is only verifiable where the
@@ -551,9 +537,8 @@ function renderCardScreen() {
   const connected = user?.gnosisPay || null;
 
   if (!gpToken) {
-    // Not signed in to Gnosis Pay THIS session. If we have stored status, say
-    // what we last saw and when — but never draw a balance from it, because a
-    // stale balance shown as current is the exact lie this screen avoids.
+    // Not signed in to Gnosis Pay this session. Show the stored status and
+    // when it was seen, but never a balance from it: it may be stale.
     el.innerHTML = `
       <div class="m-rows">
         ${connected ? `
@@ -685,10 +670,9 @@ function renderCardTile() {
 /* ==========================================================================
    SEND FLOW — country → method → amount → recipient → progress
    --------------------------------------------------------------------------
-   Real throughout: quotes come from POST /api/quotes, the payment is signed by
-   the device key exactly as the desktop flow signs it, and the timeline is
-   driven by the transfer's own state rather than a timer. The design's 182
-   corridors and four rails are not here because the API prices two.
+   Quotes come from POST /api/quotes, the payment is signed by the device key
+   as in the desktop flow, and the timeline follows the transfer's state. The
+   design's 182 corridors and four rails are not here; the API prices two.
    ========================================================================== */
 const M_DESTINATIONS = [
   { cc: "EU", name: "Europe", cur: "EUR", rail: "sepa", sub: "SEPA · EUR", eta: "Seconds – 1 day" },

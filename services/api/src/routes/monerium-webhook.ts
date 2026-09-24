@@ -1,11 +1,11 @@
 /**
  * The Monerium webhook.
  *
- * IT TRUSTS NOTHING IN THE BODY except an order id, which handleWebhookEvent
- * re-reads from Monerium — so a forged payload buys nothing even with no
- * secret configured. MONERIUM_WEBHOOK_SECRET adds Monerium's documented
- * webhook-id/timestamp/signature HMAC on top, with delivery-id dedupe and a
- * staleness window.
+ * Only the order id is taken from the body; handleWebhookEvent re-reads the
+ * order from Monerium, so a forged payload achieves nothing even without a
+ * secret. MONERIUM_WEBHOOK_SECRET adds Monerium's documented
+ * webhook-id/timestamp/signature HMAC, delivery-id dedupe and a staleness
+ * window.
  */
 import express from "express";
 import { wrap } from "./util.js";

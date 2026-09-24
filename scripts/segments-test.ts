@@ -1,13 +1,12 @@
 /**
  * resolveSegment — every branch, and the cases where two rules disagree.
  *
- * The interesting tests here are not the happy paths; they are the collisions,
- * because precedence is the whole design:
+ * The important cases are the collisions, where precedence decides:
  *   - a US citizen living in Germany (US rule beats a servable residence)
  *   - a Guam resident (Monerium rates several US territories servable, so the
  *     tier alone would hand a US person an account)
  *   - an Indian resident (Monerium rates IN servable; we decline anyway)
- *   - a Nigerian resident (no partner, but NOT sanctioned — and must never be
+ *   - a Nigerian resident (no partner, but not sanctioned, and must not be
  *     labelled as such)
  *
  * Pure function, no chain, no network, no store.

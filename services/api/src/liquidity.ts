@@ -2,19 +2,16 @@
  * The liquidity seam: which venue prices a trade, which one settles it, and
  * how a quote survives the gap between them.
  *
- * THE VENUES LIVE IN ./liquidity/. This file is what the rest of the system
- * talks to — it chooses a provider, persists the quote that priced a transfer,
- * and dispatches execution back to the venue that actually quoted it. Adding a
- * venue means adding a file there and a case in providerById, not editing the
- * money path.
+ * The venues live in ./liquidity/. This file chooses a provider, persists the
+ * quote that priced a transfer, and dispatches execution back to the venue
+ * that quoted it. A new venue is a file there plus a case in providerById.
  *
- * NEVER FALL BACK TO OUR OWN BOOK. An unknown provider id throws rather than
- * quietly using FxSwapper, because that would price real transfers off our own
- * inventory on any LIQUIDITY_PROVIDER typo while reporting a maker set the
- * rate — the exact degradation this seam exists to refuse.
+ * An unknown provider id throws. Don't fall back to FxSwapper: a
+ * LIQUIDITY_PROVIDER typo would then price real transfers off our own
+ * inventory while reporting that a maker set the rate.
  *
  * Types and the two rules every venue shares are in ./liquidity/contract.ts,
- * re-exported here so existing importers are unaffected by the split.
+ * re-exported here for existing importers.
  */
 import { FX, LIQUIDITY, railFeeEur } from "./config.js";
 import { eur, usd } from "./chain.js";
@@ -49,9 +46,8 @@ export function providerById(id: LiquidityProviderId): LiquidityProvider {
     case "lifi": return new LifiLiquidityProvider();
     case "best": return new BestExecutionProvider(undefined, providerById);
     default:
-      // Never fall back to FxSwapper here: that would silently price real
-      // transfers off our own inventory on any LIQUIDITY_PROVIDER typo, the
-      // exact degradation this seam exists to refuse.
+      // No FxSwapper fallback: a LIQUIDITY_PROVIDER typo would then price
+      // real transfers off our own inventory with no error.
       throw new Error(`unknown liquidity provider "${id}" — check LIQUIDITY_PROVIDER/LIQUIDITY_VENUES`);
   }
 }
@@ -127,18 +123,15 @@ export async function prepareSafeSwapForTransfer(
 }
 
 /**
- * The Safe-executed swap for an inbound crypto deposit — USDC in, EURe back
- * into the SAME Safe it came from.
+ * The Safe-executed swap for an inbound crypto deposit: USDC in, EURe back
+ * into the same Safe.
  *
- * The same shape the cash rail uses: one user-signed batch that approves the
- * venue and executes the swap, with the output delivered straight back to the
- * user. The orchestrator never holds the deposit, so the path is non-custodial
- * end to end and needs no API-held owner key.
+ * Same shape as the cash rail: one user-signed batch that approves the venue
+ * and executes the swap. The orchestrator never holds the deposit, so the path
+ * is non-custodial and needs no API-held owner key.
  *
- * RECIPIENT IS THE USER'S OWN SAFE, deliberately. On the cash rail the output
- * goes to a payout destination; here there is no payout — the user is
- * converting their own money and keeping it. Anything else would be a transfer
- * wearing a conversion's clothes.
+ * The recipient must be the user's own Safe. There is no payout here; any
+ * other recipient would make this a transfer, not a conversion.
  */
 export async function prepareDepositConversion(
   safeAddress: `0x${string}`,

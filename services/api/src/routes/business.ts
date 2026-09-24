@@ -1,15 +1,14 @@
 /**
- * /api/orgs/:orgId — the business surface, composed from four route modules.
+ * /api/orgs/:orgId: the business surface, composed from four route modules.
  *
- * ONE ROUTER PER SUBJECT, mounted on the same path: drafts, incoming invoices,
+ * One router per subject, mounted on the same path: drafts, incoming invoices,
  * issued invoices, and bookkeeping. They share the derived-state helpers in
  * ./business/state.ts and the request helpers in ./business/shared.ts, so the
- * rules that cut across them — four eyes, INVALID_DATA, gating as a read-time
- * filter — have one home each rather than four copies.
+ * cross-cutting rules (four eyes, INVALID_DATA, gating as a read-time filter)
+ * each live in one place.
  *
- * requireSession and the transfer factory are INJECTED. server.ts owns
- * authentication, and one code path builds transfers, so this surface cannot
- * acquire its own way of doing either.
+ * requireSession and the transfer factory are injected: server.ts owns
+ * authentication and one code path builds transfers.
  *
  * The public invoice-link endpoints are exported here but mounted separately
  * at /api/invoice-links: they are reached by a supplier who has no account and

@@ -2,17 +2,15 @@
  * SEP-9 field shaping.
  *
  * SEP-9 is the shared vocabulary anchors use for customer data, but anchors
- * differ in HOW they want it and WHICH subset they accept. Two differences
- * bit us and are encoded here rather than assumed:
+ * differ in how they want it and which subset they accept:
  *
- *  - `address_country_code` is ISO 3166-1 **alpha-3** ("DEU", "USA"), not the
- *    alpha-2 the rest of this app stores for a user's country.
- *  - MoneyGram documents exactly nine fields it reads, passed in the SEP-24
- *    interactive POST body. Stellar's test anchor instead wants them over
- *    SEP-12, and requires `email_address`, which MoneyGram does not list.
+ *  - `address_country_code` is ISO 3166-1 alpha-3 ("DEU", "USA"); the rest of
+ *    this app stores alpha-2 for a user's country.
+ *  - MoneyGram documents nine fields it reads, passed in the SEP-24
+ *    interactive POST body. Stellar's test anchor wants them over SEP-12, and
+ *    requires `email_address`, which MoneyGram does not list.
  *
- * So we keep one standard-shaped mapping and let each transport pick its
- * subset, instead of pretending one anchor's behaviour is the protocol.
+ * So there is one standard-shaped mapping and each transport picks its subset.
  */
 
 /**

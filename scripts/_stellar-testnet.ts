@@ -1,12 +1,10 @@
 /**
- * Pin the live Stellar harnesses to TESTNET.
+ * Pin the live Stellar harnesses to testnet.
  *
- * config.ts defaults to the PUBLIC network, so a harness that submits
- * changeTrust operations or an on-ledger payment would, with a real treasury
- * secret in .env, do so on mainnet. This sets the testnet endpoints where
- * nothing set them and REFUSES to continue if the passphrase still resolves
- * to the public network — a harness must never be one env var away from
- * real money. Import it before config.js.
+ * config.ts defaults to the public network, so with a real treasury secret in
+ * .env a harness submitting changeTrust or a payment would do so on mainnet.
+ * This sets the testnet endpoints where unset and exits if the passphrase
+ * still names the public network. Import it before config.js.
  */
 process.env.STELLAR_HORIZON ??= "https://horizon-testnet.stellar.org";
 process.env.STELLAR_PASSPHRASE ??= "Test SDF Network ; September 2015";

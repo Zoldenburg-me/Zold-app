@@ -1,15 +1,13 @@
 /**
  * Ceremonies in flight: the UserOperations and challenges a browser has been
- * handed and not yet come back with.
+ * given and has not yet returned.
  *
- * HELD IN MEMORY ON PURPOSE. A restart only means the user repeats the step —
- * the same recovery as an expired authorization — and nothing here is worth
- * the durability of a write. Keeping them in one module means the routes that
- * create an entry and the routes that consume it share the map explicitly
- * instead of through a 3,800-line file's scope.
+ * Held in memory. After a restart the user repeats the step, as with an
+ * expired authorization. Keeping the maps in one module lets the routes that
+ * create an entry and the routes that consume it share them explicitly.
  *
- * Every map is pruned by expiry rather than trusted to stay small; each holds
- * a challenge, which is a credential with a deadline.
+ * Every map is pruned by expiry: each holds a challenge, which is a credential
+ * with a deadline.
  */
 import type { preparePasskeySafeDeployment } from "../wallet/candide.js";
 import type { User } from "../store.js";

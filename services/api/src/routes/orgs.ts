@@ -225,10 +225,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
   /**
    * Change plan.
    *
-   * Downgrade is allowed and deliberately DELETES NOTHING — the chart of
-   * accounts, tags and history stay exactly where they are and simply stop
-   * being served. That is what makes the upgrade path honest, and it is only
-   * true because no code path here removes rows.
+   * A downgrade deletes nothing: the chart of accounts, tags and history stay
+   * in the store and are just not served until the org upgrades again. No code
+   * path here may remove rows.
    */
   r.post("/:orgId/plan", (req, res) => {
     const ctx = ctxOf(req, res);
@@ -454,18 +453,18 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const now = new Date().toISOString();
 
     /**
-     * Where the money actually comes from.
+     * Where the money comes from.
      *
-     * Provisioning a Safe and a Monerium profile PER ORGANISATION is not built.
-     * Until it is, the only spendable account is one backed by a person's
-     * existing funded account — so an org either adopts the caller's, or has no
+     * Per-organisation provisioning (a Safe and a Monerium profile per org) is
+     * not built. Until it is, the only spendable account is one backed by a
+     * person's funded account, so an org either adopts the caller's or has no
      * funding identity and says so.
      *
-     * A personal org adopts automatically: it IS that person. A business org
-     * must ask (`useMyAccount: true`), because "your own wallet is now funding
-     * the company" is a decision someone should make on purpose rather than
-     * discover later. Either way `backingUserId` records whose device key can
-     * sign, since spending authority never follows a membership change.
+     * A personal org adopts automatically, since it is that person. A business
+     * org must opt in (`useMyAccount: true`), because funding the company from
+     * someone's own wallet should be an explicit choice. `backingUserId`
+     * records whose device key can sign; spending authority does not follow a
+     * membership change.
      */
     const caller = store.findUser(ctx.userId);
     const callerFunded =
@@ -476,12 +475,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       (ctx.org.type === "personal" || req.body?.useMyAccount === true);
 
     /**
-     * An account nobody can fund is GATED, not "provisioning".
-     *
-     * `provisioning` promises that something is working on it. Nothing is:
-     * per-organisation provisioning does not exist, so without adoption the
-     * account would sit in that state forever, which reads as a stuck job
-     * rather than a missing feature. Gated with a reason is the honest state.
+     * An account nobody can fund is `gated`, with a reason. `provisioning`
+     * would imply work in progress; with no per-organisation provisioning the
+     * account would stay there forever and look like a stuck job.
      */
     const status = wantsAdoption ? "active" : "gated";
     const gate = wantsAdoption
@@ -526,9 +522,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
   /**
    * Give an existing account a funding identity, from the caller's own account.
    *
-   * Separate endpoint rather than a flag on update, because this is the moment
-   * a person's own balance starts paying an organisation's bills — it deserves
-   * its own call, its own permission and its own plain-language answer.
+   * A separate endpoint because this is when a person's own balance starts
+   * paying an organisation's bills: it gets its own call, permission check and
+   * plain-language response.
    */
   r.post("/:orgId/accounts/:accountId/fund", (req, res) => {
     const ctx = ctxOf(req, res);

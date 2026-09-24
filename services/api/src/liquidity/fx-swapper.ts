@@ -1,11 +1,11 @@
 /**
  * Our own inventory, at a rate the owner sets.
  *
- * THE ONLY VENUE A SAFE CANNOT EXECUTE: the swapper's inventory is onlyTrader,
+ * The only venue a Safe cannot execute: the swapper's inventory is onlyTrader,
  * so there is no safeSwapPlan here and a deployment pinned to it takes custody
  * of the principal. Kept because local hardhat has neither LI.FI nor a seeded
- * pool — `scripts/_local-chain.ts` opts into it explicitly, and production
- * inherits the safe default instead.
+ * pool; `scripts/_local-chain.ts` opts into it, and production uses the
+ * Safe-executable default.
  */
 import { abis, addrs, orchestratorAddress, orchestratorWallet, publicClient, swapperAddress, writeAndWait } from "../chain.js";
 import {
