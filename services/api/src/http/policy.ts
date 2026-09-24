@@ -1,5 +1,5 @@
 /**
- * FP1: origin policy + per-IP rate limiting (dependency-free).
+ * Origin policy + per-IP rate limiting (dependency-free).
  *
  * Two middlewares, kept together because they are the outermost thing every
  * request passes through and reading them in one place is how you tell what a

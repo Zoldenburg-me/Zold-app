@@ -155,7 +155,7 @@ Device keys live in `localStorage`, scoped per origin, and an account's
 authorizer can never be rebound: `POST /api/users/:id/authorizer` answers 409
 for any address other than the one already stored. So an account onboarded at
 `localhost` cannot be operated from `zoldhq.com`, and cannot be migrated — this
-is FP4's hard edge, not a bug in the move.
+is the device key's hard edge, not a bug in the move.
 
 (This paragraph used to attribute that to `RemitVault.setAuthorizer` letting
 only the current authorizer rotate. That contract was deleted on main and

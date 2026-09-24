@@ -24,7 +24,7 @@ import {
   safeMessageHash,
 } from "../wallet/candide.js";
 
-/** How long a device signature stays submittable (FP4). */
+/** How long a device signature stays submittable. */
 export const AUTH_WINDOW_SEC = 15 * 60;
 
 /**

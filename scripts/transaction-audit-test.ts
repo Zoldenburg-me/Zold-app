@@ -1,6 +1,6 @@
 /**
  * Transaction admission and attribution — the decision points money passes
- * through, and the three defects the September 2026 audit found in them.
+ * through, and three defects found in them.
  *
  * WHAT COUNTS AS A "DECISION ENGINE" HERE. There is no model and no scoring
  * service in this repo; the judgements that decide where money goes are plain
@@ -245,7 +245,7 @@ await check("a merchant URL that is not http(s) is dropped rather than rendered"
     "data:text/html,<script>alert(1)</script>",
     "vbscript:msgbox(1)",
     "file:///etc/passwd",
-    "http://shop.example/thank_you", // https only, as the review pass on main decided
+    "http://shop.example/thank_you", // https only
     "/relative/path",
     "",
     undefined,

@@ -1,7 +1,7 @@
 # Code layout — the modularity pass
 
-*Moved out of CLAUDE.md with the rest of the reasoning (Sep 2026). CLAUDE.md
-keeps the file map's rules; this is the original section.*
+*Decision history: the reasoning behind the current invariants, kept as written
+apart from naming.*
 
 ## Modularity pass (Sep 2026) — where things live now
 
@@ -10,7 +10,7 @@ suites are green across the whole pass (33 of them on a machine with no
 egress), the browser halves were driven in a real Chromium, and every move was
 checked to be a MOVE: the concatenation of the split files is the text that was
 there. Nothing below changes behaviour. Landed on main as PR #190
-(`claude/modularity-on-main`, superseding #186); both branches are deleted.
+(superseding #186).
 
 | was | is |
 |---|---|
@@ -87,6 +87,6 @@ VERIFICATION, and what it does not cover: the offline suites and a real browser
 ceremony creates an account, every app screen renders, all 151 top-level
 declarations the inline script used to make are reachable, and all twelve
 business dashboard views render signed in. NOT covered here: `draft:test`,
-`fp5:test`, `jit:test`, `lifi:test` and one `business:test` check need `.env`
+`quote-binding:test`, `jit:test`, `lifi:test` and one `business:test` check need `.env`
 credentials or egress this machine does not have; each fails identically on the
 pre-split files, which was checked rather than assumed.

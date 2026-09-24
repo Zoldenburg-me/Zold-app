@@ -26,7 +26,7 @@ Short version, so the rest can be skipped by someone in a hurry:
    the programme manager Baanx AND the EEA issuer Monavate, and bought them
    saying "self-custodial payments at scale").
 4. **The provider problem has a workaround that needs nobody's permission**,
-   and it was sized this session: several issuer-processors give the programme
+   and it has been sized: several issuer-processors give the programme
    a real-time authorisation callback with a published timeout (Lithic 6 s,
    Marqeta 3 s, Airwallex 2.5 s, Adyen 2 s), and settle in fiat from a prefunded
    programme account. Our own app does the Aqua pull; the issuer never learns
@@ -191,7 +191,7 @@ Zold Safe there needs a paid Candide plan or another bundler.
 
 ## 4. The provider problem, provider by provider
 
-The question the user asked first: how does an existing card provider pull from
+The first question: how does an existing card provider pull from
 Aqua instead of from its own contract or balance? Sized per provider, smallest
 change, who has to say yes.
 
@@ -260,8 +260,8 @@ so it is passed in at setup, and it could be either.
 
 ## 5. The workaround that needs nobody's permission
 
-The user asked for a simple workaround if the providers will not connect. There
-is one, it is not a hack, and this session found the numbers that decide it.
+If the providers will not connect, there is a simple workaround. It is not a
+hack, and the numbers that decide it are below.
 
 **Invert the integration.** Several issuer-processors give the programme
 manager a synchronous authorisation decision and settle in fiat from a

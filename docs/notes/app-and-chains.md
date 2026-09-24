@@ -2,20 +2,18 @@
 
 Read before touching the mobile UI, the PWA layer, chain selection or deployments.json.
 
-*Moved verbatim out of CLAUDE.md (Sep 2026) when that file passed 2,100 lines.
-The sections below are the original decision history, unedited. CLAUDE.md keeps
-the invariants and links here for the reasoning.*
+*Decision history: the reasoning behind the current invariants, kept as written
+apart from naming.*
 
 ## Mobile app + PWA (Aug 2026) — LANDED
 
-Branch `claude/remove-upi-and-onboarding-restyle` is FULLY MERGED into main
-(`git rev-list --count origin/main..origin/<branch>` is 0). This section used to
-say "IN PROGRESS, PR not opened" and that was doc rot: main already carries the
+The UPI-removal and onboarding-restyle work is FULLY MERGED into main. This
+section used to say "IN PROGRESS, PR not opened" and that was doc rot: main already carries the
 UPI removal, the onboarding restyle, the PWA layer and the mobile app. Work from
 main.
 
-DESIGN SOURCE: `~/Downloads/Zold Mobile Dashboard Redesign.zip` — the user's
-Claude Design export. `README.md` in it is a real spec (tokens, screens,
+DESIGN SOURCE: `~/Downloads/Zold Mobile Dashboard Redesign.zip` — the design
+export. `README.md` in it is a real spec (tokens, screens,
 behaviour, state); build `Zold Mobile Noir.dc.html`, the approved variant.
 The landing page came from a separate export, already applied.
 
@@ -122,7 +120,7 @@ the app still opens and API calls return a 503 the UI prints. The offline bar
 is driven by BOTH navigator.onLine and api() failing, because a dead server on
 live wifi reports onLine true.
 BEFORE SHIPPING INSTALL: on iOS a home-screen web app may get storage separate
-from Safari. The FP4 device key lives in localStorage and only the current
+from Safari. The device key lives in localStorage and only the current
 authorizer may rotate it, so onboarding in Safari then installing could strand
 an account. Untested on a real device; test before offering install.
 
@@ -201,7 +199,7 @@ an account. Untested on a real device; test before offering install.
   and had gone 5-14% stale (real: 1.1379 / 96.55 / 129.64) while the receipt
   said "real exchange rate" with a "0.50% margin" — EUR->INR was quoting 14.3%
   under the market. 1.08 lived in THREE places (config twice + deploy.ts) and
-  FP5's binding check compared only two of them, so fixing one alone would have
+  the quote-binding check compared only two of them, so fixing one alone would have
   silently promised a rate the swap could not deliver. midRate is now the live
   mid, fxRate what we deliver, and marginBps is MEASURED between them.
   TRANSF_RATES_FIXED pins rates for tests/offline (fail-closed in production
@@ -223,7 +221,7 @@ an account. Untested on a real device; test before offering install.
   Two rates, deliberately: quote() is firm and per-amount; indicativeRate() is
   cheap and cached (LIQUIDITY_INDICATIVE_TTL_MS) for receipts, so typing in the
   amount box is not a quote storm.
-  THE COUPLING THIS FIXED: fx.ts and FP5's assertQuoteRateBinding both read the
+  THE COUPLING THIS FIXED: fx.ts and the quote binding's assertQuoteRateBinding both read the
   FxSwapper contract directly, so a deployment switched to RFQ would have kept
   quoting — and binding against — the local mock's rate. Both now ask
   liquidityProvider(). liquidity.rfq (maker quote id + tx) is persisted on the
@@ -234,14 +232,14 @@ an account. Untested on a real device; test before offering install.
   hardhat), real token addresses and one live quote. The execute() path in
   particular has only been exercised through its guard branches.
 - Known TODOs marked in code: per-transfer FX hedging. (Both earlier items
-  are done: passkey assertion verification shipped with FP2, and the
+  are done: passkey assertion verification shipped with WebAuthn verification, and the
   Monerium webhook no longer trusts its request body — see
   docs/notes/identity-and-security.md.)
 - Monerium webhook FIXED (July 2026): it used to credit whatever address
   and amount the body stated, unauthenticated. It now reads only an order
   id and re-reads that order from Monerium (mirrorOrderById), so a forged
   payload buys nothing; MONERIUM_WEBHOOK_SECRET adds an HMAC gate on top
-  (OpenClaw PR #32 replaced the guessed scheme with Monerium's documented
+  (PR #32 replaced the guessed scheme with Monerium's documented
   webhook-id/webhook-timestamp/webhook-signature HMAC, plus delivery-id
   dedupe; PR #33 added a staleness window and stopped a transient Monerium
   outage from consuming a delivery id — a 503 now asks for the retry instead

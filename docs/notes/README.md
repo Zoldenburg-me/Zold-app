@@ -1,15 +1,13 @@
 # docs/notes — decision history
 
-CLAUDE.md used to carry all of this inline; at 2,166 lines every session loaded
-141 KB of it to find one paragraph. The invariants and the map stayed there;
-the reasoning moved here, verbatim and unedited.
+The reasoning behind the project's invariants, split by area.
 
 Read the file that covers what you are about to touch:
 
 | file | covers |
 |---|---|
 | `money-movement.md` | custody, liquidity venues, fees, FX, the cash rail, Stellar, sandbox modes |
-| `identity-and-security.md` | the red-team gate, FP4 key custody, recovery, onboarding, Monerium connections |
+| `identity-and-security.md` | the security gate, key custody, recovery, onboarding, Monerium connections |
 | `business-and-invoicing.md` | the organisation domain, currencies, invoicing by jurisdiction, account documents |
 | `payments-and-checkout.md` | payment links, both Shopify modes, shareable receipts, Gnosis Pay |
 | `app-and-chains.md` | the mobile app and PWA, testnet plumbing, how far a send actually runs |

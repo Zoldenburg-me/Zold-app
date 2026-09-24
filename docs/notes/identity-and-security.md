@@ -2,12 +2,11 @@
 
 Read before touching keys, passkeys, sessions, WebAuthn, recovery or the Monerium connection.
 
-*Moved verbatim out of CLAUDE.md (Sep 2026) when that file passed 2,100 lines.
-The sections below are the original decision history, unedited. CLAUDE.md keeps
-the invariants and links here for the reasoning.*
+*Decision history: the reasoning behind the current invariants, kept as written
+apart from naming.*
 
-## Security gate (red-team, July 2026 — fix before any hosted/public demo)
-Sessions+authz landed (PR #2). FP1+FP2 DONE (July 2026): simulate endpoints
+## Security gate (July 2026 — fix before any hosted/public demo)
+Sessions+authz landed (PR #2). Origin policy, rate limits and WebAuthn verification DONE (July 2026): simulate endpoints
 403 in production (ALLOW_SIMULATION=1 to override), mock fallback fail-closed
 unless ALLOW_MOCK_FALLBACK=1, origin allowlist (WEBAUTHN_ORIGINS/RP_ID) +
 per-IP rate limits, and full server-side WebAuthn: challenge endpoint, CBOR
@@ -21,7 +20,7 @@ states instead of sending those users through Monerium provisioning; add-money
 and send controls remain unavailable until approved. Approval must still come
 from the configured provider/operator path; the local
 `/api/users/:id/kyc/mock-review` route remains dev-only self-approval.
-Existing-Monerium connect DONE in code (July 2026, OpenClaw ba7c0c2 + test in
+Existing-Monerium connect DONE in code (July 2026, commit ba7c0c2 + test in
 PR #41): pending users choose between connecting an existing Monerium account
 and the normal identity review path. The connect flow is Authorization Code +
 PKCE (S256) across five endpoints — connect/start, oauth/callback, accounts,
@@ -32,15 +31,15 @@ app IBAN; it never moves the user's existing one. npm run monerium:oauth:test
 drives the loop against a stub that verifies the PKCE itself (12 checks).
 UNPROVEN: nobody has connected a real Monerium account — needs the OAuth app
 registered with a matching MONERIUM_REDIRECT_URI and one browser run.
-FP3 DONE (July 2026): failures auto-compensate (escrow release + vault
+Failure compensation DONE (July 2026): failures auto-compensate (escrow release + vault
 re-credit at current rates, itemized deductions, REFUNDED state), startup +
-5-min sweep recovers stranded transfers; FORCE_FAIL_STEP test hook,
-npm run fp3:test.
+5-min sweep recovers stranded transfers; FORCE_FAIL_STEP test hook and a
+compensation suite (both since deleted).
 !! STALE SINCE THE REMITVAULT REMOVAL (Aug 2026) — READ THIS FIRST !!
 `contracts/src/RemitVault.sol` NO LONGER EXISTS. It was deleted on main by
 `break/remove-remit-vault`, and that PR did not update this file, so everything
 below describing RemitVault.debit / setAuthorizer / _isValidSignature describes
-a contract that is gone — including the whole "FP4 completion — recovery"
+a contract that is gone — including the whole "Key custody completion — recovery"
 section later in this file, whose steps 3 and 4 name functions you cannot call.
 WHAT IS ACTUALLY TRUE NOW: the same EIP-712 PaymentAuthorization is signed by
 the same browser device key, but it is verified by `assertDeviceAuthorization`
@@ -54,9 +53,8 @@ user Safe owner keys; passkey Safes debit through co-signer allowances. The
 device key still stops a stolen session from swapping the payee or the amount.
 The recovery plan below needs rewriting against whatever replaces the vault as
 the enforcement point.
-USER-SIGNED EXECUTION (Aug 2026, branch claude/user-signed-execution — the
-regulatory doc's Change 1; supersedes the interim per-transfer allowance that
-briefly lived on claude/per-transfer-allowance and was never merged): the
+USER-SIGNED EXECUTION (Aug 2026 — the regulatory doc's Change 1; supersedes an
+interim per-transfer allowance that was never merged): the
 ALLOWANCE MODEL IS GONE ENTIRELY. No module, no delegate, no standing or
 one-time amounts — transferTokenFromSafeAllowance no longer exists. POST
 /api/transfers prepares the userOp that IS the debit: an ERC-20 transfer of
@@ -73,7 +71,7 @@ allowanceModuleAddress survives only for that read). The co-signer sends no
 native transactions any more — it needs NO gas. The allowance repair routes
 (GET/POST /passkey-safe/allowance*) and the client's repair banner are
 deleted. The CANDIDE_COSIGNER_*_ALLOWANCE_* env knobs do nothing (boot note
-says so). npm run execution:test (13 checks, pure builders); fp3/e2e blocker
+says so). npm run execution:test (13 checks, pure builders); compensation/e2e blocker
 regexes updated to the new refusal text.
 CHANGE 2 WINDOWS 1-3 DONE (same branch): the cash-rail send is ONE user-signed
 batch [legacy revoke?] -> fee transfer -> approve venue -> swap, atomic — a
@@ -104,8 +102,8 @@ real Base Sepolia send has exercised execution→debit, and no batched swap has
 run against a real pool (needs dex:setup + a funded Safe); Bridge live mode
 remains entirely unexercised.
 
-FP4 (key custody): SPEND-AUTHORITY HALF DONE (July 2026, PR #11, branch
-claude/fp4-vault-authorization — do not re-do differently). RemitVault.debit
+Key custody: SPEND-AUTHORITY HALF DONE (July 2026, PR #11 — do not re-do
+differently). RemitVault.debit
 now requires an EIP-712 PaymentAuthorization signed by the account's
 registered authorizer; the orchestrator role only submits and pays gas. The
 authorizer key is generated in the browser (localStorage, vendored
@@ -116,14 +114,14 @@ sign-in-page -> POST /api/transfers/:id/authorize. Verified live: sandbox
 onboarding bound the browser key on-chain; wrong-key signature rejected by
 the contract itself. authorizerOf ALSO accepts EIP-1271 — this is the hook
 for the passkey half below; build against it, not around it.
-FP4 key-custody half: user Safe owner keys are no longer stored in db.json.
+Key-custody half: user Safe owner keys are no longer stored in db.json.
 Candide WebAuthn Safe owner (fromSafeWebauthn) signs the Monerium declaration
 and orders via the passkey, then the passkey-owned Safe replaces the browser
 EOA as the vault authorizer (no contract change needed). The send-time passkey prompt is now
 the real gate: the device key is encrypted at rest with WebAuthn PRF
 (HKDF -> AES-GCM, only {iv,ct} in localStorage), so each payment needs a
 ceremony to unwrap; authenticators without PRF fall back to an unwrapped
-key labelled protection:"none". npm run fp4:test covers the envelope
+key labelled protection:"none". npm run device-key:test covers the envelope
 headlessly. VERIFIED NEGATIVELY (Aug 2026, real browser + real authenticator):
 the authenticator reported NO PRF SUPPORT, so the device key was stored
 UNWRAPPED with protection:"none". The console says so plainly
@@ -135,10 +133,10 @@ per-authenticator capability to be detected and surfaced, not a guarantee of
 the design. Still unverified on hardware that DOES offer PRF: that it returns
 the SAME 32 bytes across ceremonies — if not, a wrapped key is unrecoverable
 after reload.
-FP5 (contract governance + quote binding): PARTIAL. Quote↔execution binding
+Contract governance + quote binding: PARTIAL. Quote↔execution binding
 DONE (services/api/src/orchestrator.ts assertQuoteRateBinding: refuses +
 auto-refunds if on-chain rate drifts > FX.QUOTE_BINDING_BPS from the quote's
-lockedSwapRate; npm run fp5:test). OpenClaw PR #9 landed replay/role/pause
+lockedSwapRate; npm run quote-binding:test). PR #9 landed replay/role/pause
 hardening (idempotent deposits, escrow Status enum + refundTo binding,
 swapper onlyTrader+pause, live-chain deploy guard). Multisig/timelock ownership DONE
 (July 2026, PR #26): contracts/src/AdminTimelock.sol is an M-of-N + delay
@@ -149,12 +147,12 @@ can un-pause). deploy.ts transfers ownership after wiring roles;
 TIMELOCK_DELAY_SECONDS / TIMELOCK_THRESHOLD configure it. Still open:
 tiered/KYC-risk caps (vs global daily cap), Bebop executable quotes to
 replace the mock rate.
-Hardening pass (July 2026, branch claude/code-vulnerability-review-drgsst):
+Hardening pass (July 2026):
 - AUTHORIZE RACE — was a real double-spend. Everything in
   POST /api/transfers/:id/authorize up to the first `await` runs synchronously,
   so two parallel submissions of ONE device signature both cleared the
   `state === "CREATED"` check. The vault rejected the loser's duplicate
-  transferId, that revert took the FP3 path, and compensation re-credited the
+  transferId, that revert took the compensation path, and compensation re-credited the
   sender (local RPC) while the winner completed the payout — the shared txs
   array already held the winner's `vault.debit`. Now store.claimAuthorization()
   claims the submission synchronously (nothing yields between read and write),
@@ -170,7 +168,7 @@ Hardening pass (July 2026, branch claude/code-vulnerability-review-drgsst):
   before, so the Amoy path meant hardhat's published keys holding ramp +
   orchestrator — and the ramp role can bind a payment authorizer to any account
   that has not bound one yet, so anyone could claim a new user's account and
-  spend it. FP4 was worth nothing in that configuration.
+  spend it. The device key was worth nothing in that configuration.
 - Passkey re-registration now needs a step-up from the CURRENT credential (a
   stolen session token was otherwise permanent account access, silently
   replacing the real passkey); WebAuthn challenges are bound to the account; a
@@ -195,7 +193,7 @@ connected Monerium account is delegated trust with no identity match (now at
 least auditable via kyc.applicantId), and db.json still holds senderProfile PII
 in plaintext.
 Launch gate: local demos fine; NOT safe hosted, with real funds, or claiming
-payout finality until FP1-FP4 done.
+payout finality until the security gate is done.
 
 ## Co-signer retired (Sep 2026) — supersedes step 2 below
 
@@ -224,7 +222,7 @@ What changed:
 NOT RUN: no removal has executed on a real chain; the removeOwner calldata is
 unit-tested (selector 0xf8dc5dd9, prev-owner and sentinel cases) only.
 
-## FP4 completion — recovery (decided July 2026, 2-of-2)
+## Key custody completion — recovery (decided July 2026, 2-of-2)
 
 THE BLOCKER: losing the browser device key permanently bricks an account.
 `RemitVault.setAuthorizer` only lets the CURRENT authorizer rotate, and the
@@ -360,7 +358,7 @@ RULES THAT CARRY WEIGHT, each with a check:
    new passkey's signer verifier is deployed by the deployer key at execution
    time (permissionless factory call) so the first post-recovery UserOperation
    can validate.
- - Finalisation also unbinds the FP4 device key (only the lost device could
+ - Finalisation also unbinds the device key (only the lost device could
    rotate it) and revokes the lost device's sessions. Channel targets are
    masked on every surface, including the account payload.
  - Recoveries finalize themselves on a sweep (`RECOVERY_SWEEP_MS`); the user
@@ -376,7 +374,7 @@ this; the two are separate modes on RecoveryRequest.
 
 ## Email required + recovery in onboarding (Sep 2026)
 
-Branch claude/email-onboarding-flow. `npm run recovery:candide:test` carries
+`npm run recovery:candide:test` carries
 the signup checks (28); `npm run onboarding:test` still passes with emails on
 every signup.
 
@@ -433,7 +431,7 @@ deployment has ever opened (BRIDGE_LIVE and an anchor are both unset
 everywhere). No page ever wrote it; the only rows came from the test script.
 Collecting identity-document numbers for a rail that cannot run fails GDPR
 data minimisation on its face, and it dragged the impact assessment up from
-"account + financial data" to "identity documents". An earlier review pass
+"account + financial data" to "identity documents". An earlier decision
 kept the routes as "external API surface"; that call is reversed here with
 the data cost now clear.
 

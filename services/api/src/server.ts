@@ -63,7 +63,7 @@ app.use(express.json({
   },
 }));
 
-// FP1: origin policy + per-IP rate limiting live in http/policy.ts — the
+// Origin policy + per-IP rate limiting live in http/policy.ts — the
 // outermost thing every request passes through, readable in one place.
 app.use(securityHeaders);
 app.use(originPolicy);
@@ -202,11 +202,11 @@ assertChainMatches().catch((e) => {
 // Same class of problem, quieter symptom: the smart-account chain can differ
 // from the app chain without anything throwing.
 warnIfSmartAccountChainDiffers();
-// FP3: compensate anything stranded by a crash or failed payout, then keep
+// Compensate anything stranded by a crash or failed payout, then keep
 // sweeping in the background.
 sweepStrandedTransfers()
-  .then((n) => n && console.log(`FP3 sweep: compensated ${n} stranded transfer(s)`))
-  .catch((e) => console.error(`FP3 sweep failed: ${e?.message ?? e}`));
+  .then((n) => n && console.log(`Compensation sweep: compensated ${n} stranded transfer(s)`))
+  .catch((e) => console.error(`Compensation sweep failed: ${e?.message ?? e}`));
 setInterval(() => sweepStrandedTransfers().catch(() => {}), 5 * 60_000).unref();
 // Candide recoveries finalize themselves once the grace period has run, so a
 // user who lost their phone on a Friday is not waiting for a click on Monday.

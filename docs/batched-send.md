@@ -14,7 +14,7 @@ key. The current transitional executor still submits later on-chain legs from a
 server key, so today's four transactions cost **gas and latency, not user
 friction**.
 
-That changes with FP4. Once the passkey Safe is the authorizer and
+That changes with the device-key work. Once the passkey Safe is the authorizer and
 `fundingSource === "safe"`, the funds move from the user's Safe, and each Safe
 operation needs its own passkey ceremony. That is where "four signatures per
 send" becomes real, and it is worth designing away before it ships rather than
@@ -45,7 +45,7 @@ One signature, one atomic transaction, gas sponsored by the existing paymaster.
 ## Why this is worth more than the signature count
 
 **Atomicity.** Today a failure between legs leaves an approval dangling and
-USDC stranded mid-corridor — exactly the state FP3's compensation logic exists
+USDC stranded mid-corridor — exactly the state the failure-compensation logic exists
 to unwind. Batched, it all lands or none of it does, and there is nothing to
 compensate.
 
@@ -80,7 +80,7 @@ state before the payout is marked funded.
 
 ## Order of work
 
-This lands **with** FP4, not before it: there is no Safe-funded swap to batch
+This lands **with** the device-key work, not before it: there is no Safe-funded swap to batch
 until the Safe holds the funds and the passkey signs. The batching itself is
 the cheap part — the `MetaTransaction[]` shape already works.
 

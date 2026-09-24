@@ -2,9 +2,8 @@
 
 Read before touching payment requests, the Shopify integrations, shareable receipts or Gnosis Pay.
 
-*Moved verbatim out of CLAUDE.md (Sep 2026) when that file passed 2,100 lines.
-The sections below are the original decision history, unedited. CLAUDE.md keeps
-the invariants and links here for the reasoning.*
+*Decision history: the reasoning behind the current invariants, kept as written
+apart from naming.*
 
 ## Payment links + Shopify — the checkout, picked up again (Sep 2026)
 
@@ -188,7 +187,7 @@ intents, PKCE code exchange — plus the new-user onboard-in-flow (account -> KY
 -> device key -> funding -> device-signed SEPA -> merchant code). It is a
 CLIENT of this API: an allowlisted proxy, source of truth for nothing but
 merchants and intents. It runs on its own origin because passkeys are
-RP-ID-scoped and the FP4 device key lives in one origin's localStorage, so a
+RP-ID-scoped and the device key lives in one origin's localStorage, so a
 user onboarded there has both halves in one place.
 SEPA remittance reference (July 2026): POST /api/transfers takes an optional
 `reference` on the sepa rail and it rides on the payment, so a payee reconciles

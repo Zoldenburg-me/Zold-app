@@ -66,7 +66,7 @@ into existence is a real SEPA transfer to a provisioned IBAN. Mock USDC you can
 mint at will.
 
 **The swapper holds zero EURe.** EUR→USDC works (a million USDC in stock). The
-reverse direction — used by refunds and FP3 compensation — will fail for lack of
+reverse direction — used by refunds and failure compensation — will fail for lack of
 inventory until someone sends real EURe to the swapper. That is expected, not a
 bug you have found.
 
@@ -253,7 +253,7 @@ been moved out — leaving them in would have sent you re-proving them.
 | Safe deployment, EIP-1271 signing | `services/api/src/wallet/candide.ts` |
 
 `CLAUDE.md` carries the full state of the project, including the open security
-items and the FP4 recovery plan.
+items and the recovery plan.
 
 ---
 

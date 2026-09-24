@@ -257,7 +257,7 @@ export const CUSTODY = {
   requireNonCustodial: process.env.REQUIRE_NON_CUSTODIAL === "1",
 } as const;
 
-/** FP1/FP2 security posture (red-team fixes). */
+/** Security posture: origin policy, rate limits and WebAuthn verification. */
 export const SECURITY = {
   /**
    * How many reverse proxies sit in front of this process.
@@ -876,7 +876,7 @@ export const CRYPTO_IN = {
   /**
    * How far the venue's rate may sit from the live mid before we refuse.
    *
-   * This is the same discipline as FP5's quote binding, for the same reason:
+   * This is the same discipline as the quote binding, for the same reason:
    * the FxSwapper's rate is one WE set, so without an independent check we
    * could credit e-money at a price no market would give — the exact failure
    * the live-rates work existed to end.
@@ -914,7 +914,7 @@ export const FX = {
   CASH_FEE_EUR: Math.max(0, Number(process.env.CASH_FEE_EUR ?? 0.99)),
   QUOTE_TTL_MS: 10 * 60 * 1000,
   DAILY_CAP_EUR: 2500,
-  // FP5: max on-chain rate drift between quote and execution before the
+  // Quote binding: max on-chain rate drift between quote and execution before the
   // transfer is rejected and refunded (bps).
   QUOTE_BINDING_BPS: 50,
 };

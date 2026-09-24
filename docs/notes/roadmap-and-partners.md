@@ -1,7 +1,7 @@
 # Roadmap and payout partners
 
-*Moved verbatim out of CLAUDE.md (Sep 2026). CLAUDE.md carries a condensed
-version; this is the original with the per-partner detail.*
+*Decision history with the per-partner detail, kept as written apart from
+naming.*
 
 ## Roadmap (agreed priority)
 0. Payout partners secured (July 2026): **dLocal** (crypto product:
@@ -276,7 +276,7 @@ CARD SEPARATELY to 1inch Labs/Degensoft and to Exodus. Licence: Aqua-Source-1.1
 §5.2 "Pure Caller Use" is free below USD 100k fees/yr and USD 10m liquidity
 under control; the incubator exemption only matters above that.
 
-CORRECTIONS TO THE SECTIONS ABOVE, each checked this session:
+CORRECTIONS TO THE SECTIONS ABOVE, each checked:
  - EXODUS OWNS BAANX AND MONAVATE. The $175m SPA never closed; W3C defaulted
    on Exodus's $70m loan, UK receivers were appointed, and Exodus bought
    Monavate Holdings + Baanx.com Ltd from the receivers on 1 May 2026 for

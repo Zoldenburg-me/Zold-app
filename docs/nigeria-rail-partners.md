@@ -65,7 +65,7 @@ SECOND, ARCHITECTURAL, AND SPECIFIC TO US: their Smart Wallet is an EIP-1167
 minimal proxy with an owner EOA calling `execute()`, and they state plainly that
 they do not use UserOperations, paymasters or the ERC-4337 EntryPoint, with the
 owner paying gas in the native token. Zold accounts are ERC-4337 passkey Safes
-with NO EOA and NO private key — that is the whole of FP4. So a Zold account
+with NO EOA and NO private key — that is the whole point of the device key. So a Zold account
 cannot own a Strails wallet in the way their flow assumes.
 
 THE SHAPE THAT DOES WORK, and it is already precedented here: user's Safe signs

@@ -214,7 +214,7 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   the API answers 409 naming the mismatch. `HARNESS.enabled`
   (`LOCAL_HARNESS=1` on 31337 and not production) fakes the op hashes.
 
-### 5.2 Device key (FP4, `public/device.js`)
+### 5.2 Device key (`public/device.js`)
 
 - A secp256k1 key is generated in the browser and stored in
   `localStorage["zold-device-key"]`. It is wrapped with AES-GCM under

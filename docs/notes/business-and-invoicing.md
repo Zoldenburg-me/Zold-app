@@ -2,9 +2,8 @@
 
 Read before touching the organisation domain, drafts, the currency registry, invoices or account documents.
 
-*Moved verbatim out of CLAUDE.md (Sep 2026) when that file passed 2,100 lines.
-The sections below are the original decision history, unedited. CLAUDE.md keeps
-the invariants and links here for the reasoning.*
+*Decision history: the reasoning behind the current invariants, kept as written
+apart from naming.*
 
 ## Business + premium accounts (Aug 2026) — the organisation domain
 
@@ -71,14 +70,14 @@ WHAT WE TOOK FROM GNOSIS AND WHAT WE DID NOT — the one real conflict is custod
 Their whole promise was "you import your wallets, we never have access": an
 accounting layer over other people's money. That is incoherent for us, because a
 *local account* is something we ISSUE. So: we issue accounts and sign for them
-(FP4 device key / passkey Safe), and imported wallets are READ-ONLY — balances,
+(device key / passkey Safe), and imported wallets are READ-ONLY — balances,
 bookkeeping and export, never a signature. Rows are stamped `custody:
 "external"` so a signing path can assert on the row itself. Executing a draft
 from an imported wallet returns unsigned transactions and says so.
 
 DRAFT EXECUTION IS WIRED (Aug 2026). `npm run draft:test` (14 checks, spawns
 its own chain and API). A reviewed draft becomes ONE TRANSFER PER LINE, each
-carrying its own FP4 authorization; nothing moves until the device signs each
+carrying its own device-key authorization; nothing moves until the device signs each
 one, which is what makes every refusal path below safe.
  - ONE CODE PATH. `buildTransferFromQuote` was EXTRACTED from POST
    /api/transfers unchanged and is INJECTED into the business router, so draft
@@ -135,8 +134,7 @@ NOT FINISHED, and refused loudly rather than faked:
 
 ## CHF and NGN — tokens shown, rails still closed (Aug 2026)
 
-Added to the currency registry with the two settlement tokens the user asked
-for. `npm run business:test` (43 checks). ALL FOUR ADDRESSES VERIFIED ON CHAIN
+Added to the currency registry with its two settlement tokens. `npm run business:test` (43 checks). ALL FOUR ADDRESSES VERIFIED ON CHAIN
 by reading name()/symbol()/decimals() from the contract — the addresses came
 from a third-party listing and a listing page is a claim, not evidence.
 
