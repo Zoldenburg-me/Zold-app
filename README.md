@@ -7,8 +7,9 @@ borders. Built and operated by Zoldenburg.
 
 You get a euro IBAN through Monerium. Bank transfers arrive as EURe (Monerium's
 regulated euro e-money token) in a Safe smart account on Base whose owner is a
-passkey on your device. Every payment is a user operation you sign at send
-time; the server can prepare a debit but cannot execute one.
+passkey on your device (plus a Zold co-signer in hosted production). Every
+payment is a user operation you sign at send time; the server can prepare and
+counter-sign a debit but cannot start one.
 
 Product documentation for users: [docs/gitbook](docs/gitbook/README.md).
 
@@ -107,8 +108,9 @@ docs/                 design docs; docs/notes/ holds the decision history
 
 ### Rules the code depends on
 
-- **No debit without a user signature.** The API holds no owner key and no
-  allowance.
+- **No debit without a user signature.** The passkey signs every user
+  operation. In hosted production the Safe is 2-of-2 with a Zold co-signer,
+  which can counter-sign but never start a debit. There is no allowance.
 - **Fail closed.** No rate, no quote; no venue, no trade; no Monerium
   connection, no SEPA send.
 - **Nothing is shown as real that has not moved real money.** Closed rails are
