@@ -236,8 +236,10 @@ main as of `dcd5a9a`. Status per finding:
    it. ALREADY CLOSED on main by `4cb06a3` (merged the same day, likely after
    the test ran): the starting browser gets a per-request secret, every by-id
    route requires it, a stranger's start supersedes only a PASSKEY_PENDING
-   request, and one past that is a 409. `recovery:candide:test` covers the
-   hijack. What remains is griefing, not takeover: an attacker who reaches
+   request, and one past that is a 409. `6cf05de` (PR #197) then added the
+   report's own fix on top: registering the passkey issues a single-use OTP
+   ticket, and every code submission needs it (403 WRONG_BROWSER otherwise).
+   `recovery:candide:test` covers both. What remains is griefing, not takeover: an attacker who reaches
    OTP_PENDING blocks the owner's own start until it expires. The report's
    "notify enrolled channels on start" would make that visible; not built.
 2. **Invite seat takeover (High)** — acceptance matched `user.email`, which
@@ -272,7 +274,9 @@ main as of `dcd5a9a`. Status per finding:
    hold a swapper/timelock from before that change; if so, those contracts are
    governed by server keys and should be dropped from the file.
 6. **Handle claim race (Medium)** — `POST /users/:id/handle` re-checks the
-   handle with nothing awaited between the check and the write.
+   handle with nothing awaited between the check and the write. Landed via
+   the tester's own bot (`da9cd02`, PR #199); an identical check here was
+   dropped in the merge so the route checks once.
 7. **Duplicate email accounts (Low)** — the one-passkeyed-account-per-email
    rule is re-asserted at first passkey registration, not only at signup.
 8. **Crypto-deposit convert encoding (Low)** — the assertion is decoded from
