@@ -197,6 +197,33 @@ in plaintext.
 Launch gate: local demos fine; NOT safe hosted, with real funds, or claiming
 payout finality until FP1-FP4 done.
 
+## Co-signer retired (Sep 2026) — supersedes step 2 below
+
+The 2-of-2 co-signer is gone from new Safes. Reason: it could never start a
+debit, but it made Zold a required party to every movement of a user's money,
+and a user could not escape it by adding their own key — on a Safe, an owner
+change is itself a Safe transaction at the current threshold, so the co-signer
+had to sign its own bypass. Hosted production also REQUIRED it (config.ts), so
+the "self-custodial" framing was not true there.
+
+What changed:
+ - passkeySafePlan plans 1-of-1 always; config.ts no longer fails without
+   CANDIDE_COSIGNER_*; CANDIDE_COSIGNER_ENABLED is gone.
+ - Legacy 2-of-2 Safes: POST /api/users/:id/passkey-safe/cosigner-removal
+   prepares removeOwner(prev, cosigner, 1) as a Safe setup operation; the
+   passkey signs, the co-signer counter-signs its own removal, and the plan is
+   updated (cosignerAddress cleared, threshold 1, cosignerRemovedAt set) only
+   after getOwners/getThreshold confirm it. accountForPlan addresses such a
+   Safe directly, like a recovered one. Refused while a recovery is open.
+ - Candide recovery installs only the new passkey (it used to carry the
+   co-signer over); finalisation clears cosignerAddress to match.
+ - Monerium link-signature no longer demands CANDIDE_COSIGNER_KEY for a
+   passkey-only Safe (it did regardless, which blocked 1-of-1 accounts).
+ - server.ts logs every account still on a 2-of-2 Safe at startup, and says
+   loudly when the key they need is missing.
+NOT RUN: no removal has executed on a real chain; the removeOwner calldata is
+unit-tested (selector 0xf8dc5dd9, prev-owner and sentinel cases) only.
+
 ## FP4 completion — recovery (decided July 2026, 2-of-2)
 
 THE BLOCKER: losing the browser device key permanently bricks an account.
