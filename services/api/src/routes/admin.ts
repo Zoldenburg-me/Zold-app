@@ -168,15 +168,15 @@ async function deployerFloat() {
  * Gas balances of every EOA that sends transactions for the platform. Each is
  * a distinct outage when dry, and the errors do not say which wallet is empty:
  * a dry orchestrator fails swaps and the fee leg; a dry deployer fails Safe
- * verifier deployments. Name them, so the dashboard can too. The co-signer
- * sends no native transactions — Safe debits are UserOperations through the
+ * verifier deployments. Name them, so the dashboard can too. The legacy
+ * co-signer (still an owner only on Safes deployed as 2-of-2) sends no native transactions — Safe debits are UserOperations through the
  * bundler and paymaster — but it stays listed so a residual balance is visible.
  */
 let operatorGasCache: { at: number; value: { role: string; address: string; eth: number }[] } | null = null;
 async function operatorGas() {
   if (operatorGasCache && Date.now() - operatorGasCache.at < 60_000) return operatorGasCache.value;
   const wallets: { role: string; address: `0x${string}` }[] = [
-    { role: "co-signer (userOp counter-signer, no gas needed)", address: (CANDIDE.cosignerAddress || "0x") as `0x${string}` },
+    { role: "legacy co-signer (2-of-2 Safes only, no gas needed)", address: (CANDIDE.cosignerAddress || "0x") as `0x${string}` },
     { role: "orchestrator (swaps, fees)", address: orchestratorAddress },
     { role: "deployer (gas)", address: deployerWallet.account.address },
   ];

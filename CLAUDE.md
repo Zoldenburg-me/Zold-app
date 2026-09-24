@@ -123,6 +123,11 @@ Each of these was a bug once. The reasoning is in `docs/notes/`.
   make two ledgers agree is worse than the disagreement.
 
 **Identity and authority**
+- **The passkey is the Safe's only owner.** The 2-of-2 Zold co-signer was
+  retired (Sep 2026): it meant a user could not move their own funds, or add
+  a key, without us. Legacy 2-of-2 Safes need `CANDIDE_COSIGNER_KEY` until
+  each user removes it (`passkey-safe/cosigner-removal`); never plan a new
+  Safe with it.
 - **Three checks, not one**: session (who), member+role (may they here), plan
   capability (did the org buy it). Collapsing any two opens a hole.
 - **Four eyes**: the reviewer may not be the drafter, whatever their role — and

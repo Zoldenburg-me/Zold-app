@@ -1,6 +1,7 @@
 # Zold — product architecture
 
-*Written 2026-09-24 from a line-by-line read of `main` at `8dd8009`. This is the
+*Written 2026-09-24 from a line-by-line read of `main` at `8dd8009`, updated
+for PR #193 (co-signer retired, `3ba5c5e`). This is the
 map of **what the product is made of and how the pieces relate**. Its companion,
 [`technical-architecture.md`](technical-architecture.md), covers how each piece
 is built. Both are the source for the next GitBook update. Section 12 lists
@@ -107,7 +108,7 @@ flowchart LR
 ```mermaid
 flowchart TB
   User["User (login identity)<br/>email · passkey · segment"]
-  Safe["Safe smart account on Base<br/>owners: passkey (+ server co-signer)"]
+  Safe["Safe smart account on Base<br/>owner: passkey only (1-of-1)"]
   IBAN["Monerium IBAN<br/>address-matched to the Safe"]
   Dev["Device key (secp256k1)<br/>browser localStorage"]
   POrg["Personal organisation<br/>(auto-created)"]
@@ -173,9 +174,12 @@ sequenceDiagram
    refused before any row is created.
 2. **Passkey.** There is no skip and no password path.
 3. **Safe deployment.** An ERC-4337 Safe is deployed with Candide's bundler
-   and paymaster, so it needs no gas. On a hosted deployment the Safe is
-   **2-of-2**: the passkey plus a server co-signer key. The co-signer cannot
-   move money alone, because every operation also needs the passkey.
+   and paymaster, so it needs no gas. The Safe is **1-of-1: the passkey is its
+   only owner.** Zold holds no key that can move or block the funds. Safes
+   deployed before PR #193 were 2-of-2, with a Zold co-signer as the second
+   owner. They keep working while `CANDIDE_COSIGNER_KEY` is set, and the holder
+   can remove the co-signer in Settings with one passkey signature. No removal
+   has executed on a real chain yet.
 4. **Recovery enrolment** is optional and shown only if the deployment has
    `emailSmsRecovery`.
 5. **Monerium gate.** The user connects by OAuth (PKCE) *or* pastes their own
@@ -219,7 +223,7 @@ These are *per-user partner* capabilities. They are separate from the
 
 | mode | status | how it works |
 |---|---|---|
-| **Email/SMS guardian (Candide)** | BUILT, UNPROVEN (stub service only) | Candide becomes a Safe guardian (threshold 1). Lost device: a new passkey is created, an OTP is verified on every registered channel, and Candide executes the recovery on chain. After a grace period (3 days in production) the new passkey is bound. The old device can veto during the grace period. |
+| **Email/SMS guardian (Candide)** | BUILT, UNPROVEN (stub service only) | Candide becomes a Safe guardian (threshold 1). Lost device: a new passkey is created, an OTP is verified on every registered channel, and Candide executes the recovery on chain. After a grace period (3 days in production) the new passkey becomes the Safe's only owner; a legacy co-signer is not carried over. The old device can veto during the grace period. |
 | **Managed KYC guardian** | NOT BUILT beyond the operator workflow | An operator approves, a delay runs, then an external guardian signer would act. That signer does not exist in the repo and nothing finalises a managed recovery. |
 
 The new credential lives on the recovery request, not the user, until the
@@ -663,5 +667,5 @@ does not support.
 | `business/payments-and-approvals.md` | Send from the business dashboard | Send from `/business` does not yet produce the passkey assertion a Safe debit needs. There is no reject or re-point UI. |
 | `get-paid/payment-page.md` | QR on the page | The QR image route is currently unreachable: it is shadowed by the payment-link route (see the technical doc). |
 | `add-money/crypto-deposit.md` and app copy | Converted "at the live mid rate on arrival" | Converted on passkey approval, at the venue's rate, checked against the mid. |
-| `landing.html` | "Live on Base"; "custodial in practice" | Base Sepolia only. The account is non-custodial (the passkey owns the Safe). |
+| `landing.html` | "Live on Base" | Base Sepolia only. (The "custodial in practice" footnote was fixed in PR #193.) |
 | Plans copy | Business includes "accounting integrations" | LABEL ONLY. It should be marked unavailable or removed. |
