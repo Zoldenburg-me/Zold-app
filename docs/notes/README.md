@@ -15,6 +15,7 @@ Read the file that covers what you are about to touch:
 | `app-and-chains.md` | the mobile app and PWA, testnet plumbing, how far a send actually runs |
 | `review-passes.md` | the mainnet-ready cut and the two multi-agent review sweeps |
 | `roadmap-and-partners.md` | payout, funding and card partners, with the per-partner detail |
+| `code-layout.md` | where every file moved in the modularity pass, and the rules that kept it a pure move |
 
 These are notes, not specification. A claim marked VERIFIED was checked against
 a live chain, API or bytecode — if you contradict one, re-test before rewriting

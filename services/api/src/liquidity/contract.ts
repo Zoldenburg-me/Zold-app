@@ -1,0 +1,241 @@
+/**
+ * What every liquidity venue has to agree on: the shape of a quote, the shape
+ * of an execution, and the two safety rules no venue may skip.
+ *
+ * ASSERT WHAT THE VENUE NAMES. A venue's calldata is executed with the
+ * orchestrator's key or, in a batch, the user's passkey — so whatever the API
+ * answered is a transaction we are about to sign. LI.FI and Bebop both return
+ * the approval spender SEPARATELY from the call target, and they happen to be
+ * the same contract today; approving the target works by luck and would break
+ * silently the day routing moves to a settlement contract or Permit2.
+ *
+ * SURPLUS IS MEASURED AND ATTRIBUTED, NEVER SILENT. The receipt reports a
+ * margin measured between the live mid and what we deliver, so pocketing
+ * positive slippage quietly would make that number understate what we take.
+ */
+import { LIQUIDITY } from "../config.js";
+import {
+  abis,
+  publicClient,
+  } from "../chain.js";
+import type { Transfer } from "../store.js";
+/**
+ * A venue's calldata is executed with the orchestrator's key or, in a batch,
+ * the user's passkey. Whatever the API answered is therefore a transaction we
+ * are about to sign: the target and the approval spender must be contracts we
+ * named in config, and a token swap carries no native value.
+ */
+export function assertVenueTarget(
+  venue: string,
+  allowed: string[],
+  to: string | undefined,
+  spender: string | undefined,
+  value: unknown,
+): void {
+  const ok = (addr?: string) => !!addr && allowed.includes(addr.toLowerCase());
+  if (!allowed.length) {
+    throw new Error(`${venue}: no settlement contracts are configured, so its calldata cannot be executed — refusing`);
+  }
+  if (!ok(to)) throw new Error(`${venue} named ${to} as the call target, which is not a configured ${venue} contract — refusing`);
+  if (!ok(spender)) throw new Error(`${venue} asked for an approval to ${spender}, which is not a configured ${venue} contract — refusing`);
+  if (value !== undefined && value !== null && value !== "" && BigInt(String(value)) !== 0n) {
+    throw new Error(`${venue} calldata carries native value on a token swap — refusing`);
+  }
+}
+
+export const MAX_SLIPPAGE_BPS = 30n;
+
+export type LiquiditySide = "EURE_TO_USDC" | "USDC_TO_EURE";
+export type LiquidityToken = "EURe" | "USDC";
+export type LiquidityProviderId = "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best";
+
+export interface LiquidityQuote {
+  provider: LiquidityProviderId;
+  side: LiquiditySide;
+  quoteId: string;
+  tokenIn: LiquidityToken;
+  tokenOut: LiquidityToken;
+  amountIn: bigint;
+  expectedOut: bigint;
+  minOut: bigint;
+  rate: bigint;
+  expiresAt: string;
+  /** RFQ only: the maker's quote id, the tx it wants submitted, and the
+   *  address that must be approved to pull the sell token. */
+  rfq?: {
+    quoteId: string;
+    tx: { to?: string; data?: string; value?: string } | null;
+    approvalTarget?: string;
+  };
+  /** CoW only: the order the solvers will fill. */
+  cow?: { orderId: string; feeAmount: string; validTo: number; appData: string };
+  /** DEX only: the exact pool the quote was taken from, plus the independent
+   *  mid it was checked against. execute() must reuse this pool — re-picking
+   *  at execution could route through a different, unchecked one. */
+  dex?: { pool: `0x${string}`; fee: number; mid: number; deviationBps: number };
+  /** Best-execution only: what each venue offered, so the choice is auditable
+   *  after the fact rather than a number that appeared from nowhere. */
+  routing?: { venue: string; expectedOut: string | null; error?: string }[];
+  /** LI.FI only: the route it priced and the tx it wants submitted. Held on
+   *  the quote because prepare and execute are separate steps — re-quoting at
+   *  execution would settle at a price the user never saw. */
+  lifi?: {
+    tool: string;
+    approvalAddress: `0x${string}`;
+    tx: { to: `0x${string}`; data: `0x${string}`; value?: string; gasLimit?: string };
+    toToken: `0x${string}`;
+    mid: number;
+    deviationBps: number;
+  };
+}
+
+export interface LiquidityExecution {
+  quote: LiquidityQuote;
+  txs: Transfer["txs"];
+  amountOut: bigint;
+  /**
+   * Positive slippage: what arrived beyond what was quoted. Always MEASURED,
+   * never assumed, and recorded whoever keeps it — a surplus nobody can see is
+   * indistinguishable from a margin nobody disclosed.
+   */
+  surplus?: { amount: string; keptBy: "user" | "treasury" };
+}
+
+/**
+ * A swap the USER'S SAFE executes, not the orchestrator: who runs the calldata
+ * and where the output token is delivered. Venues that bind the taker into
+ * their quote (RFQ makers, LI.FI routes) must be quoted WITH this context —
+ * re-targeting their calldata after the fact silently produces a transaction
+ * the venue will refuse or misdeliver.
+ */
+export interface SafeSwapContext {
+  executor: `0x${string}`;
+  recipient: `0x${string}`;
+}
+
+/**
+ * Everything a user-signed batch needs from the venue: the price being signed,
+ * the approval the venue names (spender is the venue's own answer, never
+ * assumed equal to call.to — the Bebop/LI.FI approvalTarget trap), and the
+ * executable call. The caller composes [approve, call] into the UserOperation.
+ */
+export interface SafeSwapPlan {
+  quote: LiquidityQuote;
+  approval: { token: `0x${string}`; spender: `0x${string}`; amount: bigint };
+  call: { to: `0x${string}`; data: `0x${string}`; value: bigint };
+}
+
+export interface LiquidityProvider {
+  quote(side: LiquiditySide, amountIn: bigint, quoteId: string, expiresAt: string): Promise<LiquidityQuote>;
+  execute(quote: LiquidityQuote, to?: `0x${string}`): Promise<LiquidityExecution>;
+  /**
+   * Build a swap the user's Safe can execute itself — the venue-specific half
+   * of Change 2 windows 1-3. OPTIONAL because not every venue can serve an
+   * arbitrary executor: FxSwapper is onlyTrader (our own permissioned
+   * inventory — when we are the counterparty the custody question is a
+   * counterparty question, not a window to close), and CoW does not execute
+   * here at all. A venue without this method makes the transfer fall back to
+   * the plain user-signed debit with the orchestrator swapping after.
+   */
+  safeSwapPlan?(
+    side: LiquiditySide,
+    amountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+    ctx: SafeSwapContext,
+  ): Promise<SafeSwapPlan>;
+  /**
+   * A cheap, display-only EUR->USD rate for building a receipt, as a float and
+   * in the swapper's 6dp integer form.
+   *
+   * Separate from quote() on purpose. quote() is firm, per-amount and
+   * short-lived — with a real market maker it consumes rate limit and may even
+   * be a commitment. A user typing into an amount box needs neither. The rate
+   * shown must still come from the PROVIDER rather than a constant, or the
+   * receipt quietly advertises a price nobody will honour.
+   */
+  indicativeRate(side: LiquiditySide): Promise<{ rate: number; raw: bigint }>;
+}
+
+/**
+ * Read a balance until it reflects a write we know happened (bounded).
+ *
+ * Same replica-lag disease as waitForAllowanceVisibility, on the read side:
+ * the compensation reverse swap DELIVERED (Safe went 40 -> 44.01 EURe on
+ * chain) and its own verification then read a stale replica, saw no delta,
+ * and declared the delivery missing. Returns the last read either way — the
+ * caller still decides what a zero delta means.
+ */
+export async function balanceAfterWrite(
+  token: `0x${string}`,
+  who: `0x${string}`,
+  before: bigint,
+): Promise<bigint> {
+  let last = before;
+  for (let i = 0; i < 12; i++) {
+    last = (await publicClient.readContract({
+      address: token,
+      abi: abis.MockToken,
+      functionName: "balanceOf",
+      args: [who],
+    })) as bigint;
+    if (last > before) return last;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return last;
+}
+
+/**
+ * Wait until a fresh read actually shows the allowance the approve just set.
+ *
+ * The public RPC is load-balanced: the swap SIMULATION can land on a replica
+ * that has not seen the approve block yet, and the swap then reverts
+ * ERC20InsufficientAllowance against an allowance that is genuinely on
+ * chain — a real €5 transfer failed and auto-refunded over exactly this.
+ * Bounded: a lagging replica converges within a block or two; a truly
+ * missing approve stays missing and the swap's own revert reports it.
+ */
+export async function waitForAllowanceVisibility(
+  token: `0x${string}`,
+  owner: `0x${string}`,
+  spender: `0x${string}`,
+  amount: bigint,
+): Promise<void> {
+  for (let i = 0; i < 12; i++) {
+    const current = (await publicClient.readContract({
+      address: token,
+      abi: abis.MockToken,
+      functionName: "allowance",
+      args: [owner, spender],
+    })) as bigint;
+    if (current >= amount) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+
+/**
+ * Measure positive slippage and apply the configured policy.
+ *
+ * Called by every venue after it reads the delivered amount. Surplus is
+ * recorded whoever keeps it: under the default the user simply receives it,
+ * and under "treasury" the amount is still written down, because a surplus
+ * nobody can see is indistinguishable from an undisclosed margin.
+ */
+export function applySurplus(
+  quote: LiquidityQuote,
+  amountOut: bigint,
+  /** Defaults to the configured policy. Passed explicitly only by tests, which
+   *  cannot re-read config once the module is cached. */
+  policy: "user" | "treasury" = LIQUIDITY.SURPLUS_POLICY,
+): {
+  amountOut: bigint;
+  surplus?: LiquidityExecution["surplus"];
+} {
+  const raw = amountOut - quote.expectedOut;
+  if (raw <= 0n) return { amountOut };
+  if (policy === "treasury") {
+    return { amountOut: quote.expectedOut, surplus: { amount: raw.toString(), keptBy: "treasury" } };
+  }
+  return { amountOut, surplus: { amount: raw.toString(), keptBy: "user" } };
+}
