@@ -24,7 +24,10 @@
  * a request is handed a random secret ONCE (stored hashed on the request) and
  * every by-id route requires it in `x-recovery-secret`. A second caller who
  * names the same email never learns the id of a request someone else started
- * and cannot drive it. Finalisation hands out NO session: the new passkey is
+ * and cannot drive it. Registering the new passkey hands that browser a
+ * second, single-use OTP ticket, and every code submission requires it: the
+ * owner's channel codes can only ever confirm the credential THIS browser
+ * created. Finalisation hands out NO session: the new passkey is
  * bound to the account and signs in through the ordinary passkey login, which
  * is proof of the new credential rather than of having seen an id.
  */
@@ -137,6 +140,17 @@ function secretMatches(r: RecoveryRequest, secret: string): boolean {
   const stored = r.candide?.accessHash;
   if (!stored || !secret || secret.length > 256) return false;
   const a = Buffer.from(hashSecret(secret), "hex");
+  const b = Buffer.from(stored, "hex");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+const OTP_TICKET_HEADER = "x-recovery-otp-ticket";
+
+/** The OTP ticket issued to the browser that registered the new passkey. */
+function otpTicketMatches(r: RecoveryRequest, req: express.Request): boolean {
+  const stored = r.candide?.otpTicketHash;
+  const ticket = req.get(OTP_TICKET_HEADER) ?? "";
+  if (!stored || !ticket || ticket.length > 256) return false;
+  const a = Buffer.from(hashSecret(ticket), "hex");
   const b = Buffer.from(stored, "hex");
   return a.length === b.length && timingSafeEqual(a, b);
 }
@@ -852,6 +866,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const newThreshold = 1;
 
       const sig = await requestSignatureChallenge(plan.address, newOwners, newThreshold);
+      const otpTicket = randomBytes(32).toString("base64url");
       const updated = store.updateRecoveryRequest(request.id, {
         status: "OTP_PENDING",
         candide: {
@@ -866,12 +881,15 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           },
           newOwners,
           newThreshold,
+          otpTicketHash: hashSecret(otpTicket),
           serviceRequestId: sig.requestId,
           requiredVerifications: sig.requiredVerifications,
           auths: sig.auths.map((a) => ({ challengeId: a.challengeId, channel: a.channel, target: a.target, verified: false })),
         },
       });
-      res.json({ ...publicRequest(updated), submitTo: `/api/recovery/candide/${request.id}/otp` });
+      // Returned once: the codes the owner receives confirm the credential
+      // registered HERE, so only this browser may submit them.
+      res.json({ ...publicRequest(updated), otpTicket, submitTo: `/api/recovery/candide/${request.id}/otp` });
     }),
   );
 
@@ -883,6 +901,12 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const c = request.candide;
       if (request.status !== "OTP_PENDING" || !c?.serviceRequestId || !c.auths || !c.newOwners || !c.newPasskey) {
         return res.status(409).json({ ...publicRequest(request), error: `recovery is ${request.status}` });
+      }
+      if (!otpTicketMatches(request, req)) {
+        return res.status(403).json({
+          error: "the passkey this recovery would install was not created in this browser — do not enter codes here; start recovery again from this device",
+          code: "WRONG_BROWSER",
+        });
       }
       const challengeId = String(req.body?.challengeId ?? "");
       const auth = c.auths.find((a) => a.challengeId === challengeId);
@@ -929,6 +953,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           candide: {
             ...c,
             auths,
+            otpTicketHash: undefined,
             guardianAddress: result.guardianAddress,
             recoveryRequestId: executed.id,
             executedAt: now.toISOString(),

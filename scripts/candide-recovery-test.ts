@@ -444,9 +444,10 @@ try {
   const newPasskey = await makePasskey("replacement");
   let recovery: any;
   let secret = "";
+  let otpTicket = "";
   /** A no-session recovery call from the browser that started it. */
-  const rc = (pathname: string, body?: any, method?: string, s = secret) =>
-    call(pathname, body, method, "", s ? { "x-recovery-secret": s } : {});
+  const rc = (pathname: string, body?: any, method?: string, s = secret, tk = otpTicket) =>
+    call(pathname, body, method, "", { ...(s ? { "x-recovery-secret": s } : {}), ...(tk ? { "x-recovery-otp-ticket": tk } : {}) });
 
   await t("an unknown email gets a generic refusal", async () => {
     const r = await call("/api/recovery/candide", { email: "nobody@example.com" }, undefined, "");
@@ -512,6 +513,9 @@ try {
     assert.equal(r.data.candide.auths.length, 2);
     assert.equal(r.data.candide.newPasskeyRegistered, true);
     assert.ok(!r.text.includes("attestation"), "the new credential is not on the public surface");
+    assert.match(r.data.otpTicket ?? "", /^[A-Za-z0-9_-]{40,}$/, "a ticket for the browser that registered the passkey");
+    assert.ok(!r.text.includes("otpTicketHash"));
+    otpTicket = r.data.otpTicket;
     const req = seen.signatureRequests[0];
     assert.equal(req.account.toLowerCase(), safeAddress.toLowerCase());
     assert.equal(req.newOwners.length, 1, "passkey-only Safe: one new owner");
@@ -529,6 +533,15 @@ try {
   await t("a caller without the secret cannot submit codes", async () => {
     const r = await rc(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[0].challengeId, otp: OTP }, undefined, "");
     assert.equal(r.status, 404, JSON.stringify(r.data));
+    assert.equal(seen.signatureSubmits.length, 0, "nothing reached Candide");
+  });
+
+  await t("codes are refused without the ticket from the browser that registered the passkey", async () => {
+    const none = await rc(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[0].challengeId, otp: OTP }, undefined, secret, "");
+    assert.equal(none.status, 403, JSON.stringify(none.data));
+    assert.equal(none.data.code, "WRONG_BROWSER");
+    const wrong = await rc(`/api/recovery/candide/${recovery.id}/otp`, { challengeId: recovery.candide.auths[0].challengeId, otp: OTP }, undefined, secret, "not-the-ticket");
+    assert.equal(wrong.status, 403, JSON.stringify(wrong.data));
     assert.equal(seen.signatureSubmits.length, 0, "nothing reached Candide");
   });
 
