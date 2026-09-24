@@ -41,11 +41,6 @@ import { HARNESS } from "../config.js";
 import { partnerTimeout } from "../http.js";
 const allowSimulation = () => HARNESS.enabled;
 
-const COSIGNER_ENABLED =
-  process.env.CANDIDE_COSIGNER_ENABLED === "1" ||
-  (process.env.CANDIDE_COSIGNER_ENABLED !== "0" &&
-    Boolean(process.env.CANDIDE_COSIGNER_ADDRESS && process.env.CANDIDE_COSIGNER_KEY));
-
 /** The smart-account chain follows the app chain unless told otherwise, and
  *  Candide's public endpoints are addressed by that id (their v3 bundler and
  *  paymaster answer for 8453 — checked with eth_supportedEntryPoints). */
@@ -55,7 +50,13 @@ export const CANDIDE = {
   bundlerUrl: process.env.CANDIDE_BUNDLER_URL ?? `https://api.candide.dev/public/v3/${CANDIDE_CHAIN_ID}`,
   paymasterUrl: process.env.CANDIDE_PAYMASTER_URL ?? `https://api.candide.dev/public/v3/${CANDIDE_CHAIN_ID}`,
   rpcUrl: process.env.CANDIDE_RPC_URL ?? process.env.TRANSF_RPC_URL ?? "https://mainnet.base.org",
-  cosignerEnabled: COSIGNER_ENABLED,
+  /**
+   * LEGACY ONLY. New Safes are passkey-only (1-of-1); nothing adds a co-signer
+   * any more. Safes deployed earlier as 2-of-2 still list this address as an
+   * owner, so until their user removes it (removeCosignerTransactions) every
+   * operation on them needs this key to counter-sign — unset it while such a
+   * Safe exists and its funds cannot move.
+   */
   cosignerAddress: (process.env.CANDIDE_COSIGNER_ADDRESS ?? "") as `0x${string}` | "",
   cosignerKey: (process.env.CANDIDE_COSIGNER_KEY ?? "") as `0x${string}` | "",
   recoveryGuardianAddress: (process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS ?? "") as `0x${string}` | "",
@@ -92,6 +93,8 @@ export function webauthnOwnerFromStore(owner: { x: string; y: string }): Webauth
   return { x: BigInt(owner.x), y: BigInt(owner.y) };
 }
 
+/** LEGACY: the 2-of-2 account an older plan was derived from. Only
+ *  accountForPlan uses it, to re-derive the address such a plan recorded. */
 export function smartAccountForPasskeyCosigner(
   passkeyOwner: WebauthnPublicKey,
   cosignerAddress: `0x${string}`,
@@ -106,6 +109,8 @@ export function smartAccountForPasskey(passkeyOwner: WebauthnPublicKey): SafeAcc
 export interface PasskeySafeDeploymentPlan {
   address: `0x${string}`;
   threshold: 1 | 2;
+  /** LEGACY: set only on Safes deployed as 2-of-2 before the co-signer was
+   *  retired, and cleared once the user removes it. */
   cosignerAddress?: `0x${string}`;
   passkeyPublicKey: { x: string; y: string };
   cosignerPolicy?: {
@@ -126,6 +131,9 @@ export interface PasskeySafeDeploymentPlan {
   /** A recovered Safe: its address is fixed and no longer derives from the
    *  current owner set, so it is addressed rather than computed. */
   recoveredAt?: string;
+  /** The legacy co-signer was removed from the owner set. Like recoveredAt,
+   *  the address no longer derives from the owners. */
+  cosignerRemovedAt?: string;
 }
 
 export interface BrowserPasskeyAssertion {
@@ -406,7 +414,7 @@ async function sponsoredUserOperation(
  */
 export function accountForPlan(plan: PasskeySafeDeploymentPlan): { account: SafeAccount; passkeyOwner: WebauthnPublicKey } {
   const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  if (plan.recoveredAt) {
+  if (plan.recoveredAt || plan.cosignerRemovedAt) {
     return { account: new SafeAccount(plan.address), passkeyOwner };
   }
   const account = plan.cosignerAddress
@@ -445,8 +453,8 @@ export async function prepareSafeSetupOperation(
 
 /**
  * Build the UserOperation that debits one transfer from the user's Safe. The
- * passkey owner signs its hash at send time (the co-signer counter-signs where
- * it is an owner), so the exact movement — token, amount, destination — is
+ * passkey owner signs its hash at send time (a legacy 2-of-2 Safe also needs
+ * the co-signer's counter-signature until its user removes it), so the exact movement — token, amount, destination — is
  * user-approved and chain-enforced. Between sends nothing can move: no owner
  * key is stored server-side and no allowance exists.
  */
@@ -577,6 +585,55 @@ export async function signMessageAsPasskeySafe(
   return SafeAccount.buildSignaturesFromSingerSignaturePairs(pairs, { isInit: false }) as `0x${string}`;
 }
 
+/**
+ * The Safe call that retires a legacy co-signer: removeOwner(prev, cosigner, 1)
+ * leaves the passkey as the only owner at threshold 1. It runs as a Safe
+ * setup operation, so the passkey signs it — and, because the Safe is still
+ * 2-of-2 when it executes, the co-signer counter-signs its own removal. That
+ * is the last thing the co-signer key ever has to sign for this Safe.
+ *
+ * `owners` is the chain's current owner list. Safe keeps owners as a linked
+ * list, so removal names the owner before it (the sentinel 0x…01 when the
+ * co-signer is first). Compared case-insensitively: an env var address need
+ * not be checksummed the way getOwners returns it.
+ */
+export function removeCosignerTransactions(
+  safeAddress: `0x${string}`,
+  owners: readonly string[],
+  cosigner: `0x${string}`,
+): MetaTransaction[] {
+  const i = owners.findIndex((o) => o.toLowerCase() === cosigner.toLowerCase());
+  if (i === -1) throw new Error(`co-signer ${cosigner} is not an owner of this Safe`);
+  if (owners.length < 2) throw new Error("refusing to remove the Safe's only owner");
+  const prev = (i === 0 ? SAFE_OWNER_SENTINEL : owners[i - 1]) as `0x${string}`;
+  return [
+    {
+      to: safeAddress,
+      value: 0n,
+      data: encodeFunctionData({
+        abi: SAFE_REMOVE_OWNER_ABI,
+        functionName: "removeOwner",
+        args: [prev, owners[i] as `0x${string}`, 1n],
+      }),
+    },
+  ];
+}
+
+const SAFE_OWNER_SENTINEL = "0x0000000000000000000000000000000000000001";
+const SAFE_REMOVE_OWNER_ABI = [
+  {
+    type: "function",
+    name: "removeOwner",
+    inputs: [
+      { name: "prevOwner", type: "address" },
+      { name: "owner", type: "address" },
+      { name: "_threshold", type: "uint256" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+] as const;
+
 export async function isDeployed(address: string): Promise<boolean> {
   if (allowSimulation()) return true;
   const res = await fetch(CANDIDE.rpcUrl, {
@@ -669,6 +726,12 @@ async function ethCall(to: string, data: `0x${string}`): Promise<`0x${string}`> 
 export async function safeOwners(safeAddress: string): Promise<`0x${string}`[]> {
   const raw = await ethCall(safeAddress, encodeFunctionData({ abi: SAFE_READ_ABI, functionName: "getOwners" }));
   return [...(decodeFunctionResult({ abi: SAFE_READ_ABI, functionName: "getOwners", data: raw }) as readonly string[])] as `0x${string}`[];
+}
+
+/** The Safe's current signature threshold, read from the smart-account chain. */
+export async function safeThreshold(safeAddress: string): Promise<number> {
+  const raw = await ethCall(safeAddress, encodeFunctionData({ abi: SAFE_READ_ABI, functionName: "getThreshold" }));
+  return Number(decodeFunctionResult({ abi: SAFE_READ_ABI, functionName: "getThreshold", data: raw }));
 }
 
 export interface RecoveryModuleState {
