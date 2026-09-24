@@ -110,7 +110,7 @@ These are **wallet private keys and secrets we create**. This is the part Baer f
 | `DEPLOY_DEPLOYER_KEY` | Deploys contracts | Cold — only needed at deploy time |
 | `DEPLOY_ORCHESTRATOR_KEY` | Submits transfers, pays gas | **Hot — runs continuously** |
 | `DEPLOY_RAMP_KEY` | Credits deposits | **Hot** |
-| `CANDIDE_COSIGNER_KEY` | 2nd signer on user Safes | **Hot** |
+| `CANDIDE_COSIGNER_KEY` | Legacy only: 2nd owner on Safes deployed as 2-of-2 before the co-signer was retired, until each user removes it. New Safes have no co-signer | **Hot** while any legacy Safe remains |
 | `STELLAR_TREASURY_SECRET` | Holds the payout float | **Hot — holds funds** |
 | `MONERIUM_TOKEN_ENCRYPTION_KEY` | Encrypts user OAuth tokens at rest | ≥32 chars, app refuses to start without it |
 | `KYC_OPERATOR_TOKEN` | Approves KYC decisions | Required in production |
@@ -119,7 +119,7 @@ These are **wallet private keys and secrets we create**. This is the part Baer f
 
 - ✅ **Contract ownership is already protected.** `AdminTimelock` (2-of-3 + delay) owns the deployed contracts. No single key can raise the daily cap, grant a role, or drain the swapper. Emergency pause is instant via a separate guardian; only the timelock can un-pause.
 - ❌ **The hot operational keys above are not.** They sit in `.env` as plaintext private keys. This is the real exposure.
-- ✅ **No user Safe owner keys exist server-side any more.** Every debit is a UserOperation the user's passkey signs at send time; the co-signer key only counter-signs those operations and holds no unilateral spend authority.
+- ✅ **No user Safe owner keys exist server-side for new accounts.** The passkey is the Safe's only owner, and every debit is a UserOperation it signs at send time. Legacy 2-of-2 Safes still need the co-signer key to counter-sign until their user removes it from the app.
 
 Recommended: move the hot keys to a KMS or signer service (AWS KMS, GCP KMS, Turnkey, Privy) rather than `.env`. That solves both of Baer's concerns — no keys written down, and no single person's signature needed to keep the app up.
 
@@ -137,7 +137,6 @@ MONERIUM_TOKEN_ENCRYPTION_KEY     required, ≥32 chars
 MONERIUM_REDIRECT_URI             must be explicit https
 WEBAUTHN_ORIGINS                  explicit https, no localhost
 TRUSTED_PROXY_HOPS                must be explicit
-CANDIDE_COSIGNER_ADDRESS + KEY    required before hosted funding
 CANDIDE_RECOVERY_GUARDIAN_ADDRESS required before hosted funding
 CANDIDE_CHAIN_ID == TRANSF_CHAIN_ID
 TRANSF_CHAIN_ID                  must be a mainnet chain (8453)
