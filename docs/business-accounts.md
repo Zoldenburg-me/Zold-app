@@ -51,7 +51,7 @@ NOT TAKEN, and the reason matters:
    funds — "you import your wallets, we never have access". That is coherent
    for an accounting layer, and incoherent for us: a *local account* is
    something we issue, with an identifier someone else can pay into. So we
-   issue accounts and sign for them (FP4 device key / passkey Safe), and we
+   issue accounts and sign for them (device key / passkey Safe), and we
    additionally support **imported wallets as read-only** — balances,
    transactions, bookkeeping and export, but we never sign for them. A payment
    from an imported wallet is built by us and signed by its owner.

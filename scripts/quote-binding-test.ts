@@ -1,12 +1,12 @@
 /**
- * FP5 quote-to-execution binding test.
+ * Quote-to-execution binding test.
  *
  * Full remittance execution needs a deployed Safe, which a hardhat-only test
  * does not have. This pins the invariant directly: a quote records the rate it
  * was priced against, and the
  * executor refuses if the live on-chain rate has moved past tolerance.
  *
- * Own port. Run: npm run fp5:test
+ * Own port. Run: npm run quote-binding:test
  */
 import "./_local-chain.js";
 import assert from "node:assert/strict";
@@ -78,8 +78,8 @@ try {
   const { raw: lockedSwapRate } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
   const now = new Date().toISOString();
   const quote: Quote = {
-    id: "q-fp5",
-    userId: "u-fp5",
+    id: "q-quote-binding",
+    userId: "u-quote-binding",
     rail: "cash",
     status: "OPEN",
     sendEur: 100,
@@ -96,8 +96,8 @@ try {
   };
   store.addQuote(quote);
   const transfer: Transfer = {
-    id: "t-fp5",
-    userId: "u-fp5",
+    id: "t-quote-binding",
+    userId: "u-quote-binding",
     quoteId: quote.id,
     rail: "cash",
     recipientName: "Recipient",
@@ -142,7 +142,7 @@ try {
     { type: "function", name: "execute", stateMutability: "payable", inputs: [{ name: "id", type: "bytes32" }], outputs: [{ type: "bytes" }] },
     { type: "function", name: "operationId", stateMutability: "pure", inputs: [{ name: "target", type: "address" }, { name: "value", type: "uint256" }, { name: "data", type: "bytes" }, { name: "salt", type: "bytes32" }], outputs: [{ type: "bytes32" }] },
   ] as const;
-  const salt = keccak256(toHex("fp5-rate-move"));
+  const salt = keccak256(toHex("quote-binding-rate-move"));
   const opId = await pub.readContract({ address: timelock, abi: tlAbi, functionName: "operationId", args: [swapper, 0n, setRate, salt] });
   const send = async (w: typeof dep, fn: "queue" | "confirm" | "execute", args: any[]) => {
     const { request } = await pub.simulateContract({ account: w.account, address: timelock, abi: tlAbi, functionName: fn as any, args: args as any });
@@ -157,7 +157,7 @@ try {
     /FX rate moved since quote/i,
   );
 
-  console.log("\nFP5 BINDING TEST PASSED — moved rates are refused before settlement");
+  console.log("\nQUOTE BINDING TEST PASSED — moved rates are refused before settlement");
 } finally {
   for (const c of children) c.kill();
 }

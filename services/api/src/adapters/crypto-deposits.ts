@@ -149,7 +149,7 @@ async function valueAtReceipt(
  *
  * The FxSwapper's rate is one WE set, so on a local chain this check is the
  * only thing standing between a mispriced swapper and e-money credited at a
- * fictional rate. Same discipline as FP5's quote binding, applied at the point
+ * fictional rate. Same discipline as the quote binding, applied at the point
  * where the number becomes someone's balance.
  *
  * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), matching what

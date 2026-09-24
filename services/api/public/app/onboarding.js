@@ -481,7 +481,7 @@ async function registerPasskey(u) {
       pubKeyCredParams: [{ type: "public-key", alg: -7 }],
       authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
       timeout: 60000,
-      // FP4: ask for the PRF extension so this passkey can encrypt the
+      // Ask for the PRF extension so this passkey can encrypt the
       // device spending key. Authenticators without it still register fine.
       extensions: { prf: {} },
     },
@@ -535,7 +535,7 @@ async function finishPasskeySafeSetup(timeoutMs = 45000) {
   }
 }
 
-/* FP4: bind this browser's device key as the account's payment authorizer.
+/* Bind this browser's device key as the account's payment authorizer.
    The server records the first binding and refuses re-binding unless the
    existing device authorizes it, so this can establish but never steal. */
 /* The passkey credential this browser wraps the device key with. */
@@ -607,7 +607,7 @@ async function moneriumRedeemAssertion(authorization) {
   };
 }
 
-/* FP4: mint the device key and bind it as the account's payment authorizer.
+/* Mint the device key and bind it as the account's payment authorizer.
    Runs after passkey registration so the key can be wrapped with the
    authenticator's PRF secret; the server takes the first binding and refuses
    re-binding by anyone but the device, so this establishes, never steals. */

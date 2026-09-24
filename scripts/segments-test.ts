@@ -186,8 +186,8 @@ check("a Mexican resident is ONCHAIN_NO_CARD", () => {
 });
 
 check("a NIGERIAN resident is UNSUPPORTED, not sanctioned and not promised an account", () => {
-  // The brief named NG as an ONCHAIN_NO_CARD example, but Monerium prohibits
-  // NG outright — so that path would promise an account no partner will open.
+  // NG is not ONCHAIN_NO_CARD: Monerium prohibits NG outright, so that path
+  // would promise an account no partner will open.
   const d = resolveSegment(person("NG", ["NG"]));
   assert.equal(d.segment, "BLOCKED_UNSUPPORTED");
   assert.equal(d.reasonCode, "no_partner_for_residence");

@@ -1,5 +1,5 @@
 /**
- * FP4 test device.
+ * Test device.
  *
  * A payment only moves if the account's registered device key signs its exact
  * terms. In the app that key is generated in the browser and gated behind the

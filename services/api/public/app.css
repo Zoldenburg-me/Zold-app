@@ -974,8 +974,8 @@
   .m-rail.off:hover { border-color: var(--m-line); }
   .m-rail .m-tag { align-self: flex-start; }
 
-  /* Recent recipients. The design uses 56px circles; squares at 10px, per the
-     README's "avatars-as-squares" and "50% only for status dots". */
+  /* Recent recipients. The mockups use 56px circles; squares at 10px, per the
+     design spec's "avatars-as-squares" and "50% only for status dots". */
   .m-avrow { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 6px; }
   .m-av {
     flex: none; width: 60px; display: flex; flex-direction: column; align-items: center; gap: 7px;
@@ -1076,10 +1076,10 @@
   .m-ref .code { font-size: 32px; font-weight: 400; letter-spacing: 6px; margin: 10px 0 4px; font-variant-numeric: tabular-nums; }
 
   /* ---------- activity + profile ----------
-     On the README's tokens. The Noir file draws these screens with 40-56px
+     On the design spec's tokens. The Noir mockups draw these screens with 40-56px
      round avatars and 16/14px M3 type, contradicting its OWN written spec —
      "nothing above 12px, 50% only for status dots" — and the home and send
-     screens built from that spec. The README wins, so the app has one scale
+     screens built from that spec. The spec wins, so the app has one scale
      rather than two. Activity rows are literally the dashboard's .m-row: same
      component, so the two lists cannot drift apart. */
   #dashboard.m-on[data-msub="activity"] #m-activity-screen,
@@ -1202,7 +1202,7 @@
   .m-lede { font-size: 16px; color: var(--m-dim); margin-top: 10px; letter-spacing: .5px; line-height: 1.5; }
 
   /* Option row — the Add funds list, the destination list, the Plus row.
-     On the README's scale, like every other list in the app; 16/14px M3 type
+     On the design spec's scale, like every other list in the app; 16/14px M3 type
      sits a size above the rows it appears beside. */
   .m-optrow {
     width: 100%; text-align: left; display: flex; gap: 12px; align-items: center;

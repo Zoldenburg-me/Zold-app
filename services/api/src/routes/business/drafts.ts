@@ -238,7 +238,7 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
   });
 
   /**
-   * Execute a reviewed draft: one transfer per line, each needing its own FP4
+   * Execute a reviewed draft: one transfer per line, each needing its own
    * device signature.
    *
    * NOTHING MOVES HERE. This endpoint creates transfers and hands back the

@@ -79,11 +79,10 @@ import type { ShopifyConnection } from "../shopify/types.js";
  * page or as the target of a redirect from our own origin. An HMAC proves the
  * body came from the app's shared secret; it does not make the strings inside
  * it safe, and `javascript:` in an href is script execution on the page a
- * stranger opened to pay someone. index.html has had this guard (safeUrl) for
- * the app's anchor links since the hardening pass; the payer-facing path never
- * got it.
+ * stranger opened to pay someone. index.html already applies this guard
+ * (safeUrl) to the app's anchor links; the payer-facing path did not.
  *
- * https only (main's review pass chose the same bar), and parseable. Anything
+ * https only (the same bar as safeUrl), and parseable. Anything
  * else is dropped rather than repaired:
  * the fallbacks at the two call sites (the pay page itself) are correct
  * destinations, so losing a malformed one costs the buyer nothing.

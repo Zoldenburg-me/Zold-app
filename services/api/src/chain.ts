@@ -196,7 +196,7 @@ export function destinationCommitment(
 }
 
 /**
- * FP4: the EIP-712 payload the user's device signs to authorize one payment.
+ * The EIP-712 payload the user's device signs to authorize one payment.
  * Safe-native transfer authorization. The API verifies it before relaying Safe
  * operations.
  */
@@ -243,7 +243,7 @@ export function paymentAuthorizationTypedData(args: {
  * The quote's EUR leg is read from here rather than from a constant so that
  * what we promise and what we can deliver cannot drift apart. `rate` is USDC
  * (6dp) per 1e18 EURe, so 1_080_000 means 1 EURe -> 1.08 USDC. `raw` is what
- * FP5 locks into the quote and re-checks at execution.
+ * the quote binding locks into the quote and re-checks at execution.
  */
 export async function swapperRate(): Promise<{ rate: number; raw: bigint }> {
   const raw = (await publicClient.readContract({
