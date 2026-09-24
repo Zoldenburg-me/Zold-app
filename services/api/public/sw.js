@@ -19,7 +19,7 @@
  * needs no bump. Bump SHELL_CACHE when the SHELL list itself changes or a
  * vendored file does; activate deletes every other cache this origin owns.
  */
-const SHELL_CACHE = "zold-shell-v3";
+const SHELL_CACHE = "zold-shell-v4";
 
 /**
  * The device key and the vendored crypto matter most here. If /device.js or
@@ -52,6 +52,11 @@ const SHELL = [
   "/vendor/hashes/_assert.js",
   "/vendor/hashes/_u64.js",
   "/vendor/hashes/cryptoBrowser.js",
+  // Self-hosted fonts. The icon font is here because the app's buttons are
+  // ligature glyphs: without it offline, every icon renders as its name.
+  "/vendor/fonts/text.css",
+  "/vendor/fonts/material-symbols.css",
+  "/vendor/fonts/materialsymbolsrounded-316c5f1a5b.woff2",
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
@@ -103,7 +108,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return; // never touch writes
 
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return; // fonts/icons from a CDN: leave alone
+  if (url.origin !== self.location.origin) return; // not ours: leave alone
 
   // Account state, quotes, transfers, rates: network or nothing.
   if (url.pathname.startsWith("/api/")) {
@@ -182,7 +187,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Everything else (vendored crypto, icons, manifest): cache first, and keep
+  // Everything else (vendored crypto and fonts, icons, manifest): cache first, and keep
   // whatever the network returns.
   event.respondWith(
     (async () => {
