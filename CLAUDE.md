@@ -79,7 +79,12 @@ The modularity pass (Sep 2026) split the five big files; every move was a MOVE
   `liquidity/best.ts` takes its venue resolver as an argument (no cycle).
 - `public/app/*.js` are **classic scripts sharing one scope**: every file but
   the last holds declarations and wiring only, and NOTHING CALLS FORWARD into a
-  later file. `public/business/*.js` are **ES modules**; `core.js` owns the
+  later file. The last is `app/main.js`, and anything that awaits and then
+  renders goes there — the event loop runs while the parser waits on a later
+  script, so an early fetch can resolve before the code it renders with exists.
+  `sw.js` serves page `.js`/`.css` network-first (only `/vendor/*`, icons and
+  the manifest are cache-first), so a deploy needs no `SHELL_CACHE` bump unless
+  the SHELL list or a vendored file changes. `public/business/*.js` are **ES modules**; `core.js` owns the
   shared state and exports setters.
 - **server.ts still owns authentication**: every router is a factory taking
   `requireUserSession`.
@@ -182,8 +187,11 @@ that do not own the local deployment).
 ## Environment
 
 - Ports 3000 (API/UI), 8545 (chain), 8546 (contract tests).
-- No `gh` CLI, no brew. GitHub pushes use a fine-grained PAT the user mints per
-  session; push auth username must be `tonyzil`, not `x-access-token`.
+- No `gh` CLI, no brew. `origin` is SSH (`git@github.com:…`) and the user's
+  key works for push and branch deletion without a token (verified 2026-09-24).
+  The GitHub REST API (opening or closing PRs via curl) needs a fine-grained
+  PAT the user mints per session; with a PAT in an HTTPS URL, the auth username
+  must be `tonyzil`, not `x-access-token`. Tell the user to revoke it after.
 - Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.17.0-darwin-arm64/bin:$PATH"`.
   That is an **arm64** build and was
   the wrong arch on the Intel machine one session ran on ("Bad CPU type"), which
@@ -300,6 +308,10 @@ Claude sessions, OpenClaw, `pinky/*` and `baer/*` all commit here.
   commit you last pushed; after merging, grep the tree — "merged: true" is not
   proof. PR #3 silently dropped a pushed commit this way.
 - Start every session with `git fetch`; expect main to have moved mid-session.
+- **2026-09-24: every branch except main was deleted**, locally and on GitHub,
+  at the user's request — including unmerged `baer/*`, `pinky/*`, `docs/*` and
+  five `claude/*` branches. Work that exists only in another agent's clone must
+  be re-pushed from there; do not assume an old branch name still resolves.
 - A grep count of zero is not proof either: confirm the file is READABLE first.
   (zsh treats `:s/` in `$REF:services/...` as a substitution modifier, which
   mangled the ref and made a landed change read as absent.)
