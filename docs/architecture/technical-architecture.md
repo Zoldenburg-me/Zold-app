@@ -1,6 +1,7 @@
 # Zold — technical architecture
 
-*Written 2026-09-24 from a line-by-line read of `main` at `8dd8009`. Companion
+*Written 2026-09-24 from a line-by-line read of `main` at `8dd8009`, updated
+for PR #193 (co-signer retired, `3ba5c5e`). Companion
 to [`product-architecture.md`](product-architecture.md), which covers what the
 product is. This document covers how it is built. File references are
 `path:line` at that commit, and paths under `services/api/src/` are written
@@ -175,7 +176,7 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
 
 ---
 
-## 5. Custody: the Safe, the co-signer and the device key
+## 5. Custody: the Safe and the device key
 
 ### 5.1 Safe smart account (`wallet/candide.ts`, `wallet/passkey-safe-plan.ts`)
 
@@ -184,19 +185,27 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   its address is deterministic and counterfactual.
 - **Owner 1** is the passkey, as a WebAuthn owner `{x, y}` taken from the
   P-256 JWK.
-- **Owner 2** is optional: the server co-signer EOA
-  (`CANDIDE_COSIGNER_ADDRESS` / `_KEY`) with threshold 2. **Hosted
-  production requires it** (`config.ts:437-439`), so production Safes are
-  2-of-2. The co-signer counter-signs every UserOp and Safe message and cannot
-  act alone. No allowance module is installed. The address is kept only to
+- **New Safes are 1-of-1**: the passkey is the only owner (PR #193). No
+  allowance module is installed; the allowance-module address is kept only to
   read and revoke legacy allowances.
+- **Legacy 2-of-2 Safes** (deployed before PR #193) list the retired Zold
+  co-signer EOA as a second owner, with threshold 2. They keep working while
+  `CANDIDE_COSIGNER_ADDRESS` / `_KEY` are set, and the server counter-signs
+  their UserOps and Safe messages. `POST /users/:id/passkey-safe/cosigner-removal[/:requestId]`
+  prepares `removeOwner(prev, cosigner, 1)` as a passkey-signed operation,
+  which the co-signer counter-signs one last time. The plan changes only after
+  `getOwners`/`getThreshold` confirm it on chain. It is refused while a
+  recovery is open. At startup `server.ts` names every account still on
+  2-of-2, and errors if the key they need is missing. No removal has executed
+  on a real chain.
 - An optional managed-recovery guardian goes through a SocialRecoveryModule
   (After3Days by default).
 - The Safe is deployed as the `initCode` of its first UserOperation. The
   bundler and paymaster default to `https://api.candide.dev/public/v3/<chainId>`
   with an ERC-7677 paymaster, so the user needs no gas. The passkey signs
   `getUserOperationEip712Hash(op, chainId)`. `submitPasskeySafeOperation`
-  assembles the signers (passkey assertion plus co-signer), sends the op, and
+  assembles the signers (the passkey assertion, plus the co-signer on a legacy
+  2-of-2 Safe), sends the op, and
   **blocks the HTTP request until the op is included**.
 - EIP-1271 messages (`signMessageAsPasskeySafe`) are used for the Monerium
   link declaration, the Monerium redeem order, the Candide SIWE registration,
@@ -272,7 +281,7 @@ sequenceDiagram
   B->>A: POST /transfers/:id/authorize
   Note over A: verify execution assertion BEFORE claim<br/>verify redeem assertion → EIP-1271 sig<br/>claimAuthorization (sync, one-shot)
   A->>A: assertDeviceAuthorization (EIP-712)
-  A->>C: submit user-signed UserOp (+ co-signer)
+  A->>C: submit user-signed UserOp
   C-->>A: included → DEBITED
   A->>M: placeOrder(kind: redeem, signature) → PAYOUT_SUBMITTED
 ```
@@ -280,8 +289,8 @@ sequenceDiagram
 Build order (`transfers/build.ts:85-411`) runs in this sequence:
 
 1. KYC approved, then Safe balance ≥ send, then `safeDebitBlocker` (an active
-   passkey Safe equal to `user.address`, with the co-signer key present if the
-   Safe is 2-of-2), then the early daily-cap check.
+   passkey Safe equal to `user.address`, and the co-signer key present only
+   for a legacy 2-of-2 Safe), then the early daily-cap check.
 2. Device key bound, then `holdDailyCap` (synchronous, taken *before* the
    quote is consumed), then `consumeQuote`.
 3. The debit is prepared. **SEPA debits only the fee (€0), so the principal
@@ -407,7 +416,7 @@ There is no CCTP code. Only the on-ledger Stellar payment half has ever run
 | OAuth | Authorization Code + PKCE S256. `state` is 24 random bytes. It is **bound to the browser** by an HttpOnly `zold_monerium_connect` nonce cookie (`Path=/api/monerium/oauth`, 10 min, SameSite=Lax), and the server stores the nonce's SHA-256. Refresh uses the same client id, de-duplicated per user. |
 | API keys | Validated for shape, then **verified against Monerium before storing**. On success Zold reads context, profiles, IBANs and addresses. An address-matched IBAN approves immediately. |
 | Secrets at rest | AES-256-GCM (`crypto-at-rest.ts`) keyed on `MONERIUM_TOKEN_ENCRYPTION_KEY` (also used for Shopify tokens under a domain-separated key). Access and refresh tokens and the API secret are encrypted. With no key, the route answers 503 and never stores plaintext. |
-| IBAN activation | The passkey signs the SafeMessage of `LINK_MESSAGE`. The server assembles the EIP-1271 signature (passkey plus co-signer) and calls `POST /addresses` then `POST /ibans`. It **only accepts the IBAN whose address is the user's Safe**. It never unlinks, because a wrongly-bound address is "burned" at Monerium (verified live). |
+| IBAN activation | The passkey signs the SafeMessage of `LINK_MESSAGE`. The server assembles the EIP-1271 signature (the passkey, plus the co-signer on a legacy 2-of-2 Safe) and calls `POST /addresses` then `POST /ibans`. It **only accepts the IBAN whose address is the user's Safe**. It never unlinks, because a wrongly-bound address is "burned" at Monerium (verified live). |
 | Deposits | `pollDepositsOnce` every 15 s over the app's profiles and each own-credential user's profile. `mirrorOrder` records processed `issue` orders. The EURe itself is minted straight into the Safe. Each order is also offered to pay-link attribution (code in memo) and invoice attribution (invoice number in memo). |
 | Webhook | `POST /api/webhooks/monerium`. It verifies a Standard Webhooks HMAC (`webhook-id.timestamp.body`, `whsec_` key, 300 s tolerance) and de-duplicates by `webhook-id`. It **trusts only the order id** and re-reads that order from Monerium on the app client. Production requires the secret. |
 | Reconciler | Every 15 min it compares Monerium's processed issue orders with the mirrored ids and reports `UNMIRRORED` / `PHANTOM`. **It reports, never repairs.** It does not look at transfers, Bridge, redeems or balances. |
@@ -739,7 +748,7 @@ only self-hosted fonts.
   - Bridge: live without a key.
   - Candide: a CANDIDE chain that differs from the app chain, a recovery
     signer without https or a token, the 3-minute recovery module, or no
-    co-signer or recovery guardian when hosted.
+    no recovery guardian when hosted. (The co-signer is no longer required.)
   - Stellar and MoneyGram: the testnet passphrase, or missing MoneyGram
     secrets.
   - WebAuthn: no explicit https `WEBAUTHN_ORIGINS`.
@@ -830,6 +839,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one. |
 | `POST /users/:id/passkey` (U) | Register a passkey. Needs a step-up if one already exists. |
 | `POST /users/:id/passkey-safe/deployment[/:requestId]` (U) | Prepare, then submit, the Safe deploy. |
+| `POST /users/:id/passkey-safe/cosigner-removal[/:requestId]` (U) | Legacy 2-of-2 only: prepare, then submit, removal of the retired co-signer. |
 | `POST /passkey/login` (A) | Passkey sign-in. |
 | `GET /users/:id` (U) | Account read. |
 | `GET /users/:id/kyc` (U) | Account read. |
