@@ -1,6 +1,6 @@
 import express from "express";
 import { API_HOST, API_PORT, BRIDGE, CRYPTO_IN, CUSTODY, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY } from "./config.js";
-import { initStore } from "./store.js";
+import { initStore, store } from "./store.js";
 import {
   moneriumApiKeysAvailable,
   moneriumEnvironment,
@@ -320,6 +320,18 @@ app.listen(API_PORT, API_HOST, () => {
         "exist — every Safe debit is a UserOperation the user's passkey signs at send time. " +
         "Standing allowances on older Safes are revoked automatically on the next send.",
     );
+  }
+  // The co-signer is retired: new Safes are passkey-only. A Safe deployed as
+  // 2-of-2 before that still needs the co-signer key for every operation —
+  // including the one that removes it — so name those accounts and say loudly
+  // if the key is gone, rather than letting their sends fail one by one.
+  const legacy = store.users.filter((u) => u.passkeySafe?.cosignerAddress);
+  if (legacy.length) {
+    const msg =
+      `CO-SIGNER: ${legacy.length} account(s) still have a 2-of-2 Safe with the legacy co-signer as an owner ` +
+      `(${legacy.map((u) => u.id).join(", ")}). Each user can remove it from the app.`;
+    if (CANDIDE.cosignerKey) console.warn(msg);
+    else console.error(`${msg} CANDIDE_COSIGNER_KEY is NOT set, so none of them can send or remove it until it is.`);
   }
 });
 

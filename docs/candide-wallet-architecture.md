@@ -66,8 +66,8 @@ deployment. At transfer creation the server prepares the UserOperation that
 performs the debit itself — an ERC-20 transfer of exactly that transfer's
 amount (the fee alone on the Safe-funded SEPA rail) to the orchestrator's
 working address. The user's passkey signs its hash at send time alongside the
-device signature; the co-signer counter-signs where it is an owner; the
-bundler executes. The chain enforces token, amount and destination, so the
+device signature; the bundler executes. (A legacy 2-of-2 Safe also needs
+the co-signer's counter-signature until its user removes it — see below.) The chain enforces token, amount and destination, so the
 answer to "can we dispose of client assets without the client" is NO,
 architecturally: the API holds no user owner keys and no delegated spend
 authority of any size, at any time. Legacy standing allowances left on old
@@ -128,15 +128,21 @@ authorizer binding without a verified passkey is refused.
 
 1. Keep the existing device authorizer path for local demos.
 2. Add client-side Safe UserOperation creation for passkey-owned Safes. The
-   server already records the deterministic 2-of-2 passkey/co-signer Safe plan
-   at passkey registration when `CANDIDE_COSIGNER_ADDRESS` is configured, and
-   can now submit a passkey-signed/co-signed deployment UserOperation when
-   `CANDIDE_COSIGNER_KEY` is available.
-3. Add recovery setup before enabling real deposits. New passkey/co-signer
-   Safe deployments now enable Candide's `SocialRecoveryModule` and add the
+   server records the deterministic passkey-only (1-of-1) Safe plan at passkey
+   registration.
+   CO-SIGNER RETIRED (Sep 2026): Safes used to be planned 2-of-2 with a Zold
+   co-signer. It could never start a debit, but it meant the user could not
+   move their own funds without Zold, and a user could not add a key of their
+   own without Zold co-signing the owner change. New plans are passkey-only.
+   Existing 2-of-2 Safes keep working while `CANDIDE_COSIGNER_KEY` is set and
+   can drop the co-signer with one passkey-signed `removeOwner` operation
+   (`POST /api/users/:id/passkey-safe/cosigner-removal`); a Candide recovery
+   installs only the new passkey.
+3. Add recovery setup before enabling real deposits. New passkey Safe
+   deployments now enable Candide's `SocialRecoveryModule` and add the
    configured recovery guardian during the first UserOperation when
-   `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` is configured; absent that, it defaults
-   to the co-signer. The managed recovery API tracks requests, KYC/operator
+   `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` is configured (required in hosted
+   production). The managed recovery API tracks requests, KYC/operator
    approval, the delay window, and the fail-closed handoff to a separate
    guardian signer. That signer must submit the on-chain
    `SocialRecoveryModule` recovery transaction; it must not be an API hot key.

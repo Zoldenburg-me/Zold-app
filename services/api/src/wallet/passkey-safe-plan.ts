@@ -12,7 +12,6 @@ import { bufToB64url } from "../webauthn.js";
 import {
   CANDIDE,
   smartAccountForPasskey,
-  smartAccountForPasskeyCosigner,
   webauthnOwnerFromJwk,
   webauthnOwnerToStore,
 } from "./candide.js";
@@ -22,34 +21,26 @@ export function passkeySafePlan(
   publicKey: NonNullable<NonNullable<User["passkey"]>["publicKey"]>,
 ): User["passkeySafe"] | undefined {
   if (!publicKey || publicKey.alg !== "ES256") return undefined;
-  const cosignerAddress =
-    CANDIDE.cosignerEnabled && /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.cosignerAddress)
-      ? (CANDIDE.cosignerAddress as `0x${string}`)
-      : undefined;
   const owner = webauthnOwnerFromJwk(publicKey.jwk);
   if (!owner) return undefined;
-  const account = cosignerAddress
-    ? smartAccountForPasskeyCosigner(owner, cosignerAddress)
-    : smartAccountForPasskey(owner);
+  // The passkey is the ONLY owner. A Zold co-signer as second owner (2-of-2)
+  // was retired: it could not start a debit, but it meant the user could not
+  // move their own funds without Zold's counter-signature. Older 2-of-2 plans
+  // keep their stored owner set until the user removes the co-signer.
+  const account = smartAccountForPasskey(owner);
   const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
     ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)
     : undefined;
   return {
     address: account.accountAddress as `0x${string}`,
     status: "planned",
-    threshold: cosignerAddress ? 2 : 1,
-    ...(cosignerAddress ? { cosignerAddress } : {}),
+    threshold: 1,
     // No allowance module, no delegate, no spend amounts: nothing moves from
     // the Safe except UserOperations the user's own passkey signs. The policy
-    // record only says whether a co-signing OWNER exists (and keeps the shape
-    // stored accounts already have); the module address is there so standing
-    // allowances on older Safes can be found and revoked.
+    // record keeps the shape stored accounts already have; the module address
+    // is there so standing allowances on older Safes can be found and revoked.
     cosignerPolicy: {
-      // Keyed on the GATED cosignerAddress (CANDIDE.cosignerEnabled applied),
-      // not the raw env var: with the co-signer disabled this plan is a
-      // 1-of-1 Safe, and recording enabled:true would make the UI describe a
-      // co-signer that is not in the owner set.
-      enabled: Boolean(cosignerAddress),
+      enabled: false,
       allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
       allowancePeriodMinutes: "0",
       allowances: [],

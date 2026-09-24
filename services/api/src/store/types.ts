@@ -33,8 +33,9 @@ export interface User {
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
     /**
-   * Passkey Safe state. Production can add a co-signer as a second owner;
-   * local/test plans stay passkey-only unless the harness opts in.
+   * Passkey Safe state. The passkey is the only owner (threshold 1). Safes
+   * deployed before the co-signer was retired may still be 2-of-2 with
+   * `cosignerAddress` set, until the user removes it.
    */
   passkeySafe?: {
     address: `0x${string}`;
@@ -84,6 +85,10 @@ export interface User {
      *  that address is no longer the counterfactual one of its current owner,
      *  so the account must be built from the address, never re-derived. */
     recoveredAt?: string;
+    /** Set once the user removed the legacy co-signer owner. Like
+     *  recoveredAt, the address no longer derives from the owner set. */
+    cosignerRemovedAt?: string;
+    cosignerRemovalOpHash?: string;
   };
   /** WebAuthn credential bound to this account. Public key + counter are
    *  stored from a verified registration; login verifies assertions. */
@@ -671,8 +676,8 @@ export interface RecoveryRequest {
       attestation?: string;
       createdAt: string;
     };
-    /** The owner set the recovery installs: the new passkey's signer, plus
-     *  the co-signer where the Safe is 2-of-2. */
+    /** The owner set the recovery installs: the new passkey's signer only.
+     *  Recoveries started before the co-signer was retired may include it. */
     newOwners?: `0x${string}`[];
     newThreshold?: number;
     /** Candide's signature-request id and the OTP challenges it issued. */
