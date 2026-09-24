@@ -288,7 +288,7 @@ front of someone whose salary is in the account.
 
 ## Email / SMS recovery — Candide's guardian (Sep 2026)
 
-`npm run recovery:candide:test` (34 checks, stub service, simulated chain).
+`npm run recovery:candide:test` (39 checks, stub service, simulated chain).
 Access to Candide's Safe Recovery Service is arranged; `RECOVERY_SERVICE_URL`
 is the switch, and without it the feature reports `unavailable` and every route
 refuses. Code: `recovery/candide-guardian.ts` (SDK wrapper, fail-closed),
