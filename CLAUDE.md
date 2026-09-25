@@ -125,9 +125,9 @@ Each of these was a bug once. The reasoning is in `docs/notes/`.
 **Identity and authority**
 - **The passkey is the Safe's only owner.** The 2-of-2 Zold co-signer was
   retired (Sep 2026): it meant a user could not move their own funds, or add
-  a key, without us. Its key is deleted (Sep 2026) and legacy 2-of-2 Safes
-  that still list it are ABANDONED: `accountForPlan` refuses them with
-  `AbandonedLegacySafeError`, the row stays. Never plan a Safe with it.
+  a key, without us. Its key, the removal route and the legacy 2-of-2 Safe
+  model are all deleted (Sep 2026): no deployment and no database held such a
+  Safe. The plan type is `threshold: 1` only. Never reintroduce a co-owner.
 - **Gas is a choice, not an assumption.** `SAFE_GAS_PAYMENT` = `sponsored`
   (default) | `native` (Safe pays ETH) | `token` (Safe pays USDC via Candide's
   token paymaster). VERIFIED with `npm run preflight -- --chain 8453`: the
