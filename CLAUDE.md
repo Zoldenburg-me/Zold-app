@@ -125,9 +125,15 @@ Each of these was a bug once. The reasoning is in `docs/notes/`.
 **Identity and authority**
 - **The passkey is the Safe's only owner.** The 2-of-2 Zold co-signer was
   retired (Sep 2026): it meant a user could not move their own funds, or add
-  a key, without us. Legacy 2-of-2 Safes need `CANDIDE_COSIGNER_KEY` until
-  each user removes it (`passkey-safe/cosigner-removal`); never plan a new
-  Safe with it.
+  a key, without us. Its key is deleted (Sep 2026) and legacy 2-of-2 Safes
+  that still list it are ABANDONED: `accountForPlan` refuses them with
+  `AbandonedLegacySafeError`, the row stays. Never plan a Safe with it.
+- **Gas is a choice, not an assumption.** `SAFE_GAS_PAYMENT` = `sponsored`
+  (default) | `native` (Safe pays ETH) | `token` (Safe pays USDC via Candide's
+  token paymaster). VERIFIED with `npm run preflight -- --chain 8453`: the
+  keyless public paymaster REFUSES to sponsor on Base mainnet ("no publicly
+  available gas policy"); `native` and `token` both work there. It sponsors
+  on Base Sepolia. Run the preflight before any mainnet deploy.
 - **Three checks, not one**: session (who), member+role (may they here), plan
   capability (did the org buy it). Collapsing any two opens a hole.
 - **Four eyes**: the reviewer may not be the drafter, whatever their role — and
@@ -185,6 +191,11 @@ hardhat has neither, so the API refuses with 409 and names the mismatch rather
 than failing as a bare "Failed to fetch". That is also the wall a local send
 hits: `npm run api` against Base Sepolia with a funded, deployed Safe is the
 only way past it.
+
+`npm run preflight` asks every Candide endpoint the configured chain and gas
+mode depend on whether it will do its job — bundler, paymaster (with a
+throwaway deployment op, never signed), recovery module and service,
+forwarding — and exits 1 on any FAIL. `--chain 8453 --gas token` overrides.
 
 `npm run dev` wiping its own db is why test accounts vanish between runs — and
 why the live accounts in `data/db.json` must never be exercised with it.

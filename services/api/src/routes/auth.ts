@@ -14,7 +14,6 @@
 import express from "express";
 import { wrap } from "./util.js";
 import { randomUUID } from "node:crypto";
-import { privateKeyToAccount } from "viem/accounts";
 import { CHAIN_ID, HARNESS, SECURITY } from "../config.js";
 import { accountBalances } from "../chain.js";
 import { store, type User } from "../store.js";
@@ -32,15 +31,8 @@ import {
 } from "../wallet/passkey-safe-plan.js";
 import {
   CANDIDE,
-  isDeployed,
-  passkeyAccountAddress,
   preparePasskeySafeDeployment,
-  prepareSafeSetupOperation,
-  removeCosignerTransactions,
-  safeOwners,
-  safeThreshold,
   submitPasskeySafeOperation,
-  webauthnOwnerFromStore,
 } from "../wallet/candide.js";
 import { b64urlToBuf, issueChallenge, verifyAssertion, verifyRegistration } from "../webauthn.js";
 import { publicUser, withSession } from "../users/public-user.js";
@@ -93,14 +85,6 @@ export async function verifyPasskeyStepUp(user: User, body: any, res: express.Re
     res.status(401).json({ error: String(err?.message ?? err) });
     return false;
   }
-}
-
-/** Prepared co-signer removals awaiting the passkey's signature. In memory on
- *  purpose, like every other ceremony: a restart just means asking again. */
-const pendingCosignerRemovals = new Map<string, { userId: string; userOperation: any; expiresAt: number }>();
-function prunePendingCosignerRemovals() {
-  const now = Date.now();
-  for (const [id, p] of pendingCosignerRemovals) if (p.expiresAt < now) pendingCosignerRemovals.delete(id);
 }
 
 export function createAuthRouter(deps: AuthDeps) {
@@ -222,9 +206,6 @@ export function createAuthRouter(deps: AuthDeps) {
       if (user.passkeySafe.status === "active") {
         return res.json({ safeAddress: user.passkeySafe.address, status: "active" });
       }
-      if (user.passkeySafe.cosignerAddress && !CANDIDE.cosignerKey) {
-        return res.status(503).json({ error: "CANDIDE_COSIGNER_KEY is required before passkey Safe deployment" });
-      }
       /**
        * Deploying a passkey Safe goes through an ERC-4337 bundler and paymaster.
        * A local hardhat node has neither, so under `npm run dev` this reaches
@@ -330,123 +311,6 @@ export function createAuthRouter(deps: AuthDeps) {
         });
       }
       res.status(201).json({ ...publicUser(updated), deployOpHash: opHash });
-    }),
-  );
-
-  /**
-   * Retire the legacy co-signer from a 2-of-2 Safe, leaving the passkey as the
-   * only owner at threshold 1. After this, nothing Zold holds can take part in
-   * — or block — a movement of the user's funds.
-   *
-   * The user's passkey signs the removal. Because the Safe is still 2-of-2
-   * when the operation executes, the co-signer key counter-signs its own
-   * removal; that is the last signature it gives for this Safe. The owner set
-   * is read from the chain both to build the call and to confirm the result.
-   */
-  router.post(
-    "/users/:id/passkey-safe/cosigner-removal",
-    wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
-      if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      const plan = user.passkeySafe;
-      if (!user.passkey?.publicKey || !plan || plan.status !== "active") {
-        return res.status(409).json({ error: "an active passkey Safe is required" });
-      }
-      const cosigner = plan.cosignerAddress;
-      if (!cosigner) return res.status(409).json({ error: "this Safe has no co-signer — the passkey is already its only owner" });
-      if (!CANDIDE.cosignerKey) {
-        return res.status(503).json({
-          error: "CANDIDE_COSIGNER_KEY is required: the Safe is still 2-of-2, so the co-signer has to counter-sign its own removal",
-        });
-      }
-      if (privateKeyToAccount(CANDIDE.cosignerKey).address.toLowerCase() !== cosigner.toLowerCase()) {
-        return res.status(503).json({
-          error: "the configured CANDIDE_COSIGNER_KEY is not the co-signer on this Safe, so its counter-signature would be rejected",
-        });
-      }
-      if (store.recoveryRequests.some((r) => r.userId === user.id && !["FINALIZED", "CANCELED", "EXPIRED"].includes(r.status))) {
-        return res.status(409).json({ error: "a recovery is in progress on this account — finish or cancel it first" });
-      }
-      if (!(await isDeployed(plan.address))) {
-        return res.status(409).json({ error: "the Safe must be deployed before its owners can change" });
-      }
-      const owners = HARNESS.enabled
-        ? [passkeyAccountAddress(webauthnOwnerFromStore(plan.passkeyPublicKey)), cosigner]
-        : await safeOwners(plan.address);
-      let txs;
-      try {
-        txs = removeCosignerTransactions(plan.address, owners, cosigner);
-      } catch (err: any) {
-        return res.status(409).json({ error: String(err?.message ?? err) });
-      }
-      const prepared = await prepareSafeSetupOperation(plan, txs);
-      prunePendingCosignerRemovals();
-      const requestId = randomUUID();
-      pendingCosignerRemovals.set(requestId, {
-        userId: user.id,
-        userOperation: prepared.userOperation,
-        expiresAt: Date.now() + 5 * 60_000,
-      });
-      res.status(201).json({
-        requestId,
-        credentialId: user.passkey.credentialId,
-        rpId: user.passkey.rpId ?? SECURITY.rpId,
-        challenge: passkeySafeChallenge(prepared.challenge),
-        cosignerAddress: cosigner,
-        submitTo: `/api/users/${user.id}/passkey-safe/cosigner-removal/${requestId}`,
-      });
-    }),
-  );
-
-  router.post(
-    "/users/:id/passkey-safe/cosigner-removal/:requestId",
-    wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
-      if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      prunePendingCosignerRemovals();
-      const pending = pendingCosignerRemovals.get(req.params.requestId);
-      if (!pending || pending.userId !== user.id) {
-        return res.status(404).json({ error: "co-signer removal request not found or expired" });
-      }
-      const plan = user.passkeySafe;
-      const cosigner = plan?.cosignerAddress;
-      if (!plan || !cosigner) return res.status(409).json({ error: "this Safe has no co-signer" });
-      const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
-      if (!authenticatorData || !clientDataJSON || !signature) {
-        return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
-      }
-      // Claimed BEFORE the await: two parallel submits must not both send it.
-      pendingCosignerRemovals.delete(req.params.requestId);
-      const opHash = await submitPasskeySafeOperation(plan, pending.userOperation, {
-        authenticatorData: b64urlToBuf(authenticatorData),
-        clientDataJSON: b64urlToBuf(clientDataJSON),
-        signature: b64urlToBuf(signature),
-      });
-      // Believe the chain, not the bundler's receipt: the stored plan changes
-      // only once the owner set really lacks the co-signer.
-      if (!HARNESS.enabled) {
-        const [owners, threshold] = await Promise.all([safeOwners(plan.address), safeThreshold(plan.address)]);
-        if (owners.some((o) => o.toLowerCase() === cosigner.toLowerCase()) || threshold !== 1) {
-          return res.status(502).json({
-            error: "the operation was submitted but the Safe still lists the co-signer — check the chain before retrying",
-            opHash,
-          });
-        }
-      }
-      const updated = store.updateUser(user.id, {
-        passkeySafe: {
-          ...plan,
-          cosignerAddress: undefined,
-          threshold: 1,
-          cosignerPolicy: plan.cosignerPolicy ? { ...plan.cosignerPolicy, enabled: false } : undefined,
-          cosignerRemovedAt: new Date().toISOString(),
-          cosignerRemovalOpHash: opHash ?? undefined,
-        },
-      });
-      console.log(`CO-SIGNER: removed from ${user.id}'s Safe ${plan.address} (op ${opHash})`);
-      res.status(201).json({ ...publicUser(updated), opHash });
     }),
   );
 
