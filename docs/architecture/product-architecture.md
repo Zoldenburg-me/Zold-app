@@ -178,9 +178,8 @@ sequenceDiagram
    (sponsored, which works on Base Sepolia but NOT through the keyless public
    endpoint on Base mainnet), by the Safe in ETH, or by the Safe in USDC. The
    Safe is **1-of-1: the passkey is its only owner.** Zold holds no key that
-   can move or block the funds. Safes deployed before PR #193 were 2-of-2 with
-   a Zold co-signer; its key is deleted and those Safes are abandoned (every
-   operation on them is refused, the record is kept).
+   can move or block the funds. The 2-of-2 Zold co-signer that Safes had
+   before PR #193 is gone, with its key.
 4. **Recovery enrolment** is optional and shown only if the deployment has
    `emailSmsRecovery`.
 5. **Monerium gate.** The user connects by OAuth (PKCE) *or* pastes their own

@@ -222,7 +222,7 @@ What changed:
 NOT RUN: no removal has executed on a real chain; the removeOwner calldata is
 unit-tested (selector 0xf8dc5dd9, prev-owner and sentinel cases) only.
 
-## Co-signer key deleted; legacy 2-of-2 Safes abandoned (25 Sep 2026)
+## Co-signer key and legacy 2-of-2 model deleted (25 Sep 2026)
 
 Supersedes the removal route above. The user decided the legacy 2-of-2 Safes
 are abandoned rather than migrated, so the co-signer key has no remaining job
@@ -230,11 +230,12 @@ and a plaintext private key in .env is pure liability. Removed: the key and
 address env vars, the removal route and its UI, co-signer counter-signing in
 submit and message signing, and the legacy-allowance revoke (its delegate WAS
 the co-signer, so with the key gone nobody can spend such an allowance).
-accountForPlan now throws AbandonedLegacySafeError (409) for any plan with
-cosignerAddress set; the row is kept, per "gating is a read-time filter". The
-key's address held ~0.008 Base Sepolia ETH and 0 on mainnet when deleted.
-Safes whose co-signer WAS removed earlier (cosignerRemovedAt) are live 1-of-1s
-and still work.
+The legacy Safe model went too (cosignerAddress, cosignerRemovedAt,
+threshold 2): checked before deleting, no local database held a Safe record
+of any kind, and there is no hosted deployment, so no row needed migrating.
+A plan written by old code would now fail accountForPlan's address check
+(fail closed). The key's address held ~0.008 Base Sepolia ETH and 0 on
+mainnet when deleted.
 
 ## Gas payment is configurable (25 Sep 2026)
 

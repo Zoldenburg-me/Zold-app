@@ -48,7 +48,6 @@ import {
   writeAndWait,
 } from "./chain.js";
 import {
-  isAbandonedLegacySafe,
   submitPasskeySafeOperation,
   type BrowserPasskeyAssertion,
   type PasskeySafeDeploymentPlan,
@@ -286,12 +285,7 @@ async function debitSafeFundedSepaFee(
 }
 
 export function safeDebitBlocker(user: User): string | null {
-  if (activePasskeySafe(user)) {
-    return passkeySafeExecutionReady(user)
-      ? null
-      : "This account's Safe is an abandoned legacy 2-of-2 (the retired Zold co-signer is still an owner) " +
-        "and can no longer sign — create a new passkey Safe";
-  }
+  if (activePasskeySafe(user)) return null;
   return (
     "Safe-held funds need an active passkey Safe before transfers can be executed — " +
     "every debit is a UserOperation the passkey signs"
@@ -305,20 +299,17 @@ function activePasskeySafe(user: User): boolean {
   );
 }
 
-/** Can this account's send-time UserOperation actually be completed?
- *  A passkey-only Safe needs nothing but the user's assertion; an abandoned
- *  legacy 2-of-2 Safe can never complete one. */
+/** Can this account's send-time UserOperation actually be completed? A
+ *  passkey Safe needs nothing but the user's assertion. */
 function passkeySafeExecutionReady(user: User): boolean {
-  if (!activePasskeySafe(user) || !user.passkeySafe) return false;
-  return !isAbandonedLegacySafe(user.passkeySafe);
+  return activePasskeySafe(user);
 }
 
 /**
  * The user-approved debit of one transfer: a UserOperation, prepared at
  * transfer creation for the exact token/amount/destination, whose hash the
  * user's passkey signed at send time. This process cannot produce that
- * signature — it can only relay it (and counter-sign on a legacy 2-of-2
- * Safe). No execution means no debit; there is no server-side fallback path.
+ * signature — it can only relay it. No execution means no debit; there is no server-side fallback path.
  */
 async function submitSafeExecution(user: User, execution: SafeExecution | undefined): Promise<string> {
   if (!passkeySafeExecutionReady(user)) {

@@ -23,9 +23,8 @@ export function passkeySafePlan(
   if (!publicKey || publicKey.alg !== "ES256") return undefined;
   const owner = webauthnOwnerFromJwk(publicKey.jwk);
   if (!owner) return undefined;
-  // The passkey is the ONLY owner. A Zold co-signer as second owner (2-of-2)
-  // was retired: it could not start a debit, but it meant the user could not
-  // move their own funds without Zold's counter-signature.
+  // The passkey is the ONLY owner: nothing Zold holds can take part in, or
+  // block, a movement of the user's funds.
   const account = smartAccountForPasskey(owner);
   const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
     ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)

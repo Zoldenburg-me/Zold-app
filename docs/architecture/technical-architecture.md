@@ -192,10 +192,6 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   balance is checked before the passkey signs), or `token` (Candide's token
   paymaster, USDC by default on 8453). Every abstractionkit request carries
   `partnerTimeout()`. `npm run preflight` checks the chosen mode live.
-- **Legacy 2-of-2 Safes** (deployed before PR #193) list the retired Zold
-  co-signer as a second owner. The co-signer key is deleted, so they are
-  abandoned: `accountForPlan` throws `AbandonedLegacySafeError` (409) and the
-  stored row is kept. At startup `server.ts` names every such account.
 - An optional managed-recovery guardian goes through a SocialRecoveryModule
   (After3Days by default).
 - The Safe is deployed as the `initCode` of its first UserOperation. The
