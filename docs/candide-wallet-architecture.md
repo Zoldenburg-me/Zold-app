@@ -39,7 +39,7 @@ Advanced users can add:
 
 ## Transfer Permission Model
 
-> **Superseded (Aug 2026):** the allowance-module design below was replaced by
+> **Superseded:** the allowance-module design below was replaced by
 > user-signed execution — see the IMPLEMENTED notes further down. Kept for the
 > reasoning that led there.
 
@@ -59,7 +59,7 @@ Current implementation note: live Monerium deposits land in the user's Safe,
 and the API now treats `safeBalanceEur` as `balanceEur`. Remittance funding is
 Safe-first.
 
-**Implemented (Aug 2026): user-signed execution.** This is
+**Implemented: user-signed execution.** This is
 regulatory-architecture.md's Change 1, and it supersedes both the standing
 allowance and the interim per-transfer grant. There is no allowance, no
 delegate, and no module installed at deployment. At transfer creation the
@@ -77,7 +77,7 @@ operation revokes any legacy standing allowance left on an old Safe
 The delegate-design section below is therefore historical: there is no
 delegate to constrain.
 
-ALSO IMPLEMENTED (Aug 2026): Change 2 windows 1-3 — the cash-rail send is ONE
+ALSO IMPLEMENTED: Change 2 windows 1-3 — the cash-rail send is ONE
 user-signed batch: fee transfer -> venue approval -> swap, atomic, with the
 output delivered straight to the destination the payout leg names, Bridge's
 deposit address (the rail is closed without Bridge, so there is no other
@@ -130,7 +130,7 @@ authorizer binding without a verified passkey is refused.
 2. Add client-side Safe UserOperation creation for passkey-owned Safes. The
    server records the deterministic passkey-only (1-of-1) Safe plan at passkey
    registration.
-   CO-SIGNER RETIRED (Sep 2026): Safes used to be planned 2-of-2 with a Zold
+   CO-SIGNER RETIRED: Safes used to be planned 2-of-2 with a Zold
    co-signer. It could never start a debit, but it meant the user could not
    move their own funds without Zold, and a user could not add a key of their
    own without Zold co-signing the owner change. New plans are passkey-only.

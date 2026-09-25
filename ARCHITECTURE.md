@@ -2,8 +2,7 @@
 
 Status: September 2026. Running deployment: Base Sepolia (84532). Default
 chain: Base mainnet (8453), not yet deployed. What has and has not run against
-real money is listed in [README.md](README.md#status); the reasoning behind
-each decision below is in [docs/notes/](docs/notes/).
+real money is listed in [README.md](README.md#status).
 
 ## 1. Accounts and custody
 
