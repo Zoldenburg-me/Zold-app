@@ -11,22 +11,18 @@ import type { PayoutRail } from "./store.js";
  * - cash (EUR -> KES): executable EUR->USD, then live USD->KES, minus our
  *   spread, plus a fixed fee. On-chain leg swaps EURe->USDC; MoneyGram handles
  *   USD->KES at payout.
- * - sepa (EUR -> EUR bank): no FX — fixed fee only; payout via Monerium
+ * - sepa (EUR -> EUR bank): no FX, fixed fee only; payout via Monerium
  *   redeem order (EURe burned, SEPA transfer out).
  *
- * TWO DIFFERENT RATES, ON PURPOSE:
+ * Two rates:
  *
- *   midRate  — the true market mid from the live feed (EUR->KES directly).
- *              This is the "real exchange rate" line on the receipt. It is a
- *              reference we do NOT trade at.
- *   fxRate   — what we can actually deliver: the on-chain swapper's EUR->USD
- *              rate (the one the swap will really execute at), times the live
- *              USD->fiat leg, minus our spread.
+ *   midRate  — market mid from the live feed (EUR->KES directly). The
+ *              "real exchange rate" line on the receipt; we do not trade at it.
+ *   fxRate   — what we can deliver: the on-chain swapper's executable EUR->USD
+ *              rate, times the live USD->fiat leg, minus our spread.
  *
- * marginBps is then MEASURED as the gap between them, not asserted. That
- * matters: a receipt stating a flat "0.50% margin" over a stale mid says
- * nothing about the real one. If the on-chain rate drifts from the market,
- * the margin line grows and the drift is visible instead of hidden.
+ * marginBps is measured as the gap between them, so if the on-chain rate
+ * drifts from the market the margin line on the receipt grows with it.
  */
 export interface QuoteRequest {
   rail: PayoutRail;

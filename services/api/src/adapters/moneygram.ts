@@ -63,15 +63,14 @@ export function anchorMemoForPickup(
 }
 
 /**
- * FATF Travel Rule originator data for ONE cash pickup — who is sending.
+ * FATF Travel Rule originator data for one cash pickup: who is sending.
  *
- * HELD FOR THE CALL, NEVER PERSISTED. This replaced a stored
- * `user.senderProfile` (Sep 2026): identity-document numbers, birth date and
- * home address kept in a plaintext file for a rail no deployment has ever
- * opened, which fails data minimisation on its face. When an anchor is
- * actually integrated, collect these at send time for that transfer,
- * transmit them, and keep only what retention law requires — encrypted.
- * Document images stay out of scope; they belong with a KYC provider.
+ * Held for the call, never persisted. Don't reintroduce a stored sender
+ * profile (ID numbers, birth date, home address) for a rail that has never
+ * opened; that fails data minimisation. When an anchor is integrated, collect
+ * these at send time for that transfer, transmit them, and keep only what
+ * retention law requires, encrypted. Document images belong with a KYC
+ * provider.
  */
 export interface SenderDetails {
   /** The account id. Used only to derive the per-user SEP-10/SEP-12 memo. */

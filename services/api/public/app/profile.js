@@ -71,8 +71,8 @@ function renderProfileScreen() {
       : cr.guardianStatus === "active" ? `Active · ${cr.channels.length} channel${cr.channels.length === 1 ? "" : "s"}`
         : "Guardian not on your smart account yet";
 
-  /* Own Monerium keys: state, never a promise. "Unavailable" is what a
-     deployment without an encryption key honestly is. */
+  /* Own Monerium keys: show the current state. A deployment without an
+     encryption key shows "Unavailable". */
   const mon = $("m-pf-monerium");
   mon.classList.toggle("hidden", !HAS("monerium"));
   const keys = u.monerium?.method === "api_keys" ? u.monerium.apiKeys : null;

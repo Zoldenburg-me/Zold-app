@@ -3,13 +3,12 @@
  *
  * GET /pmm/{chain}/v3/quote returns an executable quote — `buyTokens[addr]`
  * carries `amount` and `minimumAmount`, and with gasless=false the response
- * carries a ready `tx` we submit with the orchestrator wallet. So the price we
- * show is one a maker has actually committed to, not one we picked.
+ * carries a ready `tx` we submit with the orchestrator wallet. The price shown
+ * is one a maker has committed to.
  *
- * Fail-closed everywhere: an unreachable maker, an expired quote, or a missing
- * token address refuses rather than silently falling back to our own inventory
- * at our own rate. Quietly serving the mock's price while claiming RFQ pricing
- * would be indistinguishable from working.
+ * Fails closed: an unreachable maker, an expired quote or a missing token
+ * address refuses. Don't add a fallback to our own inventory; it would serve
+ * the mock's price labelled as RFQ pricing.
  */
 import { LIQUIDITY } from "../config.js";
 import { abis, addrs, eur, orchestratorAddress, orchestratorWallet, publicClient, usd, writeAndWait } from "../chain.js";
@@ -137,11 +136,10 @@ export class RfqLiquidityProvider implements LiquidityProvider {
       throw new Error("RFQ quote carries no executable tx — request a new quote");
     }
     if (to.toLowerCase() !== orchestratorAddress.toLowerCase()) {
-      // Bebop pays the receiver named at quote time; we quote with the
-      // orchestrator as receiver, so anything else is a caller mistake rather
-      // than something to paper over by forwarding tokens silently. Checked
-      // BEFORE anything is submitted: validating after the settlement would
-      // convert the caller's tokens and then throw — the worst of both.
+      // Bebop pays the receiver named at quote time, and we quote with the
+      // orchestrator as receiver, so any other `to` is a caller mistake.
+      // Checked before submitting; after settlement the tokens would already
+      // be converted.
       throw new Error(`RFQ quote pays ${orchestratorAddress}, not ${to}`);
     }
     const a = addrs();

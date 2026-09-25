@@ -106,13 +106,12 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
 /**
  * May this request collect for this invoice?
  *
- * Only an invoice the payee's own organisation ISSUED. Collecting against
- * someone else's invoice would attach a stranger's payment to their books, and
- * collecting against an incoming one is backwards — that is a bill to pay, and
- * paying it is a draft, not a payment link.
+ * Only an invoice the payee's own organisation issued. Another org's invoice
+ * would attach a stranger's payment to their books, and an incoming invoice
+ * is a bill to pay via a draft, not a payment link.
  *
- * An invoice already settled is refused rather than quietly given a second
- * collection route: two live ways to pay one invoice is how it gets paid twice.
+ * A settled invoice is refused: two live ways to pay one invoice lets it be
+ * paid twice.
  */
 function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, payee: User) {
   const invoice = store.findInvoice(invoiceId);
@@ -322,10 +321,9 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     }
     const r = store.findPaymentRequestByCode(code);
     const user = r ? store.findUser(r.userId) : undefined;
-    // The handle in the URL is for the reader; the code is what resolves. A
-    // link minted under an old handle keeps working, but a code pasted under
-    // SOMEONE ELSE's handle does not — that would let a page impersonate a
-    // payee it does not belong to.
+    // The code resolves; the handle is for the reader. A link minted under an
+    // old handle keeps working, but a code under someone else's handle is a
+    // 404, so a page cannot impersonate another payee.
     if (!r || !user || (user.paymentPage?.handle !== req.params.handle && r.handle !== req.params.handle)) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;

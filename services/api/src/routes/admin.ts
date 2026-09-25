@@ -1,14 +1,13 @@
 /**
  * The operator dashboard's read side.
  *
- * READ ONLY, AND MASKED. Every row here is somebody's account, so recipient
- * phone numbers and IBANs are masked before they leave, and there is no write
- * route: the KYC-review and issue-IBAN buttons went with the routes behind
- * them when identity became Monerium's.
+ * Read only and masked: recipient phone numbers and IBANs are masked before
+ * they leave, and there is no write route (KYC review and IBAN issue belong to
+ * Monerium).
  *
- * Authentication is the operator bearer token, deliberately NOT a user
- * session — a user must never be able to act as the operator on their own
- * account — and it fails closed when no token is configured.
+ * Authentication is the operator bearer token, never a user session, so a user
+ * cannot act as the operator on their own account. It fails closed when no
+ * token is configured.
  */
 import express from "express";
 import { wrap } from "./util.js";

@@ -1,13 +1,11 @@
 /**
  * The payment page: claiming a handle, and what a stranger may read about one.
  *
- * A HANDLE IS DISCOVERABLE, AND THE PAGE SAYS SO. 200 versus 404 tells a
- * caller whether a handle is claimed, and handles are short and human-readable
- * by design. That is true of every username system and is not fixable while
- * the link is meant to be shared, so the honest response is to state it rather
- * than imply the link is a secret.
+ * Handles are discoverable: 200 versus 404 tells a caller whether one is
+ * claimed, and handles are short and readable. That cannot change while the
+ * link is meant to be shared, so the page tells the payee.
  *
- * Claiming is passkey-Safe gated, NOT KYC-gated: a public page may exist
+ * Claiming is gated on the passkey Safe, not on KYC: a public page may exist
  * before review, but only once the Safe exists on-chain and is the account of
  * record. Settlement and conversion apply their own gates later.
  */
@@ -53,17 +51,12 @@ function payChain() {
  * of record. Settlement/conversion can still apply its own compliance gates.
  */
 /**
- * Public payee lookup. No session: this is the point of a payment link.
+ * Public payee lookup. No session, since a payment link is for strangers.
  *
- * The response comes from publicPayee, which is an allowlist — see pay.ts.
+ * The response comes from publicPayee, which is an allowlist (see pay.ts).
  *
- * Handles ARE enumerable, and pretending otherwise would be worse than the
- * fact: 200 versus 404 tells a caller whether a handle is claimed, and handles
- * are short and human-readable by design. That is true of every username
- * system and is not fixable while the link is meant to be shared, so the
- * honest response is to say it — the page tells the payee that anyone who
- * knows OR GUESSES the handle can find the address, rather than implying the
- * link is a secret.
+ * Handles are enumerable (see the header). The page tells the payee that
+ * anyone who knows or guesses the handle can find the address.
  */
 /** The QR image, rendered server-side. Carries the bare address: see the note
  *  in pay.ts on why the EIP-681 URI is a link instead. */

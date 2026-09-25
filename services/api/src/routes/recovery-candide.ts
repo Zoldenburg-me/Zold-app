@@ -1,5 +1,5 @@
 /**
- * Email/SMS recovery through Candide's guardian — two halves, two audiences.
+ * Email/SMS recovery through Candide's guardian, in two halves.
  *
  * ENROLMENT (`/users/:id/recovery/candide/*`, session required): the account
  * holder, with their working passkey, registers an email or phone with
@@ -7,29 +7,26 @@
  * Candide's guardian to the Safe's recovery module in a user-signed
  * operation. Two passkey ceremonies, one OTP.
  *
- * RECOVERY (`/recovery/candide/*`, NO session — the whole point is that the
- * device with the passkey is gone): the person names the account, registers
- * a NEW passkey in this browser, passes an OTP on every channel they
- * enrolled, and Candide signs and executes the recovery. After the module's
- * grace period, finalisation swaps the Safe's owner to the new passkey and
- * only then is the credential bound to the account.
+ * RECOVERY (`/recovery/candide/*`, no session, since the device with the
+ * passkey is gone): the person names the account, registers a new passkey in
+ * this browser, passes an OTP on every channel they enrolled, and Candide
+ * signs and executes the recovery. After the module's grace period,
+ * finalisation swaps the Safe's owner to the new passkey, and only then is the
+ * credential bound to the account.
  *
- * THE INVARIANT THAT MATTERS: until finalisation the new credential lives on
- * the recovery request, not on the user. Someone holding the OTP channels can
- * start a recovery — that is what the channels are for — but cannot sign in
- * or spend before the grace period has run, which is the window the rightful
- * owner has to cancel from their still-working device.
+ * Until finalisation the new credential lives on the recovery request, not on
+ * the user. Someone holding the OTP channels can start a recovery but cannot
+ * sign in or spend before the grace period has run; that period is the owner's
+ * window to cancel from their still-working device.
  *
- * THE ID IS NOT A CAPABILITY. Starting needs only an email, so whoever starts
- * a request is handed a random secret ONCE (stored hashed on the request) and
- * every by-id route requires it in `x-recovery-secret`. A second caller who
- * names the same email never learns the id of a request someone else started
- * and cannot drive it. Registering the new passkey hands that browser a
- * second, single-use OTP ticket, and every code submission requires it: the
- * owner's channel codes can only ever confirm the credential THIS browser
- * created. Finalisation hands out NO session: the new passkey is
- * bound to the account and signs in through the ordinary passkey login, which
- * is proof of the new credential rather than of having seen an id.
+ * The id is not a capability. Starting needs only an email, so the starter is
+ * given a random secret once (stored hashed on the request) and every by-id
+ * route requires it in `x-recovery-secret`. A second caller naming the same
+ * email never learns the id and cannot drive the request. Registering the new
+ * passkey gives that browser a second, single-use OTP ticket that every code
+ * submission requires, so the owner's channel codes can only confirm the
+ * credential this browser created. Finalisation issues no session: the new
+ * passkey signs in through the ordinary passkey login.
  */
 import express from "express";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -430,12 +427,11 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (!candideRecoveryEnabled()) {
         return res.status(503).json({ error: "email/SMS recovery is not available on this deployment — RECOVERY_SERVICE_URL is unset" });
       }
-      // Gated on the SAFE, not on KYC. Recovery guards the Safe, and the Safe
-      // has an address money can reach the moment it is deployed, before any
-      // IBAN exists — so enrolment runs in onboarding right after deployment,
-      // while the account is still pending at the Monerium gate. activePlan()
-      // is the check; a rejected account keeps the right to recover what it
-      // holds.
+      // Gated on the Safe, not on KYC. The Safe can receive money as soon as
+      // it is deployed, before any IBAN exists, so enrolment runs in
+      // onboarding right after deployment while the account is still pending
+      // at the Monerium gate. activePlan() is the check; a rejected account
+      // can still recover what it holds.
       const plan = activePlan(user);
       const { channel, target } = normaliseChannelTarget(req.body?.channel, req.body?.target);
       if (user.passkeySafe?.candideRecovery?.channels.some((c) => c.channel === channel && c.target === target)) {

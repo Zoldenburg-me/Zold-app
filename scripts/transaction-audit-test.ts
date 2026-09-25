@@ -1,20 +1,14 @@
 /**
- * Transaction admission and attribution — the decision points money passes
- * through, and three defects found in them.
- *
- * WHAT COUNTS AS A "DECISION ENGINE" HERE. There is no model and no scoring
- * service in this repo; the judgements that decide where money goes are plain
- * arithmetic over thresholds, and this is where they live:
+ * Transaction admission and attribution: the threshold checks that decide
+ * where money goes.
  *
  *   admission    — does this transfer fit under the daily cap, right now
  *   attribution  — which open payment request, if any, does this USDC pay
  *   fail-closed  — what happens when the rate feed or a partner stops answering
  *
- * Each has a borderline case where the right answer is not the obvious one,
- * and each is covered at the boundary rather than in the middle. Where a
- * regression would be silent — a deposit booked twice, a cap that holds for
- * one request but not two — the test is written against the defect, not the
- * feature.
+ * Each is tested at its boundary. Where a regression would raise no error (a
+ * deposit booked twice, a cap that holds for one request but not two) the
+ * test targets that specific defect.
  *
  * No chain, no network (a loopback stub stands in for the rate feed).
  *
@@ -345,12 +339,10 @@ await check("two transfers prepared in parallel cannot both reserve the whole ca
 });
 
 await check("transfer creation RESERVES the cap rather than only checking it", () => {
-  // The unit tests above prove the primitive. This proves the call site uses
-  // it, and uses it EARLY: the hold must be taken before the quote is spent
-  // and before Bridge is asked for a transfer, or a cap refusal leaves an
-  // unfunded Bridge transfer behind (the finding this replaced).
-  // buildTransferFromQuote is the ONE path that builds a transfer; the
-  // modularity pass moved it out of server.ts.
+  // Checks the call site takes the hold before the quote is spent and before
+  // Bridge is asked for a transfer; otherwise a cap refusal leaves an unfunded
+  // Bridge transfer behind. buildTransferFromQuote (transfers/build.ts) is the
+  // only path that builds a transfer.
   const src = readFileSync("services/api/src/transfers/build.ts", "utf8");
   const hold = src.indexOf("store.holdDailyCap(");
   assert.ok(hold > 0, "transfer creation no longer holds the cap");

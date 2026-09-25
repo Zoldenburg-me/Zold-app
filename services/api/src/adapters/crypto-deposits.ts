@@ -1,31 +1,26 @@
 /**
- * Crypto in — USDC forwarded from a payment page into the merchant Safe.
+ * Crypto in: USDC forwarded from a payment page into the merchant Safe.
  *
- * Euros arrive by SEPA and Monerium issues EURe to the user's Safe; this is
- * the other way in. It watches payment-page deposit addresses for inbound
- * USDC and settles into the merchant Safe, so a corridor payout can be funded
- * from crypto without the user first finding a bank.
+ * SEPA plus Monerium EURe is the main way in; this watches payment-page
+ * deposit addresses for inbound USDC so a corridor payout can be funded from
+ * crypto without a bank.
  *
- * Two separable steps, deliberately:
+ *   detect  - read Transfer logs addressed to the watched addresses (this file)
+ *   convert - a user-signed batch swaps USDC->EURe into the merchant Safe;
+ *             settleConvertedDeposit records what arrived
  *
- *   detect  — read Transfer logs addressed to the watched addresses (this file)
- *   convert — a USER-SIGNED batch swaps USDC->EURe into the merchant Safe;
- *             settleConvertedDeposit records what actually arrived
+ * Only the swap needs Candide's bundler, which hardhat lacks, so detection and
+ * settlement are testable locally and the swap is not.
  *
- * Only the swap needs Candide's bundler, which no hardhat node provides, so
- * detection and settlement are testable locally and the swap is not — the
- * same seam the Safe-funded transfer path has, for the same reason.
- *
- * WHAT THIS DOES NOT DO
- * - It converts nothing without `user.paymentPage.autoConvert`.
- * - It watches the payment page's configured forwarding recipient. In
- *   production that should be the merchant Safe, reached through Candide's
- *   forwarding address rather than an API-held payment-page owner key.
- * - A deposit is RECORDED for every account; the user-signed conversion to
- *   e-money is what the KYC gate stands in front of.
- * - It does not screen the SENDING address. An unsolicited transfer from an
- *   unknown counterparty is a source-of-funds question that belongs with a
- *   compliance provider, and nothing here answers it.
+ * Limits:
+ * - Nothing converts without `user.paymentPage.autoConvert`.
+ * - It watches the page's configured forwarding recipient. In production that
+ *   should be the merchant Safe via Candide's forwarding address, not an
+ *   API-held payment-page owner key.
+ * - Deposits are recorded for every account; the KYC gate sits in front of
+ *   the user-signed conversion to e-money.
+ * - The sending address is not screened. Source of funds for an unsolicited
+ *   transfer belongs with a compliance provider.
  */
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
@@ -59,26 +54,18 @@ interface WatchedAddress {
 /** Accounts whose inbound transfers are recorded, either as direct Safe
  * funding or through page-scoped auto-settlement.
  *
- * Three rules, each learned from a mis-attribution that shipped:
- *
- * - The ZERO ADDRESS is never watched. Accounts without a deployed Safe hold
- *   0x0 as their address, and watching it attributed every EURe BURN (each
- *   redeem's Transfer to 0x0) to whichever Safe-less account came first — a
- *   €22.01 payout burn showed up as a deposit on an unrelated account.
- * - ONE entry per address, and the page is watched at its DEPOSIT address —
- *   the address payers are actually told — never at its recipient. Watching
- *   the recipient meant direct Safe USDC was reclassified as page
- *   auto-convert (converting money the owner chose to hold as USDC), while
- *   deposits at a real forwarder address were not watched at all. When the
- *   deposit address IS the user's Safe (the local-safe provider), the page
- *   entry wins on purpose: opting that address into auto-convert is the
- *   owner's explicit instruction for USDC arriving there.
- * - Direct Safe funding is recorded for EVERY account, not only approved
- *   ones. Recording is observation, not a credit decision: a pending
- *   account's Safe can already receive (a deposit lands there directly,
- *   before manual review lands), and skipping it meant the cursor moved past
- *   the transfer forever — the deposit never appeared even after approval.
- *   Page auto-convert stays approved-only: conversion IS a credit decision.
+ * - The zero address is never watched. Safe-less accounts hold 0x0, and
+ *   watching it attributed every EURe burn (each redeem's Transfer to 0x0) to
+ *   the first Safe-less account.
+ * - One entry per address, and a page is watched at its deposit address (the
+ *   one payers are told), not its recipient. Watching the recipient turned
+ *   direct Safe USDC into page auto-convert and missed forwarder deposits.
+ *   When the deposit address is the user's Safe (local-safe provider), the
+ *   page entry wins: opting it into auto-convert is the owner's instruction.
+ * - Direct Safe funding is recorded for all accounts, approved or not. A
+ *   pending account's Safe can already receive, and skipping it moves the
+ *   cursor past the transfer for good. Page auto-convert stays approved-only
+ *   because conversion is a credit decision.
  */
 function watchedAddresses(): WatchedAddress[] {
   const seen = new Set<string>();
@@ -114,14 +101,12 @@ function hasOpenCryptoRequest(userId: string): boolean {
 }
 
 /**
- * What a USDC deposit was worth in EUR when it arrived, with the provenance to
- * defend the number later.
+ * What a USDC deposit was worth in EUR when it arrived, with the rate's
+ * provenance.
  *
- * REFUSES rather than guessing. rates.ts has no stale fallback by design, and
- * a receipt valued at an invented rate is worse than one valued late: the
- * first is a wrong figure in the books, the second is a gap someone can fill.
- * A deposit whose rate could not be read is recorded without a receipt value
- * and can be valued on the next attempt.
+ * Returns undefined when no rate is available (rates.ts has no stale
+ * fallback). The deposit is then recorded without a receipt value and can be
+ * valued later; a made-up rate would put a wrong figure in the books.
  */
 async function valueAtReceipt(
   amountUsdc: number,
@@ -145,12 +130,11 @@ async function valueAtReceipt(
 }
 
 /**
- * Refuse to convert at a price the market would not give.
+ * Refuse to convert at a rate too far from the live mid.
  *
- * The FxSwapper's rate is one WE set, so on a local chain this check is the
- * only thing standing between a mispriced swapper and e-money credited at a
- * fictional rate. Same discipline as the quote binding, applied at the point
- * where the number becomes someone's balance.
+ * The FxSwapper's rate is set by us, so on a local chain this is the only
+ * check against crediting e-money at a mispriced rate. Same idea as the quote
+ * binding, applied where the number becomes a balance.
  *
  * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), matching what
  * FxSwapper.rate() posts and what the liquidity providers report.
@@ -197,10 +181,6 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
    */
   const safeBlocker = safeDebitBlocker(user);
   if (safeBlocker) {
-    // Someone reading this has money sitting at an address they own and is
-    // being told it cannot be converted; the first thing they need to know is
-    // that it has not gone anywhere. Without that sentence a solvable state
-    // reads as a loss.
     return (
       `${safeBlocker}. Your ${deposit.amountUsdc ?? 0} USDC is still yours at ${user.address} — ` +
       "it simply cannot be converted until the account can sign."
@@ -226,13 +206,9 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
     const page = user.paymentPage;
     if (!page) throw new Error("this account has no payment page");
     const blocker = depositConversionBlocker(user, deposit);
-    // Settling in USDC is not a blocker, it is a DIFFERENT settlement — the
-    // user chose to keep the asset, and that is a completed deposit, not a
-    // refused one. Auto-settlement OFF is the same outcome by a different
-    // choice: the forwarder has already delivered the USDC to the Safe and
-    // nothing converts it, so the deposit is complete as USDC. It used to be
-    // REFUSED with "auto-settlement switched off", which read as a fault to a
-    // payee whose pay link had just been paid in full.
+    // Settling in USDC, or auto-settlement off, completes the deposit as USDC:
+    // the forwarder has already delivered it to the Safe. Marking it REFUSED
+    // would show a fault to a payee whose link was paid in full.
     if (page.settlementAsset === "USDC" || !page.autoConvert) {
       const settled = store.updateCryptoDeposit(deposit.id, {
         state: "CONVERTED",
@@ -257,16 +233,10 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
     if (blocker) throw new Error(blocker);
 
     /**
-     * THE SWAP IS NOT PERFORMED HERE.
-     *
-     * Converting means moving the user's USDC, and the only thing that may do
-     * that is a UserOperation their passkey signed. This poller runs with
-     * nobody present, so it CANNOT convert — it can only establish that the
-     * deposit is ready to be converted and wait for the account holder.
-     *
-     * So "auto-convert" means detected automatically and converted on
-     * approval, and the deposit says so rather than sitting at DETECTED with
-     * no explanation — a missing signature must not read like a fault.
+     * The swap is not performed here. Moving the user's USDC needs a
+     * UserOperation their passkey signed, and this poller runs unattended.
+     * "Auto-convert" means detected automatically and converted on approval;
+     * the reason text tells the user a signature is pending.
      */
     return store.updateCryptoDeposit(deposit.id, {
       state: "DETECTED",
@@ -283,12 +253,11 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
 }
 
 /**
- * Record the result of a conversion the USER signed and the API submitted.
+ * Record the result of a conversion the user signed and the API submitted.
  *
- * The credited amount is MEASURED as the Safe's EURe balance delta, never
- * copied from the quote: "the router did not revert" and "this much EURe
- * arrived" are different facts, and only the second one may be credited. The
- * signed floor is checked against the measured delta for the same reason.
+ * The credited amount is measured as the Safe's EURe balance delta, not copied
+ * from the quote (a swap that did not revert may still deliver less). The
+ * signed floor is checked against that delta too.
  */
 export async function settleConvertedDeposit(
   deposit: CryptoDeposit,
@@ -320,15 +289,11 @@ export async function settleConvertedDeposit(
 
   const creditedEur = eur.fromWei(receivedWei);
   /**
-   * The realised gain: what arrived, minus what it was worth at receipt.
+   * The realised gain: what arrived minus its value at receipt. Recorded once,
+   * now, and never recomputed from a later rate. Near zero when conversion
+   * follows receipt promptly (the tax reason to convert promptly).
    *
-   * Recorded as a FACT at the moment it is known, never recomputed. A gain
-   * re-derived later from whatever rate a feed reports then is not the gain
-   * that occurred. Near zero when the conversion follows the receipt promptly,
-   * which is the tax argument for converting promptly at all.
-   *
-   * Absent when the receipt could not be valued — an unknown basis yields an
-   * unknown gain, and a zero would be a claim.
+   * Absent, not zero, when the receipt could not be valued.
    */
   const realisedGainEur =
     deposit.receipt
@@ -358,14 +323,11 @@ export async function settleConvertedDeposit(
 /**
  * Write the payment back onto the invoice it settles.
  *
- * The invoice is the Beleg and the deposit is the Zahlung; German bookkeeping
- * wants them tied, and an auditor asking "how was invoice 2026-001 paid?"
- * should get one thread: this transaction arrived, this one converted it, this
- * much euro landed. Reconstructing that later from timestamps and amounts is
- * guesswork dressed as reconciliation.
+ * The invoice is the Beleg and the deposit the Zahlung; German bookkeeping
+ * wants them tied, so an auditor sees which transaction arrived, which
+ * converted it and how much euro landed.
  *
- * Appends rather than replaces: an invoice can legitimately be settled by more
- * than one payment, and overwriting would erase the earlier ones.
+ * Appends: an invoice can be settled by more than one payment.
  */
 export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
   if (!deposit.invoiceId) return;
@@ -381,10 +343,9 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
  * One scan of the chain for inbound USDC, followed by conversion of whatever
  * is new.
  *
- * The cursor advances only after every log in the window has been RECORDED —
- * not after it has been converted. A deposit we saw but could not convert is a
- * REFUSED row someone can act on; a deposit we never recorded because the
- * cursor ran ahead is money that silently vanished.
+ * The cursor advances once every log in the window is recorded, whether or not
+ * it converted. An unconverted deposit is a REFUSED row someone can act on; an
+ * unrecorded one behind the cursor is never seen again.
  */
 let scanning = false;
 
@@ -496,10 +457,9 @@ async function scanCryptoDeposits(): Promise<number> {
       const now = new Date().toISOString();
       const directSafeFunding = match.source === "safe" || token.token === "EURE";
       /**
-       * The acquisition value, stamped HERE — at detection, once, with the
-       * rate's provenance — and never recomputed. A figure re-derived months
-       * later from whatever the feed says then is not the value at receipt;
-       * it is a guess wearing its clothes.
+       * The acquisition value, stamped once at detection with the rate's
+       * provenance and never recomputed. A later feed rate is not the value
+       * at receipt.
        */
       const receipt =
         token.token === "USDC"
@@ -580,9 +540,8 @@ async function scanCryptoDeposits(): Promise<number> {
 /**
  * Retry deposits left DETECTED by a crash between recording and conversion.
  *
- * Only DETECTED. A REFUSED deposit is a decision, not a transient failure, and
- * retrying it in a loop would hammer a venue over a deposit that is below the
- * floor or belongs to an account that has not opted in.
+ * REFUSED deposits are skipped: they are below the floor or not opted in, and
+ * retrying them would hit the venue on every tick.
  */
 export async function sweepPendingCryptoDeposits(): Promise<number> {
   if (!CRYPTO_IN.enabled) return 0;

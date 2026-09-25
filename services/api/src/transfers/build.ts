@@ -31,17 +31,15 @@ export const AUTH_WINDOW_SEC = 15 * 60;
  * Build a transfer from an open quote, and the authorization the device must
  * sign for it.
  *
- * ONE CODE PATH. This was extracted from POST /api/transfers unchanged so that
- * draft execution creates transfers the SAME way. A second, parallel
- * construction would be the classic route by which one caller quietly skips a
- * balance check, a daily cap, or the destination commitment — so the business
- * router is handed this function rather than being trusted to rebuild it.
+ * This is the only code path that builds a transfer: POST /api/transfers and
+ * draft execution both call it. Don't add a second construction in the
+ * business router; that is how a caller ends up skipping a balance check, the
+ * daily cap or the destination commitment.
  *
- * It returns a discriminated result rather than writing to a response: it has
- * two callers and only one of them owns an HTTP response. The `res` it passes
- * to requireKycApproved / assertDailyCap is a collector whose
- * `.status(x).json(y)` evaluates to the failure result itself, so every
- * refusal below reads exactly as it did when this was a route.
+ * It returns a discriminated result because only one of its two callers owns
+ * an HTTP response. The `res` passed to requireKycApproved / assertDailyCap is
+ * a collector whose `.status(x).json(y)` evaluates to the failure result, so
+ * the refusals below keep their route-handler shape.
  */
 export type TransferBuildFailure = { ok: false; status: number; body: any };
 export type TransferBuildResult =
@@ -192,11 +190,10 @@ async function prepareTransferFromQuote(
       | { credentialId: string; challenge: string; amountEur: number; token: "EURE" }
       | undefined;
     /**
-     * Which custody mode this transfer will actually run in, recorded on the
-     * transfer itself. Starts at the honest worst case and is narrowed only
-     * when a Safe-executed batch is genuinely prepared — so a venue outage or
-     * a missing config leaves the truthful answer behind rather than an
-     * optimistic one nobody revisited.
+     * Which custody mode this transfer will run in, recorded on the transfer.
+     * Starts at the worst case and is narrowed only when a Safe-executed batch
+     * is actually prepared, so a venue outage or missing config leaves the
+     * worst case recorded.
      *
      * The SEPA rail is already non-custodial for the principal: Monerium's
      * redeem burns the payout straight from the Safe and only the fee moves.
@@ -218,12 +215,12 @@ async function prepareTransferFromQuote(
       user.passkey?.credentialId &&
       user.passkeySafe?.status === "active" &&
       user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
-      // A legacy 2-of-2 Safe needs the co-signer KEY to counter-sign; a passkey-only
-      // Safe needs nothing beyond the user's assertion. Deliberately the same
-      // condition as the orchestrator's passkeySafeExecutionReady: requiring
-      // more here (the address env var, say) would create transfers that pass
-      // the readiness blocker but silently never get an execution prepared,
-      // and then fail at authorize blaming the user.
+      // A legacy 2-of-2 Safe needs the co-signer key to counter-sign; a
+      // passkey-only Safe needs only the user's assertion. Keep this identical
+      // to the orchestrator's passkeySafeExecutionReady: requiring more here
+      // (the address env var, say) creates transfers that pass the readiness
+      // blocker, never get an execution prepared, and fail at authorize with
+      // an error that blames the user.
       (!user.passkeySafe.cosignerAddress || CANDIDE.cosignerKey) &&
       !HARNESS.enabled
     ) {
@@ -277,8 +274,8 @@ async function prepareTransferFromQuote(
             });
             if (swap) {
               const convertWei = swap.plan.approval.amount;
-              // Equality is the legitimate zero-fee shape; only a convert
-              // amount EXCEEDING the signed debit total is incoherent.
+              // Equal amounts mean a zero fee, which is valid; only a convert
+              // amount above the signed debit total is an error.
               if (convertWei > debitWei) throw new Error("swap amount exceeds the authorized debit total");
               prepared = await prepareTransferBatchExecution(user.passkeySafe, {
                 token: addrs().eure,
@@ -356,17 +353,15 @@ async function prepareTransferFromQuote(
       }
     }
     /**
-     * Turn the preference into a guarantee where an operator asked for one.
+     * Enforce non-custody where an operator asked for it.
      *
-     * REQUIRE_NON_CUSTODIAL=1 means this deployment has promised it does not
-     * take possession of client funds, so a fallback to the orchestrator is a
-     * broken promise, not a degraded mode — refuse and name the cause rather
-     * than moving money in a way the deployment says it does not.
+     * REQUIRE_NON_CUSTODIAL=1 means this deployment does not take possession
+     * of client funds, so falling back to the orchestrator is refused with the
+     * cause named.
      *
-     * This spends the quote (consumed above). That is acceptable precisely
-     * because every cause here is a deployment-wide condition — the venue
-     * cannot serve a Safe, Bridge is not live — so it fails on the first
-     * transfer and is fixed once, not intermittently for one unlucky user.
+     * This spends the quote (consumed above). That is acceptable because every
+     * cause here is deployment-wide (the venue cannot serve a Safe, Bridge is
+     * not live), so it fails on the first transfer and is fixed once.
      */
     if (CUSTODY.requireNonCustodial && custody.mode === "orchestrator") {
       return res.status(409).json({

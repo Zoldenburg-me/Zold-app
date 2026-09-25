@@ -523,12 +523,10 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   if (t.fundingSource === "safe") {
     if (swapRan) {
       /**
-       * Reverse the swap and give the euros back. The rate movement of the
-       * round trip is worn by the user as an ITEMIZED deduction (both legs at
-       * execution prices, the received amount MEASURED as a Safe balance
-       * delta, not read off the quote) — that honesty beats parking the money
-       * in MANUAL_REVIEW indefinitely. Reversal failing still parks for
-       * review — guessing is the one thing this path must never do.
+       * Reverse the swap and give the euros back. The user bears the round
+       * trip's rate movement as an itemized deduction: both legs at execution
+       * prices, the received amount measured as a Safe balance delta. If the
+       * reversal fails the transfer goes to MANUAL_REVIEW.
        */
       try {
         const provider = liquidityProvider();
@@ -657,12 +655,11 @@ export async function sweepStrandedTransfers(): Promise<number> {
         t.auth?.authorizedAt &&
         Date.now() - Date.parse(t.auth.authorizedAt) > STALE_MS
       ) {
-        // The crash window between submitting the user-signed UserOperation
-        // and persisting DEBITED: the claim is consumed (so /authorize 409s
-        // forever) while the on-chain outcome is unknown — the operation may
-        // or may not have landed. Auto-refunding would pay twice if it did;
-        // leaving it CREATED hides that money may have moved with no record.
-        // Review is the only honest state: an operator checks the chain.
+        // Crash between submitting the user-signed UserOperation and
+        // persisting DEBITED. The claim is consumed (/authorize now 409s) and
+        // the operation may or may not have landed. A refund would pay twice
+        // if it did, and CREATED would hide a possible debit, so an operator
+        // checks the chain.
         store.updateTransfer(t.id, {
           state: "MANUAL_REVIEW",
           error:
@@ -715,14 +712,12 @@ export async function executeTransfer(
     let usdcOut: number;
     if (execution?.batch) {
       // 1+2 fused: the user-signed batch takes the fee, approves the venue and
-      // swaps — atomically, with the output delivered straight to the batch
-      // recipient. The orchestrator never holds the input; its job here is to
-      // refuse on staleness BEFORE anything moves, then MEASURE what arrived.
-      // The expiry check matters here specifically: the non-batch path's
-      // venue execute() refuses expired quotes itself, but the batch never
-      // calls execute — and the authorization window (15 min) outlives the
-      // quote TTL (10 min), so without this a signed-late batch would settle
-      // a price the quote no longer promises, bounded only by minOut.
+      // swaps atomically, delivering straight to the batch recipient. The
+      // orchestrator never holds the input: it refuses on staleness before
+      // anything moves, then measures what arrived.
+      // The expiry check is needed because the batch never calls the venue's
+      // execute() (which refuses expired quotes), and the authorization window
+      // (15 min) outlives the quote TTL (10 min).
       if (transfer.liquidity?.expiresAt && Date.now() > Date.parse(transfer.liquidity.expiresAt)) {
         throw new Error("liquidity quote expired before the batch was submitted — create the transfer again");
       }
@@ -748,12 +743,10 @@ export async function executeTransfer(
       const delivered = (await balanceAfterWrite(a.usdc, recipient, before)) - before;
       const minOut = BigInt(transfer.liquidity?.minOut ?? "0");
       if (delivered < minOut) {
-        // The venue call enforces the floor, so landing here means the
-        // recipient read is stale or the output landed somewhere this plan
-        // does not describe — either way the one thing NOT to do is settle a
-        // payout against money we cannot see. With the swap step recorded
-        // above, compensation reviews this as post-swap rather than
-        // mis-refunding it as unswapped.
+        // The venue enforces the floor, so this means a stale recipient read or
+        // output delivered elsewhere. Don't settle a payout against money we
+        // cannot see. The swap step recorded above makes compensation treat
+        // this as post-swap.
         throw new Error(
           `Safe swap batch delivered ${delivered} to ${recipient}, below the signed floor ${minOut}`,
         );
@@ -808,12 +801,11 @@ export async function executeTransfer(
     let bridgePlan: BridgeTransferPlan;
     try {
       const destination = bridgeDestination();
-      // A batched live send already created this Bridge transfer at CREATION
-      // (that is where its deposit address came from), so this call is an
-      // idempotent replay and must carry the SAME body — the recorded amount
-      // and the user's Safe as source — not the measured delivery. A replay
-      // with a different body under one idempotency key is either rejected or
-      // silently answered with the original, both wrong.
+      // A batched live send created this Bridge transfer at creation (for its
+      // deposit address), so this is an idempotent replay and must send the
+      // same body: the recorded amount and the user's Safe as source. A
+      // different body under one idempotency key is rejected or answered with
+      // the original.
       const batchLive = execution?.batch?.mode === "live";
       bridgePlan = await createBridgeTransfer(
         transfer.id,

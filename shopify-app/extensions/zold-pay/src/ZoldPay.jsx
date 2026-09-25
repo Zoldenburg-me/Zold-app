@@ -5,15 +5,15 @@ import { useEffect, useState } from "react";
  * whichever surface mounted it (checkout vs customer-account expose the same
  * component set under different packages).
  *
- * WHAT IT SHOWS, and only what the API says:
+ * It shows what the API returns:
  *  - while the webhook is on its way: "preparing your payment" (404 pending);
  *  - OPEN: the EUR total, the exact USDC figure, the address, a QR of the
  *    EIP-681 URI, the chain, and how long the request stays open;
  *  - PAID: the payment was seen; the order is being marked paid;
  *  - EXPIRED / CANCELLED: the request closed, with the pay link still shown
  *    so the buyer can reach the merchant's page.
- * It never computes an amount itself and never says "paid" before the API
- * does — the API is what marks the order paid in Shopify.
+ * It computes no amounts and shows "paid" only after the API does, since the
+ * API marks the order paid in Shopify.
  */
 const POLL_MS = 4000;
 const PENDING_GIVE_UP_MS = 90_000;

@@ -1,22 +1,18 @@
 /**
- * /api/gnosis-pay — the user's own connected Gnosis Pay card account.
+ * /api/gnosis-pay: the user's own connected Gnosis Pay card account.
  *
- * A router factory taking requireSession, so server.ts stays the single owner
- * of authentication (same shape as the orgs/business routers).
+ * A router factory taking requireSession, so server.ts stays the only owner of
+ * authentication (same shape as the orgs/business routers).
  *
- * THE SHAPE, and why it is a proxy rather than a store: Gnosis Pay's JWT
- * belongs to the user's account with THEM. The browser holds it for the length
- * of a session and sends it on each call; this process never persists it. So
- * every read here takes the token from a header and forwards it. That is the
- * whole reason these routes exist rather than the browser calling Gnosis Pay
- * directly — their API is not CORS-open to our origin, and putting the token
- * through a server we control keeps it out of a cross-origin request.
+ * This is a proxy. Gnosis Pay's JWT belongs to the user's account with them;
+ * the browser holds it for the session and sends it on each call, and this
+ * process never persists it. The routes exist because their API is not
+ * CORS-open to our origin.
  *
- * WHAT IS DELIBERATELY ABSENT (docs/gnosis-pay-permissionless-integration.md,
- * PR sequence): signup, terms, KYC, phone OTP, Safe deploy, card creation and
- * funding. This is the auth + read-only foundation. Adding
- * the write paths before the read paths are stable is how a half-onboarded
- * user ends up stuck between two systems with no way back.
+ * Not built yet (docs/gnosis-pay-permissionless-integration.md, PR sequence):
+ * signup, terms, KYC, phone OTP, Safe deploy, card creation and funding. This
+ * is the auth and read-only layer. Keep the write paths out until reads are
+ * stable, or a half-onboarded user gets stuck between two systems.
  */
 import express from "express";
 import { GNOSIS_PAY, SECURITY } from "../config.js";
@@ -39,8 +35,8 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
 /**
  * Permissionless mode has no webhooks and no partner attribution. Every
- * response says so, because a card balance rendered with no provenance reads
- * as Zold's number about Zold's card, and it is neither.
+ * response says so, so a card balance is not read as Zold's figure for a
+ * Zold card.
  */
 const PROVENANCE = {
   source: "gnosis-pay" as const,
@@ -85,12 +81,9 @@ export function createGnosisPayRouter(requireSession: SessionResolver): express.
   const r = express.Router();
 
   /**
-   * Segment gate for the whole router.
-   *
-   * Gnosis Pay is EU_FULL only. Enforced here rather than per-route so a new
-   * endpoint added later cannot forget it — the gate is the door, not a note
-   * on each room. A pre-segmentation account defaults to EU_FULL for the same
-   * migration reason as the server-side guard.
+   * Segment gate for the whole router: Gnosis Pay is EU_FULL only. It sits on
+   * the router so a new endpoint cannot miss it. A pre-segmentation account
+   * defaults to EU_FULL, as in the server-side guard.
    */
   r.use((req, res, next) => {
     const session = requireSession(req, res);

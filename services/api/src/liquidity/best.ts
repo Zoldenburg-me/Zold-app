@@ -1,26 +1,20 @@
 /**
  * Best execution across every wired venue.
  *
- * WHY THIS HAS TO EXIST once there is more than one venue. LI.FI aggregates,
- * the Uniswap adapter sees one pool; picking between them by config means
- * settling at the worse price every time the other is better, silently. The
- * live numbers make that concrete rather than theoretical — LI.FI quoted
- * 1.1506 on Base where a single pool would have been whatever that pool held.
+ * LI.FI aggregates and the Uniswap adapter sees one pool, so picking one by
+ * config settles at the worse price whenever the other is better (LI.FI
+ * quoted 1.1506 on Base, where a single pool gives whatever it holds).
  *
- * Venues are quoted in PARALLEL and the largest out for the same in wins. A
- * venue that refuses does not sink the trade; a venue that refuses for a reason
- * that should stop the trade (a price the independent mid disagrees with) has
- * already refused inside its own quote(), which is why that guard lives per
- * venue rather than here.
+ * Venues are quoted in parallel and the largest out for the same in wins. One
+ * venue refusing does not sink the trade. The price-vs-mid guard runs inside
+ * each venue's own quote(), so a bad price has already refused there.
  *
- * Every venue's answer is recorded on the quote, including the losers and the
- * reasons they failed, so the choice can be reviewed afterwards instead of
- * being a number that appeared from nowhere.
+ * Every venue's answer, including losers and their failure reasons, is
+ * recorded on the quote so the choice can be reviewed later.
  *
- * NOT netted against gas. On the L2s in play gas is cents against a
- * corridor-sized trade, and pretending to a precision we do not have would be
- * worse than the omission — but it does mean a venue that wins by a hair on
- * price could lose on cost. Revisit if venues ever land that close.
+ * Not netted against gas: on these L2s gas is cents against a corridor-sized
+ * trade. A venue that wins on price by a hair could still lose on cost;
+ * revisit if venues land that close.
  */
 import { LIQUIDITY } from "../config.js";
 import {
@@ -37,8 +31,7 @@ export class BestExecutionProvider implements LiquidityProvider {
   private indicative: { at: number; rate: number; raw: bigint } | null = null;
 
   /** Venues may be injected. Tests need that because config is frozen at first
-   *  import, so an env flip afterwards silently exercises the default and
-   *  passes for the wrong reason. */
+   *  import, so a later env change would test the default venues instead. */
   constructor(
     private injected?: { id: string; provider: LiquidityProvider }[],
     /** How to build a venue by id. Injected by the seam rather than imported
@@ -96,10 +89,9 @@ export class BestExecutionProvider implements LiquidityProvider {
 
   /**
    * Best execution over the venues that can serve a Safe executor. Venues
-   * without safeSwapPlan (FxSwapper, CoW) are excluded HERE, not silently
-   * downgraded — their absence is recorded in routing so a route choice under
-   * this mode stays auditable. All capable venues failing refuses, and the
-   * transfer falls back to the plain user-signed debit path.
+   * without safeSwapPlan (FxSwapper, CoW) are excluded here and their absence
+   * is recorded in routing. If every capable venue fails this refuses, and
+   * the transfer falls back to the plain user-signed debit path.
    */
   async safeSwapPlan(
     side: LiquiditySide,

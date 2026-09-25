@@ -83,9 +83,8 @@ export function draftDueDate(org: Organisation, issueDate: string): string | und
  * Build a draft from the request, filling the issuer from the organisation and
  * the VAT treatment from what the user chose.
  *
- * THE DEFAULT MATTERS: a Kleinunternehmer must never be handed a VAT rate by
- * default. Showing tax you do not owe makes you liable for it under §14c, and a
- * default is exactly where that would slip through unnoticed.
+ * A Kleinunternehmer must not get a VAT rate by default: showing tax you do
+ * not owe makes you liable for it under §14c.
  */
 export function draftFrom(org: Organisation, body: Record<string, any>): InvoiceDraft {
   const inv = org.invoicing ?? {};
@@ -139,9 +138,8 @@ export function draftFrom(org: Organisation, body: Record<string, any>): Invoice
           : "This organisation is registered under a small-business scheme and must not charge VAT. Turn that off in the invoicing profile first, or issue the invoice exempt.",
       );
     }
-    // No default rate outside Germany: 19 is a German number, and quietly
-    // applying it to a Polish or Swedish entity is exactly the wrongness this
-    // jurisdiction split exists to remove.
+    // No default rate outside Germany: 19 is the German rate and would be
+    // wrong for, say, a Polish or Swedish entity.
     const raw = body.vat?.rate ?? inv.defaultVatRate ?? (jur.ruleSet === "DE" ? 19 : undefined);
     if (raw === undefined) {
       throw new InvoiceComplianceError(
@@ -189,12 +187,10 @@ export function draftFrom(org: Organisation, body: Record<string, any>): Invoice
 /**
  * Attach the settlement-currency restatement to a foreign-currency draft.
  *
- * The rate is fetched ONCE, here, and frozen onto the document: an invoice is a
- * statement about a moment, and a euro figure re-derived later from whatever a
- * feed says then is not the figure the customer was given. A feed that is
- * unavailable leaves the conversion absent, and `checkCompliance` then refuses
- * the invoice — which is the right outcome, because § 16 Abs. 6 wants the euro
- * tax amount and we would otherwise be issuing without it.
+ * The rate is fetched once, here, and frozen onto the document, so the euro
+ * figure stays the one the customer was given. If the feed is unavailable the
+ * conversion is left absent and `checkCompliance` refuses the invoice, since
+ * § 16 Abs. 6 requires the euro tax amount.
  */
 export async function withConversion(draft: InvoiceDraft): Promise<InvoiceDraft> {
   const currency = draft.currency ?? SETTLEMENT_CURRENCY;
@@ -203,8 +199,7 @@ export async function withConversion(draft: InvoiceDraft): Promise<InvoiceDraft>
   try {
     totals = computeTotals(draft.lines, draft.treatment);
   } catch {
-    // Lines that do not compute are reported by checkCompliance in its own
-    // words; converting nothing is not this function's problem to describe.
+    // checkCompliance reports lines that do not compute.
     return draft;
   }
   try {
