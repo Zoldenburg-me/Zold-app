@@ -3,10 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  AbandonedLegacySafeError,
   CANDIDE,
-  accountForPlan,
-  isAbandonedLegacySafe,
   passkeySafeRecoverySetupTransactions,
   smartAccountForPasskey,
   webauthnOwnerFromJwk,
@@ -77,7 +74,7 @@ const plan = passkeySafePlan(
 );
 assert.ok(plan, "an ES256 passkey must produce a Safe plan");
 assert.equal(plan.threshold, 1, "a new Safe must be 1-of-1");
-assert.equal(plan.cosignerAddress, undefined, "a new Safe must not list a co-signer owner");
+assert.equal((plan as any).cosignerAddress, undefined, "a new Safe must not list a co-signer owner");
 assert.equal((plan as any).cosignerPolicy, undefined, "a new plan must not carry an allowance policy");
 assert.equal(
   plan.address.toLowerCase(),
@@ -85,33 +82,20 @@ assert.equal(
   "a new plan's address must be the passkey-only counterfactual address",
 );
 
-/* ---- Legacy 2-of-2 Safes are abandoned ----------------------------------
-   The co-signer key is gone, so a Safe that still lists it cannot sign.
-   Every operation goes through accountForPlan, which refuses it up front. */
-const legacyPlan = {
-  address: "0x2222222222222222222222222222222222222222" as const,
-  threshold: 2 as const,
-  cosignerAddress: guardian,
-  passkeyPublicKey: webauthnOwnerToStore(passkeyOwner),
-};
-assert.ok(isAbandonedLegacySafe(legacyPlan));
-assert.ok(!isAbandonedLegacySafe(plan));
-assert.throws(() => accountForPlan(legacyPlan), AbandonedLegacySafeError);
-// A Safe whose co-signer was removed before retirement is a live 1-of-1,
-// addressed directly because its owners no longer derive its address.
-const removedPlan = { ...legacyPlan, cosignerAddress: undefined, threshold: 1 as const, cosignerRemovedAt: new Date().toISOString() };
-assert.equal(accountForPlan(removedPlan).account.accountAddress.toLowerCase(), legacyPlan.address.toLowerCase());
-
-// No code may sign with, or require, a co-signer key.
+// The co-signer is gone entirely: no code signs with it, requires it, or even
+// models a Safe that lists it.
 for (const rel of [
   "services/api/src/wallet/candide.ts",
   "services/api/src/routes/auth.ts",
   "services/api/src/routes/monerium.ts",
   "services/api/src/orchestrator.ts",
   "services/api/src/transfers/build.ts",
+  "services/api/src/store/types.ts",
+  "services/api/src/wallet/passkey-safe-plan.ts",
+  "services/api/src/routes/recovery-candide.ts",
 ]) {
   const source = readFileSync(path.join(ROOT, rel), "utf8");
-  assert.ok(!source.includes("cosignerKey"), `${rel} must not read a co-signer key`);
+  assert.ok(!/cosigner/i.test(source), `${rel} must not mention a co-signer`);
 }
 const authRoutes = readFileSync(path.join(ROOT, "services/api/src/routes/auth.ts"), "utf8");
 assert.ok(!authRoutes.includes("cosigner-removal"), "the co-signer removal route is gone with the key");

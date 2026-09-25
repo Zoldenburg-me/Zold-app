@@ -18,7 +18,6 @@ import { assertDailyCap, requireKycApproved } from "../http/guards.js";
 import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
-  isAbandonedLegacySafe,
   prepareTransferBatchExecution,
   prepareTransferExecution,
   safeMessageHash,
@@ -215,12 +214,6 @@ async function prepareTransferFromQuote(
       user.passkey?.credentialId &&
       user.passkeySafe?.status === "active" &&
       user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
-      // An abandoned legacy 2-of-2 Safe cannot sign. Keep this identical to
-      // the orchestrator's passkeySafeExecutionReady: requiring more here
-      // creates transfers that pass the readiness blocker, never get an
-      // execution prepared, and fail at authorize with an error that blames
-      // the user.
-      !isAbandonedLegacySafe(user.passkeySafe) &&
       !HARNESS.enabled
     ) {
       try {

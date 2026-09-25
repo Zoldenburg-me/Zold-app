@@ -43,11 +43,6 @@ function renderProfileScreen() {
     { icon: "key", t: "Device spending key", d: "Signs the amount and the payee before anything moves", st: u.authorizerAddress ? "Bound" : "Not bound" },
     { icon: "health_and_safety", t: "Managed recovery", d: "Guardian can restore a lost passkey", st: safe?.recovery?.status === "active" ? "Active" : "Not enabled" },
   ];
-  /* A Safe deployed before the co-signer was retired, and never cleared of
-     it, is abandoned: the co-signer key is gone, so it cannot sign. */
-  if (safe?.cosignerAddress) {
-    security.push({ icon: "group", t: "Legacy 2-of-2 smart account", d: "Zold's co-signer was retired, so this account can no longer sign", st: "Abandoned" });
-  }
   $("m-pf-security").innerHTML = security.map((r) => `
     <div class="m-secrow"${r.action ? ` data-sec-action="${r.action}" style="cursor:pointer"` : ""}>
       <span class="material-symbols-rounded">${r.icon}</span>

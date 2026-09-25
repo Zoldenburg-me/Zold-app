@@ -432,7 +432,7 @@ function renderShellPages() {
   $("acct-address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — not deployed` : (user.address || "—");
   document.querySelector('[data-copy="acct-address"]')?.classList.toggle("hidden", !!plannedSafe);
   $("acct-owner").textContent = user.passkeySafe?.status === "active"
-    ? (user.passkeySafe?.cosignerAddress ? "abandoned legacy 2-of-2 — cannot sign" : "passkey")
+    ? "passkey"
     : "passkey setup required";
   $("acct-kyc").textContent = kycCopy(user.kycStatus, user)[1];
   $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
@@ -447,9 +447,7 @@ function renderShellPages() {
   const safe = user.passkeySafe;
   $("set-wallet-policy").textContent = !safe
     ? "Passkey Safe not planned yet."
-    : safe.cosignerAddress
-      ? "Legacy 2-of-2 Safe · abandoned — Zold's co-signer was retired, so this Safe can no longer sign"
-      : `Passkey-only Safe · you are its only owner and sign every movement with your passkey.`;
+    : `Passkey-only Safe · you are its only owner and sign every movement with your passkey.`;
   renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
     ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`

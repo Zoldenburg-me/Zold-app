@@ -659,33 +659,7 @@ try {
     assert.equal(r.status, 409);
   });
 
-  /* ---- Legacy 2-of-2 Safe: abandoned ---------------------------------
-     No API path creates a 2-of-2 Safe any more, so seed one: stop the API and
-     rewrite this account's plan as a Safe that still lists the retired
-     co-signer. The co-signer key is gone, so such a Safe cannot sign; it must
-     stay visible (gating is a read-time filter) and nothing may offer to fix
-     it. accountForPlan's refusal is covered by passkey-safe:test. */
-  console.log("then: a legacy 2-of-2 Safe is abandoned…");
-  const COSIGNER = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc" as const;
-  await new Promise<void>((r) => { api.once("exit", () => r()); api.kill("SIGTERM"); });
-  {
-    const dbPath = process.env.TRANSF_DB_PATH!;
-    const db = JSON.parse(readFileSync(dbPath, "utf8"));
-    const u = db.users.find((x: any) => x.id === userId);
-    u.passkeySafe = { ...u.passkeySafe, threshold: 2, cosignerAddress: COSIGNER };
-    writeFileSync(dbPath, JSON.stringify(db));
-  }
-  api = bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], apiEnv);
-  await waitForApi();
-
-  await t("an abandoned legacy Safe is still visible, address and all", async () => {
-    const me = await call(`/api/users/${userId}`);
-    assert.equal(me.status, 200, JSON.stringify(me.data));
-    assert.equal(me.data.passkeySafe.cosignerAddress, COSIGNER);
-    assert.equal(me.data.passkeySafe.address, safeAddress);
-  });
-
-  await t("the co-signer removal route is gone with the key", async () => {
+  await t("there is no co-signer removal route", async () => {
     const r = await call(`/api/users/${userId}/passkey-safe/cosigner-removal`, {});
     assert.equal(r.status, 404, JSON.stringify(r.data));
   });

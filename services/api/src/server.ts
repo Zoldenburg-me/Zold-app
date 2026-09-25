@@ -50,7 +50,7 @@ import {
   warnIfSmartAccountChainDiffers,
   publicClient,
   } from "./chain.js";
-import { AbandonedLegacySafeError, CANDIDE, SafeGasError } from "./wallet/candide.js";
+import { CANDIDE, SafeGasError } from "./wallet/candide.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -186,9 +186,9 @@ app.use(((err, _req, res, next) => {
   // response and no error at all. Hand those to express's default handler,
   // which closes the connection properly.
   if (res.headersSent) return next(err);
-  // Refusals the user or operator can act on: an abandoned legacy Safe, or a
-  // Safe that cannot pay its gas. Their messages name no secret.
-  if (err instanceof AbandonedLegacySafeError || err instanceof SafeGasError) {
+  // A Safe that cannot pay its gas is something the user or operator can fix,
+  // and the message names no secret.
+  if (err instanceof SafeGasError) {
     return res.status(err.status).json({ error: err.message });
   }
   const detail = String(err?.shortMessage ?? err?.message ?? err);
@@ -306,16 +306,6 @@ app.listen(API_PORT, API_HOST, () => {
   }
   if (CUSTODY.requireNonCustodial) {
     console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
-  }
-  // Legacy 2-of-2 Safes (the retired co-signer still an owner) are abandoned:
-  // no co-signer key is configured, so they cannot sign. Name them once so an
-  // operator knows why those accounts refuse every operation.
-  const legacy = store.users.filter((u) => u.passkeySafe?.cosignerAddress);
-  if (legacy.length) {
-    console.warn(
-      `LEGACY SAFES: ${legacy.length} account(s) have an abandoned 2-of-2 Safe with the retired co-signer ` +
-        `as an owner (${legacy.map((u) => u.id).join(", ")}); every operation on them is refused.`,
-    );
   }
   if (process.env.CANDIDE_COSIGNER_KEY) {
     console.warn("NOTE: CANDIDE_COSIGNER_KEY is set but nothing reads it any more — remove it from the environment.");

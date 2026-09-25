@@ -425,8 +425,7 @@ function assertProductionConfig() {
     if (!process.env.TRUSTED_PROXY_HOPS) {
       fail("TRUSTED_PROXY_HOPS must be explicit for hosted production");
     }
-    // No co-signer is required: Safes are passkey-only (1-of-1), and legacy
-    // 2-of-2 Safes are abandoned; server.ts names any such account at startup.
+    // No co-signer is required: Safes are passkey-only (1-of-1).
     // No standing allowance is required either: the user's passkey approves
     // each transfer for its exact debit amount at send time.
     if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS) {

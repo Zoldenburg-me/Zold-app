@@ -123,30 +123,6 @@ const paymaster = () =>
 const INCLUSION_TIMEOUT_S = 180;
 const INCLUSION_POLL_S = 2;
 
-/**
- * A Safe whose stored plan still lists the retired Zold co-signer as a second
- * owner. Those Safes are abandoned: the co-signer key is no longer configured,
- * so they cannot sign anything, and every operation refuses up front with
- * this rather than failing halfway through a passkey ceremony. The stored plan
- * is kept (gating is a read-time filter, never a delete) so the address and
- * any balance on it stay visible.
- */
-export class AbandonedLegacySafeError extends Error {
-  readonly status = 409;
-  constructor(address: string) {
-    super(
-      `Safe ${address} is a legacy 2-of-2 with the retired Zold co-signer as an owner. ` +
-        `Those Safes are abandoned and can no longer sign; create a new passkey Safe.`,
-    );
-    this.name = "AbandonedLegacySafeError";
-  }
-}
-
-/** Is this plan a legacy 2-of-2 Safe that still lists the co-signer? */
-export function isAbandonedLegacySafe(plan: { cosignerAddress?: string } | undefined | null): boolean {
-  return Boolean(plan?.cosignerAddress);
-}
-
 function b64urlToBigInt(value: string): bigint {
   const buf = Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64");
   return BigInt(`0x${buf.toString("hex")}`);
@@ -176,11 +152,7 @@ export function smartAccountForPasskey(passkeyOwner: WebauthnPublicKey): SafeAcc
 
 export interface PasskeySafeDeploymentPlan {
   address: `0x${string}`;
-  threshold: 1 | 2;
-  /** LEGACY: set on Safes deployed as 2-of-2 before the co-signer was retired.
-   *  Such a Safe is abandoned (AbandonedLegacySafeError); nothing reads it but
-   *  that check. */
-  cosignerAddress?: `0x${string}`;
+  threshold: 1;
   passkeyPublicKey: { x: string; y: string };
   recovery?: {
     moduleAddress: `0x${string}`;
@@ -190,9 +162,6 @@ export interface PasskeySafeDeploymentPlan {
   /** A recovered Safe: its address is fixed and no longer derives from the
    *  current owner set, so it is addressed rather than computed. */
   recoveredAt?: string;
-  /** The legacy co-signer was removed from the owner set. Like recoveredAt,
-   *  the address no longer derives from the owners. */
-  cosignerRemovedAt?: string;
 }
 
 export interface BrowserPasskeyAssertion {
@@ -494,9 +463,8 @@ export async function ethBalance(address: string): Promise<bigint> {
  * built from the address alone and the derivation would be wrong.
  */
 export function accountForPlan(plan: PasskeySafeDeploymentPlan): { account: SafeAccount; passkeyOwner: WebauthnPublicKey } {
-  if (isAbandonedLegacySafe(plan)) throw new AbandonedLegacySafeError(plan.address);
   const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  if (plan.recoveredAt || plan.cosignerRemovedAt) {
+  if (plan.recoveredAt) {
     return { account: new SafeAccount(plan.address), passkeyOwner };
   }
   const account = smartAccountForPasskey(passkeyOwner);
