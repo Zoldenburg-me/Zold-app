@@ -2,26 +2,8 @@
 
 ## Start here
 
-This file is the map and the invariants. The *reasoning* — what was tested,
-what broke, what was rejected and why — was in `docs/notes/` and was
-removed from the public repo and its history (Sep 2026), along with partner
-outreach and proposal docs. They live in `.private/docs-archive/` (gitignored,
-local to the operator's clone only). If it is missing, ask the user for it. It is decision history, not a
-tutorial: a claim marked VERIFIED was checked against a live chain, API or
-bytecode. If you contradict one, re-test before rewriting it, and say what you
-ran.
-
-| you are about to… | read |
-|---|---|
-| touch money movement, FX, a swap, the cash rail or Stellar | `.private/docs-archive/docs/notes/money-movement.md` |
-| touch keys, passkeys, sessions, custody, recovery or Monerium | `.private/docs-archive/docs/notes/identity-and-security.md` |
-| touch the org domain, drafts, currencies or invoices | `.private/docs-archive/docs/notes/business-and-invoicing.md` |
-| touch payment links, Shopify, receipts or the card | `.private/docs-archive/docs/notes/payments-and-checkout.md` |
-| touch the mobile UI, the PWA, chain selection or deployments | `.private/docs-archive/docs/notes/app-and-chains.md` |
-| wonder why a guard looks arbitrary | `.private/docs-archive/docs/notes/review-passes.md` |
-| look for a file that moved, or move one | `.private/docs-archive/docs/notes/code-layout.md` |
-| talk to a payout, card or funding partner | `.private/docs-archive/docs/notes/roadmap-and-partners.md` |
-| pick up someone else's branch | Multi-agent workflow, below |
+This file is the map and the invariants. If you pick up someone else's branch,
+read the multi-agent workflow below first.
 
 Architecture (read from code, Sep 2026): `docs/architecture/product-architecture.md`
 (what exists, with status per feature) and `docs/architecture/technical-architecture.md`
@@ -72,7 +54,7 @@ THREE RULES OVERRIDE CONVENIENCE:
 ## Where the code lives
 
 The modularity pass (Sep 2026) split the five big files; every move was a MOVE
-(no behaviour change). Full table and reasoning: `.private/docs-archive/docs/notes/code-layout.md`.
+(no behaviour change).
 
 - `server.ts` is wiring only (~320 lines): routers under `routes/`, the shared
   HTTP layer under `http/`, and **`transfers/build.ts` is the ONE path that
@@ -97,7 +79,7 @@ The modularity pass (Sep 2026) split the five big files; every move was a MOVE
 
 ## Invariants
 
-Each of these was a bug once. The reasoning is in `.private/docs-archive/docs/notes/`.
+Each of these was a bug once.
 
 **Money**
 - **No debit without a user signature.** `POST /api/transfers` prepares the
@@ -287,10 +269,6 @@ Shopify path in front of a privacy-sensitive merchant until it exists.
 
 ## Roadmap (agreed priority)
 
-Condensed. Per-partner detail — dLocal's sandbox, Mony's fee and KYC-tier
-constraints, Immersve's three funding protocols, the verified Monerium sandbox
-chain names — is in `.private/docs-archive/docs/notes/roadmap-and-partners.md`.
-
 0. **Payout partners**: dLocal (stablecoin-funded payouts, 60+ markets) and
    Yellow Card (Africa, settles natively in USDC). Both uncontracted. Pin down
    settlement currency, prefunding, fees/FX, recipient KYC ownership, caps.
@@ -306,8 +284,7 @@ chain names — is in `.private/docs-archive/docs/notes/roadmap-and-partners.md`
    than a reseller; Base and Polygon both covered). The catch: **USDC/USDT only,
    no EURe**, so a card puts EUR/USD FX between a balance and a spend — which
    disappears on the *recipient* side. They run their own KYC, so it is a second
-   identity relationship, not a reuse of Monerium's. Read the 1inch Aqua
-   sections of `.private/docs-archive/docs/notes/roadmap-and-partners.md` before relying on this:
+   identity relationship, not a reuse of Monerium's. Note:
    Immersve withdrawals are NOT permissionless, the Bank of Lithuania cut its
    EEA issuer channel (Dec 2025), Kulipa is dead, and Exodus now owns Baanx and
    Monavate. Proposal only; nothing card-side is built.
