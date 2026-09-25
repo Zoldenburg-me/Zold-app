@@ -10,7 +10,7 @@ closed (no BRIDGE_LIVE, no anchor).
 
 ## Shape
 
-    browser ──https──▶ Cloudflare edge ──tunnel──▶ cloudflared (this Mac) ──▶ 127.0.0.1:3000
+    browser ──https──▶ Cloudflare edge ──tunnel──▶ cloudflared (this Mac) ──▶ 100.0.0.1:3000
 
 The API keeps binding `127.0.0.1`. That is correct and worth preserving: the
 app is reachable only through the tunnel, never from the LAN, and there is no
@@ -41,7 +41,7 @@ Write `~/.cloudflared/config.yml` (substitute the id printed by `create`):
     credentials-file: /Users/xxx/.cloudflared/<TUNNEL_ID>.json
     ingress:
       - hostname: zoldhq.com
-        service: http://127.0.0.1:3000
+        service: http://100.0.0.1:3000
       - service: http_status:404
 
 Then, in two terminals:
