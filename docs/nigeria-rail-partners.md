@@ -47,12 +47,12 @@ Everything we need is documented:
  - A **mock sandbox** to build against without moving money.
  - Two documented integration paths: **Fintech Partner** and **Direct User**.
 
-STANDING ACCESS IS THE POINT. API keys plus real-time webhooks means we can
-observe a settlement that lands hours later, while nobody is looking at the
-screen. That is the property that makes the Monerium adapter work and the
-Gnosis Pay one only a viewer — see the rule in CLAUDE.md.
+**Standing access.** API keys plus real-time webhooks let us observe a
+settlement that lands hours later, while nobody is looking at the screen. The
+Monerium adapter has that property and the Gnosis Pay one, which is only a
+viewer, does not (see the rule in CLAUDE.md).
 
-ANSWERED FROM THE DOCS — offramp needs THEIR wallet. Both `/cngnofframp` and
+**Answered from the docs: offramp needs their wallet.** Both `/cngnofframp` and
 `/initiateofframp` draw on a Strails-deployed Smart Wallet, and the fintech
 response reports `walletSource: "system_wallet"`. There is no call that
 offramps from an arbitrary source address.
@@ -61,28 +61,28 @@ The onramp params offer a custom owner EOA, but it is mutually exclusive with
 the exit: "Strails cannot withdraw funds from wallets with a custom owner." You
 get their custody and the offramp, or your control and no offramp.
 
-SECOND, ARCHITECTURAL, AND SPECIFIC TO US: their Smart Wallet is an EIP-1167
-minimal proxy with an owner EOA calling `execute()`, and they state plainly that
-they do not use UserOperations, paymasters or the ERC-4337 EntryPoint, with the
-owner paying gas in the native token. Zold accounts are ERC-4337 passkey Safes
-with NO EOA and NO private key — that is the whole point of the device key. So a Zold account
-cannot own a Strails wallet in the way their flow assumes.
+**Architectural, and specific to us.** Their Smart Wallet is an EIP-1167
+minimal proxy with an owner EOA calling `execute()`. They state that they do
+not use UserOperations, paymasters or the ERC-4337 EntryPoint; the owner pays
+gas in the native token. Zold accounts are ERC-4337 passkey Safes with no EOA
+and no private key, by design of the device key, so a Zold account cannot own a
+Strails wallet in the way their flow assumes.
 
-THE SHAPE THAT DOES WORK, and it is already precedented here: user's Safe signs
-a cNGN transfer into a Strails wallet, Strails settles naira. That is a
-deposit-address flow, the same shape the cash rail uses with Bridge — where
-CLAUDE.md already records that once the funds land they are with the settlement
-custodian. Buildable and honest, but it IS a custody hop and `transfer.custody`
-would need a value for "delivered to an external settlement custodian" rather
-than being squeezed into `orchestrator`.
+**The shape that works** has a precedent here: the user's Safe signs a cNGN
+transfer into a Strails wallet, and Strails settles naira. That is a
+deposit-address flow, the same shape the cash rail uses with Bridge, where
+CLAUDE.md records that once the funds land they are with the settlement
+custodian. It is buildable, but it is a custody hop: `transfer.custody` would
+need its own value for "delivered to an external settlement custodian", since
+`orchestrator` does not describe it.
 
-AVOID THE FX PATH unless it is needed: their orderbook requires registering an
+**Avoid the FX path** unless it is needed: their orderbook requires registering an
 MPC Vault and handing Strails both `mpcVaultApiKey` and
 `mpcClientSignerPrivateKey` — an OpenSSH private key — under a disclaimer that
 "Strails assumes no liability for losses arising from the use of MPC Vault
 services". Plain offramp does not require it.
 
-WHAT IS STILL NOT DISCLOSED: no operating entity, no jurisdiction, no licence,
+**Still not disclosed:** no operating entity, no jurisdiction, no licence,
 and nothing about whether a foreign company can onboard.
 
 ### Flint API

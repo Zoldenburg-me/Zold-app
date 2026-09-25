@@ -63,15 +63,14 @@ a liquidity protocol.
   Pay, and Gnosis Pay's Safe is Gnosis Pay's, not the user's.
 - **You have to pre-load it, and loaded money stops being anything else.** It
   earns nothing, votes nothing, collateralises nothing, provides no liquidity.
-  This is *precisely* the "DeFi-disabled capital" complaint the Aqua whitepaper
-  opens with, applied to spending instead of to LP positions. 1inch is arguing
-  against pooled custody in one product and requiring it in another.
+  This is the "DeFi-disabled capital" complaint the Aqua whitepaper opens with,
+  applied to spending instead of to LP positions. 1inch argues against pooled
+  custody in one product and requires it in another.
 - **The economics leak to a third party.** Published figures: 1.75% conversion
-  fee, 2% cashback in BXX — roughly 0.25% net to the user. The conversion spread
-  goes to the card partner rather than through 1inch's own aggregator, which is
-  the single thing 1inch is best in the world at.
-- **The brand cost is the real one.** 1inch's identity is self-custody. The card
-  is the exception, and it is the most consumer-visible product in the suite.
+  fee, 2% cashback in BXX, roughly 0.25% net to the user. The conversion spread
+  goes to the card partner, not through 1inch's own aggregator.
+- **Brand.** 1inch's identity is self-custody. The card is the exception, and it
+  is the most consumer-visible product in the suite.
 
 A card that spends from the user's own wallet fixes all four at once, and the
 fourth for free.
@@ -106,10 +105,9 @@ cannot honour, and the first trade after liquidity returns can lock in an
 adverse move. For a market maker that is path-dependent loss and the paper
 recommends manual docking as the mitigation.
 
-**For a card, that identical condition is a decline.** Declines are a normal,
-expected, free event in every card network on earth. There is no adverse
-selection, no path dependence, no inventory left facing a stale price. The
-failure mode Aqua cannot fully solve for trading is a non-event for payments.
+**For a card, the same condition is a decline.** Declines are routine and cost
+nothing in every card network. There is no adverse selection, no path
+dependence and no inventory facing a stale price.
 
 The amplification argument is also *stronger* here. The whitepaper measures
 85–97% of AMM liquidity sitting idle. A card limit is idle far more than that:
@@ -190,12 +188,11 @@ precedents, checked September 2026:
   permissionless withdrawal.
 
 So "will an issuer let a card spend from the user's own wallet" is settled. The
-real gates are different, and they are worth stating precisely because they are
-what the conversation is actually about:
+remaining gates:
 
 1. **You need a programme manager who has already built the non-custodial
-   authorisation path.** Short list, and Baanx is on it and already contracted
-   with 1inch. Nobody is inventing this from scratch with a bank.
+   authorisation path.** The list is short; Baanx is on it and already
+   contracted with 1inch. Nobody has to build this from scratch with a bank.
 2. **Every one of them binds the card to the provider's own wallet, on the
    provider's own chain.** MetaMask Card spends from a MetaMask smart account on
    Linea. Gnosis Pay spends from a purpose-built Gnosis Pay Safe on Gnosis, which
@@ -210,32 +207,29 @@ what the conversation is actually about:
    in early 2026 subject to US, UK and EU approval. A conversation with Baanx in
    2026 is a conversation with a company mid-acquisition.
 
-**Gate 2 is the hole, and it is where Aqua stops being a nice idea and becomes
-the differentiator.** Aqua is a neutral, ownerless registry deployed
+**Gate 2 is where Aqua matters.** Aqua is a neutral, ownerless registry deployed
 deterministically across thirteen-plus chains, and anything that can call it can
-grant against it — including a Safe the user already has, on a chain the user
-already uses. It is the one piece of this that 1inch owns outright and that no
-competitor can adopt without adopting 1inch's contract. The ask to Baanx is not
-"invent something". It is **"point the non-custodial authorisation path you
-already built for MetaMask at Aqua instead of at one wallet vendor's own
-framework."**
+grant against it, including a Safe the user already has on a chain the user
+already uses. 1inch owns it outright, and a competitor cannot adopt it without
+adopting 1inch's contract. The ask to Baanx is to point the non-custodial
+authorisation path they built for MetaMask at Aqua in place of one wallet
+vendor's own framework.
 
-**The security argument got sharper too.** On 1 June 2026 attackers exploited the
-Zodiac Delay and Roles modules on Gnosis Pay's card Safes; roughly $1.5m was
-extracted and Gnosis covered user losses. The root cause was a missing status
-check in a static call — in a module installed on the user's own wallet. Aqua
-installs nothing on the user's wallet. It holds an ERC-20 allowance and eighty
-lines of accounting with no owner, no pause and no upgrade path. That is a
-strictly smaller surface than the incumbent design, and there is now an incident
-to point at rather than an argument to make.
+**Security.** On 1 June 2026 attackers exploited the Zodiac Delay and Roles
+modules on Gnosis Pay's card Safes; roughly $1.5m was extracted and Gnosis
+covered user losses. The root cause was a missing status check in a static call,
+in a module installed on the user's own wallet. Aqua installs nothing on the
+user's wallet. It holds an ERC-20 allowance and eighty lines of accounting with
+no owner, no pause and no upgrade path, a strictly smaller surface than the
+incumbent design.
 
-**A fourth tier, and why we still prefer Tier A.** Gnosis Pay's Delay Module
+**A fourth tier, and why Tier A stays the default.** Gnosis Pay's Delay Module
 imposes a three-minute delay on the user's *non-card* transactions, which closes
 the double-spend race between an authorisation and the user's own outbound
-transfer without pulling anything at authorisation. Aqua has **no delay
-mechanism**, so that race is real and unhandled: either pull at authorisation
-(Tier A) or install a delay module and accept the surface that just cost Gnosis
-$1.5m. That is the reason Tier A is the default and not merely the safe choice.
+transfer without pulling anything at authorisation. Aqua has no delay mechanism,
+so the race is open: either pull at authorisation (Tier A) or install a delay
+module and accept the kind of surface that cost Gnosis $1.5m. That is why Tier A
+is the default.
 
 
 ## 7. Whose contract does the pulling? The integration question
@@ -273,13 +267,11 @@ balance is meant to back anything else. Aqua gives three ceilings instead of one
 a per-card virtual balance, a `dock()` that kills one card without touching the
 approval, and separate accounting so a card cannot eat a committed payroll.
 
-**And the counter-argument, which their engineer will make and which is fair.**
-For one card with one limit, a raw approval to their own contract is simpler and
-Aqua is a dependency on a third party for accounting they could keep in their own
-storage. Aqua only earns its place when several spending rights sit over one
-balance, and when the accounting should be neutral rather than the card
-programme's private ledger. That is the argument to win, and it is not won by
-asserting it.
+**The counter-argument.** For one card with one limit, a raw approval to their
+own contract is simpler, and Aqua is a third-party dependency for accounting
+they could keep in their own storage. Aqua is only worth it when several
+spending rights sit over one balance and the accounting should be neutral
+rather than the card programme's private ledger.
 
 ### The consequence nobody can design around: `dock()` forces Tier A
 
@@ -289,19 +281,17 @@ it, veto it or see it coming. That is excellent for the cardholder and a genuine
 problem for the issuer, because a cardholder can spend at a terminal and dock
 before clearing.
 
-Gnosis Pay's three-minute Delay Module exists precisely to close this race — its
-defined term in their terms of service says so, "in order to avoid
-double-spending" — and Aqua reopens it. There is no module to add, because Aqua's
-`dock()` is called on Aqua by the user directly and nothing the CardApp does can
-slow it. Note that Gnosis Pay ALREADY reserves at authorisation (their lifecycle
-docs: on approval "money is immediately deducted … and moved to hold account on
-chain"), so for that programme Tier A is not a new settlement model, only a new
-place to pull from.
+Gnosis Pay's three-minute Delay Module exists to close this race (its defined
+term in their terms of service says so, "in order to avoid double-spending"),
+and Aqua reopens it. No module can fix it: the user calls `dock()` on Aqua
+directly, and nothing the CardApp does can slow it. Gnosis Pay already reserves
+at authorisation (their lifecycle docs: on approval "money is immediately
+deducted … and moved to hold account on chain"), so for that programme Tier A is
+not a new settlement model, only a new place to pull from.
 
-**Therefore pull-at-authorisation is not the preferred tier for an Aqua card, it
-is the only safe one.** §5's Tier B stops being available the moment the funding
-source is Aqua. State that up front in any conversation, because it is the sort of
-thing that gets discovered after a contract is signed.
+**So pull-at-authorisation is the only safe tier for an Aqua card.** §5's Tier B
+is unavailable once the funding source is Aqua. Say so at the start of any
+partner conversation.
 
 ### Three routes, and only one of them is a pitch
 
@@ -373,20 +363,18 @@ contract CardApp is AquaApp {
 }
 ```
 
-Four properties fall out of Aqua's design rather than out of this contract, which
-is the point:
+Four properties come from Aqua's design, not from this contract:
 
-- `pull()` takes the app from `msg.sender`, so **only the app the holder shipped
-  to can spend that card**, only up to that card's own virtual limit, and never
+- `pull()` takes the app from `msg.sender`, so only the app the holder shipped
+  to can spend that card, only up to that card's own virtual limit, and never
   above the holder's ERC-20 approval. Three independent ceilings, none of them
   ours to raise.
 - `dock()` zeroes the balance, so a later `pull()` underflows and reverts.
-  **Freeze is immediate and hard**, and it costs one transaction with no funds
-  movement — better than any card network's block file.
+  Freeze is immediate and costs one transaction with no funds movement.
 - Strategies are immutable, so raising a limit is dock-then-ship. That is the
-  correct security property for a card and the wrong UX; the app hides it.
-- Aqua has no admin key and no pause, so there is no party — including 1inch —
-  who can freeze a cardholder's underlying funds.
+  right security property for a card and awkward UX; the app hides it.
+- Aqua has no admin key and no pause, so no party (1inch included) can freeze a
+  cardholder's underlying funds.
 
 **A trap worth writing down now:** `push()` requires an *active* strategy. A
 refund to a docked card **reverts**. So do not dock on card expiry or on
@@ -453,10 +441,10 @@ what this document is about.
 **VERIFIED on chain, Sep 2026, `eth_getCode` plus selector search in the deployed
 bytecode:**
 
-- Aqua registry `0x1111113ccf1426a8e30e2bff5e005d929bf6a90a` is live on **Base
-  mainnet and on Gnosis**, identical bytecode length (11,240 bytes) on both —
-  a deterministic deploy. Both are chains where Monerium issues EURe, and Gnosis
-  is where Gnosis Pay's card Safes already live.
+- Aqua registry `0x1111113ccf1426a8e30e2bff5e005d929bf6a90a` is live on Base
+  mainnet and on Gnosis, with identical bytecode length (11,240 bytes) on both,
+  so a deterministic deploy. Monerium issues EURe on both chains, and Gnosis is
+  where Gnosis Pay's card Safes live.
 - Its deployed bytecode contains the selectors for `ship`, `dock`, `pull`,
   `push` and `rawBalances`, so the repo interface is the deployed interface.
 - **The address in the 1inch developer-release blog post is a different
@@ -465,12 +453,12 @@ bytecode:**
   with the same interface on one chain. Ship to the wrong one and the virtual
   balances sit in a registry no app reads. Pin the address from the repository,
   not from the announcement.
-- **Aqua is NOT deployed on Base Sepolia** (empty code). This is the LI.FI wall
-  again: the card work cannot be exercised on Zold's current test chain. Either
-  fork Base mainnet locally or do this work on Base mainnet or Gnosis.
-- `Aqua.sol` read in full, not summarized: 80 lines, no owner, no pause, no
-  upgradeability, no signature scheme — so **a Safe can be a maker**, since
-  `ship()` and `dock()` key off `msg.sender` with no EOA assumption.
+- Aqua is not deployed on Base Sepolia (empty code). As with LI.FI, the card
+  work cannot be exercised on Zold's current test chain. Either fork Base
+  mainnet locally or do this work on Base mainnet or Gnosis.
+- `Aqua.sol` read in full: 80 lines, no owner, no pause, no upgradeability, no
+  signature scheme. A Safe can be a maker, since `ship()` and `dock()` key off
+  `msg.sender` with no EOA assumption.
 
 **Not verified, and each is a real gate:**
 

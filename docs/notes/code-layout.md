@@ -22,37 +22,37 @@ there. Nothing below changes behaviour. Landed on main as PR #190
 | `public/business.html` 1,482 | 80 of markup + `business.css` + 6 ES modules |
 | `admin.html` 807 | 168 + `admin.css` + `admin.js` |
 
-THE RULES THAT SURVIVED THE MOVE, each because it was deliberately preserved:
- - **server.ts still owns authentication.** Every router is a FACTORY taking
-   `requireUserSession`. A pure projection (`publicUser`) is imported instead —
-   plumbing a pure function through a deps bag only hid where it came from.
- - **ONE path builds a transfer.** `transfers/build.ts` is `buildTransferFromQuote`
-   extracted whole, and the business router is still handed it rather than
-   trusted to rebuild it. `custody:test`'s source grep follows it there.
+Rules kept through the move:
+ - **server.ts still owns authentication.** Every router is a factory taking
+   `requireUserSession`. A pure projection (`publicUser`) is imported directly;
+   passing a pure function through a deps bag only hid where it came from.
+ - **One path builds a transfer.** `transfers/build.ts` is `buildTransferFromQuote`
+   extracted whole, and the business router is handed it, never rebuilds it.
+   `custody:test`'s source grep follows it there.
  - **Route paths lost their `/api` prefix** because the routers are mounted at
    `/api`. The rate limiter reads the mount-relative path either way, so the
-   buckets are unchanged — check that before moving a router's mount point.
+   buckets are unchanged; check that before moving a router's mount point.
  - **`liquidity/best.ts` takes its venue resolver as a constructor argument**
-   rather than importing `providerById` back from the seam. The registry knows
-   every venue; a venue importing the registry is a cycle for no gain.
+   so it does not import `providerById` back from the seam. The registry knows
+   every venue, and a venue importing the registry would be a cycle.
 
-THE TWO BROWSER DECISIONS, which differ on purpose:
- - **`public/app/*.js` are CLASSIC scripts, not modules.** That code shares one
-   scope — `user`, `quote`, `sessionToken` and forty other bindings are read and
-   reassigned across what are now nine files. ES modules export live bindings
-   only the defining module may assign, so going modular means rewriting every
+The two browser trees use different module systems:
+ - **`public/app/*.js` are classic scripts, not modules.** That code shares one
+   scope: `user`, `quote`, `sessionToken` and forty other bindings are read and
+   reassigned across what are now nine files. Only the defining ES module may
+   assign its exported bindings, so going modular means rewriting every
    assignment site. Ordered classic scripts keep the declarative script scope the
-   single inline script already had. THE INVARIANT THAT MAKES IT SAFE: every file
-   but the last holds declarations and event wiring only, and NOTHING CALLS
-   FORWARD into a file loaded later. It was checked mechanically before the cut
-   (all nine bare-identifier wirings and every top-level initialiser resolve
-   backwards) and the boundaries were placed to keep it true. Keep it true.
- - **`public/business/*.js` ARE ES modules**, because that script was already
+   single inline script already had. **Invariant:** every file but the last
+   holds declarations and event wiring only, and nothing calls forward into a
+   file loaded later. This was checked mechanically before the split (all nine
+   bare-identifier wirings and every top-level initialiser resolve backwards),
+   and the file boundaries were placed to keep it true. Keep it true.
+ - **`public/business/*.js` are ES modules**, because that script was already
    `type="module"` and only fifteen places reassign shared state. `core.js`
    owns `org`/`view`/`invoiceDraft` and exports setters; an exported binding is
-   LIVE, so every READ stayed a plain `org` and no read site changed. The import
-   cycles between core, views and shell are cycles of function declarations —
-   nothing at module-eval time calls across one.
+   live, so every read stayed a plain `org` and no read site changed. The import
+   cycles between core, views and shell are cycles of function declarations;
+   nothing calls across one at module-eval time.
 
 `sw.js` caches the new app files and moved to `zold-shell-v2`: `/app` is now a
 shell of markup that draws nothing without them, so caching the page and not

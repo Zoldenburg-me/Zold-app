@@ -9,10 +9,10 @@ sub-accounts. That is the Xflow platform shape, and it is wrong for this
 product.
 
 **Our users hold their own cNGN and their own relationship with the issuer.**
-That is the pattern already built twice here — Monerium by OAuth, Gnosis Pay by
-SIWE — and it is better on every axis that matters: no KYB on Zoldenburg UG, no
-Nigerian entity, no custody of anyone's naira, and the MiCA exchange question
-stays narrow because the user signs their own swap in their own Safe.
+The pattern is already built twice here (Monerium by OAuth, Gnosis Pay by
+SIWE). It needs no KYB on Zoldenburg UG, no Nigerian entity and no custody of
+anyone's naira, and the MiCA exchange question stays narrow because the user
+signs their own swap in their own Safe.
 
 **Most of the product needs nothing from them.** cNGN is an ERC-20 on Base. We
 already read token balances from chain, and the USDC→cNGN swap is user-signed
@@ -33,12 +33,12 @@ shape. That is a structural requirement, not a preference:
 | act while user is away | no | yes |
 | can reconcile a late settlement | **no** | yes |
 
-A card balance is a snapshot, so session-bound access suits it — which is why
-the Gnosis Pay adapter holds its JWT in browser memory and never persists it.
-**A redemption is not a snapshot.** cNGN burns, NIP settles minutes to hours
-later, and the naira lands when nobody is looking at the screen. A session-bound
-integration can never observe that leg, webhooks would arrive to a session that
-no longer exists, and the ledger could not close without the user present.
+A card balance is a snapshot, so session-bound access suits it; the Gnosis
+Pay adapter holds its JWT in browser memory and never persists it. **A
+redemption spans time.** cNGN burns, NIP settles minutes to hours later, and
+the naira lands when nobody is looking at the screen. A session-bound
+integration cannot observe that leg, webhooks would arrive to a session that no
+longer exists, and the ledger could not close without the user present.
 
 Nothing in their public docs offers an authorization-code flow. Everything is
 merchant-shaped: keys from a merchant dashboard, three of them (`apiKey`,
@@ -58,13 +58,13 @@ So there are three possible worlds, best to worst:
 3. **Nothing.** Hand-off: we hold, swap and keep books; the user leaves to
    redeem and the UI states plainly that we cannot see that leg.
 
-WHERE (2) IS GENUINELY WORSE THAN (1), and it should not be glossed: asking a
-user to paste three secrets, one of them named `privateKey`, is a far larger ask
-than an OAuth consent screen and a far larger liability if we are ever breached.
-An OAuth grant is scoped and revocable by design; a pasted key set is scoped only
-as well as their permission model allows and revoked only if the user remembers
-to go and delete it. There is also no refresh and no expiry — a long-lived
-secret in our store fails worse than a token that dies on its own.
+**Where (2) is worse than (1).** Asking a user to paste three secrets, one of
+them named `privateKey`, is a far larger ask than an OAuth consent screen and a
+far larger liability if we are breached. An OAuth grant is scoped and revocable
+by design; a pasted key set is scoped only as well as their permission model
+allows, and revoked only if the user goes and deletes it. It also has no
+refresh and no expiry, so a leak of our store exposes a long-lived secret
+where an OAuth token would have expired.
 
 ## Verified before writing
 

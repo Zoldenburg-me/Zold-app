@@ -45,9 +45,8 @@ One signature, one atomic transaction, gas sponsored by the existing paymaster.
 ## Why this is worth more than the signature count
 
 **Atomicity.** Today a failure between legs leaves an approval dangling and
-USDC stranded mid-corridor — exactly the state the failure-compensation logic exists
-to unwind. Batched, it all lands or none of it does, and there is nothing to
-compensate.
+USDC stranded mid-corridor, which the failure-compensation logic has to unwind.
+A batch either lands whole or not at all, so there is nothing to compensate.
 
 ## Three things that will bite
 

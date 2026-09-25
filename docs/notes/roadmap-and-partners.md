@@ -73,76 +73,74 @@ maker -> app -> strategyHash -> token -> balance, and four verbs — `ship`
 scheme — so a Safe can be a maker. It is a revocable scoped spending-rights
 registry; the AMM is one app on top.
 
-VERIFIED ON CHAIN (eth_getCode + selector search in the deployed bytecode):
- - `0x1111113ccf1426a8e30e2bff5e005d929bf6a90a` is live on Base mainnet AND
+VERIFIED on chain (eth_getCode + selector search in the deployed bytecode):
+ - `0x1111113ccf1426a8e30e2bff5e005d929bf6a90a` is live on Base mainnet and
    Gnosis, identical 11,240-byte deterministic deploy, carrying the ship/dock/
    pull/push/rawBalances selectors.
- - THE ADDRESS IN 1INCH'S OWN DEVELOPER-RELEASE BLOG POST IS A DIFFERENT
-   CONTRACT. `0x499943e74fb0ce105688beee8ef2abec5d936d31` is also live on Base
-   (12,504 bytes) with the same ABI — the Nov 2025 preview. Two registries,
-   same interface, one chain; ship to the wrong one and the virtual balances
-   sit where no app reads them. Pin the repo address, not the announcement's.
- - NOT ON BASE SEPOLIA (empty code). The LI.FI wall again: this cannot be
-   exercised on our test chain. Fork Base mainnet or work on Base/Gnosis.
+ - The address in 1inch's own developer-release blog post is a different
+   contract. `0x499943e74fb0ce105688beee8ef2abec5d936d31` is also live on Base
+   (12,504 bytes) with the same ABI: the Nov 2025 preview. With two registries
+   on one chain, virtual balances shipped to the wrong one sit where no app
+   reads them. Pin the repo address, not the announcement's.
+ - Not on Base Sepolia (empty code). As with LI.FI, this cannot be exercised
+   on our test chain. Fork Base mainnet or work on Base/Gnosis.
 
-TWO TRAPS TO NOT REDISCOVER: `ship()` checks NEITHER the wallet balance NOR the
-ERC-20 approval, so a virtual balance is a ceiling and not a reserve — which is
-why the auth-vs-clearing tier design in the doc exists rather than being a
-footnote. And `push()` requires an ACTIVE strategy, so a refund to a docked card
-REVERTS; do not treat `dock()` as "close the card" until the refund window shuts.
+**Two traps.** `ship()` checks neither the wallet balance nor the ERC-20
+approval, so a virtual balance is a ceiling, not a reserve; the auth-vs-clearing
+tier design in the doc exists because of this. And `push()` requires an active
+strategy, so a refund to a docked card reverts. Do not treat `dock()` as "close
+the card" until the refund window shuts.
 
 LICENSE GATE: Aqua is `LicenseRef-Degensoft-Aqua-Source-1.1`, © Degensoft Ltd —
 source-available, not open source. A CardApp needs a licensing conversation.
 
-THE ISSUER QUESTION IS SETTLED, and the answer reframes the pitch: **BAANX, THE
-COMPANY BEHIND THE 1INCH CARD, ALREADY SELLS NON-CUSTODIAL.** They run the
-MetaMask Card (funds stay in the user's wallet on Linea, user-set caps, a
-contract authorises in under five seconds), they list custodial and
-non-custodial as two tiers of one platform across EVM and Solana, and they
-shipped the first non-custodial on-chain card with Tezos in 2024. Ledger,
-Exodus, Trust Wallet and 1inch all run Crypto Life cards there — 1inch is on
-the custodial tier of a platform that sells the other one. Also live: Gnosis
-Pay (user's own Safe on Gnosis + Monerium EURe + a personal IBAN — our exact
-stack, on Visa, in the EEA), Kulipa (issuer processor sends the auth, Kulipa
-moves funds to an on-chain escrow, then clears — pull-at-auth, proven), Rain
-(Visa principal member, per-customer contract the customer owns), Immersve
-(Mastercard principal member, on-chain funding contracts).
+**Issuer question: settled, and it changes the pitch.** Baanx, the company
+behind the 1inch Card, already sells non-custodial. They run the MetaMask Card
+(funds stay in the user's wallet on Linea, user-set caps, a contract authorises
+in under five seconds), list custodial and non-custodial as two tiers of one
+platform across EVM and Solana, and shipped the first non-custodial on-chain
+card with Tezos in 2024. Ledger, Exodus, Trust Wallet and 1inch all run Crypto
+Life cards there; 1inch is on the custodial tier. Also live: Gnosis Pay (user's
+own Safe on Gnosis + Monerium EURe + a personal IBAN, which is our stack, on
+Visa, in the EEA), Kulipa (issuer processor sends the auth, Kulipa moves funds
+to an on-chain escrow, then clears: pull-at-auth, proven), Rain (Visa principal
+member, per-customer contract the customer owns), Immersve (Mastercard
+principal member, on-chain funding contracts).
 
-SO THE GATE MOVED. Every one of those binds the card to THE PROVIDER'S wallet on
-THE PROVIDER'S chain — MetaMask's smart account on Linea, a Gnosis Pay Safe on
+**Where the gate is now.** Each of these binds the card to the provider's wallet
+on the provider's chain: MetaMask's smart account on Linea, a Gnosis Pay Safe on
 Gnosis that reads view-only in Safe{Wallet} because their modules own it, a Rain
 contract, Immersve's Funds Storage. "Non-custodial" currently means your keys,
-our wallet, our chain. THAT is the hole Aqua fills and the only part 1inch would
-own. Latency is no longer the open question (under five seconds, precedented);
-the open question is commercial.
+our wallet, our chain. Aqua fills that gap, and it is the only part 1inch would
+own. Latency is settled (under five seconds, precedented); the open question is
+commercial.
 
-AND THE SECURITY ARGUMENT HAS AN INCIDENT BEHIND IT: 1 Jun 2026, attackers
-exploited the Zodiac Delay + Roles modules on Gnosis Pay's card Safes (missing
-status check in a static call), ~$1.5m extracted, Gnosis covered it. Those
-modules sit ON THE USER'S WALLET. Aqua installs nothing on the wallet — an
-ERC-20 allowance and 80 lines with no owner. Corollary to design around: Aqua
-has NO delay mechanism, so the auth-vs-user-withdrawal race is unhandled unless
-you pull at authorisation. Do not "fix" that by adding a delay module.
+**Security incident.** On 1 Jun 2026 attackers exploited the Zodiac Delay +
+Roles modules on Gnosis Pay's card Safes (missing status check in a static
+call); ~$1.5m was extracted and Gnosis covered it. Those modules sit on the
+user's wallet. Aqua installs nothing on the wallet: it is an ERC-20 allowance
+and 80 lines with no owner. The corollary: Aqua has no delay mechanism, so the
+auth-vs-user-withdrawal race is unhandled unless you pull at authorisation. Do
+not handle that by adding a delay module.
 
 COUNTERPARTY TIMING: Exodus is acquiring Baanx for $175m, expected to close
 early 2026 subject to US/UK/EU approval.
 
-BUT THE CARD PROGRAMME STILL HAS TO ACCEPT AQUA AS THE THING IT PULLS FROM, and
-none of them do. Size of the change, read from Immersve's source not their docs:
+**The card programme still has to accept Aqua as its pull source,** and none
+do. Size of the change, read from Immersve's source (not their docs):
 `FundsStorageLogic.directSpendDebit()` under `FundingMode.APPROVAL` already does
-`safeTransferFrom(_token, spender, address(this), amount)` — i.e. a Mastercard
-principal member ALREADY ships "user keeps the money, we pull at spend time with
-an idempotency key and a reversal window". Moving that to Aqua is ONE CALL
+`safeTransferFrom(_token, spender, address(this), amount)`. So a Mastercard
+principal member already ships "user keeps the money, we pull at spend time with
+an idempotency key and a reversal window". Moving that to Aqua is one call
 (`AQUA.pull(...)` instead of `safeTransferFrom`, inherit `AquaApp`); their
-idempotency, reversals, pause and roles are untouched. One line in principle, a
-contract change + audit + product decision in practice, and it is theirs.
+idempotency, reversals, pause and roles are untouched. One line in principle; in
+practice a contract change, an audit and a product decision, all of them theirs.
 
-THE CONSEQUENCE THAT REMOVES A DESIGN OPTION: Aqua's `dock()` is unconditional
-and immediate, and the app cannot delay, veto or foresee it — so a cardholder can
-spend at a terminal and dock before clearing. Gnosis Pay's 3-minute Delay Module
-exists exactly to close that race and Aqua REOPENS it, with no module to add
-because dock() is called on Aqua directly. Therefore PULL-AT-AUTHORISATION IS
-NOT THE PREFERRED TIER FOR AN AQUA CARD, IT IS THE ONLY SAFE ONE.
+**Pull-at-authorisation is the only safe tier for an Aqua card.** Aqua's
+`dock()` is unconditional and immediate, and the app cannot delay, veto or
+foresee it, so a cardholder can spend at a terminal and dock before clearing.
+Gnosis Pay's 3-minute Delay Module exists to close that race. Aqua reopens it,
+and no module can be added because dock() is called on Aqua directly.
 
 GNOSIS PAY IS THE ONE PLACE AQUA WORKS WITH NOBODY'S PERMISSION — full write-up
 in `docs/aqua-on-gnosis-pay.md`, read from `gnosispay/account-kit` source, not
@@ -167,80 +165,79 @@ that at clearing a short balance "isn't an issue"; Monavate's terms say funds ar
 "immediately deducted". So the exposure window is one instant, not the clearing
 window, and the Delay Module's job is narrower than assumed.
 
-TERMS READ (Gnosis Pay ToS 18 Nov 2025, English law, EEA entity Gnosis P. Tech
-Unipessoal Lda; Monavate Cardholder Terms EEA, issuer UAB Monavate). NOTHING
-PROHIBITS granting an ERC-20 allowance from the Safe, and ToS §11.3 disclaims
-liability for the Safe expressly "because … it is accessible by other third party
-software applications". Four clauses bite: §6.2 "Prohibited Configurations" is
-drafted BY EXCLUSION (anything but deploying the two modules and setting the
-daily limit), though an approve arguably is not a Safe *configuration* and
-Monavate's narrower ground is "in such a way that it no longer works with the
-Card"; §2.6 lets them restrict an account at discretion; Monavate requires
-"sufficient Supported Funds in your Safe AT ALL TIMES"; and §5.5 forbids business
-use, which kills any org/treasury version. THE EXPENSIVE ONE IS THE SHORTFALL
-CLAUSE: a completed transaction against a short Safe is a debt the user must
-reimburse, Monavate may charge the Safe for it, may suspend the card until
-repaid, and may levy a per-transaction admin fee. Best argument FOR the idea is
-also in the terms: "no interest is payable to you on the balance of Supported
-Funds stored on the Safe" — the idleness is contractual.
+**Terms read** (Gnosis Pay ToS 18 Nov 2025, English law, EEA entity Gnosis P.
+Tech Unipessoal Lda; Monavate Cardholder Terms EEA, issuer UAB Monavate).
+Nothing prohibits granting an ERC-20 allowance from the Safe, and ToS §11.3
+disclaims liability for the Safe expressly "because … it is accessible by other
+third party software applications". Four clauses bite: §6.2 "Prohibited
+Configurations" is drafted by exclusion (anything but deploying the two modules
+and setting the daily limit), though an approve arguably is not a Safe
+*configuration* and Monavate's narrower ground is "in such a way that it no
+longer works with the Card"; §2.6 lets them restrict an account at discretion;
+Monavate requires "sufficient Supported Funds in your Safe AT ALL TIMES"; and
+§5.5 forbids business use, which rules out any org/treasury version. The costly
+one is the shortfall clause: a completed transaction against a short Safe is a
+debt the user must reimburse, Monavate may charge the Safe for it, may suspend
+the card until repaid, and may levy a per-transaction admin fee. The terms also
+hold the best argument for the idea: "no interest is payable to you on the
+balance of Supported Funds stored on the Safe", so the idle balance is
+contractual.
 
-RESERVE RULE, now sized from the terms rather than guessed: hotels/car rentals
-add "typically 10%-20%" over-authorisation and the difference can take 7 DAYS to
-free up. Better than a slider — SET THE RESERVE EQUAL TO THE ON-CHAIN DAILY
-LIMIT (readable via their API), because the Roles allowance caps the card's draw
-per period at exactly that. Invariant: sum of shipped EURe across ALL strategies
-<= EURe balance - daily limit. Framing that keeps it honest: THE MONEY NEVER
-LEAVES THE SAFE; Aqua holds an allowance, the card always sees the full balance,
-and docking is instant with no withdrawal to wait for.
+**Reserve rule,** sized from the terms: hotels/car rentals add "typically
+10%-20%" over-authorisation and the difference can take 7 days to free up. Set
+the reserve equal to the on-chain daily limit (readable via their API), because
+the Roles allowance caps the card's draw per period at exactly that; this beats
+a user-set slider. Invariant: sum of shipped EURe across all strategies <= EURe
+balance - daily limit. How to describe it: the money never leaves the Safe.
+Aqua holds an allowance, the card always sees the full balance, and docking is
+instant with no withdrawal to wait for.
 
-THE REAL OBJECTION IS ASSET, NOT CUSTODY: an AMM strategy converts inventory by
-design, so a pull of EURe that pushes back USDC.e leaves an EEA cardholder
-holding an asset THE CARD CANNOT SPEND (Supported Funds = EURe in the EEA, GBPe
-in the UK, USDC.e elsewhere). Value unchanged, card underfunded. The shape that
-suits a card float is a single-asset EURe-in/EURe-out app with no inventory risk,
-and NOTHING LIKE THAT EXISTS ON AQUA — it would have to be written. Until it
-does, do not point card money at a EURe/USDC.e pool.
+**The real objection is the asset, not custody.** An AMM strategy converts
+inventory by design, so a pull of EURe that pushes back USDC.e leaves an EEA
+cardholder holding an asset the card cannot spend (Supported Funds = EURe in the
+EEA, GBPe in the UK, USDC.e elsewhere). Value is unchanged and the card is
+underfunded. A card float needs a single-asset EURe-in/EURe-out app with no
+inventory risk. None exists on Aqua; it would have to be written. Until then, do
+not point card money at a EURe/USDC.e pool.
 
-THE FINDING THAT MUST REACH THE UI: an Aqua `pull()` is `transferFrom` executed
-BY AQUA against a standing allowance — NOT a Safe transaction — so the Delay
-Module never sees it and the 3-minute double-spend protection DOES NOT COVER IT
-(their own defined term scopes the delay to "any non-Card transactions that you
-carry out from your Safe").
+**Must reach the UI.** An Aqua `pull()` is `transferFrom` executed by Aqua
+against a standing allowance, not a Safe transaction, so the Delay Module never
+sees it and the 3-minute double-spend protection does not cover it (their own
+defined term scopes the delay to "any non-Card transactions that you carry out
+from your Safe").
 The only protection is the virtual-balance ceiling, so the rule is: sum of
-shipped virtual balances across ALL strategies <= balance - card reserve. Aqua's
-SLAC thesis says over-provision across strategies; FOR A CARD-BACKING WALLET THAT
-IS INVERTED AND MUST BE REFUSED, or a shared-liquidity UI declines someone's
-weekly shop. Terms question NOT settled: nobody has read whether Gnosis Pay
-permits a third-party allowance from the card Safe.
+shipped virtual balances across all strategies <= balance - card reserve.
+Aqua's SLAC thesis says over-provision across strategies; a card-backing wallet
+must refuse that, or a shared-liquidity UI declines someone's weekly shop. Terms
+question not settled: nobody has read whether Gnosis Pay permits a third-party
+allowance from the card Safe.
 
-CREDIT ON AQUA — `docs/aqua-credit-module.md`. THE TRAP FIRST: **Aqua cannot be
-a lien.** `dock()` is unconditional and the borrower can simply move the
-collateral (pull ends in safeTransferFrom against the real balance), so a credit
-line secured only by an Aqua strategy is UNSECURED CREDIT WEARING COLLATERAL'S
-CLOTHES. Do not design one and do not let a UI imply otherwise. Spending the
-collateral instead is a DISPOSAL PER PURCHASE — in Germany a taxable event each
-time and it breaks the §23 EStG one-year exemption, which is the whole reason
-people want credit rather than debit.
+Credit on Aqua: `docs/aqua-credit-module.md`. **Aqua cannot be a lien.**
+`dock()` is unconditional and the borrower can move the collateral (pull ends in
+safeTransferFrom against the real balance), so a credit line secured only by an
+Aqua strategy is unsecured credit. Do not design one and do not let a UI imply
+otherwise. Spending the collateral instead is a disposal per purchase: in
+Germany a taxable event each time, and it breaks the §23 EStG one-year
+exemption, which is why people want credit rather than debit.
 
-WHERE IT DOES WORK — FLIP WHO THE MAKER IS. Undrawn credit is the most idle
+**Where it does work: the lender is the maker.** Undrawn credit is the most idle
 capital in finance; a lender committing €10m parks €10m and almost none is drawn
-on any day. So the LENDER ships: keeps the money in their own wallet, one
-strategy hash per borrower = a per-borrower limit off one shared balance,
+on any day. So the lender ships: keeps the money in their own wallet, one
+strategy hash per borrower gives a per-borrower limit off one shared balance,
 `pull()` at authorisation, repayments arrive as `push()`, `dock()` cuts off one
-borrower instantly. None of the trap applies because the maker is the lender.
-This is the ONLY design here where SLAC is an argument in favour rather than a
-hazard.
+borrower instantly. The lien problem does not arise because the maker is the
+lender. This is the only design here where SLAC helps.
 
-COMPOSING WITH A MONEY MARKET (verified on Gnosis, one chain has the whole
+**Composing with a money market** (verified on Gnosis; one chain has the whole
 stack): Aave v3 Pool `0xb50201558B00496A145fE76f7424749556E326D8`
-getReservesList() returns 9 reserves and EURe IS ONE (with WETH, wstETH, GNO,
+getReservesList() returns 9 reserves and EURe is one (with WETH, wstETH, GNO,
 sDAI, USDC, USDC.e, wxDAI). Off their market page, not measured: EURe ~3.50%
-supply / 4.71% variable borrow. THE NARROW ARGUMENT FOR AQUA HERE: you cannot
-borrow inside an auth window, so Design B is really a borrowed EURe BUFFER the
-card draws down, i.e. paying interest on idle float; re-supplying it to Aave cuts
-the cost to ~1.2 points but takes it out of the wallet where the card cannot
-reach it. Aqua is the only way to make the buffer earn WITHOUT LEAVING THE
-WALLET. Say it that narrowly. Precedent: ether.fi Cash already ships Borrow Mode
+supply / 4.71% variable borrow. The argument for Aqua here is narrow. You cannot
+borrow inside an auth window, so Design B is a borrowed EURe buffer the card
+draws down, i.e. paying interest on idle float. Re-supplying it to Aave cuts the
+cost to ~1.2 points but takes it out of the wallet, where the card cannot reach
+it. Aqua is the only way to make the buffer earn without leaving the wallet;
+claim no more than that. Precedent: ether.fi Cash already ships Borrow Mode
 (weETH, 55% LTV, ~4% APY, Visa) beside a Direct Pay mode.
 
 A REAL non-custodial lien needs an escrow (not Aqua) or a Gnosis-Pay-shaped
@@ -320,11 +317,11 @@ integrates Bridge. Best provider fit; Gnosis Pay white-label is the smallest
 technical delta (already reserves at auth, already spends EURe) and the
 largest contract (2–3 year terms, their Safe).
 
-THE WORKAROUND THAT NEEDS NOBODY'S PERMISSION: invert it. Take a processor
+**Workaround that needs nobody's permission: invert it.** Take a processor
 with a synchronous auth callback and fiat prefund (Lithic+Monavate,
-Marqeta+TransactPay, Adyen, Airwallex); OUR CardApp does AQUA.pull at
+Marqeta+TransactPay, Adyen, Airwallex); our CardApp does AQUA.pull at
 authorisation; the issuer's fiat prefund is topped up by Monerium redemptions
-(the SEPA leg we already run). Aqua appears in no contract but ours. Cost is
+(the SEPA leg we already run). Aqua appears in no contract but ours. The cost is
 programme-manager obligations and a settlement-lag float, not user balances.
 
 TRAD-FINTECH STABLECOIN CARDS (full table in the doc): Stripe/Bridge (the only

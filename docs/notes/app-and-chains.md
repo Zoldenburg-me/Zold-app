@@ -23,29 +23,29 @@ wallet, Zold Plus, the Pay hub, the send flow (country → method → amount →
 recipient → progress), Activity, transaction detail, Profile, and the KYC
 gate + pending screens.
 
-THE RULE APPLIED THROUGHOUT, agreed with the user: where the design shows
-something the API cannot back, it is visibly unavailable — never faked. The
-savings vault, USD accounts and Zold Plus say SOON; the send flow offers the
-two corridors the API prices (EUR->KES, EUR->EUR) and states that more open
-with partners rather than listing 182 countries that dead-end at the quote;
-Zold Plus shows no price because that tier does not exist, and links to the
-Privacy Bundle that does. On the Pay hub, Zold and Crypto are SOON and
-genuinely `disabled` — there is no Zold-to-Zold endpoint and USDC arrives at an
-account but nothing sends it out. Its search runs over people this account has
-actually paid, not the design's @zoldtag directory: a handle resolves to a
-deposit address with no rail that can pay it, so the search would find someone
-and then have nowhere to go. No QR affordance either — nothing scans one.
-Quotes, signing and both timelines are real; a timeline reads the transfer's
-own state, not a timer.
+**Rule applied throughout** (agreed with the user): where the design shows
+something the API cannot back, it is visibly unavailable. The savings vault,
+USD accounts and Zold Plus say SOON. The send flow offers the two corridors the
+API prices (EUR->KES, EUR->EUR) and states that more open with partners; it
+does not list 182 countries that dead-end at the quote. Zold Plus shows no
+price because that tier does not exist, and links to the Privacy Bundle that
+does. On the Pay hub, Zold and Crypto are SOON and `disabled`: there is no
+Zold-to-Zold endpoint, and USDC arrives at an account but nothing sends it out.
+Its search runs over people this account has paid, not the design's @zoldtag
+directory: a handle resolves to a deposit address with no rail that can pay
+it, so the search would find someone and then have nowhere to go. No QR
+affordance either, since nothing scans one. Quotes, signing and both timelines
+are real; a timeline reads the transfer's own state, not a timer.
 
-TOKEN QUESTION — SETTLED (Aug 2026), do not reopen. The Noir file is
+**Token question: settled (Aug 2026).** Do not reopen it. The Noir file is
 half-converted: home and the send flow follow its README (12px radii, mono
 labels, Space Grotesk figures) while Activity, Profile, Plus and KYC are drawn
-with 40-56px round avatars and 16/14px M3 type. The user chose the README —
-"nothing above 12px, 50% only for status dots" — and the retrofit is done, so
-the app is on ONE scale. `.m-optrow` moved too (Add funds, destination and
+with 40-56px round avatars and 16/14px M3 type. The user chose the README
+("nothing above 12px, 50% only for status dots") and the retrofit is done, so
+the app is on one scale. `.m-optrow` moved too (Add funds, destination and
 method lists): at 16/14 it sat a size above every row beside it. If a screen
-from that file looks wrong when you port it, the file is wrong, not the app.
+ported from that file looks wrong, the file is at fault; port it to the README
+scale.
 
 Two structural cleanups worth not undoing:
  - The dashboard's recent list and the Activity screen render the SAME row
@@ -61,18 +61,16 @@ layout's right-hand column with a selector that outranks anything scoped to
 `.m-step`, so every timeline rendered with no nodes and no connecting line —
 including the shipped send progress screen, silently, for several commits.
 
-HOW FAR A SEND ACTUALLY RUNS (Aug 2026, re-measured after the RemitVault
-merge). Not "never observed" any more — the wall moved, and it is worth knowing
-exactly where it now is.
+**How far a send runs** (measured Aug 2026, after the RemitVault merge).
 
-PROVEN, locally, through the mobile UI: device key bound -> POST /api/quotes
+Proven locally, through the mobile UI: device key bound -> POST /api/quotes
 (live mid, EUR->KES) -> POST /api/transfers -> device signs the EIP-712
 PaymentAuthorization -> POST /authorize -> orchestrator runs ->
-`assertDeviceAuthorization` PASSES. That last step is the one worth recording:
-after RemitVault was deleted the signature is verified in the API process, and
-this proves that path accepts a real browser-generated signature.
+`assertDeviceAuthorization` passes. The last step matters: with RemitVault
+deleted, the signature is verified in the API process, and this proves that
+path accepts a real browser-generated signature.
 
-THE WALL: local hardhat transfers now refuse before debit unless the account
+**The wall:** local hardhat transfers now refuse before debit unless the account
 has an active passkey Safe with a configured co-signer allowance. The Safe
 address is counterfactual and can only be deployed through Candide's bundler on
 CANDIDE_CHAIN_ID=84532, which
@@ -81,19 +79,19 @@ does not exist on local hardhat 31337. Nothing about the send flow fixes this;
 past it, and debited -> bridged -> paid is still unexercised beyond its
 state-mapping logic.
 
-FUNDING NOW, since `scripts/credit-test.ts` was DELETED with RemitVault: there
-is no ledger to credit any more, so mint MockToken EURe straight to the user's
-Safe address from hardhat account 0 (the token owner) and `refresh()` picks it
-up. /api/simulate/sepa-deposit still refuses in sandbox mode.
+**Funding:** `scripts/credit-test.ts` was deleted with RemitVault and there is
+no ledger to credit, so mint MockToken EURe straight to the user's Safe address
+from hardhat account 0 (the token owner) and `refresh()` picks it up.
+/api/simulate/sepa-deposit still refuses in sandbox mode.
 
 Activity and transaction detail were verified by rendering realistic Transfer
 objects into `hist` — the render code is real, the transfers were fixtures.
 
-BALANCE FIGURES CHANGED SHAPE: `accountBalances` now returns only
+**Balance figures:** `accountBalances` returns only
 `balanceEur === safeBalanceEur`; `vaultBalanceEur` is gone. `mobileFigures`
-reports total == available deliberately — there is one pot, and an in-flight
-transfer has already left the Safe, so the Safe balance is both what is held
-and what is spendable. Do not "fix" that into a subtraction.
+reports total == available because there is one pot: an in-flight transfer has
+already left the Safe, so the Safe balance is both what is held and what is
+spendable. Do not turn that into a subtraction.
 
 HOW TO SEE THE KYC GATE LOCALLY, because this costs an hour otherwise:
 `npm run dev` CANNOT show it. `scripts/_test-env.ts` sets
@@ -152,56 +150,54 @@ an account. Untested on a real device; test before offering install.
 - Shareable Receipts (PR #122): `/r/:slug` renders shareable receipts. Set `TRANSF_PUBLIC_URL=https://zoldhq.com` for host generation.
 - Toolchain: Node.js `v24.13.0` (`~/.nvm/versions/node/v24.13.0/bin`) and `x86_64` `cloudflared` 2026.7.3 in `.toolchain/bin/cloudflared`.
 - Working: two payout rails (KES cash / SEPA), Candide Safe 2-of-2 wallets deployed gasless with EIP-1271 Monerium linking, e2e green across both rails.
-- UPI REMOVED (Aug 2026) — deleted, not disabled, and not to be rebuilt from
+- UPI removed (Aug 2026): deleted, not disabled, and not to be rebuilt from
   this repo's history without a partner. It was a mock partner adapter that
   minted its own UTRs: the rail rendered a "UPI payment successful" panel and a
-  12-digit reference for money that had reached nobody, which is the one class
-  of fake this project does not keep. Gone: adapters/upi.ts, the `upi` member of
+  12-digit reference for money that had reached nobody. This project does not
+  keep that kind of fake. Removed: adapters/upi.ts, the `upi` member of
   PayoutRail, receiveInr/recipientVpa/transfer.upi, the INR quote mode (both
   INR-fixed and EUR-fixed), the destination commitment's `upi|vpa=` preimage in
-  BOTH chain.ts and public/device.js, the QR-scan UI, and the e2e leg. India is
-  gone from the app's destination list too — its only rail was UPI, so leaving
+  both chain.ts and public/device.js, the QR-scan UI, and the e2e leg. India is
+  gone from the app's destination list too: its only rail was UPI, so leaving
   it listed meant an empty options screen with no way forward. `POST /api/quotes`
   now refuses `rail: "upi"` with 400, and e2e asserts that refusal so the rail
-  cannot creep back in unnoticed.
-- NOT "live anchor payouts" — that phrase was in this file and was wrong. The
-  Stellar ledger half is proven and the anchor half has never run; see the
-  Stellar section.
-- Deployment capabilities are now published (Aug 2026): GET /api/health carries
-  `capabilities: { simulation, sandbox }`. The app's "Add money" card renders
-  deposit controls only where the API accepts them.
-  `capabilities: { simulation, sandbox }`. The app's "Add money" card was hard
-  wired to /api/simulate/sepa-deposit and shown to everyone, but that route is
-  dev-only — 403 in production, and 403 off a loopback socket — and NOTHING in
-  any response told the client which mode it was in, so the only way to find
-  out was to press the button and read the error. The browser now renders the
+  cannot return unnoticed.
+- Anchor payouts are not live. The Stellar ledger half is proven and the
+  anchor half has never run; see the Stellar section.
+- Deployment capabilities are published (Aug 2026): GET /api/health carries
+  `capabilities: { simulation, sandbox }`. The app's "Add money" card had been
+  hard wired to /api/simulate/sepa-deposit and shown to everyone, but that
+  route is dev-only (403 in production, and 403 off a loopback socket), and no
+  response told the client which mode it was in, so the only way to find out
+  was to press the button and read the error. The browser now renders the
   deposit control only where the API would accept it and shows real transfer
   instructions everywhere else. The client default is `simulation: false`, so a
   failed probe hides a control the server might refuse rather than offering one
-  it will. Public on purpose: it is deployment state, not account state,
-  /api/health already publishes contract addresses, and the simulate routes are
-  gated on the flag AND a loopback socket, so the value buys an attacker
-  nothing one refused request would not.
+  it will. The flag is public because it is deployment state, not account
+  state; /api/health already publishes contract addresses, and the simulate
+  routes are gated on the flag and a loopback socket, so the value tells an
+  attacker nothing one refused request would not.
 - Reconciler (July 2026): services/api/src/reconcile.ts compares Monerium's
   processed issue orders against what we mirrored, plus on-chain invariants
   (totalCredited == sum of balances; vault tokens cover credit). Reports
-  UNMIRRORED / PHANTOM / CHAIN drift; never repairs — a system that silently
-  mints to make two ledgers agree is worse than the disagreement. Runs
+  UNMIRRORED / PHANTOM / CHAIN drift and never repairs it: minting to make two
+  ledgers agree is worse than the disagreement. Runs
   log-only on server startup + every 15 min; `npm run reconcile` on demand,
   `npm run reconcile:test` (6 checks) proves each drift class is caught.
   This is ARCHITECTURE.md §6's reconciler, and it goes away when the mirror
   seam does (Polygon: EURe native, no local mirror).
-- FX rates are LIVE (July 2026): services/api/src/rates.ts fetches EUR mids
-  (TRANSF_RATES_URL, 10-min cache) and REFUSES to quote rather than serve a
+- FX rates are live (July 2026): services/api/src/rates.ts fetches EUR mids
+  (TRANSF_RATES_URL, 10-min cache) and refuses to quote instead of serving a
   stale rate. The EUR->USD leg is read from the on-chain swapper, not a
   constant, so the quote cannot promise a rate the swap will not honour.
-  THE BUG THIS FIXED: EURUSD 1.08 / USDINR 87.2 / USDKES 129.5 were hardcoded
+  Bug fixed: EURUSD 1.08 / USDINR 87.2 / USDKES 129.5 were hardcoded
   and had gone 5-14% stale (real: 1.1379 / 96.55 / 129.64) while the receipt
-  said "real exchange rate" with a "0.50% margin" — EUR->INR was quoting 14.3%
-  under the market. 1.08 lived in THREE places (config twice + deploy.ts) and
-  the quote-binding check compared only two of them, so fixing one alone would have
-  silently promised a rate the swap could not deliver. midRate is now the live
-  mid, fxRate what we deliver, and marginBps is MEASURED between them.
+  said "real exchange rate" with a "0.50% margin"; EUR->INR was quoting 14.3%
+  under the market. 1.08 lived in three places (config twice + deploy.ts) and
+  the quote-binding check compared only two of them, so fixing one alone would
+  have promised, with no error, a rate the swap could not deliver. midRate is
+  now the live mid, fxRate what we deliver, and marginBps is measured between
+  them.
   TRANSF_RATES_FIXED pins rates for tests/offline (fail-closed in production
   unless ALLOW_FIXED_RATES=1); DEPLOY_EURUSD_RATE pins the swapper seed.
   npm run fx:test (11 checks). NOTE for the cash rail: MoneyGram does the
@@ -215,20 +211,20 @@ an account. Untested on a real device; test before offering install.
   PMM RFQ API, built against their documented v3 shape:
   GET /pmm/{chain}/v3/quote -> buyTokens[addr].{amount,minimumAmount}, expiry,
   and with gasless=false a ready `tx` we submit). The RFQ path is fail-closed
-  everywhere: maker down / declining / slow / wrong token all REFUSE rather
-  than fall back to our own book, which would price real transfers off a rate
-  we chose while reporting a maker set it.
-  Two rates, deliberately: quote() is firm and per-amount; indicativeRate() is
+  everywhere: maker down / declining / slow / wrong token all refuse. Falling
+  back to our own book would price real transfers off a rate we chose while
+  reporting that a maker set it.
+  Two rates: quote() is firm and per-amount; indicativeRate() is
   cheap and cached (LIQUIDITY_INDICATIVE_TTL_MS) for receipts, so typing in the
   amount box is not a quote storm.
-  THE COUPLING THIS FIXED: fx.ts and the quote binding's assertQuoteRateBinding both read the
+  Coupling fixed: fx.ts and the quote binding's assertQuoteRateBinding both read the
   FxSwapper contract directly, so a deployment switched to RFQ would have kept
   quoting — and binding against — the local mock's rate. Both now ask
   liquidityProvider(). liquidity.rfq (maker quote id + tx) is persisted on the
   transfer because prepare and execute are separate steps; re-quoting at
   execution would settle at a price the user never saw.
   npm run jit:test (14 checks, stub Bebop, no chain needed).
-  UNPROVEN: never run against real Bebop — needs a supported chain (not
+  Unproven: never run against real Bebop — needs a supported chain (not
   hardhat), real token addresses and one live quote. The execute() path in
   particular has only been exercised through its guard branches.
 - Known TODOs marked in code: per-transfer FX hedging. (Both earlier items
@@ -242,7 +238,7 @@ an account. Untested on a real device; test before offering install.
   (PR #32 replaced the guessed scheme with Monerium's documented
   webhook-id/webhook-timestamp/webhook-signature HMAC, plus delivery-id
   dedupe; PR #33 added a staleness window and stopped a transient Monerium
-  outage from consuming a delivery id — a 503 now asks for the retry instead
-  of silently swallowing it). npm run webhook:test covers it with a stub
+  outage from consuming a delivery id: a 503 now asks for the retry instead
+  of dropping it). npm run webhook:test covers it with a stub
   Monerium.
 

@@ -224,13 +224,13 @@ unit-tested (selector 0xf8dc5dd9, prev-owner and sentinel cases) only.
 
 ## Key custody completion — recovery (decided July 2026, 2-of-2)
 
-THE BLOCKER: losing the browser device key permanently bricks an account.
-`RemitVault.setAuthorizer` only lets the CURRENT authorizer rotate, and the
-key lives in localStorage. No passkey, no support path, no ramp override
-recovers it. Demonstrated live: the "Base Proof" account on Base Sepolia has
-EUR 121 credited and can never spend it. Consumer smart-wallet research
-consistently finds users will not fund an account without credible,
-*rehearsable* recovery — so this gates launch, not polish.
+**Blocker:** losing the browser device key permanently bricks an account.
+`RemitVault.setAuthorizer` only lets the current authorizer rotate, and the
+key lives in localStorage. No passkey, support path or ramp override recovers
+it. Demonstrated live: the "Base Proof" account on Base Sepolia has EUR 121
+credited and can never spend it. Consumer smart-wallet research consistently
+finds users will not fund an account without credible, *rehearsable* recovery,
+so this gates launch.
 
 THE FIX, in this order (the order is not optional):
  0. Refuse to issue an IBAN until a passkey exists. An IBAN is the point of
@@ -264,25 +264,25 @@ VERIFIED, so nobody re-litigates it:
  - RemitVault._isValidSignature staticcalls isValidSignature for contract
    signers — the hook is already there.
 
-WRINKLE TO DESIGN IN FROM THE START: redeemToIban signs as the Safe to burn
-EURe, and runs asynchronously after the user has gone. A passkey-owned Safe
-cannot be signed by the server alone. Collect BOTH signatures at send time —
-the vault authorization and the Monerium redeem message. Both are fully
-determined when the user approves (amount + IBAN), so nothing is signed blind.
+**Design in from the start:** redeemToIban signs as the Safe to burn EURe,
+and runs asynchronously after the user has gone. A passkey-owned Safe cannot
+be signed by the server alone. Collect both signatures at send time: the vault
+authorization and the Monerium redeem message. Both are fully determined when
+the user approves (amount + IBAN), so nothing is signed blind.
 
-HARD EDGE: only the current authorizer can rotate, so accounts that still
-hold their device key can migrate themselves; ones that lost it never can.
-This fixes the future, not the past.
+**Limit:** only the current authorizer can rotate, so accounts that still hold
+their device key can migrate themselves; ones that lost it never can. The fix
+does not rescue accounts that have already lost their key.
 
-BACKSTOP, NOT A PRODUCT: EURe is e-money, so Monerium's liability is to the
-identified customer and holders have a redemption right at par — unlike USDC,
-where Circle owes the holder nothing. Monerium also has the technical means
-(EURe is a UUPS proxy they own, with mint(); no burn/recover/forceTransfer
-selector exists in the deployed implementation). So a lost wallet is likely
-recoverable through re-KYC and reissuance. UNCONFIRMED — not in their docs,
-ask them in writing. It does not cover USDC or in-flight transfers, does not
-restore the Safe, and "submit ID and wait" is not a recovery path to put in
-front of someone whose salary is in the account.
+**Backstop, not a product.** EURe is e-money, so Monerium's liability is to
+the identified customer and holders have a redemption right at par (with USDC,
+Circle owes the holder nothing). Monerium also has the technical means (EURe
+is a UUPS proxy they own, with mint(); no burn/recover/forceTransfer selector
+exists in the deployed implementation). So a lost wallet is likely recoverable
+through re-KYC and reissuance. Unconfirmed: it is not in their docs, so ask
+them in writing. It does not cover USDC or in-flight transfers, does not
+restore the Safe, and "submit ID and wait" is not a recovery path to offer
+someone whose salary is in the account.
 
 ## Email / SMS recovery — Candide's guardian (Sep 2026)
 
@@ -425,15 +425,14 @@ some into local databases). `npm run pay:test` and `npm run anchor:sweep:test`
 pass; `travelrule:test` is rewritten around the new type but is a LIVE test
 against testanchor and was not run from the sandbox (egress blocked).
 
-WHY: it was the most sensitive data in the system, held in plaintext, for
-exactly one consumer — the Stellar anchor leg of the cash rail — which no
-deployment has ever opened (BRIDGE_LIVE and an anchor are both unset
-everywhere). No page ever wrote it; the only rows came from the test script.
-Collecting identity-document numbers for a rail that cannot run fails GDPR
-data minimisation on its face, and it dragged the impact assessment up from
-"account + financial data" to "identity documents". An earlier decision
-kept the routes as "external API surface"; that call is reversed here with
-the data cost now clear.
+**Why:** it was the most sensitive data in the system, held in plaintext, for
+one consumer: the Stellar anchor leg of the cash rail, which no deployment has
+ever opened (BRIDGE_LIVE and an anchor are both unset everywhere). No page
+ever wrote it; the only rows came from the test script. Collecting
+identity-document numbers for a rail that cannot run fails GDPR data
+minimisation, and it raised the impact assessment from "account + financial
+data" to "identity documents". An earlier decision kept the routes as
+"external API surface"; this reverses it because of that data cost.
 
 WHAT REPLACES IT: `SenderDetails` in adapters/moneygram.ts — the same text
 fields, HELD FOR ONE CALL and never persisted. `createCashPickupViaAnchor`
@@ -456,31 +455,30 @@ is a Travel Rule gap to close per transfer once real money moves that way.
 testing against your own Monerium account: Profile -> Monerium keys, paste the
 client id + secret of an app created in THAT account's developer section.
 
-WHERE THE CREDENTIAL DECISION LIVES NOW: `adapters/monerium-connection.ts`.
-`moneriumClientFor(user)` answers "whose credentials act for this user" —
-API keys, then OAuth, then the app's MONERIUM_CLIENT_ID/SECRET — and
+**Where the credential decision lives:** `adapters/monerium-connection.ts`.
+`moneriumClientFor(user)` answers "whose credentials act for this user"
+(API keys, then OAuth, then the app's MONERIUM_CLIENT_ID/SECRET), and
 `moneriumLiveFor(user)` answers "is Monerium real for this user" (app
-credentials OR a connection of their own). The token encrypt/decrypt/refresh
-helpers that used to sit in server.ts moved there unchanged in scheme
-(crypto-at-rest.ts purpose `monerium`; old ciphertext still decrypts). ONE
-DELIBERATE CHANGE inside that move: the OAuth refresh now sends
-MONERIUM_OAUTH_CLIENT_ID (falls back to MONERIUM_CLIENT_ID), the same client
-that did the code exchange; the old code sent MONERIUM_CLIENT_ID, which a real
-OAuth server rejects when the two differ.
+credentials or a connection of their own). The token encrypt/decrypt/refresh
+helpers moved there from server.ts with the scheme unchanged (crypto-at-rest.ts
+purpose `monerium`; old ciphertext still decrypts). One behaviour change came
+with the move: the OAuth refresh now sends MONERIUM_OAUTH_CLIENT_ID (falls back
+to MONERIUM_CLIENT_ID), the same client that did the code exchange; the old
+code sent MONERIUM_CLIENT_ID, which a real OAuth server rejects when the two
+differ.
 
-WHY THE SANDBOX ADAPTER HAD TO CHANGE, not just the routes: the address the
-app links and the IBAN it requests live under the USER's profile, which the
-app's keys cannot see (the same blind spot `MoneriumClient.orders()` documents
-for unscoped calls). So `redeemToIban`, `getOrderState`, `findIban` and the
+**Why the sandbox adapter changed as well as the routes:** the address the app
+links and the IBAN it requests live under the user's profile, which the app's
+keys cannot see (the same blind spot `MoneriumClient.orders()` documents for
+unscoped calls). So `redeemToIban`, `getOrderState`, `findIban` and the
 deposit poller now run on the user's client when they have one; the poller
-additionally walks `usersWithOwnCredentials()` and asks each one's account
-(default profile AND the recorded one). The test proves it the hard way: the
-API is started with NO app secret, the stub issues a token only for the one
-known pair and 401s everything else, and activation + a credited deposit still
-happen. `executeSepaTransfer` is gated on `moneriumLiveFor(user)`, so an
-account connected by API keys places a REAL redeem even on a deployment whose
-own credentials are unset — a connected account mock-PAYING would be the UPI
-fake again.
+also walks `usersWithOwnCredentials()` and asks each one's account (default
+profile and the recorded one). The test starts the API with no app secret; the
+stub issues a token only for the one known pair and 401s everything else, and
+activation + a credited deposit still happen. `executeSepaTransfer` is gated
+on `moneriumLiveFor(user)`, so an account connected by API keys places a real
+redeem even on a deployment whose own credentials are unset. A connected
+account that mock-paid would repeat the UPI fake.
 
 RULES THAT CARRY WEIGHT:
  - VERIFIED BEFORE STORED. The pair is exchanged for a token and /auth/context,
