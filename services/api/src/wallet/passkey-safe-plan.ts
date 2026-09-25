@@ -25,8 +25,7 @@ export function passkeySafePlan(
   if (!owner) return undefined;
   // The passkey is the ONLY owner. A Zold co-signer as second owner (2-of-2)
   // was retired: it could not start a debit, but it meant the user could not
-  // move their own funds without Zold's counter-signature. Older 2-of-2 plans
-  // keep their stored owner set until the user removes the co-signer.
+  // move their own funds without Zold's counter-signature.
   const account = smartAccountForPasskey(owner);
   const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
     ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)
@@ -36,15 +35,7 @@ export function passkeySafePlan(
     status: "planned",
     threshold: 1,
     // No allowance module, no delegate, no spend amounts: nothing moves from
-    // the Safe except UserOperations the user's own passkey signs. The policy
-    // record keeps the shape stored accounts already have; the module address
-    // is there so standing allowances on older Safes can be found and revoked.
-    cosignerPolicy: {
-      enabled: false,
-      allowanceModuleAddress: CANDIDE.allowanceModuleAddress,
-      allowancePeriodMinutes: "0",
-      allowances: [],
-    },
+    // the Safe except UserOperations the user's own passkey signs.
     passkeyPublicKey: webauthnOwnerToStore(owner),
     ...(recoveryGuardianAddress
       ? {

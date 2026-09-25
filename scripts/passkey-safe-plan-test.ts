@@ -2,15 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { decodeFunctionData, getAddress } from "viem";
 import {
+  AbandonedLegacySafeError,
   CANDIDE,
   accountForPlan,
-  passkeyAccountAddress,
+  isAbandonedLegacySafe,
   passkeySafeRecoverySetupTransactions,
-  removeCosignerTransactions,
   smartAccountForPasskey,
-  smartAccountForPasskeyCosigner,
   webauthnOwnerFromJwk,
   webauthnOwnerToStore,
 } from "../services/api/src/wallet/candide.js";
@@ -25,39 +23,31 @@ const jwk: JsonWebKey = {
   x: b64url("1111111111111111111111111111111111111111111111111111111111111111"),
   y: b64url("2222222222222222222222222222222222222222222222222222222222222222"),
 };
-const cosigner = "0x1111111111111111111111111111111111111111" as const;
+const guardian = "0x1111111111111111111111111111111111111111" as const;
 const passkeyOwner = webauthnOwnerFromJwk(jwk);
 assert.ok(passkeyOwner, "ES256 passkey JWK should produce Safe WebAuthn owner coordinates");
 
-const safe = smartAccountForPasskeyCosigner(passkeyOwner, cosigner);
 const passkeyOnlySafe = smartAccountForPasskey(passkeyOwner);
-assert.match(safe.accountAddress, /^0x[0-9a-fA-F]{40}$/);
 assert.match(passkeyOnlySafe.accountAddress, /^0x[0-9a-fA-F]{40}$/);
 assert.equal(
-  smartAccountForPasskeyCosigner(passkeyOwner, cosigner).accountAddress,
-  safe.accountAddress,
-  "passkey/co-signer Safe address must be deterministic",
-);
-assert.notEqual(
-  passkeyOnlySafe.accountAddress.toLowerCase(),
-  safe.accountAddress.toLowerCase(),
-  "production co-signer policy must produce a different Safe than local passkey-only setup",
+  smartAccountForPasskey(passkeyOwner).accountAddress,
+  passkeyOnlySafe.accountAddress,
+  "the passkey Safe address must be deterministic",
 );
 const recoverySetup = passkeySafeRecoverySetupTransactions({
-  address: safe.accountAddress as `0x${string}`,
-  threshold: 2,
-  cosignerAddress: cosigner,
+  address: passkeyOnlySafe.accountAddress as `0x${string}`,
+  threshold: 1,
   passkeyPublicKey: webauthnOwnerToStore(passkeyOwner),
   recovery: {
     moduleAddress: CANDIDE.recoveryModuleAddress,
-    guardianAddress: cosigner,
+    guardianAddress: guardian,
     threshold: 1,
   },
 });
 assert.equal(recoverySetup.length, 2, "recovery setup should enable the module and add one guardian");
 assert.equal(
   recoverySetup[0].to.toLowerCase(),
-  safe.accountAddress.toLowerCase(),
+  passkeyOnlySafe.accountAddress.toLowerCase(),
   "the Safe itself must receive the enableModule call",
 );
 assert.equal(
@@ -80,11 +70,7 @@ assert.ok(
 
 assert.equal(webauthnOwnerFromJwk({ ...jwk, crv: "P-384" }), null);
 
-/* ---- The co-signer is retired: new plans are passkey-only ---------------
-   Even with a co-signer address configured (legacy Safes still need one), a
-   NEW plan must never list it as an owner. */
-(CANDIDE as any).cosignerAddress = cosigner;
-(CANDIDE as any).cosignerKey = `0x${"ab".repeat(32)}`;
+/* ---- The co-signer is retired: new plans are passkey-only --------------- */
 const plan = passkeySafePlan(
   { address: "0x0000000000000000000000000000000000000000" } as any,
   { jwk, alg: "ES256" } as any,
@@ -92,65 +78,50 @@ const plan = passkeySafePlan(
 assert.ok(plan, "an ES256 passkey must produce a Safe plan");
 assert.equal(plan.threshold, 1, "a new Safe must be 1-of-1");
 assert.equal(plan.cosignerAddress, undefined, "a new Safe must not list a co-signer owner");
-assert.equal(plan.cosignerPolicy?.enabled, false);
+assert.equal((plan as any).cosignerPolicy, undefined, "a new plan must not carry an allowance policy");
 assert.equal(
   plan.address.toLowerCase(),
   passkeyOnlySafe.accountAddress.toLowerCase(),
   "a new plan's address must be the passkey-only counterfactual address",
 );
 
-/* ---- Removing the co-signer from a legacy 2-of-2 Safe ------------------- */
-const legacySafe = safe.accountAddress as `0x${string}`;
-const passkeySigner = passkeyAccountAddress(passkeyOwner);
-const REMOVE_OWNER_ABI = [{
-  type: "function", name: "removeOwner", stateMutability: "nonpayable", outputs: [],
-  inputs: [{ name: "prevOwner", type: "address" }, { name: "owner", type: "address" }, { name: "_threshold", type: "uint256" }],
-}] as const;
-const decodeRemoval = (txs: ReturnType<typeof removeCosignerTransactions>) => {
-  assert.equal(txs.length, 1);
-  assert.equal(txs[0].to.toLowerCase(), legacySafe.toLowerCase(), "removeOwner must be called ON the Safe itself");
-  assert.equal(txs[0].value, 0n);
-  const { functionName, args } = decodeFunctionData({ abi: REMOVE_OWNER_ABI, data: txs[0].data as `0x${string}` });
-  assert.equal(functionName, "removeOwner");
-  return args;
-};
-// Co-signer second in the owner list: prevOwner is the passkey signer.
-let args = decodeRemoval(removeCosignerTransactions(legacySafe, [passkeySigner, cosigner], cosigner));
-assert.equal(args[0].toLowerCase(), passkeySigner.toLowerCase());
-assert.equal(args[1].toLowerCase(), cosigner.toLowerCase());
-assert.equal(args[2], 1n, "the Safe must end at threshold 1");
-// Co-signer first: prevOwner is Safe's sentinel.
-args = decodeRemoval(removeCosignerTransactions(legacySafe, [cosigner, passkeySigner], cosigner));
-assert.equal(args[0], "0x0000000000000000000000000000000000000001");
-// Case-insensitive: getOwners returns checksummed addresses, env vars need not be.
-const mixedCase = getAddress("0xabcdef0123456789abcdef0123456789abcdef01");
-args = decodeRemoval(removeCosignerTransactions(legacySafe, [passkeySigner, mixedCase], mixedCase.toLowerCase() as `0x${string}`));
-assert.equal(args[1], mixedCase, "the owner must be passed exactly as the chain lists it");
-assert.throws(() => removeCosignerTransactions(legacySafe, [passkeySigner], cosigner), /not an owner/);
-assert.throws(() => removeCosignerTransactions(legacySafe, [cosigner], cosigner), /only owner/);
-
-// After removal the owner set no longer derives the address, so the account
-// must be addressed directly — re-deriving would throw a mismatch.
+/* ---- Legacy 2-of-2 Safes are abandoned ----------------------------------
+   The co-signer key is gone, so a Safe that still lists it cannot sign.
+   Every operation goes through accountForPlan, which refuses it up front. */
 const legacyPlan = {
-  address: legacySafe,
-  threshold: 1 as const,
+  address: "0x2222222222222222222222222222222222222222" as const,
+  threshold: 2 as const,
+  cosignerAddress: guardian,
   passkeyPublicKey: webauthnOwnerToStore(passkeyOwner),
 };
-assert.throws(() => accountForPlan(legacyPlan), /does not match/, "a 1-of-1 derivation cannot reach a 2-of-2 address");
-assert.equal(
-  accountForPlan({ ...legacyPlan, cosignerRemovedAt: new Date().toISOString() }).account.accountAddress.toLowerCase(),
-  legacySafe.toLowerCase(),
-);
+assert.ok(isAbandonedLegacySafe(legacyPlan));
+assert.ok(!isAbandonedLegacySafe(plan));
+assert.throws(() => accountForPlan(legacyPlan), AbandonedLegacySafeError);
+// A Safe whose co-signer was removed before retirement is a live 1-of-1,
+// addressed directly because its owners no longer derive its address.
+const removedPlan = { ...legacyPlan, cosignerAddress: undefined, threshold: 1 as const, cosignerRemovedAt: new Date().toISOString() };
+assert.equal(accountForPlan(removedPlan).account.accountAddress.toLowerCase(), legacyPlan.address.toLowerCase());
 
-// A Candide recovery installs only the new passkey — it never carries the
-// co-signer over. And the removal route must stay present.
+// No code may sign with, or require, a co-signer key.
+for (const rel of [
+  "services/api/src/wallet/candide.ts",
+  "services/api/src/routes/auth.ts",
+  "services/api/src/routes/monerium.ts",
+  "services/api/src/orchestrator.ts",
+  "services/api/src/transfers/build.ts",
+]) {
+  const source = readFileSync(path.join(ROOT, rel), "utf8");
+  assert.ok(!source.includes("cosignerKey"), `${rel} must not read a co-signer key`);
+}
+const authRoutes = readFileSync(path.join(ROOT, "services/api/src/routes/auth.ts"), "utf8");
+assert.ok(!authRoutes.includes("cosigner-removal"), "the co-signer removal route is gone with the key");
+
+// A Candide recovery installs only the new passkey.
 const recoverySource = readFileSync(path.join(ROOT, "services/api/src/routes/recovery-candide.ts"), "utf8");
 assert.ok(
   /const newOwners: `0x\$\{string\}`\[\] = \[passkeyAccountAddress\(owner\)\];/.test(recoverySource),
   "recovery must install the new passkey as the only owner",
 );
-const authRoutes = readFileSync(path.join(ROOT, "services/api/src/routes/auth.ts"), "utf8");
-assert.ok(authRoutes.includes('"/users/:id/passkey-safe/cosigner-removal"'), "the co-signer removal route must remain present");
 const configSource = readFileSync(path.join(ROOT, "services/api/src/config.ts"), "utf8");
 assert.ok(!/fail\([^)]*CANDIDE_COSIGNER/.test(configSource), "production must not require a co-signer");
 

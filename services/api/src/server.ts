@@ -50,9 +50,7 @@ import {
   warnIfSmartAccountChainDiffers,
   publicClient,
   } from "./chain.js";
-import {
-  CANDIDE,
-  } from "./wallet/candide.js";
+import { AbandonedLegacySafeError, CANDIDE, SafeGasError } from "./wallet/candide.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -188,6 +186,11 @@ app.use(((err, _req, res, next) => {
   // response and no error at all. Hand those to express's default handler,
   // which closes the connection properly.
   if (res.headersSent) return next(err);
+  // Refusals the user or operator can act on: an abandoned legacy Safe, or a
+  // Safe that cannot pay its gas. Their messages name no secret.
+  if (err instanceof AbandonedLegacySafeError || err instanceof SafeGasError) {
+    return res.status(err.status).json({ error: err.message });
+  }
   const detail = String(err?.shortMessage ?? err?.message ?? err);
   res.status(500).json({ error: SECURITY.exposeInternalErrors ? detail : "internal server error" });
 }) as express.ErrorRequestHandler);
@@ -304,33 +307,28 @@ app.listen(API_PORT, API_HOST, () => {
   if (CUSTODY.requireNonCustodial) {
     console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
   }
-  // There are no allowances: every debit is a UserOperation the user's
-  // passkey signs for the exact amount and destination. Warn an operator who
-  // sets these env vars that they have no effect.
-  if (
-    process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ||
-    process.env.CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS ||
-    process.env.CANDIDE_COSIGNER_ALLOWANCE_PERIOD_MINUTES ||
-    process.env.CANDIDE_COSIGNER_ALLOWANCE_AMOUNT
-  ) {
-    console.warn(
-      "NOTE: CANDIDE_COSIGNER_*_ALLOWANCE_* env vars are set but co-signer allowances do not " +
-        "exist — every Safe debit is a UserOperation the user's passkey signs at send time. " +
-        "Standing allowances on older Safes are revoked automatically on the next send.",
-    );
-  }
-  // The co-signer is retired: new Safes are passkey-only. A Safe deployed as
-  // 2-of-2 before that still needs the co-signer key for every operation —
-  // including the one that removes it — so name those accounts and say loudly
-  // if the key is gone, rather than letting their sends fail one by one.
+  // Legacy 2-of-2 Safes (the retired co-signer still an owner) are abandoned:
+  // no co-signer key is configured, so they cannot sign. Name them once so an
+  // operator knows why those accounts refuse every operation.
   const legacy = store.users.filter((u) => u.passkeySafe?.cosignerAddress);
   if (legacy.length) {
-    const msg =
-      `CO-SIGNER: ${legacy.length} account(s) still have a 2-of-2 Safe with the legacy co-signer as an owner ` +
-      `(${legacy.map((u) => u.id).join(", ")}). Each user can remove it from the app.`;
-    if (CANDIDE.cosignerKey) console.warn(msg);
-    else console.error(`${msg} CANDIDE_COSIGNER_KEY is NOT set, so none of them can send or remove it until it is.`);
+    console.warn(
+      `LEGACY SAFES: ${legacy.length} account(s) have an abandoned 2-of-2 Safe with the retired co-signer ` +
+        `as an owner (${legacy.map((u) => u.id).join(", ")}); every operation on them is refused.`,
+    );
   }
+  if (process.env.CANDIDE_COSIGNER_KEY) {
+    console.warn("NOTE: CANDIDE_COSIGNER_KEY is set but nothing reads it any more — remove it from the environment.");
+  }
+  console.log(
+    `GAS: Safe UserOperations are ${
+      CANDIDE.gas.mode === "sponsored"
+        ? `sponsored by the paymaster at ${CANDIDE.paymasterUrl}`
+        : CANDIDE.gas.mode === "native"
+          ? "paid by each Safe in ETH (no paymaster)"
+          : `paid by each Safe in token ${CANDIDE.gas.token} through ${CANDIDE.paymasterUrl}`
+    }.`,
+  );
 });
 
 /**

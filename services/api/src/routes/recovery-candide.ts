@@ -307,11 +307,8 @@ export async function finalizeCandideRecovery(
       ...user.passkeySafe,
       passkeyPublicKey: webauthnOwnerToStore(owner),
       recoveredAt: now.toISOString(),
-      // A recovery started before the co-signer was retired may still carry it
-      // in its owner set; record exactly what the chain was told to install.
-      ...(user.passkeySafe.cosignerAddress && newOwners.includes(user.passkeySafe.cosignerAddress.toLowerCase())
-        ? {}
-        : { cosignerAddress: undefined, threshold: 1 as const }),
+      cosignerAddress: undefined,
+      threshold: 1 as const,
     },
     authorizerAddress: undefined,
   });

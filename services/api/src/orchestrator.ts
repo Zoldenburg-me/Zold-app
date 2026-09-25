@@ -48,7 +48,7 @@ import {
   writeAndWait,
 } from "./chain.js";
 import {
-  CANDIDE,
+  isAbandonedLegacySafe,
   submitPasskeySafeOperation,
   type BrowserPasskeyAssertion,
   type PasskeySafeDeploymentPlan,
@@ -289,8 +289,8 @@ export function safeDebitBlocker(user: User): string | null {
   if (activePasskeySafe(user)) {
     return passkeySafeExecutionReady(user)
       ? null
-      : "This account's Safe is a legacy 2-of-2 with a co-signing owner, and no co-signer key is configured — " +
-        "set CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY so it can send, then remove the co-signer";
+      : "This account's Safe is an abandoned legacy 2-of-2 (the retired Zold co-signer is still an owner) " +
+        "and can no longer sign — create a new passkey Safe";
   }
   return (
     "Safe-held funds need an active passkey Safe before transfers can be executed — " +
@@ -306,12 +306,11 @@ function activePasskeySafe(user: User): boolean {
 }
 
 /** Can this account's send-time UserOperation actually be completed?
- *  A passkey-only Safe needs nothing but the user's assertion; a legacy 2-of-2
- *  Safe additionally needs the co-signer key until its user removes it. */
+ *  A passkey-only Safe needs nothing but the user's assertion; an abandoned
+ *  legacy 2-of-2 Safe can never complete one. */
 function passkeySafeExecutionReady(user: User): boolean {
   if (!activePasskeySafe(user) || !user.passkeySafe) return false;
-  if (!user.passkeySafe.cosignerAddress) return true;
-  return Boolean(CANDIDE.cosignerKey);
+  return !isAbandonedLegacySafe(user.passkeySafe);
 }
 
 /**

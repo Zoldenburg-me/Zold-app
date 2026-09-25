@@ -24,9 +24,10 @@ export interface User {
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
     /**
-   * Passkey Safe state. The passkey is the only owner (threshold 1). Safes
-   * deployed before the co-signer was retired may still be 2-of-2 with
-   * `cosignerAddress` set, until the user removes it.
+   * Passkey Safe state. The passkey is the only owner (threshold 1). A Safe
+   * deployed as 2-of-2 before the co-signer was retired still has
+   * `cosignerAddress` set; it is abandoned (AbandonedLegacySafeError) and the
+   * row is kept only so its address and balance stay visible.
    */
   passkeySafe?: {
     address: `0x${string}`;
@@ -34,16 +35,6 @@ export interface User {
     threshold: 1 | 2;
     cosignerAddress?: `0x${string}`;
     passkeyPublicKey: { x: string; y: string };
-    cosignerPolicy?: {
-      enabled: boolean;
-      allowanceModuleAddress: `0x${string}`;
-      allowancePeriodMinutes?: string;
-      allowances?: {
-        token: `0x${string}`;
-        symbol: "EURE" | "USDC";
-        amount: string;
-      }[];
-    };
     recovery?: {
       moduleAddress: `0x${string}`;
       guardianAddress: `0x${string}`;
@@ -76,8 +67,9 @@ export interface User {
      *  that address is no longer the counterfactual one of its current owner,
      *  so the account must be built from the address, never re-derived. */
     recoveredAt?: string;
-    /** Set once the user removed the legacy co-signer owner. Like
-     *  recoveredAt, the address no longer derives from the owner set. */
+    /** Set on Safes whose user removed the legacy co-signer before it was
+     *  retired. Like recoveredAt, the address no longer derives from the
+     *  owner set. Nothing writes these any more. */
     cosignerRemovedAt?: string;
     cosignerRemovalOpHash?: string;
   };

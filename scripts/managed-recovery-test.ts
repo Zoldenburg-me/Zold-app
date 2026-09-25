@@ -58,8 +58,7 @@ const baseUser = {
   passkeySafe: {
     address: "0x1111111111111111111111111111111111111111",
     status: "active",
-    threshold: 2,
-    cosignerAddress: "0x2222222222222222222222222222222222222222",
+    threshold: 1,
     passkeyPublicKey: { x: `0x${"11".repeat(32)}`, y: `0x${"22".repeat(32)}` },
     recovery: {
       moduleAddress: "0x3333333333333333333333333333333333333333",
