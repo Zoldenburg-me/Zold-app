@@ -2,10 +2,9 @@
  * The chart of accounts, categorisation rules, the ledger, positions and
  * export.
  *
- * GATING IS A READ-TIME FILTER, NEVER A WRITE-TIME DELETE. A downgraded org
- * keeps its chart of accounts, its rules and its history; the API refuses to
- * serve them, and an upgrade makes them readable again. Nothing here deletes
- * on downgrade, deliberately.
+ * Gating is a read-time filter, not a delete. A downgraded org keeps its
+ * chart of accounts, rules and history; the API refuses to serve them until
+ * an upgrade. Nothing here may delete on downgrade.
  */
 import express from "express";
 import { randomUUID } from "node:crypto";

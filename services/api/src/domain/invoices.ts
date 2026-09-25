@@ -1,14 +1,13 @@
 /**
- * Invoices — the "Invoice-Me" one-time link.
+ * Invoices: the "Invoice-Me" one-time link.
  *
- * The payor generates a link and sends it to a supplier. The supplier fills the
- * invoice in through that link with NO ACCOUNT AND NO WALLET CONNECTION, which
- * is the whole reason the feature works: the friction of onboarding a vendor is
- * what stops invoices being paid, and this removes it.
+ * The payor generates a link and sends it to a supplier, who fills the invoice
+ * in through it with no account and no wallet connection. Vendor onboarding is
+ * what usually stalls payment, so the link skips it.
  *
- * That also makes the link a bearer credential, so:
- *  - we store only its hash, never the token, so a leaked database does not
- *    hand over open invoices;
+ * That makes the link a bearer credential, so:
+ *  - we store only its hash, so a leaked database does not hand over open
+ *    invoices;
  *  - the supplier-facing view is filtered to what a supplier may see;
  *  - an optional password adds a second factor for a link sent over email.
  */
@@ -159,9 +158,9 @@ export function supplierView(
     payor: { name: payorName },
     /**
      * The issued document, for an outgoing invoice. Safe to expose in full:
-     * every field here is printed on the invoice the customer already holds,
-     * and an invoice they cannot read is not an invoice. Internal ids, member
-     * ids and the link hashes stay out, as with the rest of this view.
+     * every field is printed on the invoice the customer already holds.
+     * Internal ids, member ids and link hashes stay out, as in the rest of
+     * this view.
      */
     issued: invoice.issued,
     ...(invoice.issued && issuerExtras
@@ -193,14 +192,14 @@ export function isOverdue(invoice: Invoice, now = new Date()): boolean {
 /**
  * What this invoice is payable as, in the settlement currency.
  *
- * An invoice written in dollars is still collected in euro or in USDC quoted
- * from euro, because that is the only rail there is. The euro figure is the one
- * FROZEN at issue, never recomputed from today's rate: the customer agreed to
- * pay what the document told them, and re-deriving it later would quietly move
- * the amount due between the invoice being read and being paid.
+ * An invoice written in dollars is still collected in euro, or in USDC quoted
+ * from euro, since that is the only rail. The euro figure is the one frozen at
+ * issue. Don't recompute it from today's rate: the customer agreed to the
+ * amount on the document, and a new rate would change the amount due between
+ * reading and paying.
  *
- * Returns undefined for an invoice that was never issued through the outgoing
- * path, which therefore has no frozen figures to collect against.
+ * Returns undefined for an invoice not issued through the outgoing path, which
+ * has no frozen figures.
  */
 export function payableEur(invoice: Invoice): number | undefined {
   const issued = invoice.issued;
@@ -213,22 +212,21 @@ export function payableEur(invoice: Invoice): number | undefined {
 /**
  * Build the settlement record for a crypto payment.
  *
- * Everything here is a FACT already stored on the deposit — nothing is
- * recomputed from a rate feed at read time, because a value re-derived later
- * from whatever a provider reports then is not the value that applied.
+ * Every value comes from the deposit record. Nothing is recomputed from a rate
+ * feed at read time: a rate read later is not the one that applied.
  *
- * The conversion block appears only once the asset has actually been converted.
- * While it is absent the invoice reads correctly as "paid, asset still held",
- * which is a real position on the balance sheet rather than an incomplete row.
+ * The conversion block appears only once the asset has been converted. Without
+ * it the invoice reads as "paid, asset still held", which is a real balance
+ * sheet position.
  */
 export function buildCryptoSettlement(deposit: CryptoDeposit): CryptoInvoiceSettlement {
   const received = deposit.token === "USDC" ? deposit.amountUsdc ?? 0 : deposit.amountEur ?? 0;
   const converted = deposit.state === "CONVERTED" && deposit.settlementAsset === "EURE";
   /**
-   * The venue's spread against the independent mid, in euro — the only fee
-   * figure we can state honestly. Requires both rates; absent otherwise rather
-   * than guessed, and never inferred from the receipt-to-credit difference,
-   * which also contains market movement.
+   * The venue's spread against the independent mid, in euro: the only fee
+   * figure we can state. Needs both rates and is absent otherwise. Don't infer
+   * it from the receipt-to-credit difference, which also contains market
+   * movement.
    */
   const spreadEur =
     converted && deposit.rate && deposit.midRate && deposit.amountUsdc
@@ -308,17 +306,14 @@ export interface MoneriumOrderLike {
 /**
  * Does this SEPA credit name an invoice by its number?
  *
- * The everyday way an invoice gets paid: bank details on the sheet, the invoice
- * number in the reference. Matched on the normalised number appearing in the
- * normalised memo.
+ * The common case: bank details on the invoice, its number in the reference.
+ * Matched on the normalised number appearing in the normalised memo.
  *
- * DELIBERATELY CONSERVATIVE. A short number would match half the memos in a
- * ledger — "14" appears in a date, an address and another invoice's number — so
- * anything under six characters is not matched at all, and the payer's own
- * pay-link code remains the reliable route. A missed match leaves the credit
- * unattributed and someone reconciles it by hand; a wrong match books a
- * stranger's money against a customer's invoice and closes it. Those are not
- * equally bad.
+ * Numbers under six characters are not matched at all, since a short number
+ * like "14" also appears in dates, addresses and other invoice numbers; the
+ * payer's pay-link code is the reliable route. A missed match leaves the credit
+ * for manual reconciliation. A wrong match books someone else's money against
+ * an invoice and closes it, which is worse.
  */
 export const MIN_MATCHABLE_INVOICE_NUMBER = 6;
 
@@ -330,7 +325,7 @@ export const MIN_MATCHABLE_INVOICE_NUMBER = 6;
  * of a later one whenever the series outgrows its padding (and padding can be
  * set as low as 1). So the number's letters and digits must appear in order,
  * with any punctuation or spacing between them ("re 2026 0042" still names
- * RE-2026-0042), and with NO letter or digit directly before or after.
+ * RE-2026-0042), and with no letter or digit directly before or after.
  */
 export function orderNamesInvoice(order: MoneriumOrderLike, invoice: Invoice): boolean {
   const number = invoice.issued?.number;

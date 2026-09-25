@@ -1,27 +1,23 @@
 /**
- * Residency and citizenship configuration — the ONLY place country codes live.
+ * Residency and citizenship configuration. Country codes live only here.
  *
- * No component, screen or route may carry a country code. They ask this module
- * or the segment resolver. The reason is not tidiness: these lists change for
- * legal reasons, on someone else's timetable, and a code hardcoded in a screen
- * is one nobody finds when the list moves.
+ * Components, screens and routes ask this module or the segment resolver
+ * instead of carrying codes. These lists change for legal reasons on someone
+ * else's timetable, and a code hardcoded in a screen gets missed.
  *
- * THREE INDEPENDENT QUESTIONS, kept independent on purpose:
+ * Three independent questions:
  *
  *   1. Is this person a US person?        -> a legal exclusion we apply ourselves
  *   2. Are they under sanctions?          -> an explicit, short, auditable list
- *   3. Will a PARTNER serve this country? -> Monerium's own residency policy
+ *   3. Will a partner serve this country? -> Monerium's own residency policy
  *
- * Collapsing any two produces a wrong answer with a confident label. A Nigerian
- * resident is not sanctioned — Monerium simply will not serve them — and
- * telling them otherwise would be both false and offensive. So question 3 has
- * its own outcome and its own reason code.
+ * Merging any two gives wrong answers. A Nigerian resident is not sanctioned;
+ * Monerium just will not serve them. So question 3 has its own outcome and
+ * reason code.
  *
- * MONERIUM IS THE REFERENCE for question 3, deliberately: they are the issuer,
- * the account is theirs to open, and maintaining a second opinion about which
- * countries are servable would drift from the partner who actually decides.
- * `country-policy.ts` already holds their tier table; this module never copies
- * it, it calls it.
+ * Monerium is the reference for question 3: they are the issuer and decide
+ * which countries they serve. `country-policy.ts` holds their tier table; this
+ * module calls it and does not copy it.
  */
 
 import { countryBlock, normaliseCountryCode } from "../country-policy.js";
@@ -47,43 +43,38 @@ export const EU_FULL_RESIDENCE: readonly string[] = [
 ];
 
 /**
- * Sanctions deny list. Residence OR citizenship in any of these blocks.
+ * Sanctions deny list. Residence or citizenship in any of these blocks.
  *
- * SHORT AND EXPLICIT ON PURPOSE. This list is a legal assertion about specific
- * jurisdictions, and it is checked against citizenship as well as residence —
- * a stricter rule than many firms apply, and the one that was asked for. It is
- * NOT a dumping ground for "some partner declined": that is question 3 above
- * and has its own outcome.
+ * Kept short and explicit: it is a legal assertion about specific
+ * jurisdictions, checked against citizenship as well as residence (stricter
+ * than many firms, and what was asked for). Don't add "a partner declined"
+ * countries here; that is question 3 above.
  *
- * NOT A COMPLETE SANCTIONS SCREEN. This is a country-level gate, not a
- * name-level one; screening individuals against consolidated lists (OFAC SDN,
- * EU, UN, HMT) is the KYC provider's job and remains theirs.
+ * Country-level only. Screening individuals against consolidated lists (OFAC
+ * SDN, EU, UN, HMT) is the KYC provider's job.
  */
 export const SANCTIONED: readonly string[] = ["IR", "KP", "SY", "CU", "RU", "BY"];
 
 /**
- * Regions where Gnosis Pay will not issue a card, but where an account is
- * otherwise fine.
+ * Regions where Gnosis Pay will not issue a card, but an account is fine.
  *
- * Kept separate from the sanctions list on purpose. Blocking an account
- * outright because the card partner declines the region would refuse someone
- * Monerium would serve, so this list downgrades the segment
- * (EU_FULL -> ONCHAIN_NO_CARD) instead of blocking.
+ * Separate from the sanctions list: Monerium would still serve these people,
+ * so this list downgrades the segment (EU_FULL -> ONCHAIN_NO_CARD) and does
+ * not block.
  *
- * Empty until read off Gnosis Pay's own terms. Empty is honest; a guessed list
- * would silently remove cards from people entitled to one.
+ * Empty until read off Gnosis Pay's own terms; a guessed list would remove
+ * cards from people entitled to one.
  * TODO(gnosis-pay): populate from Gnosis Pay's published prohibited regions.
  */
 export const GNOSIS_PAY_PROHIBITED: readonly string[] = [];
 
 /**
- * ISO codes that ARE the United States for this purpose.
+ * ISO codes that count as the United States here.
  *
- * THIS LIST IS LOAD-BEARING and is the reason it exists separately: Monerium's
- * own tier table rates several US territories as servable (Guam and the US
- * Virgin Islands are `medium`, the Northern Mariana Islands `low`), so a
- * territory resident would pass a tier check and be handed an account. A US
- * person is a US person wherever they live.
+ * Monerium's tier table rates several US territories as servable (Guam and
+ * the US Virgin Islands `medium`, the Northern Mariana Islands `low`), so a
+ * territory resident would pass a tier check alone. A US person is a US person
+ * wherever they live.
  */
 export const US_TERRITORIES: readonly string[] = [
   "US",

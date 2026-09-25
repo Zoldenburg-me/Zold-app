@@ -1,20 +1,18 @@
 /**
  * Monerium existing-account connect (OAuth) test.
  *
- * The connect flow lets a user who already has a Monerium account attach it
- * instead of repeating KYC. It ships as five endpoints and had no coverage
- * beyond "returns 503 when unconfigured" — so nothing proved the PKCE was
- * real, that tokens stay encrypted, or that activation actually issues an app
- * IBAN.
+ * The connect flow (five endpoints) lets a user who already has a Monerium
+ * account attach it without repeating KYC. This checks that PKCE works, that
+ * tokens stay encrypted, and that activation issues an app IBAN.
  *
- * This drives the whole loop against a stub Monerium. The stub is not a
- * pushover: it **verifies the PKCE challenge itself** (S256 of the verifier
- * presented at exchange must equal the challenge sent at start), so a flow
- * that only decorated the URL with a challenge would fail here.
+ * It drives the whole loop against a stub Monerium that verifies the PKCE
+ * challenge itself (S256 of the verifier presented at exchange must equal the
+ * challenge sent at start), so a flow that only adds a challenge to the URL
+ * fails here.
  *
- * What this canNOT prove, and needs a real Monerium account in a browser:
- * that Monerium's authorize page accepts our client_id/redirect_uri
- * registration, and that its real token response matches this shape.
+ * Not covered (needs a real Monerium account in a browser): whether Monerium's
+ * authorize page accepts our client_id/redirect_uri registration, and whether
+ * its real token response matches this shape.
  *
  * Run: npm run monerium:oauth:test
  */

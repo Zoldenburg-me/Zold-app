@@ -1,24 +1,18 @@
 /**
  * Gnosis Pay permissionless adapter — auth + read-only foundation.
  *
- * WHAT THESE EXIST TO CATCH. The integration doc transcribed two details of
- * the real API wrongly, and both are silently fatal in a way that reads as our
- * bug rather than theirs:
+ * The integration doc got two details of the real API wrong (checked against
+ * the live OpenAPI spec and endpoint). Both fail in a way that looks like a
+ * Zold bug:
  *
- *   1. GET /auth/nonce returns text/plain. Parsing it as JSON throws on a
- *      response that was completely fine.
+ *   1. GET /auth/nonce returns text/plain; parsing it as JSON throws.
  *   2. That response sets a `siwe` cookie and the challenge is verified
- *      against it. Fetch the nonce server-side without carrying the cookie
- *      forward and every signature comes back rejected, as if the user had
- *      signed the wrong thing.
+ *      against it. Without carrying the cookie forward, every signature is
+ *      rejected as if the user signed the wrong thing.
  *
- * Both were found by reading the live OpenAPI spec and calling the endpoint,
- * and both are asserted here so a refactor cannot quietly reintroduce them.
- *
- * Also covered: the chain is pinned to Gnosis (100) rather than derived from
- * the app chain, balances stay STRINGS, a 401 from Gnosis Pay does not become
- * a 401 from us (which would log the user out of Zold), and no JWT is ever
- * persisted.
+ * Also covered: the chain is pinned to Gnosis (100), not derived from the app
+ * chain; balances stay strings; a 401 from Gnosis Pay does not become a 401
+ * from us (which would log the user out of Zold); no JWT is persisted.
  *
  * Stub Gnosis Pay, no chain, no network.
  *

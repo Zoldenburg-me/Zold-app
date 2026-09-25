@@ -141,11 +141,10 @@ export class MoneriumClient {
   /**
    * Orders, optionally scoped to one profile.
    *
-   * WITHOUT a profile this returns only the app's DEFAULT profile's orders —
-   * not every order the app can see. A user's deposit lands under THEIR
-   * profile, so an unscoped call cannot see it: the euros arrive on-chain,
-   * Monerium marks the order processed, and we credit nothing. Always pass
-   * the profile you care about.
+   * Without a profile this returns only the app's default profile's orders.
+   * A user's deposit lands under their own profile, so an unscoped call
+   * misses it: the euros arrive on-chain, Monerium marks the order processed,
+   * and we credit nothing. Always pass the profile.
    */
   orders(profileId?: string) {
     const q = profileId ? `?profile=${encodeURIComponent(profileId)}` : "";

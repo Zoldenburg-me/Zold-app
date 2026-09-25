@@ -1,19 +1,19 @@
 /**
- * Candide's email/SMS guardian — the Safe Recovery Service as a guardian on
+ * Candide's email/SMS guardian: the Safe Recovery Service as a guardian on
  * the user's Safe.
  *
- * WHAT CANDIDE DOES: holds one guardian key, registers OTP channels against a
- * Safe (each registration is a SIWE statement the SAFE signs, so only an owner
- * can add a channel), and signs a recovery request only after the requester
- * passes an OTP on EVERY registered channel. Execution and finalisation are
- * sponsored by the service. The grace period is the module's, on chain.
+ * Candide holds one guardian key and registers OTP channels against a Safe
+ * (each registration is a SIWE statement the Safe signs, so only an owner can
+ * add a channel). It signs a recovery request only after the requester passes
+ * an OTP on every registered channel. The service sponsors execution and
+ * finalisation; the grace period is the module's, on chain.
  *
- * WHAT THIS FILE DOES: wraps the SDK behind a fail-closed availability check
- * (no RECOVERY_SERVICE_URL, no feature), validates channel targets before
- * they reach a third party, masks them on the way out, and pins one
- * invariant the SDK does not: the module Candide will recover through
+ * This file wraps the SDK behind a fail-closed availability check (no
+ * RECOVERY_SERVICE_URL, no feature), validates channel targets before they
+ * reach a third party, and masks them on the way out. It also checks what the
+ * SDK does not: the module Candide recovers through
  * (`getNetworkConfig().moduleAddress`) must be the module the guardian is
- * added to. A guardian in the wrong module is a guardian in no module.
+ * added to, or the guardian has no effect.
  *
  * Nothing here signs. The Safe-side signatures (registration SIWE, adding the
  * guardian, cancelling) are passkey ceremonies driven by the routes; the

@@ -2,19 +2,17 @@
  * Field-level encryption at rest.
  *
  * AES-256-GCM, random 12-byte IV, key derived by SHA-256 over the configured
- * secret, serialised as `iv.tag.ciphertext` in base64url — the scheme that
- * has protected Monerium OAuth tokens since they were first stored, kept
- * byte-identical so existing ciphertext stays readable and there is one
- * scheme to review rather than two.
+ * secret, serialised as `iv.tag.ciphertext` in base64url. This is the scheme
+ * Monerium OAuth tokens were first stored with; keep it byte-identical so
+ * existing ciphertext stays readable.
  *
- * PURPOSE-SEPARATED KEYS. Each caller names its purpose, and the purpose is
- * mixed into the derived key, so a leak of one context does not become a leak
- * of the other even when the same secret is configured for both. `monerium`
- * derives exactly as before so nothing already written becomes unreadable.
+ * Keys are purpose-separated: each caller names a purpose that is mixed into
+ * the derived key, so a leak in one context does not expose the other even
+ * with the same secret. `monerium` derives as before, so existing data stays
+ * readable.
  *
- * WHAT THIS IS NOT. It is not a KMS, there is no key rotation, and the secret
- * lives in the environment. That is a real limitation and it is written down in
- * README's data-handling section rather than left to be discovered.
+ * Not a KMS: no key rotation, and the secret lives in the environment (see
+ * README's data-handling section).
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 

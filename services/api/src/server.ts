@@ -278,12 +278,9 @@ if (CRYPTO_IN.enabled) startCryptoDepositPoller();
 app.listen(API_PORT, API_HOST, () => {
   console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
   /**
-   * Say the custody posture out loud at startup.
-   *
-   * Whether the orchestrator ends up holding a user's funds is decided by the
-   * interaction of the liquidity venue and whether Bridge is live, neither of
-   * which announces itself. An operator who believes they are running a
-   * non-custodial deployment should find out here, not from a regulator.
+   * Log the custody posture at startup. Whether the orchestrator holds user
+   * funds depends on the liquidity venue and whether Bridge is live, and
+   * neither is visible otherwise.
    */
   const safeExecutable = ["dex", "lifi", "rfq", "best"].includes(LIQUIDITY.PROVIDER);
   if (!safeExecutable) {
@@ -308,9 +305,8 @@ app.listen(API_PORT, API_HOST, () => {
     console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
   }
   // There are no allowances: every debit is a UserOperation the user's
-  // passkey signs for the exact amount and destination. An operator setting
-  // these env knobs should hear that they do nothing — silently ignoring them
-  // would read as authority that exists but doesn't.
+  // passkey signs for the exact amount and destination. Warn an operator who
+  // sets these env vars that they have no effect.
   if (
     process.env.CANDIDE_COSIGNER_EURE_ALLOWANCE_WEI ||
     process.env.CANDIDE_COSIGNER_USDC_ALLOWANCE_UNITS ||
@@ -338,18 +334,12 @@ app.listen(API_PORT, API_HOST, () => {
 });
 
 /**
- * Last-resort diagnostics for the two ways this process dies silently.
+ * Last-resort diagnostics for unhandled rejections and uncaught exceptions.
  *
- * Node's default for an unhandled rejection is to terminate, which is the
- * right posture here — pending Safe executions live in memory and a process
- * in an unknown state must not keep signing — but the default report can be
- * a bare stack with no indication that a payments API just went down. These
- * handlers change nothing about WHETHER we exit; they make sure the reason is
- * in the log before we do, and that a supervisor sees a non-zero code.
- *
- * Deliberately NOT swallowing: an API that keeps serving after an unhandled
- * rejection in a money path is the failure mode this codebase refuses
- * everywhere else.
+ * We still exit: pending Safe executions live in memory and a process in an
+ * unknown state must not keep signing. These handlers only log the reason
+ * first and exit non-zero so a supervisor notices. Don't change them to
+ * swallow the error and keep serving.
  */
 process.on("unhandledRejection", (reason: any) => {
   console.error(

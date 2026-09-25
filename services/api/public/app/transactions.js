@@ -89,12 +89,10 @@ function paintDetail(t) {
 }
 
 /* ---------- Share receipt ----------
-   The composer picks what a public receipt exposes. Nothing here enforces
-   anything: the server builds the payload and never sends a withheld value, so
-   these controls choose what leaves the building rather than what CSS hides.
-   That is why a change to a LIVE link is saved immediately — a sender who
-   narrows a selection and closes the screen has narrowed the real link, not
-   just this preview. */
+   The composer picks what a public receipt exposes. The server builds the
+   payload and never sends a withheld value, so these controls set what the
+   server publishes. A change to a live link is saved immediately, so closing
+   the screen after narrowing a selection narrows the real link. */
 const SHARE_GROUPS = [
   { key: "sender", label: "Your name", options: [["full", "Full"], ["first", "First"], ["last", "Last"], ["hidden", "None"]] },
   { key: "recipient", label: "Recipient name", options: [["full", "Full"], ["first", "First"], ["last", "Last"], ["hidden", "None"]] },

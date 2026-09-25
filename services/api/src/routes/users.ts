@@ -1,16 +1,15 @@
 /**
  * Accounts: signup, the account read, the KYC state, and the privacy bundle.
  *
- * SIGNUP DECIDES A SEGMENT, NOT A VERDICT. The country, citizenship and US
- * answers resolve to a segment whose capabilities every later route asks
- * about; a blocked applicant is told plainly what Zold cannot offer and is
- * NOT told which rule produced it, because naming the rule tells someone
- * which answer to change. The internal reason code goes to the audit log.
+ * Signup resolves the country, citizenship and US answers to a segment, whose
+ * capabilities every later route checks. A blocked applicant is told what Zold
+ * cannot offer, not which rule fired: naming the rule tells someone which
+ * answer to change. The internal reason code goes to the audit log.
  *
- * An email is a CHANNEL, not an identity — Monerium still owns KYC and the
- * passkey is still the login. It exists so a device that no longer has the
- * passkey can name its account, and so the OS passkey picker shows something
- * that does not collide. Nothing here verifies it and nothing claims to.
+ * Email is a contact channel, not an identity: Monerium owns KYC and the
+ * passkey is the login. It lets a device without the passkey name its account,
+ * and gives the OS passkey picker a label that does not collide. Nothing here
+ * verifies it.
  */
 import express from "express";
 import { wrap } from "./util.js";
@@ -60,14 +59,12 @@ const CONSENT_VERSION = "2026-08-31";
 /**
  * What a blocked person is told.
  *
- * PLAIN, AND NOT A REASON. Each line says what Zold cannot offer and stops
- * there. It does not cite a rule, a country policy or a partner, because the
- * user cannot act on any of that and because naming the rule tells someone
- * which answer to change. The internal reasonCode goes to the audit log.
+ * Each line says what Zold cannot offer. It cites no rule, country policy or
+ * partner: the user cannot act on them, and naming the rule tells someone which
+ * answer to change. The internal reasonCode goes to the audit log.
  *
- * No legal advice, and no implication that the user has done something wrong —
- * which is why the unsupported case says the residence is not served rather
- * than anything about the person.
+ * No legal advice and no suggestion of wrongdoing, so the unsupported case
+ * talks about the residence, not the person.
  */
 const BLOCKED_COPY: Record<Extract<Segment, `BLOCKED_${string}`>, string> = {
   BLOCKED_US: "Zold is not available to US persons.",
@@ -89,25 +86,23 @@ export function createUserRouter(deps: UserDeps) {
       }
       if (name.trim().length > 120) return res.status(400).json({ error: "name is too long" });
       /**
-       * EMAIL IS REQUIRED, and it is a channel, not an identity. Identity is
-       * Monerium's; the passkey is the login. The email exists so the account
-       * can be found and recovered from a device that no longer has the
-       * passkey (Candide's guardian looks the account up by it), and so the
-       * OS passkey picker shows something that does not collide the way a
-       * full name does. It is verified only where it is used: Candide's OTP at
-       * recovery enrolment. Nothing here sends mail, and nothing claims to.
+       * Email is required as a channel, not an identity (identity is
+       * Monerium's; the passkey is the login). It lets the account be found
+       * and recovered from a device without the passkey (Candide's guardian
+       * looks it up by email), and gives the OS passkey picker a label that
+       * does not collide the way a full name does. It is verified only by
+       * Candide's OTP at recovery enrolment. Nothing here sends mail.
        */
       const emailNorm = typeof email === "string" ? email.trim() : "";
       if (!emailNorm) return res.status(400).json({ error: "name, email and country required" });
       if (emailNorm.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailNorm)) {
         return res.status(400).json({ error: "invalid email" });
       }
-      // ONE CLAIMABLE ACCOUNT PER EMAIL. Recovery resolves an email to an
+      // One claimable account per email. Recovery resolves an email to an
       // account, so two accounts with passkeys on one address would make the
-      // lookup a guess. A row with no passkey is onboarding that stopped before
-      // any credential existed — nothing can sign in to it — so the same
-      // person may start again rather than being locked out by a failed
-      // ceremony.
+      // lookup ambiguous. A row with no passkey is onboarding that stopped
+      // before any credential existed (nothing can sign in to it), so the same
+      // person may start again after a failed ceremony.
       if (store.usersByEmail(emailNorm).some((u) => !!u.passkey)) {
         return res.status(409).json({
           error: "an account already uses this email — sign in with your passkey, or recover the account if you lost the device",
@@ -116,22 +111,20 @@ export function createUserRouter(deps: UserDeps) {
       }
 
       /**
-       * SEGMENTATION, NOT A BARE COUNTRY GATE.
-       *
-       * `countryBlock()` is consulted INSIDE resolveSegment rather than run here
-       * first, and the reason is not tidiness: it answers only "will Monerium
-       * serve this residence", so on its own it would refuse Nigerians with a
-       * message about Monerium's country policy — a partner's name in front of a
-       * user who was never going to use that partner. The resolver asks the three
-       * questions separately and returns which of them actually decided.
+       * Segmentation. Don't call `countryBlock()` here first: it only answers
+       * "will Monerium serve this residence", so on its own it would refuse,
+       * say, Nigerians with a message about Monerium's country policy, naming a
+       * partner the user was never going to use. resolveSegment consults it
+       * internally, asks the three questions separately and returns which one
+       * decided.
        *
        * Callers that send no segmentation fields are read as an individual with
        * a single citizenship equal to residence and all-no US answers.
        */
       const type: "individual" | "company" = accountType === "company" ? "company" : "individual";
-      // The app asks ONE question (citizen, Green Card or tax resident); older
-      // clients and the harnesses still send the three. Keep whichever shape
-      // was answered rather than translating one into the other.
+      // The app asks one combined question (citizen, Green Card or tax
+      // resident); older clients and the harnesses still send the three. Keep
+      // whichever shape was answered; don't translate one into the other.
       const combined = typeof usAnswers?.usPerson === "boolean";
       const answers = {
         ...(combined
@@ -175,9 +168,8 @@ export function createUserRouter(deps: UserDeps) {
           email: redact(emailNorm),
           outcome: "refused_at_signup",
         }));
-        // Deliberately says what Zold cannot offer and NOT which rule fired.
-        // reasonCode stays in the log; publishing it tells someone which answer
-        // to change to get a different outcome.
+        // Says what Zold cannot offer, not which rule fired. reasonCode stays in
+        // the log: publishing it tells someone which answer to change.
         return res.status(403).json({
           error: BLOCKED_COPY[decision.segment as keyof typeof BLOCKED_COPY],
           code: decision.segment,

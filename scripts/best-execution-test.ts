@@ -1,18 +1,16 @@
 /**
  * Best execution + surplus policy.
  *
- * Once more than one venue is wired, choosing by config means settling at the
- * worse price whenever the other venue is better — silently, and with nothing
- * in the record to show it happened. These cover the parts that make that
- * impossible: the larger out wins, losers and their reasons are recorded, a
- * dead venue does not sink a trade that another venue can price, and all
- * venues failing REFUSES rather than falling back to our own book.
+ * With more than one venue wired, picking by config settles at the worse
+ * price whenever the other venue is better, with no record of it. These check
+ * that the larger output wins, losers and their reasons are recorded, a dead
+ * venue does not sink a trade another venue can price, and all venues failing
+ * refuses the trade (no fallback to our own book).
  *
- * Also covers positive slippage. The default sends it to the user, and that
- * default is load-bearing: the receipt reports marginBps measured between the
- * live mid and what we deliver, so quietly keeping surplus would make that
- * number understate what we take. Under "treasury" the amount must still be
- * recorded.
+ * Also covers positive slippage. The default sends it to the user: the receipt
+ * reports marginBps between the live mid and what we deliver, so keeping
+ * surplus unrecorded would make that number understate what we take. Under
+ * "treasury" the amount must still be recorded.
  *
  * Stub venues, no chain and no network.
  *

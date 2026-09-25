@@ -1,17 +1,17 @@
 /**
- * What every liquidity venue has to agree on: the shape of a quote, the shape
- * of an execution, and the two safety rules no venue may skip.
+ * The contract every liquidity venue shares: the quote shape, the execution
+ * shape, and two safety rules.
  *
- * ASSERT WHAT THE VENUE NAMES. A venue's calldata is executed with the
- * orchestrator's key or, in a batch, the user's passkey — so whatever the API
- * answered is a transaction we are about to sign. LI.FI and Bebop both return
- * the approval spender SEPARATELY from the call target, and they happen to be
- * the same contract today; approving the target works by luck and would break
- * silently the day routing moves to a settlement contract or Permit2.
+ * Approve the spender the venue names. Venue calldata runs with the
+ * orchestrator's key or, in a batch, the user's passkey, so the API's answer
+ * is a transaction we sign. LI.FI and Bebop return the approval spender
+ * separately from the call target. They are the same contract today, but
+ * approving the target would break with no error once routing moves to a
+ * settlement contract or Permit2.
  *
- * SURPLUS IS MEASURED AND ATTRIBUTED, NEVER SILENT. The receipt reports a
- * margin measured between the live mid and what we deliver, so pocketing
- * positive slippage quietly would make that number understate what we take.
+ * Measure and attribute surplus. The receipt reports margin between the live
+ * mid and what we deliver; unrecorded positive slippage would make that number
+ * understate what we take.
  */
 import { LIQUIDITY } from "../config.js";
 import {
@@ -94,19 +94,17 @@ export interface LiquidityExecution {
   txs: Transfer["txs"];
   amountOut: bigint;
   /**
-   * Positive slippage: what arrived beyond what was quoted. Always MEASURED,
-   * never assumed, and recorded whoever keeps it — a surplus nobody can see is
-   * indistinguishable from a margin nobody disclosed.
+   * Positive slippage: what arrived beyond the quote. Measured, and recorded
+   * whoever keeps it, so it cannot pass as undisclosed margin.
    */
   surplus?: { amount: string; keptBy: "user" | "treasury" };
 }
 
 /**
- * A swap the USER'S SAFE executes, not the orchestrator: who runs the calldata
- * and where the output token is delivered. Venues that bind the taker into
- * their quote (RFQ makers, LI.FI routes) must be quoted WITH this context —
- * re-targeting their calldata after the fact silently produces a transaction
- * the venue will refuse or misdeliver.
+ * A swap executed by the user's Safe: who runs the calldata and where the
+ * output token goes. Venues that bind the taker into their quote (RFQ makers,
+ * LI.FI routes) must be quoted with this context. Re-targeting their calldata
+ * afterwards gives a transaction the venue will refuse or misdeliver.
  */
 export interface SafeSwapContext {
   executor: `0x${string}`;
@@ -148,11 +146,9 @@ export interface LiquidityProvider {
    * A cheap, display-only EUR->USD rate for building a receipt, as a float and
    * in the swapper's 6dp integer form.
    *
-   * Separate from quote() on purpose. quote() is firm, per-amount and
-   * short-lived — with a real market maker it consumes rate limit and may even
-   * be a commitment. A user typing into an amount box needs neither. The rate
-   * shown must still come from the PROVIDER rather than a constant, or the
-   * receipt quietly advertises a price nobody will honour.
+   * Separate from quote(), which is firm, per-amount and short-lived; with a
+   * real market maker it uses rate limit and may be a commitment. Don't
+   * replace this with a constant: the receipt would show a price nobody honours.
    */
   indicativeRate(side: LiquiditySide): Promise<{ rate: number; raw: bigint }>;
 }
@@ -186,14 +182,13 @@ export async function balanceAfterWrite(
 }
 
 /**
- * Wait until a fresh read actually shows the allowance the approve just set.
+ * Wait until a fresh read shows the allowance the approve just set.
  *
- * The public RPC is load-balanced: the swap SIMULATION can land on a replica
- * that has not seen the approve block yet, and the swap then reverts
- * ERC20InsufficientAllowance against an allowance that is genuinely on
- * chain — a real €5 transfer failed and auto-refunded over exactly this.
- * Bounded: a lagging replica converges within a block or two; a truly
- * missing approve stays missing and the swap's own revert reports it.
+ * The public RPC is load-balanced: the swap simulation can hit a replica that
+ * has not seen the approve block, and the swap reverts
+ * ERC20InsufficientAllowance although the allowance is on chain (a real €5
+ * transfer auto-refunded this way). Bounded: a lagging replica catches up in a
+ * block or two; a missing approve stays missing and the swap's revert says so.
  */
 export async function waitForAllowanceVisibility(
   token: `0x${string}`,

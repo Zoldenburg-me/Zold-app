@@ -244,13 +244,12 @@ function rasterise(matrix: boolean[][], scale = 8, quiet = 4) {
 }
 
 /**
- * THE test for this encoder — an independent decoder, not our own reader.
+ * Decodes with an independent reader (jsqr).
  *
- * A transposed format strip or a reversed bit order along row 8 passes every
- * check that reads the matrix back through our own conventions, while a real
- * scanner cannot tell which mask was applied and refuses the code outright.
- * Reading it back with jsqr is the only check that catches that, so it runs
- * on the payloads the product actually emits.
+ * A transposed format strip or reversed bit order along row 8 passes any check
+ * that reads the matrix through our own conventions, but a real scanner cannot
+ * tell which mask was applied and rejects the code. Runs on the payloads the
+ * product emits.
  */
 check("an independent decoder reads the code — jsqr, not our own reader", () => {
   for (const payload of [

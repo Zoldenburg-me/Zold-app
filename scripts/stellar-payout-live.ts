@@ -1,28 +1,22 @@
 /**
- * Prove the Stellar payout leg on real testnet — the part that has never run.
+ * Exercise the Stellar payout leg on real testnet.
  *
- * WHAT WAS ALREADY PROVEN: SEP-10 auth and opening a SEP-24 withdrawal
- * (npm run stellar:check), and that the treasury can hold the asset
- * (npm run trustline:test). What has NEVER happened is the thing that actually
- * moves value: an ON-LEDGER PAYMENT to the anchor, carrying its memo, observed
- * by the anchor and driven to a terminal state. Until that runs, "live anchor
- * payouts" is a claim about code that has only ever been read.
+ * `npm run stellar:check` covers SEP-10 auth and opening a SEP-24 withdrawal;
+ * `npm run trustline:test` covers the treasury holding the asset. This covers
+ * the on-ledger payment to the anchor with its memo, observed by the anchor
+ * and driven to a terminal state.
  *
- * WHY SEP-6 AND NOT SEP-24. SEP-24 hands the user an interactive web form, so a
- * withdrawal sits at `incomplete` and never publishes an account or memo until
- * a human finishes it — which is exactly where stellar:check stops today.
- * SEP-6 is the non-interactive sibling: same SEP-10 auth, same ledger payment,
- * same memo semantics, but it returns `account_id` and `memo` directly, so the
- * payment path can be exercised without a browser. The Stellar mechanics being
- * proven here — trustline, asset payment, memo type, submission, anchor
- * observation — are identical.
+ * Uses SEP-6: SEP-24 needs a human to finish an interactive form before it
+ * publishes an account or memo (where stellar:check stops). SEP-6 has the same
+ * SEP-10 auth, ledger payment and memo semantics but returns `account_id` and
+ * `memo` directly, so no browser is needed.
  *
- * Nothing here is a mock: real testnet, real anchor, real ledger.
+ * No mocks: real testnet, real anchor, real ledger.
  *
  * Run: npm run stellar:payout:live
  */
-// Testnet pinned, and NOT _test-env: that helper switches production posture
-// off, which a script that submits a real payment must never inherit.
+// Testnet pinned. Not _test-env: that helper switches production posture off,
+// which a script that submits a real payment must not inherit.
 import "./_stellar-testnet.js";
 import { Asset, BASE_FEE, Horizon, Keypair, Memo, Networks, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { STELLAR } from "../services/api/src/config.js";

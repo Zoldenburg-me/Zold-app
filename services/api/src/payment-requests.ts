@@ -1,36 +1,32 @@
 /**
- * Payment requests — "pay me €40 for the invoice" as a link.
+ * Payment requests: "pay me €40 for the invoice" as a link.
  *
- * A payment PAGE (pay.ts) is a standing address: a handle, a QR code, no
- * amount. A payment REQUEST is one specific ask against that page — an
- * amount, a description, a code the payer carries — and a record of what
- * arrived against it. The link is `/pay/<handle>/<code>`; the code is the
- * credential (75 bits, Crockford alphabet, look-alikes folded) and the handle
- * is there so the payer can read who is asking.
+ * A payment page (pay.ts) is a standing address: a handle, a QR code, no
+ * amount. A payment request is one ask against that page (an amount, a
+ * description, a code the payer carries) plus a record of what arrived. The
+ * link is `/pay/<handle>/<code>`; the code is the credential (75 bits,
+ * Crockford alphabet, look-alikes folded) and the handle shows who is asking.
  *
- * THREE WAYS TO PAY, and how each is attributed back to the request:
+ * Three ways to pay, and how each is attributed to the request:
  *
- *   crypto  USDC on the app chain to the payee's page address. The page has ONE
- *           address for every request, so attribution is BY AMOUNT: each open
- *           request quotes a USDC amount that is unique among the payee's open
- *           quotes (nudged by a micro-unit when two would collide), and an
- *           inbound deposit is matched to the closest quoted amount. What that
- *           buys, and what it does not, is in `matchDepositToRequests`.
- *   bank    a SEPA transfer to the payee's IBAN carrying the code as the
- *           remittance reference. Attributed from Monerium's issue order, whose
- *           memo is the reference the payer wrote.
+ *   crypto  USDC on the app chain to the payee's page address. The page has one
+ *           address for every request, so attribution is by amount: each open
+ *           request quotes a USDC amount unique among the payee's open quotes
+ *           (nudged by a micro-unit on collision), and a deposit is matched to
+ *           the closest quote. Limits are in `matchDepositToRequests`.
+ *   bank    a SEPA transfer to the payee's IBAN with the code as remittance
+ *           reference, attributed from the memo on Monerium's issue order.
  *   zold    another Zold account paying from its balance. Today that is a SEPA
- *           payout into the payee's IBAN with the code as reference — the same
- *           rail as `bank`, started from the app with everything prefilled.
- *           There is no on-chain Zold-to-Zold rail yet (see the Pay hub notes
- *           in docs/notes/app-and-chains.md), so this does not pretend to be one.
+ *           payout to the payee's IBAN with the code as reference, the same
+ *           rail as `bank`, prefilled in the app. There is no on-chain
+ *           Zold-to-Zold rail yet (see the Pay hub notes in
+ *           docs/notes/app-and-chains.md).
  *
- * WHAT IS NOT HERE. No money moves in this file. Matching records that a
- * payment arrived; conversion of a USDC deposit to EURe is the user-signed
- * path in adapters/crypto-deposits.ts, and a request settles in EUR only once
- * that has happened (`settledEur`). Until then the request is PAID in the
- * sense a merchant needs — the funds are at the payee's own address — and the
- * record says which asset is actually held.
+ * No money moves in this file. Matching records that a payment arrived;
+ * converting a USDC deposit to EURe is the user-signed path in
+ * adapters/crypto-deposits.ts, and a request settles in EUR only after that
+ * (`settledEur`). Until then the request is PAID (the funds are at the payee's
+ * own address) and the record says which asset is held.
  */
 import { randomBytes } from "node:crypto";
 import { MONERIUM, PAYMENT_REQUESTS } from "./config.js";
@@ -353,17 +349,16 @@ export interface DepositMatch {
 /**
  * Which open request, if any, a USDC deposit at the payee's page address pays.
  *
- * Only quotes issued BEFORE the money arrived are candidates: a quote issued
- * after the deposit cannot be what the payer saw. Exact unit match wins; then
- * the closest quoted amount, provided the deposit is at least the partial
- * floor. Above tolerance-under it is a full payment; above the quote it is an
- * over-payment (still the payer's intent, recorded as such); below tolerance
- * but above the floor it is partial and the request stays open for the rest.
+ * Only quotes issued before the money arrived are candidates, since a later
+ * quote cannot be what the payer saw. Exact unit match wins; then the closest
+ * quoted amount, if the deposit is at least the partial floor. Within the
+ * underpay tolerance it is a full payment; above the quote, an over-payment
+ * (recorded as such); below tolerance but above the floor, partial, and the
+ * request stays open for the rest.
  *
- * WHAT THIS CANNOT DO: tell two requests apart when a payer types a rounded
- * amount that sits between their nudged quotes. Closest wins and ties go to
- * the older request. The owner sees which request a deposit was booked to and
- * can move it; a wrong guess is visible, not silent.
+ * Limitation: when a payer types a rounded amount between two requests' nudged
+ * quotes, closest wins and ties go to the older request. The owner sees which
+ * request a deposit was booked to and can move it.
  */
 export function matchDepositToRequests(
   deposit: Pick<CryptoDeposit, "amountUsdc" | "detectedAt" | "receipt" | "token">,
@@ -573,10 +568,9 @@ export interface PublicPaymentRequest {
 }
 
 /**
- * What an unauthenticated visitor may see. An ALLOWLIST: every field here is
- * named on purpose, the same discipline as pay.ts. The payee's IBAN and legal
- * name go out only on a request that offers bank payment — a SEPA transfer
- * cannot be made without them — and never on a crypto-only link.
+ * What an unauthenticated visitor may see. An allowlist, as in pay.ts. The
+ * payee's IBAN and legal name go out only on a request that offers bank
+ * payment (SEPA needs them), never on a crypto-only link.
  */
 export function publicPaymentRequest(
   r: PaymentRequest,

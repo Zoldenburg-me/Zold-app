@@ -1,31 +1,27 @@
 /**
- * Account documents — receipt, statement, balance confirmation, proof of
- * ownership. What a person hands to a landlord, an employer, a tax adviser or
- * a bank that asks "show me".
+ * Account documents: receipt, statement, balance confirmation, proof of
+ * ownership, for a landlord, employer, tax adviser or bank.
  *
- * WHAT EVERY DOCUMENT IS. A frozen snapshot of facts, stored under an
- * unguessable verification code, signed by this server's document key, and
- * re-checkable at /v/<code>. The PDF is the browser's print of the page — the
- * same route Rebind's receipt takes (their PDF's producer is Chromium) — so
- * the document is never something only a file claims; the page is the record
- * and the file is a picture of it.
+ * Each document is a frozen snapshot stored under an unguessable verification
+ * code, signed by this server's document key and re-checkable at /v/<code>.
+ * The PDF is the browser's print of that page (as with Rebind's receipt, whose
+ * PDF producer is Chromium); the page is the record.
  *
- * WHO IS WHO, named as Monerium's own terms name them (personal and business
- * ToS, s. 1.1 and s. 5): Monerium is the e-money issuer; the IBAN and the
- * SEPA payment services are provided by AS LHV Pank, Tallinn; Zold is
- * software. A document that says "Bank: Zold" or "Bank: Monerium" would be
- * wrong on both counts, and a balance confirmation must say that the balance
- * is e-money redeemable at par, safeguarded, and not a bank deposit (s. 4 and
- * s. 6). Those sentences are part of the data, not decoration.
+ * Roles, as Monerium's terms name them (personal and business ToS, s. 1.1 and
+ * s. 5): Monerium is the e-money issuer; the IBAN and SEPA payment services
+ * are provided by AS LHV Pank, Tallinn; Zold is software. Never label Zold or
+ * Monerium as the bank. A balance confirmation must state that the balance is
+ * e-money redeemable at par, safeguarded, and not a bank deposit (s. 4 and
+ * s. 6); those sentences are required content.
  *
- * WHERE THE NUMBERS COME FROM, in order of authority:
- *   1. the chain — every EURe movement is a token transfer on the Safe, and a
- *      balance is `balanceOf` at a block. A statement's opening and closing
- *      balances are read there, so they reconcile by construction or the
- *      document says by how much they do not;
- *   2. Monerium's orders — the human side of each SEPA movement: counterparty
- *      name, IBAN, memo. The statement is honest about which lines carry it;
- *   3. our transfer records — recipient, fee, memo, state.
+ * Sources, in order of authority:
+ *   1. the chain: every EURe movement is a token transfer on the Safe, and a
+ *      balance is `balanceOf` at a block. Statement opening and closing
+ *      balances are read there, so they reconcile or the document states the
+ *      difference;
+ *   2. Monerium's orders: counterparty name, IBAN and memo for each SEPA
+ *      movement. The statement marks which lines carry them;
+ *   3. our transfer records: recipient, fee, memo, state.
  */
 import { randomBytes } from "node:crypto";
 import { keccak256, toBytes, type Hex } from "viem";

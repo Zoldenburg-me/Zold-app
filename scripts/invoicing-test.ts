@@ -1,11 +1,10 @@
 /**
- * German invoice compliance, proved offline.
+ * German invoice compliance, tested offline.
  *
- * These checks encode rules with money attached: a missing mandatory field
- * costs the CUSTOMER their input-tax deduction (§ 14 Abs. 4 UStG), and a VAT
- * amount shown on an exempt invoice makes the ISSUER liable for tax they never
- * collected (§ 14c UStG). Both are silent failures — nothing bounces, the
- * damage shows up months later — so they are pinned here.
+ * A missing mandatory field costs the customer their input-tax deduction
+ * (§ 14 Abs. 4 UStG), and a VAT amount on an exempt invoice makes the issuer
+ * liable for tax never collected (§ 14c UStG). Neither produces an error at
+ * issue time; the damage shows up months later.
  *
  *   npm run invoicing:test
  */

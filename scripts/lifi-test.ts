@@ -1,17 +1,14 @@
 /**
  * LI.FI liquidity provider tests.
  *
- * LI.FI is the venue intended for production: aggregated routing rather than
- * one pool we picked. Tested live before building this — 100 EURe -> USDC
- * quoted executable on Gnosis (1.1493), Base (1.1506) and Polygon (1.1491)
- * against a live mid of ~1.1511, routed through Nordstern Finance, Fly and
- * Bitget, none of which a hardcoded venue list would contain.
+ * LI.FI is the venue intended for production (aggregated routing). 100 EURe ->
+ * USDC quoted executable on Gnosis (1.1493), Base (1.1506) and Polygon
+ * (1.1491) against a live mid of ~1.1511, via Nordstern Finance, Fly and
+ * Bitget.
  *
- * What matters here is that aggregation does not become a blind spot. We are
- * handing route selection to a third party, so every way its answer can be
- * wrong has to refuse rather than settle: unreachable, erroring, priced in a
- * token we did not ask for, carrying no executable transaction, naming no
- * approval target, or simply quoting a rate the rest of the market disagrees
+ * Route selection is a third party's, so each way its answer can be wrong
+ * must refuse: unreachable, erroring, priced in a token we did not ask for, no
+ * executable transaction, no approval target, or a rate the market disagrees
  * with.
  *
  * Runs against a stub shaped like the real /v1/quote response, whose fields

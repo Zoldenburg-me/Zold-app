@@ -1,10 +1,9 @@
 /**
  * What a role may do.
  *
- * Separate from plans.ts on purpose: a plan says what the ORGANISATION bought,
- * a role says what this PERSON may do with it. Both must pass. Conflating them
- * is how a viewer on a Business plan ends up able to send money because the
- * feature "is included".
+ * Kept apart from plans.ts: a plan says what the organisation bought, a role
+ * says what this person may do with it, and both must pass. Merged, a viewer
+ * on a Business plan could send money because the feature "is included".
  */
 
 import type { Role } from "./types.js";
@@ -98,10 +97,8 @@ export function roleCan(role: Role, permission: Permission): boolean {
 }
 
 /**
- * Four-eyes: the person who submitted a draft may not be the one who reviews
- * it, whatever their role. An admin who drafts a payment still needs a second
- * admin — otherwise "review" is a button the same person presses twice and the
- * control is theatre.
+ * Four-eyes: the person who submitted a draft may not review it, whatever
+ * their role. An admin who drafts a payment still needs a second admin.
  */
 export function canReviewDraft(
   role: Role,

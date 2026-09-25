@@ -46,9 +46,8 @@ import { b64urlToBuf, issueChallenge, verifyAssertion, verifyRegistration } from
 import { publicUser, withSession } from "../users/public-user.js";
 
 /**
- * requireUserSession is INJECTED rather than imported, so server.ts stays the
- * single owner of authentication: a route module cannot quietly acquire a
- * second way to decide who is calling.
+ * requireUserSession is injected so that server.ts stays the only place that
+ * decides who is calling.
  */
 export interface AuthDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;

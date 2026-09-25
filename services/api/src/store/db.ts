@@ -1,15 +1,13 @@
 /**
  * The database: one JSON file, loaded at start, rewritten on every change.
  *
- * WHY A FILE. This is a demo-scale store with an explicit seam — everything
- * goes through the methods in store.ts, so swapping it for a real database is
- * a change in one place. What it is NOT is safe for concurrent writers: the
- * whole file is rewritten, so two processes on one path will lose each
- * other's writes.
+ * A demo-scale store. Everything goes through the methods in store.ts, so
+ * swapping in a real database is a change in one place. It is not safe for
+ * concurrent writers: the whole file is rewritten, so two processes on one
+ * path lose each other's writes.
  *
- * The migrations here run at load and are IDEMPOTENT by construction, each
- * keyed on the row it would create. A migration that runs twice on a money
- * ledger is worse than one that never ran.
+ * The migrations run at load and are idempotent, each keyed on the row it
+ * would create, because this holds a money ledger.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -98,12 +96,10 @@ export interface Db {
 /**
  * Where the store lives. TRANSF_DB_PATH overrides it.
  *
- * Tests point this somewhere disposable, because they reset the database on
- * every run — and when that was the same file the running app uses, a test
- * run destroyed live accounts. That is not hypothetical: it wiped a Safe
- * owner key on Base Sepolia, stranding the account permanently, since only
- * the current authorizer may rotate. A test must not be able to reach the
- * working database at all.
+ * Tests point this somewhere disposable because they reset the database on
+ * every run. A test run on the live file once wiped a Safe owner key on Base
+ * Sepolia and stranded the account (only the current authorizer may rotate),
+ * so tests must not be able to reach the working database.
  */
 const DB_PATH = process.env.TRANSF_DB_PATH
   ? path.resolve(process.env.TRANSF_DB_PATH)
@@ -199,15 +195,13 @@ export function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
  * Give every user created before organisations existed a personal
  * organisation of one.
  *
- * Those users have a real IBAN and a real on-chain address — on Base Sepolia
- * some of them hold credited EUR — so the migration must CARRY THEM FORWARD,
- * not re-issue. The org's EUR account
- * therefore takes the user's existing `iban` and `address` verbatim, and its
- * status is derived from the user's funding state rather than assumed active:
- * a user who never finished provisioning must not acquire an account that
- * claims to be open.
+ * Those users have a real IBAN and on-chain address (some on Base Sepolia
+ * hold credited EUR), so the org's EUR account takes the user's `iban` and
+ * `address` verbatim; never re-issue them. Its status is derived from the
+ * user's funding state, so a user who never finished provisioning does not
+ * get an account that claims to be open.
  *
- * Idempotent — keyed on a member row existing for the user — so it is safe on
+ * Idempotent (keyed on a member row existing for the user), so it is safe on
  * every start, and it never touches a user who already has an org.
  */
 /**

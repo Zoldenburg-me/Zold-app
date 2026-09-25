@@ -1,20 +1,17 @@
 /**
- * Custody posture — is the orchestrator ever holding the sender's funds?
+ * Custody posture: does the orchestrator ever hold the sender's funds?
  *
- * THE PROBLEM THIS COVERS. "We are non-custodial" was an emergent property of
- * three unrelated settings: which liquidity venue was configured, whether
- * Bridge was live, and whether a venue call happened to succeed. The shipped
- * default (LIQUIDITY_PROVIDER=fx-swapper) could not be executed by a user's
- * Safe at all, so the default deployment debited every cash-rail transfer to
- * the orchestrator's own address — and the fallback that got it there was a
- * console.error nobody read. A property nobody asserts and nothing records is
- * not a property.
+ * Non-custody depends on three settings: the configured liquidity venue,
+ * whether Bridge is live, and whether a venue call succeeds. A default of
+ * LIQUIDITY_PROVIDER=fx-swapper cannot be executed by a user's Safe, so it
+ * debits every cash-rail transfer to the orchestrator's address, and the
+ * fallback only logs a console.error.
  *
- * So these check the three things that make the claim real:
- *   1. the DEFAULT venue is one a Safe can execute (the config-level fix),
+ * These check:
+ *   1. the default venue is one a Safe can execute,
  *   2. every venue is correctly classified as Safe-executable or not,
- *   3. the local chain opts INTO the custodial venue explicitly, rather than
- *      production inheriting it.
+ *   3. the local chain opts into the custodial venue explicitly, so production
+ *      does not inherit it.
  *
  * The recording and refusal paths that ride on this are exercised end to end
  * by draft:test, which drives a real API.
@@ -75,9 +72,9 @@ check("the default venue list is entirely Safe-executable", () => {
 });
 
 check("the non-custodial GUARANTEE is opt-in, not silently assumed", () => {
-  // Defaulting the refusal on would brick every dry-run and testnet deployment,
-  // where there is genuinely no external address to deliver into. The PATH is
-  // the default; the REFUSAL is a deliberate operator choice.
+  // Refusing by default would break every dry-run and testnet deployment,
+  // which has no external address to deliver into. The non-custodial path is
+  // the default; the refusal is an operator setting.
   assert.equal(CUSTODY.requireNonCustodial, false);
 });
 

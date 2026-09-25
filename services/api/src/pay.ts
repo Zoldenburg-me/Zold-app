@@ -2,20 +2,19 @@
  * Payment pages — a shareable handle that resolves to a page-scoped deposit
  * address someone can pay.
  *
- * The page is deliberately dull: a handle, the address, a QR code, and the
- * chain and token it expects. No amount field and no wallet connection, because
- * the payer's wallet already does both of those better than a web page can.
+ * The page shows a handle, the address, a QR code, and the chain and token it
+ * expects. No amount field and no wallet connection: the payer's wallet does
+ * both.
  *
- * NOT PRIVATE, and the page says so. This page has its own deposit address so
- * random transfers into the user's main wallet do not trigger the page's
- * settlement rule, but it is still one public address per handle. Anyone with
- * the handle can inspect that page address on a block explorer.
+ * Not private, and the page says so. The page has its own deposit address so
+ * unrelated transfers into the user's main wallet do not trigger its
+ * settlement rule, but it is one public address per handle, visible to anyone
+ * with the handle on a block explorer.
  *
- * WHAT A PUBLIC RESPONSE MAY CONTAIN is the security-relevant part of this
- * file. `publicPayee` is an allowlist, built by naming the four fields that go
- * out rather than by deleting the ones that must not. The account object next
- * to it holds an IBAN, an email, a KYC decision, a Travel Rule profile and a
- * private key; a redaction list would leak the next field somebody adds.
+ * Security: `publicPayee` is an allowlist naming the fields that go out. The
+ * account object next to it holds an IBAN, an email, a KYC decision, a Travel
+ * Rule profile and a private key. Don't switch to a redaction list; it would
+ * leak the next field somebody adds.
  */
 import type { User } from "./store.js";
 
@@ -67,10 +66,9 @@ export function normaliseHandle(raw: unknown): string {
 
 /** Optional display name shown on the page.
  *
- *  NOT defaulted to `user.name`. That is whatever was typed at signup and on a
- *  KYC-approved account it is a real legal name; publishing it at a guessable
- *  URL because someone claimed a handle is not a choice we get to make for
- *  them. Absent means the page shows the handle alone. */
+ *  Not defaulted to `user.name`: on a KYC-approved account that is a real
+ *  legal name, and the page is at a guessable URL. Absent means the page shows
+ *  the handle alone. */
 export function normaliseDisplayName(raw: unknown): string | undefined {
   if (raw === undefined || raw === null || raw === "") return undefined;
   if (typeof raw !== "string") throw new HandleError("displayName must be a string");
@@ -119,10 +117,9 @@ export function publicPayee(
 /**
  * EIP-681 request URI, for an "open in wallet" link.
  *
- * Kept OUT of the QR code on purpose. Wallet support for parsing EIP-681 is
- * uneven, while every wallet that scans anything can scan a bare address — so
- * the QR carries the address and the page states the chain and token in text.
- * A code that a payer's wallet cannot read is worse than one carrying less.
+ * Not used in the QR code. Wallet support for EIP-681 is uneven, but every
+ * wallet can scan a bare address, so the QR carries the address and the page
+ * states the chain and token in text.
  */
 export function paymentUri(payee: PublicPayee, amount?: number): string {
   const base = `ethereum:${payee.token.address}@${payee.chainId}/transfer?address=${payee.address}`;

@@ -1,21 +1,19 @@
 /**
  * One timeout for outbound calls to partners.
  *
- * Node's global `fetch` has NO default timeout. An upstream that accepts the
- * connection and then never answers therefore hangs the caller forever, and
- * these callers are not background curiosities: Monerium's redeem is the SEPA
- * payout leg, Candide's bundler is every Safe debit, Bridge is the cash rail's
- * exit, Shopify's Admin API is how a paid order gets marked paid. A hung one
- * holds an Express handler open with no response, and inside a sweep it holds
- * that sweep's turn forever — the tick never completes, so the next one never
- * runs and the queue it was draining stops draining silently.
+ * Node's global `fetch` has no default timeout, so an upstream that accepts
+ * the connection and never answers hangs the caller forever. These callers
+ * matter: Monerium's redeem is the SEPA payout leg, Candide's bundler is every
+ * Safe debit, Bridge is the cash rail's exit, and Shopify's Admin API marks
+ * orders paid. A hung call holds an Express handler open, and inside a sweep
+ * the tick never completes, so the next never runs and the queue stops with
+ * no error.
  *
- * rates.ts and the liquidity venues already bound their own calls, with their
- * own numbers, because a quote must fail fast. This is the default for
- * everything else: generous enough for a slow partner, finite.
+ * rates.ts and the liquidity venues set their own shorter bounds, since a
+ * quote must fail fast. This is the default for everything else.
  *
- * A timeout raises `TimeoutError`, which every one of these call sites already
- * treats as the partner being unavailable — the same path as a 5xx.
+ * A timeout raises `TimeoutError`, which every call site treats as the partner
+ * being unavailable, like a 5xx.
  */
 import { envNumber } from "./config.js";
 

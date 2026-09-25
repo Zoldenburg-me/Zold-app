@@ -1,26 +1,19 @@
 /**
  * Append-only audit log for decisions that must be explainable later.
  *
- * WHAT GOES IN: the segment decision and the inputs that produced it, the US
- * questionnaire answers, consent events, partner account ids, and partner
- * webhook events. These are the things someone will one day have to
- * reconstruct — a regulator asking why an account was refused, or a user asking
- * why they were. A decision nobody can replay is a decision nobody can defend.
+ * In: the segment decision and its inputs, the US questionnaire answers,
+ * consent events, partner account ids, and partner webhook events: what a
+ * regulator or a user would need to reconstruct why an account was refused.
  *
- * WHAT NEVER GOES IN, and this is enforced rather than requested: a PAN, a bank
- * account number, an OAuth token, a session token. `redact()` hashes anything
- * marked sensitive and stores `sha256:<12 hex>` — enough to prove two entries
- * concern the same value, useless to anyone who reads the log. The point of an
- * audit log is to survive being read by the wrong person.
+ * Never in (enforced by sanitise()): a PAN, a bank account number, an OAuth
+ * token, a session token. `redact()` stores `sha256:<12 hex>`, enough to show
+ * two entries concern the same value without revealing it.
  *
- * APPEND-ONLY IS THE PROPERTY, and it is structural: there is no update method
- * and no delete method, deliberately. A log a process can edit is a log that
- * proves nothing.
+ * There is no update or delete method, and there must not be one.
  *
- * Storage is the same JSON store as everything else, which is honest about what
- * this is: durable enough to answer questions in a demo or a small deployment,
- * and not a tamper-evident ledger. A real deployment ships these to an
- * append-only sink. Said here rather than implied.
+ * Storage is the same JSON store as everything else: fine for a demo or a
+ * small deployment, not a tamper-evident ledger. A real deployment ships these
+ * to an append-only sink.
  */
 import { createHash, randomUUID } from "node:crypto";
 
@@ -57,11 +50,9 @@ const FORBIDDEN = /^(pan|panNumber|accountNumber|bankAccount|iban|token|jwt|apiK
 /**
  * Copy a record, hashing anything whose key looks sensitive.
  *
- * A denylist is weaker than an allowlist and is used here on purpose: the
- * alternative is that a caller adding a field silently gets it dropped from the
- * audit trail, which is the worse failure for a log whose job is completeness.
- * The forbidden keys are hashed, never omitted — so the entry still records
- * that a PAN was involved.
+ * A denylist, because with an allowlist a caller's new field would be dropped
+ * from the audit trail with no error. Forbidden keys are hashed, not omitted,
+ * so the entry still records that e.g. a PAN was involved.
  */
 export function sanitise(data: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};

@@ -1,21 +1,18 @@
 /**
  * Uniswap v3 as an execution venue.
  *
- * WHY THIS EXISTS. The FxSwapper holds inventory we fund, which does not scale
- * past a demo — the whole point of the liquidity seam is to stop carrying a
- * treasury. The two venues tried before both dead-ended here: Bebop lists
- * EURe only on Ethereum and publishes no testnet, and CoW quotes well on
- * Gnosis but cannot execute without deciding who signs the order. Uniswap v3 is the one venue that both lists our tokens
- * and can be exercised on a testnet, because the pool is just a contract.
+ * The FxSwapper holds inventory we fund, which does not scale past a demo.
+ * Bebop lists EURe only on Ethereum with no testnet, and CoW quotes well on
+ * Gnosis but needs a decision about who signs the order. Uniswap v3 lists our
+ * tokens and runs on a testnet, since the pool is just a contract.
  *
- * On mainnet the counterparty is everyone else's liquidity, so there is no
- * treasury. On a testnet nobody has made a EURe market, so `npm run dex:setup`
- * creates and seeds a pool — that is a TEST FIXTURE, not inventory, and it is
- * why the numbers on Base Sepolia are ours rather than a market's.
+ * On mainnet the counterparty is public liquidity, so there is no treasury. On
+ * a testnet nobody makes a EURe market, so `npm run dex:setup` creates and
+ * seeds a pool. That pool is a test fixture, so Base Sepolia prices are ours,
+ * not a market's.
  *
- * Everything here fails closed. No pool, no liquidity, a stale quote, or a
- * price that disagrees with the independent FX feed all REFUSE. A swap that
- * silently settles at a bad rate is worse than one that does not happen.
+ * Fails closed: no pool, no liquidity, a stale quote, or a price that
+ * disagrees with the independent FX feed all refuse.
  */
 import { parseAbi } from "viem";
 import { LIQUIDITY } from "./config.js";
@@ -120,17 +117,14 @@ export async function quoteExactInputSingle(args: {
 }
 
 /**
- * Refuse a pool price that disagrees with the outside world.
+ * Refuse a pool price that disagrees with the independent mid.
  *
- * THE POINT OF THIS FUNCTION. An RFQ maker names a price it will honour. A
- * pool has no opinion — its price is wherever the last trade left it, and a
- * thin pool can be pushed a long way by anyone willing to spend. Without an
- * independent check, skewing a pool would make this system quote, bind and
- * settle a real transfer at that skewed rate while reporting it as the market.
+ * A pool's price is wherever the last trade left it, and a thin pool can be
+ * pushed far by anyone willing to spend. Without this check a skewed pool
+ * would be quoted, bound and settled as the market rate.
  *
- * `rates.ts` is the independent opinion: a different source, already
- * fail-closed, and already what the receipt is measured against. If the two
- * disagree by more than the band, we refuse rather than pick a winner.
+ * `rates.ts` is the independent source (fail-closed, and what the receipt is
+ * measured against). Beyond the band, we refuse.
  */
 export async function assertPriceSane(
   impliedUsdPerEur: number,

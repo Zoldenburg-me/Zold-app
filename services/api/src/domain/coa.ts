@@ -1,12 +1,10 @@
 /**
  * Chart of accounts and the rules that map transactions onto it.
  *
- * Gnosis Business shipped a default chart plus three scopes of automation
- * (defaults by transaction type, per wallet/asset, per contact). We keep the
- * shape and pin down the one thing their docs leave implicit: precedence.
- * Without a stated order, two rules that both match make the mapping depend on
- * insertion order, and a bookkeeping system whose answer depends on row order
- * is not one an accountant can sign.
+ * Same shape as Gnosis Business: a default chart plus three scopes of
+ * automation (by transaction type, per wallet/asset, per contact). Their docs
+ * leave precedence implicit; here it is fixed, so two matching rules do not
+ * make the mapping depend on insertion order.
  */
 
 import type { AccountRule, ChartAccount, ChartAccountType, LedgerEntry } from "./types.js";
@@ -155,10 +153,8 @@ export function resolveAccountCode(
 /**
  * Apply rules to entries.
  *
- * Only ever touches rows whose code was set automatically. A human's mapping is
- * the more reliable of the two and must survive a later rule change — Gnosis's
- * own flow has people fixing categorisations by hand, and silently reverting
- * that work is how the feature stops being trusted.
+ * Only touches rows whose code was set automatically. A code a person set by
+ * hand must survive a later rule change.
  */
 export function applyRules(
   rules: AccountRule[],

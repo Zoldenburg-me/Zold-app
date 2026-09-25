@@ -5,18 +5,15 @@
  * issue-order ids were observed, so this flags missed or fabricated receipt
  * records without comparing against a second ledger.
  *
- * This reports drift. It deliberately does NOT repair it: every repair is a
- * balance change, and an automated system that quietly mints or burns to make
- * two ledgers agree is a worse problem than the disagreement. A human decides
- * what a discrepancy means.
+ * This reports drift and does not repair it. Every repair is a balance change
+ * (a mint or burn), so a human decides what a discrepancy means.
  *
  * Two classes of finding:
  *
  *  - UNMIRRORED  Monerium processed a deposit we never recorded. Usually a
  *                missed webhook or a poller outage.
- *  - PHANTOM     We recorded an order Monerium has no record of. This is what
- *                a forged webhook delivery would have produced before the
- *                receiver stopped trusting request bodies.
+ *  - PHANTOM     We recorded an order Monerium has no record of, e.g. from a
+ *                forged webhook body trusted by an older receiver.
  */
 import { usersWithOwnCredentials } from "./adapters/monerium-connection.js";
 import { moneriumSandboxEnabled } from "./config.js";

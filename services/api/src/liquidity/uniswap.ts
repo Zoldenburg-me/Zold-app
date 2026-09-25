@@ -1,15 +1,14 @@
 /**
  * Uniswap v3, executed on-chain.
  *
- * The venue that finally settles: Bebop will not list EURe and has no testnet,
- * CoW quotes but deliberately refuses to execute. A pool is just a contract, so
- * this one can be proven on Base Sepolia before it ever sees real money.
+ * Bebop will not list EURe and has no testnet; CoW quotes but will not
+ * execute. A pool is just a contract, so this venue can be tested on Base
+ * Sepolia before real money.
  *
- * The important difference from RFQ is that a pool price is not a promise. A
- * maker quotes what it will honour; a pool is wherever the last trade left it,
- * and anyone can move a thin one. So every quote is checked against the
- * independent live mid, and the pool the check ran on is pinned onto the quote
- * so execution cannot drift to a different one.
+ * Unlike an RFQ maker's quote, a pool price is not a promise: it is wherever
+ * the last trade left it, and anyone can move a thin pool. Every quote is
+ * checked against the independent live mid, and the checked pool is pinned
+ * onto the quote so execution cannot drift to another.
  */
 import { encodeFunctionData } from "viem";
 import { LIQUIDITY } from "../config.js";
