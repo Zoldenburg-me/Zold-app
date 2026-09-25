@@ -48,7 +48,6 @@ import {
   writeAndWait,
 } from "./chain.js";
 import {
-  CANDIDE,
   submitPasskeySafeOperation,
   type BrowserPasskeyAssertion,
   type PasskeySafeDeploymentPlan,
@@ -286,12 +285,7 @@ async function debitSafeFundedSepaFee(
 }
 
 export function safeDebitBlocker(user: User): string | null {
-  if (activePasskeySafe(user)) {
-    return passkeySafeExecutionReady(user)
-      ? null
-      : "This account's Safe is a legacy 2-of-2 with a co-signing owner, and no co-signer key is configured — " +
-        "set CANDIDE_COSIGNER_ADDRESS and CANDIDE_COSIGNER_KEY so it can send, then remove the co-signer";
-  }
+  if (activePasskeySafe(user)) return null;
   return (
     "Safe-held funds need an active passkey Safe before transfers can be executed — " +
     "every debit is a UserOperation the passkey signs"
@@ -305,21 +299,17 @@ function activePasskeySafe(user: User): boolean {
   );
 }
 
-/** Can this account's send-time UserOperation actually be completed?
- *  A passkey-only Safe needs nothing but the user's assertion; a legacy 2-of-2
- *  Safe additionally needs the co-signer key until its user removes it. */
+/** Can this account's send-time UserOperation actually be completed? A
+ *  passkey Safe needs nothing but the user's assertion. */
 function passkeySafeExecutionReady(user: User): boolean {
-  if (!activePasskeySafe(user) || !user.passkeySafe) return false;
-  if (!user.passkeySafe.cosignerAddress) return true;
-  return Boolean(CANDIDE.cosignerKey);
+  return activePasskeySafe(user);
 }
 
 /**
  * The user-approved debit of one transfer: a UserOperation, prepared at
  * transfer creation for the exact token/amount/destination, whose hash the
  * user's passkey signed at send time. This process cannot produce that
- * signature — it can only relay it (and counter-sign on a legacy 2-of-2
- * Safe). No execution means no debit; there is no server-side fallback path.
+ * signature — it can only relay it. No execution means no debit; there is no server-side fallback path.
  */
 async function submitSafeExecution(user: User, execution: SafeExecution | undefined): Promise<string> {
   if (!passkeySafeExecutionReady(user)) {

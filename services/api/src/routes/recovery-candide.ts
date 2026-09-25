@@ -307,11 +307,7 @@ export async function finalizeCandideRecovery(
       ...user.passkeySafe,
       passkeyPublicKey: webauthnOwnerToStore(owner),
       recoveredAt: now.toISOString(),
-      // A recovery started before the co-signer was retired may still carry it
-      // in its owner set; record exactly what the chain was told to install.
-      ...(user.passkeySafe.cosignerAddress && newOwners.includes(user.passkeySafe.cosignerAddress.toLowerCase())
-        ? {}
-        : { cosignerAddress: undefined, threshold: 1 as const }),
+      threshold: 1 as const,
     },
     authorizerAddress: undefined,
   });
@@ -856,8 +852,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const owner = webauthnOwnerFromJwk(reg.key.jwk);
       if (!owner) return res.status(400).json({ error: "could not read the new passkey's public key" });
       const plan = user.passkeySafe;
-      // The new passkey becomes the ONLY owner. A legacy co-signer is not
-      // carried over: recovery is also how a 2-of-2 Safe leaves it behind.
+      // The new passkey becomes the ONLY owner.
       const newOwners: `0x${string}`[] = [passkeyAccountAddress(owner)];
       const newThreshold = 1;
 

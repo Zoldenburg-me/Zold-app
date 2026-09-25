@@ -110,7 +110,6 @@ These are **wallet private keys and secrets we create**. This is the part Baer f
 | `DEPLOY_DEPLOYER_KEY` | Deploys contracts | Cold — only needed at deploy time |
 | `DEPLOY_ORCHESTRATOR_KEY` | Submits transfers, pays gas | **Hot — runs continuously** |
 | `DEPLOY_RAMP_KEY` | Credits deposits | **Hot** |
-| `CANDIDE_COSIGNER_KEY` | Legacy only: 2nd owner on Safes deployed as 2-of-2 before the co-signer was retired, until each user removes it. New Safes have no co-signer | **Hot** while any legacy Safe remains |
 | `STELLAR_TREASURY_SECRET` | Holds the payout float | **Hot — holds funds** |
 | `MONERIUM_TOKEN_ENCRYPTION_KEY` | Encrypts user OAuth tokens at rest | ≥32 chars, app refuses to start without it |
 | `KYC_OPERATOR_TOKEN` | Approves KYC decisions | Required in production |

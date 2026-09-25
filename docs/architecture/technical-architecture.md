@@ -186,18 +186,12 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
 - **Owner 1** is the passkey, as a WebAuthn owner `{x, y}` taken from the
   P-256 JWK.
 - **New Safes are 1-of-1**: the passkey is the only owner (PR #193). No
-  allowance module is installed; the allowance-module address is kept only to
-  read and revoke legacy allowances.
-- **Legacy 2-of-2 Safes** (deployed before PR #193) list the retired Zold
-  co-signer EOA as a second owner, with threshold 2. They keep working while
-  `CANDIDE_COSIGNER_ADDRESS` / `_KEY` are set, and the server counter-signs
-  their UserOps and Safe messages. `POST /users/:id/passkey-safe/cosigner-removal[/:requestId]`
-  prepares `removeOwner(prev, cosigner, 1)` as a passkey-signed operation,
-  which the co-signer counter-signs one last time. The plan changes only after
-  `getOwners`/`getThreshold` confirm it on chain. It is refused while a
-  recovery is open. At startup `server.ts` names every account still on
-  2-of-2, and errors if the key they need is missing. No removal has executed
-  on a real chain.
+  allowance module is installed.
+- **Gas** (`SAFE_GAS_PAYMENT`, `wallet/candide.ts` `payGas`): `sponsored`
+  (Candide paymaster, default), `native` (the Safe's ETH, no paymaster; the
+  balance is checked before the passkey signs), or `token` (Candide's token
+  paymaster, USDC by default on 8453). Every abstractionkit request carries
+  `partnerTimeout()`. `npm run preflight` checks the chosen mode live.
 - An optional managed-recovery guardian goes through a SocialRecoveryModule
   (After3Days by default).
 - The Safe is deployed as the `initCode` of its first UserOperation. The
@@ -839,7 +833,6 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one. |
 | `POST /users/:id/passkey` (U) | Register a passkey. Needs a step-up if one already exists. |
 | `POST /users/:id/passkey-safe/deployment[/:requestId]` (U) | Prepare, then submit, the Safe deploy. |
-| `POST /users/:id/passkey-safe/cosigner-removal[/:requestId]` (U) | Legacy 2-of-2 only: prepare, then submit, removal of the retired co-signer. |
 | `POST /passkey/login` (A) | Passkey sign-in. |
 | `GET /users/:id` (U) | Account read. |
 | `GET /users/:id/kyc` (U) | Account read. |

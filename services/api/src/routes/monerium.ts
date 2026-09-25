@@ -36,7 +36,6 @@ import { pendingMoneriumLinkSignatures, prunePendingMoneriumLinkSignatures } fro
 import { publicUser } from "../users/public-user.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
-  CANDIDE,
   isDeployed,
   safeMessageHash,
   signMessageAsPasskeySafe,
@@ -296,11 +295,6 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
       if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
         return res.status(409).json({ error: "active passkey Safe required before Monerium address linking" });
-      }
-      // Only a legacy 2-of-2 Safe needs a counter-signature on the link
-      // message; a passkey-only Safe signs it alone.
-      if (user.passkeySafe.cosignerAddress && !CANDIDE.cosignerKey) {
-        return res.status(503).json({ error: "CANDIDE_COSIGNER_KEY is required to co-sign Monerium address linking for this legacy 2-of-2 Safe" });
       }
       // Fail here, before the passkey ceremony, if no Monerium access exists —
       // a ceremony whose submit is doomed just burns the user's approval.

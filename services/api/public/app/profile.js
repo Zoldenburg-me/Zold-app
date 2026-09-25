@@ -43,12 +43,6 @@ function renderProfileScreen() {
     { icon: "key", t: "Device spending key", d: "Signs the amount and the payee before anything moves", st: u.authorizerAddress ? "Bound" : "Not bound" },
     { icon: "health_and_safety", t: "Managed recovery", d: "Guardian can restore a lost passkey", st: safe?.recovery?.status === "active" ? "Active" : "Not enabled" },
   ];
-  /* Only a Safe deployed before the co-signer was retired still has one. It
-     cannot start a payment, but every payment needs its counter-signature
-     until it is removed — so say so and offer the removal. */
-  if (safe?.cosignerAddress) {
-    security.push({ icon: "group", t: "Zold co-signer (legacy)", d: "Second owner on your smart account — tap to remove it", st: "Still an owner", action: "remove-cosigner" });
-  }
   $("m-pf-security").innerHTML = security.map((r) => `
     <div class="m-secrow"${r.action ? ` data-sec-action="${r.action}" style="cursor:pointer"` : ""}>
       <span class="material-symbols-rounded">${r.icon}</span>
@@ -58,7 +52,6 @@ function renderProfileScreen() {
       </div>
       <span class="st" style="color:${/Registered|Bound|Enabled|Active/.test(r.st) ? "var(--m-mint)" : "var(--m-faint)"}">${esc(r.st)}</span>
     </div>`).join("");
-  $("m-pf-security").querySelector('[data-sec-action="remove-cosigner"]')?.addEventListener("click", () => removeCosigner("m-pf-sec-err"));
 
   const sub = u.privacyBundle;
   $("m-pf-plus-sub").textContent = sub && sub.status !== "canceled" ? "Privacy Bundle active" : "Coming soon";
