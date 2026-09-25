@@ -173,13 +173,13 @@ sequenceDiagram
    be called for this user (§4.3). US persons and sanctioned residences are
    refused before any row is created.
 2. **Passkey.** There is no skip and no password path.
-3. **Safe deployment.** An ERC-4337 Safe is deployed with Candide's bundler
-   and paymaster, so it needs no gas. The Safe is **1-of-1: the passkey is its
-   only owner.** Zold holds no key that can move or block the funds. Safes
-   deployed before PR #193 were 2-of-2, with a Zold co-signer as the second
-   owner. They keep working while `CANDIDE_COSIGNER_KEY` is set, and the holder
-   can remove the co-signer in Settings with one passkey signature. No removal
-   has executed on a real chain yet.
+3. **Safe deployment.** An ERC-4337 Safe is deployed through Candide's
+   bundler. Gas is paid per `SAFE_GAS_PAYMENT`: by Candide's paymaster
+   (sponsored, which works on Base Sepolia but NOT through the keyless public
+   endpoint on Base mainnet), by the Safe in ETH, or by the Safe in USDC. The
+   Safe is **1-of-1: the passkey is its only owner.** Zold holds no key that
+   can move or block the funds. The 2-of-2 Zold co-signer that Safes had
+   before PR #193 is gone, with its key.
 4. **Recovery enrolment** is optional and shown only if the deployment has
    `emailSmsRecovery`.
 5. **Monerium gate.** The user connects by OAuth (PKCE) *or* pastes their own

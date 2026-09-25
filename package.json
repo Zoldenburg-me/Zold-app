@@ -30,6 +30,8 @@
     "device-key:test": "tsx scripts/device-key-test.ts",
     "passkey-safe:test": "tsx scripts/passkey-safe-plan-test.ts",
     "execution:test": "tsx scripts/safe-execution-test.ts",
+    "gas:test": "tsx scripts/safe-gas-test.ts",
+    "preflight": "tsx scripts/mainnet-preflight.ts",
     "webhook:test": "tsx scripts/webhook-test.ts",
     "reconcile": "tsx scripts/reconcile.ts",
     "reconcile:test": "tsx scripts/reconcile-test.ts",

@@ -8,16 +8,17 @@
  *
  * For Monerium to verify ownership of a contract wallet it calls EIP-1271 on
  * the address, so the Safe must actually be deployed on the chain Monerium
- * checks (Base by default; CANDIDE_CHAIN_ID follows TRANSF_CHAIN_ID). Deployment is gasless via Candide's public
- * bundler + paymaster and is centralized in the passkey Safe deployment route.
+ * checks (Base by default; CANDIDE_CHAIN_ID follows TRANSF_CHAIN_ID). Deployment goes through Candide's public
+ * bundler and is centralized in the passkey Safe deployment route. Who pays the
+ * gas is SAFE_GAS_PAYMENT (see gasPaymentFromEnv).
  */
 import {
-  AllowanceModule,
   SafeMultiChainSigAccountV1 as SafeAccount,
   Erc7677Paymaster,
+  HttpTransport,
   SocialRecoveryModule,
   SocialRecoveryModuleGracePeriodSelector,
-  fromPrivateKey,
+  calculateUserOperationMaxGasCost,
   fromSafeWebauthn,
   getSafeMessageEip712Data,
   webauthnSignatureFromAssertion,
@@ -26,7 +27,6 @@ import {
   type UserOperationV9,
   type WebauthnPublicKey,
 } from "abstractionkit";
-import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionResult, encodeFunctionData, hashTypedData } from "viem";
 
 /**
@@ -44,30 +44,84 @@ const allowSimulation = () => HARNESS.enabled;
  *  Candide's public endpoints are addressed by that id (their v3 bundler and
  *  paymaster answer for 8453 — checked with eth_supportedEntryPoints). */
 const CANDIDE_CHAIN_ID = process.env.CANDIDE_CHAIN_ID ?? process.env.TRANSF_CHAIN_ID ?? "8453";
+
+/**
+ * Who pays a UserOperation's gas.
+ *
+ * - `sponsored`: Candide's paymaster pays. Their free Starter plan covers 1,000
+ *   sponsored mainnet ops inside a 90-day trial, and the keyless public
+ *   endpoint may not sponsor mainnet at all — `npm run preflight` asks it.
+ * - `native`: the Safe pays in ETH and no paymaster is involved, so nothing
+ *   here depends on anyone's quota. The Safe must hold ETH first; for a Safe
+ *   that is not deployed yet, send it to the counterfactual address.
+ * - `token`: Candide's token paymaster takes an ERC-20 (USDC by default on
+ *   Base) from the Safe as gas. It answers without an API key on Base mainnet.
+ *   EURe is not on its list (checked with pm_supportedERC20Tokens, Sep 2026),
+ *   so the Safe needs a little USDC.
+ *
+ * Read once at boot; an unknown value refuses to start rather than falling
+ * back to a mode the operator did not choose.
+ */
+export type GasPayment = { mode: "sponsored" } | { mode: "native" } | { mode: "token"; token: `0x${string}` };
+
+/** Circle's USDC, the token-paymaster default. Candide's public paymaster
+ *  lists it on 8453; on 84532 it lists only its own test token. */
+const DEFAULT_GAS_TOKEN: Record<string, `0x${string}`> = {
+  "8453": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+};
+
+export function gasPaymentFromEnv(env: NodeJS.ProcessEnv, chainId: string): GasPayment {
+  const mode = (env.SAFE_GAS_PAYMENT ?? "sponsored").trim().toLowerCase();
+  if (mode === "sponsored" || mode === "native") return { mode };
+  if (mode === "token") {
+    const token = (env.SAFE_GAS_TOKEN ?? DEFAULT_GAS_TOKEN[chainId] ?? "").trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(token)) {
+      throw new Error(
+        `SAFE_GAS_PAYMENT=token needs SAFE_GAS_TOKEN on chain ${chainId} (no default token is known there)`,
+      );
+    }
+    return { mode, token: token as `0x${string}` };
+  }
+  throw new Error(`SAFE_GAS_PAYMENT must be sponsored, native or token, got "${env.SAFE_GAS_PAYMENT}"`);
+}
+
 export const CANDIDE = {
   chainId: BigInt(CANDIDE_CHAIN_ID),
   bundlerUrl: process.env.CANDIDE_BUNDLER_URL ?? `https://api.candide.dev/public/v3/${CANDIDE_CHAIN_ID}`,
   paymasterUrl: process.env.CANDIDE_PAYMASTER_URL ?? `https://api.candide.dev/public/v3/${CANDIDE_CHAIN_ID}`,
   rpcUrl: process.env.CANDIDE_RPC_URL ?? process.env.TRANSF_RPC_URL ?? "https://mainnet.base.org",
-  /**
-   * LEGACY ONLY. New Safes are passkey-only (1-of-1); nothing adds a co-signer
-   * any more. Safes deployed earlier as 2-of-2 still list this address as an
-   * owner, so until their user removes it (removeCosignerTransactions) every
-   * operation on them needs this key to counter-sign — unset it while such a
-   * Safe exists and its funds cannot move.
-   */
-  cosignerAddress: (process.env.CANDIDE_COSIGNER_ADDRESS ?? "") as `0x${string}` | "",
-  cosignerKey: (process.env.CANDIDE_COSIGNER_KEY ?? "") as `0x${string}` | "",
+  gas: gasPaymentFromEnv(process.env, CANDIDE_CHAIN_ID),
   recoveryGuardianAddress: (process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS ?? "") as `0x${string}` | "",
   recoveryModuleAddress: (process.env.CANDIDE_RECOVERY_MODULE_ADDRESS ??
     SocialRecoveryModuleGracePeriodSelector.After3Days) as `0x${string}`,
-  /** Used ONLY to read and revoke standing allowances left on older Safes.
-   *  Nothing installs an allowance — debits are user-signed UserOperations. */
-  allowanceModuleAddress: (process.env.CANDIDE_ALLOWANCE_MODULE_ADDRESS ??
-    (BigInt(CANDIDE_CHAIN_ID) === 84532n
-      ? "0xAA46724893dedD72658219405185Fb0Fc91e091C"
-      : AllowanceModule.DEFAULT_ALLOWANCE_MODULE_ADDRESS)) as `0x${string}`,
 };
+
+/**
+ * Every request abstractionkit makes — bundler, paymaster, and the nonce and
+ * gas-price reads — goes through this fetch, so none of them can hang a send.
+ * Its own HttpTransport passes no signal of its own unless a caller does; when
+ * one does, either signal aborts the request.
+ */
+const timedFetch: typeof fetch = (input, init) =>
+  fetch(input, {
+    ...init,
+    signal: init?.signal ? AbortSignal.any([init.signal, partnerTimeout()]) : partnerTimeout(),
+  });
+const transport = (url: string) => new HttpTransport(url, { fetch: timedFetch });
+const bundler = () => transport(CANDIDE.bundlerUrl);
+const rpc = () => transport(CANDIDE.rpcUrl);
+const paymaster = () =>
+  new Erc7677Paymaster(transport(CANDIDE.paymasterUrl), {
+    chainId: CANDIDE.chainId,
+    // Detection only runs on a URL string; with a transport it has to be named,
+    // or the Candide-specific stub and token-quote calls are skipped.
+    provider: Erc7677Paymaster.detectProvider(CANDIDE.paymasterUrl),
+  });
+
+/** How long submit waits for a bundler to include an op, and how often it
+ *  asks. The whole HTTP request blocks on this. */
+const INCLUSION_TIMEOUT_S = 180;
+const INCLUSION_POLL_S = 2;
 
 function b64urlToBigInt(value: string): bigint {
   const buf = Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64");
@@ -92,36 +146,14 @@ export function webauthnOwnerFromStore(owner: { x: string; y: string }): Webauth
   return { x: BigInt(owner.x), y: BigInt(owner.y) };
 }
 
-/** LEGACY: the 2-of-2 account an older plan was derived from. Only
- *  accountForPlan uses it, to re-derive the address such a plan recorded. */
-export function smartAccountForPasskeyCosigner(
-  passkeyOwner: WebauthnPublicKey,
-  cosignerAddress: `0x${string}`,
-): SafeAccount {
-  return SafeAccount.initializeNewAccount([passkeyOwner, cosignerAddress], { threshold: 2 });
-}
-
 export function smartAccountForPasskey(passkeyOwner: WebauthnPublicKey): SafeAccount {
   return SafeAccount.initializeNewAccount([passkeyOwner]);
 }
 
 export interface PasskeySafeDeploymentPlan {
   address: `0x${string}`;
-  threshold: 1 | 2;
-  /** LEGACY: set only on Safes deployed as 2-of-2 before the co-signer was
-   *  retired, and cleared once the user removes it. */
-  cosignerAddress?: `0x${string}`;
+  threshold: 1;
   passkeyPublicKey: { x: string; y: string };
-  cosignerPolicy?: {
-    enabled: boolean;
-    allowanceModuleAddress: `0x${string}`;
-    allowancePeriodMinutes?: string;
-    allowances?: {
-      token: `0x${string}`;
-      symbol: "EURE" | "USDC";
-      amount: string;
-    }[];
-  };
   recovery?: {
     moduleAddress: `0x${string}`;
     guardianAddress: `0x${string}`;
@@ -130,9 +162,6 @@ export interface PasskeySafeDeploymentPlan {
   /** A recovered Safe: its address is fixed and no longer derives from the
    *  current owner set, so it is addressed rather than computed. */
   recoveredAt?: string;
-  /** The legacy co-signer was removed from the owner set. Like recoveredAt,
-   *  the address no longer derives from the owners. */
-  cosignerRemovedAt?: string;
 }
 
 export interface BrowserPasskeyAssertion {
@@ -189,24 +218,7 @@ export async function preparePasskeySafeDeployment(plan: PasskeySafeDeploymentPl
     };
   }
   const noop: MetaTransaction = { to: account.accountAddress, value: 0n, data: "0x" };
-  const userOperation = await account.createUserOperation(
-    setup.length ? setup : [noop],
-    CANDIDE.rpcUrl,
-    CANDIDE.bundlerUrl,
-    { expectedSigners: plan.cosignerAddress ? [passkeyOwner, plan.cosignerAddress] : [passkeyOwner] },
-  );
-  const paymaster = new Erc7677Paymaster(CANDIDE.paymasterUrl);
-  const sponsored = await paymaster.createPaymasterUserOperation(
-    account as any,
-    userOperation as any,
-    CANDIDE.bundlerUrl,
-  );
-  const finalOp: UserOperationV9 = ((sponsored as any).userOperation ?? sponsored) as UserOperationV9;
-  return {
-    safeAddress: account.accountAddress as `0x${string}`,
-    challenge: account.getUserOperationEip712Hash(finalOp, CANDIDE.chainId) as `0x${string}`,
-    userOperation: finalOp,
-  };
+  return paidUserOperation(account, passkeyOwner, setup.length ? setup : [noop]);
 }
 
 export function passkeySafeRecoverySetupTransactions(plan: PasskeySafeDeploymentPlan): MetaTransaction[] {
@@ -226,33 +238,16 @@ export function passkeySafeRecoverySetupTransactions(plan: PasskeySafeDeployment
  * transfers the exact amount to the destination the terms name. No allowance
  * or delegate; the transfer itself is signed, so the chain enforces amount and
  * destination.
- *
- * If the account still carries a standing allowance from an older deployment,
- * a deleteAllowance is added to revoke it. The co-signer key alone could spend
- * that allowance, so the first user-signed send closes it, leaving this as the
- * only spend path.
  */
 export function transferExecutionTransactions(
   token: `0x${string}`,
   to: `0x${string}`,
   amount: bigint,
-  opts: {
-    /** Set to revoke a standing allowance for (delegate, token). */
-    revokeLegacyAllowance?: { delegate: `0x${string}`; moduleAddress?: `0x${string}` };
-  } = {},
 ): MetaTransaction[] {
   if (amount <= 0n) {
     throw new Error(`a Safe execution needs a positive amount, got ${amount}`);
   }
-  const txs: MetaTransaction[] = [];
-  if (opts.revokeLegacyAllowance) {
-    const allowance = new AllowanceModule(
-      opts.revokeLegacyAllowance.moduleAddress ?? CANDIDE.allowanceModuleAddress,
-    );
-    txs.push(allowance.createDeleteAllowanceMetaTransaction(opts.revokeLegacyAllowance.delegate, token));
-  }
-  txs.push(erc20TransferMetaTransaction(token, to, amount));
-  return txs;
+  return [erc20TransferMetaTransaction(token, to, amount)];
 }
 
 const ERC20_TRANSFER_ABI = [
@@ -292,7 +287,7 @@ function erc20TransferMetaTransaction(token: `0x${string}`, to: `0x${string}`, a
 /**
  * The full cash-rail debit as one user-signed batch (Change 2, windows 1-3):
  *
- *   [revoke legacy allowance?] -> fee transfer -> approve venue -> swap call
+ *   fee transfer -> approve venue -> swap call
  *
  * The flat service fee moves to us as its own transfer, separate from the
  * conversion. The venue approval is for exactly the convertible amount, to the
@@ -307,7 +302,6 @@ export function transferSwapBatchTransactions(args: {
   feeAmount: bigint;
   approval: { spender: `0x${string}`; amount: bigint };
   call: { to: `0x${string}`; data: `0x${string}`; value: bigint };
-  revokeLegacyAllowance?: { delegate: `0x${string}`; moduleAddress?: `0x${string}` };
 }): MetaTransaction[] {
   if (args.approval.amount <= 0n) {
     throw new Error(`a Safe swap batch needs a positive convert amount, got ${args.approval.amount}`);
@@ -316,12 +310,6 @@ export function transferSwapBatchTransactions(args: {
     throw new Error(`a Safe swap batch cannot carry a negative fee, got ${args.feeAmount}`);
   }
   const txs: MetaTransaction[] = [];
-  if (args.revokeLegacyAllowance) {
-    const allowance = new AllowanceModule(
-      args.revokeLegacyAllowance.moduleAddress ?? CANDIDE.allowanceModuleAddress,
-    );
-    txs.push(allowance.createDeleteAllowanceMetaTransaction(args.revokeLegacyAllowance.delegate, args.token));
-  }
   if (args.feeAmount > 0n) {
     txs.push(erc20TransferMetaTransaction(args.token, args.feeTo, args.feeAmount));
   }
@@ -340,15 +328,13 @@ export function transferSwapBatchTransactions(args: {
 
 /**
  * The shared core of every send-time user-signed operation: validate the plan,
- * short-circuit under simulation, refuse undeployed Safes, read (from the
- * chain, never the database) whether a legacy standing allowance still needs
- * revoking, then wrap the caller's meta-transactions into a sponsored
- * UserOperation whose hash the passkey will sign.
+ * short-circuit under simulation, refuse undeployed Safes, then wrap the
+ * caller's meta-transactions into a UserOperation whose hash the passkey will
+ * sign.
  */
 async function prepareSafeExecutionCore(
   plan: PasskeySafeDeploymentPlan,
-  token: `0x${string}`,
-  buildSetup: (revokeLegacyAllowance?: { delegate: `0x${string}` }) => MetaTransaction[],
+  txs: MetaTransaction[],
 ): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
   const { account, passkeyOwner } = accountForPlan(plan);
   if (allowSimulation()) {
@@ -361,45 +347,113 @@ async function prepareSafeExecutionCore(
   if (!(await isDeployed(account.accountAddress))) {
     throw new Error("passkey Safe must be deployed before a transfer can be executed from it");
   }
-  // Revoke a standing co-signer allowance if one survives on an older Safe.
-  // It is spendable by the co-signer key alone, so it rides along on the
-  // first user-signed send.
-  let revokeLegacyAllowance: { delegate: `0x${string}` } | undefined;
-  if (CANDIDE.cosignerAddress) {
-    const legacy = await readCosignerTokenAllowance(plan.address, token);
-    if (legacy && legacy.amount > 0n) {
-      revokeLegacyAllowance = { delegate: CANDIDE.cosignerAddress };
-    }
-  }
-  return sponsoredUserOperation(account, plan, passkeyOwner, buildSetup(revokeLegacyAllowance));
+  return paidUserOperation(account, passkeyOwner, txs);
 }
 
-/** Wrap meta-transactions into a paymaster-sponsored UserOperation whose
- *  EIP-712 hash the passkey signs. */
-async function sponsoredUserOperation(
+/**
+ * Wrap meta-transactions into a UserOperation whose gas is paid the way
+ * CANDIDE.gas says, and return the EIP-712 hash the passkey signs.
+ *
+ * The passkey signs the op AFTER gas is settled, so a token-paymaster approve
+ * prepended to the calldata is part of what the user approves.
+ */
+async function paidUserOperation(
   account: SafeAccount,
-  plan: PasskeySafeDeploymentPlan,
   passkeyOwner: WebauthnPublicKey,
   txs: MetaTransaction[],
 ): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
-  const userOperation = await account.createUserOperation(
-    txs,
-    CANDIDE.rpcUrl,
-    CANDIDE.bundlerUrl,
-    { expectedSigners: plan.cosignerAddress ? [passkeyOwner, plan.cosignerAddress] : [passkeyOwner] },
-  );
-  const paymaster = new Erc7677Paymaster(CANDIDE.paymasterUrl);
-  const sponsored = await paymaster.createPaymasterUserOperation(
-    account as any,
-    userOperation as any,
-    CANDIDE.bundlerUrl,
-  );
-  const finalOp: UserOperationV9 = ((sponsored as any).userOperation ?? sponsored) as UserOperationV9;
+  const userOperation = await account.createUserOperation(txs, rpc(), bundler(), {
+    expectedSigners: [passkeyOwner],
+  });
+  const finalOp = await payGas(account, userOperation);
   return {
     safeAddress: account.accountAddress as `0x${string}`,
     challenge: account.getUserOperationEip712Hash(finalOp, CANDIDE.chainId) as `0x${string}`,
     userOperation: finalOp,
   };
+}
+
+async function payGas(account: SafeAccount, userOperation: UserOperationV9): Promise<UserOperationV9> {
+  const gas = CANDIDE.gas;
+  if (gas.mode === "native") {
+    // No paymaster: the EntryPoint takes the prefund from the Safe's ETH.
+    // Refuse here, before the passkey ceremony, rather than let the bundler
+    // reject a signed op with AA21.
+    const need = calculateUserOperationMaxGasCost(userOperation);
+    const have = await ethBalance(account.accountAddress);
+    if (have < need) {
+      throw new SafeGasError(
+        `the Safe needs up to ${formatEth(need)} ETH for gas and holds ${formatEth(have)} — ` +
+          `send ETH to ${account.accountAddress} on chain ${CANDIDE.chainId}`,
+      );
+    }
+    return userOperation;
+  }
+  const context = gas.mode === "token" ? { token: gas.token } : {};
+  let result: Awaited<ReturnType<Erc7677Paymaster["createPaymasterUserOperation"]>>;
+  try {
+    result = await paymaster().createPaymasterUserOperation(account as any, userOperation as any, bundler(), context);
+  } catch (err) {
+    throw paymasterRefusal(err, account.accountAddress) ?? err;
+  }
+  // abstractionkit falls back to SPONSORSHIP when it cannot get a token quote.
+  // An operator who chose token payment did not choose that; refuse instead.
+  if (gas.mode === "token" && !result.tokenQuote) {
+    throw new SafeGasError(`the paymaster at ${CANDIDE.paymasterUrl} gave no quote for gas token ${gas.token}`);
+  }
+  return result.userOperation as UserOperationV9;
+}
+
+/**
+ * The two refusals a paymaster gives that the user or operator can act on,
+ * as Candide words them (seen on Base mainnet, Sep 2026). Anything else stays
+ * the paymaster's own error.
+ */
+function paymasterRefusal(err: unknown, safeAddress: string): SafeGasError | null {
+  const text = `${(err as any)?.message ?? ""} ${(err as any)?.cause?.message ?? ""}`;
+  if (/does not qualify for any publicly available gas policy/i.test(text)) {
+    return new SafeGasError(
+      `the paymaster at ${CANDIDE.paymasterUrl} will not sponsor this operation on chain ${CANDIDE.chainId} ` +
+        `(no public gas policy covers it) — set SAFE_GAS_PAYMENT=native or =token, or use an API key with a funded policy`,
+    );
+  }
+  const short = /token balance lower than the required `?(0x[0-9a-f]+)`? allowance/i.exec(text);
+  if (short && CANDIDE.gas.mode === "token") {
+    return new SafeGasError(
+      `the Safe needs at least ${BigInt(short[1])} base units of gas token ${CANDIDE.gas.token} — ` +
+        `send some to ${safeAddress} on chain ${CANDIDE.chainId}`,
+    );
+  }
+  return null;
+}
+
+/** The gas could not be arranged: the Safe is short, or the paymaster would
+ *  not quote. A 409 — the user (or operator) has something to fix — rather
+ *  than an opaque 500. */
+export class SafeGasError extends Error {
+  readonly status = 409;
+  constructor(message: string) {
+    super(message);
+    this.name = "SafeGasError";
+  }
+}
+
+function formatEth(wei: bigint): string {
+  return (Number(wei) / 1e18).toFixed(6);
+}
+
+export async function ethBalance(address: string): Promise<bigint> {
+  const res = await fetch(CANDIDE.rpcUrl, {
+    signal: partnerTimeout(),
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [address, "latest"] }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body || body.error || typeof body.result !== "string") {
+    throw new Error(`eth_getBalance failed (${res.status}): ${JSON.stringify(body?.error ?? body ?? "").slice(0, 160)}`);
+  }
+  return BigInt(body.result);
 }
 
 /**
@@ -410,12 +464,10 @@ async function sponsoredUserOperation(
  */
 export function accountForPlan(plan: PasskeySafeDeploymentPlan): { account: SafeAccount; passkeyOwner: WebauthnPublicKey } {
   const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  if (plan.recoveredAt || plan.cosignerRemovedAt) {
+  if (plan.recoveredAt) {
     return { account: new SafeAccount(plan.address), passkeyOwner };
   }
-  const account = plan.cosignerAddress
-    ? smartAccountForPasskeyCosigner(passkeyOwner, plan.cosignerAddress)
-    : smartAccountForPasskey(passkeyOwner);
+  const account = smartAccountForPasskey(passkeyOwner);
   if (account.accountAddress.toLowerCase() !== plan.address.toLowerCase()) {
     throw new Error("passkey Safe plan does not match the deterministic account address");
   }
@@ -425,8 +477,7 @@ export function accountForPlan(plan: PasskeySafeDeploymentPlan): { account: Safe
 /**
  * A user-signed operation that changes the Safe's own configuration — adding
  * a recovery guardian, cancelling a recovery — rather than moving tokens.
- * Same sponsorship and signing path as a transfer; no allowance read, since
- * nothing here is a spend.
+ * Same gas and signing path as a transfer.
  */
 export async function prepareSafeSetupOperation(
   plan: PasskeySafeDeploymentPlan,
@@ -444,13 +495,12 @@ export async function prepareSafeSetupOperation(
   if (!(await isDeployed(account.accountAddress))) {
     throw new Error("passkey Safe must be deployed before its configuration can change");
   }
-  return sponsoredUserOperation(account, plan, passkeyOwner, txs);
+  return paidUserOperation(account, passkeyOwner, txs);
 }
 
 /**
  * Build the UserOperation that debits one transfer from the user's Safe. The
- * passkey owner signs its hash at send time (a legacy 2-of-2 Safe also needs
- * the co-signer's counter-signature until its user removes it), so the exact movement — token, amount, destination — is
+ * passkey owner signs its hash at send time, so the exact movement — token, amount, destination — is
  * user-approved and chain-enforced. Between sends nothing can move: no owner
  * key is stored server-side and no allowance exists.
  */
@@ -460,9 +510,7 @@ export async function prepareTransferExecution(
   to: `0x${string}`,
   amount: bigint,
 ): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
-  return prepareSafeExecutionCore(plan, token, (revokeLegacyAllowance) =>
-    transferExecutionTransactions(token, to, amount, { revokeLegacyAllowance }),
-  );
+  return prepareSafeExecutionCore(plan, transferExecutionTransactions(token, to, amount));
 }
 
 /**
@@ -480,40 +528,7 @@ export async function prepareTransferBatchExecution(
     call: { to: `0x${string}`; data: `0x${string}`; value: bigint };
   },
 ): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
-  return prepareSafeExecutionCore(plan, args.token, (revokeLegacyAllowance) =>
-    transferSwapBatchTransactions({ ...args, revokeLegacyAllowance }),
-  );
-}
-
-/**
- * What the chain says the co-signer may spend from this Safe — as opposed to
- * what the database says deployment intended. Calls to a codeless module
- * address succeed, so a stored policy can describe an allowance that does not
- * exist; only the chain answers. Returns null when the module cannot be read.
- */
-export async function readCosignerTokenAllowance(
-  safeAddress: `0x${string}`,
-  token: `0x${string}`,
-): Promise<{ amount: bigint; remaining: bigint } | null> {
-  if (!CANDIDE.cosignerAddress) return null;
-  try {
-    const allowance = new AllowanceModule(CANDIDE.allowanceModuleAddress);
-    // Read on the chain the UserOperation will execute on (CANDIDE.rpcUrl),
-    // not the app chain: config allows the two to differ, and deciding the
-    // revoke from the wrong chain silently skips it.
-    const current = await allowance.getTokensAllowance(CANDIDE.rpcUrl, safeAddress, CANDIDE.cosignerAddress, token);
-    const nowMin = BigInt(Math.floor(Date.now() / 60_000));
-    const spent =
-      current.resetTimeMin > 0n && nowMin >= current.lastResetMin + current.resetTimeMin
-        ? 0n
-        : current.spent;
-    return { amount: current.amount, remaining: current.amount > spent ? current.amount - spent : 0n };
-  } catch (err: any) {
-    // Not silent: a skipped read means a legacy standing allowance the
-    // co-signer key alone can spend may go un-revoked this send.
-    console.error(`candide: could not read the co-signer allowance for ${safeAddress}; revoke skipped this send: ${err?.message ?? err}`);
-    return null;
-  }
+  return prepareSafeExecutionCore(plan, transferSwapBatchTransactions(args));
 }
 
 export async function submitPasskeySafeOperation(
@@ -522,9 +537,6 @@ export async function submitPasskeySafeOperation(
   assertion: BrowserPasskeyAssertion,
 ): Promise<string | null> {
   const { account, passkeyOwner } = accountForPlan(plan);
-  if (plan.cosignerAddress && !CANDIDE.cosignerKey) {
-    throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign passkey Safe deployment");
-  }
   if (allowSimulation()) {
     return "0xmock-user-op-hash";
   }
@@ -535,15 +547,13 @@ export async function submitPasskeySafeOperation(
     accountClass: SafeAccount,
     getAssertion: async () => webauthnSignatureFromAssertion(assertion),
   });
-  const signers = [passkeySigner];
-  if (plan.cosignerAddress) signers.push(fromPrivateKey(CANDIDE.cosignerKey));
   userOperation.signature = await account.signUserOperationWithSigners(
     userOperation,
-    signers,
+    [passkeySigner],
     CANDIDE.chainId,
   );
-  const response = await account.sendUserOperation(userOperation, CANDIDE.bundlerUrl);
-  await response.included();
+  const response = await account.sendUserOperation(userOperation, bundler());
+  await response.included(INCLUSION_TIMEOUT_S, INCLUSION_POLL_S);
   return response.userOperationHash;
 }
 
@@ -557,78 +567,13 @@ export async function signMessageAsPasskeySafe(
   if (account.accountAddress.toLowerCase() !== safeAddress.toLowerCase()) {
     throw new Error("passkey Safe plan does not match the address being linked");
   }
-  const { domain, types, messageValue } = getSafeMessageEip712Data(
-    safeAddress as `0x${string}`,
-    CANDIDE.chainId,
-    message,
-  );
   const webauthnAddr = passkeyAccountAddress(passkeyOwner);
   const passkeySignature = SafeAccount.createWebAuthnSignature(webauthnSignatureFromAssertion(assertion));
   const pairs: SignerSignaturePair[] = [
     { signer: webauthnAddr as any, signature: passkeySignature, isContractSignature: true },
   ];
-  if (plan.cosignerAddress) {
-    if (!CANDIDE.cosignerKey) throw new Error("CANDIDE_COSIGNER_KEY is required to co-sign Safe message");
-    const cosigner = privateKeyToAccount(CANDIDE.cosignerKey);
-    const cosignerSignature = await cosigner.signTypedData({
-      domain: domain as any,
-      types: types as any,
-      primaryType: "SafeMessage",
-      message: messageValue as any,
-    });
-    pairs.push({ signer: plan.cosignerAddress, signature: cosignerSignature });
-  }
   return SafeAccount.buildSignaturesFromSingerSignaturePairs(pairs, { isInit: false }) as `0x${string}`;
 }
-
-/**
- * The Safe call that retires a legacy co-signer: removeOwner(prev, cosigner, 1)
- * leaves the passkey as the only owner at threshold 1. It runs as a Safe
- * setup operation, so the passkey signs it — and, because the Safe is still
- * 2-of-2 when it executes, the co-signer counter-signs its own removal. That
- * is the last thing the co-signer key ever has to sign for this Safe.
- *
- * `owners` is the chain's current owner list. Safe keeps owners as a linked
- * list, so removal names the owner before it (the sentinel 0x…01 when the
- * co-signer is first). Compared case-insensitively: an env var address need
- * not be checksummed the way getOwners returns it.
- */
-export function removeCosignerTransactions(
-  safeAddress: `0x${string}`,
-  owners: readonly string[],
-  cosigner: `0x${string}`,
-): MetaTransaction[] {
-  const i = owners.findIndex((o) => o.toLowerCase() === cosigner.toLowerCase());
-  if (i === -1) throw new Error(`co-signer ${cosigner} is not an owner of this Safe`);
-  if (owners.length < 2) throw new Error("refusing to remove the Safe's only owner");
-  const prev = (i === 0 ? SAFE_OWNER_SENTINEL : owners[i - 1]) as `0x${string}`;
-  return [
-    {
-      to: safeAddress,
-      value: 0n,
-      data: encodeFunctionData({
-        abi: SAFE_REMOVE_OWNER_ABI,
-        functionName: "removeOwner",
-        args: [prev, owners[i] as `0x${string}`, 1n],
-      }),
-    },
-  ];
-}
-
-const SAFE_OWNER_SENTINEL = "0x0000000000000000000000000000000000000001";
-const SAFE_REMOVE_OWNER_ABI = [
-  {
-    type: "function",
-    name: "removeOwner",
-    inputs: [
-      { name: "prevOwner", type: "address" },
-      { name: "owner", type: "address" },
-      { name: "_threshold", type: "uint256" },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-] as const;
 
 export async function isDeployed(address: string): Promise<boolean> {
   if (allowSimulation()) return true;
@@ -771,9 +716,9 @@ export async function readRecoveryState(
   if (!moduleEnabled) return { moduleAddress, moduleEnabled, guardians: [], threshold: 0, pending: null };
   const srm = new SocialRecoveryModule(moduleAddress);
   const [guardians, threshold, request] = await Promise.all([
-    srm.getGuardians(CANDIDE.rpcUrl, plan.address),
-    srm.threshold(CANDIDE.rpcUrl, plan.address),
-    srm.getRecoveryRequest(CANDIDE.rpcUrl, plan.address),
+    srm.getGuardians(rpc(), plan.address),
+    srm.threshold(rpc(), plan.address),
+    srm.getRecoveryRequest(rpc(), plan.address),
   ]);
   const executeAfter = Number(request.executeAfter);
   return {
