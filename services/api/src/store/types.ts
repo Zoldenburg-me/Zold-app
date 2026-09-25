@@ -24,26 +24,13 @@ export interface User {
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
     /**
-   * Passkey Safe state. The passkey is the only owner (threshold 1). Safes
-   * deployed before the co-signer was retired may still be 2-of-2 with
-   * `cosignerAddress` set, until the user removes it.
+   * Passkey Safe state. The passkey is the only owner (threshold 1).
    */
   passkeySafe?: {
     address: `0x${string}`;
     status: "planned" | "active";
-    threshold: 1 | 2;
-    cosignerAddress?: `0x${string}`;
+    threshold: 1;
     passkeyPublicKey: { x: string; y: string };
-    cosignerPolicy?: {
-      enabled: boolean;
-      allowanceModuleAddress: `0x${string}`;
-      allowancePeriodMinutes?: string;
-      allowances?: {
-        token: `0x${string}`;
-        symbol: "EURE" | "USDC";
-        amount: string;
-      }[];
-    };
     recovery?: {
       moduleAddress: `0x${string}`;
       guardianAddress: `0x${string}`;
@@ -76,10 +63,6 @@ export interface User {
      *  that address is no longer the counterfactual one of its current owner,
      *  so the account must be built from the address, never re-derived. */
     recoveredAt?: string;
-    /** Set once the user removed the legacy co-signer owner. Like
-     *  recoveredAt, the address no longer derives from the owner set. */
-    cosignerRemovedAt?: string;
-    cosignerRemovalOpHash?: string;
   };
   /** WebAuthn credential bound to this account. Public key + counter are
    *  stored from a verified registration; login verifies assertions. */
@@ -452,7 +435,7 @@ export interface Transfer {
   };
   /**
    * Monerium redeem approval fixed at transfer creation for SEPA payouts.
-   * Once the Safe is passkey/co-signer owned, the browser must sign this while
+   * Once the Safe is passkey owned, the browser must sign this while
    * the user is present; the server can then submit the redeem later without a
    * database Safe owner key.
    */
@@ -661,8 +644,7 @@ export interface RecoveryRequest {
       attestation?: string;
       createdAt: string;
     };
-    /** The owner set the recovery installs: the new passkey's signer only.
-     *  Recoveries started before the co-signer was retired may include it. */
+    /** The owner set the recovery installs: the new passkey's signer only. */
     newOwners?: `0x${string}`[];
     newThreshold?: number;
     /** Candide's signature-request id and the OTP challenges it issued. */

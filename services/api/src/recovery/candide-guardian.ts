@@ -28,7 +28,7 @@ import {
 } from "safe-recovery-service-sdk";
 import { RECOVERY } from "../config.js";
 import { CANDIDE, recoveryGracePeriodSeconds } from "../wallet/candide.js";
-import { partnerTimeout } from "../http.js";
+import { PARTNER_TIMEOUT_MS, partnerTimeout } from "../http.js";
 
 export type RecoveryChannel = "email" | "sms";
 
@@ -210,6 +210,35 @@ export async function assertModuleAgreement(ourModule: string): Promise<`0x${str
   return ourModule as `0x${string}`;
 }
 
+/**
+ * The recovery SDK takes no fetch and no signal, so its calls are bounded
+ * here instead. Giving up does not cancel the request: for a call that writes
+ * (register, execute, finalize) the service may still act on it, so a timeout
+ * is a 504 whose message says the outcome is unknown, never a refusal the
+ * caller could safely retry as if nothing happened.
+ */
+async function bounded<T>(call: Promise<T>, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new CandideGuardianError(
+            `${what}: the recovery service did not answer within ${PARTNER_TIMEOUT_MS} ms — the outcome is unknown`,
+            504,
+            "TIMEOUT",
+          ),
+        ),
+      PARTNER_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([call, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // enrolment: register a channel with the service (SIWE signed by the Safe, then OTP)
 
@@ -227,7 +256,10 @@ export async function registerChannel(
   eip1271Signature: string,
 ): Promise<{ challengeId: string }> {
   try {
-    const challengeId = await custodial().createRegistrationToRecovery(safeAddress, channel, target, siweMessage, eip1271Signature);
+    const challengeId = await bounded(
+      custodial().createRegistrationToRecovery(safeAddress, channel, target, siweMessage, eip1271Signature),
+      `register ${channel} recovery`,
+    );
     return { challengeId };
   } catch (err) {
     return translate(err, `could not register ${channel} recovery`);
@@ -241,7 +273,7 @@ export async function verifyRegistration(
   const code = String(otp ?? "").trim();
   if (!/^[0-9A-Za-z-]{4,12}$/.test(code)) throw new CandideGuardianError("enter the code you were sent", 400, "BAD_OTP");
   try {
-    const r = await custodial().submitRegistrationChallenge(challengeId, code);
+    const r = await bounded(custodial().submitRegistrationChallenge(challengeId, code), "submit the registration code");
     if (!/^0x[0-9a-fA-F]{40}$/.test(r.guardianAddress)) {
       throw new CandideGuardianError("the recovery service returned no guardian address", 502, "BAD_DATA");
     }
@@ -257,7 +289,7 @@ export function deleteRegistrationStatement(safeAddress: string, registrationId:
 
 export async function deleteRegistration(registrationId: string, siweMessage: string, eip1271Signature: string): Promise<boolean> {
   try {
-    return await custodial().deleteRegistration(registrationId, siweMessage, eip1271Signature);
+    return await bounded(custodial().deleteRegistration(registrationId, siweMessage, eip1271Signature), "remove the recovery channel");
   } catch (err) {
     return translate(err, "could not remove the recovery channel");
   }
@@ -272,7 +304,10 @@ export async function requestSignatureChallenge(
   newThreshold: number,
 ): Promise<SignatureRequest> {
   try {
-    return await custodial().requestCustodialGuardianSignatureChallenge(safeAddress, newOwners, newThreshold);
+    return await bounded(
+      custodial().requestCustodialGuardianSignatureChallenge(safeAddress, newOwners, newThreshold),
+      "start recovery",
+    );
   } catch (err) {
     return translate(err, "could not start recovery with the guardian service");
   }
@@ -286,7 +321,10 @@ export async function submitSignatureChallenge(
   const code = String(otp ?? "").trim();
   if (!/^[0-9A-Za-z-]{4,12}$/.test(code)) throw new CandideGuardianError("enter the code you were sent", 400, "BAD_OTP");
   try {
-    const r = await custodial().submitCustodialGuardianSignatureChallenge(requestId, challengeId, code);
+    const r = await bounded(
+      custodial().submitCustodialGuardianSignatureChallenge(requestId, challengeId, code),
+      "submit the recovery code",
+    );
     return {
       success: Boolean(r.success),
       ...(r.custodianGuardianAddress ? { guardianAddress: r.custodianGuardianAddress as `0x${string}` } : {}),
@@ -307,7 +345,10 @@ export async function executeRecovery(
   guardianSignature: string,
 ): Promise<RecoveryByGuardianRequest> {
   try {
-    return await custodial().createAndExecuteRecoveryRequest(safeAddress, newOwners, newThreshold, guardianAddress, guardianSignature);
+    return await bounded(
+      custodial().createAndExecuteRecoveryRequest(safeAddress, newOwners, newThreshold, guardianAddress, guardianSignature),
+      "execute the recovery",
+    );
   } catch (err) {
     return translate(err, "could not execute the recovery");
   }
@@ -315,7 +356,7 @@ export async function executeRecovery(
 
 export async function finalizeRecovery(moduleAddress: string, recoveryRequestId: string): Promise<boolean> {
   try {
-    return await byGuardian(moduleAddress).finalizeRecoveryRequest(recoveryRequestId);
+    return await bounded(byGuardian(moduleAddress).finalizeRecoveryRequest(recoveryRequestId), "finalize the recovery");
   } catch (err) {
     return translate(err, "could not finalize the recovery");
   }

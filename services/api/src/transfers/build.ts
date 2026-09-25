@@ -18,7 +18,6 @@ import { assertDailyCap, requireKycApproved } from "../http/guards.js";
 import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
-  CANDIDE,
   prepareTransferBatchExecution,
   prepareTransferExecution,
   safeMessageHash,
@@ -215,13 +214,6 @@ async function prepareTransferFromQuote(
       user.passkey?.credentialId &&
       user.passkeySafe?.status === "active" &&
       user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
-      // A legacy 2-of-2 Safe needs the co-signer key to counter-sign; a
-      // passkey-only Safe needs only the user's assertion. Keep this identical
-      // to the orchestrator's passkeySafeExecutionReady: requiring more here
-      // (the address env var, say) creates transfers that pass the readiness
-      // blocker, never get an execution prepared, and fail at authorize with
-      // an error that blames the user.
-      (!user.passkeySafe.cosignerAddress || CANDIDE.cosignerKey) &&
       !HARNESS.enabled
     ) {
       try {

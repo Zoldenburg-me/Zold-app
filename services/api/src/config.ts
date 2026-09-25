@@ -425,9 +425,7 @@ function assertProductionConfig() {
     if (!process.env.TRUSTED_PROXY_HOPS) {
       fail("TRUSTED_PROXY_HOPS must be explicit for hosted production");
     }
-    // No co-signer is required: Safes are passkey-only (1-of-1). The
-    // CANDIDE_COSIGNER_* pair is needed only while a legacy 2-of-2 Safe still
-    // lists it as an owner; server.ts names any such account at startup.
+    // No co-signer is required: Safes are passkey-only (1-of-1).
     // No standing allowance is required either: the user's passkey approves
     // each transfer for its exact debit amount at send time.
     if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS) {
@@ -499,6 +497,13 @@ const parseChainIds = (raw: string | undefined) =>
  * account, but hosted production must be explicitly configured before payment
  * pages can be activated.
  */
+/** The name this key once had in a deployed .env. It was never read, so
+ *  forwarding activation failed with nothing pointing at the typo; say so. */
+if (process.env.CANDIDE_FORWARDING_API_KEY && !process.env.CANDIDE_FORWARDING_ACCOUNT_API_KEY) {
+  console.warn(
+    "NOTE: CANDIDE_FORWARDING_API_KEY is set but is not read — rename it to CANDIDE_FORWARDING_ACCOUNT_API_KEY.",
+  );
+}
 export const FORWARDING = {
   rpcUrl: process.env.CANDIDE_FORWARDING_RPC_URL ?? process.env.FORWARDING_ADDRESS_RPC_URL ?? "",
   accountApiKey: process.env.CANDIDE_FORWARDING_ACCOUNT_API_KEY ?? "",
