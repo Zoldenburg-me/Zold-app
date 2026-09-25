@@ -6,8 +6,9 @@
  * necessary for a service the person asked for:
  *   - one cookie, `zold_monerium_connect` (HttpOnly, 10 minutes, only while
  *     connecting Monerium: it binds the OAuth callback to this browser);
- *   - localStorage: the session, the device key, saved contacts and the
- *     selected organisation;
+ *   - localStorage: the session, the device key, saved contacts, the
+ *     selected organisation and, only during a lost-device recovery, that
+ *     recovery's secret (`zold-recovery-secret`);
  *   - the service worker's cache of the app's own files.
  * There is no analytics, advertising or tracking of any kind, and fonts are
  * self-hosted. Strictly necessary storage needs no consent under ePrivacy
