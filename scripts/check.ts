@@ -34,6 +34,7 @@ const scripts = [
   "device-key:test",
   "passkey-safe:test",
   "execution:test",
+  "gas:test",
   "quote-binding:test",
   "fx:test",
   "jit:test",

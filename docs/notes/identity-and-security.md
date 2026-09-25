@@ -222,6 +222,44 @@ What changed:
 NOT RUN: no removal has executed on a real chain; the removeOwner calldata is
 unit-tested (selector 0xf8dc5dd9, prev-owner and sentinel cases) only.
 
+## Co-signer key deleted; legacy 2-of-2 Safes abandoned (25 Sep 2026)
+
+Supersedes the removal route above. The user decided the legacy 2-of-2 Safes
+are abandoned rather than migrated, so the co-signer key has no remaining job
+and a plaintext private key in .env is pure liability. Removed: the key and
+address env vars, the removal route and its UI, co-signer counter-signing in
+submit and message signing, and the legacy-allowance revoke (its delegate WAS
+the co-signer, so with the key gone nobody can spend such an allowance).
+accountForPlan now throws AbandonedLegacySafeError (409) for any plan with
+cosignerAddress set; the row is kept, per "gating is a read-time filter". The
+key's address held ~0.008 Base Sepolia ETH and 0 on mainnet when deleted.
+Safes whose co-signer WAS removed earlier (cosignerRemovedAt) are live 1-of-1s
+and still work.
+
+## Gas payment is configurable (25 Sep 2026)
+
+Every UserOperation used to go through the paymaster with no alternative.
+VERIFIED by `npm run preflight -- --chain 8453 --gas <mode>` against Candide's
+keyless public endpoint:
+ - sponsored: pm_getPaymasterData refuses on Base mainnet — "this user
+   operation does not qualify for any publicly available gas policy". So main
+   as it stood could not deploy or send on mainnet at all. Base Sepolia
+   sponsors (testnet is unlimited on every plan).
+ - token: USDC 0x8335…2913 accepted; the paymaster quoted a deployment and
+   stopped only at the throwaway Safe's empty balance (~0.018 USDC needed).
+   EURe is not on its token list.
+ - native: a deployment op is built and priced at ≤ ~0.000005 ETH.
+SAFE_GAS_PAYMENT picks the mode at boot (unknown value refuses to start).
+Token mode refuses when abstractionkit returns no tokenQuote, because the
+library otherwise silently falls back to sponsorship. Both paymaster refusals
+above map to SafeGasError (409) with the fix in the message.
+
+Also: every abstractionkit request now goes through an HttpTransport whose
+fetch carries partnerTimeout() — before this a hung bundler blocked a send
+forever — and the recovery SDK (no fetch/signal hook) is raced against the
+same bound, answering 504 "outcome unknown" rather than a retryable refusal.
+NOT RUN: no native- or token-paid op has been SUBMITTED on any chain.
+
 ## Key custody completion — recovery (decided July 2026, 2-of-2)
 
 **Blocker:** losing the browser device key permanently bricks an account.

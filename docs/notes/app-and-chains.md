@@ -71,7 +71,8 @@ deleted, the signature is verified in the API process, and this proves that
 path accepts a real browser-generated signature.
 
 **The wall:** local hardhat transfers now refuse before debit unless the account
-has an active passkey Safe with a configured co-signer allowance. The Safe
+has an active passkey Safe with a configured co-signer allowance (historical:
+the co-signer and its allowances are gone, Sep 2026). The Safe
 address is counterfactual and can only be deployed through Candide's bundler on
 CANDIDE_CHAIN_ID=84532, which
 does not exist on local hardhat 31337. Nothing about the send flow fixes this;
