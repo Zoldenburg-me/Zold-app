@@ -3,7 +3,7 @@
 A shareable handle that resolves to a page-scoped forwarding address someone
 can pay: `/pay/alice`.
 
-## What this is, and what it deliberately is not
+## What this is, and what it is not
 
 | | Here, today |
 |---|---|
@@ -32,14 +32,14 @@ yet: each payment page resolves to one address, so every payment to that page
 lands in the same place and anyone holding the link can read that page address
 history on an explorer.
 
-That is a real difference in kind, not a smaller version of the same thing. The
-page therefore states it in plain words, and nothing in the product describes
-these links as private. If that sentence ever gets softened for marketing
-reasons, the feature has become misleading.
+So the page offers no privacy at all, as opposed to a weaker form of it. It
+says so in plain words, and nothing in the product describes these links as
+private. Softening that sentence for marketing would make the feature
+misleading.
 
 ## Why not stealth addresses yet
 
-Not difficulty — sequencing. Doing it honestly means the recipient controls
+The blocker is sequencing. A correct design has the recipient control
 every derived account, which means deriving the keys **client-side** from
 something only they hold (a wallet signature is the usual seed).
 
@@ -61,11 +61,11 @@ Two other things it would touch, worth knowing before starting:
 ## Handles are enumerable
 
 `200` versus `404` on `/api/pay/:handle` tells a caller whether a handle is
-claimed, and handles are short and human-readable by design. That is true of
-every username system and cannot be fixed while the link is meant to be
-shared, so it is stated rather than papered over: the page tells the payee that
-anyone who knows **or guesses** the handle can find the address, and no comment
-in the code claims the endpoint resists walking.
+claimed, and handles are short and human-readable by design. Every username
+system has this property, and it cannot be fixed while the link is meant to be
+shared. The page tells the payee that anyone who knows **or guesses** the
+handle can find the address, and no comment in the code claims the endpoint
+resists walking.
 
 ## Roadmap: pay by link, not just crypto QR
 
@@ -141,10 +141,9 @@ L, versions 1–6, rendered server-side as SVG so there is one implementation an
 nothing new on the client.
 
 It carries the **bare address**, not an EIP-681 URI. Wallet support for parsing
-EIP-681 is uneven, while every wallet that scans anything can scan an address,
-so the page states the chain and token in text and offers the URI as an "open in
-wallet" link. A code a payer's wallet cannot read is worse than one carrying
-less.
+EIP-681 is uneven, while every wallet that scans anything can scan an address.
+The page states the chain and token in text and offers the URI as an "open in
+wallet" link.
 
 A full EIP-681 URI with an amount is ~135 bytes and does not fit in version 6 —
 measured. The encoder throws rather than emitting something unscannable.
