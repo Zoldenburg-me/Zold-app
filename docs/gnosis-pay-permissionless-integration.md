@@ -27,7 +27,7 @@ The useful product shape is:
 - IBAN integration: https://docs.gnosispay.com/on-off-ramps/iban-integration
 - API reference: https://api.gnosispay.com/api-docs/spec.json
 
-## Corrections To This Document (Aug 2026, found while building PR 1)
+## Corrections To This Document
 
 Two details below were transcribed wrongly and both are silently fatal — they
 fail in ways that read as a Zold signing bug rather than a wrong request. Found
@@ -220,7 +220,7 @@ Funding options:
 
 The Gnosis Chain option is the cleanest long-term fit for the CARD because
 Gnosis Pay, Monerium EURe and CoW EURe liquidity all converge there — but it is
-NOT a reason to move the app. Checked Aug 2026: Bridge.xyz, which is the live
+NOT a reason to move the app. Checked: Bridge.xyz, which is the live
 cash-rail seam, does not support Gnosis Chain as a source or destination at all,
 so the corridor would have no exit there. The shape that works is the user Safe
 deployed on Gnosis IN ADDITION to the app chain: card funding becomes a
@@ -264,7 +264,7 @@ both), and the corridor stays where Bridge and Stellar work.
    - Keep bridge/swap/funding receipts separate from Gnosis Pay transaction
      polling.
 
-## PR 1 — BUILT (Aug 2026)
+## BUILT
 
 `services/api/src/adapters/gnosis-pay.ts`, `routes/gnosis-pay.ts` (a factory
 taking `requireSession`, mounted at `/api/gnosis-pay`), `user.gnosisPay` status

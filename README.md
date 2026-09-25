@@ -103,7 +103,7 @@ services/api/public/
 contracts/src/        FxSwapper, AdminTimelock, MockToken (local hardhat fixtures only)
 shopify-app/          Shopify app config and checkout extension
 scripts/              deploy, dev chain, operations, and every test suite
-docs/                 design docs; docs/notes/ holds the decision history
+docs/                 design docs, architecture, and the GitBook user guide
 ```
 
 ### Rules the code depends on
@@ -123,8 +123,7 @@ docs/                 design docs; docs/notes/ holds the decision history
   read-time filter.
 - **Public projections are allowlists**, redacted on the server.
 
-The reasoning behind each rule is in [docs/notes/](docs/notes/). Platform
-design: [ARCHITECTURE.md](ARCHITECTURE.md). External dependencies and their
+Platform design: [ARCHITECTURE.md](ARCHITECTURE.md). External dependencies and their
 credentials: [INTEGRATORS.md](INTEGRATORS.md).
 
 ## Run it

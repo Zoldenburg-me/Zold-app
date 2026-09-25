@@ -3,29 +3,31 @@
 ## Start here
 
 This file is the map and the invariants. The *reasoning* — what was tested,
-what broke, what was rejected and why — lives in `docs/notes/`, moved there
-verbatim when this file passed 2,100 lines. It is decision history, not a
+what broke, what was rejected and why — was in `docs/notes/` and was
+removed from the public tree (Sep 2026) along with partner outreach and
+proposal docs. Read it from git history: `git show 159262a:docs/notes/<file>`
+(`git show 159262a --stat` lists the rest). It is decision history, not a
 tutorial: a claim marked VERIFIED was checked against a live chain, API or
 bytecode. If you contradict one, re-test before rewriting it, and say what you
 ran.
 
 | you are about to… | read |
 |---|---|
-| touch money movement, FX, a swap, the cash rail or Stellar | `docs/notes/money-movement.md` |
-| touch keys, passkeys, sessions, custody, recovery or Monerium | `docs/notes/identity-and-security.md` |
-| touch the org domain, drafts, currencies or invoices | `docs/notes/business-and-invoicing.md` |
-| touch payment links, Shopify, receipts or the card | `docs/notes/payments-and-checkout.md` |
-| touch the mobile UI, the PWA, chain selection or deployments | `docs/notes/app-and-chains.md` |
-| wonder why a guard looks arbitrary | `docs/notes/review-passes.md` |
-| look for a file that moved, or move one | `docs/notes/code-layout.md` |
-| talk to a payout, card or funding partner | `docs/notes/roadmap-and-partners.md` |
+| touch money movement, FX, a swap, the cash rail or Stellar | `159262a:docs/notes/money-movement.md` |
+| touch keys, passkeys, sessions, custody, recovery or Monerium | `159262a:docs/notes/identity-and-security.md` |
+| touch the org domain, drafts, currencies or invoices | `159262a:docs/notes/business-and-invoicing.md` |
+| touch payment links, Shopify, receipts or the card | `159262a:docs/notes/payments-and-checkout.md` |
+| touch the mobile UI, the PWA, chain selection or deployments | `159262a:docs/notes/app-and-chains.md` |
+| wonder why a guard looks arbitrary | `159262a:docs/notes/review-passes.md` |
+| look for a file that moved, or move one | `159262a:docs/notes/code-layout.md` |
+| talk to a payout, card or funding partner | `159262a:docs/notes/roadmap-and-partners.md` |
 | pick up someone else's branch | Multi-agent workflow, below |
 
 Architecture (read from code, Sep 2026): `docs/architecture/product-architecture.md`
 (what exists, with status per feature) and `docs/architecture/technical-architecture.md`
 (how it is built, route catalogue). Design docs (not history): `docs/business-accounts.md`,
 `docs/gnosis-pay-permissionless-integration.md`, `docs/payment-pages.md`,
-`docs/privacy-bundle.md`, `docs/gitbook/`.
+`docs/gitbook/`.
 
 THREE RULES OVERRIDE CONVENIENCE:
 1. **main is PR-merge only.**
@@ -70,7 +72,7 @@ THREE RULES OVERRIDE CONVENIENCE:
 ## Where the code lives
 
 The modularity pass (Sep 2026) split the five big files; every move was a MOVE
-(no behaviour change). Full table and reasoning: `docs/notes/code-layout.md`.
+(no behaviour change). Full table and reasoning: `159262a:docs/notes/code-layout.md`.
 
 - `server.ts` is wiring only (~320 lines): routers under `routes/`, the shared
   HTTP layer under `http/`, and **`transfers/build.ts` is the ONE path that
@@ -95,7 +97,7 @@ The modularity pass (Sep 2026) split the five big files; every move was a MOVE
 
 ## Invariants
 
-Each of these was a bug once. The reasoning is in `docs/notes/`.
+Each of these was a bug once. The reasoning is in `159262a:docs/notes/`.
 
 **Money**
 - **No debit without a user signature.** `POST /api/transfers` prepares the
@@ -287,7 +289,7 @@ Shopify path in front of a privacy-sensitive merchant until it exists.
 
 Condensed. Per-partner detail — dLocal's sandbox, Mony's fee and KYC-tier
 constraints, Immersve's three funding protocols, the verified Monerium sandbox
-chain names — is in `docs/notes/roadmap-and-partners.md`.
+chain names — is in `159262a:docs/notes/roadmap-and-partners.md`.
 
 0. **Payout partners**: dLocal (stablecoin-funded payouts, 60+ markets) and
    Yellow Card (Africa, settles natively in USDC). Both uncontracted. Pin down
@@ -305,7 +307,7 @@ chain names — is in `docs/notes/roadmap-and-partners.md`.
    no EURe**, so a card puts EUR/USD FX between a balance and a spend — which
    disappears on the *recipient* side. They run their own KYC, so it is a second
    identity relationship, not a reuse of Monerium's. Read the 1inch Aqua
-   sections of `docs/notes/roadmap-and-partners.md` before relying on this:
+   sections of `159262a:docs/notes/roadmap-and-partners.md` before relying on this:
    Immersve withdrawals are NOT permissionless, the Bank of Lithuania cut its
    EEA issuer channel (Dec 2025), Kulipa is dead, and Exodus now owns Baanx and
    Monavate. Proposal only; nothing card-side is built.

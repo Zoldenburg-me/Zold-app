@@ -1,6 +1,6 @@
 # Business & premium accounts — the rebuild
 
-Decided Aug 2026. This file records the model and the reasoning; the code is
+This file records the model and the reasoning; the code is
 `services/api/src/domain/`. Read this before changing an entity.
 
 The product is **global (local) accounts**: an organisation holds accounts

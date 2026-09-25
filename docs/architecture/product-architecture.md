@@ -587,7 +587,7 @@ biggest gap between the business layer as marketed and as built.
 |---|---|
 | Generic CSV | **BUILT.** Ledger export and monthly-balance CSV, both empty in practice (§8.3). |
 | Xero / QuickBooks | **LABEL ONLY.** The plan capability `integrations.accounting` is named "Xero and QuickBooks". There is no client, no OAuth and no route. |
-| Lexware Office (lexoffice) + GetMyInvoices | **RESEARCHED.** `docs/getmyinvoices-lexoffice.md` holds a staged plan: push receipts and statements to GetMyInvoices `/documents`, and push bank lines to GetMyInvoices transactions, which leave as MT-940 into Lexware. Lexware's API has no bank-transaction resource. No code, credential or call exists. |
+| Lexware Office (lexoffice) + GetMyInvoices | **RESEARCHED.** A staged plan exists: push receipts and statements to GetMyInvoices `/documents`, and push bank lines to GetMyInvoices transactions, which leave as MT-940 into Lexware. Lexware's API has no bank-transaction resource. No code, credential or call exists. |
 | DATEV | **NOT BUILT.** Mentioned only as a GetMyInvoices MT-940 target. There is no EXTF export. |
 | sevDesk | **OUT OF REPO.** A separate sibling project mirrors Monerium orders into sevDesk. It is not wired here. |
 
