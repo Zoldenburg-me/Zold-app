@@ -38,7 +38,7 @@ inbound port to firewall.
 Write `~/.cloudflared/config.yml` (substitute the id printed by `create`):
 
     tunnel: <TUNNEL_ID>
-    credentials-file: /Users/tonythomas/.cloudflared/<TUNNEL_ID>.json
+    credentials-file: /Users/xxx/.cloudflared/<TUNNEL_ID>.json
     ingress:
       - hostname: zoldhq.com
         service: http://127.0.0.1:3000
