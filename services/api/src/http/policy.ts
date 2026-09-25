@@ -32,10 +32,37 @@ export const originPolicy: express.RequestHandler = (req, res, next) => {
  * /invoice/<token>, /pay/<handle>/<code>) and any outbound request or link
  * click would otherwise carry at least our origin, and on a same-origin
  * navigation the full path, to wherever it lands.
+ *
+ * The CSP keeps every script, style, font, fetch and worker on our own
+ * origin: the app holds a session and a device key in localStorage, so the
+ * thing to deny an injected script is somewhere to send them. It still allows
+ * 'unsafe-inline' for scripts because every page bootstraps from an inline
+ * block today; moving those to files (or nonces) is what lets that go.
+ * frame-ancestors 'none' because nothing embeds us (the Shopify app is not
+ * embedded) and a framed pay or passkey page is a clickjacking surface.
  */
+export const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "worker-src 'self'",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 export const securityHeaders: express.RequestHandler = (_req, res, next) => {
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
+  res.setHeader("content-security-policy", CONTENT_SECURITY_POLICY);
+  res.setHeader("x-frame-options", "DENY");
+  res.setHeader("cross-origin-opener-policy", "same-origin");
+  res.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=()");
   next();
 };
 

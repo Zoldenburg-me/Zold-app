@@ -134,3 +134,27 @@ export function wouldOrphanOrg(
   });
   return remaining.length === 0;
 }
+
+/** The part of an account that can prove it controls an email address. */
+export interface EmailProofSource {
+  passkeySafe?: {
+    candideRecovery?: { channels: { channel: string; target: string; verifiedAt?: string }[] };
+  };
+}
+
+/**
+ * Whether this account has PROVEN it controls `email`, as opposed to having
+ * typed it. Signup never sends a code, so `user.email` is a claim; the only
+ * proof the platform holds is an email recovery channel, which Candide
+ * verified with a one-time code sent to that address. An invitation is a seat
+ * (up to owner, with payment approval), so it is accepted on the proof, never
+ * on the claim — otherwise whoever registers the invited address first, or
+ * is forwarded the link, takes the seat.
+ */
+export function emailIsProven(user: EmailProofSource, email: string): boolean {
+  const needle = email.trim().toLowerCase();
+  if (!needle) return false;
+  return (user.passkeySafe?.candideRecovery?.channels ?? []).some(
+    (c) => c.channel === "email" && !!c.verifiedAt && c.target.trim().toLowerCase() === needle,
+  );
+}

@@ -187,6 +187,17 @@ export function createAuthRouter(deps: AuthDeps) {
         attestation,
         createdAt: new Date().toISOString(),
       };
+      // ONE CLAIMABLE ACCOUNT PER EMAIL, re-asserted here. Signup checks it,
+      // but two passkey-less rows on one email both pass that check; the first
+      // passkey is what makes a row claimable, so it is where the invariant
+      // has to hold. Nothing is awaited between this check and the write.
+      if (!user.passkey?.publicKey && user.email &&
+          store.usersByEmail(user.email).some((u) => u.id !== user.id && !!u.passkey)) {
+        return res.status(409).json({
+          error: "an account already uses this email — sign in with your passkey, or recover the account if you lost the device",
+          code: "EMAIL_IN_USE",
+        });
+      }
       const plannedSafe = passkeySafePlan(user, reg.key);
       const updated = store.updateUser(user.id, {
         passkey: {
