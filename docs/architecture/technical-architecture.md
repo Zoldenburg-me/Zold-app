@@ -5,8 +5,7 @@ for PR #193 (co-signer retired, `3ba5c5e`). Companion
 to [`product-architecture.md`](product-architecture.md), which covers what the
 product is. This document covers how it is built. File references are
 `path:line` at that commit, and paths under `services/api/src/` are written
-without that prefix. Where this contradicts `docs/notes/`, this was read from
-code, and §19 lists the stale text.*
+without that prefix. §19 lists stale text elsewhere in the repo.*
 
 ---
 
@@ -711,7 +710,7 @@ only self-hosted fonts.
 | to add | attach at | constraints already in the code |
 |---|---|---|
 | **Ledger writer** | a projector called from `mirrorOrder`, `addCryptoDeposit` / `settleConvertedDeposit`, transfer state changes to PAID/REFUNDED, and invoice settlement | `LedgerEntry` shape and `accountCodeAuto`; run `applyRules` on insert; idempotent keys; never overwrite human codes |
-| **Accounting connector** (GetMyInvoices / Lexware, Xero, DATEV) | a new `adapters/<vendor>.ts` + `routes/business/integrations.ts`, with the capability `integrations.accounting` | per-org credential encrypted with `crypto-at-rest` (the Monerium API-keys connector is the pattern), capability `unavailable` until a key exists; needs the ledger writer first; plan in `docs/getmyinvoices-lexoffice.md` |
+| **Accounting connector** (GetMyInvoices / Lexware, Xero, DATEV) | a new `adapters/<vendor>.ts` + `routes/business/integrations.ts`, with the capability `integrations.accounting` | per-org credential encrypted with `crypto-at-rest` (the Monerium API-keys connector is the pattern), capability `unavailable` until a key exists; needs the ledger writer first |
 | **Accountant transaction feed** | an org-scoped `GET /api/orgs/:orgId/transactions` checking `transfers.read` | the backing user's transfers and deposits projected through an allowlist; the permission already exists in every role |
 | **New currency** | an entry in `domain/accounts.ts` with a real `mode()` | nothing is live without a contracted partner (rule 2) |
 | **New venue** | a file in `liquidity/` implementing `contract.ts`, plus `providerById` | an allowlist, a named spender, a measured amount out, `assertPriceSane`, and `safeSwapPlan` if it must be non-custodial |
@@ -807,8 +806,6 @@ separately rather than committed here.)
     - `_test-env.ts` now *sets* `KYC_AUTO_APPROVE=1`, while CLAUDE.md says
       it blanks it.
     - Contract tests use a random port, not 8546.
-    - `docs/notes/money-movement.md` still describes CCTP and a dry-run mode,
-      and says nothing sweeps anchor payouts.
     - The headers of `scripts/deploy.ts` and `scripts/reconcile.ts` are out
       of date.
     - The root `ARCHITECTURE.md` describes the removed allowance and
