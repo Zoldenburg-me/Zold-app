@@ -197,7 +197,25 @@ function rcSave(email, secret) {
     localStorage.setItem(RC_SECRET_KEY, JSON.stringify(all));
   } catch { /* private mode: the recovery still works in this tab */ }
 }
-const rcApi = (path, body, method) => api(path, body, method, rcSecret ? { "x-recovery-secret": rcSecret } : undefined);
+const rcApi = (path, body, method) => api(path, body, method, {
+  ...(rcSecret ? { "x-recovery-secret": rcSecret } : {}),
+  ...(rcOtpTicket ? { "x-recovery-otp-ticket": rcOtpTicket } : {}),
+});
+/* Handed out when THIS browser registers the new passkey. The codes the owner
+   receives confirm that credential, so without the ticket the code form is not
+   shown: an open ceremony whose passkey was made elsewhere is not ours. */
+let rcOtpTicket = "";
+const RC_TICKET_KEY = "zold-recovery-otp-ticket";
+function rcTicketSaved(email) {
+  try { return JSON.parse(localStorage.getItem(RC_TICKET_KEY) || "{}")[email.toLowerCase()] || ""; } catch { return ""; }
+}
+function rcTicketSave(email, ticket) {
+  try {
+    const all = JSON.parse(localStorage.getItem(RC_TICKET_KEY) || "{}");
+    if (ticket) all[email.toLowerCase()] = ticket; else delete all[email.toLowerCase()];
+    localStorage.setItem(RC_TICKET_KEY, JSON.stringify(all));
+  } catch { /* private mode: the recovery still works in this tab */ }
+}
 
 function showRecoverPanel(on) {
   $("onb-step1").classList.toggle("hidden", on);
@@ -213,6 +231,11 @@ function renderRecoverState() {
   otp.classList.add("hidden");
   st.classList.add("hidden");
   if (!r) return;
+  if (r.status === "OTP_PENDING" && !rcOtpTicket) {
+    st.classList.remove("hidden");
+    st.innerHTML = `<label>Do not enter any codes</label><div class="sub">The passkey this recovery would install was not created in this browser. If you did not start it, someone else may be trying to take the account — do not share codes with anyone. Start recovery again from this device once it expires.</div>`;
+    return;
+  }
   if (r.status === "OTP_PENDING") {
     const auths = (r.candide?.auths || []);
     otp.classList.remove("hidden");
@@ -222,7 +245,7 @@ function renderRecoverState() {
         <input id="rc-code-${i}" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" ${a.verified ? "disabled" : ""} />
         <button type="button" data-rc-confirm="${i}" ${a.verified ? "disabled" : ""}>Confirm</button>
       </div>`).join("") +
-      `<div class="sub" style="margin-top:12px">Every channel must confirm before anything happens. Once they all have, Candide signs the recovery and the waiting period starts on chain.</div>`;
+      `<div class="sub" style="margin-top:12px">These codes hand the account to the passkey you just created in THIS browser. If you did not just create one here, stop. Every channel must confirm before anything happens. Once they all have, Candide signs the recovery and the waiting period starts on chain.</div>`;
     otp.querySelectorAll("[data-rc-confirm]").forEach((b) => {
       b.onclick = async () => {
         clearErr("rc-err");
@@ -230,7 +253,12 @@ function renderRecoverState() {
         try {
           rcState = await rcApi(`/api/recovery/candide/${r.id}/otp`, { challengeId: auths[i].challengeId, otp: $(`rc-code-${i}`).value });
           renderRecoverState();
-        } catch (e) { showErr("rc-err", e); }
+        } catch (e) {
+          if (e?.status === 403) {
+            rcOtpTicket = ""; rcTicketSave(rcEmail, ""); renderRecoverState();
+          }
+          showErr("rc-err", e);
+        }
       };
     });
     return;
@@ -259,6 +287,7 @@ function renderRecoverState() {
   }
   if (r.status === "FINALIZED") {
     rcSave(rcEmail, "");
+    rcTicketSave(rcEmail, "");
     st.innerHTML = `<label>Recovered</label><div class="sub">This device's passkey now owns the account. Sign in with it.</div>
       <button class="btn-primary-lite" id="btn-rc-signin">Sign in with your new passkey</button>`;
     $("btn-rc-signin").onclick = () => { showRecoverPanel(false); $("link-signin").click(); };
@@ -275,6 +304,7 @@ async function recoverStart() {
   try {
     if (!window.PublicKeyCredential) throw new Error("passkeys aren't supported in this browser");
     rcSecret = rcSaved(rcEmail);
+    rcOtpTicket = rcTicketSaved(rcEmail);
     let r = await api("/api/recovery/candide", { email: rcEmail, ...(rcSecret ? { recoverySecret: rcSecret } : {}) });
     if (r.recoverySecret) { rcSecret = r.recoverySecret; rcSave(rcEmail, rcSecret); }
     if (r.status === "PASSKEY_PENDING") {
@@ -296,6 +326,7 @@ async function recoverStart() {
         attestation: b64url(cred.response.attestationObject),
         clientDataJSON: b64url(cred.response.clientDataJSON),
       });
+      if (r.otpTicket) { rcOtpTicket = r.otpTicket; rcTicketSave(rcEmail, rcOtpTicket); }
     }
     rcState = r;
     renderRecoverState();

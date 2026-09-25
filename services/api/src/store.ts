@@ -361,8 +361,13 @@ export const store = {
   paymentRequestsForUser(userId: string) {
     return db.paymentRequests.filter((r) => r.userId === userId);
   },
-  findPaymentRequestBySource(kind: string, externalId: string) {
-    return db.paymentRequests.find((r) => r.source?.kind === kind && r.source.externalId === externalId);
+  /** Shopify order and session ids are per-store sequences, so the shop is
+   *  part of the key: without it one connected store's webhook finds, and can
+   *  cancel or dedupe against, another store's request. */
+  findPaymentRequestBySource(kind: string, externalId: string, shop: string) {
+    return db.paymentRequests.find(
+      (r) => r.source?.kind === kind && r.source.externalId === externalId && r.source.shop === shop,
+    );
   },
 
   // ── Shopify connections ───────────────────────────────────────────────────

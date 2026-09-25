@@ -20,7 +20,7 @@ import {
   trialPlanFor,
   TRIAL_DAYS,
 } from "../services/api/src/domain/plans.js";
-import { canReviewDraft, roleCan, wouldOrphanOrg } from "../services/api/src/domain/roles.js";
+import { canReviewDraft, emailIsProven, roleCan, wouldOrphanOrg } from "../services/api/src/domain/roles.js";
 import {
   currencyAvailability,
   initialStatusFor,
@@ -190,6 +190,20 @@ check("an org cannot lose its last owner, by role change or deactivation", () =>
   assert.equal(wouldOrphanOrg(members, "m1", { role: "admin" }), true);
   assert.equal(wouldOrphanOrg(members, "m1", { status: "deactivated" }), true);
   assert.equal(wouldOrphanOrg(members, "m2", { status: "deactivated" }), false);
+});
+
+check("an invitation seat needs a PROVEN email, not the one typed at signup", () => {
+  const ch = (channel: string, target: string, verifiedAt?: string) => ({ channel, target, verifiedAt });
+  const withChannels = (...channels: ReturnType<typeof ch>[]) => ({ passkeySafe: { candideRecovery: { channels } } });
+  // Typed at signup, nothing verified: the claim alone never proves control.
+  assert.equal(emailIsProven({}, "cfo@example.com"), false);
+  assert.equal(emailIsProven(withChannels(ch("email", "cfo@example.com")), "cfo@example.com"), false);
+  // A code sent to the address and entered back is the proof.
+  assert.equal(emailIsProven(withChannels(ch("email", "cfo@example.com", "2026-09-24T00:00:00Z")), "CFO@Example.com "), true);
+  // A verified phone, or a verified different address, proves nothing about this one.
+  assert.equal(emailIsProven(withChannels(ch("sms", "cfo@example.com", "2026-09-24T00:00:00Z")), "cfo@example.com"), false);
+  assert.equal(emailIsProven(withChannels(ch("email", "me@example.com", "2026-09-24T00:00:00Z")), "cfo@example.com"), false);
+  assert.equal(emailIsProven(withChannels(ch("email", "", "2026-09-24T00:00:00Z")), ""), false);
 });
 
 console.log("\nLocal accounts");
