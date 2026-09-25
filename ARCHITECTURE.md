@@ -13,21 +13,6 @@ paymaster, so the user never holds gas. `wallet/passkey-safe-plan.ts` plans
 it **1-of-1: the user's passkey is the only owner.** Zold holds no key that can
 move funds or block the user from moving them.
 
-**Legacy 2-of-2 Safes.** Until September 2026 hosted production planned Safes
-as 2-of-2 with a Zold co-signer. The co-signer could not start a debit, but the
-user could not move funds — or add a key of their own — without Zold's
-counter-signature. That was retired:
-
-- New plans never include the co-signer, and production no longer requires
-  `CANDIDE_COSIGNER_*`.
-- An existing 2-of-2 Safe keeps working while `CANDIDE_COSIGNER_KEY` is set
-  (without it, its funds cannot move); the API names such accounts at startup.
-- The user removes the co-signer from Settings: one passkey-signed
-  `removeOwner(prev, cosigner, 1)` operation
-  (`POST /api/users/:id/passkey-safe/cosigner-removal`), which the co-signer
-  counter-signs one last time. The plan is updated only after the chain shows
-  the co-signer gone and threshold 1.
-- A Candide recovery installs only the new passkey, so recovery also drops it.
 
 There is **no allowance module and no standing spend authority**. The plan
 records an empty allowance list so allowances left on older Safes can be found
