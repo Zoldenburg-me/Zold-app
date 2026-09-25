@@ -2,8 +2,7 @@
  * User-signed Safe execution: the meta-transactions of one transfer's debit,
  * signed by the user's passkey as a UserOperation. With no delegate or
  * standing spend authority, the test checks that the batch contains exactly
- * the movement the user approves (token, destination, amount) plus, at most,
- * revoking a standing allowance left on an older Safe.
+ * the movement the user approves (token, destination, amount).
  *
  * No chain, no bundler: the builder is pure. The bundler/paymaster wrapper and
  * the authorize-route flow run against Base Sepolia, not here.
@@ -11,15 +10,12 @@
 import assert from "node:assert/strict";
 import { decodeFunctionData } from "viem";
 import {
-  CANDIDE,
   transferExecutionTransactions,
   transferSwapBatchTransactions,
 } from "../services/api/src/wallet/candide.js";
 
 const TOKEN = "0x2222222222222222222222222222222222222222" as `0x${string}`;
 const DEST = "0x4444444444444444444444444444444444444444" as `0x${string}`;
-const DELEGATE = "0x1111111111111111111111111111111111111111" as `0x${string}`;
-const MODULE = "0x3333333333333333333333333333333333333333" as `0x${string}`;
 const AMOUNT = 12_345_000_000_000_000_000n; // €12.345 in wei — deliberately not round
 
 const ABI = [
@@ -79,29 +75,9 @@ check("the transfer encodes the EXACT destination and amount", () => {
   assert.equal(args![1], AMOUNT);
 });
 
-check("no allowance-module call appears in a plain debit", () => {
-  for (const t of plain) assert.notEqual(t.to.toLowerCase(), MODULE.toLowerCase());
-});
-
-// ---- cleanup: a standing allowance is revoked in the same operation ----
-check("a standing allowance is revoked BEFORE the transfer", () => {
-  const revoking = transferExecutionTransactions(TOKEN, DEST, AMOUNT, {
-    revokeLegacyAllowance: { delegate: DELEGATE, moduleAddress: MODULE },
-  });
-  assert.equal(revoking.length, 2);
-  assert.equal(revoking[0].to.toLowerCase(), MODULE.toLowerCase());
-  const del = decode(revoking[0].data);
-  assert.equal(del.functionName, "deleteAllowance");
-  assert.equal(String(del.args![0]).toLowerCase(), DELEGATE.toLowerCase());
-  assert.equal(String(del.args![1]).toLowerCase(), TOKEN.toLowerCase());
-  assert.equal(decode(revoking[1].data).functionName, "transfer");
-});
-
-check("the revoke module address defaults to the configured CANDIDE module", () => {
-  const revoking = transferExecutionTransactions(TOKEN, DEST, AMOUNT, {
-    revokeLegacyAllowance: { delegate: DELEGATE },
-  });
-  assert.equal(revoking[0].to.toLowerCase(), CANDIDE.allowanceModuleAddress.toLowerCase());
+check("a plain debit is the transfer and nothing else", () => {
+  assert.equal(plain.length, 1);
+  assert.equal(plain[0].to.toLowerCase(), TOKEN.toLowerCase());
 });
 
 // ---- refusals ----
@@ -148,20 +124,6 @@ check("the approval names the venue's spender for exactly the convert amount", (
   const { args } = decode(batch[1].data);
   assert.equal(String(args![0]).toLowerCase(), SPENDER.toLowerCase());
   assert.equal(args![1], CONVERT);
-});
-
-check("an allowance revoke is prepended to the batch", () => {
-  const revoking = transferSwapBatchTransactions({
-    token: TOKEN,
-    feeTo: FEE_TO,
-    feeAmount: FEE,
-    approval: { spender: SPENDER, amount: CONVERT },
-    call: { to: VENUE, data: SWAP_DATA, value: 0n },
-    revokeLegacyAllowance: { delegate: DELEGATE, moduleAddress: MODULE },
-  });
-  assert.equal(revoking.length, 4);
-  assert.equal(decode(revoking[0].data).functionName, "deleteAllowance");
-  assert.equal(revoking[0].to.toLowerCase(), MODULE.toLowerCase());
 });
 
 check("a zero fee drops the fee leg but keeps approval and swap", () => {

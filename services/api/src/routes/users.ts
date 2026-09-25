@@ -176,7 +176,7 @@ export function createUserRouter(deps: UserDeps) {
         });
       }
       const id = randomUUID();
-      // The real address is set by passkey/co-signer Safe deployment. Identity
+      // The real address is set by passkey Safe deployment. Identity
       // is Monerium's: the account stays pending until a Monerium connection
       // (OAuth or the user's own API keys) is activated and attributes an IBAN
       // to the Safe. No locally issued IBAN, and no auto-approval anywhere money

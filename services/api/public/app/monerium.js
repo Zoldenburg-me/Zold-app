@@ -432,7 +432,7 @@ function renderShellPages() {
   $("acct-address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — not deployed` : (user.address || "—");
   document.querySelector('[data-copy="acct-address"]')?.classList.toggle("hidden", !!plannedSafe);
   $("acct-owner").textContent = user.passkeySafe?.status === "active"
-    ? `passkey${user.passkeySafe?.cosignerAddress ? " + Zold co-signer (legacy)" : ""}`
+    ? "passkey"
     : "passkey setup required";
   $("acct-kyc").textContent = kycCopy(user.kycStatus, user)[1];
   $("acct-kyc-chip").textContent = (user.kycStatus || "approved").toUpperCase();
@@ -445,17 +445,9 @@ function renderShellPages() {
   $("set-passkey").textContent = user.passkey ? `Credential ${user.passkey.credentialId.slice(0, 16)}…` : "No passkey on this account yet.";
   $("set-device").textContent = user.authorizerAddress ? `Bound to ${user.authorizerAddress.slice(0, 10)}…${user.authorizerAddress.slice(-6)}` : "Not bound yet.";
   const safe = user.passkeySafe;
-  const cosigner = safe?.cosignerPolicy;
-  /* An older account may still carry a standing co-signer allowance; the next
-     send's user-signed operation revokes it. New accounts never have one. */
-  const legacyStanding = cosigner?.allowances?.some((x) => BigInt(x.amount || "0") > 0n);
   $("set-wallet-policy").textContent = !safe
     ? "Passkey Safe not planned yet."
-    : safe.cosignerAddress
-      ? "Legacy 2-of-2 Safe · Zold's co-signer must counter-sign every movement until you remove it" +
-        (legacyStanding ? " · standing allowance detected — revoked automatically on your next send" : "")
-      : `Passkey-only Safe · you are its only owner and sign every movement with your passkey.`;
-  $("btn-remove-cosigner")?.classList.toggle("hidden", !safe?.cosignerAddress || safe.status !== "active");
+    : `Passkey-only Safe · you are its only owner and sign every movement with your passkey.`;
   renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
     ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`
