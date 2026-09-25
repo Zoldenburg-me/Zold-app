@@ -273,12 +273,12 @@ in the store, and a Card tile + screen in the mobile app.
 
 Answers to the open questions above, as decided while building:
 
- - **Signer: the user's own browser wallet.** Not the Zold passkey Safe. An
-   EIP-1271 signature is only verifiable where the contract is deployed and the
-   Zold Safe is not on chain 100. Separately VERIFIED with a real generated
-   P-256 signature that Gnosis Chain DOES have the RIP-7212 precompile (valid
-   sig returns 1, tampered sig returns empty), and that Candide's bundler covers
-   chain 100 — so a passkey Safe there is a deliberate next step, not a blocker.
+ - **Signer: the user's own browser wallet**, not the Zold passkey Safe. An
+   EIP-1271 signature is only verifiable where the contract is deployed, and
+   the Zold Safe is not on chain 100. Separately VERIFIED with a real generated
+   P-256 signature that Gnosis Chain has the RIP-7212 precompile (valid sig
+   returns 1, tampered sig returns empty), and that Candide's bundler covers
+   chain 100. Nothing blocks a passkey Safe there; it is a next step.
  - **JWT: never persisted, anywhere.** It is a bearer credential for someone
    else's card account. The browser holds it in memory for the session and
    sends it in an `x-gnosis-pay-token` header; the API forwards and forgets.

@@ -535,9 +535,9 @@ LINK_CREATED → SUBMITTED → PAYING → PAID → RECONCILED     (+ soft DELETE
     personal-org invoices),
   - or a manual link of a crypto deposit.
 
-  **The invoice never turns PAID on its own.** A settled issued invoice still
-  reads SUBMITTED, shows OVERDUE after its due date, and must be reconciled by
-  hand.
+  **A recorded settlement does not mark the invoice PAID.** A settled issued
+  invoice still reads SUBMITTED, shows OVERDUE after its due date, and has to
+  be reconciled by hand.
 - **Not built:** credit notes and cancellations, a void state, XRechnung or
   ZUGFeRD, invoice signing, PDF generation, email delivery.
 - **Product decision on record:** Zold pays from invoices and keeps the

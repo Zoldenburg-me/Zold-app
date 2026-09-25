@@ -59,19 +59,19 @@ Current implementation note: live Monerium deposits land in the user's Safe,
 and the API now treats `safeBalanceEur` as `balanceEur`. Remittance funding is
 Safe-first.
 
-IMPLEMENTED (Aug 2026): user-signed execution — regulatory-architecture.md's
-Change 1, superseding both the standing allowance and the interim per-transfer
-grant. There is no allowance, no delegate, and no module installed at
-deployment. At transfer creation the server prepares the UserOperation that
-performs the debit itself — an ERC-20 transfer of exactly that transfer's
-amount (the fee alone on the Safe-funded SEPA rail) to the orchestrator's
-working address. The user's passkey signs its hash at send time alongside the
-device signature; the bundler executes. (A legacy 2-of-2 Safe also needs
-the co-signer's counter-signature until its user removes it — see below.) The chain enforces token, amount and destination, so the
-answer to "can we dispose of client assets without the client" is NO,
-architecturally: the API holds no user owner keys and no delegated spend
-authority of any size, at any time. Legacy standing allowances left on old
-Safes are revoked automatically by the next send's operation
+**Implemented (Aug 2026): user-signed execution.** This is
+regulatory-architecture.md's Change 1, and it supersedes both the standing
+allowance and the interim per-transfer grant. There is no allowance, no
+delegate, and no module installed at deployment. At transfer creation the
+server prepares the UserOperation that performs the debit: an ERC-20 transfer
+of exactly that transfer's amount (the fee alone on the Safe-funded SEPA rail)
+to the orchestrator's working address. The user's passkey signs its hash at
+send time alongside the device signature, and the bundler executes. (A legacy
+2-of-2 Safe also needs the co-signer's counter-signature until its user
+removes it; see below.) The chain enforces token, amount and destination, and
+the API holds no user owner keys and no delegated spend authority of any size,
+so it cannot dispose of client assets without the client. The next send's
+operation revokes any legacy standing allowance left on an old Safe
 (`transferExecutionTransactions` prepends a `deleteAllowance`).
 
 The delegate-design section below is therefore historical: there is no
