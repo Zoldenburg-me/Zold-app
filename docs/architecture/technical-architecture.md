@@ -5,8 +5,7 @@ for PR #193 (co-signer retired, `3ba5c5e`). Companion
 to [`product-architecture.md`](product-architecture.md), which covers what the
 product is. This document covers how it is built. File references are
 `path:line` at that commit, and paths under `services/api/src/` are written
-without that prefix. Where this contradicts `docs/notes/`, this was read from
-code, and §19 lists the stale text.*
+without that prefix. §19 lists stale text elsewhere in the repo.*
 
 ---
 
@@ -813,8 +812,6 @@ separately rather than committed here.)
     - `_test-env.ts` now *sets* `KYC_AUTO_APPROVE=1`, while CLAUDE.md says
       it blanks it.
     - Contract tests use a random port, not 8546.
-    - `docs/notes/money-movement.md` still describes CCTP and a dry-run mode,
-      and says nothing sweeps anchor payouts.
     - The headers of `scripts/deploy.ts` and `scripts/reconcile.ts` are out
       of date.
     - The root `ARCHITECTURE.md` describes the removed allowance and

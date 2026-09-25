@@ -19,8 +19,7 @@
  *   zold    another Zold account paying from its balance. Today that is a SEPA
  *           payout to the payee's IBAN with the code as reference, the same
  *           rail as `bank`, prefilled in the app. There is no on-chain
- *           Zold-to-Zold rail yet (see the Pay hub notes in
- *           docs/notes/app-and-chains.md).
+ *           Zold-to-Zold rail yet.
  *
  * No money moves in this file. Matching records that a payment arrived;
  * converting a USDC deposit to EURe is the user-signed path in
