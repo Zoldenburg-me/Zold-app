@@ -205,7 +205,7 @@ await check("a signed payment session becomes a EUR request payable in USDC only
   assert.equal(r.status, 201, JSON.stringify(r.body));
   redirect = r.body.redirect_url;
   assert.match(redirect, new RegExp(`^${API}/pay/lena-shop/[0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5}$`));
-  const req = store.findPaymentRequestBySource("shopify", s1.id)!;
+  const req = store.findPaymentRequestBySource("shopify", s1.id, SHOP)!;
   assert.equal(req.amountEur, 49.9);
   assert.deepEqual(req.methods, ["crypto"]);
   assert.equal(req.test, true);
@@ -255,7 +255,7 @@ const payRequest = (req: any) => {
   return attributeDepositToRequest(d);
 };
 await check("the buyer's USDC deposit marks the request PAID and Shopify is told exactly once, with the buyer's onward URL recorded", async () => {
-  const req = store.findPaymentRequestBySource("shopify", s1.id)!;
+  const req = store.findPaymentRequestBySource("shopify", s1.id, SHOP)!;
   const paid = payRequest(req)!;
   assert.equal(paid.state, "PAID");
   assert.ok(await until(() => Boolean(store.findPaymentRequest(req.id)!.source.resolvedAt)), `not resolved: ${store.findPaymentRequest(req.id)!.source.resolveError}`);
@@ -264,7 +264,7 @@ await check("the buyer's USDC deposit marks the request PAID and Shopify is told
   assert.match(store.findPaymentRequest(req.id)!.source.returnUrl!, /thank_you/);
 });
 await check("the return link sends the buyer to the URL Shopify gave", async () => {
-  const req = store.findPaymentRequestBySource("shopify", s1.id)!;
+  const req = store.findPaymentRequestBySource("shopify", s1.id, SHOP)!;
   const r = await call("GET", `/api/shopify/return/${req.code}`);
   assert.equal(r.status, 302);
   assert.equal(r.location, decodeURIComponent(req.source.returnUrl!));
@@ -272,7 +272,7 @@ await check("the return link sends the buyer to the URL Shopify gave", async () 
 await check("a paid request whose resolve failed keeps the error and the sweep retries it", async () => {
   const s = session();
   await fromShopify("/api/shopify/payment", s);
-  const req = store.findPaymentRequestBySource("shopify", s.id)!;
+  const req = store.findPaymentRequestBySource("shopify", s.id, SHOP)!;
   failNextResolve = true;
   payRequest(req);
   assert.ok(await until(() => Boolean(store.findPaymentRequest(req.id)!.source.resolveError)), "no error recorded");
@@ -283,16 +283,16 @@ await check("a paid request whose resolve failed keeps the error and the sweep r
   assert.equal(after.source.resolveAttempts, 2);
   assert.equal(calls.filter((c) => c.op === "paymentSessionResolve" && c.vars.id === s.gid).length, 2);
 });
-await check("a buyer who cancels is sent back to the store and the request is closed", async () => {
+await check("a buyer who cancels is sent back to the store; the unauthenticated GET does not close the request", async () => {
   const s = session();
   await fromShopify("/api/shopify/payment", s);
-  const req = store.findPaymentRequestBySource("shopify", s.id)!;
+  const req = store.findPaymentRequestBySource("shopify", s.id, SHOP)!;
   const r = await call("GET", `/api/shopify/cancel/${req.code}`);
   assert.equal(r.location, `https://${SHOP}/checkouts/c/cancel`);
-  assert.equal(store.findPaymentRequest(req.id)!.state, "CANCELLED");
+  assert.equal(store.findPaymentRequest(req.id)!.state, "OPEN");
 });
 await check("a paid request cannot be cancelled by visiting the cancel link", async () => {
-  const req = store.findPaymentRequestBySource("shopify", s1.id)!;
+  const req = store.findPaymentRequestBySource("shopify", s1.id, SHOP)!;
   await call("GET", `/api/shopify/cancel/${req.code}`);
   assert.equal(store.findPaymentRequest(req.id)!.state, "PAID");
 });
@@ -318,7 +318,7 @@ await check("the org view lists the store and its checkouts and never the token"
   assert.equal(r.body.available, true);
   assert.equal(r.body.connections[0].shop, SHOP);
   assert.equal(r.body.connections[0].ready, true);
-  assert.equal(r.body.requests.length, 3, "one request per accepted session: paid, failed-then-resolved, cancelled");
+  assert.equal(r.body.requests.length, 3, "one request per accepted session: paid, failed-then-resolved, abandoned");
   assert.ok(r.body.requests.every((x: any) => x.shop === SHOP));
   const text = JSON.stringify(r.body);
   assert.ok(!text.includes(TOKEN) && !text.includes("accessTokenEnc"), "the store token crossed the API");

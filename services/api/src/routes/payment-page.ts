@@ -102,6 +102,14 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
         { chainId: CHAIN_ID, symbol: "EURE" as const, address: addrs().eure, decimals: 18 },
         { chainId: CHAIN_ID, symbol: "USDC" as const, address: addrs().usdc, decimals: 6 },
       ];
+      // The partner round trip above yields the event loop, so another claim
+      // of the same handle can land while this one waits. Handle uniqueness
+      // is a check-then-write invariant: re-assert it in the same synchronous
+      // window as the write (the claimAuthorization / holdDailyCap pattern).
+      const takenNow = store.findUserByHandle(handle);
+      if (takenNow && takenNow.id !== user.id) {
+        return res.status(409).json({ error: `"${handle}" is already taken` });
+      }
       const updated = store.updateUser(user.id, {
         handle: undefined,
         payDisplayName: undefined,
