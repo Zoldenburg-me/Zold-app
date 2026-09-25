@@ -19,3 +19,6 @@ data/db*.json
 
 # Timestamped .env backups — same secrets as .env, same rule.
 .env.backup-*
+
+# Internal notes kept out of the public repo (decision history, partner docs)
+.private/
