@@ -6,12 +6,11 @@ draft. Nothing built.** Read `aqua-credit-module.md` §1 first: Aqua cannot hold
 lien, and everything here is arranged around that.
 
 **Short answer.** Rain's real-time funding (RTF) does not make Rain pull from
-Aqua. It does something more useful for us: Rain now pulls **from an ERC-20
-allowance at authorisation**, which is the only safe tier for an Aqua card
-(`1inch-aqua-card.md` §5, "dock() forces Tier A"), and it does it for us, on
-Rain's rails, with Rain as issuer. That lets the credit design that actually
+Aqua. Rain now pulls from an ERC-20 allowance at authorisation, on Rain's rails
+with Rain as issuer, and that is the only safe tier for an Aqua card
+(`1inch-aqua-card.md` §5, "dock() forces Tier A"). So the credit design that
 works on Aqua, where **the lender is the maker** (`aqua-credit-module.md` §5,
-Design C), sit one layer behind the wallet Rain pulls from, with no change on
+Design C), can sit one layer behind the wallet Rain pulls from, with no change on
 Rain's side. The cost is a small per-card buffer. One small ask of Rain removes
 the buffer (§6).
 
@@ -196,7 +195,7 @@ decision, not the cardholder's.
 Secured credit needs collateral the borrower cannot move. Aqua cannot provide
 that (`aqua-credit-module.md` §1). v1 choices:
 
-- **Unsecured, small lines, underwritten off-chain.** This is the honest
+- **Unsecured, small lines, underwritten off-chain.** This is the plain
   credit-card shape. The lender's loss is capped at `limit` per borrower.
 - **Secured by an escrow** `CollateralVault` (cbBTC / wstETH on Base) with an
   LTV that sets `limit`, an oracle, and **liquidation through 1inch
@@ -222,10 +221,10 @@ drawn first, then `lenderFloat`.
 **Refill (after the auth).** Keeper sees the Transfer → `refill()` →
 `AQUA.pull` 120 USDC from the lender's wallet into the CardAccount → back to B.
 If the refill fails (lender docked, lender wallet short, limit reached), the
-**next** authorisation that exceeds the remaining buffer is declined by Rain
-for insufficient funds. **This is the safe failure direction.** A failed
-refill produces a decline, never an unfunded purchase, because Rain has already
-committed the money for every approved auth.
+next authorisation that exceeds the remaining buffer is declined by Rain for
+insufficient funds. A failed refill therefore produces a decline, never an
+unfunded purchase, because Rain has already committed the money for every
+approved auth.
 
 **Settlement.** Rain liquidates the RainCollateral to Visa. Nothing for us to
 do. The lender's exposure started at the auth pull, not here.
@@ -352,13 +351,13 @@ to change anything.
 | collections | | servicer, if contracted | ✓ |
 | **credit licence** | | | ✓ **the gate** |
 
-**The credit licence is the real gate, and Aqua does not change it.** A lender
+**The credit licence is the gate, and Aqua does not change it.** A lender
 extending revolving consumer credit needs to be licensed where the borrower is
 (US: state lending licences or a bank-partner origination; other regions
 likewise). Rain's own "extension of credit" is fully collateralised by the
-committed funds. Ours is actual credit. The unsecured variant is consumer
-lending, full stop. The secured variant is still lending. Scope v1 to
-**business cards** or to a jurisdiction where the lender already holds a licence.
+committed funds; ours is actual credit. The unsecured variant is consumer
+lending, and the secured variant is still lending. Scope v1 to business cards or
+to a jurisdiction where the lender already holds a licence.
 
 **Aqua licence.** `LicenseRef-Degensoft-Aqua-Source-1.1` §5.2 "Pure Caller Use"
 is free below USD 100k fees/yr **and USD 10m liquidity under control**. A credit

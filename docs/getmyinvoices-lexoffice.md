@@ -135,9 +135,9 @@ GetMyInvoices target is a new file beside it, not a new project. The rules
 that repo already enforces carry over unchanged and are the ones that matter
 here:
 
-- only **processed** orders are mirrored — `placed`, `pending` and `rejected`
-  are not bank movements, and a line in the books for a payment that may still
-  be rejected is the one record this must never make;
+- only **processed** orders are mirrored. `placed`, `pending` and `rejected`
+  are not bank movements, and a payment that may still be rejected must never
+  appear as a line in the books;
 - the mint and burn legs of an order are folded onto that order by tx hash, so
   nothing is booked twice;
 - an on-chain movement matching no visible order is **reported, not booked**;
@@ -187,15 +187,14 @@ is how the copy in the accountant's books stops matching the copy in the
 customer's inbox.
 
 **2. Incoming invoices carry no VAT and no supplier document.**
-The Invoice-Me line is `{description, quantity, unitPrice, amount}` — there is
-no tax rate on it anywhere, and `Invoice` has no attachment field at all. So
-for an incoming invoice we hold neither the rate the bookkeeper needs to book
-it nor the supplier's own PDF. Anything we pushed would be a Zold-rendered
-representation of someone else's invoice, which is not the document §14 makes
-the supplier responsible for and not what the recipient's Vorsteuerabzug hangs
-on.
+The Invoice-Me line is `{description, quantity, unitPrice, amount}`, with no
+tax rate, and `Invoice` has no attachment field. For an incoming invoice we
+hold neither the rate the bookkeeper needs nor the supplier's own PDF. Anything
+we pushed would be a Zold rendering of someone else's invoice. §14 makes the
+supplier responsible for the invoice document, and the recipient's
+Vorsteuerabzug depends on that document, not on our rendering.
 
-Two honest ways out, and the first is small:
+Two ways out, and the first is small:
 
 - add a file upload to the supplier's Invoice-Me form, so we hold *their*
   document and push that. This is what makes the incoming lane worth having at
@@ -247,20 +246,18 @@ bookkeeper already does for an unconnectable bank.
 The reasoning, shortest first.
 
 **We cannot automate their side whatever we build.** Lexware Office has no
-bank resource in its public API. Every route into it ends with a human
-dropping a file into an offline account. Building a Lexware-Office-shaped CSV
-exporter would not remove that step, it would only move which tool produces
-the file. There is no version of this where the bank half is hands-free, and
-the honest thing is to stop trying to make one.
+bank resource in its public API, so every route into it ends with a human
+dropping a file into an offline account. A Lexware-Office-shaped CSV exporter
+would only change which tool produces the file. The bank half cannot be made
+hands-free.
 
-**GetMyInvoices is where the matching happens, and that is the part worth
-having.** `POST /bankAccounts/{uid}/transactions/{uid}/assign` links a
-document to a transaction. We know which transfer paid which invoice —
-`invoice.payment.transferId` records it at execution time — and that knowledge
-is the single most valuable thing we can hand a bookkeeper. Push transactions
-straight into Lexware Office instead and the link is thrown away, so someone
-re-derives it by matching amounts against dates. Pushing to GetMyInvoices is
-the only route that carries it across.
+**GetMyInvoices is where the matching happens.**
+`POST /bankAccounts/{uid}/transactions/{uid}/assign` links a document to a
+transaction. We know which transfer paid which invoice
+(`invoice.payment.transferId` records it at execution time), and that is the
+most useful thing we can hand a bookkeeper. Pushing transactions straight into
+Lexware Office drops the link, and someone re-derives it by matching amounts
+against dates. GetMyInvoices is the only route that carries it across.
 
 **It is one integration, and most of it exists.** The transaction builder is
 `sevdesk-monerium`'s `mapping.ts` with a different sink.
@@ -278,9 +275,9 @@ wrongly is worse than no file, whereas the CSV import is transactions only.
 ### What makes it correct rather than merely working
 
 - **Own the handover state.** Remember what has already been pushed, per
-  account, so a re-run does not double-book. `sevdesk-monerium` already keeps
-  exactly this (which order became which row, last block scanned per address)
-  and it is the reason re-running there is safe.
+  account, so a re-run does not double-book. `sevdesk-monerium` keeps the same
+  state (which order became which row, last block scanned per address), which
+  is what makes re-running there safe.
 - **Settled money only.** `placed`, `pending` and `rejected` orders are not
   bank movements. Unchanged from the sevDesk rules.
 - **EURe ONLY. No USDC in the feed** (decided 10 Sep 2026, user's call). The
@@ -290,12 +287,12 @@ wrongly is worse than no file, whereas the CSV import is transactions only.
   USDC as "USD" to make it fit would be a mislabel we invented — see the UPI
   rule. This also removes the hardest modelling question from the first build.
 
-  **A USDC movement is REPORTED, NOT BOOKED**, exactly as an unmatched on-chain
-  movement already is in `sevdesk-monerium`. Excluded is not the same as
-  hidden, and silently dropping money the business received is the one failure
-  this whole design exists to avoid.
+  **A USDC movement is reported, not booked**, as an unmatched on-chain
+  movement already is in `sevdesk-monerium`. It is excluded from the feed but
+  still shown: dropping money the business received without a trace is the
+  failure this design exists to avoid.
 
-  Three consequences to disclose to the accountant rather than let them find:
+  Three consequences to disclose to the accountant:
 
   *Money enters the books when it becomes euros, not when the customer paid.*
   A converted crypto payment reaches the feed as the EURe inflow from the swap,
@@ -305,15 +302,14 @@ wrongly is worse than no file, whereas the CSV import is transactions only.
 
   *The realised FX gain is absorbed, not shown.* `InvoiceSettlement` holds what
   arrived, its EUR value at receipt and whose rate that came from, the
-  conversion transaction, what was credited, and the gain — with the gain
-  absent rather than zero when the basis is unknown, because zero would be a
-  claim. An EUR-only feed flattens all of that into the converted amount. The
-  data is not lost, it is just not in this pipe.
+  conversion transaction, what was credited, and the gain. The gain is absent
+  when the basis is unknown, because a zero would assert a value. An EUR-only
+  feed flattens all of that into the converted amount; the data is kept, just
+  not in this pipe.
 
   *An unconverted USDC balance is invisible to the books.* With auto-convert
-  off, USDC sits in the account and never becomes a feed line at all. That is a
-  real holding missing from their view, and they must be told, not left to
-  notice.
+  off, USDC sits in the account and never becomes a feed line. That holding is
+  missing from their view, and they must be told.
 
 - **One question that is still theirs, not ours.** Do wallet-to-wallet EURe
   movements belong in the bank feed at all? They are real movements in the
@@ -350,15 +346,13 @@ Ships with `npm run gmi:test` against a stub, wired into `check.ts` like every
 other suite. No credential, no chain, no network. This is the largest piece
 and it is unblocked.
 
-**Stage 2 — server-side rendering of the invoice page.** The one real
-infrastructure decision in this plan, and it should be taken deliberately
-rather than absorbed. There are no PDF bytes anywhere today, and the document
-lane cannot start without them. Render the existing page headlessly so the
-pushed document is byte-identical to the one the customer received, rather
-than adding a second generator that can drift from it. It is a new heavyweight
-dependency in the deployment, which is the argument against, and the argument
-for is that the alternative puts two renderings of one legal document into the
-world.
+**Stage 2 — server-side rendering of the invoice page.** The one
+infrastructure decision in this plan, and it needs an explicit yes. There are
+no PDF bytes anywhere today, and the document lane cannot start without them.
+Render the existing page headlessly so the pushed document is byte-identical
+to the one the customer received; a second generator could drift from it.
+Against: a new heavyweight dependency in the deployment. For: the alternative
+puts two renderings of one legal document into circulation.
 
 **Stage 3 — the document lane.** Push outgoing invoices, then receipts and
 statements. Per-org GetMyInvoices API key, encrypted at rest with a new
@@ -381,17 +375,15 @@ built and unproven, and the dashboard says so.
 
 ### Two notes for whoever picks this up
 
-**It does not breach the invoicing boundary.** That boundary says Zold pays
-from an invoice and keeps the record, while invoicing software creates,
-chases and books. Exporting a record we already hold to the customer's
-accountant is keeping the record and handing it over. It is not chasing and
-not booking, and this plan must not grow into either.
+**It stays inside the invoicing boundary.** Zold pays from an invoice and
+keeps the record; invoicing software creates, chases and books. Exporting a
+record we already hold to the customer's accountant is keeping the record.
+This plan must not grow into chasing or booking.
 
-**Where it lives: in this repo, not a sibling.** `sevdesk-monerium` is
-standalone because it needs only Monerium and a chain. This needs
-`invoice.payment.transferId`, which exists only here, and that link is the
-whole value of stage 4. Port the mapping rather than depending on the sibling
-repo.
+**Where it lives: in this repo.** `sevdesk-monerium` is standalone because it
+needs only Monerium and a chain. This needs `invoice.payment.transferId`,
+which exists only here, and stage 4 depends on that link. Port the mapping
+instead of depending on the sibling repo.
 
 ## How Lexware Office handles incoming invoices today
 
@@ -427,13 +419,12 @@ documents they capture well would be effort spent where there is no problem.
 Stage 3 stays outgoing-only, and now for a better reason than the missing
 supplier file.
 
-**A broken e-invoice is worse than no e-invoice.** This is the finding worth
-keeping. A plain PDF is accepted as an ordinary receipt today, and the
-obligation to *issue* structured invoices only phases in from 2027. But the
-moment we emit ZUGFeRD, a slightly wrong file is **refused at upload** where
-the plain PDF would have gone through. So the e-invoicing work in CLAUDE.md
-must not ship half-done: an invalid file does not degrade gracefully, it
-bounces, and it bounces at the customer's end where we cannot see it.
+**An invalid e-invoice is refused where a plain PDF is accepted.** A plain PDF
+goes in as an ordinary receipt today, and the obligation to *issue* structured
+invoices only phases in from 2027. Once we emit ZUGFeRD, a slightly wrong file
+is refused at upload. So the e-invoicing work in CLAUDE.md must not ship
+half-done: an invalid file bounces at the customer's end, where we cannot see
+it.
 
 **The email route needs no API key at all.** A customer could give us their
 `@inbox.lexware.email` address and we would mail invoices straight in — no
@@ -466,23 +457,20 @@ So neither side ever receives a file from us. Both print. There is no send, no
 attachment, no delivery record, and nothing knows whether the customer opened
 it. The delivery interface is a browser prompt dialog.
 
-**This is why the incoming/outgoing split is not arbitrary.** A supplier's
-invoice reaches the customer by email and their existing collection catches it.
-An invoice the org *issues* exists nowhere but here — it is not in any mailbox,
-because it left rather than arrived. Zold is its only source, which is exactly
-why it is the half worth pushing.
+**Why the incoming/outgoing split.** A supplier's invoice reaches the customer
+by email and their existing collection catches it. An invoice the org *issues*
+is in no mailbox, because it left and never arrived. Zold is its only source,
+so it is the half worth pushing.
 
-**And it doubles the value of stage 2.** Rendering the page server-side was
-justified as the thing that unblocks the accountant lane. The same work
-produces a real PDF the org can attach to an email instead of pasting a link
-out of a prompt dialog. One piece of infrastructure, two problems.
+**Stage 2 also fixes delivery.** The same server-side render that unblocks the
+accountant lane produces a PDF the org can attach to an email, in place of a
+link copied out of a prompt dialog.
 
-Where the boundary sits, since this is exactly the direction that erodes it:
-producing the file and letting someone download it is keeping the record. A
-**send** — mailing it to the customer, chasing it, tracking whether it was
-opened — is invoicing software, which the boundary says we do not build. There
-is no mail transport here anyway, and this is a good reason not to add one for
-this purpose.
+This is where the boundary tends to erode. Producing the file and letting
+someone download it is keeping the record. A **send** (mailing it to the
+customer, chasing it, tracking whether it was opened) is invoicing software,
+which the boundary says we do not build. There is no mail transport here, and
+this is a reason not to add one for this purpose.
 
 ## Invoice integrity — three gaps found while answering the delivery question
 
@@ -490,14 +478,13 @@ Not tax advice, and the app already says so on every screen that touches this.
 What follows is what the code does, checked on 10 Sep 2026, set against what
 the standards ask for.
 
-**First, what is NOT the gap.** "The customer could edit the PDF" is true of
-every invoice ever sent and is not what the law is worried about. § 14 Abs. 1
-UStG asks for authenticity of origin, integrity of content and legibility
-across the retention period, and it explicitly allows these to be guaranteed by
-an internal control procedure producing a reliable audit trail. No qualified
-signature is required. This is why every German business emails plain PDFs
-quite legally. The real question is what OUR side guarantees, and there the
-answer is weaker than it should be.
+**Not a gap: the customer can edit the PDF.** That is true of every invoice
+ever sent. § 14 Abs. 1 UStG asks for authenticity of origin, integrity of
+content and legibility across the retention period, and allows these to be
+guaranteed by an internal control procedure producing a reliable audit trail.
+No qualified signature is required, which is why German businesses email plain
+PDFs legally. The question is what our side guarantees, and there the answer
+is weaker than it should be.
 
 **Gap 1 — an issued invoice can be deleted.** An outgoing invoice is written
 in state `SUBMITTED` ("issued and locked", says the comment). The transition
@@ -522,14 +509,13 @@ what a reader of the books cannot resolve.
 Fix: refuse to issue a number the org has already used, and refuse to set the
 series below the highest number already issued.
 
-**Gap 3 — there is no artifact, and nothing is signed.** This is the deep one.
-Today the record is a database row plus a live rendering. The document someone
-shows in 2032 will be produced by 2032's code from 2026's data. The frozen
-`issued` snapshot protects the data, which was the right call and is why this
-is a gap rather than a disaster — but it does not protect the rendering, and
-GoBD asks for reproducibility in the original form.
+**Gap 3 — there is no artifact, and nothing is signed.** The largest of the
+three. Today the record is a database row plus a live rendering, so the
+document someone shows in 2032 will be produced by 2032's code from 2026's
+data. The frozen `issued` snapshot protects the data but not the rendering,
+and GoBD asks for reproducibility in the original form.
 
-The asymmetry is the tell: `documents.ts` already signs statements, receipts,
+By contrast, `documents.ts` already signs statements, receipts,
 balance confirmations and proofs of ownership over a canonical digest, hands
 out a verification code, and **re-checks the signature on every visit** to
 `/v/<code>`. Our receipts are verifiable and our invoices are not.
@@ -555,10 +541,10 @@ already done.
 scans. There is no creation endpoint in the spec and no such feature in the
 product. So that particular swap is not on the table.
 
-**Lexware Office can, and does it better than we will.** It creates invoices,
-numbers them, keeps them under GoBD, and already emits XRechnung and ZUGFeRD —
-the 2027 obligation that CLAUDE.md lists as the next real piece of invoicing
-work is, for them, shipped. The accountant already has it.
+**Lexware Office can, and does more of it than we do.** It creates invoices,
+numbers them, keeps them under GoBD, and already emits XRechnung and ZUGFeRD.
+The 2027 obligation that CLAUDE.md lists as the next piece of invoicing work
+has already shipped there, and the accountant already uses it.
 
 ### Correcting something I argued earlier in this document
 
@@ -572,8 +558,8 @@ and it cannot be used to justify the invoicing.
 ### What is genuinely ours, whatever we decide
 
 - **Bank movements.** Monerium orders and on-chain EURe transfers. Nobody else
-  has these and no accounting product can derive them. This is the real
-  contribution and it is untouched by any of the above.
+  has these and no accounting product can derive them. None of the above
+  changes that.
 - **Receipts, statements and payment records.** Payment pages, Shopify orders,
   the whole `/v/<code>` family. These are already signed over a canonical
   digest and re-verified on every visit, so they are *already* the thing the
@@ -583,9 +569,9 @@ and it cannot be used to justify the invoicing.
 
 **Cap the issued-invoice module. Do not deepen it.**
 
-1. **Fix gaps 1 and 2 anyway** — deletable issued invoices and non-unique
-   numbers. They are live defects, they are cheap, and a vanished invoice or a
-   duplicated number is harmful whatever the strategy turns out to be.
+1. **Fix gaps 1 and 2 anyway** (deletable issued invoices and non-unique
+   numbers). They are live defects and cheap to fix, and a vanished invoice or
+   a duplicated number does harm under any strategy.
 2. **Do not build gap 3's archive-and-sign stack for invoices, and do not
    chase EN 16931.** That road ends with us maintaining a German invoicing
    product. Signing receipts was worth it because receipts are ours alone;
@@ -632,13 +618,12 @@ So a EUR invoice settled in USDC is:
 Often a third: the EUR value at receipt need not equal the invoice amount, so
 there is a difference on the receivable as well.
 
-**One correction to the framing, and it matters.** Both transactions belong in
-the **books**, not in the invoice body. The invoice stays a EUR document
-stating the EUR consideration and the VAT on it — that is what § 14 asks for
-and the crypto leg does not change the VAT base. Restating an issued invoice
-around the payment asset invites exactly the § 14c problem the invoicing module
-was built to make unrepresentable. Note the payment reference on it if useful;
-do not rebuild the tax figures around it.
+**Both transactions belong in the books, not in the invoice body.** The
+invoice stays a EUR document stating the EUR consideration and the VAT on it,
+as § 14 asks; the crypto leg does not change the VAT base. Restating an issued
+invoice around the payment asset invites the § 14c problem the invoicing
+module was built to make unrepresentable. Note the payment reference on it if
+useful, but leave the tax figures alone.
 
 ### Lexware Office cannot represent this, and it is not close
 
@@ -663,24 +648,21 @@ Zold integrates with anything.** Worth saying to them in those words, early.
 
 ### What this changes for us
 
-**The EURe-only feed was the right call, and now for a stronger reason.** USDC
-is not a currency, so a bank account is structurally the wrong instrument for
-it. Nothing to revisit there.
+**The EURe-only feed stands.** USDC is not a currency in tax terms, so a bank
+account is the wrong instrument for it.
 
-**But the disclosure written above is no longer sufficient.** "The realised FX
-gain is absorbed, not shown" was framed as something to tell the accountant. If
-that gain is taxable business income, then absorbed and unshown means taxable
-income missing from the books. That is not a footnote, it is the customer's
-compliance gap, and it needs a deliverable rather than a caveat.
+**The disclosure above is not enough.** "The realised FX gain is absorbed, not
+shown" was written as something to tell the accountant. If that gain is
+taxable business income, it is taxable income missing from the books: a
+compliance gap for the customer, which needs a deliverable.
 
-**The deliverable is a crypto settlement statement, and we are unusually well
-placed to produce one.** `InvoiceSettlement` already records what arrived, its
-EUR value at receipt, whose rate that was, the conversion transaction, what was
-actually credited, and the realised gain — with the gain **absent rather than
-zero** when the basis is unknown, because zero would be a claim. That is
-precisely the two-event story an accountant needs to make two manual bookings.
-Nobody else holds it: the exchange sees one leg, the bank sees the other, and
-Lexware Office sees neither.
+**The deliverable is a crypto settlement statement.** `InvoiceSettlement`
+already records what arrived, its EUR value at receipt, whose rate that was,
+the conversion transaction, what was credited, and the realised gain (absent
+when the basis is unknown, because a zero would assert a value). That covers
+both events an accountant needs for two manual bookings. Nobody else holds it:
+the exchange sees one leg, the bank sees the other, and Lexware Office sees
+neither.
 
 So the document lane gains a third artifact beside receipts and statements, and
 it is the one with the clearest reason to exist. It is also squarely inside the
@@ -698,11 +680,11 @@ customer pays USDC, it converts as it lands". Traced through the code on
 joins by hand**, and one of the joints is what makes the tax record complete.
 
 **You cannot issue an invoice in USDC.** The issue route hardcodes
-`currency: "EUR"`. That is the correct behaviour and should stay — the invoice
-is the EUR document. What quotes in USDC is a **payment request**: a EUR amount
-with the crypto figure derived from the live mid plus a 50 bps allowance, the
-allowance printed on the page rather than folded into the number. That is a
-payment instruction, not an invoice, and the split is right.
+`currency: "EUR"`, and that should stay: the invoice is the EUR document. What
+quotes in USDC is a **payment request**: a EUR amount with the crypto figure
+derived from the live mid plus a 50 bps allowance, printed on the page as a
+separate figure. That is a payment instruction, and keeping it separate from
+the invoice is right.
 
 **But the issued invoice page offers SEPA only.** It renders bank details and
 tells the customer to use the invoice number as the reference. There is no
@@ -724,14 +706,13 @@ remembered to link.
 
 ### What is genuinely good here
 
-The settlement record itself is right, and its comments already carry the
-reasoning. The receipt valuation is captured at receipt (amount, rate,
-provider) — the acquisition basis. The conversion writes the transaction, what
-was credited and the realised gain, "recorded as a FACT at the moment it is
-known, never recomputed", because a gain re-derived later from whatever a feed
-reports then is not the gain that occurred. It is absent rather than zero when
-the basis is unknown. Settlements append rather than replace, since one invoice
-can be settled by several payments.
+The settlement record itself is right, and its comments carry the reasoning.
+The receipt valuation (amount, rate, provider) is captured at receipt as the
+acquisition basis. The conversion writes the transaction, what was credited
+and the realised gain, "recorded as a FACT at the moment it is known, never
+recomputed": a gain re-derived later from a feed's later rate is not the gain
+that occurred. It is absent when the basis is unknown. Settlements append,
+since one invoice can be settled by several payments.
 
 The code even states the tax argument for the user's instinct: the realised
 gain is "near zero when the conversion follows the receipt promptly, which is
@@ -742,11 +723,10 @@ still get booked.
 ### The one defect worth fixing for this flow
 
 **Carry the invoice through.** A payment request raised for an invoice should
-hold its id, and pass it to the deposit on attribution, so the settlement lands
-on the invoice without anyone remembering. Today the two-event record — the
-whole reason we can serve an accountant that Lexware Office cannot — exists
-only where someone did the linking by hand. That is a thin thread to hang a tax
-record on, and the fix is small.
+hold its id and pass it to the deposit on attribution, so the settlement lands
+on the invoice without a manual step. Today the two-event record, which is what
+we can give an accountant that Lexware Office cannot, exists only where someone
+linked the deposit by hand. The fix is small.
 
 Worth deciding at the same time: whether business orgs should default
 `autoConvert` on, with the prompt-conversion reasoning stated where the toggle
@@ -757,15 +737,15 @@ lives rather than buried in a config comment.
 `npm run paylinks:test` is 78 checks, up from 70. Typecheck clean; convert,
 pay, shopify, shopify:orders, business, invoicing and draft all still pass.
 
-- **`PaymentRequest.invoiceId`.** A link can be raised for an invoice the org
-  ISSUED. Refused with a reason otherwise: a supplier's invoice is a bill and
-  is paid from a draft (409); one already settled is refused rather than given
-  a second live way to be paid, which is how an invoice gets paid twice (409);
-  another organisation's is 403; a missing one is 404. A refused creation
-  leaves no row behind, which the owner-list count asserts (8, not 12).
+- **`PaymentRequest.invoiceId`.** A link can be raised only for an invoice the
+  org issued. Otherwise it is refused with a reason: a supplier's invoice is a
+  bill and is paid from a draft (409); an invoice already settled gets no
+  second live payment route, so it cannot be paid twice (409); another
+  organisation's is 403; a missing one is 404. A refused creation leaves no
+  row behind, which the owner-list count asserts (8, not 12).
 - **It rides onto the deposit on attribution**, so the settlement is written by
   the conversion itself. It never overwrites an id the deposit already carries:
-  a manual link is a deliberate act, and attribution is a guess by amount.
+  a manual link is a user's choice, and attribution is a guess by amount.
 - **Owner projection only.** The public page is an allowlist and an invoice id
   has no business on a payer's page.
 - **The USDC branch now records too, and this was the bug that mattered.** With
@@ -791,19 +771,18 @@ browser against a USD fixture and checked for `CSS1Compat`, dark-on-white and
 no horizontal scroll.
 
 **Denomination.** The issue route no longer hardcodes euro. `currency` on the
-draft is normalised and frozen onto `issued`, so an invoice keeps saying what
-it said. A currency with no cents (JPY) or three (KWD) is REFUSED by name,
-because everything here computes in integer hundredths and applying that to
-those would be wrong by a factor of a hundred or ten, silently, on a tax
-document.
+draft is normalised and frozen onto `issued`, so an invoice keeps its original
+currency. A currency with no cents (JPY) or three (KWD) is refused by name:
+everything here computes in integer hundredths, which for those would be wrong
+by a factor of a hundred or ten on a tax document, with no error raised.
 
-**§ 16 Abs. 6 UStG is why the euro column is not optional.** A German invoice
-may state its amounts in a foreign currency, but the TAX amount must also be
-given in euro, and an invoice without it costs the RECIPIENT their input-tax
-deduction. So the restatement is computed at issue, frozen with the rate, its
-provider and its date, and PRINTED. A rate feed that is unavailable leaves the
-conversion absent and `checkCompliance` then refuses the invoice — the failure
-is a refusal, never a document with a missing column.
+**§ 16 Abs. 6 UStG makes the euro column mandatory.** A German invoice may
+state its amounts in a foreign currency, but the tax amount must also be given
+in euro, and without it the recipient loses their input-tax deduction. So the
+restatement is computed at issue, frozen with the rate, its provider and its
+date, and printed. If the rate feed is unavailable the conversion is absent
+and `checkCompliance` refuses the invoice; no document is issued with the
+column missing.
 
 Converted PER RATE BUCKET and summed, never by converting the totals: net plus
 tax has to equal gross in both currencies, and two independently rounded totals
@@ -815,8 +794,8 @@ under EU the euro figure is shown and the gap is named in `notVerified`; the
 German paragraph is never cited at a Polish entity.
 
 **Settlement and crypto.** A payment link raised for an invoice collects the
-euro amount FROZEN on the document, not today's rate — the customer agreed to
-pay what they were shown. A different amount is refused: a €10 link against a
+euro amount frozen on the document, because the customer agreed to pay what
+they were shown. A different amount is refused: a €10 link against a
 €1,000 invoice would mark it paid in full for a hundredth of the money. A short
 payment is still recorded as partial by the ordinary matching, so instalments
 are unaffected. The existing crypto quote then runs off that euro figure, which
@@ -832,9 +811,9 @@ so a payer sees crypto on the pay page rather than on the document.
 invoicing, draft, documents, pay, shopify, shopify:orders, webhook and
 reconcile all pass.
 
-`InvoiceSettlement` is now a DISCRIMINATED UNION, and that is the point: a bank
-credit carrying a conversion rate, or a crypto receipt carrying a counterparty
-IBAN, do not merely fail review — they do not typecheck.
+`InvoiceSettlement` is now a discriminated union, so a bank credit carrying a
+conversion rate, or a crypto receipt carrying a counterparty IBAN, does not
+typecheck.
 
 **Crypto.** The wallet transaction, what arrived and in what, the euro value at
 receipt with the rate, its provider and its publication date, and the chain's
@@ -845,12 +824,12 @@ the asset is still held — a true position on the balance sheet, not a
 half-filled row.
 
 **The fee figure is the venue's spread against that mid, signed as a cost.** It
-is deliberately NOT `receiptAmountEur - creditedEur`: that difference also
-contains whatever the market did between receipt and conversion, and calling
-market movement a fee misstates both numbers. `midRate` is now persisted on the
-deposit at conversion so the spread is CHECKABLE rather than asserted. Network
-gas is not deducted from the payee, so it is not a fee and is not listed; the
-screen says so rather than leaving a reader to wonder.
+is not `receiptAmountEur - creditedEur`, because that difference also contains
+whatever the market did between receipt and conversion, and counting market
+movement as a fee misstates both numbers. `midRate` is persisted on the
+deposit at conversion so the spread can be checked. Network gas is not
+deducted from the payee, so it is not a fee and is not listed; the screen says
+so.
 
 **Bank.** A SEPA credit now lands on the invoice with the counterparty's name
 and IBAN, the memo they wrote, the Monerium order id, and how it was matched.
@@ -858,7 +837,7 @@ Two routes: the payer quoted a pay-link code, or — the ordinary case, and the
 one nothing handled before — they wrote the INVOICE NUMBER on a plain transfer,
 which is what is printed beside the bank details on the sheet.
 
-That matcher is deliberately conservative. An invoice number under six
+That matcher is conservative. An invoice number under six
 characters is never matched, because "14" appears in a date, an address and
 another invoice's number. A missed match leaves a credit to be reconciled by
 hand; a wrong match books a stranger's money against a customer's invoice and
@@ -867,9 +846,9 @@ closes it. Those are not equally bad.
 Everything is idempotent on the deposit id or order id, because the poller
 re-reads the same orders by design.
 
-**Shown to the ORG only.** The supplier's view of an invoice goes through an
-allowlist that a new field cannot leak into by default, so the customer's copy
-carries none of this — they have no business seeing our venue spread.
+**Shown to the org only.** The supplier's view of an invoice goes through an
+allowlist, so a new field is excluded by default and the customer's copy
+carries none of this, including our venue spread.
 
 NOT PROVEN: no real Monerium credit has been matched to an invoice number, and
 no real swap has produced a spread figure. Both need a production connection.
@@ -880,11 +859,11 @@ Asked on 10 Sep 2026, specifically about repeated sales at the same price and
 about Shopify. Traced through the code; the constants below are the shipped
 defaults.
 
-**There is ONE deposit address per payee**, not per order.
+**There is one deposit address per payee**, not per order.
 `forwardingSalt(userId, handle)` derives it from the payment page, so every
-order that page ever takes is paid to the same address. An ERC-20 transfer
-carries no memo, so the address tells us who was paid and nothing about what
-for. **Attribution is therefore by AMOUNT.**
+order that page takes is paid to the same address. An ERC-20 transfer carries
+no memo, so the address tells us who was paid and nothing about what for.
+Attribution is therefore by amount.
 
 Each open request is quoted `ceil(cents × mid × 1.005)` in USDC micro-units,
 and on a collision with another of that payee's open quotes the amount is
@@ -910,8 +889,7 @@ likely they are on a store:
 
 1. **A rounded amount.** A payer who types 28.59 instead of 28.589738 sits
    inside both quotes' full-payment windows. Nearest wins, and an exact tie
-   resolves to the older request — a deterministic wrong answer, not a
-   coin-flip.
+   resolves to the older request, so the wrong answer is deterministic.
 2. **An exchange withdrawal fee.** Funding from an exchange deducts an
    arbitrary amount. Three per cent short is outside the full window and inside
    the 20% floor, so it books as a PARTIAL of whichever quote is nearest, and
@@ -936,11 +914,10 @@ Deriving it per request instead — the request code is already a unique
 attribution becomes exact. The amount would then decide only whether a payment
 is full or short, which is what a tolerance is actually for.
 
-**The earlier rejection of per-order addresses does not apply here.** They
-were turned down earlier as a PRIVACY fix, correctly: they forward into the same Safe
-one hop later, so the merchant's book stays readable on chain. That is a
-different problem with a different answer, and it should not be read as having
-settled this one.
+**The rejection of per-order addresses as a privacy fix does not apply here.**
+They do not fix privacy because they forward into the same Safe one hop later,
+so the merchant's book stays readable on chain. That rejection says nothing
+about attribution.
 
 What it costs, from Candide's own docs and constraints:
 
@@ -972,15 +949,14 @@ form of it is better than plain WalletConnect.
 
 **Use EIP-3009, not approve + transferFrom.** Circle's USDC implements
 `receiveWithAuthorization`: the payer signs an off-chain authorization naming
-the recipient, the value, a validity window, and a **32-byte nonce that WE
-choose**. No prior approval, no gas for them. Set that nonce from the payment
-request code and **the payment carries its own identifier** — attribution stops
-being inferred from the amount and becomes exact by construction. The `receive`
-variant additionally requires the caller to be the recipient, so the submission
+the recipient, the value, a validity window, and a 32-byte nonce that we
+choose. The payer needs no prior approval and pays no gas. Set that nonce from
+the payment request code and the payment carries its own identifier, so
+attribution is exact instead of inferred from the amount. The `receive`
+variant also requires the caller to be the recipient, so the submission
 cannot be front-run.
 
-VERIFIED ON CHAIN today, with a control, because "the docs say USDC supports
-it" is a claim and not evidence:
+VERIFIED on chain (by 11 Sep 2026), with a control:
 
 | token | `authorizationState(address,bytes32)` | verdict |
 |---|---|---|

@@ -50,11 +50,10 @@ indicative and re-read before quoting.
 Ship the collateral itself. The CardApp pulls it at settlement and swaps to EURe
 through 1inch. No lender, no oracle, no liquidation, works today.
 
-**The cost that must be said out loud:** every purchase is a disposal. For a
-German user that is a taxable event per transaction and it breaks the one-year
-§23 EStG holding exemption on the portion sold. "Spend crypto without selling it"
-is the entire reason people want a credit card rather than a debit card, and this
-design is the opposite of that. Do not ship it labelled as credit.
+**Cost:** every purchase is a disposal. For a German user that is a taxable
+event per transaction, and it breaks the one-year §23 EStG holding exemption on
+the portion sold. People want a crypto credit card so they can spend without
+selling, and this design sells. Do not ship it labelled as credit.
 
 
 ## 4. Design B — compose with a money market. Buildable now.
@@ -68,19 +67,18 @@ This is the Aqua whitepaper's own worked example, and it is already a shipped
 product: ether.fi Cash runs Borrow Mode at a 55% LTV on weETH at roughly 4% APY,
 against a Visa card, with a Direct Pay mode beside it that is Design A.
 
-**Where Aqua actually earns its place here, and it is not obvious.** You cannot
-borrow inside an authorization window — no chain settles a borrow in the latency
-budget a terminal allows. So Design B is really *a borrowed EURe buffer that the
-card draws down*, which means paying borrow interest on an idle buffer. That is
-the card-float problem again, one layer up, and this time metered.
+**Where Aqua fits.** You cannot borrow inside an authorization window: no chain
+settles a borrow in the latency budget a terminal allows. So Design B is a
+borrowed EURe buffer that the card draws down, with borrow interest paid on the
+idle buffer. That is the card-float problem again, one layer up, and metered.
 
-The obvious fix makes it worse: re-supplying the borrowed EURe to Aave earns
-3.50% against the 4.71% you pay, cutting the buffer's cost to about 1.2 points —
-but it takes the EURe out of the wallet, where the card cannot reach it.
+Re-supplying the borrowed EURe to Aave earns 3.50% against the 4.71% you pay,
+cutting the buffer's cost to about 1.2 points, but it takes the EURe out of the
+wallet, where the card cannot reach it.
 
 > Aqua is the only way to make the buffer earn **without leaving the wallet**.
 
-That is the argument, and it is a narrow one. Say it narrowly.
+That is a narrow claim, and it should be pitched as one.
 
 **Risks to put in front of a user, not in a footnote:**
 - Liquidation while they are standing at a till. A 30-40% ETH drawdown has
@@ -144,13 +142,13 @@ returned magic value without checking the call had succeeded.
 
 ## 7. What to build, in order
 
-1. **Design C first.** It is the one where Aqua is load-bearing, it needs no
-   consumer-protection story, and it is a real pitch to 1inch: fund card credit
-   without parking the float.
+1. **Design C first.** Aqua is load-bearing there, it needs no
+   consumer-protection story, and it gives 1inch a concrete offer: fund card
+   credit without parking the float.
 2. **Design B second**, on Gnosis, because every piece is verified live on that
    one chain and ether.fi has already proved the shape works commercially.
-3. **Design A only if labelled honestly**, with the disposal consequence on the
-   screen rather than in terms.
+3. **Design A only if labelled as a sale**, with the disposal consequence on the
+   screen, not only in the terms.
 4. **The restricted Safe** only when someone is prepared to own module risk.
 
 **Unproven, and none of it is small:** no CreditApp exists, no lender has agreed

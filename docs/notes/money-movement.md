@@ -9,53 +9,49 @@ apart from naming.*
 
 `npm run custody:test` (11 checks, no chain, no network).
 
-THE BUG THIS FIXED, and it was a shipped default rather than a code path:
-`LIQUIDITY_PROVIDER` defaulted to `fx-swapper`, which CANNOT be executed by a
-user's Safe (its inventory is `onlyTrader`). So `prepareSafeSwapForTransfer`
-returned null, the cash rail fell back to the plain debit, and the DEFAULT
-deployment moved every sender's full balance to the orchestrator's own address
-before swapping it. "We are non-custodial" was true only for an operator who
-knew to change one env var. The fallback that got you there was a
-`console.error` nobody reads.
+**The bug:** a shipped default, not a code path. `LIQUIDITY_PROVIDER`
+defaulted to `fx-swapper`, which a user's Safe cannot execute (its inventory is
+`onlyTrader`). So `prepareSafeSwapForTransfer` returned null, the cash rail fell
+back to the plain debit, and the default deployment moved every sender's full
+balance to the orchestrator's own address before swapping it. The app was
+non-custodial only for an operator who knew to change one env var, and the only
+sign of the fallback was a `console.error`.
 
-WHAT CHANGED:
+**Changes:**
  - `LIQUIDITY.PROVIDER` defaults to **`best`** (over `LIQUIDITY_VENUES=lifi,dex`,
    both Safe-executable). `scripts/_local-chain.ts` pins `fx-swapper` with `??=`
-   for hardhat, which has neither LI.FI nor a seeded pool. THE DIRECTION IS THE
-   POINT: production inherits the safe default and the local demo names its
-   exception, not the other way round.
- - `transfer.custody` is recorded on EVERY transfer and every rail:
+   for hardhat, which has neither LI.FI nor a seeded pool. Production inherits
+   the safe default, and the local demo names its exception.
+ - `transfer.custody` is recorded on every transfer and every rail:
    `mode: "non-custodial" | "orchestrator"`, a `reason` when custodial, and
-   `feeToOrchestrator` stated rather than left to be discovered. It starts at
-   the honest worst case and is narrowed ONLY when a batch is genuinely
-   prepared — so a venue outage leaves the truthful answer behind.
+   `feeToOrchestrator`. It starts at the worst case and is narrowed only when a
+   batch is actually prepared, so a venue outage leaves the custodial answer
+   recorded.
  - `CUSTODY.requireNonCustodial` (`REQUIRE_NON_CUSTODIAL=1`) refuses at creation
-   rather than falling back. NOT on by default and that is deliberate: with
-   BRIDGE_LIVE unset there is no external deposit address to deliver into, so
-   defaulting it on would brick every dry-run and testnet deployment including
-   Base Sepolia. The PATH is the default; the GUARANTEE is opt-in.
- - A startup CUSTODY line says which mode this deployment will actually run in.
+   instead of falling back. It is off by default: with BRIDGE_LIVE unset there
+   is no external deposit address to deliver into, so turning it on by default
+   would break every dry-run and testnet deployment, Base Sepolia included. The
+   non-custodial path is the default; the guarantee is opt-in.
+ - A startup CUSTODY line says which mode this deployment will run in.
    VERIFIED LIVE across four configurations (default/fx-swapper/BRIDGE_LIVE/
-   +REQUIRE_NON_CUSTODIAL) — each printed the right one.
+   +REQUIRE_NON_CUSTODIAL); each printed the right one.
 
-WHAT IS STILL CUSTODIAL, stated rather than glossed:
- - The FEE always lands at the orchestrator (`feeTo: orchestratorAddress` in the
-   batch). Judged revenue at the moment it moves, not client funds in transit —
-   but recorded, not hidden.
+**Still custodial:**
+ - The fee always lands at the orchestrator (`feeTo: orchestratorAddress` in the
+   batch). It is treated as revenue at the moment it moves, not client funds in
+   transit, and it is recorded.
  - Dry-run mode (BRIDGE_LIVE unset) delivers the batch output to the
-   orchestrator because the local escrow demo pulls from it. Still user-signed,
-   still one batch — and recorded as `orchestrator`, not quietly counted as a
-   win.
- - The SEPA rail was ALREADY non-custodial for the principal and this did not
+   orchestrator because the local escrow demo pulls from it. It is still
+   user-signed and still one batch, and it is recorded as `orchestrator`.
+ - The SEPA rail was already non-custodial for the principal and this did not
    change it: Monerium's redeem burns the payout straight from the Safe and only
    the fee moves (`DEBIT_STEP.safeFee`). Do not "fix" that into a full debit.
 
-REGULATORY NOTE, since this is why it matters: custody is NOT the trigger for
-most of what this app does. Money remittance under ZAG/PSD2 is *defined* as the
-no-account case, and MiCA's exchange (Art. 3(1)(16)(e)) and transfer (l)
-services trigger on acting "on behalf of clients". Being non-custodial narrows
-the MiCA class and drops safeguarding; it does not remove the licence question.
-Do not let this work be read as having answered it.
+**Regulatory note:** custody is not the trigger for most of what this app does.
+Money remittance under ZAG/PSD2 is *defined* as the no-account case, and MiCA's
+exchange (Art. 3(1)(16)(e)) and transfer (l) services trigger on acting "on
+behalf of clients". Being non-custodial narrows the MiCA class and drops
+safeguarding; it does not remove the licence question, which remains open.
 
 ## Liquidity venues — tested, not assumed (last checked Aug 2026)
 
@@ -65,13 +61,13 @@ at execution time.
 
 TESTED AGAINST THE REAL APIS, not docs:
 
-**Bebop — see "Bebop — CORRECTED" below.** The July verdict of "does not work
-for us" was drawn from base/polygon/gnosis only and is WRONG as a headline;
-EURe is supported on Ethereum. One finding from that round still stands and is
-load-bearing: Bebop returns `approvalTarget` SEPARATELY from `tx.to`, they are
-the same contract today, so approving tx.to works by luck and would break
-silently on a move to a separate settlement contract or Permit2. The same trap
-exists in LI.FI. Approve what the maker NAMES.
+**Bebop — see "Bebop — corrected" below.** The July verdict of "does not work
+for us" was drawn from base/polygon/gnosis only and is wrong as a headline;
+EURe is supported on Ethereum. One finding from that round still stands: Bebop
+returns `approvalTarget` separately from `tx.to`. They are the same contract
+today, so approving tx.to works by luck and would fail without an error on a
+move to a separate settlement contract or Permit2. LI.FI has the same shape.
+Approve the spender the maker names.
 
 **CoW Protocol — works, and is the likely answer.**
  - Quotes EURe->USDC on Gnosis at essentially the mid: 100 EURe -> 113.83 USDC
@@ -91,125 +87,122 @@ exists in LI.FI. Approve what the maker NAMES.
    none.
 
 **Best execution + surplus (Aug 2026).**
- - LIQUIDITY_PROVIDER=best quotes every venue in LIQUIDITY_VENUES in PARALLEL
-   and takes the largest out for the same in. With an aggregator sitting beside
-   a single-pool adapter, choosing by config means settling worse whenever the
-   other venue wins — silently, with nothing in the record. Losers AND their
-   failure reasons are stored on the quote (`routing`), so a route choice is
-   auditable after the fact. One venue down does not sink a trade another can
-   price; ALL failing REFUSES rather than falling back to our own book.
- - NOT netted against gas. On these L2s gas is cents against a corridor trade,
-   and faking that precision would be worse than the omission — but a venue
-   winning by a hair on price could lose on cost. Revisit if venues land close.
- - SURPLUS (positive slippage) is MEASURED and ATTRIBUTED, never silent.
-   LIQUIDITY_SURPLUS_POLICY defaults to `user` and that default is load-bearing:
-   the receipt reports marginBps MEASURED between the live mid and what we
-   deliver, so pocketing surplus quietly would make that number understate what
-   we take — the exact dishonesty the live-rates work removed. `treasury` is
-   supported and still records the amount, so it can be reflected in the margin
-   instead of hidden inside it. Keeping the spread is a business decision;
-   hiding it is not one the code will make.
+ - LIQUIDITY_PROVIDER=best quotes every venue in LIQUIDITY_VENUES in parallel
+   and takes the largest out for the same in. With an aggregator beside a
+   single-pool adapter, choosing by config would settle worse whenever the other
+   venue wins, with nothing in the record. Losers and their failure reasons are
+   stored on the quote (`routing`), so a route choice can be audited later. One
+   venue down does not sink a trade another can price; if all fail, the trade
+   is refused, with no fallback to our own book.
+ - Not netted against gas. On these L2s gas is cents against a corridor trade,
+   and an estimate would add false precision, but a venue winning by a hair on
+   price could lose on cost. Revisit if venues land close.
+ - Surplus (positive slippage) is measured and attributed.
+   LIQUIDITY_SURPLUS_POLICY defaults to `user` for a reason: the receipt reports
+   marginBps measured between the live mid and what we deliver, so keeping the
+   surplus unrecorded would make that number understate what we take, which is
+   the gap the live-rates work closed. `treasury` is supported and still
+   records the amount, so it shows in the margin. Keeping the spread is a
+   business decision; the code always records it.
  - npm run best:test (13 checks, injected stub venues, no chain/network). The
-   router takes injected venues because config is frozen at first import — an
-   env flip after that silently exercises the default and passes for the wrong
+   router takes injected venues because config is frozen at first import; an
+   env flip after that would exercise the default and pass for the wrong
    reason.
 
-**Bebop — CORRECTED Aug 2026. Monerium is a market maker ON Bebop.**
- - bebop.xyz/case-studies/monerium: Monerium joined Bebop AS A MARKET MAKER,
-   streaming firm EURe quotes into the network. Issuer-led liquidity — the
-   issuer itself is the counterparty, so there is no intermediary spread. Live
-   on ETHEREUM, more chains planned. EURe trades against stablecoins, ETH, WBTC
-   and hundreds of others; six-figure swaps supported.
- - THIS OVERTURNS THE JULY VERDICT of "does not work for us". That verdict was
-   drawn from base/polygon/gnosis, where EURe still IS TokenNotSupported — the
+**Bebop — corrected Aug 2026. Monerium is a market maker on Bebop.**
+ - bebop.xyz/case-studies/monerium: Monerium joined Bebop as a market maker,
+   streaming firm EURe quotes into the network. The issuer itself is the
+   counterparty, so there is no intermediary spread. Live on Ethereum, more
+   chains planned. EURe trades against stablecoins, ETH, WBTC and hundreds of
+   others; six-figure swaps supported.
+ - This overturns the July verdict of "does not work for us". That verdict was
+   drawn from base/polygon/gnosis, where EURe is still TokenNotSupported; the
    partnership is on the one chain we had not been able to test.
- - WHY WE COULD NOT SEE IT: ethereum and arbitrum return
-   "UnknownError: UnknownError" for EVERY pair, including a USDC->WETH control
-   that must work. So that error is auth, not token support. Access is gated
-   behind an API key requested via their contact form; a `source` header alone
-   does not open it. Any future "is X supported" test on Bebop MUST run a
-   known-good control on the same chain, or an auth failure reads as an
-   unsupported token.
- - OUR ADAPTER IS ALREADY CORRECT AND NEEDS NO CODE: RfqLiquidityProvider sends
-   Bebop's documented `source-auth` header and parses the v3 shape. Set
-   BEBOP_API_KEY, BEBOP_CHAIN=ethereum, and add `rfq` to LIQUIDITY_VENUES — then
-   it competes on price like any other venue rather than being trusted blindly.
- - OPEN QUESTION BEFORE USING IT: EURe-on-Ethereum is 0x39b8B638…, and the
+ - Why we could not see it: ethereum and arbitrum return
+   "UnknownError: UnknownError" for every pair, including a USDC->WETH control
+   that must work, so that error means auth, not token support. Access needs an
+   API key requested via their contact form; a `source` header alone does not
+   open it. Any future "is X supported" test on Bebop must run a known-good
+   control on the same chain, or an auth failure reads as an unsupported token.
+ - The adapter needs no code change: RfqLiquidityProvider sends Bebop's
+   documented `source-auth` header and parses the v3 shape. Set BEBOP_API_KEY,
+   BEBOP_CHAIN=ethereum, and add `rfq` to LIQUIDITY_VENUES; it then competes on
+   price like any other venue.
+ - Open question before using it: EURe-on-Ethereum is 0x39b8B638…, and the
    best-execution router assumes all venues sit on the app chain. Routing
    through Bebop means holding EURe on Ethereum (or bridging), and mainnet gas
-   against a corridor-sized transfer is a real cost that the router does NOT
-   net out. Better price, dearer settlement — measure both before switching.
+   against a corridor-sized transfer is a real cost that the router does not
+   net out. The price may be better and settlement dearer; measure both before
+   switching.
 
 **LI.FI — the production venue (Aug 2026). Aggregation beats one pool.**
- - TESTED LIVE, not assumed: 100 EURe -> USDC returned EXECUTABLE quotes on
-   Gnosis 1.1493, Base 1.1506, Polygon 1.1491 against a live mid of ~1.1511 —
-   4 to 17bps — routed via Nordstern Finance / Fly / Bitget. A hand-rolled
-   Uniswap adapter can only ever see Uniswap; none of those venues would have
-   been in a hardcoded list. That breadth IS the argument for an aggregator.
+ - Tested live: 100 EURe -> USDC returned executable quotes on Gnosis 1.1493,
+   Base 1.1506, Polygon 1.1491 against a live mid of ~1.1511 (4 to 17bps),
+   routed via Nordstern Finance / Fly / Bitget. A hand-rolled Uniswap adapter
+   can only see Uniswap, and none of those venues would have been in a
+   hardcoded list. That breadth is why we use an aggregator.
  - EURe exists on more chains than assumed (Monerium production /tokens):
    ethereum 1, gnosis 100, polygon 137, base 8453, arbitrum 42161, linea 59144.
    So Base mainnet is a real option, not only Gnosis.
- - IT CANNOT BE EXERCISED ON A TESTNET. It LISTS Base Sepolia (84532) but
+ - It cannot be exercised on a testnet. It lists Base Sepolia (84532) but
    answers 404 "No available quotes" there even for WETH/USDC, which has real
-   Uniswap depth — so it is the Bebop gap again. Hence `dex` stays as the
-   locally-provable path and `lifi` is what ships. Keep both; neither replaces
-   the other.
- - approvalAddress EQUALS transactionRequest.to today (both the LI.FI Diamond
-   0x1231DEB6…). Approving tx.to would therefore work by luck and break
-   silently the day routing moves to a separate settlement contract or Permit2 —
-   the identical trap already found on Bebop. We approve what it NAMES.
- - NO EXPIRY IS RETURNED (executionDuration: 0), so the only staleness bound is
+   Uniswap depth, the same gap as Bebop. So `dex` stays as the locally-provable
+   path and `lifi` is what ships. Keep both; neither replaces the other.
+ - approvalAddress equals transactionRequest.to today (both the LI.FI Diamond
+   0x1231DEB6…). Approving tx.to would work by luck and fail the day routing
+   moves to a separate settlement contract or Permit2, as on Bebop. We approve
+   the address it names.
+ - No expiry is returned (executionDuration: 0), so the only staleness bound is
    the one we impose via the quote's expiresAt.
- - The mid-deviation guard matters MORE here than for a pool: route selection is
-   delegated to a third party, so the price is still checked against rates.ts
-   before we bind. assertPriceSane names the venue in its refusal.
- - 1INCH IS DOMINATED BY THIS: mainnet-only, needs an API key we do not have,
+ - The mid-deviation guard matters more here than for a pool: a third party
+   selects the route, so the price is still checked against rates.ts before we
+   bind. assertPriceSane names the venue in its refusal.
+ - 1inch adds nothing over this: mainnet-only, needs an API key we do not have,
    and LI.FI aggregates across aggregators (it can route through 1inch itself).
- - BEBOP JIT REMAINS RULED OUT for EURe on evidence, not preference —
-   TokenNotSupported on base/polygon/gnosis, no testnet.
+ - Bebop JIT remains ruled out for EURe on evidence: TokenNotSupported on
+   base/polygon/gnosis, no testnet.
  - npm run lifi:test (16 checks, stub LI.FI shaped from a captured live Base
    response, no chain). UNPROVEN: no real swap has executed.
 
 **Uniswap v3 — the one that executes, and the one we build on.**
- - VERIFIED ON-CHAIN with eth_getCode on Base Sepolia (84532), not read off a
-   docs page: Factory 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24, SwapRouter02
+ - VERIFIED ON-CHAIN with eth_getCode on Base Sepolia (84532): Factory
+   0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24, SwapRouter02
    0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4, QuoterV2
    0xC5290058841028F1614F3A6F0F5816cAd0df5E27, NonfungiblePositionManager
    0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2, Permit2. Monerium's real EURe on
    that chain is 0x29F37F6adCa168B79B8d9567eab9BE3fBF21db85 (18dp, from their
    /tokens), USDC is 0x036CbD53842c5426634e7929541eC2318f3dCF7e (6dp).
- - CHOSEN OVER 1INCH DELIBERATELY. 1inch is mainnet-only, so a 1inch adapter
-   could never be exercised before it touched real money — exactly how the Bebop
-   adapter ended up correct and unrun. The v3 interface is identical on Base
-   Sepolia and Base mainnet, so the tested path is the shipped path. 1inch still
-   fits later as a mainnet ROUTING layer behind the same seam.
- - THERE IS NO EURe/USDC POOL on Base Sepolia at any fee tier (100/500/3000/
-   10000 all empty), while WETH/USDC has real depth — so the testnet DEX is
-   genuinely used, just not for EURe. `npm run dex:setup [-- --fix]` creates and
-   seeds one. That pool is a TEST FIXTURE, NOT A TREASURY: on mainnet the
-   counterparty is everyone else's liquidity, which is the whole reason for
-   leaving FxSwapper. Never read a Base Sepolia quote as evidence of pricing.
- - THE GUARD THAT MATTERS, and the way a pool differs from a maker: an RFQ maker
-   names a price it will honour, but an AMM pool is simply wherever the last
-   trade left it, and anyone can move a thin one. So every quote's implied
-   USD/EUR is checked against the independent live mid from rates.ts and REFUSES
-   beyond DEX_MAX_MID_DEVIATION_BPS (300 default). Without it, skewing a pool
-   would make us quote, bind and settle a real transfer at that skew while
-   reporting it as the market. The pool is also pinned onto the quote, so
-   execute() cannot drift to a different, unchecked one, and amountOutMinimum
-   carries the quoted floor into the router.
- - amountOut is MEASURED as a balance delta after the swap, not copied from the
-   quote — the router reverting on a bad fill and the amount actually received
-   are two different facts.
+ - Chosen over 1inch. 1inch is mainnet-only, so a 1inch adapter could never be
+   exercised before it touched real money, which is how the Bebop adapter ended
+   up correct and unrun. The v3 interface is identical on Base Sepolia and Base
+   mainnet, so the tested path is the shipped path. 1inch still fits later as a
+   mainnet routing layer behind the same seam.
+ - There is no EURe/USDC pool on Base Sepolia at any fee tier (100/500/3000/
+   10000 all empty), while WETH/USDC has real depth, so the testnet DEX is used,
+   just not for EURe. `npm run dex:setup [-- --fix]` creates and seeds one. That
+   pool is a test fixture, not a treasury: on mainnet the counterparty is
+   everyone else's liquidity, which is why we left FxSwapper. Never read a Base
+   Sepolia quote as evidence of pricing.
+ - **Mid-price guard.** An RFQ maker names a price it will honour; an AMM pool
+   is wherever the last trade left it, and anyone can move a thin one. So every
+   quote's implied USD/EUR is checked against the independent live mid from
+   rates.ts and refused beyond DEX_MAX_MID_DEVIATION_BPS (300 default). Without
+   it, a skewed pool would make us quote, bind and settle a real transfer at
+   that skew while reporting it as the market. The pool is also pinned onto the
+   quote, so execute() cannot drift to a different, unchecked one, and
+   amountOutMinimum carries the quoted floor into the router.
+ - amountOut is measured as a balance delta after the swap, not copied from the
+   quote: the router reverting on a bad fill and the amount actually received
+   are separate facts.
  - npm run dex:test (12 checks, no chain). UNPROVEN: no real swap has executed,
-   because seeding needs EURe and there is no faucet for it — it is only minted
-   against a real SEPA deposit. Deployer holds 21 USDC / 0 EURe today.
+   because seeding needs EURe and there is no faucet for it (it is only minted
+   against a real SEPA deposit). Deployer holds 21 USDC / 0 EURe today.
 
-CONSEQUENCE FOR THE CHAIN DECISION: EURe's deepest liquidity is on GNOSIS, and
-Monerium is Gnosis-native. Base Sepolia was chosen for testing because gas is
-~9,000x cheaper than Amoy, which was right for testing and says nothing about
-production. If CoW-on-Gnosis is the liquidity route, Gnosis is the natural
-production chain — not Base, not Polygon. Decide it deliberately.
+**Consequence for the chain decision:** EURe's deepest liquidity is on Gnosis,
+and Monerium is Gnosis-native. Base Sepolia was chosen for testing because gas
+is ~9,000x cheaper than Amoy; that says nothing about production. If
+CoW-on-Gnosis is the liquidity route, Gnosis is the natural production chain
+over Base or Polygon. This is still undecided.
 
 ## Fees — SEPA is free (Sep 2026)
 
@@ -232,63 +225,62 @@ cash rail is Bridge.xyz and never touched the escrow — `executeTransfer`'s
 live branch transfers USDC straight to Bridge's deposit address. The escrow was
 the DRY-RUN branch alone.
 
-AND REMOVING IT MADE DRY-RUN MORE HONEST, not less. The lock produced a real
-transaction on a real contract, recorded as `bridge.lockForPayout` — an
-artifact that reads like a settlement to anyone scanning the transfer, for
-money that had reached no bridge at all. That is the UPI lesson in miniature.
-`recordBridgePlan` already writes `bridge.xyz.dry-run.transfer` with the plan's
-idempotency key, which says what actually happened: a plan was recorded and
-nothing moved.
+Removing it also made the dry-run record accurate. The lock produced a real
+transaction on a real contract, recorded as `bridge.lockForPayout`, which reads
+like a settlement to anyone scanning the transfer, for money that had reached
+no bridge (the UPI lesson again). `recordBridgePlan` already writes
+`bridge.xyz.dry-run.transfer` with the plan's idempotency key, which records
+what happened: a plan was recorded and nothing moved.
 
-CONSEQUENCES, all simplifications: dry-run leaves the USDC with the
+**Consequences**, all simplifications: dry-run leaves the USDC with the
 orchestrator, so compensation is a plain reverse swap with no escrow release
 first; `settlePickup` is a pickup-state change and nothing else; and the
 `bridge.lockForPayout` / `bridge.release` / `bridge.settle` steps no longer
-exist. A live failure after Bridge has the deposit is still MANUAL_REVIEW —
-that was never the escrow's doing.
+exist. A live failure after Bridge has the deposit is still MANUAL_REVIEW,
+which never depended on the escrow.
 
-VERIFIED BEFORE DELETING: both deployed BridgeEscrow contracts on Base Sepolia
-(the one in deployments.json and the different one CLAUDE.md had recorded —
-they disagreed, so the file had been redeployed) hold ZERO USDC. Nothing was
-stranded by dropping the addresses.
+VERIFIED before deleting: both deployed BridgeEscrow contracts on Base Sepolia
+(the one in deployments.json and a different one CLAUDE.md had recorded; they
+disagreed because the file had been redeployed) hold zero USDC. Dropping the
+addresses stranded nothing.
 
 ## Stellar payout leg — how far it actually runs (Aug 2026)
 
 Ran against real testnet and the real testanchor, not mocks.
 
-PROVEN LIVE:
+**Proven live:**
  - SEP-10 auth as the treasury (GCLMM2GB…), JWT issued.
- - SEP-12 customer is ACCEPTED with all 12 fields already provided — the Travel
-   Rule work did that, and it is not the blocker for anything below.
+ - SEP-12 customer is ACCEPTED with all 12 fields already provided (the Travel
+   Rule work did that); it does not block anything below.
  - Treasury holds ~10,000 XLM and trustlines to TSTLN and to USDC issued by
-   GBBD47IF… — Circle's testnet USDC, the same asset MoneyGram's anchor uses.
- - SEP-24 AND SEP-6 withdrawals both open successfully.
- - **A REAL ON-LEDGER PAYMENT LANDS.** tx
+   GBBD47IF… (Circle's testnet USDC, the same asset MoneyGram's anchor uses).
+ - SEP-24 and SEP-6 withdrawals both open successfully.
+ - **A real on-ledger payment lands.** tx
    60528481153e250d00943d09c871ba35da3c0df347ac1cff65fa6bdc41e3d993, ledger
    3965805: 1.5 XLM moved with an id memo, built exactly as
    sendSep24WithdrawalPayment builds it (payment op + memo + sign + submit).
    Sequence handling, memo attachment and submission all work against the real
-   network. This is the piece that had never run.
+   network.
 
-STILL NOT PROVEN, and testanchor is the reason:
- - testanchor NEVER publishes withdraw_anchor_account. A SEP-24 withdrawal sits
-   at `incomplete` until a human completes their reference UI, and SEP-6 —
-   which is supposed to be the non-interactive sibling — behaves the same way,
-   returning only an id and a more_info_url. Their reference UI renders empty
-   fields in an embedded browser, so the form cannot be driven headlessly.
- - Therefore sendSep24WithdrawalPayment itself is STILL UNEXERCISED end to end:
-   the ledger half is proven, the anchor-attribution half is not. Nothing pays
-   an anchor account because no anchor account is ever named.
- - Their SEP-6 DEPOSIT also parks at `incomplete` with SEP-12 ACCEPTED, so the
+**Still not proven**, because of testanchor:
+ - testanchor never publishes withdraw_anchor_account. A SEP-24 withdrawal sits
+   at `incomplete` until a human completes their reference UI, and SEP-6 (meant
+   to be the non-interactive sibling) behaves the same way, returning only an
+   id and a more_info_url. Their reference UI renders empty fields in an
+   embedded browser, so the form cannot be driven headlessly.
+ - So sendSep24WithdrawalPayment is still unexercised end to end: the ledger
+   half is proven, the anchor-attribution half is not. Nothing pays an anchor
+   account because no anchor account is ever named.
+ - Their SEP-6 deposit also parks at `incomplete` with SEP-12 ACCEPTED, so the
    treasury cannot obtain SRT or USDC from them. Any test needing anchor asset
    is blocked on that, which is why the live script defaults to native XLM.
- - CONSEQUENCE: the anchor half will first be exercised against MoneyGram's own
-   anchor, not testanchor. Budget for finding bugs there, and do not read
-   "anchor payouts work" as covering it.
+ - The anchor half will first be exercised against MoneyGram's own anchor, not
+   testanchor. Expect bugs there, and do not read "anchor payouts work" as
+   covering it.
 
-`npm run stellar:payout:live` drives as far as the anchor permits and refuses
-with the precise reason rather than pretending. It will complete unchanged the
-moment an anchor actually publishes an account.
+`npm run stellar:payout:live` drives as far as the anchor permits and then
+refuses with the exact reason. It will complete unchanged once an anchor
+publishes an account.
 
 ## Sandbox modes (all driven by .env — gitignored, user holds credentials)
 - Monerium: MONERIUM_CLIENT_ID/SECRET → real per-user IBANs on Sepolia

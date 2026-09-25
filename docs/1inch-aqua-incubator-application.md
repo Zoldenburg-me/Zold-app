@@ -13,9 +13,9 @@ reading the deployed selectors on 11 Sep 2026, not read off a page.
 Short version, so the rest can be skipped by someone in a hurry:
 
 1. **The incubator is a DAO grant for trading strategies with a perpetual
-   revenue share, not a product incubator.** Up to $50k, paid per milestone,
-   scope explicitly excludes "non-trading/non-liquidity projects", and $0 has
-   been disbursed nine months in. A card-funding app, pitched as a card, is
+   revenue share.** It is not a product incubator. Up to $50k, paid per
+   milestone; the scope excludes "non-trading/non-liquidity projects"; $0 has
+   been disbursed nine months in. A card-funding app pitched as a card would be
    screened out on the first read.
 2. **So the application is the settlement-FX strategy the card and Zold's
    payment flows generate, not the card.** An oracle-anchored EURe/USDC (and
@@ -62,12 +62,12 @@ application form unless marked otherwise.
 Two things follow that the earlier docs did not know.
 
 **The card is out of scope as a headline.** Nothing 1inch, Degensoft or the DAO
-has published links Aqua to payments, cards, spending or the 1inch Card — not
-the whitepaper, not the developer-release post, not the launch post, not the
-three governance threads. A "CardApp" application lands in the "non-trading /
-non-liquidity" bin, and the 50% milestone ("fully integrated into the 1inch
-dApp interface") has no meaning for a card. The people who read applications
-are reviewing AMM strategies for fee revenue to a treasury.
+has published (the whitepaper, the developer-release post, the launch post, the
+three governance threads) links Aqua to payments, cards, spending or the 1inch
+Card. A "CardApp" application lands in the "non-trading / non-liquidity" bin,
+and the 50% milestone ("fully integrated into the 1inch dApp interface") has no
+meaning for a card. The reviewers are assessing AMM strategies for fee revenue
+to a treasury.
 
 **The licence question is mostly answered by the licence, not the incubator.**
 Aqua-Source-1.1 §5.2 makes "Pure Caller Use" free of any payment obligation, and
@@ -122,15 +122,15 @@ build is short:
 - EURe is live where Aqua is live: Base, Gnosis, Linea, Ethereum, Arbitrum,
   Polygon (Monerium production `/tokens`, read 11 Sep 2026).
 
-The honest weakness, to write into the application rather than have a reviewer
-find: **an oracle-anchored strategy is an inventory business for the maker.** A
-maker shipping EURe and USDC into a band around the mid earns the fee and eats
-adverse selection when the mid moves faster than the oracle updates. That is
-why the band, the oracle heartbeat and a per-strategy max fill size are
-parameters of the strategy bytes, not of the app, and why the first makers are
-Zold's own treasury and 1inch's, not the public. Aqua's own whitepaper §6.2
-names this ("illiquid strategy keeps quoting a stale price") and the mitigation
-is the same as theirs: refuse when out of band, dock when in doubt.
+**Weakness, to state in the application: an oracle-anchored strategy is an
+inventory business for the maker.** A maker shipping EURe and USDC into a band
+around the mid earns the fee and takes adverse selection when the mid moves
+faster than the oracle updates. So the band, the oracle heartbeat and a
+per-strategy max fill size are parameters of the strategy bytes, not of the
+app, and the first makers are Zold's own treasury and 1inch's, not the public.
+Aqua's whitepaper §6.2 names this ("illiquid strategy keeps quoting a stale
+price"), and the mitigation is the same as theirs: refuse when out of band, dock
+when in doubt.
 
 Working title only, to be replaced: "EUR settlement strategy". Do not ship a
 name made up here.

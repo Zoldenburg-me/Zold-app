@@ -16,14 +16,14 @@ stub Shopify, no chain). Code: `payment-requests.ts` (domain, pure),
 the app; the Shopify view in `/business`. GitBook: get-paid/payment-links.md,
 business/shopify.md.
 
-WHERE THE OLD CHECKOUT STANDS. `tonyzil/pay-with-zold` (on disk
-`zold-checkout`) is the merchant OAuth/PKCE handoff written in July against an
-API that has since changed under it (RemitVault gone, execution assertions,
-Monerium-only identity); its ADR 0001 already argued the checkout belongs on
-the app origin. The "Revolut Pay with link" ask is answered HERE, in core, as
-PAYMENT REQUESTS against the existing payment page, not by reviving that repo.
-Its PKCE handoff remains the shape for a partner who needs a code exchange
-(Mony), and nothing here replaces it.
+**The old checkout.** `tonyzil/pay-with-zold` (on disk `zold-checkout`) is the
+merchant OAuth/PKCE handoff written in July against an API that has since
+changed (RemitVault gone, execution assertions, Monerium-only identity); its ADR
+0001 already argued the checkout belongs on the app origin. The "Revolut Pay
+with link" ask is answered here, in core, as payment requests against the
+existing payment page; that repo is not revived. Its PKCE handoff remains the
+shape for a partner who needs a code exchange (Mony), and nothing here replaces
+it.
 
 A PAYMENT REQUEST is one ask against the payment page: an amount (or "payer
 chooses"), a description, a 15-char Crockford code that IS the credential
@@ -106,13 +106,13 @@ against fixture payloads in a browser, not against a live request.
 because it is the only one a store can install today. The payments-app suite
 pins `SHOPIFY_MODE=payments-app` explicitly.
 
-WHY IT EXISTS: a Keycard founder's email (Sep 2026) named the real wall —
+**Why it exists.** A Keycard founder's email (Sep 2026) named the obstacle:
 Shopify's approved-provider list (Coinbase Commerce was dropped from it), and
 weeks-to-months KYB with every crypto PSP on it, because a PSP is a
 counterparty holding the merchant's money. Our payments-app router is queued
 behind that same list, and Shopify vets a payments app's regulatory standing;
-Zoldenburg holds no MiCA transfer licence, so that approval is UNCERTAIN, not
-merely slow. The custom-app path sidesteps both: a custom-distribution app is
+Zoldenburg holds no MiCA transfer licence, so that approval is uncertain, not
+merely slow. The custom-app path avoids both: a custom-distribution app is
 installed on one store with no Shopify review, and a Zold payment page needs
 only an active passkey Safe (server.ts /api/users/:id/handle), so a merchant
 who keeps USDC hands nobody a passport. Monerium's KYB enters only for euros.
@@ -152,19 +152,19 @@ THE ONE THING THE MODE CANNOT HIDE: the order exists before the money does
 page say so. Payment customization functions and an admin order block are
 the next steps if the thank-you block proves out; neither is built.
 
-PARKED (Sep 2026, user's call) — PRIVACY OF THE MERCHANT'S BOOK. One Safe per
-account means anyone who ever paid a merchant can open that address in an
+**Parked** (Sep 2026, user's call): privacy of the merchant's book. One Safe
+per account means anyone who ever paid a merchant can open that address in an
 explorer and read every incoming payment, the EURe balance and every SEPA
-burn. Per-order forwarding addresses do NOT fix it (they forward into the
-same Safe one hop later). The acceptable fix is stealth Safes — a fresh Safe
+burn. Per-order forwarding addresses do not fix it (they forward into the
+same Safe one hop later). The acceptable fix is stealth Safes: a fresh Safe
 with a fresh derived owner per payment, never consolidated on chain, each
 converting and redeeming to the IBAN on its own (Fluidkey runs this shape on
 Base; their bank leg is Bridge/EURC, ours would be Monerium). It is weeks of
 work, needs a PRF-derived key tree with its own backup path (Candide guardian
 recovery restores the passkey Safe, not derived keys) and Monerium multi-
 address linking exercised. Custodial omnibus and mixers were both rejected.
-DO NOT put the current Shopify path in front of a privacy-sensitive merchant
-(Keycard) until this exists; everything built here sits above the address
+Do not put the current Shopify path in front of a privacy-sensitive merchant
+(Keycard) until this exists. Everything built here sits above the address
 layer and survives unchanged when the address becomes fresh per order.
 
 NOT PROVEN: `shopify-app/` (app TOML + React checkout UI extension, targets
@@ -176,16 +176,16 @@ real store has installed the app. The GitBook page presents the manual-method
 path as live and the in-checkout method as not yet available.
 
 ## Pay with Zold — moved to its own repo (July 2026)
-The merchant checkout / "Pay with Zold" product was extracted to
+The merchant checkout / "Pay with Zold" product lives in
 **github.com/tonyzil/pay-with-zold** (private; the directory on disk is
 `zold-checkout`) to keep this consumer app lean. The backend OAuth handoff +
 existing-user checkout that briefly lived here (checkout.ts, checkout.html,
 checkout-test.ts, the /api/checkout/* routes, and store Merchant/PaymentIntent)
-were REMOVED from this repo. Do not rebuild them here.
-That repo OWNS the authorization-server half — merchant registry, payment
-intents, PKCE code exchange — plus the new-user onboard-in-flow (account -> KYC
+were removed from this repo. Do not rebuild them here.
+That repo owns the authorization-server half (merchant registry, payment
+intents, PKCE code exchange) plus the new-user onboard-in-flow (account -> KYC
 -> device key -> funding -> device-signed SEPA -> merchant code). It is a
-CLIENT of this API: an allowlisted proxy, source of truth for nothing but
+client of this API: an allowlisted proxy, source of truth for nothing but
 merchants and intents. It runs on its own origin because passkeys are
 RP-ID-scoped and the device key lives in one origin's localStorage, so a
 user onboarded there has both halves in one place.
@@ -197,25 +197,25 @@ a merchant could see that Zold sent money but not which
 of their users it was for, which is the manual step the checkout exists to
 remove. services/api/src/sepa.ts folds it into the SEPA Latin subset (accents
 decomposed, so "Müller" arrives as "Muller" not "M ller"), strips the reserved
-slash forms, and truncates the REFERENCE rather than our id — half an id
-identifies nothing. 140 chars is the scheme limit and the route refuses a
-longer one rather than silently shortening the string the payee reconciles on.
-npm run sepa:test (12 checks, no chain). NOT proven end to end: the redeem call
+slash forms, and truncates the reference, never our id (half an id identifies
+nothing). 140 chars is the scheme limit, and the route refuses a longer
+reference so the string the payee reconciles on is never shortened.
+npm run sepa:test (12 checks, no chain). Not proven end to end: the redeem call
 only runs in Monerium sandbox mode, so the memo has never reached a real
 statement.
-WHAT THIS API STILL OWES IT:
+**What this API still owes it:**
 - RP_ID + WEBAUTHN_ORIGINS must cover the checkout origin or every passkey
-  ceremony started there is rejected HERE, which reads like a client bug.
+  ceremony started there is rejected by this API, which reads like a client bug.
   Production: RP_ID=zold.app with app.zold.app + checkout.zold.app both listed.
   Locally: RP_ID=localhost and WEBAUTHN_ORIGINS including localhost:3100.
 - No way for it to see a transfer reach a terminal state. It reads the transfer
-  with the USER's session at attach time, so the intent's status freezes there
-  and the merchant polls after the user has gone — on a real SEPA payout an
+  with the user's session at attach time, so the intent's status freezes there
+  and the merchant polls after the user has gone; on a real SEPA payout an
   intent would sit at AUTHORIZED forever. Needs a checkout webhook from here,
   or a service credential that can read a transfer without a user session.
   Not visible locally: hardhat settles to PAID before attach.
-- public/device.js keeps ONE key slot per origin, not per user. On a shared
-  browser a second person onboarding binds the FIRST person's key as their
+- public/device.js keeps one key slot per origin, not per user. On a shared
+  browser a second person onboarding binds the first person's key as their
   authorizer, and either could then spend the other's balance. The checkout
   refuses rather than sharing a key; the real fix is a per-account slot here.
 - KYC ordering is fixed by us, not by them: /api/users/:id/authorizer calls
@@ -240,36 +240,37 @@ the link exposes, and copies `/r/<slug>`. A recipient opens it with no account.
 it, `store.receiptShares` holds the selections. npm run receipt:test (20 checks,
 no chain, wired into check.ts).
 
-THE LOAD-BEARING PROPERTY, and what the test actually proves: redaction happens
-server-side. A withheld field is never in the JSON — the test serialises the
-whole payload and greps it for each secret, because "the page does not draw it"
-and "the page was not sent it" are different guarantees and only the second one
+**Load-bearing property:** redaction happens server-side, and that is what the
+test proves. A withheld field is never in the JSON: the test serialises the
+whole payload and greps it for each secret. "The page does not draw it" and
+"the page was not sent it" are different guarantees, and only the second
 survives someone opening devtools. Withheld fields come back as
 `{withheld:true}` with no value, so the page can still draw the ▒ block the
-design asks for without ever holding the thing.
+design asks for without holding the value.
 
-FOUR PLACES THE DESIGN WAS NOT FOLLOWED, deliberately:
- - THE SLUG. The mock prints `zold.to/r/8842-1170` — eight decimal digits, 10^8,
+Four places the design was not followed:
+ - **Slug.** The mock prints `zold.to/r/8842-1170`: eight decimal digits, 10^8,
    enumerable in hours, and every hit is a real name and amount on an
-   unauthenticated page. Kept the grouped shape, widened to 15 Crockford base32
-   chars (~75 bits), ambiguous glyphs excluded. `/api/r/` is also bucketed with
-   the auth rate limits, since guessing a slug is guessing a credential.
- - THE SIX ROUTE HOPS. The design draws a fixed Zold Safe → Base → Monerium →
+   unauthenticated page. We kept the grouped shape, widened to 15 Crockford
+   base32 chars (~75 bits), ambiguous glyphs excluded. `/api/r/` is also
+   bucketed with the auth rate limits, since guessing a slug is guessing a
+   credential.
+ - **Six route hops.** The design draws a fixed Zold Safe → Base → Monerium →
    SEPA Instant → Stellar/MYKOBO → MoneyGram route with a hardcoded block
-   number. That is not this codebase: MYKOBO appears nowhere, the SEPA rail has
-   no Stellar leg at all, the swap goes through whichever liquidity venue won,
-   and no block/finality data is stored. Hops are derived per rail from `txs`,
-   `liquidity`, `sepa` and `pickup`; a leg that did not run is not drawn, and a
-   leg that ran in simulation (CCTP dry-run, mock SEPA) carries `simulated` and
-   renders an amber badge. The Base mark only appears when CHAIN_ID really is
-   Base — otherwise the hop shows a step number.
- - "REFERENCE & PURPOSE". There is no purpose field on a Transfer. The toggle
-   governs the SEPA remittance `reference`, and is labelled for it.
- - TOKENS. The public page uses the receipt handoff's own palette (#ed188d,
-   #050506); the in-app composer uses the APP's (--m-pink #ff2d8b). The composer
-   sits between Activity and detail and would clash with every screen beside it
-   in a second pink. This is not a reopening of the settled token question — it
-   is one surface with its own spec versus one inside the app.
+   number, which does not match this codebase: MYKOBO appears nowhere, the SEPA
+   rail has no Stellar leg at all, the swap goes through whichever liquidity
+   venue won, and no block/finality data is stored. Hops are derived per rail
+   from `txs`, `liquidity`, `sepa` and `pickup`; a leg that did not run is not
+   drawn, and a leg that ran in simulation (CCTP dry-run, mock SEPA) carries
+   `simulated` and renders an amber badge. The Base mark only appears when
+   CHAIN_ID is Base; otherwise the hop shows a step number.
+ - **"Reference & purpose".** There is no purpose field on a Transfer. The
+   toggle governs the SEPA remittance `reference`, and is labelled for it.
+ - **Tokens.** The public page uses the receipt handoff's own palette (#ed188d,
+   #050506); the in-app composer uses the app's (--m-pink #ff2d8b), because it
+   sits between Activity and detail and a second pink would clash with every
+   screen beside it. The settled token question stays settled: the public page
+   is one surface with its own spec, and the composer is inside the app.
 
 ALSO DECIDED: one share per transfer (re-posting edits it, so narrowing a
 selection narrows the live link rather than leaving a generous older one alive);
@@ -308,13 +309,13 @@ its KYC and owns the card Safe. Permissionless mode has NO webhooks and NO
 attribution of card activity back to Zold, so nothing may be presented as a
 Zold card — the provenance line is rendered on every state, including errors.
 
-TWO API DETAILS THE DESIGN DOC HAD WRONG, both silently fatal, both found by
-reading the live OpenAPI spec and calling the endpoint rather than trusting the
-transcription — and both now asserted in the test:
- - `GET /auth/nonce` returns **text/plain**, not JSON.
- - It **sets a `siwe` cookie** that `POST /auth/challenge` verifies against.
+**Two API details the design doc had wrong.** Either one breaks sign-in with
+no error naming the cause. Both were found by reading the live OpenAPI spec and
+calling the endpoint, and both are now asserted in the test:
+ - `GET /auth/nonce` returns text/plain, not JSON.
+ - It sets a `siwe` cookie that `POST /auth/challenge` verifies against.
    Drop it and every signature is rejected as if the user signed wrong.
-Also: `/account-balances` returns decimal strings of MINOR UNITS (`^[0-9]+$`),
+Also: `/account-balances` returns decimal strings of minor units (`^[0-9]+$`),
 kept as strings end to end; and the `Event` schema behind `/transactions`
 declares no properties, so items are passed through as opaque.
 
@@ -332,40 +333,40 @@ DECISIONS THAT CARRY WEIGHT:
    EIP-1271 is only verifiable where the contract is deployed, and the Zold Safe
    is not on chain 100.
 
-CHAIN FACTS, VERIFIED not assumed (scripts were throwaway; re-run before
-relying on them): Gnosis Chain (100) HAS the RIP-7212 P256 precompile — probed
-with a real generated P-256 signature, valid returns 1 and a tampered r returns
-empty, same as Base Sepolia — and Candide's bundler/paymaster cover chain 100.
-So a passkey Safe on Gnosis is possible and is the natural next step; it was NOT
-the blocker it was assumed to be.
+**Chain facts, VERIFIED** (the scripts were throwaway; re-run before relying
+on them): Gnosis Chain (100) has the RIP-7212 P256 precompile (probed with a
+real generated P-256 signature: valid returns 1 and a tampered r returns empty,
+same as Base Sepolia), and Candide's bundler/paymaster cover chain 100. So a
+passkey Safe on Gnosis is possible and is the natural next step; the chain is
+not a blocker.
 
-NOT BUILT, deliberately (PRs 2-4 in the doc): signup, terms, KYC, phone OTP,
-Safe deploy, card creation, and ALL funding. NOT PROVEN: no real Gnosis Pay
-account has been connected.
+Not built (deferred to PRs 2-4 in the doc): signup, terms, KYC, phone OTP, Safe
+deploy, card creation, and all funding. Not proven: no real Gnosis Pay account
+has been connected.
 
-SCOPE NOTE: "make everything Gnosis Pay compatible" was scoped to the adapter
-only. Moving Zold to Gnosis Chain was considered and NOT done, and the REASON
-was corrected once: it is not CCTP. CCTP is the dry-run alternative that has
-never executed live; Bridge.xyz is the live seam (BRIDGE.sourceRail = "base").
-The real reason is that **Bridge does not support Gnosis Chain either** —
-checked against their payment-routes table, which lists Arbitrum, Avalanche,
-Base, Celo, Ethereum, HyperEVM, Linea, Monad, Optimism, Polygon, Solana,
-Stellar, Sui, Tempo, Tron, World Chain, XDC and Aptos, and no Gnosis at all.
-On Gnosis the cash rail would have NO exit. The current Base -> Stellar route
-with USDC at both ends is squarely on their supported set.
+**Scope note:** "make everything Gnosis Pay compatible" was scoped to the
+adapter only. Moving Zold to Gnosis Chain was considered and not done. The
+reason is not CCTP, which is the dry-run alternative that has never executed
+live; Bridge.xyz is the live seam (BRIDGE.sourceRail = "base"). The reason is
+that Bridge does not support Gnosis Chain either, checked against their
+payment-routes table, which lists Arbitrum, Avalanche, Base, Celo, Ethereum,
+HyperEVM, Linea, Monad, Optimism, Polygon, Solana, Stellar, Sui, Tempo, Tron,
+World Chain, XDC and Aptos, and no Gnosis at all. On Gnosis the cash rail would
+have no exit. The current Base -> Stellar route with USDC at both ends is on
+their supported set.
 
-AND THE MIGRATION IS NOT NEEDED FOR THE CARD ANYWAY. Gnosis Pay's card Safe is
+**The card does not need the migration either.** Gnosis Pay's card Safe is
 theirs, on chain 100, whatever chain Zold runs on. Only two things want Zold on
-Gnosis: the passkey Safe signing SIWE by EIP-1271 (needs it deployed on 100 —
+Gnosis: the passkey Safe signing SIWE by EIP-1271 (needs it deployed on 100;
 RIP-7212 is live there, so it works), and funding the Gnosis Pay Safe from Zold
-(needs EURe on 100 — Monerium issues it there). Both are satisfied by deploying
-the user Safe on Gnosis IN ADDITION, with the corridor left on Base. EURe
-exists on both and LI.FI covers Gnosis, so card funding is a user-signed
-Base->Gnosis EURe bridge. That is the shape to build, not a migration.
+(needs EURe on 100, which Monerium issues there). Both are satisfied by also
+deploying the user Safe on Gnosis, with the corridor left on Base. EURe exists
+on both and LI.FI covers Gnosis, so card funding is a user-signed Base->Gnosis
+EURe bridge. Build that; do not migrate.
 
 BRIDGE + EEA, worth knowing before designing any USDT path: their docs state
-"USDC & EURC are the only stablecoins supported for users in the EEA" — MiCA,
-applied by them. Zoldenburg UG is an EEA entity, so Bridge CANNOT handle USDT
+"USDC & EURC are the only stablecoins supported for users in the EEA" (MiCA,
+applied by them). Zoldenburg UG is an EEA entity, so Bridge cannot handle USDT
 for us. USDT would have to be swapped to USDC before Bridge sees it, and that
 swap is the MiCA exchange service, not an integration detail.
 

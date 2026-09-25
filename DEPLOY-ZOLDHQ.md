@@ -114,7 +114,7 @@ every existing passkey would stop working.
 Add the checkout origin to `WEBAUTHN_ORIGINS` when that origin exists;
 `RP_ID` stays the apex.
 
-### NODE_ENV is deliberately NOT production
+### NODE_ENV is not production
 
 The obvious setting is wrong here, and `assertProductionConfig` refuses it:
 `production anchor mode must not use the Stellar testnet passphrase`. This
@@ -125,12 +125,11 @@ Nothing is lost by omitting it. `LOOKS_LOCAL` is already false off chain 31337,
 so internal error text is off either way, and a new user lands in `pending`
 until Monerium attributes an IBAN.
 
-Be precise about what omitting it does: `assertProductionConfig()` begins
-`if (!IS_PRODUCTION) return`, so the ENTIRE production block is skipped — not
-just the anchor-passphrase check. Everything under `LOOKS_HOSTED` is inert here
-even though `LOOKS_HOSTED` is genuinely true on chain 84532. The dev-only
-behaviour is off for the separate reason above, which is why this is safe; but
-"the config is validated" is not among the things currently true.
+`assertProductionConfig()` begins `if (!IS_PRODUCTION) return`, so omitting
+it skips the whole production block, including but not limited to the
+anchor-passphrase check. Everything under `LOOKS_HOSTED` is inert here, although
+`LOOKS_HOSTED` is true on chain 84532. The dev-only behaviour is off for the
+reason above, so this is safe, but the config is currently not validated.
 
 The consequence to plan for: the day `NODE_ENV=production` is set, a list of
 requirements arrives at once, and `.env` satisfies none of the last three today.

@@ -37,17 +37,17 @@ So the card's entire on-chain power is `EURe.transfer(settlementSafe, amount)`,
 amount within a refilling allowance. That is a genuinely tight scope and it
 deserves the compliment.
 
-**Two consequences the documentation page does not state, both material:**
+**Two consequences the documentation page does not state:**
 
 - **The user cannot revoke Gnosis Pay's role.** The Bouncer pins `setAllowance`,
-  so the only Roles-module change anyone can ever make on that account is
-  adjusting the allowance. You can set your daily limit to zero; you cannot
-  unassign the spender, re-scope the role or add a target. Ownership of the roles
-  module has been handed to a contract that will forward one function forever.
-  "Self-custody" here means the money is yours and the permission is permanent.
-- **The user CAN execute arbitrary transactions from the Safe**, by queueing them
-  on the Delay module and executing after the cooldown. That is the door Aqua
-  walks through, and it needs nobody's agreement.
+  so the only Roles-module change anyone can make on that account is adjusting
+  the allowance. You can set your daily limit to zero; you cannot unassign the
+  spender, re-scope the role or add a target. Ownership of the roles module sits
+  with a contract that forwards one function, permanently. "Self-custody" here
+  means the money is yours and the permission is permanent.
+- **The user can execute arbitrary transactions from the Safe**, by queueing
+  them on the Delay module and executing after the cooldown. Aqua uses this
+  path, and it needs nobody's agreement.
 
 
 ## 2. Verified on Gnosis Chain (100), Sep 2026
@@ -201,21 +201,19 @@ Supported Funds in your Safe **at all times** to cover the value of any
 transactions you make using your Card." Over-shipping is therefore a breach of
 the cardholder terms, not merely a risk of a decline.
 
-**THE SHORTFALL CLAUSE — the real cost of getting the reserve wrong.** If a
+**The Shortfall clause: the cost of getting the reserve wrong.** If a
 transaction completes while the Safe is short, the difference is a *Shortfall*
 which "must be reimbursed by you"; Monavate "may charge your Safe for this
 amount", "may suspend the Card" until reimbursed, and "reserve the right to
-charge … an administration fee for each transaction" that causes one. So the
-downside is not a polite decline. It is a debt to the issuer, a per-transaction
-fee, and a suspended card.
+charge … an administration fee for each transaction" that causes one. The
+downside is a debt to the issuer, a per-transaction fee and a suspended card.
 
 **§5.5: "Your Account is a personal account, and you must not use it for business
 purposes."** That removes any treasury or org version of this idea outright.
 
-**And the clause that is the best argument *for* it.** Monavate's terms state
-plainly that "no interest is payable to you on the balance of Supported Funds
-stored on the Safe". The idleness is contractual, not incidental — the issuer has
-told the cardholder in writing that this money will earn nothing, forever.
+**The clause in favour.** Monavate's terms state that "no interest is payable to
+you on the balance of Supported Funds stored on the Safe". The balance earns
+nothing by contract.
 
 
 ## 6. Sizing the reserve, with numbers from the terms rather than guesses
@@ -240,11 +238,10 @@ inventing. The invariant becomes:
 > sum of EURe virtual balances shipped across all strategies
 > ≤ EURe balance − on-chain daily limit
 
-**And the framing that makes this honest rather than frightening: the money never
-leaves the Safe.** Aqua holds an allowance, not the tokens. The card always sees
-the full balance. The reserve is not a segregated pot — it is a cap on how much
-somebody else could take in a race. Docking is one transaction and instant, and
-because nothing ever moved there is no withdrawal to wait for.
+**The money stays in the Safe.** Aqua holds an allowance, not the tokens, and
+the card always sees the full balance. The reserve is a cap on how much somebody
+else could take in a race, not a segregated pot. Docking is one instant
+transaction, and since nothing moved there is no withdrawal to wait for.
 
 
 ## 7. The risk that is specific to AMM strategies, and it is the real objection
@@ -300,19 +297,18 @@ reentrancy lock the modifier provides. If the borrower does not push, it reverts
 and the pull unwinds with it. No inventory risk, no duration, no credit risk, and
 the blast radius of a bug is the shipped virtual balance rather than the wallet.
 
-**And the honest part: the risk ladder is the return ladder inverted.** EURe
-flash-loan demand on Gnosis is probably close to zero, so this earns close to
-nothing. Aqua ships one example app, `XYCSwap.sol`, and it is a swap. Nothing of
-this shape exists, it would be new unaudited code, and it is subject to the same
-Degensoft licence question as everything else here. That is the piece that
-decides whether the card-float idea is worth doing at all.
+**The lowest-risk shape also earns the least.** EURe flash-loan demand on Gnosis
+is probably close to zero, so this earns close to nothing. Aqua ships one example
+app, `XYCSwap.sol`, and it is a swap. Nothing of this shape exists; it would be
+new unaudited code, subject to the same Degensoft licence question as everything
+else here. Whether the card-float idea is worth doing depends on this piece.
 
-**Honest assessment:** the mechanism works, the terms most likely permit it, and
-the reserve rule is provable. But with only AMM-shaped strategies available, the
+**Assessment:** the mechanism works, the terms most likely permit it, and the
+reserve rule is provable. With only AMM-shaped strategies available, though, the
 cardholder takes inventory risk and contract risk on the money that makes their
-card work, in exchange for returns that on Gnosis are unlikely to be large. For
-most balances that is a bad trade. Build the single-asset strategy first, or do
-not offer this.
+card work, for returns that on Gnosis are unlikely to be large. For most
+balances that is a bad trade. Build the single-asset strategy first, or do not
+offer this.
 
 
 ## 8. What this does not fix
@@ -343,7 +339,7 @@ additions below touch the card:
 - read the Safe's Aqua state with `rawBalances` and show it beside the Gnosis Pay
   balance,
 - a reserve control that computes balance − reserve and refuses to ship past it,
-  summing across every strategy rather than per strategy,
+  summing across every strategy,
 - two delay-queue transactions to approve and ship, one to dock,
-- and the honest line next to the button: this money can be pulled by the strategy
-  without the three-minute delay, and the reserve is what keeps the card working.
+- and a line next to the button: the strategy can pull this money without the
+  three-minute delay, and the reserve is what keeps the card working.

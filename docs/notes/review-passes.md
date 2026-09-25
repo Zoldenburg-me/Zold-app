@@ -56,14 +56,14 @@ WHAT A DEPLOYMENT IS NOW:
    TESTNET_FAUCET_EUR, KYC_PROVIDER, SUMSUB_APP_TOKEN) or KYC_AUTO_APPROVE=1
    is still set.
 
-THE ONE HARNESS SEAM THAT STAYS, and why: the hardhat chain (31337) has no
-Monerium, so the test suites cannot approve an account through activation.
-`KYC.autoApprove` honours KYC_AUTO_APPROVE=1 ONLY when IS_LOCAL_CHAIN (31337)
+**The one harness seam that stays.** The hardhat chain (31337) has no Monerium,
+so the test suites cannot approve an account through activation.
+`KYC.autoApprove` honours KYC_AUTO_APPROVE=1 only when IS_LOCAL_CHAIN (31337)
 and not production; every other chain ignores it and production refuses it.
-Likewise `mirrorOrder` mints the hardhat MockToken when Monerium issues no EURe
-on the chain AND the chain is 31337 (webhook/reconcile suites); on any other
-chain such an order is logged and NOT recorded. Both are inert on real money
-by construction, not by configuration.
+Likewise `mirrorOrder` mints the hardhat MockToken only when Monerium issues no
+EURe on the chain and the chain is 31337 (webhook/reconcile suites); on any
+other chain such an order is logged and not recorded. Both checks are in code,
+so no configuration can make them touch real money.
 
 DELETED SUITES (they tested the removed paths): e2e, compensation, kyc, kyc-ui,
 kyc-operator, bridge-dryrun, faucet, sumsub-kyc. draft-execution-test now mints

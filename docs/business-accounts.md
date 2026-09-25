@@ -17,27 +17,25 @@ members and roles, plans that gate features, an address book that holds bank
 details, payments that go through review before they move, invoices that a
 supplier can fill in without an account, and bookkeeping that exports to Xero.
 
-TAKEN, close to as-is:
+**Taken**, close to as-is:
  - **Organisation as the tenant**, not the user. Members are invited by email,
    carry a role, and are deactivated rather than deleted. Invitations expire
-   (theirs: 3 days — we keep that).
+   (theirs: 3 days; we keep that).
  - **Two plans with a feature matrix.** Starter is free and payouts-only;
    Business is paid and unlocks accounting. One 30-day trial per org.
    Downgrade *pauses* premium features and keeps the data, so an upgrade
-   restores everything. That last rule is the one that makes the gate humane,
-   and it is a storage decision, not a UI one — see `plans.ts`.
+   restores everything. That is enforced in storage, not only in the UI (see
+   `plans.ts`).
  - **Per-feature verification.** They ran KYB twice: once with Triple-A for
-   fiat payouts, once with Blockpass for cards. That is not duplication, it is
-   the honest shape — each regulated partner owns its own identity
-   relationship and neither accepts the other's. Our `verifications` map is
-   keyed by capability for exactly this reason.
+   fiat payouts, once with Blockpass for cards, because each regulated partner
+   owns its own identity relationship and neither accepts the other's. Our
+   `verifications` map is keyed by capability for the same reason.
  - **Address book holds bank details.** A contact is not an address; it is a
    payee with wallets *and* bank accounts, and the payout form reads from it.
  - **Drafts with review and approval.** Create → submit for review → reviewed →
    execute, with distinct people on each step, plus `INVALID_DATA` for a draft
-   whose saved recipient changed underneath it. That state exists because
-   address books drift, and a payment that silently retargets is worse than one
-   that stops.
+   whose saved recipient changed underneath it. Address books drift, and that
+   state stops the payment instead of sending it to the edited recipient.
  - **Invoice-Me links.** The payor generates a one-time link; the supplier
    fills the invoice in with no account and no wallet connection; the payor
    pays from the transfer page. Invoices lock on submit.
@@ -46,17 +44,15 @@ TAKEN, close to as-is:
    per-contact), transaction mapping, FIFO tax lots, monthly balance report,
    CSV/Xero export.
 
-NOT TAKEN, and the reason matters:
- - **Their custody model is the opposite of ours.** Gnosis Business never held
-   funds — "you import your wallets, we never have access". That is coherent
-   for an accounting layer, and incoherent for us: a *local account* is
-   something we issue, with an identifier someone else can pay into. So we
-   issue accounts and sign for them (device key / passkey Safe), and we
-   additionally support **imported wallets as read-only** — balances,
-   transactions, bookkeeping and export, but we never sign for them. A payment
-   from an imported wallet is built by us and signed by its owner.
-   The one-line rule: *if we issued it, we can sign it; if you imported it, you
-   sign it.*
+**Not taken:**
+ - **Their custody model.** Gnosis Business never held funds ("you import your
+   wallets, we never have access"), which suits an accounting layer. A *local
+   account* is something we issue, with an identifier someone else can pay
+   into, so we issue accounts and sign for them (device key / passkey Safe). We
+   also support **imported wallets as read-only**: balances, transactions,
+   bookkeeping and export, but we never sign for them. A payment from an
+   imported wallet is built by us and signed by its owner. The rule: *if we
+   issued it, we can sign it; if you imported it, you sign it.*
  - **Their payout rail.** Triple-A required $10k/month before verification
    would even start. Our EUR rail is Monerium and is already proven.
  - **Cards.** Their card was USDC-on-Polygon through a third-party issuer. Our
@@ -109,12 +105,12 @@ login becomes a spending login.
       identifier  iban / accountNumber+sortCode / routingNumber / mobile
       address   0x… smart account, where the currency is tokenised
 
-Only **EUR is real**: Monerium issues a genuine IBAN and EURe settles on Base
+Only **EUR is real**: Monerium issues a real IBAN and EURe settles on Base
 Sepolia today. Every other currency is modelled with `status: "gated"` and a
-`gate.needs` string naming the partner and what is missing. This is deliberate
-and is the same rule the rest of the repo follows: a rail that has never moved
-money must not render as if it has. `accounts.ts` holds the registry and it is
-the single place a currency becomes live.
+`gate.needs` string naming the partner and what is missing, following the
+repo-wide rule that a rail that has never moved money must not render as if it
+has. `accounts.ts` holds the registry and is the only place a currency becomes
+live.
 
 `ImportedWallet` is the Gnosis half: an address we watch and
 book, never sign for. `custody: "external"` is stored on the row, and the

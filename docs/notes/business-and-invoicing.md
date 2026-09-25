@@ -35,36 +35,36 @@ opens a hole. Session (who is this), member+role (may they do this here), plan
 capability (did the org buy it). A viewer on a Business plan must not be able to
 send money; an owner on Starter must not reach the chart of accounts.
 
-THE RULES THAT CARRY THE WEIGHT, each with a test:
- - **Gating is a read-time filter, NEVER a write-time delete.** A downgraded org
+The main rules, each with a test:
+ - **Gating is a read-time filter, never a write-time delete.** A downgraded org
    keeps its chart of accounts, tags and history; the API refuses to serve them.
-   Gnosis promised exactly this and it is only true if nothing deletes on
-   downgrade. Proved live: downgrade to starter, 15 chart accounts / 8 rules /
-   1 contact / 2 drafts / 1 invoice still in the store, all readable again after
+   Gnosis promised this, and it holds only if nothing deletes on downgrade.
+   Proved live: downgrade to starter, 15 chart accounts / 8 rules / 1 contact /
+   2 drafts / 1 invoice still in the store, all readable again after
    re-upgrade. Nothing in `store.ts` deletes an org, account, invoice or ledger
-   row — deliberately no such method exists.
+   row, and no such method exists.
  - **A trial is a grant with an end date, not a plan change.** `org.plan` is
    untouched for the whole trial, so lapsing needs no migration. One per org.
- - **FOUR EYES.** The reviewer may not be the drafter, whatever their role,
-   or review is a button the same person presses twice.
- - **INVALID_DATA.** A draft whose payee changed after it was saved is HELD, not
-   retargeted. The line stores a fingerprint at save time and it is recomputed
-   at review AND again at execution — the gap between approval and execution is
-   exactly where an address-book edit lands. Bank accounts keep their id when
-   their IBAN is edited, so identity alone does NOT detect this; the fingerprint
-   is what does. Proved end to end through the API.
- - **An org can never lose its last owner** — by role change or deactivation,
-   which are the same hole reached two ways.
+ - **Four eyes.** The reviewer may not be the drafter, whatever their role;
+   otherwise one person could draft and approve the same payment.
+ - **INVALID_DATA.** A draft whose payee changed after it was saved is held, not
+   retargeted. The line stores a fingerprint at save time, recomputed at review
+   and again at execution, because the gap between approval and execution is
+   where an address-book edit lands. Bank accounts keep their id when their
+   IBAN is edited, so the id alone does not detect the change; the fingerprint
+   does. Proved end to end through the API.
+ - **An org can never lose its last owner**, whether by role change or by
+   deactivation.
 
-ONLY EUR IS REAL, and that is enforced in one place. `domain/accounts.ts` holds
-the currency registry, and liveness is a PREDICATE (`live()`) that asks whether
-the provider is configured, not a boolean somebody can flip. USD/GBP/KES/INR are
+**Only EUR is real**, enforced in one place. `domain/accounts.ts` holds the
+currency registry, and liveness is a predicate (`live()`) that asks whether the
+provider is configured, so there is no flag to flip. USD/GBP/KES/INR are
 modelled with `status: "gated"` and a `needs` line naming the partner and the
 missing piece (Iron is request-access and ungranted; Triple-A wants $10k/month;
-dLocal and Yellow Card are uncontracted). A gated account is still RECORDED when
-asked for — that keeps the demand signal and stops the UI lying in the other
-direction — but it can never be spent from. This is the UPI lesson applied
-structurally: a rail that has never moved money must not render as if it has.
+dLocal and Yellow Card are uncontracted). A gated account is still recorded when
+asked for, which keeps the demand signal and lets the UI show the request, but
+it can never be spent from. This applies the UPI lesson in the data model: a
+rail that has never moved money must not render as if it has.
 
 WHAT WE TOOK FROM GNOSIS AND WHAT WE DID NOT — the one real conflict is custody.
 Their whole promise was "you import your wallets, we never have access": an
@@ -75,68 +75,67 @@ bookkeeping and export, never a signature. Rows are stamped `custody:
 "external"` so a signing path can assert on the row itself. Executing a draft
 from an imported wallet returns unsigned transactions and says so.
 
-DRAFT EXECUTION IS WIRED (Aug 2026). `npm run draft:test` (14 checks, spawns
-its own chain and API). A reviewed draft becomes ONE TRANSFER PER LINE, each
-carrying its own device-key authorization; nothing moves until the device signs each
-one, which is what makes every refusal path below safe.
- - ONE CODE PATH. `buildTransferFromQuote` was EXTRACTED from POST
-   /api/transfers unchanged and is INJECTED into the business router, so draft
+**Draft execution is wired (Aug 2026).** `npm run draft:test` (14 checks,
+spawns its own chain and API). A reviewed draft becomes one transfer per line,
+each carrying its own device-key authorization. Nothing moves until the device
+signs each one, which is what makes every refusal path below safe.
+ - **One code path.** `buildTransferFromQuote` was extracted from POST
+   /api/transfers unchanged and is injected into the business router, so draft
    execution cannot become a second, weaker way to create a transfer. The test
    asserts the batch fails with the byte-identical error a direct transfer
-   gives — that equality is the point, not the failure.
- - WHO MAY SIGN. Spending authority is a device key in one person's browser, so
-   `Account.backingUserId` records whose it is. A `payer` may approve and may
-   press send, but only the backing user can produce the signature; the API says
-   that in words instead of failing later at /authorize like a bug.
- - PLAN-DEPENDENT REVIEW. With `transfers.approvals` bought, a draft must be
-   REVIEWED by a second person before it can be sent. WITHOUT it (Starter) there
-   is no review step at all, so DRAFT -> EXECUTING is legal — otherwise every
-   Starter draft would be permanently unsendable, which is what the first cut
-   did.
- - ALL-OR-NOTHING. Every line is planned before anything is created: wallet
+   gives; the check is that the two errors are equal.
+ - **Who may sign.** Spending authority is a device key in one person's
+   browser, so `Account.backingUserId` records whose it is. A `payer` may
+   approve and may press send, but only the backing user can produce the
+   signature. The API states that in its response instead of failing later at
+   /authorize with an unexplained error.
+ - **Plan-dependent review.** With `transfers.approvals` bought, a draft must be
+   reviewed by a second person before it can be sent. Without it (Starter)
+   there is no review step, so DRAFT -> EXECUTING is legal; otherwise every
+   Starter draft would be permanently unsendable.
+ - **All-or-nothing.** Every line is planned before anything is created: wallet
    destinations, gated currencies, sub-fee amounts and over-cap amounts are all
-   refused up front (422, nothing created). The balance is checked as a TOTAL,
+   refused up front (422, nothing created). The balance is checked as a total,
    because the per-transfer check inside buildTransferFromQuote sees the full
    balance every time and N lines that each fit can still overdraw together.
- - PARTIAL FAILURE. If line 3 fails, lines 1-2 exist as CREATED transfers with
-   no signature — they cannot move money and simply expire. The draft goes to
-   FAILED (not back to REVIEWED) so a retry is a deliberate re-draft rather than
-   a second batch stacked on the first.
- - DRAFT STATE IS DERIVED from its transfers, never stored: a row claiming
-   EXECUTED while a transfer sits in MANUAL_REVIEW would be a comfortable lie.
- - MOCK IS A THIRD ANSWER. `CurrencyDefinition.mode()` returns "live" | "mock" |
-   false, not a boolean. EUR is "live" against Monerium and "mock" on a genuinely
-   local deployment (SECURITY.allowSimulation) — real machinery, no real money,
-   labelled as such in the API and the UI. The first cut collapsed mock into
-   "closed", which made the entire product unreachable in development and is how
-   a mock path stops being exercised at all.
- - AN ORG ACCOUNT NEEDS A FUNDING IDENTITY. Per-org Safe/Monerium provisioning
-   is NOT built, so a new org's account is `gated` (never `provisioning`, which
-   would promise work nobody is doing) until someone calls
-   POST /accounts/:id/fund to back it with their own account. A business org
-   must ask; the response says plainly that personal money is now paying company
+ - **Partial failure.** If line 3 fails, lines 1-2 exist as CREATED transfers
+   with no signature; they cannot move money and expire. The draft goes to
+   FAILED (not back to REVIEWED), so a retry means a new draft, not a second
+   batch stacked on the first.
+ - **Draft state is derived** from its transfers, never stored, so a draft
+   cannot show EXECUTED while a transfer sits in MANUAL_REVIEW.
+ - **Mock is a third answer.** `CurrencyDefinition.mode()` returns "live" |
+   "mock" | false. EUR is "live" against Monerium and "mock" on a local
+   deployment (SECURITY.allowSimulation): real machinery, no real money,
+   labelled as such in the API and the UI. Collapsing mock into "closed" makes
+   the whole product unreachable in development, and then the mock path stops
+   being exercised.
+ - **An org account needs a funding identity.** Per-org Safe/Monerium
+   provisioning is not built, so a new org's account is `gated` (never
+   `provisioning`, which would promise work nobody is doing) until someone
+   calls POST /accounts/:id/fund to back it with their own account. A business
+   org must ask; the response states that personal money is now paying company
    bills.
- - STILL UNPROVEN: a batch that actually creates transfers. That needs an active
-   passkey Safe, which needs an ERC-4337 bundler; local hardhat has none, which
-   is exactly why e2e asserts the Safe refusal rather than a send. Prove it on
-   Base Sepolia with `npm run api`.
+ - **Still unproven:** a batch that actually creates transfers. That needs an
+   active passkey Safe, which needs an ERC-4337 bundler; local hardhat has
+   none, so e2e asserts the Safe refusal rather than a send. Prove it on Base
+   Sepolia with `npm run api`.
 
-NOT FINISHED, and refused loudly rather than faked:
+**Not finished.** Each gap is refused with an explanation:
  - No mail transport exists, so member invitations and invoice links return
    their token to the caller with a note saying no email was sent. Do not add a
    "we emailed them" string without adding a transport.
- - Imported wallets are never actually synced — `sync.status` stays `pending`.
-   The ledger is therefore empty until something writes to it, and the
-   Transactions/Assets screens say so rather than showing zeros as if final.
- - Cards are modelled as a capability that reports `unavailable` at ANY price,
-   never as an upgrade. Telling someone to pay for something unbuilt costs them
-   money.
+ - Imported wallets are never synced (`sync.status` stays `pending`). The
+   ledger is empty until something writes to it, and the Transactions/Assets
+   screens say so instead of showing zeros as if final.
+ - Cards are modelled as a capability that reports `unavailable` at any price,
+   never as an upgrade, so nobody is asked to pay for something unbuilt.
 
 ## CHF and NGN — tokens shown, rails still closed (Aug 2026)
 
-Added to the currency registry with its two settlement tokens. `npm run business:test` (43 checks). ALL FOUR ADDRESSES VERIFIED ON CHAIN
-by reading name()/symbol()/decimals() from the contract — the addresses came
-from a third-party listing and a listing page is a claim, not evidence.
+Added to the currency registry with its two settlement tokens. `npm run business:test` (43 checks). All four addresses VERIFIED on chain
+by reading name()/symbol()/decimals() from the contract, because the addresses
+came from a third-party listing.
 
  - **CHF / ZCHF (Frankencoin)** — ethereum
    `0xB58E61C3098d85632Df34EecfB899A1Ed80921cB`, 18dp, supply ~30.6M.
@@ -145,31 +144,31 @@ from a third-party listing and a listing page is a claim, not evidence.
    bnb `0xa8AEA66B361a8d53e8865c62D142167Af28Af058`,
    ethereum `0x17CDB2a01e7a34CbB3DD4b83260B05d0274C8dab`,
    polygon `0x52828daa48C1a9A06F37500882b42daf0bE04C3B`.
-   SUPPLY IS ON BASE (~2.58bn) AND BNB (~699m). Ethereum (~137k) and Polygon
-   (~12.6k) are rounding error — do not design a route through them. Base is
-   also our app chain, so it is the only deployment worth building against.
+   Supply is on Base (~2.58bn) and BNB (~699m). Ethereum (~137k) and Polygon
+   (~12.6k) are negligible; do not design a route through them. Base is also
+   our app chain, so it is the only deployment worth building against.
 
-THE NEW STATE THIS INTRODUCED, and why it needed its own modelling: a currency
-whose TOKEN is real, liquid and verified, but whose ACCOUNT does not exist.
-That is different from USD/GBP (no token, named partner ungranted) and it is
-the shape most likely to mislead — a live token reads as a working rail. So
-`CurrencyDefinition.token` names the token, its issuer, its verified contracts
-and WHAT BACKS IT, and `currencyAvailability()` stamps `heldByUs` on it. The
-test asserts `heldByUs === available`: a token can only be reported as held
-where the rail is actually open, so a shown token can never imply a balance.
+**The new state:** a currency whose token is real, liquid and verified, but
+whose account does not exist. That differs from USD/GBP (no token, named
+partner ungranted), and it is the case most likely to mislead, because a live
+token reads as a working rail. So `CurrencyDefinition.token` names the token,
+its issuer, its verified contracts and what backs it, and
+`currencyAvailability()` stamps `heldByUs` on it. The test asserts
+`heldByUs === available`: a token is reported as held only where the rail is
+open, so a shown token never implies a balance.
 
-BACKING IS THE FIELD THAT MATTERS and the one a currency code hides:
- - EURe is e-money with a REDEMPTION RIGHT AT PAR against a licensed issuer.
- - ZCHF has NO issuer who owes anyone redemption — it is minted against
-   borrower collateral with the peg defended by auctions. Under MiCA it is a
-   crypto-asset, not an EMT, and Frankencoin argues some provisions do not
-   apply because it is decentralised — an argument, not a ruling.
- - cNGN is naira-reserve backed under a NIGERIAN perimeter (SEC Nigeria, 2025
+**Backing** is the field a currency code hides:
+ - EURe is e-money with a redemption right at par against a licensed issuer.
+ - ZCHF has no issuer who owes anyone redemption. It is minted against
+   borrower collateral, with the peg defended by auctions. Under MiCA it is a
+   crypto-asset, not an EMT; Frankencoin argues some provisions do not apply
+   because it is decentralised, which is an argument, not a ruling.
+ - cNGN is naira-reserve backed under a Nigerian perimeter (SEC Nigeria, 2025
    Investments and Securities Act; CBN keeps payment-system oversight). That
    says nothing about MiCA and gives an EEA holder no EU protection.
-Rendering all three as "CHF / EUR / NGN" would flatten instruments that differ
-in kind, which is why the business Currencies table now has a token column
-carrying the backing sentence verbatim.
+Rendering all three as "CHF / EUR / NGN" would treat as alike instruments that
+differ in kind, so the business Currencies table has a token column carrying
+the backing sentence verbatim.
 
 ALSO: `AccountProvider` gained `"none"` — no candidate identified at all,
 distinct from a named partner we have not contracted with. CHF is `none` (there
@@ -184,41 +183,41 @@ nobody has requested.
 
 ## Invoicing by jurisdiction (Aug 2026)
 
-THE MISTAKE THIS FIXED, one commit after the first cut shipped: German law was
-applied to EVERY entity. A Polish or Swedish org was offered
-"§ 19 UStG Kleinunternehmerregelung" and a 19% rate; an Indian one was offered
-German exemptions with no mention of GST. That is worse than offering nothing,
-because it looks authoritative. `domain/jurisdictions.ts` now resolves the rule
-set from the ISSUING entity's country — an invoice is governed by where the
-issuer is established, not where the customer is.
+**Rule set by issuer country.** `domain/jurisdictions.ts` resolves the rule set
+from the issuing entity's country, because an invoice is governed by where the
+issuer is established, not where the customer is. The first cut applied German
+law to every entity: a Polish or Swedish org was offered
+"§ 19 UStG Kleinunternehmerregelung" and a 19% rate, and an Indian one was
+offered German exemptions with no mention of GST. Wrong rules that look
+authoritative do more harm than no rules.
 
-THREE RULE SETS, and the difference is what we ENCODE versus what we CARRY:
+**Three rule sets**, differing in what we encode and what we only carry:
  - `DE`  statutory  — German paragraphs encoded and enforced (see below).
  - `EU`  directive  — the VAT Directive baseline every member state shares
    (Art. 226 particulars, 196 reverse charge, 138 intra-community, 146 export).
-   National additions are NOT encoded; there are 26 other sets and we verified
+   National additions are not encoded; there are 26 other sets and we verified
    none. The org adds its own rules for what its country needs.
  - `GENERIC` structural — both parties, a number, dates and arithmetic that adds
-   up. NO tax law. India, the US, the UK and everywhere else land here.
+   up. No tax law. India, the US, the UK and everywhere else land here.
 
-EVERY REPORT CARRIES ITS VERIFICATION LEVEL, so `ok: true` never claims more
-coverage than we have, and `notVerified` names the gaps verbatim (for India it
-names GSTIN, HSN/SAC, place of supply and the CGST/SGST/IGST split, which we do
-not model). The UI renders that list next to every invoice.
+**Every report carries its verification level**, so `ok: true` never claims
+more coverage than we have, and `notVerified` names the gaps verbatim (for
+India: GSTIN, HSN/SAC, place of supply and the CGST/SGST/IGST split, which we
+do not model). The UI renders that list next to every invoice.
 
-CITATIONS FOLLOW THE RULE SET. `basis(de, eu)` quotes a German paragraph only
-under DE, the Directive article under EU, and NOTHING under GENERIC — quoting
-"§ 14 Abs. 4 UStG" at an Indian entity would be confidently wrong. Same for
+**Citations follow the rule set.** `basis(de, eu)` quotes a German paragraph
+only under DE, the Directive article under EU, and nothing under GENERIC;
+"§ 14 Abs. 4 UStG" does not apply to an Indian entity. The same holds for
 exemption labels: `reasonForRuleSet()` gives Poland "Reverse charge (EU) —
 Art. 196 VAT Directive", not "Reverse Charge (EU-Ausland) — § 3a Abs. 2 UStG".
-Three separate leaks of this kind were found and fixed by testing PL and IN
-against the running server; grep for hardcoded `UStG` before adding UI copy.
+Testing PL and IN against the running server found three leaks of this kind,
+all fixed; grep for hardcoded `UStG` before adding UI copy.
 
-NO VAT RATE TABLE IS SHIPPED. Rates change by statute and 27 numbers we have not
-checked would be 27 confident lies. Germany's 19/7 is enforced because we
-checked it; everywhere else the org sets the rate it charges and we validate
-only that it is a percentage. A missing rate REFUSES rather than defaults —
-quietly applying 19 to a Polish entity is the original bug in miniature.
+**No VAT rate table is shipped.** Rates change by statute, and a table would
+ship 27 numbers we have not checked. Germany's 19/7 is enforced because we checked
+it; everywhere else the org sets the rate it charges and we validate only that
+it is a percentage. A missing rate is refused, never defaulted: applying 19 to
+a Polish entity would repeat the original bug.
 
 The § 33 UStDV €250 simplified-invoice shortcut is likewise German-only. Member
 states may set their own; we have not checked them, so elsewhere full content is
@@ -245,32 +244,32 @@ NOT TAX ADVICE and the app says so on every screen that touches it. What the
 code guarantees is narrower: the software cannot produce a document missing a
 mandatory field, and cannot show tax the issuer does not owe.
 
-THE TWO RULES WITH MONEY ATTACHED, both silent failures — nothing bounces, the
-damage arrives months later:
- - §14c UStG: show VAT you did not owe and you OWE IT ANYWAY, and the customer
-   cannot deduct it. So `VatTreatment` is a DISCRIMINATED UNION whose exempt arm
-   has no rate and no tax field — "exempt with a VAT amount" is unrepresentable,
-   not merely discouraged. computeTotals forces every line to 0% when the
-   invoice is exempt, even a line carrying its own rate.
- - §14 Abs. 4: a missing mandatory field costs the RECIPIENT their Vorsteuerabzug
-   until a corrected invoice arrives. The damage lands on the customer, not on
-   whoever made the mistake, which is why it is checked before issuing.
+**Two rules carry money.** Neither failure bounces; the damage arrives months
+later:
+ - §14c UStG: VAT shown but not owed is owed anyway, and the customer cannot
+   deduct it. So `VatTreatment` is a discriminated union whose exempt arm has no
+   rate and no tax field, which makes "exempt with a VAT amount"
+   unrepresentable. computeTotals forces every line to 0% when the invoice is
+   exempt, even a line carrying its own rate.
+ - §14 Abs. 4: a missing mandatory field costs the recipient their
+   Vorsteuerabzug until a corrected invoice arrives. The damage lands on the
+   customer, not on whoever made the mistake, so it is checked before issuing.
 
-WHAT IS ENCODED (sources checked against IHK/Haufe/dejure, not memory):
+**What is encoded** (sources checked against IHK/Haufe/dejure):
  - §14 Abs. 4 UStG — the ten mandatory details. The date of supply is required
-   EVEN WHEN it equals the invoice date; a supply PERIOD satisfies it too.
- - §33 UStDV — Kleinbetragsrechnung up to €250 GROSS drops recipient, invoice
+   even when it equals the invoice date; a supply period satisfies it too.
+ - §33 UStDV — Kleinbetragsrechnung up to €250 gross drops recipient, invoice
    number, tax number and supply date. One cent over and full content returns.
  - §34a UStDV (new 2025) — Kleinunternehmer content rules, so a missing tax
-   number is a WARNING there and an ERROR elsewhere. §19 thresholds rose in 2025
-   to €25,000 prior year / €100,000 current.
+   number is a warning there and an error elsewhere. §19 thresholds rose in
+   2025 to €25,000 prior year / €100,000 current.
  - Reverse charge — the invoice must carry the literal
    "Steuerschuldnerschaft des Leistungsempfängers" (Art. 226 Nr. 11a MwStSystRL
-   allows other official EU languages), and EU B2B needs BOTH USt-IdNr.
+   allows other official EU languages), and EU B2B needs both USt-IdNr.
  - Also: intra-community supply, export to third countries, place-of-supply
    abroad, and a free-text `other` that forces the issuer to write the basis.
  - Every reason carries its statute, printed next to the choice and on the
-   document, so the user can check us rather than trust us.
+   document, so the user can check it.
 
 MONEY IS INTEGER CENTS end to end, and VAT is rounded ONCE PER RATE BUCKET, not
 per line — rounding each line and summing drifts against what the tax office
@@ -283,16 +282,17 @@ invoice, so they live there once. `issued` on the invoice is a FROZEN SNAPSHOT o
 both parties, the treatment and the display choices — re-rendering from today's
 org profile would quietly rewrite a document the tax office may later ask about.
 
-DISPLAY TOGGLES COVER OPTIONAL BLOCKS ONLY. Everything §14 requires is rendered
-unconditionally and is absent from the settings map: a generator whose settings
-can produce an invalid invoice is a trap, and it springs on the customer.
+**Display toggles cover optional blocks only.** Everything §14 requires is
+rendered unconditionally and is absent from the settings map, so no
+combination of settings can produce an invalid invoice (the customer would
+bear the cost).
 
-THE DOCUMENT IS A DOCUMENT. `public/invoice.html` renders a white A4-printable
-sheet inside the dark app chrome, with a German sender line, per-rate VAT table
-and a print stylesheet. Deliberately NOT the receipt-printer aesthetic that was
-considered: a till roll cannot hold two addresses and a VAT table, does not
-print to A4, and reads as less credible to the accountant who must accept it.
-That treatment belongs on /r/:slug receipts, which are a different artifact.
+**Invoice layout.** `public/invoice.html` renders a white A4-printable sheet
+inside the dark app chrome, with a German sender line, per-rate VAT table and a
+print stylesheet. A receipt-printer look was considered and rejected: a till
+roll cannot hold two addresses and a VAT table, does not print to A4, and reads
+as less credible to the accountant who must accept it. That look belongs on
+/r/:slug receipts, which are a different artifact.
 
 BUG THIS FOUND — QUIRKS MODE. business.html and invoice.html were written
 without `<!DOCTYPE html>`, so they rendered in BackCompat. In quirks mode TABLES
@@ -364,14 +364,14 @@ shape of Rebind's two-line footer; the first cut restated it in every body
 and was trimmed on the user's call. The bank-details screen was also
 corrected: it used to call Monerium the bank.
 
-STATEMENT SOURCES, in order of authority: chain balances at the period's
+**Statement sources**, in order of authority: chain balances at the period's
 boundary blocks (binary search over block timestamps), Monerium orders for the
 counterparty name/IBAN/memo, our transfer records. Duplicates across sources
 are the same money seen twice and are merged by amount within a day. A
-statement that does not reconcile SAYS SO with the delta rather than refusing;
+statement that does not reconcile prints the delta instead of being refused;
 a statement without a Monerium connection says its lines carry ledger data
-only. Proof of ownership is framed as proof of CONTROL (the Safe signs a
-message naming the account, the code and the day); the issuer's word is
+only. Proof of ownership is framed as proof of control (the Safe signs a
+message naming the account, the code and the day); the issuer's record is
 Monerium's own account history, and the document says so.
 
 REFUSED: any document for an account whose account of record is the zero
