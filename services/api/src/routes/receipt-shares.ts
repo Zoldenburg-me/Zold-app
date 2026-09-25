@@ -1,19 +1,14 @@
 /**
  * Shareable receipts.
  *
- * REDACTION HAPPENS SERVER-SIDE. A withheld field is never in the JSON — it
- * comes back as `{withheld:true}` with no value — because "the page does not
- * draw it" and "the page was never sent it" are different guarantees, and only
- * the second survives someone opening devtools.
+ * Redaction happens server-side. A withheld field comes back as
+ * `{withheld:true}` with no value, so it cannot be recovered in devtools.
  *
- * Unlike /pay/<handle>, this link IS the credential, so the slug is 15
- * Crockford characters rather than the design's eight digits, and /api/r/ sits
- * on the tight rate bucket: guessing a slug is guessing at a secret.
+ * Unlike /pay/<handle>, this link is the credential, so the slug is 15
+ * Crockford characters and /api/r/ sits on the tight rate bucket.
  *
- * One share per transfer. Re-posting EDITS it, so narrowing a selection
- * narrows the live link instead of leaving a more generous older one alive —
- * and an edit does NOT extend the 30-day window, or a tweak would turn an
- * expiring link into an indefinite one.
+ * One share per transfer. Re-posting edits it, so narrowing a selection
+ * narrows the live link. An edit does not extend the 30-day window.
  */
 import express from "express";
 import { wrap } from "./util.js";
@@ -37,10 +32,8 @@ export interface ReceiptShareDeps {
 /* ---------------------------------------------------------------------------
  * Shareable receipts
  *
- * Unlike /pay/:handle, this link IS the credential: a slug is the only thing
- * standing between a stranger and someone's transfer, which is why the slug
- * carries real entropy and why the route is bucketed with the auth endpoints
- * against scanning.
+ * The slug is the only thing between a stranger and someone's transfer, so it
+ * carries real entropy and the route shares the auth rate bucket.
  * ------------------------------------------------------------------------- */
 
 /** The sender's own view of the share, with the URL to hand out. */
@@ -60,14 +53,10 @@ function shareResponse(req: express.Request, share: ReceiptShare) {
 /**
  * Create or re-scope the share for a transfer.
  *
- * Re-posting edits the existing share rather than minting a second slug, so
- * narrowing a selection narrows what is actually public. It also keeps the link
- * a sender has already sent working — reissuing on every edit would silently
- * break the copy in someone's chat window.
+ * Re-posting edits the existing share and keeps its slug, so narrowing a
+ * selection narrows what is public and links already sent keep working.
  *
- * The expiry is NOT extended by an edit. A share is a 30-day window opened
- * once; letting a tweak reset the clock would make an indefinitely-live link
- * out of a link the sender believed was expiring.
+ * An edit does not extend the expiry: a share is a 30-day window opened once.
  */
 /** Kill the link. The slug stays recorded so a later visitor is told it was
  *  revoked rather than getting the same 404 as a typo. */
@@ -75,10 +64,9 @@ function shareResponse(req: express.Request, share: ReceiptShare) {
  * The public payload. No session, and no user record beyond the sender's name
  * at the granularity the sender chose.
  *
- * Every refusal is a 404 with the same shape whether the slug is unknown or
- * merely dead, except that a revoked or expired share says which — the holder
- * of a real link deserves to know why it stopped working, and a scanner learns
- * nothing from it that a 404 did not already tell them.
+ * Every refusal is a 404 of the same shape, except that a revoked or expired
+ * share says which. That tells a link holder why it stopped working and tells
+ * a scanner nothing new.
  */
 
 export function createReceiptShareRouter(deps: ReceiptShareDeps) {

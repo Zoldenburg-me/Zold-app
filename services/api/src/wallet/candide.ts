@@ -30,12 +30,11 @@ import { privateKeyToAccount } from "viem/accounts";
 import { decodeFunctionResult, encodeFunctionData, hashTypedData } from "viem";
 
 /**
- * The only shortcuts left are the HARNESS ones (config.ts): fake challenges
- * and a fake UserOperation hash on the hardhat chain, where no bundler
- * exists. Do not add a looser gate here: one keyed on NODE_ENV alone is TRUE
- * on the hosted testnet and would report PAID while no money had left the
- * user's Safe. HARNESS.enabled cannot be true on any chain where money is
- * real.
+ * The only shortcuts are the HARNESS ones (config.ts): fake challenges and a
+ * fake UserOperation hash on the hardhat chain, where no bundler exists. Don't
+ * gate on NODE_ENV alone: it is true on the hosted testnet and would report
+ * PAID while no money left the user's Safe. HARNESS.enabled cannot be true on
+ * a chain with real money.
  */
 import { HARNESS } from "../config.js";
 import { partnerTimeout } from "../http.js";
@@ -223,17 +222,15 @@ export function passkeySafeRecoverySetupTransactions(plan: PasskeySafeDeployment
 }
 
 /**
- * The meta-transactions of one transfer's user-signed debit: the Safe itself
- * transfers the exact amount to the destination the terms name. No allowance,
- * no delegate — the movement IS the thing signed, so the chain enforces the
- * amount and destination rather than our process checking them.
+ * The meta-transactions of one transfer's user-signed debit: the Safe
+ * transfers the exact amount to the destination the terms name. No allowance
+ * or delegate; the transfer itself is signed, so the chain enforces amount and
+ * destination.
  *
- * When the account still carries a standing allowance from an older
- * deployment, a deleteAllowance rides along and revokes it. That allowance is
- * spendable by the co-signer key ALONE — exactly the unilateral disposal
- * capability this model rules out — so the first user-signed send is the
- * right moment to close it: the user is present and signing anyway, and
- * afterwards the account has no spend path but this one.
+ * If the account still carries a standing allowance from an older deployment,
+ * a deleteAllowance is added to revoke it. The co-signer key alone could spend
+ * that allowance, so the first user-signed send closes it, leaving this as the
+ * only spend path.
  */
 export function transferExecutionTransactions(
   token: `0x${string}`,
@@ -293,17 +290,16 @@ function erc20TransferMetaTransaction(token: `0x${string}`, to: `0x${string}`, a
 }
 
 /**
- * The full cash-rail debit as ONE user-signed batch — Change 2, windows 1-3:
+ * The full cash-rail debit as one user-signed batch (Change 2, windows 1-3):
  *
  *   [revoke legacy allowance?] -> fee transfer -> approve venue -> swap call
  *
- * The fee moves to us as its own transfer (a flat service fee, taken openly,
- * not folded into the conversion); the venue approval is for exactly the
- * convertible amount and names the spender the VENUE named; the swap call
- * carries the quoted floor and delivers the output straight to the payout
- * destination. The batch is atomic: if any leg fails — a stale maker quote, a
- * moved pool — the whole operation reverts and nothing has left the Safe.
- * There is no state in which we hold the user's euros.
+ * The flat service fee moves to us as its own transfer, separate from the
+ * conversion. The venue approval is for exactly the convertible amount, to the
+ * spender the venue named. The swap call carries the quoted floor and delivers
+ * straight to the payout destination. The batch is atomic: if any leg fails
+ * (stale maker quote, moved pool) it all reverts and nothing leaves the Safe,
+ * so we never hold the user's euros.
  */
 export function transferSwapBatchTransactions(args: {
   token: `0x${string}`;

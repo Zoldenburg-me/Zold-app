@@ -1,20 +1,14 @@
 /**
- * SEPA remittance information — the line the payee reads on their statement.
+ * SEPA remittance information: the line the payee reads on their statement.
  *
- * This is the only field that travels with the money, so it is what a merchant
- * reconciles against. A bare `Zold <our uuid>` tells the payee nothing they
- * can act on: a merchant receiving a checkout payment could see that Zold sent
- * it but not which of their users it was for, leaving them matching payments
- * by hand — the manual step the product exists to remove.
+ * It is the only field that travels with the money, so merchants reconcile
+ * against it. A bare `Zold <our uuid>` does not tell a merchant which of their
+ * users a checkout payment was for. So the payer's reference leads and our
+ * transfer id follows, and both sides reconcile from the same string.
  *
- * So the payer's reference leads and our transfer id follows, and both sides
- * can reconcile from the same string.
- *
- * The constraints are the scheme's, not ours. SEPA carries at most 140
- * characters of unstructured remittance information, in the "SEPA Latin"
- * subset. Banks along the way are entitled to drop or mangle anything outside
- * it, and some silently truncate instead of rejecting — so we normalise here
- * rather than discover it on a statement.
+ * SEPA carries at most 140 characters of unstructured remittance information,
+ * in the "SEPA Latin" subset. Banks may drop or mangle anything outside it,
+ * and some truncate without rejecting, so we normalise here.
  */
 
 /** Characters SEPA guarantees end to end. */
@@ -62,11 +56,9 @@ function stripReservedSlashes(s: string): string {
  * With no reference the line is `Powered by Zold <transfer id>`, so a payee
  * sees who sent it and an operator can find the transfer from the statement.
  *
- * With one, the reference leads (it is what the payee reconciles on) and a
- * short form of our transfer id trails, kept whole rather than truncated: an
- * id cut in half identifies nothing. If the reference is too long to fit
- * alongside it, the REFERENCE is what gets truncated, and the caller is
- * expected to have refused an over-long reference long before this point.
+ * With one, the reference leads (the payee reconciles on it) and a short form
+ * of our transfer id trails, always whole. If both do not fit, the reference
+ * is truncated; callers should already have refused an over-long reference.
  */
 export function paymentMemo(transferId: string, reference?: string): string {
   const shortId = transferId.replace(/-/g, "").slice(0, 8);

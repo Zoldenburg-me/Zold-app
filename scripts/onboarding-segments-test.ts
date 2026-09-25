@@ -1,17 +1,15 @@
 /**
- * Segmentation at the API, not in the resolver.
+ * Segmentation wiring at the API.
  *
- * `npm run segments:test` proves the rules offline. This proves the WIRING,
- * which is where segmentation usually fails in practice:
+ * `npm run segments:test` covers the resolver rules offline. This covers:
  *
- *   - a blocked person is refused at signup and the refusal is AUDITED even
- *     though no account exists — "we refused someone and kept no record" is
- *     the failure the log exists to prevent;
+ *   - a blocked person is refused at signup and the refusal is audited even
+ *     though no account exists;
  *   - the refusal copy never names the rule that fired;
- *   - the client is handed capabilities but NOT the reasonCode;
- *   - the segment cannot be set or changed by the client;
- *   - an IN_COLLECTIONS account is refused a partner call IN CODE, not merely
- *     denied a button — the check that a crafted request has to get past.
+ *   - the client gets capabilities but not the reasonCode;
+ *   - the client cannot set or change the segment;
+ *   - an IN_COLLECTIONS account is refused a partner call by the API, so a
+ *     crafted request fails too.
  *
  * Starts and stops its own chain and API.
  * Run: npm run onboarding:test

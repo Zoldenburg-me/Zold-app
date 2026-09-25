@@ -102,11 +102,10 @@ export function rateLimit(key: string, perMin: number): boolean {
 /**
  * Failed guesses at one secret, across every source.
  *
- * The per-IP buckets do nothing against a guesser spread over many addresses,
- * so a secret a human chose (an invoice-link password) also counts its own
- * failures. Only failures count, so the rightful holder is not throttled by
- * the requests a normal session makes. The price: whoever holds the link can
- * lock its supplier out for one window by guessing wrong on purpose.
+ * Per-IP buckets miss a guesser spread over many addresses, so a human-chosen
+ * secret (an invoice-link password) also counts its own failures. Only
+ * failures count, so normal use is not throttled. Trade-off: anyone with the
+ * link can lock its supplier out for one window by guessing wrong.
  */
 const failures = new Map<string, { n: number; reset: number }>();
 

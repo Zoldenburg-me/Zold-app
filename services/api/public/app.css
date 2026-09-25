@@ -778,12 +778,10 @@
   .m-btn-quiet .material-symbols-rounded { color: var(--m-dim); font-size: 18px; }
 
   /* ---------- tiles ---------- */
-  /* Two columns, so an odd tile out would sit against a half-width hole.
-     The last tile spans instead when the count is odd — :nth-child(odd) on the
-     last child is exactly "there is no partner for this one". Add a fourth
-     tile and the rule stops applying on its own. Position, not a tile id: a
-     rule naming a tile stays on after a fourth tile arrives, and the dashboard
-     grows tiles by many hands. One rule for one job. */
+  /* Two columns. When the count is odd the last tile spans both, so it does
+     not sit next to an empty half. Keyed on position so it keeps working as
+     tiles are added; a rule naming one tile would stay on after a fourth
+     arrives. */
   .m-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
   .m-tiles > :last-child:nth-child(odd) { grid-column: 1 / -1; }
   .m-tile {
@@ -1076,12 +1074,11 @@
   .m-ref .code { font-size: 32px; font-weight: 400; letter-spacing: 6px; margin: 10px 0 4px; font-variant-numeric: tabular-nums; }
 
   /* ---------- activity + profile ----------
-     On the design spec's tokens. The Noir mockups draw these screens with 40-56px
-     round avatars and 16/14px M3 type, contradicting its OWN written spec —
-     "nothing above 12px, 50% only for status dots" — and the home and send
-     screens built from that spec. The spec wins, so the app has one scale
-     rather than two. Activity rows are literally the dashboard's .m-row: same
-     component, so the two lists cannot drift apart. */
+     Uses the design spec's tokens. The Noir mockups draw these screens with
+     40-56px round avatars and 16/14px M3 type, which contradicts the written
+     spec ("nothing above 12px, 50% only for status dots") and the home and send
+     screens. Follow the spec. Activity rows reuse the dashboard's .m-row so the
+     two lists stay in sync. */
   #dashboard.m-on[data-msub="activity"] #m-activity-screen,
   #dashboard.m-on[data-msub="detail"] #m-detail-screen,
   #dashboard.m-on[data-msub="share"] #m-share-screen,
@@ -1091,17 +1088,13 @@
   #dashboard.m-on[data-msub="documents"] #m-documents-screen { display: block; }
 
   /* ---------- share receipt (composer) ----------
-     The handoff draws this as a 340px card beside a live 520px preview of the
-     public page. A 412px column cannot hold both, and the handoff itself says
-     "in-app this is a bottom sheet or full screen" — so it is a screen, and the
-     preview is a plain list of what the link will and will not carry. A
-     shrunken, unreadable copy of the receipt would look like a preview without
-     answering the only question the composer exists to answer.
+     The handoff draws this as a 340px card beside a 520px live preview of the
+     public page. A 412px column cannot hold both, and the handoff says "in-app
+     this is a bottom sheet or full screen", so it is a screen, and the preview
+     is a plain list of what the link will and will not carry.
 
-     Tokens are the APP's, not the receipt handoff's: this screen sits between
-     Activity and transaction detail, so it follows their pink and their radii.
-     The public page uses the handoff's own palette — it is a separate surface
-     with its own spec and nothing of the app's chrome around it. */
+     Uses the app's tokens (pink, radii), since it sits between Activity and
+     transaction detail. The public page uses the handoff's own palette. */
   .m-sharegroup { padding: 13px 0; border-bottom: 1px solid var(--m-line-faint); }
   .m-sharegroup .lab { font-size: 12.5px; font-weight: 500; color: #c9ccd1; }
   .m-segs { display: flex; gap: 5px; margin-top: 8px; }

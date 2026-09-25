@@ -3,21 +3,16 @@ pragma solidity ^0.8.24;
 
 /// @title AdminTimelock — M-of-N owners, plus a delay before anything lands.
 ///
-/// The privileged surface of this system is small but powerful: whoever owns
-/// the managed contracts can grant execution roles or drain the swapper's
-/// inventory. A single key holding that is one compromise away from the
-/// system's liquidity.
-///
-/// This contract becomes that owner. Two properties matter:
+/// Whoever owns the managed contracts can grant execution roles or drain the
+/// swapper's inventory, so this contract is that owner instead of one key:
 ///
 ///  - M-of-N: one stolen key is not enough to act.
 ///  - A delay: every parameter change and withdrawal is queued in public
-///    before it executes, so anyone watching can see a hostile change coming
-///    and any owner can cancel it.
+///    before it executes, so a hostile change is visible and any owner can
+///    cancel it.
 ///
-/// Emergency pause is deliberately NOT routed through here — see the guardian
-/// role on FxSwapper. Stopping the system must be instant; starting it again
-/// is what deserves the delay.
+/// Emergency pause does not go through here (see the guardian role on
+/// FxSwapper): stopping must be instant; restarting gets the delay.
 contract AdminTimelock {
     struct Operation {
         address target;

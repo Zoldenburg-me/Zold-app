@@ -36,12 +36,11 @@ export const publicUser = (
       }
     : {}),
   /**
-   * The client is told its capabilities, NOT the rule that produced them.
+   * The client gets its capabilities, not the rule that produced them.
    *
    * `reasonCode` and the raw US answers are stripped: the first tells someone
-   * which answer to change, and the second is theirs but has no business being
-   * echoed back on every read. `gate` IS sent, because a gated segment must be
-   * able to say what is missing.
+   * which answer to change, and the second need not be echoed on every read.
+   * `gate` is sent so a gated segment can say what is missing.
    */
   ...(segment
     ? {

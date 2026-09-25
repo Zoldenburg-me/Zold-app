@@ -1,20 +1,20 @@
 /**
- * Monerium — the identity and the euro rail, connected two ways.
+ * Monerium: identity and the euro rail, connected by OAuth or by the user's
+ * own API keys.
  *
- * OAUTH, or the user's OWN API keys. Either way the rule is the same:
- * CONNECTING IS NOT APPROVAL. kycStatus stays pending until an IBAN is
- * attributed to this Safe's address on the connected account, because that
- * address match is the only evidence that the person who holds the Monerium
- * account is the person holding this Zold account.
+ * Connecting is not approval. kycStatus stays pending until an IBAN is
+ * attributed to this Safe's address on the connected account; that address
+ * match is the only evidence that the Monerium account holder is the person
+ * holding this Zold account.
  *
- * The OAuth callback is bound to an HttpOnly cookie nonce as well as the
- * `state`, because state alone let an attacker start a connect on their own
- * account, send the victim the consent link, and receive the victim's tokens.
- * The connect must therefore start in the browser that finishes it.
+ * The OAuth callback is bound to an HttpOnly cookie nonce as well as `state`.
+ * With state alone, an attacker could start a connect on their own account,
+ * send the victim the consent link and receive the victim's tokens. The
+ * connect must start in the browser that finishes it.
  *
- * Token encryption, refresh and the "whose credentials act for this user"
- * decision live in adapters/monerium-connection.ts — the sandbox adapter's
- * redeem and deposit polling need the same answer these routes do.
+ * Token encryption, refresh and "whose credentials act for this user" live in
+ * adapters/monerium-connection.ts, because the sandbox adapter's redeem and
+ * deposit polling need the same answer.
  */
 import express from "express";
 import { wrap } from "./util.js";
@@ -113,26 +113,23 @@ async function readMoneriumAccountSnapshot(user: User, accessToken?: string) {
 }
 
 /**
- * Connect the user's OWN Monerium app credentials.
+ * Connect the user's own Monerium app credentials.
  *
- * For testing against your own Monerium account: create an app in the account's
- * developer section, paste its client id and secret here. The server proves the
- * pair against Monerium first (a stored credential nobody checked turns every
- * later failure into a phantom bug), then stores the secret encrypted and
- * treats the connection like an OAuth one — activation, deposit polling and
- * SEPA redeems run on these credentials, since the user's profile is invisible
- * to the app's own keys.
+ * For testing against your own Monerium account: create an app in the
+ * account's developer section and paste its client id and secret. The server
+ * checks the pair against Monerium first, stores the secret encrypted and
+ * treats the connection like an OAuth one. Activation, deposit polling and
+ * SEPA redeems run on these credentials, since the app's own keys cannot see
+ * the user's profile.
  *
- * WHAT IT DOES NOT DO: approve KYC. Connecting is not identity. Approval comes
- * from activation (address-matched IBAN on the connected account), exactly as
- * for the OAuth path — unless the connected account ALREADY attributes an IBAN
- * to this Safe, which is the same evidence activation would produce.
+ * This does not approve KYC. Approval comes from activation (an
+ * address-matched IBAN on the connected account), as for OAuth, unless the
+ * connected account already attributes an IBAN to this Safe.
  */
 /**
- * Forget the user's API keys. The IBAN Monerium issued stays recorded — it
- * exists at Monerium whether or not we hold a credential — but nothing on this
- * account can be read or redeemed until keys are connected again, and the
- * funding detail says so instead of leaving a silent dead rail.
+ * Forget the user's API keys. The IBAN Monerium issued stays recorded (it
+ * exists at Monerium either way), but nothing on this account can be read or
+ * redeemed until keys are connected again, and the funding detail says so.
  */
 
 export function createMoneriumRouter(deps: MoneriumDeps) {
@@ -423,14 +420,13 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         }
       }
       /**
-       * Wrong-profile bindings are DETECTED and parked, never unlinked. An
-       * address linked under the app's DEFAULT profile has its IBAN request park
-       * forever, and POST /addresses answers "already linked" without moving the
-       * binding — but unlinking to re-link BURNS the address: Monerium answers
-       * every later link attempt with "Cannot link, please contact support", and
-       * a Safe's address cannot be changed. Detection tells the operator exactly
-       * what to raise with Monerium; deletion turns a stuck account into a
-       * bricked one (verified live on 0x9650E5…).
+       * Wrong-profile bindings are detected and parked. Don't unlink them. An
+       * address linked under the app's default profile has its IBAN request
+       * park forever, and POST /addresses answers "already linked" without
+       * moving the binding. Unlinking to re-link burns the address: Monerium
+       * answers every later link with "Cannot link, please contact support",
+       * and a Safe's address cannot change (seen on 0x9650E5…). Detection tells
+       * the operator what to raise with Monerium.
        */
       let wrongProfileBinding: string | undefined;
       if (viaApp && profileId) {
@@ -489,14 +485,13 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       }
       const snapshot = await readMoneriumAccountSnapshot(user, accessToken);
       /**
-       * ADDRESS-MATCHED ONLY — an IBAN is money routing, not decoration.
+       * Address-matched IBANs only.
        *
-       * With app credentials the snapshot lists EVERY customer's IBAN, so
-       * falling back to "the first IBAN in the snapshot" when this address's
-       * has not been issued yet displays some OTHER account's IBAN as this one's
-       * — and a payment sent to it mints into the other user's Safe. No IBAN yet
-       * must mean iban_pending, never someone else's; refreshPendingIban polls
-       * by address and attributes correctly.
+       * With app credentials the snapshot lists every customer's IBAN. Falling
+       * back to the first one when this address's is not issued yet would show
+       * another account's IBAN here, and a payment sent to it mints into that
+       * user's Safe. No IBAN yet means iban_pending; refreshPendingIban polls
+       * by address and attributes it.
        */
       const iban =
         snapshot.ibans.find(

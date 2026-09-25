@@ -1,13 +1,12 @@
 /**
- * User-signed Safe execution — the meta-transactions of one transfer's debit,
- * signed by the user's passkey as a UserOperation. There is no delegate and
- * no standing spend authority, so the property under test is that the batch
- * contains EXACTLY the movement the user approves — token, destination and
- * amount chain-enforced — plus, at most, the revocation of a standing
- * allowance left on an older Safe.
+ * User-signed Safe execution: the meta-transactions of one transfer's debit,
+ * signed by the user's passkey as a UserOperation. With no delegate or
+ * standing spend authority, the test checks that the batch contains exactly
+ * the movement the user approves (token, destination, amount) plus, at most,
+ * revoking a standing allowance left on an older Safe.
  *
  * No chain, no bundler: the builder is pure. The bundler/paymaster wrapper and
- * the authorize-route flow are exercised against Base Sepolia, not here.
+ * the authorize-route flow run against Base Sepolia, not here.
  */
 import assert from "node:assert/strict";
 import { decodeFunctionData } from "viem";

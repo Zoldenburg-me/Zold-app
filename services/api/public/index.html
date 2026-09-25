@@ -22,9 +22,8 @@
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <!-- Network state. Kept outside every screen because it is true of all of
-       them, and because the API refuses rather than serving a stale balance
-       while it is up — the user is owed the reason. -->
+  <!-- Network state. Outside every screen because it applies to all of them.
+       The API refuses to serve a stale balance, so the user needs the reason. -->
   <div id="offline-bar" class="hidden">You're offline — balances and quotes can't be refreshed</div>
 
   <!-- ============ blocked (an outcome, not an error) ============
@@ -75,11 +74,9 @@
             <button type="button" class="ghost sm" id="cit-add">Add</button>
           </div>
 
-          <!-- ONE US question, naming all three grounds — the person answers
-               about themselves without having to know which of the three
-               applies. Deliberately NOT pre-answered: an unanswered question
-               and a "no" are different facts, and the API refuses a missing
-               answer rather than reading silence as a denial. -->
+          <!-- One US question naming all three grounds, so the person need not
+               know which applies. Not pre-answered: unanswered and "no" are
+               different facts, and the API refuses a missing answer. -->
           <div class="onb-qs" id="us-qs">
             <div class="onb-qs-h">One required question</div>
             <div class="onb-q" data-q="usPerson">
@@ -153,21 +150,18 @@
             <div class="pstep"><span class="pdot">✓</span><span class="ptext">Deploy your smart wallet <span class="pwhy">— approve with the passkey, we cover the fee</span></span></div>
             <div class="pstep"><span class="pdot">✓</span><span class="ptext">Connect Monerium <span class="pwhy">— your identity check and IBAN</span></span></div>
           </div>
-          <!-- No "later": the API refuses to issue an IBAN to an account with no
-               passkey (custodyBlockerBeforeFunding), and there is no mock IBAN
-               to look around with. The passkey IS the account. -->
+          <!-- No "later" option: the API refuses an IBAN to an account with no
+               passkey (custodyBlockerBeforeFunding), and there is no mock IBAN. -->
           <div class="onb-note">The passkey is the account: it signs in, it approves every payment, and it is what Monerium's IBAN is bound to. Without one nothing can be issued.</div>
           <div class="error hidden" id="pk-err"></div>
         </div>
 
-        <!-- Step 3: recovery, before the Monerium gate. The smart wallet now
-             has an address money can reach, and the only thing that can spend
-             from it is the passkey on this device. Drawn only when /api/health
-             says the deployment has Candide's service — offerRecoveryEnrolment()
-             resolves without showing this when it does not, because an
-             unavailable step drawn as a promise is the thing this app does not
-             do. The email is the one given at signup and is verified HERE, by
-             Candide's code; Zold sends nothing. -->
+        <!-- Step 3: recovery, before the Monerium gate. The smart wallet can now
+             receive money and only this device's passkey can spend from it.
+             Shown only when /api/health says Candide's service is configured;
+             otherwise offerRecoveryEnrolment() resolves without showing it.
+             The email is the signup one, verified here by Candide's code;
+             Zold sends nothing. -->
         <div id="onb-step3" class="hidden">
           <h1>If you lose this device</h1>
           <div class="sub">Your passkey exists only here. Register your email so a lost phone is not a lost account: a code to it, then a waiting period you can cancel from this device, moves the account to a new passkey.</div>
@@ -265,10 +259,9 @@
         </div>
       </div>
 
-      <!-- Step 3: recovery, stated at its real strength and no more. Candide
-           holds the one guardian key; the waiting period is the module's, on
-           chain; and nothing here tells the owner a recovery began — the
-           Profile screen does, which is why the foot says to keep the device. -->
+      <!-- Step 3: recovery. Candide holds the only guardian key and the
+           waiting period is the module's, on chain. Only the Profile screen
+           tells the owner a recovery began, hence "keep this device". -->
       <div class="onb-hero-inner hero-3">
         <h2>A lost phone is not a lost account.</h2>
         <div class="tag">Recovery is a guardian on your smart wallet, run by Candide, that can move the account to a new passkey only after a code on every registered channel and a waiting period.</div>
@@ -601,11 +594,10 @@
       </div>
 
       <!-- ================= Card (Gnosis Pay, connected) =================
-           DELIBERATELY NOT A ZOLD CARD. Gnosis Pay issues it, holds its KYC
-           and owns the card Safe; permissionless mode gives no webhooks and no
-           attribution back to us. So this screen shows a CONNECTED account and
-           says whose it is, every time — and every figure carries the moment it
-           was read, because there is nothing pushing updates. -->
+           Not a Zold card. Gnosis Pay issues it, holds its KYC and owns the
+           card Safe; permissionless mode gives us no webhooks or attribution.
+           The screen shows a connected account and says whose it is. Every
+           figure carries the time it was read, since nothing pushes updates. -->
       <div class="m-screen" id="m-card-screen">
         <div class="m-sheadrow"><button class="m-backbtn" data-mback><span class="material-symbols-rounded" style="font-size:24px">arrow_back</span></button></div>
         <div class="m-h1">Card</div>

@@ -1,25 +1,22 @@
 /**
  * Plans and the feature matrix, derived from Gnosis Business's own table.
  *
- * TWO RULES THAT ARE EASY TO GET WRONG, and that the rest of this file exists
- * to enforce:
+ * Two rules this file enforces:
  *
- *  1. Gating is a READ-TIME FILTER, never a write-time delete. A downgraded org
- *     keeps its chart of accounts, its tags and its history; the API refuses to
- *     serve them and the UI offers an upgrade. Gnosis promised exactly this
- *     ("your information isn't lost… all your previous data and settings will
- *     come back automatically") and it is only true if nothing deletes on
- *     downgrade. Nothing in this codebase may delete on downgrade.
+ *  1. Gating is a read-time filter, never a write-time delete. A downgraded
+ *     org keeps its chart of accounts, tags and history; the API refuses to
+ *     serve them and the UI offers an upgrade. Gnosis promises that data
+ *     "will come back automatically" after an upgrade, which only holds if
+ *     nothing in this codebase deletes on downgrade.
  *
- *  2. A trial is a GRANT WITH AN END DATE, not a plan change. `org.plan` is
- *     untouched for the whole trial, so when it lapses the org is back where it
- *     was with no migration and no data touched. One per org, ever.
+ *  2. A trial is a grant with an end date, not a plan change. `org.plan` is
+ *     untouched during the trial, so when it lapses nothing needs migrating.
+ *     One per org, ever.
  *
- * Grants are listed as an explicit set of plans rather than a rank, because
- * `premium` and `business` are siblings, not steps: premium is the paid
- * personal plan and business is the paid organisational one. A numeric rank
- * would force one to imply the other and quietly grant members to a personal
- * account or deny cost-basis to a business.
+ * Grants are an explicit set of plans, not a rank: `premium` (paid personal)
+ * and `business` (paid organisational) are siblings. A numeric rank would make
+ * one imply the other, granting members to a personal account or denying
+ * cost-basis to a business.
  */
 
 import type { OrgType, Organisation, PlanId } from "./types.js";
@@ -433,9 +430,7 @@ export function limitsFor(
 
 /**
  * The whole matrix for one org, for the UI. Refused capabilities are returned
- * WITH their reasons rather than omitted, so the client can render an upgrade
- * prompt in place instead of silently hiding a feature — the difference between
- * a product that sells and one that looks broken.
+ * with their reasons so the client can render an upgrade prompt in place.
  */
 export function capabilityMatrix(
   org: Pick<Organisation, "type" | "plan" | "trial">,
