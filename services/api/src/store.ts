@@ -28,7 +28,9 @@ import type {
   Organisation,
 } from "./domain/types.js";
 import type {
+  ConversionSweep,
   CryptoDeposit,
+  MoneriumIssueRecord,
   PaymentRequest,
   Quote,
   ReceiptShare,
@@ -785,5 +787,30 @@ export const store = {
     const byId = new Map(entries.map((e) => [e.id, e]));
     db.ledger = db.ledger.map((e) => byId.get(e.id) ?? e);
     persist();
+  },
+
+  // ── Bookkeeping inputs the statement writer needs ─────────────────────────
+
+  get moneriumIssueOrders() {
+    return db.moneriumIssueOrders;
+  },
+  /** The bank facts of a processed issue order, once per order id. */
+  recordMoneriumIssue(r: MoneriumIssueRecord) {
+    const existing = db.moneriumIssueOrders.find((x) => x.orderId === r.orderId);
+    if (existing) return existing;
+    db.moneriumIssueOrders.push(r);
+    persist();
+    return r;
+  },
+  get conversionSweeps() {
+    return db.conversionSweeps;
+  },
+  addConversionSweep(s: ConversionSweep) {
+    db.conversionSweeps.push(s);
+    persist();
+    return s;
+  },
+  documentsForOrg(orgId: string) {
+    return db.documents.filter((d) => d.orgId === orgId);
   },
 };

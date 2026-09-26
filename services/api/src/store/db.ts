@@ -28,7 +28,9 @@ import type {
   Organisation,
 } from "../domain/types.js";
 import type {
+  ConversionSweep,
   CryptoDeposit,
+  MoneriumIssueRecord,
   PaymentRequest,
   Quote,
   ReceiptShare,
@@ -60,6 +62,10 @@ export interface Db {
   processedMoneriumOrders: string[];
   /** Monerium webhook delivery ids already accepted. */
   processedMoneriumWebhooks: string[];
+  /** The bank facts of each processed issue order, for the statement line. */
+  moneriumIssueOrders: MoneriumIssueRecord[];
+  /** Monthly leftover sweeps (bookkeeping/statement.ts). */
+  conversionSweeps: ConversionSweep[];
   /** Inbound crypto seen at a user's account, and what became of it. */
   cryptoDeposits: CryptoDeposit[];
   /** Append-only audit trail: segment decisions, consents, partner events. */
@@ -117,6 +123,8 @@ export let db: Db = {
   shopifyConnections: [],
   processedMoneriumOrders: [],
   processedMoneriumWebhooks: [],
+  moneriumIssueOrders: [],
+  conversionSweeps: [],
   cryptoDeposits: [],
   audit: [],
   recoveryRequests: [],
@@ -144,6 +152,8 @@ export function initStore() {
     db.shopifyConnections ??= [];
     db.processedMoneriumOrders ??= [];
     db.processedMoneriumWebhooks ??= [];
+    db.moneriumIssueOrders ??= [];
+    db.conversionSweeps ??= [];
     db.cryptoDeposits ??= [];
     db.audit ??= [];
     db.recoveryRequests ??= [];
