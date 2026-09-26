@@ -374,6 +374,72 @@ RENDER.members = async () => {
     </tr>`).join("") + `</tbody></table></div>`;
 };
 
+/**
+ * The accountant's month: one line per economic event, a Beleg per line,
+ * the Lexware CSV and the ZIP. Figures from a conversion carry the rule-2
+ * label until a swap has moved real money.
+ */
+const EVENT_LABEL = {
+  sepa_in: "SEPA in", sepa_out: "SEPA out", sepa_out_reversal: "Reversal",
+  crypto_converted: "USDC → EURe", crypto_held: "USDC held", sweep: "Kursdifferenz sweep",
+};
+export let exportMonth = null;
+export const setExportMonth = (v) => { exportMonth = v; };
+
+RENDER.export = async () => {
+  if (!cap("export.ledger").allowed) return gateHtml("export.ledger");
+  const first = await api(`/api/orgs/${org.id}/bookkeeping/statement`);
+  const months = first.months.length ? first.months : [new Date().toISOString().slice(0, 7)];
+  if (!exportMonth || !months.includes(exportMonth)) setExportMonth(months[0]);
+  const d = await api(`/api/orgs/${org.id}/bookkeeping/statement?month=${encodeURIComponent(exportMonth)}`);
+  const integrations = cap("integrations.accounting").allowed
+    ? (await api(`/api/orgs/${org.id}/integrations`).catch(() => null))?.integrations : null;
+  const withBeleg = d.lines.filter((l) => l.documentCode).length;
+  return `<div class="card"><div class="h"><div><h2>Accountant export</h2>
+      <div class="desc">One line per economic event on the EUR account, the way a PayPal or Stripe clearing account appears in the books. Each line gets one Beleg holding the on-chain detail.</div></div>
+      <select id="x-month">${months.map((m) => `<option ${m === exportMonth ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></div>
+    ${d.swapsHaveExecuted ? "" : `<div class="banner warn">${esc(d.note || "")}</div>`}
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.8rem 0">
+      <button data-act="export-rebuild" class="ghost">Rebuild lines</button>
+      <button data-act="export-prepare">Prepare ${esc(exportMonth)} (issue Belege)</button>
+      <button data-act="export-csv" class="ghost" ${withBeleg ? "" : "disabled"}>Lexware CSV</button>
+      <button data-act="export-zip" class="ghost" ${withBeleg ? "" : "disabled"}>Belege ZIP</button>
+      ${integrations?.getmyinvoices?.connected ? `<button data-act="gmi-push" ${withBeleg ? "" : "disabled"}>Push Belege to GetMyInvoices</button>` : ""}
+    </div>
+    <div class="desc">${d.lines.length} line(s), ${withBeleg} with a Beleg.${integrations && !integrations.getmyinvoices?.connected ? " Connect GetMyInvoices under Settings to push the Belege." : ""}</div>
+    ${d.lines.length ? `<table><thead><tr><th>Value date</th><th>Event</th><th>Counterparty</th><th>Reference</th><th class="num">EUR</th><th>Beleg</th></tr></thead><tbody>` +
+      d.lines.map((l) => `<tr>
+        <td class="desc">${esc(l.valueDate)}${l.bookingDate !== l.valueDate ? `<br><span class="desc">booked ${esc(l.bookingDate)}</span>` : ""}</td>
+        <td>${esc(EVENT_LABEL[l.event] || l.event)}${l.unexecuted ? ` <span class="pill mut" title="from an unexecuted path">unexecuted</span>` : ""}</td>
+        <td>${esc(l.counterparty?.name || "")}<br><span class="desc mono">${esc(l.counterparty?.iban || (l.counterparty?.address ? l.counterparty.address.slice(0, 10) + "…" : ""))}</span></td>
+        <td>${esc(l.reference)}${l.links?.invoiceNumber ? `<br><span class="desc">Invoice ${esc(l.links.invoiceNumber)}</span>` : ""}</td>
+        <td class="mono num" style="color:${l.amountCents >= 0 ? "var(--green)" : "var(--text)"}">${(l.amountCents / 100).toFixed(2)}</td>
+        <td>${l.documentCode ? `<a href="${esc(l.documentUrl)}" target="_blank" rel="noopener" class="mono">${esc(l.documentCode)}</a>` : `<button class="sm ghost" data-act="line-beleg" data-line="${esc(l.id)}">Issue</button>`}</td>
+      </tr>`).join("") + `</tbody></table>`
+      : `<div class="empty">No statement lines in ${esc(exportMonth)}. Lines appear once money moves on the EUR account backed by your smart account.</div>`}
+  </div>`;
+};
+
+/** Settings → Integrations: the connector's state, never its key. */
+export async function integrationsCard() {
+  if (!cap("integrations.accounting").allowed) return "";
+  const r = await api(`/api/orgs/${org.id}/integrations`).catch(() => null);
+  if (!r) return "";
+  const g = r.integrations.getmyinvoices;
+  return `<div class="card"><div class="h"><div><h2>Accounting connector</h2>
+      <div class="desc">GetMyInvoices is the inbox your accountant collects documents from. Each month's Belege can be pushed there; bank lines go in as a Lexware CSV (or a GetMyInvoices bank account — still to be decided with the accountant).</div></div></div>
+    ${g.connected
+      ? `<div>Connected to <b>${esc(g.accountName || "GetMyInvoices")}</b>${g.accountEmail ? ` (${esc(g.accountEmail)})` : ""} since ${esc(String(g.connectedAt).slice(0, 10))}.</div>
+         <div style="margin-top:.6rem"><button class="ghost" data-act="gmi-disconnect">Remove key</button></div>`
+      : r.available
+        ? `<label>API key (GetMyInvoices → Settings → API)</label><input id="gmi-key" type="password" autocomplete="off" placeholder="paste the key; it is verified, then stored encrypted" />
+           <label>Company id (optional)</label><input id="gmi-company" placeholder="leave empty for the account's own company" />
+           <div style="margin-top:.6rem"><button data-act="gmi-connect">Verify and connect</button></div>
+           <div class="desc" style="margin-top:.4rem">The key is checked against GetMyInvoices once, stored encrypted, and never shown again. Nothing is uploaded until you press Push on the export page.</div>`
+        : `<div class="desc">Not available: ${esc(g.needs || "")}.</div>`}
+  </div>`;
+}
+
 RENDER.settings = async () => {
   const plan = await api(`/api/orgs/${org.id}/plan`);
   return `<div class="card"><div class="h"><div><h2>Organisation</h2></div>
@@ -409,7 +475,7 @@ RENDER.settings = async () => {
       </div>`).join("") + `</div>
       ${plan.trialAvailable ? `<div style="margin-top:1rem"><button class="ghost" data-act="trial">
         Start the ${plan.trialDays}-day trial</button></div>` : ""}
-    </div>`;
+    </div>` + (await integrationsCard());
 };
 
 

@@ -6,8 +6,25 @@
  * and nowhere else.
  */
 import { $, api, cap, dialog, esc, fmtEur, org, orgs, setView, toast, token } from "./core.js";
-import { invoiceDraft, readInvoiceEditor, refreshInvoiceCheck, setInvoiceDraft } from "./views.js";
+import { exportMonth, invoiceDraft, readInvoiceEditor, refreshInvoiceCheck, setExportMonth, setInvoiceDraft } from "./views.js";
 import { loadOrg, render } from "./shell.js";
+
+/** A file the API serves behind the bearer header, which a navigation
+ *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
+async function download(path, filename) {
+  const res = await fetch(path, { headers: { authorization: `Bearer ${token}` } });
+  if (!res.ok) return toast("Export failed", true);
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function monthChosen() {
+  const v = $("#x-month")?.value || exportMonth;
+  setExportMonth(v);
+  return v;
+}
 
 export const ACTIONS = {
   async "shopify-connect"() {
@@ -249,13 +266,50 @@ export const ACTIONS = {
     toast(`${r.changed} transaction(s) re-mapped. ${r.note}`);
   },
   async "export-ledger"() {
-    // The route reads the bearer header, which a navigation cannot carry.
-    const res = await fetch(`/api/orgs/${org.id}/export/ledger.csv`, { headers: { authorization: `Bearer ${token}` } });
-    if (!res.ok) return toast("Export failed", true);
-    const url = URL.createObjectURL(await res.blob());
-    const a = Object.assign(document.createElement("a"), { href: url, download: "transactions.csv" });
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+    await download(`/api/orgs/${org.id}/export/ledger.csv`, "transactions.csv");
+  },
+
+  // ── Accountant export ────────────────────────────────────────────────────
+  async "export-rebuild"() {
+    const r = await api(`/api/orgs/${org.id}/bookkeeping/statement/rebuild`, { method: "POST" });
+    toast(`${r.added} line(s) added, ${r.updated} refreshed. Account codes you set by hand were left alone.`);
+  },
+  async "export-prepare"() {
+    const month = monthChosen();
+    const r = await api(`/api/orgs/${org.id}/bookkeeping/export/${month}/prepare`, { method: "POST" });
+    toast(`${month}: ${r.lines} line(s), ${r.belegeIssued} Beleg(e) issued${r.failed.length ? `, ${r.failed.length} failed` : ""}.`, r.failed.length > 0);
+  },
+  async "export-csv"() {
+    const month = monthChosen();
+    await download(`/api/orgs/${org.id}/bookkeeping/export/${month}/lexware.csv`, `zold-${month}-lexware.csv`);
+  },
+  async "export-zip"() {
+    const month = monthChosen();
+    await download(`/api/orgs/${org.id}/bookkeeping/export/${month}/belege.zip`, `zold-${month}-belege.zip`);
+  },
+  async "line-beleg"(el) {
+    const r = await api(`/api/orgs/${org.id}/bookkeeping/lines/${el.dataset.line}/beleg`, { method: "POST" });
+    toast(`Beleg ${r.code} ${r.issued ? "issued" : "already existed"}.`);
+  },
+  async "gmi-push"() {
+    const month = monthChosen();
+    if (!confirm(`Upload every Beleg of ${month} to your GetMyInvoices account? Documents already there (same number) are skipped.`)) return;
+    const r = await api(`/api/orgs/${org.id}/integrations/getmyinvoices/push`, { method: "POST", body: { month } });
+    const n = (k) => r.results.filter((x) => x.outcome === k).length;
+    toast(`${n("uploaded")} uploaded, ${n("exists")} already there, ${n("no-beleg")} without a Beleg, ${n("failed")} failed.`, n("failed") > 0);
+  },
+  async "gmi-connect"() {
+    const apiKey = $("#gmi-key").value.trim();
+    const companyId = $("#gmi-company").value.trim();
+    if (!apiKey) return toast("Paste the API key first.", true);
+    const r = await api(`/api/orgs/${org.id}/integrations/getmyinvoices`, { method: "POST", body: { apiKey, ...(companyId ? { companyId } : {}) } });
+    $("#gmi-key").value = "";
+    toast(`Connected to ${r.account.organization || r.account.name || "GetMyInvoices"}.`);
+  },
+  async "gmi-disconnect"() {
+    if (!confirm("Remove the GetMyInvoices key? Nothing already uploaded is touched.")) return;
+    await api(`/api/orgs/${org.id}/integrations/getmyinvoices`, { method: "DELETE" });
+    toast("Key removed.");
   },
   async "save-org"() {
     const body = {
