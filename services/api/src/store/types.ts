@@ -330,6 +330,9 @@ export interface CryptoDeposit {
   logIndex: number;
   /** Raw token units (EURe is 18dp, USDC is 6dp), as a string — JSON has no bigint. */
   amountUnits: string;
+  /** The sending address, as the Transfer log named it. Absent on rows
+   *  recorded before it was kept. The zero address is a Monerium mint. */
+  from?: `0x${string}`;
   amountEur?: number;
   amountUsdc?: number;
   /**
@@ -387,9 +390,74 @@ export interface CryptoDeposit {
    * the swap. Stored so the reported spread can be checked.
    */
   midRate?: number;
+  /**
+   * The conversion as the chain recorded it. `txs` used to hold only the
+   * ERC-4337 userOperationHash, which no explorer resolves to a block; the
+   * bundler's receipt gives the transaction hash, block and gas, and the
+   * Beleg needs all three.
+   */
+  conversion?: {
+    userOpHash?: string;
+    txHash?: string;
+    blockNumber?: number;
+    /** Block time of the conversion. */
+    at?: string;
+    /** USDC units actually swapped. Equals amountUnits on an exact-input
+     *  conversion; less on an exact-output one, where the rest stays in the Safe. */
+    amountInUnits?: string;
+    /** Venue fee taken out of the input, in USDC units, where the venue
+     *  itemises one (LI.FI's fixed fee); absent when it does not. */
+    venueFeeUnits?: string;
+    /** Gas as the bundler settled it, and who paid: the paymaster, or the
+     *  Safe in ETH or in the gas token. */
+    gasCostWei?: string;
+    gasPaidBy?: "sponsored" | "safe-native" | "safe-token";
+  };
+  /** Exact-output conversion: USDC units left in the Safe after the swap,
+   *  waiting for the monthly sweep. */
+  leftoverUnits?: string;
   txs: { step: string; hash: string }[];
   detectedAt: string;
   updatedAt: string;
+}
+
+/**
+ * A processed Monerium `issue` order (a SEPA credit that minted EURe), kept
+ * as the bank facts the books need: who paid, from which IBAN, with what
+ * reference. Written once when the order is first seen; never the whole
+ * order, never anything about the payer beyond what a bank statement shows.
+ */
+export interface MoneriumIssueRecord {
+  orderId: string;
+  userId: string;
+  amountEur: number;
+  counterpartyName?: string;
+  counterpartyIban?: string;
+  memo?: string;
+  processedAt: string;
+  recordedAt: string;
+}
+
+/**
+ * One monthly sweep: the USDC left over by exact-output conversions,
+ * converted in one user-signed swap and booked as a single
+ * "Kursdifferenz / Restbeträge" line. Written by the sweep route once the
+ * chain has the swap; a row here is a swap that happened.
+ */
+export interface ConversionSweep {
+  id: string;
+  userId: string;
+  /** YYYY-MM the leftovers belong to. */
+  month: string;
+  depositIds: string[];
+  amountInUnits: string;
+  creditedEur: number;
+  provider?: string;
+  rate?: number;
+  midRate?: number;
+  conversion?: CryptoDeposit["conversion"];
+  txs: { step: string; hash: string }[];
+  at: string;
 }
 
 export interface Transfer {

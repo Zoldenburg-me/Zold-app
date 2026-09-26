@@ -163,6 +163,7 @@ export async function createPaymentRequest(
     expiresAt: string;
     test?: boolean;
     invoiceId?: string;
+    externalInvoiceNumber?: string;
   },
   source: PaymentRequestSource,
   orgId?: string,
@@ -213,6 +214,7 @@ export async function createPaymentRequest(
     state: "OPEN",
     ...(input.test ? { test: true } : {}),
     ...(input.invoiceId ? { invoiceId: input.invoiceId } : {}),
+    ...(input.externalInvoiceNumber ? { externalInvoiceNumber: input.externalInvoiceNumber } : {}),
     cryptoQuotes: [],
     payments: [],
     source,

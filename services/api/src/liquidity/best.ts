@@ -88,6 +88,35 @@ export class BestExecutionProvider implements LiquidityProvider {
   }
 
   /**
+   * Exact output over the venues that can plan one (today: dex). The cheapest
+   * ceiling wins; a venue that cannot deliver an exact amount is simply not a
+   * candidate, so with none the caller fails closed.
+   */
+  async safeExactOutputPlan(
+    side: LiquiditySide,
+    amountOut: bigint,
+    maxAmountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+    ctx: SafeSwapContext,
+  ): Promise<SafeSwapPlan> {
+    const venues = this.venues().filter((v) => v.provider.safeExactOutputPlan);
+    if (!venues.length) throw new Error("no configured venue can plan an exact-output swap (needs dex)");
+    const settled = await Promise.allSettled(
+      venues.map((v) => v.provider.safeExactOutputPlan!(side, amountOut, maxAmountIn, quoteId, expiresAt, ctx)),
+    );
+    const winners = settled
+      .map((r) => (r.status === "fulfilled" ? r.value : null))
+      .filter((x): x is SafeSwapPlan => x !== null)
+      .sort((a, b) => (a.quote.amountIn < b.quote.amountIn ? -1 : a.quote.amountIn > b.quote.amountIn ? 1 : 0));
+    if (!winners.length) {
+      const why = settled.map((r, i) => `${venues[i].id}: ${r.status === "rejected" ? String(r.reason?.message ?? r.reason).slice(0, 200) : "no plan"}`).join(" | ");
+      throw new Error(`no venue can deliver exactly ${amountOut} — ${why}`);
+    }
+    return winners[0];
+  }
+
+  /**
    * Best execution over the venues that can serve a Safe executor. Venues
    * without safeSwapPlan (FxSwapper, CoW) are excluded here and their absence
    * is recorded in routing. If every capable venue fails this refuses, and

@@ -13,6 +13,7 @@ export const VIEWS = [
   { id: "ledger", label: "Transactions", section: "Books", capability: "ledger.transactions" },
   { id: "assets", label: "Assets", section: "Books", capability: "assets.costBasis" },
   { id: "coa", label: "Chart of accounts", section: "Books", capability: "coa.manage" },
+  { id: "export", label: "Accountant export", section: "Books", capability: "export.ledger" },
   { id: "members", label: "Members", section: "Admin", capability: "members.manage" },
   { id: "settings", label: "Settings", section: "Admin" },
 ];

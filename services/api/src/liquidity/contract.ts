@@ -76,6 +76,10 @@ export interface LiquidityQuote {
   /** Best-execution only: what each venue offered, so the choice is auditable
    *  after the fact rather than a number that appeared from nowhere. */
   routing?: { venue: string; expectedOut: string | null; error?: string }[];
+  /** Exact-output only: what the pool quoted as the input, and the ceiling
+   *  the user signs. `amountIn` above IS the ceiling; the real input is
+   *  measured after the swap. */
+  exactOutput?: { quotedIn: bigint; amountInMaximum: bigint };
   /** LI.FI only: the route it priced and the tx it wants submitted. Held on
    *  the quote because prepare and execute are separate steps — re-quoting at
    *  execution would settle at a price the user never saw. */
@@ -138,6 +142,28 @@ export interface LiquidityProvider {
   safeSwapPlan?(
     side: LiquiditySide,
     amountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+    ctx: SafeSwapContext,
+  ): Promise<SafeSwapPlan>;
+  /**
+   * An EXACT-OUTPUT swap the user's Safe executes: deliver exactly `amountOut`
+   * of tokenOut to the recipient, spending at most `maxAmountIn`, and leave
+   * the unspent input in the Safe. This is what lets a crypto-paid invoice
+   * land as exactly the invoice amount in EURe, with the leftover swept once
+   * a month instead of appearing as a stray figure on every payment.
+   *
+   * OPTIONAL and honest: only a venue whose contract takes an output amount
+   * can offer it. Uniswap's router does. An aggregator's "reverse quote"
+   * (LI.FI /quote/toAmount) sizes the INPUT so the expected output lands near
+   * the target, but still executes exact-input with a minimum — the leftover
+   * would land on the output side. That is not this method, so LI.FI does not
+   * implement it and the caller fails closed.
+   */
+  safeExactOutputPlan?(
+    side: LiquiditySide,
+    amountOut: bigint,
+    maxAmountIn: bigint,
     quoteId: string,
     expiresAt: string,
     ctx: SafeSwapContext,

@@ -171,6 +171,31 @@ function render(doc) {
       `<div class="prose">This confirms that on <strong>${esc(when(s.block.at))}</strong> the account of <strong>${esc(s.holder.name)}</strong> held <strong>${esc(eur(s.balanceEur))}</strong>, read from the Base ledger at block ${esc(String(s.block.number))}. The balance is e-money redeemable at par; it is not a bank deposit.</div>` +
       signatures(doc) + legal(doc);
   }
+  if (s.kind === "beleg") {
+    const TITLES = { sepa_in: "SEPA credit received", sepa_out: "SEPA payment sent", sepa_out_reversal: "Reversal of a failed payment", crypto_converted: "USDC received and converted to EURe", crypto_held: "USDC received and held", sweep: "Monthly conversion of leftover USDC" };
+    const l = s.line;
+    const row = (k, v) => v === undefined || v === null || v === "" ? "" : `<div><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
+    const block = (title, rows) => rows.join("") ? `<h3 style="margin-top:22px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)">${esc(title)}</h3><div class="meta" style="min-width:0">${rows.join("")}</div>` : "";
+    const gasPayer = { sponsored: "the paymaster (sponsored)", "safe-native": "the account, in ETH", "safe-token": "the account, in the gas token (USDC)" };
+    const c = s.conversion || {};
+    return head(doc, "Beleg", TITLES[l.event] || "Statement line") + holder(s.holder) +
+      block("Statement line", [
+        row("Amount", eur(l.amountCents / 100)), row("Booking date", l.bookingDate), row("Value date", l.valueDate),
+        row("Counterparty", [l.counterparty?.name, l.counterparty?.iban ? ibanFmt(l.counterparty.iban) : "", l.counterparty?.address].filter(Boolean).join(" · ")),
+        row("Reference", l.reference), row("Account code", l.accountCode), row("Line key", l.key),
+      ]) +
+      (s.invoice ? block("Invoice", [row("Number", s.invoice.number + (s.invoice.source === "external" ? " (issued outside Zold)" : "")), row("Payer", s.invoice.payer)]) : "") +
+      (s.bank ? block("Bank", [row("Monerium order", s.bank.orderId), row("Counterparty", s.bank.counterpartyName), row("IBAN", s.bank.counterpartyIban ? ibanFmt(s.bank.counterpartyIban) : ""), row("Memo", s.bank.memo), row("Processed", s.bank.processedAt ? when(s.bank.processedAt) : ""), row("Transfer", s.bank.transferId), row("Zold fee", s.bank.feeEur !== undefined ? eur(s.bank.feeEur) : ""), row("Refund", s.bank.refund ? `${eur(s.bank.refund.amountEur)} at ${when(s.bank.refund.at)} — ${s.bank.refund.deductions}` : "")]) : "") +
+      (s.receipt ? block("Receipt (crypto)", [row("Received", `${s.receipt.amount} ${s.receipt.asset}`), row("Transaction", `${s.receipt.txHash} (log ${s.receipt.logIndex})`), row("Block time", s.receipt.blockTime ? when(s.receipt.blockTime) : ""), row("From", s.receipt.from),
+        row("Value at receipt", s.receipt.valueEur !== undefined ? `${eur(s.receipt.valueEur)} at ${s.receipt.rate} USD/EUR` : "not valued — no reference rate was available"),
+        row("Rate source", s.receipt.valueEur !== undefined ? `${s.receipt.rateProvider}, ECB reference rate for ${s.receipt.rateAsOf} (fixed once per business day; not an intraday rate)` : "")]) : "") +
+      (s.conversion ? block(s.sweep ? "Sweep conversion" : "Conversion", [row("Leftovers from", s.sweep ? `${s.sweep.depositIds.length} conversion(s) in ${s.sweep.month}` : ""), row("Transaction", c.txHash), row("UserOperation", c.userOpHash), row("Block", c.blockNumber), row("Time", c.at ? when(c.at) : ""), row("Venue", c.venue), row("Rate", c.rate !== undefined ? `${c.rate} USD/EUR${c.midRate ? ` (independent mid ${c.midRate})` : ""}` : ""), row("Amount in", c.amountInUsdc !== undefined ? `${c.amountInUsdc} USDC` : ""), row("Venue fee", c.venueFeeUsdc !== undefined ? `${c.venueFeeUsdc} USDC` : ""), row("EURe credited", c.creditedEur !== undefined ? eur(c.creditedEur) : ""), row("Left in the account", c.leftoverUsdc !== undefined ? `${c.leftoverUsdc} USDC (swept monthly)` : ""), row("Receivable difference", c.receivableDifferenceEur !== undefined ? eur(c.receivableDifferenceEur) : ""), row("Gain / loss on conversion", c.gainEur !== undefined ? eur(c.gainEur) : "")]) : "") +
+      (s.gas && (s.gas.costWei || s.gas.paidBy) ? block("Gas", [row("Cost", s.gas.costWei ? `${s.gas.costWei} wei` : ""), row("Paid by", gasPayer[s.gas.paidBy])]) : "") +
+      block("Records", [row("Transfer id", l.links.transferId), row("Deposit id", l.links.depositId), row("Order id", l.links.orderId), row("Payment link", l.links.paymentRequestId), ...l.links.txHashes.map((h) => row("Transaction", h))]) +
+      (s.unexecutedNote ? `<div class="note">${esc(s.unexecutedNote)}</div>` : "") +
+      `<div class="prose sub" style="margin-top:14px"><a href="/api/v/${esc(code)}/beleg.pdf">Download as PDF</a></div>` +
+      signatures(doc) + legal(doc, ["Statement lines are projected from the account's own records; the on-chain facts are re-read on every verification."]);
+  }
   if (s.kind === "ownership") {
     return head(doc, "Proof of account ownership", "Zold account document") + holder(s.holder) +
       `<div class="prose">${esc(s.statement)}</div>
@@ -197,7 +222,7 @@ document.getElementById("btn-print").onclick = () => window.print();
     const res = await fetch(`/api/v/${encodeURIComponent(code)}`, { headers: { accept: "application/json" } });
     const doc = await res.json();
     if (!res.ok) throw new Error(doc.error || `HTTP ${res.status}`);
-    document.title = `${doc.kind === "statement" ? "Account statement" : doc.kind === "receipt" ? "Transfer receipt" : doc.kind === "balance" ? "Balance confirmation" : "Proof of ownership"} · Zold`;
+    document.title = `${doc.kind === "statement" ? "Account statement" : doc.kind === "receipt" ? "Transfer receipt" : doc.kind === "balance" ? "Balance confirmation" : doc.kind === "beleg" ? "Beleg" : "Proof of ownership"} · Zold`;
     document.getElementById("sheet").innerHTML = render(doc);
     verdict(doc);
   } catch (e) {

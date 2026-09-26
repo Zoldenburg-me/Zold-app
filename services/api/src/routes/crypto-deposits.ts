@@ -21,7 +21,7 @@ import {
   recordInvoiceSettlement,
   settleConvertedDeposit,
 } from "../adapters/crypto-deposits.js";
-import { store, type User } from "../store.js";
+import { store, type CryptoDeposit, type User } from "../store.js";
 import { custodyBlockerBeforeFunding, requireCapability, requireKycApproved } from "../http/guards.js";
 import type { PendingPasskeySafeDeployment } from "../http/pending.js";
 import { AUTH_WINDOW_SEC } from "../transfers/build.js";
@@ -29,8 +29,10 @@ import { publicUser } from "../users/public-user.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
   prepareTransferBatchExecution,
-  submitPasskeySafeOperation,
+  submitPasskeySafeOperationWithReceipt,
+  type SubmittedOperation,
 } from "../wallet/candide.js";
+import { publicClient } from "../chain.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { ownerInvoiceView } from "../domain/invoices.js";
 
@@ -63,6 +65,33 @@ const pendingDepositConversions = new Map<string, {
  */
 /** What arrived as crypto and what became of it. Read-only; the poller owns
  *  every state change here. */
+
+/**
+ * The conversion as the chain recorded it, for the deposit and its Beleg.
+ * The block time is read from the chain; a failed read leaves the time
+ * absent rather than substituting the server clock.
+ */
+async function conversionFacts(
+  submitted: SubmittedOperation,
+  amountInUnits: string,
+): Promise<CryptoDeposit["conversion"]> {
+  let at: string | undefined;
+  if (submitted.blockNumber && submitted.blockNumber > 0) {
+    try {
+      const blk = await publicClient.getBlock({ blockNumber: BigInt(submitted.blockNumber) });
+      at = new Date(Number(blk.timestamp) * 1000).toISOString();
+    } catch { /* recorded without a time rather than with the wrong one */ }
+  }
+  return {
+    ...(submitted.userOpHash ? { userOpHash: submitted.userOpHash } : {}),
+    ...(submitted.txHash ? { txHash: submitted.txHash } : {}),
+    ...(submitted.blockNumber !== undefined ? { blockNumber: submitted.blockNumber } : {}),
+    ...(at ? { at } : {}),
+    amountInUnits,
+    ...(submitted.gasCostWei ? { gasCostWei: submitted.gasCostWei } : {}),
+    gasPaidBy: submitted.gasPaidBy,
+  };
+}
 
 export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
   const { requireUserSession } = deps;
@@ -236,11 +265,11 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       } catch (err: any) {
         return res.status(503).json({ error: String(err?.message ?? err) });
       }
-      let opHash: string | null = null;
+      let submitted: SubmittedOperation;
       try {
         // The browser sends base64url; the Safe signature needs the bytes,
         // exactly as the transfer path decodes them.
-        opHash = await submitPasskeySafeOperation(pending.plan, pending.userOperation, {
+        submitted = await submitPasskeySafeOperationWithReceipt(pending.plan, pending.userOperation, {
           authenticatorData: b64urlToBuf(a.authenticatorData),
           clientDataJSON: b64urlToBuf(a.clientDataJSON),
           signature: b64urlToBuf(a.signature),
@@ -251,11 +280,18 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         return res.status(502).json({ error: reason });
       }
 
-      const txs = [...deposit.txs, { step: "safe.swap(usdc->eure)", hash: opHash ?? "0x" }];
+      // The chain's transaction hash is what an auditor resolves; the userOp
+      // hash is kept beside it because it is what the bundler answers for.
+      const txs = [
+        ...deposit.txs,
+        { step: "safe.swap(usdc->eure)", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" },
+        ...(submitted.txHash && submitted.userOpHash ? [{ step: "userOperation", hash: submitted.userOpHash }] : []),
+      ];
       const settled = await settleConvertedDeposit(
         deposit, user,
         { provider: pending.quote.provider, rate: BigInt(pending.quote.rate), minOut: BigInt(pending.quote.minOut) },
         before, txs,
+        await conversionFacts(submitted, deposit.amountUnits),
       );
       const balances = await accountBalances(user.address);
       res.json({ deposit: settled, ...balances });
