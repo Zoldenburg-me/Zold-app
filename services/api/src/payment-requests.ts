@@ -132,6 +132,13 @@ export interface PaymentRequest {
    * so hanging it on someone remembering was the wrong thread to use.
    */
   invoiceId?: string;
+  /**
+   * The invoice this link collects when the invoice lives in the accountant's
+   * software (Lexware) rather than here. Free text as printed on it; it
+   * becomes the payment reference on the statement line and the document
+   * number on the Beleg, so the accountant matches on it directly.
+   */
+  externalInvoiceNumber?: string;
   cryptoQuotes: CryptoQuote[];
   payments: RequestPayment[];
   source: PaymentRequestSource;
@@ -191,6 +198,7 @@ export interface CreateInput {
   /** An outgoing invoice this request collects. Shape only — existence and
    *  ownership are checked where the store is available. */
   invoiceId?: string;
+  externalInvoiceNumber?: string;
 }
 
 /** Which methods this payee can actually offer, with the reason for each gap.
@@ -255,6 +263,14 @@ export function validateCreate(body: any, user: User, now = new Date()): CreateI
     invoiceId = b.invoiceId.trim();
     if (!invoiceId) throw new PaymentRequestError("invoiceId must not be blank");
   }
+  let externalInvoiceNumber: string | undefined;
+  if (b.externalInvoiceNumber !== undefined && b.externalInvoiceNumber !== null && b.externalInvoiceNumber !== "") {
+    if (typeof b.externalInvoiceNumber !== "string") throw new PaymentRequestError("externalInvoiceNumber must be a string");
+    externalInvoiceNumber = b.externalInvoiceNumber.trim().replace(/\s+/g, " ").slice(0, 60) || undefined;
+    if (externalInvoiceNumber && invoiceId) {
+      throw new PaymentRequestError("a link collects either a Zold invoice or an external invoice number, not both");
+    }
+  }
   return {
     amountEur,
     description,
@@ -262,6 +278,7 @@ export function validateCreate(body: any, user: User, now = new Date()): CreateI
     expiresAt,
     ...(b.test === true ? { test: true } : {}),
     ...(invoiceId ? { invoiceId } : {}),
+    ...(externalInvoiceNumber ? { externalInvoiceNumber } : {}),
   };
 }
 
@@ -658,6 +675,7 @@ export function ownerPaymentRequest(r: PaymentRequest, baseUrl: string) {
     /** Owner's view only. The public projection is an allowlist and an invoice
      *  id has no business on a payer's page. */
     invoiceId: r.invoiceId,
+    externalInvoiceNumber: r.externalInvoiceNumber,
     payments: r.payments,
     source: r.source,
     latestQuote: r.cryptoQuotes[r.cryptoQuotes.length - 1],
