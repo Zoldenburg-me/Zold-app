@@ -340,7 +340,6 @@ function setPasskeyButtonBusy(busy, label) {
    API refuses a half-filled set.
    ========================================================================== */
 let acctType = "individual";
-let citizenships = [];
 const usAnswers = { usPerson: null, companyUsNexus: null };
 
 /** Which partner is named in the consent line. Cosmetic and best-effort — the
@@ -351,25 +350,38 @@ function partnerLabel(country) {
   return "Monerium";
 }
 
-function renderCitizenships() {
-  $("cit-chips").innerHTML = citizenships.length
-    ? citizenships.map((c) => `<span class="onb-chip">${esc(c)}<button type="button" data-rm="${esc(c)}">×</button></span>`).join("")
-    : `<span class="onb-hint" style="font-size:13px">None added yet</span>`;
-  $("cit-chips").querySelectorAll("[data-rm]").forEach((b) => {
-    b.onclick = () => { citizenships = citizenships.filter((c) => c !== b.dataset.rm); renderCitizenships(); };
-  });
+/* Every ISO 3166-1 alpha-2 country, not the ones we serve: which countries
+   are served is the server's rule, and a filtered list is that rule shipped
+   to the client. Names come from the browser in the reader's language; the
+   code is what is sent. */
+const ISO_COUNTRIES = (
+  "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ " +
+  "CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR " +
+  "GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP " +
+  "KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT " +
+  "MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW " +
+  "SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG " +
+  "UM US UY UZ VA VC VE VG VI VN VU WF WS XK YE YT ZA ZM ZW"
+).split(" ");
+
+function countryOptions() {
+  let names = null;
+  try { names = new Intl.DisplayNames([navigator.language, "en"], { type: "region" }); } catch { /* old browser: codes */ }
+  const collator = new Intl.Collator(navigator.language);
+  return ISO_COUNTRIES
+    .map((code) => ({ code, name: (names && names.of(code)) || code }))
+    .sort((a, b) => collator.compare(a.name, b.name));
 }
 
-function addCitizenship() {
-  const v = $("cit-input").value.trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(v)) return showErr("create-err", new Error("use a two-letter country code, e.g. DE"));
-  clearErr("create-err");
-  if (!citizenships.includes(v)) citizenships.push(v);
-  $("cit-input").value = "";
-  renderCitizenships();
+/* No country is pre-selected. The browser's locale is a guess about the
+   language someone reads, not where they live, and a pre-filled residence is
+   an answer nobody gave. */
+function fillCountrySelect(el) {
+  el.innerHTML = `<option value="" disabled selected>Select a country</option>` +
+    countryOptions().map((c) => `<option value="${c.code}">${esc(c.name)}</option>`).join("");
 }
-$("cit-add").onclick = addCitizenship;
-$("cit-input").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); addCitizenship(); } };
+fillCountrySelect($("country"));
+fillCountrySelect($("incorp-country"));
 
 $("acct-type").querySelectorAll("[data-acct]").forEach((b) => {
   b.onclick = () => {
@@ -391,7 +403,7 @@ $("us-qs").querySelectorAll(".onb-q").forEach((row) => {
   });
 });
 
-$("country").oninput = () => { $("partner-name").textContent = partnerLabel($("country").value); };
+$("country").onchange = () => { $("partner-name").textContent = partnerLabel($("country").value); };
 
 $("btn-continue").onclick = () => {
   clearErr("create-err");
@@ -402,13 +414,8 @@ $("btn-continue").onclick = () => {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     return showErr("create-err", new Error("that email doesn't look right"));
   }
-  const country = ($("country").value.trim() || "").toUpperCase();
-  if (!/^[A-Z]{2}$/.test(country)) {
-    return showErr("create-err", new Error("country of residence must be a two-letter code, e.g. DE"));
-  }
-  if (!citizenships.length) {
-    return showErr("create-err", new Error("please add at least one citizenship"));
-  }
+  const country = $("country").value;
+  if (!country) return showErr("create-err", new Error("please choose your country of residence"));
   const required = ["usPerson", ...(acctType === "company" ? ["companyUsNexus"] : [])];
   if (required.some((k) => usAnswers[k] === null)) {
     return showErr("create-err", new Error("please answer the US question — yes or no"));
@@ -424,10 +431,9 @@ $("btn-continue").onclick = () => {
     email,
     country,
     accountType: acctType,
-    citizenships: [...citizenships],
     usAnswers: { ...usAnswers },
-    ...(acctType === "company" && $("incorp-country").value.trim()
-      ? { companyIncorporationCountry: $("incorp-country").value.trim().toUpperCase() }
+    ...(acctType === "company" && $("incorp-country").value
+      ? { companyIncorporationCountry: $("incorp-country").value }
       : {}),
     consents: [
       { kind: "zold_terms" },
@@ -439,7 +445,6 @@ $("btn-continue").onclick = () => {
   $("ostep1").className = "dot done";
   $("ostep2").className = "dot active";
 };
-renderCitizenships();
 
 /** A refused signup is an outcome, not an error toast. Shows what Zold cannot
  *  offer; never the rule, the partner or the country policy. */

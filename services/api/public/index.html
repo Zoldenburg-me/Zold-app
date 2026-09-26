@@ -61,17 +61,14 @@
             <button type="button" class="on" data-acct="individual">Individual</button>
             <button type="button" data-acct="company">Company</button>
           </div>
-          <label>Country of residence</label>
-          <input id="country" placeholder="DE" maxlength="2" autocomplete="country" />
+          <!-- Full country names, codes sent. The list is every ISO 3166
+               country, not the ones we serve: the UI does not branch on
+               country (see onboarding.js), and the server decides. -->
+          <label for="country">Country of residence</label>
+          <select id="country" autocomplete="country" required></select>
           <div class="hidden" id="incorp-wrap">
-            <label>Country of incorporation</label>
-            <input id="incorp-country" placeholder="DE" maxlength="2" />
-          </div>
-          <label>Citizenship <span class="onb-hint">— add every one you hold</span></label>
-          <div class="onb-chips" id="cit-chips"></div>
-          <div class="onb-addrow">
-            <input id="cit-input" placeholder="DE" maxlength="2" />
-            <button type="button" class="ghost sm" id="cit-add">Add</button>
+            <label for="incorp-country">Country of incorporation</label>
+            <select id="incorp-country" required></select>
           </div>
 
           <!-- One US question naming all three grounds, so the person need not
