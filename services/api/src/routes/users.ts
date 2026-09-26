@@ -118,8 +118,8 @@ export function createUserRouter(deps: UserDeps) {
        * internally, asks the three questions separately and returns which one
        * decided.
        *
-       * Callers that send no segmentation fields are read as an individual with
-       * a single citizenship equal to residence and all-no US answers.
+       * Callers that send no segmentation fields are read as an individual,
+       * screened on residence alone, with all-no US answers.
        */
       const type: "individual" | "company" = accountType === "company" ? "company" : "individual";
       // The app asks one combined question (citizen, Green Card or tax
@@ -138,13 +138,16 @@ export function createUserRouter(deps: UserDeps) {
           ? { companyUsNexus: usAnswers?.companyUsNexus === true }
           : { companyUsNexus: null }),
       };
+      // Store only citizenships the caller declared. Without any, screening
+      // uses residence, but residence is never saved as a citizenship.
+      const declaredCitizenships: string[] | null = Array.isArray(citizenships) && citizenships.length
+        ? citizenships.map((c: any) => normaliseCountryCode(String(c)))
+        : null;
       let decision;
       try {
         decision = resolveSegment({
           residence: String(country),
-          citizenships: Array.isArray(citizenships) && citizenships.length
-            ? citizenships.map(String)
-            : [String(country)],
+          citizenships: declaredCitizenships ?? [String(country)],
           accountType: type,
           usAnswers: answers,
           ...(companyIncorporationCountry ? { companyIncorporationCountry: String(companyIncorporationCountry) } : {}),
@@ -160,7 +163,7 @@ export function createUserRouter(deps: UserDeps) {
       if (decision.segment.startsWith("BLOCKED_")) {
         store.audit(auditEntry("segment.decided", {
           residence: normaliseCountryCode(String(country)),
-          citizenships: (Array.isArray(citizenships) ? citizenships : [country]).map((c: any) => normaliseCountryCode(String(c))),
+          ...(declaredCitizenships ? { citizenships: declaredCitizenships } : {}),
           accountType: type,
           usAnswers: answers,
           segment: decision.segment,
@@ -210,8 +213,7 @@ export function createUserRouter(deps: UserDeps) {
         ...(decision.gate ? { gate: decision.gate } : {}),
       });
       store.updateUser(user.id, {
-        citizenships: (Array.isArray(citizenships) && citizenships.length
-          ? citizenships.map(String) : [String(country)]).map(normaliseCountryCode),
+        ...(declaredCitizenships ? { citizenships: declaredCitizenships } : {}),
         accountType: type,
         ...(companyIncorporationCountry
           ? { companyIncorporationCountry: normaliseCountryCode(String(companyIncorporationCountry)) }
