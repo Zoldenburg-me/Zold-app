@@ -446,8 +446,7 @@ $("btn-continue").onclick = () => {
   $("ostep2").className = "dot active";
 };
 
-/** A refused signup is an outcome, not an error toast. Shows what Zold cannot
- *  offer; never the rule, the partner or the country policy. */
+/** A refused signup is an outcome, not an error toast. */
 function showBlocked(code, _serverMessage) {
   $("onboard").style.display = "none";
   $("blocked").classList.add("on");
@@ -474,9 +473,8 @@ async function registerPasskey(u) {
         name: pendingInfo.email || pendingInfo.name,
         displayName: pendingInfo.name,
       },
-      // P-256 only: the passkey becomes the Safe's owner and Candide's
-      // WebAuthn owner needs a P-256 key; an RS256 credential registers and
-      // then fails at Safe deployment.
+      // ES256 (P-256) only. This passkey becomes the Safe's owner, which
+      // verifies P-256 signatures; any other algorithm would fail at deployment.
       pubKeyCredParams: [{ type: "public-key", alg: -7 }],
       authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
       timeout: 60000,

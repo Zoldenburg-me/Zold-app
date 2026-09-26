@@ -138,10 +138,8 @@ export function createUserRouter(deps: UserDeps) {
           ? { companyUsNexus: usAnswers?.companyUsNexus === true }
           : { companyUsNexus: null }),
       };
-      // The app no longer asks for citizenship. Screening then runs on
-      // residence alone (the resolver needs one entry), but only a DECLARED
-      // citizenship is written to the row or the audit log: residence is not
-      // a nationality, and recording one as the other is a fact nobody gave.
+      // Store only citizenships the caller declared. Without any, screening
+      // uses residence, but residence is never saved as a citizenship.
       const declaredCitizenships: string[] | null = Array.isArray(citizenships) && citizenships.length
         ? citizenships.map((c: any) => normaliseCountryCode(String(c)))
         : null;
