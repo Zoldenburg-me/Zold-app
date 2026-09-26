@@ -28,9 +28,10 @@ import { store, type CryptoDeposit, type User } from "../store.js";
 import { addrs, eur, usd, publicClient } from "../chain.js";
 import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
-import { midRates } from "../rates.js";
+import { midRates, referenceRate } from "../rates.js";
 import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
 import { buildCryptoSettlement, withSettlement } from "../domain/invoices.js";
+import { writeStatementLines } from "../bookkeeping/writer.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
  *  the real USDC emits the same signature and this path must not depend on our
@@ -104,21 +105,27 @@ function hasOpenCryptoRequest(userId: string): boolean {
  * What a USDC deposit was worth in EUR when it arrived, with the rate's
  * provenance.
  *
+ * Valued at the ECB reference rate for the day the chain says the money
+ * arrived, which is what the books record. The ECB fixes once per business
+ * day, so `rateAsOf` is the fixing day, not the block's minute — and on a
+ * weekend, a holiday, or before the day's publication it is an earlier day
+ * than the receipt. Stored as such rather than dressed up as intraday.
+ *
  * Returns undefined when no rate is available (rates.ts has no stale
  * fallback). The deposit is then recorded without a receipt value and can be
  * valued later; a made-up rate would put a wrong figure in the books.
  */
-async function valueAtReceipt(
+export async function valueAtReceipt(
   amountUsdc: number,
   blockTimestamp?: string,
 ): Promise<CryptoDeposit["receipt"] | undefined> {
   try {
-    const r = await midRates();
-    const usdPerEur = r.eur.USD;
-    if (!(usdPerEur > 0)) return undefined;
+    const day = blockTimestamp ? blockTimestamp.slice(0, 10) : undefined;
+    const r = await referenceRate("USD", day);
+    if (!(r.rate > 0)) return undefined;
     return {
-      amountEur: Math.round((amountUsdc / usdPerEur) * 100) / 100,
-      rate: usdPerEur,
+      amountEur: Math.round((amountUsdc / r.rate) * 100) / 100,
+      rate: r.rate,
       rateProvider: r.provider,
       rateAsOf: r.asOf,
       ratedAt: new Date().toISOString(),
@@ -265,6 +272,9 @@ export async function settleConvertedDeposit(
   quote: { provider: string; rate: bigint; minOut: bigint },
   balanceBeforeWei: bigint,
   txs: CryptoDeposit["txs"],
+  /** The chain's record of the swap (tx hash, block, gas), when the
+   *  submitter had a receipt. Absent on the harness stand-ins. */
+  conversion?: CryptoDeposit["conversion"],
 ): Promise<CryptoDeposit> {
   const { venue: venueRate, mid: midRate } = await assertRateSane(quote.rate);
   const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, balanceBeforeWei);
@@ -304,6 +314,8 @@ export async function settleConvertedDeposit(
       `via ${quote.provider} at ${venueRate.toFixed(4)}` +
       (realisedGainEur === undefined ? "" : ` (realised EUR ${realisedGainEur})`),
   );
+  const amountInUnits = conversion?.amountInUnits ?? deposit.amountUnits;
+  const leftover = BigInt(deposit.amountUnits) - BigInt(amountInUnits);
   const settled = store.updateCryptoDeposit(deposit.id, {
     state: "CONVERTED",
     creditedEur,
@@ -312,11 +324,14 @@ export async function settleConvertedDeposit(
     rate: venueRate,
     midRate,
     ...(realisedGainEur === undefined ? {} : { realisedGainEur }),
+    conversion: { ...(conversion ?? {}), amountInUnits },
+    ...(leftover > 0n ? { leftoverUnits: leftover.toString() } : {}),
     txs,
     reason: undefined,
   });
   if (settled.invoiceId) recordInvoiceSettlement(settled);
   noteDepositSettled(settled);
+  writeStatementLines();
   return settled;
 }
 
@@ -483,6 +498,7 @@ async function scanCryptoDeposits(): Promise<number> {
           txHash,
           logIndex,
           amountUnits: value.toString(),
+          ...(/^0x[0-9a-f]{40}$/.test(from) ? { from: from as `0x${string}` } : {}),
           ...(token.token === "EURE" ? { amountEur: eur.fromWei(value), creditedEur: eur.fromWei(value) } : {}),
           ...(token.token === "USDC"
             ? {
@@ -534,6 +550,7 @@ async function scanCryptoDeposits(): Promise<number> {
       console.error(`crypto-in: could not settle deposit ${deposit.id}: ${err?.message ?? err}`);
     }
   }
+  if (fresh.length) writeStatementLines();
   return fresh.length;
 }
 

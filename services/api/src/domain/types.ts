@@ -140,6 +140,23 @@ export interface Organisation {
     customFields?: { label: string; value: string }[];
     language?: "de" | "en";
   };
+  /**
+   * Accounting connectors. The credential is encrypted at rest and never
+   * returned; `integrations.accounting` stays unavailable until one exists.
+   */
+  integrations?: {
+    getmyinvoices?: {
+      apiKeyEnc: string;
+      /** Which account the key opened, as GetMyInvoices reported it. */
+      accountName?: string;
+      accountEmail?: string;
+      accountId?: string;
+      connectedAt: string;
+      connectedByMemberId: string;
+      /** Uploads land under this company; absent means the account's own. */
+      companyId?: number;
+    };
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -747,4 +764,49 @@ export interface LedgerEntry {
   txType?: string;
   at: string;
   createdAt: string;
+  /**
+   * Set on rows the statement-line writer projects from the account's real
+   * activity (bookkeeping/statement.ts): one EUR line per economic event, the
+   * way PayPal or Stripe appear in German books. `key` is the event's stable
+   * identity, so re-running the writer is a no-op; the links name every
+   * record and transaction behind the line, and `documentCode` the Beleg.
+   */
+  statement?: StatementFacts;
+}
+
+export type StatementEvent =
+  | "sepa_in"
+  | "sepa_out"
+  | "sepa_out_reversal"
+  | "crypto_converted"
+  | "crypto_held"
+  | "sweep";
+
+export interface StatementFacts {
+  key: string;
+  event: StatementEvent;
+  /** When the event was booked (the day the record was made) and when the
+   *  money moved. The chain's block time where there is one. */
+  bookingDate: string;
+  valueDate: string;
+  /** Signed euro cents: positive in, negative out. */
+  amountCents: number;
+  counterparty: { name?: string; iban?: string; address?: string };
+  /** What the accountant matches on: the external invoice number when known,
+   *  else the memo, else the record id. */
+  reference: string;
+  links: {
+    transferId?: string;
+    depositId?: string;
+    orderId?: string;
+    paymentRequestId?: string;
+    invoiceId?: string;
+    invoiceNumber?: string;
+    txHashes: string[];
+    userOpHash?: string;
+  };
+  /** The Beleg issued for this line, once one exists. */
+  documentCode?: string;
+  /** Rule 2: the figure comes from a path that has never moved real money. */
+  unexecuted?: boolean;
 }
