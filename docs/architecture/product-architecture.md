@@ -559,9 +559,54 @@ A revoked document still resolves but shows as failing verification. These
 belong to a *user's* account, not an org. Only the account holder can create
 them.
 
-### 8.3 Bookkeeping — INERT
+### 8.3 Bookkeeping — LIVE for statement lines, INERT for imported wallets
 
-The machinery exists and is tested with fixtures:
+**The ledger writer exists (Sep 2026).** `bookkeeping/writer.ts` projects the
+account's real activity into `LedgerEntry` rows carrying a `statement` block:
+**one EUR line per economic event**, the way a PayPal or Stripe clearing
+account appears in German books, with one Beleg per line holding the on-chain
+detail. It runs where money changes state (a Monerium issue order mirrored, a
+deposit settled, a SEPA transfer PAID) and on a one-minute sweep, so a REFUNDED
+written by compensation or an event a crash cut short still gets its line.
+
+| event | line | key |
+|---|---|---|
+| SEPA in (Monerium issue order, processed) | +amount, counterparty name and IBAN, memo | `monerium:issue:<orderId>` |
+| SEPA out (transfer PAID or PAYOUT_SUBMITTED) | −payout, plus a −fee line when a fee was taken | `transfer:<id>:payout`, `:fee` |
+| SEPA out REFUNDED with money returned | −debit and a +reversal; the deduction is the net | `transfer:<id>:debit`, `:refund` |
+| USDC deposit converted to EURe | +credited EUR (measured), dated by the conversion's block | `deposit:<id>:converted` |
+| USDC deposit held unconverted | +EUR value at the ECB reference rate on the receipt day; **no rate, no line** | `deposit:<id>:held` |
+| monthly sweep of exact-output leftovers | +credited EUR, "Kursdifferenz / Restbeträge" | `sweep:<id>` |
+
+Each line carries booking date and value date, the signed amount in cents,
+the counterparty, a payment reference (the external invoice number when the
+pay link carries one, else the invoice number, else the memo), and links to
+every underlying record and chain transaction. Keys make re-runs a no-op;
+facts are refreshed, a human's account code is never overwritten.
+
+Which organisation: the one whose **EUR account is backed by the user's Safe**
+(`Account.backingUserId`). A user with no such account gets no lines and one
+log line saying so. Imported wallets still never sync, so their half of the
+ledger stays empty.
+
+**Receipts are valued at the ECB reference rate** (Frankfurter, per business
+day) for the day the chain says the money arrived. The ECB fixes once a day
+around 16:00 CET, so the stored `rateAsOf` is a fixing day, not the block's
+minute, and on a weekend or before publication it is an earlier day than the
+receipt; the Beleg says so in words. The live mid (open.er-api.com) stays the
+execution sanity check.
+
+**The conversion record now holds the chain's facts**: the userOperation hash
+is resolved through the bundler receipt to the transaction hash, block, gas
+cost and who paid it (`CryptoDeposit.conversion`), plus the input actually
+swapped and any leftover.
+
+**Rule 2 on every figure from a swap**: no dex, LI.FI, RFQ or CoW swap has
+executed with real money, so every conversion line and Beleg carries
+`unexecuted` and a sentence saying so until a converted deposit on a
+real-money chain has a chain transaction hash.
+
+The older machinery is unchanged and still tested with fixtures:
 
 - **Chart of accounts:** one generic, Xero-style starter chart (1000 cash …
   4000 sales … 6010 gas fees). **Not SKR03/SKR04.** Accounts can be added.
@@ -574,22 +619,57 @@ The machinery exists and is tested with fixtures:
 - **Monthly balance report**, with CSV output.
 - **Ledger CSV export**, with generic columns and a CSV-injection guard.
 
-**Nothing in production ever writes a ledger row.** `store.addLedgerEntries`
-has no caller. Transfers, Monerium orders, crypto deposits, invoice
-settlements and imported wallets all bypass the ledger. So Transactions,
-Assets, the monthly report and the export are empty on every real
-deployment. Connecting the account's real activity to the ledger is the single
-biggest gap between the business layer as marketed and as built.
+The statement writer is the only production writer of ledger rows. Imported
+wallets still bypass the ledger, so Assets and the monthly report show the
+account's own activity only.
 
-### 8.4 Connectors to external accounting software — NOT BUILT
+**The Beleg (LIVE).** One document per statement line, issued when a month is
+prepared for export (or on demand per line): a frozen snapshot under a
+15-character verification code, signed by the document key, published at
+`/v/<CODE>` with a PDF at `/api/v/<CODE>/beleg.pdf`, and re-verified on every
+visit — signature, digest, revocation, and whether the records it was built
+from still say the same (a corrected deposit fails the document rather than
+vanishing; the receipt transaction is re-read from the chain). For a
+USDC-paid invoice it shows the invoice number and payer, USDC received with
+the receipt tx and block time, the ECB rate with its fixing day, the
+conversion's chain tx, time, venue, rate, amount in and EURe credited, the
+receivable difference and the gain or loss, gas and who paid it. The PDF is
+produced in-process (`bookkeeping/pdf.ts`, Helvetica, WinAnsi, no
+dependency).
+
+**Monthly export (LIVE).** Business dashboard → Books → Accountant export:
+prepare a month (issues the Belege), then download a **Lexware Office
+bank-import CSV** (the help centre's `Bankimport-Vorlage.csv`: seven columns,
+semicolon, `DD.MM.YYYY`, decimal comma, ISO-8859-1, CSV-injection guarded,
+the Beleg code in Zusatzinfo) and a **ZIP of the Belege** named
+`<value date>_<code>_<reference>.pdf`.
+
+**Exact-output conversion (PARTIAL).** A pay link can carry an external
+(Lexware) invoice number. Uniswap v3 can plan an exact-output swap
+(`exactOutputSingle`: exactly the invoice amount in EURe, the quoted input
+plus slippage as the ceiling, the unspent USDC left in the Safe); the seam
+fails closed on every other venue. **LI.FI cannot**: its reverse quote sizes
+the input so the *expected* output lands near the target but still executes
+exact-input with a minimum, so the leftover would land on the EURe side. Not
+yet built: the deposit route that uses the exact-output plan, the monthly
+sweep ceremony (one user-signed swap of the leftovers), and the "asks for the
+rest" step on an underpaid link. The store rows and the statement line for a
+sweep exist; nothing writes a sweep yet.
+
+### 8.4 Connectors to external accounting software — GetMyInvoices BUILT, unproven live
 
 | target | what exists |
 |---|---|
-| Generic CSV | **BUILT.** Ledger export and monthly-balance CSV, both empty in practice (§8.3). |
-| Xero / QuickBooks | **LABEL ONLY.** The plan capability `integrations.accounting` is named "Xero and QuickBooks". There is no client, no OAuth and no route. |
-| Lexware Office (lexoffice) + GetMyInvoices | **RESEARCHED.** A staged plan exists: push receipts and statements to GetMyInvoices `/documents`, and push bank lines to GetMyInvoices transactions, which leave as MT-940 into Lexware. Lexware's API has no bank-transaction resource. No code, credential or call exists. |
-| DATEV | **NOT BUILT.** Mentioned only as a GetMyInvoices MT-940 target. There is no EXTF export. |
+| Lexware Office CSV | **BUILT.** The bank-import CSV above. Whether the accountant wants this, MT940 or CAMT is open. |
+| GetMyInvoices | **BUILT, unit-tested against a fake, never uploaded to.** Per-org API key, verified against `GET /account` before it is stored (AES-256-GCM, purpose `getmyinvoices`, never returned). Push a month's Belege to `POST /documents` with the Beleg code as document number, amounts, `paymentStatus: Paid`, `paidAt` = the receipt's block date, and the tx hashes as tags and note; idempotent by a `GET /documents?documentNumberFilter=` lookup first. Their OpenAPI (v3, Sep 2026) also has `POST /bankAccounts/{uid}/transactions`, so bank lines *could* go in by API onto a custom bank account; the client has the call, no route uses it. `npm run gmi:smoke` is read-only against a real key. Only `GET /account` and `GET /bankAccounts` have been called on the real account. |
+| Xero / QuickBooks | **NOT BUILT.** The capability is now labelled for the GetMyInvoices connector. |
+| DATEV | **NOT BUILT.** |
 | sevDesk | **OUT OF REPO.** A separate sibling project mirrors Monerium orders into sevDesk. It is not wired here. |
+
+Open with the accountant (weloveaccounting.de): the one-line-per-event model
+with on-chain detail in the Beleg; a monthly Kursdifferenz sweep line; ECB as
+the valuation source; Ist- or Soll-Versteuerung; and where bank lines should
+go (Lexware CSV, a GetMyInvoices bank account, MT940 or CAMT).
 
 ---
 

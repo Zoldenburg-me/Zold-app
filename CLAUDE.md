@@ -236,6 +236,7 @@ submit mainnet ops).
 | money path | `fx:test` `jit:test` `best:test` `dex:test` `lifi:test` `custody:test` `execution:test` `quote-binding:test` `sepa:test` `refund:guard:test` |
 | identity | `webauthn:selftest` `security:test` `device-key:test` `authorize:test` `passkey-safe:test` `recovery:test` `recovery:candide:test` `monerium:oauth:test` `monerium:apikeys:test` `webhook:test` |
 | business | `business:test` `draft:test` `invoicing:test` `documents:test` |
+| bookkeeping | `statement:test` `beleg:test` `lexware:csv:test` `exact-output:test` `gmi:test` (offline, fake server); `gmi:smoke` is read-only against the real account and is NOT in check |
 | payments | `paylinks:test` `shopify:test` `shopify:orders:test` `receipt:test` `pay:test` `crypto:test` `convert:test` |
 | ops | `reconcile:test` `anchor:*:test` `country:policy:test` `segments:test` `onboarding:test` `gnosispay:test` |
 | live (network) | `travelrule:test` `trustline:test` `stellar:payout:live` `anchor:test` `eur:proof` |
