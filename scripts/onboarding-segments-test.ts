@@ -175,8 +175,6 @@ try {
     assert.ok(!br.data.segment.capabilities.includes("card"));
   });
 
-  // The app no longer asks for citizenship. Residence alone is screened, and
-  // no citizenship is recorded that the person did not declare.
   const noCit = await signup({
     name: "Lea", email: "lea@example.com", country: "FR", accountType: "individual", usAnswers: NO_US,
   });
