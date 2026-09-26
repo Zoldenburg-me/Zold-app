@@ -69,8 +69,8 @@ export interface Organisation {
     city?: string;
     postalCode?: string;
     stateOrProvince?: string;
-    /** ISO 3166-1 alpha-2. Some partners want alpha-3 — convert at the edge
-     *  (stellar/sep9.ts), never store the converted form. */
+    /** ISO 3166-1 alpha-2. A partner that wants alpha-3 converts at its own
+     *  edge; never store the converted form. */
     country: string;
   };
   plan: PlanId;

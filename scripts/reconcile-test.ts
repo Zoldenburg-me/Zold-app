@@ -145,7 +145,6 @@ try {
     MONERIUM_BASE_URL: `http://127.0.0.1:${STUB_PORT}`,
     MONERIUM_CHAIN: "sepolia", // the stub issues on sepolia; the chain filter must see the same name
     MONERIUM_POLL_MS: "3600000",
-    MG_ANCHOR_DOMAIN: "",
   };
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], apiEnv);
   for (const s = Date.now(); Date.now() - s < 30_000; ) {

@@ -285,16 +285,16 @@ function erc20TransferMetaTransaction(token: `0x${string}`, to: `0x${string}`, a
 }
 
 /**
- * The full cash-rail debit as one user-signed batch (Change 2, windows 1-3):
+ * A swap out of the user's Safe as one user-signed batch:
  *
  *   fee transfer -> approve venue -> swap call
  *
- * The flat service fee moves to us as its own transfer, separate from the
- * conversion. The venue approval is for exactly the convertible amount, to the
- * spender the venue named. The swap call carries the quoted floor and delivers
- * straight to the payout destination. The batch is atomic: if any leg fails
- * (stale maker quote, moved pool) it all reverts and nothing leaves the Safe,
- * so we never hold the user's euros.
+ * Deposit conversion (USDC -> EURe) is the caller today, with a zero fee, so
+ * the fee leg is skipped. The venue approval is for exactly the convertible
+ * amount, to the spender the venue named. The swap call carries the quoted
+ * floor and delivers to the recipient the venue was asked for. The batch is
+ * atomic: if any leg fails (stale maker quote, moved pool) it all reverts and
+ * nothing leaves the Safe, so we never hold the user's funds.
  */
 export function transferSwapBatchTransactions(args: {
   token: `0x${string}`;
@@ -514,7 +514,7 @@ export async function prepareTransferExecution(
 }
 
 /**
- * Build the UserOperation for a full cash-rail send: fee + venue approval +
+ * Build the UserOperation for a Safe-executed swap: fee + venue approval +
  * swap, one signature, atomic. See transferSwapBatchTransactions for the
  * batch's shape and why each leg is there.
  */

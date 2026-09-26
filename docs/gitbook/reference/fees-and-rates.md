@@ -15,15 +15,14 @@ Every cost is on the quote before you approve. A quote shows the fee, and for a 
 | Receiving a bank transfer | Free |
 | Receiving a crypto deposit | Free; the sender pays their own network fee |
 | SEPA bank transfer out | Free |
-| Cash pickup | Fixed fee per transfer plus the exchange-rate margin, both shown on the quote |
 | USD account (ACH / wire) | Not open yet; fees are published when the rail is |
-| Euro ↔ dollar conversion | No Zold fee; you get the venue's rate, shown on the quote |
+| Converting a USDC deposit to euros | No Zold fee; you get the venue's rate, shown on the quote |
 | Network (gas) fees | Paid by Zold. You never need to hold ETH |
 | Plans | Starter is free; Premium and Business are priced in Settings → Plan |
 
 ## Exchange rates
 
-For a conversion, Zold fetches a live mid-market rate and then asks its liquidity venues for a firm price for your exact amount. Several venues are quoted in parallel and the best one is taken, and the choice is recorded on the transfer. The quote shows:
+A SEPA payment is euros to euros and has no exchange rate. Rates apply when you convert a USDC deposit to euros: Zold fetches a live mid-market rate and then asks its liquidity venues for a firm price for your exact amount. Several venues are quoted in parallel and the best one is taken, and the choice is recorded on the deposit. The quote shows:
 
 * **Mid-market rate** — the reference rate at that moment.
 * **Your rate** — what the venue will deliver.
@@ -31,10 +30,6 @@ For a conversion, Zold fetches a live mid-market rate and then asks its liquidit
 
 If the live rate feed is unavailable, Zold does not quote. If a venue's price is unreasonably far from the mid-market rate, Zold refuses it rather than pass it on.
 
-A quote is held for **ten minutes**. At execution, the rate is checked against the quote; if the market has moved beyond a small band since you approved, the transfer is refused and refunded rather than settled at a rate you did not see.
+A quote is held for **ten minutes**. The conversion carries a minimum amount out taken from the quote, so it cannot settle below what you approved; if the venue would deliver less, it is refused.
 
 If the conversion settles better than quoted, the difference goes to you.
-
-## Cash pickup
-
-The local-currency amount on a cash-pickup quote is Zold's estimate of MoneyGram's rate. MoneyGram sets the final amount when the payout is funded; the transfer detail shows it.

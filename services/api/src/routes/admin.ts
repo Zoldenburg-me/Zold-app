@@ -1,7 +1,7 @@
 /**
  * The operator dashboard's read side.
  *
- * Read only and masked: recipient phone numbers and IBANs are masked before
+ * Read only and masked: recipient IBANs are masked before
  * they leave, and there is no write route (KYC review and IBAN issue belong to
  * Monerium).
  *
@@ -45,15 +45,7 @@ function maskIdentifier(v?: string): string | undefined {
 
 function adminTransfer(transfer: Transfer) {
   const quote = store.findQuote(transfer.quoteId);
-  const route = [
-    ...transfer.txs.map((tx) => ({ kind: "chain" as const, ...tx })),
-    ...(transfer.liquidity?.txHash
-      ? [{ kind: "liquidity" as const, step: `liquidity.${transfer.liquidity.provider}`, hash: transfer.liquidity.txHash }]
-      : []),
-    ...(transfer.pickup?.anchorPaymentHash
-      ? [{ kind: "payout" as const, step: "moneygram.anchor.payment", hash: transfer.pickup.anchorPaymentHash }]
-      : []),
-  ];
+  const route = transfer.txs.map((tx) => ({ kind: "chain" as const, ...tx }));
   return {
     kind: "transfer" as const,
     id: transfer.id,
@@ -64,42 +56,22 @@ function adminTransfer(transfer: Transfer) {
     statusDetail:
       transfer.error ??
       transfer.sepa?.detail ??
-      transfer.pickup?.anchorStatus ??
-      transfer.pickup?.status ??
       transfer.sepa?.state,
     sendEur: transfer.sendEur,
     receiveEur: transfer.receiveEur,
-    receiveKes: transfer.receiveKes,
     recipientName: transfer.recipientName,
     // Masked in the ops list: the dashboard needs to distinguish payees, not
     // hold their full identifiers on every poll.
-    recipientPhone: maskIdentifier(transfer.recipientPhone),
     recipientIban: maskIdentifier(transfer.recipientIban),
     fundingSource: transfer.fundingSource,
-    payout:
-      transfer.rail === "sepa"
-        ? {
-            provider: transfer.sepa?.mode === "sandbox" ? "Monerium" : "Mock SEPA",
-            orderId: transfer.sepa?.orderId,
-            state: transfer.sepa?.state,
-            detail: transfer.sepa?.detail,
-            redeemSignedAt: transfer.moneriumRedeem?.signedAt,
-            memo: transfer.moneriumRedeem?.memo,
-          }
-        : {
-            provider: transfer.pickup?.provider ?? "MoneyGram",
-            referenceCode: transfer.pickup?.referenceCode,
-            status: transfer.pickup?.status,
-            anchorStatus: transfer.pickup?.anchorStatus,
-            anchorTransactionId: transfer.pickup?.anchorTransactionId,
-            anchorReferenceNumber: transfer.pickup?.anchorReferenceNumber,
-            anchorAsset: transfer.pickup?.anchorAsset,
-            anchorAmount: transfer.pickup?.anchorAmount,
-            anchorAmountIn: transfer.pickup?.anchorAmountIn,
-            moreInfoUrl: transfer.pickup?.moreInfoUrl,
-          },
-    liquidity: transfer.liquidity,
-    bridge: route.filter((x) => x.step.startsWith("bridge.")),
+    payout: {
+      provider: transfer.sepa?.mode === "sandbox" ? "Monerium" : "Mock SEPA",
+      orderId: transfer.sepa?.orderId,
+      state: transfer.sepa?.state,
+      detail: transfer.sepa?.detail,
+      redeemSignedAt: transfer.moneriumRedeem?.signedAt,
+      memo: transfer.moneriumRedeem?.memo,
+    },
     route,
     lastHash: lastHash(transfer.txs),
     refund: transfer.refund,

@@ -42,9 +42,8 @@ async function renderDetailScreen() {
 }
 
 function paintDetail(t) {
-  const sepa = t.rail === "sepa";
   const st = mTxStatus(t);
-  const dest = sepa ? "Europe" : "Kenya";
+  const dest = "Europe";
   $("m-det-amount").textContent = `−€${fmt(t.sendEur)}`;
   $("m-det-who").textContent = `to ${t.recipientName || "—"} · ${dest}`;
   const tag = $("m-det-status");
@@ -55,11 +54,11 @@ function paintDetail(t) {
 
   const mask = (v) => (v && v.length > 12 ? `${v.slice(0, 4)} ···· ${v.slice(-4)}` : v);
   const rows = [
-    ["Rail", sepa ? "SEPA transfer" : "MoneyGram cash pickup"],
+    ["Rail", "SEPA transfer"],
     ["Destination", dest],
-    ["They receive", sepa ? `€${fmt(t.receiveEur ?? 0)}` : `${fmt(t.receiveKes ?? 0)} KES`],
+    ["They receive", `€${fmt(t.receiveEur ?? 0)}`],
     ["Recipient", t.recipientName || "—"],
-    [sepa ? "IBAN" : "Mobile", mask(sepa ? t.recipientIban : t.recipientPhone) || "—"],
+    ["IBAN", mask(t.recipientIban) || "—"],
     ...(t.reference ? [["Your reference", t.reference]] : []),
     ...(t.refund ? [["Refunded", `€${fmt(t.refund.amountEur)} · ${t.refund.deductions}`]] : []),
     ["Sent", new Date(t.createdAt).toLocaleString("en", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })],
@@ -71,9 +70,6 @@ function paintDetail(t) {
       <div class="m-rowv">${esc(String(v))}</div>
     </div>`).join("");
 
-  const ref = t.pickup?.referenceCode;
-  $("m-det-ref").classList.toggle("hidden", !(!sepa && ref));
-  if (ref) $("m-det-code").textContent = ref;
   $("m-det-timeline").innerHTML = mTimeline(t).html;
   // CREATED means the device signature has not arrived, so nothing has moved
   // and there is no outcome to publish. The API refuses a share there too.
@@ -178,7 +174,6 @@ function paintShare() {
 function paintSharePreview() {
   const t = hist.find((x) => x.id === mShare.transferId) || {};
   const f = mShare.fields;
-  const sepa = t.rail === "sepa";
   const nameSummary = (mode, full) => {
     const parts = String(full || "").trim().split(/\s+/);
     if (mode === "hidden" || !parts[0]) return null;
@@ -186,7 +181,7 @@ function paintSharePreview() {
     if (mode === "first") return `${parts[0]} ▒▒▒▒▒`;
     return parts.length > 1 ? `▒▒▒▒▒ ${parts.slice(1).join(" ")}` : null;
   };
-  const acct = sepa ? t.recipientIban : t.recipientPhone;
+  const acct = t.recipientIban;
   const acctSummary = () => {
     if (!acct || f.account === "hidden") return null;
     const c = String(acct).replace(/\s+/g, "");
@@ -196,7 +191,7 @@ function paintSharePreview() {
   const rows = [
     ["Your name", nameSummary(f.sender, user?.name)],
     ["Recipient", nameSummary(f.recipient, t.recipientName)],
-    [sepa ? "Payout account" : "Mobile number", acctSummary()],
+    ["Payout account", acctSummary()],
     ["Amount", f.fx === "both" ? "Both currencies" : f.fx === "sender" ? "What you sent" : "What they get"],
     ["Rate & fee", f.showRate ? "Shown" : null],
     ["Your reference", t.reference ? (f.showRef ? t.reference : null) : "—"],

@@ -619,16 +619,6 @@
   .pickup .plabel { font-size: .68rem; letter-spacing: .13em; text-transform: uppercase; color: var(--amber); font-weight: 700; }
   .pickup .code { font-size: 2rem; font-weight: 700; letter-spacing: .28em; color: var(--amber); margin: .32rem 0 .18rem; }
   .pickup .pnote { font-size: .78rem; color: var(--muted); }
-  .paidbox {
-    margin-top: 1rem; text-align: center; padding: 1.15rem; border-radius: var(--radius);
-    background: rgba(61, 214, 140, 0.06); border: 1px solid rgba(61, 214, 140, 0.3); animation: rise .4s ease;
-  }
-  .paidbox .check { width: 50px; height: 50px; margin: 0 auto .45rem; border-radius: 50%; background: rgba(61, 214, 140, 0.12); display: grid; place-items: center; }
-  .paidbox .check svg { stroke: var(--green); stroke-width: 3; fill: none; stroke-linecap: round; stroke-linejoin: round; }
-  .paidbox .check svg path { stroke-dasharray: 30; stroke-dashoffset: 30; animation: draw .6s .2s ease forwards; }
-  @keyframes draw { to { stroke-dashoffset: 0; } }
-  .paidbox .pt { font-weight: 700; font-size: 1rem; color: var(--green); }
-  .paidbox .pd { font-size: .8rem; color: var(--muted); }
 
   /* ==========================================================================
      MOBILE APP — "Noir"

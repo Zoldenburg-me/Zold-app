@@ -11,12 +11,7 @@ import { FX, SECURITY, railFeeEur } from "../config.js";
 import { ibanChecksumValid, normaliseIban } from "../domain/contacts.js";
 import { createQuote, isExpired } from "../fx.js";
 import { SEPA_REMITTANCE_MAX } from "../sepa.js";
-import {
-  cashRailOpen,
-  executeSepaTransfer,
-  executeTransfer,
-  refreshPayout,
-} from "../orchestrator.js";
+import { executeSepaTransfer } from "../orchestrator.js";
 import { store } from "../store.js";
 import { requireCapability, requireKycApproved } from "../http/guards.js";
 import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
@@ -54,20 +49,14 @@ export function createTransferRouter(deps: TransferDeps) {
   router.post(
     "/quotes",
     wrap(async (req, res) => {
-      const { userId, sendEur, rail = "cash" } = req.body ?? {};
-      if (rail === "cash" && !cashRailOpen()) {
-        return res.status(503).json({
-          error: "the cash rail is not open on this deployment — Bridge and the payout anchor are not configured",
-          code: "RAIL_CLOSED",
-        });
-      }
+      const { userId, sendEur, rail = "sepa" } = req.body ?? {};
       const user = store.findUser(userId);
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
       if (!requireCapability(user, "onchain_balance", res)) return;
       if (!requireKycApproved(user, res)) return;
-      if (!["cash", "sepa"].includes(rail)) {
-        return res.status(400).json({ error: "rail must be cash or sepa" });
+      if (rail !== "sepa") {
+        return res.status(400).json({ error: "rail must be sepa — bank payout is the only rail this deployment runs" });
       }
       const amount = Number(sendEur);
       const railFee = railFeeEur(rail);
@@ -84,7 +73,7 @@ export function createTransferRouter(deps: TransferDeps) {
   router.post(
     "/transfers",
     wrap(async (req, res) => {
-      const { quoteId, recipientName, recipientPhone, recipientIban, reference } = req.body ?? {};
+      const { quoteId, recipientName, recipientIban, reference } = req.body ?? {};
       const quote = store.findQuote(quoteId);
       if (!quote) return res.status(404).json({ error: "quote not found" });
       if (!requireUserSession(req, res, quote.userId)) return;
@@ -98,16 +87,11 @@ export function createTransferRouter(deps: TransferDeps) {
       if (typeof recipientName !== "string" || !recipientName.trim() || recipientName.length > 140) {
         return res.status(400).json({ error: "recipientName required (up to 140 characters)" });
       }
-      if (quote.rail === "sepa") {
-        if (typeof recipientIban !== "string" || !recipientIban.trim()) {
-          return res.status(400).json({ error: "recipientIban required for bank payout" });
-        }
-        if (!ibanChecksumValid(normaliseIban(recipientIban))) {
-          return res.status(400).json({ error: "recipientIban is not a valid IBAN" });
-        }
+      if (typeof recipientIban !== "string" || !recipientIban.trim()) {
+        return res.status(400).json({ error: "recipientIban required for bank payout" });
       }
-      if (quote.rail === "cash" && (typeof recipientPhone !== "string" || !recipientPhone.trim() || recipientPhone.length > 32)) {
-        return res.status(400).json({ error: "recipientPhone required for cash pickup" });
+      if (!ibanChecksumValid(normaliseIban(recipientIban))) {
+        return res.status(400).json({ error: "recipientIban is not a valid IBAN" });
       }
       // Remittance reference: carried to the payee on the SEPA rail so they can
       // reconcile the payment against their own records. Refused rather than
@@ -122,15 +106,9 @@ export function createTransferRouter(deps: TransferDeps) {
             error: `reference must be ${SEPA_REMITTANCE_MAX} characters or fewer (SEPA remittance limit)`,
           });
         }
-        if (quote.rail !== "sepa") {
-          return res.status(400).json({
-            error: "reference is only carried on the sepa rail",
-          });
-        }
       }
       const built = await buildTransferFromQuote(quote, {
         recipientName,
-        recipientPhone,
         recipientIban,
         reference,
       });
@@ -191,16 +169,6 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!t) return res.status(404).json({ error: "transfer not found" });
       if (!requireUserSession(req, res, t.userId)) return;
       res.json(t);
-    }),
-  );
-
-  router.post(
-    "/transfers/:id/refresh-payout",
-    wrap(async (req, res) => {
-      const t = store.findTransfer(req.params.id);
-      if (!t) return res.status(404).json({ error: "transfer not found" });
-      if (!requireUserSession(req, res, t.userId)) return;
-      res.json(await refreshPayout(t, { timeoutMs: 0 }));
     }),
   );
 
@@ -356,11 +324,7 @@ export function createTransferRouter(deps: TransferDeps) {
           return res.status(401).json({ error: String(err?.message ?? err) });
         }
       }
-      if (
-        transfer.rail === "sepa" &&
-        transfer.moneriumRedeem &&
-        !effectiveRedeemSignature
-      ) {
+      if (transfer.moneriumRedeem && !effectiveRedeemSignature) {
         return res.status(400).json({
           error: "passkey Safe Monerium redeem approval is required before this SEPA transfer can execute",
         });
@@ -385,7 +349,6 @@ export function createTransferRouter(deps: TransferDeps) {
               clientDataJSON: b64urlToBuf(executionAssertion.clientDataJSON),
               signature: b64urlToBuf(executionAssertion.signature),
             },
-            ...(pendingExecution.batch ? { batch: pendingExecution.batch } : {}),
           }
         : undefined;
       if (pendingExecution) pendingTransferExecutions.delete(transfer.id);
@@ -401,10 +364,7 @@ export function createTransferRouter(deps: TransferDeps) {
         executableTransfer = store.findTransfer(transfer.id)!;
       }
       const auth = { deadline: transfer.auth.deadline, signature: signature as `0x${string}` };
-      const result =
-        executableTransfer.rail === "sepa"
-          ? await executeSepaTransfer(executableTransfer, user, auth, execution)
-          : await executeTransfer(executableTransfer, user, auth, execution);
+      const result = await executeSepaTransfer(executableTransfer, user, auth, execution);
       res.status(result.state === "FAILED" ? 502 : 200).json(result);
     }),
   );

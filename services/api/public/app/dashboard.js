@@ -60,8 +60,7 @@ function renderUser(u) {
  *  transfers past CREATED but not yet terminal; nothing on-chain reports it. */
 function mobileFigures(u) {
   const safe = u.safeBalanceEur ?? u.balanceEur ?? 0;
-  const live = ["DEBITED", "SWAPPED", "BRIDGED", "PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING",
-    "PAYOUT_FUNDED", "PAYOUT_READY", "PAYOUT_SUBMITTED"];
+  const live = ["DEBITED", "PAYOUT_SUBMITTED"];
   const inflight = hist.filter((t) => live.includes(t.state)).reduce((n, t) => n + (t.sendEur || 0), 0);
   return { total: safe, available: u.balanceEur ?? safe, inflight };
 }
@@ -167,15 +166,14 @@ function mTxRow(t) {
     </span>
   </div>`;
   }
-  const sepa = t.rail === "sepa";
   const st = mTxStatus(t);
   const when = new Date(t.createdAt).toLocaleDateString("en", { day: "numeric", month: "short" });
-  const recv = sepa ? `€${fmt(t.receiveEur ?? 0)}` : `${fmt(t.receiveKes ?? 0)} KES`;
+  const recv = `€${fmt(t.receiveEur ?? 0)}`;
   return `<button class="m-row" data-mtx="${esc(t.id)}">
-    <span class="cc">${sepa ? "EU" : "KE"}</span>
+    <span class="cc">EU</span>
     <span style="flex:1;min-width:0">
       <span class="who" style="display:block">${esc(t.recipientName || "—")}</span>
-      <span class="sub" style="display:block">${sepa ? "SEPA" : "MoneyGram cash"} · ${esc(when)} · ${esc(recv)}</span>
+      <span class="sub" style="display:block">SEPA · ${esc(when)} · ${esc(recv)}</span>
     </span>
     <span style="text-align:right;flex:none">
       <span class="amt m-fig" style="display:block">−€${fmt(t.sendEur)}</span>
@@ -672,25 +670,24 @@ function renderCardTile() {
    --------------------------------------------------------------------------
    Quotes come from POST /api/quotes, the payment is signed by the device key
    as in the desktop flow, and the timeline follows the transfer's state. The
-   design's 182 corridors and four rails are not here; the API prices two.
+   design's 182 corridors and four rails are not here; the API prices one:
+   EUR over SEPA. A corridor is added here when a payout partner is live.
    ========================================================================== */
 const M_DESTINATIONS = [
   { cc: "EU", name: "Europe", cur: "EUR", rail: "sepa", sub: "SEPA · EUR", eta: "Seconds – 1 day" },
-  { cc: "KE", name: "Kenya", cur: "KES", rail: "cash", sub: "MoneyGram · KES", eta: "Minutes" },
 ];
 const M_METHODS = {
   sepa: { icon: "account_balance", title: "Bank transfer (IBAN)", sub: "To any account in the SEPA zone" },
-  cash: { icon: "payments", title: "Cash pickup (MoneyGram)", sub: "Collect at any agent" },
 };
-let mSend = { dest: null, quote: null, rec: { name: "", iban: "", phone: "" }, transfer: null, prefill: null };
+let mSend = { dest: null, quote: null, rec: { name: "", iban: "" }, transfer: null, prefill: null };
 let mQuoteTimer = null;
 
 /* ==========================================================================
    PAY HUB
    --------------------------------------------------------------------------
    The design's four rails and its @zoldtag directory are not all here. What
-   the API can do is send EUR over SEPA and cash to Kenya, so those two are
-   live and the other two say so; and the only recipients this app knows about
+   the API can do is send EUR over SEPA, so that one is live and the other
+   three say so; and the only recipients this app knows about
    are the ones this account has paid, so that is what the search searches.
    Anything picked here lands on the amount step with the recipient carried,
    and the recipient step is still the one that validates it.
@@ -700,7 +697,7 @@ let mQuoteTimer = null;
 function mPayees() {
   const seen = new Map();
   for (const t of hist) {
-    const id = t.rail === "sepa" ? t.recipientIban : t.recipientPhone;
+    const id = t.recipientIban;
     const key = `${t.rail}:${(id || t.recipientName || "").toLowerCase()}`;
     if (!id || seen.has(key)) continue;
     seen.set(key, {
@@ -714,17 +711,13 @@ function mPayees() {
 
 const M_RAILS = [
   { id: "sepa", icon: "account_balance", t: "Bank", d: "SEPA to an IBAN", live: true, accent: true },
-  { id: "cash", icon: "public", t: "International", d: "Cash pickup, Kenya", live: true },
+  { id: "intl", icon: "public", t: "International", d: "Opens with a payout partner", live: false },
   { id: "zold", icon: "bolt", t: "Zold", d: "No Zold-to-Zold transfer yet", live: false },
   { id: "crypto", icon: "currency_bitcoin", t: "Crypto", d: "USDC in only, never out", live: false },
 ];
 
 function renderPayScreen() {
-  // The cash corridor is only offered when the deployment can actually pay it
-  // (Bridge live + an anchor); otherwise it reads as coming, not as a wall.
-  const rails = M_RAILS.map((r) => r.id !== "cash" ? r
-    : { ...r, live: caps.cashRail, d: caps.cashRail ? r.d : "Cash pickup opens with a payout partner" });
-  $("m-rails").innerHTML = rails.map((r) => `
+  $("m-rails").innerHTML = M_RAILS.map((r) => `
     <button class="m-rail${r.live ? (r.accent ? " go" : "") : " off"}" ${r.live ? `data-mrail="${r.id}"` : "disabled"}>
       ${r.live ? `<span class="material-symbols-rounded">${r.icon}</span>` : '<span class="m-tag soon">SOON</span>'}
       <span class="t">${esc(r.t)}</span>
@@ -743,7 +736,7 @@ function renderPayScreen() {
     </button>`).join("");
   $("m-pay-saved").innerHTML = payees.length
     ? payees.map((p) => `<button class="m-row" data-mpayee="${esc(p.key)}">
-        <span class="cc">${p.rail === "sepa" ? "EU" : "KE"}</span>
+        <span class="cc">EU</span>
         <span style="flex:1;min-width:0">
           <span class="who" style="display:block">${esc(p.name)}</span>
           <span class="sub" style="display:block;font-family:var(--m-mono)">${esc(p.masked)}</span>
@@ -773,7 +766,7 @@ function renderPayMatches() {
   const hits = mPayees().filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
   el.innerHTML = hits.length
     ? hits.map((p) => `<button class="m-row" data-mpayee="${esc(p.key)}">
-        <span class="cc">${p.rail === "sepa" ? "EU" : "KE"}</span>
+        <span class="cc">EU</span>
         <span style="flex:1;min-width:0">
           <span class="who" style="display:block">${esc(p.name)}</span>
           <span class="sub" style="display:block;font-family:var(--m-mono)">${esc(p.masked)}</span>
@@ -787,13 +780,11 @@ function renderPayMatches() {
 /**
  * Enter the send flow on a rail, optionally with a recipient already chosen.
  *
- * Kenya is picked from a list because more corridors open with partners; SEPA
- * has exactly one destination, so the design's "the Bank rail skips the method
- * step" applies to the country step too — there is nothing to choose.
+ * SEPA has exactly one destination, so the design's "the Bank rail skips the
+ * method step" applies to the country step too — there is nothing to choose.
  */
 function startSend(rail, payee) {
   mSend.prefill = payee || null;
-  if (rail === "cash" && !payee) return mobileNav("country");
   const d = M_DESTINATIONS.find((x) => x.rail === rail);
   if (!d) return mobileNav("country");
   toAmountStep(d, "pay");
@@ -801,9 +792,7 @@ function startSend(rail, payee) {
 
 function renderCountryList(filter = "") {
   const q = filter.trim().toLowerCase();
-  // A cash destination is only listed when the deployment can pay it.
   const list = M_DESTINATIONS
-    .filter((d) => d.rail !== "cash" || caps.cashRail)
     .filter((d) => !q || d.name.toLowerCase().includes(q) || d.cur.toLowerCase().includes(q) || d.cc.toLowerCase().includes(q));
   $("m-country-list").innerHTML = list.length
     ? list.map((d) => `<button class="m-optrow" data-mdest="${d.cc}">
@@ -832,7 +821,7 @@ function toAmountStep(d, from) {
 function pickDestination(d) {
   mSend.dest = d;
   $("m-method-dest").textContent = d.name;
-  $("m-method-rail").textContent = d.rail === "sepa" ? "SEPA" : "MoneyGram";
+  $("m-method-rail").textContent = "SEPA";
   $("m-method-cur").textContent = d.cur;
   const m = M_METHODS[d.rail];
   $("m-method-list").innerHTML = `<button class="m-optrow" id="m-pick-method">
@@ -851,7 +840,6 @@ async function requestQuote() {
   mSend.quote = null;
   $("m-amount-next").disabled = true;
   $("m-quote-total").classList.add("hidden");
-  $("m-quote-note").classList.add("hidden");
   $("m-quote-rows").innerHTML = "";
   clearErr("m-amount-err");
   if (!d || !(amount > 0)) { $("m-quote-status").textContent = "Enter an amount to price it."; return; }
@@ -868,19 +856,11 @@ async function requestQuote() {
 
 function renderQuote(q) {
   const d = mSend.dest;
-  const cash = d.rail === "cash";
-  const rows = cash
-    ? [["Mid-market rate", `${fmt(q.midRate, 2)} ${d.cur}`],
-       ["Your rate", `${fmt(q.fxRate, 2)} ${d.cur}`],
-       ["FX margin", `${fmt((q.marginBps ?? 0) / 100, 2)}%`],
-       ["Fee", `€${fmt(q.fixedFeeEur)}`]]
-    : [["You send", `€${fmt(q.sendEur)}`], ...(q.fixedFeeEur > 0 ? [["Fee", `€${fmt(q.fixedFeeEur)}`]] : [["Fee", "None"]])];
+  const rows = [["You send", `€${fmt(q.sendEur)}`], ["Fee", q.fixedFeeEur > 0 ? `€${fmt(q.fixedFeeEur)}` : "None"]];
   $("m-quote-status").textContent = "";
   $("m-quote-rows").innerHTML = rows.map(([k, v]) => `<div class="m-qrow"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
-  $("m-quote-recv").textContent = cash ? `${fmt(q.receiveKes)} ${d.cur}` : `€${fmt(q.receiveEur)}`;
+  $("m-quote-recv").textContent = `€${fmt(q.receiveEur)}`;
   $("m-quote-total").classList.remove("hidden");
-  $("m-quote-note").textContent = "Rate locked for ten minutes. The quote expires rather than repricing silently.";
-  $("m-quote-note").classList.toggle("hidden", !cash);
   const bal = user?.balanceEur ?? 0;
   const over = q.sendEur > bal;
   $("m-balance-note").textContent = over
@@ -891,29 +871,24 @@ function renderQuote(q) {
 
 function toRecipient() {
   const d = mSend.dest;
-  const cash = d.rail === "cash";
-  $("m-rec-hint").textContent = cash
-    ? "The name must match the ID they collect with."
-    : "The name and IBAN of the account you're paying.";
+  $("m-rec-hint").textContent = "The name and IBAN of the account you're paying.";
   /* A payee picked on the Pay hub arrives here already filled in. It is filled
      in, not hidden: the identifier is what the device signs a commitment over,
      so it stays on screen and editable rather than being carried invisibly. */
   const pre = mSend.prefill && mSend.prefill.rail === d.rail ? mSend.prefill : null;
   $("m-rec-fields").innerHTML = `
-    <div class="m-field"><label>Full name</label><input id="m-rec-name" value="${esc(pre?.name || "")}" placeholder="${cash ? "Joseph Otieno" : "Elena Weber"}" /></div>
-    ${cash
-      ? `<div class="m-field"><label>Mobile number</label><input id="m-rec-phone" inputmode="tel" value="${esc(pre?.id || "")}" placeholder="+254 7xx xxx xxx" /></div>`
-      : `<div class="m-field"><label>IBAN</label><input id="m-rec-iban" value="${esc(pre?.id || "")}" placeholder="DE89 3704 0044 0532 0130 00" /></div>`}
-    ${!cash && pre?.reference
+    <div class="m-field"><label>Full name</label><input id="m-rec-name" value="${esc(pre?.name || "")}" placeholder="Elena Weber" /></div>
+    <div class="m-field"><label>IBAN</label><input id="m-rec-iban" value="${esc(pre?.id || "")}" placeholder="DE89 3704 0044 0532 0130 00" /></div>
+    ${pre?.reference
       ? `<div class="m-field"><label>Reference — the payee matches the payment on this</label><input id="m-rec-ref" value="${esc(pre.reference)}" maxlength="140" /></div>`
       : ""}`;
   const q = mSend.quote;
   $("m-sum-send").textContent = `€${fmt(q.sendEur)}`;
-  $("m-sum-recv").textContent = cash ? `${fmt(q.receiveKes)} ${d.cur}` : `€${fmt(q.receiveEur)}`;
+  $("m-sum-recv").textContent = `€${fmt(q.receiveEur)}`;
   $("m-sum-eta").textContent = d.eta;
   const validate = () => {
     const name = ($("m-rec-name").value || "").trim();
-    const id = cash ? ($("m-rec-phone").value || "").trim() : ($("m-rec-iban").value || "").trim();
+    const id = ($("m-rec-iban").value || "").trim();
     $("m-rec-send").disabled = !(name && id);
   };
   $("m-rec-fields").querySelectorAll("input").forEach((i) => { i.oninput = validate; });
@@ -930,16 +905,14 @@ async function submitMobileSend() {
   const btn = $("m-rec-send");
   btn.disabled = true;
   const d = mSend.dest;
-  const cash = d.rail === "cash";
   try {
     if (!kycApproved(user)) throw new Error("identity review must be approved before sending");
     if (!user.authorizerAddress) await registerDeviceKey(user);
     const recipient = {
       recipientName: ($("m-rec-name").value || "").trim(),
-      recipientPhone: cash ? ($("m-rec-phone").value || "").trim() : undefined,
-      recipientIban: cash ? undefined : ($("m-rec-iban").value || "").trim(),
+      recipientIban: ($("m-rec-iban").value || "").trim(),
     };
-    const reference = !cash ? ($("m-rec-ref")?.value || "").trim() : "";
+    const reference = ($("m-rec-ref")?.value || "").trim();
     const created = await api("/api/transfers", { quoteId: mSend.quote.id, ...recipient, ...(reference ? { reference } : {}) });
     mSend.transfer = created;
     mSend.rec = recipient;
@@ -952,7 +925,6 @@ async function submitMobileSend() {
       throw new Error("this account's spending key was registered in a different browser — sign in there, or rotate the key from that device");
     }
     const expected = dev.destinationCommitment(d.rail, {
-      phone: recipient.recipientPhone,
       iban: recipient.recipientIban,
       name: recipient.recipientName,
     });
@@ -993,19 +965,17 @@ async function submitMobileSend() {
  * screen they opened would be the confusing half of that, so both use five.
  */
 function mTimeline(t) {
-  const cash = t.rail === "cash";
   const steps = [
     { t: "Quote locked", d: `quote ${String(t.quoteId || "").slice(0, 8)}` },
     /* One funding source: the move out of the user's own Safe. DEBIT_STEP in
        orchestrator.ts is the list — if another source is ever added there, it
        has to be matched here too. */
     { t: "Debited from your safe", d: t.txs?.find((x) => x.step.startsWith("safe.transfer"))?.hash?.slice(0, 18) || "waiting" },
-    { t: cash ? "Anchor session opened" : "Redeem order placed", d: cash ? (t.pickup?.anchorTransactionId || "—") : (t.sepa?.orderId || t.sepa?.state || "—") },
-    { t: cash ? "Converted and funded" : "Sent over SEPA", d: t.txs?.find((x) => x.step.startsWith("liquidity") || x.step.startsWith("bridge."))?.step || (t.sepa?.state ?? "—") },
-    { t: cash ? "Collected" : "Paid", d: t.state },
+    { t: "Redeem order placed", d: t.sepa?.orderId || t.sepa?.state || "—" },
+    { t: "Sent over SEPA", d: t.sepa?.state ?? "—" },
+    { t: "Paid", d: t.state },
   ];
-  const reached = { CREATED: 1, DEBITED: 2, SWAPPED: 3, BRIDGED: 3, PAYOUT_DETAILS_PENDING: 3,
-    PAYOUT_FUNDING_PENDING: 4, PAYOUT_FUNDED: 4, PAYOUT_READY: 4, PAYOUT_SUBMITTED: 4, PAID: 5 }[t.state] ?? 1;
+  const reached = { CREATED: 1, DEBITED: 2, PAYOUT_SUBMITTED: 4, PAID: 5 }[t.state] ?? 1;
   const stalled = ["FAILED", "REFUNDED", "MANUAL_REVIEW"].includes(t.state);
   const html = steps.map((s, i) => {
     const cls = stalled && i >= reached ? "" : i < reached ? "done" : i === reached ? "active" : "";
@@ -1020,16 +990,12 @@ function mTimeline(t) {
 
 /** Timeline driven by the transfer's real state, not a timer. */
 function renderProgress(t) {
-  const d = mSend.dest || { rail: t.rail, name: t.rail === "sepa" ? "Europe" : "Kenya", cur: t.rail === "sepa" ? "EUR" : "KES" };
-  const cash = d.rail === "cash";
+  const d = mSend.dest || M_DESTINATIONS.find((x) => x.rail === t.rail) || M_DESTINATIONS[0];
   const { html, stalled } = mTimeline(t);
   $("m-prog-kicker").textContent = stalled ? t.state.replace("_", " ") : t.state === "PAID" ? "Sent" : "Sending";
-  $("m-prog-amount").textContent = cash ? `${fmt(t.receiveKes)} ${d.cur}` : `€${fmt(t.receiveEur ?? t.sendEur)}`;
+  $("m-prog-amount").textContent = `€${fmt(t.receiveEur ?? t.sendEur)}`;
   $("m-prog-to").textContent = `to ${mSend.rec?.recipientName || t.recipientName || "—"} · ${d.name}`;
   $("m-timeline").innerHTML = html;
-  const ref = t.pickup?.referenceCode;
-  $("m-prog-ref").classList.toggle("hidden", !(cash && ref));
-  if (ref) $("m-prog-code").textContent = ref;
   if (t.error) showErr("m-prog-err", new Error(t.error));
-  $("m-prog-done").classList.toggle("hidden", !(t.state === "PAID" || stalled || t.pickup));
+  $("m-prog-done").classList.toggle("hidden", !(t.state === "PAID" || stalled));
 }

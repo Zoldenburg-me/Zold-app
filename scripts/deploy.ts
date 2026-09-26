@@ -228,9 +228,8 @@ async function main() {
    * Off hardhat, the deployment is the two real token addresses and nothing
    * else. The FxSwapper (our own inventory, not Safe-executable) and the
    * AdminTimelock are local fixtures; production liquidity comes from LI.FI /
-   * Uniswap through the user's own Safe, and the cash leg goes through
-   * Bridge.xyz. Don't deploy mock USDC here: every rail would point at a token
-   * nobody holds.
+   * Uniswap through the user's own Safe. Don't deploy mock USDC here: every
+   * rail would point at a token nobody holds.
    */
   if (CHAIN_ID !== hardhat.id) {
     const usdcAddr = (process.env.DEPLOY_USDC_ADDRESS as `0x${string}` | undefined) ?? KNOWN_USDC[CHAIN_ID];

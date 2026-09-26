@@ -191,7 +191,7 @@ $("m-usd-x").onclick = () => $("m-usd").classList.add("hidden");
  * probe hides a control the server might refuse rather than offering one it
  * will.
  */
-let caps = { sandbox: true, cashRail: false, moneriumOAuth: false, moneriumApiKeys: false, moneriumEnvironment: "production", moneriumHost: "api.monerium.app", emailSmsRecovery: false };
+let caps = { sandbox: true, moneriumOAuth: false, moneriumApiKeys: false, moneriumEnvironment: "production", moneriumHost: "api.monerium.app", emailSmsRecovery: false };
 
 async function loadCapabilities() {
   try {

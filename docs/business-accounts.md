@@ -145,5 +145,5 @@ Deleted: the assumption that a user *is* an account — one `user.iban`, one
 Kept untouched, because it is the expensive part and it is verified: `chain.ts`,
 `liquidity.ts`, `rates.ts`, `dex.ts`, `fx.ts`, `sepa.ts`, `webauthn.ts`,
 `qr.ts`, `receipt.ts`, `reconcile.ts`, `recovery*.ts`, `country-policy.ts`,
-`adapters/*`, `stellar/*`, `bridge/*`, `wallet/*`, and the contracts. The
+`adapters/*`, `wallet/*`, and the contracts. The
 orchestrator keeps its state machine and gains an org-scoped caller.

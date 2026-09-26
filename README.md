@@ -18,9 +18,8 @@ Product documentation for users: [docs/gitbook](docs/gitbook/README.md).
 | | |
 |---|---|
 | **Open** | Euro IBAN (Monerium OAuth or your own Monerium API keys), SEPA payouts via Monerium redeem (no Zold fee), USDC ⇄ EURe conversion, payment page, payment links, Invoice-Me links, receipts, verifiable documents, business organisations with four-eyes drafts, invoicing, bookkeeping, Gnosis Pay card view |
-| **Closed** | Cash pickup (Bridge.xyz → Stellar → MoneyGram). Quotes answer `503 RAIL_CLOSED` until `BRIDGE_LIVE=1` and an anchor are configured |
-| **Not built** | USD account, other currencies, own card, Shopify in-checkout payment method |
-| **Never run on real money** | No mainnet deploy, no executed swap, no live Bridge/CCTP transfer, no registered Monerium production OAuth app, no Shopify app install, no Candide recovery call, no mail transport |
+| **Not built** | International payouts (the Pay hub tile reads SOON until a payout partner is contracted), USD account, other currencies, own card, Shopify in-checkout payment method |
+| **Never run on real money** | No mainnet deploy, no executed swap, no registered Monerium production OAuth app, no Shopify app install, no Candide recovery call, no mail transport |
 
 The running deployment is Base Sepolia (84532). The default chain is Base
 mainnet (8453), which has no entry in `deployments.json` yet.
@@ -39,24 +38,24 @@ mainnet (8453), which has no entry in `deployments.json` yet.
 ├────────────────────────────────────────────────────────────────────────────┤
 │ transfers/build.ts   the ONE path that creates a transfer                   │
 │ orchestrator.ts      transfer state machine, compensation, sweeps           │
-│ fx.ts  rates.ts      quotes, bound to an independent live mid               │
+│ fx.ts  rates.ts      quotes; live mid that every venue quote must meet      │
 │ liquidity.ts         venue seam → liquidity/{lifi,rfq,uniswap,cow,best,…}  │
 │ domain/              orgs, roles, plans, drafts, invoices, ledger (no I/O)  │
 │ store.ts             the only code that touches the database               │
 ├────────────────────────────────────────────────────────────────────────────┤
 │ wallet/     Candide Safe (ERC-4337, bundler + paymaster)                    │
-│ adapters/   Monerium, Gnosis Pay, MoneyGram, crypto deposits, forwarder     │
-│ bridge/  stellar/  shopify/  recovery/                                      │
-└──────┬──────────────────┬──────────────────┬───────────────────┬───────────┘
-       ▼                  ▼                  ▼                   ▼
-   Base (Safe,        Monerium          FX venues           Bridge.xyz /
-   EURe, USDC)     (IBAN, redeem)    (LI.FI, Bebop, …)   Stellar (closed)
+│ adapters/   Monerium, Gnosis Pay, crypto deposits, forwarder                │
+│ shopify/  recovery/                                                         │
+└──────┬──────────────────┬──────────────────┬───────────────────────────────┘
+       ▼                  ▼                  ▼
+   Base (Safe,        Monerium          FX venues
+   EURe, USDC)     (IBAN, redeem)    (LI.FI, Bebop, …)
 ```
 
 ### How a SEPA payment flows
 
-1. `POST /api/quotes` prices the payment against a live mid (`fx.ts`,
-   `rates.ts`). No rate, no quote.
+1. `POST /api/quotes` prices the payment (`fx.ts`). SEPA is EUR to EUR: no FX
+   leg, a fixed fee (€0), and a short expiry.
 2. `POST /api/transfers` calls `transfers/build.ts`, which prepares the Safe
    user operation that *is* the debit. Its token, amount and destination are
    fixed in the hash.
@@ -66,7 +65,8 @@ mainnet (8453), which has no entry in `deployments.json` yet.
    Monerium, recording each state and tx hash. A 4xx refusal refunds; a timeout
    or anything ambiguous goes to `MANUAL_REVIEW`.
 
-A conversion follows the same path, with `liquidity.ts` picking the venue:
+Converting an inbound USDC deposit to EURe inside the Safe is the only thing
+that uses a venue; `liquidity.ts` picks it:
 every venue's quote is checked against the independent mid, venue calldata is
 allowlisted, and the amount received is measured as a balance delta.
 
@@ -88,8 +88,7 @@ services/api/src/
   transfers/build.ts   builds a transfer from a quote (direct send and draft execution)
   domain/              plans, roles, drafts, invoices, invoicing, jurisdictions, ledger, coa
   wallet/              Candide Safe deployment, signing, passkey Safe plan
-  adapters/            monerium-*, gnosis-pay, moneygram, crypto-deposits, candide-forwarder
-  bridge/  stellar/    cash rail (closed)
+  adapters/            monerium-*, gnosis-pay, crypto-deposits, candide-forwarder
   shopify/  recovery/  merchant and guardian integrations
   documents.ts  receipt.ts  reconcile.ts  webauthn.ts  crypto-at-rest.ts
 
@@ -152,8 +151,7 @@ receipt, `/v/<code>` document verification.
 
 ### Tests
 
-`npm run check` is offline and is the one to run. `npm run check:live` adds the
-Stellar testnet suites. Each suite also runs alone (`npm run fx:test`,
+`npm run check` is offline and is the one to run. Each suite also runs alone (`npm run fx:test`,
 `npm run business:test`, …); [TESTING.md](TESTING.md) covers manual end-to-end testing.
 
 ## Names

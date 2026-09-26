@@ -208,12 +208,11 @@ export function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
  * Delete stored Travel Rule sender profiles (Sep 2026).
  *
  * `user.senderProfile` held identity-document numbers, birth dates and home
- * addresses for the anchor leg of the cash rail — a rail no deployment has
- * ever opened. Keeping the most sensitive data in the system for a purpose
- * that cannot run fails data minimisation, so the field is gone from the
- * type and any row that still carries one (the Travel Rule harness wrote
- * some) is stripped on load. Originator data is collected per transfer when
- * an anchor is actually integrated; see adapters/moneygram.ts SenderDetails.
+ * addresses for the anchor leg of a cash rail that never opened and has
+ * since been deleted. Keeping the most sensitive data in the system for a
+ * purpose that cannot run fails data minimisation, so the field is gone from
+ * the type and any row that still carries one is stripped on load. A future
+ * payout partner that needs originator data collects it per transfer.
  */
 function stripSenderProfiles() {
   let stripped = 0;

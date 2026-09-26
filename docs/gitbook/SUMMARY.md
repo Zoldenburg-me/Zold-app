@@ -19,7 +19,6 @@
 
 * [How a payment works](send-money/how-a-payment-works.md)
 * [SEPA bank transfer](send-money/sepa-bank-transfer.md)
-* [Cash pickup](send-money/cash-pickup.md)
 * [Tracking and receipts](send-money/tracking-and-receipts.md)
 
 ## Get paid

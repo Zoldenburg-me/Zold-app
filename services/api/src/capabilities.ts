@@ -8,7 +8,6 @@
  */
 import { MONERIUM, SHOPIFY, moneriumOAuthEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
-import { cashRailOpen } from "./orchestrator.js";
 import { shopifyAvailable } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
 
@@ -26,9 +25,6 @@ export function capabilities() {
     sandbox: true,
     /** May the browser offer "sign up / sign in with Monerium" (OAuth)? */
     moneriumOAuth: moneriumOAuthEnabled(),
-    /** Is the cash (EUR -> KES) corridor open? Bridge live AND an anchor
-     *  configured; the UI hides the corridor rather than quote into a wall. */
-    cashRail: cashRailOpen(),
     /** Is a Shopify payments app registered for this deployment? Without one
      *  the dashboard's Shopify card says so instead of offering a connect
      *  button that can only fail. */

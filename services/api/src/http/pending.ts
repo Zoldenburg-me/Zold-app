@@ -40,9 +40,6 @@ export const pendingTransferExecutions = new Map<
     challenge: string;
     plan: NonNullable<User["passkeySafe"]>;
     userOperation: PendingPasskeySafeDeployment;
-    /** Present when the operation is a full fee+approve+swap batch: where the
-     *  swap output is delivered, so execution can measure and settle there. */
-    batch?: { recipient: `0x${string}`; mode: "live" };
   }
 >();
 

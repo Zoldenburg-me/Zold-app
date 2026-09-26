@@ -1,5 +1,5 @@
 import express from "express";
-import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY } from "./config.js";
+import { API_HOST, API_PORT, CHAIN_ID, CRYPTO_IN, IS_REAL_MONEY_CHAIN, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY } from "./config.js";
 import { initStore, store } from "./store.js";
 import {
   moneriumApiKeysAvailable,
@@ -9,10 +9,7 @@ import {
   checkConnection,
   startDepositPoller,
 } from "./adapters/monerium-sandbox.js";
-import {
-  sweepAnchorPayouts,
-  sweepStrandedTransfers,
-  } from "./orchestrator.js";
+import { sweepStrandedTransfers } from "./orchestrator.js";
 import {
   startCryptoDepositPoller,
   } from "./adapters/crypto-deposits.js";
@@ -231,16 +228,6 @@ setInterval(
       .catch((e) => console.error(`pay-request sweep failed: ${e?.message ?? e}`)),
   PAYMENT_REQUESTS.sweepMs,
 ).unref();
-sweepAnchorPayouts()
-  .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
-  .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`));
-setInterval(
-  () =>
-    sweepAnchorPayouts()
-      .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
-      .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`)),
-  30_000,
-).unref();
 
 // Reconciler: log-only, never repairs. Drift between Monerium's ledger and
 // local receipt state should be loud rather than discovered later by a user
@@ -281,31 +268,16 @@ if (CRYPTO_IN.enabled) startCryptoDepositPoller();
 app.listen(API_PORT, API_HOST, () => {
   console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
   /**
-   * Log the custody posture at startup. Whether the orchestrator holds user
-   * funds depends on the liquidity venue and whether Bridge is live, and
-   * neither is visible otherwise.
+   * Log the custody posture at startup. SEPA sends are non-custodial by
+   * construction; USDC deposit conversion is only possible where the user's
+   * Safe can execute the venue, and that is not visible otherwise.
    */
-  const safeExecutable = ["dex", "lifi", "rfq", "best"].includes(LIQUIDITY.PROVIDER);
-  if (!safeExecutable) {
+  console.log("CUSTODY: SEPA sends are non-custodial — Monerium burns the payout from the Safe; only the fee moves.");
+  if (!["dex", "lifi", "rfq", "best"].includes(LIQUIDITY.PROVIDER)) {
     console.warn(
       `CUSTODY: LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER} cannot be executed by a user's Safe, so ` +
-        "cash-rail transfers debit the full amount to the orchestrator and swap from there. " +
-        "The non-custodial path needs dex, lifi, rfq or best.",
+        "USDC deposits cannot be converted to EURe. That needs dex, lifi, rfq or best.",
     );
-  } else if (!BRIDGE.live) {
-    console.warn(
-      "CUSTODY: the Safe-executed swap batch is available, but BRIDGE_LIVE is not set — with no " +
-        "external deposit address the batch delivers its output to the orchestrator. Cash-rail " +
-        "transfers are recorded as custodial until Bridge is live.",
-    );
-  } else {
-    console.log(
-      "CUSTODY: cash-rail transfers run non-custodially — the user's Safe signs one batch that " +
-        "delivers straight to Bridge. The SEPA rail moves only the fee.",
-    );
-  }
-  if (CUSTODY.requireNonCustodial) {
-    console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
   }
   if (process.env.CANDIDE_COSIGNER_KEY) {
     console.warn("NOTE: CANDIDE_COSIGNER_KEY is set but nothing reads it any more — remove it from the environment.");

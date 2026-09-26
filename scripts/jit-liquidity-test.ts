@@ -205,15 +205,6 @@ try {
     assert.equal(hits, 2, `cache should have lapsed, got ${hits} calls`);
   });
 
-  await t("an rfq quote survives the prepare -> execute round trip", async () => {
-    const { serializeExecution } = await import("../services/api/src/liquidity.js");
-    const q = await p.quote("EURE_TO_USDC", 100n * 10n ** 18n, "q12", new Date(Date.now() + 600_000).toISOString());
-    const stored = serializeExecution({ quote: q, amountOut: q.expectedOut, txs: [] });
-    // Without this the maker's tx is dropped between the two steps and
-    // execution fails on a quote that was perfectly good.
-    assert.ok(stored.rfq?.tx?.data, "the maker's tx must be persisted");
-    assert.equal(stored.rfq?.quoteId, "bebop-quote-1");
-  });
 
   console.log(
     `\nJIT LIQUIDITY TEST PASSED — ${pass}/${pass}: RFQ prices come from the maker, and a bad maker refuses instead of falling back to our own book`,

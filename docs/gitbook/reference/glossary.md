@@ -4,8 +4,6 @@ description: Words used in the app, briefly.
 
 # Glossary
 
-**Bridge** — The licensed money transmitter that issues your US dollar account and settles its ACH and wire payments.
-
 **Base** — The public network your smart wallet lives on. A layer-2 of Ethereum.
 
 **Chart of accounts** — Your list of bookkeeping categories, against which transactions are mapped.
@@ -40,9 +38,7 @@ description: Words used in the app, briefly.
 
 **Payment page** — Your public link at zoldhq.com/pay/handle, showing an address anyone can pay.
 
-**Pickup reference** — The MoneyGram number a recipient gives at the counter to collect cash.
-
-**Quote** — The fixed terms of a transfer: amounts, rate, fee. Held for ten minutes.
+**Quote** — The fixed terms of a transfer or conversion: amounts, fee, and for a conversion the rate. Held for ten minutes.
 
 **Reporting currency** — The currency your ledger and reports are valued in.
 
@@ -52,4 +48,4 @@ description: Words used in the app, briefly.
 
 **Tax lot** — One acquisition of an asset, with its date, quantity and cost, used to compute gains.
 
-**USDC** — A US-dollar stablecoin issued by Circle. Accepted as a deposit and used inside the cash-pickup route.
+**USDC** — A US-dollar stablecoin issued by Circle. Accepted as a deposit, and convertible to EURe in your wallet.

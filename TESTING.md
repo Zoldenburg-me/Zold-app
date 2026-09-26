@@ -14,14 +14,11 @@ npm run compile
 npm run test:contracts   # 6 Solidity tests: FX access/slippage, AdminTimelock governance
 npm run audit:deps       # npm advisory scan
 npm run check            # everything offline: contracts, typecheck, ~40 focused harnesses
-npm run check:live       # the same plus the Stellar testnet / test-anchor suites
 ```
 
 `npm run check` is the one that matters before pushing — it allocates a random
 free port for the whole run, which is why a suite passing on its own is weaker
-evidence than it looks. It is offline; `check:live` adds `anchor:test`,
-`travelrule:test` and `trustline:test`, which reach Stellar testnet and the
-test anchor and fail if those hosts are unreachable.
+evidence than it looks. It is offline.
 
 The suites that boot their own chain + API refuse to start while `npm run dev`
 holds their ports, and say so.
@@ -40,7 +37,7 @@ npm run dev              # then open http://localhost:3000/app
    production) and no IBAN: hardhat has no Monerium.
 2. **Add money** — mint MockToken EURe to the Safe address from hardhat
    account 0 (the token owner); the balance reads straight from the Safe.
-3. **🇰🇪 Cash pickup / 🏦 Bank transfer** — quoting works end to end, but the
+3. **🏦 Bank transfer** — quoting works end to end, but the
    SEND ITSELF REFUSES on local hardhat by design: every debit is a
    UserOperation the passkey signs through Candide's bundler, which does not
    exist on chain 31337. Expect the clear refusal ("active passkey Safe before
@@ -73,45 +70,6 @@ account becomes `approved`.
    PAYOUT_SUBMITTED → PAID). Without a portal deposit the redeem is refused
    and the transfer fails closed, recording Monerium's actual rejection.
 
-### Stellar anchor (the MoneyGram protocol, live)
-
-```sh
-npm run stellar:check    # friendbot treasury + SEP-10 auth + SEP-24 withdrawal
-```
-
-Runs against Stellar's public test anchor — no signup. With
-`MG_ANCHOR_DOMAIN=testanchor.stellar.org` in `.env`, cash-pickup transfers
-create real SEP-24 withdrawals (the ticket links the anchor's interactive
-page).
-
-For production MoneyGram, confirm the partner-specific SEP-10 auth settings
-before using live credentials: `MG_AUTH_MEMO` for custodial positive-integer
-user memos, plus `MG_CLIENT_DOMAIN` and `MG_CLIENT_DOMAIN_SIGNING_SECRET` if
-MoneyGram requires client-domain attribution.
-
-Stellar variables the code understands:
-
-- `MG_ANCHOR_DOMAIN` — anchor home domain, for example `testanchor.stellar.org`
-- `MG_ANCHOR_ASSET` — withdrawal asset. Defaults to `SRT` for the public test
-  anchor and `USDC` for MoneyGram domains; setting a non-`USDC` MoneyGram asset
-  fails at startup.
-- `STELLAR_TREASURY_SECRET` — treasury signer for SEP-10 auth and on-ledger
-  SEP-24 payment
-- `STELLAR_HORIZON`, `STELLAR_PASSPHRASE`, `STELLAR_FRIENDBOT` — default to
-  the PUBLIC network; the harnesses pin testnet themselves (`_stellar-testnet.ts`)
-
-The treasury must hold the anchor asset and have the required trustline.
-`testanchor.stellar.org` can use `native` with no trustline for protocol
-tests, but production MoneyGram/USDC requires the partner-confirmed asset.
-
-### Bridge.xyz funding (Base USDC -> Stellar-side USDC)
-
-The cash rail is closed unless `BRIDGE_LIVE=1`, `BRIDGE_API_KEY`,
-`BRIDGE_ON_BEHALF_OF`, the Bridge-approved Stellar destination fields
-(`BRIDGE_DESTINATION_ADDRESS`, optional `BRIDGE_DESTINATION_MEMO`) and an
-anchor (`MG_ANCHOR_DOMAIN`) are all set. There is no dry-run: `/api/quotes`
-answers `RAIL_CLOSED` and the app hides the corridor.
-
 ## Known limitations (by design, MVP)
 
 - On local hardhat EURe/USDC are MockTokens and no passkey Safe can deploy
@@ -128,20 +86,9 @@ npm run dex:test    # 12 checks — pool prices checked against an independent m
 npm run best:test   # 13 checks — better price wins, surplus measured
 ```
 
-All three are offline. What they cannot cover is a real swap: LI.FI publishes
-no testnet, and Base Sepolia has no EURe/USDC pool. `npm run dex:setup` reports
+The venues convert inbound USDC deposits to EURe inside the user's Safe; no
+send path uses them. All three suites are offline. What they cannot cover is
+a real swap: LI.FI publishes no testnet, and Base Sepolia has no EURe/USDC
+pool. `npm run dex:setup` reports
 exactly what is missing and refuses rather than half-running; `-- --fix` creates
 and seeds a pool once the treasury holds EURe.
-
-## Stellar payout
-
-```sh
-npm run stellar:check         # SEP-10 + SEP-24 against Stellar's test anchor
-npm run trustline:test        # 9 checks — the payout account can receive the asset
-npm run stellar:payout:live   # drives a real testnet payment as far as the anchor allows
-```
-
-`stellar:payout:live` proves the ledger half — a real memo-carrying payment
-lands — then stops, because the test anchor never publishes a withdrawal
-account over SEP-24 or SEP-6. It completes unchanged against an anchor that
-does.

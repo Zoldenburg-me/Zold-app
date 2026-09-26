@@ -32,8 +32,9 @@ const check = (label: string, fn: () => void) => {
 // fixtures — every secret is a distinctive string so a leak sweep can find it
 
 const IBAN = "DE89370400440532013000";
-const PHONE = "254712345678";
 const SAFE_HASH = "0x7f3a91c4aaaabbbbccccddddeeeeffff000011112222333344445555666677c21d";
+const ORDER = "ord_8842117";
+const MEMO = "Zold t1 rent";
 
 const sender: User = {
   id: "u1",
@@ -49,61 +50,36 @@ const sender: User = {
 const quote: Quote = {
   id: "q1",
   userId: "u1",
-  rail: "cash",
+  rail: "sepa",
   status: "CONSUMED",
   sendEur: 850,
   fixedFeeEur: 2.9,
-  fxRate: 144.02,
-  receiveKes: 122417.5,
-  receiveEur: 0,
-  midRate: 144.51,
-  marginBps: 34,
-  effectiveRate: 143.53,
+  fxRate: 1,
+  receiveEur: 847.1,
+  midRate: 1,
+  marginBps: 0,
+  effectiveRate: 0.9966,
   expiresAt: "2026-08-05T14:30:00.000Z",
   createdAt: "2026-08-05T14:20:00.000Z",
 };
 
-const cashTransfer: Transfer = {
+const sepaTransfer: Transfer = {
   id: "t1",
   userId: "u1",
   quoteId: "q1",
-  rail: "cash",
+  rail: "sepa",
   recipientName: "Joseph Otieno",
-  recipientPhone: PHONE,
+  recipientIban: IBAN,
   reference: "Family support",
   state: "PAID",
   sendEur: 850,
-  receiveKes: 122417.5,
+  receiveEur: 847.1,
   fundingSource: "safe",
-  txs: [
-    { step: "safe.transfer", hash: SAFE_HASH },
-    { step: "bridge.xyz.dry-run.transfer", hash: "bridge_dry_plan" },
-  ],
-  liquidity: {
-    provider: "lifi",
-    rate: "1150600",
-    tokenIn: "EURe",
-    tokenOut: "USDC",
-    executedAt: "2026-08-05T14:22:00.000Z",
-  } as any,
-  pickup: { referenceCode: "88421170", provider: "MoneyGram", status: "PAID" } as any,
+  txs: [{ step: "safe.transfer(fee)", hash: SAFE_HASH }],
+  sepa: { mode: "sandbox", orderId: ORDER, state: "processed" },
+  moneriumRedeem: { amount: "847.1", iban: IBAN, issuedAt: "x", message: "m", memo: MEMO },
   createdAt: "2026-08-05T14:22:00.000Z",
   updatedAt: "2026-08-05T15:07:00.000Z",
-} as any;
-
-const sepaTransfer: Transfer = {
-  ...cashTransfer,
-  id: "t2",
-  rail: "sepa",
-  recipientPhone: undefined,
-  recipientIban: IBAN,
-  receiveKes: 0,
-  receiveEur: 847.1,
-  txs: [{ step: "safe.transfer.fee", hash: SAFE_HASH }],
-  liquidity: undefined,
-  pickup: undefined,
-  sepa: { mode: "sandbox", orderId: "ord_123", state: "processed" },
-  moneriumRedeem: { amount: "847.1", iban: IBAN, issuedAt: "x", message: "m", memo: "Zold t2" },
 } as any;
 
 const build = (t: Transfer, f: Partial<ReceiptShareFields>): ReceiptPayload =>
@@ -144,18 +120,18 @@ check("an unknown selection falls back to the current setting, never wider", () 
 });
 
 check("hiding both names puts neither name anywhere in the payload", () => {
-  const p = build(cashTransfer, { sender: "hidden", recipient: "hidden" });
+  const p = build(sepaTransfer, { sender: "hidden", recipient: "hidden" });
   assert.deepEqual(p.parties.from, { withheld: true });
   assert.deepEqual(p.parties.to, { withheld: true });
   leakSweep(p, ["Amina", "Kamau", "Joseph", "Otieno"]);
 });
 
 check("a half-name publishes one half and carries nothing of the other", () => {
-  const first = build(cashTransfer, { sender: "first" });
+  const first = build(sepaTransfer, { sender: "first" });
   assert.deepEqual(first.parties.from, { first: "Amina", redact: "last" });
   leakSweep(first, ["Kamau"]);
 
-  const last = build(cashTransfer, { sender: "last" });
+  const last = build(sepaTransfer, { sender: "last" });
   assert.deepEqual(last.parties.from, { last: "Kamau", redact: "first" });
   leakSweep(last, ["Amina"]);
 });
@@ -164,7 +140,7 @@ check("a single-word name redacts rather than over-sharing the whole of it", () 
   const mononym = { ...sender, name: "Prince" };
   const p = buildReceipt({
     slug: "s",
-    transfer: cashTransfer,
+    transfer: sepaTransfer,
     sender: mononym,
     quote,
     fields: { ...DEFAULT_SHARE_FIELDS, sender: "last" },
@@ -193,95 +169,80 @@ check("the full account is published only when the sender asks for it", () => {
   assert.equal(p.rows.find((r) => r.key === "Payout account")?.value, "DE89 3704 0044 0532 0130 00");
 });
 
-check("the cash rail redacts a phone number, not an IBAN label", () => {
-  const p = build(cashTransfer, { account: "hidden" });
-  assert.ok(p.rows.find((r) => r.key === "Mobile number")?.withheld);
-  leakSweep(p, [PHONE]);
-});
-
 check("turning off rate and reference removes both rows entirely", () => {
-  const p = build(cashTransfer, { showRate: false, showRef: false });
+  const p = build(sepaTransfer, { showRate: false, showRef: false });
   assert.ok(!p.rows.some((r) => r.key === "Your rate" || r.key === "Zold fee" || r.key === "Reference"));
-  leakSweep(p, ["144.02", "Family support"]);
+  leakSweep(p, ["2.90", "Family support"]);
   assert.ok(p.anyWithheld, "the page still admits something was withheld");
 });
 
 check("the currency picker decides the hero figure", () => {
-  assert.equal(build(cashTransfer, { fx: "sender" }).hero.amount, "€850.00");
-  assert.ok(build(cashTransfer, { fx: "recipient" }).hero.amount.startsWith("KES"));
-  const both = build(cashTransfer, { fx: "both" });
+  assert.equal(build(sepaTransfer, { fx: "sender" }).hero.amount, "€850.00");
+  assert.equal(build(sepaTransfer, { fx: "recipient" }).hero.amount, "€847.10");
+  const both = build(sepaTransfer, { fx: "both" });
   assert.ok(both.rows.some((r) => r.key === "Sent") && both.rows.some((r) => r.key === "Received"));
 });
 
 check("the status is read from the transfer, not from having been shared", () => {
-  assert.equal(receiptStatus({ ...cashTransfer, state: "PAID" } as Transfer).label, "Delivered");
-  assert.equal(receiptStatus({ ...cashTransfer, state: "FAILED" } as Transfer).tone, "red");
-  assert.equal(receiptStatus({ ...cashTransfer, state: "DEBITED" } as Transfer).settled, false);
-  assert.equal(receiptStatus({ ...cashTransfer, state: "REFUNDED" } as Transfer).label, "Refunded to sender");
+  assert.equal(receiptStatus({ ...sepaTransfer, state: "PAID" } as Transfer).label, "Delivered");
+  assert.equal(receiptStatus({ ...sepaTransfer, state: "FAILED" } as Transfer).tone, "red");
+  assert.equal(receiptStatus({ ...sepaTransfer, state: "DEBITED" } as Transfer).settled, false);
+  assert.equal(receiptStatus({ ...sepaTransfer, state: "REFUNDED" } as Transfer).label, "Refunded to sender");
 });
 
 check("an in-flight transfer never renders as delivered", () => {
-  const p = build({ ...cashTransfer, state: "PAYOUT_SUBMITTED" } as Transfer, {});
+  const p = build({ ...sepaTransfer, state: "PAYOUT_SUBMITTED" } as Transfer, {});
   assert.equal(p.status.settled, false);
   assert.notEqual(p.status.label, "Delivered");
   assert.ok(p.steps.some((s) => !s.done), "unfinished steps stay unfinished");
 });
 
 check("the route is absent until the sender enables it", () => {
-  assert.equal(build(cashTransfer, { route: false }).route, undefined);
-  assert.ok((build(cashTransfer, { route: true }).route ?? []).length > 0);
+  assert.equal(build(sepaTransfer, { route: false }).route, undefined);
+  assert.ok((build(sepaTransfer, { route: true }).route ?? []).length > 0);
 });
 
-check("route hops come from the transfer's own steps, per rail", () => {
-  const cash = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true });
-  const rails = cash.map((h) => h.rail);
-  assert.ok(rails.some((r) => r === "Zold Safe"));
-  assert.ok(rails.some((r) => r.includes("lifi")), "the venue that filled it is named");
-  assert.ok(rails.some((r) => r === "MoneyGram"));
-  assert.ok(!rails.some((r) => /Monerium|SEPA/.test(r)), "no SEPA legs on the cash rail");
+check("route hops come from the transfer's own steps", () => {
+  const rails = receiptRoute(sepaTransfer, { ...DEFAULT_SHARE_FIELDS, route: true }).map((h) => h.rail);
+  assert.deepEqual(rails, ["Zold Safe", "Monerium EMI", "SEPA credit transfer"]);
 
-  const sepaHops = receiptRoute(sepaTransfer, { ...DEFAULT_SHARE_FIELDS, route: true });
-  const sepaRails = sepaHops.map((h) => h.rail);
-  assert.ok(sepaRails.includes("Monerium EMI") && sepaRails.includes("SEPA credit transfer"));
-  assert.ok(!sepaRails.some((r) => /Stellar|MoneyGram/.test(r)), "no anchor legs on the SEPA rail");
+  const undebited = receiptRoute({ ...sepaTransfer, txs: [] } as Transfer, { ...DEFAULT_SHARE_FIELDS, route: true });
+  assert.ok(!undebited.some((h) => h.rail === "Zold Safe"), "a leg that did not run is not drawn");
 });
 
 check("a leg that did not settle is marked simulated rather than drawn as real", () => {
-  const hops = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true });
-  const bridge = hops.find((h) => h.rail === "Bridge.xyz");
-  assert.ok(bridge?.simulated, "a dry-run Bridge plan is not settled funding");
-  assert.match(bridge!.via, /no funds were sent/);
+  const mock = { ...sepaTransfer, sepa: { mode: "mock", state: "processed" } } as Transfer;
+  const hops = receiptRoute(mock, { ...DEFAULT_SHARE_FIELDS, route: true });
+  const issuer = hops.find((h) => h.rail === "Monerium EMI");
+  assert.ok(issuer?.simulated, "a redemption with no issuer order is not a settlement");
+  assert.match(issuer!.via, /no issuer order was placed/);
 });
 
-check("the SEPA safe hop says only the fee left the safe", () => {
+check("the safe hop says only the fee left the safe", () => {
   const hops = receiptRoute(sepaTransfer, { ...DEFAULT_SHARE_FIELDS, route: true });
   assert.match(hops.find((h) => h.rail === "Zold Safe")!.via, /fee moved out/);
 });
 
 check("route references mirror the same selections as the rows", () => {
-  const hidden = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true, sender: "hidden" });
+  const hidden = receiptRoute(sepaTransfer, { ...DEFAULT_SHARE_FIELDS, route: true, sender: "hidden" });
   const safe = hidden.find((h) => h.rail === "Zold Safe")!;
   assert.ok(safe.withheld && !safe.ref, "hiding the sender withholds their safe's transaction hash");
   assert.ok(!JSON.stringify(hidden).includes(SAFE_HASH));
 
-  const publicRoute = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true });
+  const publicRoute = receiptRoute(sepaTransfer, { ...DEFAULT_SHARE_FIELDS, route: true });
   assert.ok(!JSON.stringify(publicRoute).includes(SAFE_HASH), "route tx hashes are not published as searchable refs");
-  assert.ok(!publicRoute.find((h) => h.rail === "Bridge.xyz")?.ref, "Bridge plan ids are not published as searchable refs");
 
-  const noRate = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true, showRate: false });
-  assert.ok(noRate.find((h) => h.rail.includes("lifi"))!.withheld, "the rate toggle also governs the route");
-  assert.ok(!JSON.stringify(noRate).includes("1.1506"));
+  const noAccount = receiptRoute(sepaTransfer, { ...DEFAULT_SHARE_FIELDS, route: true, account: "hidden" });
+  assert.ok(noAccount.find((h) => h.rail === "Monerium EMI")!.withheld, "the account toggle also governs the order ref");
+  assert.ok(!JSON.stringify(noAccount).includes(ORDER));
 
-  const rate = publicRoute.find((h) => h.rail.includes("lifi"))!.ref;
-  assert.equal(rate, "1 EURe = 1.1506 USDC");
-
-  const noRecipient = receiptRoute(cashTransfer, { ...DEFAULT_SHARE_FIELDS, route: true, recipient: "hidden" });
-  assert.ok(noRecipient.find((h) => h.rail === "MoneyGram")!.withheld);
-  assert.ok(!JSON.stringify(noRecipient).includes("88421170"), "the pickup code is a payout credential");
+  const noRef = receiptRoute(sepaTransfer, { ...DEFAULT_SHARE_FIELDS, route: true, showRef: false });
+  assert.ok(noRef.find((h) => h.rail === "SEPA credit transfer")!.withheld, "the reference toggle also governs the memo");
+  assert.ok(!JSON.stringify(noRef).includes(MEMO));
 });
 
 check("the tightest possible share leaks nothing at all", () => {
-  const p = build(cashTransfer, {
+  const p = build(sepaTransfer, {
     sender: "hidden",
     recipient: "hidden",
     account: "hidden",
@@ -289,7 +250,7 @@ check("the tightest possible share leaks nothing at all", () => {
     showRef: false,
     route: true,
   });
-  leakSweep(p, ["Amina", "Kamau", "Joseph", "Otieno", PHONE, SAFE_HASH, "144.02", "Family support", "88421170"]);
+  leakSweep(p, ["Amina", "Kamau", "Joseph", "Otieno", IBAN, SAFE_HASH, "2.90", "Family support", ORDER, MEMO]);
   assert.ok(p.anyWithheld);
 });
 

@@ -231,8 +231,7 @@ export type TransferFactory = (
   quote: Awaited<ReturnType<typeof createQuote>>,
   recipient: {
     recipientName: string;
-    recipientPhone?: string;
-    recipientIban?: string;
+    recipientIban: string;
     reference?: string;
   },
 ) => Promise<

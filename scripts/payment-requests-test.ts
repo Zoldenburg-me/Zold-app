@@ -26,7 +26,6 @@ const RPC = "http://127.0.0.1:8554";
 process.env.TRANSF_RPC_URL = RPC;
 process.env.MONERIUM_CLIENT_ID = "";
 process.env.MONERIUM_CLIENT_SECRET = "";
-process.env.MG_ANCHOR_DOMAIN = "";
 const MID = 1.1379;
 process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: MID, INR: 109.87, KES: 147.53 });
 process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(MID * 1e6));
@@ -509,7 +508,7 @@ try {
   const liveCode = live.body.code.replace(/-/g, "");
   store.addTransfer({
     id: "t-paid", userId: "someone-else", quoteId: "q", rail: "sepa", recipientName: "Miriam Zoldenburg", recipientIban: miriam.iban,
-    reference: `${live.body.code} invoice`, state: "PAID", sendEur: 40.99, receiveEur: 40, receiveKes: 0, txs: [], createdAt: nowIso, updatedAt: nowIso,
+    reference: `${live.body.code} invoice`, state: "PAID", sendEur: 40.99, receiveEur: 40, txs: [], createdAt: nowIso, updatedAt: nowIso,
   } as any);
   const swept = await routes.sweepPaymentRequests();
   const r4 = store.findPaymentRequest(live.body.id)!;

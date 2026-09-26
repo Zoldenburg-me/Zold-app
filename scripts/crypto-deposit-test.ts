@@ -31,7 +31,6 @@ const RPC = "http://127.0.0.1:8552";
 process.env.TRANSF_RPC_URL = RPC;
 process.env.MONERIUM_CLIENT_ID = "";
 process.env.MONERIUM_CLIENT_SECRET = "";
-process.env.MG_ANCHOR_DOMAIN = "";
 // The swapper is seeded at this rate; pin the mid to match so the sanity check
 // has a stable reference instead of asserting what the euro did overnight.
 const MID = 1.1379;

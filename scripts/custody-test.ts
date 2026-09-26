@@ -1,20 +1,17 @@
 /**
  * Custody posture: does the orchestrator ever hold the sender's funds?
  *
- * Non-custody depends on three settings: the configured liquidity venue,
- * whether Bridge is live, and whether a venue call succeeds. A default of
- * LIQUIDITY_PROVIDER=fx-swapper cannot be executed by a user's Safe, so it
- * debits every cash-rail transfer to the orchestrator's address, and the
- * fallback only logs a console.error.
+ * A SEPA send is non-custodial by construction: Monerium burns the payout
+ * from the Safe and only the fee moves. USDC deposit conversion is
+ * non-custodial only where the user's Safe can execute the venue; a default of
+ * LIQUIDITY_PROVIDER=fx-swapper could not, and would refuse every conversion.
  *
  * These check:
  *   1. the default venue is one a Safe can execute,
  *   2. every venue is correctly classified as Safe-executable or not,
  *   3. the local chain opts into the custodial venue explicitly, so production
- *      does not inherit it.
- *
- * The recording and refusal paths that ride on this are exercised end to end
- * by draft:test, which drives a real API.
+ *      does not inherit it,
+ *   4. the transfer builder records the custody mode on every transfer.
  *
  * No chain, no network.
  *
@@ -42,18 +39,18 @@ const check = (label: string, fn: () => void) => {
 // nothing gets, so an inherited LIQUIDITY_PROVIDER would test the wrong thing.
 delete process.env.LIQUIDITY_PROVIDER;
 delete process.env.LIQUIDITY_VENUES;
-const { LIQUIDITY, CUSTODY } = await import("../services/api/src/config.js");
+const { LIQUIDITY } = await import("../services/api/src/config.js");
 
 /** The venues whose swaps can be executed BY THE USER'S SAFE — the ones that
- *  implement safeSwapPlan, so the batch delivers straight to the payout
- *  destination and the orchestrator never holds the input. */
+ *  implement safeSwapPlan, so the batch swaps inside the Safe and the
+ *  orchestrator never holds the input. */
 const SAFE_EXECUTABLE = ["dex", "lifi", "rfq", "best"];
 
 check("the default liquidity provider is one a user's Safe can execute", () => {
   assert.ok(
     SAFE_EXECUTABLE.includes(LIQUIDITY.PROVIDER),
     `default LIQUIDITY_PROVIDER is ${LIQUIDITY.PROVIDER}, which cannot serve a Safe — ` +
-      "the default deployment would take custody of every cash-rail transfer",
+      "the default deployment could not convert a single USDC deposit without custody",
   );
 });
 
@@ -66,16 +63,9 @@ check("the default venue list is entirely Safe-executable", () => {
   for (const v of LIQUIDITY.VENUES) {
     assert.ok(
       SAFE_EXECUTABLE.includes(v),
-      `default venue ${v} cannot serve a Safe; best would fall back to a custodial debit whenever it won`,
+      `default venue ${v} cannot serve a Safe; best would pick a venue the Safe cannot execute whenever it won`,
     );
   }
-});
-
-check("the non-custodial GUARANTEE is opt-in, not silently assumed", () => {
-  // Refusing by default would break every dry-run and testnet deployment,
-  // which has no external address to deliver into. The non-custodial path is
-  // the default; the refusal is an operator setting.
-  assert.equal(CUSTODY.requireNonCustodial, false);
 });
 
 // --- 2. Venue classification ------------------------------------------------
@@ -88,7 +78,7 @@ for (const id of ["dex", "lifi", "rfq"]) {
   check(`${id} implements safeSwapPlan (the non-custodial path)`, () => {
     assert.ok(
       typeof (providerById as any)(id).safeSwapPlan === "function",
-      `${id} lost safeSwapPlan — transfers on it now route through the orchestrator`,
+      `${id} lost safeSwapPlan — deposits on it can no longer be converted by the Safe`,
     );
   });
 }
@@ -118,8 +108,8 @@ check("the transfer builder records custody rather than inferring it later", () 
   // route and draft execution both go through it — so the custody record has
   // one place to be written and one place to check for.
   const src = readFileSync("services/api/src/transfers/build.ts", "utf8");
-  assert.match(src, /transfer\.custody = custody;/, "custody is never persisted");
-  assert.match(src, /CUSTODY\.requireNonCustodial && custody\.mode === "orchestrator"/, "no refusal path");
+  assert.match(src, /transfer\.custody = \{ mode: "non-custodial"/, "custody is never persisted");
+  assert.doesNotMatch(src, /mode: "orchestrator"/, "no current rail routes the principal through the orchestrator");
 });
 
 console.log("");

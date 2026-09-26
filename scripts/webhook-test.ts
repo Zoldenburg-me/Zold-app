@@ -165,7 +165,6 @@ try {
     MONERIUM_CHAIN: "sepolia", // the stub issues on sepolia; the chain filter must see the same name
     MONERIUM_POLL_MS: "3600000", // don't let the poller race the assertions
     MONERIUM_WEBHOOK_SECRET: "",
-    MG_ANCHOR_DOMAIN: "",
   });
   for (const s = Date.now(); Date.now() - s < 30_000; ) {
     try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}
@@ -256,7 +255,6 @@ try {
     MONERIUM_BASE_URL: `http://127.0.0.1:${STUB_PORT}`,
     MONERIUM_POLL_MS: "3600000",
     MONERIUM_WEBHOOK_SECRET: SECRET,
-    MG_ANCHOR_DOMAIN: "",
   });
   for (const s = Date.now(); Date.now() - s < 30_000; ) {
     try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}

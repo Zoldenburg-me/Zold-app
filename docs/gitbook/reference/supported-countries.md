@@ -28,9 +28,8 @@ The list of countries our euro issuer serves is theirs and changes on their time
 | Destination | Method | Currency | Status |
 | --- | --- | --- | --- |
 | Any SEPA country | Bank transfer to an IBAN | EUR | Open |
-| Kenya | Cash pickup at a MoneyGram agent | KES | Open |
 | Kenya | M-Pesa account | KES | Not yet fully live |
-| United States | ACH / wire from your USD account | USD | Opening soon, through Bridge |
+| United States | ACH / wire from your USD account | USD | Not yet fully live |
 | United Kingdom | Faster Payments | GBP | Not yet fully live |
 | Switzerland | Swiss IBAN | CHF | Not yet fully live |
 | Nigeria | NIP bank transfer (NUBAN) | NGN | Not yet fully live |

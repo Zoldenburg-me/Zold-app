@@ -111,8 +111,7 @@ export class DexLiquidityProvider implements LiquidityProvider {
     });
 
     // Read past replica lag: a stale pre-swap balance here would report a
-    // landed swap as unswapped, and compensation would refund EURe this side
-    // no longer holds.
+    // landed swap as unswapped and under-report what was delivered.
     const delivered = (await balanceAfterWrite(tokenOut, to, before)) - before;
     if (delivered < quote.minOut) {
       throw new Error(

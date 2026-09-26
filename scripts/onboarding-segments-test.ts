@@ -35,7 +35,7 @@ const bin = (name: string) => path.join(ROOT, "node_modules/.bin", name);
 const children: ChildProcess[] = [];
 function spawnBg(cmd: string, args: string[]) {
   const c = spawn(cmd, args, { cwd: ROOT, stdio: "ignore",
-    env: { ...process.env, MONERIUM_CLIENT_ID: "", MONERIUM_CLIENT_SECRET: "", MG_ANCHOR_DOMAIN: "" } });
+    env: { ...process.env, MONERIUM_CLIENT_ID: "", MONERIUM_CLIENT_SECRET: "" } });
   children.push(c);
   return c;
 }

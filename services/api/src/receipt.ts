@@ -116,8 +116,6 @@ export function parseShareFields(body: any, base = DEFAULT_SHARE_FIELDS): Receip
 // formatting
 
 const eur = (n: number) => `€${n.toFixed(2)}`;
-const kes = (n: number) =>
-  `KES ${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 function nameParts(full: string): { first: string; last: string } {
   const [first, ...rest] = String(full ?? "").trim().split(/\s+/);
@@ -174,7 +172,6 @@ export function receiptStatus(t: Transfer): ReceiptPayload["status"] {
   if (t.state === "REFUNDED") return { label: "Refunded to sender", tone: "amber", settled: false };
   if (t.state === "FAILED") return { label: "Failed", tone: "red", settled: false };
   if (t.state === "MANUAL_REVIEW") return { label: "Under review", tone: "amber", settled: false };
-  if (t.state === "PAYOUT_READY") return { label: "Ready to collect", tone: "amber", settled: false };
   return { label: "In progress", tone: "amber", settled: false };
 }
 
@@ -190,77 +187,33 @@ function chainLabel(): string {
   return `Chain ${CHAIN_ID}`;
 }
 
-function routeRate(rate: string, tokenIn: string, tokenOut: string): string {
-  const raw = BigInt(rate);
-  const human = Number(raw) / 1e6;
-  return `1 ${tokenIn} = ${human.toFixed(4)} ${tokenOut}`;
-}
-
 /**
  * The settlement route, derived from what the transfer actually did.
  *
- * The design draws six fixed hops ending at a Stellar/MYKOBO jump and a
- * MoneyGram counter. This codebase does not have that route: the SEPA rail has
- * no Stellar leg at all, the swap goes through whichever liquidity venue won,
- * and the anchor half has never settled against a real payout partner. So the
- * hops are built from `txs`, `liquidity`, `sepa` and `pickup` — a leg that did
- * not run is not drawn, and a leg that ran in simulation carries `simulated` so
- * the page can say so rather than let a dry run read as a settlement.
+ * The hops are built from `txs` and `sepa` — a leg that did not run is not
+ * drawn, and a leg that ran without a live issuer carries `simulated` so the
+ * page can say so rather than let a dry run read as a settlement.
  */
 export function receiptRoute(t: Transfer, fields: ReceiptShareFields, sender?: User): ReceiptHop[] {
   const hops: ReceiptHop[] = [];
   const step = (prefix: string) => t.txs?.find((x) => x.step.startsWith(prefix));
   const onBase = BASE_CHAINS.has(CHAIN_ID);
 
-  // 1. The user's own Safe. On SEPA only the fee leaves it — the payout is
-  //    burned from the Safe by Monerium — and saying "your money moved here"
-  //    would misdescribe where the euros actually were.
-  const safeMove = step("safe.transfer");
-  if (safeMove) {
-    const feeOnly = safeMove.step === "safe.transfer.fee";
+  // 1. The user's own Safe. Only the fee leaves it — the payout is burned
+  //    from the Safe by Monerium — and saying "your money moved here" would
+  //    misdescribe where the euros actually were.
+  if (step("safe.transfer")) {
     hops.push({
       rail: "Zold Safe",
       badge: chainLabel(),
       base: onBase,
-      via: feeOnly
-        ? "Zold's fee moved out of the sender's smart account; the payout stayed in it until redemption"
-        : "EURe moved out of the sender's smart account",
+      via: "Zold's fee moved out of the sender's smart account; the payout stayed in it until redemption",
       ...(fields.sender === "hidden" ? { withheld: true as const } : {}),
     });
   }
 
-  // 2. The conversion leg, named by the venue that actually filled it.
-  const liq = t.liquidity;
-  if (liq) {
-    hops.push({
-      rail: liq.provider === "fx-swapper" ? "Zold FX inventory" : `Liquidity · ${liq.provider}`,
-      badge: liq.tokenIn === "EURe" ? "EURe → USDC" : "USDC → EURe",
-      via:
-        liq.provider === "fx-swapper"
-          ? "Filled from Zold's own inventory at the rate held on the swapper contract"
-          : `Filled just-in-time by ${liq.provider}`,
-      ...(fields.showRate ? { ref: routeRate(liq.rate, liq.tokenIn, liq.tokenOut) } : { withheld: true as const }),
-      ...(liq.executedAt ? {} : { simulated: true as const }),
-    });
-  }
-
-  // 3. Bridge.xyz funding. Dry-run is the default and must never read as a
-  // completed stablecoin movement.
-  const bridgeFunding = step("bridge.xyz.deposit.transfer") || step("bridge.xyz.destination_tx");
-  const bridgePlan = t.txs?.find((x) => x.step.startsWith("bridge.xyz.") && x.step.endsWith(".transfer"));
-  if (bridgeFunding || bridgePlan) {
-    hops.push({
-      rail: "Bridge.xyz",
-      badge: "Bridge",
-      via: bridgeFunding
-        ? "USDC funding was sent to Bridge for Stellar-side settlement"
-        : "Bridge transfer plan recorded; no funds were sent",
-      ...(bridgeFunding ? {} : { simulated: true as const }),
-    });
-  }
-
-  // 4a. SEPA: Monerium redeems the EURe and the euro leg leaves.
-  if (t.rail === "sepa" && t.sepa) {
+  // 2. Monerium redeems the EURe and the euro leg leaves.
+  if (t.sepa) {
     hops.push({
       rail: "Monerium EMI",
       badge: "E-money",
@@ -286,30 +239,6 @@ export function receiptRoute(t: Transfer, fields: ReceiptShareFields, sender?: U
     });
   }
 
-  // 4b. Cash: the anchor, then the counter. Both only as far as they ran.
-  if (t.rail === "cash" && t.pickup) {
-    const p = t.pickup;
-    if (p.anchorTransactionId || p.anchorPaymentHash) {
-      hops.push({
-        rail: "Stellar anchor",
-        badge: "Anchor",
-        via: p.anchorPaymentHash
-          ? "Payout asset delivered to the anchor's account on Stellar"
-          : "Withdrawal opened with the anchor; no on-ledger payment yet",
-        ...(p.anchorPaymentHash ? {} : { simulated: true as const }),
-      });
-    }
-    hops.push({
-      rail: p.provider || "Payout partner",
-      badge: "Payout",
-      via: "Cash collected by the recipient at an agent counter",
-      ...(fields.recipient === "hidden" || !p.referenceCode
-        ? { withheld: true as const }
-        : { ref: `pickup ${p.referenceCode}` }),
-      ...(p.status === "PAID" ? {} : { simulated: true as const }),
-    });
-  }
-
   return hops;
 }
 
@@ -332,17 +261,14 @@ export function buildReceipt(args: {
   expiresAt: string;
 }): ReceiptPayload {
   const { transfer: t, sender, quote, fields, slug } = args;
-  const sepa = t.rail === "sepa";
   const status = receiptStatus(t);
   const rows: ReceiptRow[] = [];
 
   const sentEur = eur(t.sendEur);
-  const receivedEur = eur(t.receiveEur ?? Math.max(0, t.sendEur - railFeeEur(t.rail)));
-  const receivedKes = kes(t.receiveKes ?? 0);
-  const received = sepa ? receivedEur : receivedKes;
+  const received = eur(t.receiveEur ?? Math.max(0, t.sendEur - railFeeEur(t.rail)));
 
-  // The hero follows the currency picker: "KES only" means a recipient sees the
-  // figure in the money they actually get, and nothing in euro.
+  // The hero follows the currency picker: "recipient" shows the figure the
+  // payee actually gets, after the fee.
   const hero = fields.fx === "recipient" ? received : sentEur;
 
   const push = (key: string, v: Maybe<string> | undefined, opts: Omit<ReceiptRow, "key" | "value" | "withheld"> = {}) => {
@@ -352,9 +278,7 @@ export function buildReceipt(args: {
   };
 
   if (fields.showRef && t.reference) push("Reference", t.reference, { mono: true, tone: "muted" });
-  push(sepa ? "Payout account" : "Mobile number", accountFor(fields.account, sepa ? t.recipientIban : t.recipientPhone), {
-    mono: true,
-  });
+  push("Payout account", accountFor(fields.account, t.recipientIban), { mono: true });
 
   if (fields.fx === "both") {
     push("Sent", sentEur, { mono: true });
@@ -367,9 +291,6 @@ export function buildReceipt(args: {
   }
 
   if (fields.showRate) {
-    if (quote && !sepa && quote.fxRate) {
-      push("Your rate", `1 EUR = ${quote.fxRate.toFixed(2)} KES`, { mono: true, tone: "muted" });
-    }
     if (quote) {
       // marginBps is measured between the live mid and what we delivered, so it
       // is reportable as-is. Presenting the flat fee without it understated what
@@ -381,7 +302,7 @@ export function buildReceipt(args: {
     }
   }
 
-  push("Delivered via", sepa ? "SEPA credit transfer" : t.pickup?.provider || "Cash pickup", { tone: "muted" });
+  push("Delivered via", "SEPA credit transfer", { tone: "muted" });
   if (t.refund) push("Refunded", `${eur(t.refund.amountEur)} · ${t.refund.deductions}`, { tone: "muted" });
 
   const route = fields.route ? receiptRoute(t, fields, args.sender) : undefined;
@@ -421,24 +342,17 @@ export function buildReceipt(args: {
  * mismatch is what the in-app timelines were unified to remove.
  */
 export function receiptSteps(t: Transfer): ReceiptPayload["steps"] {
-  const cash = t.rail === "cash";
   const titles = [
     "Payment authorised",
     "Debited from the sender's safe",
-    cash ? "Converted for payout" : "Redeem order placed",
-    cash ? "Cleared to payout partner" : "Sent over SEPA",
-    cash ? "Collected by recipient" : "Paid out",
+    "Redeem order placed",
+    "Sent over SEPA",
+    "Paid out",
   ];
   const reached =
     ({
       CREATED: 1,
       DEBITED: 2,
-      SWAPPED: 3,
-      BRIDGED: 3,
-      PAYOUT_DETAILS_PENDING: 3,
-      PAYOUT_FUNDING_PENDING: 4,
-      PAYOUT_FUNDED: 4,
-      PAYOUT_READY: 4,
       PAYOUT_SUBMITTED: 4,
       PAID: 5,
     } as Record<string, number>)[t.state] ?? 1;

@@ -1,7 +1,7 @@
 {
   "name": "Zold — euros in, local payouts out",
   "short_name": "Zold",
-  "description": "A euro account with your own IBAN. Send to a bank account or to cash pickup, with the rate and fee shown before you send.",
+  "description": "A euro account with your own IBAN. Send to any bank account in the SEPA zone, with the fee shown before you send.",
   "start_url": "/app",
   "scope": "/",
   "display": "standalone",

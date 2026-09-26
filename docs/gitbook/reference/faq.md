@@ -26,16 +26,16 @@ Yes, if your passkey syncs (iCloud Keychain, Google Password Manager, a password
 See [Security and recovery](../getting-started/security-and-recovery.md). If you enrolled email / SMS recovery, you can recover on a new device yourself. If not, contact support for managed recovery, which is slower and requires proving your identity again.
 
 **Why was my quote refused?**
-Usually because a fresh market rate could not be fetched, or because the venue price was too far from the market. Try again in a minute. Zold never quotes from an old rate.
+For a payment, usually because the amount is above the daily limit or your account is not approved yet. For a crypto conversion, because a fresh market rate could not be fetched or the venue price was too far from the market; try again in a minute. Zold never quotes from an old rate.
 
 **Why did my transfer go to Manual review?**
-Something happened that should not be resolved automatically, such as a partner failing after it already held the funds. Your money is accounted for and someone will look at it. You will be contacted.
+Something happened that should not be resolved automatically, such as no clear answer from Monerium on whether it accepted a payment. Your money is accounted for and someone will look at it. You will be contacted.
 
 **Can I hold dollars?**
-Soon. A US dollar account with its own account and routing number is being added through Bridge, and sits in the same wallet as your euros. See [Your US dollar account](../add-money/usd-account.md).
+Not yet. A US dollar account with its own account and routing number needs an account provider; Iron is the candidate and access has not been granted. It would sit in the same wallet as your euros. See [Your US dollar account](../add-money/usd-account.md).
 
 **Can I pay in a currency other than euros?**
-Cash pickup in Kenya pays out shillings. Other currencies open as their accounts become available; see [Accounts and currencies](../business/accounts-and-currencies.md).
+Not yet. Payouts are in euros by SEPA. Other currencies open when a payout partner is signed and their accounts become available; see [Accounts and currencies](../business/accounts-and-currencies.md).
 
 **Is my payment page private?**
 No. See [Your payment page](../get-paid/payment-page.md).

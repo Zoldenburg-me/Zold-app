@@ -49,17 +49,13 @@ a substitute ledger.
 
 ## What The Orchestrator Does Today
 
-The current orchestrator is more than a message relay in some flows:
+The orchestrator's working address receives only a send's fee (€0 on SEPA
+today); Monerium burns the payout straight from the Safe. It does not swap:
+converting a USDC deposit to EURe is a user-signed batch that runs inside the
+Safe and delivers back into it. It holds no user owner keys.
 
-- It can receive funds as working capital for execution.
-- It executes swap/liquidity operations.
-- It interacts with bridge/payout contracts.
-- In some transitional Safe flows, the backend still relies on server-held
-  signing material to move funds.
-
-That is useful for a demo and for proving the product mechanics, but it is not
-the target architecture. If the Safe already owns the user's account logic, then
-client funds should not move through a separate operator wallet.
+That is the target: if the Safe already owns the user's account logic, client
+funds should not move through a separate operator wallet.
 
 ## Why RemitVault Was Removed
 

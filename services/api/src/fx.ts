@@ -1,96 +1,44 @@
 import { randomUUID } from "node:crypto";
 import { FX, railFeeEur } from "./config.js";
 import { store, type Quote } from "./store.js";
-import { eurPer, usdPer } from "./rates.js";
-import { liquidityProvider } from "./liquidity.js";
 
 import type { PayoutRail } from "./store.js";
 
 /**
  * Quote engine.
- * - cash (EUR -> KES): executable EUR->USD, then live USD->KES, minus our
- *   spread, plus a fixed fee. On-chain leg swaps EURe->USDC; MoneyGram handles
- *   USD->KES at payout.
  * - sepa (EUR -> EUR bank): no FX, fixed fee only; payout via Monerium
  *   redeem order (EURe burned, SEPA transfer out).
  *
- * Two rates:
- *
- *   midRate  — market mid from the live feed (EUR->KES directly). The
- *              "real exchange rate" line on the receipt; we do not trade at it.
- *   fxRate   — what we can deliver: the on-chain swapper's executable EUR->USD
- *              rate, times the live USD->fiat leg, minus our spread.
- *
- * marginBps is measured as the gap between them, so if the on-chain rate
- * drifts from the market the margin line on the receipt grows with it.
+ * A rail with an FX leg would quote two rates — the live market mid (a
+ * reference we do not trade at) and what the venue can actually deliver —
+ * and measure marginBps as the gap between them. SEPA has neither, so both
+ * are 1 and the margin is 0.
  */
 export interface QuoteRequest {
   rail: PayoutRail;
-  sendEur?: number; // cash + sepa: sender-fixed
+  sendEur?: number; // sender-fixed
 }
-
-/** Legs of a corridor quote, resolved from the chain + the live feed. */
-async function corridorRates(fiat: "KES") {
-  // Executable EUR->USD, asked of whichever liquidity source will actually
-  // fill the swap — the local swapper or a market maker over RFQ. Reading the
-  // swapper contract directly here would keep quoting the mock's price after a
-  // deployment switched to RFQ, which looks completely healthy while being
-  // wrong. The quote binding re-checks the rate against the same provider at execution.
-  const { rate, raw } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
-  const usdFiat = await usdPer(fiat); // live: what a partner settles at
-  const marketMid = await eurPer(fiat); // live: true EUR->fiat mid, reference only
-  const allIn = rate * usdFiat * (1 - FX.SPREAD_BPS / 10_000);
-  return { marketMid, allIn, lockedSwapRate: String(raw) };
-}
-
-/** How far `allIn` sits below the market mid, in bps. Never negative. */
-const marginBps = (mid: number, allIn: number) =>
-  Math.max(0, Math.round(((mid - allIn) / mid) * 10_000));
 
 export async function createQuote(userId: string, req: QuoteRequest): Promise<Quote> {
-  const base = {
-    id: randomUUID(),
-    userId,
-    rail: req.rail,
-    status: "OPEN" as const,
-    receiveKes: 0,
-    receiveEur: 0,
-    expiresAt: new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
-    createdAt: new Date().toISOString(),
-  };
-
-  let quote: Quote;
   const sendEur = req.sendEur ?? 0;
   const fee = railFeeEur(req.rail);
   const convertible = sendEur - fee;
   if (convertible <= 0) throw new Error(fee > 0 ? `amount must exceed the €${fee} fee` : "amount must be positive");
-  if (req.rail === "sepa") {
-    quote = {
-      ...base,
-      // No FX leg, so nothing to bind to the swapper.
-      sendEur,
-      fixedFeeEur: fee,
-      midRate: 1,
-      fxRate: 1,
-      marginBps: 0,
-      effectiveRate: round(convertible / sendEur, 4),
-      receiveEur: round(convertible, 2),
-    };
-  } else {
-    const { marketMid, allIn, lockedSwapRate } = await corridorRates("KES");
-    const receiveKes = round(convertible * allIn, 2);
-    quote = {
-      ...base,
-      lockedSwapRate,
-      sendEur,
-      fixedFeeEur: fee,
-      midRate: round(marketMid, 4),
-      fxRate: round(allIn, 4),
-      marginBps: marginBps(marketMid, allIn),
-      effectiveRate: round(receiveKes / sendEur, 4),
-      receiveKes,
-    };
-  }
+  const quote: Quote = {
+    id: randomUUID(),
+    userId,
+    rail: req.rail,
+    status: "OPEN",
+    expiresAt: new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
+    createdAt: new Date().toISOString(),
+    sendEur,
+    fixedFeeEur: fee,
+    midRate: 1,
+    fxRate: 1,
+    marginBps: 0,
+    effectiveRate: round(convertible / sendEur, 4),
+    receiveEur: round(convertible, 2),
+  };
   store.addQuote(quote);
   return quote;
 }

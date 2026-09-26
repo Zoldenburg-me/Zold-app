@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { BRIDGE, CUSTODY, FX, HARNESS, LIQUIDITY, railFeeEur } from "../config.js";
+import { FX, HARNESS, railFeeEur } from "../config.js";
 import {
   accountBalances,
   addrs,
@@ -9,19 +9,13 @@ import {
   paymentAuthorizationTypedData,
   transferIdHash,
 } from "../chain.js";
-import { createBridgeTransfer } from "../bridge/bridgexyz.js";
-import { prepareSafeSwapForTransfer } from "../liquidity.js";
 import { moneriumRedeemMessage, paymentMemo } from "../sepa.js";
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
 import { store, type Quote, type Transfer } from "../store.js";
 import { assertDailyCap, requireKycApproved } from "../http/guards.js";
 import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
-import {
-  prepareTransferBatchExecution,
-  prepareTransferExecution,
-  safeMessageHash,
-} from "../wallet/candide.js";
+import { prepareTransferExecution, safeMessageHash } from "../wallet/candide.js";
 
 /** How long a device signature stays submittable. */
 export const AUTH_WINDOW_SEC = 15 * 60;
@@ -64,8 +58,7 @@ export async function buildTransferFromQuote(
   quote: Quote,
   recipient: {
     recipientName: string;
-    recipientPhone?: string;
-    recipientIban?: string;
+    recipientIban: string;
     reference?: string;
   },
 ): Promise<TransferBuildResult> {
@@ -83,14 +76,13 @@ async function prepareTransferFromQuote(
   quote: Quote,
   recipient: {
     recipientName: string;
-    recipientPhone?: string;
-    recipientIban?: string;
+    recipientIban: string;
     reference?: string;
   },
   hold: { id?: string },
 ): Promise<TransferBuildResult> {
   const { res, out } = responseCollector();
-  const { recipientName, recipientPhone, recipientIban, reference } = recipient;
+  const { recipientName, recipientIban, reference } = recipient;
     const user = store.findUser(quote.userId)!;
     if (!requireKycApproved(user, res)) return out;
     const balances = await accountBalances(user.address);
@@ -116,26 +108,22 @@ async function prepareTransferFromQuote(
       quoteId: quote.id,
       rail: quote.rail,
       recipientName,
-      recipientPhone,
       recipientIban,
       reference: reference || undefined,
       state: "CREATED" as const,
       sendEur: quote.sendEur,
-      receiveKes: quote.receiveKes,
       receiveEur: quote.receiveEur,
       fundingSource,
       txs: [],
       createdAt,
       updatedAt: createdAt,
     };
-    if (transfer.rail === "sepa" && transfer.recipientIban) {
-      const payoutEur = transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa");
-      const redeem = moneriumRedeemMessage(payoutEur, transfer.recipientIban, createdAt);
-      transfer.moneriumRedeem = {
-        ...redeem,
-        memo: paymentMemo(transfer.id, transfer.reference),
-      };
-    }
+    const payoutEur = transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa");
+    const redeem = moneriumRedeemMessage(payoutEur, recipientIban, createdAt);
+    transfer.moneriumRedeem = {
+      ...redeem,
+      memo: paymentMemo(transfer.id, transfer.reference),
+    };
     // The account must be bound to a device key before it can spend.
     const authorizer = user.authorizerAddress;
     if (!authorizer) {
@@ -149,9 +137,8 @@ async function prepareTransferFromQuote(
      * assertDailyCap above refuses early with a useful message, but it ran
      * before the balance read, so it cannot hold against a parallel request.
      * The hold can: nothing yields between counting and recording it. And it
-     * is taken before the quote is consumed and, on the cash rail, before a
-     * live Bridge transfer is created — a refusal here leaves no spent quote
-     * and no unfunded transfer at Bridge behind it.
+     * is taken before the quote is consumed, so a refusal here leaves no
+     * spent quote behind it.
      */
     const held = store.holdDailyCap(user.id, transfer.sendEur, FX.DAILY_CAP_EUR, () =>
       safeFundedEurToday(user.id),
@@ -175,7 +162,6 @@ async function prepareTransferFromQuote(
     const amountWei = eur.toWei(transfer.sendEur);
     const deadline = Math.floor(Date.now() / 1000) + AUTH_WINDOW_SEC;
     const destination = destinationCommitment(transfer.rail, {
-      phone: transfer.recipientPhone,
       iban: transfer.recipientIban,
       name: transfer.recipientName,
     });
@@ -188,27 +174,8 @@ async function prepareTransferFromQuote(
     let safeExecution:
       | { credentialId: string; challenge: string; amountEur: number; token: "EURE" }
       | undefined;
-    /**
-     * Which custody mode this transfer will run in, recorded on the transfer.
-     * Starts at the worst case and is narrowed only when a Safe-executed batch
-     * is actually prepared, so a venue outage or missing config leaves the
-     * worst case recorded.
-     *
-     * The SEPA rail is already non-custodial for the principal: Monerium's
-     * redeem burns the payout straight from the Safe and only the fee moves.
-     */
-    let custody: NonNullable<Transfer["custody"]> =
-      transfer.rail === "sepa"
-        ? { mode: "non-custodial", feeToOrchestrator: transfer.sendEur > (transfer.receiveEur ?? 0) }
-        : {
-            mode: "orchestrator",
-            reason: "no Safe-executed swap batch was prepared for this transfer",
-            feeToOrchestrator: true,
-          };
-    const debitWei =
-      transfer.rail === "sepa"
-        ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa"))))
-        : amountWei;
+    // The debit is the fee alone: the payout burns straight from the Safe.
+    const debitWei = eur.toWei(Math.max(0, transfer.sendEur - payoutEur));
     if (
       debitWei > 0n &&
       user.passkey?.credentialId &&
@@ -217,103 +184,7 @@ async function prepareTransferFromQuote(
       !HARNESS.enabled
     ) {
       try {
-        let prepared: Awaited<ReturnType<typeof prepareTransferExecution>> | undefined;
-        let batch: { recipient: `0x${string}`; mode: "live" } | undefined;
-        // Cash rail: try the full fee+approve+swap batch first (Change 2,
-        // windows 1-3) — one signature, atomic, and the orchestrator never
-        // holds the input. Falls back to the plain user-signed debit when the
-        // configured venue cannot serve a Safe executor (FxSwapper, CoW) or
-        // the venue is down; the fallback still never moves without the user.
-        if (transfer.rail === "cash") {
-          try {
-            // A cash transfer exists only while the rail is open (BRIDGE_LIVE
-            // and an anchor — /api/quotes refuses otherwise), so the output
-            // always lands at Bridge's deposit address for this transfer.
-            if (!BRIDGE.destinationAddress) {
-              // Same refusal bridgeDestination() gives at execute — refuse
-              // here rather than posting Bridge a transfer with an empty
-              // to_address and discovering it one leg later.
-              throw new Error(
-                "BRIDGE_LIVE=1 requires BRIDGE_DESTINATION_ADDRESS until MoneyGram anchor payment instructions are wired into Bridge",
-              );
-            }
-            const convertEur = transfer.sendEur - railFeeEur("cash");
-            const rate = Number(quote.lockedSwapRate ?? "0") / 1e6;
-            if (!(rate > 0)) throw new Error("no locked swap rate to size the Bridge transfer");
-            const bridgeAmountUsdc = Math.floor(convertEur * rate * 100) / 100;
-            let recipient: `0x${string}`;
-            {
-              const bridgePlan = await createBridgeTransfer(
-                transfer.id,
-                bridgeAmountUsdc,
-                {
-                  paymentRail: BRIDGE.destinationRail,
-                  currency: BRIDGE.destinationCurrency,
-                  toAddress: BRIDGE.destinationAddress,
-                  blockchainMemo: BRIDGE.destinationMemo || undefined,
-                },
-                { sourceAddress: user.address },
-              );
-              const deposit = bridgePlan.sourceDepositInstructions?.to_address;
-              if (!deposit || !/^0x[a-fA-F0-9]{40}$/.test(deposit)) {
-                throw new Error("Bridge returned no Base deposit address for the swap to deliver into");
-              }
-              recipient = deposit as `0x${string}`;
-            }
-            const swap = await prepareSafeSwapForTransfer(transfer, {
-              executor: user.address as `0x${string}`,
-              recipient,
-            });
-            if (swap) {
-              const convertWei = swap.plan.approval.amount;
-              // Equal amounts mean a zero fee, which is valid; only a convert
-              // amount above the signed debit total is an error.
-              if (convertWei > debitWei) throw new Error("swap amount exceeds the authorized debit total");
-              prepared = await prepareTransferBatchExecution(user.passkeySafe, {
-                token: addrs().eure,
-                feeTo: orchestratorAddress,
-                // Exact by construction: fee + convert always equals the
-                // debited total, whatever floating-point did to the euros.
-                feeAmount: debitWei - convertWei,
-                approval: { spender: swap.plan.approval.spender, amount: convertWei },
-                call: swap.plan.call,
-              });
-              batch = { recipient, mode: "live" };
-              // The batch delivers straight to Bridge's deposit address, so
-              // the input never reaches an address we hold a key to.
-              custody = { mode: "non-custodial", feeToOrchestrator: true };
-              transfer.liquidity = swap.serialized;
-              transfer.safeSwap = {
-                recipient,
-                mode: "live",
-                // The amount the live Bridge transfer was created with. Execute
-                // must re-create with EXACTLY this body — the idempotency key
-                // is shared, and an idempotent replay with a different amount
-                // is either rejected or silently ignored.
-                bridgeAmountUsdc,
-              };
-            }
-            if (!swap) {
-              custody = {
-                mode: "orchestrator",
-                reason:
-                  `the configured liquidity venue (${LIQUIDITY.PROVIDER}) cannot be executed by the ` +
-                  "user's Safe, so the input is debited to the orchestrator and swapped from there",
-                feeToOrchestrator: true,
-              };
-            }
-          } catch (err: any) {
-            custody = {
-              mode: "orchestrator",
-              reason: `Safe-executed batch unavailable: ${err?.message ?? err}`,
-              feeToOrchestrator: true,
-            };
-            console.error(
-              `Safe swap batch unavailable for ${transfer.id} (falling back to plain debit): ${err?.message ?? err}`,
-            );
-          }
-        }
-        prepared ??= await prepareTransferExecution(
+        const prepared = await prepareTransferExecution(
           user.passkeySafe,
           addrs().eure,
           orchestratorAddress,
@@ -327,7 +198,6 @@ async function prepareTransferFromQuote(
           challenge,
           plan: user.passkeySafe,
           userOperation: prepared.userOperation,
-          ...(batch ? { batch } : {}),
         });
         safeExecution = {
           credentialId: user.passkey.credentialId,
@@ -345,25 +215,10 @@ async function prepareTransferFromQuote(
       }
     }
     /**
-     * Enforce non-custody where an operator asked for it.
-     *
-     * REQUIRE_NON_CUSTODIAL=1 means this deployment does not take possession
-     * of client funds, so falling back to the orchestrator is refused with the
-     * cause named.
-     *
-     * This spends the quote (consumed above). That is acceptable because every
-     * cause here is deployment-wide (the venue cannot serve a Safe, Bridge is
-     * not live), so it fails on the first transfer and is fixed once.
+     * SEPA is non-custodial for the principal: Monerium's redeem burns the
+     * payout straight from the Safe, and only the fee reaches the orchestrator.
      */
-    if (CUSTODY.requireNonCustodial && custody.mode === "orchestrator") {
-      return res.status(409).json({
-        error:
-          "refusing to create this transfer: REQUIRE_NON_CUSTODIAL=1 but it would route the sender's " +
-          `funds through the orchestrator — ${custody.reason ?? "no Safe-executed batch was prepared"}`,
-        custody,
-      });
-    }
-    transfer.custody = custody;
+    transfer.custody = { mode: "non-custodial", feeToOrchestrator: debitWei > 0n };
     // The hold taken before any partner call becomes this row, in one step.
     store.addTransferUnderHold(transfer, held.holdId);
     return {

@@ -267,7 +267,9 @@ export interface User {
   createdAt: string;
 }
 
-export type PayoutRail = "cash" | "sepa";
+/** Bank payout via Monerium redeem is the only rail. The union is kept so a
+ *  future payout partner is a type change, not a schema change. */
+export type PayoutRail = "sepa";
 
 export interface Quote {
   id: string;
@@ -276,9 +278,8 @@ export interface Quote {
   status: "OPEN" | "CONSUMED" | "EXPIRED";
   sendEur: number;
   fixedFeeEur: number;
-  fxRate: number; // all-in rate after spread (EUR->KES, 1 for sepa)
-  receiveKes: number; // cash rail (0 otherwise)
-  receiveEur: number; // sepa rail (0 otherwise)
+  fxRate: number; // all-in rate after spread (1: no FX leg on sepa)
+  receiveEur: number;
   /** True market mid from the live feed. A reference we do NOT trade at. */
   midRate: number;
   /** Measured gap between midRate and fxRate. Not a configured constant: an
@@ -288,10 +289,6 @@ export interface Quote {
    *  amounts the flat fee dominates (EUR 2 to cash loses half to it), and an
    *  itemised fee alone made that look like a broken exchange rate. */
   effectiveRate: number;
-  /** Quote binding: the liquidity venue's rate (tokenOut units per 1e18 tokenIn) this
-   *  quote's economics assume. Execution refuses to swap if the live rate has
-   *  drifted past tolerance — binds quoted price to settlement price. */
-  lockedSwapRate?: string;
   expiresAt: string;
   createdAt: string;
 }
@@ -299,12 +296,6 @@ export interface Quote {
 export type TransferState =
   | "CREATED"
   | "DEBITED"
-  | "SWAPPED"
-  | "BRIDGED"
-  | "PAYOUT_DETAILS_PENDING"
-  | "PAYOUT_FUNDING_PENDING"
-  | "PAYOUT_FUNDED"
-  | "PAYOUT_READY"
   | "PAYOUT_SUBMITTED"
   | "PAID"
   | "MANUAL_REVIEW"
@@ -398,8 +389,7 @@ export interface Transfer {
   quoteId: string;
   rail: PayoutRail;
   recipientName: string;
-  recipientPhone?: string; // cash rail
-  recipientIban?: string; // sepa rail
+  recipientIban?: string;
   /**
    * Payer-supplied remittance reference, carried to the payee on the SEPA
    * payment so they can reconcile it against their own records. Set by callers
@@ -410,15 +400,13 @@ export interface Transfer {
   reference?: string;
   state: TransferState;
   sendEur: number;
-  receiveKes: number; // cash rail
-  receiveEur?: number; // sepa rail
-  usdcOut?: number;
+  receiveEur?: number;
   /**
    * Where the input EURe is taken from at execution time.
    *
    * Safe is the only live funding source now. The API verifies the device
    * authorization before moving the one-time amount needed for this rail:
-   * the full send on the FX rails, the fee alone on SEPA.
+   * the fee alone on SEPA.
    */
   fundingSource?: "safe";
   /** The terms the device is asked to authorize. Fixed when the transfer
@@ -427,7 +415,7 @@ export interface Transfer {
   auth?: {
     to: `0x${string}`;
     amountWei: string; // bigint as decimal string (JSON store)
-    /** keccak256 commitment to the payout destination (rail + IBAN/VPA/phone),
+    /** keccak256 commitment to the payout destination (rail + IBAN + name),
      *  signed by the device so the recipient cannot be swapped after signing. */
     destination: `0x${string}`;
     deadline: number; // unix seconds
@@ -449,51 +437,18 @@ export interface Transfer {
     signedAt?: string;
   };
   txs: { step: string; hash: string }[];
-  /** Internal JIT liquidity execution details. This records how value moved
-   *  into the settlement asset for the payout rail; it is not a swap product. */
-  liquidity?: {
-    provider: "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best";
-    side: "EURE_TO_USDC" | "USDC_TO_EURE";
-    quoteId: string;
-    tokenIn: "EURe" | "USDC";
-    tokenOut: "EURe" | "USDC";
-    amountIn: string;
-    expectedOut: string;
-    minOut: string;
-    rate: string;
-    expiresAt: string;
-    /** RFQ only: the maker's quote id and the tx it wants submitted. Persisted
-     *  because the plan is prepared and executed in separate steps — a quote
-     *  that lost its tx cannot be replayed, and re-quoting at execution time
-     *  would settle at a price the user never agreed to. */
-    rfq?: { quoteId: string; tx: { to?: string; data?: string; value?: string } | null; approvalTarget?: string };
-    cow?: { orderId: string; feeAmount: string; validTo: number; appData: string };
-    dex?: { pool: `0x${string}`; fee: number; mid: number; deviationBps: number };
-    lifi?: {
-      tool: string;
-      approvalAddress: `0x${string}`;
-      toToken: `0x${string}`;
-      tx: { to: `0x${string}`; data: `0x${string}`; value?: string; gasLimit?: string };
-      mid: number;
-      deviationBps: number;
-    };
-    executedAt?: string;
-    txHash?: string;
-  };
   /**
    * Did the orchestrator hold this transfer's input funds?
    *
-   * Recorded at creation on every transfer and rail. The answer has regulatory
-   * weight, so it must not depend on replaying which venue was configured and
-   * whether a venue call succeeded. A fallback from the Safe-executed batch to
-   * the plain debit changes the answer, so it records itself.
+   * Recorded at creation on every transfer. The answer has regulatory
+   * weight, so it is written down rather than inferred from configuration.
    *
    *  non-custodial — the user's funds never reach an address we hold a key to.
-   *                  The cash-rail batch delivering straight to Bridge, and the
-   *                  SEPA rail, where Monerium burns the payout from the Safe
+   *                  The SEPA rail: Monerium burns the payout from the Safe
    *                  and only the fee moves.
-   *  orchestrator   — the input was debited to the orchestrator's own address
-   *                  and swapped from there. `reason` says why that path ran.
+   *  orchestrator   — the input was debited to the orchestrator's own address.
+   *                  No current rail does this; a rail that must says why in
+   *                  `reason`.
    *
    * The fee is excluded: it is revenue when it moves, not client funds in
    * transit. `feeToOrchestrator` records it anyway.
@@ -504,50 +459,6 @@ export interface Transfer {
     reason?: string;
     /** The fee always lands at the orchestrator; stated, not hidden. */
     feeToOrchestrator?: boolean;
-  };
-  /**
-   * Set when this transfer's debit and swap ride in ONE user-signed
-   * UserOperation (Change 2, windows 1-3): the batch approves the venue and
-   * delivers the output straight to `recipient`, so the orchestrator never
-   * holds the input. `recipient` is the Bridge deposit address ("dry-run" survives only on
-   * rows written before the rail was closed without BRIDGE_LIVE), and once the batch lands the funds are already with the
-   * settlement custodian — which is why compensation must not assume it can
-   * reverse-swap them.
-   */
-  safeSwap?: {
-    recipient: `0x${string}`;
-    mode: "dry-run" | "live";
-    /** Live mode: the amount the Bridge transfer was created with at transfer
-     *  creation. Execute re-creates under the same idempotency key, so it must
-     *  send exactly this amount — a different body is not an idempotent replay. */
-    bridgeAmountUsdc?: number;
-  };
-  pickup?: {
-    referenceCode: string;
-    provider: string;
-    status: string;
-    /** SEP-24 interactive URL (recipient-facing page at the anchor). */
-    interactiveUrl?: string;
-    /** Anchor mode: the anchor's own ids/amounts, and the last status it
-     *  reported. `referenceCode` is ours; a real MoneyGram agent code is
-     *  theirs. Keeping both stops one being mistaken for the other. */
-    anchorTransactionId?: string;
-    anchorAmount?: number;
-    anchorAsset?: string;
-    anchorPaymentHash?: string;
-    /** SEP-10 memo used when the anchor withdrawal was created. Reused on
-     *  refresh/funding so custodial anchors keep the same per-user context. */
-    anchorMemo?: string;
-    anchorAmountIn?: string;
-    anchorReferenceNumber?: string;
-    moreInfoUrl?: string;
-    anchorStatus?: string;
-    /** Bridge.xyz transfer funding this anchor withdrawal. */
-    bridgeTransferId?: string;
-    bridgeState?: string;
-    bridgeDepositAddress?: string;
-    bridgeDepositMemo?: string;
-    bridgeDestinationTxHash?: string;
   };
   /** SEPA payout leg: a Monerium redeem order (`sandbox` is the historical
    *  literal for it). `mock` survives only on rows from the removed mock path. */
@@ -711,7 +622,7 @@ export interface ReceiptShare {
 export interface ReceiptShareFields {
   sender: "full" | "first" | "last" | "hidden";
   recipient: "full" | "first" | "last" | "hidden";
-  /** IBAN on the SEPA rail, mobile number on the cash rail. */
+  /** The payee IBAN. */
   account: "full" | "short" | "hidden";
   /** Which side's currency the page leads with. */
   fx: "both" | "sender" | "recipient";

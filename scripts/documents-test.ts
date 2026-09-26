@@ -192,7 +192,7 @@ try {
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
     TRANSF_API_PORT: String(API_PORT), TRANSF_RPC_URL: RPC_URL, PORT: String(API_PORT),
     RP_ID: "localhost", WEBAUTHN_ORIGINS: `${API},http://localhost:${API_PORT}`,
-    MONERIUM_CLIENT_ID: "", MONERIUM_CLIENT_SECRET: "", MG_ANCHOR_DOMAIN: "",
+    MONERIUM_CLIENT_ID: "", MONERIUM_CLIENT_SECRET: "",
     CANDIDE_CHAIN_ID: "31337", CANDIDE_RPC_URL: RPC_URL, CANDIDE_RECOVERY_GUARDIAN_ADDRESS: "",
     CRYPTO_IN_POLL_MS: "1000", LOCAL_HARNESS: "1", KYC_AUTO_APPROVE: "1",
   });

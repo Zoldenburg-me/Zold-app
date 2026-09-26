@@ -13,12 +13,11 @@ description: Every transfer has a timeline, a detail view and a receipt you can 
 Open a row for:
 
 * amount sent and amount received, with rate and fee,
-* the recipient and the reference or pickup code,
+* the recipient and the reference,
 * a **timeline** that reflects the transfer's actual state, step by step,
-* for a cash pickup, the MoneyGram reference and a **Refresh status** button,
 * the option to **share a receipt**.
 
-A step that has not happened is not shown as done. If a transfer is waiting on something — the recipient's details, a partner confirmation — the timeline says what.
+A step that has not happened is not shown as done. If a transfer is waiting on something — Monerium's confirmation of the bank payment — the timeline says what.
 
 ## Shareable receipts
 

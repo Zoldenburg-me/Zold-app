@@ -180,7 +180,7 @@ const CURRENCIES: CurrencyDefinition[] = [
     tokenised: false,
     mode: () => false as const,
     needs:
-      "a Kenyan payout partner. dLocal and Yellow Card both cover KES and neither is contracted; the existing cash rail pays a MoneyGram counter, which is a pickup, not an account.",
+      "a Kenyan payout partner. dLocal and Yellow Card both cover KES and neither is contracted.",
   },
   {
     code: "NGN",
@@ -221,9 +221,7 @@ const CURRENCIES: CurrencyDefinition[] = [
       "a Nigerian payout partner and an issuer relationship. Yellow Card covers Nigeria — their largest "
       + "market — and is uncontracted. cNGN is real, regulated in Nigeria and " +
       "liquid on Base, but we hold none and have no way in or out: their API needs a merchant " +
-      "account and API keys we have not requested. Note also that Bridge — our licensed transfer " +
-      "seam — supports only USDC and EURC for EEA users under MiCA, so cNGN cannot move through it " +
-      "for a European entity at all.",
+      "account and API keys we have not requested.",
   },
   {
     code: "INR",

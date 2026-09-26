@@ -215,8 +215,8 @@ export const store = {
    *
    * Checking the cap in buildTransferFromQuote and writing the reserving row
    * several awaits later let two parallel requests each create a full-cap
-   * transfer. Checking again at the write refuses too late: on the cash rail,
-   * after a live Bridge transfer exists, leaving it unfunded. A hold taken
+   * transfer. Checking again at the write refuses too late: after the quote is
+   * spent and the bundler has prepared the debit. A hold taken
    * before any partner is called refuses the second request while nothing
    * outside this process has been touched, and counts the first from the
    * moment it starts preparing.

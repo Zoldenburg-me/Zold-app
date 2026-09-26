@@ -2,7 +2,7 @@
 
 Zoldenburg builds payment infrastructure for moving stablecoin value into real-world rails.
 
-Our current focus is **Zold**: a passkey-first remittance app that lets users hold funds in their own Safe account, fund with EURe, and send through KYC-backed payout rails such as Monerium SEPA and MoneyGram cash pickup.
+Our current focus is **Zold**: a passkey-first remittance app that lets users hold funds in their own Safe account, fund with EURe, and send by SEPA through Monerium.
 
 ## What We Are Building
 
@@ -10,14 +10,14 @@ Zoldenburg is working on a user-owned money movement stack:
 
 - **Passkey Safe accounts**: smart accounts controlled by user presence, not API-held private keys.
 - **EURe-native balances**: euro stablecoin funding and settlement on EVM rails.
-- **KYC-backed payout rails**: Monerium for SEPA payouts and MoneyGram/SEP rails for cash pickup flows.
-- **Operational transparency**: backend transaction trails for Safe debits, swaps, bridges, payout orders, failures, and refunds.
+- **SEPA payouts**: Monerium redeems EURe from the user's Safe to the payee's IBAN. Other payout rails wait on a partner.
+- **Operational transparency**: backend transaction trails for Safe debits, deposit conversions, payout orders, failures, and refunds.
 - **Non-custodial defaults**: user funds should stay in user-owned accounts unless an explicit, signed transfer is being executed.
 
 ## Repositories
 
 - **Zold App**: the main product app and backend for quotes, passkey Safe funding, Monerium OAuth, payment pages, admin operations, and payout execution.
-- **Contracts**: Safe-adjacent payment, bridge, recovery, and liquidity test contracts where applicable.
+- **Contracts**: local test fixtures (FX swapper, timelock, mock token); nothing is deployed on a real chain.
 - **Docs and deployment notes**: architecture, production configuration, security notes, and integration plans.
 
 Some repositories may stay private while the protocol and product surfaces are still changing quickly.
@@ -26,8 +26,7 @@ Some repositories may stay private while the protocol and product surfaces are s
 
 - **Safe / Candide** for passkey smart-account planning, deployment, and user-signed operation execution.
 - **Monerium** for OAuth, IBAN activation, EURe account linking, and SEPA redeem orders.
-- **MoneyGram / Stellar anchors** for cash payout exploration through KYC-compatible rails.
-- **EVM liquidity routes** for EURe/USDC conversion, including recorded route metadata for operator review.
+- **EVM liquidity routes** for converting USDC deposits to EURe, including recorded route metadata for operator review.
 - **Gnosis Pay research** for future card-account integration paths.
 
 ## How To Contribute

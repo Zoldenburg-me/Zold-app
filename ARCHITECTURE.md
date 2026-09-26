@@ -69,18 +69,15 @@ the server cannot produce a debit on its own.
 direct send route and by business draft execution. `orchestrator.ts` drives it:
 
 ```
-SEPA:  CREATED → DEBITED → PAID
-cash:  CREATED → DEBITED → SWAPPED → BRIDGED → PAYOUT_DETAILS_PENDING
-         → PAYOUT_FUNDING_PENDING → PAYOUT_FUNDED → PAYOUT_READY
-         → PAYOUT_SUBMITTED → PAID
+CREATED → DEBITED → PAYOUT_SUBMITTED → PAID
 any step can end in FAILED, REFUNDED or MANUAL_REVIEW
 ```
 
 - Every leg records its step and tx hash before the next runs; a debit already
   recorded is refused, so a crash cannot double-spend.
-- **Compensation is asymmetric**: a 4xx refusal refunds; a timeout, a
-  duplicate-transfer revert, or any failure after a partner holds the money
-  goes to `MANUAL_REVIEW`. `store.updateTransfer` refuses to move a `REFUNDED`
+- **Compensation is asymmetric**: a 4xx refusal refunds what left the Safe
+  (on SEPA, the fee alone); a timeout, a duplicate-transfer revert, or any
+  failure after a partner holds the money goes to `MANUAL_REVIEW`. `store.updateTransfer` refuses to move a `REFUNDED`
   or `PAID` transfer backwards.
 - A sweep at startup and every 5 minutes retries stranded transfers.
 - The reconciler (`reconcile.ts`) reports drift between ledgers and never
@@ -91,7 +88,7 @@ any step can end in FAILED, REFUNDED or MANUAL_REVIEW
 | rail | path | state |
 |---|---|---|
 | SEPA | Monerium redeem burns EURe from the Safe and pays the IBAN. Only the fee (currently €0) leaves the Safe to Zold. | open |
-| Cash pickup | USDC → Bridge.xyz → Stellar → MoneyGram (SEP-10/12/24) | **closed** unless `BRIDGE_LIVE=1` and an anchor are configured (`cashRailOpen()`); quotes answer `503 RAIL_CLOSED` |
+| International | none | not built; the Pay hub shows a disabled SOON tile until a payout partner (dLocal, Yellow Card — both uncontracted) is contracted. `POST /api/quotes` accepts only `rail: "sepa"` |
 
 There are no mock legs: a rail is live or the transfer is refused before
 anything leaves the Safe.
@@ -101,15 +98,17 @@ anything leaves the Safe.
 | token | issuer | role |
 |---|---|---|
 | EURe | Monerium (EU EMI) | the euro balance; address per chain from Monerium's `/tokens` |
-| USDC | Circle | payment-page deposits and the cash rail |
+| USDC | Circle | payment-page and crypto deposits, convertible to EURe inside the Safe |
 
-- `rates.ts` fetches live mid-rates (10-minute cache) with bounds checks. No
-  rate, no quote.
-- `fx.ts` builds the quote; `assertQuoteRateBinding` refuses and refunds if
-  the executed rate drifts past `FX.QUOTE_BINDING_BPS`.
-- `liquidity.ts` is the seam: it chooses a venue, persists the quote that
-  priced a transfer, and sends execution back to the venue that quoted it. An
-  unknown provider id throws — there is no fallback to our own inventory.
+- `rates.ts` fetches live mid-rates (10-minute cache) with bounds checks. USD
+  is required (no USD rate, no venue quote); KES is fetched when available,
+  for invoice currency conversion only.
+- `fx.ts` builds the send quote. SEPA is EUR to EUR, so the quote has no FX
+  leg: mid and rate are 1, margin 0, and the only deduction is the rail fee.
+- `liquidity.ts` is the seam, used only to convert an inbound USDC deposit to
+  EURe inside the user's Safe (`prepareDepositConversion`): it chooses a
+  venue and prepares the Safe-executed swap. No send uses a venue. An unknown
+  provider id throws — there is no fallback to our own inventory.
 - Venues, one file each in `liquidity/`:
 
 | venue | file | notes |
@@ -129,7 +128,8 @@ anything leaves the Safe.
   slippage goes to the user by default and is recorded.
 
 Default deployment (`best` over `lifi,dex`) is non-custodial: both venues
-execute from the Safe. `transfer.custody` records where the fee landed.
+execute from the Safe. On a send, `transfer.custody` records where the fee
+landed.
 
 ## 5. Businesses
 
@@ -168,8 +168,7 @@ decide who is calling.
 | `services/api/src/liquidity/` | one file per FX venue, behind `liquidity.ts` |
 | `services/api/src/store/` | row shapes (`types.ts`) and the JSON file db with migrations (`db.ts`); `store.ts` holds the methods and is the only code that touches the db |
 | `services/api/src/wallet/` | Safe deployment plan, signing, user operations |
-| `services/api/src/adapters/` | Monerium, Gnosis Pay, MoneyGram, crypto deposits, Candide forwarder |
-| `services/api/src/stellar/`, `bridge/` | cash rail (closed) |
+| `services/api/src/adapters/` | Monerium, Gnosis Pay, crypto deposits, Candide forwarder |
 | `services/api/src/shopify/`, `recovery/` | merchant and guardian integrations |
 | `services/api/public/app/` | account app: ordered classic scripts sharing one scope. No file calls forward into a later one; `main.js` loads last and holds everything that awaits then renders |
 | `services/api/public/business/` | org dashboard as ES modules; `core.js` owns shared state and exports setters |
@@ -182,7 +181,7 @@ passkey-safe's mount check). Moving code means moving their greps.
 ## 7. Data and exposure
 
 - **Collect per call, store nothing.** Zold stores no identity documents;
-  identity is Monerium's. Sender details for a rail are held for one call.
+  identity is Monerium's.
 - **Secrets at rest are encrypted** (`crypto-at-rest.ts`): Monerium tokens and
   API keys, Shopify store tokens. None appears in an API response.
 - **Public projections are allowlists**, redacted on the server: a withheld
@@ -191,8 +190,6 @@ passkey-safe's mount check). Moving code means moving their greps.
   bucket, never cached by the service worker, 404 under the wrong handle.
 - **Documents are frozen, signed snapshots**, re-verified on every visit to
   `/v/<code>`; a revoked one fails verification rather than vanishing.
-- **Travel Rule**: SEP-9 originator fields are mapped for the MoneyGram anchor
-  (`stellar/sep9.ts`); collection per transfer is not yet wired.
 
 ## 8. Public surfaces
 
@@ -205,4 +202,4 @@ passkey-safe's mount check). Moving code means moving their greps.
 | `/invoice/<token>` | invoice |
 | `/r/<slug>` | shared receipt |
 | `/v/<code>` | document verification |
-| `/api/health` | `capabilities: { sandbox, moneriumOAuth, moneriumApiKeys, moneriumEnvironment, moneriumHost, cashRail, shopify, shopifyMode, emailSmsRecovery }` — the UI renders a control only where the API would accept it |
+| `/api/health` | `capabilities: { sandbox, moneriumOAuth, moneriumApiKeys, moneriumEnvironment, moneriumHost, shopify, shopifyMode, emailSmsRecovery }` — the UI renders a control only where the API would accept it |

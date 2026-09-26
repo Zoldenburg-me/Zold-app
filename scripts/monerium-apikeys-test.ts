@@ -327,7 +327,6 @@ try {
     CANDIDE_ALLOWANCE_MODULE_ADDRESS: "0x691f59471Bfd2B7d639DCF74671a2d648ED1E331",
     CANDIDE_RECOVERY_GUARDIAN_ADDRESS: "",
     KYC_AUTO_APPROVE: "0",
-    MG_ANCHOR_DOMAIN: "",
   });
   for (const s = Date.now(); Date.now() - s < 30_000; ) {
     try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}

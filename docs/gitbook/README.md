@@ -26,7 +26,7 @@ A global account is a set of local accounts under one roof. Each one is denomina
 
 | | |
 | --- | --- |
-| **Cash pickup** | Send euros, a relative collects local currency at a MoneyGram counter. See [Cash pickup](send-money/cash-pickup.md). |
+| **International payouts** | Payouts outside the euro area, opening once a payout partner is signed. The app shows the tile as SOON until then. |
 | **US dollar account** | A US account and routing number that receives ACH and wire and pays out to any US bank. See [Your US dollar account](add-money/usd-account.md). |
 | **More currencies** | GBP, CHF, NGN and KES accounts, each on its own local rail. See [Accounts and currencies](business/accounts-and-currencies.md). |
 | **Shopify in-checkout** | Zold as a native payment method inside Shopify's checkout, with no pending order. |

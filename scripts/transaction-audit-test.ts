@@ -115,7 +115,6 @@ const transfer = (id: string, sendEur: number, over: Partial<Transfer> = {}): Tr
   recipientIban: "DE02120300000000202051",
   state: "CREATED",
   sendEur,
-  receiveKes: 0,
   receiveEur: sendEur,
   fundingSource: "safe",
   txs: [],
@@ -138,9 +137,8 @@ const usedByCapUser = () =>
 
 console.log("─── (a) clean, valid transactions ───");
 
-await check("SEPA carries no fee and the cash corridor carries its own", () => {
+await check("SEPA carries no fee by default", () => {
   assert.equal(railFeeEur("sepa"), 0);
-  assert.equal(railFeeEur("cash"), 0.99);
 });
 
 await check("an exact-amount deposit settles its request in full", () => {
@@ -340,14 +338,16 @@ await check("two transfers prepared in parallel cannot both reserve the whole ca
 
 await check("transfer creation RESERVES the cap rather than only checking it", () => {
   // Checks the call site takes the hold before the quote is spent and before
-  // Bridge is asked for a transfer; otherwise a cap refusal leaves an unfunded
-  // Bridge transfer behind. buildTransferFromQuote (transfers/build.ts) is the
+  // any partner is asked to prepare the debit; otherwise a cap refusal leaves
+  // a spent quote behind. buildTransferFromQuote (transfers/build.ts) is the
   // only path that builds a transfer.
   const src = readFileSync("services/api/src/transfers/build.ts", "utf8");
   const hold = src.indexOf("store.holdDailyCap(");
   assert.ok(hold > 0, "transfer creation no longer holds the cap");
   assert.ok(hold < src.indexOf("store.consumeQuote(quote.id)"), "the quote is consumed before the cap is held");
-  assert.ok(hold < src.indexOf("await createBridgeTransfer("), "Bridge is called before the cap is held");
+  const prepare = src.indexOf("await prepareTransferExecution(");
+  assert.ok(prepare > 0, "the debit preparation call has moved — update this check");
+  assert.ok(hold < prepare, "the bundler is called before the cap is held");
   assert.match(src, /store\.addTransferUnderHold\(/, "the row is not written under the hold");
   assert.match(src, /finally \{\s*if \(hold\.id\) store\.releaseCapHold\(hold\.id\)/, "a refused or failed preparation keeps its hold");
   assert.doesNotMatch(
@@ -418,11 +418,9 @@ await check("every partner client on a money path bounds its own calls", () => {
   // can see.
   const files = [
     "services/api/src/adapters/monerium-client.ts",
-    "services/api/src/bridge/bridgexyz.ts",
     "services/api/src/wallet/candide.ts",
     "services/api/src/adapters/candide-forwarder.ts",
     "services/api/src/recovery/candide-guardian.ts",
-    "services/api/src/stellar/anchor.ts",
   ];
   for (const f of files) {
     const src = readFileSync(f, "utf8");
@@ -448,7 +446,7 @@ await check("the deposit scanner refuses to run two scans at once", () => {
 await check("a malformed partner timeout refuses at boot, not at the first partner call", () => {
   // Imported in a child process because the value is read once at import and
   // this process already has it. A typo that reached AbortSignal.timeout would
-  // throw a RangeError on every Monerium, Bridge and Candide call instead.
+  // throw a RangeError on every Monerium and Candide call instead.
   const load = (value: string) =>
     spawnSync(process.execPath, ["--import", "tsx", "-e", 'await import("./services/api/src/http.ts")'], {
       env: { ...process.env, PARTNER_HTTP_TIMEOUT_MS: value },

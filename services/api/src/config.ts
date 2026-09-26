@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { PayoutRail } from "./store/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, "../../..");
@@ -88,7 +89,7 @@ export const moneriumOAuthEnabled = () => Boolean(MONERIUM.oauthClientId);
 /**
  * THE ONE HARNESS SEAM. scripts/_local-chain.ts sets LOCAL_HARNESS=1 for every
  * test suite, and it is honoured ONLY on the hardhat chain (31337) outside
- * production: that chain has no Monerium, no ERC-4337 bundler and no anchor,
+ * production: that chain has no Monerium and no ERC-4337 bundler,
  * so the suites need fake Safe ceremonies, a fake UserOperation hash, a
  * locally minted EURe for a mirrored deposit, and up-front account approval.
  * On every real-money chain the flag is inert by construction (the chain id
@@ -161,90 +162,6 @@ if (KYC.operatorToken && KYC.operatorToken.length < 24) {
     "KYC_OPERATOR_TOKEN is too short (need >= 24 chars) — generate one with `openssl rand -base64 32`",
   );
 }
-
-/**
- * Bridge.xyz orchestration — the cash rail's exit to Stellar.
- *
- * Without BRIDGE_LIVE=1 the cash rail is CLOSED (no dry-run, no local escrow);
- * BRIDGE_LIVE=1 calls Bridge's Transfer API and waits for the
- * user/orchestrator-side deposit to fund it.
- */
-export const BRIDGE = {
-  live: process.env.BRIDGE_LIVE === "1",
-  apiKey: process.env.BRIDGE_API_KEY ?? "",
-  baseUrl: process.env.BRIDGE_BASE_URL ?? "https://api.bridge.xyz",
-  onBehalfOf: process.env.BRIDGE_ON_BEHALF_OF ?? "",
-  sourceRail: process.env.BRIDGE_SOURCE_RAIL ?? "base",
-  destinationRail: process.env.BRIDGE_DESTINATION_RAIL ?? "stellar",
-  destinationCurrency: process.env.BRIDGE_DESTINATION_CURRENCY ?? "usdc",
-  destinationAddress: process.env.BRIDGE_DESTINATION_ADDRESS ?? "",
-  destinationMemo: process.env.BRIDGE_DESTINATION_MEMO ?? "",
-};
-
-const configuredAnchorDomain = process.env.MG_ANCHOR_DOMAIN ?? "";
-const configuredAnchorAsset = process.env.MG_ANCHOR_ASSET?.trim();
-
-function isMoneyGramAnchorDomain(domain: string): boolean {
-  return /(^|\.)moneygram\.com$/i.test(domain.trim());
-}
-
-function defaultAnchorAsset(domain: string): string {
-  return isMoneyGramAnchorDomain(domain) ? "USDC" : "SRT";
-}
-
-const anchorAsset = configuredAnchorAsset || defaultAnchorAsset(configuredAnchorDomain);
-if (isMoneyGramAnchorDomain(configuredAnchorDomain) && anchorAsset !== "USDC") {
-  throw new Error(
-    `MG_ANCHOR_ASSET=${anchorAsset} is incompatible with MoneyGram anchor ${configuredAnchorDomain}; use USDC`,
-  );
-}
-
-export const STELLAR_TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
-export const STELLAR_PUBLIC_PASSPHRASE = "Public Global Stellar Network ; September 2015";
-
-/** Stellar treasury + MoneyGram-style anchor (SEP-10/SEP-24). */
-export const STELLAR = {
-  // Public network by default. The Stellar testnet (horizon-testnet, the test
-  // passphrase, friendbot) is opt-in for the anchor harnesses.
-  horizon: process.env.STELLAR_HORIZON ?? "https://horizon.stellar.org",
-  networkPassphrase: process.env.STELLAR_PASSPHRASE ?? STELLAR_PUBLIC_PASSPHRASE,
-  friendbot: process.env.STELLAR_FRIENDBOT ?? "",
-  // Anchor home domain for SEP-10/24. Stellar's public test anchor works
-  // without any signup; MoneyGram production is the same protocol at their
-  // domain with a partner-onboarded account.
-  anchorDomain: configuredAnchorDomain,
-  anchorAsset,
-  // MoneyGram production may require SEP-10 custodial auth to include a
-  // positive integer memo identifying the end user behind a shared account.
-  authMemo: process.env.MG_AUTH_MEMO ?? "",
-  clientDomain: process.env.MG_CLIENT_DOMAIN ?? "",
-  clientDomainSigningSecret: process.env.MG_CLIENT_DOMAIN_SIGNING_SECRET ?? "",
-  treasurySecret: process.env.STELLAR_TREASURY_SECRET ?? "",
-};
-
-export const anchorModeEnabled = () => Boolean(STELLAR.anchorDomain);
-
-/**
- * Custody posture: whether the orchestrator may ever hold a user's input funds.
- *
- * "We never take custody" has regulatory weight (roughly the line between a
- * technical service provider and a payment/crypto-asset service). Otherwise it
- * depends on three unrelated settings: the configured venue, whether Bridge is
- * live, and whether a venue call succeeds. So every transfer records the
- * custody mode it ran in (`transfer.custody`), and `requireNonCustodial` turns
- * the preference into a refusal.
- *
- * The refusal is off by default: with BRIDGE_LIVE unset there is no external
- * deposit address, so a batch's output can only go to the orchestrator, and
- * turning it on would break every testnet deployment including Base Sepolia.
- * The default path is non-custodial; a deployment moving real money should set
- * REQUIRE_NON_CUSTODIAL=1.
- */
-export const CUSTODY = {
-  /** Refuse to create a transfer that would route the user's funds through the
-   *  orchestrator. */
-  requireNonCustodial: process.env.REQUIRE_NON_CUSTODIAL === "1",
-} as const;
 
 /** Security posture: origin policy, rate limits and WebAuthn verification. */
 export const SECURITY = {
@@ -365,10 +282,6 @@ function assertProductionConfig() {
   if (MONERIUM.tokenEncryptionKey && MONERIUM.tokenEncryptionKey.length < 32) {
     fail("MONERIUM_TOKEN_ENCRYPTION_KEY must be at least 32 characters");
   }
-  if (BRIDGE.live) {
-    if (!BRIDGE.apiKey) fail("BRIDGE_API_KEY is required when BRIDGE_LIVE=1");
-    if (!BRIDGE.onBehalfOf) fail("BRIDGE_ON_BEHALF_OF is required when BRIDGE_LIVE=1");
-  }
   /**
    * The app chain and the smart-account chain must agree in production.
    *
@@ -402,17 +315,6 @@ function assertProductionConfig() {
     if (!RECOVERY.guardianSignerToken) {
       fail("RECOVERY_GUARDIAN_SIGNER_TOKEN is required when RECOVERY_GUARDIAN_SIGNER_URL is configured");
     }
-  }
-  if (anchorModeEnabled() && STELLAR.networkPassphrase === STELLAR_TESTNET_PASSPHRASE) {
-    fail("production anchor mode must not use the Stellar testnet passphrase");
-  }
-  if (isMoneyGramAnchorDomain(STELLAR.anchorDomain)) {
-    if (!STELLAR.authMemo) fail("MG_AUTH_MEMO is required for production MoneyGram custodial auth");
-    if (!STELLAR.clientDomain) fail("MG_CLIENT_DOMAIN is required for production MoneyGram client attribution");
-    if (!STELLAR.clientDomainSigningSecret) {
-      fail("MG_CLIENT_DOMAIN_SIGNING_SECRET is required for production MoneyGram client attribution");
-    }
-    if (!STELLAR.treasurySecret) fail("STELLAR_TREASURY_SECRET is required for production MoneyGram anchor mode");
   }
 
   if (LOOKS_HOSTED) {
@@ -624,8 +526,6 @@ export interface Deployments {
   /** Written by the hardhat deploy, never read. */
   timelock?: `0x${string}`;
   swapper?: `0x${string}`;
-  /** Present in older entries, never read. */
-  bridge?: `0x${string}`;
 }
 
 /**
@@ -864,32 +764,23 @@ export const CRYPTO_IN = {
   maxBlockSpan: BigInt(envNumber("CRYPTO_IN_MAX_BLOCK_SPAN", 5_000, { min: 1 })),
 };
 
-// FX configuration for the launch corridor (EUR -> KES cash pickup).
-//
-// Mid rates come live from rates.ts; a hardcoded constant goes stale while the
-// receipt still claims a margin over the market rate. EUR->USD is whatever the
-// liquidity venue executes at, read in fx.ts. Only our own pricing lives here.
+// Pricing for sends. Only our own pricing lives here; mid rates come live
+// from rates.ts.
 export const FX = {
-  SPREAD_BPS: 50, // our FX spread on the cash corridor
   /**
    * Fees are PER RAIL, and SEPA is free. Monerium charges nothing for the
-   * redeem, so neither do we; the only fee in the product is on the cash
-   * corridor (closed until a partner is live). Conversions carry no fee
-   * either — the venue's rate is the whole price. Env-overridable so a fee
-   * can be introduced without a deploy, and read through railFeeEur() so no
-   * code path can pick up the wrong rail's number.
+   * redeem, so neither do we. Conversions carry no fee either — the venue's
+   * rate is the whole price. Env-overridable so a fee can be introduced
+   * without a deploy, and read through railFeeEur() so a future rail cannot
+   * pick up the wrong rail's number.
    */
   SEPA_FEE_EUR: Math.max(0, Number(process.env.SEPA_FEE_EUR ?? 0)),
-  CASH_FEE_EUR: Math.max(0, Number(process.env.CASH_FEE_EUR ?? 0.99)),
   QUOTE_TTL_MS: 10 * 60 * 1000,
   DAILY_CAP_EUR: 2500,
-  // Quote binding: max on-chain rate drift between quote and execution before the
-  // transfer is rejected and refunded (bps).
-  QUOTE_BINDING_BPS: 50,
 };
 
-/** The fixed fee for a rail, in EUR. Zero on SEPA. */
-export const railFeeEur = (rail: string): number => (rail === "cash" ? FX.CASH_FEE_EUR : FX.SEPA_FEE_EUR);
+/** The fixed fee for a rail, in EUR. Zero on SEPA unless SEPA_FEE_EUR says otherwise. */
+export const railFeeEur = (_rail: PayoutRail): number => FX.SEPA_FEE_EUR;
 
 const boolEnv = (key: string) => process.env[key] === "1";
 

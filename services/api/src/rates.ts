@@ -6,9 +6,9 @@
  *
  *   1. No stale fallback. If the feed is unreachable and the cache has aged
  *      out, quoting fails, so a sender is never quoted last month's market.
- *   2. The feed only supplies the fiat legs (USD->KES) that a payout partner
- *      settles. The EUR->USD leg is the on-chain swapper's executable rate,
- *      read from the chain (see fx.ts), since we cannot trade at a feed rate.
+ *   2. The feed is a reference mid, never a price we trade at: venue quotes
+ *      are checked against it (assertPriceSane) and receipts value crypto at
+ *      it, but what a swap delivers is measured on chain.
  */
 import { RATES } from "./config.js";
 
@@ -53,11 +53,15 @@ function pinned(): MidRates | null {
     }
     eur[code] = v;
   }
+  keepOptional(parsed, eur);
   return { eur, asOf: "pinned", fetchedAt: Date.now(), provider: "TRANSF_RATES_FIXED" };
 }
 
-/** Currencies every quote path needs; a response missing one is unusable. */
-const REQUIRED = ["USD", "KES"] as const;
+/** Currencies every path needs; a response missing one is unusable. */
+const REQUIRED = ["USD"] as const;
+/** Kept when the feed carries them, for invoice totals shown in another
+ *  currency (routes/business/shared.ts). Their absence refuses nothing. */
+const OPTIONAL = ["KES"] as const;
 
 export class RateUnavailableError extends Error {
   constructor(detail: string) {
@@ -66,6 +70,13 @@ export class RateUnavailableError extends Error {
         `falling back to a stale rate — retry, or set TRANSF_RATES_URL to a reachable feed.`,
     );
     this.name = "RateUnavailableError";
+  }
+}
+
+function keepOptional(source: any, eur: Record<string, number>): void {
+  for (const code of OPTIONAL) {
+    const v = source?.[code];
+    if (typeof v === "number" && Number.isFinite(v) && v > 0) eur[code] = v;
   }
 }
 
@@ -82,6 +93,7 @@ function parse(body: any, provider: string): MidRates {
     }
     eur[code] = v;
   }
+  keepOptional(rates, eur);
   const base = body?.base ?? body?.base_code;
   if (base && String(base).toUpperCase() !== "EUR") {
     throw new Error(`feed returned base ${base}, expected EUR`);
@@ -142,20 +154,6 @@ export async function eurPer(code: string): Promise<number> {
   const v = r.eur[code.toUpperCase()];
   if (!v) throw new RateUnavailableError(`no rate for ${code}`);
   return v;
-}
-
-/**
- * Units of `code` per 1 USD, derived from the EUR legs.
- *
- * The fiat leg a payout partner settles is USD-denominated (we deliver USDC),
- * so this is the number that belongs downstream of the on-chain swap.
- */
-export async function usdPer(code: string): Promise<number> {
-  const r = await midRates();
-  const usd = r.eur.USD;
-  const target = r.eur[code.toUpperCase()];
-  if (!usd || !target) throw new RateUnavailableError(`no rate for ${code}`);
-  return target / usd;
 }
 
 /** Test/ops hook: drop the cache so the next call refetches. */

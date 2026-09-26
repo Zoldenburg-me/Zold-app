@@ -1,18 +1,18 @@
 /**
  * Recovery for Safe-funded transfers.
  *
- * A transfer takes EURe out of the user's own Safe. Compensation used to
- * decide "did any money move?" by looking for an old ledger step, which that
- * path never pushes —
- * so a failure recorded a €0 refund reading "nothing was debited" while the
- * euros sat at the orchestrator, and the sweep then skipped the transfer
- * forever because a set `refund` is what marks one as settled.
+ * A SEPA transfer takes its fee out of the user's own Safe; the payout is
+ * burned from the Safe by Monerium. Compensation used to decide "did any
+ * money move?" by looking for an old ledger step, which that path never
+ * pushes — so a failure recorded a €0 refund reading "nothing was debited"
+ * while the euros sat at the orchestrator, and the sweep then skipped the
+ * transfer forever because a set `refund` is what marks one as settled.
  *
  * Why this drives compensateTransfer directly instead of sending a transfer:
  * the debit leg itself now requires an active passkey Safe signing the debit, which a
  * hardhat node cannot provide. What CAN be tested locally is everything that
  * happens after it, which is where the money was being lost. The seeded state
- * is exactly what debitInputFunds writes on success.
+ * is exactly what debitSafeFundedSepaFee writes on success.
  *
  * Runs its own chain on a shifted port. Run: npm run safe-funded:test
  */
@@ -34,7 +34,6 @@ process.env.TRANSF_RPC_URL = RPC;
 process.env.SEPA_FEE_EUR ??= "0.99";
 process.env.MONERIUM_CLIENT_ID = "";
 process.env.MONERIUM_CLIENT_SECRET = "";
-process.env.MG_ANCHOR_DOMAIN = "";
 
 const bin = (n: string) => path.join(ROOT, "node_modules/.bin", n);
 const children: ChildProcess[] = [];
@@ -68,7 +67,7 @@ const check = (label: string, cond: boolean, detail = "") => {
 };
 
 try {
-  console.log("1/5 chain + deploy…");
+  console.log("1/4 chain + deploy…");
   bg(process.execPath, [bin("hardhat"), "node", "--port", "8549"]);
   await waitRpc();
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], {
@@ -121,33 +120,30 @@ try {
     return user;
   }
 
-  /** The transfer record debitInputFunds leaves behind after a successful
-   *  Safe move: state DEBITED, the safe step recorded, euros at the
-   *  orchestrator. `extraSteps` simulates getting further down the flow. */
-  async function seedSafeFundedTransfer(user: any, sendEur: number, extraSteps: string[] = []) {
-    // The orchestrator ends up holding what left the Safe.
+  /** The transfer record debitSafeFundedSepaFee leaves behind after a
+   *  successful fee move, then failed: the fee step recorded, the fee at the
+   *  orchestrator, the payout still in the Safe. */
+  async function seedFeeDebitedTransfer(user: any, sendEur: number, feeEur: number) {
+    // The orchestrator ends up holding what left the Safe: the fee.
     await writeAndWait(deployerWallet, {
       address: addrs().eure,
       abi: abis.MockToken,
       functionName: "mint",
-      args: [orchestratorAddress, eur.toWei(sendEur)],
+      args: [orchestratorAddress, eur.toWei(feeEur)],
     });
     const t = {
       id: randomUUID(),
       userId: user.id,
       quoteId: randomUUID(),
-      rail: "cash" as const,
+      rail: "sepa" as const,
       recipientName: "Recipient",
-      recipientPhone: "+254700000000",
+      recipientIban: "DE89370400440532013000",
       state: "FAILED" as const,
       error: "forced failure for test",
       sendEur,
-      receiveKes: 0,
+      receiveEur: sendEur - feeEur,
       fundingSource: "safe" as const,
-      txs: [
-        { step: DEBIT_STEP.safe, hash: `0x${"11".repeat(32)}` },
-        ...extraSteps.map((step) => ({ step, hash: `0x${"22".repeat(32)}` })),
-      ],
+      txs: [{ step: DEBIT_STEP.safeFee, hash: `0x${"11".repeat(32)}` }],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     } as any;
@@ -155,17 +151,17 @@ try {
     return t;
   }
 
-  console.log("2/5 failed Safe-funded transfer refunds to the Safe…");
+  console.log("2/4 a failed transfer refunds its fee to the Safe…");
   {
     const user = await seedUser("Safe Refund", 0);
-    const t = await seedSafeFundedTransfer(user, 100);
+    const t = await seedFeeDebitedTransfer(user, 100, 2);
     const before = await eureBalance(user.address);
     const out = await compensateTransfer(t.id);
 
     check("state is REFUNDED", out.state === "REFUNDED", `got ${out.state} (${out.error ?? ""})`);
     check(
-      "refund is the full amount, not €0",
-      out.refund?.amountEur === 100,
+      "refund is the fee that moved, not €0",
+      out.refund?.amountEur === 2,
       `got ${out.refund?.amountEur}`,
     );
     check(
@@ -179,48 +175,14 @@ try {
       out.txs.map((x: any) => x.step).join(","),
     );
     const after = await eureBalance(user.address);
-    check("EURe arrived back in the Safe", after - before === 100, `${before} -> ${after}`);
+    check("EURe arrived back in the Safe", after - before === 2, `${before} -> ${after}`);
     check(
       "only the Safe refund step was recorded",
       !out.txs.some((x: any) => x.step.includes("vault")),
     );
   }
 
-  console.log("3/5 already-swapped input goes to review, not a silent €0…");
-  {
-    const user = await seedUser("Safe Swapped", 0);
-    const t = await seedSafeFundedTransfer(user, 60, ["swapper.swapExactIn"]);
-    store.updateTransfer(t.id, {
-      usdcOut: 50,
-      liquidity: {
-        provider: "dex",
-        side: "EURE_TO_USDC",
-        quoteId: t.quoteId,
-        tokenIn: "EURe",
-        tokenOut: "USDC",
-        amountIn: eur.toWei(59.01).toString(),
-        expectedOut: "50000000",
-        minOut: "49000000",
-        rate: "1000000",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      },
-    } as any);
-    const out = await compensateTransfer(t.id);
-    check("state is MANUAL_REVIEW", out.state === "MANUAL_REVIEW", `got ${out.state}`);
-    check(
-      "the error explains the euros are no longer EURe",
-      /reverse swap/.test(out.error ?? ""),
-      out.error ?? "",
-    );
-    check(
-      "refund estimate uses the persisted execution rate, not the mock swapper",
-      /€50\.99/.test(out.error ?? ""),
-      out.error ?? "",
-    );
-    check("no €0 refund record was written", !out.refund, JSON.stringify(out.refund));
-  }
-
-  console.log("3b/5 SEPA moved only the fee, so only the fee comes back…");
+  console.log("3/4 the configured SEPA fee is what comes back, never the payout…");
   {
     const { FX } = await import("../services/api/src/config.js");
     const user = await seedUser("Safe Sepa Fee", 0);
@@ -245,7 +207,6 @@ try {
       state: "FAILED" as const,
       error: "redeem rejected",
       sendEur,
-      receiveKes: 0,
       receiveEur: payoutEur,
       fundingSource: "safe" as const,
       txs: [{ step: DEBIT_STEP.safeFee, hash: `0x${"33".repeat(32)}` }],
@@ -270,29 +231,30 @@ try {
     check("only the fee moved back", after - before === feeEur, `${before} -> ${after}`);
   }
 
-  console.log("4/5 the sweep picks up Safe-funded failures…");
+  console.log("4/4 the sweep picks up Safe-funded failures…");
   {
     const user = await seedUser("Safe Sweep", 0);
-    const t = await seedSafeFundedTransfer(user, 25);
+    const t = await seedFeeDebitedTransfer(user, 25, 1);
     const n = await sweepStrandedTransfers();
     const out = store.findTransfer(t.id)!;
     check("sweep compensated at least one transfer", n >= 1, `n=${n}`);
     check("swept transfer reached REFUNDED", out.state === "REFUNDED", `got ${out.state}`);
-    check("swept refund is €25", out.refund?.amountEur === 25, `got ${out.refund?.amountEur}`);
+    check("swept refund is the €1 fee", out.refund?.amountEur === 1, `got ${out.refund?.amountEur}`);
   }
 
-  console.log("5/5 a genuinely pre-debit failure still owes nothing…");
+  console.log("   a genuinely pre-debit failure still owes nothing…");
   {
     const user = await seedUser("No Debit", 0);
     const t = {
       id: randomUUID(),
       userId: user.id,
       quoteId: randomUUID(),
-      rail: "cash" as const,
+      rail: "sepa" as const,
       recipientName: "Recipient",
+      recipientIban: "DE89370400440532013000",
       state: "FAILED" as const,
       sendEur: 10,
-      receiveKes: 0,
+      receiveEur: 10,
       fundingSource: "safe" as const,
       txs: [],
       createdAt: new Date().toISOString(),
@@ -308,7 +270,7 @@ try {
     );
   }
 
-  console.log("   daily cap counts both pots…");
+  console.log("   daily cap counts Safe-funded sends…");
   {
     const user = await seedUser("Cap", 0);
     const usage = await dailyCapUsage(user);
@@ -319,11 +281,12 @@ try {
       id: randomUUID(),
       userId: user.id,
       quoteId: randomUUID(),
-      rail: "cash",
+      rail: "sepa",
       recipientName: "R",
+      recipientIban: "DE89370400440532013000",
       state: "CREATED",
       sendEur: 400,
-      receiveKes: 0,
+      receiveEur: 400,
       fundingSource: "safe",
       txs: [],
       createdAt: new Date().toISOString(),

@@ -2,13 +2,13 @@
 
 Everything Zold talks to, what it needs from us, and whether getting it costs a call.
 
-**Status of the 8 things we actually need to go live:**
+**Status of what we actually need to go live:**
 
 | | |
 |---|---|
-| ✅ Have it (sandbox) | Monerium, Candide, Stellar |
+| ✅ Have it (sandbox) | Monerium, Candide |
 | 🟢 Self-serve — no call, ~10 min each | RPC provider, LI.FI, rates feed, Stripe standard |
-| 🔴 Needs a form/email first | Monerium **production** OAuth app — plus Bridge (bank rails) and MoneyGram (cash) |
+| 🔴 Needs a form/email first | Monerium **production** OAuth app — plus a payout partner (dLocal or Yellow Card) for anything beyond SEPA |
 
 Only **one** is a hard blocker: the Monerium production OAuth app (identity and IBANs are Monerium's; there is no separate KYC provider). Everything else is either self-serve or optional. Full call list in §1.
 
@@ -21,8 +21,6 @@ Only **one** is a hard blocker: the Monerium production OAuth app (identity and 
 | # | Who | What we need | Blocking? | Start here | Lead time |
 |---|---|---|---|---|---|
 | 1 | **Monerium** (production) | Real e-money relationship. Sandbox → live EUR IBANs | ✅ **YES** — no EUR in or out without it | Existing sandbox contact | Weeks–months (regulated) |
-| 3 | **Bridge** (bridge.xyz) | Stablecoin → **bank** payouts: ACH, SEPA, SPEI, Pix, LatAm | ⚠️ Optional — covers **bank** rails in one integration (replaces dLocal) | bridge.xyz contact form | Weeks (enterprise) |
-| 4 | **MoneyGram** | Cash-pickup partner agreement | ⚠️ **No substitute on this list** — cash pickup, not a bank rail | Via Stellar anchor programme | Months, hard |
 | 5 | **Stripe** | Card acceptance for Zold Plus / Privacy Bundle subs | ❌ No — nothing to bill yet | **Standard account is self-serve** — no call | Same day |
 | 6 | **Yellow Card** | Africa payouts, settles USDC, no prefunding | ❌ No | yellowcard.io business form | Weeks |
 | 7 | **Bebop** | RFQ liquidity. Monerium market-makes EURe there | ❌ No — LI.FI already works | Contact form | Weeks |
@@ -30,18 +28,14 @@ Only **one** is a hard blocker: the Monerium production OAuth app (identity and 
 | 9 | **Iron** (MoonPay) | USD/GBP funding | ❌ No | Request access form | Weeks |
 | 10 | **Kokio / Mysterium** | eSIM + VPN fulfilment for Privacy Bundle | ❌ No — manual today | Partner contact | Weeks |
 
-**If you only send two emails: #1 and #2.** Those are the only hard blockers.
-
-**#3 is the strategic one.** Bridge is Stripe-owned (acquired Oct 2024, $1.1B). One integration covers the **bank** rails we'd otherwise chase across dLocal and Yellow Card separately. Worth sending even though it isn't blocking.
-
-> `services/api/src/bridge/bridgexyz.ts` is the Bridge.xyz transfer seam — it replaced the old Circle CCTP worker that previously lived in this directory.
+**If you only send one email: #1.** It is the only hard blocker.
 
 ### Stripe — two very different things
 
 | | Access | Use for us |
 |---|---|---|
 | **Stripe standard** (cards, subscriptions) | 🟢 Self-serve, no call | Billing Zold Plus / Privacy Bundle. **Not integrated — no payment processor in the codebase at all** |
-| **Stripe stablecoin / Bridge products** | 🔴 Sales-led | The fiat rails in #3 above |
+| **Stripe stablecoin / Bridge products** | 🔴 Sales-led | Not used. An on-ramp there would be a second identity relationship (Bridge customers and KYC links); Iron is the USD/GBP funding candidate |
 
 ---
 
@@ -51,7 +45,6 @@ Only **one** is a hard blocker: the Monerium production OAuth app (identity and 
 |---|---|---|---|---|---|
 | **Monerium** | EUR issuer. Per-user IBANs, EURe on-chain | `MONERIUM_CLIENT_ID`<br>`MONERIUM_CLIENT_SECRET`<br>`MONERIUM_WEBHOOK_SECRET`<br>`MONERIUM_REDIRECT_URI` | ✅ sandbox | Sandbox self-serve at monerium.dev. **Production = regulated e-money relationship** | 🔴 for prod |
 | **Candide** | ERC-4337 bundler + paymaster. Deploys the Safes, pays gas | `CANDIDE_BUNDLER_URL`<br>`CANDIDE_PAYMASTER_URL`<br>`CANDIDE_RPC_URL` | ✅ | Self-serve dashboard | 🟢 |
-| **Stellar** | Horizon + Soroban, cash-payout leg | `STELLAR_TREASURY_SECRET` (we generate) | ✅ testnet | Public infra, no key | 🟢 |
 | **RPC provider** | Reading/writing the chain | `TRANSF_RPC_URL`<br>`CANDIDE_RPC_URL` | ⚠️ public endpoint | Alchemy / Infura / QuickNode free tier. **Public RPC will rate-limit us in production** | 🟢 |
 | **Rates feed** | Live FX mid-rates | `TRANSF_RATES_URL` | ⚠️ free tier | Defaults to `open.er-api.com`. Paid tier for reliability | 🟢 |
 
@@ -72,21 +65,11 @@ Only **one** is a hard blocker: the Monerium production OAuth app (identity and 
 
 ## 4. Payout rails
 
-Two categories that do **not** substitute for each other. Bank rails need the recipient to have an account, IBAN, CLABE or Pix key; cash pickup needs only ID at a counter. Our KES rail is cash.
-
-**Cash out (recipient has no bank account)**
-
-| Rail | Status | Access | Call? |
-|---|---|---|---|
-| **MoneyGram** | 🔴 blocked | Needs a real partner agreement. We're on `testanchor.stellar.org`, which never publishes a payout account, so this **cannot complete end-to-end today** | 🔴 hard |
-| Western Union / Ria | not evaluated | The only real alternatives if MoneyGram stalls | 🔴 |
-
-**Bank out (recipient has an account / Pix key / CLABE)**
+SEPA is the only payout rail in the code. Anything beyond EUR→EUR waits on a payout partner; the app shows the International tile as SOON until then.
 
 | Rail | Status | Access | Call? |
 |---|---|---|---|
 | **SEPA** (EUR→EUR) | ✅ works, via Monerium | — | — |
-| **Bridge** (Stripe) | not integrated | Enterprise sales. ACH/SEPA/SPEI/Pix, LatAm | 🔴 |
 | **dLocal** | not integrated | **Public sandbox at docs.dlocal.com — start today, no call** | 🟢 |
 | **Yellow Card** | not integrated | Africa, settles in USDC, no prefunding | 🔴 |
 
@@ -110,7 +93,6 @@ These are **wallet private keys and secrets we create**. This is the part Baer f
 | `DEPLOY_DEPLOYER_KEY` | Deploys contracts | Cold — only needed at deploy time |
 | `DEPLOY_ORCHESTRATOR_KEY` | Submits transfers, pays gas | **Hot — runs continuously** |
 | `DEPLOY_RAMP_KEY` | Credits deposits | **Hot** |
-| `STELLAR_TREASURY_SECRET` | Holds the payout float | **Hot — holds funds** |
 | `MONERIUM_TOKEN_ENCRYPTION_KEY` | Encrypts user OAuth tokens at rest | ≥32 chars, app refuses to start without it |
 | `KYC_OPERATOR_TOKEN` | Approves KYC decisions | Required in production |
 
@@ -150,13 +132,13 @@ ALLOW_SIMULATION / ALLOW_MOCK_FALLBACK / KYC_AUTO_APPROVE / TESTNET_FAUCET_EUR /
 
 Two things worth saying plainly before anyone counts this as done:
 
-1. **A send has never completed end-to-end.** Locally it now runs quote → transfer → device signature → authorization ✅, then stops because the user's Safe isn't deployed on the local chain. `debited → bridged → paid` has never run anywhere.
-2. **The MoneyGram cash rail cannot complete with any key.** The test anchor never publishes a payout account. It needs MoneyGram themselves — or we swap to **dLocal**, which has a public sandbox and no call.
+1. **A send has never completed end-to-end.** Locally it now runs quote → transfer → device signature → authorization ✅, then stops because the user's Safe isn't deployed on the local chain. `DEBITED → PAYOUT_SUBMITTED → PAID` has never run on a real chain.
+2. **SEPA is the only payout.** Nothing pays out in another currency; that needs **dLocal** (public sandbox, no call) or Yellow Card, both uncontracted.
 
 **Fastest unblock, in order:**
 
 1. Real RPC key (10 min, self-serve) → deploy a Safe on Base Sepolia → prove one send to PAID
-2. dLocal sandbox (self-serve) instead of waiting on MoneyGram
-3. Monerium production OAuth app + Bridge conversations in parallel — those clocks run regardless
+2. dLocal sandbox (self-serve) for a first non-EUR payout
+3. Monerium production OAuth app in parallel — that clock runs regardless
 
 Steps 1–3 need **zero calls**.

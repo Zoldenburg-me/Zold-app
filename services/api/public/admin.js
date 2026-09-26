@@ -300,14 +300,13 @@ function renderUsers() {
 function statusBadgeClass(state) {
   if (['PAID', 'CONVERTED'].includes(state)) return 'badge-paid';
   if (ATTENTION_STATES.includes(state)) return 'badge-review';
-  if (['CREATED', 'DETECTED', 'DEBITED', 'SWAPPED', 'BRIDGED', 'PAYOUT_DETAILS_PENDING', 'PAYOUT_FUNDING_PENDING', 'PAYOUT_FUNDED', 'PAYOUT_READY', 'PAYOUT_SUBMITTED'].includes(state)) return 'badge-open';
+  if (['CREATED', 'DETECTED', 'DEBITED', 'PAYOUT_SUBMITTED'].includes(state)) return 'badge-open';
   return 'badge-neutral';
 }
 
 function railLabel(t) {
   if (t.kind === 'funding') return `${t.token || 'Token'} funding`;
   if (t.rail === 'sepa') return t.payout?.provider || 'Monerium';
-  if (t.rail === 'cash') return t.payout?.provider || 'MoneyGram';
   return t.rail || 'Unknown';
 }
 
@@ -316,8 +315,7 @@ function amountLabel(t) {
     if (t.token === 'USDC') return `+${Number(t.amountUsdc || 0).toFixed(2)} USDC`;
     return `+€${Number(t.amountEur || 0).toFixed(2)}`;
   }
-  if (t.rail === 'sepa') return `€${Number(t.sendEur || 0).toFixed(2)} → €${Number(t.receiveEur || 0).toFixed(2)}`;
-  return `€${Number(t.sendEur || 0).toFixed(2)} → KES ${Number(t.receiveKes || 0).toLocaleString()}`;
+  return `€${Number(t.sendEur || 0).toFixed(2)} → €${Number(t.receiveEur || 0).toFixed(2)}`;
 }
 
 function routeChips(t) {
@@ -345,8 +343,7 @@ function renderTransactions() {
       t.id, t.state, t.rail, t.kind,
       t.user?.name, t.user?.id, t.user?.safeAddress,
       t.txHash, t.lastHash, t.error, t.statusDetail,
-      t.payout?.orderId, t.payout?.referenceCode, t.payout?.anchorTransactionId,
-      t.liquidity?.provider,
+      t.payout?.orderId,
     ].filter(Boolean).join(' ').toLowerCase();
     return txMatchesFilter(t) && (!query || hay.includes(query));
   });

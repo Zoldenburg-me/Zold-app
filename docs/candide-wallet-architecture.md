@@ -77,22 +77,19 @@ operation revokes any legacy standing allowance left on an old Safe
 The delegate-design section below is therefore historical: there is no
 delegate to constrain.
 
-ALSO IMPLEMENTED: Change 2 windows 1-3 — the cash-rail send is ONE
-user-signed batch: fee transfer -> venue approval -> swap, atomic, with the
-output delivered straight to the destination the payout leg names, Bridge's
-deposit address (the rail is closed without Bridge, so there is no other
-destination). The orchestrator never holds the input: a
-failed batch reverts entirely and nothing leaves the Safe. The venue half is a
-`safeSwapPlan` capability on the liquidity seam — Uniswap builds calldata
-offline against the same quoted pool and floor; LI.FI and Bebop are quoted
-WITH the Safe as executor so the route is built for the account that runs it;
-FxSwapper cannot serve a Safe (onlyTrader — our own inventory, where we are
-the counterparty and the question is Change 3's, not a custody window) and
-CoW does not execute, so those venues fall back to the plain user-signed
-debit with the orchestrator swapping after.
+ALSO IMPLEMENTED: Change 2 windows 1-3, now used only for converting an
+inbound USDC deposit to EURe. The conversion is ONE user-signed batch:
+venue approval -> swap, atomic, with the output delivered back into the same
+Safe. The orchestrator never holds the deposit: a failed batch reverts
+entirely and nothing leaves the Safe. The venue half is a `safeSwapPlan`
+capability on the liquidity seam — Uniswap builds calldata offline against
+the same quoted pool and floor; LI.FI and Bebop are quoted WITH the Safe as
+executor so the route is built for the account that runs it; FxSwapper
+cannot serve a Safe (onlyTrader — our own inventory) and CoW does not
+execute, so a deposit cannot be converted on either. No send uses a venue:
+SEPA has no FX leg.
 
-What custody remains on the cash rail: the fx-swapper fallback path, and the
-fee itself (revenue, not client money).
+What custody remains on a send: the fee itself (revenue, not client money).
 
 Scheduled transfer:
 

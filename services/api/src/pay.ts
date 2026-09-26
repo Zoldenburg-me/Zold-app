@@ -12,8 +12,8 @@
  * with the handle on a block explorer.
  *
  * Security: `publicPayee` is an allowlist naming the fields that go out. The
- * account object next to it holds an IBAN, an email, a KYC decision, a Travel
- * Rule profile and a private key. Don't switch to a redaction list; it would
+ * account object next to it holds an IBAN, an email, a KYC decision and a
+ * private key. Don't switch to a redaction list; it would
  * leak the next field somebody adds.
  */
 import type { User } from "./store.js";

@@ -751,7 +751,6 @@
             <span style="font-size:14px;font-weight:500">They receive</span>
             <span class="v" id="m-quote-recv">—</span>
           </div>
-          <div class="m-qnote hidden" id="m-quote-note"></div>
         </div>
         <div class="m-qnote" id="m-balance-note"></div>
         <div class="error hidden" id="m-amount-err"></div>
@@ -780,11 +779,6 @@
           <div style="font-size:36px;font-weight:400;margin-top:8px;font-variant-numeric:tabular-nums;line-height:44px" id="m-prog-amount">—</div>
           <div class="m-lede" style="margin-top:4px" id="m-prog-to">—</div>
           <div style="margin-top:32px" id="m-timeline"></div>
-          <div class="m-ref hidden" id="m-prog-ref">
-            <div style="font-size:12px;font-weight:500;letter-spacing:.5px;text-transform:uppercase;opacity:.85">MoneyGram reference</div>
-            <div class="code" id="m-prog-code">—</div>
-            <div style="font-size:14px;opacity:.85;letter-spacing:.25px">Collectable with photo ID at any agent</div>
-          </div>
           <div class="error hidden" id="m-prog-err"></div>
           <button class="m-cta hidden" id="m-prog-done">Done</button>
         </div>
@@ -793,19 +787,18 @@
       <!-- ================= Activity ================= -->
       <div class="m-screen" id="m-activity-screen">
         <div class="m-title">Activity</div>
-        <!-- All / SEPA / Cash only. The design also filters Bank and Crypto;
+        <!-- All / SEPA only. The design also filters Bank and Crypto;
              neither rail exists here, so those chips would always be empty. -->
         <div class="m-filters" id="m-filters">
           <button data-mfilter="all" class="on"><span class="material-symbols-rounded">check</span>All</button>
           <button data-mfilter="sepa">SEPA</button>
-          <button data-mfilter="cash">Cash</button>
         </div>
         <div id="m-tx-list"></div>
       </div>
 
       <!-- ================= Transaction detail =================
            Every field is read off the transfer itself. Rows the transfer does
-           not carry (a payer reference, a MoneyGram code, a refund) are absent
+           not carry (a payer reference, a refund) are absent
            rather than blank, so a row on this screen always means something
            happened. -->
       <div class="m-screen" id="m-detail-screen">
@@ -816,11 +809,6 @@
           <span class="m-tag" id="m-det-status">—</span>
         </div>
         <div class="m-rows" id="m-det-rows"></div>
-        <div class="m-ref hidden" id="m-det-ref">
-          <div style="font:500 9.5px var(--m-mono);letter-spacing:.14em;text-transform:uppercase;opacity:.85">MoneyGram reference</div>
-          <div class="code" id="m-det-code">—</div>
-          <div style="font-size:11px;opacity:.85">Collectable with photo ID at any agent</div>
-        </div>
         <div class="m-seclabel">Settlement</div>
         <div id="m-det-timeline"></div>
         <div class="m-note warn hidden" id="m-det-error"></div>
@@ -1101,7 +1089,6 @@
           <h2>Ledger</h2>
           <div class="toolbar">
             <button class="filter-btn active" data-tx-filter="all">All</button>
-            <button class="filter-btn" data-tx-filter="cash">Cash</button>
             <button class="filter-btn" data-tx-filter="sepa">SEPA</button>
             <button class="ghost" id="btn-refresh-tx">Refresh</button>
           </div>
@@ -1185,8 +1172,6 @@
           <div id="send-details" class="hidden">
             <div class="stepnav"><a id="back-options">‹ Delivery options</a><span id="det-title"></span></div>
             <div class="quote" id="quote-box" style="border-top:0;padding-top:0;margin-top:.2rem">
-              <div class="qrow" id="row-mid"><span>Mid-market rate</span><span class="dotfill"></span><span id="q-mid"></span></div>
-              <div class="qrow" id="row-rate"><span>Your rate <span class="rate-badge" id="q-margin"></span></span><span class="dotfill"></span><span id="q-rate"></span></div>
               <div class="qrow"><span>Fixed fee</span><span class="dotfill"></span><span id="q-fee"></span></div>
               <div class="qrow total"><span id="total-label">Recipient gets</span><span class="val" id="q-recv"></span></div>
               <!-- What the sender actually gets per EUR, fee included. Without
@@ -1195,9 +1180,8 @@
                    itemised rows all look fine while the outcome does not. -->
               <div class="qrow" id="row-effective"><span id="q-eff-label">Effective rate</span><span class="dotfill"></span><span id="q-eff"></span></div>
               <div class="row2" style="margin-top:.9rem" id="recipient-row">
-                <div><label style="margin-top:0">Recipient name</label><input id="rec-name" placeholder="Joseph Otieno" /></div>
-                <div id="field-phone"><label style="margin-top:0">Phone</label><input id="rec-phone" placeholder="+254 7xx…" /></div>
-                <div id="field-iban" class="hidden"><label style="margin-top:0">Recipient IBAN</label><input id="rec-iban" placeholder="DE89 3704 0044 0532 0130 00" /></div>
+                <div><label style="margin-top:0">Recipient name</label><input id="rec-name" placeholder="Elena Weber" /></div>
+                <div id="field-iban"><label style="margin-top:0">Recipient IBAN</label><input id="rec-iban" placeholder="DE89 3704 0044 0532 0130 00" /></div>
               </div>
               <button class="wide" id="btn-send">Send now</button>
             </div>
@@ -1207,21 +1191,10 @@
 
         <div id="step-progress" class="hidden">
           <div class="timeline" id="timeline"></div>
-          <div class="pickup hidden" id="pickup-box">
-            <div class="plabel">MoneyGram pickup reference</div>
-            <div class="code" id="t-ref"></div>
-            <div class="pnote"><span id="p-note-text"></span> <b id="p-kes"></b><span id="p-links"></span></div>
-            <button class="ghost hidden" style="margin-top:.9rem" id="btn-refresh-payout">Refresh MoneyGram status</button>
-          </div>
           <div class="pickup hidden" id="sepa-box" style="border-color:rgba(176,109,245,.45);background:rgba(176,109,245,.06)">
             <div class="plabel" style="color:var(--acc2)">SEPA bank payout</div>
             <div class="code" id="sepa-status" style="font-size:1.15rem;letter-spacing:.04em;color:var(--acc2);text-shadow:none"></div>
             <div class="pnote" id="sepa-note"></div>
-          </div>
-          <div class="paidbox hidden" id="paid-box">
-            <div class="check"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
-            <div class="pt">Cash collected</div>
-            <div class="pd" id="paid-note"></div>
           </div>
           <div class="pickup hidden" id="refund-box" style="border-color:rgba(245,109,109,.45);background:rgba(245,109,109,.06)">
             <div class="pt" id="refund-title" style="color:var(--red)">Payout couldn't be completed</div>

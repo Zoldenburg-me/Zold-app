@@ -27,9 +27,9 @@ flowchart TB
     DOMAIN["domain/: plans, roles, drafts, invoicing, ledger… (pure)"]
     ORCH["orchestrator.ts — the money path"]
     LIQ["liquidity.ts seam → liquidity/*"]
-    ADP["adapters/: Monerium, Candide, Gnosis Pay, MoneyGram, crypto-in"]
+    ADP["adapters/: Monerium, Candide, Gnosis Pay, crypto-in"]
     STORE["store.ts → store/db.ts (one JSON file)"]
-    LOOPS["7 background loops"]
+    LOOPS["6 background loops"]
   end
   subgraph External
     BASE[(Base / Base Sepolia RPC)]
@@ -39,12 +39,11 @@ flowchart TB
     RATES[open.er-api.com mid rates]
     SHOP[Shopify Admin / Payments Apps GraphQL]
     GP[Gnosis Pay API]
-    BR[Bridge.xyz · Stellar anchor]
   end
   PWA & BIZ & PUB & EXT --> PIPE --> PAGES & ROUTERS
   ROUTERS --> DOMAIN & ORCH & ADP & STORE
-  ORCH --> LIQ --> VEN
-  ORCH --> BASE & CAND & MON & BR
+  ADP --> LIQ --> VEN
+  ORCH --> BASE & CAND & MON
   ADP --> MON & CAND & GP & BASE
   LOOPS --> ORCH & ADP & STORE
 ```
@@ -59,7 +58,7 @@ flowchart TB
   as written: classic scripts for `/app`, ES modules for `/business`, and
   vendored `@noble` crypto.
 - **Few dependencies.** `express`, `viem`, `abstractionkit` (Candide Safe /
-  ERC-4337), `safe-recovery-service-sdk` and `@stellar/stellar-sdk`. There is
+  ERC-4337) and `safe-recovery-service-sdk`. There is
   no DB driver, no helmet/cors/rate-limit package, no WebAuthn library (the
   verifier and CBOR decoder in `webauthn.ts` are hand-written) and no test
   framework (`node:assert` plus scripts).
@@ -76,11 +75,10 @@ flowchart TB
 | `services/api/src/domain/` | Pure rules with no HTTP and no chain: `plans`, `roles`, `segments`, `residency`, `accounts` (currency registry), `contacts`, `drafts`, `invoices`, `invoicing`, `jurisdictions`, `ledger`, `coa`, `passwords`, `types`. |
 | `services/api/src/transfers/build.ts` | **The one path that builds a transfer.** It is shared by `POST /api/transfers` and draft execution. |
 | `services/api/src/orchestrator.ts` | Execution, debit, compensation and sweeps. Deliberately not split, so it can be read top to bottom. |
-| `services/api/src/liquidity.ts` + `liquidity/` | The venue seam, and one file per venue (`best`, `lifi`, `uniswap`, `rfq`, `cow`, `fx-swapper`, `contract`). |
-| `services/api/src/adapters/` | Monerium (client, connection, tokens, "sandbox" poller), Candide forwarder, crypto deposits, Gnosis Pay, MoneyGram. |
+| `services/api/src/liquidity.ts` + `liquidity/` | The venue seam (used only to convert inbound USDC deposits to EURe), and one file per venue (`best`, `lifi`, `uniswap`, `rfq`, `cow`, `fx-swapper`, `contract`). |
+| `services/api/src/adapters/` | Monerium (client, connection, tokens, "sandbox" poller), Candide forwarder, crypto deposits, Gnosis Pay. |
 | `services/api/src/wallet/` | `candide.ts` (Safe accounts, UserOps, EIP-1271 messages, recovery txs), `passkey-safe-plan.ts`. |
 | `services/api/src/recovery*`, `recovery/` | Managed and Candide guardian recovery. |
-| `services/api/src/stellar/`, `bridge/` | The cash rail: SEP-10/12/24, SEP-9, and Bridge transfers. |
 | `services/api/src/shopify/` | Admin/Payments GraphQL client, HMAC, types. |
 | `services/api/src/store.ts`, `store/` | `store.ts` holds the methods and is the only code that touches `db`. `store/db.ts` handles load, migrate and persist. `store/types.ts` holds the row shapes. |
 | `services/api/src/config.ts` | Every setting, and every production refusal, in one file (~970 lines). |
@@ -220,8 +218,7 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
 - It signs EIP-712 `PaymentAuthorization {account, amount, to, transferId,
   destination, deadline}` under the domain `{name: "TransF Safe Transfer",
   version 1, chainId, verifyingContract: user Safe}` (`chain.ts:203-238`).
-  `destination` is `keccak("sepa|iban=<IBAN>|name=<NAME>")` or the cash
-  equivalent. The browser recomputes it and **refuses to sign** if the
+  `destination` is `keccak("sepa|iban=<IBAN>|name=<NAME>")`. The browser recomputes it and **refuses to sign** if the
   server's typed data names a different destination.
 - It is verified **in the API process** (`orchestrator.ts:202-239`), not on
   chain: the RemitVault contract that enforced it was deleted in August 2026.
@@ -240,16 +237,9 @@ stateDiagram-v2
   DEBITED --> PAYOUT_SUBMITTED: SEPA — Monerium redeem accepted
   PAYOUT_SUBMITTED --> PAID: poller — order processed
   PAYOUT_SUBMITTED --> FAILED: poller — rejected/failed
-  DEBITED --> SWAPPED: cash — venue delivered (measured)
-  SWAPPED --> BRIDGED: Bridge deposit funded
-  BRIDGED --> PAYOUT_READY
-  BRIDGED --> PAYOUT_DETAILS_PENDING
-  BRIDGED --> PAYOUT_FUNDING_PENDING
-  PAYOUT_FUNDING_PENDING --> PAYOUT_FUNDED: Stellar payment sent
-  PAYOUT_FUNDED --> PAID: anchor completed
   DEBITED --> MANUAL_REVIEW: redeem outcome unknown (5xx/timeout)
   FAILED --> REFUNDED: compensateTransfer
-  FAILED --> MANUAL_REVIEW: duplicate / funds at Bridge / reverse swap failed
+  FAILED --> MANUAL_REVIEW: duplicate debit / refund path unavailable
 ```
 
 `store.updateTransfer` refuses to move a `PAID` or `REFUNDED` transfer to any
@@ -263,10 +253,10 @@ sequenceDiagram
   participant A as API
   participant C as Candide bundler
   participant M as Monerium
-  B->>A: POST /quotes {rail, sendEur}
+  B->>A: POST /quotes {rail: sepa, sendEur}
   A-->>B: quote (10 min TTL; SEPA: 1:1, fee €0)
   B->>A: POST /transfers {quoteId, recipient, IBAN, reference}
-  Note over A: build.ts: KYC · balance · Safe active · device key bound<br/>holdDailyCap (sync) · consumeQuote (sync)<br/>auth terms {to, amountWei, destination, deadline+15m}<br/>prepare UserOp (fee transfer, or fee+approve+swap batch)<br/>pendingTransferExecutions[id] (memory)
+  Note over A: build.ts: KYC · balance · Safe active · device key bound<br/>holdDailyCap (sync) · consumeQuote (sync)<br/>auth terms {to, amountWei, destination, deadline+15m}<br/>prepare UserOp (fee transfer)<br/>pendingTransferExecutions[id] (memory)
   A-->>B: transfer + authorization {typedData, safeExecution.challenge, moneriumRedeem.challenge}
   B->>B: device key signs typedData
   B->>B: passkey signs safeExecution.challenge
@@ -287,12 +277,10 @@ Build order (`transfers/build.ts:85-411`) runs in this sequence:
 2. Device key bound, then `holdDailyCap` (synchronous, taken *before* the
    quote is consumed), then `consumeQuote`.
 3. The debit is prepared. **SEPA debits only the fee (€0), so the principal
-   is burned by Monerium straight from the Safe.** Cash tries a fused batch
-   first: fee transfer, `approve(spender the venue names)`, and a venue call
-   delivering USDC to the Bridge deposit address. It falls back to a full
-   debit to the orchestrator (`custody: orchestrator`, which
-   `REQUIRE_NON_CUSTODIAL=1` turns into a 409).
-4. `transfer.custody = {mode, reason?, feeToOrchestrator}` is always recorded.
+   is burned by Monerium straight from the Safe.** With a €0 fee there is no
+   debit operation at all.
+4. `transfer.custody = {mode: "non-custodial", feeToOrchestrator}` is always
+   recorded.
 
 Draft execution calls the same `buildTransferFromQuote`, which the business
 router receives injected and never rebuilds.
@@ -300,36 +288,31 @@ router receives injected and never rebuilds.
 ### 6.3 Compensation (`orchestrator.ts:382-622`)
 
 - `failAndCompensate` writes FAILED. It escalates to **MANUAL_REVIEW** on a
-  duplicate-debit error or once any `bridge.xyz.deposit.*` step exists.
-  Otherwise it compensates.
+  duplicate-debit error. Otherwise it compensates.
 - `compensateTransfer`:
-  - If no input moved, it records a zero refund.
-  - If the funds are un-swapped, it returns `min(refund, moved)` EURe to the
-    Safe. The `safe.refundTransfer` step is recorded *before* REFUNDED is
-    written.
-  - If the funds were swapped (non-batch), it reverse-swaps and returns the
-    measured EURe.
-  - A live batch swap, or any failure of the above, goes to MANUAL_REVIEW.
+  - If no input moved (no `safe.transfer(fee)` step), it records a zero
+    refund.
+  - Otherwise it returns the EURe that left the Safe (the fee) to the Safe.
+    The `safe.refundTransfer` step is recorded *before* REFUNDED is written,
+    and a transfer with that step already on record is not refunded twice.
+  - A transfer not funded from the Safe goes to MANUAL_REVIEW.
 - SEPA: a Monerium **4xx** refunds the fee. A **timeout or 5xx** goes to
   MANUAL_REVIEW ("redeem outcome unknown").
 - Sweeps:
   - `sweepStrandedTransfers` runs at boot and every 5 min. It re-fails
-    DEBITED/SWAPPED/BRIDGED transfers that are stale (more than 10 min) and
+    DEBITED transfers that are stale (more than 10 min) and
     not executing, and sends to MANUAL_REVIEW a CREATED transfer whose
     authorisation was claimed more than 10 min ago.
-  - `sweepAnchorPayouts` runs every 30 s.
 
 ### 6.4 Invariants encoded here
 
 - A **debit only happens with a user signature**: the passkey signs the
   UserOp hash, and the chain enforces token, amount and recipient.
-- **Quote binding**: `assertQuoteRateBinding` refuses when the live venue rate
-  drifts more than 50 bps from `lockedSwapRate`. In the batch path it runs
-  before the debit. In the non-batch path it runs after, so a drift there
-  refunds.
+- **No FX leg on a send**: a SEPA quote is EUR to EUR (mid and rate 1,
+  margin 0), so there is no rate to bind at execution.
 - **Amounts out are measured** as balance deltas (`balanceAfterWrite`,
-  12 × 500 ms against RPC replica lag). The exceptions are the hardhat-only
-  fx-swapper and non-batch `usdcOut` (§19).
+  12 × 500 ms against RPC replica lag) on a deposit conversion. The exception
+  is the hardhat-only fx-swapper.
 - **Races are closed synchronously** by `claimAuthorization`,
   `claimDraftExecution`, `holdDailyCap`/`addTransferUnderHold`,
   `consumeQuote` and the crypto-deposit identity (`txHash`, `logIndex`). There
@@ -348,8 +331,10 @@ router receives injected and never rebuilds.
   than `DEX_MAX_MID_DEVIATION_BPS` (300) from the mid. It is applied to
   uniswap, lifi, rfq and cow. Crypto-in conversion uses a tighter 100 bps.
 - **Venue seam** (`liquidity.ts`): `providerById` **throws** on an unknown id
-  and never falls back. A persisted quote is executed on the venue that
-  priced it. The default is `LIQUIDITY_PROVIDER=best` over `lifi,dex`.
+  and never falls back. Its one caller is the USDC → EURe deposit
+  conversion (`prepareDepositConversion`), a Safe-executed swap whose
+  recipient is the user's own Safe; no send uses a venue. The default is
+  `LIQUIDITY_PROVIDER=best` over `lifi,dex`.
 
 | venue | quote | execute | Safe-executable | guard |
 |---|---|---|---|---|
@@ -382,22 +367,11 @@ is recorded.
 - Settlement is tracked by `pollRedeemOrdersOnce` every 15 s: `processed`
   becomes PAID, and `rejected`/`failed` becomes FAILED.
 
-### 8.2 Cash rail — closed
+### 8.2 No other rail
 
-`cashRailOpen() = BRIDGE_LIVE && MG_ANCHOR_DOMAIN`. Closed is enforced at the
-quote (503 `RAIL_CLOSED`), at execution (before any debit), and in
-`/api/health`. When open, the path runs:
-
-1. Batch swap EURe to USDC into a Bridge deposit address.
-2. Bridge moves USDC from Base to Stellar, to a static
-   `BRIDGE_DESTINATION_ADDRESS`.
-3. The Stellar treasury pays the anchor's `withdraw_anchor_account`: SEP-10
-   auth, SEP-12 customer, SEP-24 interactive withdraw, and the 9-field SEP-9
-   subset MoneyGram needs.
-4. The anchor is polled until `completed`.
-
-There is no CCTP code. Only the on-ledger Stellar payment half has ever run
-(tx `60528481…`, ledger 3965805).
+`POST /quotes` accepts only `rail: "sepa"` and answers 400 otherwise. There is
+no non-EUR payout: the app's International tile is a disabled SOON tile until
+a payout partner (dLocal, Yellow Card — both uncontracted) is integrated.
 
 ---
 
@@ -412,7 +386,7 @@ There is no CCTP code. Only the on-ledger Stellar payment half has ever run
 | IBAN activation | The passkey signs the SafeMessage of `LINK_MESSAGE`. The server assembles the EIP-1271 signature (the passkey, plus the co-signer on a legacy 2-of-2 Safe) and calls `POST /addresses` then `POST /ibans`. It **only accepts the IBAN whose address is the user's Safe**. It never unlinks, because a wrongly-bound address is "burned" at Monerium (verified live). |
 | Deposits | `pollDepositsOnce` every 15 s over the app's profiles and each own-credential user's profile. `mirrorOrder` records processed `issue` orders. The EURe itself is minted straight into the Safe. Each order is also offered to pay-link attribution (code in memo) and invoice attribution (invoice number in memo). |
 | Webhook | `POST /api/webhooks/monerium`. It verifies a Standard Webhooks HMAC (`webhook-id.timestamp.body`, `whsec_` key, 300 s tolerance) and de-duplicates by `webhook-id`. It **trusts only the order id** and re-reads that order from Monerium on the app client. Production requires the secret. |
-| Reconciler | Every 15 min it compares Monerium's processed issue orders with the mirrored ids and reports `UNMIRRORED` / `PHANTOM`. **It reports, never repairs.** It does not look at transfers, Bridge, redeems or balances. |
+| Reconciler | Every 15 min it compares Monerium's processed issue orders with the mirrored ids and reports `UNMIRRORED` / `PHANTOM`. **It reports, never repairs.** It does not look at transfers, redeems or balances. |
 
 ---
 
@@ -481,8 +455,8 @@ flowchart LR
   user fields pass through, so new fields are published by default.
 - **Receipt shares**: a 75-bit slug, one share per transfer, and re-POST
   edits the share without extending its 30-day TTL. Route hops are derived
-  from `txs`, `liquidity`, `sepa` and `pickup`, and anything not actually
-  executed is flagged `simulated`.
+  from `txs` and `sepa`, and anything not actually executed is flagged
+  `simulated`.
 
 ---
 
@@ -652,7 +626,6 @@ flowchart LR
 | `sweepStrandedTransfers` | boot + 5 min | compensate stale transfers, flag claimed-but-unrecorded |
 | `sweepCandideRecoveries` | 5 s after boot, then `RECOVERY_SWEEP_MS` (60 s) | expire, then finalise past grace |
 | `sweepPaymentRequests` | 60 s | expire; match own SEPA transfers by code; retry Shopify resolves (**uncapped**) |
-| `sweepAnchorPayouts` | boot + 30 s | refresh Stellar anchor payouts |
 | `reconcile` | 10 s after boot, then 15 min | Monerium drift report (log only) |
 | Monerium poller | 15 s | deposits → mirror + attribution; redeems → PAID/FAILED; pending IBANs |
 | Crypto-in poller | 15 s | scan logs → deposits → attribution → conversion bookkeeping |
@@ -738,12 +711,9 @@ only self-hosted fonts.
     key, no webhook secret while app credentials are set, or a non-https
     redirect.
   - Store: `ALLOW_PLAINTEXT_STORE` missing.
-  - Bridge: live without a key.
   - Candide: a CANDIDE chain that differs from the app chain, a recovery
     signer without https or a token, the 3-minute recovery module, or no
     no recovery guardian when hosted. (The co-signer is no longer required.)
-  - Stellar and MoneyGram: the testnet passphrase, or missing MoneyGram
-    secrets.
   - WebAuthn: no explicit https `WEBAUTHN_ORIGINS`.
   - Proxy: no `TRUSTED_PROXY_HOPS`.
 
@@ -784,25 +754,18 @@ separately rather than committed here.)
    Safe debit needs. On plans without approvals the UI has no send path.
    CSV-imported lines are wallet lines, which cannot be paid from an issued
    account.
-7. **Refund after a non-batch swap** cannot succeed through LI.FI or Bebop,
-   because both refuse a non-orchestrator recipient. It ends in MANUAL_REVIEW.
-8. **Amounts that are not measured:** non-batch `usdcOut` is copied from the
-   quote, and RFQ never records surplus.
-9. **The cash batch creates a live Bridge transfer at build time.** An
-   abandoned transfer leaves an unfunded one behind. `executeTransfer` sends
-   no sender details, so a SEP-12 anchor refuses *after* Bridge holds the
-   funds.
-10. **SEPA counterpart `country` is the sender's country** (default `DE`).
-    `sepa.mode` is always the literal `"sandbox"`.
-11. **`refreshPendingIban` sets the IBAN but not `kycStatus: approved`.** An
-    IBAN issued asynchronously leaves the account pending.
-12. **Indicative-rate caches never hit**, because `providerById` builds a new
+7. **RFQ never records surplus.**
+8. **SEPA counterpart `country` is the sender's country** (default `DE`).
+   `sepa.mode` is always the literal `"sandbox"`.
+9. **`refreshPendingIban` sets the IBAN but not `kycStatus: approved`.** An
+   IBAN issued asynchronously leaves the account pending.
+10. **Indicative-rate caches never hit**, because `providerById` builds a new
     venue instance per call.
-13. **Shopify resolve retries are uncapped**, and the Shopify webhooks, the
+11. **Shopify resolve retries are uncapped**, and the Shopify webhooks, the
     extension poll and the pay-page poll share the 20/min auth bucket per IP.
-14. The `pay-request.html` open-amount crypto view stops re-rendering once the
+12. The `pay-request.html` open-amount crypto view stops re-rendering once the
     payer has typed an amount.
-15. Stale text:
+13. Stale text:
     - `_test-env.ts` now *sets* `KYC_AUTO_APPROVE=1`, while CLAUDE.md says
       it blanks it.
     - Contract tests use a random port, not 8546.
@@ -856,13 +819,12 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 
 | | |
 |---|---|
-| `POST /quotes` (U, segment `onchain_balance`, KYC; cash gated) | Quote. |
+| `POST /quotes` (U, segment `onchain_balance`, KYC; `sepa` only) | Quote. |
 | `POST /transfers` (U) | Build. |
 | `POST /transfers/:id/authorize` (U) | Sign and execute. |
 | `GET /users/:id/transfers` (U) | Transfer list. |
 | `GET /users/:id/activity` (U) | Transfers and deposits. |
 | `GET /transfers/:id` (U) | One transfer. |
-| `POST /transfers/:id/refresh-payout` (U) | Cash payout refresh. |
 | `GET /rates` | Public mid rates. |
 | `GET /health` | Block, contracts, capabilities. |
 

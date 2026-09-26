@@ -125,10 +125,9 @@ function signOut() {
 $("btn-signout").onclick = signOut;
 
 /* ---------- destination-first send flow ---------- */
-let rail = "cash";
+let rail = "sepa";
 let dest = null;
 const RAILS = {
-  cash: { icon: "💵", label: "Cash pickup", desc: "Collect at any MoneyGram agent", eta: "~10 min" },
   sepa: { icon: "🏦", label: "Bank transfer", desc: "Any IBAN · SEPA", eta: "seconds – 1 day" },
 };
 /**
@@ -137,10 +136,9 @@ const RAILS = {
  * when a licensed partner does.
  */
 const DESTS = [
-  { code: "KE", flag: "🇰🇪", name: "Kenya", cur: "KES", rails: ["cash"], soon: [["📱", "M-Pesa wallet", "straight to their phone"]] },
   { code: "EU", flag: "🇪🇺", name: "Europe", cur: "EUR", rails: ["sepa"], soon: [] },
 ];
-const recvOf = (q) => (q.rail === "sepa" ? `€${fmt(q.receiveEur)}` : `KES ${fmt(q.receiveKes)}`);
+const recvOf = (q) => `€${fmt(q.receiveEur)}`;
 
 function showSendStep(step) {
   $("send-dest").classList.toggle("hidden", step !== "dest");
@@ -205,15 +203,6 @@ function selectOption(q) {
   clearErr("send-err");
   const m = RAILS[rail];
   $("det-title").textContent = `${m.icon} ${m.label} · ${dest.flag} ${dest.name}`;
-  const sepa = rail === "sepa";
-  $("row-mid").classList.toggle("hidden", sepa);
-  $("row-rate").classList.toggle("hidden", sepa);
-  if (!sepa) {
-    $("q-mid").textContent = `1 EUR = ${fmt(q.midRate, 2)} KES`;
-    $("q-rate").textContent = `1 EUR = ${fmt(q.fxRate, 2)} KES`;
-    // Measured against the live mid, not a constant we assert.
-    $("q-margin").textContent = `${fmt((q.marginBps ?? 0) / 100, 2)}% margin`;
-  }
   $("q-fee").textContent = q.fixedFeeEur > 0 ? `€${fmt(q.fixedFeeEur)}` : "None";
   $("total-label").textContent = "Recipient gets";
   $("q-recv").textContent = recvOf(q);
@@ -222,16 +211,12 @@ function selectOption(q) {
      small send — that is the case where the row-by-row receipt looks correct
      and the result still is not worth sending. */
   const feeShare = q.sendEur > 0 ? q.fixedFeeEur / q.sendEur : 0;
-  $("q-eff").textContent = sepa
-    ? `€${fmt(q.effectiveRate ?? 0, 4)} per €1 sent`
-    : `1 EUR = ${fmt(q.effectiveRate ?? 0, 2)} KES`;
+  $("q-eff").textContent = `€${fmt(q.effectiveRate ?? 0, 4)} per €1 sent`;
   const heavy = feeShare >= 0.05;
   $("q-eff-label").textContent = heavy
     ? `Effective rate — the €${fmt(q.fixedFeeEur)} fee is ${fmt(feeShare * 100, 0)}% of this send`
     : "Effective rate";
   $("row-effective").style.color = heavy ? "var(--amber)" : "";
-  $("field-phone").classList.toggle("hidden", rail !== "cash");
-  $("field-iban").classList.toggle("hidden", rail !== "sepa");
   $("btn-send").textContent = `Send €${fmt(q.sendEur)} now`;
   showSendStep("details");
 }
@@ -242,18 +227,7 @@ $("back-options").onclick = () => showSendStep("options");
 
 /* ---------- transfer + animated timeline ---------- */
 const STEP_LABELS = {
-  "safe.transfer(orchestrator)": ["Moving EURe from your Safe", "💶"],
   "safe.transfer(fee)": ["Collecting the transfer fee", "💶"],
-  "swapper.swapExactIn": ["Swapping EURe → USDC", "🔁"],
-  "liquidity.fx-swapper.eure-usdc": ["Routing EURe → USDC liquidity", "🔁"],
-  "liquidity.fx-swapper.usdc-eure": ["Routing USDC → EURe liquidity", "🔁"],
-  "bridge.xyz.dry-run.transfer": ["Planning Bridge.xyz transfer", "🌉"],
-  "bridge.xyz.deposit.funded": ["Bridge deposit funded by your signed batch", "🌉"],
-  "bridge.xyz.live.transfer": ["Creating Bridge.xyz transfer", "🌉"],
-  "bridge.xyz.deposit.address": ["Bridge deposit address ready", "🏦"],
-  "bridge.xyz.deposit.memo": ["Bridge deposit memo ready", "🏦"],
-  "bridge.xyz.deposit.transfer": ["Funding Bridge.xyz transfer", "💵"],
-  "bridge.xyz.destination_tx": ["Bridge destination funded", "✅"],
   "safe.refundTransfer": ["Refunding your Safe", "💶"],
 };
 
@@ -280,9 +254,7 @@ function playTimeline(t, { onDone } = {}) {
     const [label, icon] = STEP_LABELS[x.step] || [x.step, "⚙️"];
     return stepEl(label, `tx ${x.hash}`, icon);
   });
-  if (t.rail === "sepa") {
-    for (const [label, detail, icon] of sepaSteps(t)) steps.push(stepEl(label, detail, icon));
-  }
+  for (const [label, detail, icon] of sepaSteps(t)) steps.push(stepEl(label, detail, icon));
   steps.forEach((el) => tl.appendChild(el));
   steps.forEach((el, i) => {
     setTimeout(() => {
@@ -299,7 +271,7 @@ function playTimeline(t, { onDone } = {}) {
 }
 
 /* A transfer that failed, refunded, or landed in manual review must never be
-   shown as a pending pickup — the recipient is NOT getting the money. */
+   shown as in flight — the recipient is NOT getting the money. */
 const isTerminalFailure = (t) => ["REFUNDED", "FAILED", "MANUAL_REVIEW"].includes(t.state);
 
 function revealRefund(t) {
@@ -326,31 +298,6 @@ function revealRefund(t) {
   }
   $("btn-again").classList.remove("hidden");
   $("refund-box").scrollIntoView({ block: "nearest", behavior: "smooth" });
-}
-
-function revealPickup(t) {
-  const p = t.pickup || {};
-  $("pickup-box").classList.remove("hidden");
-  $("t-ref").textContent = p.anchorReferenceNumber || p.referenceCode || "PENDING";
-  $("p-kes").textContent = `KES ${fmt(t.receiveKes)}`;
-  let note = `${t.recipientName} shows this code + ID at any agent · gets `;
-  if (t.state === "PAYOUT_DETAILS_PENDING") note = `${t.recipientName} completes MoneyGram details before the pickup reference is issued · gets `;
-  if (t.state === "PAYOUT_FUNDING_PENDING") note = `${t.recipientName}'s details are accepted; funding is waiting for on-ledger payment · gets `;
-  if (t.state === "PAYOUT_FUNDED") note = `${t.recipientName}'s payout is funded and waiting for MoneyGram confirmation · gets `;
-  $("p-note-text").textContent = note;
-  $("p-links").innerHTML = "";
-  const anchorPage = safeUrl(p.interactiveUrl);
-  if (anchorPage) {
-    $("p-links").insertAdjacentHTML("beforeend",
-      ` · <a href="${esc(anchorPage)}" target="_blank" rel="noreferrer" style="color:var(--amber)">anchor page ↗</a>`);
-  }
-  const moreInfo = safeUrl(p.moreInfoUrl);
-  if (moreInfo) {
-    $("p-links").insertAdjacentHTML("beforeend",
-      ` · <a href="${esc(moreInfo)}" target="_blank" rel="noreferrer" style="color:var(--amber)">details ↗</a>`);
-  }
-  $("btn-refresh-payout").classList.toggle("hidden", !p.anchorTransactionId);
-  $("pickup-box").scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function renderSepaResult(t) {
@@ -395,7 +342,6 @@ async function pollSepaTransfer(id) {
     // 1. Propose: the server fixes the terms and returns them unexecuted.
     const recipient = {
       recipientName: $("rec-name").value.trim() || "Recipient",
-      recipientPhone: $("rec-phone").value.trim() || "+254700000000",
       recipientIban: $("rec-iban").value.trim(),
     };
     const created = await api("/api/transfers", { quoteId: quote.id, ...recipient });
@@ -412,7 +358,6 @@ async function pollSepaTransfer(id) {
     // the server's signed terms name a different destination — this is what
     // stops a tampered server redirecting the payment to another recipient.
     const expectedDestination = dev.destinationCommitment(rail, {
-      phone: recipient.recipientPhone,
       iban: recipient.recipientIban,
       name: recipient.recipientName,
     });
@@ -435,16 +380,12 @@ async function pollSepaTransfer(id) {
     $("step-progress").classList.remove("hidden");
     // The timeline still animates every step it took — including the refund
     // legs — but the outcome panel must match the real terminal state, not
-    // assume the rail succeeded. A fail-closed anchor payout comes back
-    // REFUNDED, not FAILED, and must not read as a pending pickup.
+    // assume the rail succeeded. A refused redeem comes back REFUNDED, not
+    // FAILED, and must not read as in flight.
     playTimeline(t, { onDone: () => {
       if (isTerminalFailure(t)) { revealRefund(t); return; }
-      if (t.rail === "sepa") {
-        renderSepaResult(t);
-        if (t.state === "PAYOUT_SUBMITTED") pollSepaTransfer(t.id);
-      } else {
-        revealPickup(t);
-      }
+      renderSepaResult(t);
+      if (t.state === "PAYOUT_SUBMITTED") pollSepaTransfer(t.id);
     } });
     refresh();
     addHistory(t);
@@ -452,29 +393,9 @@ async function pollSepaTransfer(id) {
   finally { $("btn-send").disabled = false; }
 };
 
-async function refreshCashPayout() {
-  try {
-    const t = await api(`/api/transfers/${transfer.id}/refresh-payout`, {});
-    transfer = t;
-    revealPickup(t);
-    updateHistory(t);
-    if (t.state === "PAID") {
-      $("pickup-box").classList.add("hidden");
-      $("paid-box").classList.remove("hidden");
-      $("paid-note").textContent = `${t.recipientName} collected KES ${fmt(t.receiveKes)} · ref ${t.pickup.referenceCode}`;
-      $("btn-again").classList.remove("hidden");
-    }
-  } catch (e) { showErr("send-err", e); }
-}
-
-$("btn-refresh-payout").onclick = refreshCashPayout;
-
-
 $("btn-again").onclick = () => {
   $("step-progress").classList.add("hidden");
-  $("paid-box").classList.add("hidden");
   $("btn-again").classList.add("hidden");
-  $("pickup-box").classList.add("hidden");
   $("sepa-box").classList.add("hidden");
   $("refund-box").classList.add("hidden");
   $("step-quote").classList.remove("hidden");
@@ -500,19 +421,13 @@ function histRow(t) {
     </div>`;
   }
   const paid = t.state === "PAID";
-  const sepa = t.rail === "sepa";
-  const sub = sepa
-    ? `${esc((t.recipientIban || "").slice(0, 9))}… · €${fmt(t.receiveEur)}`
-    : `ref ${esc(t.pickup ? t.pickup.referenceCode : "—")} · KES ${fmt(t.receiveKes)}`;
+  const sub = `${esc((t.recipientIban || "").slice(0, 9))}… · €${fmt(t.receiveEur)}`;
   const status = paid ? "PAID" : t.state === "REFUNDED" ? "REFUNDED" : t.state === "FAILED" ? "FAILED"
-    : t.state === "PAYOUT_DETAILS_PENDING" ? "DETAILS PENDING"
-    : t.state === "PAYOUT_FUNDING_PENDING" ? "FUNDING PENDING"
-    : t.state === "PAYOUT_FUNDED" ? "FUNDED"
-    : sepa ? "SEPA IN FLIGHT" : "READY FOR PICKUP";
+    : t.state === "MANUAL_REVIEW" ? "REVIEW" : "SEPA IN FLIGHT";
   const color = paid ? "var(--green)" : t.state === "REFUNDED" ? "var(--muted)"
     : t.state === "FAILED" ? "var(--red)" : "var(--amber)";
   return `
-    <div class="hic">${sepa ? "🏦" : "🇰🇪"}</div>
+    <div class="hic">🏦</div>
     <div class="hmain">
       <div class="hn">${esc(t.recipientName)}</div>
       <div class="hs">${sub}</div>

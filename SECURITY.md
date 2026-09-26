@@ -9,7 +9,7 @@ You can expect an acknowledgement within a few days. There is no bug bounty.
 ## What this codebase is, honestly
 
 This is a working prototype whose defaults are **mainnet and production**
-(Base, Monerium production, the public Stellar network); testnets and
+(Base, Monerium production); testnets and
 sandboxes are selected by configuration. It has had internal
 security reviews and carries real security machinery — server-side WebAuthn,
 device-signed EIP-712 payment authorization, passkey-owned (1-of-1)

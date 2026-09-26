@@ -21,10 +21,10 @@ Every currency below is shown in the app with its status. Where an account is no
 ### US dollar — next
 
 {% hint style="warning" %}
-**Not yet fully live.** USD accounts are being added through Bridge and open soon. Request one now and it is opened the day the rail is ready.
+**Not yet fully live.** USD accounts need an account provider; Iron is the candidate and access has not been granted. Request one now and it is opened the day the rail is ready.
 {% endhint %}
 
-A USD account gives you a US account number and routing number in your name, receives ACH and domestic wire, holds the balance as USDC in your wallet, and pays out by ACH or wire to any US bank. Bridge issues the account and settles the dollar side, and runs its own verification when you open it. Full description: [Your US dollar account](../add-money/usd-account.md).
+A USD account gives you a US account number and routing number in your name, receives ACH and domestic wire, holds the balance as USDC in your wallet, and pays out by ACH or wire to any US bank. The provider issues the account, settles the dollar side, and runs its own verification when you open it. Full description: [Your US dollar account](../add-money/usd-account.md).
 
 ### Pound sterling
 
@@ -45,7 +45,7 @@ The settlement token in view is **ZCHF (Frankencoin)**, minted against crypto co
 ### Kenyan shilling
 
 {% hint style="warning" %}
-**Not yet fully live.** A KES account (M-Pesa) opens with a Kenyan payout partner. Cash pickup to Kenya is available today from your euro account.
+**Not yet fully live.** A KES account (M-Pesa) opens with a Kenyan payout partner.
 {% endhint %}
 
 ### Nigerian naira

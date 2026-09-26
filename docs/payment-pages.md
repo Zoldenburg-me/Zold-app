@@ -127,7 +127,7 @@ settlement can still require KYC, but publishing the page itself does not.
 
 `publicPayee` in `services/api/src/pay.ts` is an **allowlist**: it names the
 fields that go out. The account object beside it holds an IBAN, an email
-address, a KYC decision, a Travel Rule profile and a private key, so a
+address, a KYC decision and a private key, so a
 redaction list would leak whatever field somebody adds next.
 
 `payDisplayName` is deliberately separate from `user.name`. That one may be a

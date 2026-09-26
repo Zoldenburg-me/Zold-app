@@ -36,15 +36,19 @@ THREE RULES OVERRIDE CONVENIENCE:
   always creates `pending` with no IBAN; only an address-matched IBAN approves.
   There is no KYC provider, no Sumsub, no operator review route.
 - **Rails**: SEPA (Monerium redeem, non-custodial for the principal, fee €0) is
-  open. The **cash rail is CLOSED** unless `cashRailOpen()` — quotes answer 503
-  RAIL_CLOSED and the app hides the corridor. UPI is deleted, not disabled.
-- **Custody**: `LIQUIDITY.PROVIDER` defaults to `best` over `lifi,dex`, both
-  Safe-executable, so the default deployment is non-custodial. The fee always
-  lands at the orchestrator and `transfer.custody` records it.
+  the ONLY rail; `POST /api/quotes` refuses any other. The cash rail (Bridge.xyz
+  → Stellar → MoneyGram anchor, EUR → KES pickup) and UPI are deleted, not
+  disabled, and so is the Stellar SDK. A new corridor comes back with a signed
+  payout partner (dLocal / Yellow Card), not by reviving that code.
+- **Custody**: a SEPA send moves only the fee; Monerium burns the payout from
+  the Safe. The fee lands at the orchestrator and `transfer.custody` records
+  it. The liquidity venues (`LIQUIDITY.PROVIDER` defaults to `best` over
+  `lifi,dex`, both Safe-executable) serve one thing: converting an inbound
+  USDC deposit to EURe inside the user's own Safe.
 - **Simulation is gone.** No `/api/simulate/*` mock deposits, no
   `ALLOW_MOCK_FALLBACK`, no faucet, no mock IBANs. `/api/health` publishes
   `capabilities: { sandbox, moneriumOAuth, moneriumApiKeys, moneriumEnvironment,
-  moneriumHost, cashRail, shopify, shopifyMode, emailSmsRecovery }` (verified
+  moneriumHost, shopify, shopifyMode, emailSmsRecovery }` (verified
   against `capabilities()` in capabilities.ts), and the UI renders a control only
   where the API would accept it.
 - **The one harness seam that stays**: `KYC_AUTO_APPROVE=1` is honoured only on
@@ -86,9 +90,9 @@ Each of these was a bug once.
   userOp that *is* the debit; the passkey signs its hash at send time and the
   chain enforces token, amount and destination. The allowance model is gone —
   the API can dispose of nothing, ever.
-- **Quote binds execution.** `assertQuoteRateBinding` refuses and auto-refunds
-  if the on-chain rate drifts past `FX.QUOTE_BINDING_BPS`. Persisted quotes
-  execute on the venue that priced them.
+- **A quote binds its terms.** A SEPA quote has no FX leg: it fixes the fee
+  and the payout, the device signs a commitment to the IBAN and name, and
+  Monerium's redeem is for exactly that payout.
 - **Every venue quote is checked against an independent mid** (`assertPriceSane`
   over `rates.ts`) — a pool is wherever the last trade left it, and an
   aggregator's route is a third party's choice.
@@ -97,12 +101,14 @@ Each of these was a bug once.
   equalling `tx.to` today is luck, not a guarantee.
 - **Amounts out are MEASURED** as a balance delta, never copied from the quote.
 - **Compensation is asymmetric on purpose**: only a 4xx refusal refunds; a
-  timeout, a duplicate-transfer revert, or any failure after Bridge holds the
-  deposit is MANUAL_REVIEW. `store.updateTransfer` refuses to move a
+  timeout or a duplicate-transfer revert is MANUAL_REVIEW, because Monerium
+  may have accepted the order. A refund returns what left the Safe — the fee —
+  never the payout that stayed in it. `store.updateTransfer` refuses to move a
   REFUNDED/PAID transfer backwards.
-- **Margin is measured, surplus is attributed.** `marginBps` is computed between
-  the live mid and what we deliver; positive slippage goes to the user by
-  default and is recorded either way.
+- **Surplus goes to the user.** A deposit conversion swaps inside the user's
+  own Safe, so positive slippage lands there. Each venue's `execute()` (the
+  orchestrator-held swap, where `applySurplus` records it) has had no
+  production caller since the cash rail was deleted; only tests reach it.
 - **The reconciler reports drift and never repairs it.** A system that mints to
   make two ledgers agree is worse than the disagreement.
 
@@ -226,19 +232,17 @@ that do not own the local deployment).
 
 ## Test suites
 
-`npm run check` is OFFLINE and is the one to run. `npm run check:live` adds the
-three Stellar suites (each pins testnet via `scripts/_stellar-testnet.ts` —
-config defaults to pubnet, and a real treasury secret in .env would otherwise
-submit mainnet ops).
+`npm run check` is OFFLINE and is the one to run. `eur:proof` is the one live
+(network) script, against Monerium.
 
 | area | suites |
 |---|---|
-| money path | `fx:test` `jit:test` `best:test` `dex:test` `lifi:test` `custody:test` `execution:test` `quote-binding:test` `sepa:test` `refund:guard:test` |
+| money path | `fx:test` `jit:test` `best:test` `dex:test` `lifi:test` `custody:test` `execution:test` `sepa:test` `refund:guard:test` |
 | identity | `webauthn:selftest` `security:test` `device-key:test` `authorize:test` `passkey-safe:test` `recovery:test` `recovery:candide:test` `monerium:oauth:test` `monerium:apikeys:test` `webhook:test` |
 | business | `business:test` `draft:test` `invoicing:test` `documents:test` |
 | payments | `paylinks:test` `shopify:test` `shopify:orders:test` `receipt:test` `pay:test` `crypto:test` `convert:test` |
-| ops | `reconcile:test` `anchor:*:test` `country:policy:test` `segments:test` `onboarding:test` `gnosispay:test` |
-| live (network) | `travelrule:test` `trustline:test` `stellar:payout:live` `anchor:test` `eur:proof` |
+| ops | `reconcile:test` `country:policy:test` `segments:test` `onboarding:test` `gnosispay:test` |
+| live (network) | `eur:proof` |
 
 ## What has never run
 
@@ -246,13 +250,10 @@ Say this plainly rather than letting the surface imply otherwise:
 
 - **No mainnet deploy.** No 8453 entry in `deployments.json`; needs funded
   operator keys the user holds.
-- **No real money has moved through a swap.** No dex/LI.FI/RFQ/CoW swap has
-  executed; no Base Sepolia send has exercised execution → debit.
-- **The cash rail has never opened.** Bridge live mode is entirely unexercised,
-  CCTP has never executed live, and the anchor-attribution half of the Stellar
-  payout has never run — only the on-ledger payment half is proven (tx
-  `60528481…`, ledger 3965805). testanchor never publishes
-  `withdraw_anchor_account`, so MoneyGram's own anchor is where the bugs will be.
+- **No real money has moved through a swap.** No dex/LI.FI/RFQ/CoW deposit
+  conversion has executed; no Base Sepolia send has exercised execution → debit.
+- **No payout outside SEPA exists.** No partner is contracted, and no
+  corridor code is kept waiting for one.
 - **No real Monerium production OAuth app is registered**, and no real
   client-credentials token has been used. The OAuth cookie binding and the
   refresh client-id change are unproven against the real server.

@@ -11,7 +11,7 @@
  *   npm run dex:setup          report what exists and what is missing
  *   npm run dex:setup -- --fix create the pool and mint a full-range position
  *
- * Mirrors `npm run stellar:setup`: read-only unless asked to change anything.
+ * Read-only unless asked to change anything.
  */
 import { createPublicClient, createWalletClient, http, parseAbi, formatUnits, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";

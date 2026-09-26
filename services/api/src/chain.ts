@@ -159,36 +159,28 @@ export async function writeAndWait(
  * The keccak256 commitment to a payout destination that the device signs.
  *
  * The device authorization fixes the amount and the on-chain `to`, but the
- * money actually leaves the system on a fiat leg (SEPA IBAN, cash pickup
- * phone) the contract can never see. Folding a hash of that target into
+ * money actually leaves the system on a fiat leg (the SEPA IBAN) the contract
+ * can never see. Folding a hash of that target into
  * the signed struct means the signature attests to *who* is paid: a server
  * that later swaps the recipient produces a payout whose recomputed commitment
  * no longer matches what the user signed, and the relayed spend is refused.
  *
- * The recipient NAME is part of it, not just the account identifier. On the cash
- * rail the name is the payout identity — it is what the anchor is told and what
- * the person presents with ID at the counter — so a commitment over the phone
- * number alone left the one field that decides who collects the money outside
- * what the device signed.
+ * The recipient NAME is part of it, not just the IBAN: it is what the payee's
+ * bank is told, so leaving it out would put a field that decides who is paid
+ * outside what the device signed.
  *
- * The preimage is canonical per rail so the browser, the API, and the
- * orchestrator all derive the identical value from the same recipient:
- *   cash → "cash|phone=<phone>|name=<NAME>"  (phone trimmed)
+ * The preimage is canonical so the browser, the API, and the orchestrator all
+ * derive the identical value from the same recipient:
  *   sepa → "sepa|iban=<IBAN>|name=<NAME>"    (whitespace-stripped, upper-cased)
  * where <NAME> is trimmed, inner whitespace collapsed, upper-cased.
  * Keep this in lockstep with destinationCommitment() in public/device.js.
  */
 export function destinationCommitment(
   rail: PayoutRail,
-  target: { phone?: string; iban?: string; name?: string },
+  target: { iban?: string; name?: string },
 ): `0x${string}` {
   const name = (target.name ?? "").trim().replace(/\s+/g, " ").toUpperCase();
-  let preimage: string;
-  if (rail === "sepa") {
-    preimage = `sepa|iban=${(target.iban ?? "").replace(/\s/g, "").toUpperCase()}`;
-  } else {
-    preimage = `cash|phone=${(target.phone ?? "").trim()}`;
-  }
+  const preimage = `${rail}|iban=${(target.iban ?? "").replace(/\s/g, "").toUpperCase()}`;
   return keccak256(toHex(`${preimage}|name=${name}`));
 }
 

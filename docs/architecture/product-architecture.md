@@ -81,7 +81,6 @@ flowchart LR
     VEN[LI.FI / Uniswap v3<br/>swap venues]
     SH[Shopify]
     GP[Gnosis Pay]
-    BR[Bridge.xyz + MoneyGram<br/>cash rail — closed]
   end
   U --> APP --> API
   M --> BIZ --> API
@@ -89,7 +88,6 @@ flowchart LR
   S --> PUB
   OP --> ADM --> API
   API --> MON & CAN & VEN & SH & GP
-  API -.gated.-> BR
 ```
 
 | actor | how they get in | what they can reach |
@@ -247,7 +245,7 @@ spend during the grace period.
 | rail | status | notes |
 |---|---|---|
 | **SEPA transfer** | BUILT on Base Sepolia, **never executed end to end** | Monerium *redeems* EURe from the Safe to the payee's IBAN. The principal never passes through Zold, so it is non-custodial. The Zold fee is €0. The payee sees a reference plus "Powered by Zold". |
-| **Cash pickup (MoneyGram via Bridge.xyz and a Stellar anchor)** | GATED | Closed unless `BRIDGE_LIVE=1` and an anchor are configured. Quotes answer 503 `RAIL_CLOSED` and the app hides the corridor. It has never run live. |
+| **International payout** | NOT BUILT | A disabled SOON tile on the Pay hub ("Opens with a payout partner"). `POST /api/quotes` accepts only `rail: "sepa"`. The candidates are dLocal and Yellow Card, both uncontracted. |
 | **Zold-to-Zold** | NOT BUILT | The "Zold account" option on a pay link opens a pre-filled *SEPA* send. |
 | **Crypto out** | NOT BUILT | Marked SOON in the app ("USDC in only, never out"). |
 | **UPI** | Deleted | It minted references for money that reached nobody. |
@@ -265,12 +263,13 @@ than a delay.
 
 ### 5.4 Fees, rates and limits
 
-- SEPA fee **€0**. The cash fee is €0.99 plus a 50 bps spread, but that rail is closed.
+- SEPA fee **€0** (`SEPA_FEE_EUR`). A SEPA quote has no FX leg.
 - Daily send cap **€2,500** per user. It is hard-coded.
 - A quote lives for **10 minutes**. The signed authorisation window is 15
   minutes.
-- Every venue price is checked against an independent mid-rate from an open
-  FX feed, and the quote refuses if the two drift apart.
+- On a deposit conversion, every venue price is checked against an
+  independent mid-rate from an open FX feed, and the quote refuses if the two
+  drift apart.
 
 ---
 
@@ -345,7 +344,7 @@ change with the GitBook.
 
 ### 6.4 Receipts — LIVE
 
-The sender of a SEPA or cash transfer can publish `/r/<slug>`. The slug is a
+The sender of a SEPA transfer can publish `/r/<slug>`. The slug is a
 75-bit credential and the link lives for 30 days. The sender chooses what
 shows: name granularity, account full, short or hidden, FX, rate, reference,
 and route. **Redaction is done on the server.** A withheld field is never in
@@ -629,7 +628,7 @@ imply:
   Monerium sandbox, at zoldhq.com behind a Cloudflare tunnel.
 - No real money has moved through a swap, and no Base Sepolia send has
   executed the debit.
-- The cash rail has never opened.
+- No payout other than SEPA exists.
 - No Monerium production OAuth app is registered, and no real
   client-credentials token has been used.
 - No Shopify app is registered and no store has installed one.
@@ -661,7 +660,7 @@ does not support.
 | `invoicing/issue-an-invoice.md` | VAT rate per line; toggles per invoice; pick a contact | The API has per-line VAT but the UI does not. Toggles are org defaults only. Picking a contact prefills name and country only. |
 | `invoicing/vat-and-jurisdictions.md` | "Under the structural rule set there is no built-in list" | GENERIC offers `export_third_country` and `other`. |
 | `docs/business-accounts.md` (role table) | Owner may delete the org | No delete route exists, by design. |
-| `business/accounts-and-currencies.md` | USD accounts "through Bridge" | The currency registry names **Iron** as the USD/GBP provider. Bridge appears in code only as the cash-rail transfer seam. |
+| `business/accounts-and-currencies.md` | USD accounts "through Bridge" | The currency registry names **Iron** as the USD/GBP provider. There is no Bridge code. |
 | `business/bulk-payments.md` | CSV destination "an IBAN, or a wallet address"; Payments → New draft → Import CSV | The importer produces wallet lines only (`chainId: 0`), and wallet lines are refused from an issued account. There is no Import CSV button in `/business`. The API parses and returns lines but does not create a draft. |
 | `business/imported-wallets.md` | "its balance shown"; history and backfill on Premium/Business | Nothing reads an imported wallet's balance or history. `sync.status` stays `pending` forever. |
 | `business/payments-and-approvals.md` | Send from the business dashboard | Send from `/business` does not yet produce the passkey assertion a Safe debit needs. There is no reject or re-point UI. |

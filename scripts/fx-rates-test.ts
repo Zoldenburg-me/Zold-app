@@ -16,7 +16,7 @@ process.env.TRANSF_RATES_URL = `http://127.0.0.1:${PORT}/rates`;
 process.env.TRANSF_RATES_TTL_MS = "500";
 process.env.TRANSF_RATES_TIMEOUT_MS = "1500";
 
-let mode: "ok" | "500" | "garbage" | "missing" | "hang" | "wrongbase" = "ok";
+let mode: "ok" | "500" | "garbage" | "missing" | "nokes" | "hang" | "wrongbase" = "ok";
 let hits = 0;
 const LIVE = { USD: 1.1379, INR: 109.87, KES: 147.53 };
 
@@ -28,8 +28,9 @@ const stub: Server = createServer(async (req, res) => {
   };
   if (mode === "500") return send(500, { error: "upstream down" });
   if (mode === "garbage") return send(200, "not json at all");
-  if (mode === "missing") return send(200, { base: "EUR", rates: { USD: 1.1379 } });
+  if (mode === "missing") return send(200, { base: "EUR", rates: { KES: 147.53 } });
   if (mode === "hang") return; // never responds -> client timeout
+  if (mode === "nokes") return send(200, { base: "EUR", rates: { USD: 1.1379 } });
   if (mode === "wrongbase") return send(200, { base: "USD", rates: LIVE });
   send(200, { base: "EUR", date: "2026-07-26", rates: LIVE });
 });
@@ -59,10 +60,12 @@ try {
     );
   });
 
-  await t("USD legs are derived from the EUR legs", async () => {
+  await t("a feed without KES still serves USD — KES is optional", async () => {
     rates.resetRateCache();
-    const usdKes = await rates.usdPer("KES");
-    assert.ok(Math.abs(usdKes - LIVE.KES / LIVE.USD) < 1e-9, `got ${usdKes}`);
+    mode = "nokes";
+    assert.equal(await rates.eurPer("USD"), LIVE.USD);
+    await assert.rejects(() => rates.eurPer("KES"), /no rate for KES/);
+    mode = "ok";
   });
 
   await t("results are cached — a burst of quotes is one upstream call", async () => {
@@ -91,7 +94,7 @@ try {
   await t("a feed missing a currency we quote is refused", async () => {
     rates.resetRateCache();
     mode = "missing";
-    await assert.rejects(() => rates.eurPer("USD"), /KES/);
+    await assert.rejects(() => rates.eurPer("USD"), /USD/);
     mode = "ok";
   });
 
@@ -139,8 +142,8 @@ try {
 
   await t("a pinned set missing a currency is refused, not half-used", async () => {
     rates.resetRateCache();
-    process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1, INR: 100 }); // no KES
-    await assert.rejects(() => rates.eurPer("KES"), /missing a valid KES/);
+    process.env.TRANSF_RATES_FIXED = JSON.stringify({ INR: 100, KES: 140 }); // no USD
+    await assert.rejects(() => rates.eurPer("KES"), /missing a valid USD/);
     delete process.env.TRANSF_RATES_FIXED;
   });
 

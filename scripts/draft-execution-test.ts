@@ -43,7 +43,6 @@ function spawnBg(cmd: string, args: string[]) {
       ...process.env,
       MONERIUM_CLIENT_ID: "",
       MONERIUM_CLIENT_SECRET: "",
-      MG_ANCHOR_DOMAIN: "",
     },
   });
   children.push(child);

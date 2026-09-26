@@ -1,9 +1,8 @@
 /**
  * Pin the local-test security posture. No chain, RPC or DB.
  *
- * Separate from _local-chain.ts because anchor/trustline/travel-rule talk to
- * real testnets and must not be pinned to 31337, but must still not inherit
- * the operator's hosted posture.
+ * Separate from _local-chain.ts because pure-function suites need no chain at
+ * all, but must still not inherit the operator's hosted posture.
  *
  * `.env` is the operator's file and carries the hosted deployment
  * (NODE_ENV=production, the zoldhq.com WebAuthn origin). `process.loadEnvFile`
