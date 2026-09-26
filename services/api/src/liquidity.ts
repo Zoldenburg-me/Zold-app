@@ -157,6 +157,37 @@ export async function prepareDepositConversion(
   };
 }
 
+/**
+ * The exact-output form of the conversion above: deliver exactly the invoice
+ * amount in EURe and leave the unspent USDC in the Safe for the monthly
+ * sweep. Refuses, rather than falling back to exact input, when the venue
+ * cannot plan one — a payment that lands as a different amount is not the
+ * conversion the user asked for.
+ */
+export async function prepareExactDepositConversion(
+  safeAddress: `0x${string}`,
+  amountOutEureWei: bigint,
+  maxAmountUsdcUnits: bigint,
+  quoteId: string,
+): Promise<{ plan: SafeSwapPlan }> {
+  const provider = liquidityProvider();
+  if (!provider.safeExactOutputPlan) {
+    throw new Error(
+      `the configured liquidity venue (${LIQUIDITY.PROVIDER}) cannot plan an exact-output swap — ` +
+        "only dex (Uniswap v3) can deliver exactly the invoice amount; refusing rather than converting a different amount",
+    );
+  }
+  const plan = await provider.safeExactOutputPlan(
+    "USDC_TO_EURE",
+    amountOutEureWei,
+    maxAmountUsdcUnits,
+    quoteId,
+    new Date(Date.now() + FX.QUOTE_TTL_MS).toISOString(),
+    { executor: safeAddress, recipient: safeAddress },
+  );
+  return { plan };
+}
+
 export function serializeExecution(e: LiquidityExecution): NonNullable<Transfer["liquidity"]> {
   return {
     provider: e.quote.provider,
