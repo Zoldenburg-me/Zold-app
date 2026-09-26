@@ -17,7 +17,7 @@
 import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -173,6 +173,29 @@ try {
   check("a Brazilian resident gets an account with no card", () => {
     assert.equal(br.data.segment.value, "ONCHAIN_NO_CARD");
     assert.ok(!br.data.segment.capabilities.includes("card"));
+  });
+
+  // The app no longer asks for citizenship. Residence alone is screened, and
+  // no citizenship is recorded that the person did not declare.
+  const noCit = await signup({
+    name: "Lea", email: "lea@example.com", country: "FR", accountType: "individual", usAnswers: NO_US,
+  });
+  check("a signup that declares no citizenship is screened on residence", () => {
+    assert.equal(noCit.status, 201);
+    assert.equal(noCit.data.segment.value, "EU_FULL");
+  });
+  check("an undeclared citizenship is not recorded as the residence", () => {
+    const row = JSON.parse(readFileSync(process.env.TRANSF_DB_PATH!, "utf8"))
+      .users.find((u: any) => u.id === noCit.data.id);
+    assert.ok(row, "user row written");
+    assert.equal(row.citizenships, undefined);
+  });
+  const sanctionedResidence = await signup({
+    name: "R", email: "r@example.com", country: "RU", accountType: "individual", usAnswers: NO_US,
+  });
+  check("a sanctioned residence is still refused with no citizenship declared", () => {
+    assert.equal(sanctionedResidence.status, 403);
+    assert.equal(sanctionedResidence.data.code, "BLOCKED_SANCTIONED");
   });
 
   console.log("\nThe segment is not the client's to set");
