@@ -536,9 +536,36 @@ export async function submitPasskeySafeOperation(
   userOperation: UserOperationV9,
   assertion: BrowserPasskeyAssertion,
 ): Promise<string | null> {
+  return (await submitPasskeySafeOperationWithReceipt(plan, userOperation, assertion)).userOpHash;
+}
+
+/**
+ * What the chain recorded for a submitted operation. The userOperationHash
+ * is the bundler's identifier; the transaction hash is what an explorer, an
+ * auditor and the Beleg resolve. Gas is the bundler's settled figure, and who
+ * paid it follows the configured gas mode.
+ */
+export interface SubmittedOperation {
+  userOpHash: string | null;
+  txHash?: string;
+  blockNumber?: number;
+  gasCostWei?: string;
+  gasPaidBy: "sponsored" | "safe-native" | "safe-token";
+  /** False when the bundler included the op but the Safe call reverted. */
+  success?: boolean;
+}
+
+export async function submitPasskeySafeOperationWithReceipt(
+  plan: PasskeySafeDeploymentPlan,
+  userOperation: UserOperationV9,
+  assertion: BrowserPasskeyAssertion,
+): Promise<SubmittedOperation> {
+  const gasPaidBy =
+    CANDIDE.gas.mode === "sponsored" ? "sponsored" : CANDIDE.gas.mode === "native" ? "safe-native" : "safe-token";
   const { account, passkeyOwner } = accountForPlan(plan);
   if (allowSimulation()) {
-    return "0xmock-user-op-hash";
+    // Harness only (hardhat, no bundler): a fake receipt to match the fake hash.
+    return { userOpHash: "0xmock-user-op-hash", txHash: "0xmock-tx-hash", blockNumber: 0, gasCostWei: "0", gasPaidBy, success: true };
   }
   const deployed = await isDeployed(account.accountAddress);
   const passkeySigner = fromSafeWebauthn({
@@ -553,8 +580,19 @@ export async function submitPasskeySafeOperation(
     CANDIDE.chainId,
   );
   const response = await account.sendUserOperation(userOperation, bundler());
-  await response.included(INCLUSION_TIMEOUT_S, INCLUSION_POLL_S);
-  return response.userOperationHash;
+  const receipt = await response.included(INCLUSION_TIMEOUT_S, INCLUSION_POLL_S);
+  return {
+    userOpHash: response.userOperationHash,
+    ...(receipt
+      ? {
+          txHash: receipt.receipt.transactionHash,
+          blockNumber: Number(receipt.receipt.blockNumber),
+          gasCostWei: receipt.actualGasCost.toString(),
+          success: receipt.success,
+        }
+      : {}),
+    gasPaidBy,
+  };
 }
 
 export async function signMessageAsPasskeySafe(

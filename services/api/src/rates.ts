@@ -162,4 +162,78 @@ export async function usdPer(code: string): Promise<number> {
 export function resetRateCache(): void {
   cache = null;
   inFlight = null;
+  referenceCache.clear();
+}
+
+// ── ECB reference rates, for valuing what the books record ──────────────────
+
+export interface ReferenceRate {
+  /** Units of `code` per 1 EUR. */
+  rate: number;
+  code: string;
+  /** The business day the ECB fixed it (YYYY-MM-DD). On a weekend, holiday or
+   *  before the day's 16:00 CET publication this is EARLIER than the day
+   *  asked for, and the Beleg says so. */
+  asOf: string;
+  provider: string;
+  fetchedAt: string;
+}
+
+const referenceCache = new Map<string, ReferenceRate>();
+
+/**
+ * The ECB reference rate for a calendar day, from Frankfurter.
+ *
+ * Valuation, not pricing: a crypto receipt is booked at the day's reference
+ * rate (the source the 2025 BMF letter on Aufzeichnungspflichten accepts when
+ * applied consistently), while every trade is still checked against the live
+ * mid. Pinned rates (TRANSF_RATES_FIXED) serve here too, under their own
+ * provider name, so an offline harness can value a receipt without the ECB.
+ *
+ * Fails closed: no rate, no value, never a guess. The caller records nothing
+ * and can value later.
+ */
+export async function referenceRate(code: string, day?: string): Promise<ReferenceRate> {
+  const upper = code.toUpperCase();
+  const fixed = pinned();
+  if (fixed) {
+    const v = fixed.eur[upper];
+    if (!v) throw new RateUnavailableError(`no pinned reference rate for ${upper}`);
+    const asOf = day ?? new Date().toISOString().slice(0, 10);
+    return { rate: v, code: upper, asOf, provider: fixed.provider, fetchedAt: new Date().toISOString() };
+  }
+  const key = `${upper}:${day ?? "latest"}`;
+  const hit = referenceCache.get(key);
+  // A dated fixing never changes; "latest" may, once a day.
+  if (hit && (day || Date.now() - Date.parse(hit.fetchedAt) < RATES.TTL_MS)) return hit;
+  const url = new URL(`${RATES.ECB_URL.replace(/\/$/, "")}/${day ?? "latest"}`);
+  url.searchParams.set("base", "EUR");
+  url.searchParams.set("symbols", upper);
+  let body: any;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(RATES.TIMEOUT_MS), headers: { accept: "application/json" } });
+    if (!res.ok) throw new Error(`${url.host} responded ${res.status}`);
+    body = await res.json();
+  } catch (e: any) {
+    throw new RateUnavailableError(`ECB reference rate: ${e?.message ?? e}`);
+  }
+  const v = body?.rates?.[upper];
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) {
+    throw new RateUnavailableError(`ECB reference feed has no ${upper} rate`);
+  }
+  if (String(body?.base ?? "EUR").toUpperCase() !== "EUR") {
+    throw new RateUnavailableError(`ECB reference feed returned base ${body.base}, expected EUR`);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(body?.date ?? ""))) {
+    throw new RateUnavailableError("ECB reference feed did not say which day it fixed");
+  }
+  const out: ReferenceRate = {
+    rate: v,
+    code: upper,
+    asOf: body.date,
+    provider: `ecb via ${url.host}`,
+    fetchedAt: new Date().toISOString(),
+  };
+  referenceCache.set(key, out);
+  return out;
 }

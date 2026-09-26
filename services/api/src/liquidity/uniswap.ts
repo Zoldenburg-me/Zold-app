@@ -13,7 +13,7 @@
 import { encodeFunctionData } from "viem";
 import { LIQUIDITY } from "../config.js";
 import { addrs, eur, orchestratorAddress, orchestratorWallet, publicClient, usd, writeAndWait } from "../chain.js";
-import { assertPriceSane, bestPool, erc20Abi, quoteExactInputSingle, rate6dp, routerAbi } from "../dex.js";
+import { assertPriceSane, bestPool, erc20Abi, quoteExactInputSingle, quoteExactOutputSingle, rate6dp, routerAbi } from "../dex.js";
 import {
   LiquidityExecution,
   LiquidityProvider,
@@ -165,6 +165,73 @@ export class DexLiquidityProvider implements LiquidityProvider {
     return {
       quote,
       approval: { token: tokenIn, spender: LIQUIDITY.DEX_ROUTER, amount: quote.amountIn },
+      call: { to: LIQUIDITY.DEX_ROUTER, data, value: 0n },
+    };
+  }
+
+  /**
+   * Exact output: the router delivers exactly `amountOut` and pulls what that
+   * costs, capped at `maxAmountIn`; the rest of the approval goes unused and
+   * the tokens stay in the Safe. Quoted against the same pool and the same
+   * live-mid check as an exact-input trade, and the quoted input is what the
+   * user signs as the ceiling — `maxAmountIn` bounds it, never replaces it.
+   */
+  async safeExactOutputPlan(
+    side: LiquiditySide,
+    amountOut: bigint,
+    maxAmountIn: bigint,
+    quoteId: string,
+    expiresAt: string,
+    ctx: SafeSwapContext,
+  ): Promise<SafeSwapPlan> {
+    if (amountOut <= 0n) throw new Error("dex exact-output quote requires a positive amount");
+    const { tokenIn, tokenOut, inName, outName } = this.tokens(side);
+    const pool = await bestPool(tokenIn, tokenOut);
+    if (!pool) throw new Error("no EURe/USDC pool with liquidity on this chain — refusing rather than settling elsewhere");
+    const quotedIn = await quoteExactOutputSingle({ tokenIn, tokenOut, amountOut, fee: pool.fee });
+    const amountInMaximum = (quotedIn * (10_000n + LIQUIDITY.DEX_SLIPPAGE_BPS)) / 10_000n;
+    if (amountInMaximum > maxAmountIn) {
+      throw new Error(
+        `delivering exactly ${amountOut} ${outName} costs up to ${amountInMaximum} ${inName} at this pool, ` +
+          `more than the ${maxAmountIn} available — refusing; the payment is short of the invoice`,
+      );
+    }
+    const eureWei = side === "EURE_TO_USDC" ? quotedIn : amountOut;
+    const usdcUnits = side === "EURE_TO_USDC" ? amountOut : quotedIn;
+    const raw = rate6dp(eureWei, usdcUnits);
+    const { mid, deviationBps } = await assertPriceSane(Number(raw) / 1e6);
+    const quote: LiquidityQuote = {
+      provider: "dex",
+      side,
+      quoteId,
+      tokenIn: inName,
+      tokenOut: outName,
+      amountIn: amountInMaximum,
+      expectedOut: amountOut,
+      minOut: amountOut,
+      rate: raw,
+      expiresAt,
+      dex: { pool: pool.address, fee: pool.fee, mid, deviationBps },
+      exactOutput: { quotedIn, amountInMaximum },
+    };
+    const data = encodeFunctionData({
+      abi: routerAbi,
+      functionName: "exactOutputSingle",
+      args: [
+        {
+          tokenIn,
+          tokenOut,
+          fee: pool.fee,
+          recipient: ctx.recipient,
+          amountOut,
+          amountInMaximum,
+          sqrtPriceLimitX96: 0n,
+        },
+      ],
+    });
+    return {
+      quote,
+      approval: { token: tokenIn, spender: LIQUIDITY.DEX_ROUTER, amount: amountInMaximum },
       call: { to: LIQUIDITY.DEX_ROUTER, data, value: 0n },
     };
   }

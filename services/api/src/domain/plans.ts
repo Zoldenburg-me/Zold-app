@@ -268,10 +268,10 @@ const CAPS: CapabilityDefinition[] = [
   },
   {
     id: "integrations.accounting",
-    label: "Xero and QuickBooks",
+    label: "Accounting connector (GetMyInvoices)",
     grantedTo: ["business"],
     orgTypes: ["business"],
-    upgradeHint: "Sync your transactions into your main ledger.",
+    upgradeHint: "Push each month's Belege into your accountant's GetMyInvoices inbox.",
   },
 
   // ── Not built ────────────────────────────────────────────────────────────

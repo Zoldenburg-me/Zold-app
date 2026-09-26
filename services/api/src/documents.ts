@@ -30,7 +30,7 @@ import { IS_PRODUCTION, CHAIN_ID, KEYS, PUBLIC_URL } from "./config.js";
 import type { Transfer, User } from "./store.js";
 import { paymentMemo } from "./sepa.js";
 
-export type DocumentKind = "receipt" | "statement" | "balance" | "ownership";
+export type DocumentKind = "receipt" | "statement" | "balance" | "ownership" | "beleg";
 
 /** Who stands behind what — one paragraph, once, at the foot of every
  *  document (Monerium's terms, s. 1.1 and s. 5). */
@@ -124,7 +124,19 @@ export interface OwnershipSnapshot {
   safeMessage: string;
 }
 
-export type DocumentSnapshot = StatementSnapshot | ReceiptSnapshot | BalanceSnapshot | OwnershipSnapshot;
+/**
+ * The Beleg: one document per statement line, holding every fact behind the
+ * one euro figure the accountant books. Shape owned by bookkeeping/beleg.ts;
+ * declared here so the store names one document type.
+ */
+export type { BelegSnapshot } from "./bookkeeping/beleg.js";
+
+export type DocumentSnapshot =
+  | StatementSnapshot
+  | ReceiptSnapshot
+  | BalanceSnapshot
+  | OwnershipSnapshot
+  | import("./bookkeeping/beleg.js").BelegSnapshot;
 
 export interface DocumentAttestations {
   zold: { signer: `0x${string}`; signature: Hex; digest: Hex; signedAt: string };
@@ -136,6 +148,8 @@ export interface StoredDocument {
   code: string;
   kind: DocumentKind;
   userId: string;
+  /** Set on a Beleg: the organisation whose books it belongs to. */
+  orgId?: string;
   createdAt: string;
   snapshot: DocumentSnapshot;
   attestations: DocumentAttestations;
@@ -401,8 +415,8 @@ export function ownershipStatement(holder: HolderBlock, date: string): string {
 
 export const documentUrl = (code: string) => `${PUBLIC_URL || ""}/v/${normaliseCode(code)}`;
 
-/** Public projection: everything except the id. The code is the credential. */
+/** Public projection: everything except the ids. The code is the credential. */
 export function publicDocument(doc: StoredDocument) {
-  const { id, userId, ...pub } = doc;
+  const { id, userId, orgId, ...pub } = doc;
   return { ...pub, url: documentUrl(doc.code) };
 }

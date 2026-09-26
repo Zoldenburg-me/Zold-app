@@ -709,8 +709,11 @@ only self-hosted fonts.
 
 | to add | attach at | constraints already in the code |
 |---|---|---|
-| **Ledger writer** | a projector called from `mirrorOrder`, `addCryptoDeposit` / `settleConvertedDeposit`, transfer state changes to PAID/REFUNDED, and invoice settlement | `LedgerEntry` shape and `accountCodeAuto`; run `applyRules` on insert; idempotent keys; never overwrite human codes |
-| **Accounting connector** (GetMyInvoices / Lexware, Xero, DATEV) | a new `adapters/<vendor>.ts` + `routes/business/integrations.ts`, with the capability `integrations.accounting` | per-org credential encrypted with `crypto-at-rest` (the Monerium API-keys connector is the pattern), capability `unavailable` until a key exists; needs the ledger writer first |
+| **Ledger writer** — BUILT (`bookkeeping/statement.ts` pure projection, `bookkeeping/writer.ts` store-touching) | attached: `mirrorOrder` and the Monerium poll loops (`keepIssueFacts` → `noteMoneriumIssue`), `settleConvertedDeposit` and the crypto scan, `pollRedeemOrdersOnce` on PAID, and a 60 s sweep in `server.ts` that covers REFUNDED from compensation | keys per event (`statement.key`); `applyRules` on insert; `mergeStatementLines` refreshes facts only and never touches `accountCode`; an org is found through `Account.backingUserId`; a USDC receipt with no ECB rate produces no line. To add an event: a draft in `statement.ts` with a stable key, and a Beleg block in `bookkeeping/beleg.ts` |
+| **Beleg** — BUILT (`bookkeeping/beleg.ts`, `issue.ts`, `pdf.ts`) | `issueBelegForLine`; `/v/:code` verifies via `belegStillAgrees`; `/v/:code/beleg.pdf` | a `StoredDocument` of kind `beleg` with `orgId`; one per line, the code written back onto `statement.documentCode` |
+| **Monthly export** — BUILT (`routes/business/bookkeeping-export.ts`, `bookkeeping/lexware.ts`, `zip.ts`) | `POST /:orgId/bookkeeping/export/:month/prepare`, then the CSV and ZIP GETs | `export.ledger` + `reports.run` to prepare, `ledger.read` to download; MT940/CAMT would be a sibling of `lexware.ts` |
+| **Accounting connector** — GetMyInvoices BUILT (`adapters/getmyinvoices.ts`, `routes/business/integrations.ts`) | `POST /:orgId/integrations/getmyinvoices` (verify + store), `…/push` (a month's Belege), `…/bank-accounts` (read) | key encrypted with purpose `getmyinvoices` under `MONERIUM_TOKEN_ENCRYPTION_KEY`; plan capability `integrations.accounting` plus a 409 without a key; uploads idempotent on the document number; `POST /bankAccounts/{uid}/transactions` exists in their spec and in the client, unused by any route |
+| **Exact-output conversion** — venue half BUILT (`LiquidityProvider.safeExactOutputPlan`, dex only; `prepareExactDepositConversion` in `liquidity.ts`) | a `convert/prepare?mode=exact` on the deposit route, and a sweep route that writes `ConversionSweep` rows | fail closed on venues without the method (LI.FI's reverse quote is not exact output); the ceiling is the quoted input plus `DEX_SLIPPAGE_BPS`; the leftover is `CryptoDeposit.leftoverUnits` |
 | **Accountant transaction feed** | an org-scoped `GET /api/orgs/:orgId/transactions` checking `transfers.read` | the backing user's transfers and deposits projected through an allowlist; the permission already exists in every role |
 | **New currency** | an entry in `domain/accounts.ts` with a real `mode()` | nothing is live without a contracted partner (rule 2) |
 | **New venue** | a file in `liquidity/` implementing `contract.ts`, plus `providerById` | an allowlist, a named spender, a measured amount out, `assertPriceSane`, and `safeSwapPlan` if it must be non-custodial |
@@ -913,6 +916,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /users/:id/documents/{receipt, statement, balance, ownership[/:r]}` (U) | Create a document. |
 | `DELETE /users/:id/documents/:code` (U) | Revoke. |
 | `GET /v/:code` (A) | Public document with live verification. |
+| `GET /v/:code/beleg.pdf` (A) | A Beleg as PDF bytes. |
 
 **Card**
 
@@ -975,6 +979,16 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET /:orgId/assets` (C(assets.costBasis)) | Assets and cost basis. |
 | `GET /:orgId/reports/monthly-balance` (C(reports.monthlyBalance)) | Monthly balance report. |
 | `GET /:orgId/export/ledger.csv` (C(export.ledger)) | Ledger CSV. |
+| `GET /:orgId/bookkeeping/statement[?month=]` (C(ledger.transactions)) | Statement lines: one per economic event, with links and Beleg codes. |
+| `POST /:orgId/bookkeeping/statement/rebuild` (C(ledger.transactions), ledger.categorise) | Re-run the ledger writer for the org's accounts. |
+| `POST /:orgId/bookkeeping/export/:month/prepare` (C(export.ledger), reports.run) | Issue the month's missing Belege. |
+| `GET /:orgId/bookkeeping/export/:month/lexware.csv` (C(export.ledger)) | Lexware Office bank-import CSV. |
+| `GET /:orgId/bookkeeping/export/:month/belege.zip` (C(export.ledger)) | ZIP of the month's Belege. |
+| `POST /:orgId/bookkeeping/lines/:lineId/beleg` (C(export.ledger), reports.run) | Issue one line's Beleg. |
+| `GET /:orgId/integrations` (org.read) | Connector state; never a key. |
+| `POST/DELETE /:orgId/integrations/getmyinvoices` (C(integrations.accounting), org.update) | Verify and store, or remove, the org's GetMyInvoices key. |
+| `GET /:orgId/integrations/getmyinvoices/bank-accounts` (C(integrations.accounting)) | Their bank accounts, read only. |
+| `POST /:orgId/integrations/getmyinvoices/push` (C(integrations.accounting), reports.run) | Push a month's Belege; idempotent on the document number. |
 
 **Shopify**
 

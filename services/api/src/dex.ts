@@ -32,9 +32,11 @@ export const poolAbi = parseAbi([
 ]);
 export const quoterAbi = parseAbi([
   "function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)",
+  "function quoteExactOutputSingle((address tokenIn,address tokenOut,uint256 amount,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountIn,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)",
 ]);
 export const routerAbi = parseAbi([
   "function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)",
+  "function exactOutputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountOut,uint256 amountInMaximum,uint160 sqrtPriceLimitX96)) payable returns (uint256 amountIn)",
 ]);
 export const erc20Abi = parseAbi([
   "function approve(address,uint256) returns (bool)",
@@ -114,6 +116,39 @@ export async function quoteExactInputSingle(args: {
     throw new Error("dex quoter returned zero out — pool cannot fill this size");
   }
   return amountOut;
+}
+
+/**
+ * The input the router would take to deliver exactly `amountOut`. Same
+ * simulate-and-revert mechanics as the exact-input quote; the router's
+ * exactOutputSingle then enforces `amountInMaximum` and leaves the unused
+ * input where it was.
+ */
+export async function quoteExactOutputSingle(args: {
+  tokenIn: `0x${string}`;
+  tokenOut: `0x${string}`;
+  amountOut: bigint;
+  fee: number;
+}): Promise<bigint> {
+  const { result } = await publicClient.simulateContract({
+    address: LIQUIDITY.DEX_QUOTER,
+    abi: quoterAbi,
+    functionName: "quoteExactOutputSingle",
+    args: [
+      {
+        tokenIn: args.tokenIn,
+        tokenOut: args.tokenOut,
+        amount: args.amountOut,
+        fee: args.fee,
+        sqrtPriceLimitX96: 0n,
+      },
+    ],
+  });
+  const amountIn = (result as readonly bigint[])[0];
+  if (!amountIn || amountIn <= 0n) {
+    throw new Error("dex quoter returned zero in — pool cannot deliver this size");
+  }
+  return amountIn;
 }
 
 /**

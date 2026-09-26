@@ -44,6 +44,7 @@ import { createDocumentsRouter } from "./routes/documents.js";
 import { createPaymentRequestRouter, onPaymentRequestPaid, sweepPaymentRequests } from "./routes/payment-requests.js";
 import { createShopifyRouter, resolveShopifyRequest } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
+import { writeStatementLines } from "./bookkeeping/writer.js";
 import {
   addrs,
   assertChainMatches,
@@ -241,6 +242,16 @@ setInterval(
       .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`)),
   30_000,
 ).unref();
+
+// The ledger writer: one statement line per economic event, projected from
+// the store. Hooked where money changes state, and swept here so a REFUNDED
+// written by compensation, or an event a crash cut short, still gets its line.
+setTimeout(() => {
+  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${e?.message ?? e}`); }
+}, 3_000).unref();
+setInterval(() => {
+  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${e?.message ?? e}`); }
+}, 60_000).unref();
 
 // Reconciler: log-only, never repairs. Drift between Monerium's ledger and
 // local receipt state should be loud rather than discovered later by a user

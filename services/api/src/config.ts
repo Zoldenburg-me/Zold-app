@@ -801,6 +801,20 @@ export const RATES = {
   URL: process.env.TRANSF_RATES_URL ?? "https://open.er-api.com/v6/latest/EUR",
   TTL_MS: Number(process.env.TRANSF_RATES_TTL_MS ?? 10 * 60 * 1000),
   TIMEOUT_MS: Number(process.env.TRANSF_RATES_TIMEOUT_MS ?? 8_000),
+  /**
+   * ECB reference rates (Frankfurter mirrors the ECB's daily fixing). Used to
+   * VALUE a receipt for the books, never to price a trade: the ECB publishes
+   * once per business day around 16:00 CET, so this is the day's reference
+   * rate, not an intraday mid. The live mid above stays the execution check.
+   */
+  ECB_URL: process.env.TRANSF_ECB_RATES_URL ?? "https://api.frankfurter.dev/v1",
+};
+
+/** GetMyInvoices, the document inbox the accountant reads. The key is per
+ *  organisation and encrypted at rest; nothing here holds one. */
+export const GETMYINVOICES = {
+  BASE_URL: process.env.GETMYINVOICES_BASE_URL ?? "https://api.getmyinvoices.com/accounts/v3",
+  TIMEOUT_MS: envNumber("GETMYINVOICES_TIMEOUT_MS", 20_000, { min: 1000 }),
 };
 
 /**

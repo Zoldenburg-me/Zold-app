@@ -27,7 +27,9 @@ export type AuditKind =
   | "partner.call_refused"
   /** A user connected or removed credentials of their own for a partner. */
   | "partner.credentials_connected"
-  | "partner.credentials_removed";
+  | "partner.credentials_removed"
+  /** Belege pushed to an accounting inbox; counts only, never a key. */
+  | "partner.documents_pushed";
 
 export interface AuditEntry {
   id: string;
