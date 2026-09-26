@@ -10,7 +10,7 @@ import {
   setOrgs, setView, toast, token, view,
 } from "./core.js";
 import { VIEWS, planBanner, renderNav } from "./nav.js";
-import { RENDER, refreshInvoiceCheck } from "./views.js";
+import { RENDER, refreshInvoiceCheck, setExportMonth } from "./views.js";
 import { ACTIONS } from "./actions.js";
 
 document.addEventListener("click", async (ev) => {
@@ -36,6 +36,9 @@ export async function render() {
   $("#view").innerHTML = `<div class="empty">Loading…</div>`;
   try {
     $("#view").innerHTML = await (RENDER[view] ?? RENDER.overview)();
+    if (view === "export") {
+      $("#x-month")?.addEventListener("change", (e) => { setExportMonth(e.target.value); render(); });
+    }
     if (view === "invoice-new") {
       refreshInvoiceCheck();
       // Debounced so typing an address is not a request per keystroke, and
