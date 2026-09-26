@@ -45,6 +45,7 @@ import {
   statementTotals,
   verifyZoldAttestation,
 } from "../documents.js";
+import { belegPdf, belegStillAgrees, belegFileName } from "../bookkeeping/beleg.js";
 
 export interface DocumentsDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -213,6 +214,26 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
       ok: doc.snapshot.reconciliation.reconciles,
       detail: doc.snapshot.reconciliation.note,
     });
+  }
+  if (doc.snapshot.kind === "beleg") {
+    const s = doc.snapshot;
+    const entry = store.ledger.find((e) => e.id === s.line.lineId);
+    const agree = belegStillAgrees(s, {
+      entry,
+      deposit: s.line.links.depositId ? store.cryptoDeposits.find((d) => d.id === s.line.links.depositId) : undefined,
+      transfer: s.line.links.transferId ? store.findTransfer(s.line.links.transferId) : undefined,
+      issueOrder: s.line.links.orderId ? store.moneriumIssueOrders.find((o) => o.orderId === s.line.links.orderId) : undefined,
+      sweep: s.sweep ? store.conversionSweeps.find((x) => `sweep:${x.id}` === s.line.key) : undefined,
+    });
+    checks.push({ name: "Underlying records still agree", ok: agree.ok, detail: agree.detail });
+    if (s.receipt?.txHash && !HARNESS.enabled) {
+      try {
+        const rc = await publicClient.getTransactionReceipt({ hash: s.receipt.txHash as `0x${string}` });
+        checks.push({ name: "Receipt transaction on chain", ok: rc.status === "success", detail: `block ${rc.blockNumber}` });
+      } catch (err: any) {
+        checks.push({ name: "Receipt transaction on chain", ok: false, detail: `could not read: ${String(err?.message ?? err).slice(0, 100)}` });
+      }
+    }
   }
   const safe = doc.attestations.safe;
   if (safe) {
@@ -451,6 +472,23 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     }),
   );
 
+  /** The Beleg as bytes: the same frozen snapshot, rendered server-side. The
+   *  verdict is not baked in; the page at /v/<code> is where it is checked. */
+  router.get(
+    "/v/:code/beleg.pdf",
+    wrap(async (req, res) => {
+      res.setHeader("X-Robots-Tag", "noindex, nofollow");
+      if (!isDocumentCode(req.params.code)) return res.status(404).json({ error: "no such document" });
+      const doc = store.findDocumentByCode(normaliseCode(req.params.code));
+      if (!doc || doc.snapshot.kind !== "beleg") return res.status(404).json({ error: "no such document" });
+      res
+        .status(200)
+        .type("application/pdf")
+        .setHeader("content-disposition", `inline; filename="${belegFileName(doc.snapshot, doc.code)}"`)
+        .send(belegPdf(doc.snapshot, doc.code, doc.createdAt));
+    }),
+  );
+
   return router;
 }
 
@@ -476,5 +514,6 @@ function summarise(d: StoredDocument): string {
   if (s.kind === "statement") return `${s.period.from.slice(0, 10)} to ${s.period.to.slice(0, 10)} · ${s.lines.length} line${s.lines.length === 1 ? "" : "s"}`;
   if (s.kind === "receipt") return `€${s.line.amountEur.toFixed(2)} to ${s.line.counterpartyName ?? "—"}`;
   if (s.kind === "balance") return `€${s.balanceEur.toFixed(2)} at block ${s.block.number}`;
+  if (s.kind === "beleg") return `${(s.line.amountCents / 100).toFixed(2)} · ${s.line.reference}`;
   return d.attestations.safe ? "signed by Zold and your smart account" : "signed by Zold";
 }

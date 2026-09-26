@@ -25,6 +25,20 @@ import { abis, addrs, deployerWallet, eur, writeAndWait } from "../chain.js";
 import { keccak256, toHex } from "viem";
 import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
 import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../routes/payment-requests.js";
+import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
+
+/**
+ * The bank facts of a processed issue order on our chain, for the statement
+ * line. Runs for every processed order seen, whether or not this poll
+ * mirrored it, so orders recorded before the table existed still get lines.
+ */
+function keepIssueFacts(order: MoneriumOrder): void {
+  if (order.kind !== "issue" || !isProcessed(order)) return;
+  if (order.chain !== MONERIUM.chain) return;
+  if (String(order.currency ?? "eur").toLowerCase() !== "eur") return;
+  const user = store.findUserByAddress(order.address);
+  if (user) noteMoneriumIssue(order, user);
+}
 
 /**
  * The APP's client (MONERIUM_CLIENT_ID/SECRET). Anything about ONE user goes
@@ -195,6 +209,7 @@ async function mirrorOrder(order: MoneriumOrder): Promise<boolean> {
     }
   }
   store.markOrderProcessed(order.id);
+  noteMoneriumIssue(order, user);
   console.log(`monerium: recorded issue order ${order.id} (€${amount}) for ${user.name}`);
   return true;
 }
@@ -311,6 +326,7 @@ export async function pollDepositsOnce(): Promise<number> {
       // Or the ordinary case: they wrote the invoice number, because that is
       // what is printed beside the bank details on the sheet.
       attributeMoneriumOrderToInvoice(order);
+      keepIssueFacts(order);
     }
   }
   /**
@@ -333,9 +349,11 @@ export async function pollDepositsOnce(): Promise<number> {
         if (await mirrorOrder(order)) credited++;
         attributeMoneriumOrder(order);
         attributeMoneriumOrderToInvoice(order);
+        keepIssueFacts(order);
       }
     }
   }
+  writeStatementLines();
   return credited;
 }
 
@@ -358,6 +376,7 @@ export async function pollRedeemOrdersOnce(): Promise<void> {
       if (state === "processed") {
         store.updateTransfer(t.id, { state: "PAID", sepa: { ...t.sepa!, state } });
         console.log(`monerium: redeem order ${t.sepa!.orderId} processed (transfer ${t.id})`);
+        writeStatementLines();
       } else if (state === "rejected" || state === "failed") {
         store.updateTransfer(t.id, {
           state: "FAILED",
