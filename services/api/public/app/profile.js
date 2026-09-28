@@ -40,11 +40,11 @@ function renderProfileScreen() {
   const safe = u.passkeySafe;
   const security = [
     { icon: "fingerprint", t: "Passkey", d: "Signs in and approves payments", st: u.passkey?.credentialId ? "Registered" : "Not set" },
-    { icon: "key", t: "Device spending key", d: "Signs the amount and the payee before anything moves", st: u.authorizerAddress ? "Bound" : "Not bound" },
+    { id: "device", icon: "key", t: "Device spending key", d: "Signs the amount and the payee before anything moves", st: u.authorizerAddress ? "Bound" : "Not bound" },
     { icon: "health_and_safety", t: "Managed recovery", d: "Guardian can restore a lost passkey", st: safe?.recovery?.status === "active" ? "Active" : "Not enabled" },
   ];
   $("m-pf-security").innerHTML = security.map((r) => `
-    <div class="m-secrow"${r.action ? ` data-sec-action="${r.action}" style="cursor:pointer"` : ""}>
+    <div class="m-secrow"${r.id ? ` data-sec="${r.id}"` : ""}${r.action ? ` data-sec-action="${r.action}" style="cursor:pointer"` : ""}>
       <span class="material-symbols-rounded">${r.icon}</span>
       <div style="flex:1;min-width:0">
         <div class="t">${esc(r.t)}</div>
@@ -52,6 +52,21 @@ function renderProfileScreen() {
       </div>
       <span class="st" style="color:${/Registered|Bound|Enabled|Active/.test(r.st) ? "var(--m-mint)" : "var(--m-faint)"}">${esc(r.st)}</span>
     </div>`).join("");
+
+  /* PRF is per authenticator. Without it the device key sits unencrypted in
+     localStorage, and "Bound" in green was all this screen said about it. */
+  if (u.authorizerAddress) {
+    deviceLib.then((dev) => {
+      if (dev.keyStatus().protection !== "none") return;
+      const row = $("m-pf-security").querySelector('[data-sec="device"]');
+      if (!row) return;
+      row.querySelector(".d").textContent =
+        "Stored unencrypted in this browser: this passkey cannot encrypt it (no PRF support), so anything that can read this browser's storage can sign with it";
+      const st = row.querySelector(".st");
+      st.textContent = "Unprotected";
+      st.style.color = "var(--m-amber)";
+    });
+  }
 
   const sub = u.privacyBundle;
   $("m-pf-plus-sub").textContent = sub && sub.status !== "canceled" ? "Privacy Bundle active" : "Coming soon";

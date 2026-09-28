@@ -18,6 +18,7 @@ import {
   refreshPayout,
 } from "../orchestrator.js";
 import { store } from "../store.js";
+import { moneriumLiveFor } from "../adapters/monerium-connection.js";
 import { requireCapability, requireKycApproved } from "../http/guards.js";
 import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
 import { buildTransferFromQuote } from "../transfers/build.js";
@@ -68,6 +69,16 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!requireKycApproved(user, res)) return;
       if (!["cash", "sepa"].includes(rail)) {
         return res.status(400).json({ error: "rail must be cash or sepa" });
+      }
+      // The SEPA payout is a Monerium redeem order. Without a connection the
+      // send is refused at execution anyway (before the fee debit), but only
+      // after the user has approved it with their passkey two or three
+      // times. Refuse at the quote, before any ceremony.
+      if (rail === "sepa" && !moneriumLiveFor(user)) {
+        return res.status(409).json({
+          error: "no Monerium connection for this account — sign in with Monerium or add your Monerium API keys before sending",
+          code: "MONERIUM_NOT_CONNECTED",
+        });
       }
       const amount = Number(sendEur);
       const railFee = railFeeEur(rail);
