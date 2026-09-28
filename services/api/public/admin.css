@@ -44,7 +44,7 @@ header {
   display: grid; place-items: center; font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 20px; color: #090b10;
   box-shadow: 0 0 20px var(--primary-glow);
 }
-.brand-title { font-family: 'Outfit', sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+.brand-title { margin: 0; font-family: 'Outfit', sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
 .brand-subtitle { font-size: 13px; color: var(--text-muted); }
 
 .auth-bar { display: flex; align-items: center; gap: 12px; background: var(--surface-1); padding: 8px 16px; border-radius: var(--radius-md); border: 1px solid var(--border); }

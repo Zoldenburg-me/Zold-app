@@ -12,17 +12,97 @@
  * still gets a real page rather than a bare 404.
  *
  * /landing.html still resolves, because links to it exist in the wild.
+ *
+ * A share preview needs ABSOLUTE urls (og:image, og:url, canonical), and only
+ * TRANSF_PUBLIC_URL says what they are — never the Host header, which the
+ * caller writes. A page marks the spot with <!--zold:abs-->; without a public
+ * url, og:image falls back to a relative path and canonical is left out.
  */
 import express from "express";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PUBLIC_URL } from "../config.js";
 
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../public");
+const base = PUBLIC_URL.replace(/\/+$/, "");
+
+/** The one page search engines are invited to: everything else is an app
+ *  screen or a credential-bearing link. */
+const INDEXABLE = ["/"];
+
+const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+
+function absTags(canonicalPath?: string): string {
+  const tags = [
+    `<meta property="og:image" content="${attr(`${base}/og-image.png`)}" />`,
+    `<meta property="og:image:width" content="1200" />`,
+    `<meta property="og:image:height" content="630" />`,
+    `<meta name="twitter:image" content="${attr(`${base}/og-image.png`)}" />`,
+  ];
+  if (base && canonicalPath) {
+    tags.push(`<link rel="canonical" href="${attr(base + canonicalPath)}" />`);
+    tags.push(`<meta property="og:url" content="${attr(base + canonicalPath)}" />`);
+  }
+  return tags.join("\n");
+}
+
+/** Read once, fill the marker, serve from memory. */
+function page(file: string, canonicalPath?: string): express.RequestHandler {
+  let html: string | undefined;
+  return (_req, res) => {
+    html ??= fs.readFileSync(path.join(pub, file), "utf8").replace("<!--zold:abs-->", absTags(canonicalPath));
+    res.type("html").send(html);
+  };
+}
+
+/** Served after every router: an unknown path gets the site's own page, not
+ *  express's "Cannot GET", and an unknown API path gets JSON. */
+export function notFound(): express.RequestHandler {
+  const html = page("404.html");
+  return (req, res, next) => {
+    res.status(404);
+    if (req.path.startsWith("/api/") || req.path === "/api") return res.json({ error: "not found" });
+    if (req.method !== "GET" && req.method !== "HEAD") return res.type("text").send("Not found");
+    return html(req, res, next);
+  };
+}
 
 export function createPageRouter() {
   const router = express.Router();
 
-  router.get("/", (_req, res) => res.sendFile(path.join(pub, "landing.html")));
+  router.get(["/", "/landing.html"], page("landing.html", "/"));
+
+  router.get("/robots.txt", (_req, res) => {
+    const lines = [
+      "User-agent: *",
+      "Allow: /$",
+      // App screens and links that carry a credential. Each page also says
+      // noindex itself; this keeps well-behaved crawlers from fetching them.
+      "Disallow: /app",
+      "Disallow: /admin",
+      "Disallow: /business",
+      "Disallow: /api/",
+      "Disallow: /pay/",
+      "Disallow: /r/",
+      "Disallow: /v/",
+      "Disallow: /invoice/",
+    ];
+    if (base) lines.push("", `Sitemap: ${base}/sitemap.xml`);
+    res.type("text/plain").send(lines.join("\n") + "\n");
+  });
+
+  router.get("/sitemap.xml", (_req, res, next) => {
+    // A sitemap of relative urls is invalid, and the Host header is the
+    // caller's to write — no public url, no sitemap.
+    if (!base) return next();
+    const urls = INDEXABLE.map((p) => `  <url><loc>${attr(base + p)}</loc></url>`).join("\n");
+    res
+      .type("application/xml")
+      .send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`);
+  });
+
+  router.get("/favicon.ico", (_req, res) => res.redirect(301, "/icons/icon-192.png"));
   router.get(["/app", "/app/"], (_req, res) => res.sendFile(path.join(pub, "index.html")));
   router.get(["/admin", "/admin/"], (_req, res) => res.sendFile(path.join(pub, "admin.html")));
   /** The org dashboard — business and premium personal accounts. */
@@ -34,10 +114,10 @@ export function createPageRouter() {
   /** An account document, re-verified on every visit. */
   router.get("/v/:code", (_req, res) => res.sendFile(path.join(pub, "document.html")));
   /** A payment page, and a payment request against it. */
-  router.get("/pay/:handle", (_req, res) => res.sendFile(path.join(pub, "pay.html")));
-  router.get("/pay/:handle/:code", (_req, res) => res.sendFile(path.join(pub, "pay-request.html")));
+  router.get("/pay/:handle", page("pay.html"));
+  router.get("/pay/:handle/:code", page("pay-request.html"));
   /** A shared receipt. */
-  router.get("/r/:slug", (_req, res) => res.sendFile(path.join(pub, "receipt.html")));
+  router.get("/r/:slug", page("receipt.html"));
 
   router.use(express.static(pub));
 
