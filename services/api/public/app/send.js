@@ -364,7 +364,7 @@ function renderSepaResult(t) {
     $("btn-again").classList.remove("hidden");
   } else if (t.state === "FAILED") {
     $("sepa-status").textContent = "Payout failed";
-    $("sepa-note").textContent = t.error || "unknown error";
+    $("sepa-note").textContent = t.error || "Monerium did not give a reason. Check Activity for this transfer's status.";
     $("btn-again").classList.remove("hidden");
   } else {
     $("sepa-status").textContent = "Awaiting SEPA settlement…";

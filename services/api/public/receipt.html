@@ -4,6 +4,10 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Receipt · Zold</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<meta property="og:site_name" content="Zold" />
+<meta name="twitter:card" content="summary_large_image" />
+<!--zold:abs-->
 <!-- A receipt names two people and an amount. The API sends the same header,
      but a link pasted into a chat window can be fetched by a crawler that
      never asks the API, so the page says it too. -->
@@ -49,6 +53,7 @@
   /* hero */
   .hero { display: flex; flex-direction: column; align-items: center; margin-top: 28px; }
   .amount {
+    margin: 0;
     font-family: var(--display); font-weight: 600; font-size: 38px; line-height: 1;
     letter-spacing: -.03em; font-variant-numeric: tabular-nums; text-align: center;
   }
@@ -160,7 +165,7 @@
 
   <main id="receipt" class="hidden">
     <div class="hero">
-      <div class="amount" id="amount">—</div>
+      <h1 class="amount" id="amount">—</h1>
       <div class="status">
         <span id="status-icon" class="tone-mint" style="display:flex"></span>
         <span class="lab" id="status-lab">—</span>
