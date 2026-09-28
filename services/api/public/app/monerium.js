@@ -40,7 +40,7 @@ function renderMoneriumScreen() {
       ${needsIban ? `<button class="m-cta" id="m-mon-activate" style="margin-top:16px">Activate IBAN with passkey</button>` : ""}
       <button class="m-link" id="m-mon-refresh" style="margin-top:12px">Refresh accounts</button>
       <button class="m-link" id="m-mon-remove" style="margin-top:12px">Remove keys</button>
-      <div class="m-err hidden" id="m-mon-err" style="margin-top:12px"></div>
+      <div class="m-err hidden" role="alert" id="m-mon-err" style="margin-top:12px"></div>
       <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
         The secret was checked against Monerium once and stored encrypted. It is never shown again, not even to you —
         to rotate it, remove the keys and connect the new pair.
@@ -75,7 +75,7 @@ function renderMoneriumScreen() {
     <div class="m-field" style="margin-top:12px"><label>Client secret</label><input id="m-mon-secret" type="password" autocomplete="off" placeholder="shown once when the app was created"></div>
     <div class="m-field" style="margin-top:12px"><label>Label (optional)</label><input id="m-mon-label" placeholder="e.g. my sandbox app"></div>
     <button class="m-cta" id="m-mon-connect" style="margin-top:16px">Verify and connect</button>
-    <div class="m-err hidden" id="m-mon-err" style="margin-top:12px"></div>
+    <div class="m-err hidden" role="alert" id="m-mon-err" style="margin-top:12px"></div>
     <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
       Zold verifies the pair against Monerium before storing anything, encrypts the secret at rest and never returns it.
       Your Monerium account, its profile and its IBANs stay yours; Zold links its smart account under that profile and asks
@@ -134,6 +134,7 @@ $("m-copy-wallet").onclick = async () => {
   try { await navigator.clipboard.writeText(user.address); } catch { return; }
   const b = $("m-copy-wallet");
   b.textContent = "Copied";
+  announce("Copied");
   setTimeout(() => { b.textContent = "Copy address"; }, 1400);
 };
 
@@ -177,7 +178,8 @@ $("m-addr").onclick = async () => {
   if (!user?.address) return;
   try { await navigator.clipboard.writeText(user.address); } catch { return; }
   const icon = $("m-addr-icon");
-  icon.textContent = "check";
+  icon.textContent = "check"; // aria-hidden: the words go to the live region
+  announce("Copied");
   setTimeout(() => { icon.textContent = "content_copy"; }, 1400);
 };
 
@@ -417,7 +419,11 @@ async function refresh() {
 function switchView(view) {
   activeView = view;
   document.querySelectorAll(".view").forEach((el) => el.classList.toggle("active", el.id === `view-${view}`));
-  document.querySelectorAll(".nav a").forEach((a) => a.classList.toggle("active", a.dataset.view === view));
+  document.querySelectorAll(".nav a").forEach((a) => {
+    const on = a.dataset.view === view;
+    a.classList.toggle("active", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
   $("view-title").textContent = ({ dashboard: "Dashboard", transactions: "Transactions", accounts: "Accounts", contacts: "Contacts", settings: "Settings" })[view] || "Dashboard";
   $("send-card")?.classList.toggle("hidden", view !== "dashboard" || !kycApproved(user));
   renderShellPages();
@@ -461,7 +467,12 @@ async function loadTransfers() {
   try {
     const data = await api(`/api/users/${user.id}/activity`);
     hist.splice(0, hist.length, ...(data.activity || []));
+    histLoadFailed = false;
     renderHistory();
     renderTransactionPage();
-  } catch {}
+  } catch {
+    // Say so rather than letting the list read "No transfers yet".
+    histLoadFailed = true;
+    renderHistory();
+  }
 }

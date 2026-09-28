@@ -7,7 +7,20 @@
 /* ---------- onboarding flow: create -> staged provisioning -> dashboard */
 function provStep(i, state) {
   const el = document.querySelectorAll("#prov-steps .pstep")[i];
-  if (el) el.className = "pstep" + (state ? " " + state : "");
+  if (!el) return;
+  el.className = "pstep" + (state ? " " + state : "");
+  stepStateText(el, state);
+}
+
+/* The dot's colour is the only thing a class change alters, and a screen
+   reader hears neither. Each step carries a visually hidden state word; the
+   list is aria-live and each step aria-atomic, so the change is read as the
+   whole step ("Create your passkey, done"). */
+function stepStateText(el, state) {
+  const s = el.querySelector(".pstate");
+  if (!s) return;
+  const label = { done: "done", active: "in progress", fail: "failed" }[state] || "";
+  s.textContent = label ? `, ${label}` : "";
 }
 
 function enterDashboard(name) {
@@ -99,7 +112,7 @@ function renderKycGate(u, needsChoice) {
       else running = true;
     }
     return `<div class="m-gstep ${state}">
-      <div class="nd"><span class="material-symbols-rounded" style="font-size:14px">${
+      <div class="nd"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:14px">${
         state === "done" ? "check" : state === "bad" ? "close" : "more_horiz"}</span></div>
       <div style="min-width:0"><div class="t">${esc(s.t)}</div><div class="d">${esc(s.d)}</div></div>
     </div>`;
@@ -390,7 +403,10 @@ fillCountrySelect($("incorp-country"));
 $("acct-type").querySelectorAll("[data-acct]").forEach((b) => {
   b.onclick = () => {
     acctType = b.dataset.acct;
-    $("acct-type").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+    $("acct-type").querySelectorAll("button").forEach((x) => {
+      x.classList.toggle("on", x === b);
+      x.setAttribute("aria-pressed", x === b ? "true" : "false");
+    });
     // Question (d) and the incorporation country only exist for a company.
     $("q-company").classList.toggle("hidden", acctType !== "company");
     $("incorp-wrap").classList.toggle("hidden", acctType !== "company");
@@ -402,7 +418,10 @@ $("us-qs").querySelectorAll(".onb-q").forEach((row) => {
   row.querySelectorAll("[data-v]").forEach((b) => {
     b.onclick = () => {
       usAnswers[row.dataset.q] = b.dataset.v === "yes";
-      row.querySelectorAll("[data-v]").forEach((x) => x.classList.toggle("on", x === b));
+      row.querySelectorAll("[data-v]").forEach((x) => {
+        x.classList.toggle("on", x === b);
+        x.setAttribute("aria-pressed", x === b ? "true" : "false");
+      });
     };
   });
 });
@@ -632,6 +651,7 @@ function pkStep(i, state) {
   if (!el) return;
   el.className = "pstep" + (state ? " " + state : "");
   el.querySelector(".pdot").textContent = state === "fail" ? "✕" : "✓";
+  stepStateText(el, state);
 }
 
 /* ---------- Onboarding step 3: recovery enrolment ---------- */

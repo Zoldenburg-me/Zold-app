@@ -39,6 +39,7 @@ function renderAutoConvert(on) {
   const b = $("btn-autoconvert");
   b.textContent = on ? "on" : "off";
   b.dataset.on = on ? "1" : "0";
+  b.setAttribute("aria-pressed", on ? "true" : "false");
 }
 
 /* Deposits are shown whatever their outcome. A refusal is the case a user most
@@ -85,7 +86,9 @@ document.querySelectorAll(".copybtn").forEach((b) => {
   b.onclick = async () => {
     try {
       await navigator.clipboard.writeText($(b.dataset.copy).textContent);
-      b.textContent = "copied!"; setTimeout(() => (b.textContent = "copy"), 1200);
+      b.textContent = "Copied";
+      announce("Copied");
+      setTimeout(() => (b.textContent = "copy"), 1200);
     } catch {}
   };
 });
@@ -101,7 +104,10 @@ $("btn-refresh-tx").onclick = () => loadTransfers();
 document.querySelectorAll("[data-tx-filter]").forEach((b) => {
   b.onclick = () => {
     txFilter = b.dataset.txFilter;
-    document.querySelectorAll("[data-tx-filter]").forEach((x) => x.classList.toggle("active", x === b));
+    document.querySelectorAll("[data-tx-filter]").forEach((x) => {
+      x.classList.toggle("active", x === b);
+      x.setAttribute("aria-pressed", x === b ? "true" : "false");
+    });
     renderTransactionPage();
   };
 });
@@ -149,7 +155,7 @@ function showSendStep(step) {
 }
 
 $("dest-grid").innerHTML = DESTS.map(
-  (d, i) => `<button class="dest-btn" data-i="${i}"><span class="df">${d.flag}</span>${d.name}</button>`,
+  (d, i) => `<button class="dest-btn" data-i="${i}"><span class="df" aria-hidden="true">${d.flag}</span>${d.name}</button>`,
 ).join("");
 document.querySelectorAll(".dest-btn").forEach((b) => {
   b.onclick = () => selectDest(DESTS[Number(b.dataset.i)]);
@@ -176,7 +182,7 @@ async function selectDest(d) {
       const el = document.createElement("button");
       el.className = "opt-card";
       el.innerHTML = `
-        <span class="oi">${m.icon}</span>
+        <span class="oi" aria-hidden="true">${m.icon}</span>
         <span class="om">
           <span class="ol">${m.label} ${i === 0 ? '<span class="badge">RECOMMENDED</span>' : ""}</span>
           <span class="od">${m.desc} · ${m.eta} · ${q.fixedFeeEur > 0 ? `fee €${fmt(q.fixedFeeEur)}` : "no fee"}</span>
@@ -188,7 +194,7 @@ async function selectDest(d) {
     for (const [icon, label, desc] of d.soon) {
       const el = document.createElement("div");
       el.className = "opt-card disabled";
-      el.innerHTML = `<span class="oi">${icon}</span>
+      el.innerHTML = `<span class="oi" aria-hidden="true">${icon}</span>
         <span class="om"><span class="ol">${label} <span class="badge soon">COMING SOON</span></span>
         <span class="od">${desc}</span></span>`;
       $("opt-list").appendChild(el);
@@ -267,7 +273,7 @@ function stepEl(title, detail, icon) {
   const el = document.createElement("div");
   el.className = "tstep";
   el.innerHTML = `
-    <div class="rail2"><div class="node">${esc(icon)}</div><div class="line"></div></div>
+    <div class="rail2" aria-hidden="true"><div class="node">${esc(icon)}</div><div class="line"></div></div>
     <div class="body"><div class="t">${esc(title)}</div><div class="d">${esc(detail)}</div></div>`;
   return el;
 }
@@ -384,20 +390,37 @@ async function pollSepaTransfer(id) {
   setTimeout(() => pollSepaTransfer(id), 5000);
 }
 
-	$("btn-send").onclick = async () => {
-	  clearErr("send-err");
-	  $("btn-send").disabled = true;
-	  try {
-	    if (!kycApproved(user)) throw new Error("identity review must be approved before sending");
-	    // Late binding for accounts that skipped registration at onboarding.
+$("btn-send").onclick = async () => {
+  clearErr("send-err");
+  /* Every field the device will sign a commitment over must have been typed.
+     A blank used to become "Recipient" / "+254700000000" and be signed into
+     the transfer as if someone had entered it. Checked before any API call
+     or device-key work, so a refusal costs nothing. Only the rail's own
+     identifier is sent, as the mobile flow does. */
+  const recipient = {
+    recipientName: $("rec-name").value.trim(),
+    recipientPhone: rail === "cash" ? $("rec-phone").value.trim() : undefined,
+    recipientIban: rail === "sepa" ? $("rec-iban").value.trim() : undefined,
+  };
+  const missing = !recipient.recipientName ? ["rec-name", "enter the recipient's name"]
+    : rail === "cash" && !recipient.recipientPhone ? ["rec-phone", "enter the recipient's phone number"]
+    : rail === "sepa" && !recipient.recipientIban ? ["rec-iban", "enter the recipient's IBAN"]
+    : null;
+  if (missing) {
+    showErr("send-err", new Error(missing[1]));
+    $(missing[0]).focus();
+    return;
+  }
+  const btn = $("btn-send");
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    if (!kycApproved(user)) throw new Error("identity review must be approved before sending");
+    // Late binding for accounts that skipped registration at onboarding.
     if (!user.authorizerAddress) await registerDeviceKey(user);
 
     // 1. Propose: the server fixes the terms and returns them unexecuted.
-    const recipient = {
-      recipientName: $("rec-name").value.trim() || "Recipient",
-      recipientPhone: $("rec-phone").value.trim() || "+254700000000",
-      recipientIban: $("rec-iban").value.trim(),
-    };
     const created = await api("/api/transfers", { quoteId: quote.id, ...recipient });
 
     // 2. Authorize: unlock the device key with the passkey and sign the exact
@@ -449,7 +472,7 @@ async function pollSepaTransfer(id) {
     refresh();
     addHistory(t);
   } catch (e) { showErr("send-err", e); }
-  finally { $("btn-send").disabled = false; }
+  finally { btn.disabled = false; btn.textContent = label; }
 };
 
 async function refreshCashPayout() {
@@ -483,6 +506,21 @@ $("btn-again").onclick = () => {
 
 /* ---------- history ---------- */
 const hist = [];
+/* Set when the last activity load failed. An empty `hist` then means "we could
+   not ask", not "nothing happened": an outage must not read as an empty
+   account. Rows already loaded stay on screen; only the empty state changes. */
+let histLoadFailed = false;
+/** The empty state for a transfer list, or the load failure in its place.
+ *  The retry calls loadTransfers() (app/monerium.js) on click, never at parse. */
+function histEmptyHtml(cls, emptyText, style = "") {
+  const st = style ? ` style="${style}"` : "";
+  if (!histLoadFailed) return `<div class="${cls}"${st}>${emptyText}</div>`;
+  return `<div class="${cls}"${st}>Couldn't load your transfers. Check your connection and try again.
+    <button type="button" class="linkbtn" data-hist-retry style="text-decoration:underline">Try again</button></div>`;
+}
+function bindHistRetry(el) {
+  el.querySelectorAll("[data-hist-retry]").forEach((b) => { b.onclick = () => loadTransfers(); });
+}
 function histRow(t) {
   if (t.kind === "funding") {
     const token = t.token === "USDC" ? "USDC" : "EURe";
@@ -512,7 +550,7 @@ function histRow(t) {
   const color = paid ? "var(--green)" : t.state === "REFUNDED" ? "var(--muted)"
     : t.state === "FAILED" ? "var(--red)" : "var(--amber)";
   return `
-    <div class="hic">${sepa ? "🏦" : "🇰🇪"}</div>
+    <div class="hic" aria-hidden="true">${sepa ? "🏦" : "🇰🇪"}</div>
     <div class="hmain">
       <div class="hn">${esc(t.recipientName)}</div>
       <div class="hs">${sub}</div>
@@ -537,7 +575,8 @@ function renderHistory() {
   const h = $("history");
   h.innerHTML = hist.length
     ? hist.map((t) => `<div class="hitem">${histRow(t)}</div>`).join("")
-    : '<div class="empty">No transfers yet</div>';
+    : histEmptyHtml("empty", "No transfers yet");
+  bindHistRetry(h);
   renderTransactionPage();
   renderMobileActivity();
   if ($("dashboard").dataset.msub === "activity") renderActivityScreen();
@@ -555,7 +594,8 @@ function renderTransactionPage() {
   $("tx-total-open").textContent = String(open);
   list.innerHTML = transfers.length
     ? transfers.map((t) => `<div class="hitem">${histRow(t)}</div>`).join("")
-    : '<div class="empty">No transfers match this filter</div>';
+    : hist.length ? '<div class="empty">No transfers match this filter</div>' : histEmptyHtml("empty", "No transfers yet");
+  bindHistRetry(list);
 }
 
 function renderContacts() {

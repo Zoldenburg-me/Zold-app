@@ -28,12 +28,20 @@ export function renderNav() {
     if (v.capability && !verdict.allowed && !verdict.requiresPlan && !verdict.unavailable) continue;
     if (v.section !== section) { section = v.section; if (section) html += `<div class="sect">${esc(section)}</div>`; }
     const locked = v.capability && !verdict.allowed;
-    html += `<a data-view="${v.id}" class="${view === v.id ? "active" : ""}">${esc(v.label)}
+    const here = view === v.id;
+    html += `<a href="?view=${esc(v.id)}" data-view="${esc(v.id)}" class="${here ? "active" : ""}"${here ? ` aria-current="page"` : ""}>${esc(v.label)}
       ${locked ? `<span class="lock">${verdict.unavailable ? "—" : "PRO"}</span>` : ""}</a>`;
   }
   $("#nav").innerHTML = html;
+  // A real link, so a modifier-click or middle-click opens the view in a new
+  // tab (boot reads ?view=). A plain click stays in the page.
   $("#nav").querySelectorAll("a").forEach((a) =>
-    a.onclick = () => { setView(a.dataset.view); render(); });
+    a.onclick = (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      setView(a.dataset.view);
+      render();
+    });
 }
 
 export function planBanner() {

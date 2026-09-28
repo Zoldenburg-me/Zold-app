@@ -85,7 +85,7 @@ function paintDetail(t) {
   $("m-det-receipt").classList.toggle("hidden", !(t.rail === "sepa" && t.state === "PAID"));
   const err = $("m-det-error");
   err.classList.toggle("hidden", !t.error);
-  if (t.error) err.innerHTML = `<span class="material-symbols-rounded" style="font-size:20px;flex:none">warning</span><div>${esc(t.error)}</div>`;
+  if (t.error) err.innerHTML = `<span class="material-symbols-rounded" aria-hidden="true" style="font-size:20px;flex:none">warning</span><div>${esc(t.error)}</div>`;
 }
 
 /* ---------- Share receipt ----------
@@ -136,10 +136,10 @@ async function renderShareScreen() {
 function paintShare() {
   const f = mShare.fields;
   $("m-share-groups").innerHTML = SHARE_GROUPS.map((g) => `
-    <div class="m-sharegroup">
-      <div class="lab">${esc(g.label)}</div>
+    <div class="m-sharegroup" role="group" aria-labelledby="m-sg-${g.key}">
+      <div class="lab" id="m-sg-${g.key}">${esc(g.label)}</div>
       <div class="m-segs">${g.options.map(([id, label]) =>
-        `<button data-sgroup="${g.key}" data-sval="${id}" class="${f[g.key] === id ? "on" : ""}">${esc(label)}</button>`
+        `<button data-sgroup="${g.key}" data-sval="${id}" class="${f[g.key] === id ? "on" : ""}" aria-pressed="${f[g.key] === id}">${esc(label)}</button>`
       ).join("")}</div>
     </div>`).join("");
 
@@ -206,7 +206,7 @@ function paintSharePreview() {
     const off = v === null;
     const shown = off ? "withheld" : v;
     return `<div class="r ${off ? "off" : "on"}">
-      <span class="material-symbols-rounded">${off ? "visibility_off" : "visibility"}</span>
+      <span class="material-symbols-rounded" aria-hidden="true">${off ? "visibility_off" : "visibility"}</span>
       <span>${esc(k)}</span><span class="v">${esc(shown)}</span>
     </div>`;
   }).join("");
@@ -252,6 +252,7 @@ $("m-share-copy").onclick = async () => {
     return;
   }
   btn.textContent = "Link copied";
+  announce("Link copied");
   setTimeout(() => { btn.textContent = "Copy share link"; }, 1800);
 };
 
@@ -274,13 +275,16 @@ function renderActivityScreen() {
   const list = hist.filter((t) => mFilter === "all" || t.rail === mFilter);
   $("m-tx-list").innerHTML = list.length
     ? list.map(mTxRow).join("")
-    : '<div class="m-empty" style="text-align:center;padding:32px 0">Nothing here yet</div>';
+    : hist.length ? '<div class="m-empty" style="text-align:center;padding:32px 0">Nothing here yet</div>'
+      : histEmptyHtml("m-empty", "Nothing here yet", "text-align:center;padding:32px 0");
+  bindHistRetry($("m-tx-list"));
   document.querySelectorAll("#m-filters button").forEach((b) => {
     const on = b.dataset.mfilter === mFilter;
     b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
     // The design puts a leading check on the selected chip only.
     const tick = b.querySelector(".material-symbols-rounded");
-    if (on && !tick) b.insertAdjacentHTML("afterbegin", '<span class="material-symbols-rounded">check</span>');
+    if (on && !tick) b.insertAdjacentHTML("afterbegin", '<span class="material-symbols-rounded" aria-hidden="true">check</span>');
     if (!on && tick) tick.remove();
   });
   bindTxRows($("m-tx-list"));
