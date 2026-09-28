@@ -36,9 +36,13 @@ const searchInput = document.getElementById('searchInput');
 // The operator token is kept for this tab only: it is the remote
 // approval switch for every account, and any same-origin script can read
 // localStorage.
+// Debounced: a request per keystroke would fire a burst of 401s for every
+// prefix of the token.
+let tokenTimer;
 tokenInput.addEventListener('input', () => {
   sessionStorage.setItem('zold_operator_token', tokenInput.value);
-  loadDashboard();
+  clearTimeout(tokenTimer);
+  tokenTimer = setTimeout(loadDashboard, 400);
 });
 localStorage.removeItem('zold_operator_token');
 
@@ -158,7 +162,7 @@ function attentionItems() {
     if (u.kycStatus === 'pending' || u.kycStatus === 'manual_review') {
       items.push({
         kind: 'kyc', label: 'Monerium', who: u.name || u.id, why: `${u.kycStatus.replace('_', ' ')} since ${fmtWhen(u.createdAt)} — activates with a passkey once Monerium attributes an IBAN`,
-        actions: `<button class="btn-icon" data-inspect-user="${escapeHtml(u.id)}" title="View JSON">🔍</button>`,
+        actions: inspectUserBtn(u),
       });
     } else if (u.kycStatus === 'approved' && !u.iban) {
       items.push({
@@ -166,7 +170,7 @@ function attentionItems() {
         why: (u.passkeySafe?.status === 'active' || u.wallet?.deployed)
           ? 'approved, Safe deployed, no IBAN yet — Monerium issues it; the user activates with a passkey tap'
           : 'approved but smart wallet not finished — user must complete onboarding first',
-        actions: `<button class="btn-icon" data-inspect-user="${escapeHtml(u.id)}" title="View JSON">🔍</button>`,
+        actions: inspectUserBtn(u),
       });
     }
   }
@@ -175,17 +179,28 @@ function attentionItems() {
       items.push({
         kind: 'tx', label: t.state, who: t.user?.name || t.user?.id || 'unknown',
         why: `${railLabel(t)} · ${amountLabel(t)} · ${t.statusDetail || t.error || ''}`,
-        actions: `<button class="btn-icon" data-inspect-tx="${escapeHtml(t.id)}">🔍</button>`,
+        actions: inspectTxBtn(t),
       });
     } else if (isStale(t)) {
       items.push({
         kind: 'stale', label: 'STUCK', who: t.user?.name || t.user?.id || 'unknown',
         why: `${railLabel(t)} · ${amountLabel(t)} · in ${t.state} since ${fmtWhen(t.updatedAt || t.createdAt)}`,
-        actions: `<button class="btn-icon" data-inspect-tx="${escapeHtml(t.id)}">🔍</button>`,
+        actions: inspectTxBtn(t),
       });
     }
   }
   return items;
+}
+
+/* Icon-only buttons: the emoji is decoration, the label names the target. */
+function inspectUserBtn(u) {
+  const label = `Inspect user ${u.name || u.id}`;
+  return `<button type="button" class="btn-icon" data-inspect-user="${escapeHtml(u.id)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"><span aria-hidden="true">🔍</span></button>`;
+}
+
+function inspectTxBtn(t, icon = '🔍') {
+  const label = `Inspect transfer ${t.id}`;
+  return `<button type="button" class="btn-icon" data-inspect-tx="${escapeHtml(t.id)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"><span aria-hidden="true">${icon}</span></button>`;
 }
 
 function renderAttention() {
@@ -225,7 +240,9 @@ function jumpToTx(filter) {
 
 function setFilter(groupId, dataKey, value) {
   document.querySelectorAll(`#${groupId} .tab-btn`).forEach(b => {
-    b.classList.toggle('active', b.dataset[dataKey] === value);
+    const on = b.dataset[dataKey] === value;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
   });
 }
 
@@ -289,7 +306,7 @@ function renderUsers() {
         <td style="color: var(--text-muted); font-size: 12px;">${new Date(u.createdAt).toLocaleDateString()}</td>
         <td>
           <div class="actions-cell">
-            <button class="btn-icon" data-inspect-user="${escapeHtml(u.id)}" title="View JSON">🔍</button>
+            ${inspectUserBtn(u)}
           </div>
         </td>
       </tr>
@@ -388,23 +405,34 @@ function renderTransactions() {
         <td><div class="route-stack">${routeChips(t)}</div></td>
         <td style="color: var(--text-muted); font-size: 12px;">${updated ? new Date(updated).toLocaleString() : 'Unknown'}</td>
         <td>
-          <button class="btn-icon" data-inspect-tx="${escapeHtml(t.id)}" title="View route JSON">${routeCount ? '⛓' : '🔍'}</button>
+          ${inspectTxBtn(t, routeCount ? '⛓' : '🔍')}
         </td>
       </tr>
     `;
   }).join('');
 }
 
+/* The modal: focus moves in on open and back to whatever opened it on close,
+   so a keyboard user is not dropped at the top of the page. The opener may
+   have been re-rendered by then; fall back to the same row's fresh button. */
+let modalOpener = null;
+const modalOverlay = document.getElementById('modalOverlay');
+const isModalOpen = () => modalOverlay.classList.contains('open');
+
+function openModal(title, data) {
+  modalOpener = document.activeElement;
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalJson').textContent = JSON.stringify(data, null, 2);
+  modalOverlay.classList.add('open');
+  document.getElementById('modalTitle').focus();
+}
+
 function inspectUser(user) {
-  document.getElementById('modalTitle').textContent = `User: ${user.name} (${user.id})`;
-  document.getElementById('modalJson').textContent = JSON.stringify(user, null, 2);
-  document.getElementById('modalOverlay').classList.add('open');
+  openModal(`User: ${user.name} (${user.id})`, user);
 }
 
 function inspectTransaction(tx) {
-  document.getElementById('modalTitle').textContent = `Transaction: ${tx.id}`;
-  document.getElementById('modalJson').textContent = JSON.stringify(tx, null, 2);
-  document.getElementById('modalOverlay').classList.add('open');
+  openModal(`Transaction: ${tx.id}`, tx);
 }
 
 // Rows carry ids, never JSON: an inline handler built from a user's
@@ -426,13 +454,31 @@ document.addEventListener('click', (ev) => {
 });
 
 function closeModal() {
-  document.getElementById('modalOverlay').classList.remove('open');
+  if (!isModalOpen()) return;
+  modalOverlay.classList.remove('open');
+  let back = modalOpener;
+  if (back && !back.isConnected) {
+    const key = back.dataset?.inspectUser ? 'data-inspect-user' : back.dataset?.inspectTx ? 'data-inspect-tx' : null;
+    const id = key && back.getAttribute(key);
+    back = id ? document.querySelector(`[${key}="${CSS.escape(id)}"]`) : null;
+  }
+  modalOpener = null;
+  back?.focus();
 }
+
+document.addEventListener('keydown', (ev) => {
+  if (!isModalOpen()) return;
+  if (ev.key === 'Escape') { ev.preventDefault(); closeModal(); }
+  // The close button is the modal's only control: Tab stays on it rather
+  // than walking into the page behind the backdrop.
+  if (ev.key === 'Tab') { ev.preventDefault(); modalOverlay.querySelector('.close-btn').focus(); }
+});
+// A click on the backdrop (outside the panel) closes too.
+modalOverlay.addEventListener('click', (ev) => { if (ev.target === modalOverlay) closeModal(); });
 
 document.querySelectorAll('[data-filter]').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
+    setFilter('userFilterTabs', 'filter', btn.dataset.filter);
     currentFilter = btn.dataset.filter;
     renderUsers();
   });
@@ -440,8 +486,7 @@ document.querySelectorAll('[data-filter]').forEach(btn => {
 
 document.querySelectorAll('[data-tx-filter]').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('[data-tx-filter]').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
+    setFilter('txFilterTabs', 'txFilter', btn.dataset.txFilter);
     currentTxFilter = btn.dataset.txFilter;
     renderTransactions();
   });
@@ -464,4 +509,12 @@ function escapeHtml(str) {
 }
 
 loadDashboard();
-setInterval(loadDashboard, 10000);
+// The refresh rebuilds both tables and the triage list, which throws away
+// keyboard focus inside them. Skip a tick while someone is working there or
+// reading the modal; the next tick catches up.
+setInterval(() => {
+  if (isModalOpen()) return;
+  const a = document.activeElement;
+  if (a && a.closest('#usersTableBody, #transactionsTableBody, #attentionList')) return;
+  loadDashboard();
+}, 10000);

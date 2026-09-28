@@ -195,7 +195,7 @@ function bindTxRows(el) {
 function renderMobileActivity() {
   const el = $("m-recent");
   if (!el) return;
-  if (!hist.length) { el.innerHTML = '<div class="m-empty">No transfers yet</div>'; return; }
+  if (!hist.length) { el.innerHTML = histEmptyHtml("m-empty", "No transfers yet"); bindHistRetry(el); return; }
   el.innerHTML = hist.slice(0, 5).map(mTxRow).join("");
   bindTxRows(el);
 }
@@ -217,7 +217,11 @@ function mobileNav(target) {
     amount: "send", recipient: "send", progress: "send", plus: "home", bundle: "home", payment: "home",
     card: "home", home: "home", activity: "activity", detail: "activity", share: "activity",
     profile: "profile", monerium: "profile", recovery: "profile", documents: "profile", links: "home" }[target];
-  document.querySelectorAll("#m-nav button").forEach((b) => b.classList.toggle("active", b.dataset.mnav === navFor));
+  document.querySelectorAll("#m-nav button").forEach((b) => {
+    const on = b.dataset.mnav === navFor;
+    b.classList.toggle("active", on);
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
   if (sub === "bundle") $("m-subtitle").textContent = "Zold Plus";
   if (sub === "bank") renderBankScreen();
@@ -261,12 +265,13 @@ function renderBankScreen() {
         <div class="m-rowk">${esc(r.k)}</div>
         <div class="m-rowv">${esc(r.v)}</div>
       </div>
-      ${r.copy ? `<button class="m-copybtn" data-mcopy="${i}">Copy</button>` : ""}
+      ${r.copy ? `<button class="m-copybtn" data-mcopy="${i}" aria-label="Copy ${esc(r.k)}">Copy</button>` : ""}
     </div>`).join("");
   $("m-bank-rows").querySelectorAll("[data-mcopy]").forEach((b) => {
     b.onclick = async () => {
       try { await navigator.clipboard.writeText(rows[Number(b.dataset.mcopy)].v); } catch { return; }
       b.textContent = "Copied";
+      announce("Copied");
       setTimeout(() => { b.textContent = "Copy"; }, 1400);
     };
   });
@@ -556,7 +561,7 @@ function renderCardScreen() {
           : "Connect a Gnosis Pay account you already have. Zold does not create one for you."}
       </div>
       <button class="m-cta" id="m-card-signin" style="margin-top:16px">Sign in with wallet</button>
-      <div class="m-err hidden" id="m-card-err" style="margin-top:12px"></div>
+      <div class="m-err hidden" role="alert" id="m-card-err" style="margin-top:12px"></div>
       <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
         Gnosis Pay issues and operates this card and holds its KYC. Zold shows your connected account
         and cannot see card activity except when you open this screen.
@@ -591,7 +596,7 @@ function renderCardScreen() {
     </div>
     <button class="m-link" id="m-card-refresh" style="margin-top:12px">Refresh</button>
     <button class="m-link" id="m-card-forget" style="margin-top:12px">Disconnect</button>
-    <div class="m-err hidden" id="m-card-err" style="margin-top:12px"></div>`;
+    <div class="m-err hidden" role="alert" id="m-card-err" style="margin-top:12px"></div>`;
   $("m-card-refresh").onclick = () => gpLoadAccount().catch((e) => showErr("m-card-err", e));
   $("m-card-forget").onclick = gpDisconnect;
 }
@@ -726,7 +731,7 @@ function renderPayScreen() {
     : { ...r, live: caps.cashRail, d: caps.cashRail ? r.d : "Cash pickup opens with a payout partner" });
   $("m-rails").innerHTML = rails.map((r) => `
     <button class="m-rail${r.live ? (r.accent ? " go" : "") : " off"}" ${r.live ? `data-mrail="${r.id}"` : "disabled"}>
-      ${r.live ? `<span class="material-symbols-rounded">${r.icon}</span>` : '<span class="m-tag soon">SOON</span>'}
+      ${r.live ? `<span class="material-symbols-rounded" aria-hidden="true">${r.icon}</span>` : '<span class="m-tag soon">SOON</span>'}
       <span class="t">${esc(r.t)}</span>
       <span class="d">${esc(r.d)}</span>
     </button>`).join("");
@@ -748,7 +753,7 @@ function renderPayScreen() {
           <span class="who" style="display:block">${esc(p.name)}</span>
           <span class="sub" style="display:block;font-family:var(--m-mono)">${esc(p.masked)}</span>
         </span>
-        <span class="material-symbols-rounded" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
+        <span class="material-symbols-rounded" aria-hidden="true" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
       </button>`).join("")
     : '<div class="m-empty">Nobody yet — the people you pay are saved here.</div>';
   bindPayees();
@@ -778,7 +783,7 @@ function renderPayMatches() {
           <span class="who" style="display:block">${esc(p.name)}</span>
           <span class="sub" style="display:block;font-family:var(--m-mono)">${esc(p.masked)}</span>
         </span>
-        <span class="material-symbols-rounded" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
+        <span class="material-symbols-rounded" aria-hidden="true" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
       </button>`).join("")
     : '<div class="m-empty">Nobody you have paid matches that.</div>';
   bindPayees();
@@ -809,7 +814,7 @@ function renderCountryList(filter = "") {
     ? list.map((d) => `<button class="m-optrow" data-mdest="${d.cc}">
         <span class="cc">${d.cc}</span>
         <span class="tx"><span class="t">${esc(d.name)}</span><span class="d">${esc(d.sub)}</span></span>
-        <span class="material-symbols-rounded ch">chevron_right</span>
+        <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
       </button>`).join("")
     : '<div class="m-empty" style="text-align:center;padding:32px 0">No match</div>';
   $("m-country-list").querySelectorAll("[data-mdest]").forEach((b) => {
@@ -836,7 +841,7 @@ function pickDestination(d) {
   $("m-method-cur").textContent = d.cur;
   const m = M_METHODS[d.rail];
   $("m-method-list").innerHTML = `<button class="m-optrow" id="m-pick-method">
-      <span class="material-symbols-rounded ic">${m.icon}</span>
+      <span class="material-symbols-rounded ic" aria-hidden="true">${m.icon}</span>
       <span class="tx"><span class="t">${esc(m.title)}</span><span class="d">${esc(m.sub)}</span></span>
       <span style="text-align:right;flex:none"><span style="display:block;font-size:12px;font-weight:600">${esc(d.eta)}</span><span style="display:block;font-size:10px;color:var(--m-faint);margin-top:2px">fee with quote</span></span>
     </button>`;
@@ -954,7 +959,9 @@ function toRecipient() {
 async function submitMobileSend() {
   clearErr("m-rec-err");
   const btn = $("m-rec-send");
+  const label = btn.textContent;
   btn.disabled = true;
+  btn.textContent = "Sending…";
   const d = mSend.dest;
   const cash = d.rail === "cash";
   try {
@@ -1006,6 +1013,7 @@ async function submitMobileSend() {
     showErr(onProgress ? "m-prog-err" : "m-rec-err", e);
     if (onProgress) $("m-prog-done").classList.remove("hidden");
     btn.disabled = false;
+    btn.textContent = label;
     /* The progress screen was drawn from the CREATED transfer. A refused
        authorize has usually moved it on (FAILED, nothing debited), and the
        screen kept saying "Sending" with the debit step spinning. Re-read it. */
@@ -1051,7 +1059,7 @@ function mTimeline(t) {
     const cls = stalled && i >= reached ? "" : i < reached ? "done" : i === reached ? "active" : "";
     const icon = i < reached ? "check" : stalled && i === reached ? "priority_high" : "more_horiz";
     return `<div class="m-step ${cls}" style="opacity:${i <= reached ? 1 : .45}">
-      <div class="tl"><div class="node"><span class="material-symbols-rounded" style="font-size:18px">${icon}</span></div><div class="line"></div></div>
+      <div class="tl"><div class="node"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:18px">${icon}</span></div><div class="line"></div></div>
       <div class="body"><div class="t">${esc(s.t)}</div><div class="d">${esc(String(s.d))}</div></div>
     </div>`;
   }).join("");

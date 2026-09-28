@@ -41,14 +41,14 @@ async function renderRecoveryScreen() {
   }
   el.innerHTML = `<div class="m-lede" style="font-size:13px">Loading…</div>`;
   try { recoveryScreen = await api(`/api/users/${user.id}/recovery/candide`); }
-  catch (e) { el.innerHTML = `<div class="m-err">${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = `<div class="m-err" role="alert">${esc(e.message)}</div>`; return; }
   const r = recoveryScreen;
   const grace = r.gracePeriodSeconds == null ? "unknown" : r.gracePeriodSeconds < 3600 ? `${Math.round(r.gracePeriodSeconds / 60)} minutes (test module)` : `${Math.round(r.gracePeriodSeconds / 86400)} days`;
   const status = r.guardianStatus === "active" ? "Active" : r.guardianStatus === "pending_setup" ? "Guardian not on your smart account yet" : "Not set up";
   const pending = r.onChain?.pendingRecovery;
   const channels = (r.channels || []).map((c) => `
     <div class="m-secrow">
-      <span class="material-symbols-rounded">${c.channel === "sms" ? "sms" : "mail"}</span>
+      <span class="material-symbols-rounded" aria-hidden="true">${c.channel === "sms" ? "sms" : "mail"}</span>
       <div style="flex:1;min-width:0"><div class="t">${esc(c.target)}</div><div class="d">${c.channel === "sms" ? "SMS code" : "Email code"} · verified ${esc(new Date(c.verifiedAt).toLocaleDateString())}</div></div>
       <button class="m-link" data-rc-remove="${esc(c.registrationId)}">Remove</button>
     </div>`).join("");
@@ -74,7 +74,7 @@ async function renderRecoveryScreen() {
       <div class="m-field"><label>Email or phone (+49…)</label><input id="m-rc-target" autocomplete="off" placeholder="name@example.com or +4915112345678"></div>
       <button class="m-cta" id="m-rc-addbtn" style="margin-top:12px">Register with my passkey</button>
     </div>
-    <div class="m-err hidden" id="m-rc-err" style="margin-top:12px"></div>
+    <div class="m-err hidden" role="alert" id="m-rc-err" style="margin-top:12px"></div>
     <div class="m-lede" style="font-size:12px;margin-top:20px;color:var(--m-dim)">
       Candide holds the guardian key and signs a recovery only after a code is confirmed on EVERY channel here.
       Adding or removing a channel is a message your smart account signs with your passkey. The waiting period is enforced on chain, not by Zold.
@@ -101,6 +101,8 @@ function renderRecoveryOtp() {
     <button class="m-link" id="m-rc-codecancel" style="margin-top:8px">Start over</button>`;
   $("m-rc-codebtn").onclick = async () => {
     clearErr("m-rc-err");
+    const btn = $("m-rc-codebtn");
+    btn.disabled = true;
     try {
       const r = await api(recoveryOtpStage.submitTo, { otp: $("m-rc-code").value });
       recoveryOtpStage = null;
@@ -109,6 +111,7 @@ function renderRecoveryOtp() {
       mobileNav("recovery");
       if (r.next === "guardian") await recoveryActivateGuardian();
     } catch (e) { showErr("m-rc-err", e); }
+    finally { btn.disabled = false; }
   };
   $("m-rc-codecancel").onclick = () => { recoveryOtpStage = null; mobileNav("recovery"); };
 }
@@ -131,6 +134,9 @@ async function recoveryAddChannel(raw) {
 
 async function recoveryActivateGuardian() {
   clearErr("m-rc-err");
+  // Absent when reached straight from a confirmed code rather than a click.
+  const btn = $("m-rc-activate");
+  if (btn) btn.disabled = true;
   try {
     const prep = await api(`/api/users/${user.id}/recovery/candide/guardian`, {});
     if (prep.challenge) {
@@ -140,6 +146,7 @@ async function recoveryActivateGuardian() {
     renderUser(await api(`/api/users/${user.id}`));
     mobileNav("recovery");
   } catch (e) { showErr("m-rc-err", e); }
+  finally { if (btn) btn.disabled = false; }
 }
 
 async function recoveryRemoveChannel(registrationId) {
@@ -157,12 +164,15 @@ async function recoveryRemoveChannel(registrationId) {
 async function recoveryCancelOnChain() {
   clearErr("m-rc-err");
   if (!confirm("Cancel the recovery in progress? The new passkey will not take over this account.")) return;
+  const btn = $("m-rc-cancel");
+  if (btn) btn.disabled = true;
   try {
     const prep = await api(`/api/users/${user.id}/recovery/candide/cancel`, {});
     const sig = await passkeySignPrepared(prep);
     await api(prep.submitTo, sig);
     mobileNav("recovery");
   } catch (e) { showErr("m-rc-err", e); }
+  finally { if (btn) btn.disabled = false; }
 }
 
 /* ---------- lost device: recover from the onboarding page ---------- */

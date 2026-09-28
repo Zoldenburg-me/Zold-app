@@ -146,6 +146,36 @@
   .state .h { font-size: 15px; font-weight: 600; }
   .state .p { font-size: 12.5px; color: var(--muted); margin-top: 8px; line-height: 1.55; }
   .hidden { display: none !important; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+
+  /* Print: the screen palette is white on black, which prints as a blank page
+     (browsers drop backgrounds by default). Swap the tokens to ink on paper,
+     drop the glow and motion, and keep colour only where it carries meaning —
+     the settled/pending tone and the done dots. */
+  @media print {
+    :root {
+      --bg: #fff; --surface: #fff; --chrome: #fff;
+      --line: #c9c9cf; --sep: #e2e2e8; --line-raised: #c9c9cf;
+      --text: #111; --text-2: #222; --text-3: #333;
+      --muted: #555; --faint: #666; --redacted: #999;
+      --mint: #1b7f4b; --amber: #9a6200; --red: #b3261e; --pink: #b0106a;
+    }
+    html, body { background: #fff; }
+    body { min-height: 0; }
+    .wrap { padding: 0; max-width: none; }
+    .glow { display: none; }
+    *, *::before, *::after { animation: none !important; transition: none !important; box-shadow: none !important; }
+    .card { break-inside: avoid; page-break-inside: avoid; }
+    .step, .hop, .row { break-inside: avoid; page-break-inside: avoid; }
+    .disc .hint, .disc .chev { display: none; }
+    .tone-mint, .tone-amber, .tone-red, .dot.done, .v.mint, .badge.sim {
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+  }
 </style>
 </head>
 <body>
@@ -153,7 +183,7 @@
   <div class="brand">
     <div class="lockup">
       <div class="glow"></div>
-      <span class="glyph">&#9661;</span>
+      <span class="glyph" aria-hidden="true">&#9661;</span>
       <span class="word">Zold</span>
     </div>
   </div>
@@ -167,7 +197,7 @@
     <div class="hero">
       <h1 class="amount" id="amount">—</h1>
       <div class="status">
-        <span id="status-icon" class="tone-mint" style="display:flex"></span>
+        <span id="status-icon" class="tone-mint" style="display:flex" aria-hidden="true"></span>
         <span class="lab" id="status-lab">—</span>
         <span class="at" id="status-at"></span>
       </div>
@@ -200,9 +230,9 @@
 
     <div class="sent">
       <span class="l">Sent with</span>
-      <span class="m"><span>&#9661;</span>Zold</span>
+      <span class="m"><span aria-hidden="true">&#9661;</span>Zold</span>
     </div>
-    <div class="note hidden" id="withheld-note">Fields marked &#9618; were withheld by the sender.</div>
+    <div class="note hidden" id="withheld-note">Fields marked <span aria-hidden="true">&#9618;</span><span class="sr-only">withheld</span> were withheld by the sender.</div>
   </main>
 </div>
 
@@ -215,7 +245,9 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
 ));
-const BLOCK = "&#9618;&#9618;&#9618;&#9618;&#9618;";
+/* The glyphs are drawn for the eye; a screen reader hears "withheld" instead
+   of five block characters. */
+const BLOCK = '<span aria-hidden="true">&#9618;&#9618;&#9618;&#9618;&#9618;</span><span class="sr-only">withheld</span>';
 
 function showState(h, p) {
   $("state").classList.remove("hidden");
@@ -224,8 +256,8 @@ function showState(h, p) {
   $("state-p").textContent = p || "";
 }
 
-const CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>';
-const CLOCK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/></svg>';
+const CHECK = '<svg aria-hidden="true" focusable="false" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>';
+const CLOCK = '<svg aria-hidden="true" focusable="false" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/></svg>';
 
 /** A name arrives in parts so the page — not the server — decides how a
  *  withheld half is drawn. `redact` names the missing half; there is no value
@@ -241,6 +273,14 @@ function when(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return "";
   return d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+/* Time of day on its own, formatted directly rather than cut out of the
+   string above — the separator between date and time is a locale detail. */
+const TIME_FMT = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
+function timeOnly(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "" : TIME_FMT.format(d);
 }
 
 function render(r) {
@@ -266,10 +306,10 @@ function render(r) {
 
   $("steps").innerHTML = (r.steps || []).map((s) => `
     <div class="step ${s.done ? "" : "todo"}">
-      <div class="node"><div class="dot ${s.done ? "done" : ""}"></div><div class="line"></div></div>
+      <div class="node"><div class="dot ${s.done ? "done" : ""}" aria-hidden="true"></div><div class="line" aria-hidden="true"></div></div>
       <div class="sbody">
-        <span class="t">${esc(s.title)}</span>
-        <span class="time">${s.time ? esc(when(s.time).split(", ").pop()) : ""}</span>
+        <span class="t">${esc(s.title)}<span class="sr-only"> (${s.done ? "done" : "pending"})</span></span>
+        <span class="time">${s.time ? esc(timeOnly(s.time)) : ""}</span>
       </div>
     </div>`).join("");
 
@@ -282,7 +322,7 @@ function render(r) {
       ? '<svg width="12" height="12" viewBox="0 0 639 639" aria-hidden="true"><path fill="#0052FF" d="M318.3,639c176.4,0,319.5-143,319.5-319.5C637.8,143.1,494.8,0,318.3,0C151,0,13.6,128.8,0,292.6h422.2v53.7H0C13.6,510.2,151,639,318.3,639L318.3,639z"/></svg>'
       : esc(String(i + 1).padStart(2, "0"));
     const ref = h.withheld
-      ? `<div class="href redact">${BLOCK}${BLOCK} · withheld by sender</div>`
+      ? `<div class="href redact"><span aria-hidden="true">&#9618;&#9618;&#9618;&#9618;&#9618;&#9618;&#9618;&#9618;&#9618;&#9618; · </span>withheld by sender</div>`
       : h.ref ? `<div class="href">${esc(h.ref)}</div>` : "";
     const sim = h.simulated ? '<span class="badge sim">simulated</span>' : "";
     return `<div class="hop">

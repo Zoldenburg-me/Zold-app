@@ -23,7 +23,8 @@
   a:hover { color: #ed188d; }
   a.pill:hover { background: #ff2d9e; color: #fff; }
   a.ghost:hover { border-color: #4a4a55; color: #ededf0; }
-  a:focus-visible { outline: 2px solid #ed188d; outline-offset: 2px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid #ed188d; outline-offset: 2px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   ::selection { background: rgba(237,24,141,.3); }
   img { max-width: 100%; }
   @keyframes zfloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
@@ -42,7 +43,7 @@
   <div style="position:sticky; top:0; z-index:40; backdrop-filter:blur(14px); background:rgba(8,8,11,.78); border-bottom:1px solid rgba(35,35,40,.9)">
     <div style="max-width:1140px; margin:0 auto; padding:14px 24px; display:flex; align-items:center; gap:24px">
       <a href="#top" style="display:flex; align-items:center; gap:9px; font-size:17px; font-weight:600; letter-spacing:-.03em">
-        <span style="color:#ed188d; font-size:15px; line-height:1">▽</span>Zold
+        <span aria-hidden="true" style="color:#ed188d; font-size:15px; line-height:1">▽</span>Zold
       </a>
       <div style="flex:1"></div>
       <!-- Two products, named in the menu. Personal is the consumer account at
@@ -62,7 +63,7 @@
     <div style="position:absolute; inset:-140px 0 auto; height:820px; pointer-events:none; background:radial-gradient(52% 48% at 50% 30%, rgba(237,24,141,.30), rgba(237,24,141,.07) 55%, transparent 72%); animation:zpulse 9s ease-in-out infinite"></div>
     <div style="position:relative; max-width:1140px; margin:0 auto">
       <div style="display:inline-flex; align-items:center; gap:8px; padding:6px 13px 6px 9px; border:1px solid rgba(237,24,141,.35); border-radius:999px; font-size:12px; color:#e8a9cd; background:rgba(237,24,141,.07)">
-        <span class="js-net-dot" style="width:6px; height:6px; border-radius:50%; background:#f5a623; box-shadow:0 0 8px #f5a623"></span><span><span class="js-net">Base</span> · Monerium IBAN<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
+        <span class="js-net-dot" style="width:6px; height:6px; border-radius:50%; background:#f5a623; box-shadow:0 0 8px #f5a623"></span><span><span class="js-net">Base</span> · Monerium IBAN<a href="#notes" aria-label="Note 1" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
       </div>
 
       <!-- Hero headline: a fixed line plus a rotating one.
@@ -73,13 +74,16 @@
            page under the reader. -->
       <h1 style="margin:22px 0 0; font-size:clamp(52px,9vw,108px); line-height:.92; font-weight:600; letter-spacing:-.05em; color:#fbf9fc">Bank on Chain</h1>
 
-      <div class="rot" aria-live="polite" style="position:relative; margin:14px 0 0; height:1.25em; font-size:clamp(22px,3.4vw,38px); line-height:1.25; font-weight:600; letter-spacing:-.03em">
+      <!-- No aria-live: a phrase that changes every 2.6 s forever would talk over
+           the rest of the page. Screen readers get one stable line instead. -->
+      <div class="rot" style="position:relative; margin:14px 0 0; height:1.25em; font-size:clamp(22px,3.4vw,38px); line-height:1.25; font-weight:600; letter-spacing:-.03em">
         <!-- Invisible sizer: reserves the width of the longest phrase. -->
         <span class="rot-sizer" aria-hidden="true" style="visibility:hidden; white-space:nowrap">your own IBAN</span>
-        <span id="rot-word" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; white-space:nowrap; background:linear-gradient(90deg,#c084fc,#ed188d); -webkit-background-clip:text; background-clip:text; color:transparent; transition:opacity .32s ease, transform .32s ease">Zold</span>
+        <span class="sr-only">Zold: your own IBAN, smart money</span>
+        <span id="rot-word" aria-hidden="true" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; white-space:nowrap; background:linear-gradient(90deg,#c084fc,#ed188d); -webkit-background-clip:text; background-clip:text; color:transparent; transition:opacity .32s ease, transform .32s ease">Zold</span>
       </div>
 
-      <p style="margin:20px auto 0; max-width:650px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Get paid to your own IBAN or in USDC, hold euros in a smart account only your passkey can spend from, and pay any IBAN in Europe over SEPA with no Zold fee. More countries open as payout partners sign.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
+      <p style="margin:20px auto 0; max-width:650px; font-size:clamp(15px,1.6vw,17px); line-height:1.6; color:#9a9aa5">Get paid to your own IBAN or in USDC, hold euros in a smart account only your passkey can spend from, and pay any IBAN in Europe over SEPA with no Zold fee. More countries open as payout partners sign.<a href="#notes" aria-label="Note 3" style="color:#ed188d; font-size:11px; vertical-align:super">3</a></p>
 
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:30px">
         <a href="/app" style="display:inline-flex; align-items:center; height:46px; padding:0 26px; border-radius:999px; background:#ed188d; color:#fff; font-size:14.5px; font-weight:600; box-shadow:0 10px 34px rgba(237,24,141,.4)" class="pill">Open a personal account</a>
@@ -87,9 +91,9 @@
       </div>
     </div>
 
-    <div style="position:relative; max-width:1000px; margin:clamp(44px,6vw,74px) auto 0; padding:0 0 clamp(40px,6vw,80px)">
+    <div role="img" aria-label="Illustration of the Zold app: an example euro balance and a SEPA payout quote. Not a real account." style="position:relative; max-width:1000px; margin:clamp(44px,6vw,74px) auto 0; padding:0 0 clamp(40px,6vw,80px)">
       <div style="position:absolute; left:8%; right:8%; top:18%; bottom:6%; background:radial-gradient(50% 50% at 50% 50%, rgba(237,24,141,.34), transparent 70%); filter:blur(38px); pointer-events:none"></div>
-      <div style="position:relative; border:1px solid #232328; border-radius:16px; background:linear-gradient(180deg,#131317,#0d0d11); box-shadow:0 40px 90px rgba(0,0,0,.65); overflow:hidden; text-align:left">
+      <div aria-hidden="true" style="position:relative; border:1px solid #232328; border-radius:16px; background:linear-gradient(180deg,#131317,#0d0d11); box-shadow:0 40px 90px rgba(0,0,0,.65); overflow:hidden; text-align:left">
         <div style="display:flex; align-items:center; gap:12px; padding:11px 16px; border-bottom:1px solid #1e1e23; background:#0e0e12">
           <div style="display:flex; gap:6px">
             <span style="width:9px; height:9px; border-radius:50%; background:#2c2c33"></span>
@@ -143,30 +147,30 @@
   <section id="rails" style="padding:clamp(56px,8vw,96px) 24px; text-align:center">
     <div style="max-width:900px; margin:0 auto">
       <h2 style="margin:0; font-size:clamp(28px,4.4vw,48px); line-height:1.04; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">One account. Money in, money out.</h2>
-      <p style="margin:16px auto 0; max-width:620px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Euros arrive over SEPA to your own IBAN, or as USDC on Base, and land in a smart account you control.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">1</a> They leave as a SEPA payment to any European IBAN. Cash pickup and other countries are built but stay closed until a payout partner is signed.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">2,3</a></p>
+      <p style="margin:16px auto 0; max-width:620px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Euros arrive over SEPA to your own IBAN, or as USDC on Base, and land in a smart account you control.<a href="#notes" aria-label="Note 1" style="color:#ed188d; font-size:11px; vertical-align:super">1</a> They leave as a SEPA payment to any European IBAN. Cash pickup and other countries are built but stay closed until a payout partner is signed.<a href="#notes" aria-label="Notes 2 and 3" style="color:#ed188d; font-size:11px; vertical-align:super">2,3</a></p>
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:clamp(18px,3vw,38px); margin-top:clamp(34px,5vw,52px)">
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#e8a9cd; box-shadow:inset 0 1px 0 rgba(255,255,255,.05)"><i class="ph ph-bank"></i></span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#e8a9cd; box-shadow:inset 0 1px 0 rgba(255,255,255,.05)"><i aria-hidden="true" class="ph ph-bank"></i></span>
           <span style="font-size:11.5px; color:#8a8a94">IBAN</span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
           <span style="width:56px; height:56px; border-radius:50%; border:1px solid rgba(237,24,141,.4); background:radial-gradient(70% 70% at 50% 25%, rgba(237,24,141,.22), #0d0d11); display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:600; color:#ffd6ec; box-shadow:0 0 26px rgba(237,24,141,.28)">€</span>
-          <span style="font-size:11.5px; color:#8a8a94">e-money<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
+          <span style="font-size:11.5px; color:#8a8a94">e-money<a href="#notes" aria-label="Note 1" style="color:#ed188d; font-size:10px; vertical-align:super; margin-left:1px">1</a></span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-arrows-left-right"></i></span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i aria-hidden="true" class="ph ph-arrows-left-right"></i></span>
           <span style="font-size:11.5px; color:#8a8a94">SEPA</span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-currency-circle-dollar"></i></span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i aria-hidden="true" class="ph ph-currency-circle-dollar"></i></span>
           <span style="font-size:11.5px; color:#8a8a94">USDC on Base</span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-credit-card"></i></span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i aria-hidden="true" class="ph ph-credit-card"></i></span>
           <span style="font-size:11.5px; color:#8a8a94">Card via Gnosis Pay</span>
         </div>
         <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:92px; opacity:.5">
-          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i class="ph ph-hand-coins"></i></span>
+          <span style="width:56px; height:56px; border-radius:50%; border:1px solid #2c2c33; background:radial-gradient(70% 70% at 50% 25%, #17171d, #0d0d11); display:flex; align-items:center; justify-content:center; font-size:22px; color:#cfcfd8"><i aria-hidden="true" class="ph ph-hand-coins"></i></span>
           <span style="font-size:11.5px; color:#8a8a94">Cash pickup · soon</span>
         </div>
       </div>
@@ -177,11 +181,11 @@
 
   <section id="account" style="padding:clamp(56px,8vw,104px) 24px">
     <div style="max-width:1080px; margin:0 auto; display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:clamp(32px,5vw,64px); align-items:center">
-      <div style="position:relative">
+      <div role="img" aria-label="Illustration of a Zold euro account card with an example IBAN and account holder." style="position:relative">
         <div style="position:absolute; inset:12% 6%; background:radial-gradient(50% 50% at 40% 45%, rgba(237,24,141,.28), transparent 72%); filter:blur(30px)"></div>
-        <div style="position:relative; border:1px solid #2c2c33; border-radius:18px; padding:clamp(20px,3vw,28px); background:linear-gradient(150deg,#17171d,#0c0c10); box-shadow:0 30px 70px rgba(0,0,0,.6)">
+        <div aria-hidden="true" style="position:relative; border:1px solid #2c2c33; border-radius:18px; padding:clamp(20px,3vw,28px); background:linear-gradient(150deg,#17171d,#0c0c10); box-shadow:0 30px 70px rgba(0,0,0,.6)">
           <div style="display:flex; align-items:center; justify-content:space-between">
-            <span style="display:flex; align-items:center; gap:7px; font-size:14px; font-weight:600; letter-spacing:-.02em"><span style="color:#ed188d">▽</span>Zold</span>
+            <span style="display:flex; align-items:center; gap:7px; font-size:14px; font-weight:600; letter-spacing:-.02em"><span aria-hidden="true" style="color:#ed188d">▽</span>Zold</span>
             <span style="font-size:10.5px; letter-spacing:.1em; color:#8a8a94">EUR ACCOUNT</span>
           </div>
           <div style="margin-top:clamp(28px,5vw,54px); font-size:clamp(15px,2vw,19px); letter-spacing:.14em; color:#ededf0; font-variant-numeric:tabular-nums">GB59 MONE 0000 0042 8817</div>
@@ -201,11 +205,11 @@
       <div>
         <span style="display:inline-flex; align-items:center; gap:8px; font-size:11.5px; font-weight:600; letter-spacing:.13em; color:#8a8a94">YOUR MONEY</span>
         <h2 style="margin:14px 0 0; font-size:clamp(28px,4vw,44px); line-height:1.05; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">Your euros stay yours.</h2>
-        <p style="margin:16px 0 0; max-width:46ch; font-size:15.5px; line-height:1.6; color:#9a9aa5">Money paid into your IBAN is held as regulated electronic money,<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">1</a> backed one-for-one and recorded against your account — not pooled with a company's own funds. It sits there until you decide to send it.</p>
+        <p style="margin:16px 0 0; max-width:46ch; font-size:15.5px; line-height:1.6; color:#9a9aa5">Money paid into your IBAN is held as regulated electronic money,<a href="#notes" aria-label="Note 1" style="color:#ed188d; font-size:11px; vertical-align:super">1</a> backed one-for-one and recorded against your account — not pooled with a company's own funds. It sits there until you decide to send it.</p>
         <div style="display:grid; gap:14px; margin-top:26px">
-          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#ed188d; font-size:17px; line-height:1.35"><i class="ph ph-coins"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">One balance, in euros</div><div style="font-size:13px; color:#8a8a94">No monthly fee, no minimum, nothing to convert before you can spend it.</div></div></div>
-          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#ed188d; font-size:17px; line-height:1.35"><i class="ph ph-fingerprint"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Nothing leaves without your face or fingerprint<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super">4</a></div><div style="font-size:13px; color:#8a8a94">You approve one exact amount, to one exact person. That approval can't be reused or redirected.</div></div></div>
-          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#ed188d; font-size:17px; line-height:1.35"><i class="ph ph-list-checks"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">You always know where a payment is</div><div style="font-size:13px; color:#8a8a94">Sent, collected, or back in your balance with the reason it came back. Never in limbo.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#ed188d; font-size:17px; line-height:1.35"><i aria-hidden="true" class="ph ph-coins"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">One balance, in euros</div><div style="font-size:13px; color:#8a8a94">No monthly fee, no minimum, nothing to convert before you can spend it.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#ed188d; font-size:17px; line-height:1.35"><i aria-hidden="true" class="ph ph-fingerprint"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Nothing leaves without your face or fingerprint<a href="#notes" aria-label="Note 4" style="color:#ed188d; font-size:10px; vertical-align:super">4</a></div><div style="font-size:13px; color:#8a8a94">You approve one exact amount, to one exact person. That approval can't be reused or redirected.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#ed188d; font-size:17px; line-height:1.35"><i aria-hidden="true" class="ph ph-list-checks"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">You always know where a payment is</div><div style="font-size:13px; color:#8a8a94">Sent, collected, or back in your balance with the reason it came back. Never in limbo.</div></div></div>
         </div>
       </div>
     </div>
@@ -239,7 +243,7 @@
         <span style="margin-top:auto; font-size:10.5px; line-height:1.35; color:#5b5b66">Card</span>
       </div>
     </div>
-    <p style="margin:clamp(26px,3.4vw,38px) auto 0; max-width:70ch; font-size:12.5px; line-height:1.65; color:#8a8a94"><span style="color:#ededf0; font-weight:600">Zold is not a bank.</span> Your euros are issued and held as e-money by Monerium ehf., supervised by the Central Bank of Iceland.<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super">1</a> <a href="#notes" style="color:#e8a9cd">Full notes</a>.</p>
+    <p style="margin:clamp(26px,3.4vw,38px) auto 0; max-width:70ch; font-size:12.5px; line-height:1.65; color:#8a8a94"><span style="color:#ededf0; font-weight:600">Zold is not a bank.</span> Your euros are issued and held as e-money by Monerium ehf., supervised by the Central Bank of Iceland.<a href="#notes" aria-label="Note 1" style="color:#ed188d; font-size:10px; vertical-align:super">1</a> <a href="#notes" style="color:#e8a9cd">Full notes</a>.</p>
   </section>
 
   <div style="height:1px; background:linear-gradient(90deg,transparent,#232328 12%,#232328 88%,transparent)"></div>
@@ -252,13 +256,13 @@
 
       <div style="display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:clamp(20px,4vw,44px); margin-top:clamp(36px,5vw,56px)">
         <div style="display:grid; gap:14px; min-width:190px; text-align:left">
-          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-fingerprint"></i></span>Passkey login</div>
-          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 8.5s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-shield-check"></i></span>Your passkey owns the account</div>
-          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7.8s ease-in-out infinite"><span style="color:#f5a623; font-size:16px"><i class="ph ph-timer"></i></span>Quote expiry</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i aria-hidden="true" class="ph ph-fingerprint"></i></span>Passkey login</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 8.5s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i aria-hidden="true" class="ph ph-shield-check"></i></span>Your passkey owns the account</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7.8s ease-in-out infinite"><span style="color:#f5a623; font-size:16px"><i aria-hidden="true" class="ph ph-timer"></i></span>Quote expiry</div>
         </div>
 
-        <div style="position:relative; width:clamp(248px,26vw,292px); border:1px solid #2c2c33; border-radius:38px; padding:10px; background:linear-gradient(180deg,#1a1a20,#0b0b0e); box-shadow:0 40px 90px rgba(0,0,0,.7), 0 0 60px rgba(237,24,141,.18)">
-          <div style="border-radius:30px; background:#0c0c10; overflow:hidden; text-align:left">
+        <div role="img" aria-label="Illustration of a phone approving an example €250 SEPA payout with a passkey." style="position:relative; width:clamp(248px,26vw,292px); border:1px solid #2c2c33; border-radius:38px; padding:10px; background:linear-gradient(180deg,#1a1a20,#0b0b0e); box-shadow:0 40px 90px rgba(0,0,0,.7), 0 0 60px rgba(237,24,141,.18)">
+          <div aria-hidden="true" style="border-radius:30px; background:#0c0c10; overflow:hidden; text-align:left">
             <div style="display:flex; justify-content:center; padding:9px 0 4px"><span style="width:56px; height:5px; border-radius:3px; background:#232328"></span></div>
             <div style="padding:14px 18px 20px">
               <div style="font-size:11px; letter-spacing:.12em; color:#5b5b66">APPROVE PAYOUT</div>
@@ -271,7 +275,7 @@
                 <div style="display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #1c1c21"><span style="color:#8a8a94">Quote expires</span><span class="js-expiry" style="color:#f5a623">9:02</span></div>
               </div>
               <div style="margin-top:16px; display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:12px; border:1px solid rgba(237,24,141,.3); background:rgba(237,24,141,.08)">
-                <span style="color:#ed188d; font-size:19px"><i class="ph ph-fingerprint"></i></span>
+                <span style="color:#ed188d; font-size:19px"><i aria-hidden="true" class="ph ph-fingerprint"></i></span>
                 <span style="font-size:12.5px; color:#f0d3e4">Touch ID to sign this exact payout</span>
               </div>
               <div style="margin-top:12px; height:40px; border-radius:999px; background:#ed188d; color:#fff; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:600; box-shadow:0 8px 26px rgba(237,24,141,.4)">Approve &amp; send</div>
@@ -280,9 +284,9 @@
         </div>
 
         <div style="display:grid; gap:14px; min-width:190px; text-align:left">
-          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 8.2s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i class="ph ph-signature"></i></span>Recipient fixed at signing</div>
-          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7.4s ease-in-out infinite"><span style="color:#f5a623; font-size:16px"><i class="ph ph-magnifying-glass"></i></span>Stuck payments flagged, not guessed</div>
-          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 9s ease-in-out infinite"><span style="color:#3dd68c; font-size:16px"><i class="ph ph-arrow-u-up-left"></i></span>Refund on failure</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 8.2s ease-in-out infinite"><span style="color:#ed188d; font-size:16px"><i aria-hidden="true" class="ph ph-signature"></i></span>Recipient fixed at signing</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 7.4s ease-in-out infinite"><span style="color:#f5a623; font-size:16px"><i aria-hidden="true" class="ph ph-magnifying-glass"></i></span>Stuck payments flagged, not guessed</div>
+          <div style="display:flex; align-items:center; gap:10px; padding:11px 14px; border:1px solid #2c2c33; border-radius:14px; background:rgba(19,19,23,.8); backdrop-filter:blur(8px); font-size:13px; animation:zfloat 9s ease-in-out infinite"><span style="color:#3dd68c; font-size:16px"><i aria-hidden="true" class="ph ph-arrow-u-up-left"></i></span>Refund on failure</div>
         </div>
       </div>
     </div>
@@ -298,11 +302,11 @@
     <div style="max-width:1080px; margin:0 auto; display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:clamp(32px,5vw,64px); align-items:center">
 
       <div style="order:2">
-        <div style="position:relative">
+        <div role="img" aria-label="Illustration of a business payment run of two supplier payments waiting for a second approver." style="position:relative">
           <div style="position:absolute; inset:12% 6%; background:radial-gradient(50% 50% at 60% 45%, rgba(139,92,246,.26), transparent 72%); filter:blur(30px)"></div>
-          <div style="position:relative; border:1px solid #2c2c33; border-radius:18px; padding:clamp(18px,2.6vw,24px); background:linear-gradient(150deg,#17171d,#0c0c10); box-shadow:0 30px 70px rgba(0,0,0,.6)">
+          <div aria-hidden="true" style="position:relative; border:1px solid #2c2c33; border-radius:18px; padding:clamp(18px,2.6vw,24px); background:linear-gradient(150deg,#17171d,#0c0c10); box-shadow:0 30px 70px rgba(0,0,0,.6)">
             <div style="display:flex; align-items:center; justify-content:space-between; gap:12px">
-              <span style="display:flex; align-items:center; gap:7px; font-size:13.5px; font-weight:600; letter-spacing:-.02em"><span style="color:#ed188d">▽</span>Acme GmbH</span>
+              <span style="display:flex; align-items:center; gap:7px; font-size:13.5px; font-weight:600; letter-spacing:-.02em"><span aria-hidden="true" style="color:#ed188d">▽</span>Acme GmbH</span>
               <span style="font-size:10px; font-weight:600; letter-spacing:.06em; padding:3px 8px; border-radius:999px; background:rgba(245,166,35,.14); color:#f5a623">PENDING REVIEW</span>
             </div>
 
@@ -317,7 +321,7 @@
             </div>
 
             <div style="margin-top:14px; padding-top:13px; border-top:1px solid #1c1c21; display:flex; align-items:center; gap:9px">
-              <span style="color:#8b5cf6; font-size:15px; line-height:1"><i class="ph ph-users-three"></i></span>
+              <span style="color:#8b5cf6; font-size:15px; line-height:1"><i aria-hidden="true" class="ph ph-users-three"></i></span>
               <span style="font-size:12px; color:#8a8a94">Drafted by Miriam · needs a second approver</span>
             </div>
             <div style="margin-top:12px; display:flex; gap:8px">
@@ -331,18 +335,18 @@
       <div style="order:1">
         <span style="display:inline-flex; align-items:center; gap:8px; font-size:11.5px; font-weight:600; letter-spacing:.13em; color:#8a8a94">FOR BUSINESS</span>
         <h2 style="margin:14px 0 0; font-size:clamp(28px,4vw,44px); line-height:1.05; font-weight:600; letter-spacing:-.04em; color:#fbf9fc">Your company's money, with the controls a company needs.</h2>
-        <p style="margin:16px 0 0; max-width:46ch; font-size:15.5px; line-height:1.6; color:#9a9aa5">An organisation holds the accounts, not a person. Invite your team, give each of them only what their job needs, and put a second pair of eyes in front of every payment that leaves.<a href="#notes" style="color:#ed188d; font-size:11px; vertical-align:super">5</a></p>
+        <p style="margin:16px 0 0; max-width:46ch; font-size:15.5px; line-height:1.6; color:#9a9aa5">An organisation holds the accounts, not a person. Invite your team, give each of them only what their job needs, and put a second pair of eyes in front of every payment that leaves.<a href="#notes" aria-label="Note 5" style="color:#ed188d; font-size:11px; vertical-align:super">5</a></p>
 
         <div style="display:grid; gap:14px; margin-top:26px">
-          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-users-three"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Roles that separate the books from the money</div><div style="font-size:13px; color:#8a8a94">Your bookkeeper can categorise every transaction and never send a euro. Viewer, accountant, payer, admin, owner.</div></div></div>
-          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-seal-check"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Four eyes on every payment run</div><div style="font-size:13px; color:#8a8a94">Whoever drafts a payment cannot approve it. And if a payee's bank details change after approval, the payment stops instead of following them.</div></div></div>
-          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-receipt"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Invoices your suppliers can actually use</div><div style="font-size:13px; color:#8a8a94">Send a one-time link. They fill in the invoice with no account, no wallet and no onboarding, and you pay it from the same screen.</div></div></div>
-          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i class="ph ph-notebook"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Books your accountant recognises</div><div style="font-size:13px; color:#8a8a94">Your own chart of accounts, rules that map transactions to it automatically, cost basis, and a CSV that opens in the ledger you already keep.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i aria-hidden="true" class="ph ph-users-three"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Roles that separate the books from the money</div><div style="font-size:13px; color:#8a8a94">Your bookkeeper can categorise every transaction and never send a euro. Viewer, accountant, payer, admin, owner.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i aria-hidden="true" class="ph ph-seal-check"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Four eyes on every payment run</div><div style="font-size:13px; color:#8a8a94">Whoever drafts a payment cannot approve it. And if a payee's bank details change after approval, the payment stops instead of following them.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i aria-hidden="true" class="ph ph-receipt"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Invoices your suppliers can actually use</div><div style="font-size:13px; color:#8a8a94">Send a one-time link. They fill in the invoice with no account, no wallet and no onboarding, and you pay it from the same screen.</div></div></div>
+          <div style="display:flex; gap:12px; align-items:flex-start"><span style="color:#8b5cf6; font-size:17px; line-height:1.35"><i aria-hidden="true" class="ph ph-notebook"></i></span><div><div style="font-size:14.5px; font-weight:600; color:#ededf0">Books your accountant recognises</div><div style="font-size:13px; color:#8a8a94">Your own chart of accounts, rules that map transactions to it automatically, cost basis, and a CSV that opens in the ledger you already keep.</div></div></div>
         </div>
 
         <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:30px">
           <a href="/business" style="display:inline-flex; align-items:center; height:44px; padding:0 22px; border-radius:999px; background:#ed188d; color:#fff; font-size:14px; font-weight:600; box-shadow:0 10px 30px rgba(237,24,141,.34)" class="pill">Open a business account</a>
-          <span style="font-size:12.5px; color:#5b5b66">Free while you are getting started · 30-day trial of the paid plan<a href="#notes" style="color:#ed188d; font-size:10px; vertical-align:super">5</a></span>
+          <span style="font-size:12.5px; color:#5b5b66">Free while you are getting started · 30-day trial of the paid plan<a href="#notes" aria-label="Note 5" style="color:#ed188d; font-size:10px; vertical-align:super">5</a></span>
         </div>
       </div>
 
@@ -354,7 +358,7 @@
   <section id="launch" style="position:relative; padding:clamp(64px,9vw,120px) 24px; text-align:center; overflow:hidden">
     <div style="position:absolute; left:50%; bottom:-220px; width:min(760px,120%); height:520px; transform:translateX(-50%); background:radial-gradient(50% 50% at 50% 50%, rgba(237,24,141,.28), transparent 70%); pointer-events:none"></div>
     <div style="position:relative">
-      <span style="display:inline-flex; align-items:center; justify-content:center; width:72px; height:72px; border-radius:20px; border:1px solid rgba(237,24,141,.35); background:linear-gradient(160deg,#1b1b22,#0d0d11); box-shadow:0 0 44px rgba(237,24,141,.3); font-size:26px; color:#ed188d">▽</span>
+      <span aria-hidden="true" style="display:inline-flex; align-items:center; justify-content:center; width:72px; height:72px; border-radius:20px; border:1px solid rgba(237,24,141,.35); background:linear-gradient(160deg,#1b1b22,#0d0d11); box-shadow:0 0 44px rgba(237,24,141,.3); font-size:26px; color:#ed188d">▽</span>
       <h2 style="margin:24px 0 0; font-size:clamp(28px,4.6vw,52px); line-height:1.04; font-weight:600; letter-spacing:-.045em; color:#fbf9fc">Get started with Zold.</h2>
       <p style="margin:14px auto 0; max-width:440px; font-size:15.5px; line-height:1.6; color:#9a9aa5">Create a passkey, connect Monerium for your IBAN, and send.</p>
       <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin-top:28px">
@@ -372,7 +376,7 @@
     <div style="max-width:1080px; margin:0 auto">
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:32px 40px">
         <div style="max-width:34ch">
-          <span style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:600; letter-spacing:-.02em"><span style="color:#ed188d">▽</span>Zold <span style="font-weight:400; color:#5b5b66">by Zoldenburg</span></span>
+          <span style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:600; letter-spacing:-.02em"><span aria-hidden="true" style="color:#ed188d">▽</span>Zold <span style="font-weight:400; color:#5b5b66">by Zoldenburg</span></span>
           <p style="margin:12px 0 0; font-size:13px; line-height:1.6; color:#8a8a94">A euro account with your own IBAN, held in a smart account only you can spend from. Zold is software, not a bank.</p>
         </div>
         <div>
