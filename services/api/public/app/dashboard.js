@@ -178,7 +178,7 @@ function mTxRow(t) {
       <span class="sub" style="display:block">${sepa ? "SEPA" : "MoneyGram cash"} · ${esc(when)} · ${esc(recv)}</span>
     </span>
     <span style="text-align:right;flex:none">
-      <span class="amt m-fig" style="display:block">−€${fmt(t.sendEur)}</span>
+      <span class="amt m-fig" style="display:block">${txAmountLabel(t)}</span>
       <span class="st" style="display:block;color:${st.colour}">${st.label}</span>
     </span>
   </button>`;
@@ -844,23 +844,49 @@ function pickDestination(d) {
   mobileNav("method");
 }
 
+/**
+ * Euros as typed, to the cent, or NaN. A comma is a decimal separator: this
+ * is a euro app and a German keyboard's inputmode=decimal types "120,50",
+ * which Number() refused while the screen only said "Enter an amount". No
+ * exponents ("1e3") and nothing below a cent, which priced as €0.00.
+ */
+function parseEurInput(raw) {
+  const v = String(raw ?? "").replace(/\s/g, "");
+  if (!/^\d+([.,]\d{0,2})?$/.test(v)) return NaN;
+  const n = Number(v.replace(",", "."));
+  return n >= 0.01 ? n : NaN;
+}
+
+/** Bumped per request: a slow answer for an amount the user has since
+ *  changed must not replace the quote for the amount on screen. */
+let mQuoteSeq = 0;
+
 /** Price the corridor. Refuses to show a figure it did not get from the API. */
 async function requestQuote() {
   const d = mSend.dest;
-  const amount = Number($("m-amount").value);
+  const typed = ($("m-amount").value || "").trim();
+  const amount = parseEurInput(typed);
+  const seq = ++mQuoteSeq;
   mSend.quote = null;
   $("m-amount-next").disabled = true;
   $("m-quote-total").classList.add("hidden");
   $("m-quote-note").classList.add("hidden");
   $("m-quote-rows").innerHTML = "";
   clearErr("m-amount-err");
-  if (!d || !(amount > 0)) { $("m-quote-status").textContent = "Enter an amount to price it."; return; }
+  if (!d || !(amount > 0)) {
+    $("m-quote-status").textContent = typed && !/^0*[.,]?0*$/.test(typed)
+      ? "Enter an amount in euros and cents, like 120 or 120,50."
+      : "Enter an amount to price it.";
+    return;
+  }
   $("m-quote-status").textContent = "Pricing…";
   try {
     const q = await api("/api/quotes", { userId: user.id, rail: d.rail, sendEur: amount });
+    if (seq !== mQuoteSeq) return;
     mSend.quote = q;
     renderQuote(q);
   } catch (e) {
+    if (seq !== mQuoteSeq) return;
     $("m-quote-status").textContent = "";
     showErr("m-amount-err", e);
   }
@@ -980,6 +1006,20 @@ async function submitMobileSend() {
     showErr(onProgress ? "m-prog-err" : "m-rec-err", e);
     if (onProgress) $("m-prog-done").classList.remove("hidden");
     btn.disabled = false;
+    /* The progress screen was drawn from the CREATED transfer. A refused
+       authorize has usually moved it on (FAILED, nothing debited), and the
+       screen kept saying "Sending" with the debit step spinning. Re-read it. */
+    if (onProgress && mSend.transfer?.id) {
+      try {
+        const fresh = await api(`/api/transfers/${mSend.transfer.id}`);
+        if (fresh.id === mSend.transfer?.id && fresh.state !== "CREATED") {
+          mSend.transfer = fresh;
+          renderProgress(fresh);
+          if (hist.some((x) => x.id === fresh.id)) updateHistory(fresh);
+          else addHistory(fresh);
+        }
+      } catch { /* keep the error already on screen */ }
+    }
   }
 }
 

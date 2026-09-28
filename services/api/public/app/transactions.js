@@ -45,7 +45,7 @@ function paintDetail(t) {
   const sepa = t.rail === "sepa";
   const st = mTxStatus(t);
   const dest = sepa ? "Europe" : "Kenya";
-  $("m-det-amount").textContent = `−€${fmt(t.sendEur)}`;
+  $("m-det-amount").textContent = txAmountLabel(t);
   $("m-det-who").textContent = `to ${t.recipientName || "—"} · ${dest}`;
   const tag = $("m-det-status");
   tag.textContent = st.label;
