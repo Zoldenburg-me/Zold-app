@@ -23,7 +23,7 @@ import { createMoneriumWebhookRouter } from "./routes/monerium-webhook.js";
 import { createMoneriumRouter } from "./routes/monerium.js";
 import { createAdminRouter } from "./routes/admin.js";
 import { createManagedRecoveryRouter } from "./routes/recovery-managed.js";
-import { createPageRouter } from "./routes/pages.js";
+import { createPageRouter, notFound } from "./routes/pages.js";
 import { createUserRouter } from "./routes/users.js";
 import { createCryptoDepositRouter } from "./routes/crypto-deposits.js";
 import { createPaymentPageRouter } from "./routes/payment-page.js";
@@ -178,6 +178,8 @@ app.use("/api", createAuthRouter({ requireUserSession }));
 app.use("/api", createTransferRouter({ requireUserSession }));
 // Monerium's deposit webhook: an order id and nothing else is believed.
 app.use("/api", createMoneriumWebhookRouter());
+// Last: nothing above claimed the path.
+app.use(notFound());
 
 app.use(((err, _req, res, next) => {
   console.error(err);

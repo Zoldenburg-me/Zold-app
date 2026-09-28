@@ -6,6 +6,7 @@
 <meta name="robots" content="noindex, nofollow" />
 <meta name="referrer" content="no-referrer" />
 <title>Account document · Zold</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="/vendor/fonts/text.css" />
 <style>
   /*
@@ -98,7 +99,7 @@ const code = location.pathname.split("/").pop();
 function head(doc, title, sub) {
   return `<div class="head">
     <div><div class="zold"><b>▽</b> Zold</div><div class="sub">${esc(sub)}</div></div>
-    <div class="right"><div><strong>${esc(title)}</strong></div><div>Generated ${esc(day(doc.createdAt))}</div><div>Verification ${esc(code)}</div></div>
+    <div class="right"><h1 style="margin:0;font-size:inherit;font-weight:700">${esc(title)}</h1><div>Generated ${esc(day(doc.createdAt))}</div><div>Verification ${esc(code)}</div></div>
   </div>`;
 }
 function holder(h, extra = []) {
