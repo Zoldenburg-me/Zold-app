@@ -116,4 +116,8 @@ async function api(path, body, method, extraHeaders) {
 }
 const showErr = (id, e) => { const el = $(id); el.textContent = e.message; el.classList.remove("hidden"); };
 const clearErr = (id) => $(id).classList.add("hidden");
+/** A sent transfer's amount as a signed outflow — except where the money
+ *  never left or came back (FAILED, REFUNDED): a "−€120.00" beside a
+ *  transfer that debited nothing reads as money gone. */
+const txAmountLabel = (t) => `${["FAILED", "REFUNDED"].includes(t.state) ? "" : "−"}€${fmt(t.sendEur)}`;
 const shortAddr = (addr) => addr ? `${addr.slice(0, 8)}…${addr.slice(-6)}` : "—";

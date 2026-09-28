@@ -367,7 +367,11 @@ const ISO_COUNTRIES = (
 function countryOptions() {
   let names = null;
   try { names = new Intl.DisplayNames([navigator.language, "en"], { type: "region" }); } catch { /* old browser: codes */ }
-  const collator = new Intl.Collator(navigator.language);
+  // A malformed navigator.language (headless Linux reports "en-US@posix")
+  // makes the Collator throw, and a throw here is at top level: it stopped
+  // this whole script, so the signup form had no Continue handler at all.
+  let collator;
+  try { collator = new Intl.Collator(navigator.language); } catch { collator = new Intl.Collator("en"); }
   return ISO_COUNTRIES
     .map((code) => ({ code, name: (names && names.of(code)) || code }))
     .sort((a, b) => collator.compare(a.name, b.name));

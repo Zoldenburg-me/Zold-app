@@ -518,7 +518,7 @@ function histRow(t) {
       <div class="hs">${sub}</div>
     </div>
     <div>
-      <div class="hamt">−€${fmt(t.sendEur)}</div>
+      <div class="hamt">${txAmountLabel(t)}</div>
       <div class="hst" style="color:${color}">${status}</div>
     </div>`;
 }
