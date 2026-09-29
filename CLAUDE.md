@@ -29,7 +29,10 @@ THREE RULES OVERRIDE CONVENIENCE:
   real chain it holds only Monerium's EURe and Circle's USDC — FxSwapper and
   AdminTimelock are hardhat-only fixtures. **No 8453 entry exists yet**: run
   `npm run deploy` with real operator keys before `npm run api` there.
-  Running deployment today is **Base Sepolia (84532)**.
+  Running deployment today is **Base Sepolia (84532)** with the Monerium
+  sandbox, at zoldhq.com on an Akash lease behind a Cloudflare tunnel
+  (technical-architecture §18.1). Its database is on the lease's volume:
+  closing the lease deletes every tester's account.
 - **Identity is Monerium's.** Onboarding: account (email required) → passkey
   (no skip) → Safe deployed → recovery enrolment → the gate offers OAuth *or*
   your own Monerium API keys → "Activate IBAN with passkey". `POST /api/users`
