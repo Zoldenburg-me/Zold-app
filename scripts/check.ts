@@ -50,6 +50,7 @@ const scripts = [
   "refund:guard:test",
   "business:test",
   "security:test",
+  "plan:test",
   "invoicing:test",
   "custody:test",
   "segments:test",
