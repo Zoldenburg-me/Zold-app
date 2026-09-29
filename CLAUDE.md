@@ -44,7 +44,7 @@ THREE RULES OVERRIDE CONVENIENCE:
 - **Simulation is gone.** No `/api/simulate/*` mock deposits, no
   `ALLOW_MOCK_FALLBACK`, no faucet, no mock IBANs. `/api/health` publishes
   `capabilities: { sandbox, moneriumOAuth, moneriumApiKeys, moneriumEnvironment,
-  moneriumHost, cashRail, shopify, shopifyMode, emailSmsRecovery }` (verified
+  moneriumHost, cashRail, shopify, shopifyMode, emailSmsRecovery, zoldenburgRecovery }` (verified
   against `capabilities()` in capabilities.ts), and the UI renders a control only
   where the API would accept it.
 - **The one harness seam that stays**: `KYC_AUTO_APPROVE=1` is honoured only on
@@ -140,6 +140,25 @@ Each of these was a bug once.
   at execution. The gap between approval and execution is where an address-book
   edit lands.
 - **An org can never lose its last owner** — by role change or by deactivation.
+- **Zoldenburg is a recovery guardian only by the user's choice.** Deployment
+  adds no guardian; onboarding step 3 offers it (one passkey-signed op), and
+  skipping shows the warning that Zoldenburg UG then cannot recover the
+  account and only EURe is reclaimable from Monerium — the user must tick it,
+  and `recoveryChoice` records the answer. A lost device asks with a new
+  passkey and a reference (`/recovery/zoldenburg`); an operator verifies the
+  person against Monerium's KYC and signs from a HARDWARE WALLET (a Keycard
+  Shell: air-gapped, QR only, held in MetaMask/Rabby as a QR account), either in
+  Safe Cover (Candide's open-source recovery UI; not on Base Sepolia) or in
+  /admin → Recoveries via eth_signTypedData_v4 with the deployer relaying.
+  **The API never holds the guardian key**, recomputes the digest from the
+  module before accepting a signature, and moves a request only on what the
+  chain shows. Zoldenburg alone can START a takeover of an opted-in Safe; the
+  module's grace period plus the owner's cancel is the only protection, so a
+  production module must be the 3/7/14-day one. The deployed modules hash with
+  EIP-712 version "0.0.1", not the "0.2.0" in Candide's GitHub source.
+  A signature's v of 0/1 is normalised to 27/28 before relaying (the module's
+  ECDSA check would revert on 0/1). Admin → Recoveries → "Test guardian
+  wallet" proves the Shell → wallet → API path without touching a Safe.
 - **A recovery's new credential lives on the RecoveryRequest** until the chain
   confirms the new owner, so whoever holds the OTP channels cannot sign in or
   spend during the grace period.
@@ -272,6 +291,9 @@ Say this plainly rather than letting the surface imply otherwise:
   payments-app route additionally needs approval into Shopify's Payments Apps
   program, which is uncertain, not merely slow — hence `custom-app` is the
   default mode.
+- **No Zoldenburg recovery has run on chain**: no guardian added, no relayed
+  signature, no finalisation, and Safe Cover has not been used against a Zold
+  Safe. `recovery:test` runs the flow under the harness only.
 - **No Candide recovery service has been called** (stub only); no on-chain
   guardian add, execute or finalise, no real OTP.
 - **No mail transport exists.** Invitations, invoice links and recovery emails

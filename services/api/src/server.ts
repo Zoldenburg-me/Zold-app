@@ -22,7 +22,6 @@ import { createTransferRouter } from "./routes/transfers.js";
 import { createMoneriumWebhookRouter } from "./routes/monerium-webhook.js";
 import { createMoneriumRouter } from "./routes/monerium.js";
 import { createAdminRouter } from "./routes/admin.js";
-import { createManagedRecoveryRouter } from "./routes/recovery-managed.js";
 import { createPageRouter, notFound } from "./routes/pages.js";
 import { createUserRouter } from "./routes/users.js";
 import { createCryptoDepositRouter } from "./routes/crypto-deposits.js";
@@ -40,6 +39,8 @@ import { createBusinessRouter, createInvoiceLinkRouter } from "./routes/business
 import { createGnosisPayRouter } from "./routes/gnosis-pay.js";
 import { formatReport, reconcile } from "./reconcile.js";
 import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
+import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./routes/recovery-zoldenburg.js";
+import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
 import { createDocumentsRouter } from "./routes/documents.js";
 import { createSafeSignerRouter } from "./routes/safe-signers.js";
 import { createPaymentRequestRouter, onPaymentRequestPaid, sweepPaymentRequests } from "./routes/payment-requests.js";
@@ -173,8 +174,9 @@ app.use("/api", createReceiptShareRouter({ requireUserSession }));
 app.use("/api", createMoneriumRouter({ requireUserSession }));
 // The operator dashboard's read side, behind the operator bearer token.
 app.use("/api", createAdminRouter());
-// Managed recovery: the operator-plus-external-signer mode.
-app.use("/api", createManagedRecoveryRouter({ requireUserSession }));
+// Zoldenburg as guardian: the owner opts in, asks after losing the passkey,
+// and an operator signs from a hardware wallet (admin console or Safe Cover).
+app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession }));
 // Sessions and passkeys: the WebAuthn ceremonies, and the passkey Safe whose
 // owner those credentials are.
 app.use("/api", createAuthRouter({ requireUserSession }));
@@ -221,6 +223,16 @@ sweepStrandedTransfers()
   .then((n) => n && console.log(`Compensation sweep: compensated ${n} stranded transfer(s)`))
   .catch((e) => console.error(`Compensation sweep failed: ${e?.message ?? e}`));
 setInterval(() => sweepStrandedTransfers().catch(() => {}), 5 * 60_000).unref();
+// Zoldenburg recoveries: pick up a signature made in Safe Cover, expire
+// unanswered requests, and finalize once the grace period has run.
+if (zoldenburgRecoveryEnabled()) {
+  const runZoldenburgSweep = () =>
+    sweepZoldenburgRecoveries()
+      .then((n) => n && console.log(`recovery sweep: finalized ${n} Zoldenburg recover${n === 1 ? "y" : "ies"}`))
+      .catch((e) => console.error(`recovery sweep failed: ${e?.message ?? e}`));
+  setTimeout(runZoldenburgSweep, 5_000).unref();
+  setInterval(runZoldenburgSweep, RECOVERY.sweepMs).unref();
+}
 // Candide recoveries finalize themselves once the grace period has run, so a
 // user who lost their phone on a Friday is not waiting for a click on Monday.
 if (candideRecoveryEnabled()) {

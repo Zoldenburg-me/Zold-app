@@ -42,7 +42,7 @@
     "anchor:sweep:test": "tsx scripts/anchor-sweep-test.ts",
     "refund:guard:test": "tsx scripts/refund-guard-test.ts",
     "authorize:test": "tsx scripts/authorize-claim-test.ts",
-    "recovery:test": "tsx scripts/managed-recovery-test.ts",
+    "recovery:test": "tsx scripts/zoldenburg-recovery-test.ts",
     "recovery:candide:test": "tsx scripts/candide-recovery-test.ts",
     "documents:test": "tsx scripts/documents-test.ts",
     "paylinks:test": "tsx scripts/payment-requests-test.ts",
@@ -92,6 +92,7 @@
     "@stellar/stellar-sdk": "^16.1.0",
     "abstractionkit": "^0.4.0",
     "express": "^4.19.0",
+    "lz-string": "1.5.0",
     "safe-recovery-service-sdk": "^0.0.4",
     "viem": "^2.21.0"
   },

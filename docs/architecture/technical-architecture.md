@@ -191,8 +191,10 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   balance is checked before the passkey signs), or `token` (Candide's token
   paymaster, USDC by default on 8453). Every abstractionkit request carries
   `partnerTimeout()`. `npm run preflight` checks the chosen mode live.
-- An optional managed-recovery guardian goes through a SocialRecoveryModule
-  (After3Days by default).
+- Recovery guardians go through a SocialRecoveryModule (After3Days by
+  default). Deployment installs none: Zoldenburg's guardian is added only when
+  the user opts in (`routes/recovery-zoldenburg.ts`), and its key stays on the
+  operator's hardware wallet.
 - The Safe is deployed as the `initCode` of its first UserOperation. The
   bundler and paymaster default to `https://api.candide.dev/public/v3/<chainId>`
   with an ERC-7677 paymaster, so the user needs no gas. The passkey signs

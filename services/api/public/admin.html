@@ -75,6 +75,40 @@
       <div class="attention-list" id="attentionList"></div>
     </div>
 
+    <!-- Zoldenburg-guardian recoveries. A person who lost their passkey asks
+         support; the operator checks them against Monerium's verification and
+         signs as guardian from a hardware wallet (Safe Cover, or here via
+         eth_signTypedData_v4). The API moves a request only on what the chain
+         shows. -->
+    <div class="panel" id="recoveriesPanel">
+      <div class="panel-head">
+        <div class="panel-title">Recoveries <span class="panel-count" id="recoveriesCount"></span></div>
+        <div class="rv-actions">
+          <span style="font-size:12px;color:var(--text-dim)" id="recoveriesGuardian">Zoldenburg guardian</span>
+          <button type="button" class="btn btn-icon" id="rvCheckBtn">Test guardian wallet</button>
+        </div>
+      </div>
+      <div id="rvCheckMsg" role="status" aria-live="polite" style="padding:0 18px"></div>
+      <div class="panel-scroll" style="max-height:320px">
+        <table>
+          <thead>
+            <tr>
+              <th>Reference</th>
+              <th>Account</th>
+              <th>Monerium KYC</th>
+              <th>Status</th>
+              <th>Requested</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="recoveriesTableBody">
+            <tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">Loading recoveries…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="recoveryDetail" class="rv-detail" hidden></div>
+    </div>
+
     <!-- One search filters both panels. -->
     <div class="controls">
       <div class="search-box">

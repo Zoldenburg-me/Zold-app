@@ -63,7 +63,8 @@ function renderKycGate(u, needsChoice) {
   const rejected = u.kycStatus === "rejected";
   const approved = kycApproved(u);
   const walletReady = !needsPasskeySafeSetup(u) && !!u.passkeySafe;
-  const recoveryActive = u.passkeySafe?.candideRecovery?.guardianStatus === "active";
+  const zoldGuardian = u.passkeySafe?.recovery?.status === "active";
+  const recoveryActive = zoldGuardian || u.passkeySafe?.candideRecovery?.guardianStatus === "active";
 
   // At the gate nothing is running yet, so there is nothing to report on.
   gate.classList.toggle("hidden", !!needsChoice);
@@ -96,8 +97,10 @@ function renderKycGate(u, needsChoice) {
     { t: "Smart wallet deployed", d: walletReady ? "Your account exists on-chain" : "Approve the deployment with your passkey", state: walletReady ? "done" : "now" },
     // Only where the deployment offers it. Not "now" when skipped, since
     // nothing waits on it.
-    ...(caps.emailSmsRecovery ? [{ t: "Recovery set up",
-      d: recoveryActive ? "Email registered, guardian on your smart wallet" : "Skipped — set it up from your profile; until then a lost device loses the account",
+    ...(caps.emailSmsRecovery || caps.zoldenburgRecovery ? [{ t: "Recovery set up",
+      d: zoldGuardian ? "Zoldenburg is your recovery guardian"
+        : recoveryActive ? "Email registered, guardian on your smart wallet"
+          : "Skipped — Zoldenburg cannot recover this account; add a guardian from your profile",
       state: recoveryActive ? "done" : "" }] : []),
     { t: "Monerium connected", d: connected ? (u.monerium?.method === "api_keys" ? "Your own API keys" : "Signed in with Monerium") : "Sign in, or add your API keys", state: connected ? "done" : "now" },
     { t: "IBAN activated", d: rejected ? "Not approved" : approved ? "Funding and sending are open" : "One passkey confirmation",
@@ -656,38 +659,107 @@ function pkStep(i, state) {
 
 /* ---------- Onboarding step 3: recovery enrolment ---------- */
 
-/* Is there recovery work left that onboarding should offer? True only where
-   the deployment has the service, the Safe is active and the guardian is not
-   yet on it. */
-function recoveryEnrolmentPending(u = user) {
+/* Has the user still to answer the Zoldenburg-guardian offer? Only where the
+   deployment has a guardian, the Safe is active, and they neither added it
+   nor declined it. */
+function zoldenburgChoicePending(u = user) {
+  return !!(caps.zoldenburgRecovery && u?.passkeySafe?.status === "active"
+    && !u.passkeySafe.recoveryChoice && u.passkeySafe.recovery?.status !== "active");
+}
+
+/* Is there Candide (email/SMS) enrolment left? True only where the deployment
+   has the service, the Safe is active and the guardian is not yet on it. */
+function candideEnrolmentPending(u = user) {
   return !!(caps.emailSmsRecovery && u?.passkeySafe?.status === "active"
     && u.passkeySafe.candideRecovery?.guardianStatus !== "active");
 }
 
+function recoveryEnrolmentPending(u = user) {
+  return zoldenburgChoicePending(u) || candideEnrolmentPending(u);
+}
+
 /* Runs right after the smart wallet is active and before the Monerium gate.
-   Same three calls the Profile screen makes (channel -> signature -> OTP,
-   then guardian), against the email given at signup. Resolves true when the
-   guardian is on the Safe, false when skipped or unavailable; it never
-   throws, because a recovery failure must not stop the account it protects
-   from being finished — the Profile screen keeps the same controls. */
-function offerRecoveryEnrolment() {
-  if (!recoveryEnrolmentPending() || !user?.email) return Promise.resolve(false);
+   First the Zoldenburg-guardian choice, then (where the deployment has it)
+   Candide email enrolment. Resolves true when a guardian is on the Safe;
+   never throws, because a recovery failure must not stop the account it
+   protects from being finished — Profile → Recovery keeps the same controls. */
+async function offerRecoveryEnrolment() {
+  if (!recoveryEnrolmentPending()) return false;
+  $("onb-step2").classList.add("hidden");
+  $("onb-step3").classList.remove("hidden");
+  $("ostep2").className = "dot done";
+  $("ostep3").className = "dot active";
+  let guarded = false;
+  if (zoldenburgChoicePending()) guarded = await offerZoldenburgGuardian();
+  if (candideEnrolmentPending() && user?.email) guarded = (await offerCandideEnrolment()) || guarded;
+  $("onb-step3").classList.add("hidden");
+  $("ostep3").className = "dot done";
+  return guarded;
+}
+
+/* The Zoldenburg choice. Add = one passkey-signed operation; skip = the
+   warning, a tick, and a recorded decline. */
+function offerZoldenburgGuardian() {
+  return new Promise((resolve) => {
+    const panes = ["rec-zold", "rec-zold-warn", "rec-zold-done"];
+    const show = (id) => {
+      panes.forEach((x) => $(x).classList.toggle("hidden", x !== id));
+      ["rec-candide-lede", "rec-intro", "rec-otp", "rec-done"].forEach((x) => $(x).classList.add("hidden"));
+    };
+    clearErr("rec-err");
+    show("rec-zold");
+    api(`/api/users/${user.id}/recovery/zoldenburg`)
+      .then((r) => { $("rec-zold-grace").textContent = graceText(r.gracePeriodSeconds); })
+      .catch(() => { /* keep the generic wording */ });
+    const ack = $("rec-zold-ack");
+    ack.checked = false;
+    ack.onchange = () => { if (ack.checked) clearErr("rec-err"); };
+    $("btn-rec-zold-skip").onclick = () => { clearErr("rec-err"); show("rec-zold-warn"); $("rec-zold-ack").focus(); };
+    $("btn-rec-zold-back").onclick = () => { clearErr("rec-err"); show("rec-zold"); };
+    $("btn-rec-zold-continue").onclick = () => resolve(true);
+    $("btn-rec-zold-decline").onclick = async () => {
+      clearErr("rec-err");
+      if (!ack.checked) {
+        showErr("rec-err", new Error("tick the box to confirm you understand Zoldenburg UG cannot recover this account"));
+        return ack.focus();
+      }
+      const b = $("btn-rec-zold-decline");
+      b.disabled = true;
+      try {
+        await api(`/api/users/${user.id}/recovery/zoldenburg/decline`, { acknowledged: true });
+        user = await api(`/api/users/${user.id}`);
+        resolve(false);
+      } catch (e) { showErr("rec-err", e); b.disabled = false; }
+    };
+    $("btn-rec-zold-add").onclick = async () => {
+      clearErr("rec-err");
+      const b = $("btn-rec-zold-add");
+      b.disabled = true;
+      b.textContent = "Approve with your passkey…";
+      try {
+        const prep = await api(`/api/users/${user.id}/recovery/zoldenburg`, { acknowledged: true });
+        if (prep.challenge) await api(prep.submitTo, await passkeySignPrepared(prep));
+        user = await api(`/api/users/${user.id}`);
+        show("rec-zold-done");
+      } catch (e) { showErr("rec-err", e); }
+      finally { b.disabled = false; b.textContent = "Add Zoldenburg as guardian"; }
+    };
+  });
+}
+
+/* Candide email enrolment: channel -> signature -> OTP, then guardian, against
+   the signup email. Resolves true when the guardian is on the Safe. */
+function offerCandideEnrolment() {
   return new Promise((resolve) => {
     const panes = ["rec-intro", "rec-otp", "rec-done"];
     const show = (id) => panes.forEach((x) => $(x).classList.toggle("hidden", x !== id));
-    $("onb-step2").classList.add("hidden");
-    $("onb-step3").classList.remove("hidden");
-    $("ostep2").className = "dot done";
-    $("ostep3").className = "dot active";
+    ["rec-zold", "rec-zold-warn", "rec-zold-done"].forEach((x) => $(x).classList.add("hidden"));
+    $("rec-candide-lede").classList.remove("hidden");
     $("rec-email").textContent = user.email;
     clearErr("rec-err");
     show("rec-intro");
     let otp = null; // { submitTo } while a code is outstanding
-    const finish = (enrolled) => {
-      $("onb-step3").classList.add("hidden");
-      $("ostep3").className = "dot done";
-      resolve(enrolled);
-    };
+    const finish = (enrolled) => resolve(enrolled);
     $("btn-rec-skip").onclick = () => finish(false);
     $("btn-rec-continue").onclick = () => finish(user.passkeySafe?.candideRecovery?.guardianStatus === "active");
     $("btn-rec-restart").onclick = () => { otp = null; clearErr("rec-err"); show("rec-intro"); };

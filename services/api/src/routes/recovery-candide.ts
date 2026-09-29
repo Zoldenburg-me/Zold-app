@@ -30,14 +30,11 @@
  */
 import express from "express";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { createWalletClient, http } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { CHAIN_ID, HARNESS, KEYS, RECOVERY, SECURITY } from "../config.js";
+import { HARNESS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import {
   CANDIDE,
   assertRecoveryModuleDeployed,
-  deployWebAuthnVerifierTransaction,
   isDeployed,
   passkeyAccountAddress,
   prepareSafeSetupOperation,
@@ -50,7 +47,6 @@ import {
   signMessageAsPasskeySafe,
   submitPasskeySafeOperation,
   webauthnOwnerFromJwk,
-  webauthnOwnerToStore,
   type PasskeySafeDeploymentPlan,
 } from "../wallet/candide.js";
 import {
@@ -71,6 +67,7 @@ import {
 } from "../recovery/candide-guardian.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertionForChallenge, verifyRegistration } from "../webauthn.js";
 import { publicRecoveryRequest } from "../recovery.js";
+import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
 
 export interface CandideRecoveryDeps {
@@ -290,30 +287,8 @@ export async function finalizeCandideRecovery(
     });
   }
 
-  // The chain says the new passkey owns the Safe. Bind it, drop the lost
-  // device's spending key (only the CURRENT authorizer may rotate it, and
-  // that device is gone) and revoke every session the old device held.
-  const owner = webauthnOwnerFromJwk(np.publicKey.jwk)!;
-  store.updateUser(user.id, {
-    passkey: {
-      credentialId: np.credentialId,
-      publicKey: np.publicKey,
-      signCount: np.signCount,
-      rpId: np.rpId,
-      attestation: np.attestation,
-      createdAt: np.createdAt,
-    },
-    passkeySafe: {
-      ...user.passkeySafe,
-      passkeyPublicKey: webauthnOwnerToStore(owner),
-      recoveredAt: now.toISOString(),
-      threshold: 1 as const,
-    },
-    authorizerAddress: undefined,
-  });
-  for (const s of store.sessions) {
-    if (s.userId === user.id && !s.revokedAt) store.revokeSession(s.id);
-  }
+  // The chain says the new passkey owns the Safe.
+  bindRecoveredPasskey(user, np, now);
   console.log(`RECOVERY: ${request.id} finalized — ${user.id}'s Safe ${request.safeAddress} now owned by the new passkey`);
   return store.updateRecoveryRequest(request.id, {
     status: "FINALIZED",
@@ -342,26 +317,6 @@ export async function sweepCandideRecoveries(now = new Date()): Promise<number> 
     }
   }
   return n;
-}
-
-/**
- * Deploy the new passkey's signer verifier so the recovered Safe's owner is
- * a contract that can validate signatures. Permissionless factory call from
- * the deployer key, on the app chain — skipped (and said so) when the
- * smart-account chain is not the app chain, which only happens locally.
- */
-async function deployVerifierForOwner(owner: { x: bigint; y: bigint }): Promise<string | undefined> {
-  if (HARNESS.enabled) return undefined;
-  if (BigInt(CHAIN_ID) !== BigInt(CANDIDE.chainId)) return undefined;
-  const verifier = passkeyAccountAddress(owner);
-  if (await isDeployed(verifier)) return undefined;
-  const tx = deployWebAuthnVerifierTransaction(owner);
-  const wallet = createWalletClient({
-    account: privateKeyToAccount(KEYS.deployer),
-    chain: { id: CHAIN_ID, name: `chain-${CHAIN_ID}`, nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [CANDIDE.rpcUrl] } } },
-    transport: http(CANDIDE.rpcUrl),
-  });
-  return wallet.sendTransaction({ to: tx.to as `0x${string}`, data: tx.data as `0x${string}`, value: tx.value });
 }
 
 // ---------------------------------------------------------------------------
@@ -725,7 +680,9 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       pendingSafeOperations.delete(req.params.requestId);
       const now = new Date().toISOString();
       for (const r of store.recoveryRequestsForUser(user.id)) {
-        if (r.mode === "candide" && ["OTP_PENDING", "GRACE_PERIOD"].includes(r.status)) {
+        // The module holds one recovery per Safe, whoever's guardian started
+        // it, so the owner's cancel ends a Zoldenburg one too.
+        if ((r.mode === "candide" || r.mode === "zoldenburg") && ["OTP_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) {
           store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now, cancelReason: "cancelled on chain by the account owner" });
         }
       }

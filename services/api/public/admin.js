@@ -1,8 +1,9 @@
 /**
  * The operator dashboard.
  *
- * Read only: every route behind it is a read. KYC review and IBAN issue belong
- * to Monerium.
+ * Read only, with ONE exception: Recoveries, where an operator reviews a
+ * person who lost their passkey and signs as Zoldenburg's guardian from the
+ * Keycard Shell (through MetaMask/Rabby, or Safe Cover). KYC review and IBAN issue belong to Monerium.
  *
  * Two security details. The operator token lives in sessionStorage so it does
  * not outlive the tab. Rows carry ids for a delegated listener; don't build an
@@ -104,10 +105,261 @@ async function loadDashboard() {
     renderUsers();
     renderTransactions();
     renderAttention();
+    await loadRecoveries();
   } catch (err) {
     console.error("Dashboard error:", err);
   }
 }
+
+/* ---------- Recoveries (Zoldenburg guardian) ---------- */
+
+let recoveries = { enabled: false, requests: [] };
+let openRecoveryId = null;
+const RV_STATUS = {
+  PASSKEY_PENDING: ['badge-neutral', 'No passkey yet'],
+  REVIEW_PENDING: ['badge-review', 'Needs review'],
+  GRACE_PERIOD: ['badge-pending', 'Waiting period'],
+  FINALIZED: ['badge-approved', 'Recovered'],
+  CANCELED: ['badge-neutral', 'Cancelled'],
+  EXPIRED: ['badge-neutral', 'Expired'],
+};
+
+async function loadRecoveries() {
+  const res = await fetchApi('/api/admin/recoveries');
+  if (!res.ok) return;
+  recoveries = await res.json();
+  renderRecoveries();
+}
+
+function renderRecoveries() {
+  const body = document.getElementById('recoveriesTableBody');
+  const rows = recoveries.requests || [];
+  document.getElementById('recoveriesCount').textContent = rows.filter((r) => r.status === 'REVIEW_PENDING').length || '';
+  document.getElementById('recoveriesGuardian').textContent = recoveries.enabled
+    ? `Guardian ${recoveries.guardianAddress} · chain ${recoveries.chainId}`
+    : 'Not configured — CANDIDE_RECOVERY_GUARDIAN_ADDRESS is unset';
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No recovery requests.</td></tr>`;
+  } else {
+    body.innerHTML = rows.map((r) => {
+      const [cls, label] = RV_STATUS[r.status] || ['badge-neutral', r.status];
+      const a = r.account || {};
+      return `<tr>
+        <td><span class="code-pill" translate="no">${escapeHtml(r.zoldenburg?.reference || '—')}</span></td>
+        <td><div class="user-info"><span class="user-name">${escapeHtml(a.name || '—')}</span><span class="user-id">${escapeHtml(a.email || a.id || '')}</span></div></td>
+        <td><span class="badge ${a.kycStatus === 'approved' ? 'badge-approved' : 'badge-pending'}">${escapeHtml(a.kycStatus || 'unknown')}</span></td>
+        <td><span class="badge ${cls}">${escapeHtml(label)}</span></td>
+        <td>${escapeHtml(fmtWhen(r.requestedAt))}</td>
+        <td><button type="button" class="btn btn-iban" data-open-recovery="${escapeHtml(r.id)}" aria-expanded="${openRecoveryId === r.id}">${r.status === 'REVIEW_PENDING' ? 'Review' : 'Open'}</button></td>
+      </tr>`;
+    }).join('');
+  }
+  // Re-render the open detail only if its data changed underneath it and the
+  // operator is not typing in it.
+  const det = document.getElementById('recoveryDetail');
+  if (openRecoveryId && !det.contains(document.activeElement)) renderRecoveryDetail();
+}
+
+function rvField(k, v, mono) {
+  return `<div><div class="rv-k">${escapeHtml(k)}</div><div class="rv-v${mono ? ' mono' : ''}" ${mono ? 'translate="no"' : ''}>${escapeHtml(v ?? '—')}</div></div>`;
+}
+
+function renderRecoveryDetail(message) {
+  const det = document.getElementById('recoveryDetail');
+  const r = (recoveries.requests || []).find((x) => x.id === openRecoveryId);
+  if (!r) { det.hidden = true; det.innerHTML = ''; return; }
+  const a = r.account || {};
+  const z = r.zoldenburg || {};
+  const review = r.status === 'REVIEW_PENDING';
+  const grace = r.status === 'GRACE_PERIOD';
+  const ready = grace && z.finalizeAfter && Date.now() >= Date.parse(z.finalizeAfter);
+  det.hidden = false;
+  det.innerHTML = `
+    <div class="rv-grid">
+      ${rvField('Reference', z.reference, true)}
+      ${rvField('Name', a.name)}
+      ${rvField('Email', a.email)}
+      ${rvField('Country', a.country)}
+      ${rvField('Monerium KYC', a.kycStatus)}
+      ${rvField('Monerium link', a.moneriumMethod ? `${a.moneriumMethod}${a.moneriumProfileId ? ' · profile ' + a.moneriumProfileId : ''}` : 'not connected')}
+      ${rvField('IBAN', a.iban)}
+      ${rvField('Account created', a.createdAt ? fmtWhen(a.createdAt) : '—')}
+      ${rvField('Safe', r.safeAddress, true)}
+      ${rvField('New owner (new passkey)', (z.newOwners || []).join(', '), true)}
+      ${rvField('Requested', fmtWhen(r.requestedAt))}
+      ${rvField(grace ? 'Finalizable after' : 'Expires', grace ? fmtWhen(z.finalizeAfter) : fmtWhen(r.expiresAt))}
+      ${z.executeTxHash ? rvField('Execute tx', z.executeTxHash, true) : ''}
+      ${z.finalizeTxHash ? rvField('Finalize tx', z.finalizeTxHash, true) : ''}
+      ${r.reviewReason ? rvField('Review note', r.reviewReason) : ''}
+      ${r.cancelReason ? rvField('Cancel reason', r.cancelReason) : ''}
+      ${z.finalizeError ? rvField('Last finalize error', z.finalizeError) : ''}
+    </div>
+    ${review ? `
+      <div class="rv-box warn">
+        <b>Before you sign.</b> Signing starts a takeover of this account: after the waiting period the new passkey owns it. Only the old passkey can stop it.
+        <ol>
+          <li>The person wrote from <b>${escapeHtml(a.email || 'the account email')}</b> and quoted reference <b translate="no">${escapeHtml(z.reference || '')}</b>.</li>
+          <li>You checked them against the identity Monerium verified (${a.kycStatus === 'approved' ? 'approved' : '<b>NOT approved</b>'}) — Zold holds the result, not the documents.</li>
+          <li>Anything unusual (new email, urgency, a third party speaking for them) → reject.</li>
+        </ol>
+      </div>
+      <div>
+        <label for="rvNote">How you verified the person (stored with the request)</label>
+        <textarea id="rvNote" rows="2" placeholder="e.g. Video call 29 Sep, matched name and DOB with Monerium profile, email from account address" autocomplete="off"></textarea>
+      </div>
+      <div class="rv-actions">
+        ${r.safeCoverLink
+          ? `<a class="btn btn-link" href="${escapeHtml(r.safeCoverLink)}" target="_blank" rel="noopener noreferrer">Open in Safe Cover ↗</a>
+             <button type="button" class="btn btn-iban" data-rv="sync">I signed in Safe Cover — check chain</button>`
+          : `<span class="rv-k">Safe Cover does not list chain ${escapeHtml(recoveries.chainId)} — sign here</span>`}
+        <button type="button" class="btn btn-approve" data-rv="sign">Sign with Keycard Shell</button>
+      </div>
+      <details>
+        <summary>Signed on another device? Paste the signature</summary>
+        <div class="rv-actions" style="margin-bottom:10px"><button type="button" class="btn btn-icon" data-rv="payload">Show typed data to sign</button></div>
+        <pre class="json-code" id="rvPayload" hidden></pre>
+        <label for="rvSig" style="margin-top:10px">eth_signTypedData_v4 signature (0x…, 65 bytes)</label>
+        <textarea id="rvSig" class="mono" rows="2" autocomplete="off" spellcheck="false"></textarea>
+        <div class="rv-actions" style="margin-top:10px"><button type="button" class="btn btn-approve" data-rv="execute">Relay signature</button></div>
+      </details>
+      <div>
+        <label for="rvReason">Reject — reason the person will see</label>
+        <input type="text" id="rvReason" autocomplete="off" placeholder="e.g. We could not verify your identity. Contact support@zoldhq.com.">
+        <div class="rv-actions" style="margin-top:10px"><button type="button" class="btn btn-reject" data-rv="reject">Reject request</button></div>
+      </div>` : ''}
+    ${grace ? `
+      <div class="rv-box">The recovery is on chain. The owner's old passkey can cancel it until <b>${escapeHtml(fmtWhen(z.finalizeAfter))}</b>; after that the sweep finalizes it and binds the new passkey.</div>
+      <div class="rv-actions"><button type="button" class="btn btn-approve" data-rv="finalize" ${ready ? '' : 'disabled'}>Finalize now</button></div>` : ''}
+    <div id="rvMsg" role="status" aria-live="polite">${message || ''}</div>`;
+}
+
+async function recoveryAction(path, body) {
+  const res = await fetchApi(`/api/admin/recoveries/${encodeURIComponent(openRecoveryId)}/${path}`, { method: 'POST', body: JSON.stringify(body || {}) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function rvMessage(text, ok) {
+  const el = document.getElementById('rvMsg');
+  if (el) el.innerHTML = `<span class="${ok ? 'rv-ok' : 'rv-err'}">${escapeHtml(text)}</span>`;
+}
+
+async function afterRecoveryAction(updated, text) {
+  await loadRecoveries();
+  renderRecoveryDetail(`<span class="rv-ok">${escapeHtml(text)}</span>`);
+  if (updated?.status) document.getElementById('recoveryDetail').focus?.();
+}
+
+/* The guardian is a Keycard Shell: air-gapped, QR only. MetaMask or Rabby
+   holds it as a QR hardware account; eth_signTypedData_v4 shows a QR, the
+   Shell scans it, clear-signs the EIP-712 fields on its own screen, and its
+   answer QR is scanned back. The API checks the signer and the digest; this
+   only asks. */
+async function walletSign(guardianAddress, typedData) {
+  if (!window.ethereum) throw new Error('No browser wallet found. Add the Keycard Shell to MetaMask or Rabby as a QR hardware wallet, then reload.');
+  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  const account = (accounts || []).find((x) => x.toLowerCase() === guardianAddress.toLowerCase());
+  if (!account) throw new Error(`Select the guardian account ${guardianAddress} (the Keycard Shell account) in your wallet — it offered ${(accounts || []).join(', ') || 'none'}.`);
+  return window.ethereum.request({ method: 'eth_signTypedData_v4', params: [account, JSON.stringify(typedData)] });
+}
+
+/* What the Shell's screen must show, field by field. Anything else: reject on
+   the device. */
+function deviceChecklist(req) {
+  const d = req.typedData.domain, m = req.typedData.message;
+  const line = (k, v) => `<li><span class="rv-k">${escapeHtml(k)}</span> <span class="rv-v mono" translate="no">${escapeHtml(v)}</span></li>`;
+  return `<div class="rv-box warn" style="margin-top:10px"><b>Scan the QR with Keycard Shell and check its screen shows exactly:</b>
+    <ul style="list-style:none;margin-top:8px;display:grid;gap:4px">
+      ${line('Domain', `${d.name} ${d.version}`)}
+      ${line('Chain', d.chainId)}
+      ${line('Contract', d.verifyingContract)}
+      ${line('wallet (the Safe)', m.wallet)}
+      ${line('newOwners', m.newOwners.join(', '))}
+      ${line('newThreshold', m.newThreshold)}
+      ${line('nonce', m.nonce)}
+    </ul>Approve on the Shell, then scan its answer QR back into the wallet.</div>`;
+}
+
+async function signWithWallet() {
+  const note = document.getElementById('rvNote').value.trim();
+  if (note.length < 10) return rvMessage('Record how you verified the person first.');
+  rvMessage('Preparing the recovery…', true);
+  const req = await recoveryAction('sign-request');
+  document.getElementById('rvMsg').innerHTML = deviceChecklist(req);
+  const signature = await walletSign(req.guardianAddress, req.typedData);
+  rvMessage('Relaying and waiting for the chain…', true);
+  const updated = await recoveryAction('execute', { signature, reviewNote: note });
+  await afterRecoveryAction(updated, 'Signed and executed. The waiting period has started.');
+}
+
+document.getElementById('rvCheckBtn').addEventListener('click', async (ev) => {
+  const btn = ev.currentTarget;
+  const out = document.getElementById('rvCheckMsg');
+  const say = (text, ok) => { out.innerHTML = `<p class="${ok ? 'rv-ok' : 'rv-err'}" style="padding:10px 0">${escapeHtml(text)}</p>`; };
+  btn.disabled = true;
+  try {
+    const cRes = await fetchApi('/api/admin/recoveries/guardian-check/challenge', { method: 'POST', body: '{}' });
+    const c = await cRes.json();
+    if (!cRes.ok) throw new Error(c.error || `HTTP ${cRes.status}`);
+    say('Sign the test message on the Keycard Shell. It approves nothing and touches no Safe.', true);
+    const signature = await walletSign(c.guardianAddress, c.typedData);
+    const vRes = await fetchApi('/api/admin/recoveries/guardian-check', { method: 'POST', body: JSON.stringify({ issuedAt: c.typedData.message.issuedAt, signature }) });
+    const v = await vRes.json();
+    if (!vRes.ok) throw new Error(v.error || `HTTP ${vRes.status}`);
+    say(`Guardian wallet works: the signature recovers to ${v.guardianAddress}.`, true);
+  } catch (err) {
+    say(err?.message || String(err));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('recoveriesPanel').addEventListener('click', async (ev) => {
+  const open = ev.target.closest('[data-open-recovery]');
+  if (open) {
+    openRecoveryId = openRecoveryId === open.dataset.openRecovery ? null : open.dataset.openRecovery;
+    renderRecoveries();
+    renderRecoveryDetail();
+    return;
+  }
+  const act = ev.target.closest('[data-rv]');
+  if (!act || !openRecoveryId) return;
+  act.disabled = true;
+  try {
+    const kind = act.dataset.rv;
+    if (kind === 'sign') await signWithWallet();
+    else if (kind === 'payload') {
+      const req = await recoveryAction('sign-request');
+      const pre = document.getElementById('rvPayload');
+      pre.hidden = false;
+      pre.textContent = `Guardian: ${req.guardianAddress}\nDigest:   ${req.digest}\n\n${JSON.stringify(req.typedData, null, 2)}`;
+    } else if (kind === 'execute') {
+      const note = document.getElementById('rvNote').value.trim();
+      if (note.length < 10) { rvMessage('Record how you verified the person first.'); return; }
+      rvMessage('Relaying and waiting for the chain…', true);
+      const updated = await recoveryAction('execute', { signature: document.getElementById('rvSig').value.trim(), reviewNote: note });
+      await afterRecoveryAction(updated, 'Signed and executed. The waiting period has started.');
+    } else if (kind === 'sync') {
+      const updated = await recoveryAction('sync', { reviewNote: document.getElementById('rvNote').value.trim() });
+      if (updated.status === 'REVIEW_PENDING') rvMessage('The chain shows no recovery for this Safe yet. Finish confirm + execute in Safe Cover, then check again.');
+      else await afterRecoveryAction(updated, 'Seen on chain. The waiting period has started.');
+    } else if (kind === 'reject') {
+      const reason = document.getElementById('rvReason').value.trim();
+      if (!reason) { rvMessage('Give a reason — the person sees it.'); return; }
+      if (!confirm('Reject this recovery request?')) return;
+      const updated = await recoveryAction('reject', { reason });
+      await afterRecoveryAction(updated, 'Rejected.');
+    } else if (kind === 'finalize') {
+      const updated = await recoveryAction('finalize');
+      await afterRecoveryAction(updated, updated.status === 'FINALIZED' ? 'Finalized. The new passkey owns the account.' : 'Not finalized yet — see the error above.');
+    }
+  } catch (err) {
+    rvMessage(err?.message || String(err));
+  } finally {
+    if (act.isConnected) act.disabled = false;
+  }
+});
 
 /* The deployer pays gas. Its balance dropping below
    a couple of grants is an outage-in-waiting that otherwise only shows as
@@ -515,6 +767,6 @@ loadDashboard();
 setInterval(() => {
   if (isModalOpen()) return;
   const a = document.activeElement;
-  if (a && a.closest('#usersTableBody, #transactionsTableBody, #attentionList')) return;
+  if (a && a.closest('#usersTableBody, #transactionsTableBody, #attentionList, #recoveriesPanel')) return;
   loadDashboard();
 }, 10000);
