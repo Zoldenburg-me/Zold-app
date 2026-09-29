@@ -61,7 +61,7 @@ export const ACTIONS = {
         body: { currency: $("#d-cur").value, label: $("#d-label").value },
       });
       toast(r.note || `${r.account.currency} account opened.`);
-    }),
+    }, { okLabel: "Open account" }),
   "new-contact": () => dialog("Add contact",
     `<label>Name</label><input id="d-name" />
      <label>Email</label><input id="d-email" />
@@ -80,7 +80,7 @@ export const ACTIONS = {
           }] : [],
         },
       });
-    }),
+    }, { okLabel: "Add contact" }),
   async "del-contact"(el) {
     await api(`/api/orgs/${org.id}/contacts/${el.dataset.id}`, { method: "DELETE" });
   },
@@ -98,7 +98,7 @@ export const ACTIONS = {
           kind: $("#d-kind").value, label: $("#d-label").value },
       });
       toast(r.note);
-    }),
+    }, { okLabel: "Import wallet" }),
   async "fund-account"(el) {
     const r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
     toast(r.note);
@@ -120,7 +120,7 @@ export const ACTIONS = {
       });
       // No mail transport here, so hand the link over rather than pretend.
       prompt(r.note, `${location.origin}/app?invite=${r.inviteToken}`);
-    }),
+    }, { okLabel: "Invite" }),
   async deactivate(el) {
     await api(`/api/orgs/${org.id}/members/${el.dataset.id}`, {
       method: "PATCH", body: { status: "deactivated" },
@@ -197,7 +197,7 @@ export const ACTIONS = {
           }],
         },
       });
-    }),
+    }, { okLabel: "Add rule" }),
   async "del-custom-reason"(el) {
     const d = await api(`/api/orgs/${org.id}/invoicing/profile`);
     await api(`/api/orgs/${org.id}/invoicing/profile`, {
@@ -237,7 +237,7 @@ export const ACTIONS = {
     async () => {
       await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}/reconcile`, { method: "POST", body: { note: $("#d-note").value || undefined } });
       toast("Invoice reconciled.");
-    }),
+    }, { okLabel: "Mark as paid" }),
   "new-invoice": () => dialog("Create an invoice link",
     `<label>Currency</label><input id="d-cur" value="${esc(org.reporting.currency)}" />
      <label>Due date</label><input id="d-due" type="date" />
@@ -249,7 +249,7 @@ export const ACTIONS = {
           password: $("#d-pw").value || undefined },
       });
       prompt(r.note, location.origin + r.linkPath);
-    }),
+    }, { okLabel: "Create link" }),
   "new-coa": () => dialog("Add an account",
     `<label>Code</label><input id="d-code" placeholder="6400" />
      <label>Name</label><input id="d-name" />
@@ -260,7 +260,7 @@ export const ACTIONS = {
         method: "POST",
         body: { code: $("#d-code").value, name: $("#d-name").value, type: $("#d-type").value },
       });
-    }),
+    }, { okLabel: "Add account" }),
   async "apply-rules"() {
     const r = await api(`/api/orgs/${org.id}/account-rules/apply`, { method: "POST" });
     toast(`${r.changed} transaction(s) re-mapped. ${r.note}`);
@@ -371,17 +371,61 @@ export const ACTIONS = {
             }],
           },
         });
-      });
+      }, { okLabel: "Create payment" });
   },
   async "submit-draft"(el) {
     await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/submit`, { method: "POST" });
     toast("Submitted for review.");
   },
+  /**
+   * Review: show what is being approved, then POST only on an explicit
+   * Approve or Reject. Four eyes is the server's call (the drafter gets a
+   * 403, shown in the dialog); this screen only makes sure nobody approves
+   * a payment they have not seen.
+   */
   async "review-draft"(el) {
-    await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/review`, {
-      method: "POST", body: { approve: true },
-    });
-    toast("Approved.");
+    const [{ drafts }, { contacts }] = await Promise.all([
+      api(`/api/orgs/${org.id}/drafts`),
+      // Only to show the IBAN next to each payee; the review still works without.
+      api(`/api/orgs/${org.id}/contacts`).catch(() => ({ contacts: [] })),
+    ]);
+    const d = drafts.find((x) => x.id === el.dataset.id);
+    if (!d) throw new Error("This draft no longer exists.");
+    const ibanOf = (l) => {
+      const c = contacts.find((x) => x.id === l.contactId);
+      const b = c?.bankAccounts?.find((x) => x.id === l.destination.bankAccountId);
+      return b?.iban || l.destination?.address || "";
+    };
+    const url = `/api/orgs/${org.id}/drafts/${d.id}/review`;
+    dialog("Review payment",
+      `<p class="desc" style="margin-bottom:.6rem">Check every payee and amount. Approving lets it be
+         sent; you cannot approve a payment you drafted.</p>
+       <table><thead><tr><th>To</th><th class="num">Amount</th></tr></thead><tbody>${d.lines
+         .map((l) => `<tr><td>${esc(l.destination.displayName)}
+             ${ibanOf(l) ? `<div class="desc mono">${esc(ibanOf(l))}</div>` : ""}
+             ${l.note ? `<div class="desc">${esc(l.note)}</div>` : ""}</td>
+           <td class="mono num">${esc(l.amount)} ${esc(l.asset)}</td></tr>`).join("")}</tbody>
+         <tfoot><tr><th>Total</th><th class="num mono">${Object.entries(d.totals || {})
+           .map(([a, v]) => `${esc(v)} ${esc(a)}`).join("<br>")}</th></tr></tfoot></table>
+       <label for="d-reason">Reason, if rejecting (optional)</label><input id="d-reason" />`,
+      async () => {
+        await api(url, { method: "POST", body: { approve: true } });
+        toast("Approved.");
+      },
+      {
+        okLabel: "Approve",
+        secondary: {
+          label: "Reject",
+          cls: "ghost danger",
+          onSubmit: async () => {
+            await api(url, {
+              method: "POST",
+              body: { approve: false, reason: $("#d-reason").value.trim() || undefined },
+            });
+            toast("Rejected.");
+          },
+        },
+      });
   },
   /**
    * Send: create one transfer per line, then sign each on this device.
@@ -400,7 +444,7 @@ export const ACTIONS = {
          <table><thead><tr><th>To</th><th>Amount</th></tr></thead><tbody>${r.lines
            .map((l) => `<tr><td>${esc(l.destination.displayName)}</td>
              <td class="mono">${esc(l.amount)} ${esc(l.asset)}</td></tr>`).join("")}</tbody></table>`,
-        async () => {});
+        null, { closeOnly: true });
     }
     if (!r.authorizations?.length) return toast(r.note || "Nothing to sign.");
 

@@ -22,9 +22,9 @@
         </div>
       </div>
       <div class="auth-bar">
-        <span style="font-size: 12px; color: var(--text-muted);">Operator Token:</span>
-        <input type="password" id="operatorToken" placeholder="Enter operator token...">
-        <div class="auth-status online" id="authPill">
+        <label for="operatorToken" style="font-size: 12px; color: var(--text-muted);">Operator Token:</label>
+        <input type="password" id="operatorToken" placeholder="Enter operator token..." aria-label="Operator token" autocomplete="off" spellcheck="false">
+        <div class="auth-status online" id="authPill" role="status" aria-live="polite">
           <span class="status-dot"></span>
           <span id="authText">Connected</span>
         </div>
@@ -34,31 +34,31 @@
     <!-- KPI tiles. Clicking a tile jumps to the panel it summarises with the
          matching filter applied. -->
     <div class="stats-grid">
-      <div class="stat-card clickable" onclick="jumpToUsers('all')">
-        <div class="stat-label">Total Users</div>
-        <div class="stat-value" id="statUsers">--</div>
-        <div class="stat-sub">Accounts registered</div>
-      </div>
-      <div class="stat-card clickable" onclick="jumpToUsers('pending')">
-        <div class="stat-label">Pending at Monerium</div>
-        <div class="stat-value" id="statPending" style="color: var(--warning);">--</div>
-        <div class="stat-sub">Not yet activated</div>
-      </div>
-      <div class="stat-card clickable" onclick="jumpToUsers('approved')">
-        <div class="stat-label">Active Safes</div>
-        <div class="stat-value" id="statSafes" style="color: var(--primary);">--</div>
-        <div class="stat-sub">Deployed on Base</div>
-      </div>
-      <div class="stat-card clickable" onclick="jumpToTx('all')">
-        <div class="stat-label">Transfers</div>
-        <div class="stat-value" id="statTransfers" style="color: var(--success);">--</div>
-        <div class="stat-sub" id="statVolume">Volume —</div>
-      </div>
-      <div class="stat-card clickable" onclick="jumpToTx('attention')">
-        <div class="stat-label">Needs Attention</div>
-        <div class="stat-value" id="statAttention">--</div>
-        <div class="stat-sub">KYC · IBANs · failed & stuck transfers</div>
-      </div>
+      <button type="button" class="stat-card clickable" onclick="jumpToUsers('all')">
+        <span class="stat-label">Total Users</span>
+        <span class="stat-value" id="statUsers">--</span>
+        <span class="stat-sub">Accounts registered</span>
+      </button>
+      <button type="button" class="stat-card clickable" onclick="jumpToUsers('pending')">
+        <span class="stat-label">Pending at Monerium</span>
+        <span class="stat-value" id="statPending" style="color: var(--warning);">--</span>
+        <span class="stat-sub">Not yet activated</span>
+      </button>
+      <button type="button" class="stat-card clickable" onclick="jumpToUsers('approved')">
+        <span class="stat-label">Active Safes</span>
+        <span class="stat-value" id="statSafes" style="color: var(--primary);">--</span>
+        <span class="stat-sub">Deployed on Base</span>
+      </button>
+      <button type="button" class="stat-card clickable" onclick="jumpToTx('all')">
+        <span class="stat-label">Transfers</span>
+        <span class="stat-value" id="statTransfers" style="color: var(--success);">--</span>
+        <span class="stat-sub" id="statVolume">Volume —</span>
+      </button>
+      <button type="button" class="stat-card clickable" onclick="jumpToTx('attention')">
+        <span class="stat-label">Needs Attention</span>
+        <span class="stat-value" id="statAttention">--</span>
+        <span class="stat-sub">KYC · IBANs · failed & stuck transfers</span>
+      </button>
       <div class="stat-card">
         <div class="stat-label">Deployer Float</div>
         <div class="stat-value" id="statFloat">--</div>
@@ -78,8 +78,8 @@
     <!-- One search filters both panels. -->
     <div class="controls">
       <div class="search-box">
-        <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" id="searchInput" placeholder="Search users and transactions — name, id, Safe, IBAN, state, tx hash...">
+        <svg class="search-icon" aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="search" id="searchInput" aria-label="Search users and transactions" placeholder="Search users and transactions — name, id, Safe, IBAN, state, tx hash...">
       </div>
     </div>
 
@@ -87,12 +87,12 @@
     <div class="panel" id="usersPanel">
       <div class="panel-head">
         <div class="panel-title">Accounts <span class="panel-count" id="usersCount"></span></div>
-        <div class="filter-tabs" id="userFilterTabs">
-          <button class="tab-btn active" data-filter="all">All</button>
-          <button class="tab-btn" data-filter="pending">Pending</button>
-          <button class="tab-btn" data-filter="approved">Approved</button>
-          <button class="tab-btn" data-filter="rejected">Rejected</button>
-          <button class="tab-btn" data-filter="no-iban">No IBAN</button>
+        <div class="filter-tabs" id="userFilterTabs" role="group" aria-label="Filter accounts">
+          <button type="button" class="tab-btn active" aria-pressed="true" data-filter="all">All</button>
+          <button type="button" class="tab-btn" aria-pressed="false" data-filter="pending">Pending</button>
+          <button type="button" class="tab-btn" aria-pressed="false" data-filter="approved">Approved</button>
+          <button type="button" class="tab-btn" aria-pressed="false" data-filter="rejected">Rejected</button>
+          <button type="button" class="tab-btn" aria-pressed="false" data-filter="no-iban">No IBAN</button>
         </div>
       </div>
       <div class="panel-scroll">
@@ -121,13 +121,13 @@
     <div class="panel" id="txPanel">
       <div class="panel-head">
         <div class="panel-title">Transaction Operations <span class="panel-count" id="txCount"></span></div>
-        <div class="filter-tabs" id="txFilterTabs">
-          <button class="tab-btn active" data-tx-filter="all">All</button>
-          <button class="tab-btn" data-tx-filter="sepa">Monerium</button>
-          <button class="tab-btn" data-tx-filter="cash">MoneyGram</button>
-          <button class="tab-btn" data-tx-filter="funding">Funding</button>
-          <button class="tab-btn" data-tx-filter="inflight">In Flight</button>
-          <button class="tab-btn" data-tx-filter="attention">Needs Attention</button>
+        <div class="filter-tabs" id="txFilterTabs" role="group" aria-label="Filter transactions">
+          <button type="button" class="tab-btn active" aria-pressed="true" data-tx-filter="all">All</button>
+          <button type="button" class="tab-btn" aria-pressed="false" data-tx-filter="sepa">Monerium</button>
+          <button type="button" class="tab-btn" aria-pressed="false" data-tx-filter="cash">MoneyGram</button>
+          <button type="button" class="tab-btn" aria-pressed="false" data-tx-filter="funding">Funding</button>
+          <button type="button" class="tab-btn" aria-pressed="false" data-tx-filter="inflight">In Flight</button>
+          <button type="button" class="tab-btn" aria-pressed="false" data-tx-filter="attention">Needs Attention</button>
         </div>
       </div>
       <div class="panel-scroll">
@@ -154,10 +154,10 @@
 
   <!-- Detail JSON Modal -->
   <div class="modal-overlay" id="modalOverlay">
-    <div class="modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-header">
-        <div class="modal-title" id="modalTitle">User Raw Details</div>
-        <button class="close-btn" onclick="closeModal()">&times;</button>
+        <h2 class="modal-title" id="modalTitle" tabindex="-1">User Raw Details</h2>
+        <button type="button" class="close-btn" onclick="closeModal()" aria-label="Close"><span aria-hidden="true">&times;</span></button>
       </div>
       <pre class="json-code" id="modalJson"></pre>
     </div>
