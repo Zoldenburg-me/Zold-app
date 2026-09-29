@@ -20,8 +20,11 @@ export let view = "overview";
 
 export function toast(msg, bad = false) {
   const t = $("#toast");
-  t.textContent = msg;
+  // Shown first and filled a frame later: a live region that is display:none
+  // when its text changes is not reliably announced.
   t.className = bad ? "bad" : "";
+  t.textContent = "";
+  requestAnimationFrame(() => { t.textContent = msg; });
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.add("hidden"), bad ? 7000 : 3500);
 }
@@ -84,21 +87,54 @@ export const fmtEur = (cents) => fmtMoney(cents, "EUR");
 
 // ── actions ────────────────────────────────────────────────────────────────
 
-export function dialog(title, bodyHtml, onSubmit) {
-  $("#dlg-body").innerHTML = `<h3>${esc(title)}</h3>${bodyHtml}
-    <div class="dlg-actions"><button class="ghost" id="dlg-cancel">Cancel</button>
-    <button id="dlg-ok">Save</button></div>`;
+/**
+ * The one modal. `opts.okLabel` names the primary action ("Invite", not
+ * "Save"); `opts.secondary` adds a second action ({ label, onSubmit, cls })
+ * for a real either/or such as Approve / Reject; `opts.closeOnly` shows a
+ * single Close for a dialog that only informs.
+ *
+ * Errors are shown INSIDE the dialog: a toast renders under the modal
+ * backdrop, and the dialog stays open so the input is not lost. The action
+ * buttons are disabled while a submit is in flight, so a double click cannot
+ * send twice.
+ */
+export function dialog(title, bodyHtml, onSubmit, opts = {}) {
+  const { okLabel = "Save", secondary = null, closeOnly = false } = opts;
+  $("#dlg-body").innerHTML = `<h3 id="dlg-title">${esc(title)}</h3>${bodyHtml}
+    <div id="dlg-err" class="dlg-err" role="alert"></div>
+    <div class="dlg-actions">${closeOnly
+      ? `<button id="dlg-cancel">Close</button>`
+      : `<button class="ghost" id="dlg-cancel">Cancel</button>
+    ${secondary ? `<button class="${esc(secondary.cls ?? "ghost")}" id="dlg-alt">${esc(secondary.label)}</button>` : ""}
+    <button id="dlg-ok">${esc(okLabel)}</button>`}</div>`;
   $("#dlg").showModal();
   $("#dlg-cancel").onclick = () => $("#dlg").close();
-  $("#dlg-ok").onclick = async () => {
-    try { await onSubmit(); $("#dlg").close(); render(); }
-    catch (e) { toast(e.message, true); }
+  if (closeOnly) return;
+  const run = (fn) => async () => {
+    const actions = [$("#dlg-ok"), $("#dlg-alt")].filter(Boolean);
+    const err = $("#dlg-err");
+    if (actions.some((b) => b.disabled)) return;
+    err.textContent = "";
+    actions.forEach((b) => { b.disabled = true; });
+    try { await fn(); $("#dlg").close(); render(); }
+    catch (e) { err.textContent = e.message; }
+    finally { actions.forEach((b) => { b.disabled = false; }); }
   };
+  $("#dlg-ok").onclick = run(onSubmit);
+  if (secondary) $("#dlg-alt").onclick = run(secondary.onSubmit);
 }
 
 
 /** The bindings other modules reassign. Every READ of them stays live. */
 export const setOrg = (v) => { org = v; };
 export const setOrgs = (v) => { orgs = v; };
-export const setView = (v) => { view = v; };
+/** Changing the view is a navigation: it gets a history entry, so Back works
+ *  and the URL can be bookmarked or opened in a new tab. `push: false` is for
+ *  popstate, where the browser has already moved the URL. */
+export const setView = (v, { push = true } = {}) => {
+  view = v;
+  if (push && new URLSearchParams(location.search).get("view") !== v) {
+    history.pushState({ view: v }, "", `${location.pathname}?view=${encodeURIComponent(v)}`);
+  }
+};
 export const setInvoiceInputListener = (v) => { invoiceInputListener = v; };

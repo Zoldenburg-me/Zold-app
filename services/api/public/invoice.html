@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<html lang="en">
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <link rel="stylesheet" href="/vendor/fonts/text.css" />
@@ -114,6 +115,7 @@
   label { display: block; font-size: .74rem; font-weight: 500; color: var(--muted); margin: .8rem 0 .3rem; }
   input, select, textarea { width: 100%; padding: .6rem .72rem; border-radius: 8px; font-size: .9rem; border: 1px solid var(--border2); background: #0e0e12; color: var(--text); font-family: var(--font); }
   input:focus, select:focus { outline: none; border-color: var(--acc); box-shadow: 0 0 0 3px rgba(237,24,141,.15); }
+  a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
 
   @media print {
     /* Only the sheet prints, edge to edge on A4. Everything else is chrome. */
@@ -127,7 +129,7 @@
 
 <div class="wrap">
   <div class="topbar">
-    <div class="brand"><span>▽</span> Zold</div>
+    <div class="brand"><span aria-hidden="true">▽</span> Zold</div>
     <div class="actions" id="actions"></div>
   </div>
   <div id="content"><div class="panel">Loading…</div></div>
@@ -218,8 +220,11 @@ function renderIssued(inv) {
   const cur = d.currency ?? "EUR";
   const conv = d.conversion;
 
+  // The sheet is typeset in the invoice's language; the chrome around it stays
+  // English, so the language is declared on the sheet rather than on <html>.
+  const sheetLang = d.language === "en" ? "en" : "de";
   return `
-  <div class="sheet" id="sheet">
+  <div class="sheet" id="sheet" lang="${sheetLang}">
     <div class="sheet-head">
       <div>
         <h1>${esc(bilingual ? "Rechnung / Invoice" : t.invoice)}</h1>
@@ -333,9 +338,9 @@ const complianceNote = (j) =>
 
 let lines = [{ description: "", quantity: "1", unitPrice: "" }];
 const lineRows = () => lines.map((l, i) => `<tr>
-  <td><input data-i="${i}" data-f="description" value="${esc(l.description)}" placeholder="What you did" /></td>
-  <td style="width:80px"><input data-i="${i}" data-f="quantity" value="${esc(l.quantity)}" /></td>
-  <td style="width:110px"><input data-i="${i}" data-f="unitPrice" value="${esc(l.unitPrice)}" placeholder="0.00" /></td>
+  <td><input data-i="${i}" data-f="description" value="${esc(l.description)}" placeholder="What you did" aria-label="Line ${i + 1} description" /></td>
+  <td style="width:80px"><input data-i="${i}" data-f="quantity" value="${esc(l.quantity)}" inputmode="decimal" aria-label="Line ${i + 1} quantity" /></td>
+  <td style="width:110px"><input data-i="${i}" data-f="unitPrice" value="${esc(l.unitPrice)}" placeholder="0.00" inputmode="decimal" aria-label="Line ${i + 1} unit price" /></td>
   <td style="width:100px" class="num">${(Number(l.quantity || 0) * Number(l.unitPrice || 0)).toFixed(2)}</td>
 </tr>`).join("");
 const total = () => lines.reduce((s, l) => s + Number(l.quantity || 0) * Number(l.unitPrice || 0), 0).toFixed(2);
@@ -345,11 +350,11 @@ function renderForm(inv) {
     <div class="panel"><h2>Invoice requested by ${esc(inv.payor.name)}</h2>
       <div class="note">Fill this in and submit — no account and no wallet needed. Once submitted it is
         timestamped and locked.</div>
-      <label>Your organisation</label><input id="f-org" />
-      <label>Email</label><input id="f-email" type="email" />
-      <label>Invoice number</label><input id="f-num" />
-      <label>VAT ID (optional)</label><input id="f-vat" placeholder="DE123456789" />
-      <label>Address (optional)</label><input id="f-addr" />
+      <label for="f-org">Your organisation</label><input id="f-org" autocomplete="organization" />
+      <label for="f-email">Email</label><input id="f-email" type="email" autocomplete="email" />
+      <label for="f-num">Invoice number</label><input id="f-num" />
+      <label for="f-vat">VAT ID (optional)</label><input id="f-vat" placeholder="DE123456789" />
+      <label for="f-addr">Address (optional)</label><input id="f-addr" autocomplete="street-address" />
     </div>
     <div class="panel"><h2>Lines</h2>
       <table class="items"><thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Unit</th><th class="num">Amount</th></tr></thead>
@@ -359,16 +364,16 @@ function renderForm(inv) {
     </div>
     <div class="panel"><h2>How to pay you</h2>
       <div class="note">Your bank account lets ${esc(inv.payor.name)} pay this invoice by SEPA transfer with your invoice number as the reference.</div>
-      <label>Account holder</label><input id="f-holder" placeholder="Name on the account" />
-      <label>IBAN</label><input id="f-iban" placeholder="DE89 3704 0044 0532 0130 00" />
-      <label>BIC (optional)</label><input id="f-bic" placeholder="COBADEFFXXX" />
+      <label for="f-holder">Account holder</label><input id="f-holder" placeholder="Name on the account" />
+      <label for="f-iban">IBAN</label><input id="f-iban" placeholder="DE89 3704 0044 0532 0130 00" />
+      <label for="f-bic">BIC (optional)</label><input id="f-bic" placeholder="COBADEFFXXX" />
       <details style="margin-top:.8rem"><summary style="cursor:pointer;color:var(--muted)">Or a wallet address instead</summary>
-        <label>Wallet address</label><input id="f-wallet" placeholder="0x…" />
-        <label>Chain ID</label><input id="f-chain" value="8453" />
+        <label for="f-wallet">Wallet address</label><input id="f-wallet" placeholder="0x…" />
+        <label for="f-chain">Chain ID</label><input id="f-chain" value="8453" inputmode="numeric" />
       </details>
     </div>
     <div style="margin-top:1.2rem"><button id="submit">Submit invoice</button></div>
-    <div id="err"></div>`;
+    <div id="err" role="alert"></div>`;
 
   $("#lines").addEventListener("input", (e) => {
     const el = e.target;
@@ -441,12 +446,21 @@ function render(inv) {
 function renderPassword(message) {
   $("#content").innerHTML = `<div class="panel">
     <h2>This link is password protected</h2>
-    <label>Password</label><input id="f-pw" type="password" />
-    <div style="margin-top:1rem"><button id="pw-go">Open</button></div>
-    <div id="err">${password && message ? `<div class="err">${esc(message)}</div>` : ""}</div></div>`;
-  $("#pw-go").onclick = async () => {
+    <form id="pw-form" novalidate>
+      <label for="f-pw">Password</label><input id="f-pw" type="password" autocomplete="current-password" aria-describedby="err" />
+      <div style="margin-top:1rem"><button id="pw-go" type="submit">Open</button></div>
+    </form>
+    <div id="err" role="alert">${password && message ? `<div class="err">${esc(message)}</div>` : ""}</div></div>`;
+  // A wrong password re-renders this form; put the cursor back in the field.
+  if (password) $("#f-pw").focus();
+  $("#pw-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const go = $("#pw-go");
+    if (go.disabled) return; // already checking
+    go.disabled = true;
     password = $("#f-pw").value;
-    try { await boot(); } catch (e) { $("#err").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+    try { await boot(); } catch (err) { $("#err").innerHTML = `<div class="err">${esc(err.message)}</div>`; }
+    finally { go.disabled = false; }
   };
 }
 
@@ -456,7 +470,7 @@ async function boot() {
     data = await api(`/api/invoice-links/${encodeURIComponent(token)}`);
   } catch (e) {
     if (e.passwordRequired) return renderPassword(e.message);
-    $("#content").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    $("#content").innerHTML = `<div class="err" role="alert">${esc(e.message)}</div>`;
     return;
   }
   render(data.invoice);

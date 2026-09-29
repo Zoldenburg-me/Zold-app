@@ -114,8 +114,27 @@ async function api(path, body, method, extraHeaders) {
   }
   return data;
 }
-const showErr = (id, e) => { const el = $(id); el.textContent = e.message; el.classList.remove("hidden"); };
+/* role="alert" so a screen reader announces the error: a red line appearing
+   under a button is otherwise silent. Static .error slots carry the role in
+   the markup; this covers the ones built from template strings. */
+const showErr = (id, e) => {
+  const el = $(id);
+  if (!el.hasAttribute("role")) el.setAttribute("role", "alert");
+  el.textContent = e.message;
+  el.classList.remove("hidden");
+};
 const clearErr = (id) => $(id).classList.add("hidden");
+/* Say something to a screen reader without drawing it — for confirmations
+   shown only as an icon swap or a label on a button whose accessible name is
+   fixed ("Copied"). One polite region, #sr-announce in index.html (it must
+   exist before the text changes, or nothing is read). Cleared first so the
+   same message twice is announced twice. */
+function announce(msg) {
+  const el = $("sr-announce");
+  if (!el) return;
+  el.textContent = "";
+  setTimeout(() => { el.textContent = msg; }, 50);
+}
 /** A sent transfer's amount as a signed outflow — except where the money
  *  never left or came back (FAILED, REFUNDED): a "−€120.00" beside a
  *  transfer that debited nothing reads as money gone. */
