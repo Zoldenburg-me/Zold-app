@@ -202,7 +202,7 @@ async function loadCapabilities() {
   } catch {
     /* keep the safe defaults */
   }
-  $("recover-link-row").classList.toggle("hidden", !caps.emailSmsRecovery);
+  $("recover-link-row").classList.toggle("hidden", !caps.emailSmsRecovery && !caps.zoldenburgRecovery);
   renderFundCard();
 }
 
@@ -281,53 +281,28 @@ async function cancelPrivacyBundle() {
   } catch (e) { showErr("privacy-err", e); }
 }
 
+/* The settings row reads the account row; Profile → Recovery reads the chain
+   and holds every control. */
 async function loadRecoveryInfo() {
-  if (!user) return null;
-  try {
-    recoveryInfo = await api(`/api/users/${user.id}/recovery`);
-    return recoveryInfo;
-  } catch {
-    recoveryInfo = null;
-    return null;
-  }
+  recoveryInfo = user ? { safe: user.passkeySafe } : null;
+  return recoveryInfo;
 }
 
 function renderRecoveryInfo() {
   const el = $("set-recovery");
   const btn = $("btn-recovery-start");
   if (!el || !btn) return;
-  if (!recoveryInfo) {
-    el.textContent = "Checking recovery status.";
-    btn.disabled = true;
-    return;
-  }
-  const active = recoveryInfo.requests?.find((r) => !["FINALIZED", "CANCELED", "EXPIRED"].includes(r.status));
-  if (active) {
-    const ready = active.readyAt ? new Date(active.readyAt).toLocaleString() : "";
-    el.textContent = active.status === "DELAYING" ? `Delay active until ${ready}` : active.status.replaceAll("_", " ").toLowerCase();
-    btn.disabled = true;
-    btn.textContent = "Open";
-    return;
-  }
-  btn.textContent = "Start";
-  btn.disabled = !recoveryInfo.available;
-  el.textContent = recoveryInfo.available
-    ? `Zold recovery module · ${recoveryInfo.delayHours}h delay`
-    : (recoveryInfo.blocked || "Recovery unavailable");
+  const safe = user?.passkeySafe;
+  btn.textContent = "Manage";
+  btn.disabled = !safe || safe.status !== "active" || (!caps.zoldenburgRecovery && !caps.emailSmsRecovery);
+  el.textContent = !caps.zoldenburgRecovery && !caps.emailSmsRecovery ? "No recovery guardian on this deployment."
+    : safe?.recovery?.status === "active" ? "Zoldenburg is your recovery guardian."
+      : safe?.candideRecovery?.guardianStatus === "active" ? "Email/SMS recovery is on."
+        : "No guardian — Zoldenburg UG cannot recover this account if you lose your passkey.";
 }
 
-async function startRecoveryRequest() {
-  clearErr("recovery-err");
-  $("btn-recovery-start").disabled = true;
-  try {
-    await api(`/api/users/${user.id}/recovery/requests`, {});
-    await loadRecoveryInfo();
-    renderRecoveryInfo();
-  } catch (e) {
-    showErr("recovery-err", e);
-  } finally {
-    renderRecoveryInfo();
-  }
+function startRecoveryRequest() {
+  mobileNav("recovery");
 }
 
 async function renderPrivacyBundle() {

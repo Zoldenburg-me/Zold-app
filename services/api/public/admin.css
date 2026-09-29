@@ -195,3 +195,29 @@ tr:hover td { background: rgba(255, 255, 255, 0.015); }
 .modal-title:focus { outline: none; }
 .close-btn { background: transparent; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer; }
 .json-code { background: var(--bg); padding: 16px; border-radius: var(--radius-md); border: 1px solid var(--border); font-family: monospace; font-size: 12px; color: var(--accent); overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+
+/* ---------- Recoveries ---------- */
+.rv-detail { border-top: 1px solid var(--border); padding: 18px; display: grid; gap: 16px; }
+.rv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 20px; }
+.rv-k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
+.rv-v { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+.rv-v.mono { font-family: monospace; font-size: 12px; }
+.rv-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+.rv-box b { color: var(--text); }
+.rv-box.warn { border-color: rgba(255, 171, 0, .35); background: var(--warning-bg); }
+.rv-box ol { margin: 6px 0 0 18px; }
+.rv-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.rv-detail label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+.rv-detail textarea, .rv-detail input[type="text"] {
+  width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; font-size: 13px; font-family: inherit; resize: vertical;
+}
+.rv-detail textarea.mono { font-family: monospace; font-size: 12px; }
+.rv-detail textarea:focus-visible, .rv-detail input:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+.rv-err { color: var(--danger); font-size: 13px; }
+.rv-ok { color: var(--success); font-size: 13px; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; filter: none; box-shadow: none; }
+.btn-link { background: transparent; border: 1px solid var(--border); color: var(--primary); text-decoration: none; }
+.btn-link:hover { border-color: var(--primary); background: var(--primary-glow); }
+.rv-detail details summary { cursor: pointer; font-size: 12.5px; color: var(--text-muted); }
+.rv-detail details[open] summary { margin-bottom: 10px; }

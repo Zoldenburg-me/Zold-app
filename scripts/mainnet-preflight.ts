@@ -171,7 +171,7 @@ try {
 console.log("recovery");
 try {
   if (await isDeployed(CANDIDE.recoveryModuleAddress)) ok(`recovery module ${CANDIDE.recoveryModuleAddress} has code`);
-  else if (CANDIDE.recoveryGuardianAddress) fail(`recovery module ${CANDIDE.recoveryModuleAddress} has no code, and deployment would enable it`);
+  else if (CANDIDE.recoveryGuardianAddress) fail(`recovery module ${CANDIDE.recoveryModuleAddress} has no code, and users who add Zoldenburg as guardian would enable it`);
   else warn(`recovery module ${CANDIDE.recoveryModuleAddress} has no code here (only matters once recovery is configured)`);
 } catch (e) {
   fail(`could not read the recovery module: ${errMsg(e)}`);

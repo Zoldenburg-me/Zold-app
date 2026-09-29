@@ -10,7 +10,6 @@
 import type { User } from "../store.js";
 import { bufToB64url } from "../webauthn.js";
 import {
-  CANDIDE,
   smartAccountForPasskey,
   webauthnOwnerFromJwk,
   webauthnOwnerToStore,
@@ -26,9 +25,6 @@ export function passkeySafePlan(
   // The passkey is the ONLY owner: nothing Zold holds can take part in, or
   // block, a movement of the user's funds.
   const account = smartAccountForPasskey(owner);
-  const recoveryGuardianAddress = /^0x[0-9a-fA-F]{40}$/.test(CANDIDE.recoveryGuardianAddress)
-    ? (CANDIDE.recoveryGuardianAddress as `0x${string}`)
-    : undefined;
   return {
     address: account.accountAddress as `0x${string}`,
     status: "planned",
@@ -36,16 +32,8 @@ export function passkeySafePlan(
     // No allowance module, no delegate, no spend amounts: nothing moves from
     // the Safe except UserOperations the user's own passkey signs.
     passkeyPublicKey: webauthnOwnerToStore(owner),
-    ...(recoveryGuardianAddress
-      ? {
-          recovery: {
-            moduleAddress: CANDIDE.recoveryModuleAddress,
-            guardianAddress: recoveryGuardianAddress,
-            threshold: 1,
-            status: "planned",
-          },
-        }
-      : {}),
+    // No recovery guardian: adding Zoldenburg is the user's choice, made after
+    // deployment with its own passkey-signed operation (recovery-zoldenburg.ts).
     createdAt: new Date().toISOString(),
     previousAddress: user.address,
   };

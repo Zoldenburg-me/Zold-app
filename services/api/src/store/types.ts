@@ -31,13 +31,27 @@ export interface User {
     status: "planned" | "active";
     threshold: 1;
     passkeyPublicKey: { x: string; y: string };
+    /**
+     * Zoldenburg as a guardian on this Safe's recovery module, by the user's
+     * own choice (onboarding step 3 or Profile → Recovery). `active` only
+     * once the chain lists the guardian. Rows written before the choice
+     * existed were added silently by the deployment op; they read as active.
+     */
     recovery?: {
       moduleAddress: `0x${string}`;
       guardianAddress: `0x${string}`;
       threshold: 1;
       status: "planned" | "active";
       enabledAt?: string;
+      opHash?: string;
     };
+    /**
+     * What the user answered when offered Zoldenburg as recovery guardian.
+     * `declined` records that they saw and acknowledged the warning that
+     * Zoldenburg cannot recover the account and only the EURe balance is
+     * reclaimable from Monerium. Absent: never asked.
+     */
+    recoveryChoice?: { choice: "zoldenburg" | "declined"; at: string };
     /**
      * Candide's email/SMS guardian on this Safe.
      *
@@ -644,6 +658,9 @@ export type RecoveryRequestStatus =
   | "OTP_PENDING"
   /** Candide guardian: executed on chain; the owner may still cancel until `finalizeAfter`. */
   | "GRACE_PERIOD"
+  /** Zoldenburg guardian: new passkey registered, waiting for an operator to
+   *  check the person against Monerium's identity and sign. */
+  | "REVIEW_PENDING"
   | "FINALIZED"
   | "CANCELED"
   | "EXPIRED";
@@ -652,8 +669,9 @@ export interface RecoveryRequest {
   id: string;
   userId: string;
   safeAddress: `0x${string}`;
-  /** `managed` (operator-approved, external signer) unless set. */
-  mode?: "managed" | "candide";
+  /** `zoldenburg`: the owner asks Zoldenburg, an operator reviews and signs
+   *  as guardian. `candide`: email/SMS OTPs. `managed` only on legacy rows. */
+  mode?: "managed" | "candide" | "zoldenburg";
   status: RecoveryRequestStatus;
   requestedAt: string;
   expiresAt: string;
@@ -727,6 +745,36 @@ export interface RecoveryRequest {
     /** Wrong codes so far on the no-session OTP route. */
     otpAttempts?: number;
     finalizeAfter?: string;
+    verifierDeployTxHash?: string;
+    finalizeAttempts?: number;
+    finalizeError?: string;
+  };
+  /**
+   * Zoldenburg-guardian recovery. Same custody rule as `candide`: the new
+   * credential waits HERE until the chain shows it as the Safe's owner.
+   */
+  zoldenburg?: {
+    /** sha256 of the per-request secret given once to the starting browser. */
+    accessHash?: string;
+    /** Short code the person quotes when they contact support. */
+    reference?: string;
+    newPasskey?: {
+      credentialId: string;
+      publicKey: { jwk: JsonWebKey; alg: "ES256" | "RS256" };
+      signCount: number;
+      rpId: string;
+      attestation?: string;
+      createdAt: string;
+    };
+    newOwners?: `0x${string}`[];
+    newThreshold?: number;
+    /** The EIP-712 digest the guardian signed, as the module computed it. */
+    recoveryHash?: `0x${string}`;
+    executeTxHash?: `0x${string}`;
+    executedAt?: string;
+    gracePeriodSeconds?: number;
+    finalizeAfter?: string;
+    finalizeTxHash?: `0x${string}`;
     verifierDeployTxHash?: string;
     finalizeAttempts?: number;
     finalizeError?: string;

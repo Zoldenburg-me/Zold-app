@@ -121,12 +121,8 @@ export const KYC = {
 };
 
 export const RECOVERY = {
-  managedKycGuardian: process.env.RECOVERY_MANAGED_KYC_GUARDIAN !== "0",
-  delayHours: Math.max(1, Number(process.env.RECOVERY_DELAY_HOURS ?? 72)),
+  /** How long a started recovery may wait for its passkey, codes or review. */
   requestTtlHours: Math.max(1, Number(process.env.RECOVERY_REQUEST_TTL_HOURS ?? 24 * 14)),
-  guardianSignerUrl: process.env.RECOVERY_GUARDIAN_SIGNER_URL ?? "",
-  guardianSignerToken: process.env.RECOVERY_GUARDIAN_SIGNER_TOKEN ?? "",
-  guardianSignerTimeoutMs: Math.max(1000, Number(process.env.RECOVERY_GUARDIAN_SIGNER_TIMEOUT_MS ?? 10_000)),
   /**
    * Candide's Safe Recovery Service — the email/SMS guardian.
    *
@@ -388,20 +384,11 @@ function assertProductionConfig() {
       );
     }
   }
-  if (RECOVERY.managedKycGuardian && !RECOVERY.guardianSignerUrl) {
-    fail("RECOVERY_GUARDIAN_SIGNER_URL is required in production when managed KYC recovery is enabled");
-  }
   if ((process.env.CANDIDE_RECOVERY_MODULE_ADDRESS ?? "").toLowerCase() === RECOVERY_MODULE_3_MINUTES.toLowerCase()) {
     fail("CANDIDE_RECOVERY_MODULE_ADDRESS is the 3-minute test module — use the 3/7/14-day module in production");
   }
   if (RECOVERY.serviceUrl) {
     try { requireExplicitHttpsUrl("RECOVERY_SERVICE_URL", RECOVERY.serviceUrl); } catch (e: any) { fail(e.message); }
-  }
-  if (RECOVERY.guardianSignerUrl) {
-    try { requireExplicitHttpsUrl("RECOVERY_GUARDIAN_SIGNER_URL", RECOVERY.guardianSignerUrl); } catch (e: any) { fail(e.message); }
-    if (!RECOVERY.guardianSignerToken) {
-      fail("RECOVERY_GUARDIAN_SIGNER_TOKEN is required when RECOVERY_GUARDIAN_SIGNER_URL is configured");
-    }
   }
   if (anchorModeEnabled() && STELLAR.networkPassphrase === STELLAR_TESTNET_PASSPHRASE) {
     fail("production anchor mode must not use the Stellar testnet passphrase");
@@ -428,6 +415,8 @@ function assertProductionConfig() {
     // No co-signer is required: Safes are passkey-only (1-of-1).
     // No standing allowance is required either: the user's passkey approves
     // each transfer for its exact debit amount at send time.
+    // Zoldenburg's guardian (the operator hardware wallet's address). Users
+    // opt in to it; without it the onboarding offer has nothing to add.
     if (!process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS) {
       fail("CANDIDE_RECOVERY_GUARDIAN_ADDRESS is required before hosted production funding");
     }

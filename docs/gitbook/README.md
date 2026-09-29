@@ -20,7 +20,7 @@ A global account is a set of local accounts under one roof. Each one is denomina
 
 **Invoice and keep the books.** [Invoices](invoicing/issue-an-invoice.md) checked against [your country's rules](invoicing/vat-and-jurisdictions.md), and [bookkeeping](bookkeeping/transactions-and-tags.md) with tags, a chart of accounts, cost basis and [export](bookkeeping/export-and-integrations.md) to your accountant's software.
 
-**Stay in control.** The wallet's owner is a passkey on your device, and you can [recover it by email or phone](getting-started/security-and-recovery.md) if the device is lost. Statements, receipts and balance confirmations carry a verification code anyone can check.
+**Stay in control.** The wallet's owner is a passkey on your device, and if the device is lost, [Zoldenburg can recover it](getting-started/security-and-recovery.md) when you choose it as your guardian. Statements, receipts and balance confirmations carry a verification code anyone can check.
 
 ## Coming soon
 

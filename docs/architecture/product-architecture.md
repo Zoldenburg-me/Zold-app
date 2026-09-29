@@ -180,7 +180,8 @@ sequenceDiagram
    Safe is **1-of-1: the passkey is its only owner.** Zold holds no key that
    can move or block the funds. The 2-of-2 Zold co-signer that Safes had
    before PR #193 is gone, with its key.
-4. **Recovery enrolment** is optional and shown only if the deployment has
+4. **Recovery** is offered where the deployment has `zoldenburgRecovery`
+   (Zoldenburg as guardian; skipping needs an acknowledged warning) and/or
    `emailSmsRecovery`.
 5. **Monerium gate.** The user connects by OAuth (PKCE) *or* pastes their own
    Monerium API keys. There is no white-label path: Zold never creates a
@@ -224,7 +225,7 @@ These are *per-user partner* capabilities. They are separate from the
 | mode | status | how it works |
 |---|---|---|
 | **Email/SMS guardian (Candide)** | BUILT, UNPROVEN (stub service only) | Candide becomes a Safe guardian (threshold 1). Lost device: a new passkey is created, an OTP is verified on every registered channel, and Candide executes the recovery on chain. After a grace period (3 days in production) the new passkey becomes the Safe's only owner; a legacy co-signer is not carried over. The old device can veto during the grace period. |
-| **Managed KYC guardian** | NOT BUILT beyond the operator workflow | An operator approves, a delay runs, then an external guardian signer would act. That signer does not exist in the repo and nothing finalises a managed recovery. |
+| **Zoldenburg guardian** | BUILT, UNPROVEN (harness only) | Opt-in at onboarding or in Profile; skipping shows that Zoldenburg UG then cannot recover the account and only EURe is reclaimable from Monerium. A lost device registers a new passkey and quotes a reference to support; an operator checks the person against Monerium's KYC and signs as guardian from a hardware wallet (admin → Recoveries, or Safe Cover). After the grace period the new passkey is the only owner; the old device can cancel until then. |
 
 The new credential lives on the recovery request, not the user, until the
 chain confirms the new owner. Whoever holds the OTP channels therefore cannot
