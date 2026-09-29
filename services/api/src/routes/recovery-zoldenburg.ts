@@ -469,17 +469,14 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       let open = store
         .recoveryRequestsForUser(user.id)
         .find((r) => r.mode === "zoldenburg" && (OPEN as readonly string[]).includes(r.status) && (r.status === "GRACE_PERIOD" || Date.now() < Date.parse(r.expiresAt)));
-      // Only the starting browser may resume. A stranger naming the account
-      // supersedes a request with nothing invested; past that, refused.
+      // Only the starting browser may resume. A request is replaced only by
+      // a caller that presents its secret, so naming the account can no
+      // longer cancel a victim's in-progress initiation.
       if (open && !secretMatches(open, presentedSecret(req))) {
-        if (open.status !== "PASSKEY_PENDING") {
-          return res.status(409).json({
-            error: "a recovery for this account is already in progress — continue it in the browser that started it, or contact support",
-            code: "RECOVERY_IN_PROGRESS",
-          });
-        }
-        store.updateRecoveryRequest(open.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "superseded by a new recovery start" });
-        open = undefined;
+        return res.status(409).json({
+          error: "a recovery for this account is already in progress — continue it in the browser that started it, or contact support",
+          code: "RECOVERY_IN_PROGRESS",
+        });
       }
       const moduleAddress = user.passkeySafe!.recovery!.moduleAddress;
       const secret = open ? undefined : randomBytes(32).toString("base64url");
