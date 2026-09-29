@@ -110,6 +110,8 @@ const timedFetch: typeof fetch = (input, init) =>
 const transport = (url: string) => new HttpTransport(url, { fetch: timedFetch });
 const bundler = () => transport(CANDIDE.bundlerUrl);
 const rpc = () => transport(CANDIDE.rpcUrl);
+/** The smart-account chain's RPC, with the partner timeout, for module reads elsewhere. */
+export const candideRpc = rpc;
 const paymaster = () =>
   new Erc7677Paymaster(transport(CANDIDE.paymasterUrl), {
     chainId: CANDIDE.chainId,
@@ -347,6 +349,7 @@ async function prepareSafeExecutionCore(
   if (!(await isDeployed(account.accountAddress))) {
     throw new Error("passkey Safe must be deployed before a transfer can be executed from it");
   }
+  await assertPasskeyAloneCanSign(account.accountAddress);
   return paidUserOperation(account, passkeyOwner, txs);
 }
 
@@ -438,6 +441,32 @@ export class SafeGasError extends Error {
   }
 }
 
+/**
+ * The Safe needs more signatures than the passkey can give. A user may raise
+ * the threshold themselves (advanced settings, with their own second owner);
+ * Zold collects only the passkey's signature, so every operation it builds
+ * would fail at the bundler with a signature error. Refuse before the passkey
+ * ceremony and say why.
+ */
+export class SafeThresholdError extends Error {
+  readonly status = 409;
+  readonly code = "SAFE_NEEDS_MORE_SIGNATURES";
+  constructor(message: string) {
+    super(message);
+    this.name = "SafeThresholdError";
+  }
+}
+
+async function assertPasskeyAloneCanSign(safeAddress: string): Promise<void> {
+  const threshold = await safeThreshold(safeAddress);
+  if (threshold > 1) {
+    throw new SafeThresholdError(
+      `this smart account needs ${threshold} signatures and Zold can collect only your passkey's — ` +
+        `sign with all owners on app.safe.global, or recover the account to reset it`,
+    );
+  }
+}
+
 function formatEth(wei: bigint): string {
   return (Number(wei) / 1e18).toFixed(6);
 }
@@ -495,6 +524,7 @@ export async function prepareSafeSetupOperation(
   if (!(await isDeployed(account.accountAddress))) {
     throw new Error("passkey Safe must be deployed before its configuration can change");
   }
+  await assertPasskeyAloneCanSign(account.accountAddress);
   return paidUserOperation(account, passkeyOwner, txs);
 }
 
@@ -689,7 +719,7 @@ const SAFE_READ_ABI = [
   },
 ] as const;
 
-async function ethCall(to: string, data: `0x${string}`): Promise<`0x${string}`> {
+export async function ethCall(to: string, data: `0x${string}`): Promise<`0x${string}`> {
   const res = await fetch(CANDIDE.rpcUrl, {
     signal: partnerTimeout(),
     method: "POST",
