@@ -42,7 +42,7 @@ import {
   } from "../wallet/candide.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { normalizeIban } from "../sepa.js";
-import { confirmedMoves, releaseIbanFromOtherUsers } from "../adapters/monerium-sandbox.js";
+import { confirmedMoves, mayApproveOnIban, releaseIbanFromOtherUsers } from "../adapters/monerium-sandbox.js";
 import {
   encryptToken,
   forgetUserClient,
@@ -641,7 +641,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         // "duplicate" answer on both proves nothing about THIS address, and an
         // IBAN not yet issued is iban_pending, which refreshPendingIban resolves
         // and approves when it lands.
-        ...(viaApp || !iban
+        ...(viaApp || !iban || !mayApproveOnIban(user)
           ? {}
           : {
               kycStatus: "approved" as const,
@@ -827,7 +827,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         updated = store.updateUser(user.id, {
           iban,
           moneriumIbanMoves: moves,
-          ...(user.kycStatus === "rejected"
+          ...(!mayApproveOnIban(user)
             ? {}
             : {
                 kycStatus: "approved" as const,
@@ -931,7 +931,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
 
       const updated = store.updateUser(user.id, {
         moneriumConnect: undefined,
-        ...(wasApproved
+        ...(wasApproved || !mayApproveOnIban(user)
           ? {}
           : ownIban
             ? {
