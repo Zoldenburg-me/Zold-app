@@ -24,12 +24,13 @@ The backend may compute addresses, prepare UserOperations, request paymaster
 sponsorship, and relay operations through the bundler. It must not own the
 Safe signing key.
 
-The default recovery path for non-crypto users is managed KYC recovery: the
-Safe has a service guardian, the user proves identity through the KYC/recovery
-operator path, and recovery waits through the module grace period before a new
-owner can take over. The API only decides when a request is allowed to proceed;
-the guardian signature is delegated to a separate signer service configured by
-`RECOVERY_GUARDIAN_SIGNER_URL`, so the API does not become a hot guardian key.
+The default recovery path for non-crypto users is Zoldenburg as guardian, by
+the user's choice: a lost device registers a new passkey and asks support, an
+operator checks the person against the identity Monerium verified, and signs
+the recovery from a hardware wallet (the admin console or Safe Cover). The
+module's grace period is the owner's window to cancel. The API never holds the
+guardian key; it checks the signature against the module's own digest and
+relays it.
 Advanced users can add:
 
 - Two passkeys on separate devices.

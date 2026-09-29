@@ -191,6 +191,19 @@
   }
   .pk-card .pk-ic { font-size: 1.05rem; line-height: 1.35; }
   .pk-card b { color: var(--text); font-weight: 600; }
+  .rec-facts { margin: 1rem 0 0; padding-left: 1.1rem; font-size: .84rem; color: var(--onb-sub); line-height: 1.6; }
+  .rec-facts li + li { margin-top: .35rem; }
+  .rec-facts b { color: var(--text); font-weight: 600; }
+  /* The one warning in onboarding that must not read as fine print. */
+  .rec-warn {
+    margin-top: 1.2rem; padding: 1.1rem 1.15rem; border-radius: 14px;
+    background: rgba(244, 67, 108, .10); border: 2px solid var(--red);
+    font-size: .92rem; line-height: 1.6; color: var(--text);
+  }
+  .rec-warn-title { font-size: 1.02rem; font-weight: 700; color: var(--red); margin-bottom: .4rem; }
+  .rec-warn p { margin: .45rem 0 0; }
+  .rec-warn b { font-weight: 700; }
+  .btn-primary-lite:disabled { opacity: .45; cursor: not-allowed; filter: none; }
   .onb-note { margin-top: .85rem; font-size: .78rem; color: var(--faint); line-height: 1.6; }
   .onb-terms { margin-top: 1.8rem; font-size: .76rem; color: var(--faint); line-height: 1.75; }
   .onb-terms a, .onb-terms .linkbtn { color: var(--text); text-decoration: none; cursor: pointer; border-bottom: 1px solid var(--onb-line); }

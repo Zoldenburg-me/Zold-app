@@ -11,6 +11,7 @@ import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/moneri
 import { cashRailOpen } from "./orchestrator.js";
 import { shopifyAvailable } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
+import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
 
 /**
  * What this deployment can do, so the browser only offers actions the server
@@ -48,6 +49,9 @@ export function capabilities() {
     /** May a user enrol email/SMS recovery, and may a lost device recover
      *  through it? Needs Candide's recovery service URL. */
     emailSmsRecovery: candideRecoveryEnabled(),
+    /** May a user add Zoldenburg as their recovery guardian, and may a lost
+     *  device ask Zoldenburg to recover it? Needs the guardian address. */
+    zoldenburgRecovery: zoldenburgRecoveryEnabled(),
     moneriumHost: (() => { try { return new URL(MONERIUM.baseUrl).host; } catch { return MONERIUM.baseUrl; } })(),
   };
 }
