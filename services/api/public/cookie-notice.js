@@ -61,11 +61,29 @@
     ok.style.cssText =
       "flex:none;height:36px;padding:0 18px;border:0;border-radius:999px;background:#ed188d;color:#fff;" +
       "font:600 13px Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;cursor:pointer";
+    // Where keyboard focus was before it entered the notice, so dismissing it
+    // can hand focus back instead of dropping it on <body> with the box gone.
+    var cameFrom = null;
+    box.addEventListener("focusin", function (e) {
+      if (!cameFrom && e.relatedTarget && !box.contains(e.relatedTarget)) cameFrom = e.relatedTarget;
+    });
     ok.onclick = function () {
       try { localStorage.setItem(KEY, "1"); } catch (_) { /* shows again next visit */ }
+      var hadFocus = box.contains(document.activeElement);
       box.remove();
+      if (!hadFocus) return;
+      var back = cameFrom && document.contains(cameFrom) ? cameFrom : document.querySelector("main, h1");
+      if (!back) return;
+      if (back.tabIndex < 0 && !back.hasAttribute("tabindex")) back.setAttribute("tabindex", "-1");
+      try { back.focus({ preventScroll: true }); } catch (_) { back.focus(); }
     };
 
+    // Inline styles cannot express :focus-visible, and the host page's own
+    // focus rules may not reach these controls.
+    var ring = document.createElement("style");
+    ring.textContent =
+      "#zold-cookie-notice a:focus-visible,#zold-cookie-notice button:focus-visible{outline:2px solid #ed188d;outline-offset:2px}";
+    box.appendChild(ring);
     box.appendChild(text);
     box.appendChild(ok);
     document.body.appendChild(box);

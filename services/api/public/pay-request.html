@@ -50,7 +50,7 @@
   .pane.on { display: block; }
   .qrbox { background: #fff; border-radius: 12px; padding: .6rem; width: 216px; margin: 0 auto 1rem; }
   .qrbox img { display: block; width: 200px; height: 200px; }
-  .lbl { font-size: .66rem; font-weight: 700; letter-spacing: .07em; color: var(--faint); margin: .8rem 0 .3rem; }
+  .lbl { display: block; font-size: .66rem; font-weight: 700; letter-spacing: .07em; color: var(--faint); margin: .8rem 0 .3rem; }
   .val {
     background: var(--row); border: 1px solid var(--border2); border-radius: 10px;
     padding: .6rem .7rem; font-family: ui-monospace, Menlo, monospace; font-size: .8rem;
@@ -58,13 +58,21 @@
   }
   .val.big { font-size: 1.05rem; font-weight: 650; }
   .val button { width: auto; margin: 0; padding: .3rem .6rem; font-size: .72rem; background: var(--card); color: var(--muted); border: 1px solid var(--border2); flex: none; }
-  button {
+  button, .btn {
     width: 100%; margin-top: .6rem; padding: .75rem; border-radius: 10px; border: 0;
     background: var(--pink); color: #fff; font-weight: 650; font-size: .9rem; cursor: pointer;
   }
-  button:hover { filter: brightness(1.08); }
-  button.ghost { background: var(--row); color: var(--text); border: 1px solid var(--border2); }
-  button:disabled { opacity: .5; cursor: default; filter: none; }
+  /* A link that navigates is an <a>, styled like the buttons around it. */
+  .btn { display: block; text-align: center; text-decoration: none; font-family: inherit; line-height: normal; }
+  button:hover, .btn:hover { filter: brightness(1.08); }
+  button.ghost, .btn.ghost { background: var(--row); color: var(--text); border: 1px solid var(--border2); }
+  button:disabled, .btn[aria-disabled="true"] { opacity: .5; cursor: default; filter: none; }
+  .btn[aria-disabled="true"] { pointer-events: none; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
   input {
     width: 100%; background: var(--row); border: 1px solid var(--border2); color: var(--text); border-radius: 10px;
     padding: .7rem .75rem; font: inherit; font-size: 1rem;
@@ -86,7 +94,7 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="brand"><span class="mark">▽</span><span class="name">Zold</span></div>
+  <div class="brand"><span class="mark" aria-hidden="true">▽</span><span class="name">Zold</span></div>
 
   <div class="card">
     <div id="loading" class="missing"><p>Loading…</p></div>
@@ -107,19 +115,19 @@
       </div>
       <div class="amt" id="amt"></div>
       <div class="desc" id="desc"></div>
-      <div class="status" id="status"><span class="dot"></span><span id="status-text"></span></div>
+      <div class="status" id="status" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="status-text"></span></div>
 
       <div id="paid" class="hidden">
         <div class="pay" id="paylist"></div>
-        <a id="return" class="hidden"><button>Return to the store</button></a>
+        <a id="return" class="btn hidden">Return to the store</a>
       </div>
 
       <div id="open">
         <div id="amount-ask" class="hidden">
-          <div class="lbl">AMOUNT TO PAY (EUR)</div>
-          <input id="amount-in" inputmode="decimal" placeholder="25.00" />
+          <label class="lbl" for="amount-in">AMOUNT TO PAY (EUR)</label>
+          <input id="amount-in" inputmode="decimal" placeholder="25.00" aria-describedby="amount-err" />
           <button id="amount-go">Continue</button>
-          <div class="err hidden" id="amount-err"></div>
+          <div class="err hidden" id="amount-err" role="alert"></div>
         </div>
 
         <div id="methods" class="hidden">
@@ -128,10 +136,10 @@
           <div class="pane" id="pane-crypto">
             <div class="qrbox"><img id="qr" alt="QR code of the receiving address" /></div>
             <div class="lbl">SEND EXACTLY</div>
-            <div class="val big"><span id="usdc"></span><button data-copy="usdc">Copy</button></div>
+            <div class="val big"><span id="usdc"></span><button data-copy="usdc" aria-label="Copy amount">Copy</button></div>
             <div class="lbl">TO THIS ADDRESS</div>
-            <div class="val"><span id="addr"></span><button data-copy="addr">Copy</button></div>
-            <button id="open-wallet" class="ghost">Open in wallet</button>
+            <div class="val"><span id="addr"></span><button data-copy="addr" aria-label="Copy address">Copy</button></div>
+            <a id="open-wallet" class="btn ghost" aria-disabled="true">Open in wallet</a>
             <p class="note" id="crypto-note"></p>
             <p class="note"><strong>Network and token matter.</strong> Send <strong id="tok">USDC</strong> on <strong id="chain">this network</strong> only.
               Another token or network will not reach this request. The payment is matched by amount, so send the exact figure shown.</p>
@@ -139,12 +147,12 @@
 
           <div class="pane" id="pane-bank">
             <div class="lbl">BENEFICIARY</div>
-            <div class="val"><span id="holder"></span><button data-copy="holder">Copy</button></div>
+            <div class="val"><span id="holder"></span><button data-copy="holder" aria-label="Copy beneficiary name">Copy</button></div>
             <div class="lbl">IBAN</div>
-            <div class="val"><span id="iban"></span><button data-copy="iban">Copy</button></div>
+            <div class="val"><span id="iban"></span><button data-copy="iban" aria-label="Copy IBAN">Copy</button></div>
             <div id="bic-row" class="hidden"><div class="lbl">BIC</div><div class="val"><span id="bic"></span></div></div>
             <div class="lbl">REFERENCE — WRITE THIS ON THE TRANSFER</div>
-            <div class="val big"><span id="ref"></span><button data-copy="ref">Copy</button></div>
+            <div class="val big"><span id="ref"></span><button data-copy="ref" aria-label="Copy reference">Copy</button></div>
             <div class="lbl">AMOUNT</div>
             <div class="val"><span id="bank-amt"></span></div>
             <p class="note">A SEPA transfer with this reference is matched to this request when it lands. Without the reference it still arrives, but has to be matched by hand.
@@ -153,15 +161,16 @@
 
           <div class="pane" id="pane-zold">
             <p class="desc" style="margin-top:.4rem">Have a Zold account? Pay from your balance. The app opens with the amount, the account and the reference filled in; you approve with your passkey.</p>
-            <a id="zold-link"><button>Open in Zold</button></a>
+            <a id="zold-link" class="btn hidden">Open in Zold</a>
             <p class="note">Today this sends a euro transfer to the payee's account with the reference attached — the same rail as a bank transfer, without any typing.</p>
           </div>
         </div>
-        <a id="cancel" class="hidden"><button class="ghost">Cancel and return to the store</button></a>
+        <a id="cancel" class="btn ghost hidden">Cancel and return to the store</a>
       </div>
     </div>
   </div>
 
+  <div id="copy-live" class="sr-only" aria-live="polite"></div>
   <div class="foot">Zoldenburg · <a href="/">zold</a></div>
 </div>
 
@@ -179,12 +188,25 @@ let req = null;
 let amountEur = null; // for open-amount requests, what the payer typed
 let tab = null;
 
+function announce(msg) {
+  const live = $("copy-live");
+  live.textContent = "";
+  setTimeout(() => { live.textContent = msg; }, 50);
+}
+
 function copyable() {
   document.querySelectorAll("[data-copy]").forEach((b) => {
     b.onclick = async () => {
       const el = $(b.dataset.copy);
-      try { await navigator.clipboard.writeText(el.dataset.raw ?? el.textContent); } catch { return; }
-      b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200);
+      const what = (b.getAttribute("aria-label") || "Copy").replace(/^Copy /, "");
+      let ok = true;
+      try { await navigator.clipboard.writeText(el.dataset.raw ?? el.textContent); } catch { ok = false; }
+      // The visible swap is for the eye; the live region says the same thing
+      // to a screen reader, which would not re-read a button's text.
+      b.textContent = ok ? "Copied" : "Copy failed";
+      announce(ok ? `${what} copied` : `Could not copy the ${what.toLowerCase()}. Select it and copy it by hand.`);
+      clearTimeout(b._t);
+      b._t = setTimeout(() => (b.textContent = "Copy"), ok ? 1200 : 2500);
     };
   });
 }
@@ -213,12 +235,15 @@ function render(p) {
   const st = $("status");
   st.className = "status";
   const paid = p.paidEur || 0;
-  if (p.state === "PAID") { st.classList.add("ok"); $("status-text").textContent = `Paid ${eur(paid)}`; }
-  else if (p.state === "EXPIRED") { st.classList.add("warn"); $("status-text").textContent = "Expired"; }
-  else if (p.state === "CANCELLED") { st.classList.add("warn"); $("status-text").textContent = "Cancelled by the payee"; }
-  else if (paid > 0 && p.outstandingEur > 0) { st.classList.add("warn", "live"); $("status-text").textContent = `${eur(paid)} received · ${eur(p.outstandingEur)} outstanding`; }
-  else if (paid > 0) { st.classList.add("ok"); $("status-text").textContent = `${eur(paid)} received so far`; }
-  else { st.classList.add("live"); $("status-text").textContent = "Awaiting payment"; }
+  // The status is a live region: only write it when the words change, or a
+  // re-render (a tab switch) would announce "Awaiting payment" again.
+  const setStatus = (t) => { if ($("status-text").textContent !== t) $("status-text").textContent = t; };
+  if (p.state === "PAID") { st.classList.add("ok"); setStatus(`Paid ${eur(paid)}`); }
+  else if (p.state === "EXPIRED") { st.classList.add("warn"); setStatus("Expired"); }
+  else if (p.state === "CANCELLED") { st.classList.add("warn"); setStatus("Cancelled by the payee"); }
+  else if (paid > 0 && p.outstandingEur > 0) { st.classList.add("warn", "live"); setStatus(`${eur(paid)} received · ${eur(p.outstandingEur)} outstanding`); }
+  else if (paid > 0) { st.classList.add("ok"); setStatus(`${eur(paid)} received so far`); }
+  else { st.classList.add("live"); setStatus("Awaiting payment"); }
 
   const open = p.state === "OPEN";
   $("open").classList.toggle("hidden", !open);
@@ -246,8 +271,15 @@ function render(p) {
   if (p.methods.crypto) tabs.push(["crypto", "Crypto (USDC)"]);
   if (p.methods.bank) tabs.push(["bank", "Bank transfer"], ["zold", "Zold account"]);
   if (!tab || !tabs.some(([id]) => id === tab)) tab = tabs[0]?.[0];
-  $("tabs").innerHTML = tabs.map(([id, t]) => `<button class="tab${id === tab ? " on" : ""}" data-tab="${id}">${t}</button>`).join("");
-  $("tabs").querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => { tab = b.dataset.tab; render(req); }; });
+  $("tabs").innerHTML = tabs.map(([id, t]) => `<button class="tab${id === tab ? " on" : ""}" data-tab="${id}" aria-pressed="${id === tab}">${t}</button>`).join("");
+  $("tabs").querySelectorAll("[data-tab]").forEach((b) => {
+    b.onclick = () => {
+      tab = b.dataset.tab;
+      render(req);
+      // render() rebuilt the tab row; put focus back on the tab just chosen.
+      $("tabs").querySelector(`[data-tab="${tab}"]`)?.focus();
+    };
+  });
   document.querySelectorAll(".pane").forEach((el) => el.classList.toggle("on", el.id === `pane-${tab}`));
 
   const c = p.methods.crypto;
@@ -259,14 +291,15 @@ function render(p) {
     if (c.amountUsdc !== undefined) {
       $("usdc").textContent = `${c.amountUsdc} ${c.token.symbol}`;
       $("usdc").dataset.raw = String(c.amountUsdc);
-      $("open-wallet").disabled = false;
-      $("open-wallet").onclick = () => { location.href = c.uri; };
+      $("open-wallet").href = c.uri;
+      $("open-wallet").removeAttribute("aria-disabled");
       const until = new Date(c.validUntil);
       $("crypto-note").innerHTML = `Priced at <strong>${c.rate.toFixed(4)} USD/EUR</strong> (live mid) plus a <strong>${(c.allowanceBps / 100).toFixed(2)}%</strong> conversion allowance. This figure holds until ${until.toLocaleTimeString()}, then the page re-prices; any amount this page has shown still counts. The payee is credited what the conversion actually delivers.`;
     } else {
       $("usdc").textContent = "No live rate right now";
       delete $("usdc").dataset.raw;
-      $("open-wallet").disabled = true;
+      $("open-wallet").removeAttribute("href");
+      $("open-wallet").setAttribute("aria-disabled", "true");
       $("crypto-note").textContent = "The EUR/USD rate feed is unavailable, so no crypto amount can be quoted. Pay by bank transfer, or try again shortly.";
     }
   }
@@ -283,6 +316,7 @@ function render(p) {
     const u = new URL(b.appUrl);
     if (amountEur && p.amountEur === undefined) u.searchParams.set("amount", String(amountEur));
     $("zold-link").href = u.toString();
+    show("zold-link");
   }
   copyable();
 }
@@ -298,17 +332,21 @@ async function load() {
 }
 
 $("amount-go").onclick = async () => {
+  const go = $("amount-go");
+  if (go.disabled) return; // a quote is already in flight
   hide("amount-err");
   const n = Number(($("amount-in").value || "").replace(",", "."));
   if (!(n > 0)) { $("amount-err").textContent = "Enter an amount."; show("amount-err"); return; }
   amountEur = Math.round(n * 100) / 100;
   if (req.methods.crypto) {
+    go.disabled = true;
     try {
       const res = await fetch(`${API}/quote`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ amountEur }) });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "could not quote");
       render(body);
     } catch (e) { $("amount-err").textContent = e.message; show("amount-err"); }
+    finally { go.disabled = false; }
   } else render(req);
 };
 

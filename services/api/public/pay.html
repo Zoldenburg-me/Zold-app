@@ -34,7 +34,7 @@
     background: var(--pink); color: #fff; font-weight: 700; font-size: 1.35rem;
     display: flex; align-items: center; justify-content: center;
   }
-  .dn { font-size: 1.1rem; font-weight: 650; }
+  .dn { font-size: 1.1rem; font-weight: 650; margin: 0; }
   .hd { color: var(--faint); font-size: .82rem; font-family: ui-monospace, Menlo, monospace; }
   .qrbox { background: #fff; border-radius: 12px; padding: .6rem; width: 216px; margin: 0 auto 1.1rem; }
   .qrbox img { display: block; width: 200px; height: 200px; }
@@ -44,12 +44,19 @@
     padding: .6rem .7rem; font-family: ui-monospace, Menlo, monospace; font-size: .72rem;
     word-break: break-all; line-height: 1.5; color: var(--muted);
   }
-  button {
+  button, .btn {
     width: 100%; margin-top: .6rem; padding: .7rem; border-radius: 10px; border: 0;
     background: var(--pink); color: #fff; font-weight: 650; font-size: .9rem; cursor: pointer;
   }
-  button:hover { filter: brightness(1.08); }
-  button.ghost { background: var(--row); color: var(--text); border: 1px solid var(--border2); }
+  /* A link that navigates is an <a>, styled like the button above it. */
+  .btn { display: block; text-align: center; text-decoration: none; font-family: inherit; line-height: normal; }
+  button:hover, .btn:hover { filter: brightness(1.08); }
+  button.ghost, .btn.ghost { background: var(--row); color: var(--text); border: 1px solid var(--border2); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
   .meta { display: flex; gap: .5rem; justify-content: center; margin: 1rem 0 0; flex-wrap: wrap; }
   .chip {
     background: var(--row); border: 1px solid var(--border2); border-radius: 999px;
@@ -67,9 +74,9 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="brand"><span class="mark">▽</span><span class="name">Zold</span></div>
+  <div class="brand"><span class="mark" aria-hidden="true">▽</span><span class="name">Zold</span></div>
 
-  <div class="card">
+  <div class="card" id="card" aria-busy="true">
     <div id="loading" class="missing"><p>Loading…</p></div>
 
     <div id="notfound" class="missing hidden">
@@ -80,7 +87,7 @@
     <div id="payee" class="hidden">
       <div class="who">
         <div class="avatar" id="avatar">?</div>
-        <div class="dn" id="dn"></div>
+        <h1 class="dn" id="dn"></h1>
         <div class="hd" id="hd"></div>
       </div>
 
@@ -89,7 +96,8 @@
       <div class="lbl">RECEIVING ADDRESS</div>
       <div class="addr" id="addr"></div>
       <button id="copy">Copy address</button>
-      <button id="open" class="ghost">Open in wallet</button>
+      <a id="open" class="btn ghost">Open in wallet</a>
+      <div id="copy-live" class="sr-only" aria-live="polite"></div>
 
       <div class="meta">
         <span class="chip" id="chip-token"></span>
@@ -136,6 +144,7 @@ async function load() {
     const p = await res.json();
     hide("loading");
     show("payee");
+    $("card").setAttribute("aria-busy", "false");
 
     const label = p.displayName || p.handle || "?";
     $("avatar").textContent = (label.trim()[0] || "?").toUpperCase();
@@ -153,17 +162,29 @@ async function load() {
       ? (p.settlementAsset === "USDC" ? "USDC" : "EUR(e)")
       : "manual";
 
+    // The visible swap is for the eye; the live region says it to a screen
+    // reader, which would not re-read the button's text on its own.
+    const say = (msg) => { $("copy-live").textContent = ""; setTimeout(() => { $("copy-live").textContent = msg; }, 50); };
+    let copyTimer;
     $("copy").onclick = async () => {
+      clearTimeout(copyTimer);
       try {
         await navigator.clipboard.writeText(p.address);
         $("copy").textContent = "Copied";
-        setTimeout(() => ($("copy").textContent = "Copy address"), 1400);
-      } catch { /* clipboard refused; the address is on screen to select */ }
+        say("Address copied");
+        copyTimer = setTimeout(() => ($("copy").textContent = "Copy address"), 1400);
+      } catch {
+        // Clipboard refused; the address is on screen to select by hand.
+        $("copy").textContent = "Could not copy — select the address above";
+        say("Could not copy. Select the address and copy it by hand.");
+        copyTimer = setTimeout(() => ($("copy").textContent = "Copy address"), 3000);
+      }
     };
-    $("open").onclick = () => { location.href = paymentUri(p); };
+    $("open").href = paymentUri(p);
   } catch {
     hide("loading");
     show("notfound");
+    $("card").setAttribute("aria-busy", "false");
   }
 }
 load();
