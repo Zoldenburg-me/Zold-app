@@ -937,7 +937,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET/POST /` (S) | List or create orgs. |
 | `GET/PATCH /:orgId` (M, P(org.update)) | Read or update the org. |
 | `GET /:orgId/plan` (M) | Plan. |
-| `POST /:orgId/plan[/trial]` (M, P(org.billing)) | Change plan or start the trial. |
+| `POST /:orgId/plan[/trial]` (M, P(org.billing)) | Downgrade, or start the trial. A paid plan answers 402 `PAID_PLAN_NEEDS_GRANT`. |
 | `GET /:orgId/members` (M) | Member list. |
 | `POST /:orgId/members` (C(members.manage), P(members.invite)) | Invite. |
 | `PATCH /:orgId/members/:m` (C(members.manage), P(members.update)) | Change role or status. |
@@ -1010,3 +1010,4 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | | |
 |---|---|
 | `GET /admin/{stats, users, transactions}` (operator token, A) | Read-only console. |
+| `POST /admin/orgs/:orgId/plan` (operator token, A) | Grant a plan. The only way onto a paid plan while there is no billing. |

@@ -133,21 +133,25 @@ export function recordFailure(key: string, windowMs: number): void {
  * Monerium API keys being checked against a third party.
  */
 function isAuthRoute(req: express.Request): boolean {
+  // Express routes are case-insensitive and ignore a trailing slash, so match
+  // the same way: "/api/Recovery/..." or "/webauthn/challenge/" reaches the
+  // same handler and must land in the same bucket.
+  const path = req.path.toLowerCase().replace(/\/+$/, "") || "/";
   return (
-    req.path.startsWith("/passkey") ||
+    path.startsWith("/passkey") ||
     // Unauthenticated, and every call stores a challenge server-side.
-    req.path === "/webauthn/challenge" ||
-    req.path.startsWith("/recovery") ||
-    req.path.startsWith("/r/") ||
-    req.path.startsWith("/v/") ||
+    path === "/webauthn/challenge" ||
+    path.startsWith("/recovery") ||
+    path.startsWith("/r/") ||
+    path.startsWith("/v/") ||
     // The bare /pay/<handle> page is public by design and stays on the general
     // bucket; only /pay/<handle>/<code> is a credential.
-    /^\/pay\/[^/]+\/[^/]+/.test(req.path) ||
-    req.path.startsWith("/shopify/") ||
-    req.path.startsWith("/admin") ||
-    req.path.startsWith("/invoice-links/") ||
-    (req.path.endsWith("/monerium/api-keys") && req.method === "POST") ||
-    (req.path === "/users" && req.method === "POST")
+    /^\/pay\/[^/]+\/[^/]+/.test(path) ||
+    path.startsWith("/shopify/") ||
+    path.startsWith("/admin") ||
+    path.startsWith("/invoice-links/") ||
+    (path.endsWith("/monerium/api-keys") && req.method === "POST") ||
+    (path === "/users" && req.method === "POST")
   );
 }
 

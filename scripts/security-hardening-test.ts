@@ -82,6 +82,12 @@ await check("unauthenticated challenge minting sits on the tight bucket", async 
   for (let i = 0; i < 21; i++) last = (await fetch(`${base}/api/webauthn/challenge`, { method: "POST" })).status;
   assert.equal(last, 429);
 });
+await check("changing case or adding a trailing slash does not escape the tight bucket", async () => {
+  // Express routes ignore both, so these reach the same handler as above.
+  for (const p of ["/api/WebAuthn/Challenge", "/api/webauthn/challenge/"]) {
+    assert.equal((await fetch(`${base}${p}`, { method: "POST" })).status, 429, p);
+  }
+});
 await check("every response says no-referrer and nosniff", async () => {
   const r = await fetch(`${base}/api/invoice-links/nothing`);
   assert.equal(r.headers.get("referrer-policy"), "no-referrer");

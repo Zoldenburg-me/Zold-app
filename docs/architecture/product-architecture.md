@@ -394,8 +394,10 @@ exist.
 - **Gating is a read-time filter, never a delete.** A downgrade pauses
   business features and keeps the data.
 - **A trial is a grant with an end date**: 30 days, one per org, ever.
-- **There is no billing.** An owner switches plans or starts a trial with a
-  click, and nothing charges them.
+- **There is no billing.** An owner can start the trial or downgrade with a
+  click, but cannot switch onto a paid plan (402 `PAID_PLAN_NEEDS_GRANT`):
+  a paid plan is an operator grant (`POST /api/admin/orgs/:orgId/plan`), so
+  nothing is handed out as bought that nobody paid for.
 - `cards` is marked *unavailable* at every price. `integrations.accounting` is
   **not** marked unavailable, so it reports as allowed on Business with nothing
   behind it (§9.3).
