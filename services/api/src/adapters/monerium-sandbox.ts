@@ -91,6 +91,13 @@ export function releaseIbanFromOtherUsers(iban: string, keepUserId: string): voi
   }
 }
 
+/**
+ * An address-matched IBAN approves an account only from `pending`. A
+ * rejected or manual_review account is not approved by an IBAN appearing,
+ * and an approved one keeps its original approval record.
+ */
+export const mayApproveOnIban = (user: User) => user.kycStatus === "pending";
+
 /** Mark the newest unconfirmed move of `iban` on this user as confirmed. */
 export function confirmedMoves(user: User, iban: string): User["moneriumIbanMoves"] {
   const moves = user.moneriumIbanMoves;
@@ -114,7 +121,9 @@ export async function refreshPendingIban(user: User): Promise<User> {
       // same when the IBAN is there at once). Without this, an IBAN issued
       // after activation was stored but the account stayed pending, and the
       // app hides the IBAN of a pending account.
-      const approve = user.kycStatus !== "approved" && user.kycStatus !== "rejected";
+      // Allowlist, not denylist: only a pending account is approved by its
+      // IBAN. manual_review (and anything added later) stays where it is.
+      const approve = mayApproveOnIban(user);
       return store.updateUser(user.id, {
         iban,
         funding: { ...user.funding, status: "active", detail: undefined },
