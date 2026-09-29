@@ -290,6 +290,12 @@ Say this plainly rather than letting the surface imply otherwise:
 - **No real Monerium production OAuth app is registered**, and no real
   client-credentials token has been used. The OAuth cookie binding and the
   refresh client-id change are unproven against the real server.
+- **Moving an existing Monerium IBAN** (`POST /users/:id/monerium/move-iban`,
+  `PATCH /ibans/{iban}`) has run only against the fake Monerium in the
+  oauth/apikeys suites, never against Monerium's real sandbox. Whether the
+  sandbox allows PATCH to a `basesepolia` address is unverified, and so is
+  the `profile` field on GET /ibans items that the move and the
+  `IBAN_EXISTS_ELSEWHERE` answer rely on (without it both refuse).
 - **No Shopify app is registered** and no store has installed one; the
   payments-app route additionally needs approval into Shopify's Payments Apps
   program, which is uncertain, not merely slow — hence `custom-app` is the

@@ -831,8 +831,8 @@ separately rather than committed here.)
    funds.
 10. **SEPA counterpart `country` is the sender's country** (default `DE`).
     `sepa.mode` is always the literal `"sandbox"`.
-11. **`refreshPendingIban` sets the IBAN but not `kycStatus: approved`.** An
-    IBAN issued asynchronously leaves the account pending.
+11. *(Fixed Sep 2026.)* `refreshPendingIban` now approves the account when
+    the address-matched IBAN arrives after activation.
 12. **Indicative-rate caches never hit**, because `providerById` builds a new
     venue instance per call.
 13. **Shopify resolve retries are uncapped**, and the Shopify webhooks, the
@@ -910,8 +910,9 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /users/:id/monerium/connect/start` (U, segment) | Start OAuth. |
 | `GET /monerium/oauth/callback` (state + cookie) | OAuth return. |
 | `GET /users/:id/monerium/accounts` (U) | Refresh and read the snapshot. |
-| `POST /users/:id/monerium/link-signature/start` (U) | Challenge for activation. |
-| `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. |
+| `POST /users/:id/monerium/link-signature/start` (U) | Challenge for activation, or for a move with `{purpose: "move-iban", iban}` (bound to that IBAN, single use). |
+| `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. 409 `IBAN_EXISTS_ELSEWHERE` (with `existing: {iban, address, chain, profileId}`) when Monerium answers 304 because the profile's one IBAN pays another address; 409 `IBAN_EXISTS_UNRESOLVED` when that IBAN cannot be pinned to exactly one. |
+| `POST /users/:id/monerium/move-iban` (U, passkey, typed `MOVE`) | Move the user's existing IBAN to the Safe: own connection only, IBAN must be on the profile the Safe is linked under; links the Safe, `PATCH /ibans/{iban}`, approves only if the re-read shows the IBAN on the Safe, else `iban_pending`. Records `moneriumIbanMoves`. 409 `IBAN_NOT_ON_PROFILE` / `ADDRESS_NOT_ON_PROFILE`. |
 | `DELETE /users/:id/monerium/connect` (U) | Forget the connection. |
 | `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. |
 | `DELETE /users/:id/monerium/api-keys` (U) | Remove own keys. |

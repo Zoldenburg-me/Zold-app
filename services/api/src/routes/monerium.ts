@@ -41,6 +41,8 @@ import {
   signMessageAsPasskeySafe,
   } from "../wallet/candide.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
+import { normalizeIban } from "../sepa.js";
+import { confirmedMoves, releaseIbanFromOtherUsers } from "../adapters/monerium-sandbox.js";
 import {
   encryptToken,
   forgetUserClient,
@@ -110,6 +112,122 @@ async function readMoneriumAccountSnapshot(user: User, accessToken?: string) {
   const addresses = Array.isArray(addressRes) ? addressRes : (addressRes?.addresses ?? []);
   return { context, profiles, ibans, addresses };
 }
+
+type Hex = `0x${string}`;
+type ActiveSafeUser = User & {
+  passkey: NonNullable<User["passkey"]>;
+  passkeySafe: NonNullable<User["passkeySafe"]>;
+};
+const hasActiveSafe = (user: User): user is ActiveSafeUser =>
+  Boolean(user.passkey?.publicKey && user.passkeySafe && user.passkeySafe.status === "active");
+
+const sameAddress = (a: unknown, b: unknown) =>
+  typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+
+/** An IBAN as the user typed or Monerium listed it, compared without spaces. */
+const ibanKey = (v: unknown) => (typeof v === "string" ? normalizeIban(v) : "");
+const IBAN_SHAPE = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{10,30}$/;
+
+/**
+ * Monerium's answer to POST /ibans for a profile that already has its one
+ * IBAN: 304, with no body (fetch drops a 304's body, so the status is the
+ * signal; the text is matched too in case a proxy rewrites the status).
+ */
+const profileAlreadyHasIban = (err: unknown) =>
+  err instanceof MoneriumApiError &&
+  (err.status === 304 || /already has an iban/i.test(err.message));
+
+const alreadyDone = (err: unknown) =>
+  err instanceof MoneriumApiError &&
+  err.status < 500 &&
+  /already|exist|duplicate/i.test(err.message);
+
+/**
+ * Verify the passkey assertion over `challenge` (the Safe message hash of
+ * LINK_MESSAGE) and turn it into the Safe's EIP-1271 signature. The API holds
+ * no key: without the user's fresh assertion there is no signature.
+ */
+async function passkeySafeLinkSignature(
+  user: ActiveSafeUser,
+  challenge: string,
+  body: any,
+): Promise<{ user: User; signature: Hex }> {
+  const { authenticatorData, clientDataJSON, signature: assertionSignature } = body ?? {};
+  const passkey = user.passkey;
+  if (!passkey.publicKey) throw new Error("no passkey public key on this account");
+  const { signCount } = await verifyAssertionForChallenge(
+    authenticatorData,
+    clientDataJSON,
+    assertionSignature,
+    passkey.publicKey,
+    passkey.signCount ?? 0,
+    passkey.rpId ?? SECURITY.rpId,
+    SECURITY.origins,
+    challenge,
+    true,
+  );
+  const updated = store.updateUser(user.id, { passkey: { ...passkey, signCount } });
+  const signature = await signMessageAsPasskeySafe(user.passkeySafe, user.address, LINK_MESSAGE, {
+    authenticatorData: b64urlToBuf(authenticatorData),
+    clientDataJSON: b64urlToBuf(clientDataJSON),
+    signature: b64urlToBuf(assertionSignature),
+  });
+  return { user: updated, signature };
+}
+
+/**
+ * POST /addresses: link the Safe under `profileId` with its signed ownership
+ * declaration. "Already linked" is success. Returns the refusal to send, or
+ * undefined when the address is linked (or was already).
+ */
+async function linkSafeAddress(
+  user: User,
+  accessToken: string,
+  signature: Hex,
+  profileId: string | undefined,
+): Promise<string | undefined> {
+  try {
+    await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/addresses", {
+      address: user.address,
+      signature,
+      chain: MONERIUM.chain,
+      message: LINK_MESSAGE,
+      ...(profileId ? { profile: profileId } : {}),
+    });
+    return undefined;
+  } catch (err: any) {
+    if (alreadyDone(err)) return undefined;
+    console.error(`monerium: address linking refused for ${user.id}: ${err?.message ?? err}`);
+    // "Cannot link ... contact support" is Monerium's permanent verdict on
+    // a burned (once-unlinked) address. A Safe's address cannot change, so
+    // record it: the client stops offering an activation that can only
+    // fail, and the account page says why instead of erroring forever.
+    if (/cannot link/i.test(String(err?.message ?? ""))) {
+      store.updateUser(user.id, {
+        funding: {
+          ...(user.funding ?? { mode: "sandbox" as const }),
+          mode: "sandbox",
+          status: "error",
+          addressUnlinkable: true,
+          detail: "Monerium cannot link this address (support required) — this account cannot receive an IBAN; open a new account",
+        } as User["funding"],
+      });
+    }
+    return `Monerium refused the address linking: ${err?.message ?? err}`;
+  }
+}
+
+/** The profile Monerium has this address linked under, or undefined. */
+async function linkedProfileOf(accessToken: string, address: string): Promise<string | undefined> {
+  try {
+    const rec = await moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", `/addresses/${address}`);
+    return typeof rec?.profile === "string" && rec.profile ? rec.profile : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const maskIban = (iban: string) => `•••• ${normalizeIban(iban).slice(-4)}`;
 
 /**
  * Connect the user's own Monerium app credentials.
@@ -310,6 +428,13 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (!(await isDeployed(user.address))) {
         return res.status(409).json({ error: "passkey Safe must be deployed before Monerium address linking" });
       }
+      // A move is approved for the one IBAN the user confirmed, and its
+      // ceremony is good for nothing else.
+      const purpose = req.body?.purpose === "move-iban" ? ("move-iban" as const) : ("activate" as const);
+      const iban = purpose === "move-iban" ? ibanKey(req.body?.iban) : undefined;
+      if (purpose === "move-iban" && !IBAN_SHAPE.test(iban ?? "")) {
+        return res.status(400).json({ error: "the IBAN to move is required" });
+      }
       prunePendingMoneriumLinkSignatures();
       const requestId = randomUUID();
       const profileId = typeof req.body?.profileId === "string" ? req.body.profileId : user.monerium?.profileId;
@@ -318,6 +443,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         userId: user.id,
         profileId,
         challenge,
+        purpose,
+        ...(iban ? { iban } : {}),
         expiresAt: Date.now() + 5 * 60_000,
       });
       res.status(201).json({
@@ -327,7 +454,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         rpId: user.passkey.rpId ?? SECURITY.rpId,
         message: LINK_MESSAGE,
         address: user.address,
-        submitTo: `/api/users/${user.id}/monerium/activate`,
+        submitTo: `/api/users/${user.id}/monerium/${purpose === "move-iban" ? "move-iban" : "activate"}`,
       });
     }),
   );
@@ -350,14 +477,12 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           error: "passkey Safe must be deployed before Monerium address linking",
         });
       }
-      if (!user.passkey?.publicKey || !user.passkeySafe || user.passkeySafe.status !== "active") {
+      if (!hasActiveSafe(user)) {
         return res.status(409).json({ error: "active passkey Safe required before Monerium address linking" });
       }
       // Captured under the guard above: `user` is reassigned below (store
-      // updates), which discards TypeScript's narrowing on these.
-      const passkey = user.passkey;
-      const passkeyKey = user.passkey.publicKey;
-      const passkeySafe = user.passkeySafe;
+      // updates), which discards TypeScript's narrowing.
+      const safeUser = user;
 
       prunePendingMoneriumLinkSignatures();
       let profileId: string | undefined;
@@ -375,7 +500,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
             ? req.body.linkSignatureRequestId
             : "";
         const pending = requestId ? pendingMoneriumLinkSignatures.get(requestId) : undefined;
-        if (!pending || pending.userId !== user.id) {
+        if (!pending || pending.userId !== user.id || pending.purpose === "move-iban") {
           return res.status(409).json({
             error: "fresh passkey Safe signature required for Monerium address linking",
             start: `/api/users/${user.id}/monerium/link-signature/start`,
@@ -400,23 +525,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           });
         }
         try {
-          const { signCount } = await verifyAssertionForChallenge(
-            authenticatorData,
-            clientDataJSON,
-            assertionSignature,
-            passkeyKey,
-            passkey.signCount ?? 0,
-            passkey.rpId ?? SECURITY.rpId,
-            SECURITY.origins,
-            pending.challenge,
-            true,
-          );
-          user = store.updateUser(user.id, { passkey: { ...passkey, signCount } });
-          signature = await signMessageAsPasskeySafe(passkeySafe, user.address, LINK_MESSAGE, {
-            authenticatorData: b64urlToBuf(authenticatorData),
-            clientDataJSON: b64urlToBuf(clientDataJSON),
-            signature: b64urlToBuf(assertionSignature),
-          });
+          ({ user, signature } = await passkeySafeLinkSignature(safeUser, pending.challenge, req.body));
         } catch (err: any) {
           return res.status(401).json({ error: String(err?.message ?? err) });
         }
@@ -439,48 +548,25 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           // not linked yet — the normal first-run case
         }
       }
-      const alreadyDone = (err: unknown) =>
-        err instanceof MoneriumApiError &&
-        err.status < 500 &&
-        /already|exist|duplicate/i.test(err.message);
-      try {
-        await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/addresses", {
-          address: user.address,
-          signature,
-          chain: MONERIUM.chain,
-          message: LINK_MESSAGE,
-          ...(profileId ? { profile: profileId } : {}),
-        });
-      } catch (err: any) {
-        if (!alreadyDone(err)) {
-          console.error(`monerium activate: address linking refused for ${user.id}: ${err?.message ?? err}`);
-          // "Cannot link ... contact support" is Monerium's permanent verdict on
-          // a burned (once-unlinked) address. A Safe's address cannot change, so
-          // record it: the client stops offering an activation that can only
-          // fail, and the account page says why instead of erroring forever.
-          if (/cannot link/i.test(String(err?.message ?? ""))) {
-            store.updateUser(user.id, {
-              funding: {
-                ...(user.funding ?? { mode: "sandbox" as const }),
-                mode: "sandbox",
-                status: "error",
-                addressUnlinkable: true,
-                detail: "Monerium cannot link this address (support required) — this account cannot receive an IBAN; open a new account",
-              } as User["funding"],
-            });
-          }
-          // 400, not 502: Cloudflare swallows origin 502 bodies with its own
-          // error page, so the reason above never reached the user.
-          return res.status(400).json({ error: `Monerium refused the address linking: ${err?.message ?? err}` });
-        }
+      const linkRefused = await linkSafeAddress(user, accessToken, signature, profileId);
+      if (linkRefused) {
+        // 400, not 502: Cloudflare swallows origin 502 bodies with its own
+        // error page, so the reason never reached the user.
+        return res.status(400).json({ error: linkRefused });
       }
+      // A Monerium profile has ONE IBAN. For a profile that already has it,
+      // POST /ibans answers 304: not a refusal, but not an IBAN for this Safe
+      // either. What to do about it is the user's call (move-iban).
+      let profileHasIban = false;
       try {
         await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "POST", "/ibans", {
           address: user.address,
           chain: MONERIUM.chain,
         });
       } catch (err: any) {
-        if (!alreadyDone(err)) {
+        if (profileAlreadyHasIban(err)) {
+          profileHasIban = true;
+        } else if (!alreadyDone(err)) {
           console.error(`monerium activate: IBAN request refused for ${user.id}: ${err?.message ?? err}`);
           return res.status(400).json({ error: `Monerium refused the IBAN request: ${err?.message ?? err}` });
         }
@@ -499,6 +585,53 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         snapshot.ibans.find(
           (i: any) => String(i.address ?? "").toLowerCase() === user.address.toLowerCase() && i.iban,
         )?.iban ?? "";
+
+      if (profileHasIban && !iban) {
+        /**
+         * The profile's IBAN pays another address. Say which, so the user can
+         * decide whether to move it here, and store nothing but the reason:
+         * that IBAN is not this account's until Monerium attributes it to
+         * this Safe. With the app's credentials the list is every customer's
+         * IBANs, so nothing from it is shown.
+         */
+        const say = (status: number, body: Record<string, unknown>, detail: string) => {
+          store.updateUser(user.id, {
+            funding: { ...(user.funding ?? { mode: "sandbox" as const, status: "provisioning" as const }), detail },
+          });
+          return res.status(status).json(body);
+        };
+        if (viaApp) {
+          return say(409, {
+            error: "Monerium says this profile already has an IBAN. Connect your own Monerium account to see it and move it here.",
+          }, "Monerium profile already has an IBAN; connect your own Monerium account to move it");
+        }
+        const linkedUnder = await linkedProfileOf(accessToken, user.address);
+        const candidates = linkedUnder
+          ? snapshot.ibans.filter((i: any) => i?.profile === linkedUnder && ibanKey(i.iban))
+          : [];
+        if (candidates.length !== 1) {
+          // Fail closed: no profile to read, or not exactly one IBAN on it.
+          const why = !linkedUnder
+            ? "Monerium does not say which profile this Safe is linked under"
+            : `Monerium lists ${candidates.length} IBANs on profile ${linkedUnder}`;
+          return say(409, {
+            error: `Monerium says this profile already has an IBAN, but ${why}, so Zold cannot tell which one to offer. Nothing was changed.`,
+            code: "IBAN_EXISTS_UNRESOLVED",
+          }, `Monerium profile already has an IBAN; ${why}`);
+        }
+        const existing = candidates[0];
+        const existingIban = ibanKey(existing.iban);
+        return say(409, {
+          error: `Your Monerium profile already has an IBAN (${maskIban(existingIban)}). It pays into ${existing.address ?? "another address"} on ${existing.chain ?? "another chain"}, not this account. You can move it here; nothing has changed yet.`,
+          code: "IBAN_EXISTS_ELSEWHERE",
+          existing: {
+            iban: existingIban,
+            address: existing.address ?? null,
+            chain: existing.chain ?? null,
+            profileId: linkedUnder,
+          },
+        }, `Your Monerium profile already has an IBAN (${maskIban(existingIban)}) paying into ${existing.address ?? "another address"} on ${existing.chain ?? "another chain"} — move it to this account, or keep it where it is`);
+      }
 
       const updated = store.updateUser(user.id, {
         // What Monerium attributes to THIS address, or nothing. Falling back to
@@ -532,6 +665,209 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         },
         monerium: { ...user.monerium!, profileId, ...snapshot },
       });
+      const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
+      res.json({ ...publicUser(updated), ...balances });
+    }),
+  );
+
+  /**
+   * Move the user's EXISTING Monerium IBAN to this Safe.
+   *
+   * A Monerium profile has one IBAN, so a user who already has one gets 304
+   * from POST /ibans (activate answers IBAN_EXISTS_ELSEWHERE). PATCH
+   * /ibans/{iban} {address, chain} points that IBAN at another address: bank
+   * payments to it mint there from then on, and the old wallet stops
+   * receiving them. Because that changes where someone's money lands, the
+   * route wants a typed "MOVE", a fresh passkey ceremony started for this
+   * IBAN, and the user's OWN connection (never the app's credentials).
+   *
+   * The IBAN in the body only chooses what to move. What is stored is what
+   * Monerium's re-read attributes to this Safe's address, and only that
+   * approves the account. A PATCH that is accepted but not yet visible leaves
+   * the account iban_pending; refreshPendingIban finishes it.
+   */
+  router.post(
+    "/users/:id/monerium/move-iban",
+    wrap(async (req, res) => {
+      let user = store.findUser(req.params.id);
+      if (!user) return res.status(404).json({ error: "user not found" });
+      if (!requireUserSession(req, res, user.id)) return;
+      if (!requireCapability(user, "monerium", res)) return;
+      const custodyBlocked = custodyBlockerBeforeFunding(user);
+      if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
+      if (!hasActiveSafe(user)) {
+        return res.status(409).json({ error: "active passkey Safe required before moving an IBAN to it" });
+      }
+      const safeUser = user;
+
+      // Checked before the ceremony is consumed, so a typo costs no approval.
+      if (req.body?.confirm !== "MOVE") {
+        return res.status(400).json({
+          error: 'type MOVE to confirm — this changes where bank payments to the IBAN land',
+          code: "CONFIRMATION_REQUIRED",
+        });
+      }
+      const requested = ibanKey(req.body?.iban);
+      if (!IBAN_SHAPE.test(requested)) {
+        return res.status(400).json({ error: "the IBAN to move is required" });
+      }
+      if (!hasOwnMoneriumCredentials(user)) {
+        return res.status(409).json({
+          error: "moving an IBAN needs your own Monerium connection — sign in with Monerium or add your Monerium API keys",
+          code: "MONERIUM_NOT_CONNECTED",
+        });
+      }
+      const { accessToken, viaApp } = await moneriumLinkAccessToken(user);
+      if (viaApp) {
+        return res.status(409).json({
+          error: "moving an IBAN needs your own Monerium connection, not the app's",
+          code: "MONERIUM_NOT_CONNECTED",
+        });
+      }
+      if (!(await isDeployed(user.address))) {
+        return res.status(409).json({ error: "passkey Safe must be deployed before an IBAN can be moved to it" });
+      }
+
+      prunePendingMoneriumLinkSignatures();
+      const requestId =
+        typeof req.body?.requestId === "string"
+          ? req.body.requestId
+          : typeof req.body?.linkSignatureRequestId === "string"
+            ? req.body.linkSignatureRequestId
+            : "";
+      const pending = requestId ? pendingMoneriumLinkSignatures.get(requestId) : undefined;
+      if (pending?.userId === user.id) pendingMoneriumLinkSignatures.delete(requestId);
+      if (!pending || pending.userId !== user.id || pending.purpose !== "move-iban" || pending.iban !== requested) {
+        return res.status(409).json({
+          error: "fresh passkey approval for moving this IBAN required",
+          start: `/api/users/${user.id}/monerium/link-signature/start`,
+        });
+      }
+      let signature: Hex;
+      try {
+        ({ user, signature } = await passkeySafeLinkSignature(safeUser, pending.challenge, req.body));
+      } catch (err: any) {
+        return res.status(401).json({ error: String(err?.message ?? err) });
+      }
+
+      // Where the IBAN is and which profile holds it, read on the user's own
+      // connection. Exactly one match, on one of the user's own profiles, on
+      // the profile this account is connected under — or refuse.
+      const before = await readMoneriumAccountSnapshot(user, accessToken);
+      const matches = before.ibans.filter((i: any) => ibanKey(i?.iban) === requested);
+      const notOnProfile = (error: string) =>
+        res.status(409).json({ error, code: "IBAN_NOT_ON_PROFILE" });
+      if (matches.length !== 1) {
+        return notOnProfile(
+          matches.length
+            ? `Monerium lists ${maskIban(requested)} ${matches.length} times on your account; refusing to guess`
+            : `${maskIban(requested)} is not on your connected Monerium account`,
+        );
+      }
+      const current = matches[0];
+      const ibanProfile = typeof current.profile === "string" ? current.profile : "";
+      const ownProfiles = before.profiles.map((p: any) => p?.id);
+      if (!ibanProfile || !ownProfiles.includes(ibanProfile)) {
+        return notOnProfile(`Monerium does not show ${maskIban(requested)} on a profile of your connected account`);
+      }
+      // The profile the server recorded for this connection wins over the one
+      // the browser named when it started the ceremony.
+      const accountProfile = user.monerium?.profileId ?? user.funding?.moneriumProfileId ?? pending.profileId;
+      if (accountProfile && accountProfile !== ibanProfile) {
+        return notOnProfile(
+          `${maskIban(requested)} belongs to Monerium profile ${ibanProfile}, but this account is connected under profile ${accountProfile}`,
+        );
+      }
+
+      // The Safe must be linked under the IBAN's profile before Monerium will
+      // point the IBAN at it: link it exactly as activate does, then check.
+      const linkRefused = await linkSafeAddress(user, accessToken, signature, ibanProfile);
+      if (linkRefused) return res.status(400).json({ error: linkRefused });
+      const linkedUnder = await linkedProfileOf(accessToken, user.address);
+      if (linkedUnder !== ibanProfile) {
+        return res.status(409).json({
+          error: linkedUnder
+            ? `this Safe is linked under Monerium profile ${linkedUnder}, not ${ibanProfile} — Monerium support has to move it; do NOT unlink`
+            : `Monerium does not show this Safe linked under profile ${ibanProfile}; nothing was moved`,
+          code: "ADDRESS_NOT_ON_PROFILE",
+        });
+      }
+
+      const requestedAt = new Date().toISOString();
+      const move = {
+        iban: requested,
+        profileId: ibanProfile,
+        fromAddress: String(current.address ?? ""),
+        fromChain: String(current.chain ?? ""),
+        toAddress: user.address,
+        toChain: MONERIUM.chain,
+        requestedAt,
+      };
+      if (!sameAddress(current.address, user.address)) {
+        try {
+          await moneriumBearerRequest(MONERIUM.baseUrl, accessToken, "PATCH", `/ibans/${encodeURIComponent(requested)}`, {
+            address: user.address,
+            chain: MONERIUM.chain,
+          });
+        } catch (err: any) {
+          console.error(`monerium move-iban: PATCH refused for ${user.id}: ${err?.message ?? err}`);
+          return res.status(400).json({ error: `Monerium refused to move the IBAN: ${err?.message ?? err}` });
+        }
+      }
+
+      // Only Monerium's own list decides. A failed re-read is "not confirmed".
+      const after = await readMoneriumAccountSnapshot(user, accessToken).catch(() => undefined);
+      const landed = after?.ibans.filter((i: any) => ibanKey(i?.iban) === requested) ?? [];
+      const confirmed = landed.length === 1 && sameAddress(landed[0].address, user.address);
+      const moves = [...(user.moneriumIbanMoves ?? []), move];
+      let updated: User;
+      if (confirmed) {
+        const iban = ibanKey(landed[0].iban);
+        releaseIbanFromOtherUsers(iban, user.id);
+        updated = store.updateUser(user.id, {
+          iban,
+          moneriumIbanMoves: moves,
+          ...(user.kycStatus === "rejected"
+            ? {}
+            : {
+                kycStatus: "approved" as const,
+                kyc: {
+                  provider: "monerium" as const,
+                  onboardingPath: "existing_monerium" as const,
+                  checkedAt: new Date().toISOString(),
+                  applicantId: ibanProfile,
+                  reason: `approved when Monerium moved IBAN ${maskIban(iban)} to ${user.address} (profile ${ibanProfile})`,
+                },
+              }),
+          funding: {
+            ...(user.funding ?? {}),
+            mode: "sandbox",
+            status: "active",
+            moneriumProfileId: ibanProfile,
+            detail: undefined,
+          },
+          monerium: { ...user.monerium!, profileId: ibanProfile, ...after },
+        });
+        updated = store.updateUser(user.id, { moneriumIbanMoves: confirmedMoves(updated, iban) });
+      } else {
+        updated = store.updateUser(user.id, {
+          iban: "",
+          moneriumIbanMoves: moves,
+          funding: {
+            ...(user.funding ?? {}),
+            mode: "sandbox",
+            status: "iban_pending",
+            moneriumProfileId: ibanProfile,
+            detail: `Monerium accepted moving ${maskIban(requested)} to this account but does not show it here yet — checked again on every visit`,
+          },
+          ...(after ? { monerium: { ...user.monerium!, profileId: ibanProfile, ...after } } : {}),
+        });
+      }
+      store.audit(auditEntry(
+        "partner.iban_moved",
+        { partner: "monerium", profileId: ibanProfile, ibanLast4: requested.slice(-4), fromChain: move.fromChain, confirmed },
+        user.id,
+      ));
       const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
       res.json({ ...publicUser(updated), ...balances });
     }),
