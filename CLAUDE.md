@@ -111,7 +111,18 @@ Each of these was a bug once.
   retired (Sep 2026): it meant a user could not move their own funds, or add
   a key, without us. Its key, the removal route and the legacy 2-of-2 Safe
   model are all deleted (Sep 2026): no deployment and no database held such a
-  Safe. The plan type is `threshold: 1` only. Never reintroduce a co-owner.
+  Safe. The plan type is `threshold: 1` only. Never reintroduce a co-owner
+  that Zold holds.
+- **The user may add their OWN second owner** (Profile → Enable advanced
+  features → Signers & rules; `routes/safe-signers.ts`). Read from the chain on
+  every visit, changed only by passkey-signed ops. Zold cannot collect that
+  owner's signature, so at threshold > 1 `assertPasskeyAloneCanSign` refuses
+  every op (409 `SAFE_NEEDS_MORE_SIGNATURES`); raising the threshold therefore
+  needs a guardian on chain and a typed `LOCK`, and no route lowers it.
+  Candide's `finalizeRecovery` replaces the WHOLE owner set, so a recovery
+  drops the second owner and resets the threshold — but leaves Allowance-module
+  delegates in place. Spending limits use Safe's AllowanceModule v0.1.1
+  (`0xAA46…091C`); Zold only sets them and never spends through one.
 - **Gas is a choice, not an assumption.** `SAFE_GAS_PAYMENT` = `sponsored`
   (default) | `native` (Safe pays ETH) | `token` (Safe pays USDC via Candide's
   token paymaster). VERIFIED with `npm run preflight -- --chain 8453`: the
@@ -234,7 +245,7 @@ submit mainnet ops).
 | area | suites |
 |---|---|
 | money path | `fx:test` `jit:test` `best:test` `dex:test` `lifi:test` `custody:test` `execution:test` `quote-binding:test` `sepa:test` `refund:guard:test` |
-| identity | `webauthn:selftest` `security:test` `device-key:test` `authorize:test` `passkey-safe:test` `recovery:test` `recovery:candide:test` `monerium:oauth:test` `monerium:apikeys:test` `webhook:test` |
+| identity | `webauthn:selftest` `security:test` `device-key:test` `authorize:test` `passkey-safe:test` `safe-signers:test` `recovery:test` `recovery:candide:test` `monerium:oauth:test` `monerium:apikeys:test` `webhook:test` |
 | business | `business:test` `draft:test` `invoicing:test` `documents:test` |
 | bookkeeping | `statement:test` `beleg:test` `lexware:csv:test` `exact-output:test` `gmi:test` (offline, fake server); `gmi:smoke` is read-only against the real account and is NOT in check |
 | payments | `paylinks:test` `shopify:test` `shopify:orders:test` `receipt:test` `pay:test` `crypto:test` `convert:test` |

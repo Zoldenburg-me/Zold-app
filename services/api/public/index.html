@@ -901,6 +901,18 @@
           <span class="tx"><span class="t">Statements &amp; documents</span><span class="d">Statement, balance confirmation, proof of ownership</span></span>
           <span class="material-symbols-rounded ch">chevron_right</span>
         </button>
+        <!-- Advanced features: off by default, remembered per browser. Reveals
+             the Signers & rules screen (app/signers.js). -->
+        <button class="m-optrow" id="m-pf-advanced" role="switch" aria-checked="false" style="margin-top:8px">
+          <span class="material-symbols-rounded ic" aria-hidden="true">tune</span>
+          <span class="tx"><span class="t">Enable advanced features</span><span class="d" id="m-pf-advanced-sub">Second owner, cosigner rules, spending limits</span></span>
+          <span class="m-switch" aria-hidden="true"></span>
+        </button>
+        <button class="m-optrow hidden" id="m-pf-signers" style="margin-top:8px">
+          <span class="material-symbols-rounded ic" aria-hidden="true">admin_panel_settings</span>
+          <span class="tx"><span class="t">Signers &amp; rules</span><span class="d">Passkey, second owner, cosigner rules</span></span>
+          <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
+        </button>
         <button class="m-optrow" id="m-pf-recovery" style="margin-top:8px">
           <span class="material-symbols-rounded ic">health_and_safety</span>
           <span class="tx"><span class="t">Email / SMS recovery</span><span class="d" id="m-pf-recovery-sub">Not set up</span></span>
@@ -931,6 +943,16 @@
         <div class="m-h1">Statements &amp; documents</div>
         <div class="m-lede">Each document opens at a verification link, where anyone can check it and where you print it to PDF.</div>
         <div id="m-doc-body" style="margin-top:24px"></div>
+      </div>
+
+      <!-- ================= Signers & rules (advanced) =================
+           The Safe's owners, threshold and Allowance-module spending limits,
+           read from the chain on every visit. Changes are passkey-signed. -->
+      <div class="m-screen" id="m-signers-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back to profile"><span class="material-symbols-rounded" style="font-size:24px" aria-hidden="true">arrow_back</span></button></div>
+        <div class="m-h1">Signers &amp; rules</div>
+        <div class="m-lede">Who can sign for your smart account, and what they need. Read from the chain each time you open this.</div>
+        <div id="m-sg-body" style="margin-top:24px"></div>
       </div>
 
       <!-- ================= Email / SMS recovery =================
@@ -1266,6 +1288,7 @@
 <script src="/app/monerium.js"></script>
 <script src="/app/onboarding.js"></script>
 <script src="/app/send.js"></script>
+<script src="/app/signers.js"></script>
 <script src="/app/pwa.js"></script>
 <script src="/app/main.js"></script>
 <script src="/cookie-notice.js" defer></script>

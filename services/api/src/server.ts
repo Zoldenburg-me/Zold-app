@@ -41,6 +41,7 @@ import { createGnosisPayRouter } from "./routes/gnosis-pay.js";
 import { formatReport, reconcile } from "./reconcile.js";
 import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
 import { createDocumentsRouter } from "./routes/documents.js";
+import { createSafeSignerRouter } from "./routes/safe-signers.js";
 import { createPaymentRequestRouter, onPaymentRequestPaid, sweepPaymentRequests } from "./routes/payment-requests.js";
 import { createShopifyRouter, resolveShopifyRequest } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
@@ -51,7 +52,7 @@ import {
   warnIfSmartAccountChainDiffers,
   publicClient,
   } from "./chain.js";
-import { CANDIDE, SafeGasError } from "./wallet/candide.js";
+import { CANDIDE, SafeGasError, SafeThresholdError } from "./wallet/candide.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -139,6 +140,9 @@ const sandbox = moneriumSandboxEnabled();
 // no-session half sits under /recovery, which the limiter above already
 // treats as an auth route.
 app.use("/api", createCandideRecoveryRouter({ requireUserSession, publicUser }));
+// Advanced security: the holder's own second owner, threshold and spending
+// limits on their Safe. Read from the chain, changed only by passkey-signed ops.
+app.use("/api", createSafeSignerRouter({ requireUserSession }));
 // Account documents: receipts, statements, balance and ownership letters, each
 // verifiable at /v/<code>. The page is the record; the PDF is its print.
 app.use("/api", createDocumentsRouter({ requireUserSession }));
@@ -193,6 +197,9 @@ app.use(((err, _req, res, next) => {
   // and the message names no secret.
   if (err instanceof SafeGasError) {
     return res.status(err.status).json({ error: err.message });
+  }
+  if (err instanceof SafeThresholdError) {
+    return res.status(err.status).json({ error: err.message, code: err.code });
   }
   const detail = String(err?.shortMessage ?? err?.message ?? err);
   res.status(500).json({ error: SECURITY.exposeInternalErrors ? detail : "internal server error" });

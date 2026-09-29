@@ -1084,6 +1084,21 @@
   #dashboard.m-on[data-msub="monerium"] #m-monerium-screen { display: block; }
   #dashboard.m-on[data-msub="recovery"] #m-recovery-screen { display: block; }
   #dashboard.m-on[data-msub="documents"] #m-documents-screen { display: block; }
+  #dashboard.m-on[data-msub="signers"] #m-signers-screen { display: block; }
+  /* The Advanced features switch: a real button with role="switch". */
+  .m-switch {
+    width: 40px; height: 24px; flex: none; border-radius: 12px; background: var(--m-line-strong);
+    position: relative; transition: background-color .15s ease;
+  }
+  .m-switch::after {
+    content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; transition: transform .15s ease;
+  }
+  [aria-checked="true"] > .m-switch { background: var(--m-pink); }
+  [aria-checked="true"] > .m-switch::after { transform: translateX(16px); }
+  .m-optrow:focus-visible, .m-copybtn:focus-visible { outline: 2px solid var(--m-pink); outline-offset: 2px; }
+  .m-copybtn:disabled { opacity: .4; cursor: default; }
+  @media (prefers-reduced-motion: reduce) { .m-switch, .m-switch::after { transition: none; } }
 
   /* ---------- share receipt (composer) ----------
      The handoff draws this as a 340px card beside a 520px live preview of the
