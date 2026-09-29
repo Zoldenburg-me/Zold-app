@@ -464,7 +464,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     wrap(async (req, res) => {
       assertZoldenburgRecoveryEnabled();
       const user = findRecoverable(req.body);
-      if (!user) return res.status(404).json({ error: "no account with Zoldenburg recovery matches that" });
+      if (!user) return res.status(404).json({ error: "recovery not found" });
       const now = new Date();
       let open = store
         .recoveryRequestsForUser(user.id)
