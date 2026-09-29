@@ -74,9 +74,26 @@ export async function refreshPendingIban(user: User): Promise<User> {
   try {
     const iban = await findIban(user.address, user);
     if (iban) {
+      // An address-matched IBAN is what approves an account (activate does the
+      // same when the IBAN is there at once). Without this, an IBAN issued
+      // after activation was stored but the account stayed pending, and the
+      // app hides the IBAN of a pending account.
+      const approve = user.kycStatus !== "approved" && user.kycStatus !== "rejected";
       return store.updateUser(user.id, {
         iban,
-        funding: { ...user.funding, status: "active" },
+        funding: { ...user.funding, status: "active", detail: undefined },
+        ...(approve
+          ? {
+              kycStatus: "approved" as const,
+              kyc: {
+                provider: "monerium" as const,
+                onboardingPath: "existing_monerium" as const,
+                checkedAt: new Date().toISOString(),
+                applicantId: user.funding.moneriumProfileId,
+                reason: `approved when Monerium issued the IBAN for ${user.address}`,
+              },
+            }
+          : {}),
       });
     }
   } catch {
