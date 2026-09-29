@@ -59,6 +59,8 @@ const seen = {
   linkMessage: "",
   linkSignature: "",
   ibanRequestedFor: "",
+  // Monerium issues an IBAN some time after the request, as the sandbox does.
+  ibanIssued: false,
   bearerTokens: [] as string[],
 };
 
@@ -217,12 +219,12 @@ const stub = createServer((req, res) => {
       if (req.method === "POST") {
         const body = JSON.parse(raw || "{}");
         seen.ibanRequestedFor = body.address ?? "";
-        return send(201, { iban: APP_IBAN, address: body.address });
+        return send(201, { address: body.address });
       }
       // The user's pre-existing IBAN is on a DIFFERENT address; the app IBAN
-      // only appears once activate has requested it.
+      // only appears once activate has requested it and Monerium has issued it.
       const list: any[] = [{ iban: EXISTING_IBAN, address: "0x00000000000000000000000000000000000000ff" }];
-      if (seen.ibanRequestedFor) list.push({ iban: APP_IBAN, address: seen.ibanRequestedFor });
+      if (seen.ibanRequestedFor && seen.ibanIssued) list.push({ iban: APP_IBAN, address: seen.ibanRequestedFor });
       return send(200, { ibans: list });
     }
 
@@ -452,14 +454,18 @@ try {
     assert.equal(seen.linkedAddress.toLowerCase(), start.data.address.toLowerCase(), "must link the app's Safe address");
     assert.ok(seen.linkSignature.startsWith("0x"), "expected an ownership-declaration signature");
     assert.equal(seen.ibanRequestedFor.toLowerCase(), start.data.address.toLowerCase());
-    assert.equal(r.data.iban, APP_IBAN, "funding should use the newly issued app IBAN");
+    assert.equal(r.data.iban, "", "no IBAN until Monerium has issued one for this address");
     assert.notEqual(r.data.iban, EXISTING_IBAN, "the user's existing IBAN must never be silently moved");
+    assert.equal(r.data.funding.status, "iban_pending");
+    assert.equal(r.data.kycStatus, "pending", "a requested IBAN is not an issued one");
     const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
     assert.ok(!db.includes("privateKey"), "activation must not require storing user private key material");
   });
 
-  await t("activation approves the account and opens funding", async () => {
+  await t("the IBAN Monerium issues later approves the account and opens funding", async () => {
+    seen.ibanIssued = true;
     const me = await call(`/api/users/${userId}`);
+    assert.equal(me.data.iban, APP_IBAN, "funding should use the newly issued app IBAN");
     assert.equal(me.data.kycStatus, "approved");
     assert.equal(me.data.kyc.provider, "monerium");
     assert.equal(me.data.funding.status, "active");
