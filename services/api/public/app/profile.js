@@ -75,12 +75,13 @@ function renderProfileScreen() {
   $("m-pf-plus-sub").textContent = sub && sub.status !== "canceled" ? "Privacy Bundle active" : "Coming soon";
 
   const cr = safe?.candideRecovery;
-  $("m-pf-recovery").classList.toggle("hidden", !caps.emailSmsRecovery && !cr);
-  $("m-pf-recovery-sub").textContent = !caps.emailSmsRecovery
-    ? "Unavailable on this deployment"
-    : !cr ? "Not set up"
-      : cr.guardianStatus === "active" ? `Active · ${cr.channels.length} channel${cr.channels.length === 1 ? "" : "s"}`
-        : "Guardian not on your smart account yet";
+  const zr = safe?.recovery?.status === "active";
+  $("m-pf-recovery").classList.toggle("hidden", !caps.emailSmsRecovery && !caps.zoldenburgRecovery && !cr && !zr);
+  $("m-pf-recovery-sub").textContent = zr ? "Zoldenburg is your guardian"
+    : cr?.guardianStatus === "active" ? `Email / SMS · ${cr.channels.length} channel${cr.channels.length === 1 ? "" : "s"}`
+      : !caps.emailSmsRecovery && !caps.zoldenburgRecovery ? "Unavailable on this deployment"
+        : cr ? "Guardian not on your smart account yet"
+          : "No guardian — a lost passkey is a lost account";
 
   /* Own Monerium keys: show the current state. A deployment without an
      encryption key shows "Unavailable". */

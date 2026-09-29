@@ -110,14 +110,14 @@
           </div>
         </div>
 
-        <!-- Lost-device recovery through Candide's email/SMS guardian. Shown
-             only when /api/health says the deployment has the service; the
+        <!-- Lost-device recovery through Candide's email/SMS guardian or
+             Zoldenburg's. Shown only when /api/health offers either; the
              steps are the API's states, not a script: name the account, make
              a new passkey HERE, pass a code on every channel, then wait out
              the on-chain grace period before this passkey owns anything. -->
         <div id="onb-recover" class="hidden">
           <h1>Recover your account</h1>
-          <div class="sub" id="rc-lede">Enter the email you set up for recovery. You will create a new passkey on this device and confirm a code on every channel you registered.</div>
+          <div class="sub" id="rc-lede">Enter the email on your account. You will create a new passkey on this device, then either confirm a code on every recovery channel you registered or contact Zoldenburg support with a reference, depending on how your account is protected.</div>
           <div id="rc-start">
             <label>Recovery email</label>
             <input id="rc-email" type="email" placeholder="miriam@example.com" />
@@ -165,7 +165,41 @@
              Zold sends nothing. -->
         <div id="onb-step3" class="hidden">
           <h1>If you lose this device</h1>
-          <div class="sub">Your passkey exists only here. Register your email so a lost phone is not a lost account: a code to it, then a waiting period you can cancel from this device, moves the account to a new passkey.</div>
+          <!-- Zoldenburg as guardian: offered first, never added silently.
+               Skipping shows the warning and needs a tick; the choice is
+               recorded server-side (POST …/recovery/zoldenburg/decline). -->
+          <div id="rec-zold" class="hidden">
+            <div class="sub">Your passkey exists only on this device. Choose now whether Zoldenburg may help you get back in if it is lost.</div>
+            <div class="pk-card" style="margin-top:1.2rem"><span class="pk-ic" aria-hidden="true">🛟</span><span>
+              <b>Zoldenburg as your recovery guardian.</b>
+              If you lose your passkey, contact Zoldenburg support. We check you against the identity Monerium verified, then sign a recovery that moves this account to a new passkey you create.
+            </span></div>
+            <ul class="rec-facts">
+              <li>The recovery waits <b id="rec-zold-grace">several days</b> on chain before it takes effect. While your passkey still works you can cancel it — that is your protection against anyone asking in your name, us included.</li>
+              <li>Zoldenburg can start a recovery on its own; it cannot skip the waiting period.</li>
+              <li>A recovery replaces every signer on the account with the new passkey.</li>
+              <li>You can remove Zoldenburg later from Profile → Recovery.</li>
+            </ul>
+            <button class="btn-primary-lite" id="btn-rec-zold-add">Add Zoldenburg as guardian</button>
+            <button class="ghost wide" id="btn-rec-zold-skip">Skip</button>
+            <div class="onb-note">One passkey approval adds the guardian to your smart wallet.</div>
+          </div>
+          <div id="rec-zold-warn" class="hidden">
+            <div class="rec-warn" role="alert">
+              <div class="rec-warn-title"><span aria-hidden="true">⚠</span> Without a guardian, a lost passkey is a lost account</div>
+              <p>If you lose access to this account or your passkey, <b>Zoldenburg UG cannot recover your account.</b></p>
+              <p>Only your e-money balance (<b>EURe</b>) can be recovered — from Monerium, its issuer, under Icelandic law. Anything else held in the account cannot be recovered.</p>
+            </div>
+            <label class="onb-check"><input type="checkbox" id="rec-zold-ack" />
+              <span>I understand that Zoldenburg UG cannot recover my account if I lose my passkey.</span></label>
+            <button class="btn-primary-lite" id="btn-rec-zold-decline">Continue without recovery</button>
+            <button class="ghost wide" id="btn-rec-zold-back">Back — add Zoldenburg as guardian</button>
+          </div>
+          <div id="rec-zold-done" class="hidden">
+            <div class="pk-card"><span class="pk-ic" aria-hidden="true">✓</span><span><b>Zoldenburg is your recovery guardian.</b> If you lose this device, use "Lost your passkey?" on the sign-in page and contact support with the reference it gives you.</span></div>
+            <button class="btn-primary-lite" id="btn-rec-zold-continue">Continue</button>
+          </div>
+          <div id="rec-candide-lede" class="sub">Your passkey exists only here. Register your email so a lost phone is not a lost account: a code to it, then a waiting period you can cancel from this device, moves the account to a new passkey.</div>
           <div id="rec-intro">
             <label>Recovery email</label>
             <div class="onb-static" id="rec-email"></div>
@@ -917,7 +951,7 @@
         </button>
         <button class="m-optrow" id="m-pf-recovery" style="margin-top:8px">
           <span class="material-symbols-rounded ic" aria-hidden="true">health_and_safety</span>
-          <span class="tx"><span class="t">Email / SMS recovery</span><span class="d" id="m-pf-recovery-sub">Not set up</span></span>
+          <span class="tx"><span class="t">Recovery</span><span class="d" id="m-pf-recovery-sub">Not set up</span></span>
           <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
         </button>
 
@@ -957,14 +991,14 @@
         <div id="m-sg-body" style="margin-top:24px"></div>
       </div>
 
-      <!-- ================= Email / SMS recovery =================
+      <!-- ================= Recovery (Zoldenburg guardian, email/SMS) =================
            Candide's guardian on the smart account. Enrolment is two passkey
            ceremonies and one code; nothing is listed as protected until the
            guardian is actually in the module's guardian set. -->
       <div class="m-screen" id="m-recovery-screen">
         <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-h1">Email / SMS recovery</div>
-        <div class="m-lede">If you lose this device, a code sent to every channel below lets you move the account to a new passkey — after a waiting period during which this device can still cancel.</div>
+        <div class="m-h1">Recovery</div>
+        <div class="m-lede">Who can move this account to a new passkey if you lose this device. Every recovery waits on chain first, and this device can cancel it until then.</div>
         <div id="m-rc-body" style="margin-top:24px"></div>
       </div>
 

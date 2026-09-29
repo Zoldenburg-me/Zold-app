@@ -29,12 +29,14 @@ and revoked.
 
 **Recovery** (`recovery.ts`, `routes/recovery-*.ts`, `recovery/`)
 
-- A guardian module on the Safe with a delay (`RECOVERY_DELAY_HOURS`, default
-  72) during which the current owner can cancel.
-- Managed recovery: a guardian signer service (`RECOVERY_GUARDIAN_SIGNER_URL`)
-  acts for users whose identity Monerium approved. It installs the new owner
-  alone at threshold 1, but nothing updates the stored plan after it
-  executes — that path is not wired end to end.
+- Candide's SocialRecoveryModule on the Safe; its grace period (3 days on
+  the production module) is the owner's window to cancel.
+- Zoldenburg guardian (`routes/recovery-zoldenburg.ts`): opt-in, never added
+  by deployment. A lost device registers a new passkey and quotes a
+  reference; an operator verifies the person against Monerium's KYC and signs
+  from a hardware wallet (admin console or Safe Cover). The API holds no
+  guardian key and binds the new passkey only once the chain shows it as the
+  owner. Never run on chain yet.
 - Email/SMS recovery: Candide's Safe Recovery Service is the guardian and
   signs after a one-time code on each registered channel. It is wired but has
   never been called against the real service.

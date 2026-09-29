@@ -23,7 +23,7 @@ No. You use euros. Network fees are paid by Zold.
 Yes, if your passkey syncs (iCloud Keychain, Google Password Manager, a password manager). Each device also has its own device key for signing payments, created the first time you use the account there.
 
 **I lost my phone.**
-See [Security and recovery](../getting-started/security-and-recovery.md). If you enrolled email / SMS recovery, you can recover on a new device yourself. If not, contact support for managed recovery, which is slower and requires proving your identity again.
+See [Security and recovery](../getting-started/security-and-recovery.md). If you chose Zoldenburg as your recovery guardian, start a recovery from the sign-in screen and contact support with the reference it shows; we check your identity and sign it. If you did not choose a guardian, Zoldenburg UG cannot recover your account — only your EURe balance can be recovered, from Monerium.
 
 **Why was my quote refused?**
 Usually because a fresh market rate could not be fetched, or because the venue price was too far from the market. Try again in a minute. Zold never quotes from an old rate.
