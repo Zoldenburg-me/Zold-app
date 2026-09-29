@@ -25,12 +25,13 @@ function renderProfileScreen() {
         <div class="m-rowk">${esc(r.k)}</div>
         <div class="m-rowv">${esc(r.v)}</div>
       </div>
-      ${r.copy ? `<button class="m-copybtn" data-pfcopy="${i}">Copy</button>` : ""}
+      ${r.copy ? `<button class="m-copybtn" data-pfcopy="${i}" aria-label="Copy ${esc(r.k)}">Copy</button>` : ""}
     </div>`).join("");
   $("m-pf-account").querySelectorAll("[data-pfcopy]").forEach((b) => {
     b.onclick = async () => {
       try { await navigator.clipboard.writeText(account[Number(b.dataset.pfcopy)].copy); } catch { return; }
       b.textContent = "Copied";
+      announce("Copied");
       setTimeout(() => { b.textContent = "Copy"; }, 1400);
     };
   });
@@ -45,7 +46,7 @@ function renderProfileScreen() {
   ];
   $("m-pf-security").innerHTML = security.map((r) => `
     <div class="m-secrow"${r.id ? ` data-sec="${r.id}"` : ""}${r.action ? ` data-sec-action="${r.action}" style="cursor:pointer"` : ""}>
-      <span class="material-symbols-rounded">${r.icon}</span>
+      <span class="material-symbols-rounded" aria-hidden="true">${r.icon}</span>
       <div style="flex:1;min-width:0">
         <div class="t">${esc(r.t)}</div>
         <div class="d">${esc(r.d)}</div>
@@ -111,7 +112,7 @@ async function renderDocumentsScreen() {
   el.innerHTML = `<div class="m-lede" style="font-size:13px">Loading…</div>`;
   let docs = [];
   try { docs = (await api(`/api/users/${user.id}/documents`)).documents || []; }
-  catch (e) { el.innerHTML = `<div class="m-err">${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = `<div class="m-err" role="alert">${esc(e.message)}</div>`; return; }
   const months = monthOptions();
   el.innerHTML = `
     <div class="m-seclabel">Create</div>
@@ -122,13 +123,13 @@ async function renderDocumentsScreen() {
     <button class="m-cta" id="m-doc-statement" style="margin-top:12px">Create statement</button>
     <button class="m-cta quiet" id="m-doc-balance" style="margin-top:8px">Balance confirmation (now)</button>
     <button class="m-cta quiet" id="m-doc-ownership" style="margin-top:8px">Proof of ownership (sign with passkey)</button>
-    <div class="m-err hidden" id="m-doc-err" style="margin-top:12px"></div>
+    <div class="m-err hidden" role="alert" id="m-doc-err" style="margin-top:12px"></div>
     <div class="m-seclabel" style="margin-top:24px">Issued</div>
     <div class="m-rows" id="m-doc-list">${docs.length ? docs.map((d) => `
       <button class="m-secrow" data-doc-url="${esc(d.url)}" style="width:100%;text-align:left;background:none;border:0;color:inherit;font:inherit;cursor:pointer">
-        <span class="material-symbols-rounded">${d.kind === "receipt" ? "receipt_long" : d.kind === "balance" ? "account_balance" : d.kind === "ownership" ? "verified_user" : "description"}</span>
+        <span class="material-symbols-rounded" aria-hidden="true">${d.kind === "receipt" ? "receipt_long" : d.kind === "balance" ? "account_balance" : d.kind === "ownership" ? "verified_user" : "description"}</span>
         <div style="flex:1;min-width:0"><div class="t">${esc(DOC_KIND_LABEL[d.kind] || d.kind)}</div><div class="d">${esc(d.summary || "")} · ${esc(new Date(d.createdAt).toLocaleDateString())}${d.revokedAt ? " · revoked" : ""}</div></div>
-        <span class="material-symbols-rounded" style="color:var(--m-faint)">open_in_new</span>
+        <span class="material-symbols-rounded" aria-hidden="true" style="color:var(--m-faint)">open_in_new</span>
       </button>`).join("") : `<div class="m-lede" style="font-size:13px">Nothing issued yet.</div>`}</div>
     `;
   el.querySelectorAll("[data-doc-url]").forEach((b) => { b.onclick = () => window.open(b.dataset.docUrl, "_blank", "noopener"); });
@@ -170,7 +171,7 @@ async function renderLinksScreen() {
   el.innerHTML = `<div class="m-lede" style="font-size:13px">Loading…</div>`;
   let data;
   try { data = await api(`/api/users/${user.id}/payment-requests`); }
-  catch (e) { el.innerHTML = `<div class="m-err">${esc(e.message)}</div>`; return; }
+  catch (e) { el.innerHTML = `<div class="m-err" role="alert">${esc(e.message)}</div>`; return; }
   const methods = data.methods || [];
   const can = (m) => !!methods.find((x) => x.method === m)?.available;
   const needs = methods.filter((m) => !m.available).map((m) => `${m.method === "crypto" ? "USDC" : "Bank transfer"} is off until you ${m.needs}.`);
@@ -188,14 +189,14 @@ async function renderLinksScreen() {
     ${check("m-lk-bank", "Bank transfer with a reference, or from another Zold account", can("bank"))}
     ${needs.length ? `<div class="m-lede" style="font-size:12.5px">${needs.map(esc).join(" ")}</div>` : ""}
     <button class="m-cta" id="m-lk-create" style="margin-top:12px" ${can("crypto") || can("bank") ? "" : "disabled"}>Create link</button>
-    <div class="m-err hidden" id="m-lk-err" style="margin-top:12px"></div>
+    <div class="m-err hidden" role="alert" id="m-lk-err" style="margin-top:12px"></div>
     <div class="m-seclabel" style="margin-top:24px">Your links</div>
     <div class="m-rows" id="m-lk-list">${rows.length ? rows.map((r) => `
       <button class="m-secrow" data-lk="${esc(r.id)}" style="width:100%;text-align:left;background:none;border:0;color:inherit;font:inherit;cursor:pointer">
-        <span class="material-symbols-rounded">${icon(r)}</span>
+        <span class="material-symbols-rounded" aria-hidden="true">${icon(r)}</span>
         <div style="flex:1;min-width:0"><div class="t">${esc(money(r.amountEur))}${r.description ? ` · ${esc(r.description)}` : ""}</div>
           <div class="d">${esc(r.state.toLowerCase())}${r.paidEur ? ` · €${fmt(r.paidEur)} received` : ""} · ${esc(new Date(r.createdAt).toLocaleDateString())}${r.source?.kind === "shopify" ? " · Shopify" : ""}</div></div>
-        <span class="material-symbols-rounded" style="color:var(--m-faint)">${linksOpen === r.id ? "expand_less" : "expand_more"}</span>
+        <span class="material-symbols-rounded" aria-hidden="true" style="color:var(--m-faint)">${linksOpen === r.id ? "expand_less" : "expand_more"}</span>
       </button>
       ${linksOpen === r.id ? linkDetail(r) : ""}`).join("") : `<div class="m-lede" style="font-size:13px">No links yet.</div>`}</div>`;
 
@@ -205,6 +206,8 @@ async function renderLinksScreen() {
     const methodsWanted = [];
     if ($("m-lk-crypto").checked) methodsWanted.push("crypto");
     if ($("m-lk-bank").checked) methodsWanted.push("bank");
+    const btn = $("m-lk-create");
+    btn.disabled = true;
     try {
       const r = await api(`/api/users/${user.id}/payment-requests`, {
         ...(raw ? { amountEur: Number(raw) } : {}),
@@ -214,6 +217,7 @@ async function renderLinksScreen() {
       linksOpen = r.id;
       renderLinksScreen();
     } catch (e) { showErr("m-lk-err", e); }
+    finally { btn.disabled = false; }
   };
   el.querySelectorAll("[data-lk]").forEach((b) => {
     b.onclick = () => { linksOpen = linksOpen === b.dataset.lk ? null : b.dataset.lk; renderLinksScreen(); };
@@ -223,7 +227,7 @@ async function renderLinksScreen() {
   });
   el.querySelectorAll("[data-lk-copy]").forEach((b) => {
     b.onclick = async () => {
-      try { await navigator.clipboard.writeText(b.dataset.lkCopy); b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy link"), 1200); } catch {}
+      try { await navigator.clipboard.writeText(b.dataset.lkCopy); b.textContent = "Copied"; announce("Copied"); setTimeout(() => (b.textContent = "Copy link"), 1200); } catch {}
     };
   });
   el.querySelectorAll("[data-lk-cancel]").forEach((b) => {

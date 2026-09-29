@@ -281,7 +281,7 @@ RENDER.shopify = async () => {
         <td><b>€${Number(r.amountEur ?? 0).toFixed(2)}</b>${r.payments?.length ? `<div class="desc">${r.payments.map((p) => `${p.amountUsdc ?? ""} USDC${p.settledEur !== undefined ? ` → €${p.settledEur}` : " (not converted)"}`).join("<br>")}</div>` : ""}</td>
         <td><span class="pill ${pill(r)}">${esc(r.state.toLowerCase())}</span></td>
         <td>${r.resolvedAt ? `<span class="pill ok">yes</span>` : r.state === "PAID" ? `<span class="pill bad">no</span>${r.resolveError ? `<div class="desc">${esc(r.resolveError)}</div>` : ""}` : `<span class="pill mut">—</span>`}</td>
-        <td class="row-actions"><a href="${esc(r.url)}" target="_blank" rel="noopener"><button class="ghost sm">Page</button></a></td>
+        <td class="row-actions"><a class="btn ghost sm" href="${esc(r.url)}" target="_blank" rel="noopener">Page</a></td>
       </tr>`).join("") + `</tbody></table>`
       : `<div class="empty">${custom ? "No orders yet." : "No checkouts yet."}</div>`) + `</div>`;
   if (custom) {
@@ -723,7 +723,7 @@ RENDER["invoice-new"] = async () => {
                 placeholder="Steuerfrei nach § 4 Nr. … UStG" />` : ""}`}
   </div>
 
-  <div class="card" id="inv-check"><div class="desc">Checking…</div></div>
+  <div class="card" id="inv-check" aria-live="polite"><div class="desc">Checking…</div></div>
 
   <div class="row-actions" style="margin-bottom:2rem">
     <button data-act="inv-issue">Issue invoice</button>
