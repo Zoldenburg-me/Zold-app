@@ -416,7 +416,11 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
     for (const plan of plans) {
       // A line that pays an invoice carries the supplier's invoice number as
       // the remittance text — the one string their bookkeeping matches on.
-      const invoice = plan.invoiceId ? store.findInvoice(plan.invoiceId) : undefined;
+      // A line's invoiceId arrived in a request body, so it is only honoured
+      // for an invoice of THIS org — otherwise a member could stamp another
+      // org's invoice number on a transfer, or overwrite its payment link.
+      const found = plan.invoiceId ? store.findInvoice(plan.invoiceId) : undefined;
+      const invoice = found && found.orgId === ctx.org.id ? found : undefined;
       let built;
       try {
         const quote = await createQuote(user.id, { rail: "sepa", sendEur: plan.sendEur });
@@ -461,7 +465,7 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
         });
       }
 
-      if (invoice && invoice.state === "PAYING") {
+      if (invoice && invoice.state === "PAYING" && invoice.payment?.draftId === claimed.id) {
         store.updateInvoice(invoice.id, {
           payment: { ...invoice.payment, transferId: built.transfer.id },
         });

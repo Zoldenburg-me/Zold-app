@@ -402,7 +402,7 @@ async function payGas(account: SafeAccount, userOperation: UserOperationV9): Pro
   // abstractionkit falls back to SPONSORSHIP when it cannot get a token quote.
   // An operator who chose token payment did not choose that; refuse instead.
   if (gas.mode === "token" && !result.tokenQuote) {
-    throw new SafeGasError(`the paymaster at ${CANDIDE.paymasterUrl} gave no quote for gas token ${gas.token}`);
+    throw new SafeGasError(`the paymaster gave no quote for gas token ${gas.token}`);
   }
   return result.userOperation as UserOperationV9;
 }
@@ -416,7 +416,7 @@ function paymasterRefusal(err: unknown, safeAddress: string): SafeGasError | nul
   const text = `${(err as any)?.message ?? ""} ${(err as any)?.cause?.message ?? ""}`;
   if (/does not qualify for any publicly available gas policy/i.test(text)) {
     return new SafeGasError(
-      `the paymaster at ${CANDIDE.paymasterUrl} will not sponsor this operation on chain ${CANDIDE.chainId} ` +
+      `the paymaster will not sponsor this operation on chain ${CANDIDE.chainId} ` +
         `(no public gas policy covers it) — set SAFE_GAS_PAYMENT=native or =token, or use an API key with a funded policy`,
     );
   }
@@ -432,7 +432,9 @@ function paymasterRefusal(err: unknown, safeAddress: string): SafeGasError | nul
 
 /** The gas could not be arranged: the Safe is short, or the paymaster would
  *  not quote. A 409 — the user (or operator) has something to fix — rather
- *  than an opaque 500. */
+ *  than an opaque 500. Its message reaches the caller verbatim, so it must
+ *  never carry the paymaster URL: a keyed Candide endpoint holds its API key
+ *  in the URL. */
 export class SafeGasError extends Error {
   readonly status = 409;
   constructor(message: string) {

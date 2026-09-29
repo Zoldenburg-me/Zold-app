@@ -15,6 +15,8 @@ import { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient } f
 import { publicUser } from "../users/public-user.js";
 import { store, type CryptoDeposit, type Transfer } from "../store.js";
 import { requireOperator } from "../http/guards.js";
+import { plansFor, trialIsActive } from "../domain/plans.js";
+import type { PlanId } from "../domain/types.js";
 
 function adminUserSummary(userId: string) {
   const u = store.findUser(userId);
@@ -213,6 +215,30 @@ export function createAdminRouter() {
         deployer: await deployerFloat().catch(() => null),
         operatorGas: await operatorGas().catch(() => null),
       });
+    }),
+  );
+
+  /**
+   * Grant an organisation a plan. Owners cannot buy a paid plan themselves —
+   * there is no billing — so a paid plan is an operator decision, made here.
+   * Like the owner's route, it only changes `plan`; nothing is deleted.
+   */
+  router.post(
+    "/admin/orgs/:orgId/plan",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      const org = store.findOrganisation(String(req.params.orgId));
+      if (!org) return res.status(404).json({ error: "organisation not found" });
+      const plan = String(req.body?.plan ?? "");
+      const allowed: string[] = plansFor(org.type).map((p) => p.id);
+      if (!allowed.includes(plan)) {
+        return res.status(400).json({ error: `A ${org.type} organisation can hold ${allowed.join(" or ")}.` });
+      }
+      const updated = store.updateOrganisation(org.id, {
+        plan: plan as PlanId,
+        ...(trialIsActive(org) ? { trial: { ...org.trial!, endedAt: new Date().toISOString() } } : {}),
+      });
+      res.json({ id: updated.id, plan: updated.plan, trial: updated.trial });
     }),
   );
 

@@ -27,6 +27,7 @@ import {
   suggestedCurrency,
 } from "../domain/accounts.js";
 import {
+  PLANS,
   TRIAL_DAYS,
   effectivePlan,
   limitsFor,
@@ -34,7 +35,7 @@ import {
   trialIsActive,
   trialPlanFor,
 } from "../domain/plans.js";
-import { ROLES, type OrgType, type Organisation, type Role } from "../domain/types.js";
+import { ROLES, type OrgType, type Organisation, type PlanId, type Role } from "../domain/types.js";
 import { ADDRESS_RE, ContactError, validateBankAccount, validateWallet } from "../domain/contacts.js";
 import { hashToken } from "../domain/invoices.js";
 import { emailIsProven, wouldOrphanOrg } from "../domain/roles.js";
@@ -240,6 +241,16 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!allowed.includes(plan)) {
       return res.status(400).json({
         error: `A ${ctx.org.type} organisation can hold ${allowed.join(" or ")}.`,
+      });
+    }
+    // There is no billing, so an owner cannot buy a paid plan here: a click
+    // that grants one is a paywall that charges nothing. Moving onto a paid
+    // plan is an operator grant (POST /api/admin/orgs/:orgId/plan); the
+    // 30-day trial is the self-serve way in. Downgrading stays open.
+    if (PLANS[plan as PlanId].price !== "Free" && plan !== ctx.org.plan) {
+      return res.status(402).json({
+        error: `${PLANS[plan as PlanId].name} is a paid plan and Zold takes no payments yet, so it cannot be switched on here. Start the trial, or ask Zold to grant it.`,
+        code: "PAID_PLAN_NEEDS_GRANT",
       });
     }
     const org = store.updateOrganisation(ctx.org.id, {
