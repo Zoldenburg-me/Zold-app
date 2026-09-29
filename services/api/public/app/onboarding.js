@@ -230,16 +230,125 @@ async function issueAppIban() {
       timeout: 60000,
     },
   });
-  const activated = await api(start.submitTo, {
-    profileId,
-    linkSignatureRequestId: start.requestId,
-    credentialId: cred.id,
-    authenticatorData: b64url(cred.response.authenticatorData),
-    clientDataJSON: b64url(cred.response.clientDataJSON),
-    signature: b64url(cred.response.signature),
-  });
+  let activated;
+  try {
+    activated = await api(start.submitTo, {
+      profileId,
+      linkSignatureRequestId: start.requestId,
+      credentialId: cred.id,
+      authenticatorData: b64url(cred.response.authenticatorData),
+      clientDataJSON: b64url(cred.response.clientDataJSON),
+      signature: b64url(cred.response.signature),
+    });
+  } catch (e) {
+    if (e.code !== "IBAN_EXISTS_ELSEWHERE" || !e.body?.existing) throw e;
+    // The profile's one IBAN pays another address. Only the user decides
+    // whether to move it; the API recorded nothing but the reason.
+    activated = await offerIbanMove(e.body.existing, profileId);
+    if (!activated) {
+      renderUser(await api(`/api/users/${user.id}`));
+      throw new Error("IBAN not moved. Your Monerium IBAN still pays into the other wallet; move it whenever you are ready.");
+    }
+  }
   renderUser(activated);
   return true;
+}
+
+/* "Move my existing Monerium IBAN to Zold". A Monerium profile has ONE IBAN,
+   so a user who already has one cannot get a second; they can point the one
+   they have at this Safe. Resolves with the account as the API returns it
+   after the move, or null on Cancel. Nothing here says "done": the caller
+   renders whatever the API reports, and the API approves only once Monerium
+   lists the IBAN against this Safe. */
+function offerIbanMove(existing, profileId) {
+  const iban = String(existing.iban || "").replace(/\s+/g, "").toUpperCase();
+  const masked = `•••• •••• •••• ${iban.slice(-4)}`;
+  const from = existing.address ? String(existing.address) : "another address";
+  const chain = existing.chain ? String(existing.chain) : "another chain";
+  const dlg = document.createElement("dialog");
+  dlg.className = "m-dialog";
+  dlg.setAttribute("aria-labelledby", "m-mv-title");
+  dlg.innerHTML = `
+    <h2 id="m-mv-title">Your Monerium IBAN already pays somewhere else</h2>
+    <div class="m-lede" style="font-size:13px">Monerium gives each profile one IBAN. Yours exists, so Zold cannot get a second one. You can move it to this account instead.</div>
+    <div class="m-rows">
+      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">IBAN</div><div class="m-rowv">${esc(masked)}</div></div></div>
+      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">Pays into now</div><div class="m-rowv">${esc(from)}</div></div></div>
+      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">Chain</div><div class="m-rowv">${esc(chain)}</div></div></div>
+    </div>
+    <div class="m-note warn" style="margin-top:16px;font-size:13px;line-height:1.45">
+      After the move, payments to this IBAN arrive in your Zold account and the old wallet stops receiving them.
+      Anyone paying you keeps using the same IBAN. You can move it back from Monerium.
+    </div>
+    <div class="m-field" style="margin-top:16px"><label for="m-mv-confirm">Type MOVE to confirm</label>
+      <input id="m-mv-confirm" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
+    <div class="m-lede hidden" id="m-mv-status" role="status" style="font-size:13px;margin-top:12px"></div>
+    <div class="m-err hidden" role="alert" id="m-mv-err" style="margin-top:12px"></div>
+    <button class="m-cta" id="m-mv-go" disabled>Move IBAN to Zold</button>
+    <button class="m-cta quiet" id="m-mv-cancel">Cancel</button>`;
+  document.body.appendChild(dlg);
+  const q = (id) => dlg.querySelector(`#${id}`);
+  const go = q("m-mv-go");
+  const cancel = q("m-mv-cancel");
+  const input = q("m-mv-confirm");
+  const status = q("m-mv-status");
+  const errEl = q("m-mv-err");
+  input.oninput = () => { go.disabled = input.value.trim() !== "MOVE"; };
+
+  return new Promise((resolve) => {
+    let busy = false;
+    let result = null;
+    const finish = () => { dlg.close(); dlg.remove(); resolve(result); };
+    cancel.onclick = () => { if (!busy) finish(); };
+    // Escape is Cancel, but never mid-ceremony.
+    dlg.addEventListener("cancel", (ev) => { ev.preventDefault(); if (!busy) finish(); });
+    go.onclick = async () => {
+      if (result) return finish();
+      busy = true;
+      go.disabled = true;
+      cancel.disabled = true;
+      errEl.classList.add("hidden");
+      try {
+        const start = await api(`/api/users/${user.id}/monerium/link-signature/start`, { profileId, purpose: "move-iban", iban });
+        const cred = await navigator.credentials.get({
+          publicKey: {
+            challenge: b64urlToBytes(start.challenge),
+            allowCredentials: [{ type: "public-key", id: b64urlToBytes(start.credentialId) }],
+            userVerification: "required",
+            timeout: 60000,
+          },
+        });
+        status.textContent = "Asking Monerium to move the IBAN…";
+        status.classList.remove("hidden");
+        const moved = await api(start.submitTo, {
+          iban,
+          confirm: input.value.trim(),
+          requestId: start.requestId,
+          credentialId: cred.id,
+          authenticatorData: b64url(cred.response.authenticatorData),
+          clientDataJSON: b64url(cred.response.clientDataJSON),
+          signature: b64url(cred.response.signature),
+        });
+        result = moved;
+        if (moved.iban && kycApproved(moved)) return finish();
+        // Accepted, not yet visible at Monerium: say exactly that.
+        status.textContent = "Monerium accepted the move but does not list the IBAN on your Zold account yet. It is checked again each time you open the app; until then it is not shown as yours.";
+        go.textContent = "OK";
+        go.disabled = false;
+        input.disabled = true;
+      } catch (e) {
+        status.classList.add("hidden");
+        errEl.textContent = e.name === "NotAllowedError" ? "Passkey confirmation was cancelled." : e.message;
+        errEl.classList.remove("hidden");
+        go.disabled = input.value.trim() !== "MOVE";
+      } finally {
+        busy = false;
+        cancel.disabled = !!result;
+      }
+    };
+    dlg.showModal();
+    input.focus();
+  });
 }
 
 async function activateConnectedMonerium() {
