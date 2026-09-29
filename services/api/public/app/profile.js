@@ -69,6 +69,8 @@ function renderProfileScreen() {
     });
   }
 
+  renderAdvancedToggle();
+
   const sub = u.privacyBundle;
   $("m-pf-plus-sub").textContent = sub && sub.status !== "canceled" ? "Privacy Bundle active" : "Coming soon";
 

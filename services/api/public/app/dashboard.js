@@ -208,7 +208,7 @@ function mobileNav(target) {
     method: "method", amount: "amount", recipient: "recipient", progress: "progress",
     plus: "plus", bundle: "bundle", payment: "payment", activity: "activity", detail: "detail",
     share: "share", profile: "profile", card: "card", monerium: "monerium", recovery: "recovery", documents: "documents",
-    links: "links" }[target];
+    links: "links", signers: "signers" }[target];
   shell.dataset.msub = sub || "home";
   if (!sub) switchView(target === "home" ? "dashboard" : target === "activity" ? "transactions" : "settings");
   else switchView("dashboard");
@@ -216,7 +216,7 @@ function mobileNav(target) {
   const navFor = { add: "add", bank: "add", crypto: "add", send: "send", pay: "send", country: "send", method: "send",
     amount: "send", recipient: "send", progress: "send", plus: "home", bundle: "home", payment: "home",
     card: "home", home: "home", activity: "activity", detail: "activity", share: "activity",
-    profile: "profile", monerium: "profile", recovery: "profile", documents: "profile", links: "home" }[target];
+    profile: "profile", monerium: "profile", recovery: "profile", documents: "profile", signers: "profile", links: "home" }[target];
   document.querySelectorAll("#m-nav button").forEach((b) => {
     const on = b.dataset.mnav === navFor;
     b.classList.toggle("active", on);
@@ -236,6 +236,7 @@ function mobileNav(target) {
   if (sub === "monerium") renderMoneriumScreen();
   if (sub === "recovery") renderRecoveryScreen();
   if (sub === "documents") renderDocumentsScreen();
+  if (sub === "signers") renderSignersScreen();
   if (sub === "links") renderLinksScreen();
   $("dashboard").querySelector(".main").scrollTop = 0;
 }
