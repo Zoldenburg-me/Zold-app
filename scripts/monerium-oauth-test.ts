@@ -41,6 +41,11 @@ const ACCESS_TOKEN = "stub-access-token-" + randomBytes(8).toString("hex");
 const REFRESH_TOKEN = "stub-refresh-token-" + randomBytes(8).toString("hex");
 const AUTH_CODE = "stub-auth-code";
 const PROFILE_ID = "profile-existing-user";
+// The user's other profile, whose IBAN predates Zold and pays a wallet
+// outside it. It is on the user's connection but not under the profile a
+// Safe here is linked to, so it can be neither shown as this account's nor
+// moved from it.
+const BUSINESS_PROFILE_ID = "profile-existing-business";
 const EXISTING_IBAN = "GB33BUKB20201555555555";
 const APP_IBAN = "IS140159260076545510730339";
 
@@ -59,8 +64,37 @@ const seen = {
   linkMessage: "",
   linkSignature: "",
   ibanRequestedFor: "",
+  ibanRequestAnswers: [] as number[],
+  // Monerium issues an IBAN some time after the request, as the sandbox does.
+  ibanIssued: false,
+  /** address (lowercase) -> the profile it was linked under */
+  links: new Map<string, string>(),
+  patches: [] as { iban: string; address: string; chain: string }[],
+  // Whether an accepted PATCH shows on the next GET /ibans. When false, the
+  // move is accepted but a re-read still shows the old address.
+  patchSettles: true,
+  pendingPatch: null as null | { iban: string; address: string; chain: string },
   bearerTokens: [] as string[],
 };
+
+/** One IBAN per profile, as Monerium holds them. */
+const ibanRecords: { iban: string; profile: string; address: string; chain: string }[] = [
+  { iban: EXISTING_IBAN, profile: BUSINESS_PROFILE_ID, address: "0x00000000000000000000000000000000000000ff", chain: "gnosis" },
+];
+const compact = (v: string) => v.replace(/\s+/g, "").toUpperCase();
+function currentIbans() {
+  // The APP IBAN appears once activate has requested it and Monerium has issued it.
+  if (seen.ibanRequestedFor && seen.ibanIssued && !ibanRecords.some((i) => i.iban === APP_IBAN)) {
+    ibanRecords.push({ iban: APP_IBAN, profile: PROFILE_ID, address: seen.ibanRequestedFor, chain: "sepolia" });
+  }
+  if (seen.pendingPatch && seen.patchSettles) {
+    const rec = ibanRecords.find((i) => i.iban === seen.pendingPatch!.iban)!;
+    rec.address = seen.pendingPatch.address;
+    rec.chain = seen.pendingPatch.chain;
+    seen.pendingPatch = null;
+  }
+  return ibanRecords;
+}
 
 const s256 = (v: string) => createHash("sha256").update(v).digest("base64url");
 const sha256 = (b: Buffer | string) => createHash("sha256").update(b).digest();
@@ -104,14 +138,14 @@ function clientData(type: string, challenge: string) {
   return b64url(Buffer.from(JSON.stringify({ type, challenge, origin: ORIGIN }), "utf8"));
 }
 
-async function makePasskey() {
+async function makePasskey(id = "monerium-oauth-passkey-0001") {
   const pair = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const jwk = await webcrypto.subtle.exportKey("jwk", pair.publicKey);
   const cose = enc(new Map<number, any>([
     [1, 2], [3, -7], [-1, 1],
     [-2, unb64url(jwk.x!)], [-3, unb64url(jwk.y!)],
   ]));
-  const credId = Buffer.from("monerium-oauth-passkey-0001");
+  const credId = Buffer.from(id);
   const authData = (flags: number, count: number, includeAttestation = false) => {
     const base = Buffer.alloc(37);
     sha256("localhost").copy(base, 0);
@@ -200,30 +234,58 @@ const stub = createServer((req, res) => {
     }
 
     if (url.startsWith("/auth/context")) return send(200, { userId: "monerium-user-1", email: "user@example.com" });
-    if (url.startsWith("/profiles")) return send(200, { profiles: [{ id: PROFILE_ID, kind: "personal", state: "approved" }] });
+    if (url.startsWith("/profiles")) {
+      return send(200, { profiles: [
+        { id: PROFILE_ID, kind: "personal", state: "approved" },
+        { id: BUSINESS_PROFILE_ID, kind: "corporate", state: "approved" },
+      ] });
+    }
 
+    if (url.startsWith("/addresses/")) {
+      const addr = decodeURIComponent(url.slice("/addresses/".length)).toLowerCase();
+      const profile = seen.links.get(addr);
+      return profile ? send(200, { address: addr, profile, chains: ["sepolia"] }) : send(404, { message: "address not linked" });
+    }
     if (url.startsWith("/addresses")) {
       if (req.method === "POST") {
         const body = JSON.parse(raw || "{}");
         seen.linkedAddress = body.address ?? "";
         seen.linkMessage = body.message ?? "";
         seen.linkSignature = body.signature ?? "";
+        seen.links.set(String(body.address ?? "").toLowerCase(), body.profile ?? PROFILE_ID);
         return send(201, { address: body.address, chain: body.chain, profile: body.profile });
       }
-      return send(200, { addresses: seen.linkedAddress ? [{ address: seen.linkedAddress, chain: "sepolia" }] : [] });
+      return send(200, { addresses: [...seen.links].map(([address, profile]) => ({ address, profile, chain: "sepolia" })) });
     }
 
+    if (url.startsWith("/ibans/") && req.method === "PATCH") {
+      const iban = compact(decodeURIComponent(url.slice("/ibans/".length)));
+      const body = JSON.parse(raw || "{}");
+      seen.patches.push({ iban, address: body.address ?? "", chain: body.chain ?? "" });
+      const rec = currentIbans().find((i) => i.iban === iban);
+      if (!rec) return send(404, { message: "IBAN not found" });
+      // Monerium moves an IBAN only to an address linked under its profile.
+      if (seen.links.get(String(body.address ?? "").toLowerCase()) !== rec.profile) {
+        return send(400, { message: "address is not linked to the IBAN's profile" });
+      }
+      seen.pendingPatch = { iban, address: body.address, chain: body.chain };
+      return send(202, {});
+    }
     if (url.startsWith("/ibans")) {
       if (req.method === "POST") {
         const body = JSON.parse(raw || "{}");
         seen.ibanRequestedFor = body.address ?? "";
-        return send(201, { iban: APP_IBAN, address: body.address });
+        // One IBAN per profile: 304, no body, when the address's profile has one.
+        const profile = seen.links.get(String(body.address ?? "").toLowerCase());
+        if (currentIbans().some((i) => i.profile === profile)) {
+          seen.ibanRequestAnswers.push(304);
+          res.writeHead(304);
+          return res.end();
+        }
+        seen.ibanRequestAnswers.push(201);
+        return send(201, { address: body.address });
       }
-      // The user's pre-existing IBAN is on a DIFFERENT address; the app IBAN
-      // only appears once activate has requested it.
-      const list: any[] = [{ iban: EXISTING_IBAN, address: "0x00000000000000000000000000000000000000ff" }];
-      if (seen.ibanRequestedFor) list.push({ iban: APP_IBAN, address: seen.ibanRequestedFor });
-      return send(200, { ibans: list });
+      return send(200, { ibans: currentIbans() });
     }
 
     if (url.startsWith("/orders")) return send(200, { orders: [] });
@@ -258,10 +320,19 @@ function bg(cmd: string, args: string[], env: Record<string, string> = {}) {
 }
 
 let pass = 0;
+const failed: string[] = [];
+/* A failing case is reported and the run goes on, so one run shows every case
+ * that fails (the move-IBAN cases were each shown failing before the route
+ * existed). The process still exits non-zero on any failure. */
 const t = async (label: string, fn: () => Promise<void>) => {
-  await fn();
-  pass++;
-  console.log(`  ok  ${label}`);
+  try {
+    await fn();
+    pass++;
+    console.log(`  ok  ${label}`);
+  } catch (err: any) {
+    failed.push(label);
+    console.log(`  FAIL  ${label}\n        ${String(err?.message ?? err).split("\n")[0]}`);
+  }
 };
 
 for (const [name, url] of [
@@ -452,14 +523,18 @@ try {
     assert.equal(seen.linkedAddress.toLowerCase(), start.data.address.toLowerCase(), "must link the app's Safe address");
     assert.ok(seen.linkSignature.startsWith("0x"), "expected an ownership-declaration signature");
     assert.equal(seen.ibanRequestedFor.toLowerCase(), start.data.address.toLowerCase());
-    assert.equal(r.data.iban, APP_IBAN, "funding should use the newly issued app IBAN");
+    assert.equal(r.data.iban, "", "no IBAN until Monerium has issued one for this address");
     assert.notEqual(r.data.iban, EXISTING_IBAN, "the user's existing IBAN must never be silently moved");
+    assert.equal(r.data.funding.status, "iban_pending");
+    assert.equal(r.data.kycStatus, "pending", "a requested IBAN is not an issued one");
     const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
     assert.ok(!db.includes("privateKey"), "activation must not require storing user private key material");
   });
 
-  await t("activation approves the account and opens funding", async () => {
+  await t("the IBAN Monerium issues later approves the account and opens funding", async () => {
+    seen.ibanIssued = true;
     const me = await call(`/api/users/${userId}`);
+    assert.equal(me.data.iban, APP_IBAN, "funding should use the newly issued app IBAN");
     assert.equal(me.data.kycStatus, "approved");
     assert.equal(me.data.kyc.provider, "monerium");
     assert.equal(me.data.funding.status, "active");
@@ -475,7 +550,117 @@ try {
     assert.ok(!db.includes("accessTokenEnc"), "encrypted tokens should be dropped on disconnect");
   });
 
-  console.log(`\nMONERIUM OAUTH TEST PASSED — ${pass}/${pass}: PKCE enforced, tokens encrypted, app IBAN issued`);
+  /*
+   * A second Zold account for the same Monerium user. Its Safe links under
+   * PROFILE_ID, which now has an IBAN (the first account's), so POST /ibans
+   * answers 304 and the IBAN can only be moved.
+   */
+  const firstUser = { id: userId, token, address: seen.ibanRequestedFor };
+  token = "";
+  const second = await call("/api/users", { name: "Second Account", email: "second@example.com", country: "DE" });
+  assert.equal(second.status, 201);
+  const secondId = second.data.id;
+  token = second.data.sessionToken;
+  const passkey2 = await makePasskey("monerium-oauth-passkey-0002");
+  let count2 = 1;
+
+  await t("a second account deploys its Safe and connects the same Monerium user", async () => {
+    const challenge = await call("/api/webauthn/challenge", { purpose: "register" });
+    const registered = await call(`/api/users/${secondId}/passkey`, passkey2.register(challenge.data.challenge));
+    assert.equal(registered.status, 201, `passkey registration failed: ${registered.data.error ?? ""}`);
+    let activated = await call(`/api/users/${secondId}/passkey-safe/deployment`, {});
+    if (activated.data.requestId) {
+      activated = await call(activated.data.submitTo, await passkey2.assert(activated.data.challenge, 1));
+    }
+    assert.equal(activated.data.passkeySafe?.status, "active", `Safe activation failed: ${activated.data.error ?? ""}`);
+    const r = await call(`/api/users/${secondId}/monerium/connect/start`, {});
+    const u = new URL(r.data.redirectUrl);
+    seen.codeChallenge = u.searchParams.get("code_challenge") ?? "";
+    const cb = await call(`/api/monerium/oauth/callback?state=${encodeURIComponent(u.searchParams.get("state")!)}&code=${AUTH_CODE}`, undefined, "GET", { cookie: connectCookie });
+    assert.equal(cb.status, 302, `callback failed: ${JSON.stringify(cb.data)}`);
+  });
+
+  let secondAddress = "";
+  await t("activate answers IBAN_EXISTS_ELSEWHERE when the profile's one IBAN pays another address", async () => {
+    const start = await call(`/api/users/${secondId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
+    assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
+    secondAddress = start.data.address;
+    const r = await call(`/api/users/${secondId}/monerium/activate`, {
+      profileId: PROFILE_ID,
+      linkSignatureRequestId: start.data.requestId,
+      ...(await passkey2.assert(start.data.challenge, ++count2)),
+    });
+    assert.equal(seen.ibanRequestAnswers.at(-1), 304, "the stub must have answered 304");
+    assert.equal(r.status, 409, `expected 409, got ${r.status}: ${JSON.stringify(r.data)}`);
+    assert.equal(r.data.code, "IBAN_EXISTS_ELSEWHERE");
+    assert.equal(r.data.existing.iban, APP_IBAN);
+    assert.equal(r.data.existing.address.toLowerCase(), firstUser.address.toLowerCase());
+    assert.equal(r.data.existing.chain, "sepolia");
+    const me = await call(`/api/users/${secondId}`);
+    assert.equal(me.data.iban, "", "another address's IBAN is never stored as this account's");
+    assert.equal(me.data.kycStatus, "pending");
+    assert.match(me.data.funding.detail ?? "", /already has an IBAN/);
+  });
+
+  const moveCeremony2 = async (iban: string) => {
+    const start = await call(`/api/users/${secondId}/monerium/link-signature/start`, { profileId: PROFILE_ID, purpose: "move-iban", iban });
+    assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
+    return { requestId: start.data.requestId, ...(await passkey2.assert(start.data.challenge, ++count2)) };
+  };
+
+  await t("move-iban refuses without the typed confirmation", async () => {
+    const r = await call(`/api/users/${secondId}/monerium/move-iban`, { iban: APP_IBAN, ...(await moveCeremony2(APP_IBAN)) });
+    assert.equal(r.status, 400, `expected 400: ${JSON.stringify(r.data)}`);
+    assert.equal(seen.patches.length, 0);
+  });
+
+  await t("move-iban refuses without a fresh passkey assertion", async () => {
+    const r = await call(`/api/users/${secondId}/monerium/move-iban`, { iban: APP_IBAN, confirm: "MOVE" });
+    assert.equal(r.status, 409, `expected 409: ${JSON.stringify(r.data)}`);
+    assert.equal(seen.patches.length, 0);
+  });
+
+  await t("move-iban refuses the user's IBAN on another profile", async () => {
+    const r = await call(`/api/users/${secondId}/monerium/move-iban`, { iban: EXISTING_IBAN, confirm: "MOVE", ...(await moveCeremony2(EXISTING_IBAN)) });
+    assert.equal(r.status, 409, `expected 409: ${JSON.stringify(r.data)}`);
+    assert.equal(r.data.code, "IBAN_NOT_ON_PROFILE");
+    assert.equal(seen.patches.length, 0);
+  });
+
+  await t("a move Monerium accepts but a re-read does not confirm leaves the account pending", async () => {
+    seen.patchSettles = false;
+    const r = await call(`/api/users/${secondId}/monerium/move-iban`, { iban: APP_IBAN, confirm: "MOVE", ...(await moveCeremony2(APP_IBAN)) });
+    assert.equal(r.status, 200, `move failed: ${JSON.stringify(r.data)}`);
+    assert.deepEqual(seen.patches, [{ iban: APP_IBAN, address: secondAddress, chain: "sepolia" }], "PATCH must carry the Safe address and MONERIUM.chain");
+    assert.equal(r.data.iban, "", "the re-read still shows the old address: nothing is this account's yet");
+    assert.equal(r.data.kycStatus, "pending");
+    assert.equal(r.data.funding.status, "iban_pending");
+    assert.equal(r.data.moneriumIbanMoves?.[0]?.confirmedAt, undefined);
+    const again = await call(`/api/users/${secondId}`);
+    assert.equal(again.data.kycStatus, "pending", "polling before Monerium moves it changes nothing");
+  });
+
+  await t("once Monerium shows the IBAN on the Safe, the pending check approves and the first account lets go", async () => {
+    seen.patchSettles = true;
+    const me = await call(`/api/users/${secondId}`);
+    assert.equal(me.data.iban, APP_IBAN);
+    assert.equal(me.data.kycStatus, "approved");
+    assert.equal(me.data.funding.status, "active");
+    const move = me.data.moneriumIbanMoves?.[0];
+    assert.equal(move?.fromAddress?.toLowerCase(), firstUser.address.toLowerCase());
+    assert.equal(move?.fromChain, "sepolia");
+    assert.equal(move?.profileId, PROFILE_ID);
+    assert.ok(move?.confirmedAt, "the confirmation is recorded");
+    token = firstUser.token;
+    const first = await call(`/api/users/${firstUser.id}`);
+    token = second.data.sessionToken;
+    assert.equal(first.data.iban, "", "the first account no longer shows an IBAN that now pays another Safe");
+  });
+
+  if (failed.length) {
+    console.log(`\nMONERIUM OAUTH TEST FAILED — ${failed.length} case(s):\n  - ${failed.join("\n  - ")}`);
+    process.exitCode = 1;
+  } else console.log(`\nMONERIUM OAUTH TEST PASSED — ${pass}/${pass}: PKCE enforced, tokens encrypted, app IBAN issued`);
   console.log("note: a real Monerium account in a browser is still needed to prove the");
   console.log("      authorize page accepts our client_id/redirect_uri registration.");
 } finally {

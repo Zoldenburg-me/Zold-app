@@ -190,7 +190,24 @@ sequenceDiagram
    the address owner." as an EIP-1271 Safe message. Zold links the address and
    requests the IBAN. **Only an IBAN matched to the Safe's address approves
    the account.** There is no other KYC provider and no operator approval
-   route.
+   route. An IBAN Monerium issues after the request approves the account
+   when the pending check sees it (`refreshPendingIban`).
+7. **Move an existing IBAN** (BUILT, tested against a fake Monerium only). A
+   Monerium profile has ONE IBAN, so for a user who already has one, Monerium
+   answers the IBAN request with 304. Activate then answers 409
+   `IBAN_EXISTS_ELSEWHERE` with that IBAN and the address and chain it pays
+   into, read on the user's own connection, and stores only the reason. The
+   app shows the IBAN masked to its last four digits, the old address and
+   chain, and a plain warning: after the move, payments to the IBAN arrive in
+   Zold and the old wallet stops receiving them; payers keep the same IBAN;
+   it can be moved back from Monerium. "Move IBAN to Zold" needs a typed
+   `MOVE` and a fresh passkey ceremony. Zold links the Safe under the IBAN's
+   profile, asks Monerium to point the IBAN at the Safe (`PATCH
+   /ibans/{iban}`), and approves the account only when Monerium's re-read
+   lists the IBAN against the Safe; otherwise the account waits in
+   `iban_pending`. The move (old address, old chain, profile, when) is kept
+   on the user as `moneriumIbanMoves`, and any other Zold account still
+   showing that IBAN loses it.
 
 ### 4.2 How a payment is authorised
 
@@ -716,6 +733,10 @@ imply:
 - The cash rail has never opened.
 - No Monerium production OAuth app is registered, and no real
   client-credentials token has been used.
+- Moving an existing IBAN to a Safe has never run against Monerium's real
+  sandbox. Whether the sandbox accepts `PATCH /ibans/{iban}` to a
+  `basesepolia` address, and whether its IBAN list carries the `profile`
+  field the move relies on, are unverified.
 - No Shopify app is registered and no store has installed one.
 - No Candide recovery service has been called. No real OTP and no on-chain
   guardian action have happened.

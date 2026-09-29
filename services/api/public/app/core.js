@@ -110,6 +110,10 @@ async function api(path, body, method, extraHeaders) {
   if (!res.ok) {
     const err = new Error(data.error || res.statusText || `request failed (HTTP ${res.status})`);
     err.status = res.status;
+    // A refusal the UI answers with its own screen (IBAN_EXISTS_ELSEWHERE)
+    // needs the code and the fields that came with it.
+    err.code = data.code;
+    err.body = data;
     throw err;
   }
   return data;

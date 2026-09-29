@@ -68,15 +68,78 @@ export async function findIban(address: string, user?: User): Promise<string | u
   return hit?.iban;
 }
 
+/**
+ * Monerium attributes an IBAN to one address. Once it attributes `iban` to
+ * `keepUserId`'s Safe (a move), any other account here still holding it is
+ * showing an IBAN that no longer pays it: clear it there and say why. The
+ * funding goes back to iban_pending, so moving the IBAN back at Monerium
+ * re-attributes it through refreshPendingIban.
+ */
+export function releaseIbanFromOtherUsers(iban: string, keepUserId: string): void {
+  const target = normalizeIban(iban);
+  for (const other of store.users) {
+    if (other.id === keepUserId || !other.iban || normalizeIban(other.iban) !== target) continue;
+    store.updateUser(other.id, {
+      iban: "",
+      funding: {
+        ...(other.funding ?? { mode: "sandbox" as const }),
+        mode: other.funding?.mode ?? "sandbox",
+        status: "iban_pending",
+        detail: `IBAN ${target.slice(-4).padStart(8, "•")} was moved at Monerium to another address on ${new Date().toISOString().slice(0, 10)}; it no longer pays into this account`,
+      },
+    });
+  }
+}
+
+/**
+ * An address-matched IBAN approves an account only from `pending`. A
+ * rejected or manual_review account is not approved by an IBAN appearing,
+ * and an approved one keeps its original approval record.
+ */
+export const mayApproveOnIban = (user: User) => user.kycStatus === "pending";
+
+/** Mark the newest unconfirmed move of `iban` on this user as confirmed. */
+export function confirmedMoves(user: User, iban: string): User["moneriumIbanMoves"] {
+  const moves = user.moneriumIbanMoves;
+  if (!moves?.length) return moves;
+  const target = normalizeIban(iban);
+  const idx = moves.map((m) => !m.confirmedAt && normalizeIban(m.iban) === target).lastIndexOf(true);
+  if (idx < 0) return moves;
+  return moves.map((m, i) => (i === idx ? { ...m, confirmedAt: new Date().toISOString() } : m));
+}
+
 /** Re-check a user whose IBAN was still pending. */
 export async function refreshPendingIban(user: User): Promise<User> {
   if (user.funding?.status !== "iban_pending") return user;
   try {
     const iban = await findIban(user.address, user);
     if (iban) {
+      // A move (PATCH /ibans) that Monerium has now carried out: record it
+      // and take the IBAN off whichever account it used to pay.
+      releaseIbanFromOtherUsers(iban, user.id);
+      // An address-matched IBAN is what approves an account (activate does the
+      // same when the IBAN is there at once). Without this, an IBAN issued
+      // after activation was stored but the account stayed pending, and the
+      // app hides the IBAN of a pending account.
+      // Allowlist, not denylist: only a pending account is approved by its
+      // IBAN. manual_review (and anything added later) stays where it is.
+      const approve = mayApproveOnIban(user);
       return store.updateUser(user.id, {
         iban,
-        funding: { ...user.funding, status: "active" },
+        funding: { ...user.funding, status: "active", detail: undefined },
+        ...(user.moneriumIbanMoves ? { moneriumIbanMoves: confirmedMoves(user, iban) } : {}),
+        ...(approve
+          ? {
+              kycStatus: "approved" as const,
+              kyc: {
+                provider: "monerium" as const,
+                onboardingPath: "existing_monerium" as const,
+                checkedAt: new Date().toISOString(),
+                applicantId: user.funding.moneriumProfileId,
+                reason: `approved when Monerium issued the IBAN for ${user.address}`,
+              },
+            }
+          : {}),
       });
     }
   } catch {
