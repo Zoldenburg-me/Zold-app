@@ -254,6 +254,22 @@ export interface User {
     ibans?: any[];
     addresses?: any[];
   };
+  /**
+   * IBANs the user moved to this Safe from another address at Monerium
+   * (PATCH /ibans/{iban}), newest last, so support can see where an IBAN paid
+   * before. `confirmedAt` is set only once Monerium's own list shows the IBAN
+   * on this Safe; a move without it was accepted and not yet seen to land.
+   */
+  moneriumIbanMoves?: {
+    iban: string;
+    profileId: string;
+    fromAddress: string;
+    fromChain: string;
+    toAddress: string;
+    toChain: string;
+    requestedAt: string;
+    confirmedAt?: string;
+  }[];
   privacyBundle?: {
     planId: string;
     status: "active" | "pending_fulfillment" | "canceled";

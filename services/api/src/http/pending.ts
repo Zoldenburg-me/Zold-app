@@ -21,10 +21,21 @@ export const pendingPasskeySafeDeployments = new Map<
   { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }
 >();
 
-/** Monerium link declarations awaiting the Safe's EIP-1271 signature. */
+/**
+ * Monerium link declarations awaiting the Safe's EIP-1271 signature. A
+ * `move-iban` entry is bound to the one IBAN the user confirmed: the challenge
+ * is the Safe message hash, which cannot carry the IBAN itself.
+ */
 export const pendingMoneriumLinkSignatures = new Map<
   string,
-  { userId: string; expiresAt: number; challenge: string; profileId?: string }
+  {
+    userId: string;
+    expiresAt: number;
+    challenge: string;
+    profileId?: string;
+    purpose?: "activate" | "move-iban";
+    iban?: string;
+  }
 >();
 
 /**
