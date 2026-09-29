@@ -709,7 +709,8 @@ These are things to say plainly in the GitBook rather than let the product
 imply:
 
 - No mainnet deployment. The running deployment is Base Sepolia with the
-  Monerium sandbox, at zoldhq.com behind a Cloudflare tunnel.
+  Monerium sandbox, at zoldhq.com: one container on an Akash lease, reached
+  through a Cloudflare tunnel.
 - No real money has moved through a swap, and no Base Sepolia send has
   executed the debit.
 - The cash rail has never opened.

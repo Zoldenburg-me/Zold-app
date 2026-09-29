@@ -756,11 +756,43 @@ only self-hosted fonts.
 |---|---|---|---|---|
 | `npm run dev` | hardhat 31337 (spawned) | chain `sepolia` names | `data/db.dev.json`, wiped | the fx-swapper venue; no Safe deploy |
 | tests (`npm run check`) | hardhat on free ports | stubs | tmp | 40 offline suites; `draft`, `crypto`, `convert` and `safe-funded` run separately |
-| **zoldhq.com (current)** | Base Sepolia 84532 | sandbox, `basesepolia` | `data/db.json` on the operator's machine | `npm run api` + `cloudflared tunnel run`; the API binds 127.0.0.1; `RP_ID=zoldhq.com`; `NODE_ENV` is deliberately not production, because it would fail the checks above |
+| **zoldhq.com (current)** | Base Sepolia 84532 | sandbox, `basesepolia` | `TRANSF_DB_PATH` on the Akash lease's persistent volume | one container on an Akash lease: the API plus `cloudflared` (a dashboard-managed Cloudflare Tunnel); the API binds 127.0.0.1; `RP_ID=zoldhq.com`; `NODE_ENV` is deliberately not production, because it would fail the checks above |
 | mainnet | Base 8453 | production | — | never deployed |
 
 `RP_ID` is a one-way door: passkeys are bound to it, and the device key lives
 in per-origin localStorage, so accounts do not move between origins.
+
+### 18.1 How zoldhq.com is hosted
+
+The testnet deployment runs on [Akash](https://akash.network), paid from the
+Akash Console's managed wallet. There is no image registry: the container
+starts from `node:22`, clones this repository at a pinned commit, runs
+`npm ci` and `hardhat compile` (the ABIs are read at import, and
+`contracts/artifacts/` is not committed), writes `deployments.json` from an
+environment variable, and starts the API next to `cloudflared`.
+
+- **Ingress is the tunnel, not the provider.** `cloudflared` dials out to
+  Cloudflare, so DNS and TLS stay in Cloudflare and the lease can move to
+  another provider without a DNS change. The hop from `cloudflared` to the
+  API is `http://localhost:3000` inside the container; the visitor's side is
+  HTTPS, which is what `WEBAUTHN_ORIGINS` checks. `TRUSTED_PROXY_HOPS=1`.
+- **Akash insists on one global port**, so the SDL exposes 3000. Because the
+  API binds 127.0.0.1, the provider's public hostname answers 502: there is
+  no way in that skips Cloudflare.
+- **The provider can read everything.** An Akash provider operator can see
+  the container's environment and disk, so every secret the deployment is
+  given (Monerium sandbox credentials, the Candide API key, the testnet
+  operator keys, the token-encryption key) and the database are readable
+  there. Acceptable for a testnet with the Monerium sandbox; not a model for
+  real money. The Akash account's own API key is never passed in.
+- **The database lives and dies with the lease.** Closing it deletes every
+  account, and passkeys and Safes created there cannot be moved. Shipping new
+  code means a new lease pinned to a new commit, and so an empty database,
+  unless the volume is carried over by hand.
+- **Deploying sends the secrets, so the operator runs it.** The SDL is
+  generated from `.env` on the operator's machine and never committed.
+  Provider bids expire within minutes, so creating the deployment and
+  accepting a bid happen in one step.
 
 ---
 
