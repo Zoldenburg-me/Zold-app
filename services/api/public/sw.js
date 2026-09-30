@@ -14,7 +14,7 @@
  * needs no bump. Bump SHELL_CACHE when the SHELL list itself changes or a
  * vendored file does; activate deletes every other cache this origin owns.
  */
-const SHELL_CACHE = "zold-shell-v8";
+const SHELL_CACHE = "zold-shell-v9";
 
 /**
  * The device key and the vendored crypto matter most here. If /device.js or
@@ -42,6 +42,7 @@ const SHELL = [
   "/app/send.js",
   "/app/signers.js",
   "/app/phone.js",
+  "/app/invoices.js",
   "/app/pwa.js",
   "/app/main.js",
   "/device.js",

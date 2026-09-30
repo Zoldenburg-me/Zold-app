@@ -26,6 +26,8 @@ import {
   convertTotals,
   formatInvoiceNumber,
   fromCents,
+  invoiceDueDate,
+  invoiceLanguage,
   isEuCountry,
   normaliseInvoiceCurrency,
   normaliseVatId,
@@ -685,6 +687,23 @@ check("an EU issuer is told the euro figure is not its own national conversion โ
     JSON.stringify(pl.jurisdiction.notVerified),
   );
   assert.ok(!pl.errors.some((e) => /ยง 16 Abs. 6/.test(e.legalBasis ?? "")), "no German paragraph at a Polish entity");
+});
+
+check("an invoice's language is its own choice, falling back to the profile, then German", () => {
+  assert.equal(invoiceLanguage("en", "de"), "en");
+  assert.equal(invoiceLanguage(undefined, "en"), "en");
+  assert.equal(invoiceLanguage("", undefined), "de");
+  assert.throws(() => invoiceLanguage("fr", "de"), InvoiceComplianceError);
+});
+
+check("a typed due date wins over payment terms, and cannot precede the invoice or be no date at all", () => {
+  assert.equal(invoiceDueDate("2026-10-13", "2026-09-29", "2026-10-06"), "2026-10-13");
+  assert.equal(invoiceDueDate(undefined, "2026-09-29", "2026-10-06"), "2026-10-06");
+  assert.equal(invoiceDueDate("", "2026-09-29", undefined), undefined);
+  assert.equal(invoiceDueDate("2026-09-29", "2026-09-29", undefined), "2026-09-29");
+  assert.throws(() => invoiceDueDate("2026-09-28", "2026-09-29", undefined), /before the invoice date/);
+  assert.throws(() => invoiceDueDate("2026-02-30", "2026-01-01", undefined), /not a due date/);
+  assert.throws(() => invoiceDueDate("13.10.2026", "2026-09-29", undefined), /not a due date/);
 });
 
 console.log(`\n${passed} checks passed${process.exitCode ? " (with failures above)" : ""}\n`);
