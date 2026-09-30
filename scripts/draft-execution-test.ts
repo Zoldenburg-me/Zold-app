@@ -326,57 +326,36 @@ try {
     assert.match(wrongSigner.data.error, /device key/i);
   });
 
-  // ── The batch, against the same wall a direct transfer hits ──────────────
+  // ── The batch, against the same wall a direct send hits ─────────────────
   //
-  // A passkey Safe needs an ERC-4337 bundler, which local hardhat lacks, so no
-  // real transfer can be created here. What we can check is that draft
-  // execution takes the same code path: it must fail exactly as a direct
-  // POST /api/transfers does.
+  // Every SEPA line is a Monerium redeem, and the harness user has no Monerium
+  // connection — there is deliberately no fake one (KYC_AUTO_APPROVE is the one
+  // harness seam). A direct send is refused at the quote; draft execution must
+  // refuse the same way, before it claims the draft or creates anything.
   const batch = await call("POST", `/api/orgs/${org.id}/drafts/${draft.id}/execute`, {
     token: ownerToken,
   });
-
-  const directQuote = await ok("POST", "/api/quotes", {
+  const direct = await call("POST", "/api/quotes", {
     token: ownerToken,
     body: { userId: owner.id, rail: "sepa", sendEur: 120 },
   });
-  const direct = await call("POST", "/api/transfers", {
-    token: ownerToken,
-    body: {
-      quoteId: directQuote.id,
-      recipientName: "Supplier Ltd",
-      recipientIban: "DE89370400440532013000",
-    },
-  });
 
-  check("a batch refusal is the SAME refusal a direct transfer gets", () => {
-    assert.equal(batch.status, direct.status, "same status");
-    assert.equal(
-      batch.data.detail,
-      direct.data.error,
+  check("a batch refusal is the SAME refusal a direct send gets", () => {
+    assert.equal(direct.status, 409);
+    assert.equal(direct.data.code, "MONERIUM_NOT_CONNECTED");
+    assert.deepEqual(
+      batch,
+      direct,
       "draft execution must not be a second, weaker path to creating a transfer",
     );
-    assert.match(direct.data.error, /passkey Safe/i, "and it is the Safe guard doing it");
   });
 
-  check("a stopped batch says plainly that nothing moved", () => {
-    assert.deepEqual(batch.data.createdButUnsigned, []);
-    assert.match(batch.data.note, /Nothing moved/i);
-  });
-
-  const afterFailure = await ok("GET", `/api/orgs/${org.id}/drafts/${draft.id}`, {
+  const afterRefusal = await ok("GET", `/api/orgs/${org.id}/drafts/${draft.id}`, {
     token: ownerToken,
   });
-  check("the draft is FAILED, not silently left ready to fire again", () => {
-    assert.equal(afterFailure.draft.state, "FAILED");
-    assert.match(afterFailure.draft.failureReason, /could not be prepared/i);
-  });
-
-  const replay = await call("POST", `/api/orgs/${org.id}/drafts/${draft.id}/execute`, {
-    token: ownerToken,
-  });
-  check("a FAILED draft cannot be re-fired without being re-drafted", () => {
-    assert.equal(replay.status, 409);
+  check("a missing connection leaves the draft REVIEWED with nothing created", () => {
+    assert.equal(afterRefusal.draft.state, "REVIEWED");
+    assert.deepEqual(afterRefusal.draft.transferIds ?? [], []);
   });
 
   // ── Pre-flight: everything refused BEFORE anything is created ────────────
