@@ -914,6 +914,41 @@ export function formatInvoiceNumber(series: NumberSeries, when: Date): string {
   return `${prefix}${String(series.next).padStart(series.padding, "0")}`;
 }
 
+// ── Per-invoice language and due date ──────────────────────────────────────
+
+/**
+ * The language one invoice is written in: the one chosen for it, else the
+ * profile's, else German.
+ */
+export function invoiceLanguage(chosen: unknown, profile: "de" | "en" | undefined): "de" | "en" {
+  if (chosen === undefined || chosen === null || chosen === "") return profile ?? "de";
+  if (chosen === "de" || chosen === "en") return chosen;
+  throw new InvoiceComplianceError(`Invoices are written in German (de) or English (en), not "${String(chosen)}".`);
+}
+
+/**
+ * The due date one invoice carries: the one typed for it, else `fromTerms`
+ * (the profile's payment terms counted from the issue date). A typed date must
+ * be a real calendar date and not before the issue date, or the invoice would
+ * read as overdue from the day it was issued.
+ */
+export function invoiceDueDate(
+  typed: unknown,
+  issueDate: string,
+  fromTerms: string | undefined,
+): string | undefined {
+  if (typed === undefined || typed === null || typed === "") return fromTerms;
+  const s = String(typed);
+  const d = new Date(`${s}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) {
+    throw new InvoiceComplianceError(`"${s}" is not a due date. Use YYYY-MM-DD.`);
+  }
+  if (s < issueDate) {
+    throw new InvoiceComplianceError(`The due date ${s} is before the invoice date ${issueDate}.`);
+  }
+  return s;
+}
+
 // ── Which optional blocks the issuer wants on the document ──────────────────
 
 /**

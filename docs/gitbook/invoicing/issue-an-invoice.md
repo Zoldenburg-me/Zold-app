@@ -18,7 +18,9 @@ Fill in **Settings → Your details on an invoice** once: legal name and address
 
 **Customer.** Pick a contact or type the customer's name and address. For a reverse-charge or intra-community supply, their VAT ID is required and the form says so.
 
-**Dates.** Invoice date, and the **date of supply** or a supply period. The date of supply is required even when it equals the invoice date.
+**Dates.** Invoice date, and the **date of supply** or a supply period. The date of supply is required even when it equals the invoice date. The **due date** comes from your payment terms; you can set a different one on any invoice.
+
+**Language.** German or English, from your invoice settings; you can choose the other for one invoice.
 
 **Number.** Taken from your series; you can override it. Numbers must be unique.
 
