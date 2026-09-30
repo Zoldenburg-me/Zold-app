@@ -164,6 +164,9 @@ export interface PasskeySafeDeploymentPlan {
   /** A recovered Safe: its address is fixed and no longer derives from the
    *  current owner set, so it is addressed rather than computed. */
   recoveredAt?: string;
+  /** An existing Safe brought into Zold (routes/safe-import.ts): addressed
+   *  like a recovered one, but never called "recovered". */
+  importedAt?: string;
 }
 
 export interface BrowserPasskeyAssertion {
@@ -490,12 +493,13 @@ export async function ethBalance(address: string): Promise<bigint> {
 /**
  * The SafeAccount for a plan. Before recovery the address IS the
  * counterfactual address of the owner set, so it is re-derived and checked;
- * after a recovery the owner changed under a fixed address, so the account is
- * built from the address alone and the derivation would be wrong.
+ * after a recovery, or for an imported Safe, the owner is not the one the
+ * address was derived from, so the account is built from the address alone
+ * and the derivation would be wrong.
  */
 export function accountForPlan(plan: PasskeySafeDeploymentPlan): { account: SafeAccount; passkeyOwner: WebauthnPublicKey } {
   const passkeyOwner = webauthnOwnerFromStore(plan.passkeyPublicKey);
-  if (plan.recoveredAt) {
+  if (plan.recoveredAt || plan.importedAt) {
     return { account: new SafeAccount(plan.address), passkeyOwner };
   }
   const account = smartAccountForPasskey(passkeyOwner);

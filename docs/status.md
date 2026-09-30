@@ -31,6 +31,21 @@ Say this plainly rather than letting the surface imply otherwise:
   Safe. `recovery:test` runs the flow under the harness only.
 - **No Candide recovery service has been called** (stub only); no on-chain
   guardian add, execute or finalise, no real OTP.
+- **Importing an existing Safe** (`routes/safe-import.ts`,
+  `npm run safe:import-tx`) has run only on Base Sepolia, with a throwaway
+  EOA and a software P-256 key standing in for the passkey (2026-09-30, two
+  runs). Observed: an EOA-owned Safe deployed with SafeMultiChainSigAccountV1's
+  factory and 4337 setup; `prepare`; the script's direct `execTransaction`
+  from the EOA; `confirm` deploying the verifier from the deployer and binding
+  the account; a passkey-signed UserOperation moving 0.01 USDC out of the
+  imported Safe (tx `0xf60dd7d7…`, userOp `0x5f4d6a79…`, sponsored gas); and
+  the Safe's `isValidSignature(bytes32)` returning `0x1626ba7e` for the
+  Monerium link message signed that way (an `eth_call`, not a Monerium call).
+  Never run: a real passkey, the Transaction Builder JSON on app.safe.global
+  (its checksum is written from the tx-builder source, untested), a hardware
+  wallet sending the owner change, a Monerium link of an imported Safe, and
+  anything on Base mainnet — Zoldenburg's Safe has not been touched. No UI
+  calls the import routes.
 - **No mail transport exists.** Invitations, invoice links and recovery emails
   are never sent by Zold; routes return the token to the caller and say so. Do
   not add a "we emailed them" string without adding a transport.
