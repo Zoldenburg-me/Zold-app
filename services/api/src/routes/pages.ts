@@ -17,6 +17,10 @@
  * TRANSF_PUBLIC_URL says what they are — never the Host header, which the
  * caller writes. A page marks the spot with <!--zold:abs-->; without a public
  * url, og:image falls back to a relative path and canonical is left out.
+ *
+ * The website pages (landing, legal notes, cookies, 404) share one nav and one
+ * footer, kept in ../../site/ and filled in at <!--zold:site-nav--> and
+ * <!--zold:site-footer--> so they are not six copies that drift apart.
  */
 import express from "express";
 import fs from "node:fs";
@@ -25,11 +29,12 @@ import { fileURLToPath } from "node:url";
 import { PUBLIC_URL } from "../config.js";
 
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../public");
+const site = path.join(pub, "../site");
 const base = PUBLIC_URL.replace(/\/+$/, "");
 
-/** The one page search engines are invited to: everything else is an app
- *  screen or a credential-bearing link. */
-const INDEXABLE = ["/"];
+/** The pages search engines are invited to: the landing and the legal pages.
+ *  Everything else is an app screen or a credential-bearing link. */
+const INDEXABLE = ["/", "/legal", "/privacy"];
 
 const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
@@ -51,7 +56,11 @@ function absTags(canonicalPath?: string): string {
 function page(file: string, canonicalPath?: string): express.RequestHandler {
   let html: string | undefined;
   return (_req, res) => {
-    html ??= fs.readFileSync(path.join(pub, file), "utf8").replace("<!--zold:abs-->", absTags(canonicalPath));
+    html ??= fs
+      .readFileSync(path.join(pub, file), "utf8")
+      .replace("<!--zold:abs-->", absTags(canonicalPath))
+      .replace("<!--zold:site-nav-->", () => fs.readFileSync(path.join(site, "nav.html"), "utf8"))
+      .replace("<!--zold:site-footer-->", () => fs.readFileSync(path.join(site, "footer.html"), "utf8"));
     res.type("html").send(html);
   };
 }
@@ -72,6 +81,8 @@ export function createPageRouter() {
   const router = express.Router();
 
   router.get(["/", "/landing.html"], page("landing.html", "/"));
+  router.get("/legal", page("legal.html", "/legal"));
+  router.get("/privacy", page("privacy.html", "/privacy"));
 
   router.get("/robots.txt", (_req, res) => {
     const lines = [
