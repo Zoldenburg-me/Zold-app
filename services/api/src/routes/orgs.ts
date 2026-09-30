@@ -35,11 +35,14 @@ import {
   trialIsActive,
   trialPlanFor,
 } from "../domain/plans.js";
-import { ROLES, type OrgType, type Organisation, type PlanId, type Role } from "../domain/types.js";
+import { ROLES, type Account, type OrgType, type Organisation, type PlanId, type Role } from "../domain/types.js";
 import { ADDRESS_RE, ContactError, validateBankAccount, validateWallet } from "../domain/contacts.js";
 import { hashToken } from "../domain/invoices.js";
-import { emailIsProven, wouldOrphanOrg } from "../domain/roles.js";
+import { emailIsProven, roleCan, wouldOrphanOrg } from "../domain/roles.js";
 import { KYC } from "../config.js";
+import { wrap } from "./util.js";
+import { accountProfileStanding } from "../domain/monerium-profile.js";
+import { adoptionHint, auditProfileCheck, checkBackingProfile } from "../adapters/monerium-profile.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 
@@ -442,7 +445,16 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!requirePermission(ctx, res, "accounts.read")) return;
     const accounts = store.accountsOf(ctx.org.id);
     res.json({
-      accounts,
+      // `profile` is derived here, at read time: an account adopted before the
+      // Monerium profile check existed reads as needing one, and no row is
+      // rewritten to say so.
+      accounts: accounts.map((a) => ({ ...a, profile: accountProfileStanding(ctx.org, a) })),
+      // Whether "fund from my account" would pass, from stored facts only, so
+      // the UI offers it only where the API would accept it.
+      adoption: roleCan(ctx.member.role, "accounts.open")
+        ? adoptionHint(ctx.org, store.findUser(ctx.userId))
+        : { allowed: false, reason: `Your role (${ctx.member.role}) cannot open or fund accounts.` },
+      mayManageAccounts: roleCan(ctx.member.role, "accounts.open"),
       currencies: currencyAvailability(),
       // What a second account would cost, so the UI can show the ceiling
       // before the user hits it rather than after.
@@ -450,7 +462,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     });
   });
 
-  r.post("/:orgId/accounts", (req, res) => {
+  r.post("/:orgId/accounts", wrap(async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "accounts.open")) return;
@@ -488,6 +500,10 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
      * someone's own wallet should be an explicit choice. `backingUserId`
      * records whose device key can sign; spending authority does not follow a
      * membership change.
+     *
+     * The caller's Monerium profile must match the org: `corporate` for a
+     * business, `personal` for a personal org (domain/monerium-profile.ts).
+     * A member's personal IBAN cannot back a company.
      */
     const caller = store.findUser(ctx.userId);
     const callerFunded =
@@ -502,6 +518,25 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
      * would imply work in progress; with no per-organisation provisioning the
      * account would stay there forever and look like a stuck job.
      */
+    // Whose IBAN is it? Monerium's answer, on the caller's own credentials,
+    // before anything is written. A refusal (or Monerium not answering)
+    // refuses the whole request: nothing is opened half-adopted.
+    let profileRecord: NonNullable<Account["moneriumProfile"]> | undefined;
+    let profileWarning: string | undefined;
+    if (wantsAdoption) {
+      const checked = await checkBackingProfile(ctx.org, callerFunded!);
+      auditProfileCheck("adopt", { orgId: ctx.org.id }, callerFunded!.id, checked, ctx.userId);
+      if (!checked.ok) {
+        return res.status(checked.status).json({ error: checked.error, code: checked.code });
+      }
+      profileRecord = checked.record;
+      profileWarning = checked.warning;
+      // The Monerium read is an await: a parallel open may have landed in it.
+      if (store.accountsOf(ctx.org.id).some((a) => a.currency === currency)) {
+        return res.status(409).json({ error: `This organisation already has a ${currency} account.` });
+      }
+    }
+
     const status = wantsAdoption ? "active" : "gated";
     const gate = wantsAdoption
       ? undefined
@@ -522,6 +557,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       identifier: wantsAdoption ? { iban: callerFunded!.iban } : {},
       address: wantsAdoption ? callerFunded!.address : undefined,
       backingUserId: wantsAdoption ? callerFunded!.id : undefined,
+      ...(profileRecord ? { moneriumProfile: profileRecord } : {}),
       gate,
       createdAt: now,
       updatedAt: now,
@@ -531,16 +567,19 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (account.status === "gated") {
       note = `Recorded, but ${CURRENCY_REGISTRY[currency].name} accounts cannot be opened yet: ${account.gate?.needs}`;
     } else if (wantsAdoption && ctx.org.type === "business") {
-      note =
-        "This organisation is now funded by your personal account — payments come out of your balance and only your device key can authorise them. Per-organisation accounts are not built yet.";
+      note = `This organisation is now funded from the Monerium company profile${profileRecord?.name ? ` "${profileRecord.name}"` : ""} connected to your login. Only your device key can authorise its payments.`;
     } else if (!wantsAdoption && currency === "EUR") {
       note = callerFunded
         ? "Opened without a funding identity. Pass useMyAccount: true to fund it from your own account until per-organisation provisioning exists."
         : "Opened without a funding identity — your own account is not funded yet, and per-organisation provisioning is not built. Nothing can be sent from this account.";
     }
 
-    res.status(201).json({ account, note });
-  });
+    res.status(201).json({
+      account: { ...account, profile: accountProfileStanding(ctx.org, account) },
+      note,
+      ...(profileWarning ? { warning: profileWarning } : {}),
+    });
+  }));
 
   /**
    * Give an existing account a funding identity, from the caller's own account.
@@ -549,7 +588,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
    * paying an organisation's bills: it gets its own call, permission check and
    * plain-language response.
    */
-  r.post("/:orgId/accounts/:accountId/fund", (req, res) => {
+  r.post("/:orgId/accounts/:accountId/fund", wrap(async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "accounts.open")) return;
@@ -583,21 +622,66 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       });
     }
 
+    // The account stays gated on any refusal, including Monerium not
+    // answering: fail closed, write nothing.
+    const checked = await checkBackingProfile(ctx.org, caller);
+    auditProfileCheck("fund", { orgId: ctx.org.id, accountId: account.id }, caller.id, checked, ctx.userId);
+    if (!checked.ok) {
+      return res.status(checked.status).json({ error: checked.error, code: checked.code });
+    }
+    // The Monerium read is an await: another adoption may have landed in it.
+    if (store.findAccount(account.id)?.backingUserId) {
+      return res.status(409).json({ error: "This account was funded by another request while we checked with Monerium." });
+    }
+
     const funded = store.updateAccount(account.id, {
       status: "active",
       identifier: { iban: caller.iban },
       address: caller.address,
       backingUserId: caller.id,
+      moneriumProfile: checked.record,
       gate: undefined,
     });
     res.json({
-      account: funded,
+      account: { ...funded, profile: accountProfileStanding(ctx.org, funded) },
       note:
         ctx.org.type === "business"
-          ? "This organisation is now funded by your personal account — payments come out of your balance and only your device key can authorise them. Per-organisation accounts are not built yet."
+          ? `This organisation is now funded from the Monerium company profile${checked.record.name ? ` "${checked.record.name}"` : ""} connected to your login. Only your device key can authorise its payments.`
           : "Funded from your account.",
+      ...(checked.warning ? { warning: checked.warning } : {}),
     });
-  });
+  }));
+
+  /**
+   * Check an adopted account's Monerium profile again, on the backing user's
+   * own credentials. How an account adopted before the check existed (or
+   * whose profile Monerium has since approved) becomes sendable. Records the
+   * result only when it passes; a refusal changes nothing.
+   */
+  r.post("/:orgId/accounts/:accountId/profile-check", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requirePermission(ctx, res, "accounts.open")) return;
+
+    const account = store.findAccount(String(req.params.accountId));
+    if (!account || account.orgId !== ctx.org.id) {
+      return res.status(404).json({ error: "no such account" });
+    }
+    const backer = account.backingUserId ? store.findUser(account.backingUserId) : undefined;
+    if (!backer) {
+      return res.status(409).json({ error: "This account has no funding identity, so there is no Monerium profile to check." });
+    }
+    const checked = await checkBackingProfile(ctx.org, backer);
+    auditProfileCheck("recheck", { orgId: ctx.org.id, accountId: account.id }, backer.id, checked, ctx.userId);
+    if (!checked.ok) {
+      return res.status(checked.status).json({ error: checked.error, code: checked.code });
+    }
+    const updated = store.updateAccount(account.id, { moneriumProfile: checked.record });
+    res.json({
+      account: { ...updated, profile: accountProfileStanding(ctx.org, updated) },
+      ...(checked.warning ? { warning: checked.warning } : {}),
+    });
+  }));
 
   // ── Contacts (the address book) ───────────────────────────────────────────
 

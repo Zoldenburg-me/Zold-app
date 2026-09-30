@@ -31,7 +31,10 @@ export type AuditKind =
   /** A user moved their existing Monerium IBAN to this Safe (PATCH /ibans). */
   | "partner.iban_moved"
   /** Belege pushed to an accounting inbox; counts only, never a key. */
-  | "partner.documents_pushed";
+  | "partner.documents_pushed"
+  /** An org account's Monerium profile was checked (adopt, fund, re-check or
+   *  execution): which profile, which kind, and whether it passed. */
+  | "account.monerium_profile_checked";
 
 export interface AuditEntry {
   id: string;

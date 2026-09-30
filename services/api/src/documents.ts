@@ -70,6 +70,9 @@ export interface HolderBlock {
   safeAddress: `0x${string}`;
   chainId: number;
   accountSince: string;
+  /** Who owns the IBAN at Monerium, as recorded on the org account at its
+   *  last profile check. Absent for accounts never checked. */
+  moneriumProfile?: { id: string; kind: "personal" | "corporate"; name?: string; checkedAt: string };
 }
 
 export interface StatementLine {

@@ -106,8 +106,23 @@ export class MoneriumClient {
     return this.request<any>("GET", "/auth/context");
   }
 
-  profiles() {
-    return this.request<any>("GET", "/profiles");
+  profiles(filter: { kind?: "personal" | "corporate" } = {}) {
+    const q = filter.kind ? `?kind=${filter.kind}` : "";
+    return this.request<any>("GET", `/profiles${q}`);
+  }
+
+  /**
+   * One profile. The sandbox answers `id`, `kind`, `state`, `details`, `form`
+   * and `verifications` here and NO `name` (read 2026-09-30); `name` is on the
+   * GET /profiles list items. An id this login cannot see is a 403, not 404.
+   */
+  profile(profileId: string) {
+    // Stored ids came from Monerium, but one also arrives in request bodies,
+    // so the shape is checked before it becomes a path segment.
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(profileId)) {
+      throw new MoneriumApiError(`malformed Monerium profile id: ${profileId.slice(0, 40)}`, 400);
+    }
+    return this.request<any>("GET", `/profiles/${encodeURIComponent(profileId)}`);
   }
 
 

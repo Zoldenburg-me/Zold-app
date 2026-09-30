@@ -119,7 +119,7 @@ flowchart TB
   User -->|owner member of| POrg
   User -->|member of, any role| BOrg
   POrg --> Acc
-  BOrg -->|adopts a member's funded account| Acc
+  BOrg -->|adopts a login whose Monerium profile is corporate| Acc
   Acc -->|settles to| Safe
 ```
 
@@ -134,10 +134,15 @@ flowchart TB
   orgs.
 - **An org Account is a pointer to one member's Safe.** Per-organisation Safe
   and Monerium provisioning is **NOT BUILT**. A business org's EUR account
-  therefore *adopts* a member's personal funded account: same IBAN, same Safe,
+  therefore *adopts* a member's funded account: same IBAN, same Safe,
   `backingUserId` = that member. Only that member can execute payments from
-  it, because only they hold the device key. The same Safe and IBAN show in
-  both the personal org and the business org.
+  it, because only they hold the device key. That login's Monerium profile
+  must be an approved **corporate** profile (a personal org needs a
+  personal one): Monerium's Personal Terms §16 forbid using a personal
+  account for a company's or its clients' money. So a company needs its own
+  Zold login connected to its own Monerium company profile; a member's
+  personal IBAN cannot back it. The profile is re-checked at every draft
+  execution (technical-architecture §13.1).
 
 ---
 

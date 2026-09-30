@@ -35,8 +35,25 @@ RENDER.overview = async () => {
   return html;
 };
 
+/** Whose IBAN it is at Monerium, from the server's read-time verdict. The
+ *  "Check again" control is drawn only for a role the API would accept. */
+const profileHtml = (a, mayManage) => {
+  const p = a.profile;
+  if (!p || p.status === "not_applicable") return "";
+  if (p.status === "needs_check") {
+    return `<div class="desc" style="margin-top:.35rem"><span class="pill warn">Needs a check</span>
+      ${esc(p.reason)}</div>
+      ${mayManage ? `<div style="margin-top:.4rem"><button class="ghost sm" data-act="check-profile"
+        data-id="${esc(a.id)}">Check again</button></div>` : ""}`;
+  }
+  const who = p.kind === "corporate" ? "Company profile at Monerium" : "Personal profile at Monerium";
+  return `<div class="desc" style="margin-top:.35rem">${who}${p.name ? `: <b>${esc(p.name)}</b>` : ""}</div>
+    ${p.warning ? `<div class="desc" style="margin-top:.3rem"><span class="pill warn">${p.name ? "Name differs" : "Name not compared"}</span>
+      ${esc(p.warning)}</div>` : ""}`;
+};
+
 RENDER.accounts = async () => {
-  const { accounts, currencies } = await api(`/api/orgs/${org.id}/accounts`);
+  const { accounts, currencies, adoption, mayManageAccounts } = await api(`/api/orgs/${org.id}/accounts`);
   let html = `<div class="card"><div class="h"><div><h2>Your accounts</h2>
     <div class="desc">An account holds one currency and pays out on that currency's local rail.</div></div>
     <button data-act="open-account">Open an account</button></div>`;
@@ -52,11 +69,15 @@ RENDER.accounts = async () => {
         <td><span class="pill ${pill}">${esc(a.status)}</span>
           ${a.gate ? `<div class="desc" style="margin-top:.35rem">${esc(a.gate.reason)}<br>
             <span style="color:var(--faint)">Needs: ${esc(a.gate.needs)}</span></div>` : ""}
-          ${a.backingUserId ? `<div class="desc" style="margin-top:.3rem">Funded from your account</div>` : ""}</td>
+          ${a.backingUserId && org.type !== "business" ? `<div class="desc" style="margin-top:.3rem">Funded from your account</div>` : ""}
+          ${profileHtml(a, mayManageAccounts)}</td>
         <td>${esc(a.provider || "—")}
           ${!a.backingUserId && a.currency === "EUR"
-            ? `<div style="margin-top:.4rem"><button class="ghost sm" data-act="fund-account"
-                 data-id="${esc(a.id)}">Fund from my account</button></div>` : ""}</td></tr>`;
+            ? adoption?.allowed
+              ? `<div style="margin-top:.4rem"><button class="ghost sm" data-act="fund-account"
+                   data-id="${esc(a.id)}">${org.type === "business" ? "Connect the company's IBAN" : "Fund from my account"}</button></div>`
+              : adoption?.reason ? `<div class="desc" style="margin-top:.4rem">${esc(adoption.reason)}</div>` : ""
+            : ""}</td></tr>`;
     }).join("") + `</tbody></table>`
     : `<div class="empty">No accounts yet.</div>`;
   html += `</div>`;

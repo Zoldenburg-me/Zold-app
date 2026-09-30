@@ -21,6 +21,7 @@ import { createQuote } from "../../fx.js";
 import { accountBalances } from "../../chain.js";
 import { CURRENCY_REGISTRY, accountIsSpendable } from "../../domain/accounts.js";
 import { canReviewDraft } from "../../domain/roles.js";
+import { auditProfileCheck, checkBackingProfile } from "../../adapters/monerium-profile.js";
 import {
   CSV_MAX_BYTES,
   activity,
@@ -307,6 +308,25 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
     const user = store.findUser(account.backingUserId);
     if (!user) {
       return res.status(409).json({ error: "This account's funding identity is missing." });
+    }
+
+    // ── Whose IBAN, re-read now ───────────────────────────────────────────
+    // Before any quote or fee: the profile recorded at adoption must still be
+    // the one connected, still the kind this org needs, and still approved.
+    // Monerium not answering refuses (503) — nothing is created.
+    if (ctx.org.type === "business" || account.moneriumProfile) {
+      if (!account.moneriumProfile) {
+        return res.status(409).json({
+          code: "MONERIUM_PROFILE_UNVERIFIED",
+          error:
+            "We have not yet confirmed that this account's IBAN belongs to a company profile at Monerium. Check the account again on the Accounts screen, then send.",
+        });
+      }
+      const profile = await checkBackingProfile(ctx.org, user, account.moneriumProfile.id);
+      auditProfileCheck("execute", { orgId: ctx.org.id, accountId: account.id }, user.id, profile, ctx.userId);
+      if (!profile.ok) {
+        return res.status(profile.status).json({ code: profile.code, error: profile.error });
+      }
     }
 
     // ── Plan every line BEFORE creating anything ──────────────────────────

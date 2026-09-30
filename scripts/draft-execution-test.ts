@@ -217,11 +217,14 @@ try {
     `/api/orgs/${org.id}/accounts/${unfunded.account.id}/fund`,
     { token: ownerToken },
   );
-  check("adopting a personal account is explicit and stated plainly", () => {
+  check("adopting the caller's account is explicit and records its Monerium profile", () => {
     assert.equal(funded.account.backingUserId, owner.id);
     assert.equal(funded.account.status, "active");
     assert.equal(funded.account.address, owner.address);
-    assert.match(funded.note, /funded by your personal account/i);
+    // The local harness has no Monerium: its users stand in with a profile of
+    // the kind the org needs (adapters/monerium-profile.ts).
+    assert.equal(funded.account.moneriumProfile.kind, "corporate");
+    assert.match(funded.note, /company profile/i);
   });
 
   const contact = (
