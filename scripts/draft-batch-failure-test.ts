@@ -8,8 +8,10 @@
  * The real draft router, mounted in-process on a temp store. The transfer
  * factory and the balance reader are the two injected dependencies, and both
  * are stubbed: the builder succeeds once and then refuses, and the balance is
- * a fixed number, so no chain, bundler or network is needed. The account's
- * Monerium connection is a row in the temp store, not a seam in the API.
+ * a fixed number, so no chain or bundler is needed. The account's Monerium
+ * connection is a row in the temp store, not a seam in the API; the
+ * execution-time profile re-read goes to a local fake of Monerium that knows
+ * one approved corporate profile.
  * draft:test covers the same route against a real chain up to the Monerium
  * refusal; this suite covers what lies after the claim.
  *
@@ -17,6 +19,7 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -26,12 +29,48 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-dra
 process.env.TRANSF_CHAIN_ID = "31337";
 process.env.MONERIUM_CLIENT_ID = "";
 process.env.MONERIUM_CLIENT_SECRET = "";
+// Never contacted (the balance reader is injected), but pinned so config does
+// not fall back to a public chain when there is no .env.
+process.env.TRANSF_RPC_URL = "http://127.0.0.1:8545";
+process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-draft-failure-32";
+
+const PROFILE_ID = "0b7f3c2e-6a1d-4f8e-9c55-2d4e6f8a0b1c";
+const CLIENT_ID = "draft-failure-client";
+const CLIENT_SECRET = "draft-failure-secret";
+const profileReads: string[] = [];
+const fake = createServer((req, res) => {
+  let raw = "";
+  req.on("data", (c) => (raw += c));
+  req.on("end", () => {
+    const send = (code: number, b: unknown) => {
+      res.writeHead(code, { "content-type": "application/json" });
+      res.end(JSON.stringify(b));
+    };
+    const url = new URL(req.url ?? "/", "http://fake");
+    if (url.pathname === "/auth/token") {
+      const body = new URLSearchParams(raw);
+      if (body.get("client_id") !== CLIENT_ID || body.get("client_secret") !== CLIENT_SECRET) {
+        return send(401, { error: "invalid_client" });
+      }
+      return send(200, { access_token: "tok", expires_in: 3600, token_type: "Bearer" });
+    }
+    if (req.headers.authorization !== "Bearer tok") return send(401, { error: "unauthorized" });
+    if (url.pathname === `/profiles/${PROFILE_ID}`) {
+      profileReads.push(PROFILE_ID);
+      return send(200, { id: PROFILE_ID, kind: "corporate", state: "approved", name: "Zoldenburg UG" });
+    }
+    send(404, { error: `unhandled ${url.pathname}` });
+  });
+});
+await new Promise<void>((r) => fake.listen(0, "127.0.0.1", r));
+process.env.MONERIUM_BASE_URL = `http://127.0.0.1:${(fake.address() as any).port}`;
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { currentFingerprint } = await import("../services/api/src/domain/drafts.js");
 const { hashToken } = await import("../services/api/src/domain/invoices.js");
+const { encryptToken } = await import("../services/api/src/adapters/monerium-connection.js");
 type TransferFactory = import("../services/api/src/routes/business/shared.js").TransferFactory;
 
 let passed = 0;
@@ -56,14 +95,24 @@ store.addUser({
   country: "DE",
   kycStatus: "approved",
   address: SAFE,
-  monerium: { connectedAt: now, method: "api_keys" },
+  monerium: {
+    connectedAt: now,
+    method: "api_keys",
+    profileId: PROFILE_ID,
+    apiKeys: {
+      clientId: CLIENT_ID,
+      clientSecretEnc: encryptToken(CLIENT_SECRET),
+      baseUrl: process.env.MONERIUM_BASE_URL,
+      verifiedAt: now,
+    },
+  },
   createdAt: now,
 } as any);
 store.addUser({ id: "u_reviewer", name: "Reviewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
 store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
 store.addMember({ id: "m_owner", orgId: "org_1", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
 store.addMember({ id: "m_reviewer", orgId: "org_1", userId: "u_reviewer", email: "", role: "admin", status: "active", invitedAt: now, acceptedAt: now } as any);
-store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE, backingUserId: "u_owner", createdAt: now, updatedAt: now } as any);
+store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: SAFE, backingUserId: "u_owner", moneriumProfile: { id: PROFILE_ID, kind: "corporate", name: "Zoldenburg UG", checkedAt: now }, createdAt: now, updatedAt: now } as any);
 
 const contact = (id: string, name: string, iban: string) => {
   const c = {
@@ -164,6 +213,10 @@ await check("the failure carries the builder's status and its refusal, naming th
   assert.equal(run.data.detail, REFUSAL);
 });
 
+await check("the company profile was re-read at Monerium before anything was built", () => {
+  assert.deepEqual(profileReads, [PROFILE_ID]);
+});
+
 await check("both lines were attempted, in order, each with its own quote", () => {
   assert.equal(built.length, 2);
   assert.notEqual(built[0].quoteId, built[1].quoteId);
@@ -206,6 +259,7 @@ await check("a FAILED draft cannot be re-fired: no third build, no new transfer"
 });
 
 server.close();
+fake.close();
 if (process.exitCode) {
   console.error(`\nDRAFT BATCH FAILURE TEST FAILED`);
 } else {
