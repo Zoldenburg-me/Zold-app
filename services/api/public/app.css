@@ -116,88 +116,9 @@
   .row2 > div { flex: 1; }
   .row2 button { flex: none; }
 
-  /* ==========================================================================
-     ONBOARDING + SETUP
-     --------------------------------------------------------------------------
-     Scope note for whoever edits this next: these rules style the three
-     pre-dashboard screens only (#onboard, #provisioning, #kyc-review). The
-     dashboard has its own system further down and is designed separately — the
-     one shared class is .kyc-status, which #kyc-card reuses inside the
-     dashboard, so it is deliberately left alone below.
-
-     Every id here is load-bearing. provStep() indexes `#prov-steps .pstep` and
-     rewrites className to "pstep active|done"; the step dots are set to
-     "dot done"/"dot active"; setPasskeyButtonBusy() overwrites #btn-passkey's
-     textContent, so that button must stay text-only with no child elements.
-     ========================================================================== */
-  :root {
-    --onb-ink: #f7f7f9;
-    --onb-sub: #9a9aa6;
-    --onb-line: rgba(255,255,255,.09);
-    --onb-field: #141419;
-    --onb-lift: 0 1px 0 rgba(255,255,255,.04) inset;
-  }
-
-  #onboard { display: grid; grid-template-columns: 1fr 1.05fr; min-height: 100vh; min-height: 100dvh; }
-  .onb-left {
-    display: flex; flex-direction: column; padding: 2rem 2.4rem 2.4rem;
-    background: var(--side-bg);
-  }
-  .onb-logo { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: 1.02rem; letter-spacing: -.01em; }
-  .onb-logo .tri { color: var(--acc); }
-  .onb-form { margin: auto; width: 100%; max-width: 372px; }
-  .onb-form h1 {
-    font-size: 1.9rem; line-height: 1.15; letter-spacing: -.025em;
-    margin-bottom: .5rem; font-weight: 700; color: var(--onb-ink);
-  }
-  .onb-form .sub { color: var(--onb-sub); font-size: .93rem; line-height: 1.55; margin-bottom: 1.9rem; }
-
-  /* Segmented progress. JS toggles .active/.done on the same nodes. */
-  .onb-steps { display: flex; gap: .35rem; margin-bottom: 2rem; }
-  .onb-steps .dot {
-    height: 3px; flex: 1; border-radius: 99px; background: rgba(255,255,255,.09);
-    transition: background .35s ease;
-  }
-  .onb-steps .dot.active { background: var(--acc); }
-  .onb-steps .dot.done { background: rgba(237,24,141,.45); }
-
-  .onb-form label {
-    font-size: .78rem; font-weight: 500; color: var(--onb-sub);
-    margin: 1.05rem 0 .4rem; letter-spacing: 0;
-  }
-  .onb-form input {
-    padding: .82rem .9rem; border-radius: 12px; font-size: .95rem;
-    background: var(--onb-field); border: 1px solid var(--onb-line);
-    box-shadow: var(--onb-lift);
-  }
-  .onb-form input:focus { border-color: var(--acc); box-shadow: 0 0 0 3px rgba(237,24,141,.14); }
-
-  .btn-primary-lite {
-    width: 100%; margin-top: 1.6rem; padding: .88rem; border-radius: 999px;
-    background: #fff; color: #101014; font-weight: 600; font-size: .95rem;
-  }
-  .btn-primary-lite:hover { filter: brightness(.94); }
-  .onb-form .ghost.wide {
-    margin-top: .55rem; padding: .82rem; border-radius: 999px;
-    background: transparent; border: 1px solid var(--onb-line); color: var(--onb-sub);
-    font-size: .92rem; font-weight: 500;
-  }
-  .onb-form .ghost.wide:hover { background: rgba(255,255,255,.03); color: var(--text); }
-
-  /* The passkey explainer. Plain language on purpose — "smart-account vault"
-     told a non-crypto reader nothing they could act on. */
-  .pk-card {
-    display: flex; gap: .8rem; align-items: flex-start;
-    background: rgba(255,255,255,.025); border: 1px solid var(--onb-line);
-    border-radius: 14px; padding: 1rem 1.05rem;
-    font-size: .86rem; color: var(--onb-sub); line-height: 1.6;
-  }
-  .pk-card .pk-ic { font-size: 1.05rem; line-height: 1.35; }
-  .pk-card b { color: var(--text); font-weight: 600; }
-  .rec-facts { margin: 1rem 0 0; padding-left: 1.1rem; font-size: .84rem; color: var(--onb-sub); line-height: 1.6; }
-  .rec-facts li + li { margin-top: .35rem; }
-  .rec-facts b { color: var(--text); font-weight: 600; }
-  /* The one warning in onboarding that must not read as fine print. */
+  /* Sign-in and onboarding are UI v2 screens (ui.css, app/onboarding.js).
+     What is left here is used by the dashboard. */
+  /* Profile → Recovery: the warning that must not read as fine print. */
   .rec-warn {
     margin-top: 1.2rem; padding: 1.1rem 1.15rem; border-radius: 14px;
     background: var(--z-amber-tint); border: 2px solid var(--red);
@@ -206,160 +127,6 @@
   .rec-warn-title { font-size: 1.02rem; font-weight: 700; color: var(--red); margin-bottom: .4rem; }
   .rec-warn p { margin: .45rem 0 0; }
   .rec-warn b { font-weight: 700; }
-  .btn-primary-lite:disabled { opacity: .45; cursor: not-allowed; filter: none; }
-  .onb-note { margin-top: .85rem; font-size: .78rem; color: var(--faint); line-height: 1.6; }
-  .onb-terms { margin-top: 1.8rem; font-size: .76rem; color: var(--faint); line-height: 1.75; }
-  .onb-terms a, .onb-terms .linkbtn { color: var(--text); text-decoration: none; cursor: pointer; border-bottom: 1px solid var(--onb-line); }
-  .onb-terms a:hover, .onb-terms .linkbtn:hover { border-bottom-color: var(--acc); }
-
-  /* Right panel: what the account actually is. No mock balance — a made-up
-     number is the first thing that makes a product look unfinished. */
-  .onb-hero {
-    position: relative; overflow: hidden; display: grid; place-items: center;
-    background:
-      radial-gradient(680px 460px at 72% 22%, rgba(237,24,141,.14), transparent 64%),
-      radial-gradient(560px 420px at 26% 78%, rgba(123,47,247,.10), transparent 62%),
-      #0a0a0d;
-    border-left: 1px solid var(--onb-line);
-  }
-  .onb-hero::before {
-    content: ""; position: absolute; inset: 0; opacity: .55;
-    background:
-      repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 1px, transparent 1px 110px),
-      repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 110px);
-    mask-image: radial-gradient(80% 70% at 50% 45%, #000, transparent);
-  }
-  .onb-hero-inner { position: relative; padding: 3rem; max-width: 460px; width: 100%; }
-  /**
-   * One hero per step, driven entirely by which step is visible — no JS, which
-   * is the constraint this restyle works under.
-   *
-   * :has() reads the state the wizard already keeps (the .hidden class the
-   * handlers toggle on #onb-step1/#onb-step2), so there is nothing to keep in
-   * sync. Step one's panel is the default, so a browser without :has() simply
-   * shows it throughout rather than showing nothing.
-   */
-  .onb-hero-inner.hero-2 { display: none; }
-  /* Onboarding step-1 additions. Deliberately built from the same tokens as
-     the existing form (--onb-line, --faint, .ghost; --line was never defined, which left these controls borderless) rather than a new palette —
-     a second visual language inside one screen reads as two products. */
-  .onb-hint { color: var(--faint); font-weight: 400; }
-  .onb-seg { display: flex; gap: 8px; margin-bottom: 4px; }
-  .onb-seg button {
-    flex: 1; padding: 10px 12px; border-radius: 10px; cursor: pointer;
-    background: transparent; border: 1px solid var(--onb-line); color: inherit; font: inherit;
-  }
-  .onb-seg button.on { border-color: var(--m-pink); background: rgba(255, 45, 139, .08); }
-  .onb-addrow { display: flex; gap: 8px; align-items: center; }
-  .onb-addrow input { text-transform: uppercase; max-width: 92px; }
-  .onb-qs { margin: 18px 0 6px; border: 1px solid var(--onb-line); border-radius: 12px; padding: 12px 14px; }
-  .onb-qs-h { font-size: 13px; color: var(--faint); margin-bottom: 10px; }
-  /* The question row wraps: the text takes the full width when the Yes/No
-     pair would otherwise squeeze it, and the buttons drop to their own line. */
-  .onb-q { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 10px 0; }
-  .onb-q + .onb-q { border-top: 1px solid var(--onb-line); }
-  .onb-q .qt { flex: 1 1 200px; font-size: 14px; line-height: 1.45; }
-  .onb-q .yn { display: flex; gap: 6px; flex: 1 0 auto; justify-content: flex-end; }
-  .onb-q .yn button {
-    padding: 8px 16px; min-width: 64px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13px;
-    background: transparent; border: 1px solid var(--onb-line); color: inherit;
-  }
-  .onb-q .yn button.on { border-color: var(--m-pink); background: rgba(255, 45, 139, .10); }
-  .onb-check { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; font-size: 13.5px; line-height: 1.45; }
-  .onb-check input { width: 18px; height: 18px; margin-top: 2px; flex: 0 0 auto; accent-color: var(--acc); }
-  .onb-check a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--onb-line); }
-  .onb-check a:hover { border-bottom-color: var(--acc); }
-
-  /* The blocked screen. Same split as onboarding so it does not read as an
-     error page — it is an outcome, not a fault. */
-  #blocked { display: none; place-items: center; min-height: 100vh; padding: 24px; }
-  #blocked.on { display: grid; }
-  #blocked .bk { max-width: 460px; text-align: left; }
-  #blocked h1 { font-size: 28px; font-weight: 400; margin-bottom: 12px; }
-  #blocked .bk p { color: var(--faint); line-height: 1.6; font-size: 15px; }
-
-  #onboard:has(#onb-step2:not(.hidden)) .hero-1 { display: none; }
-  #onboard:has(#onb-step2:not(.hidden)) .hero-2 { display: block; }
-  .onb-hero-inner.hero-3 { display: none; }
-  #onboard:has(#onb-step3:not(.hidden)) .hero-1 { display: none; }
-  #onboard:has(#onb-step3:not(.hidden)) .hero-3 { display: block; }
-  /* The signup email, shown where the recovery step registers it. Read-only
-     on purpose: recovery looks the account up by the address on the account,
-     so the registered channel must be that address and not a second one. */
-  .onb-form .onb-static {
-    padding: .82rem .9rem; border-radius: 12px; font-size: .95rem;
-    background: var(--onb-field); border: 1px solid var(--onb-line); color: var(--onb-ink);
-    overflow-wrap: anywhere;
-  }
-  .onb-hero h2 {
-    font-size: 2.15rem; font-weight: 700; letter-spacing: -.03em; line-height: 1.15;
-    color: #fff; margin-bottom: .6rem;
-  }
-  .onb-hero .tag { color: var(--onb-sub); font-size: .95rem; line-height: 1.6; margin-bottom: 2.4rem; }
-  .onb-points { display: flex; flex-direction: column; gap: 1.35rem; }
-  .onb-point { display: flex; gap: .95rem; align-items: flex-start; }
-  .onb-point .pi {
-    width: 34px; height: 34px; flex: none; border-radius: 10px; display: grid; place-items: center;
-    background: rgba(255,255,255,.045); border: 1px solid var(--onb-line); font-size: .95rem;
-  }
-  .onb-point .pt { display: block; font-size: .92rem; font-weight: 600; color: var(--onb-ink); }
-  .onb-point .pd { display: block; font-size: .84rem; color: var(--onb-sub); line-height: 1.55; margin-top: .15rem; }
-  .onb-foot {
-    position: relative; margin-top: 2.6rem; padding-top: 1.3rem;
-    border-top: 1px solid var(--onb-line); font-size: .78rem; color: var(--faint); line-height: 1.65;
-  }
-
-  /* ---------- setting-up + review screens ---------- */
-  /* Same split as onboarding, so step three is not a lone card on a black
-     field. enterProvisioning() sets display:grid, which is what these columns
-     need — do not change that to flex. */
-  #provisioning { display: none; min-height: 100vh; grid-template-columns: 1fr 1.05fr; }
-  .prov-left { display: grid; place-items: center; padding: 2rem 1.6rem; background: var(--side-bg); }
-  .prov-card {
-    width: 100%; max-width: 430px; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 18px; padding: 2rem 1.8rem;
-  }
-  .prov-card h1 { font-size: 1.45rem; letter-spacing: -.02em; margin-bottom: .4rem; font-weight: 700; }
-  .prov-card .sub { color: var(--onb-sub); font-size: .88rem; line-height: 1.55; margin-bottom: 1.7rem; }
-  /* .wide sets the brand gradient and is declared after .ghost, so the
-     secondary action rendered identically to the primary — two equally loud
-     buttons with different consequences. Scoped to .prov-card so the
-     dashboard's own .wide buttons are untouched. */
-  .prov-card .wide, .prov-card .btn-primary-lite {
-    width: 100%; border-radius: 999px; padding: .82rem; margin-top: .55rem;
-    background: #fff; color: #101014; font-weight: 600; font-size: .93rem;
-  }
-  .prov-card .wide:hover { filter: brightness(.94); }
-  .prov-card .ghost.wide {
-    background: transparent; border: 1px solid var(--onb-line);
-    color: var(--onb-sub); font-weight: 500;
-  }
-  .prov-card .ghost.wide:hover { background: rgba(255,255,255,.03); color: var(--text); filter: none; }
-
-  #prov-steps { display: flex; flex-direction: column; gap: .1rem; }
-  .pstep {
-    display: flex; align-items: center; gap: .85rem; padding: .7rem 0;
-    color: var(--faint); font-size: .92rem; font-weight: 500; transition: color .3s;
-  }
-  .pstep .pdot {
-    width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; flex: none;
-    border: 1.5px solid var(--onb-line); font-size: .68rem; color: transparent; transition: all .3s;
-  }
-  .pstep.active { color: var(--text); }
-  .pstep.active .pdot { border-color: var(--acc); animation: pulse 1.2s infinite; }
-  .pstep.done { color: var(--onb-sub); }
-  .pstep.done .pdot { border-color: var(--green); background: rgba(61,214,140,.12); color: var(--green); }
-  /* One flex child for the whole label, so the trailing explanation wraps with
-     the text instead of becoming its own column. */
-  .pstep .ptext { flex: 1; }
-  .pstep .pwhy { font-weight: 400; color: var(--faint); font-size: .84rem; }
-  /* Onboarding's inline copy of the provisioning steps (#pk-steps), plus the
-     one state provisioning never needed: a step that failed while the ones
-     above it genuinely succeeded. */
-  #pk-steps { display: flex; flex-direction: column; gap: .1rem; margin: .35rem 0 .2rem; }
-  #pk-steps .pstep { padding: .45rem 0; }
-  .pstep.fail { color: var(--text); }
-  .pstep.fail .pdot { border-color: var(--red); background: var(--z-amber-tint); color: var(--red); }
 
   /* Shared with the dashboard's #kyc-card — left as it was on purpose. */
   .kyc-status {
@@ -369,7 +136,6 @@
   .kyc-status .ks { font-size: .72rem; color: var(--amber); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
   .kyc-status .kt { margin-top: .2rem; font-size: .95rem; font-weight: 700; }
   .kyc-status .kd { margin-top: .25rem; font-size: .8rem; color: var(--muted); }
-
 
   /* ---------- app shell ---------- */
   #dashboard { display: none; grid-template-columns: 210px 1fr 375px; min-height: 100vh; }
@@ -450,41 +216,15 @@
      product people will mostly open on a phone. */
   /* Between the phone breakpoint and the full split the hero column is
      narrow, so its copy is scaled with it instead of wrapping into a tower. */
-  @media (max-width: 1180px) {
-    .onb-hero-inner { padding: 2rem 1.8rem; }
-    .onb-hero h2 { font-size: 1.75rem; }
-    .onb-hero .tag { margin-bottom: 1.6rem; }
-    .onb-points { gap: 1rem; }
-  }
-  @media (max-width: 900px) {
-    #onboard, #provisioning { grid-template-columns: 1fr; }
-    .onb-hero { display: none; }
-    .onb-left, .prov-left { padding: 1.4rem 1.3rem 2rem; }
-    .onb-form { max-width: 420px; }
-    .onb-form h1 { font-size: 1.7rem; }
-    .prov-card { padding: 1.6rem 1.3rem; border-radius: 16px; }
-  }
+
   /* Phones. Every control reaches 44px so a thumb lands on it, text inputs
      are 16px so iOS does not zoom the page on focus, and the form is pinned
      to the top rather than vertically centred — a centred form jumps when the
      keyboard opens and pushes the field being typed into off screen. */
   @media (max-width: 600px) {
-    .onb-left { padding: 1rem 1rem calc(1.5rem + env(safe-area-inset-bottom)); }
-    .onb-form { margin: 1.25rem 0 0; max-width: none; }
-    .onb-form h1 { font-size: 1.55rem; }
-    .onb-form .sub { font-size: .9rem; margin-bottom: 1.3rem; }
-    .onb-steps { margin-bottom: 1.4rem; }
-    .onb-form label { margin-top: .9rem; }
-    .onb-form input { font-size: 16px; padding: .8rem .9rem; min-height: 44px; }
-    .onb-seg button, .onb-q .yn button, .onb-addrow .ghost { min-height: 44px; }
-    .onb-q .yn { width: 100%; justify-content: stretch; }
-    .onb-q .yn button { flex: 1; }
-    .onb-addrow input { max-width: none; flex: 1; }
-    .onb-check { font-size: 14px; }
-    .onb-check input { width: 20px; height: 20px; }
-    .btn-primary-lite, .onb-form .ghost.wide { min-height: 48px; }
-    .onb-terms { margin-top: 1.4rem; font-size: .8rem; }
-    .pk-card { padding: .9rem; font-size: .88rem; }
+
+    .btn-primary-lite { min-height: 48px; }
+
   }
   @media (max-width: 860px) {
     #dashboard { grid-template-columns: 1fr; }
@@ -936,55 +676,6 @@
   .m-perk .t { font-size: 13.5px; font-weight: 500; }
   .m-perk .d { font-size: 11px; color: var(--m-faint); margin-top: 1px; }
   #dashboard.m-on[data-msub="plus"] #m-plus-screen { display: block; }
-
-  /* ---------- KYC gate + pending ----------
-     Outside #dashboard, so these rules are not scoped under it; they carry the
-     same 412px column and the same tokens so the gate is not a different app
-     from the one behind it. */
-  #kyc-review {
-    min-height: 100dvh; background: var(--m-bg); color: var(--m-text);
-    font: 400 14px/1.43 Inter, system-ui, sans-serif;
-  }
-  .m-gate {
-    max-width: 412px; margin: 0 auto; padding: 40px 16px calc(32px + env(safe-area-inset-bottom, 0px));
-    box-shadow: 0 0 0 1px var(--m-line-faint); min-height: 100dvh;
-  }
-  .m-gate-mark {
-    width: 64px; height: 64px; border-radius: 12px; display: grid; place-items: center;
-    background: var(--m-pink-tint); border: 1px solid var(--m-pink-border);
-    color: var(--m-pink); margin-bottom: 24px;
-  }
-  /* Pulses only while something is genuinely in progress. */
-  .m-gate-mark.wait { animation: mPulse 1.6s infinite; }
-  .m-gate-mark.stop { background: var(--m-amber-tint); border-color: #4a3410; color: var(--m-amber); }
-  .m-gate .m-lede { font-size: 13px; }
-  .m-optrow.accent { background: var(--m-pink-tint); border-color: var(--m-pink-border); }
-  .m-optrow.accent:hover { background: #220d15; border-color: var(--m-pink); }
-
-  .m-gate-steps { margin-top: 26px; }
-  .m-gstep { display: flex; align-items: flex-start; gap: 12px; padding: 9px 0; }
-  .m-gstep .nd {
-    width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center;
-    background: var(--m-raised); color: var(--m-faint); margin-top: 1px;
-  }
-  .m-gstep.done .nd { background: var(--m-mint-tint); border: 1px solid var(--m-mint-border); color: var(--m-mint); }
-  .m-gstep.now .nd { background: var(--m-pink); color: #fff; animation: mPulse 1.6s infinite; }
-  .m-gstep.bad .nd { background: var(--m-amber-tint); color: var(--m-amber); }
-  .m-gstep .t { font-size: 13.5px; font-weight: 500; color: var(--m-dim); }
-  .m-gstep.now .t, .m-gstep.bad .t { color: #fff; }
-  .m-gstep .d { font-size: 11px; color: var(--m-faint); margin-top: 2px; }
-
-  .m-gate-status {
-    margin-top: 22px; padding: 13px 14px; border-radius: 12px;
-    background: var(--m-amber-tint); border: 1px solid #4a3410;
-  }
-  .m-gate-status.ok { background: var(--m-mint-tint); border-color: var(--m-mint-border); }
-  .m-gate-status.no { background: var(--m-pink-tint); border-color: var(--m-pink-border); }
-  .m-gate-status .m-mono { color: var(--m-amber); }
-  .m-gate-status.ok .m-mono { color: var(--m-mint); }
-  .m-gate-status.no .m-mono { color: var(--m-pink); }
-  .m-gate-status .t { font-size: 13.5px; font-weight: 600; margin-top: 4px; }
-  .m-gate-status .d { font-size: 11.5px; color: var(--m-dim); margin-top: 4px; line-height: 1.55; }
 
   /* ---------- pay hub ---------- */
   #dashboard.m-on[data-msub="pay"] #m-pay-screen { display: block; }

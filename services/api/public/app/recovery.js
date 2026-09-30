@@ -313,11 +313,7 @@ function rcTicketSave(email, ticket) {
   } catch { /* private mode: the recovery still works in this tab */ }
 }
 
-function showRecoverPanel(on) {
-  $("onb-step1").classList.toggle("hidden", on);
-  $("onb-recover").classList.toggle("hidden", !on);
-  clearErr("rc-err");
-}
+/* showRecoverPanel() lives in app/onboarding.js, which draws this screen. */
 
 function renderRecoverState() {
   const r = rcState;
@@ -329,19 +325,19 @@ function renderRecoverState() {
   if (!r) return;
   if (r.status === "OTP_PENDING" && !rcOtpTicket) {
     st.classList.remove("hidden");
-    st.innerHTML = `<label>Do not enter any codes</label><div class="sub">The passkey this recovery would install was not created in this browser. If you did not start it, someone else may be trying to take the account — do not share codes with anyone. Start recovery again from this device once it expires.</div>`;
+    st.innerHTML = `<h2 class="z-rc-h">Don’t enter any codes</h2><p class="z-sub">The Face ID sign-in this recovery would install wasn’t made in this browser. If you didn’t start it, someone else may be trying to take the account. Don’t share codes with anyone. Start recovery again from this phone once it expires.</p>`;
     return;
   }
   if (r.status === "OTP_PENDING") {
     const auths = (r.candide?.auths || []);
     otp.classList.remove("hidden");
     otp.innerHTML = auths.map((a, i) => `
-      <label>${a.channel === "sms" ? "Code sent by SMS to" : "Code emailed to"} ${esc(a.target)}${a.verified ? " · confirmed" : ""}</label>
-      <div class="onb-addrow">
-        <input id="rc-code-${i}" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" ${a.verified ? "disabled" : ""} />
-        <button type="button" data-rc-confirm="${i}" ${a.verified ? "disabled" : ""}>Confirm</button>
-      </div>`).join("") +
-      `<div class="sub" style="margin-top:12px">These codes hand the account to the passkey you just created in THIS browser. If you did not just create one here, stop. Every channel must confirm before anything happens. Once they all have, Candide signs the recovery and the waiting period starts on chain.</div>`;
+      <div class="z-field"><label for="rc-code-${i}">${a.channel === "sms" ? "Code sent by SMS to" : "Code sent to"} ${esc(a.target)}${a.verified ? ", confirmed" : ""}</label>
+      <div class="z-rc-row">
+        <input class="z-input" id="rc-code-${i}" name="one-time-code" inputmode="numeric" autocomplete="one-time-code" spellcheck="false" ${a.verified ? "disabled" : ""} />
+        <button type="button" class="z-btn z-btn--secondary" data-rc-confirm="${i}" ${a.verified ? "disabled" : ""}><span>Confirm</span></button>
+      </div></div>`).join("") +
+      `<p class="z-sub">These codes hand the account to the Face ID sign-in you just set up in THIS browser. If you didn’t just set one up here, stop. Every channel must confirm before anything happens. Then the waiting period starts.</p>`;
     otp.querySelectorAll("[data-rc-confirm]").forEach((b) => {
       b.onclick = async () => {
         clearErr("rc-err");
@@ -363,11 +359,11 @@ function renderRecoverState() {
   if (rcMode === "zoldenburg" && r.status === "REVIEW_PENDING") {
     const ref = r.zoldenburg?.reference || "";
     const mail = `mailto:support@zoldhq.com?subject=${encodeURIComponent(`Account recovery ${ref}`)}`;
-    st.innerHTML = `<label>Now contact Zoldenburg support</label>
-      <div class="sub">Your new passkey is registered in this browser. Email <a href="${mail}">support@zoldhq.com</a> from the address on your account and quote this reference:</div>
-      <div class="onb-static" style="margin-top:10px;font-size:1.2rem;letter-spacing:.08em" translate="no">${esc(ref)}</div>
-      <div class="sub" style="margin-top:10px">We check you against the identity Monerium verified before we sign anything. Once we have, the recovery waits ${esc(graceText(r.recoveryDelayHours * 3600))} on chain before this passkey owns the account — if the old passkey still works, it can cancel in that time.</div>
-      <div class="sub" style="margin-top:8px">Keep using this browser: the new passkey was created here, and only this browser can follow the request.</div>`;
+    st.innerHTML = `<h2 class="z-rc-h">Now contact Zoldenburg support</h2>
+      <p class="z-sub">Your new Face ID sign-in is saved in this browser. Email <a href="${mail}">support@zoldhq.com</a> from the address on your account and quote this reference:</p>
+      <div class="z-card z-rc-ref z-mono" translate="no">${esc(ref)}</div>
+      <p class="z-sub">We check you against the identity Monerium verified before we sign anything. Then the recovery waits ${esc(graceText(r.recoveryDelayHours * 3600))} before this phone owns the account. If the old phone still works, it can cancel in that time.</p>
+      <p class="z-sub">Keep using this browser: only this browser can follow the request.</p>`;
     setTimeout(async () => {
       try { rcState = await rcApi(`/api/recovery/zoldenburg/${r.id}`); if (rcState.status !== r.status) renderRecoverState(); } catch { /* keep the screen */ }
     }, 60000);
@@ -376,10 +372,10 @@ function renderRecoverState() {
   if (r.status === "GRACE_PERIOD") {
     const until = (r.candide?.finalizeAfter || r.zoldenburg?.finalizeAfter) ? new Date(r.candide?.finalizeAfter || r.zoldenburg.finalizeAfter) : null;
     const ready = until && Date.now() >= until.getTime();
-    st.innerHTML = `<label>Recovery is under way</label>
-      <div class="sub">The account moves to the passkey you just created ${until ? `after ${esc(until.toLocaleString())}` : "after the waiting period"}. Until then the old device can still cancel it — that delay is the protection, so it cannot be skipped.</div>
-      <button class="btn-primary-lite" id="btn-rc-finalize" ${ready ? "" : "disabled"}>${ready ? "Finish recovery" : "Waiting…"}</button>
-      <div class="sub" style="margin-top:8px">You can close this page. Zold finishes the recovery for you once the period has passed; come back and sign in with your new passkey.</div>`;
+    st.innerHTML = `<h2 class="z-rc-h">Recovery is under way</h2>
+      <p class="z-sub">The account moves to this phone ${until ? `after ${esc(until.toLocaleString())}` : "after the waiting period"}. Until then the old phone can still cancel it. That delay is the protection, so it can’t be skipped.</p>
+      <button class="z-btn z-btn--primary z-btn--full" id="btn-rc-finalize" ${ready ? "" : "disabled"}><span>${ready ? "Finish recovery" : "Waiting…"}</span></button>
+      <p class="z-sub">You can close this page. Zold finishes the recovery once the period has passed; come back and sign in with Face ID.</p>`;
     $("btn-rc-finalize").onclick = async () => {
       clearErr("rc-err");
       try {
@@ -397,12 +393,12 @@ function renderRecoverState() {
   if (r.status === "FINALIZED") {
     rcSave(rcEmail, "");
     rcTicketSave(rcEmail, "");
-    st.innerHTML = `<label>Recovered</label><div class="sub">This device's passkey now owns the account. Sign in with it.</div>
-      <button class="btn-primary-lite" id="btn-rc-signin">Sign in with your new passkey</button>`;
+    st.innerHTML = `<h2 class="z-rc-h">Recovered</h2><p class="z-sub">This phone now owns the account. Sign in with Face ID.</p>
+      <button class="z-btn z-btn--primary z-btn--full" id="btn-rc-signin"><span>Sign in with Face ID</span></button>`;
     $("btn-rc-signin").onclick = () => { showRecoverPanel(false); $("link-signin").click(); };
     return;
   }
-  st.innerHTML = `<label>${esc(r.status.replaceAll("_", " ").toLowerCase())}</label><div class="sub">${esc(r.error || r.cancelReason || "This recovery cannot continue. Start again.")}</div>`;
+  st.innerHTML = `<h2 class="z-rc-h">${esc(r.status.replaceAll("_", " ").toLowerCase())}</h2><p class="z-sub">${esc(r.error || r.cancelReason || "This recovery can’t continue. Start again.")}</p>`;
 }
 
 async function recoverStart() {

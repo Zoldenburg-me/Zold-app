@@ -10,7 +10,8 @@
  * Called from here, every classic script has already executed, so there is no
  * forward reference left to lose the race.
  */
-loadCapabilities();
+// Sign-in waits for this: which screens exist depends on it.
+const capabilitiesLoaded = loadCapabilities();
 // An invitation link lands here; it is redeemed once a session exists, so a
 // person who first has to create an account keeps the token through signup.
 {
@@ -19,4 +20,4 @@ loadCapabilities();
     try { sessionStorage.setItem("zold-invite", invite); } catch {}
   }
 }
-resumeSession();
+resumeSession(capabilitiesLoaded);

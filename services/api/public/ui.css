@@ -187,6 +187,144 @@ html:has(.z-bnav) { scroll-padding-bottom: 88px; }
   .z-sheet__grab { display: none; }
 }
 
+/* ---- Full-screen step (sign-in, onboarding) -------------------------
+   One phone column: test-mode pill, head (brand or progress), main, and the
+   actions pinned at the bottom. From 1024px the same column sits centred. */
+.z-screen { position: relative; isolation: isolate; display: flex; flex-direction: column; width: 100%; max-width: 480px; min-height: 100dvh; margin: 0 auto; }
+/* app.css drops the outline on input:focus; keyboard focus must still show. */
+.z-screen input[type="radio"]:focus-visible, .z-screen input[type="checkbox"]:focus-visible { outline: 2px solid var(--z-pink); outline-offset: 2px; box-shadow: none; }
+/* A component's own display must not beat the hidden attribute. */
+.z-screen [hidden] { display: none !important; }
+.z-screen::before { content: ""; position: absolute; inset: -160px 0 auto; z-index: -1; height: 520px; pointer-events: none; background: var(--z-hero-glow); }
+.z-screen__head { display: grid; gap: var(--z-space-3); padding: 10px var(--z-space-4) 0; }
+.z-screen__brand { display: flex; align-items: center; justify-content: space-between; height: 64px; padding: 0 var(--z-space-4); }
+.z-screen__brand a { display: inline-flex; align-items: center; gap: var(--z-space-2); min-height: var(--z-touch); color: var(--z-dim); font-size: 14px; }
+.z-screen__brand a:first-child { font-size: 18px; font-weight: 600; letter-spacing: -.02em; color: var(--z-text); }
+.z-brand-tri { color: var(--z-pink); }
+.z-screen__main { flex: 1; display: flex; flex-direction: column; gap: var(--z-space-7); padding: var(--z-space-7) var(--z-space-4) 0; }
+.z-screen__main--center { justify-content: center; }
+.z-screen__main--tight { gap: 18px; padding-top: var(--z-space-6); }
+.z-screen__foot { position: sticky; bottom: 0; display: flex; flex-direction: column; gap: var(--z-space-3); padding: var(--z-space-4) var(--z-space-4) calc(var(--z-space-7) + env(safe-area-inset-bottom, 0px)); background: linear-gradient(180deg, transparent, var(--z-bg) 24px); }
+/* Keep a focused field clear of the pinned actions. */
+html:has(.z-screen__foot) { scroll-padding-bottom: 140px; }
+.z-screen__foot--quiet { gap: 6px; padding-bottom: calc(var(--z-space-5) + env(safe-area-inset-bottom, 0px)); }
+.z-screen__fine { margin: 0; padding: 0 var(--z-space-6) var(--z-space-6); font-size: 12px; line-height: 1.5; text-align: center; color: var(--z-dim); }
+.z-screen__alt { margin: 0; font-size: 14px; line-height: 1.5; text-align: center; color: var(--z-dim); }
+.z-screen__alt a { display: inline-flex; align-items: center; min-height: var(--z-touch); }
+.z-screen .z-progress__head { min-height: var(--z-touch); }
+.z-screen .z-progress__head > span:last-child { margin-left: auto; }
+.z-screen .z-progress__head .z-tag { margin-left: var(--z-space-2); }
+.z-title--lg { font-size: 34px; }
+/* The heading takes focus when a screen changes, for screen readers; it is not a control. */
+.z-screen h1[tabindex="-1"]:focus { outline: none; }
+.z-intro { display: grid; gap: 10px; }
+.z-intro .z-sub { font-size: 15.5px; line-height: 1.6; }
+.z-form { display: flex; flex-direction: column; gap: 18px; }
+.z-form--tight { gap: 10px; }
+.z-link-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--z-touch); padding: 0 var(--z-space-2); border: 0; background: none; font: 400 14.5px/1.3 var(--z-font); color: var(--z-dim); cursor: pointer; transition: color var(--z-ease); }
+.z-link-btn:hover { color: var(--z-text); }
+.z-link-btn--small { font-size: 12.5px; }
+.z-link-btn .z-ic { font-size: 16px; }
+/* Points at Safari's own Share button, below the page. */
+.z-pointer { display: flex; flex-direction: column; align-items: center; gap: 2px; color: var(--z-pink); }
+.z-pointer .z-ic { font-size: 26px; }
+.z-pointer .z-ic + .z-ic { font-size: 22px; }
+.z-screen__foot--quiet { align-items: center; }
+.z-screen__foot--quiet .z-btn { align-self: stretch; }
+
+/* Marks: the brand tile on sign-in, an icon tile over a step's title. */
+.z-mark { display: grid; place-items: center; width: 68px; height: 68px; flex: none; border-radius: 18px; border: 1px solid var(--z-pink-border); background: var(--z-card); box-shadow: 0 0 34px color-mix(in srgb, var(--z-pink) 30%, transparent); font-size: 28px; color: var(--z-pink); }
+.z-mark--icon { width: 72px; height: 72px; border-radius: var(--z-radius-card); background: var(--z-pink-tint); box-shadow: none; color: var(--z-pink-soft); }
+.z-mark--icon .z-ic { font-size: 40px; }
+.z-mark--app { width: 96px; height: 96px; border-radius: var(--z-radius-sheet); border-color: var(--z-pink); background: var(--z-pink); box-shadow: 0 18px 50px color-mix(in srgb, var(--z-pink) 45%, transparent); font-size: 46px; color: var(--z-bg); }
+
+/* A choice between options that are links (account type). */
+.z-option { display: flex; gap: 14px; padding: 18px var(--z-space-4); border: 1px solid var(--z-line-strong); border-radius: var(--z-radius-card); background: var(--z-card); color: var(--z-text); transition: border-color var(--z-ease); }
+.z-option:hover { border-color: var(--z-line-hover); color: var(--z-text); }
+.z-option .z-tile { width: 44px; height: 44px; border-radius: var(--z-radius-sm); }
+.z-option .z-tile .z-ic { font-size: 24px; }
+.z-option__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--z-space-1); }
+.z-option__title { font-size: 17px; font-weight: 600; }
+.z-option__text { font-size: 14px; line-height: 1.45; color: var(--z-dim); }
+.z-option__more { margin-top: 6px; font-size: 13px; line-height: 1.45; color: var(--z-text); }
+.z-option > .z-ic { align-self: center; font-size: 22px; color: var(--z-dim); }
+
+/* Radio cards (recovery choice) and the checkbox card (consent, warnings). */
+.z-choice, .z-check { display: flex; gap: var(--z-space-3); align-items: flex-start; border-radius: var(--z-radius-card); background: var(--z-card); cursor: pointer; transition: border-color var(--z-ease), background-color var(--z-ease); }
+/* app.css still styles bare label and input; these are components, not those. */
+.z-choice, .z-check, .z-yn label { margin: 0; font-weight: 400; color: var(--z-text); text-transform: none; letter-spacing: normal; }
+.z-choice { padding: var(--z-space-4); border: 1px solid var(--z-line-strong); }
+.z-choice:hover { border-color: var(--z-line-hover); }
+.z-choice:has(input:checked) { border-color: var(--z-pink-border); background: var(--z-pink-tint); }
+.z-check { padding: 14px; border: 1px solid var(--z-line); font-size: 14px; line-height: 1.5; }
+.z-choice input, .z-check input { flex: none; width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--z-pink); }
+.z-check input { margin-top: 1px; }
+.z-choice__main { display: flex; flex-direction: column; gap: var(--z-space-1); min-width: 0; }
+.z-choice__title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--z-space-2); font-size: 15.5px; font-weight: 600; }
+.z-choice__text { font-size: 13.5px; line-height: 1.5; color: var(--z-dim); }
+.z-choice__title .z-tag--pink { font-size: 10px; }
+
+/* A required yes/no question. */
+.z-q { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: var(--z-space-4); border: 1px solid var(--z-line); border-radius: var(--z-radius-card); background: var(--z-card); min-width: 0; }
+.z-q legend { padding: 0 6px; font: 500 10px/1.3 var(--z-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--z-dim); }
+.z-q__text { font-size: 15px; line-height: 1.5; }
+.z-yn { display: flex; gap: var(--z-space-2); }
+.z-yn label { flex: 1 1 0; display: flex; align-items: center; justify-content: center; gap: var(--z-space-2); height: 48px; border: 1px solid var(--z-line-strong); border-radius: var(--z-radius-pill); background: var(--z-ghost); font-size: 15px; font-weight: 500; cursor: pointer; transition: border-color var(--z-ease), background-color var(--z-ease); }
+.z-yn label:hover { border-color: var(--z-line-hover); }
+.z-yn label:has(input:checked) { border-color: var(--z-pink-border); background: var(--z-pink-tint); }
+.z-yn input { width: 18px; height: 18px; margin: 0; accent-color: var(--z-pink); }
+.z-q[aria-invalid="true"] { border-color: var(--z-amber); }
+.z-q .z-err { margin-top: -4px; }
+
+/* Icon list (what Face ID does, why install) and numbered how-to steps. */
+.z-points { margin: 0; padding: 0; list-style: none; }
+.z-points li { display: flex; gap: var(--z-space-3); align-items: flex-start; padding: 14px 0; border-top: 1px solid var(--z-line); font-size: 15px; line-height: 1.5; }
+.z-points .z-ic { font-size: 22px; color: var(--z-pink); }
+.z-points--tight li { align-items: center; padding: var(--z-space-3) 0; border-top: 0; }
+.z-points--tight { padding: 0 var(--z-space-2); border-top: 1px solid var(--z-line); }
+.z-howto { margin: 0; padding: 0; list-style: none; }
+.z-howto li { display: flex; gap: 14px; align-items: flex-start; padding: var(--z-space-4) 0; }
+.z-howto li + li { border-top: 1px solid var(--z-line); }
+.z-howto .z-tile { border-color: var(--z-pink-border); background: var(--z-pink-tint); color: var(--z-pink); }
+.z-howto__main { display: flex; flex-direction: column; gap: var(--z-space-1); }
+.z-howto__title { font-size: 15.5px; font-weight: 600; }
+.z-howto__text { font-size: 13.5px; line-height: 1.5; color: var(--z-dim); }
+
+/* The partner card on the Monerium step. */
+.z-partner { display: flex; flex-direction: column; gap: 14px; padding: var(--z-space-4); }
+.z-partner__name { display: flex; align-items: center; gap: var(--z-space-3); font-size: 15px; font-weight: 600; }
+.z-partner ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: var(--z-space-2); font-size: 14px; line-height: 1.5; color: var(--z-dim); }
+
+/* Welcome cards. */
+.z-tour { display: flex; flex-direction: column; gap: 14px; padding: var(--z-space-5); box-shadow: var(--z-shadow-dialog); }
+.z-tour__row { display: flex; align-items: center; justify-content: space-between; gap: var(--z-space-3); font-size: 12.5px; color: var(--z-dim); }
+.z-tour__value { font: 400 17px/1.3 var(--z-mono); letter-spacing: .08em; color: var(--z-text); overflow-wrap: anywhere; }
+.z-tour__value--text { font: 600 17px/1.3 var(--z-font); letter-spacing: -.01em; }
+.z-dots { display: flex; gap: 6px; }
+.z-dots span { width: 8px; height: 8px; border-radius: 4px; background: var(--z-line-strong); transition: width var(--z-ease), background-color var(--z-ease); }
+.z-dots span.is-on { width: 22px; background: var(--z-pink); }
+
+/* A step that is running: the icon tile pulses only while it actually waits. */
+.z-steps { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--z-space-2); }
+.z-steps li { display: flex; align-items: center; gap: var(--z-space-3); font-size: 14px; color: var(--z-dim); }
+.z-steps li .z-ic { font-size: 20px; }
+.z-steps li.is-done { color: var(--z-text); }
+.z-steps li.is-done .z-ic { color: var(--z-mint); }
+.z-steps li.is-now { color: var(--z-text); }
+.z-steps li.is-now .z-ic { color: var(--z-pink); }
+.z-steps li.is-fail .z-ic { color: var(--z-amber); }
+
+/* An error or status line on a full screen: one sentence, amber. */
+.z-alert { padding: 12px 14px; border-radius: var(--z-radius-note); border: 1px solid var(--z-amber-border); background: var(--z-amber-tint); font-size: 13.5px; line-height: 1.5; color: var(--z-text); }
+.z-alert[role="status"] { border-color: var(--z-mint-border); background: var(--z-mint-tint); }
+
+/* The lost-device screen's own states (app/recovery.js). */
+.z-rc-h { margin: 0; font: 600 20px/1.25 var(--z-font); letter-spacing: -.03em; color: var(--z-heading); text-transform: none; }
+.z-rc-h::first-letter { text-transform: uppercase; }
+.z-rc-row { display: flex; gap: var(--z-space-2); }
+.z-rc-row .z-input { flex: 1; min-width: 0; }
+.z-rc-ref { padding: 14px; font-size: 20px; letter-spacing: .08em; text-align: center; }
+
 @media (prefers-reduced-motion: reduce) {
   .z-btn[aria-busy="true"]::before { animation: none; border-right-color: currentColor; opacity: .6; }
 }
