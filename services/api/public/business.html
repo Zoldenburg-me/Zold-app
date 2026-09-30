@@ -3,11 +3,14 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <link rel="stylesheet" href="/vendor/fonts/text.css" />
+<link rel="stylesheet" href="/vendor/fonts/material-symbols.css" />
+<link rel="stylesheet" href="/tokens.css">
 <title>Zold Business</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 <meta name="robots" content="noindex" />
 
   <link rel="stylesheet" href="/business.css">
+  <link rel="stylesheet" href="/ui.css">
 
 <a class="skip-link" href="#main">Skip to content</a>
 
@@ -80,5 +83,7 @@
 <!-- The dashboard, split into ES modules. main.js is the only one that
      starts anything; the rest declare. core.js owns the shared state and
      is the only module that writes it — see its header. -->
+<!-- UI v2 components (window.Z). Classic, so it has run before any module. -->
+<script src="/ui.js"></script>
 <script type="module" src="/business/main.js"></script>
 <script src="/cookie-notice.js" defer></script>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Convert: price moved, nothing converted</title>
+<!-- Zold UI v2 reference screen: Convert-Refused. Visual reference only; implement with real components, see ../SYSTEM.md -->
+
+<link rel="stylesheet" href="../assets/fonts/inter.css"><link rel="stylesheet" href="../assets/fonts/material-symbols.css">
+<style>
+body{margin:0;background:#08080b;font-family:Inter, system-ui, sans-serif;color:#ededf0;-webkit-font-smoothing:antialiased}
+a{color:#f06bb4;text-decoration:none}a:hover{color:#ff8fc4}
+.ms{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;font-feature-settings:'liga';-webkit-font-smoothing:antialiased}
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #ed188d;outline-offset:2px}
+input::placeholder{color:#9a9aa5}
+:root{color-scheme:dark}
+a,button,input,select,label{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.btn-p{transition:background-color .15s ease,transform .1s ease}.btn-p:hover{background:#ff2d9e !important;color:#fff !important}
+.btn-s{transition:border-color .15s ease,transform .1s ease}.btn-s:hover{border-color:#5a5a62 !important;color:#ededf0 !important}
+.btn-p:active,.btn-s:active{transform:translateY(1px)}
+.lnk{transition:color .15s ease}.lnk:hover{color:#ededf0 !important}
+.skip{position:absolute;left:16px;top:-60px;padding:10px 14px;border-radius:10px;background:#ed188d;color:#08080b !important;font-weight:600;z-index:10}.skip:focus{top:12px}
+.m-fig{font-variant-numeric:tabular-nums}
+@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important}}
+</style>
+
+</head>
+<body>
+
+<div style="width: 412px; min-height: 844px; box-sizing: border-box; position: relative; background: #08080b; display: flex; flex-direction: column; overflow: hidden"><div aria-hidden="true" style="position: absolute; inset: -160px 0 auto; height: 520px; pointer-events: none; background: radial-gradient(60% 50% at 50% 30%, rgba(237,24,141,.22), rgba(237,24,141,.05) 55%, transparent 72%)"></div><div style="position: relative; flex-grow: 1; display: flex; flex-direction: column">
+<div role="status" style="padding: 10px 16px 0; display: flex; justify-content: center">
+<span style="display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 12px; border-radius: 999px; background: rgba(245,166,35,.08); border: 1px solid rgba(245,166,35,.32); font-size: 11.5px; font-weight: 500; color: #f5a623"><span class="ms" aria-hidden="true" style="font-size: 14px; color: #f5a623">science</span>Test mode, no real money</span>
+</div>
+<header style="height: 60px; flex-shrink: 0; padding: 0 16px; display: flex; align-items: center; gap: 6px"><a href="Add-Wallet.html" aria-label="Back" style="width: 44px; height: 44px; margin-left: -10px; display: flex; align-items: center; justify-content: center"><span class="ms" aria-hidden="true" style="font-size: 24px; color: #ededf0">arrow_back</span></a><span style="flex-grow: 1"></span></header>
+<main style="flex-grow: 1; padding: 40px 16px 0; display: flex; flex-direction: column; gap: 22px">
+<span aria-hidden="true" style="width: 60px; height: 60px; flex-shrink: 0; border-radius: 12px; background: rgba(245,166,35,.08); border: 1px solid rgba(245,166,35,.32); display: flex; align-items: center; justify-content: center"><span class="ms" aria-hidden="true" style="font-size: 21px; color: #f5a623">currency_exchange</span></span>
+<div><h1 style="margin: 0; font-size: 32px; line-height: 1.05; font-weight: 600; letter-spacing: -0.045em; color: #fbf9fc">Nothing was converted</h1><p style="margin: 6px 0 0; font-size: 15px; line-height: 1.55; color: #9a9aa5">The price dropped below the €1,472.60 you approved, so we stopped. Your dollars didn’t move.</p></div>
+<div style="padding: 16px; border: 1px solid #232328; border-radius: 16px; background: linear-gradient(180deg,#131317,#0d0d11); "><div style="display: flex; justify-content: space-between; align-items: center"><span style="display: flex; flex-direction: column; gap: 3px"><span style="font-size: 13px; color: #9a9aa5">Still in your account</span>
+<span class="m-fig" style="font-size: 20px; font-weight: 600; color: #fbf9fc">1,684.12 USDC</span></span><span aria-hidden="true" style="width: 40px; height: 40px; flex-shrink: 0; border-radius: 12px; background: rgba(255,255,255,.03); border: 1px solid #2c2c33; display: flex; align-items: center; justify-content: center"><span class="ms" aria-hidden="true" style="font-size: 21px; color: #ededf0">account_balance_wallet</span></span></div></div>
+</main>
+<div style="padding: 16px 16px 28px; display: flex; flex-direction: column; gap: 6px"><a href="Convert-Review.html" class="btn-p" style="width: 100%; box-sizing: border-box; height: 54px; padding: 0 22px; display: flex; align-items: center; justify-content: center; gap: 10px; border-radius: 999px; font-size: 16px; font-weight: 600; letter-spacing: 0; white-space: nowrap; background: #ed188d; color: #fff; border: 1px solid #ed188d; box-shadow: 0 10px 34px rgba(237,24,141,.4)"><span class="ms" aria-hidden="true" style="font-size: 20px; color: #fff">refresh</span><span>Get a new price</span></a>
+<a href="Add-Wallet.html" style="height: 44px; display: flex; align-items: center; justify-content: center; font-size: 14.5px; color: #9a9aa5">Keep as dollars for now</a></div></div></div>
+
+</body>
+</html>
