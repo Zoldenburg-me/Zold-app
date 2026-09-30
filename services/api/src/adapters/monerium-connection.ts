@@ -70,6 +70,13 @@ export function hasOwnMoneriumCredentials(user: User): boolean {
   return connectionMethod(user) !== null;
 }
 
+/** The refusal for a SEPA send from an account with no Monerium connection.
+ *  One body, so the quote route and draft execution refuse identically. */
+export const MONERIUM_NOT_CONNECTED = {
+  error: "no Monerium connection for this account — sign in with Monerium or add your Monerium API keys before sending",
+  code: "MONERIUM_NOT_CONNECTED",
+} as const;
+
 /**
  * Whether Monerium is live for this user: a SEPA redeem will be placed and
  * deposits polled. True when the deployment holds app credentials, or the user
