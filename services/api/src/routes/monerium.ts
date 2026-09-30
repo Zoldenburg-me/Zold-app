@@ -34,6 +34,7 @@ import { cookieValue } from "../http/sessions.js";
 import { custodyBlockerBeforeFunding, requireCapability } from "../http/guards.js";
 import { pendingMoneriumLinkSignatures, prunePendingMoneriumLinkSignatures } from "../http/pending.js";
 import { publicUser } from "../users/public-user.js";
+import { pickProfileForSignup } from "../domain/monerium-profile.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
   isDeployed,
@@ -111,6 +112,39 @@ async function readMoneriumAccountSnapshot(user: User, accessToken?: string) {
   const ibans = Array.isArray(ibanRes) ? ibanRes : (ibanRes?.ibans ?? []);
   const addresses = Array.isArray(addressRes) ? addressRes : (addressRes?.addresses ?? []);
   return { context, profiles, ibans, addresses };
+}
+
+/**
+ * The profile this login was connected under, recorded at connect by
+ * pickProfileForSignup. Linking, IBAN issuance and moves all use it; a
+ * profile id the browser names is only accepted when it is this one.
+ */
+function connectedProfileId(user: User): string | undefined {
+  return user.monerium?.profileId ?? user.funding?.moneriumProfileId;
+}
+
+function otherProfileRefused(user: User, named: unknown) {
+  if (typeof named !== "string" || !named) return undefined;
+  const connected = connectedProfileId(user);
+  if (connected && named === connected) return undefined;
+  return {
+    error: "This Zold account uses only the Monerium profile it was connected with. Another profile on the same Monerium login cannot be used here.",
+    code: "MONERIUM_PROFILE_NOT_CONNECTED",
+  };
+}
+
+/** An IBAN Monerium attributes to this address, on the connected profile.
+ *  An item that names another profile is not this account's; one that names
+ *  none is taken on the address match alone. */
+function ownIbanOf(ibans: any[], address: string, profileId: string | undefined): string {
+  return (
+    ibans.find(
+      (i: any) =>
+        String(i?.address ?? "").toLowerCase() === address.toLowerCase() &&
+        i.iban &&
+        !(profileId && typeof i.profile === "string" && i.profile !== profileId),
+    )?.iban ?? ""
+  );
 }
 
 type Hex = `0x${string}`;
@@ -350,11 +384,27 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         },
       );
       const snapshot = await readMoneriumAccountSnapshot(user, token.access_token);
-      const approvedProfile = snapshot.profiles.find((p: any) => p.state === "approved");
-      const profileId = approvedProfile?.id ?? snapshot.profiles[0]?.id;
+      // A personal signup uses only its personal profile, a company signup
+      // only its corporate one. No profile of that kind: nothing is stored,
+      // not even the token, and the app shows why.
+      const pick = pickProfileForSignup(user.accountType, snapshot.profiles);
+      if (!pick.ok) {
+        store.updateUser(user.id, {
+          moneriumConnect: undefined,
+          moneriumRefusal: { code: pick.code, error: pick.error, at: new Date().toISOString() },
+        });
+        store.audit(auditEntry(
+          "partner.connect_refused",
+          { partner: "monerium", method: "oauth", code: pick.code, accountType: user.accountType ?? "individual" },
+          user.id,
+        ));
+        return res.redirect("/app?monerium=refused");
+      }
+      const profileId = pick.profile.id;
 
       store.updateUser(user.id, {
         moneriumConnect: undefined,
+        moneriumRefusal: undefined,
         kyc: {
           provider: "monerium",
           onboardingPath: "existing_monerium",
@@ -435,9 +485,11 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (purpose === "move-iban" && !IBAN_SHAPE.test(iban ?? "")) {
         return res.status(400).json({ error: "the IBAN to move is required" });
       }
+      const otherProfile = otherProfileRefused(user, req.body?.profileId);
+      if (otherProfile) return res.status(409).json(otherProfile);
       prunePendingMoneriumLinkSignatures();
       const requestId = randomUUID();
-      const profileId = typeof req.body?.profileId === "string" ? req.body.profileId : user.monerium?.profileId;
+      const profileId = connectedProfileId(user);
       const challenge = passkeySafeChallenge(safeMessageHash(user.address, LINK_MESSAGE));
       pendingMoneriumLinkSignatures.set(requestId, {
         userId: user.id,
@@ -491,7 +543,9 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       const rawSignature = req.body?.signature;
       if (typeof rawSignature === "string" && /^0x[0-9a-fA-F]+$/.test(rawSignature)) {
         signature = rawSignature as `0x${string}`;
-        profileId = typeof req.body?.profileId === "string" ? req.body.profileId : user.monerium?.profileId;
+        const otherProfile = otherProfileRefused(user, req.body?.profileId);
+        if (otherProfile) return res.status(409).json(otherProfile);
+        profileId = connectedProfileId(user);
       } else {
         const requestId =
           typeof req.body?.requestId === "string"
@@ -511,8 +565,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         if (!authenticatorData || !clientDataJSON || !assertionSignature) {
           return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
         }
-        profileId =
-          pending.profileId ?? user.monerium?.profileId ?? user.funding?.moneriumProfileId;
+        profileId = connectedProfileId(user) ?? pending.profileId;
         /**
          * No whitelabel path: the app never creates Monerium profiles for a
          * user. The address is linked under the profile the USER's own
@@ -581,10 +634,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
        * user's Safe. No IBAN yet means iban_pending; refreshPendingIban polls
        * by address and attributes it.
        */
-      const iban =
-        snapshot.ibans.find(
-          (i: any) => String(i.address ?? "").toLowerCase() === user.address.toLowerCase() && i.iban,
-        )?.iban ?? "";
+      const iban = ownIbanOf(snapshot.ibans, user.address, profileId);
 
       if (profileHasIban && !iban) {
         /**
@@ -918,19 +968,27 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         return res.status(503).json({ error: `Monerium could not be reached to verify the keys: ${String(err?.message ?? err).slice(0, 200)}` });
       }
 
-      const approvedProfile = verified.profiles.find((p: any) => p.state === "approved");
-      const profileId = approvedProfile?.id ?? verified.profiles[0]?.id;
+      // The same rule as the OAuth callback: the profile of this login's
+      // signup kind, or a refusal that stores nothing.
+      const pick = pickProfileForSignup(user.accountType, verified.profiles);
+      if (!pick.ok) {
+        store.audit(auditEntry(
+          "partner.connect_refused",
+          { partner: "monerium", method: "api_keys", code: pick.code, accountType: user.accountType ?? "individual" },
+          user.id,
+        ));
+        return res.status(pick.status).json({ error: pick.error, code: pick.code });
+      }
+      const profileId = pick.profile.id;
       // ADDRESS-MATCHED ONLY, for the reason activate gives: any other IBAN in
       // the snapshot is somebody's money routing, not this account's.
-      const ownIban =
-        verified.ibans.find(
-          (i: any) => String(i.address ?? "").toLowerCase() === user.address.toLowerCase() && i.iban,
-        )?.iban ?? "";
+      const ownIban = ownIbanOf(verified.ibans, user.address, profileId);
       const now = new Date().toISOString();
       const wasApproved = user.kycStatus === "approved";
 
       const updated = store.updateUser(user.id, {
         moneriumConnect: undefined,
+        moneriumRefusal: undefined,
         ...(wasApproved || !mayApproveOnIban(user)
           ? {}
           : ownIban

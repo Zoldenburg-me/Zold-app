@@ -65,7 +65,7 @@ const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { encryptToken } = await import("../services/api/src/adapters/monerium-connection.js");
-const { normaliseLegalName, nameWarning } = await import("../services/api/src/domain/monerium-profile.js");
+const { normaliseLegalName, nameWarning, pickProfileForSignup } = await import("../services/api/src/domain/monerium-profile.js");
 const { HARNESS } = await import("../services/api/src/config.js");
 
 let passed = 0;
@@ -134,6 +134,29 @@ await check("the local harness is off in this suite, so every check below reads 
   assert.equal(HARNESS.enabled, false);
 });
 
+await check("the signup kind picks the profile: personal for a person, corporate for a company, never the other", () => {
+  const both = [CORP, PERSONAL];
+  assert.equal((pickProfileForSignup("individual", both) as any).profile.id, PERSONAL.id);
+  assert.equal((pickProfileForSignup(undefined, both) as any).profile.id, PERSONAL.id, "no stated type reads as a person");
+  assert.equal((pickProfileForSignup("company", both) as any).profile.id, CORP.id);
+  const onlyCorp = pickProfileForSignup("individual", [CORP, CORP_PENDING]);
+  assert.equal(onlyCorp.ok, false);
+  assert.equal((onlyCorp as any).code, "MONERIUM_PROFILE_KIND_MISSING");
+  assert.match((onlyCorp as any).error, /support@zoldhq\.com/);
+  assert.equal(pickProfileForSignup("company", [PERSONAL]).ok, false);
+});
+
+await check("an approved profile of the kind wins; a pending one is used only when none is approved", () => {
+  assert.equal((pickProfileForSignup("company", [CORP_PENDING, CORP]) as any).profile.id, CORP.id);
+  assert.equal((pickProfileForSignup("company", [CORP_PENDING, PERSONAL]) as any).profile.id, CORP_PENDING.id);
+});
+
+await check("a profile whose kind Monerium did not state is not trusted to be either", () => {
+  assert.equal(pickProfileForSignup("individual", [{ id: "p-x", state: "approved" }]).ok, false);
+  assert.equal(pickProfileForSignup("company", [{ id: "p-x", state: "approved" }]).ok, false);
+  assert.equal(pickProfileForSignup("individual", undefined).ok, false);
+});
+
 await check("legal-form suffixes, case and punctuation do not make a name mismatch", () => {
   assert.equal(normaliseLegalName("ACME Technik GmbH"), normaliseLegalName("Acme Technik"));
   assert.equal(normaliseLegalName("Zoldenburg UG (haftungsbeschränkt)"), normaliseLegalName("zoldenburg"));
@@ -186,7 +209,7 @@ await check("a personal profile is refused for a business org, in plain words, a
   const r = await call("POST", "/api/orgs/org_biz_p/accounts/acc_biz_p/fund", "u_personal");
   assert.equal(r.status, 409);
   assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISMATCH");
-  assert.equal(r.data.error, "Business accounts need a company profile at Monerium. Open one for Gamma GmbH, then connect it here.");
+  assert.equal(r.data.error, "Business accounts need a company profile at Monerium, and this login is connected to a personal one. To send for Gamma GmbH, email support@zoldhq.com: we set up a separate account for the company, with its own Safe.");
   const row = store.findAccount("acc_biz_p")!;
   assert.equal(row.status, "gated");
   assert.equal(row.backingUserId, undefined);
