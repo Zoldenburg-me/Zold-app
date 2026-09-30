@@ -22,7 +22,8 @@ import { resolveSegment, type Segment } from "../domain/segments.js";
 import { store, type User } from "../store.js";
 import { requireKycApproved } from "../http/guards.js";
 import { publicUser, withSession } from "../users/public-user.js";
-import { refreshPendingIban } from "../adapters/monerium-sandbox.js";
+import { findIbanBic, refreshPendingIban } from "../adapters/monerium-sandbox.js";
+import { normalizeIban } from "../sepa.js";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
@@ -272,6 +273,34 @@ export function createUserRouter(deps: UserDeps) {
       }
       const balances = await accountBalances(user.address);
       res.json({ ...publicUser(user), ...balances });
+    }),
+  );
+
+  /**
+   * The BIC for the account's IBAN, as Monerium lists it. Read once per IBAN
+   * and kept on the row; the app asks when it shows the account details, not
+   * on every poll. No IBAN, or Monerium lists no BIC for it: `bic` is null and
+   * the app shows none. Nothing is guessed from the IBAN's country.
+   */
+  router.get(
+    "/users/:id/bic",
+    wrap(async (req, res) => {
+      const user = store.findUser(req.params.id);
+      if (!user) return res.status(404).json({ error: "user not found" });
+      if (!requireUserSession(req, res, user.id)) return;
+      if (!user.iban) return res.json({ bic: null });
+      const current = normalizeIban(user.iban);
+      if (user.ibanBic && normalizeIban(user.ibanBic.iban) === current) return res.json({ bic: user.ibanBic.bic });
+      let bic: string | undefined;
+      try {
+        bic = await findIbanBic(user);
+      } catch (err: any) {
+        console.error(`bic lookup failed for ${user.id}: ${err?.message ?? err}`);
+        return res.status(502).json({ error: "Monerium did not answer. Try again in a moment." });
+      }
+      if (!bic) return res.json({ bic: null });
+      store.updateUser(user.id, { ibanBic: { iban: current, bic, checkedAt: new Date().toISOString() } });
+      res.json({ bic });
     }),
   );
 

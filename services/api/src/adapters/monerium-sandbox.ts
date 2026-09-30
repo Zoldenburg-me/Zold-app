@@ -68,6 +68,18 @@ export async function findIban(address: string, user?: User): Promise<string | u
   return hit?.iban;
 }
 
+/** The BIC Monerium lists for this user's IBAN, or undefined when Monerium
+ *  lists none for it. Read on the user's own credentials, as findIban is. */
+export async function findIbanBic(user: User): Promise<string | undefined> {
+  if (!user.iban) return undefined;
+  const res = await moneriumClientFor(user).ibans();
+  const list = Array.isArray(res) ? res : (res?.ibans ?? []);
+  const target = normalizeIban(user.iban);
+  const hit = list.find((i: any) => typeof i?.iban === "string" && normalizeIban(i.iban) === target);
+  const bic = typeof hit?.bic === "string" ? hit.bic.toUpperCase().replace(/\s+/g, "") : "";
+  return /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(bic) ? bic : undefined;
+}
+
 /**
  * Monerium attributes an IBAN to one address. Once it attributes `iban` to
  * `keepUserId`'s Safe (a move), any other account here still holding it is
