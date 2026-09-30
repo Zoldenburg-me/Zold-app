@@ -29,7 +29,6 @@ function enterDashboard(name) {
   if (OB[location.hash.slice(1)]) history.replaceState(null, "", location.pathname + location.search);
   // The older screens still live in #dashboard, in its phone layout.
   $("dashboard").classList.add("m-on");
-  if (!$("dashboard").dataset.msub) $("dashboard").dataset.msub = "profile";
   phStart();
   $("userpill").style.display = "flex";
   $("pillname").textContent = name;
@@ -1740,9 +1739,6 @@ $("btn-dash-kyc-refresh").onclick = async () => {
   if (kycApproved(user)) enterDashboard(user.name);
 };
 $("btn-recovery-start").onclick = startRecoveryRequest;
-$("m-pf-recovery").onclick = () => mobileNav("recovery");
-$("m-pf-documents").onclick = () => mobileNav("documents");
-$("m-pf-links").onclick = () => phGo("get-paid");
 $("btn-links").onclick = () => phGo("get-paid");
 
 /**
