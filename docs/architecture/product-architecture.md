@@ -719,7 +719,7 @@ go (Lexware CSV, a GetMyInvoices bank account, MT940 or CAMT).
 | URL | who | what |
 |---|---|---|
 | `/` | public | Marketing landing page |
-| `/app` | account holder | Consumer PWA with onboarding, home, send, activity, payment page and links, the personal organisation's invoices and accounting connections, settings, security, plan, documents, recovery and card. A member can switch it to a company: that company's home, account details, approvals (approve or send back), members and invites. Drafting and sending a company payment stay in `/business`. Installable, and works offline for the shell. |
+| `/app` | account holder | Consumer PWA with onboarding, home, send, activity, payment page and links, the personal organisation's invoices and accounting connections, settings, security, plan, documents, recovery and card. A member can switch it to a company: that company's home, account details, approvals (approve or send back), members and invites. Drafting and sending a company payment stay in `/business`. From 1024px it has a sidebar, a wide home, payment details in a drawer and a search (Cmd or Ctrl K) over the payments, contacts and invoices already loaded; picking a company there opens `/business`. Installable, and works offline for the shell. |
 | `/business` | org member | Org dashboard: overview, accounts, payments, invoices, Shopify, contacts, wallets, transactions, assets, chart of accounts, members, settings |
 | `/pay/<handle>` | payer | Payment page |
 | `/pay/<handle>/<code>` | payer | Payment link, which also serves as the payer's receipt |
