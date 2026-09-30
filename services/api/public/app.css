@@ -1,22 +1,25 @@
+  /* The old names, kept so every existing rule reads the UI v2 tokens
+     (tokens.css, loaded first). There is no red and no purple in v2: errors and
+     failures are amber, and the one accent is pink. */
   :root {
-    --bg: #0b0b0e;
-    --side-bg: #09090c;
-    --panel: #131317;
-    --panel2: #0e0e12;
-    --row: #1a1a1f;
-    --border: #232328;
-    --border2: #2c2c33;
-    --text: #ededf0;
-    --muted: #8a8a94;
-    --faint: #5b5b66;
-    --acc: #ed188d;
-    --acc2: #8b5cf6;
-    --grad: linear-gradient(90deg, #7b2ff7, #ed188d);
-    --green: #3dd68c;
-    --amber: #f5a623;
-    --red: #f4436c;
-    --radius: 12px;
-    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --bg: var(--z-bg);
+    --side-bg: var(--z-bg);
+    --panel: var(--z-surface);
+    --panel2: var(--z-field);
+    --row: var(--z-line);
+    --border: var(--z-line);
+    --border2: var(--z-line-strong);
+    --text: var(--z-text);
+    --muted: var(--z-dim);
+    --faint: var(--z-dim); /* was #5b5b66, which fails contrast as text */
+    --acc: var(--z-pink);
+    --acc2: var(--z-pink);
+    --grad: var(--z-pink);
+    --green: var(--z-mint);
+    --amber: var(--z-amber);
+    --red: var(--z-amber);
+    --radius: var(--z-radius-md);
+    --font: var(--z-font);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
@@ -106,7 +109,7 @@
 
   .error {
     margin-top: .8rem; padding: .55rem .8rem; border-radius: 8px; font-size: .82rem;
-    background: rgba(244, 67, 108, 0.08); border: 1px solid rgba(244, 67, 108, 0.3); color: var(--red);
+    background: var(--z-amber-tint); border: 1px solid var(--z-amber-border); color: var(--red);
   }
   .hint { font-size: .76rem; color: var(--faint); margin-top: .55rem; }
   .row2 { display: flex; gap: .7rem; align-items: end; }
@@ -197,7 +200,7 @@
   /* The one warning in onboarding that must not read as fine print. */
   .rec-warn {
     margin-top: 1.2rem; padding: 1.1rem 1.15rem; border-radius: 14px;
-    background: rgba(244, 67, 108, .10); border: 2px solid var(--red);
+    background: var(--z-amber-tint); border: 2px solid var(--red);
     font-size: .92rem; line-height: 1.6; color: var(--text);
   }
   .rec-warn-title { font-size: 1.02rem; font-weight: 700; color: var(--red); margin-bottom: .4rem; }
@@ -356,7 +359,7 @@
   #pk-steps { display: flex; flex-direction: column; gap: .1rem; margin: .35rem 0 .2rem; }
   #pk-steps .pstep { padding: .45rem 0; }
   .pstep.fail { color: var(--text); }
-  .pstep.fail .pdot { border-color: var(--red); background: rgba(244,67,108,.1); color: var(--red); }
+  .pstep.fail .pdot { border-color: var(--red); background: var(--z-amber-tint); color: var(--red); }
 
   /* Shared with the dashboard's #kyc-card — left as it was on purpose. */
   .kyc-status {
@@ -509,8 +512,8 @@
   .chip.eur { background: rgba(237, 24, 141, 0.12); color: #ff7cc0; border: 1px solid rgba(237, 24, 141, 0.4); }
   .chip.ok { background: rgba(61, 214, 140, 0.1); color: var(--green); border: 1px solid rgba(61, 214, 140, 0.35); }
   .chip.pend { background: rgba(245, 166, 35, 0.1); color: var(--amber); border: 1px solid rgba(245, 166, 35, 0.3); }
-  .chip.err { background: rgba(244, 67, 108, 0.1); color: var(--red); border: 1px solid rgba(244, 67, 108, 0.3); }
-  .chip.review { background: rgba(139, 92, 246, 0.1); color: #b894ff; border: 1px solid rgba(139, 92, 246, 0.35); }
+  .chip.err { background: var(--z-amber-tint); color: var(--red); border: 1px solid var(--z-amber-border); }
+  .chip.review { background: var(--z-pink-tint); color: var(--z-pink-soft); border: 1px solid var(--z-pink-border); }
   .spark { flex: none; }
   .detail { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .5rem 0; border-top: 1px solid var(--border); margin-top: .1rem; }
   .detail .k { font-size: .68rem; color: var(--faint); font-weight: 600; letter-spacing: .06em; white-space: nowrap; }
@@ -646,7 +649,7 @@
   .tstep .body { padding-bottom: .95rem; min-width: 0; }
   .tstep .t { font-size: .85rem; font-weight: 600; }
   .tstep .d { font-size: .7rem; color: var(--faint); font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
-  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.35); } 50% { box-shadow: 0 0 0 7px rgba(139, 92, 246, 0); } }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 var(--z-pink-border); } 50% { box-shadow: 0 0 0 7px rgba(237, 24, 141, 0); } }
   @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
   /* result boxes */
