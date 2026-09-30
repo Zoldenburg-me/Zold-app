@@ -141,6 +141,8 @@ window.addEventListener("popstate", (e) => {
   const name = e.state?.ob || location.hash.slice(1);
   if (!OB[name]) return;
   obScreen = obGuard(name);
+  // The address names the screen shown, not the one asked for.
+  if (obScreen !== name) history.replaceState({ ob: obScreen, prev: e.state?.prev ?? null }, "", `${location.pathname}${location.search}#${obScreen}`);
   obRender({ focus: true });
 });
 
