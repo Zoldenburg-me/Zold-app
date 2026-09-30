@@ -41,6 +41,7 @@ const scripts = [
   "jit:test",
   "dex:test",
   "lifi:test",
+  "forwarder:test",
   "best:test",
   "webhook:test",
   "reconcile:test",

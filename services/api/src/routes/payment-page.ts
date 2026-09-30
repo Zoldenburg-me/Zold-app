@@ -97,7 +97,12 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
       }
       const now = new Date().toISOString();
       const existing = user.paymentPage;
-      const forwarder = await activatePaymentForwarder({ userId: user.id, handle, recipient: user.address });
+      const forwarder = await activatePaymentForwarder({
+        userId: user.id,
+        handle,
+        recipient: user.address,
+        token: addrs().usdc,
+      });
       const tokens = [
         { chainId: CHAIN_ID, symbol: "EURE" as const, address: addrs().eure, decimals: 18 },
         { chainId: CHAIN_ID, symbol: "USDC" as const, address: addrs().usdc, decimals: 6 },
