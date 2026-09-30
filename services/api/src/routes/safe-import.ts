@@ -44,6 +44,8 @@ export interface SafeImportDeps {
   reader?: () => ChainReader;
   /** Tests skip the relayed verifier deployment. */
   deployVerifier?: (owner: { x: bigint; y: bigint }) => Promise<string | undefined>;
+  /** Tests name the tokens; production reads EURe and USDC from deployments.json. */
+  tokens?: () => Hex[];
 }
 
 type Hex = `0x${string}`;
@@ -65,12 +67,12 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
   const router = express.Router();
   const reader = deps.reader ?? (() => jsonRpcReader(CANDIDE.rpcUrl, () => partnerTimeout()));
   const deployVerifier = deps.deployVerifier ?? deployVerifierForOwner;
+  const tokens = deps.tokens ?? (() => [addrs().eure, addrs().usdc]);
 
   /** Anything at `address` on the smart-account chain: ETH, EURe or USDC. */
   const holdsFunds = async (r: ChainReader, address: Hex): Promise<boolean> => {
     if ((await r.getBalance(address)) > 0n) return true;
-    const d = addrs();
-    for (const token of [d.eure, d.usdc]) {
+    for (const token of tokens()) {
       const raw = await r.call(token, encodeFunctionData({ abi: ERC20, functionName: "balanceOf", args: [address] }));
       if ((decodeFunctionResult({ abi: ERC20, functionName: "balanceOf", data: raw }) as bigint) > 0n) return true;
     }
