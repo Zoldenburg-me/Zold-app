@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
 import { FX, railFeeEur } from "../../config.js";
 import { createQuote } from "../../fx.js";
+import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "../../adapters/monerium-connection.js";
 import { accountBalances } from "../../chain.js";
 import { CURRENCY_REGISTRY, accountIsSpendable } from "../../domain/accounts.js";
 import { canReviewDraft } from "../../domain/roles.js";
@@ -396,13 +397,26 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
     // step, so requiring REVIEWED there would make every draft unsendable.
     const approvals = can(ctx.org, "transfers.approvals").allowed;
     const claimable: DraftState[] = approvals ? ["REVIEWED"] : ["DRAFT", "REVIEWED"];
+    const notClaimable = (state: DraftState) => ({
+      error: approvals
+        ? `This draft is ${state}. On your plan a payment must be reviewed by a second person before it can be sent.`
+        : `This draft is ${state} and cannot be sent from that state — it may already be executing.`,
+    });
+    if (!claimable.includes(checked.state)) {
+      return res.status(409).json(notClaimable(checked.state));
+    }
+
+    // Every line is a Monerium redeem. Without a connection each one would be
+    // refused at execution, after the passkey ceremonies — the same reason
+    // POST /api/quotes refuses here. Account-wide, so the draft keeps its
+    // state and can be sent once the account is connected.
+    if (!moneriumLiveFor(user)) {
+      return res.status(409).json(MONERIUM_NOT_CONNECTED);
+    }
+
     const claimed = store.claimDraftExecution(checked.id, claimable);
     if (!claimed) {
-      return res.status(409).json({
-        error: approvals
-          ? `This draft is ${checked.state}. On your plan a payment must be reviewed by a second person before it can be sent.`
-          : `This draft is ${checked.state} and cannot be sent from that state — it may already be executing.`,
-      });
+      return res.status(409).json(notClaimable(checked.state));
     }
 
     const authorizations: {
