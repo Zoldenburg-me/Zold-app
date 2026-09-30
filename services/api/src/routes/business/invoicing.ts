@@ -22,6 +22,8 @@ import {
   SETTLEMENT_CURRENCY,
   checkCompliance,
   fromCents,
+  invoiceDueDate,
+  invoiceLanguage,
   normaliseVatId,
   reasonForRuleSet,
   taxNumberLooksValid,
@@ -202,11 +204,15 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       // Converted here too, or the live panel would show a missing-euro-amount
       // error against every foreign-currency draft while it is being typed.
       const draft = await withConversion(draftFrom(ctx.org, req.body ?? {}));
+      const language = invoiceLanguage(req.body?.language, ctx.org.invoicing?.language);
+      const dueDate = invoiceDueDate(req.body?.dueDate, draft.issueDate!, draftDueDate(ctx.org, draft.issueDate!));
       const report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
       res.json({
         ...report,
         preview: {
           number: draft.number,
+          language,
+          ...(dueDate ? { dueDate } : {}),
           totals: report.totals,
           currency: draft.currency ?? SETTLEMENT_CURRENCY,
           ...(draft.conversion ? { conversion: draft.conversion } : {}),
@@ -233,8 +239,14 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     if (!requirePermission(ctx, res, "invoices.manage")) return;
 
     let draft;
+    let language: "de" | "en";
+    let dueDate: string | undefined;
     try {
       draft = await withConversion(draftFrom(ctx.org, req.body ?? {}));
+      // Chosen per invoice; the profile's language and payment terms are the
+      // defaults.
+      language = invoiceLanguage(req.body?.language, ctx.org.invoicing?.language);
+      dueDate = invoiceDueDate(req.body?.dueDate, draft.issueDate!, draftDueDate(ctx.org, draft.issueDate!));
     } catch (err) {
       if (err instanceof InvoiceComplianceError) {
         return res.status(400).json({ error: err.message });
@@ -284,7 +296,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       })),
       currency: draft.currency ?? SETTLEMENT_CURRENCY,
       total: fromCents(report.totals.grossCents),
-      dueDate: draftDueDate(ctx.org, draft.issueDate!),
+      dueDate,
       supplier: {
         orgName: draft.issuer.name ?? ctx.org.name,
         email: ctx.org.email ?? "",
@@ -298,7 +310,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
         issuer: draft.issuer,
         recipient: draft.recipient,
         vatTreatment: draft.treatment,
-        vatNote: vatNoteFor(draft.treatment, ctx.org.invoicing?.language ?? "de"),
+        vatNote: vatNoteFor(draft.treatment, language),
         netCents: report.totals.netCents,
         vatCents: report.totals.vatCents,
         grossCents: report.totals.grossCents,
@@ -312,7 +324,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
         notes: str(req.body?.notes),
         display,
         customFields: ctx.org.invoicing?.customFields,
-        language: ctx.org.invoicing?.language ?? "de",
+        language,
         acceptedWarnings: report.warnings.map((w) => `${w.field}: ${w.message}`),
         // Frozen with the document: which rules ran, and how far they went.
         jurisdiction: report.jurisdiction,

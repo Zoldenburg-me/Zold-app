@@ -503,3 +503,58 @@ a.z-switch:hover { border-color: var(--z-line-hover); color: var(--z-text); }
 .z-held__main { display: flex; flex-direction: column; gap: 2px; margin: 0; min-width: 0; }
 .z-held__label { font-size: 13px; color: var(--z-dim); }
 .z-held__fig { font-size: 18px; font-weight: 600; color: var(--z-heading); }
+
+/* ---------- Invoices (step 6) ---------- */
+.z-planchip { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 14px; border-radius: var(--z-radius-pill); border: 1px solid var(--z-pink-border); background: var(--z-pink-tint); font-size: 13px; color: var(--z-text); }
+.z-planchip .z-ic { font-size: 18px; color: var(--z-pink); }
+.z-pill__n { margin-left: 4px; opacity: .7; }
+/* A warning that links to where it is fixed. */
+.z-banner { display: flex; align-items: center; gap: var(--z-space-3); padding: 12px 14px; border-radius: var(--z-radius-note); border: 1px solid var(--z-amber-border); background: var(--z-amber-tint); font-size: 13.5px; line-height: 1.45; color: var(--z-text); }
+.z-banner:hover { color: var(--z-text); border-color: var(--z-amber); }
+.z-banner > .z-ic:first-child { font-size: 20px; color: var(--z-amber); }
+.z-banner > span:not(.z-ic) { flex: 1; }
+.z-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--z-space-2); }
+.z-cols > .z-field { min-width: 0; }
+.z-input--num { text-align: right; font-variant-numeric: tabular-nums; }
+/* One invoice line: description, then quantity, price and the line's sum. */
+.z-invline { position: relative; display: flex; flex-direction: column; gap: var(--z-space-2); margin: 0; padding: var(--z-space-3); border: 1px solid var(--z-line); border-radius: var(--z-radius-note); background: var(--z-card); min-width: 0; }
+.z-invline__rm { position: absolute; top: 0; right: 0; }
+.z-invline__nums { display: grid; grid-template-columns: 72px 1fr 96px; gap: var(--z-space-2); align-items: end; }
+.z-invline__sum { padding-bottom: 14px; text-align: right; font-size: 15px; font-weight: 600; color: var(--z-heading); }
+.z-invline .z-field:first-of-type label { padding-right: var(--z-touch); }
+.z-addline { display: flex; align-items: center; justify-content: center; gap: var(--z-space-2); min-height: var(--z-touch); padding: 10px; border: 1px dashed var(--z-line-strong); border-radius: var(--z-radius-note); background: transparent; font: 500 14px var(--z-font); color: var(--z-text); cursor: pointer; transition: border-color var(--z-ease); }
+.z-addline:hover { border-color: var(--z-line-hover); }
+.z-addline .z-ic { font-size: 18px; }
+/* Segmented choice: radios in one pill track, the chosen one filled. */
+.z-seg { display: flex; gap: var(--z-space-1); padding: var(--z-space-1); border: 1px solid var(--z-line-strong); border-radius: var(--z-radius-pill); background: var(--z-ghost); }
+.z-seg label { position: relative; flex: 1 1 0; display: flex; align-items: center; justify-content: center; min-height: var(--z-touch); margin: 0; padding: 0 10px; border-radius: var(--z-radius-pill); font-size: 13.5px; font-weight: 600; text-align: center; color: var(--z-dim); cursor: pointer; transition: background-color var(--z-ease), color var(--z-ease); }
+.z-seg label:hover:not(:has(input:checked)) { color: var(--z-text); }
+.z-seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.z-seg label:has(input:checked) { background: var(--z-pink); color: var(--z-bg); }
+.z-seg label:has(input:focus-visible) { outline: 2px solid var(--z-pink); outline-offset: 2px; }
+.z-invtotals .is-strong dt { font-size: 17px; font-weight: 600; color: var(--z-heading); }
+.z-invtotals .is-strong dd { color: var(--z-heading); }
+.z-invvat p { margin: var(--z-space-2) 0 0; }
+.z-tile--txt { font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+
+/* The invoice as paper. Dark ink on the light sheet, as it prints. */
+.z-paper { display: flex; flex-direction: column; gap: 14px; padding: 20px; border-radius: var(--z-radius-card); background: var(--z-heading); color: var(--z-bg); font-size: 12px; line-height: 1.45; }
+.z-paper p { margin: 0; }
+.z-paper__head { display: flex; justify-content: space-between; gap: var(--z-space-4); color: var(--z-line-hover); }
+.z-paper__head > div, .z-paper__lines td { min-width: 0; overflow-wrap: anywhere; }
+.z-paper__who { font-size: 14px; font-weight: 700; color: var(--z-bg); }
+.z-paper__tax { flex: none; text-align: right; }
+.z-paper__to { color: var(--z-line-hover); }
+.z-paper__title { margin: 4px 0 0; font: 700 20px/1.2 var(--z-font); letter-spacing: -.02em; color: var(--z-bg); text-wrap: balance; }
+.z-paper__meta { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--z-line-hover); }
+.z-paper__lines { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.z-paper__lines th { padding: 0 0 6px; border-bottom: 1px solid var(--z-dim); text-align: right; font-weight: 600; }
+.z-paper__lines td { padding: 8px 0; border-bottom: 1px solid var(--z-dim); text-align: right; vertical-align: top; }
+.z-paper__lines th:first-child, .z-paper__lines td:first-child { text-align: left; padding-right: var(--z-space-3); }
+.z-paper__lines td:nth-child(2) { padding-right: var(--z-space-4); }
+.z-paper__sum { display: flex; flex-direction: column; gap: 4px; align-self: flex-end; min-width: 55%; margin: 0; font-variant-numeric: tabular-nums; }
+.z-paper__sum div { display: flex; justify-content: space-between; gap: var(--z-space-4); }
+.z-paper__sum dd { margin: 0; }
+.z-paper__sum .is-total { padding-top: 6px; border-top: 1px solid var(--z-bg); font-size: 13px; font-weight: 700; }
+.z-paper__note { color: var(--z-line-hover); }
+.z-paper__pay { padding-top: 10px; border-top: 1px solid var(--z-dim); color: var(--z-line-hover); }

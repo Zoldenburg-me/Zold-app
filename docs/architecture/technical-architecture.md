@@ -1097,7 +1097,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `DELETE /:orgId/invoices/:i` (C(invoices)) | Soft delete. |
 | `POST /:orgId/invoices/:i/{pay, reconcile}` (C(invoices)) | Pay via a draft, or reconcile by hand. |
 | `GET/PATCH /:orgId/invoicing/profile` (C(invoices)) | Invoicing profile. |
-| `POST /:orgId/invoicing/{check, issue}` (C(invoices)) | Compliance dry run, or issue. |
+| `POST /:orgId/invoicing/{check, issue}` (C(invoices)) | Compliance dry run, or issue. `language` (`de`/`en`) and `dueDate` may be set per invoice; the profile's language and payment terms are the defaults. |
 | `GET /invoice-links/:token` (A) | Supplier side. |
 | `POST /invoice-links/:token/submit` (A) | Supplier side. |
 

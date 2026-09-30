@@ -564,9 +564,11 @@ LINK_CREATED → SUBMITTED → PAYING → PAID → RECONCILED     (+ soft DELETE
     personal-org invoices),
   - or a manual link of a crypto deposit.
 
-  **A recorded settlement does not mark the invoice PAID.** A settled issued
-  invoice still reads SUBMITTED, shows OVERDUE after its due date, and has to
-  be reconciled by hand.
+  Once the recorded settlements cover what the invoice is payable as (its
+  frozen euro gross, to half a cent), it goes PAID (`settlementUpdate`); short
+  of that it stays SUBMITTED, collectable for the rest. A SEPA credit is
+  matched only when the invoice number has at least six letters and digits
+  and exactly one open invoice is named; anything else is left for a person.
 - **Not built:** credit notes and cancellations, a void state, XRechnung or
   ZUGFeRD, invoice signing, PDF generation, email delivery.
 - **Product decision on record:** Zold pays from invoices and keeps the
@@ -717,7 +719,7 @@ go (Lexware CSV, a GetMyInvoices bank account, MT940 or CAMT).
 | URL | who | what |
 |---|---|---|
 | `/` | public | Marketing landing page |
-| `/app` | account holder | Consumer PWA with onboarding, home, send, activity, payment page and links, documents, profile, recovery and card. Installable, and works offline for the shell. |
+| `/app` | account holder | Consumer PWA with onboarding, home, send, activity, payment page and links, the personal organisation's invoices and accounting connections, documents, profile, recovery and card. Installable, and works offline for the shell. |
 | `/business` | org member | Org dashboard: overview, accounts, payments, invoices, Shopify, contacts, wallets, transactions, assets, chart of accounts, members, settings |
 | `/pay/<handle>` | payer | Payment page |
 | `/pay/<handle>/<code>` | payer | Payment link, which also serves as the payer's receipt |
