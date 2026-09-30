@@ -619,7 +619,10 @@ flowchart LR
   profile of the other kind or of no stated kind is never used. No profile of
   the kind refuses `MONERIUM_PROFILE_KIND_MISSING` and stores nothing (OAuth
   redirects to `/app?monerium=refused` and records only
-  `User.moneriumRefusal`). Linking and activation use the recorded profile;
+  `User.moneriumRefusal`). Monerium's `/auth` takes no profile kind, so the
+  refusal can only come after the user has signed in there; to make it rare,
+  `connect/start` prefills Monerium's form with the signup email (`email`)
+  and the Monerium screen says which email to use. Linking and activation use the recorded profile;
   a `profileId` in the body that names another answers
   `MONERIUM_PROFILE_NOT_CONNECTED`, and an address-matched IBAN that names
   another profile is not attributed. The profile is read on their own

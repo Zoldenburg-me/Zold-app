@@ -436,6 +436,7 @@ try {
     const u = new URL(redirectUrl);
     assert.equal(u.searchParams.get("response_type"), "code");
     assert.equal(u.searchParams.get("code_challenge_method"), "S256");
+    assert.equal(u.searchParams.get("email"), "existing@example.com", "Monerium's form is prefilled with the Zold signup email");
     seen.codeChallenge = u.searchParams.get("code_challenge") ?? "";
     seen.redirectUriAtStart = u.searchParams.get("redirect_uri") ?? "";
     assert.ok(seen.codeChallenge.length >= 43, "expected an S256 challenge");

@@ -142,7 +142,7 @@ await check("the signup kind picks the profile: personal for a person, corporate
   const onlyCorp = pickProfileForSignup("individual", [CORP, CORP_PENDING]);
   assert.equal(onlyCorp.ok, false);
   assert.equal((onlyCorp as any).code, "MONERIUM_PROFILE_KIND_MISSING");
-  assert.match((onlyCorp as any).error, /support@zoldhq\.com/);
+  assert.match((onlyCorp as any).error, /your personal email/);
   assert.equal(pickProfileForSignup("company", [PERSONAL]).ok, false);
 });
 

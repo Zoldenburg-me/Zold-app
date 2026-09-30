@@ -1163,7 +1163,11 @@ OB.monerium = {
         </ul>
       </div>
       ${any ? "" : Z.note({ tone: "a", text: "Monerium can’t be connected on this version of Zold yet, so no IBAN can be issued here." })}
-      ${user?.moneriumRefusal && !hasConnectedMonerium(user) ? Z.note({ tone: "a", text: user.moneriumRefusal.error }) : ""}
+      ${user?.moneriumRefusal && !hasConnectedMonerium(user)
+        ? Z.note({ tone: "a", text: user.moneriumRefusal.error })
+        : Z.note({ text: user?.accountType === "company"
+          ? "Use your company’s email at Monerium. Zold uses only a company profile there, never a personal one."
+          : "Use your personal email at Monerium. Zold uses only a personal profile there, never a company’s." })}
       <p class="z-hint">Monerium’s own terms apply. <a href="/partner-terms#monerium" target="_blank" rel="noopener">Partner terms</a></p>
       ${obAlert()}
     </main>
