@@ -540,6 +540,31 @@ flowchart LR
   OAuth or the encryption key is configured, and every other currency is
   false. `accountIsSpendable` needs both the registry and the row status
   `active`.
+- **Monerium profile kind** (`domain/monerium-profile.ts`,
+  `adapters/monerium-profile.ts`). A business org's account may only be
+  backed by an approved `corporate` Monerium profile, a personal org's by a
+  `personal` one (Monerium Personal Terms §16 forbid a personal account for a
+  third party's or clients' money). The profile is the backing user's one
+  recorded profile (`monerium.profileId`, else `funding.moneriumProfileId`),
+  read on their own credentials: `GET /profiles/:id` for `kind` and `state`,
+  and the `GET /profiles?kind=` list for `name`, since the sandbox's
+  single-profile answer has no name. Kind and name never come from the client.
+  Checked at adoption (`POST /accounts` with adoption, `/fund`), at re-check
+  (`/profile-check`) and at execution. Refusals: `MONERIUM_PROFILE_KIND_MISMATCH`,
+  `MONERIUM_PROFILE_NOT_APPROVED`, `MONERIUM_PROFILE_NOT_FOUND` (the login
+  cannot see the id; Monerium answers 403), `MONERIUM_NOT_CONNECTED` (409),
+  and `MONERIUM_UNREACHABLE` (503, fail closed, nothing written). A pass is
+  recorded on `Account.moneriumProfile` (`id`, `kind`, `name`, `checkedAt`),
+  and every check, pass or refusal, writes an
+  `account.monerium_profile_checked` audit entry. The Beleg names the
+  corporate profile as the IBAN holder, and the export's `prepare` answer
+  lists `ibanOwners`. A name that differs from `legalName` (normalised for
+  case, punctuation and trailing legal forms such as GmbH, UG,
+  haftungsbeschränkt) is a warning on the account, never a block. The list's
+  `profile` field is derived at read time: a business account adopted before
+  the check reads `needs_check` and no row is rewritten. On the hardhat
+  harness a user with no Monerium profile stands in with one of the needed
+  kind.
 - Personal orgs are created by `migrateUsersToOrganisations()` **at DB load
   only**. A user created after the process started has no personal org until
   the next restart or an explicit `POST /api/orgs`.
@@ -556,10 +581,17 @@ flowchart LR
 - Execute runs in this order:
   1. Drift check, then resolve the source account (it must be spendable and
      backed, and **caller = backingUserId**).
-  2. Plan all lines. They must be EUR bank lines above the fee and under the
+  2. Monerium profile, for a business org's account or any account with a
+     recorded profile: no record answers 409 `MONERIUM_PROFILE_UNVERIFIED`;
+     a connected profile id different from the recorded one answers
+     `MONERIUM_PROFILE_CHANGED` without calling Monerium; otherwise the
+     profile is re-read and must still have the right kind and be approved.
+     Monerium unreachable answers 503. All of this happens before the claim,
+     any quote or any fee.
+  3. Plan all lines. They must be EUR bank lines above the fee and under the
      cap, or the call answers 422 and creates nothing.
-  3. Check the total balance, then take the synchronous claim.
-  4. Per line, `createQuote(sepa)` plus the injected `buildTransferFromQuote`.
+  4. Check the total balance, then take the synchronous claim.
+  5. Per line, `createQuote(sepa)` plus the injected `buildTransferFromQuote`.
 
   The response returns one `authorization` per line to sign.
 
@@ -960,7 +992,8 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `PATCH /:orgId/members/:m` (C(members.manage), P(members.update)) | Change role or status. |
 | `POST /invites/accept` (S, email match) | Accept an invitation. |
 | `GET/POST /:orgId/accounts` (P(accounts.read / accounts.open)) | List or open accounts. |
-| `POST /:orgId/accounts/:a/fund` (P(accounts.open)) | Adopt a funded account. |
+| `POST /:orgId/accounts/:a/fund` (P(accounts.open)) | Adopt a funded account. The caller's Monerium profile must be `corporate` for a business org, `personal` for a personal one (§13.1). |
+| `POST /:orgId/accounts/:a/profile-check` (P(accounts.open)) | Re-read the backing user's Monerium profile and record it if it passes. |
 | `GET/POST/PATCH/DELETE /:orgId/contacts[/:c]` (P(contacts.*)) | Address book. |
 | `GET/POST/DELETE /:orgId/wallets[/:w]` (P(wallets.*)) | Imported wallets. |
 

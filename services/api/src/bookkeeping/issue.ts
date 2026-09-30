@@ -6,9 +6,21 @@
  */
 import { randomUUID } from "node:crypto";
 import type { LedgerEntry } from "../domain/types.js";
-import { holderBlock, newDocumentCode, normaliseCode, signSnapshot, type StoredDocument } from "../documents.js";
+import { holderBlock, newDocumentCode, normaliseCode, signSnapshot, type HolderBlock, type StoredDocument } from "../documents.js";
 import { store } from "../store.js";
 import { buildBeleg, type BelegContext, type BelegSnapshot } from "./beleg.js";
+
+/** The IBAN's owner is the Monerium profile, not the person holding the
+ *  device key: a company account's Beleg names the company. */
+function holderFor(user: Parameters<typeof holderBlock>[0], profile: HolderBlock["moneriumProfile"]): HolderBlock {
+  const base = holderBlock(user);
+  if (!profile) return base;
+  return {
+    ...base,
+    ...(profile.kind === "corporate" && profile.name ? { name: profile.name } : {}),
+    moneriumProfile: { id: profile.id, kind: profile.kind, ...(profile.name ? { name: profile.name } : {}), checkedAt: profile.checkedAt },
+  };
+}
 
 export function belegContextFor(entry: LedgerEntry): BelegContext & { userId: string } {
   const s = entry.statement;
@@ -25,7 +37,7 @@ export function belegContextFor(entry: LedgerEntry): BelegContext & { userId: st
   const invoicePayerName = invoice?.issued?.recipient?.name ?? invoice?.supplier?.orgName;
   return {
     userId: user.id,
-    holder: holderBlock(user),
+    holder: holderFor(user, account?.moneriumProfile),
     ...(deposit ? { deposit } : {}),
     ...(transfer ? { transfer } : {}),
     ...(issueOrder ? { issueOrder } : {}),

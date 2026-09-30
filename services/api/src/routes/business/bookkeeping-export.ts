@@ -119,6 +119,13 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
       }
       res.json({
         month,
+        // Which legal entity owns each IBAN, as Monerium reported it at the
+        // account's last profile check; null for an account never checked.
+        ibanOwners: store.accountsOf(ctx.org.id).filter((a) => a.backingUserId).map((a) => ({
+          accountId: a.id,
+          currency: a.currency,
+          moneriumProfile: a.moneriumProfile ?? null,
+        })),
         lines: lines.length,
         belegeIssued: issued.length,
         failed,
