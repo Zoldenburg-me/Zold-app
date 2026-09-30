@@ -17,7 +17,6 @@ function renderUser(u) {
   const plannedSafe = needsPasskeySafeSetup(u) ? u.passkeySafe?.address : null;
   $("address").textContent = plannedSafe ? `planned ${shortAddr(plannedSafe)} — finish smart wallet` : u.address;
   document.querySelector('[data-copy="address"]')?.classList.toggle("hidden", !!plannedSafe);
-  renderAutoConvert(u.paymentPage?.autoConvert);
   renderHandle(u.paymentPage);
   const chip = $("fund-chip");
   if (!kycApproved(u)) {
@@ -119,75 +118,6 @@ function applySegment() {
   // Home, Send and Add money read the capabilities themselves (app/phone.js);
   // this is what is left of the older layout.
   $("btn-send")?.classList.toggle("hidden", !HAS("onchain_balance"));
-}
-
-/* ==========================================================================
-   RECEIVED PAYMENTS — arrive automatically, convert on approval
-   --------------------------------------------------------------------------
-   "Auto-convert" cannot mean unattended. Moving the user's USDC is a
-   UserOperation their passkey signs, and the poller that spots the deposit
-   runs with nobody present. So deposits are detected automatically and
-   converted when the account holder approves, and the screen says so.
-
-   Pending conversions are surfaced prominently. A German company books crypto
-   income at its EUR value on the day it arrives, and converting later realises
-   a gain or loss against that value; converting promptly keeps it near zero.
-   The UI does not explain the tax reasoning.
-   ========================================================================== */
-const dEur = (n) => (typeof n === "number" ? `€${n.toFixed(2)}` : "—");
-
-/**
- * Convert one deposit: prepare the batch, sign its hash with the passkey,
- * submit.
- *
- * One deposit at a time. Each conversion is its own disposal with its own rate
- * and transaction, so each payment traces one-to-one to what it became. Don't
- * batch several into one swap to save a signature.
- */
-async function convertDeposit(depositId, btn) {
-  const label = btn?.textContent;
-  const setBusy = (t) => { if (btn) { btn.disabled = true; btn.textContent = t; } };
-  try {
-    setBusy("Preparing…");
-    const prep = await api(`/api/users/${user.id}/crypto-deposits/${depositId}/convert/prepare`, {});
-    setBusy(`Approve ${dEur(prep.expectedEur)}…`);
-
-    const assertion = await navigator.credentials.get({
-      publicKey: {
-        challenge: b64urlToBytes(prep.challenge),
-        rpId: location.hostname,
-        allowCredentials: prep.credentialId
-          ? [{ type: "public-key", id: b64urlToBytes(prep.credentialId) }]
-          : [],
-        userVerification: "required",
-      },
-    });
-    if (!assertion) throw new Error("no passkey response");
-
-    setBusy("Converting…");
-    const out = await api(`/api/users/${user.id}/crypto-deposits/${depositId}/convert`, {
-      executionAssertion: {
-        credentialId: prep.credentialId,
-        // b64url and b64urlToBytes are declared further down the file. Safe:
-        // both are only reached from a click or a navigation, long after the
-        // script has finished evaluating.
-        authenticatorData: b64url(assertion.response.authenticatorData),
-        clientDataJSON: b64url(assertion.response.clientDataJSON),
-        signature: b64url(assertion.response.signature),
-      },
-    });
-    if (out.safeBalanceEur !== undefined) {
-      user.safeBalanceEur = out.safeBalanceEur;
-      user.balanceEur = out.balanceEur ?? out.safeBalanceEur;
-      renderUser(user);
-    }
-  } catch (err) {
-    if (btn) { btn.disabled = false; btn.textContent = label || "Convert to euro"; }
-    // The passkey being cancelled is not an error worth a red banner — the
-    // user changed their mind, and the deposit is exactly where it was.
-    if (err?.name === "NotAllowedError") return;
-    alert(err.message || "could not convert this payment");
-  }
 }
 
 /* ==========================================================================

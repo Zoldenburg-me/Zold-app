@@ -4,7 +4,7 @@
  * Awaiting a fetch first does not guarantee later scripts have run: while the
  * parser waits on a later external script the event loop keeps running, so
  * /api/session can resolve before send.js exists. renderUser() would then hit
- * an undefined renderAutoConvert, resumeSession's catch would take the
+ * an undefined renderHandle, resumeSession's catch would take the
  * ReferenceError for a dead session, and a returning user would be signed out.
  *
  * Called from here, every classic script has already executed, so there is no

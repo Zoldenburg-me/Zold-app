@@ -172,6 +172,12 @@
           <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
         </button>
 
+        <button class="m-optrow" id="m-pf-currency" style="margin-top:8px">
+          <span class="material-symbols-rounded ic" aria-hidden="true">currency_exchange</span>
+          <span class="tx"><span class="t">Main currency</span><span class="d" id="m-pf-currency-sub">Euro</span></span>
+          <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
+        </button>
+
         <div class="m-seclabel">Security</div>
         <div class="m-rows" id="m-pf-security"></div>
         <div class="error hidden" role="alert" id="m-pf-sec-err"></div>
@@ -329,20 +335,6 @@
         <div class="error hidden" role="alert" id="dep-err"></div>
       </div>
 
-      <div class="card" id="crypto-card">
-        <h2>Crypto in</h2>
-        <div class="detail" style="border-top:none; margin-top:0; padding-top:0">
-          <span class="k">PAYMENT PAGE AUTO-SETTLEMENT</span>
-          <button id="btn-autoconvert" class="togglebtn" aria-label="Payment page auto-settlement" aria-pressed="false">off</button>
-        </div>
-        <div class="hint">
-          Only payments sent to your payment page address are settled automatically. Normal transfers
-          to your smart account stay where they land.
-        </div>
-        <div id="crypto-list"></div>
-        <div class="error hidden" role="alert" id="crypto-err"></div>
-      </div>
-
       <div class="card" id="paylink-card">
         <h2>Payment page</h2>
         <div class="row2">
@@ -352,11 +344,6 @@
           </div>
           <button id="btn-handle">Claim</button>
         </div>
-        <label>Settle incoming payments as</label>
-        <select id="settlement-asset">
-          <option value="EURE">EUR(e)</option>
-          <option value="USDC">USDC</option>
-        </select>
         <div class="detail" id="paylink-row" style="display:none">
           <span class="k">YOUR LINK</span>
           <span class="v" id="paylink">—</span>
@@ -368,9 +355,9 @@
           <button class="copybtn" data-copy="payaddr" aria-label="Copy payment page address">copy</button>
         </div>
         <div class="hint">
-          A page anyone can open to pay you in USDC today — no account needed on their side. It uses
-          a page-specific public address, so auto-settlement applies to page payments, not every
-          transfer into your smart account.
+          A page anyone can open to pay you in digital dollars (USDC), without an account of their
+          own. It has its own address, so your main currency applies to payments to the page, not to
+          every transfer into your account.
         </div>
         <div class="error hidden" role="alert" id="handle-err"></div>
         <button class="ghost wide" id="btn-links" style="margin-top:.6rem">Payment links — ask for an amount</button>
