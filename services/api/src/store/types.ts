@@ -262,6 +262,12 @@ export interface User {
     addresses?: any[];
   };
   /**
+   * Why the last Monerium connect was refused (the login had no profile of
+   * this account's signup kind), for the app to show. Cleared by a connect
+   * that succeeds. Nothing else from the refused connect is kept.
+   */
+  moneriumRefusal?: { code: string; error: string; at: string };
+  /**
    * IBANs the user moved to this Safe from another address at Monerium
    * (PATCH /ibans/{iban}), newest last, so support can see where an IBAN paid
    * before. `confirmedAt` is set only once Monerium's own list shows the IBAN
