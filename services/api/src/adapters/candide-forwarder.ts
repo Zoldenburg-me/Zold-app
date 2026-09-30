@@ -55,6 +55,32 @@ async function forwardingRpc<T>(
   return body.result as T;
 }
 
+interface ForwardingRoute {
+  sourceChainId: number;
+  destinationChainId: number;
+  tokens: { address: string; symbol: string; destinationAddress: string }[];
+}
+
+/**
+ * Refuse unless Candide routes `token` (by its destination-chain address) from
+ * every source chain to CHAIN_ID. `forwarding_getAddress` is pure computation
+ * and answers for any chain id, Base Sepolia included, so an address from it
+ * proves nothing: without a route the relayer never forwards and a payer's
+ * deposit sits in the forwarder.
+ */
+async function assertForwardingRoutes(sourceChainIds: number[], token: `0x${string}`): Promise<void> {
+  for (const sourceChainId of sourceChainIds) {
+    const { routes } = await forwardingRpc<{ routes?: ForwardingRoute[] }>("forwarding_getRoutes", { sourceChainId });
+    const route = routes?.find((r) => r.destinationChainId === CHAIN_ID);
+    if (!route) {
+      throw new Error(`Candide has no forwarding route from chain ${sourceChainId} to chain ${CHAIN_ID}`);
+    }
+    if (!route.tokens?.some((t) => t.destinationAddress?.toLowerCase() === token.toLowerCase())) {
+      throw new Error(`Candide's route from chain ${sourceChainId} to chain ${CHAIN_ID} does not deliver ${token}`);
+    }
+  }
+}
+
 /**
  * Activate the public receive address for a payment page.
  *
@@ -67,6 +93,8 @@ export async function activatePaymentForwarder(params: {
   userId: string;
   handle: string;
   recipient: `0x${string}`;
+  /** Destination-chain token every source route must deliver (the app's USDC). */
+  token: `0x${string}`;
 }): Promise<PaymentForwarderActivation> {
   const recipient = assertAddress("recipient", params.recipient);
   const salt = forwardingSalt(params.userId, params.handle);
@@ -96,6 +124,7 @@ export async function activatePaymentForwarder(params: {
   }
   const custodialWithdrawer = assertAddress("custodialWithdrawer", FORWARDING.custodialWithdrawer);
   const sourceChainIds = FORWARDING.sourceChainIds.length ? FORWARDING.sourceChainIds : [CHAIN_ID];
+  await assertForwardingRoutes(sourceChainIds, assertAddress("token", params.token));
   const baseParams = {
     recipient,
     custodialWithdrawer,
