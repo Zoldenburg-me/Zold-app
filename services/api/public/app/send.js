@@ -1,5 +1,5 @@
 /**
- * The payment page, inbound crypto, the destination-first send flow, the
+ * The payment page settings, the destination-first send flow, the
  * animated transfer timeline, and history.
  */
 /* ---------- payment page ---------- */
@@ -12,7 +12,6 @@ function renderHandle(page) {
     return;
   }
   $("handle-input").value = page.handle;
-  $("settlement-asset").value = page.settlementAsset || "EURE";
   // Shown as an absolute URL because the whole point is pasting it elsewhere.
   $("paylink").textContent = `${location.origin}/pay/${page.handle}`;
   $("payaddr").textContent = page.depositAddress || "—";
@@ -25,61 +24,18 @@ $("btn-handle").onclick = async () => {
   clearErr("handle-err");
   try {
     const handle = $("handle-input").value.trim().toLowerCase();
-    const settlementAsset = $("settlement-asset").value;
-    const r = await api(`/api/users/${user.id}/handle`, { handle, settlementAsset });
+    // Main currency owns the asset; a rename keeps it (the route defaults
+    // an absent one to EURE).
+    const settlementAsset = user.paymentPage?.settlementAsset;
+    const r = await api(`/api/users/${user.id}/handle`, {
+      handle,
+      ...(user.paymentPage?.displayName ? { displayName: user.paymentPage.displayName } : {}),
+      ...(settlementAsset ? { settlementAsset } : {}),
+    });
     user.paymentPage = r.paymentPage;
     renderHandle(r.paymentPage);
-    renderAutoConvert(r.paymentPage?.autoConvert);
     renderMobile(user);
   } catch (e) { showErr("handle-err", e); }
-};
-
-/* ---------- crypto in ---------- */
-function renderAutoConvert(on) {
-  const b = $("btn-autoconvert");
-  b.textContent = on ? "on" : "off";
-  b.dataset.on = on ? "1" : "0";
-  b.setAttribute("aria-pressed", on ? "true" : "false");
-}
-
-/* Deposits are shown whatever their outcome. A refusal is the case a user most
-   needs to see — their USDC arrived and is sitting there unconverted, and the
-   reason says what to do about it. */
-function renderCryptoDeposits(deposits) {
-  const el = $("crypto-list");
-  if (!deposits?.length) { el.innerHTML = ""; return; }
-  el.innerHTML = deposits
-    .map((d) => {
-      const ok = d.state === "CONVERTED";
-      const right = ok
-        ? (d.settlementAsset === "USDC" ? `${fmt(d.creditedUsdc ?? d.amountUsdc, 2)} USDC` : `€${fmt(d.creditedEur ?? 0)}`)
-        : `<span title="${esc(d.reason ?? "")}">not converted</span>`;
-      return `<div class="cdep">
-        <span class="amt">${fmt(d.amountUsdc, 2)} USDC</span>
-        <span class="st ${ok ? "ok" : "no"}">${right}</span>
-      </div>`;
-    })
-    .join("");
-}
-
-async function refreshCryptoDeposits() {
-  if (!user?.id || !sessionToken) return;
-  try {
-    const r = await api(`/api/users/${user.id}/crypto-deposits`);
-    renderAutoConvert(r.autoConvert);
-    if (r.settlementAsset) $("settlement-asset").value = r.settlementAsset;
-    renderCryptoDeposits(r.deposits);
-  } catch { /* the panel is informational; a failure here must not blank the app */ }
-}
-
-$("btn-autoconvert").onclick = async () => {
-  clearErr("crypto-err");
-  try {
-    const next = $("btn-autoconvert").dataset.on !== "1";
-    const u = await api(`/api/users/${user.id}/auto-convert`, { enabled: next });
-    renderUser({ ...user, ...u });
-    await refreshCryptoDeposits();
-  } catch (e) { showErr("crypto-err", e); }
 };
 
 document.querySelectorAll(".copybtn").forEach((b) => {

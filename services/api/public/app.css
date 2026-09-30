@@ -263,20 +263,6 @@
     font-size: .66rem; font-weight: 600; padding: .2rem .55rem; border-radius: 6px; flex: none;
   }
   .copybtn:hover { color: var(--text); background: #202026; filter: none; }
-  /* Deliberately not .copybtn: that class is wired to the clipboard handler. */
-  .togglebtn {
-    background: var(--row); border: 1px solid var(--border2); color: var(--muted);
-    font-size: .66rem; font-weight: 700; padding: .2rem .7rem; border-radius: 6px; flex: none;
-    letter-spacing: .06em; text-transform: uppercase;
-  }
-  .togglebtn[data-on="1"] { color: #07110b; background: var(--green); border-color: transparent; }
-  .togglebtn:hover { color: var(--text); background: #202026; filter: none; }
-  .togglebtn[data-on="1"]:hover { color: #07110b; background: var(--green); }
-  .cdep { display: flex; justify-content: space-between; gap: .6rem; padding: .4rem 0; border-top: 1px solid var(--border); font-size: .74rem; }
-  .cdep .amt { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
-  .cdep .st { font-size: .64rem; font-weight: 700; letter-spacing: .06em; }
-  .cdep .st.ok { color: var(--green); }
-  .cdep .st.no { color: var(--faint); }
 
   /* history — Valerium transaction list */
   .hitem {
