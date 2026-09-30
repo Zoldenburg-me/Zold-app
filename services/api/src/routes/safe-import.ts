@@ -203,6 +203,11 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
           await checkSafeForImport(r, address, verifier);
         }
         const now = new Date().toISOString();
+        const alreadyBound = store.findUserByAddress(address) ??
+          store.users.find((u) => u.id !== user.id && u.passkeySafe?.address.toLowerCase() === address.toLowerCase());
+        if (alreadyBound && alreadyBound.id !== user.id) {
+          throw new Refusal(409, "another account is already bound to that Safe", "ADDRESS_IN_USE");
+        }
         bound = store.updateUser(user.id, {
           address,
           wallet: { type: "candide-safe", deployed: true },
