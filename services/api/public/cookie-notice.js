@@ -16,8 +16,8 @@
  * reject nothing. If a non-essential cookie is ever added, this must become a
  * consent prompt that blocks it until accepted.
  *
- * The full list lives in the landing page's notes (#cookies); keep the two in
- * step. Dismissal is remembered in localStorage (itself necessary storage); if
+ * The full list lives on /privacy (#cookies); keep the two in step.
+ * Dismissal is remembered in localStorage (itself necessary storage); if
  * storage is blocked the notice shows again next time.
  */
 (function () {
@@ -49,8 +49,10 @@
       "Zold stores only what it needs to work: your sign-in and device key in this browser, " +
       "and one short-lived cookie while you connect Monerium. ";
     var more = document.createElement("a");
-    more.href = onLanding ? "#cookies" : "/#cookies";
-    if (!onLanding) { more.target = "_blank"; more.rel = "noopener"; }
+    // The website pages link in place; from inside the app it opens beside it.
+    var onSite = !!document.querySelector('link[href="/site.css"]');
+    more.href = "/privacy#cookies";
+    if (!onSite) { more.target = "_blank"; more.rel = "noopener"; }
     more.textContent = "What we store";
     more.style.cssText = "color:#e8a9cd;text-decoration:none;border-bottom:1px solid rgba(232,169,205,.4);white-space:nowrap";
     text.appendChild(more);
@@ -59,7 +61,7 @@
     ok.type = "button";
     ok.textContent = "Got it";
     ok.style.cssText =
-      "flex:none;height:36px;padding:0 18px;border:0;border-radius:999px;background:#ed188d;color:#fff;" +
+      "flex:none;height:36px;padding:0 18px;border:0;border-radius:999px;background:#ed188d;color:#08080b;" +
       "font:600 13px Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;cursor:pointer";
     // Where keyboard focus was before it entered the notice, so dismissing it
     // can hand focus back instead of dropping it on <body> with the box gone.
