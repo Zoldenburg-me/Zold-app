@@ -38,3 +38,17 @@ Identity and authority. Each of these was a bug once.
 - **A recovery id is not a capability.** Candide recovery's by-id routes need
   the per-request secret handed to the starting browser, and `/finalize` issues
   no session — the new passkey signs in through the ordinary login.
+- **An imported Safe is bound only on what the chain shows**
+  (`routes/safe-import.ts`, checks in `wallet/safe-import.ts`). `confirm`
+  refuses unless the address has code, its singleton (slot 0) is Safe L2
+  v1.4.1 `0x29fc…C762`, the passkey's WebAuthn verifier is an owner with at
+  most one other owner, the threshold is 1, the 4337 module `0x2293…AEAd` is
+  the only enabled module AND the fallback handler, no guard is set, and the
+  verifier has code (confirm deploys it from the deployer if not). A failed
+  RPC read binds nothing. Both routes refuse once the account's own Safe is
+  active or deployed, or while anything (ETH, EURe, USDC) sits at its planned
+  address — an import never replaces a live Safe. The plan records
+  `importedAt`, never `recoveredAt`; both make `accountForPlan` use the stored
+  address. The Safe's current owner makes the passkey an owner themselves
+  (`npm run safe:import-tx`, no key taken): `add` keeps the EOA as the user's
+  own second owner (1 of 2), `swap` removes it. Zold never signs that change.
