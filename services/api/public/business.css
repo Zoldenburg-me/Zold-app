@@ -1,23 +1,26 @@
+  /* The old names, kept so every existing rule reads the UI v2 tokens
+     (tokens.css, loaded first). There is no red and no purple in v2: errors and
+     failures are amber, and the one accent is pink. */
   :root {
-    --bg: #0b0b0e;
-    --side-bg: #09090c;
-    --panel: #131317;
-    --panel2: #0e0e12;
-    --row: #1a1a1f;
-    --border: #232328;
-    --border2: #2c2c33;
-    --text: #ededf0;
-    --muted: #8a8a94;
-    --faint: #5b5b66;
-    --acc: #ed188d;
-    --acc2: #8b5cf6;
-    --grad: linear-gradient(90deg, #7b2ff7, #ed188d);
-    --green: #3dd68c;
-    --amber: #f5a623;
-    --red: #f4436c;
-    --radius: 12px;
-    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --display: "Space Grotesk", var(--font);
+    --bg: var(--z-bg);
+    --side-bg: var(--z-bg);
+    --panel: var(--z-surface);
+    --panel2: var(--z-field);
+    --row: var(--z-line);
+    --border: var(--z-line);
+    --border2: var(--z-line-strong);
+    --text: var(--z-text);
+    --muted: var(--z-dim);
+    --faint: var(--z-dim); /* was #5b5b66, which fails contrast as text */
+    --acc: var(--z-pink);
+    --acc2: var(--z-pink);
+    --grad: var(--z-pink);
+    --green: var(--z-mint);
+    --amber: var(--z-amber);
+    --red: var(--z-amber);
+    --radius: var(--z-radius-md);
+    --font: var(--z-font);
+    --display: var(--z-font);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -60,8 +63,8 @@
   button:disabled { opacity: .45; cursor: not-allowed; }
   button.ghost { background: transparent; border: 1px solid var(--border2); color: var(--text); }
   button.ghost:hover:not(:disabled) { background: var(--row); filter: none; }
-  button.ghost.danger { color: var(--red); border-color: rgba(244,67,108,.5); }
-  button.ghost.danger:hover:not(:disabled) { background: rgba(244,67,108,.12); }
+  button.ghost.danger { color: var(--red); border-color: var(--z-amber-border); }
+  button.ghost.danger:hover:not(:disabled) { background: var(--z-amber-tint); }
   button.sm { padding: .35rem .7rem; font-size: .78rem; }
   /* A link that looks like a button, for navigation (never nest a button in an <a>). */
   a.btn {
@@ -127,7 +130,7 @@
   .pill { display: inline-block; padding: .16rem .5rem; border-radius: 99px; font-size: .68rem; font-weight: 600; letter-spacing: .02em; }
   .pill.ok { background: rgba(61,214,140,.14); color: var(--green); }
   .pill.warn { background: rgba(245,166,35,.14); color: var(--amber); }
-  .pill.bad { background: rgba(244,67,108,.14); color: var(--red); }
+  .pill.bad { background: var(--z-amber-tint); color: var(--red); }
   .pill.mut { background: var(--row); color: var(--muted); }
 
   /* Upgrade prompt shown in place of a gated feature. Don't hide the nav item
@@ -138,7 +141,7 @@
   .gate .needs { font-size: .78rem; color: var(--faint); margin-top: .7rem; }
 
   .banner { border-radius: var(--radius); padding: .75rem 1rem; margin-bottom: 1rem; font-size: .85rem; display: flex; gap: .75rem; align-items: center; }
-  .banner.info { background: rgba(139,92,246,.1); border: 1px solid rgba(139,92,246,.25); }
+  .banner.info { background: var(--z-pink-tint); border: 1px solid var(--z-pink-border); }
   .banner.warn { background: rgba(245,166,35,.1); border: 1px solid rgba(245,166,35,.28); }
   .banner button { margin-left: auto; flex-shrink: 0; }
 
@@ -150,11 +153,11 @@
   dialog h3 { font-family: var(--display); font-size: 1.05rem; margin-bottom: .6rem; }
   .dlg-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1.1rem; }
   .dlg-err { margin-top: .9rem; padding: .6rem .8rem; border-radius: 8px; font-size: .84rem;
-    background: rgba(244,67,108,.1); border: 1px solid rgba(244,67,108,.35); color: var(--red); }
+    background: var(--z-amber-tint); border: 1px solid var(--z-amber-border); color: var(--red); }
   .dlg-err:empty { display: none; }
 
   #toast { position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%); background: var(--row); border: 1px solid var(--border2); padding: .7rem 1.1rem; border-radius: 10px; font-size: .86rem; z-index: 400; max-width: 560px; }
-  #toast.bad { border-color: rgba(244,67,108,.5); }
+  #toast.bad { border-color: var(--z-amber-border); }
 
   @media (max-width: 800px) {
     .shell { grid-template-columns: 1fr; }

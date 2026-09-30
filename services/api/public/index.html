@@ -8,7 +8,7 @@
 <!-- Installable app. The manifest sets start_url=/app, so an installed icon
      opens the account rather than the marketing page. -->
 <link rel="manifest" href="/manifest.webmanifest" />
-<meta name="theme-color" content="#0b0b0e" />
+<meta name="theme-color" content="#08080b" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Zold" />
@@ -21,7 +21,11 @@
 <meta name="description" content="Your Zold euro account: an IBAN, a smart account only your passkey can spend from, and SEPA payouts." />
 <meta name="robots" content="noindex" />
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<!-- UI v2: tokens first, the old stylesheet (which now reads them), then the
+     components, so a component class wins a tie with an old element rule. -->
+<link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/ui.css">
 </head>
 <body>
   <!-- Network state. Outside every screen because it applies to all of them.
@@ -1038,7 +1042,7 @@
           <svg class="spark" width="220" height="64" viewBox="0 0 220 64" aria-hidden="true">
             <defs>
               <linearGradient id="sg" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0" stop-color="#7b2ff7"/><stop offset="1" stop-color="#ed188d"/>
+                <stop offset="0" style="stop-color:var(--z-pink-soft)"/><stop offset="1" stop-color="#ed188d"/>
               </linearGradient>
               <linearGradient id="sf" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0" stop-color="rgba(225,63,163,.22)"/><stop offset="1" stop-color="rgba(225,63,163,0)"/>
@@ -1315,6 +1319,7 @@
      scope exactly as the single inline script they were cut from did, so
      LOAD ORDER IS LOAD-BEARING — core first, main last, and no file calls
      forward into one loaded after it. app/core.js says more. -->
+<script src="/ui.js"></script>
 <script src="/app/core.js"></script>
 <script src="/app/dashboard.js"></script>
 <script src="/app/transactions.js"></script>
