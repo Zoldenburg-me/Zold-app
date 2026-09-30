@@ -45,9 +45,8 @@ const safeUrl = (u) => {
     return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
   } catch { return null; }
 };
-/* An absent status is NOT approval. The old default read a missing field as
-   "approved", which after the in-house review path was removed would have
-   opened funding on any payload that dropped the field. */
+/* An absent status is NOT approval: reading a missing field as "approved"
+   would open funding on any payload that dropped it. */
 const kycApproved = (u = user) => u?.kycStatus === "approved";
 const kycCopy = (status = "pending", u = user) => {
   if (status !== "approved" && hasConnectedMonerium(u)) {

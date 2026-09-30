@@ -34,7 +34,7 @@ Only **one** is a hard blocker: the Monerium production OAuth app (identity and 
 
 **#3 is the strategic one.** Bridge is Stripe-owned (acquired Oct 2024, $1.1B). One integration covers the **bank** rails we'd otherwise chase across dLocal and Yellow Card separately. Worth sending even though it isn't blocking.
 
-> `services/api/src/bridge/bridgexyz.ts` is the Bridge.xyz transfer seam — it replaced the old Circle CCTP worker that previously lived in this directory.
+> `services/api/src/bridge/bridgexyz.ts` is the Bridge.xyz transfer seam.
 
 ### Stripe — two very different things
 
@@ -96,7 +96,7 @@ Two categories that do **not** substitute for each other. Bank rails need the re
 
 | Need | Status | Notes |
 |---|---|---|
-| **KYC** | ✅ **Monerium's** | Removed as a separate concern (Sep 2026): the user signs up or signs in with Monerium (OAuth) or adds their own Monerium API keys; the account is approved when Monerium attributes an IBAN to its Safe. No mock, no Sumsub, no operator approval |
+| **KYC** | ✅ **Monerium's** | Not a separate concern: the user signs up or signs in with Monerium (OAuth) or adds their own Monerium API keys; the account is approved when Monerium attributes an IBAN to its Safe. No mock, no Sumsub, no operator approval |
 | **eSIM / VPN fulfilment** | ❌ Not chosen | Privacy Bundle sells these; fulfilment is manual today. Kokio, Mysterium — credentials pending |
 
 ---

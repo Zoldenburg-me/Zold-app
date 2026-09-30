@@ -23,9 +23,9 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-// A fresh store per run. The fixed /tmp path used to carry the previous run's
-// deposits forward, and the fixture hashes restart at 1 each run — so once the
-// store deduplicated on (txHash, logIndex), run two got run one's rows back.
+// A fresh store per run: the fixture hashes restart at 1 each run and the
+// store deduplicates on (txHash, logIndex), so a shared path would hand run
+// two run one's rows.
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-convert-")), "db.json");
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify({ USD: 1.1379, KES: 147.53, INR: 109.87 });
 process.env.ALLOW_FIXED_RATES = "1";
