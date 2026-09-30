@@ -16,6 +16,9 @@ export interface User {
     reason?: string;
   };
   iban: string; // funding IBAN — mock-issued, or real from Monerium sandbox
+  /** The BIC Monerium lists for `iban` (GET /ibans). Keyed by the IBAN it was
+   *  read for: after a move it no longer matches and is not published. */
+  ibanBic?: { iban: string; bic: string; checkedAt: string };
   /** Candide Safe smart-account address — the user's identity and balance
    *  account, and the address Monerium attaches the IBAN to. */
   address: `0x${string}`;

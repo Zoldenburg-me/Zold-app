@@ -509,6 +509,9 @@ const hist = [];
    not ask", not "nothing happened": an outage must not read as an empty
    account. Rows already loaded stay on screen; only the empty state changes. */
 let histLoadFailed = false;
+/* Set once the first activity load answered, so an empty list before then
+   draws as loading rather than as "No payments yet". */
+let histLoaded = false;
 /** The empty state for a transfer list, or the load failure in its place.
  *  The retry calls loadTransfers() (app/monerium.js) on click, never at parse. */
 function histEmptyHtml(cls, emptyText, style = "") {
@@ -577,8 +580,7 @@ function renderHistory() {
     : histEmptyHtml("empty", "No transfers yet");
   bindHistRetry(h);
   renderTransactionPage();
-  renderMobileActivity();
-  if ($("dashboard").dataset.msub === "activity") renderActivityScreen();
+  phRefresh();
 }
 
 function renderTransactionPage() {

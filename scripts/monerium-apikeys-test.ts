@@ -598,6 +598,16 @@ try {
     assert.equal(seen.unauthorised, 0);
   });
 
+  await t("the account's BIC is the one Monerium lists for its IBAN, and is then on the account read", async () => {
+    const r = await call(`/api/users/${userId}/bic`);
+    assert.equal(r.status, 200, `bic failed: ${r.text}`);
+    assert.equal(r.data.bic, "MONEDEFF", "the BIC comes from Monerium's IBAN record, not the IBAN's country");
+    const me = await call(`/api/users/${userId}`);
+    assert.equal(me.data.bic, "MONEDEFF");
+    assert.equal(me.data.ibanBic, undefined, "the stored record is projected as bic, not sent whole");
+    assert.equal(seen.unauthorised, 0);
+  });
+
   await t("removing the keys drops them from the store and closes the connection", async () => {
     const r = await call(`/api/users/${userId}/monerium/api-keys`, undefined, "DELETE");
     assert.equal(r.status, 200, `remove failed: ${r.text}`);

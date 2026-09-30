@@ -44,7 +44,17 @@
     <div id="ob-root"></div>
   </section>
 
-  <!-- ============ app shell ============ -->
+  <!-- ============ the app ============
+       Home, Activity, Send, Add money, Get paid, Contacts and More, rendered
+       one screen at a time by app/phone.js (design/ui-v2 step 4). The hash
+       names the screen. -->
+  <section id="phone" hidden>
+    <div id="ph-root"></div>
+  </section>
+
+  <!-- ============ older screens ============
+       Settings and what hangs off it (recovery, documents, signers, Monerium
+       keys), the card and Zold Plus, until their own redesign steps. -->
   <section id="dashboard">
     <aside class="side">
       <div class="logo"><span class="tri" aria-hidden="true">▽</span> Zold</div>
@@ -61,163 +71,10 @@
 
     <main class="main">
       <div class="topbar">
-        <h1 id="view-title">Dashboard</h1>
+        <div id="view-title" class="view-title">Dashboard</div>
       </div>
 
       <section class="view active" id="view-dashboard">
-
-      <!-- ================= Noir home =================
-           The mobile dashboard from design_handoff_zold_mobile. It replaces
-           the desktop card stack below, which stays in the document because
-           the funding, crypto, payment-page and Plus cards are still the
-           working implementations — the bottom nav reveals them by setting
-           data-msub rather than duplicating them here. They get their own
-           Noir screens in the next pass. -->
-      <div id="m-home">
-        <div class="m-head">
-          <div class="m-initials" id="m-initials">—</div>
-          <div style="flex:1;min-width:0">
-            <div class="m-name" id="m-name">Account</div>
-            <div class="m-status">
-              <span class="m-dot" id="m-kyc-dot"></span>
-              <span id="m-kyc-label">—</span>
-            </div>
-          </div>
-          <button class="m-iconbtn" id="m-bell" title="Activity" aria-label="Activity"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:19px">notifications</span></button>
-        </div>
-
-        <button class="m-kyc-banner hidden" id="m-kyc-banner">
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:20px;color:var(--m-pink)">badge</span>
-          <span style="flex:1;min-width:0">
-            <span style="display:block;font-size:13px;font-weight:600" id="m-kyc-banner-title">Verify your identity</span>
-            <span style="display:block;font-size:11.5px;color:var(--m-dim);margin-top:1px" id="m-kyc-banner-sub">Adding money and sending stay paused until then.</span>
-          </span>
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
-        </button>
-
-        <!-- Approved account without an IBAN. The desktop funding card carries
-             this action but the mobile shell never shows that card, so an
-             approved account had no way to trigger IBAN issuance from the app.
-             One tap runs the passkey ceremony that links the Safe to Monerium
-             and requests the IBAN (finishing the wallet first if needed). -->
-        <button class="m-kyc-banner hidden" id="m-iban-banner">
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:20px;color:var(--m-pink)">account_balance</span>
-          <span style="flex:1;min-width:0">
-            <span style="display:block;font-size:13px;font-weight:600" id="m-iban-banner-title">Activate your IBAN</span>
-            <span style="display:block;font-size:11.5px;color:var(--m-dim);margin-top:1px" id="m-iban-banner-sub">One passkey approval issues your account IBAN.</span>
-          </span>
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:17px;color:var(--m-faint)">chevron_right</span>
-        </button>
-        <div class="error hidden" role="alert" id="m-iban-err" style="margin-bottom:10px"></div>
-
-        <div class="m-safe">
-          <div class="m-safe-body">
-            <div class="m-safe-top">
-              <div class="m-safe-label"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:13px;color:var(--m-pink)">lock</span> Total in safe</div>
-              <span class="m-chip-eure">EURe</span>
-            </div>
-            <div class="m-balance">
-              <span class="cur">€</span><span class="amt m-fig" id="m-total">0.00</span>
-            </div>
-            <button class="m-addr" id="m-addr" aria-label="Copy Safe address">
-              <span class="k">SAFE</span> <span id="m-addr-short">—</span>
-              <span class="material-symbols-rounded" aria-hidden="true" style="font-size:13px" id="m-addr-icon">content_copy</span>
-            </button>
-          </div>
-          <div class="m-split">
-            <div>
-              <div class="m-mono" style="letter-spacing:.14em">Available</div>
-              <div class="v m-fig" id="m-available">€0.00</div>
-            </div>
-            <div>
-              <div class="m-mono" style="letter-spacing:.14em">In flight</div>
-              <div class="v dim m-fig" id="m-inflight">€0.00</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="m-actions">
-          <button class="m-btn-send" id="m-send"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:19px">north_east</span>Send</button>
-          <button class="m-btn-quiet" id="m-add"><span class="material-symbols-rounded" aria-hidden="true">add</span>Add</button>
-          <button class="m-btn-quiet" id="m-activity"><span class="material-symbols-rounded" aria-hidden="true">swap_vert</span>Activity</button>
-        </div>
-
-        <div class="m-tiles">
-          <!-- Savings vault is in the design but has no endpoint behind it, so
-               it states that rather than moving a number that isn't real. -->
-          <div class="m-tile" id="m-vault" disabled>
-            <div class="m-tile-top">
-              <div class="m-mono">Savings vault</div>
-              <span class="material-symbols-rounded" aria-hidden="true" style="font-size:15px;color:var(--m-faint)">savings</span>
-            </div>
-            <div class="ttl" style="color:var(--m-dim)">Not yet</div>
-            <div class="sub">No vault product is live</div>
-          </div>
-          <button class="m-tile" id="m-plus">
-            <div class="m-tile-top">
-              <div class="m-mono">Zold Plus</div>
-              <span class="m-tag" id="m-plus-tag">—</span>
-            </div>
-            <div class="ttl" id="m-plus-title">Upgrade</div>
-            <div class="sub" id="m-plus-sub">VPN · eSIM</div>
-          </button>
-          <button class="m-tile" id="m-payment-page">
-            <div class="m-tile-top">
-              <div class="m-mono">Payment page</div>
-              <span class="m-tag" id="m-paypage-tag">—</span>
-            </div>
-            <div class="ttl" id="m-paypage-title">Create link</div>
-            <div class="sub" id="m-paypage-sub">Get paid by QR</div>
-          </button>
-          <button class="m-tile" id="m-card-tile">
-            <div class="m-tile-top">
-              <div class="m-mono">Card</div>
-              <span class="m-tag" id="m-card-tag">—</span>
-            </div>
-            <div class="ttl" id="m-card-title">Connect</div>
-            <div class="sub" id="m-card-sub">Gnosis Pay</div>
-          </button>
-        </div>
-
-        <div class="m-notice" id="m-usd">
-          <button class="x" id="m-usd-x" title="Dismiss" aria-label="Dismiss"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:16px">close</span></button>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span class="m-tag soon">SOON</span>
-            <div style="font-size:13.5px;font-weight:600">USD accounts</div>
-          </div>
-          <div class="body">A second balance with US account details. Not open yet, and no waitlist.</div>
-        </div>
-
-        <div class="m-sec">
-          <div class="m-mono">Recent activity</div>
-          <button class="m-link" id="m-seeall">See all</button>
-        </div>
-        <div id="m-recent"><div class="m-empty">No transfers yet</div></div>
-      </div>
-
-      <!-- ================= Add funds ================= -->
-      <div class="m-screen" id="m-add-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-h1">Add funds</div>
-        <div class="m-lede">Two ways in. Bank transfers land as EURe. Wallet payments settle as your payment page is set.</div>
-        <div style="display:grid;gap:8px;margin-top:24px">
-          <button class="m-optrow" id="m-go-bank">
-            <span class="material-symbols-rounded ic" aria-hidden="true">account_balance</span>
-            <span class="tx"><span class="t">Bank account</span><span class="d">SEPA transfer to your IBAN · free</span></span>
-            <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
-          </button>
-          <button class="m-optrow" id="m-go-crypto">
-            <span class="material-symbols-rounded ic" aria-hidden="true">account_balance_wallet</span>
-            <span class="tx"><span class="t">Crypto wallet</span><span class="d">USDC on Base</span></span>
-            <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
-          </button>
-          <div class="m-optrow off">
-            <span class="material-symbols-rounded ic" aria-hidden="true" style="color:var(--m-dim)">attach_money</span>
-            <span class="tx"><span class="t">USD account</span><span class="d">ACH and wire in</span></span>
-            <span class="m-tag soon">SOON</span>
-          </div>
-        </div>
-      </div>
 
       <!-- ================= Card (Gnosis Pay, connected) =================
            Not a Zold card. Gnosis Pay issues it, holds its KYC and owns the
@@ -231,45 +88,7 @@
         <div id="m-card-body" style="margin-top:24px"></div>
       </div>
 
-      <!-- ================= Add: from your bank ================= -->
-      <div class="m-screen" id="m-bank-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback="add" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-h1">From your bank</div>
-        <div class="m-lede">Send a SEPA transfer to these details.</div>
-        <div class="m-rows" id="m-bank-rows"></div>
-        <div class="m-note info">
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:22px;flex:none">info</span>
-          <div>Seconds on SEPA Instant, otherwise the next business day. Send only from an account in your own name.</div>
-        </div>
-        <div class="m-lede" id="m-bank-note" style="font-size:12px;margin-top:16px">Deposits are real SEPA transfers to your Monerium IBAN. They are picked up automatically once Monerium has minted the euros to your wallet.</div>
-        <div class="error hidden" role="alert" id="m-bank-err"></div>
-      </div>
-
-      <!-- ================= Add: from a wallet ================= -->
-      <div class="m-screen" id="m-crypto-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback="add" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-h1">From a wallet</div>
-        <div class="m-lede">USDC on Base only. Anything else is lost.</div>
-        <div id="m-qr-wrap" style="margin-top:24px;display:flex;justify-content:center"></div>
-        <div style="margin-top:20px;border-radius:10px;background:var(--m-surface);padding:16px">
-          <div class="m-rowk">Wallet address</div>
-          <div id="m-wallet" style="font-size:15px;font-family:var(--m-mono);margin-top:8px;word-break:break-all;line-height:1.5"></div>
-          <button class="m-cta quiet" id="m-copy-wallet">Copy address</button>
-        </div>
-        <div class="m-note warn">
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:22px;flex:none">warning</span>
-          <div id="m-crypto-warn">Base network only. When USDC arrives, you approve converting it to EURe with your passkey, at the exchange's rate. We refuse the swap if that rate is too far from the market rate.</div>
-        </div>
-
-        <!-- Payments that have arrived and are waiting to be converted.
-             Deliberately on this screen rather than the home tile: it is the
-             screen the user is on when money is expected, and a pending
-             conversion is not an alert — it is the next step. -->
-        <div class="m-sec" style="margin-top:28px"><div class="m-mono">Payments received</div></div>
-        <div id="m-deposits"></div>
-      </div>
-
-      <!-- ================= Zold Plus (preview) ================= -->
+<!-- ================= Zold Plus (preview) ================= -->
       <div class="m-screen" id="m-plus-screen">
         <div class="m-sheadrow"><button class="m-backbtn" data-mback aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
         <div class="m-card">
@@ -299,175 +118,7 @@
         </button>
       </div>
 
-      <!-- ================= Pay (hub) =================
-           The design offers four rails and searches Zold handles. Two rails
-           are payable and there is no Zold-to-Zold transfer and no crypto
-           send-out, so the other two carry a SOON tag and cannot be pressed,
-           and the search runs over people this account has actually paid
-           rather than implying a directory of Zold users that would find
-           someone and then have nowhere to send them. -->
-      <div class="m-screen" id="m-pay-screen">
-        <div class="m-h2row">
-          <button class="m-backbtn" data-mback aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button>
-          <div class="m-h2">Pay</div>
-        </div>
-        <!-- No qr_code_scanner affordance: nothing in the app scans one. -->
-        <div class="m-search">
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:22px;color:var(--m-dim)">search</span>
-          <input id="m-pay-q" placeholder="Search people you've paid" autocomplete="off" />
-        </div>
-        <div id="m-pay-matches"></div>
-
-        <div class="m-sec"><div class="m-mono">Send with</div></div>
-        <div class="m-rails" id="m-rails"></div>
-
-        <div class="m-sec" id="m-pay-recent-sec"><div class="m-mono">Recent</div></div>
-        <div class="m-avrow" id="m-pay-recent"></div>
-
-        <div class="m-sec"><div class="m-mono">Saved accounts</div></div>
-        <div id="m-pay-saved"></div>
-      </div>
-
-      <!-- ================= Send: where to ================= -->
-      <div class="m-screen" id="m-country-screen">
-        <div class="m-h2row">
-          <button class="m-backbtn" data-mback="pay" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button>
-          <div class="m-h2">Where to?</div>
-        </div>
-        <div class="m-search">
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px;color:var(--m-dim)">search</span>
-          <input id="m-country-q" placeholder="Search destinations" autocomplete="off" />
-        </div>
-        <div id="m-country-list"></div>
-        <!-- The design searches 170+ countries. Two corridors are actually
-             priced and payable, so the rest is stated rather than listed as
-             options that would dead-end at the quote. -->
-        <div class="m-note info" style="margin-top:16px">
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:22px;flex:none">public</span>
-          <div>More destinations open as payout partners sign. We only list what we can price and pay.</div>
-        </div>
-      </div>
-
-      <!-- ================= Send: method ================= -->
-      <div class="m-screen" id="m-method-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback="country" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-h1" id="m-method-dest">—</div>
-        <div class="m-chiprow">
-          <span class="m-chip on" id="m-method-rail">—</span>
-          <span class="m-chip" id="m-method-cur">—</span>
-        </div>
-        <div class="m-lede" style="font-size:14px" id="m-method-intro">How should it arrive?</div>
-        <div style="display:grid;gap:8px;margin-top:16px" id="m-method-list"></div>
-      </div>
-
-      <!-- ================= Send: amount ================= -->
-      <div class="m-screen" id="m-amount-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback="method" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-kick" id="m-amount-kick">—</div>
-        <div class="m-amountline">
-          <span class="cur">€</span>
-          <input id="m-amount" inputmode="decimal" value="250" />
-        </div>
-        <div class="m-presets">
-          <button data-mpreset="50">€50</button>
-          <button data-mpreset="250">€250</button>
-          <button data-mpreset="1000">€1000</button>
-        </div>
-        <div class="m-quote" id="m-quote" aria-live="polite">
-          <div class="m-qnote" id="m-quote-status">Enter an amount to price it.</div>
-          <div id="m-quote-rows"></div>
-          <div class="m-qtotal hidden" id="m-quote-total">
-            <span style="font-size:14px;font-weight:500">They receive</span>
-            <span class="v" id="m-quote-recv">—</span>
-          </div>
-          <div class="m-qnote hidden" id="m-quote-note"></div>
-        </div>
-        <div class="m-qnote" id="m-balance-note"></div>
-        <div class="error hidden" role="alert" id="m-amount-err"></div>
-        <button class="m-cta" id="m-amount-next" disabled>Continue</button>
-      </div>
-
-      <!-- ================= Send: recipient ================= -->
-      <div class="m-screen" id="m-recipient-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback="amount" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-h1">Who gets it?</div>
-        <div class="m-lede" style="font-size:14px" id="m-rec-hint">—</div>
-        <div style="display:grid;gap:12px;margin-top:24px" id="m-rec-fields"></div>
-        <div class="m-quote" style="margin-top:24px">
-          <div class="m-qrow"><span>You send</span><span id="m-sum-send">—</span></div>
-          <div class="m-qrow"><span>They receive</span><span id="m-sum-recv" style="color:var(--m-pink);font-weight:500">—</span></div>
-          <div class="m-qrow"><span>Arrives</span><span id="m-sum-eta">—</span></div>
-        </div>
-        <div class="error hidden" role="alert" id="m-rec-err"></div>
-        <button class="m-cta" id="m-rec-send" disabled>Send</button>
-      </div>
-
-      <!-- ================= Send: progress ================= -->
-      <div class="m-screen" id="m-progress-screen">
-        <div style="padding-top:32px">
-          <div class="m-kick" id="m-prog-kicker">Sending</div>
-          <div style="font-size:36px;font-weight:400;margin-top:8px;font-variant-numeric:tabular-nums;line-height:44px" id="m-prog-amount">—</div>
-          <div class="m-lede" style="margin-top:4px" id="m-prog-to">—</div>
-          <div style="margin-top:32px" id="m-timeline" aria-live="polite"></div>
-          <div class="m-ref hidden" id="m-prog-ref">
-            <div style="font-size:12px;font-weight:500;letter-spacing:.5px;text-transform:uppercase;opacity:.85">MoneyGram reference</div>
-            <div class="code" id="m-prog-code">—</div>
-            <div style="font-size:14px;opacity:.85;letter-spacing:.25px">Collectable with photo ID at any agent</div>
-          </div>
-          <div class="error hidden" role="alert" id="m-prog-err"></div>
-          <button class="m-cta hidden" id="m-prog-done">Done</button>
-        </div>
-      </div>
-
-      <!-- ================= Activity ================= -->
-      <div class="m-screen" id="m-activity-screen">
-        <div class="m-title">Activity</div>
-        <!-- All / SEPA / Cash only. The design also filters Bank and Crypto;
-             neither rail exists here, so those chips would always be empty. -->
-        <div class="m-filters" id="m-filters">
-          <button data-mfilter="all" class="on" aria-pressed="true"><span class="material-symbols-rounded" aria-hidden="true">check</span>All</button>
-          <button data-mfilter="sepa" aria-pressed="false">SEPA</button>
-          <button data-mfilter="cash" aria-pressed="false">Cash</button>
-        </div>
-        <div id="m-tx-list"></div>
-      </div>
-
-      <!-- ================= Transaction detail =================
-           Every field is read off the transfer itself. Rows the transfer does
-           not carry (a payer reference, a MoneyGram code, a refund) are absent
-           rather than blank, so a row on this screen always means something
-           happened. -->
-      <div class="m-screen" id="m-detail-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback="activity" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-dethead">
-          <div class="amt m-fig" id="m-det-amount">—</div>
-          <div class="who" id="m-det-who">—</div>
-          <span class="m-tag" id="m-det-status">—</span>
-        </div>
-        <div class="m-rows" id="m-det-rows"></div>
-        <div class="m-ref hidden" id="m-det-ref">
-          <div style="font:500 9.5px var(--m-mono);letter-spacing:.14em;text-transform:uppercase;opacity:.85">MoneyGram reference</div>
-          <div class="code" id="m-det-code">—</div>
-          <div style="font-size:11px;opacity:.85">Collectable with photo ID at any agent</div>
-        </div>
-        <div class="m-seclabel">Settlement</div>
-        <div id="m-det-timeline"></div>
-        <div class="m-note warn hidden" id="m-det-error"></div>
-        <!-- Only for a transfer that has actually been authorised: a receipt for
-             something still awaiting a signature would publish an outcome that
-             has not happened. The API refuses it too. -->
-        <button class="m-cta quiet hidden" id="m-det-share">
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:18px;vertical-align:-4px;margin-right:6px">ios_share</span>Share receipt
-        </button>
-        <!-- A printable, verifiable receipt of a SEPA payout — the document a
-             landlord or an accountant wants, as opposed to the share page's
-             tracking view. Only once money has actually left. -->
-        <button class="m-cta quiet hidden" id="m-det-receipt">
-          <span class="material-symbols-rounded" aria-hidden="true" style="font-size:18px;vertical-align:-4px;margin-right:6px">receipt_long</span>Transfer receipt (PDF)
-        </button>
-      </div>
-
-      <!-- ================= Share receipt (composer) =================
+<!-- ================= Share receipt (composer) =================
            Pick what a recipient sees. Every selection is enforced server-side
            at /api/r/:slug — the page never receives a withheld value, so this
            screen is choosing what leaves the building, not what gets hidden. -->
@@ -488,7 +139,8 @@
 
       <!-- ================= Profile ================= -->
       <div class="m-screen" id="m-profile-screen">
-        <div class="m-title">Profile</div>
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="more" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-title">Settings</div>
         <div class="m-idcard">
           <div class="av" id="m-pf-initials">—</div>
           <div style="flex:1;min-width:0">
@@ -549,19 +201,7 @@
         <button class="m-cta" id="m-pf-signout" style="background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink);min-height:48px;font-size:14px">Sign out</button>
       </div>
 
-      <!-- ================= Payment links =================
-           A request for a specific amount against the payment page. The code
-           in the link is the credential; the page at /pay/<handle>/<code>
-           offers USDC, a SEPA transfer with the code as reference, or paying
-           from another Zold account, and shows the payer when it lands. -->
-      <div class="m-screen" id="m-links-screen">
-        <div class="m-sheadrow"><button class="m-backbtn" data-mback="home" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
-        <div class="m-h1">Payment links</div>
-        <div class="m-lede">Ask for an amount. The link shows how to pay — USDC, a bank transfer with a reference, or another Zold account — and you see here when it lands.</div>
-        <div id="m-links-body" style="margin-top:24px"></div>
-      </div>
-
-      <!-- ================= Statements & documents =================
+<!-- ================= Statements & documents =================
            Every document is a frozen, signed snapshot under a verification
            code and opens on /v/<code>, where anyone holding the code sees a
            live verdict. The PDF is that page printed. -->
@@ -883,16 +523,7 @@
       </div>
     </div>
 
-    <!-- Bottom navigation. Order is the handoff's: Add · Send · Zold · Activity
-         · Profile, with the brand mark in the centre routing home. -->
-    <nav class="m-nav" id="m-nav">
-      <button data-mnav="add"><span class="ind"><span class="material-symbols-rounded" aria-hidden="true">add</span></span>Add</button>
-      <button data-mnav="send"><span class="ind"><span class="material-symbols-rounded" aria-hidden="true">north_east</span></span>Send</button>
-      <button data-mnav="home" class="active" aria-current="page"><span class="ind"><span class="brand" aria-hidden="true">▽</span></span>Zold</button>
-      <button data-mnav="activity"><span class="ind"><span class="material-symbols-rounded" aria-hidden="true">swap_vert</span></span>Activity</button>
-      <button data-mnav="profile"><span class="ind"><span class="material-symbols-rounded" aria-hidden="true">person</span></span>Profile</button>
-    </nav>
-  </section>
+</section>
 
 <script type="importmap">
 {
@@ -917,6 +548,7 @@
 <script src="/app/onboarding.js"></script>
 <script src="/app/send.js"></script>
 <script src="/app/signers.js"></script>
+<script src="/app/phone.js"></script>
 <script src="/app/pwa.js"></script>
 <script src="/app/main.js"></script>
 <script src="/cookie-notice.js" defer></script>

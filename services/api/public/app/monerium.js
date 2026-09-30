@@ -106,86 +106,16 @@ async function connectMoneriumKeys() {
   }
 }
 
-document.querySelectorAll("#m-filters button").forEach((b) => {
-  b.onclick = () => { mFilter = b.dataset.mfilter; renderActivityScreen(); };
-});
 $("m-pf-plus").onclick = () => mobileNav("plus");
 $("m-pf-monerium").onclick = () => mobileNav("monerium");
 $("m-pf-signout").onclick = () => $("btn-signout").click();
 
-document.querySelectorAll("[data-mpreset]").forEach((b) => {
-  b.onclick = () => { $("m-amount").value = b.dataset.mpreset; requestQuote(); };
-});
-$("m-amount").oninput = () => { clearTimeout(mQuoteTimer); mQuoteTimer = setTimeout(requestQuote, 450); };
-$("m-amount-next").onclick = () => mSend.quote && toRecipient();
-$("m-rec-send").onclick = submitMobileSend;
-$("m-prog-done").onclick = () => { mSend = { dest: null, quote: null, rec: {}, transfer: null, prefill: null }; mobileNav("home"); };
-$("m-country-q").oninput = (e) => renderCountryList(e.target.value);
-$("m-pay-q").oninput = renderPayMatches;
-
+/* The older screens' back buttons: back where the user came from. */
 document.querySelectorAll("[data-mback]").forEach((b) => {
-  b.onclick = () => mobileNav(b.dataset.mback || "home");
+  b.onclick = () => phBack(b.dataset.mback || "home");
 });
 $("m-go-bundle").onclick = () => mobileNav("bundle");
-$("m-go-bank").onclick = () => mobileNav("bank");
-$("m-go-crypto").onclick = () => mobileNav("crypto");
-$("m-copy-wallet").onclick = async () => {
-  if (!user?.address) return;
-  try { await navigator.clipboard.writeText(user.address); } catch { return; }
-  const b = $("m-copy-wallet");
-  b.textContent = "Copied";
-  announce("Copied");
-  setTimeout(() => { b.textContent = "Copy address"; }, 1400);
-};
-
-document.querySelectorAll("#m-nav button").forEach((b) => {
-  b.onclick = () => mobileNav(b.dataset.mnav);
-});
-$("m-send").onclick = () => mobileNav("send");
-$("m-add").onclick = () => mobileNav("add");
-$("m-activity").onclick = () => mobileNav("activity");
-$("m-bell").onclick = () => mobileNav("activity");
-$("m-seeall").onclick = () => mobileNav("activity");
-$("m-plus").onclick = () => mobileNav("plus");
-$("m-payment-page").onclick = () => mobileNav("payment");
-$("m-card-tile").onclick = () => mobileNav("card");
-$("m-back").onclick = () => mobileNav("home");
-$("m-kyc-banner").onclick = () => enterKycReview(user?.name || "Account");
-
-$("m-iban-banner").onclick = async () => {
-  const banner = $("m-iban-banner");
-  const title = $("m-iban-banner-title");
-  const err = $("m-iban-err");
-  err.classList.add("hidden");
-  banner.disabled = true;
-  const prev = title.textContent;
-  title.textContent = "Approve with your passkey…";
-  try {
-    await finishPasskeySafeSetup();
-    await issueAppIban();
-    renderUser(user);
-  } catch (e) {
-    title.textContent = prev;
-    err.textContent = e.message || String(e);
-    err.classList.remove("hidden");
-  } finally {
-    banner.disabled = false;
-  }
-};
-
-/* Copy the Safe address. The icon confirms for 1.4s, per the handoff. */
-$("m-addr").onclick = async () => {
-  if (!user?.address) return;
-  try { await navigator.clipboard.writeText(user.address); } catch { return; }
-  const icon = $("m-addr-icon");
-  icon.textContent = "check"; // aria-hidden: the words go to the live region
-  announce("Copied");
-  setTimeout(() => { icon.textContent = "content_copy"; }, 1400);
-};
-
-/* USD accounts: no waitlist exists, so there is no "notify me" button — the
-   notice says so and can only be dismissed. */
-$("m-usd-x").onclick = () => $("m-usd").classList.add("hidden");
+$("m-back").onclick = () => phBack("home");
 
 /**
  * What this deployment lets the browser do. Defaults are the SAFE ones: with
@@ -448,6 +378,7 @@ async function loadTransfers() {
     const data = await api(`/api/users/${user.id}/activity`);
     hist.splice(0, hist.length, ...(data.activity || []));
     histLoadFailed = false;
+    histLoaded = true;
     renderHistory();
     renderTransactionPage();
   } catch {
