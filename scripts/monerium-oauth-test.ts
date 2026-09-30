@@ -235,9 +235,11 @@ const stub = createServer((req, res) => {
 
     if (url.startsWith("/auth/context")) return send(200, { userId: "monerium-user-1", email: "user@example.com" });
     if (url.startsWith("/profiles")) {
+      // Corporate first: a personal account must still get its personal
+      // profile, chosen by kind, not by position.
       return send(200, { profiles: [
-        { id: PROFILE_ID, kind: "personal", state: "approved" },
         { id: BUSINESS_PROFILE_ID, kind: "corporate", state: "approved" },
+        { id: PROFILE_ID, kind: "personal", state: "approved" },
       ] });
     }
 
@@ -434,6 +436,7 @@ try {
     const u = new URL(redirectUrl);
     assert.equal(u.searchParams.get("response_type"), "code");
     assert.equal(u.searchParams.get("code_challenge_method"), "S256");
+    assert.equal(u.searchParams.get("email"), "existing@example.com", "Monerium's form is prefilled with the Zold signup email");
     seen.codeChallenge = u.searchParams.get("code_challenge") ?? "";
     seen.redirectUriAtStart = u.searchParams.get("redirect_uri") ?? "";
     assert.ok(seen.codeChallenge.length >= 43, "expected an S256 challenge");
@@ -494,7 +497,8 @@ try {
     const r = await call(`/api/users/${userId}/monerium/accounts`);
     assert.equal(r.status, 200);
     assert.ok(r.data.ibans.some((i: any) => i.iban === EXISTING_IBAN), "expected the user's pre-existing IBAN");
-    assert.equal(r.data.profiles[0].id, PROFILE_ID);
+    assert.ok(r.data.profiles.some((p: any) => p.id === BUSINESS_PROFILE_ID), "the login's company profile is listed");
+    assert.equal(r.data.profileId, PROFILE_ID, "but a personal account stays connected under its personal profile");
   });
 
   await t("the user still cannot quote — connecting is not approval", async () => {

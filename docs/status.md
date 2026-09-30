@@ -26,9 +26,17 @@ Say this plainly rather than letting the surface imply otherwise:
   The app's sandbox login holds only `personal` profiles (none approved, read
   2026-09-30), so the corporate path and the `name` a corporate profile
   carries have run only against the fake Monerium in
-  `monerium:profile:test`. Choosing among several profiles on one Monerium
-  login is not built: the user's one recorded profile is checked, so a
-  company needs its own Zold login connected to its corporate profile.
+  `monerium:profile:test`. Which profile a login uses is fixed at connect
+  by its signup kind (personal or corporate, the other kind never), so a
+  company needs its own Zold login. A founder who signed up personally and
+  wants a company IBAN is sent to support@zoldhq.com for a separate account
+  with its own Safe, set up by hand; no such account has been set up yet.
+  A wrong-kind OAuth login is refused only after the user has signed in at
+  Monerium (its `/auth` takes no profile kind; the signup email is
+  prefilled). Whether Monerium then keeps them signed in, so that "connect
+  again" returns the same login until they sign out there, is unverified.
+  Logins connected before this rule are not re-read: one connected to a
+  profile of the other kind keeps it until it reconnects.
   The check gates sending only: invoices and pay links still receive into
   an account whose profile has not been checked.
 - **Open questions for Monerium** about the profile-kind rule:

@@ -141,8 +141,14 @@ flowchart TB
   personal one): Monerium's Personal Terms §16 forbid using a personal
   account for a company's or its clients' money. So a company needs its own
   Zold login connected to its own Monerium company profile; a member's
-  personal IBAN cannot back it. The profile is re-checked at every draft
-  execution (technical-architecture §13.1).
+  personal IBAN cannot back it. The profile a login uses is fixed at connect
+  by how it signed up: a personal signup takes only its personal profile, a
+  company signup only its corporate one, even when the same Monerium login
+  holds both. A personal signup that wants to use a company IBAN is refused
+  and pointed to support@zoldhq.com, which sets up a separate account with
+  its own Safe by hand: one Safe behind two IBANs would mix the balances.
+  The profile is re-checked at every draft execution
+  (technical-architecture §13.1).
 
 ---
 
