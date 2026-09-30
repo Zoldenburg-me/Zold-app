@@ -80,15 +80,15 @@ function mobileNav(target) {
 /** Routing of the older screens. `msub` names the sub-screen. */
 function mobileNavLegacy(target) {
   const shell = $("dashboard");
-  const sub = { plus: "plus", bundle: "bundle", payment: "payment", share: "share", profile: "profile", card: "card",
-    monerium: "monerium", recovery: "recovery", documents: "documents", signers: "signers" }[target] || "profile";
+  const sub = { plus: "plus", bundle: "bundle", payment: "payment", share: "share", card: "card",
+    monerium: "monerium", recovery: "recovery", documents: "documents", signers: "signers" }[target];
+  if (!sub) return phGo("settings");
   shell.dataset.msub = sub;
   switchView("dashboard");
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
   if (sub === "bundle") $("m-subtitle").textContent = "Zold Plus";
   if (sub === "card") renderCardScreen();
   if (sub === "share") renderShareScreen();
-  if (sub === "profile") renderProfileScreen();
   if (sub === "monerium") renderMoneriumScreen();
   if (sub === "recovery") renderRecoveryScreen();
   if (sub === "documents") renderDocumentsScreen();

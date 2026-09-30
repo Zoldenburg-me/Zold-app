@@ -3,8 +3,8 @@
 The full rules behind the one-line versions in `AGENTS.md` → Invariants →
 Identity and authority. Each of these was a bug once.
 
-- **The user may add their OWN second owner** (Profile → Enable advanced
-  features → Signers & rules; `routes/safe-signers.ts`). Read from the chain on
+- **The user may add their OWN second owner** (Settings → Who approves
+  payments; `routes/safe-signers.ts`). Read from the chain on
   every visit, changed only by passkey-signed ops. Zold cannot collect that
   owner's signature, so at threshold > 1 `assertPasskeyAloneCanSign` refuses
   every op (409 `SAFE_NEEDS_MORE_SIGNATURES`); raising the threshold therefore

@@ -106,9 +106,6 @@ async function connectMoneriumKeys() {
   }
 }
 
-$("m-pf-plus").onclick = () => mobileNav("plus");
-$("m-pf-monerium").onclick = () => mobileNav("monerium");
-$("m-pf-signout").onclick = () => $("btn-signout").click();
 
 /* The older screens' back buttons: back where the user came from. */
 document.querySelectorAll("[data-mback]").forEach((b) => {
