@@ -452,7 +452,10 @@ flowchart LR
   refused. Claiming one needs a deployed, active passkey Safe. The deposit
   address comes from the Candide forwarding RPC
   (`forwarding_getAddress` + `account_activateForwardingAddress`, salt
-  `sha256("transf:payment-page:<userId>:<handle>")`). With no forwarding RPC,
+  `sha256("transf:payment-page:<userId>:<handle>")`). Activation first asks
+  `forwarding_getRoutes` for every source chain and refuses unless each routes
+  the app's USDC to the app chain: `forwarding_getAddress` answers for any
+  chain id, and Candide routes nothing on any testnet. With no forwarding RPC,
   non-production uses the Safe itself and production throws.
 - **QR** (`qr.ts`): a hand-written byte-mode encoder, EC level L, versions
   1–6, rendered as server-side SVG. It carries the bare address because an
