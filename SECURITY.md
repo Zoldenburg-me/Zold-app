@@ -25,7 +25,7 @@ Known limitations are documented where they live rather than hidden:
 - Several external legs are proven only as far as their sandboxes allow;
   the code and docs say explicitly which halves have never run against
   the real counterparty.
-- "What has never run" in `CLAUDE.md` lists which legs are still unproven
+- `docs/status.md` lists which legs are still unproven
   and must be finished before this should ever hold real funds. Read it before
   deploying anything.
 

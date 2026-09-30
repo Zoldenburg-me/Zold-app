@@ -1,13 +1,11 @@
 /**
  * The page's entry points. LAST IN THE LOAD ORDER, and it has to be.
  *
- * These used to sit at the end of onboarding.js on the theory that both
- * begin by awaiting a fetch, so everything they touch would exist by the time
- * the fetch came back. That is not a guarantee. While the parser waits on a
- * later external script the event loop keeps running, so /api/session could
- * resolve before send.js had run; renderUser() then hit an undefined
- * renderAutoConvert, and resumeSession's catch took the ReferenceError for a
- * dead session and deleted the stored token. A returning user was signed out.
+ * Awaiting a fetch first does not guarantee later scripts have run: while the
+ * parser waits on a later external script the event loop keeps running, so
+ * /api/session can resolve before send.js exists. renderUser() would then hit
+ * an undefined renderAutoConvert, resumeSession's catch would take the
+ * ReferenceError for a dead session, and a returning user would be signed out.
  *
  * Called from here, every classic script has already executed, so there is no
  * forward reference left to lose the race.

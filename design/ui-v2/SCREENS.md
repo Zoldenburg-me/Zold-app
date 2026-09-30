@@ -41,7 +41,7 @@ Implement in: `services/api/public/index.html + app/onboarding.js, app/pwa.js` (
 | [Welcome](screens/Welcome.html) | LIVE | Welcome tour card while the IBAN is in review. | Next | [Home-Personal](screens/Home-Personal.html) |
 
 - **Auth** (412px). Returning users must see sign-in first. Recovery link always visible. 
-- **Install-iOS** (412px). PWA install on iOS is untested and may split storage from Safari (CLAUDE.md). Show before account creation, not after. 
+- **Install-iOS** (412px). PWA install on iOS is untested and may split storage from Safari (docs/status.md). Show before account creation, not after. 
 - **Install-Android** (412px). Fall back to the menu instructions when the event never fires. 
 - **Recovery-Choice** (412px). Skipping requires ticking the warning; recoveryChoice records the answer. No recovery has run on chain yet. fields: recovery; status tags: Recommended.
 - **Monerium-Connect** (412px). The API-keys option shows only when /api/health says moneriumApiKeys (the apiKeys tweak). 
@@ -233,7 +233,7 @@ Implement in: `app/recovery.js + routes/recovery-candide.ts, routes/recovery-zol
 | [Recovery-Alert](screens/Recovery-Alert.html) | PARTIAL | Old phone: someone is moving your account; cancel or confirm. | Cancel recovery | [Home-Active](screens/Home-Active.html) |
 | [Recovery-Done](screens/Recovery-Done.html) | PARTIAL | Recovery complete. | Sign in | [Home-Active](screens/Home-Active.html), [Recovery-Choice](screens/Recovery-Choice.html) |
 
-- **Recover** (412px). No recovery has run on chain (CLAUDE.md, What has never run). fields: rc-email.
+- **Recover** (412px). No recovery has run on chain (docs/status.md). fields: rc-email.
 - **Recovery-Codes** (412px). No mail transport exists yet: say what the user must do to get a code. fields: code; status tags: Entering, Next.
 - **Recovery-Pending** (412px). The new phone cannot sign in or spend during the grace period. 
 - **Recovery-Zoldenburg** (412px). Zoldenburg can only start a move; the waiting period always applies. 
