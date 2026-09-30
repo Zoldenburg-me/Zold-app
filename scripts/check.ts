@@ -29,6 +29,7 @@ const scripts = [
   "shopify:orders:test",
   "monerium:oauth:test",
   "monerium:apikeys:test",
+  "monerium:profile:test",
   "sepa:test",
   "receipt:test",
   "device-key:test",

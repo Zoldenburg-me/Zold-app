@@ -22,6 +22,21 @@ Say this plainly rather than letting the surface imply otherwise:
   sandbox allows PATCH to a `basesepolia` address is unverified, and so is
   the `profile` field on GET /ibans items that the move and the
   `IBAN_EXISTS_ELSEWHERE` answer rely on (without it both refuse).
+- **The Monerium profile-kind check has never read a corporate profile.**
+  The app's sandbox login holds only `personal` profiles (none approved, read
+  2026-09-30), so the corporate path and the `name` a corporate profile
+  carries have run only against the fake Monerium in
+  `monerium:profile:test`. Choosing among several profiles on one Monerium
+  login is not built: the user's one recorded profile is checked, so a
+  company needs its own Zold login connected to its corporate profile.
+  The check gates sending only: invoices and pay links still receive into
+  an account whose profile has not been checked.
+- **Open questions for Monerium** about the profile-kind rule:
+  - Which terms apply to sole traders and freelancers, who are not legal
+    persons: Personal or Business? Today a business org requires `corporate`.
+  - Can one Safe address be linked to two profiles?
+  - Does an invoice refund fall under Personal Terms §16's ban on receiving
+    and sending back the same amount to the same customer?
 - **No Shopify app is registered** and no store has installed one; the
   payments-app route additionally needs approval into Shopify's Payments Apps
   program, which is uncertain, not merely slow — hence `custom-app` is the

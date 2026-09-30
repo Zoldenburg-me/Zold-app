@@ -52,6 +52,7 @@
     "shopify:orders:test": "tsx scripts/shopify-orders-test.ts",
     "monerium:oauth:test": "tsx scripts/monerium-oauth-test.ts",
     "monerium:apikeys:test": "tsx scripts/monerium-apikeys-test.ts",
+    "monerium:profile:test": "tsx scripts/monerium-profile-kind-test.ts",
     "travelrule:test": "STELLAR_HORIZON=https://horizon-testnet.stellar.org STELLAR_PASSPHRASE='Test SDF Network ; September 2015' STELLAR_FRIENDBOT=https://friendbot.stellar.org MG_ANCHOR_DOMAIN=testanchor.stellar.org tsx scripts/travel-rule-test.ts",
     "stellar:setup": "tsx scripts/stellar-setup.ts",
     "stellar:payout:live": "tsx scripts/stellar-payout-live.ts",
