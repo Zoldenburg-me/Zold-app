@@ -50,6 +50,7 @@ const scripts = [
   "anchor:sweep:test",
   "refund:guard:test",
   "business:test",
+  "draft:test",
   "security:test",
   "plan:test",
   "invoicing:test",

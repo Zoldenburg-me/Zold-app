@@ -17,7 +17,7 @@
  * "dry-run" literal only for rows written before the rail was closed.)
  */
 import { BRIDGE, FX, railFeeEur } from "./config.js";
-import { moneriumLiveFor } from "./adapters/monerium-connection.js";
+import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "./adapters/monerium-connection.js";
 import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
@@ -932,9 +932,7 @@ export async function executeSepaTransfer(
     // Checked BEFORE the fee debit — a fee taken for a payout that cannot be
     // placed would only have to be refunded.
     if (!moneriumLiveFor(user)) {
-      throw new Error(
-        "no Monerium connection for this account — sign in with Monerium or add your Monerium API keys before sending",
-      );
+      throw new Error(MONERIUM_NOT_CONNECTED.error);
     }
 
     await debitSafeFundedSepaFee(transfer, user, auth, payoutEur, txs, execution);
