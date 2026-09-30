@@ -7,7 +7,7 @@
  * passkey-signed UserOperation, or that Monerium accepts its link signature.
  * docs/status.md records what ran on Base Sepolia.
  */
-import "./_test-env.js";
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,8 +23,10 @@ import {
 } from "viem";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// Before config.ts is read: a real chain id (no harness), and a throwaway db.
-process.env.TRANSF_CHAIN_ID = "84532";
+// Before config.ts is read: _local-chain pinned 31337; the harness goes back
+// off because the routes refuse under it. No chain is read (the reader and the
+// token list are canned), so nothing depends on a deployments.json entry.
+process.env.LOCAL_HARNESS = "0";
 process.env.CANDIDE_CHAIN_ID = "84532";
 process.env.KYC_AUTO_APPROVE = "0";
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "safe-import-")), "db.json");
@@ -47,6 +49,8 @@ type Hex = `0x${string}`;
 const SAFE = getAddress("0x5afe00000000000000000000000000000000beef") as Hex;
 const EOA = getAddress("0xe0a0000000000000000000000000000000000001") as Hex;
 const OTHER = getAddress("0x0ade000000000000000000000000000000000002") as Hex;
+const EURE = getAddress("0xe00e000000000000000000000000000000000005") as Hex;
+const USDC = getAddress("0x05dc000000000000000000000000000000000006") as Hex;
 const STRANGER_MODULE = getAddress("0xbad0000000000000000000000000000000000003") as Hex;
 const GUARD = getAddress("0x6a4d000000000000000000000000000000000004") as Hex;
 const SENTINEL = "0x0000000000000000000000000000000000000001";
@@ -242,6 +246,7 @@ app.use(express.json());
 app.use("/api", createSafeImportRouter({
   requireUserSession: () => true,
   reader: () => readerFor(chain),
+  tokens: () => [EURE, USDC],
   deployVerifier: async (o) => {
     deployed.push(o);
     return undefined; // the test never relays; confirm must then refuse
@@ -297,8 +302,10 @@ await check("confirm tries the verifier deployment, and refuses when it cannot s
 await check("funds at the planned address refuse the import", async () => {
   chain = { ...goodChain(), eth: { [planAddress.toLowerCase()]: 1n } };
   assert.equal((await post("/users/u1/safe/import/confirm", { address: SAFE })).body.code, "PLAN_HAS_FUNDS");
-  chain = { ...goodChain(), tokens: { [`0x036CbD53842c5426634e7929541eC2318f3dCF7e:${planAddress}`.toLowerCase()]: 1n } };
-  assert.equal((await post("/users/u1/safe/import/confirm", { address: SAFE })).body.code, "PLAN_HAS_FUNDS");
+  for (const token of [EURE, USDC]) {
+    chain = { ...goodChain(), tokens: { [`${token}:${planAddress}`.toLowerCase()]: 1n } };
+    assert.equal((await post("/users/u1/safe/import/confirm", { address: SAFE })).body.code, "PLAN_HAS_FUNDS");
+  }
 });
 await check("a deployed own Safe is never replaced", async () => {
   chain = goodChain();
