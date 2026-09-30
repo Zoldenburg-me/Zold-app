@@ -175,7 +175,7 @@ the current authorizer can rotate a device key.
 
 ## Environment
 
-- Ports 3000 (API/UI), 8545 (chain), 8546 (contract tests).
+- Ports 3000 (API/UI), 8545 (chain); contract tests pick a free port.
 - No `gh` CLI, no brew. `origin` is SSH and pushes without a token. Opening
   PRs via the REST API needs a PAT the user mints per session (HTTPS username
   `tonyzil`, not `x-access-token`); tell the user to revoke it after.

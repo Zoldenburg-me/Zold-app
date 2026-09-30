@@ -28,7 +28,7 @@ To fund locally: mint MockToken EURe straight to the user's Safe from hardhat
 account 0 (the token owner) and `refresh()` picks it up.
 
 To see the KYC gate locally, `npm run dev` cannot do it (`scripts/_test-env.ts`
-blanks `KYC_AUTO_APPROVE`). Run a second API against the chain dev.ts started —
+sets `KYC_AUTO_APPROVE=1`). Run a second API against the chain dev.ts started —
 `TRANSF_API_PORT=3001 TRANSF_CHAIN_ID=31337 KYC_AUTO_APPROVE=0 RP_ID=localhost`
 with the operator `*_KEY` vars **blanked** (.env holds real Base Sepolia keys
 that do not own the local deployment).
