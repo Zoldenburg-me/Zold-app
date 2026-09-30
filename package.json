@@ -70,6 +70,7 @@
     "security:test": "tsx scripts/security-hardening-test.ts",
     "plan:test": "tsx scripts/plan-grant-test.ts",
     "draft:test": "tsx scripts/draft-execution-test.ts",
+    "draft:failure:test": "tsx scripts/draft-batch-failure-test.ts",
     "invoicing:test": "tsx scripts/invoicing-test.ts",
     "custody:test": "tsx scripts/custody-test.ts",
     "segments:test": "tsx scripts/segments-test.ts",

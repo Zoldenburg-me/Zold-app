@@ -207,6 +207,73 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   the API answers 409 naming the mismatch. `HARNESS.enabled`
   (`LOCAL_HARNESS=1` on 31337 and not production) fakes the op hashes.
 
+#### 5.1.1 Deploy parameters
+
+Values are abstractionkit 0.4.0 defaults for `SafeMultiChainSigAccountV1`. The
+init code hash was recomputed from `proxyCreationCode()` read from the factory
+on Base. Every contract below has the same address on every chain, so a Safe
+address is the same on every chain it is deployed to.
+
+| Contract | Address |
+|---|---|
+| SafeProxyFactory v1.4.1 (CREATE2 deployer) | `0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67` |
+| Singleton: Safe **L2** v1.4.1 | `0x29fcB43b46531BcA003ddC8FCB67FFE91900C762` |
+| Proxy init code hash (with the L2 singleton) | `0xe298282cefe913ab5d282047161268a8222e4bd4ed106300c547894bbefd31ee` |
+| Safe 4337 module (enabled module and fallback handler) | `0x22939E839e3c0F479B713eAF95e0df128554AEAd` |
+| Safe module setup (`enableModules`) | `0x2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47` |
+| MultiSend | `0x38869bf66a61cF6bDB996A6aE40D5853Fd43B526` |
+| EntryPoint v0.9 | `0x433709009B8330FDa32311DF1C2AFA402eD8D009` |
+| WebAuthn shared signer v0.2.1 | `0x94a4F6affBd8975951142c3999aEAB7ecee555c2` |
+| WebAuthn signer factory / singleton v0.2.1 | `0x1d31F259eE307358a26dFb23EB365939E8641195` / `0x4E27b51350e6c2083EE19011120F50DAfEc5CA50` |
+| P-256 verifiers: RIP-7951 precompile, Daimo fallback | `0x0000000000000000000000000000000000000100`, `0xc2b78104907F722DABAc4C69f826a522B2754De4` |
+
+The singleton is baked into the init code hash, not the initializer. The
+Safe **L1** singleton `0x41675C099F32341bf84BFc5382aF534df5C7461a` gives init
+code hash `0x76733d705f71b79841c0ee960a0ca880f779cde7ef446c989e6d23efc0a4adfb`
+and a different address; it is not what Zold deploys, and vanity miners
+often default to it.
+
+Address:
+
+```
+initializer = abi.encodeCall(Safe.setup, (owners, threshold, to, data,
+              fallbackHandler, address(0), 0, address(0)))
+salt        = keccak256(keccak256(initializer) ‖ uint256(saltNonce))
+address     = keccak256(0xff ‖ factory ‖ salt ‖ initCodeHash)[12:]
+```
+
+Zold always uses `saltNonce` 0 (abstractionkit `c2Nonce`); nothing stores
+another value.
+
+`setup()` for a passkey Safe (what `smartAccountForPasskey` deploys):
+
+| Argument | Value |
+|---|---|
+| owners | `[WebAuthn shared signer]` |
+| threshold | `1` |
+| to | MultiSend |
+| data | `multiSend` of two delegatecalls: module setup `enableModules([4337 module])`, then shared signer `configure({x, y, verifiers})`, where `verifiers` packs the precompile (`0x0100`) above the Daimo verifier |
+| fallbackHandler | 4337 module |
+
+The passkey's x/y are in the initializer, so the address is per passkey. After
+deployment, signatures from a deployed Safe name the passkey's own verifier
+proxy (`passkeyAccountAddress`), not the shared signer (`isInit: !deployed`).
+
+`setup()` for an EOA-owned Safe with the same modules
+(`createInitializerCallData([eoa], 1)`, no WebAuthn configuration):
+
+| Argument | Value |
+|---|---|
+| owners | `[eoa]` |
+| threshold | `1` |
+| to | module setup |
+| data | `enableModules([4337 module])` |
+| fallbackHandler | 4337 module |
+
+Such a Safe depends only on the EOA, so its address can be mined before any
+passkey exists. Zold has no path that adopts one: `accountForPlan` accepts a
+stored address only for a recovered Safe (`recoveredAt`).
+
 ### 5.2 Device key (`public/device.js`)
 
 - A secp256k1 key is generated in the browser and stored in
