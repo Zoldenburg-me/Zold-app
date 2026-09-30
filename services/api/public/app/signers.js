@@ -1,31 +1,13 @@
 /**
  * Advanced security: signers and rules on the smart account.
  *
- * Off by default behind "Advanced features" in Profile → Security. Everything
+ * Opened from Settings and Security (app/settings.js). Everything
  * shown is read from the chain on each visit (GET /safe/signers), because an
  * owner added or removed on app.safe.global changes it without Zold hearing.
  * Every change is a passkey-signed operation: prepare → sign → submit.
  */
-const ADVANCED_KEY = "zold-advanced";
-const advancedOn = () => { try { return localStorage.getItem(ADVANCED_KEY) === "1"; } catch { return false; } };
-
 let signersState = null;  // last GET /safe/signers
 let signersView = "main"; // main | owner | lock | limit
-
-/** The Profile toggle and the row it reveals. Called from renderProfileScreen. */
-function renderAdvancedToggle() {
-  const on = advancedOn();
-  const sw = $("m-pf-advanced");
-  sw.setAttribute("aria-checked", String(on));
-  $("m-pf-advanced-sub").textContent = on ? "Signers and rules are shown below" : "Second owner, cosigner rules, spending limits";
-  $("m-pf-signers").classList.toggle("hidden", !on);
-}
-
-$("m-pf-advanced").onclick = () => {
-  try { localStorage.setItem(ADVANCED_KEY, advancedOn() ? "0" : "1"); } catch {}
-  renderAdvancedToggle();
-};
-$("m-pf-signers").onclick = () => { signersView = "main"; mobileNav("signers"); };
 
 const sgAddr = (a) => `<span translate="no" style="font-family:var(--m-mono);text-transform:none;letter-spacing:0" title="${esc(a)}">${esc(shortAddr(a))}</span>`;
 
