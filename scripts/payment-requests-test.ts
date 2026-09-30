@@ -438,6 +438,24 @@ try {
     (bankInv.settlements ?? []).length === 1 && bs?.method === "bank" && bs.counterpartyName === "Ada Payer" &&
       bs.counterpartyIban === "DE02120300000000202051" && bs.matchedOn === "invoice-number" && bs.amountEur === 25,
     JSON.stringify(bankInv.settlements));
+  check("a credit that covers the invoice closes it: PAID, with the credit's time as paidAt",
+    bankInv.state === "PAID" && bankInv.payment?.paidAt === bs?.at, JSON.stringify({ state: bankInv.state, payment: bankInv.payment }));
+  let againStatus: number | undefined;
+  try {
+    await routes.createPaymentRequest(miriam, { methods: ["crypto"], expiresAt: new Date(Date.now() + 3_600_000).toISOString(), invoiceId: bankPaid }, { kind: "app" } as any, orgId);
+  } catch (err: any) {
+    againStatus = err?.status;
+  }
+  check("so a paid invoice cannot be collected a second time", againStatus === 409, String(againStatus));
+  const invDomain = await import("../services/api/src/domain/invoices.js");
+  check("and it cannot be deleted", (() => { try { invDomain.assertDeletable(store.findInvoice(bankPaid)!); return false; } catch { return true; } })());
+  const partly = mkInvoice({}, issuedSnapshot(5000, { number: "RE-2026-0778" }));
+  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-half", memo: "RE-2026-0778" } as any);
+  const partlyInv = store.findInvoice(partly)!;
+  check("a credit short of the total leaves the invoice SUBMITTED and collectable for the rest",
+    partlyInv.state === "SUBMITTED" && (partlyInv.settlements ?? []).length === 1, JSON.stringify({ state: partlyInv.state }));
+  check("but an invoice with any payment on it cannot be deleted",
+    (() => { try { invDomain.assertDeletable(partlyInv); return false; } catch { return true; } })());
   const unrelated = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0888" }));
   routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-2", memo: "Miete September" } as any);
   check("a credit naming no invoice touches none of them", (store.findInvoice(unrelated)!.settlements ?? []).length === 0);

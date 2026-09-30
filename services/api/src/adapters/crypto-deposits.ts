@@ -30,7 +30,7 @@ import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
 import { midRates, referenceRate } from "../rates.js";
 import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
-import { buildCryptoSettlement, withSettlement } from "../domain/invoices.js";
+import { buildCryptoSettlement, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
@@ -348,9 +348,7 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
   if (!deposit.invoiceId) return;
   const invoice = store.invoices.find((i) => i.id === deposit.invoiceId);
   if (!invoice) return;
-  store.updateInvoice(invoice.id, {
-    settlements: withSettlement(invoice.settlements, buildCryptoSettlement(deposit)),
-  });
+  store.updateInvoice(invoice.id, settlementUpdate(invoice, buildCryptoSettlement(deposit)));
 }
 
 

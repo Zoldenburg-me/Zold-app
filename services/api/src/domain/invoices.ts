@@ -26,10 +26,12 @@ import type { CryptoDeposit } from "../store.js";
 export class InvoiceError extends Error {}
 
 /** Locked on submit, per Gnosis: "once submitted, invoices are timestamped and
- *  locked". Deletion is only legal while nobody has been paid. */
+ *  locked". Deletion is only legal while nobody has been paid. SUBMITTED ->
+ *  PAID is an outgoing invoice whose attributed payments cover it
+ *  (`settlementUpdate`); an incoming one goes through PAYING. */
 const TRANSITIONS: Record<InvoiceState, InvoiceState[]> = {
   LINK_CREATED: ["SUBMITTED", "DELETED"],
-  SUBMITTED: ["PAYING", "RECONCILED", "DELETED"],
+  SUBMITTED: ["PAYING", "PAID", "RECONCILED", "DELETED"],
   PAYING: ["PAID", "SUBMITTED"],
   PAID: ["RECONCILED"],
   RECONCILED: [],
@@ -343,13 +345,35 @@ export function withSettlement(existing: InvoiceSettlement[] | undefined, s: Inv
   return [...(existing ?? []).filter((x) => settlementRef(x) !== settlementRef(s)), s];
 }
 
+/**
+ * Put a payment on an invoice, and close an outgoing invoice once its payments
+ * cover what it is payable as (half a cent of tolerance for rounding). Short of
+ * that it stays SUBMITTED, collectable for the rest.
+ *
+ * Every path that attributes a payment to an invoice goes through here, so a
+ * settled invoice cannot be collected a second time.
+ */
+export function settlementUpdate(
+  invoice: Invoice,
+  s: InvoiceSettlement,
+): Pick<Invoice, "settlements"> & Partial<Pick<Invoice, "state" | "payment">> {
+  const settlements = withSettlement(invoice.settlements, s);
+  const due = payableEur(invoice);
+  if (invoice.direction !== "outgoing" || invoice.state !== "SUBMITTED" || due === undefined) {
+    return { settlements };
+  }
+  const paid = settlements.reduce((sum, x) => sum + (Number.isFinite(x.amountEur) ? x.amountEur : 0), 0);
+  if (paid + 0.005 < due) return { settlements };
+  return { settlements, state: "PAID", payment: { ...invoice.payment, paidAt: s.at } };
+}
+
 /** Rows written before `ref` existed are keyed by their deposit id. */
 export function settlementRef(s: InvoiceSettlement): string {
   return s.ref ?? (s.method === "bank" ? `monerium:${s.orderId}` : `deposit:${s.depositId}`);
 }
 
 export function assertDeletable(invoice: Invoice) {
-  if (invoice.payment?.transferId || invoice.payment?.paidAt) {
+  if (invoice.payment?.transferId || invoice.payment?.paidAt || invoice.settlements?.length) {
     throw new InvoiceError(
       "This invoice has a payment against it and cannot be deleted. Reconcile it instead.",
     );
