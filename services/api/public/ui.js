@@ -146,7 +146,8 @@
 
   /**
    * One list row. A `soon` row is not a link and not focusable, whatever
-   * `href` says: a feature that is not built cannot be pressed.
+   * `href` says: a feature that is not built cannot be pressed. Link rows get
+   * a chevron unless `chevron: false` (activity rows, as the reference draws them).
    */
   function row(o) {
     const soon = !!o.soon;
@@ -154,7 +155,7 @@
     const body = `${o.lead || ""}<span class="z-row__main"><span class="z-row__title">${esc(o.title)}</span>`
       + `${o.sub ? `<span class="z-row__sub">${esc(o.sub)}</span>` : ""}</span>`
       + `${right ? `<span class="z-row__right">${right}</span>` : ""}`
-      + `${o.href && !soon ? icon("chevron_right", "z-row__chev") : ""}`;
+      + `${o.href && !soon && o.chevron !== false ? icon("chevron_right", "z-row__chev") : ""}`;
     if (soon) return `<div class="z-row z-row--soon" aria-disabled="true">${body}</div>`;
     return o.href ? `<a class="z-row"${attr("id", o.id)} href="${esc(o.href)}">${body}</a>` : `<div class="z-row"${attr("id", o.id)}>${body}</div>`;
   }
