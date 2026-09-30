@@ -39,13 +39,16 @@ Say this plainly rather than letting the surface imply otherwise:
   from the EOA; `confirm` deploying the verifier from the deployer and binding
   the account; a passkey-signed UserOperation moving 0.01 USDC out of the
   imported Safe (tx `0xf60dd7d7…`, userOp `0x5f4d6a79…`, sponsored gas); and
-  the Safe's `isValidSignature(bytes32)` returning `0x1626ba7e` for the
-  Monerium link message signed that way (an `eth_call`, not a Monerium call).
-  Never run: a real passkey, the Transaction Builder JSON on app.safe.global
-  (its checksum is written from the tx-builder source, untested), a hardware
-  wallet sending the owner change, a Monerium link of an imported Safe, and
-  anything on Base mainnet — Zoldenburg's Safe has not been touched. No UI
-  calls the import routes.
+  Monerium's sandbox `POST /addresses` linking that Safe on `basesepolia`
+  (state `linked`) with the link message signed that way. The link used the
+  app's client-credentials token, so it landed on the app's own sandbox
+  profile, not through a user's OAuth. The same call with a signature made
+  for another Safe was refused 400 "Invalid signature: … GS024": Monerium
+  checks ERC-1271 on the Safe. Never run: a real passkey, the Transaction
+  Builder JSON on app.safe.global (its checksum is written from the
+  tx-builder source, untested), a hardware wallet sending the owner change,
+  an IBAN on an imported Safe, and anything on Base mainnet — Zoldenburg's
+  Safe has not been touched. No UI calls the import routes.
 - **No mail transport exists.** Invitations, invoice links and recovery emails
   are never sent by Zold; routes return the token to the caller and say so. Do
   not add a "we emailed them" string without adding a transport.
