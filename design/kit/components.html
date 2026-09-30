@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#08080b">
+<meta name="robots" content="noindex">
+<title>Zold UI v2 components</title>
+<!--
+  Every UI v2 component and its states, rendered by the real ui.js / ui.css the
+  app loads, so a change there shows here first. Not served by the API.
+  Open it from the repo root over http (fonts do not load over file://):
+    python3 -m http.server 8831 --bind 127.0.0.1
+    http://127.0.0.1:8831/design/kit/components.html
+  All names and amounts are sample data.
+-->
+<link rel="stylesheet" href="../ui-v2/assets/fonts/inter.css">
+<link rel="stylesheet" href="../ui-v2/assets/fonts/material-symbols.css">
+<link rel="stylesheet" href="../../services/api/public/tokens.css">
+<link rel="stylesheet" href="../../services/api/public/ui.css">
+<style>
+  * { box-sizing: border-box; }
+  body { min-height: 100dvh; background: var(--z-bg); }
+  .kit { max-width: 1100px; margin: 0 auto; padding: var(--z-space-6) var(--z-space-4) var(--z-space-12); }
+  .kit > header { display: grid; gap: var(--z-space-2); margin-bottom: var(--z-space-8); }
+  .kit__grid { display: grid; gap: var(--z-space-8); }
+  @media (min-width: 1024px) { .kit__grid { grid-template-columns: 1fr 1fr; gap: var(--z-space-10); } .kit { padding: var(--z-space-7) var(--z-space-10) var(--z-space-12); } }
+  .kit section { display: grid; gap: var(--z-space-4); align-content: start; min-width: 0; }
+  .kit h2.kit__h { margin: 0; font: 600 20px/1.25 var(--z-font); letter-spacing: -.03em; color: var(--z-heading); }
+  .kit__stack { display: grid; gap: var(--z-space-3); }
+  .kit__row { display: flex; flex-wrap: wrap; gap: var(--z-space-2); align-items: center; }
+  .kit__phone { position: relative; border: 1px solid var(--z-line); border-radius: var(--z-radius-card); overflow: hidden; background: var(--z-bg); }
+  .kit__phone::before { content: ""; position: absolute; inset: -160px 0 auto; height: 420px; background: var(--z-hero-glow); pointer-events: none; }
+  .kit__phone > * { position: relative; }
+  .kit__phone .z-bnav { position: relative; }
+</style>
+</head>
+<body>
+<a class="z-skip" href="#main">Skip to content</a>
+<main id="main" class="kit">
+  <header>
+    <h1 class="z-title">Zold UI v2 components</h1>
+    <p class="z-sub">Rendered by ui.js with tokens.css. Sample data only.</p>
+  </header>
+  <div class="kit__grid">
+    <section aria-labelledby="k-bars"><h2 class="kit__h" id="k-bars">Top of a screen</h2><div class="kit__phone" id="bars"></div></section>
+    <section aria-labelledby="k-btn"><h2 class="kit__h" id="k-btn">Buttons</h2><div class="kit__stack" id="buttons"></div></section>
+    <section aria-labelledby="k-form"><h2 class="kit__h" id="k-form">Fields</h2><form class="kit__stack" id="form" novalidate></form></section>
+    <section aria-labelledby="k-list"><h2 class="kit__h" id="k-list">Lists</h2><div class="kit__stack" id="lists"></div></section>
+    <section aria-labelledby="k-tags"><h2 class="kit__h" id="k-tags">Tags, amounts, avatars</h2><div class="kit__stack" id="tags"></div></section>
+    <section aria-labelledby="k-notes"><h2 class="kit__h" id="k-notes">Notes and details</h2><div class="kit__stack" id="notes"></div></section>
+    <section aria-labelledby="k-load"><h2 class="kit__h" id="k-load">Loading and empty</h2><div class="kit__stack" id="loading"></div></section>
+    <section aria-labelledby="k-ov"><h2 class="kit__h" id="k-ov">Sheet and dialog</h2><div class="kit__stack" id="overlays"></div></section>
+  </div>
+</main>
+<script src="../../services/api/public/ui.js"></script>
+<script>
+  const Z = window.Z;
+  const set = (id, html) => { document.getElementById(id).innerHTML = html; };
+
+  set("bars", Z.testModePill(true)
+    + Z.topbar({ title: "Review payment", back: { id: "k-back", label: "Back" }, right: Z.iconButton({ icon: "search", label: "Search", id: "k-search" }) })
+    + `<div style="padding:0 16px 20px" class="kit__stack">${Z.progress({ step: 3, of: 6, label: "Email", back: { id: "k-step-back" } })}${Z.largeTitle({ title: "Your email", sub: "Used for recovery codes. Nobody else sees it." })}</div>`
+    + Z.bottomNav({ active: "home", items: [
+        { id: "home", href: "#home", icon: "home", label: "Home" },
+        { id: "send", href: "#send", icon: "north_east", label: "Send" },
+        { id: "paid", href: "#paid", icon: "call_received", label: "Get paid" },
+        { id: "approvals", href: "#approvals", icon: "fact_check", label: "Approvals", badge: 2 },
+        { id: "more", href: "#more", icon: "more_horiz", label: "More" },
+      ] }));
+
+  set("buttons", Z.button({ label: "Approve with Face ID", variant: "primary", icon: "fingerprint", full: true, id: "k-primary" })
+    + Z.button({ label: "Add money", icon: "add", full: true })
+    + `<div class="kit__row">${Z.button({ label: "Share", icon: "ios_share" })}${Z.button({ label: "See all", variant: "quiet" })}${Z.iconButton({ icon: "content_copy", label: "Copy IBAN" })}</div>`
+    + Z.button({ label: "Approve", variant: "primary", full: true, disabledReason: "You drafted this payment, so someone else approves it." })
+    + Z.button({ label: "Saving…", variant: "secondary", full: true, id: "k-loading" }));
+  Z.setLoading(document.getElementById("k-loading"), true);
+
+  set("form", Z.field({ label: "Email", name: "email", type: "email", autocomplete: "email", placeholder: "you@example.com…", hint: "We show it to nobody." })
+    + Z.field({ label: "Trading name", name: "trading-name", autocomplete: "organization", optional: true, placeholder: "Druckerei Kessler…" })
+    + Z.field({ label: "Amount", name: "amount", inputmode: "decimal", autocomplete: "off", value: "0", error: "Enter an amount above €0.00." })
+    + Z.select({ label: "Country of residence", name: "country", autocomplete: "country", value: "DE", options: [{ value: "", label: "Choose…" }, { value: "DE", label: "Germany" }, { value: "AT", label: "Austria" }, { value: "FR", label: "France" }] })
+    + Z.button({ label: "Continue", variant: "primary", type: "submit", full: true }));
+  document.getElementById("form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const email = e.target.elements.email;
+    Z.setFieldError(email, /.+@.+\..+/.test(email.value) ? "" : "Enter an email address, like miriam@example.com.");
+    Z.focusFirstError(e.target);
+  });
+
+  set("lists", Z.listGroup({ label: "Recent activity", action: { label: "See all", href: "#activity" }, rows: [
+      Z.row({ href: "#tx1", lead: Z.avatar({ name: "Jonas Weber" }), title: "Jonas Weber", sub: "Rent share · Today 09:14", right: Z.amount({ value: 640, direction: "in" }) + Z.tag("Received") }),
+      Z.row({ href: "#tx2", lead: Z.avatar({ name: "Anna Schmidt", tone: "p" }), title: "Anna Schmidt", sub: "Bank transfer · Arriving now", right: Z.amount({ value: 250, direction: "out" }) + Z.tag("In flight") }),
+      Z.row({ href: "#tx3", lead: Z.iconTile({ icon: "currency_exchange" }), title: "Digital dollars (USDC) from a crypto wallet with a very long description", sub: "24 Sep", right: Z.amount({ value: 120, currency: "USDC", direction: "in" }) + Z.tag("Received") }),
+    ] })
+    + Z.listGroup({ label: "Ways in", rows: [
+      Z.row({ href: "#bank", lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To your IBAN, in euros" }),
+      Z.soonRow({ lead: Z.iconTile({ icon: "attach_money" }), title: "USD account", sub: "Get paid in US dollars" }),
+    ] }));
+
+  set("tags", `<div class="kit__row">${["In flight", "Paid", "Received", "Waiting for review", "Needs fixing", "Refunded", "Draft", "Open", "Soon", "Beta", "Illustration"].map((w) => Z.tag(w)).join("")}</div>`
+    + `<div class="kit__row">${Z.amount({ value: 1480, direction: "in" })}${Z.amount({ value: 1200, direction: "out" })}${Z.amount({ value: 1684.12, currency: "USDC", direction: "in" })}</div>`
+    + `<div class="kit__row">${Z.avatar({ name: "Miriam Zoldenburg" })}${Z.avatar({ name: "Café Ostwind", tone: "p" })}${Z.avatar({ name: "Lindner Holzbau", tone: "m" })}${Z.iconTile({ icon: "shield" })}${Z.iconTile({ icon: "schedule", tone: "a" })}${Z.iconTile({ icon: "check", tone: "m" })}</div>`);
+
+  set("notes", Z.note({ icon: "verified_user", text: "Your Face ID approves this amount to this IBAN only. If either changes, nothing is sent." })
+    + Z.note({ tone: "a", text: "Only USDC on the Base network. Anything else sent here is lost." })
+    + Z.note({ tone: "p", icon: "info", text: "Your IBAN is in review with Monerium." })
+    + Z.kv([
+      { key: "From", value: "Personal account" },
+      { key: "Zold fee", value: Z.formatMoney(0) },
+      { key: "Reference", value: "" },
+      { key: "Anna receives", value: Z.formatMoney(250), strong: true },
+    ])
+    + `<div class="z-card">${Z.copyRow({ label: "IBAN", value: "GB59MONE000000428817", display: Z.groupIban("GB59MONE000000428817"), mono: true })}</div>`);
+
+  set("loading", Z.skeletonRows(3)
+    + Z.listGroup({ label: "Payments", rows: [], empty: { text: "No payments yet.", action: { label: "Share your details", href: "#details" } } }));
+
+  set("overlays", `<div class="kit__row">${Z.button({ label: "Open sheet", id: "k-open-sheet" })}${Z.button({ label: "Open dialog", id: "k-open-dialog" })}</div>`);
+  document.body.insertAdjacentHTML("beforeend",
+    Z.overlay({ id: "k-sheet", title: "Account details", body: `<div class="z-card">${Z.copyRow({ label: "Account holder", value: "Miriam Zoldenburg" })}${Z.copyRow({ label: "IBAN", value: "GB59MONE000000428817", display: Z.groupIban("GB59MONE000000428817"), mono: true })}</div><div style="margin-top:20px">${Z.button({ label: "Share", variant: "primary", icon: "ios_share", full: true })}</div>` })
+    + Z.overlay({ id: "k-dialog", kind: "dialog", title: "Remove this member?", body: `<p class="z-sub" style="margin-bottom:20px">They lose access now. Their past approvals stay on record.</p><div class="kit__stack">${Z.button({ label: "Remove member", variant: "primary", full: true })}${Z.button({ label: "Keep member", full: true, autofocus: true })}</div>` }));
+  document.getElementById("k-open-sheet").addEventListener("click", (e) => Z.openOverlay("k-sheet", e.currentTarget));
+  document.getElementById("k-open-dialog").addEventListener("click", (e) => Z.openOverlay("k-dialog", e.currentTarget));
+</script>
+</body>
+</html>

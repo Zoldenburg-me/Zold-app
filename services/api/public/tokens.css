@@ -1,0 +1,41 @@
+/* Zold UI v2 tokens. A copy of design/ui-v2/tokens/tokens.css (generated from
+   tokens.json), plus --z-hero-glow, which tokens.json has and the CSS missed.
+   Keep all three in step. Loaded before every other stylesheet. */
+:root {
+  color-scheme: dark;
+  --z-bg: #08080b; --z-surface: #101014; --z-sunk: #0d0d11; --z-field: #0e0e12; --z-sheet: #111115;
+  --z-card: linear-gradient(180deg, #131317, #0d0d11); --z-ghost: rgba(255,255,255,.03);
+  --z-line: #232328; --z-line-strong: #2c2c33; --z-line-hover: #5a5a62;
+  --z-text: #ededf0; --z-heading: #fbf9fc; --z-dim: #9a9aa5;
+  --z-pink: #ed188d; --z-pink-hover: #ff2d9e; --z-pink-link: #f06bb4; --z-pink-link-hover: #ff8fc4;
+  --z-pink-soft: #e8a9cd; --z-pink-tint: rgba(237,24,141,.08); --z-pink-border: rgba(237,24,141,.35);
+  --z-mint: #3dd68c; --z-mint-tint: rgba(61,214,140,.1); --z-mint-border: rgba(61,214,140,.28);
+  --z-amber: #f5a623; --z-amber-tint: rgba(245,166,35,.08); --z-amber-border: rgba(245,166,35,.32);
+  --z-scrim: rgba(4,4,6,.66);
+
+  --z-font: Inter, system-ui, sans-serif;
+  --z-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --z-space-1: 4px; --z-space-2: 8px; --z-space-3: 12px; --z-space-4: 16px; --z-space-5: 20px;
+  --z-space-6: 24px; --z-space-7: 28px; --z-space-8: 32px; --z-space-10: 40px; --z-space-12: 48px;
+
+  --z-radius-sm: 10px; --z-radius-md: 12px; --z-radius-note: 14px; --z-radius-card: 16px;
+  --z-radius-qr: 20px; --z-radius-sheet: 24px; --z-radius-pill: 999px;
+
+  --z-touch: 44px; --z-input-h: 52px; --z-button-h: 56px; --z-row-h: 64px; --z-topbar-h: 60px;
+
+  --z-shadow-primary: 0 10px 34px rgba(237,24,141,.4);
+  --z-shadow-sheet: 0 -30px 80px rgba(0,0,0,.6);
+  --z-shadow-dialog: 0 30px 80px rgba(0,0,0,.6);
+  --z-hero-glow: radial-gradient(60% 50% at 50% 30%, rgba(237,24,141,.22), rgba(237,24,141,.05) 55%, transparent 72%);
+  --z-ease: .15s ease;
+}
+body { margin: 0; background: var(--z-bg); color: var(--z-text); font-family: var(--z-font); -webkit-font-smoothing: antialiased; }
+a { color: var(--z-pink-link); text-decoration: none; }
+a:hover { color: var(--z-pink-link-hover); }
+:where(a, button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--z-pink); outline-offset: 2px; }
+input::placeholder { color: var(--z-dim); }
+:where(a, button, input, select, label) { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.z-fig { font-variant-numeric: tabular-nums; }
+.z-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
