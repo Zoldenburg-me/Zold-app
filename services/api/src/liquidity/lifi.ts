@@ -14,7 +14,7 @@
  * against the independent live mid before we bind to it.
  */
 import { LIQUIDITY } from "../config.js";
-import { addrs, eur, orchestratorAddress, orchestratorWallet, publicClient, usd, writeAndWait } from "../chain.js";
+import { eur, orchestratorAddress, orchestratorWallet, publicClient, usd, writeAndWait } from "../chain.js";
 import { assertPriceSane, erc20Abi, rate6dp } from "../dex.js";
 import {
   LiquidityExecution,
@@ -26,13 +26,18 @@ import {
   applySurplus,
   assertVenueTarget,
   balanceAfterWrite,
+  defaultTokens,
+  type VenueTokens,
   } from "./contract.js";
 
 export class LifiLiquidityProvider implements LiquidityProvider {
   private indicative: { at: number; rate: number; raw: bigint } | null = null;
 
+  /** Tests name the tokens; production reads EURe and USDC from deployments.json. */
+  constructor(private readonly addrs: () => VenueTokens = defaultTokens) {}
+
   private async fetchQuote(side: LiquiditySide, amountIn: bigint, ctx?: SafeSwapContext) {
-    const a = addrs();
+    const a = this.addrs();
     const fromToken = side === "EURE_TO_USDC" ? a.eure : a.usdc;
     const toToken = side === "EURE_TO_USDC" ? a.usdc : a.eure;
     const url = new URL("/v1/quote", LIQUIDITY.LIFI_BASE_URL);
@@ -131,7 +136,7 @@ export class LifiLiquidityProvider implements LiquidityProvider {
       throw new Error(`lifi quote delivers to ${orchestratorAddress}, not ${to} — request a quote for that recipient`);
     }
     assertVenueTarget("LI.FI", LIQUIDITY.LIFI_CONTRACTS, quote.lifi.tx.to, quote.lifi.approvalAddress, quote.lifi.tx.value);
-    const a = addrs();
+    const a = this.addrs();
     const tokenIn = quote.side === "EURE_TO_USDC" ? a.eure : a.usdc;
 
     const balanceOf = (owner: `0x${string}`) =>
@@ -190,7 +195,7 @@ export class LifiLiquidityProvider implements LiquidityProvider {
   ): Promise<SafeSwapPlan> {
     const quote = await this.quote(side, amountIn, quoteId, expiresAt, ctx);
     if (!quote.lifi) throw new Error("LI.FI quote carries no executable route for a Safe-executed swap");
-    const a = addrs();
+    const a = this.addrs();
     const tokenIn = side === "EURE_TO_USDC" ? a.eure : a.usdc;
     return {
       quote,

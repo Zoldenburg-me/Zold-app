@@ -11,7 +11,7 @@
  * the mock's price labelled as RFQ pricing.
  */
 import { LIQUIDITY } from "../config.js";
-import { abis, addrs, eur, orchestratorAddress, orchestratorWallet, publicClient, usd, writeAndWait } from "../chain.js";
+import { abis, eur, orchestratorAddress, orchestratorWallet, publicClient, usd, writeAndWait } from "../chain.js";
 import { assertPriceSane, erc20Abi, rate6dp } from "../dex.js";
 import {
   LiquidityExecution,
@@ -23,13 +23,18 @@ import {
   MAX_SLIPPAGE_BPS,
   assertVenueTarget,
   balanceAfterWrite,
+  defaultTokens,
+  type VenueTokens,
   } from "./contract.js";
 
 export class RfqLiquidityProvider implements LiquidityProvider {
   private indicative: { at: number; rate: number; raw: bigint } | null = null;
 
+  /** Tests name the tokens; production reads EURe and USDC from deployments.json. */
+  constructor(private readonly addrs: () => VenueTokens = defaultTokens) {}
+
   private tokens(side: LiquiditySide) {
-    const a = addrs();
+    const a = this.addrs();
     return side === "EURE_TO_USDC"
       ? { sell: a.eure, buy: a.usdc, tokenIn: "EURe" as const, tokenOut: "USDC" as const }
       : { sell: a.usdc, buy: a.eure, tokenIn: "USDC" as const, tokenOut: "EURe" as const };
@@ -142,7 +147,7 @@ export class RfqLiquidityProvider implements LiquidityProvider {
       // be converted.
       throw new Error(`RFQ quote pays ${orchestratorAddress}, not ${to}`);
     }
-    const a = addrs();
+    const a = this.addrs();
     const token = quote.side === "EURE_TO_USDC" ? a.eure : a.usdc;
     const tokenOut = quote.side === "EURE_TO_USDC" ? a.usdc : a.eure;
     const spender = (quote.rfq?.approvalTarget ?? tx.to) as `0x${string}`;

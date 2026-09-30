@@ -16,6 +16,7 @@
 import { LIQUIDITY } from "../config.js";
 import {
   abis,
+  addrs,
   publicClient,
   } from "../chain.js";
 import type { Transfer } from "../store.js";
@@ -44,6 +45,14 @@ export function assertVenueTarget(
 }
 
 export const MAX_SLIPPAGE_BPS = 30n;
+
+/** The pair a third-party venue is asked to trade. */
+export interface VenueTokens {
+  eure: `0x${string}`;
+  usdc: `0x${string}`;
+}
+/** deployments.json for TRANSF_CHAIN_ID, read at call time, never at import. */
+export const defaultTokens = (): VenueTokens => addrs();
 
 export type LiquiditySide = "EURE_TO_USDC" | "USDC_TO_EURE";
 export type LiquidityToken = "EURe" | "USDC";
