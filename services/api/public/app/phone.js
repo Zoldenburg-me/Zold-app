@@ -60,6 +60,15 @@ const phWebHref = (view) => `/business${view ? `?view=${encodeURIComponent(view)
    only when that changed. */
 const PH = {};
 
+/* The desktop layout (app/desktop.js, from 1024px): `on()` says whether it
+   applies, `side(route)` draws the sidebar, and a screen's `desk` ({ html,
+   bind, live, wide, refresh }) replaces its phone layout there: `wide`
+   gives it the full width, `refresh` updates its open drawer in place. Filled in by that later
+   file; empty, every width gets the phone column. */
+const PH_DESK = { on: () => false, side: null };
+/* The layout the open screen is drawn in: its desktop one, when it has one. */
+const phView = (s) => (s.desk && PH_DESK.on() ? s.desk : s);
+
 /* Routes that open an older screen in #dashboard. */
 const PH_LEGACY = {
   plus: "plus", bundle: "bundle", card: "card", documents: "documents",
@@ -151,10 +160,12 @@ function phRender({ focus = false } = {}) {
       ],
     })
     : "";
-  root.innerHTML = `${Z.skipLink("main")}<div class="z-app" data-screen="${esc(r.name)}">${Z.testModePill(!realMoney)}${s.html(r.arg)}</div>${nav}`;
+  const v = phView(s);
+  const side = PH_DESK.side ? PH_DESK.side(r) : "";
+  root.innerHTML = `${Z.skipLink("main")}${side}<div class="z-app${v.wide ? " z-app--desk" : ""}" data-screen="${esc(r.name)}">${Z.testModePill(!realMoney)}${v.html(r.arg)}</div>${nav}`;
   document.title = `${typeof s.title === "function" ? s.title(r.arg) : s.title} · Zold`;
-  phSig = s.live ? s.live(r.arg) : "";
-  s.bind?.(root, r.arg);
+  phSig = v.live ? v.live(r.arg) : "";
+  v.bind?.(root, r.arg);
   if (focus) {
     window.scrollTo(0, 0);
     root.querySelector("h1")?.setAttribute("tabindex", "-1");
@@ -166,13 +177,16 @@ function phRender({ focus = false } = {}) {
    while someone is typing in it or has a sheet open over it. */
 function phRefresh() {
   if (!phRoute || !PH[phRoute.name] || $("phone")?.hidden) return;
-  const s = PH[phRoute.name];
+  const s = phView(PH[phRoute.name]);
   if (!s.live) return;
   const sig = s.live(phRoute.arg);
   if (sig === phSig) return;
   const active = document.activeElement;
   if (active && $("ph-root").contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return;
-  if (document.querySelector("body > .z-scrim[data-ph]:not([hidden])")) return;
+  if (document.querySelector("body > .z-scrim[data-ph]:not([hidden])")) {
+    if (s.refresh) { phSig = sig; s.refresh(phRoute.arg); }
+    return;
+  }
   phRender();
 }
 
@@ -646,50 +660,57 @@ PH.activity = {
   },
 };
 
+/* One payment: its body and its actions, drawn as a screen on the phone and
+   as a drawer over Activity on a desktop (app/desktop.js). */
+function phTxParts(id) {
+  const t = hist.find((x) => x.id === id && x.kind !== "funding");
+  if (!t) {
+    return { t: null, foot: "", body: histLoaded || histLoadFailed
+      ? Z.note({ text: "This payment is not on your account." })
+      : Z.skeletonRows(3, "Loading the payment…") };
+  }
+  const cash = t.rail === "cash";
+  const fee = !cash && typeof t.receiveEur === "number" ? Math.max(0, (t.sendEur || 0) - t.receiveEur) : null;
+  const rows = [
+    { key: "Date", value: phFull(t.createdAt) },
+    ...(cash ? [{ key: "To mobile", value: t.recipientPhone }] : [{ key: "To IBAN", value: phShortIban(t.recipientIban), mono: true }]),
+    ...(fee !== null ? [{ key: "Zold fee", value: phEur(fee) }] : []),
+    { key: "Sent as", value: cash ? "Cash pickup" : "Bank transfer" },
+    ...(!cash ? [{ key: "Reference", value: t.reference || "", hint: "On their bank statement" }] : []),
+    ...(t.refund ? [{ key: "Refunded", value: phEur(t.refund.amountEur) }] : []),
+  ];
+  const hashes = (t.txs || []).filter((x) => x.hash);
+  const tech = [
+    { key: "Payment ID", value: t.id, mono: true },
+    ...(!cash && t.recipientIban ? [{ key: "Full IBAN", value: Z.groupIban(t.recipientIban), mono: true }] : []),
+    ...(t.sepa?.orderId ? [{ key: "Monerium order", value: t.sepa.orderId, mono: true }] : []),
+    ...hashes.map((x) => ({ key: x.step, value: x.hash, mono: true })),
+  ];
+  const receipt = t.rail === "sepa" && t.state === "PAID";
+  return { t, body: `
+    <div class="z-txhead">
+      ${Z.avatar({ name: t.recipientName })}
+      <p class="z-txhead__amt z-fig">${phOut(t) ? "−" : ""}${esc(phEur(t.sendEur))}</p>
+      <p class="z-sub">to ${esc(t.recipientName || "")}</p>
+      ${Z.tag(phTxWord(t))}
+    </div>
+    ${t.error ? Z.note({ tone: "a", text: t.error }) : ""}
+    ${phInFlight(t) ? Z.note({ tone: "p", html: `On its way. <a href="${phHref("send/progress", t.id)}">See progress</a>` }) : ""}
+    ${Z.kv(rows)}
+    <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv(tech)}</details>
+    <p class="z-err" id="ph-tx-err" role="alert" hidden></p>
+  `, foot: t.state === "CREATED" ? "" : `<div class="z-pair">
+      ${receipt ? Z.button({ icon: "receipt_long", label: "Receipt", id: "ph-tx-receipt" }) : ""}
+      ${Z.button({ variant: receipt ? "secondary" : "primary", icon: "ios_share", label: "Share", href: phHref("share", t.id), className: receipt ? "" : "z-btn--full" })}
+    </div>` };
+}
+
 PH.tx = {
   title: "Payment",
   live: (id) => { const t = hist.find((x) => x.id === id); return t ? `${t.state}|${t.updatedAt}` : `none|${histLoaded}`; },
   html(id) {
-    const t = hist.find((x) => x.id === id && x.kind !== "funding");
-    if (!t) {
-      return `${phTop("Payment", "activity")}${phMain(histLoaded || histLoadFailed
-        ? Z.note({ text: "This payment is not on your account." })
-        : Z.skeletonRows(3, "Loading the payment…"))}`;
-    }
-    const cash = t.rail === "cash";
-    const fee = !cash && typeof t.receiveEur === "number" ? Math.max(0, (t.sendEur || 0) - t.receiveEur) : null;
-    const rows = [
-      { key: "Date", value: phFull(t.createdAt) },
-      ...(cash ? [{ key: "To mobile", value: t.recipientPhone }] : [{ key: "To IBAN", value: phShortIban(t.recipientIban), mono: true }]),
-      ...(fee !== null ? [{ key: "Zold fee", value: phEur(fee) }] : []),
-      { key: "Sent as", value: cash ? "Cash pickup" : "Bank transfer" },
-      ...(!cash ? [{ key: "Reference", value: t.reference || "", hint: "On their bank statement" }] : []),
-      ...(t.refund ? [{ key: "Refunded", value: phEur(t.refund.amountEur) }] : []),
-    ];
-    const hashes = (t.txs || []).filter((x) => x.hash);
-    const tech = [
-      { key: "Payment ID", value: t.id, mono: true },
-      ...(!cash && t.recipientIban ? [{ key: "Full IBAN", value: Z.groupIban(t.recipientIban), mono: true }] : []),
-      ...(t.sepa?.orderId ? [{ key: "Monerium order", value: t.sepa.orderId, mono: true }] : []),
-      ...hashes.map((x) => ({ key: x.step, value: x.hash, mono: true })),
-    ];
-    const receipt = t.rail === "sepa" && t.state === "PAID";
-    return `${phTop("Payment", "activity")}${phMain(`
-      <div class="z-txhead">
-        ${Z.avatar({ name: t.recipientName })}
-        <p class="z-txhead__amt z-fig">${phOut(t) ? "−" : ""}${esc(phEur(t.sendEur))}</p>
-        <p class="z-sub">to ${esc(t.recipientName || "")}</p>
-        ${Z.tag(phTxWord(t))}
-      </div>
-      ${t.error ? Z.note({ tone: "a", text: t.error }) : ""}
-      ${phInFlight(t) ? Z.note({ tone: "p", html: `On its way. <a href="${phHref("send/progress", t.id)}">See progress</a>` }) : ""}
-      ${Z.kv(rows)}
-      <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv(tech)}</details>
-      <p class="z-err" id="ph-tx-err" role="alert" hidden></p>
-    `)}${t.state === "CREATED" ? "" : phFoot(`<div class="z-pair">
-        ${receipt ? Z.button({ icon: "receipt_long", label: "Receipt", id: "ph-tx-receipt" }) : ""}
-        ${Z.button({ variant: receipt ? "secondary" : "primary", icon: "ios_share", label: "Share", href: phHref("share", t.id), className: receipt ? "" : "z-btn--full" })}
-      </div>`)}`;
+    const p = phTxParts(id);
+    return `${phTop("Payment", "activity")}${phMain(p.body)}${p.foot ? phFoot(p.foot) : ""}`;
   },
   bind(root, id) {
     const b = root.querySelector("#ph-tx-receipt");
@@ -1903,6 +1924,8 @@ function phOpenContact(key, root) {
   const watch = new MutationObserver(() => {
     if (!scrim.classList.contains("is-open")) {
       watch.disconnect();
+      // Removed by a redraw, which opens the sheet again: not a close.
+      if (!scrim.isConnected) return;
       if (phRoute?.name === "contacts" && phRoute.arg) history.replaceState({ ph: true }, "", `${location.pathname}${location.search}#contacts`), (phRoute = { name: "contacts", arg: null });
     }
   });
