@@ -17,9 +17,10 @@
  *
  * Run: npm run jit:test
  */
-import "./_test-env.js";
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
+import { BASE_SEPOLIA_TOKENS } from "./_base-sepolia-tokens.js";
 
 const PORT = Number(process.env.TRANSF_BEBOP_STUB_PORT ?? 8551);
 
@@ -32,17 +33,13 @@ process.env.LIQUIDITY_INDICATIVE_TTL_MS = "400";
 // prove the price is the maker's, inside the (widened) sanity band.
 process.env.DEX_MAX_MID_DEVIATION_BPS = "1000";
 process.env.BEBOP_CONTRACTS = "0x3333333333333333333333333333333333333333";
-// The provider reads token addresses from deployments; point it at a fixed set
-// so the test needs no chain.
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify({ USD: 1.1379, INR: 109.87, KES: 147.53 });
 
-// The real deployed token addresses, read the same way the provider does.
-// No RPC is needed: quote() only talks to the maker, and the execute() paths
-// exercised here refuse before they ever reach the chain. Faking these instead
-// would only prove the stub agrees with itself.
-const { addrs } = await import("../services/api/src/chain.js");
-const EURE = addrs().eure;
-const USDC = addrs().usdc;
+// Real token addresses (Base Sepolia's EURe and USDC), handed to the provider
+// through its constructor rather than read from deployments.json, which is
+// untracked. No RPC is needed: quote() only talks to the maker, and the
+// execute() paths exercised here refuse before they ever reach the chain.
+const { eure: EURE, usdc: USDC } = BASE_SEPOLIA_TOKENS;
 const SETTLEMENT = "0x3333333333333333333333333333333333333333";
 
 let mode: "ok" | "500" | "decline" | "wrongtoken" | "notx" | "hang" | "shortexpiry" = "ok";
@@ -97,11 +94,14 @@ await new Promise<void>((r) => stub.listen(PORT, r));
 
 try {
   const { liquidityProvider } = await import("../services/api/src/liquidity.js");
-  const p = liquidityProvider();
+  const { RfqLiquidityProvider } = await import("../services/api/src/liquidity/rfq.js");
+  const tokens = () => BASE_SEPOLIA_TOKENS;
+  const p = new RfqLiquidityProvider(tokens);
 
   await t("rfq provider is selected from config, not hardcoded", async () => {
+    assert.ok(liquidityProvider() instanceof RfqLiquidityProvider, "expected the RFQ provider to be active");
     const q = await p.quote("EURE_TO_USDC", 100n * 10n ** 18n, "q1", new Date(Date.now() + 600_000).toISOString());
-    assert.equal(q.provider, "rfq", "expected the RFQ provider to be active");
+    assert.equal(q.provider, "rfq");
   });
 
   await t("the maker is asked for the right pair, amount and taker", async () => {
@@ -196,7 +196,7 @@ try {
   await t("the indicative cache expires so a stale maker price is not shown", async () => {
     // Its own provider instance: the previous check leaves a warm cache, and
     // reusing it here made this test's result depend on how fast that one ran.
-    const fresh = liquidityProvider();
+    const fresh = new RfqLiquidityProvider(tokens);
     hits = 0;
     await fresh.indicativeRate("EURE_TO_USDC");
     assert.equal(hits, 1, "first call should reach the maker");

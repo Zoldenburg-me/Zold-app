@@ -17,9 +17,10 @@
  *
  * Run: npm run lifi:test
  */
-import "./_test-env.js";
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
+import { BASE_SEPOLIA_TOKENS } from "./_base-sepolia-tokens.js";
 
 const PORT = Number(process.env.TRANSF_LIFI_STUB_PORT ?? 8553);
 
@@ -33,9 +34,9 @@ process.env.DEX_MAX_MID_DEVIATION_BPS = "300";
 // The stub's Diamond and its deliberately different approval spender.
 process.env.LIFI_CONTRACTS = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE,0x4444444444444444444444444444444444444444";
 
-const { addrs } = await import("../services/api/src/chain.js");
-const EURE = addrs().eure;
-const USDC = addrs().usdc;
+// Real token addresses (Base Sepolia's EURe and USDC), handed to the provider
+// rather than read from deployments.json, which is untracked.
+const { eure: EURE, usdc: USDC } = BASE_SEPOLIA_TOKENS;
 /** Deliberately NOT tx.to — the whole point of the approvalAddress check. */
 const APPROVAL = "0x4444444444444444444444444444444444444444";
 const DIAMOND = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE";
@@ -80,7 +81,9 @@ const server: Server = createServer(async (req, res) => {
 await new Promise<void>((r) => server.listen(PORT, "127.0.0.1", r));
 
 const { liquidityProvider, serializeExecution } = await import("../services/api/src/liquidity.js");
-const p = liquidityProvider();
+const { LifiLiquidityProvider } = await import("../services/api/src/liquidity/lifi.js");
+assert.ok(liquidityProvider() instanceof LifiLiquidityProvider, "LIQUIDITY_PROVIDER=lifi must select LI.FI");
+const p = new LifiLiquidityProvider(() => BASE_SEPOLIA_TOKENS);
 const soon = () => new Date(Date.now() + 60_000).toISOString();
 const ONE_HUNDRED = 100n * 10n ** 18n;
 
