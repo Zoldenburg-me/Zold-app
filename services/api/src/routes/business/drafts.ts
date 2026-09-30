@@ -49,7 +49,15 @@ export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
 }
 
-export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: TransferFactory): express.Router {
+/** Reads an account's EUR balance. The chain read in production; a suite
+ *  that mounts this router without a chain passes its own. */
+export type BalanceReader = (address: `0x${string}`) => Promise<{ safeBalanceEur: number }>;
+
+export function createDraftRoutes(
+  deps: OrgRoutes,
+  buildTransferFromQuote: TransferFactory,
+  readBalances: BalanceReader = accountBalances,
+): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
 
@@ -397,7 +405,7 @@ export function createDraftRoutes(deps: OrgRoutes, buildTransferFromQuote: Trans
     // each fit individually can still overdraw together.
     const totalEur = plans.reduce((s, p) => s + p.sendEur, 0);
     try {
-      const balances = await accountBalances(user.address);
+      const balances = await readBalances(user.address);
       if (balances.safeBalanceEur < totalEur) {
         return res.status(400).json({
           error: `This draft sends €${totalEur.toFixed(2)} in total but the account holds €${balances.safeBalanceEur.toFixed(2)}.`,
