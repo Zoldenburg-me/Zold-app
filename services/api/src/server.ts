@@ -43,6 +43,7 @@ import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./rou
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
 import { createDocumentsRouter } from "./routes/documents.js";
 import { createSafeSignerRouter } from "./routes/safe-signers.js";
+import { createSafeImportRouter } from "./routes/safe-import.js";
 import { createPaymentRequestRouter, onPaymentRequestPaid, sweepPaymentRequests } from "./routes/payment-requests.js";
 import { createShopifyRouter, resolveShopifyRequest } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
@@ -144,6 +145,8 @@ app.use("/api", createCandideRecoveryRouter({ requireUserSession, publicUser }))
 // Advanced security: the holder's own second owner, threshold and spending
 // limits on their Safe. Read from the chain, changed only by passkey-signed ops.
 app.use("/api", createSafeSignerRouter({ requireUserSession }));
+// Bind an account to an existing Safe its owner made the passkey an owner of.
+app.use("/api", createSafeImportRouter({ requireUserSession }));
 // Account documents: receipts, statements, balance and ownership letters, each
 // verifiable at /v/<code>. The page is the record; the PDF is its print.
 app.use("/api", createDocumentsRouter({ requireUserSession }));
