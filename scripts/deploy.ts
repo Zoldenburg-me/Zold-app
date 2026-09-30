@@ -1,8 +1,10 @@
 /**
- * Deploys the contract set, wires roles, seeds FX inventory, and records the
- * addresses under this chain's id in deployments.json.
+ * Records this chain's addresses under its id in deployments.json. On local
+ * hardhat (31337) it deploys the fixture contracts, wires roles and seeds FX
+ * inventory; on a real chain it deploys nothing and records only Monerium's
+ * EURe and Circle's USDC.
  *
- * Chain comes from TRANSF_CHAIN_ID (default 31337 = hardhat). Real keys come
+ * Chain comes from TRANSF_CHAIN_ID (default 8453 = Base mainnet). Real keys come
  * from the environment; the hardhat defaults are refused on any non-local RPC
  * unless explicitly overridden, so a testnet deploy needs real funded keys.
  */

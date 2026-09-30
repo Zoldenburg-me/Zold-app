@@ -417,7 +417,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       // Fail here, before the passkey ceremony, if no Monerium access exists —
       // a ceremony whose submit is doomed just burns the user's approval.
       // No access at all is the account's state, not a server fault: a 409
-      // the UI can show, where it used to surface as a bare 500.
+      // the UI can show, not a 500.
       if (!hasOwnMoneriumCredentials(user) && !MONERIUM.clientSecret) {
         return res.status(409).json({
           error: "no Monerium connection for this account — sign in with Monerium or add your Monerium API keys first",

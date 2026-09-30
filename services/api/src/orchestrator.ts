@@ -857,7 +857,7 @@ export async function executeTransfer(
         recipientName: transfer.recipientName,
         recipientPhone: transfer.recipientPhone ?? "",
         // No originator details: nothing collects them per transfer yet, and
-        // the stored sender profile is gone (data minimisation). A SEP-12
+        // no sender profile is stored (data minimisation). A SEP-12
         // anchor refuses inside, naming what it needs.
         senderId: user.id,
       });

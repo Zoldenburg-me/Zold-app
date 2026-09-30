@@ -60,7 +60,7 @@ A send carries **two signatures**, checked in two places:
 2. **Passkey → user operation hash.** `POST /api/transfers` prepares the Safe
    user operation that *is* the debit, for the exact token, amount and
    destination. The passkey signs its hash at send time; the chain enforces
-   it. The server relays it (and counter-signs on a legacy 2-of-2 Safe).
+   it. The server relays it.
 
 A stolen session therefore cannot change the amount or the destination, and
 the server cannot produce a debit on its own.

@@ -1,7 +1,6 @@
 # Zold — product architecture
 
-*Written 2026-09-24 from a line-by-line read of `main` at `8dd8009`, updated
-for PR #193 (co-signer retired, `3ba5c5e`). This is the
+*Written from a line-by-line read of `main` at `8dd8009` (2026-09-24). This is the
 map of **what the product is made of and how the pieces relate**. Its companion,
 [`technical-architecture.md`](technical-architecture.md), covers how each piece
 is built. Both are the source for the next GitBook update. Section 12 lists
@@ -42,7 +41,7 @@ The brand split: **Zoldenburg** is the company (Zoldenburg UG, Germany), and
 
 ### 1.1 The three rules every feature obeys
 
-These come from `CLAUDE.md` and are enforced in code. They are why several
+These come from `AGENTS.md` and are enforced in code. They are why several
 features below are GATED rather than faked.
 
 1. **Nothing renders as real that has not moved real money.** Gated
@@ -178,8 +177,7 @@ sequenceDiagram
    (sponsored, which works on Base Sepolia but NOT through the keyless public
    endpoint on Base mainnet), by the Safe in ETH, or by the Safe in USDC. The
    Safe is **1-of-1: the passkey is its only owner.** Zold holds no key that
-   can move or block the funds. The 2-of-2 Zold co-signer that Safes had
-   before PR #193 is gone, with its key.
+   can move or block the funds.
 4. **Recovery** is offered where the deployment has `zoldenburgRecovery`
    (Zoldenburg as guardian; skipping needs an acknowledged warning) and/or
    `emailSmsRecovery`.
@@ -581,7 +579,7 @@ them.
 
 ### 8.3 Bookkeeping — LIVE for statement lines, INERT for imported wallets
 
-**The ledger writer exists (Sep 2026).** `bookkeeping/writer.ts` projects the
+`bookkeeping/writer.ts` projects the
 account's real activity into `LedgerEntry` rows carrying a `statement` block:
 **one EUR line per economic event**, the way a PayPal or Stripe clearing
 account appears in German books, with one Beleg per line holding the on-chain
@@ -722,30 +720,8 @@ go (Lexware CSV, a GetMyInvoices bank account, MT940 or CAMT).
 
 ## 11. What has never run
 
-These are things to say plainly in the GitBook rather than let the product
-imply:
-
-- No mainnet deployment. The running deployment is Base Sepolia with the
-  Monerium sandbox, at zoldhq.com: one container on an Akash lease, reached
-  through a Cloudflare tunnel.
-- No real money has moved through a swap, and no Base Sepolia send has
-  executed the debit.
-- The cash rail has never opened.
-- No Monerium production OAuth app is registered, and no real
-  client-credentials token has been used.
-- Moving an existing IBAN to a Safe has never run against Monerium's real
-  sandbox. Whether the sandbox accepts `PATCH /ibans/{iban}` to a
-  `basesepolia` address, and whether its IBAN list carries the `profile`
-  field the move relies on, are unverified.
-- No Shopify app is registered and no store has installed one.
-- No Candide recovery service has been called. No real OTP and no on-chain
-  guardian action have happened.
-- No mail transport exists. Invites, invoice links and recovery emails are
-  never sent by Zold.
-- Imported wallets never sync, and the ledger is never written.
-- No billing is taken for paid plans.
-- PWA install on iOS is untested. The device key lives in localStorage, which
-  a home-screen app may not share with Safari.
+The list lives in [`docs/status.md`](../status.md). Say those things plainly in
+the GitBook rather than let the product imply otherwise.
 
 ---
 

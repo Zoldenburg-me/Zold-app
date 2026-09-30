@@ -37,9 +37,9 @@ flowchart TD
   D --> E[USDC lands in merchant Safe]
   E --> F[Backend scanner detects USDC Transfer log]
   F --> G{Merchant selected settlement asset}
-  G -->|EURe| H[Sweep USDC to legacy executor]
-  H --> I[Swap USDC to EURe]
-  I --> J[Send EURe to merchant Safe]
+  G -->|EURe| H[Merchant's passkey signs the swap]
+  H --> I[Swap USDC to EURe from the Safe]
+  I --> J[EURe lands in merchant Safe, measured as a balance change]
   G -->|USDC| K[Record creditedUsdc in deposit history]
 ```
 
@@ -203,18 +203,16 @@ Do first:
 1. Require deployed merchant passkey Safe before a page becomes publicly payable.
 2. Replace `paymentPage.depositPrivateKey` with Candide Forwarding Address metadata.
 3. Keep payment-page token display to whitelisted supported tokens.
-4. Change EURe settlement from "sweep to legacy executor" to "swap from Safe,
-   settle to merchant Safe".
-5. Keep remittance funding on `safeBalanceEur`.
-6. Replace app-state replay/daily-limit checks with Safe/module or
+4. Keep remittance funding on `safeBalanceEur`.
+5. Replace app-state replay/daily-limit checks with Safe/module or
    policy-contract checks.
-7. Rename custody-sensitive backend paths from "orchestrator" to "relayer" only
+6. Rename custody-sensitive backend paths from "orchestrator" to "relayer" only
    after the code actually behaves as a relayer.
-8. Add Candide route/minimum/status polling:
+7. Add Candide route/minimum/status polling:
    - refresh route and token support from `forwarding_getRoutes`.
    - refresh below-minimum guidance from `forwarding_getMinimumAmount`.
    - poll `forwarding_getForwardsByRecipient` for forward status.
-9. Add tests proving:
+8. Add tests proving:
    - USDC lands in the merchant-controlled destination.
    - EURe conversion cannot change destination or min-out.
    - production cannot create state that production startup later rejects.

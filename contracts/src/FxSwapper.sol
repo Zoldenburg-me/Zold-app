@@ -14,9 +14,9 @@ pragma solidity ^0.8.24;
 ///     are immutable and are EURe and USDC on every deployment, both returning
 ///     bools.
 ///
-/// FxSwapper is also being retired. It holds inventory we fund and cannot be
-/// executed by a user's Safe (onlyTrader), so LIQUIDITY_PROVIDER defaults to
-/// `best` over lifi,dex and this stays as the local hardhat fixture.
+/// FxSwapper is the local hardhat fixture only. It holds inventory we fund and
+/// cannot be executed by a user's Safe (onlyTrader), so LIQUIDITY_PROVIDER
+/// defaults to `best` over lifi,dex.
 ///
 /// If the token pair becomes mutable or this contract goes to production,
 /// replace these with a low-level call that treats empty return data as

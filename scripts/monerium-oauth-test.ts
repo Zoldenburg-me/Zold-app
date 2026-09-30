@@ -388,7 +388,7 @@ try {
     CANDIDE_CHAIN_ID: "31337",
     CANDIDE_RPC_URL: RPC_URL,
     // Blank on purpose: a passkey-only Safe links to Monerium with no
-    // co-signer key at all (it used to be demanded here regardless).
+    // co-signer key at all.
     CANDIDE_ALLOWANCE_MODULE_ADDRESS: "0x691f59471Bfd2B7d639DCF74671a2d648ED1E331",
     CANDIDE_RECOVERY_GUARDIAN_ADDRESS: "",
     KYC_AUTO_APPROVE: "0", // the connect path is for pending users

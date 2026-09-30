@@ -10,8 +10,6 @@ description: Words used in the app, briefly.
 
 **Chart of accounts** — Your list of bookkeeping categories, against which transactions are mapped.
 
-**Co-signer** — a Zold key that was a second owner on accounts opened before it was retired. It could only counter-sign what your passkey had already signed. New accounts don't have one; if yours does, you can remove it under Settings.
-
 **Device key** — A key created in your browser that signs the exact terms of each payment. Encrypted with your passkey where your device supports it.
 
 **Draft** — A payment prepared for review before it is sent.
