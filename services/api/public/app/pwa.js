@@ -23,6 +23,14 @@
   function render() {
     if (window.setReachable) window.setReachable(navigator.onLine);
   }
+  /* Android's install prompt. Held back so it opens from the Install screen,
+     where the user asked for it, and never on its own. */
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    window.zoldInstallPrompt = e;
+  });
+  window.addEventListener("appinstalled", function () { window.zoldInstallPrompt = null; });
+
   window.addEventListener("online", render);
   window.addEventListener("offline", render);
   render();

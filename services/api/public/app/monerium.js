@@ -195,14 +195,19 @@ $("m-usd-x").onclick = () => $("m-usd").classList.add("hidden");
  */
 let caps = { sandbox: true, cashRail: false, moneriumOAuth: false, moneriumApiKeys: false, moneriumEnvironment: "production", moneriumHost: "api.monerium.app", emailSmsRecovery: false };
 
+/* Real money only when /api/health says so: capabilities.sandbox is true on
+   every deployment, so it cannot decide the "Test mode" pill. */
+let realMoney = false;
+
 async function loadCapabilities() {
   try {
     const h = await (await fetch("/api/health")).json();
     if (h?.capabilities) caps = { ...caps, ...h.capabilities };
+    realMoney = h?.realMoney === true;
   } catch {
     /* keep the safe defaults */
   }
-  $("recover-link-row").classList.toggle("hidden", !caps.emailSmsRecovery && !caps.zoldenburgRecovery);
+  obCapsChanged();
   renderFundCard();
 }
 
