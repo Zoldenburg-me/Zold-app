@@ -477,3 +477,29 @@ a.z-switch:hover { border-color: var(--z-line-hover); color: var(--z-text); }
   .z-btn[aria-busy="true"]::before { animation: none; border-right-color: currentColor; opacity: .6; }
   .z-disclose[open] > summary .z-ic { transform: none; }
 }
+
+/* ---------- Digital dollars to euros (step 5) ---------- */
+/* Radio choices grouped in one card, divided, as Main currency draws them. */
+.z-choices { display: flex; flex-direction: column; background: var(--z-card); border: 1px solid var(--z-line); border-radius: var(--z-radius-card); overflow: hidden; }
+.z-choices .z-choice { border: 0; border-radius: 0; background: transparent; }
+.z-choices .z-choice + .z-choice { border-top: 1px solid var(--z-line); }
+.z-choices .z-choice:has(input:checked) { background: transparent; }
+.z-choices .z-choice:has(input:focus-visible) { outline: 2px solid var(--z-pink); outline-offset: -2px; }
+.z-choice input:disabled, .z-choice:has(input:disabled) { cursor: progress; }
+.z-confirm { display: flex; flex-direction: column; gap: var(--z-space-3); }
+
+/* The price: what goes in, what comes out. */
+.z-conv { display: flex; flex-direction: column; gap: var(--z-space-3); padding: var(--z-space-5) var(--z-space-5) var(--z-space-4); }
+.z-conv p { margin: 0; }
+.z-conv__label { margin-bottom: var(--z-space-1) !important; font-size: 14px; color: var(--z-dim); }
+.z-conv__usdc { font: 600 32px/1.1 var(--z-font); letter-spacing: -.03em; color: var(--z-heading); }
+.z-conv__unit { margin-left: 6px; font-size: 18px; font-weight: 500; letter-spacing: 0; color: var(--z-dim); }
+.z-conv__arrow { display: flex; align-items: center; gap: var(--z-space-3); color: var(--z-pink); }
+.z-conv__arrow .z-ic { font-size: 20px; }
+/* Money in: the figure and its sign in mint, as the result reference draws it. */
+.z-balance__fig--in, .z-balance__fig--in .z-balance__cur { color: var(--z-mint); }
+.z-conv__arrow span:last-child { flex: 1; height: 1px; background: var(--z-line); }
+.z-held { display: flex; align-items: center; justify-content: space-between; gap: var(--z-space-3); padding: var(--z-space-4); }
+.z-held__main { display: flex; flex-direction: column; gap: 2px; margin: 0; min-width: 0; }
+.z-held__label { font-size: 13px; color: var(--z-dim); }
+.z-held__fig { font-size: 18px; font-weight: 600; color: var(--z-heading); }

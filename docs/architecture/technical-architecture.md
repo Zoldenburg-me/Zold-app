@@ -1020,7 +1020,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | | |
 |---|---|
 | `GET /users/:id/crypto-deposits` (U) | Deposit list. |
-| `POST /users/:id/crypto-deposits/:d/convert/prepare` (U) | Convert. |
+| `POST /users/:id/crypto-deposits/:d/convert/prepare` (U) | Price one conversion: `expectedEur`, `minEur`, and `expiresAt` (the end of the signing window). |
 | `POST /users/:id/crypto-deposits/:d/convert` (U + passkey) | Convert. |
 | `POST /users/:id/crypto-deposits/:d/invoice` (U + member) | Link a deposit to an invoice. |
 | `POST /users/:id/auto-convert` (U) | Toggle auto-convert. |

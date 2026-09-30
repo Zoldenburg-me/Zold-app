@@ -322,8 +322,9 @@ async function refresh() {
     if (e?.status === 401) return signOut();
   }
   // Conversion happens on the server's poll, not on a user action, so the
-  // panel has to be re-read rather than updated optimistically.
-  await refreshCryptoDeposits();
+  // payments are re-read rather than updated optimistically.
+  await phLoadDeposits();
+  phRefresh();
 }
 
 function switchView(view) {

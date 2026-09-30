@@ -178,9 +178,12 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         for (const [id, p] of pendingDepositConversions) {
           if (p.expiresAt < Date.now()) pendingDepositConversions.delete(id);
         }
+        // The price holds as long as the prepared operation does; the app
+        // counts down from this rather than from its own copy of the window.
+        const expiresAt = Date.now() + AUTH_WINDOW_SEC * 1000;
         pendingDepositConversions.set(deposit.id, {
           userId: user.id,
-          expiresAt: Date.now() + AUTH_WINDOW_SEC * 1000,
+          expiresAt,
           challenge,
           plan: user.passkeySafe!,
           userOperation: prepared.userOperation,
@@ -198,6 +201,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           expectedEur: eur.fromWei(swap.plan.quote.expectedOut),
           minEur: eur.fromWei(swap.plan.quote.minOut),
           provider: swap.plan.quote.provider,
+          expiresAt: new Date(expiresAt).toISOString(),
         });
       } catch (err: any) {
         res.status(502).json({ error: String(err?.shortMessage ?? err?.message ?? err) });
