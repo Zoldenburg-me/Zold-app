@@ -101,7 +101,11 @@ export const ACTIONS = {
     }, { okLabel: "Import wallet" }),
   async "fund-account"(el) {
     const r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
-    toast(r.note);
+    toast(r.warning ? `${r.note} ${r.warning}` : r.note);
+  },
+  async "check-profile"(el) {
+    const r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/profile-check`, { method: "POST" });
+    toast(r.warning || "Checked with Monerium. This account can send again.");
   },
   async "del-wallet"(el) {
     await api(`/api/orgs/${org.id}/wallets/${el.dataset.id}`, { method: "DELETE" });
@@ -335,11 +339,15 @@ export const ACTIONS = {
       api(`/api/orgs/${org.id}/accounts`),
     ]);
     const payable = contacts.filter((c) => c.bankAccounts.length);
-    const fundable = accounts.filter((a) => a.status === "active" && a.backingUserId);
+    const fundable = accounts.filter(
+      (a) => a.status === "active" && a.backingUserId && a.profile?.status !== "needs_check",
+    );
     if (!payable.length) return toast("Add a contact with bank details first.", true);
     if (!fundable.length) {
       return toast(
-        "No account can fund a payment yet. Open an account and fund it from your own balance.",
+        org.type === "business"
+          ? "No account can send yet. Connect the company's Monerium profile to an account on the Accounts screen."
+          : "No account can fund a payment yet. Open an account and fund it from your own balance.",
         true,
       );
     }

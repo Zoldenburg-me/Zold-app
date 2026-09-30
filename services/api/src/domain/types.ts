@@ -11,6 +11,9 @@
 
 export type OrgType = "personal" | "business";
 
+/** Monerium's profile kinds (GET /profiles `kind`). */
+export type MoneriumProfileKind = "personal" | "corporate";
+
 /**
  * Personal orgs ladder starter -> premium; business orgs starter -> business.
  * `starter` is shared: it is the free, payouts-only floor for both, which is
@@ -274,6 +277,24 @@ export interface Account {
    * rather than guessing at someone's wallet.
    */
   backingUserId?: string;
+  /**
+   * The Monerium profile that owns the IBAN, as Monerium reported it when the
+   * backing user's account was adopted or last re-checked: the legal entity a
+   * bookkeeper or auditor needs to see. Read on the backing user's own
+   * credentials, never taken from a request body. A business account may only
+   * be backed by a `corporate` profile, a personal one by a `personal`
+   * profile (Monerium Personal Terms §16). Unset on accounts adopted before
+   * the check existed; a business account without it cannot send until it is
+   * checked again. Execution re-reads the profile live in any case.
+   */
+  moneriumProfile?: {
+    id: string;
+    kind: MoneriumProfileKind;
+    /** Monerium's name for the profile: the company for a corporate one.
+     *  Absent when Monerium did not return one. */
+    name?: string;
+    checkedAt: string;
+  };
   /** Why it is not open, and what would open it. Required when `gated`. */
   gate?: {
     reason: string;
