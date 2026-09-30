@@ -15,7 +15,7 @@ import {
   buildBankSettlement,
   orderNamesInvoice,
   payableEur,
-  withSettlement,
+  settlementUpdate,
   type MoneriumOrderLike,
 } from "../domain/invoices.js";
 import { addrs } from "../chain.js";
@@ -496,9 +496,7 @@ function recordBankSettlement(
 ): void {
   const invoice = store.invoices.find((i) => i.id === invoiceId);
   if (!invoice) return;
-  store.updateInvoice(invoice.id, {
-    settlements: withSettlement(invoice.settlements, buildBankSettlement(order, matchedOn)),
-  });
+  store.updateInvoice(invoice.id, settlementUpdate(invoice, buildBankSettlement(order, matchedOn)));
 }
 
 /**

@@ -458,7 +458,19 @@ export const ACTIONS = {
     for (const a of r.authorizations) {
       try {
         const signature = await lib.signTypedData(a.authorization.typedData, credentialId);
-        await api(a.authorization.submitTo, { method: "POST", body: { signature } });
+        // The debit itself is a Safe operation the passkey signs, then the
+        // Monerium redeem order on a SEPA line — in that order, as the server
+        // verifies them (authenticator counters rise with each ceremony).
+        const executionAssertion = await lib.passkeyAssertion(a.authorization.safeExecution);
+        const moneriumRedeemAssertion = await lib.passkeyAssertion(a.authorization.moneriumRedeem);
+        await api(a.authorization.submitTo, {
+          method: "POST",
+          body: {
+            signature,
+            ...(executionAssertion ? { executionAssertion } : {}),
+            ...(moneriumRedeemAssertion ? { moneriumRedeemAssertion } : {}),
+          },
+        });
         signed++;
         toast(`Signed ${signed}/${r.authorizations.length}…`);
       } catch (e) {
