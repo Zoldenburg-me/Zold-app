@@ -348,6 +348,11 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         code_challenge: pkceChallenge(codeVerifier),
         code_challenge_method: "S256",
       });
+      // Prefill Monerium's login and sign-up form with the email this Zold
+      // account signed up with: Monerium cannot be told which profile kind to
+      // use, and the profile follows the Monerium login, so the email is the
+      // one steer we have. The user can still change it there.
+      if (user.email) params.set("email", user.email);
       res.status(201).json({ redirectUrl: `${MONERIUM.authUrl}?${params}` });
     }),
   );

@@ -31,6 +31,10 @@ Say this plainly rather than letting the surface imply otherwise:
   company needs its own Zold login. A founder who signed up personally and
   wants a company IBAN is sent to support@zoldhq.com for a separate account
   with its own Safe, set up by hand; no such account has been set up yet.
+  A wrong-kind OAuth login is refused only after the user has signed in at
+  Monerium (its `/auth` takes no profile kind; the signup email is
+  prefilled). Whether Monerium then keeps them signed in, so that "connect
+  again" returns the same login until they sign out there, is unverified.
   Logins connected before this rule are not re-read: one connected to a
   profile of the other kind keeps it until it reconnects.
   The check gates sending only: invoices and pay links still receive into

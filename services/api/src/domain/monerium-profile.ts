@@ -43,8 +43,8 @@ export function expectedProfileKind(type: OrgType): MoneriumProfileKind {
   return type === "business" ? "corporate" : "personal";
 }
 
-/** Where a company whose founder signed up personally asks for its own
- *  account and Safe. Set up by hand; there is no self-serve path. */
+/** Where a personal login asks for a company account of its own, with its
+ *  own Safe, to back a business org. Set up by hand; no self-serve path. */
 export const SEPARATE_ACCOUNT_CONTACT = "support@zoldhq.com";
 
 export type SignupAccountType = "individual" | "company";
@@ -74,8 +74,8 @@ export function pickProfileForSignup(accountType: SignupAccountType | undefined,
     code: "MONERIUM_PROFILE_KIND_MISSING",
     error:
       kind === "corporate"
-        ? "This Zold account is for a company, so it uses your company's profile at Monerium, never a personal one. The Monerium login you connected has no company profile. Open one for your company at Monerium, then connect again."
-        : `This Zold account is personal, so it uses your personal profile at Monerium, never a company's. The Monerium login you connected has no personal profile. To use a company IBAN with Zold, email ${SEPARATE_ACCOUNT_CONTACT}: we set up a separate account for the company, with its own Safe.`,
+        ? "This Monerium account is a personal one, and your Zold account is for a company. Sign out of Monerium, then connect again with your company's email and make a company account at Monerium with it."
+        : "This Monerium account is already connected with a company profile, and your Zold account is personal. Sign out of Monerium, then connect again with your personal email and make a personal account at Monerium with it.",
   };
 }
 

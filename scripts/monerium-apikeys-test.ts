@@ -436,8 +436,8 @@ try {
       const r = await call(`/api/users/${userId}/monerium/api-keys`, { clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
       assert.equal(r.status, 409, `expected 409, got ${r.status}: ${r.text}`);
       assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISSING");
-      assert.match(r.data.error, /personal, so it uses your personal profile/);
-      assert.match(r.data.error, /support@zoldhq\.com/);
+      assert.match(r.data.error, /already connected with a company profile/);
+      assert.match(r.data.error, /connect again with your personal email/);
       const me = await call(`/api/users/${userId}`);
       assert.equal(me.data.monerium, undefined, "a refused connect must leave no connection behind");
       assert.ok(!readFileSync(process.env.TRANSF_DB_PATH!, "utf8").includes("clientSecretEnc"), "a refused secret must not be written");
@@ -660,7 +660,7 @@ try {
       const r = await call(`/api/users/${companyId}/monerium/api-keys`, { clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
       assert.equal(r.status, 409, `expected 409, got ${r.status}: ${r.text}`);
       assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISSING");
-      assert.match(r.data.error, /for a company, so it uses your company's profile/);
+      assert.match(r.data.error, /connect again with your company's email/);
       assert.equal((await call(`/api/users/${companyId}`)).data.monerium, undefined);
     } finally {
       seen.profilesShown = "both";
