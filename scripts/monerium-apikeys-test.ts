@@ -71,6 +71,8 @@ const seen = {
   ibanRequestAnswered: 0,
   patches: [] as { iban: string; address: string; chain: string }[],
   orderReadsByProfile: [] as (string | null)[],
+  /** Which of the login's two profiles GET /profiles lists. */
+  profilesShown: "both" as "both" | "corporate" | "personal",
 };
 
 /** The account's IBANs as Monerium holds them; PATCH moves one. */
@@ -210,10 +212,14 @@ const stub = createServer((req, res) => {
 
     if (url.pathname === "/auth/context") return send(200, { userId: "monerium-owner-1", email: "owner@example.com" });
     if (url.pathname === "/profiles") {
-      return send(200, { profiles: [
-        { id: PROFILE_ID, kind: "personal", state: "approved" },
+      // Corporate first, so "the first approved profile" would pick the
+      // wrong one for a personal account: only the signup kind may decide.
+      const all = [
         { id: BUSINESS_PROFILE_ID, kind: "corporate", state: "approved" },
-      ] });
+        { id: PROFILE_ID, kind: "personal", state: "approved" },
+      ];
+      return send(200, { profiles: all.filter((p) =>
+        seen.profilesShown === "both" || p.kind === seen.profilesShown) });
     }
 
     if (url.pathname.startsWith("/addresses/")) {
@@ -424,6 +430,22 @@ try {
     assert.ok(!db.includes("clientSecretEnc"), "a refused secret must not be written, even encrypted");
   });
 
+  await t("a personal account whose Monerium login has only a company profile is refused, and NOTHING is stored", async () => {
+    seen.profilesShown = "corporate";
+    try {
+      const r = await call(`/api/users/${userId}/monerium/api-keys`, { clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
+      assert.equal(r.status, 409, `expected 409, got ${r.status}: ${r.text}`);
+      assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISSING");
+      assert.match(r.data.error, /personal, so it uses your personal profile/);
+      assert.match(r.data.error, /support@zoldhq\.com/);
+      const me = await call(`/api/users/${userId}`);
+      assert.equal(me.data.monerium, undefined, "a refused connect must leave no connection behind");
+      assert.ok(!readFileSync(process.env.TRANSF_DB_PATH!, "utf8").includes("clientSecretEnc"), "a refused secret must not be written");
+    } finally {
+      seen.profilesShown = "both";
+    }
+  });
+
   await t("the right keys are verified against Monerium and connected", async () => {
     const r = await call(`/api/users/${userId}/monerium/api-keys`, { clientId: USER_CLIENT_ID, clientSecret: USER_SECRET, label: "my sandbox app" });
     assert.equal(r.status, 201, `connect failed: ${r.text}`);
@@ -432,7 +454,7 @@ try {
     assert.equal(r.data.monerium.apiKeys.label, "my sandbox app");
     assert.equal(r.data.monerium.apiKeys.accountEmail, "owner@example.com");
     assert.ok(r.data.monerium.apiKeys.verifiedAt, "verification time should be recorded");
-    assert.equal(r.data.monerium.profileId, PROFILE_ID);
+    assert.equal(r.data.monerium.profileId, PROFILE_ID, "a personal account uses its personal profile, though a corporate one is listed first");
     assert.equal(r.data.funding.mode, "sandbox", "an account on real Monerium is not in mock mode");
     assert.equal(r.data.kycStatus, "pending", "connecting keys is not identity approval");
     assert.ok(seen.tokenGrants.some((g) => g.clientId === USER_CLIENT_ID && g.secretOk && g.grant === "client_credentials"));
@@ -490,6 +512,13 @@ try {
     return { requestId: start.data.requestId, ...(await passkey.assert(start.data.challenge, ++count)) };
   };
   let safeAddress = "";
+
+  await t("the company profile on the same login cannot be named at activation", async () => {
+    const start = await call(`/api/users/${userId}/monerium/link-signature/start`, { profileId: BUSINESS_PROFILE_ID });
+    assert.equal(start.status, 409, `expected 409, got ${start.status}: ${start.text}`);
+    assert.equal(start.data.code, "MONERIUM_PROFILE_NOT_CONNECTED");
+    assert.equal(seen.linkedAddress, "", "nothing may be linked under the other profile");
+  });
 
   await t("activate on a profile that already has an IBAN answers IBAN_EXISTS_ELSEWHERE, not an error", async () => {
     const start = await call(`/api/users/${userId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
@@ -614,6 +643,35 @@ try {
     const r = await call(`/api/users/${userId}/monerium/accounts`);
     assert.ok(r.status >= 400, "reading accounts with no credential must fail");
     assert.equal(seen.unauthorised, 0, "and must not have guessed at the stub with a made-up token");
+  });
+
+  // A company signing up on a Monerium login that holds both profiles.
+  const company = await call("/api/users", {
+    name: "Own Keys GmbH", email: "company.keys@example.com", country: "DE", accountType: "company",
+    companyIncorporationCountry: "DE", usAnswers: { usPerson: false, companyUsNexus: false },
+  });
+  assert.equal(company.status, 201, `company signup failed: ${company.text}`);
+  const companyId = company.data.id;
+  token = company.data.sessionToken;
+
+  await t("a company account whose Monerium login has only a personal profile is refused, and nothing is stored", async () => {
+    seen.profilesShown = "personal";
+    try {
+      const r = await call(`/api/users/${companyId}/monerium/api-keys`, { clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
+      assert.equal(r.status, 409, `expected 409, got ${r.status}: ${r.text}`);
+      assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISSING");
+      assert.match(r.data.error, /for a company, so it uses your company's profile/);
+      assert.equal((await call(`/api/users/${companyId}`)).data.monerium, undefined);
+    } finally {
+      seen.profilesShown = "both";
+    }
+  });
+
+  await t("a company account uses its corporate profile and never the personal one on the same login", async () => {
+    const r = await call(`/api/users/${companyId}/monerium/api-keys`, { clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
+    assert.equal(r.status, 201, `connect failed: ${r.text}`);
+    assert.equal(r.data.monerium.profileId, BUSINESS_PROFILE_ID);
+    assert.equal(r.data.funding.moneriumProfileId, BUSINESS_PROFILE_ID);
   });
 
   if (failed.length) {

@@ -8,10 +8,14 @@
  * `corporate` profile and a personal org's by a `personal` one, and in both
  * cases only once Monerium has approved the profile.
  *
- * Choosing among several profiles on one Monerium login is not built: the
- * profile recorded on the backing user (`monerium.profileId`, else
- * `funding.moneriumProfileId`) is the one checked, so a company needs its own
- * Zold login connected to its corporate profile.
+ * Which profile a Zold login uses is decided once, at connect, by how the
+ * login signed up (`pickProfileForSignup`): a personal signup uses only its
+ * personal profile, a company signup only its corporate one, and the other
+ * kind on the same Monerium login is never used. The profile recorded on the
+ * backing user (`monerium.profileId`, else `funding.moneriumProfileId`) is the
+ * one checked here. A company whose founder signed up personally gets its
+ * own account, with its own Safe, set up by hand through support: one Safe
+ * holding both a personal and a company IBAN would mix the two balances.
  */
 import type { Account, MoneriumProfileKind, OrgType, Organisation } from "./types.js";
 
@@ -39,6 +43,42 @@ export function expectedProfileKind(type: OrgType): MoneriumProfileKind {
   return type === "business" ? "corporate" : "personal";
 }
 
+/** Where a company whose founder signed up personally asks for its own
+ *  account and Safe. Set up by hand; there is no self-serve path. */
+export const SEPARATE_ACCOUNT_CONTACT = "support@zoldhq.com";
+
+export type SignupAccountType = "individual" | "company";
+
+export type ProfilePick =
+  | { ok: true; profile: MoneriumProfileFacts }
+  | { ok: false; status: 409; code: "MONERIUM_PROFILE_KIND_MISSING"; error: string };
+
+/**
+ * The one Monerium profile this Zold login may use, chosen by how it signed
+ * up: `company` takes a corporate profile, anything else a personal one. The
+ * approved one of that kind wins; with none approved, the first of that kind
+ * (activation links under it and waits for Monerium). A profile of the other
+ * kind is never picked, and a profile whose kind Monerium did not state is
+ * not trusted to be either. No profile of the right kind refuses.
+ */
+export function pickProfileForSignup(accountType: SignupAccountType | undefined, profiles: unknown): ProfilePick {
+  const kind: MoneriumProfileKind = accountType === "company" ? "corporate" : "personal";
+  const ofKind = (Array.isArray(profiles) ? profiles : []).filter(
+    (p: any): p is MoneriumProfileFacts => typeof p?.id === "string" && p.id !== "" && p.kind === kind,
+  );
+  const profile = ofKind.find((p) => p.state === "approved") ?? ofKind[0];
+  if (profile) return { ok: true, profile };
+  return {
+    ok: false,
+    status: 409,
+    code: "MONERIUM_PROFILE_KIND_MISSING",
+    error:
+      kind === "corporate"
+        ? "This Zold account is for a company, so it uses your company's profile at Monerium, never a personal one. The Monerium login you connected has no company profile. Open one for your company at Monerium, then connect again."
+        : `This Zold account is personal, so it uses your personal profile at Monerium, never a company's. The Monerium login you connected has no personal profile. To use a company IBAN with Zold, email ${SEPARATE_ACCOUNT_CONTACT}: we set up a separate account for the company, with its own Safe.`,
+  };
+}
+
 /** The name an org's documents carry: its legal name, else its display name. */
 export function orgLegalName(org: Pick<Organisation, "name" | "legalName">): string {
   return org.legalName?.trim() || org.name;
@@ -49,7 +89,7 @@ export function kindMismatch(org: Pick<Organisation, "type" | "name" | "legalNam
     ? {
         status: 409,
         code: "MONERIUM_PROFILE_KIND_MISMATCH",
-        error: `Business accounts need a company profile at Monerium. Open one for ${orgLegalName(org)}, then connect it here.`,
+        error: `Business accounts need a company profile at Monerium, and this login is connected to a personal one. To send for ${orgLegalName(org)}, email ${SEPARATE_ACCOUNT_CONTACT}: we set up a separate account for the company, with its own Safe.`,
       }
     : {
         status: 409,

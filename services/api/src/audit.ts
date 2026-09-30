@@ -28,6 +28,8 @@ export type AuditKind =
   /** A user connected or removed credentials of their own for a partner. */
   | "partner.credentials_connected"
   | "partner.credentials_removed"
+  /** A Monerium connect refused: the login had no profile of the signup's kind. */
+  | "partner.connect_refused"
   /** A user moved their existing Monerium IBAN to this Safe (PATCH /ibans). */
   | "partner.iban_moved"
   /** Belege pushed to an accounting inbox; counts only, never a key. */

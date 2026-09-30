@@ -613,7 +613,17 @@ flowchart LR
   `personal` one (Monerium Personal Terms §16 forbid a personal account for a
   third party's or clients' money). The profile is the backing user's one
   recorded profile (`monerium.profileId`, else `funding.moneriumProfileId`),
-  read on their own credentials: `GET /profiles/:id` for `kind` and `state`,
+  chosen at connect (OAuth callback, `POST /monerium/api-keys`) by
+  `pickProfileForSignup` from the signup's `accountType`: `company` takes a
+  `corporate` profile, anything else a `personal` one, approved first; a
+  profile of the other kind or of no stated kind is never used. No profile of
+  the kind refuses `MONERIUM_PROFILE_KIND_MISSING` and stores nothing (OAuth
+  redirects to `/app?monerium=refused` and records only
+  `User.moneriumRefusal`). Linking and activation use the recorded profile;
+  a `profileId` in the body that names another answers
+  `MONERIUM_PROFILE_NOT_CONNECTED`, and an address-matched IBAN that names
+  another profile is not attributed. The profile is read on their own
+  credentials: `GET /profiles/:id` for `kind` and `state`,
   and the `GET /profiles?kind=` list for `name`, since the sandbox's
   single-profile answer has no name. Kind and name never come from the client.
   Checked at adoption (`POST /accounts` with adoption, `/fund`), at re-check
