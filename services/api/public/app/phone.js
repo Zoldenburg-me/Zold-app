@@ -2,13 +2,20 @@
  * The phone app from design/ui-v2 (build steps 4 and 5): Home, account
  * details, Activity, one payment, Send, Add money, Get paid, Contacts, More,
  * main currency and converting digital dollars to euros. Invoices and
- * accounting connections (step 6) are in app/invoices.js, loaded next.
+ * accounting connections (step 6) are in app/invoices.js; the company screens
+ * and Settings (step 7) are in app/business.js and app/settings.js, loaded
+ * after it.
+ *
+ * The phone acts for one account at a time: the personal account, or a
+ * company the user is a member of (`phCompanyId`, chosen in More). A company
+ * gets its own Home and an Approvals tab; its money moves in the web app.
  *
  * One screen at a time, rendered into #ph-root from the account's real state.
  * The URL hash names the screen (#home, #tx/<id>, #send/amount, …), so back,
- * reload and a shared link land where they should. Screens this step does not
- * redesign (settings, recovery, documents, the card) are the older #dashboard
- * screens; their routes open them through mobileNav() and hide this root.
+ * reload and a shared link land where they should. Screens not redesigned yet
+ * (recovery, documents, signers, Monerium keys, the card) are the older
+ * #dashboard screens; their routes open them through mobileNav() and hide
+ * this root.
  *
  * Declarations and listeners only. It is called from renderUser() and
  * renderHistory() at run time, and started by enterDashboard(); nothing here
@@ -31,7 +38,22 @@
 let phRoute = null;            // { name, arg }
 let phSig = "";                // what the open screen was drawn from, for the poll
 const phCache = { deposits: null, links: null, methods: null, orgs: null, contacts: null, bic: undefined, bicFor: "", currencyPending: null,
-  invoices: null, invProfile: null, invError: null, integrations: null, invIssued: null, invRequest: null };
+  invoices: null, invProfile: null, invError: null, integrations: null, invIssued: null, invRequest: null,
+  co: null, approvalsWaiting: 0, inviteLinks: {}, plans: {}, signers: undefined, soon: null };
+
+/* The company the phone acts for, or null for the personal account. Kept per
+   user on this device, and dropped when the user is no longer a member. */
+let phCompanyId = null;
+const phCompanyKey = () => `zold-phone-company:${user?.id || ""}`;
+const phCompany = () => (phCompanyId ? (phCache.orgs || []).find((o) => o.id === phCompanyId && o.type !== "personal") || null : null);
+function phUseCompany(id) {
+  phCompanyId = id || null;
+  phCache.co = null; phCache.approvalsWaiting = 0; phCache.inviteLinks = {};
+  try { if (phCompanyId) localStorage.setItem(phCompanyKey(), phCompanyId); else localStorage.removeItem(phCompanyKey()); } catch { /* this visit only */ }
+}
+/* A link into the web app for a company: the web app opens the organisation
+   it last had, so the link names it first (see the click listener below). */
+const phWebHref = (view) => `/business${view ? `?view=${encodeURIComponent(view)}` : ""}`;
 
 /* Screens drawn here. `tab` lights the bottom nav (tab roots only show it),
    `live` returns what the screen depends on, so the 5-second poll redraws it
@@ -40,7 +62,7 @@ const PH = {};
 
 /* Routes that open an older screen in #dashboard. */
 const PH_LEGACY = {
-  settings: "profile", plus: "plus", bundle: "bundle", card: "card", documents: "documents",
+  plus: "plus", bundle: "bundle", card: "card", documents: "documents",
   signers: "signers", "monerium-settings": "monerium", "recovery-settings": "recovery", "page-settings": "payment",
 };
 
@@ -84,16 +106,20 @@ function phShowRoot(on) {
 }
 
 function phOpen(route, { focus = false } = {}) {
+  // Acting for a company, Home is the company's.
+  if (route.name === "home" && phCompanyId && PH.company) {
+    route = { name: "company", arg: null };
+    history.replaceState({ ph: true }, "", `${location.pathname}${location.search}#company`);
+  }
   phRoute = route;
   if (PH_LEGACY[route.name]) {
     phShowRoot(false);
     phSig = "";
     window.scrollTo(0, 0);
     // The share composer needs its payment; the others open by name.
-    document.title = `${{ settings: "Settings", plus: "Zold Plus", bundle: "Zold Plus", card: "Card", documents: "Documents", signers: "Who approves payments", "monerium-settings": "Monerium", "recovery-settings": "Recovery", "page-settings": "Your page", share: "Share receipt" }[route.name] || "Zold"} · Zold`;
+    document.title = `${{ plus: "Zold Plus", bundle: "Zold Plus", card: "Card", documents: "Documents", signers: "Who approves payments", "monerium-settings": "Monerium", "recovery-settings": "Recovery", "page-settings": "Your page", share: "Share receipt" }[route.name] || "Zold"} · Zold`;
     if (route.name === "share") return route.arg ? openShare(route.arg) : phGo("activity", null, { replace: true });
     mobileNavLegacy(PH_LEGACY[route.name]);
-    if (route.name === "settings") $("m-pf-currency-sub").textContent = phCurrencyWords(user?.paymentPage);
     return;
   }
   phShowRoot(true);
@@ -107,16 +133,20 @@ function phRender({ focus = false } = {}) {
   if (!r || !PH[r.name]) return;
   const s = PH[r.name];
   const root = $("ph-root");
-  // Overlays are moved to <body> when they open; drop the old ones first.
-  document.querySelectorAll("body > .z-scrim[data-ph]").forEach((el) => el.remove());
+  // Overlays are moved to <body> when they open; drop the old ones first,
+  // closing an open one so the page behind it is no longer inert.
+  document.querySelectorAll("body > .z-scrim[data-ph]").forEach((el) => { if (!el.hidden) Z.closeOverlay(el.id); el.remove(); });
+  // A company has no activity list of its own here; its tab is Approvals.
+  const co = !!phCompanyId;
   const nav = s.tab
     ? Z.bottomNav({
       active: s.tab,
       items: [
-        { id: "home", href: "#home", icon: "home", label: "Home" },
-        { id: "send", href: "#send", icon: "arrow_outward", label: "Send" },
-        { id: "get-paid", href: "#get-paid", icon: "south_west", label: "Get paid" },
-        { id: "activity", href: "#activity", icon: "swap_vert", label: "Activity" },
+        { id: "home", href: co ? "#company" : "#home", icon: "home", label: "Home" },
+        { id: "send", href: co ? "#company/send" : "#send", icon: "arrow_outward", label: "Send" },
+        { id: "get-paid", href: co ? "#company/get-paid" : "#get-paid", icon: "south_west", label: "Get paid" },
+        co ? { id: "approvals", href: "#approvals", icon: "inbox", label: "Approvals", badge: phCache.approvalsWaiting || "" }
+          : { id: "activity", href: "#activity", icon: "swap_vert", label: "Activity" },
         { id: "more", href: "#more", icon: "more_horiz", label: "More" },
       ],
     })
@@ -166,13 +196,15 @@ document.addEventListener("click", (e) => {
   phGo(r.name, r.arg);
 });
 
-/* The older Settings screen's rows into Main currency and accounting
-   connections (step 7 redraws Settings). */
-$("m-pf-currency").onclick = () => phGo("settings/currency");
-$("m-pf-integrations").onclick = () => phGo("integrations");
+/* A link into the web app for a company names that company first. */
+document.addEventListener("click", (e) => {
+  const a = e.target.closest?.("a[data-ph-org]");
+  if (a) try { localStorage.setItem("zold-org", a.dataset.phOrg); } catch { /* the web app opens its last one */ }
+});
 
 /** The app's entry: the screen the URL names, or Home. */
 function phStart() {
+  try { phCompanyId = localStorage.getItem(phCompanyKey()) || null; } catch { phCompanyId = null; }
   const r = phParse(location.hash);
   const route = r || { name: "home", arg: null };
   history.replaceState({ ph: true }, "", `${location.pathname}${location.search}${phHref(route.name, route.arg)}`);
@@ -190,8 +222,11 @@ const phCan = (org, cap) => org?.capabilities?.[cap]?.allowed === true;
 const phPersonalOrg = () => (phCache.orgs || []).find((o) => o.type === "personal") || null;
 async function phLoadOrgs() {
   if (phCache.orgs !== null) return phCache.orgs;
-  try { phCache.orgs = (await api("/api/orgs")).organisations || []; }
-  catch { phCache.orgs = []; }
+  try {
+    phCache.orgs = (await api("/api/orgs")).organisations || [];
+    // No longer a member: back to the personal account.
+    if (phCompanyId && !phCompany()) phUseCompany(null);
+  } catch { phCache.orgs = []; }
   return phCache.orgs;
 }
 /* "26 Sep": day first, and the short month en-GB spells "Sept". */
@@ -353,19 +388,26 @@ function phChecklist(u) {
       done: !!u.iban && approved,
       action: connected && !approved ? { id: "ph-ck-verify2", label: "Activate" } : null },
   ];
+  return phChecklistCard("Finish setting up", items);
+}
+
+/* A set-up card: a row per item, ticked only when `done`. An item with an
+   `action` ({ id } for a button, { href } for a link) offers it; one without
+   waits on someone else. Nothing left to do: no card. */
+function phChecklistCard(title, items) {
   const done = items.filter((i) => i.done).length;
   if (done === items.length) return "";
   const rows = items.map((i) => {
     const mark = `<span class="z-check-mark${i.done ? " is-done" : i.action ? "" : " is-wait"}" aria-hidden="true">${Z.icon(i.done ? "check" : i.action ? "radio_button_unchecked" : "schedule")}</span>`;
     const right = i.done ? Z.tag("Done")
       : i.action ? (i.action.href
-        ? `<a class="z-btn z-btn--secondary z-btn--sm" href="${esc(i.action.href)}">${esc(i.action.label)}<span class="z-sr">: ${esc(i.title)}</span></a>`
+        ? `<a class="z-btn z-btn--secondary z-btn--sm" href="${esc(i.action.href)}"${i.action.org ? ` data-ph-org="${esc(i.action.org)}"` : ""}>${esc(i.action.label)}<span class="z-sr">: ${esc(i.title)}</span></a>`
         : `<button type="button" class="z-btn z-btn--secondary z-btn--sm" id="${esc(i.action.id)}">${esc(i.action.label)}<span class="z-sr">: ${esc(i.title)}</span></button>`)
         : Z.tag("Waiting");
     return `<div class="z-row z-row--check${i.done ? " is-done" : ""}">${mark}<span class="z-row__main"><span class="z-row__title">${esc(i.title)}${i.done ? '<span class="z-sr"> (done)</span>' : ""}</span><span class="z-row__sub">${esc(i.sub)}</span></span><span class="z-row__right">${right}</span></div>`;
   });
   return `<section class="z-card z-checklist" aria-labelledby="ph-ck-title">
-    <div class="z-checklist__head"><h2 id="ph-ck-title">Finish setting up</h2><span class="z-fig">${done} of ${items.length}</span></div>
+    <div class="z-checklist__head"><h2 id="ph-ck-title">${esc(title)}</h2><span class="z-fig">${done} of ${items.length}</span></div>
     <ul class="z-list">${rows.map((r) => `<li>${r}</li>`).join("")}</ul></section>`;
 }
 
@@ -1871,31 +1913,75 @@ function phOpenContact(key, root) {
    More
    ========================================================================== */
 
+const PH_ROLE = { owner: "Owner", admin: "Admin", payer: "Payer", accountant: "Accountant", viewer: "Viewer" };
+const phRoleWord = (role) => PH_ROLE[role] || String(role || "");
+
+/* A row into the web app for a company. */
+const phWebRow = (org, o) => Z.row(o).replace('<a class="z-row"', `<a class="z-row" data-ph-org="${esc(org.id)}"`);
+
+/* Who the phone acts for: the personal account or one company. */
+function phSwitchSheet(trigger) {
+  const u = user || {};
+  const companies = (phCache.orgs || []).filter((o) => o.type !== "personal");
+  const choice = (id, name, sub) => {
+    const here = (id || null) === phCompanyId;
+    return `<li><button type="button" class="z-row z-row--btn" data-ph-switch="${esc(id || "")}"${here ? ' aria-current="true"' : ""}>${Z.avatar({ name, tone: here ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(name)}</span><span class="z-row__sub">${esc(sub)}</span></span>${here ? `<span class="z-row__right">${Z.icon("check")}<span class="z-sr">(current)</span></span>` : ""}</button></li>`;
+  };
+  document.getElementById("ph-switch")?.remove();
+  document.body.insertAdjacentHTML("beforeend", Z.overlay({
+    id: "ph-switch", title: "Switch account",
+    body: `<ul class="z-list z-card">${choice(null, u.name || "Personal", "Personal account")}${companies.map((o) => choice(o.id, o.name, `Business · you are ${phRoleWord(o.role).toLowerCase()}`)).join("")}</ul>`,
+  }));
+  const scrim = $("ph-switch");
+  scrim.dataset.ph = "1";
+  scrim.querySelectorAll("[data-ph-switch]").forEach((b) => {
+    b.onclick = () => {
+      Z.closeOverlay("ph-switch");
+      phUseCompany(b.dataset.phSwitch || null);
+      phGo(phCompanyId ? "company" : "home");
+    };
+  });
+  Z.openOverlay("ph-switch", trigger);
+}
+
 PH.more = {
   title: "More",
   tab: "more",
-  live: () => JSON.stringify(phCache.orgs?.map((o) => o.id)),
+  live: () => JSON.stringify([phCache.orgs?.map((o) => o.id), phCompanyId]),
   html() {
     const u = user || {};
     const orgs = phCache.orgs || [];
     const companies = orgs.filter((o) => o.type !== "personal");
+    const co = phCompany();
     const has = (cap) => orgs.some((o) => phCan(o, cap));
+    const who = co
+      ? { name: co.name, sub: `Business · you are ${phRoleWord(co.role).toLowerCase()}` }
+      : { name: u.name || "", sub: companies.length ? `Personal · switch to ${companies.map((o) => o.name).join(", ")}` : "Personal account" };
     const switcher = companies.length
-      ? `<a class="z-card z-switch" href="/business">${Z.avatar({ name: u.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(u.name || "")}</span><span class="z-row__sub">Personal · switch to ${esc(companies.map((o) => o.name).join(", "))}</span></span>${Z.icon("unfold_more", "z-row__chev")}</a>`
-      : `<div class="z-card z-switch">${Z.avatar({ name: u.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(u.name || "")}</span><span class="z-row__sub">Personal account</span></span></div>`;
-    const work = [
-      ...(phPersonalOrg()
-        ? [Z.row({ lead: Z.iconTile({ icon: "receipt_long" }), title: "Invoices", sub: "Issue, request and pay invoices", href: "#invoices" })]
-        : has("invoices") ? [Z.row({ lead: Z.iconTile({ icon: "receipt_long" }), title: "Invoices", sub: "In your company account", href: "/business" })] : []),
-      Z.row({ lead: Z.iconTile({ icon: "contacts" }), title: "Contacts", sub: "People and companies you pay", href: "#contacts" }),
-      ...(has("ledger.transactions") ? [Z.row({ lead: Z.iconTile({ icon: "menu_book" }), title: "Books", sub: "Memos, categories, receipts, exports", href: "/business" })] : []),
-      companies.length
-        ? Z.row({ lead: Z.iconTile({ icon: "inbox" }), title: "Approvals", sub: "In your company account", right: Z.tag("Business"), href: "/business" })
-        : `<div class="z-row z-row--soon" aria-disabled="true">${Z.iconTile({ icon: "inbox" })}<span class="z-row__main"><span class="z-row__title">Approvals</span><span class="z-row__sub">Only in company accounts</span></span><span class="z-row__right">${Z.tag("Business")}</span></div>`,
-    ];
+      ? `<button type="button" class="z-card z-switch" id="ph-switch-btn" aria-haspopup="dialog">${Z.avatar({ name: who.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(who.name)}</span><span class="z-row__sub">${esc(who.sub)}</span></span>${Z.icon("unfold_more", "z-row__chev")}</button>`
+      : `<div class="z-card z-switch">${Z.avatar({ name: who.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(who.name)}</span><span class="z-row__sub">${esc(who.sub)}</span></span></div>`;
+    const work = co
+      ? [
+        ...(phCan(co, "invoices") ? [phWebRow(co, { lead: Z.iconTile({ icon: "receipt_long" }), title: "Invoices", sub: "In the web app", href: phWebHref("invoices") })] : []),
+        phWebRow(co, { lead: Z.iconTile({ icon: "contacts" }), title: "Contacts", sub: "In the web app", href: phWebHref("contacts") }),
+        ...(phCan(co, "ledger.transactions") ? [phWebRow(co, { lead: Z.iconTile({ icon: "menu_book" }), title: "Books", sub: "Memos, categories, receipts, exports", href: phWebHref("ledger") })] : []),
+        Z.row({ lead: Z.iconTile({ icon: "inbox" }), title: "Approvals", sub: "Payments waiting for a second person", href: "#approvals" }),
+        Z.row({ lead: Z.iconTile({ icon: "group" }), title: "Members", sub: "Who is in this company and what they can do", href: "#members" }),
+      ]
+      : [
+        ...(phPersonalOrg()
+          ? [Z.row({ lead: Z.iconTile({ icon: "receipt_long" }), title: "Invoices", sub: "Issue, request and pay invoices", href: "#invoices" })]
+          : has("invoices") ? [Z.row({ lead: Z.iconTile({ icon: "receipt_long" }), title: "Invoices", sub: "In your company account", href: "/business" })] : []),
+        Z.row({ lead: Z.iconTile({ icon: "contacts" }), title: "Contacts", sub: "People and companies you pay", href: "#contacts" }),
+        ...(has("ledger.transactions") ? [Z.row({ lead: Z.iconTile({ icon: "menu_book" }), title: "Books", sub: "Memos, categories, receipts, exports", href: "/business" })] : []),
+        companies.length
+          ? Z.row({ lead: Z.iconTile({ icon: "inbox" }), title: "Approvals", sub: `In ${companies.map((o) => o.name).join(", ")}`, right: Z.tag("Business"), href: "#approvals" })
+          : `<div class="z-row z-row--soon" aria-disabled="true">${Z.iconTile({ icon: "inbox" })}<span class="z-row__main"><span class="z-row__title">Approvals</span><span class="z-row__sub">Only in company accounts</span></span><span class="z-row__right">${Z.tag("Business")}</span></div>`,
+      ];
     const other = [
-      Z.row({ lead: Z.iconTile({ icon: "settings" }), title: "Settings", sub: "Account, security, recovery, documents", href: "#settings" }),
-      ...(HAS("gnosis_pay") ? [Z.row({ lead: Z.iconTile({ icon: "credit_card" }), title: "Gnosis Pay card", sub: "A card you already have, connected", right: Z.tag("Beta"), href: "#card" })] : []),
+      Z.row({ lead: Z.iconTile({ icon: "settings" }), title: "Settings", sub: "Account, security, plan", href: "#settings" }),
+      Z.row({ lead: Z.iconTile({ icon: "hourglass_top" }), title: "Coming soon", sub: "What this account can’t do yet, and why", href: "#soon" }),
+      ...(!co && HAS("gnosis_pay") ? [Z.row({ lead: Z.iconTile({ icon: "credit_card" }), title: "Gnosis Pay card", sub: "A card you already have, connected", right: Z.tag("Beta"), href: "#card" })] : []),
       Z.row({ lead: Z.iconTile({ icon: "help" }), title: "Help", sub: "support@zoldhq.com", href: "mailto:support@zoldhq.com" }),
     ];
     return `<header class="z-app__head">${Z.largeTitle({ title: "More" })}</header>${phMain(`
@@ -1904,8 +1990,10 @@ PH.more = {
       ${Z.listGroup({ rows: other })}
     `)}`;
   },
-  bind() {
+  bind(root) {
     if (phCache.orgs === null) phLoadOrgs().then(() => { if (phRoute?.name === "more") phRender(); });
+    const sw = root.querySelector("#ph-switch-btn");
+    if (sw) sw.onclick = () => phSwitchSheet(sw);
   },
 };
 
@@ -1914,6 +2002,8 @@ function phReset() {
   phCache.deposits = null; phCache.links = null; phCache.methods = null; phCache.orgs = null;
   phCache.invoices = null; phCache.invProfile = null; phCache.invError = null; phCache.integrations = null;
   phCache.invIssued = null; phCache.invRequest = null;
+  phCache.co = null; phCache.approvalsWaiting = 0; phCache.inviteLinks = {}; phCache.plans = {}; phCache.signers = undefined; phCache.soon = null;
+  phCompanyId = null;
   phCache.contacts = null; phCache.bic = undefined; phCache.bicFor = ""; phCache.linksError = null;
   phSend = { payee: null, amount: "", reference: "", quote: null, transferId: null, error: null };
   phQuery = "";
