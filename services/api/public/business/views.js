@@ -126,7 +126,7 @@ RENDER.payments = async () => {
   let html = "";
   if (!approvals) html += gateHtml("transfers.approvals");
   html += `<div class="card"><div class="h"><div><h2>Payments</h2>
-    <div class="desc">Draft, review, then send. A payment whose recipient changed is held, not retargeted.</div></div>
+    <div class="desc">${approvals ? "Draft, review, then send." : "Draft, then send."} A payment whose recipient changed is held, not retargeted.</div></div>
     <button data-act="new-draft">New draft</button></div>` +
     (drafts.length ? `<table><thead><tr><th>State</th><th>Lines</th><th>Total</th><th></th></tr></thead><tbody>` +
       drafts.map((d) => {
@@ -139,7 +139,8 @@ RENDER.payments = async () => {
           <td>${d.lines.length}<div class="desc">${esc(d.lines.map((l) => l.destination.displayName).join(", ").slice(0, 60))}</div></td>
           <td class="mono">${Object.entries(d.totals || {}).map(([a, v]) => `${esc(v)} ${esc(a)}`).join("<br>")}</td>
           <td class="row-actions">
-            ${d.state === "DRAFT" ? `<button class="sm" data-act="submit-draft" data-id="${esc(d.id)}">Submit</button>` : ""}
+            ${d.state === "DRAFT" && approvals ? `<button class="sm" data-act="submit-draft" data-id="${esc(d.id)}">Submit</button>` : ""}
+            ${d.state === "DRAFT" && !approvals ? `<button class="sm" data-act="exec-draft" data-id="${esc(d.id)}">Send</button>` : ""}
             ${d.state === "PENDING_REVIEW" ? `<button class="sm" data-act="review-draft" data-id="${esc(d.id)}">Review</button>` : ""}
             ${d.state === "REVIEWED" ? `<button class="sm" data-act="exec-draft" data-id="${esc(d.id)}">Send</button>` : ""}
           </td></tr>`;

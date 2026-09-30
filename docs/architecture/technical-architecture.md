@@ -797,22 +797,17 @@ here). Each was re-checked against the code on 2026-09-30; unlike the rest of
 this document, the paths below are current, not pinned to `8dd8009`. Remove an
 item when it is fixed.
 
-1. **Outgoing invoices never close on payment.** An issued invoice starts
-   SUBMITTED; a bank or crypto payment only adds a `settlements` row, so it
-   stays SUBMITTED and collectable until someone reconciles it by hand.
-   Issued invoices, paid or not, can be soft-deleted. `numberSeries.next` can
-   be set below numbers already issued (duplicates are caught only at issue).
-   Bank and footer blocks are read live from `org.invoicing`, not frozen at
-   issue (`routes/business/invoice-links.ts`).
+1. **Issued invoices are not fully frozen.** `numberSeries.next` can be set
+   below numbers already issued (duplicates are caught only at issue). Bank
+   and footer blocks are read live from `org.invoicing`, not frozen at issue
+   (`routes/business/invoice-links.ts`). An unpaid issued invoice can still be
+   soft-deleted.
 2. **Invoice-bound pay links only work for the personal org**: the owner
    route passes `defaultOrgId`, so a business-org invoice answers 403
    (`routes/payment-requests.ts`).
-3. **Business Send cannot debit a Safe.** It posts only `{ signature }`, and a
-   Safe debit without `executionAssertion` answers 400
-   (`public/business/actions.js`, `routes/transfers.ts`). The UI offers Send
-   only on REVIEWED drafts, so plans without approvals have no UI path (the
-   server would execute a DRAFT). CSV-imported lines are wallet lines, which
-   execute refuses.
+3. **CSV-imported draft lines cannot be sent.** The import reads the Safe
+   CSV format (recipient address, token, amount), so every line is a wallet
+   line, and execute pays only bank lines.
 4. **Refund after a non-batch swap** fails through LI.FI or Bebop, which
    refuse any recipient but the orchestrator, and ends in MANUAL_REVIEW. It
    can succeed only when Uniswap wins the reverse quote under `best`.
@@ -835,10 +830,6 @@ item when it is fixed.
 10. **`pay-request.html`'s open-amount crypto view stops re-rendering** once
     the payer types an amount — it misses PAID and never re-prices an expired
     quote.
-11. **The mobile crypto screen says "converted at the live mid rate on
-    arrival"** (`public/index.html`, `public/app/dashboard.js`). The
-    conversion is a user-signed swap at the venue's rate, checked against the
-    mid within a drift cap.
 
 ---
 

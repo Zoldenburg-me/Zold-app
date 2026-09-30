@@ -265,7 +265,33 @@ export async function signTypedData(typedData, credentialId) {
   return bytesToHex(concat(sig, Uint8Array.of(27 + recovery)));
 }
 
+const b64url = (buf) =>
+  btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+/**
+ * A user-verified passkey assertion over a challenge the server issued, in the
+ * shape the API takes for `executionAssertion` and `moneriumRedeemAssertion`.
+ * Undefined when there is nothing to approve (no challenge on this transfer).
+ */
+export async function passkeyAssertion(req) {
+  if (!req?.challenge || !req?.credentialId) return undefined;
+  const cred = await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(req.challenge),
+      allowCredentials: [{ type: "public-key", id: b64urlToBytes(req.credentialId) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  });
+  return {
+    credentialId: req.credentialId,
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  };
+}
+
 // Hand the API to the classic script, which loaded before this module.
 if (window.__deviceLibReady) {
-  window.__deviceLibReady({ createKey, deviceAddress, signTypedData, keyStatus, destinationCommitment });
+  window.__deviceLibReady({ createKey, deviceAddress, signTypedData, keyStatus, destinationCommitment, passkeyAssertion });
 }

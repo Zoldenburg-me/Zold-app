@@ -299,7 +299,7 @@ function renderCryptoScreen() {
   $("m-crypto-warn").textContent = !page.autoConvert
     ? "Base network only. Auto-settlement is off, so USDC stays in your Safe."
     : settlesTo === "EURE"
-      ? "Base network only. USDC is converted to EURe at the live mid rate on arrival."
+      ? "Base network only. When USDC arrives, you approve converting it to EURe with your passkey, at the exchange's rate. We refuse the swap if that rate is too far from the market rate."
       : "Base network only. USDC is forwarded to your Safe and recorded as USDC settlement.";
 }
 
