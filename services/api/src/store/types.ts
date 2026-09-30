@@ -421,10 +421,9 @@ export interface CryptoDeposit {
    */
   midRate?: number;
   /**
-   * The conversion as the chain recorded it. `txs` used to hold only the
-   * ERC-4337 userOperationHash, which no explorer resolves to a block; the
-   * bundler's receipt gives the transaction hash, block and gas, and the
-   * Beleg needs all three.
+   * The conversion as the chain recorded it: the transaction hash, block and
+   * gas from the bundler's receipt, which the Beleg needs. The ERC-4337
+   * userOperationHash alone resolves to no block in any explorer.
    */
   conversion?: {
     userOpHash?: string;

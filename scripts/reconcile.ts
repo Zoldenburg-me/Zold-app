@@ -2,9 +2,9 @@
  * Reconcile the local Monerium receipt state against Monerium's own orders.
  * Reports drift; never repairs it.
  *
- * Needs the chain running (the API need not be). With Monerium credentials in
- * .env it also compares against the real sandbox ledger; without them it
- * checks the on-chain invariants only.
+ * Needs neither the chain nor the API. It compares against Monerium when app
+ * credentials are in .env or any account uses its own API keys; with neither
+ * there is nothing to compare and it reports ok.
  *
  * Run: npm run reconcile
  */

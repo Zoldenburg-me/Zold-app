@@ -2,7 +2,7 @@
 
 These rules apply to every page and screen, including ones that are not in `screens/`. They combine three sources:
 
-1. The repo's own invariants (`CLAUDE.md` at the root). Those win over everything here.
+1. The repo's own invariants (`AGENTS.md` at the root). Those win over everything here.
 2. The **design-taste-frontend** skill (`~/.agents/skills/design-taste-frontend/SKILL.md`).
 3. The **web-design-guidelines** skill (`~/.agents/skills/web-design-guidelines/SKILL.md`), which fetches Vercel's Web Interface Guidelines.
 

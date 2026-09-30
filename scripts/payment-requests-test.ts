@@ -338,7 +338,7 @@ try {
   // ── a link raised FOR an invoice carries it all the way to the settlement ──
   // The two events of a crypto-settled euro invoice (an asset acquired at its
   // euro value on receipt, then disposed of) are only auditable if the deposit
-  // knows which invoice it paid. That used to need a human to link it by hand.
+  // knows which invoice it paid, without a human linking it by hand.
   const orgId = randomUUID();
   store.addOrganisation({
     id: orgId, type: "personal", name: "Miriam Zoldenburg", plan: "starter",

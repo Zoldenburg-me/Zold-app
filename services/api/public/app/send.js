@@ -392,9 +392,8 @@ async function pollSepaTransfer(id) {
 
 $("btn-send").onclick = async () => {
   clearErr("send-err");
-  /* Every field the device will sign a commitment over must have been typed.
-     A blank used to become "Recipient" / "+254700000000" and be signed into
-     the transfer as if someone had entered it. Checked before any API call
+  /* Every field the device will sign a commitment over must have been typed;
+     never fill a blank with a placeholder and sign it. Checked before any API call
      or device-key work, so a refusal costs nothing. Only the rail's own
      identifier is sent, as the mobile flow does. */
   const recipient = {

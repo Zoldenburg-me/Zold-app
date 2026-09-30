@@ -93,8 +93,8 @@ export const moneriumOAuthEnabled = () => Boolean(MONERIUM.oauthClientId);
  * locally minted EURe for a mirrored deposit, and up-front account approval.
  * On every real-money chain the flag is inert by construction (the chain id
  * test cannot be configured away), and production refuses to start with it.
- * This replaces the old ALLOW_SIMULATION, which also opened product routes
- * (simulated deposits, self-approval, mock payouts) — those are gone.
+ * It opens no product route: there are no simulated deposits, self-approval
+ * or mock payouts.
  */
 export const HARNESS = {
   enabled: process.env.LOCAL_HARNESS === "1" && IS_LOCAL_CHAIN && !IS_PRODUCTION,
