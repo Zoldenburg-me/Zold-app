@@ -4,7 +4,7 @@
 to [`product-architecture.md`](product-architecture.md), which covers what the
 product is. This document covers how it is built. File references are
 `path:line` at that commit, and paths under `services/api/src/` are written
-without that prefix. §19 lists stale text elsewhere in the repo.*
+without that prefix. §19 lists open code findings.*
 
 ---
 
@@ -110,8 +110,8 @@ Order in `server.ts`:
    (300/min) covers everything else. Matching uses the mount-relative path.
 6. The page router serves the HTML routes, then `express.static(public)`. It
    is mounted before any `/api` router.
-7. Routers are mounted at `/api`. Mount order matters (see §19 for the QR
-   route).
+7. Routers are mounted at `/api`. Mount order matters: the payment-request
+   router passes `/pay/:handle/qr.svg` on to the payment-page router.
 8. The error handler returns 500 `internal server error`. The raw message is
    shown only when running locally and not in production.
 
@@ -790,57 +790,55 @@ environment variable, and starts the API next to `cloudflared`.
 
 ---
 
-## 19. Code-level findings from this pass
+## 19. Open code-level findings
 
-These are not security issues. They were found by reading, and they matter for
-the docs or the next change. (Security-relevant findings were reported
-separately rather than committed here.)
+These are not security issues (those are reported separately, not committed
+here). Each was re-checked against the code on 2026-09-30; unlike the rest of
+this document, the paths below are current, not pinned to `8dd8009`. Remove an
+item when it is fixed.
 
-1. **`GET /api/pay/:handle/qr.svg` never answers.** The payment-request router
-   (mounted first, `server.ts:147`) matches `/pay/:handle/:code` with code
-   `qr.svg`, fails `isRequestCode`, and returns 404 without calling
-   `next()`. It affects `pay.html`, `pay-request.html` and the app's crypto
-   screen.
-2. **`integrations.accounting` is not `unavailable`**, so the capability
-   matrix reports it allowed on Business with nothing behind it.
-3. **Outgoing invoices never auto-close.** A settled invoice reads SUBMITTED
-   or OVERDUE and remains collectable. An issued, numbered invoice can be
-   soft-deleted. The number series can be set backwards. The bank and footer
-   blocks on an issued sheet are read live, not frozen.
-4. **Invoice-bound pay links** only work for personal-org invoices, because
-   the owner route passes `defaultOrgId`.
-5. **Business Send** does not produce the passkey `executionAssertion` that a
-   Safe debit needs. On plans without approvals the UI has no send path.
-   CSV-imported lines are wallet lines, which cannot be paid from an issued
-   account.
-6. **Refund after a non-batch swap** cannot succeed through LI.FI or Bebop,
-   because both refuse a non-orchestrator recipient. It ends in MANUAL_REVIEW.
-7. **Amounts that are not measured:** non-batch `usdcOut` is copied from the
-   quote, and RFQ never records surplus.
-8. **The cash batch creates a live Bridge transfer at build time.** An
-   abandoned transfer leaves an unfunded one behind. `executeTransfer` sends
-   no sender details, so a SEP-12 anchor refuses *after* Bridge holds the
-   funds.
-9. **SEPA counterpart `country` is the sender's country** (default `DE`).
-    `sepa.mode` is always the literal `"sandbox"`.
-11. *(Fixed Sep 2026.)* `refreshPendingIban` now approves the account when
-    the address-matched IBAN arrives after activation.
-10. **Indicative-rate caches never hit**, because `providerById` builds a new
-    venue instance per call.
-11. **Shopify resolve retries are uncapped**, and the Shopify webhooks, the
-    extension poll and the pay-page poll share the 20/min auth bucket per IP.
-14. The `pay-request.html` open-amount crypto view stops re-rendering once the
-    payer has typed an amount.
-15. Stale text:
-    - `_test-env.ts` now *sets* `KYC_AUTO_APPROVE=1`, while AGENTS.md says
-      it blanks it.
-    - Contract tests use a random port, not 8546.
-    - The headers of `scripts/deploy.ts` and `scripts/reconcile.ts` are out
-      of date.
-    - The root `ARCHITECTURE.md` describes the removed allowance and
-      RemitVault model and lists hardhat fixtures as governing contracts.
-    - The mobile crypto screen says "converted at the live mid rate on
-      arrival".
+1. **Outgoing invoices never close on payment.** An issued invoice starts
+   SUBMITTED; a bank or crypto payment only adds a `settlements` row, so it
+   stays SUBMITTED and collectable until someone reconciles it by hand.
+   Issued invoices, paid or not, can be soft-deleted. `numberSeries.next` can
+   be set below numbers already issued (duplicates are caught only at issue).
+   Bank and footer blocks are read live from `org.invoicing`, not frozen at
+   issue (`routes/business/invoice-links.ts`).
+2. **Invoice-bound pay links only work for the personal org**: the owner
+   route passes `defaultOrgId`, so a business-org invoice answers 403
+   (`routes/payment-requests.ts`).
+3. **Business Send cannot debit a Safe.** It posts only `{ signature }`, and a
+   Safe debit without `executionAssertion` answers 400
+   (`public/business/actions.js`, `routes/transfers.ts`). The UI offers Send
+   only on REVIEWED drafts, so plans without approvals have no UI path (the
+   server would execute a DRAFT). CSV-imported lines are wallet lines, which
+   execute refuses.
+4. **Refund after a non-batch swap** fails through LI.FI or Bebop, which
+   refuse any recipient but the orchestrator, and ends in MANUAL_REVIEW. It
+   can succeed only when Uniswap wins the reverse quote under `best`.
+5. **Amounts not measured.** Non-batch `transfer.usdcOut` is stored from the
+   quote, and the refund reads it; the measured amount only sizes the Bridge
+   deposit (`orchestrator.ts`). RFQ (`liquidity/rfq.ts`) records no surplus.
+6. **The cash batch creates a live Bridge transfer at build time**
+   (`transfers/build.ts`) and nothing cancels it, so an abandoned transfer
+   leaves an unfunded one. `executeTransfer` passes no sender details, so a
+   SEP-12 anchor refuses *after* Bridge holds the funds.
+7. **SEPA counterpart `country` is the sender's** (`user.country || "DE"`).
+   `sepa.mode` is always the literal `"sandbox"`, so the "Mock SEPA" branches
+   in `receipt.ts` and `routes/admin.ts` never run.
+8. **Indicative-rate caches never hit**: `providerById` builds a new venue
+   per call and `best` re-resolves its venues, so per-instance caches are
+   discarded.
+9. **Shopify resolve retries are uncapped** (the sweep ignores
+   `resolveAttempts`). Shopify webhooks, the checkout-extension poll and the
+   pay-page poll (every 5 s) share the auth bucket, 20/min per IP.
+10. **`pay-request.html`'s open-amount crypto view stops re-rendering** once
+    the payer types an amount — it misses PAID and never re-prices an expired
+    quote.
+11. **The mobile crypto screen says "converted at the live mid rate on
+    arrival"** (`public/index.html`, `public/app/dashboard.js`). The
+    conversion is a user-signed swap at the venue's rate, checked against the
+    mid within a drift cap.
 
 ---
 
@@ -926,7 +924,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 |---|---|
 | `POST /users/:id/handle` (U) | Claim a handle. |
 | `GET /pay/:handle` | Public payee. |
-| `GET /pay/:handle/qr.svg` | Shadowed (see §19). |
+| `GET /pay/:handle/qr.svg` | The payee's QR code. |
 | `GET/POST /users/:id/payment-requests` (U) | List or create links. |
 | `GET /users/:id/payment-requests/{methods, :reqId}` (U) | Methods; one link. |
 | `POST /users/:id/payment-requests/:reqId/cancel` (U) | Cancel a link. |

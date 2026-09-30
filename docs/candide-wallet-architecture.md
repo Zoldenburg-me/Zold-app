@@ -73,12 +73,18 @@ authorizer binding without a verified passkey is refused.
 
 ## Production Gate
 
-Before real funds, production startup should fail unless:
+Production mode is `NODE_ENV=production` or `TRANSF_PRODUCTION=1`. The source
+of truth is `assertProductionConfig` in `services/api/src/config.ts`, which
+refuses to start on any failure. The checks that concern the wallet:
 
-- `NODE_ENV=production`
-- strict `WEBAUTHN_ORIGINS`
-- `KYC_OPERATOR_TOKEN`
-- `MONERIUM_WEBHOOK_SECRET`
-- passkey step-up enabled
-- server-held Safe owner keys disabled
-- recovery setup enabled for funded accounts
+- `KYC_OPERATOR_TOKEN` set (operator console and recovery approvals).
+- `MONERIUM_WEBHOOK_SECRET` set whenever Monerium credentials are configured.
+- `CANDIDE_RECOVERY_MODULE_ADDRESS` is not the 3-minute test module.
+- Hosted (a public URL, or not the local stack): `WEBAUTHN_ORIGINS` explicit,
+  https only, no loopback; `TRUSTED_PROXY_HOPS` explicit;
+  `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` set, so the onboarding guardian offer
+  has an address to add.
+
+Not configuration, so nothing to check at startup: passkey step-up is always
+required outside chain 31337, and the store has no field for a server-held
+Safe owner key.

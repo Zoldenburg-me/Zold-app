@@ -60,10 +60,9 @@ process.env.AUTH_RATE_LIMIT_PER_MIN = "1000";
 /**
  * KYC_AUTO_APPROVE is a gate: with "0" a new user starts pending and never
  * receives an IBAN, so any harness that funds an account fails with a missing
- * iban rather than anything about KYC. Empty restores the inferred default
- * (auto-approve when LOOKS_LOCAL), which is what harnesses were written
- * against. A harness that wants the gate sets "0" in its own child env and
- * still wins.
+ * iban rather than anything about KYC. So the harness sets "1" (honoured only
+ * on the local chain). A harness that wants the gate sets "0" in its own child
+ * env and still wins.
  *
  * Deliberately NOT handled: ALLOW_PLAINTEXT_STORE (only read under
  * NODE_ENV=production, which is pinned away here) and MONERIUM_REDIRECT_URI
