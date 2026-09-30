@@ -25,12 +25,12 @@ function enterDashboard(name) {
   }
   obScreen = null;
   $("onboard").style.display = "none";
-  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
-  // The mobile shell is the app now; the desktop sidebar/topbar/rail stay in
-  // the document only until their Noir screens land.
+  // An onboarding hash is not an app screen: the app then opens on Home.
+  if (OB[location.hash.slice(1)]) history.replaceState(null, "", location.pathname + location.search);
+  // The older screens still live in #dashboard, in its phone layout.
   $("dashboard").classList.add("m-on");
-  if (!$("dashboard").dataset.msub) $("dashboard").dataset.msub = "home";
-  $("dashboard").style.display = "grid";
+  if (!$("dashboard").dataset.msub) $("dashboard").dataset.msub = "profile";
+  phStart();
   $("userpill").style.display = "flex";
   $("pillname").textContent = name;
   $("avatar").textContent = name.trim()[0].toUpperCase();
@@ -65,6 +65,7 @@ let obRecoveryDone = null;
 
 function obShow() {
   $("dashboard").style.display = "none";
+  $("phone").hidden = true;
   $("onboard").style.display = "block";
 }
 
@@ -1735,16 +1736,8 @@ $("btn-dash-kyc-refresh").onclick = async () => {
 $("btn-recovery-start").onclick = startRecoveryRequest;
 $("m-pf-recovery").onclick = () => mobileNav("recovery");
 $("m-pf-documents").onclick = () => mobileNav("documents");
-$("m-pf-links").onclick = () => mobileNav("links");
-$("btn-links").onclick = () => mobileNav("links");
-$("m-det-receipt").onclick = async () => {
-  const t = hist.find((x) => x.id === mDetailId);
-  if (!t) return;
-  try {
-    const d = await api(`/api/users/${user.id}/documents/receipt`, { transferId: t.id });
-    window.open(d.url, "_blank", "noopener");
-  } catch (e) { $("m-det-error").textContent = e.message; $("m-det-error").classList.remove("hidden"); }
-};
+$("m-pf-links").onclick = () => phGo("get-paid");
+$("btn-links").onclick = () => phGo("get-paid");
 
 /**
  * /app?pay=<handle>/<code> — "Open in Zold" from a payment request page.
@@ -1766,8 +1759,11 @@ async function handlePayDeepLink() {
     if (!b) throw new Error("this request cannot be paid from a Zold account — it takes crypto only");
     if (p.state !== "OPEN") throw new Error(`this payment request is ${p.state.toLowerCase()}`);
     const amount = p.outstandingEur ?? Number(qs.get("amount") || 0);
-    $("m-amount").value = amount > 0 ? String(amount) : "";
-    startSend("sepa", { rail: "sepa", name: b.holder, id: b.iban, reference: b.reference });
+    phSend = {
+      payee: { name: b.holder, iban: String(b.iban).replace(/\s+/g, "").toUpperCase() },
+      amount: amount > 0 ? String(amount) : "", reference: b.reference || "", quote: null, transferId: null, error: null,
+    };
+    phGo("send/amount", "new");
   } catch (e) {
     alert(e.message);
   }
@@ -1797,7 +1793,9 @@ async function resumeSession(capabilitiesLoaded) {
     renderUser(u);
     await capabilitiesLoaded;
     const next = obNextAfterAccount();
-    if (!next) {
+    // "Do this later" on the Monerium step opened the app: a reload on an app
+    // screen stays in the app, whose Home offers the step again.
+    if (!next || (["monerium", "activate"].includes(next) && phParse(location.hash))) {
       enterDashboard(user.name);
       await handlePayDeepLink();
       return;
