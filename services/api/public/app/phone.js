@@ -1,7 +1,8 @@
 /**
  * The phone app from design/ui-v2 (build steps 4 and 5): Home, account
  * details, Activity, one payment, Send, Add money, Get paid, Contacts, More,
- * main currency and converting digital dollars to euros.
+ * main currency and converting digital dollars to euros. Invoices and
+ * accounting connections (step 6) are in app/invoices.js, loaded next.
  *
  * One screen at a time, rendered into #ph-root from the account's real state.
  * The URL hash names the screen (#home, #tx/<id>, #send/amount, …), so back,
@@ -29,7 +30,8 @@
 
 let phRoute = null;            // { name, arg }
 let phSig = "";                // what the open screen was drawn from, for the poll
-const phCache = { deposits: null, links: null, methods: null, orgs: null, contacts: null, bic: undefined, bicFor: "", currencyPending: null };
+const phCache = { deposits: null, links: null, methods: null, orgs: null, contacts: null, bic: undefined, bicFor: "", currencyPending: null,
+  invoices: null, invProfile: null, invError: null, integrations: null, invIssued: null, invRequest: null };
 
 /* Screens drawn here. `tab` lights the bottom nav (tab roots only show it),
    `live` returns what the screen depends on, so the 5-second poll redraws it
@@ -164,8 +166,10 @@ document.addEventListener("click", (e) => {
   phGo(r.name, r.arg);
 });
 
-/* The older Settings screen's row into Main currency (step 7 redraws Settings). */
+/* The older Settings screen's rows into Main currency and accounting
+   connections (step 7 redraws Settings). */
 $("m-pf-currency").onclick = () => phGo("settings/currency");
+$("m-pf-integrations").onclick = () => phGo("integrations");
 
 /** The app's entry: the screen the URL names, or Home. */
 function phStart() {
@@ -1546,10 +1550,11 @@ function phLinkSub(r) {
   return amt;
 }
 
-/* Invoices on the phone are a later step; here the button says what the
-   plan allows, in the plan's own words. */
+/* The button says what the plan allows, in the plan's own words. Invoices on
+   the phone are the personal account's; a company's are in the web app. */
 function phInvoiceButton() {
   if (phCache.orgs === null) return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: "Checking your plan…" });
+  if (phCan(phPersonalOrg(), "invoices")) return Z.button({ icon: "receipt_long", label: "Invoice", href: "#invoice/new" });
   const org = (phCache.orgs || []).find((o) => phCan(o, "invoices"));
   if (org) return Z.button({ icon: "receipt_long", label: "Invoice", href: "/business" });
   const reason = phPersonalOrg()?.capabilities?.invoices?.reason || "Invoices are not part of this account.";
@@ -1764,7 +1769,7 @@ function phConfirm(o) {
   document.getElementById(o.id)?.remove();
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: o.id, kind: "dialog", title: o.title,
-    body: `<p class="z-sub">${esc(o.text)}</p><div class="z-pair z-pair--dialog">${Z.button({ label: "Keep it", autofocus: true, className: "z-overlay__close-btn" })}${Z.button({ variant: "primary", label: o.confirm, id: `${o.id}-ok` })}</div>`,
+    body: `<p class="z-sub">${esc(o.text)}</p><div class="z-pair z-pair--dialog">${Z.button({ label: o.cancel || "Keep it", autofocus: true, className: "z-overlay__close-btn" })}${Z.button({ variant: "primary", label: o.confirm, id: `${o.id}-ok` })}</div>`,
   }));
   const scrim = $(o.id);
   scrim.dataset.ph = "1";
@@ -1879,7 +1884,9 @@ PH.more = {
       ? `<a class="z-card z-switch" href="/business">${Z.avatar({ name: u.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(u.name || "")}</span><span class="z-row__sub">Personal · switch to ${esc(companies.map((o) => o.name).join(", "))}</span></span>${Z.icon("unfold_more", "z-row__chev")}</a>`
       : `<div class="z-card z-switch">${Z.avatar({ name: u.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(u.name || "")}</span><span class="z-row__sub">Personal account</span></span></div>`;
     const work = [
-      ...(has("invoices") ? [Z.row({ lead: Z.iconTile({ icon: "receipt_long" }), title: "Invoices", sub: "Issue, request and pay invoices", href: "/business" })] : []),
+      ...(phPersonalOrg()
+        ? [Z.row({ lead: Z.iconTile({ icon: "receipt_long" }), title: "Invoices", sub: "Issue, request and pay invoices", href: "#invoices" })]
+        : has("invoices") ? [Z.row({ lead: Z.iconTile({ icon: "receipt_long" }), title: "Invoices", sub: "In your company account", href: "/business" })] : []),
       Z.row({ lead: Z.iconTile({ icon: "contacts" }), title: "Contacts", sub: "People and companies you pay", href: "#contacts" }),
       ...(has("ledger.transactions") ? [Z.row({ lead: Z.iconTile({ icon: "menu_book" }), title: "Books", sub: "Memos, categories, receipts, exports", href: "/business" })] : []),
       companies.length
@@ -1905,6 +1912,8 @@ PH.more = {
 /* Reset the per-account caches (sign-out, a different account). */
 function phReset() {
   phCache.deposits = null; phCache.links = null; phCache.methods = null; phCache.orgs = null;
+  phCache.invoices = null; phCache.invProfile = null; phCache.invError = null; phCache.integrations = null;
+  phCache.invIssued = null; phCache.invRequest = null;
   phCache.contacts = null; phCache.bic = undefined; phCache.bicFor = ""; phCache.linksError = null;
   phSend = { payee: null, amount: "", reference: "", quote: null, transferId: null, error: null };
   phQuery = "";
