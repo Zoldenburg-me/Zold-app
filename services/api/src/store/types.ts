@@ -77,6 +77,10 @@ export interface User {
      *  that address is no longer the counterfactual one of its current owner,
      *  so the account must be built from the address, never re-derived. */
     recoveredAt?: string;
+    /** Set when the account was bound to a Safe it did not deploy (an existing
+     *  Safe whose owner added this passkey's verifier). Built from the address
+     *  like a recovered Safe; kept separate so nothing calls it recovered. */
+    importedAt?: string;
   };
   /** WebAuthn credential bound to this account. Public key + counter are
    *  stored from a verified registration; login verifies assertions. */
