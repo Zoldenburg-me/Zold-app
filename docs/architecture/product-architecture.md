@@ -744,7 +744,7 @@ the GitBook rather than let the product imply otherwise.
 
 ---
 
-## 12. GitBook drift — what to fix in `docs/gitbook/`
+## 12. GitBook drift — what to fix in the zold-docs repo
 
 Each item is a statement in the current GitBook or product copy that the code
 does not support.

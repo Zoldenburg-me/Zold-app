@@ -33,6 +33,24 @@ sets `KYC_AUTO_APPROVE=1`). Run a second API against the chain dev.ts started â€
 with the operator `*_KEY` vars **blanked** (.env holds real Base Sepolia keys
 that do not own the local deployment).
 
+## The production branch
+
+Deploys run `production`, not main. It holds only what the server needs at
+runtime: `services/api/{src,public,site}`, the compiled contract ABIs that
+`chain.ts` loads at import, a `package.json` with runtime dependencies only
+(tsx included) and its lock. No docs, design, tests, scripts, Solidity, hardhat
+or Shopify extension.
+
+```bash
+scripts/build-production-branch.sh
+git push origin production
+```
+
+Each run adds one commit whose tree is main's tree through that allowlist and
+whose message names the main commit. Main is never merged into it, and it is
+never edited by hand. On the host: `npm ci --omit=dev`, write
+`deployments.json`, `npm start`; there is no `hardhat compile` step.
+
 ## Test suites
 
 `npm run check` is OFFLINE and is the one to run. `npm run check:live` adds the
