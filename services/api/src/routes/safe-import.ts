@@ -107,7 +107,9 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
     if (planCode && planCode !== "0x") {
       throw new Refusal(409, "this account's own Safe is already deployed; an import never replaces a live Safe", "SAFE_DEPLOYED");
     }
-    for (const a of new Set([plan.address.toLowerCase(), user.address.toLowerCase()])) {
+    // A new account's address is the zero address until its Safe exists, and
+    // the zero address holds burned ETH on every chain: it is never theirs.
+    for (const a of new Set([plan.address.toLowerCase(), user.address.toLowerCase()].filter((a) => a !== ZERO))) {
       if (await holdsFunds(r, a as Hex)) {
         throw new Refusal(409, `${a} holds funds; move them before binding the account to another Safe`, "PLAN_HAS_FUNDS");
       }
