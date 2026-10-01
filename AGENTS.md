@@ -17,7 +17,7 @@ Read when the task touches it:
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
 - `docs/roadmap.md` — agreed priority and parked ideas.
 - `docs/architecture/` — product (what exists, status) and technical (how,
-  routes). User docs: the `zold-docs` repo.
+  routes).
 
 ## How to write in this repo (comments, docs, this file, notes)
 
@@ -28,7 +28,8 @@ exists, a guard against a return, or a one-clause reason. Dates only on
 verified observations. Cleanup: `docs/agents/prune-history.md`.
 
 THREE RULES OVERRIDE CONVENIENCE:
-1. **main is PR-merge only.**
+1. **main is PR-merge only. Only `scripts/build-production-branch.sh` writes
+   `production`**, from merged main (`docs/running-locally.md`).
 2. **Nothing renders as real that has not moved real money.** This is the UPI
    lesson (a rail that minted its own reference numbers for money that reached
    nobody) and it is why gated currencies, SOON labels, `simulated` badges,
@@ -182,10 +183,7 @@ the current authorizer can rotate a device key.
 - Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.17.0-darwin-arm64/bin:$PATH"`.
   It is an **arm64** build: on an Intel Mac ("Bad CPU type", tsx fails too) use
   a system node. `npm run typecheck` works on either (tsc is pure JS).
-- In the embedded browser pane, click coordinates are in SCREENSHOT space, and
-  WebAuthn ceremonies never resolve — test passkeys in a real browser.
-- Check `document.compatMode === "CSS1Compat"` on any new page: without
-  `<!DOCTYPE html>` tables do not inherit colour.
+- Browser-pane and new-page checks: `docs/running-locally.md`.
 
 ## Naming
 
@@ -195,7 +193,6 @@ the current authorizer can rotate a device key.
 - **Narwhal** = mascot. No narwhal emoji exists; the UI uses 🦄.
 - Repo dir on disk is still `transF`; do NOT rewrite absolute paths in
   `.claude/launch.json`. GitHub repo rename is pending.
-- TODO before public: domain + trademark clearance for "Zold" in fintech.
 
 ## Multi-agent workflow
 
@@ -214,3 +211,5 @@ More than one agent commits here.
 - Prose without AI-marketing jargon: what is real vs simulated, specifics over
   adjectives, shortcuts stated openly.
 - Honest assessments, not cheerleading. Say what is mocked.
+- **A user-visible change gets a PR on `Zoldenburg-me/zold-docs`** (GitBook)
+  in the same task; its `AGENTS.md` sets the voice.
