@@ -1008,7 +1008,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET /monerium/oauth/callback` (state + cookie) | OAuth return. |
 | `GET /users/:id/monerium/accounts` (U) | Refresh and read the snapshot. |
 | `POST /users/:id/monerium/link-signature/start` (U) | Challenge for activation, or for a move with `{purpose: "move-iban", iban}` (bound to that IBAN, single use). |
-| `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. 409 `IBAN_EXISTS_ELSEWHERE` (with `existing: {iban, address, chain, profileId}`) when Monerium answers 304 because the profile's one IBAN pays another address; 409 `IBAN_EXISTS_UNRESOLVED` when that IBAN cannot be pinned to exactly one. |
+| `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. 409 `IBAN_EXISTS_ELSEWHERE` when Monerium answers 304 and the profile's IBANs pay other addresses: `choices: [{iban, address, chain, profileId}]` lists every IBAN on the profile the Safe is linked under, and `existing` is set only when there is exactly one; the user picks, nothing is preselected. 409 `IBAN_EXISTS_UNRESOLVED` when no profile or no IBAN on it can be read. |
 | `POST /users/:id/monerium/move-iban` (U, passkey, typed `MOVE`) | Move the user's existing IBAN to the Safe: own connection only, IBAN must be on the profile the Safe is linked under; links the Safe, `PATCH /ibans/{iban}`, approves only if the re-read shows the IBAN on the Safe, else `iban_pending`. Records `moneriumIbanMoves`. 409 `IBAN_NOT_ON_PROFILE` / `ADDRESS_NOT_ON_PROFILE`. |
 | `DELETE /users/:id/monerium/connect` (U) | Forget the connection. |
 | `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. |

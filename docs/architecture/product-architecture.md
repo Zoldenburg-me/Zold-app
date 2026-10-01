@@ -209,7 +209,9 @@ sequenceDiagram
    app shows the IBAN masked to its last four digits, the old address and
    chain, and a plain warning: after the move, payments to the IBAN arrive in
    Zold and the old wallet stops receiving them; payers keep the same IBAN;
-   it can be moved back from Monerium. "Move IBAN to Zold" needs a typed
+   it can be moved back from Monerium. A profile holding several IBANs (a
+   sandbox test login can) gets every one listed in full with where it pays,
+   none preselected, and the user picks one. "Move IBAN to Zold" needs a typed
    `MOVE` and a fresh passkey ceremony. Zold links the Safe under the IBAN's
    profile, asks Monerium to point the IBAN at the Safe (`PATCH
    /ibans/{iban}`), and approves the account only when Monerium's re-read

@@ -48,6 +48,8 @@ const PROFILE_ID = "profile-existing-user";
 const BUSINESS_PROFILE_ID = "profile-existing-business";
 const EXISTING_IBAN = "GB33BUKB20201555555555";
 const APP_IBAN = "IS140159260076545510730339";
+// A second IBAN on PROFILE_ID, as a sandbox test login can hold.
+const SPARE_IBAN = "DE89370400440532013000";
 
 let token = "";
 const children: ChildProcess[] = [];
@@ -659,6 +661,71 @@ try {
     const first = await call(`/api/users/${firstUser.id}`);
     token = second.data.sessionToken;
     assert.equal(first.data.iban, "", "the first account no longer shows an IBAN that now pays another Safe");
+  });
+
+  /**
+   * A profile holding several IBANs, none paying this Safe: activate offers
+   * every one and preselects none; the user moves the one they pick.
+   */
+  ibanRecords.push({ iban: SPARE_IBAN, profile: PROFILE_ID, address: "0x00000000000000000000000000000000000000ee", chain: "sepolia" });
+  token = "";
+  const third = await call("/api/users", { name: "Third Account", email: "third@example.com", country: "DE" });
+  assert.equal(third.status, 201);
+  const thirdId = third.data.id;
+  token = third.data.sessionToken;
+  const passkey3 = await makePasskey("monerium-oauth-passkey-0003");
+  let count3 = 1;
+  let thirdAddress = "";
+
+  await t("a third account deploys its Safe and connects the same Monerium user", async () => {
+    const challenge = await call("/api/webauthn/challenge", { purpose: "register" });
+    const registered = await call(`/api/users/${thirdId}/passkey`, passkey3.register(challenge.data.challenge));
+    assert.equal(registered.status, 201, `passkey registration failed: ${registered.data.error ?? ""}`);
+    let activated = await call(`/api/users/${thirdId}/passkey-safe/deployment`, {});
+    if (activated.data.requestId) {
+      activated = await call(activated.data.submitTo, await passkey3.assert(activated.data.challenge, 1));
+    }
+    assert.equal(activated.data.passkeySafe?.status, "active", `Safe activation failed: ${activated.data.error ?? ""}`);
+    const r = await call(`/api/users/${thirdId}/monerium/connect/start`, {});
+    const u = new URL(r.data.redirectUrl);
+    seen.codeChallenge = u.searchParams.get("code_challenge") ?? "";
+    const cb = await call(`/api/monerium/oauth/callback?state=${encodeURIComponent(u.searchParams.get("state")!)}&code=${AUTH_CODE}`, undefined, "GET", { cookie: connectCookie });
+    assert.equal(cb.status, 302, `callback failed: ${JSON.stringify(cb.data)}`);
+  });
+
+  await t("activate on a profile with several IBANs offers each as a choice, none preselected", async () => {
+    const start = await call(`/api/users/${thirdId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
+    assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
+    thirdAddress = start.data.address;
+    const r = await call(`/api/users/${thirdId}/monerium/activate`, {
+      profileId: PROFILE_ID,
+      linkSignatureRequestId: start.data.requestId,
+      ...(await passkey3.assert(start.data.challenge, ++count3)),
+    });
+    assert.equal(r.status, 409, `expected 409, got ${r.status}: ${JSON.stringify(r.data)}`);
+    assert.equal(r.data.code, "IBAN_EXISTS_ELSEWHERE");
+    assert.equal(r.data.existing, undefined, "with several IBANs none is offered as the one");
+    assert.deepEqual(r.data.choices.map((c: any) => c.iban).sort(), [APP_IBAN, SPARE_IBAN].sort());
+    assert.ok(r.data.choices.every((c: any) => c.profileId === PROFILE_ID));
+    assert.ok(!r.data.choices.some((c: any) => c.iban === EXISTING_IBAN), "another profile's IBAN is never offered");
+    const me = await call(`/api/users/${thirdId}`);
+    assert.equal(me.data.iban, "");
+    assert.equal(me.data.kycStatus, "pending");
+  });
+
+  await t("moving the picked IBAN approves the account with that IBAN", async () => {
+    const start = await call(`/api/users/${thirdId}/monerium/link-signature/start`, { profileId: PROFILE_ID, purpose: "move-iban", iban: SPARE_IBAN });
+    assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
+    const r = await call(`/api/users/${thirdId}/monerium/move-iban`, {
+      iban: SPARE_IBAN,
+      confirm: "MOVE",
+      requestId: start.data.requestId,
+      ...(await passkey3.assert(start.data.challenge, ++count3)),
+    });
+    assert.equal(r.status, 200, `move failed: ${JSON.stringify(r.data)}`);
+    assert.deepEqual(seen.patches.at(-1), { iban: SPARE_IBAN, address: thirdAddress, chain: "sepolia" });
+    assert.equal(r.data.iban, SPARE_IBAN);
+    assert.equal(r.data.kycStatus, "approved");
   });
 
   if (failed.length) {

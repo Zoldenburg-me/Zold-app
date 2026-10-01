@@ -1609,10 +1609,11 @@ async function issueAppIban() {
       signature: b64url(cred.response.signature),
     });
   } catch (e) {
-    if (e.code !== "IBAN_EXISTS_ELSEWHERE" || !e.body?.existing) throw e;
-    // The profile's one IBAN pays another address. Only the user decides
-    // whether to move it; the API recorded nothing but the reason.
-    activated = await offerIbanMove(e.body.existing, profileId);
+    const choices = e.body?.choices?.length ? e.body.choices : e.body?.existing ? [e.body.existing] : [];
+    if (e.code !== "IBAN_EXISTS_ELSEWHERE" || !choices.length) throw e;
+    // The profile's IBAN pays another address. Only the user decides whether
+    // to move it, and which one; the API recorded nothing but the reason.
+    activated = await offerIbanMove(choices, profileId);
     if (!activated) {
       renderUser(await api(`/api/users/${user.id}`));
       throw new Error("IBAN not moved. Your Monerium IBAN still pays into the other wallet; move it whenever you are ready.");
@@ -1624,24 +1625,35 @@ async function issueAppIban() {
 
 /* "Move my existing Monerium IBAN to Zold". A Monerium profile has ONE IBAN,
    so a user who already has one cannot get a second; they can point the one
-   they have at this Safe. Resolves with the account as the API returns it
+   they have at this Safe. A test or company login can hold several; then the
+   user picks one and none is preselected. Resolves with the account as the API returns it
    after the move, or null on Cancel. Nothing here says "done": the caller
    renders whatever the API reports, and the API approves only once Monerium
    lists the IBAN against this Safe. */
-function offerIbanMove(existing, profileId) {
-  const iban = String(existing.iban || "").replace(/\s+/g, "").toUpperCase();
-  const masked = `•••• •••• •••• ${iban.slice(-4)}`;
-  const from = existing.address ? String(existing.address) : "another address";
+function offerIbanMove(choices, profileId) {
+  const norm = (i) => String(i || "").replace(/\s+/g, "").toUpperCase();
+  const one = choices.length === 1 ? choices[0] : null;
+  const ibanOf = () => one ? norm(one.iban) : norm(dlg.querySelector('input[name="m-mv-iban"]:checked')?.value);
+  const fromOf = (c) => c.address ? String(c.address) : "another address";
+  const pick = one
+    ? `<div class="m-rows">
+      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">IBAN</div><div class="m-rowv">${esc(`•••• •••• •••• ${norm(one.iban).slice(-4)}`)}</div></div></div>
+      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">Pays into now</div><div class="m-rowv">${esc(fromOf(one))}</div></div></div>
+    </div>`
+    : `<fieldset class="m-rows" style="border:0;padding:0;margin:0"><legend class="m-rowk" style="padding:0 0 8px">Which IBAN to move</legend>
+      ${choices.map((c) => `<label class="m-detrow" style="cursor:pointer;gap:12px"><input type="radio" name="m-mv-iban" value="${esc(norm(c.iban))}">
+        <div style="min-width:0"><div class="m-rowv">${esc(Z.groupIban(norm(c.iban)))}</div>
+        <div class="m-rowk" style="word-break:break-all">Pays into ${esc(fromOf(c))}${c.chain ? ` on ${esc(c.chain)}` : ""}</div></div></label>`).join("")}
+    </fieldset>`;
   const dlg = document.createElement("dialog");
   dlg.className = "m-dialog";
   dlg.setAttribute("aria-labelledby", "m-mv-title");
   dlg.innerHTML = `
     <h2 id="m-mv-title">Your Monerium IBAN already pays somewhere else</h2>
-    <div class="m-lede" style="font-size:13px">Monerium gives each profile one IBAN. Yours exists, so Zold cannot get a second one. You can move it to this account instead.</div>
-    <div class="m-rows">
-      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">IBAN</div><div class="m-rowv">${esc(masked)}</div></div></div>
-      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">Pays into now</div><div class="m-rowv">${esc(from)}</div></div></div>
-    </div>
+    <div class="m-lede" style="font-size:13px">${one
+      ? "Monerium gives each profile one IBAN. Yours exists, so Zold cannot get a second one. You can move it to this account instead."
+      : `Monerium will not issue another IBAN on this profile, and it already has ${choices.length}. Pick the one to move to this account.`}</div>
+    ${pick}
     <div class="m-note warn" style="margin-top:16px;font-size:13px;line-height:1.45">
       After the move, payments to this IBAN arrive in your Zold account and the old wallet stops receiving them.
       Anyone paying you keeps using the same IBAN. You can move it back from Monerium.
@@ -1659,7 +1671,9 @@ function offerIbanMove(existing, profileId) {
   const input = q("m-mv-confirm");
   const status = q("m-mv-status");
   const errEl = q("m-mv-err");
-  input.oninput = () => { go.disabled = input.value.trim() !== "MOVE"; };
+  const ready = () => input.value.trim() === "MOVE" && !!ibanOf();
+  input.oninput = () => { go.disabled = !ready(); };
+  dlg.querySelectorAll('input[name="m-mv-iban"]').forEach((r) => { r.onchange = input.oninput; });
 
   return new Promise((resolve) => {
     let busy = false;
@@ -1674,6 +1688,8 @@ function offerIbanMove(existing, profileId) {
       go.disabled = true;
       cancel.disabled = true;
       errEl.classList.add("hidden");
+      const iban = ibanOf();
+      dlg.querySelectorAll('input[name="m-mv-iban"]').forEach((r) => { r.disabled = true; });
       try {
         const start = await api(`/api/users/${user.id}/monerium/link-signature/start`, { profileId, purpose: "move-iban", iban });
         const cred = await navigator.credentials.get({
@@ -1706,7 +1722,8 @@ function offerIbanMove(existing, profileId) {
         status.classList.add("hidden");
         errEl.textContent = e.name === "NotAllowedError" ? "Face ID was cancelled." : e.message;
         errEl.classList.remove("hidden");
-        go.disabled = input.value.trim() !== "MOVE";
+        dlg.querySelectorAll('input[name="m-mv-iban"]').forEach((r) => { r.disabled = false; });
+        go.disabled = !ready();
       } finally {
         busy = false;
         cancel.disabled = !!result;
