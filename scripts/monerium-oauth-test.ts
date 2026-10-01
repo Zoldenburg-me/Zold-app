@@ -77,6 +77,9 @@ const seen = {
   patchSettles: true,
   pendingPatch: null as null | { iban: string; address: string; chain: string },
   bearerTokens: [] as string[],
+  // The sandbox has answered 201 to POST /ibans for a profile that already
+  // has its one IBAN on another address. False reproduces that.
+  ibanPostRefusesSecond: true,
 };
 
 /** One IBAN per profile, as Monerium holds them. */
@@ -281,7 +284,7 @@ const stub = createServer((req, res) => {
         seen.ibanRequestedFor = body.address ?? "";
         // One IBAN per profile: 304, no body, when the address's profile has one.
         const profile = seen.links.get(String(body.address ?? "").toLowerCase());
-        if (currentIbans().some((i) => i.profile === profile)) {
+        if (seen.ibanPostRefusesSecond && currentIbans().some((i) => i.profile === profile)) {
           seen.ibanRequestAnswers.push(304);
           res.writeHead(304);
           return res.end();
@@ -584,6 +587,28 @@ try {
     seen.codeChallenge = u.searchParams.get("code_challenge") ?? "";
     const cb = await call(`/api/monerium/oauth/callback?state=${encodeURIComponent(u.searchParams.get("state")!)}&code=${AUTH_CODE}`, undefined, "GET", { cookie: connectCookie });
     assert.equal(cb.status, 302, `callback failed: ${JSON.stringify(cb.data)}`);
+  });
+
+  await t("activate answers IBAN_EXISTS_ELSEWHERE from the snapshot when POST /ibans answers 201", async () => {
+    seen.ibanPostRefusesSecond = false;
+    try {
+      const start = await call(`/api/users/${secondId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
+      assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
+      const r = await call(`/api/users/${secondId}/monerium/activate`, {
+        profileId: PROFILE_ID,
+        linkSignatureRequestId: start.data.requestId,
+        ...(await passkey2.assert(start.data.challenge, ++count2)),
+      });
+      assert.equal(seen.ibanRequestAnswers.at(-1), 201, "the stub must have answered 201");
+      assert.equal(r.status, 409, `expected 409, got ${r.status}: ${JSON.stringify(r.data)}`);
+      assert.equal(r.data.code, "IBAN_EXISTS_ELSEWHERE");
+      assert.equal(r.data.existing.iban, APP_IBAN);
+      const me = await call(`/api/users/${secondId}`);
+      assert.notEqual(me.data.funding?.status, "iban_pending", "an IBAN that will never come must not be awaited");
+      assert.equal(me.data.kycStatus, "pending");
+    } finally {
+      seen.ibanPostRefusesSecond = true;
+    }
   });
 
   let secondAddress = "";
