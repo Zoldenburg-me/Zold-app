@@ -1596,7 +1596,7 @@ OB["monerium-keys"] = {
 OB.activate = {
   kind: "after",
   title: "Switch on your IBAN",
-  html: () => `${obAfterProgress("activate", "Switch on")}
+  html: () => ibanWait(user) ? obIbanWaitHtml(ibanWait(user)) : `${obAfterProgress("activate", "Switch on")}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("account_balance")}</span>
       ${obIntro("Switch on your IBAN", "Your Monerium account is connected. One Face ID approval links it to your Zold account and asks Monerium for your IBAN.")}
@@ -1615,12 +1615,47 @@ OB.activate = {
   bind: (root) => {
     const act = root.querySelector("#btn-kyc-activate");
     if (act) act.onclick = () => activateIbanAtGate(act);
+    const home = root.querySelector("#btn-kyc-home");
+    if (home) home.onclick = () => obFinish();
     const ref = root.querySelector("#btn-kyc-refresh");
     ref.onclick = async () => { Z.setLoading(ref, true); await refreshKycStatus({ continueWhenApproved: true }); Z.setLoading(ref, false); };
     const re = root.querySelector("#btn-kyc-reconnect");
-    re.onclick = () => obReconnect(re);
+    if (re) re.onclick = () => obReconnect(re);
   },
 };
+
+/* The IBAN is requested and the rest is Monerium's. Says what happens next and
+   what (nothing, mostly) the person has to do, and sends them to Home: the
+   checklist there carries the wait and the poller approves when it lands.
+   "Ask Monerium again" stays for an account parked before the server could
+   tell an existing IBAN from one being issued. */
+function obIbanWaitHtml(w) {
+  const steps = [
+    { t: "Monerium connected", d: "Signed in with your Monerium account.", done: true },
+    { t: "IBAN requested", d: "Approved with your Face ID.", done: true },
+    { t: w.idCheck ? "Monerium checks your ID" : "Monerium issues your IBAN",
+      d: w.idCheck ? "Usually minutes, sometimes a day or two." : "Usually within minutes.", done: false },
+    { t: "IBAN on Home", d: "Share it and get paid by bank transfer.", done: false },
+  ];
+  return `${obAfterProgress("activate", "Waiting on Monerium")}
+    <main id="main" class="z-screen__main">
+      <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon(w.support ? "support_agent" : "schedule")}</span>
+      ${obIntro(w.title, w.sub)}
+      ${w.support ? "" : rcTimeline(steps)}
+      ${Z.note({ icon: "info", text: w.support
+        ? "Your money and your account are safe meanwhile. Adding money by bank transfer opens once the IBAN is yours."
+        : "You can leave this screen. Your IBAN shows on Home once it’s issued, and bank transfers open then." })}
+      ${obAlert()}
+    </main>
+    <div class="z-screen__foot z-screen__foot--quiet">
+      ${w.support
+        ? Z.button({ variant: "primary", full: true, label: "Email support", href: "mailto:support@zoldhq.com" })
+        : Z.button({ variant: "primary", full: true, label: "Go to Home", id: "btn-kyc-home" })}
+      ${w.support ? Z.button({ variant: "quiet", full: true, label: "Go to Home", id: "btn-kyc-home" }) : ""}
+      <button type="button" class="z-link-btn" id="btn-kyc-refresh">Check again</button>
+      ${w.support ? "" : `<button type="button" class="z-link-btn z-link-btn--small" id="btn-kyc-activate">Ask Monerium again</button>`}
+    </div>`;
+}
 
 /* After a connection: approved goes on, connected goes to the switch-on step. */
 function obAfterMonerium() {
@@ -2345,8 +2380,9 @@ async function resumeSession(capabilitiesLoaded) {
     await capabilitiesLoaded;
     const next = obNextAfterAccount();
     // "Do this later" on the Monerium step opened the app: a reload on an app
-    // screen stays in the app, whose Home offers the step again.
-    if (!next || (["monerium", "activate"].includes(next) && phParse(location.hash))) {
+    // screen stays in the app, whose Home offers the step again. An IBAN that
+    // is requested waits on Monerium, not on the person: Home, not the gate.
+    if (!next || (["monerium", "activate"].includes(next) && (phParse(location.hash) || ibanWait(user)))) {
       enterDashboard(user.name);
       await handlePayDeepLink();
       return;
