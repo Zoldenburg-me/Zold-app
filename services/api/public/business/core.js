@@ -17,6 +17,14 @@ export let invoiceInputListener = null;
 export let orgs = [];
 export let org = null;   // the full org payload, including `capabilities`
 export let view = "overview";
+/** The signed-in person (GET /api/session): their name, and the balance of
+ *  their own account, which a company account may spend from. */
+export let me = null;
+/** Test mode: the chain moves no real money (GET /api/health). undefined until read. */
+export let testMode = undefined;
+
+/** The UI v2 components (ui.js, a classic script loaded before this module). */
+export const Z = window.Z;
 
 export function toast(msg, bad = false) {
   const t = $("#toast");
@@ -60,15 +68,15 @@ export const cap = (id) => org?.capabilities?.[id] ?? { allowed: false, label: i
 export function gateHtml(id) {
   const v = cap(id);
   if (v.unavailable) {
-    return `<div class="gate"><h3>${esc(v.label)}</h3>
+    return `<div class="gate"><h3>${esc(v.label)} ${Z.tag("Soon")}</h3>
       <p>${esc(v.unavailable)}</p>
-      <div class="needs">Not a plan limit — this is not built yet.</div></div>`;
+      <div class="needs">Not a plan limit: this isn’t built yet.</div></div>`;
   }
   const plans = (v.requiresPlan || []).join(" or ");
   return `<div class="gate"><h3>${esc(v.label)}</h3>
     <p>${esc(v.upgradeHint || v.reason || "")}</p>
-    ${plans ? `<button data-act="upgrade" data-plan="${esc(v.requiresPlan[0])}">Upgrade to ${esc(plans)}</button>
-      ${org.trial ? "" : `<button class="ghost" data-act="trial">Start 30-day trial</button>`}` : ""}
+    ${plans ? `<div class="zb-actions">${org.trial ? "" : `<button class="z-btn z-btn--primary z-btn--sm" data-act="trial">Start 30-day trial</button>`}
+      <button class="z-btn z-btn--secondary z-btn--sm" data-act="upgrade" data-plan="${esc(v.requiresPlan[0])}">Choose ${esc(plans)}</button></div>` : ""}
     ${plans ? "" : `<div class="needs">${esc(v.reason || "")}</div>`}</div>`;
 }
 
@@ -85,6 +93,54 @@ export const fmtMoney = (cents, currency = "EUR") => {
 };
 export const fmtEur = (cents) => fmtMoney(cents, "EUR");
 
+/** Money in the app's words (English UI): "€1,480.00", real minus sign. */
+export const eur = (value, currency = "EUR") => Z.formatMoney(Number(value) || 0, currency);
+
+/** "26 Sep", "Today 09:14". */
+export function day(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", { day: "numeric", month: "short" }).formatToParts(d);
+  return `${parts.find((p) => p.type === "day").value} ${parts.find((p) => p.type === "month").value}`;
+}
+export function when(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  if (d.toDateString() === new Date().toDateString()) {
+    return `Today ${new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(d)}`;
+  }
+  const y = new Date(); y.setDate(y.getDate() - 1);
+  return d.toDateString() === y.toDateString() ? "Yesterday" : day(iso);
+}
+/** A date-only string ("2026-10-08") read as that calendar day. */
+export const ymd = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? `${s}T12:00:00` : s);
+
+/** "DE12 5001 •••• 4410": enough to recognise. */
+export function maskIban(iban) {
+  const s = String(iban || "").replace(/\s+/g, "");
+  return s.length > 12 ? `${s.slice(0, 4)} ${s.slice(4, 8)} •••• ${s.slice(-4)}` : Z.groupIban(s);
+}
+
+/* What each role may do, as the API's permission table has it. */
+export const ROLE_WORD = { owner: "Owner", admin: "Admin", payer: "Payer", accountant: "Accountant", viewer: "Viewer" };
+export const ROLE_CAN = {
+  owner: { propose: true, approve: true, send: true },
+  admin: { propose: true, approve: true, send: true },
+  payer: { propose: true, approve: false, send: true },
+  accountant: { propose: true, approve: false, send: false },
+  viewer: { propose: false, approve: false, send: false },
+};
+export const roleCan = (role, what) => !!ROLE_CAN[role]?.[what];
+
+/** Server text for people: the API's words for a few chain and passkey
+ *  errors, said plainly. */
+export const plain = (msg) => String(msg || "")
+  .replace(/\bpasskey\b/gi, "Face ID or fingerprint")
+  .replace(/\bEURe\b/g, "euros")
+  .replace(/\bSEPA\b/g, "bank transfer")
+  .replace(/\s+—\s+/g, ": ")
+  .replace(/(\w)'(\w)/g, "$1’$2");
+
 // ── actions ────────────────────────────────────────────────────────────────
 
 /**
@@ -100,13 +156,13 @@ export const fmtEur = (cents) => fmtMoney(cents, "EUR");
  */
 export function dialog(title, bodyHtml, onSubmit, opts = {}) {
   const { okLabel = "Save", secondary = null, closeOnly = false } = opts;
-  $("#dlg-body").innerHTML = `<h3 id="dlg-title">${esc(title)}</h3>${bodyHtml}
+  $("#dlg-body").innerHTML = `<h2 id="dlg-title">${esc(title)}</h2>${bodyHtml}
     <div id="dlg-err" class="dlg-err" role="alert"></div>
     <div class="dlg-actions">${closeOnly
-      ? `<button id="dlg-cancel">Close</button>`
-      : `<button class="ghost" id="dlg-cancel">Cancel</button>
-    ${secondary ? `<button class="${esc(secondary.cls ?? "ghost")}" id="dlg-alt">${esc(secondary.label)}</button>` : ""}
-    <button id="dlg-ok">${esc(okLabel)}</button>`}</div>`;
+      ? `<button class="z-btn z-btn--secondary" id="dlg-cancel">Close</button>`
+      : `<button class="z-btn z-btn--secondary" id="dlg-cancel">Cancel</button>
+    ${secondary ? `<button class="z-btn z-btn--secondary${secondary.cls?.includes("danger") ? " zb-danger" : ""}" id="dlg-alt">${esc(secondary.label)}</button>` : ""}
+    <button class="z-btn z-btn--primary" id="dlg-ok">${esc(okLabel)}</button>`}</div>`;
   $("#dlg").showModal();
   $("#dlg-cancel").onclick = () => $("#dlg").close();
   if (closeOnly) return;
@@ -128,6 +184,8 @@ export function dialog(title, bodyHtml, onSubmit, opts = {}) {
 /** The bindings other modules reassign. Every READ of them stays live. */
 export const setOrg = (v) => { org = v; };
 export const setOrgs = (v) => { orgs = v; };
+export const setMe = (v) => { me = v; };
+export const setTestMode = (v) => { testMode = v; };
 /** Changing the view is a navigation: it gets a history entry, so Back works
  *  and the URL can be bookmarked or opened in a new tab. `push: false` is for
  *  popstate, where the browser has already moved the URL. */
