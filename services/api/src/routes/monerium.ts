@@ -697,10 +697,10 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         }));
         const one = choices.length === 1 ? choices[0] : undefined;
         const where = one
-          ? `(${maskIban(one.iban)}). It pays into ${one.address ?? "another address"} on ${one.chain ?? "another chain"}, not this account`
+          ? `(${maskIban(one.iban)}), currently paying into ${one.address ?? "another address"} on ${one.chain ?? "another chain"}`
           : `on this profile: Monerium lists ${choices.length}, none paying into this account`;
         return say(409, {
-          error: `Your Monerium profile already has an IBAN ${where}. You can move ${one ? "it" : "one of them"} here; nothing has changed yet.`,
+          error: `You already have an IBAN at Monerium ${where}. Zold uses that same IBAN: move ${one ? "it" : "one of them"} to this account to finish. Nothing has changed yet.`,
           code: "IBAN_EXISTS_ELSEWHERE",
           ...(one ? { existing: one } : {}),
           choices,
