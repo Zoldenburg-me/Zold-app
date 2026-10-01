@@ -640,6 +640,18 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
        * by address and attributes it.
        */
       const iban = ownIbanOf(snapshot.ibans, user.address, profileId);
+      // POST /ibans is not the only witness: the sandbox has answered 201 for a
+      // profile whose one IBAN pays another address, which parked the account
+      // in iban_pending for an IBAN that never comes. The user's own snapshot
+      // (scoped to their profiles, unlike the app's) says so directly.
+      if (!viaApp && profileId && !iban) {
+        profileHasIban ||= snapshot.ibans.some(
+          (i: any) =>
+            i?.profile === profileId &&
+            ibanKey(i.iban) &&
+            String(i?.address ?? "").toLowerCase() !== user.address.toLowerCase(),
+        );
+      }
 
       if (profileHasIban && !iban) {
         /**
