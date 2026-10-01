@@ -151,6 +151,35 @@ function needsPasskeySafeSetup(u = user) {
   return !!(u?.passkeySafe && u.passkeySafe.status !== "active");
 }
 
+/* Bringing in a company's existing Safe (onboarding's b-safe-choice). Offered
+   only where the server takes it and this login could still switch: a passkey
+   and a Safe of its own that was never activated. The server also refuses a
+   planned Safe that is deployed or holds money; only `prepare` can say so. */
+function safeImportOffered(u = user) {
+  return !!(caps.safeImport && u?.accountType === "company" && u.passkey && u.passkeySafe
+    && u.passkeySafe.status !== "active");
+}
+
+/* "An import was started on THIS device." `prepare` stores nothing, so the
+   server cannot know an owner change may be on its way; this flag is the only
+   thing that keeps this browser from deploying the account's own Safe in the
+   meantime, which would end the import for good. Per device: another browser
+   signed in to the same account does not see it. A hint, never the truth —
+   every screen that reads it asks `prepare` again. */
+const SAFE_IMPORT_KEY = "zold-safe-import";
+function safeImportFlag(u = user) {
+  try {
+    const f = JSON.parse(localStorage.getItem(SAFE_IMPORT_KEY) || "null");
+    return f && u?.id && f.userId === u.id && /^0x[0-9a-fA-F]{40}$/.test(f.address || "") ? f : null;
+  } catch { return null; }
+}
+function setSafeImportFlag(address, u = user) {
+  try { localStorage.setItem(SAFE_IMPORT_KEY, JSON.stringify({ userId: u.id, address })); } catch { /* private mode: this visit only */ }
+}
+function clearSafeImportFlag() {
+  try { localStorage.removeItem(SAFE_IMPORT_KEY); } catch {}
+}
+
 function hasConnectedMonerium(u = user) {
   return !!u?.monerium?.connectedAt;
 }
@@ -161,18 +190,24 @@ function renderFundingActions(u = user) {
   if (!row || !hint || !u) return;
   const funding = u.funding || {};
   const needsIban = kycApproved(u) && !u.iban && funding.mode === "sandbox";
-  const showSafe = needsIban && needsPasskeySafeSetup(u);
+  // While an import is under way on this device, "Finish smart wallet" would
+  // deploy the account's own Safe and end it: offer the import's last step.
+  const importing = needsPasskeySafeSetup(u) && !!safeImportFlag(u);
+  const showSafe = needsIban && needsPasskeySafeSetup(u) && !importing;
   // Approval is already settled by this point (needsIban requires it), so the
   // remaining step is the same for both paths: one passkey ceremony that links
   // the Safe and issues the IBAN. In-house approved users do not need
   // Monerium's OAuth.
   const showActivate = needsIban && !needsPasskeySafeSetup(u);
-  row.classList.toggle("hidden", !(showSafe || showActivate));
+  row.classList.toggle("hidden", !(showSafe || showActivate || importing));
   $("btn-finish-safe").classList.toggle("hidden", !showSafe);
+  $("btn-finish-import").classList.toggle("hidden", !importing);
   $("btn-monerium-dashboard").classList.toggle("hidden", !showActivate);
   $("btn-monerium-dashboard").textContent = "Activate IBAN";
-  hint.classList.toggle("hidden", !(showSafe || showActivate));
-  hint.textContent = showSafe
+  hint.classList.toggle("hidden", !(showSafe || showActivate || importing));
+  hint.textContent = importing
+    ? "Once your Safe’s owner has added this phone, finish bringing the Safe in."
+    : showSafe
     ? "Finish the smart wallet first, then activate the app IBAN."
     : showActivate
       ? hasConnectedMonerium(u)
@@ -361,7 +396,10 @@ function renderShellPages() {
   const safe = user.passkeySafe;
   $("set-wallet-policy").textContent = !safe
     ? "Passkey Safe not planned yet."
-    : `Passkey-only Safe · you are its only owner and sign every movement with your passkey.`;
+    : safe.importedAt
+      // An imported Safe may keep the owner's own wallet as a second owner.
+      ? "Your company’s Safe, brought into Zold · your passkey is an owner and signs every movement Zold makes. Any other owner is your own wallet."
+      : `Passkey-only Safe · you are its only owner and sign every movement with your passkey.`;
   renderRecoveryInfo();
   $("set-privacy-live").textContent = privacyCatalog
     ? `Kokio ${privacyCatalog.fulfillment.kokio}; Mysterium ${privacyCatalog.fulfillment.mysterium}.`

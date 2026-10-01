@@ -188,10 +188,14 @@ sequenceDiagram
    (sponsored, which works on Base Sepolia but NOT through the keyless public
    endpoint on Base mainnet), by the Safe in ETH, or by the Safe in USDC. The
    Safe is **1-of-1: the passkey is its only owner.** Zold holds no key that
-   can move or block the funds.
+   can move or block the funds. A company account may instead bring in the
+   Safe it already has (`safeImport`): its current owner adds the passkey as
+   an owner in Safe{Wallet}, optionally staying as the company's own second
+   owner (1 of 2), and Zold binds the Safe once the chain shows it
+   (technical-architecture §5.1.2).
 4. **Recovery** is offered where the deployment has `zoldenburgRecovery`
    (Zoldenburg as guardian; skipping needs an acknowledged warning) and/or
-   `emailSmsRecovery`.
+   `emailSmsRecovery`, except on an imported Safe, where it has never run.
 5. **Monerium gate.** The user connects by OAuth (PKCE) *or* pastes their own
    Monerium API keys. There is no white-label path: Zold never creates a
    Monerium profile for anyone.

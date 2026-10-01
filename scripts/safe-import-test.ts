@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AddressInfo } from "node:net";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   decodeFunctionData,
   encodeFunctionResult,
@@ -239,6 +241,7 @@ const makeUser = (id: string, over: any = {}) => {
   return store.findUser(id)!;
 };
 
+const CREATED_AT = 1_790_000_000_000;
 let chain = goodChain();
 let deployed: unknown[] = [];
 const app = express();
@@ -247,6 +250,7 @@ app.use("/api", createSafeImportRouter({
   requireUserSession: () => true,
   reader: () => readerFor(chain),
   tokens: () => [EURE, USDC],
+  now: () => CREATED_AT,
   deployVerifier: async (o) => {
     deployed.push(o);
     return undefined; // the test never relays; confirm must then refuse
@@ -273,6 +277,76 @@ await check("prepare returns the verifier and both owner changes, and stores not
   assert.deepEqual(add.args, [VERIFIER, 1n]);
   assert.equal(decodeFunctionData({ abi: safeAbi, data: r.body.ownerChange.swap.data }).functionName, "swapOwner");
   assert.equal(JSON.stringify(store.findUser("u1")), before, "prepare must not touch the account");
+});
+// The script reads the chain over JSON-RPC: serve it the same canned chain.
+const rpc = express();
+rpc.use(express.json());
+rpc.post("/", async (req, res) => {
+  const { id, method, params } = req.body;
+  const r = readerFor(chain);
+  const result =
+    method === "eth_chainId" ? "0x14a34" :
+    method === "eth_getCode" ? await r.getCode(params[0]) :
+    method === "eth_getStorageAt" ? await r.getStorageAt(params[0], params[1]) :
+    method === "eth_getBalance" ? toHex(await r.getBalance(params[0])) :
+    method === "eth_call" ? await r.call(params[0].to, params[0].data) : null;
+  res.json({ jsonrpc: "2.0", id, result });
+});
+const rpcServer = await new Promise<import("node:http").Server>((r) => { const s = rpc.listen(0, "127.0.0.1", () => r(s)); });
+const rpcUrl = `http://127.0.0.1:${(rpcServer.address() as AddressInfo).port}`;
+const outDir = mkdtempSync(path.join(tmpdir(), "safe-import-tx-"));
+const scriptFile = async (extra: string[]) => {
+  const out = path.join(outDir, `${extra.join("_").replace(/[^a-z0-9]/gi, "")}.json`);
+  await promisify(execFile)(process.execPath, [
+    path.join(ROOT, "node_modules/tsx/dist/cli.mjs"), "scripts/safe-import-owner-tx.ts",
+    "--chain", "84532", "--safe", SAFE, "--rpc", rpcUrl, "--out", out, "--created-at", String(CREATED_AT), ...extra,
+  ], { cwd: ROOT });
+  return readFileSync(out, "utf8");
+};
+
+await check("the downloaded Transaction Builder file is the script's, byte for byte", async () => {
+  chain = { ...goodChain(), owners: [EOA] };
+  const r = await post("/users/u1/safe/import/prepare", { address: SAFE });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  for (const mode of ["add", "swap"] as const) {
+    const file = r.body.ownerChange[mode].txBuilder;
+    assert.equal(file.fileName, `safe-import-${SAFE}-84532.json`);
+    assert.equal(file.json, await scriptFile(["--verifier", VERIFIER, "--mode", mode]), `${mode}: route and script differ`);
+    const batch = JSON.parse(file.json);
+    assert.equal(batch.transactions.length, 1);
+    assert.equal(batch.transactions[0].data, r.body.ownerChange[mode].data);
+    assert.match(batch.meta.checksum, /^0x[0-9a-f]{64}$/);
+  }
+});
+await check("with no verifier on chain yet, both files deploy it first", async () => {
+  chain = { ...goodChain(), owners: [EOA], code: { [SAFE.toLowerCase()]: "0x6080" } };
+  const r = await post("/users/u1/safe/import/prepare", { address: SAFE });
+  assert.equal(r.body.verifierDeployed, false);
+  const file = r.body.ownerChange.add.txBuilder.json;
+  assert.equal(file, await scriptFile(["--x", toHex(PK.x), "--y", toHex(PK.y), "--mode", "add"]));
+  const batch = JSON.parse(file);
+  assert.deepEqual(batch.transactions.map((t: any) => t.to), [r.body.deployVerifier.to, SAFE]);
+});
+await check("a refused mode carries no file", async () => {
+  chain = { ...goodChain(), owners: [EOA, OTHER] };
+  const r = await post("/users/u1/safe/import/prepare", { address: SAFE });
+  assert.ok(r.body.ownerChange.add.refused);
+  assert.equal(r.body.ownerChange.add.txBuilder, undefined);
+  assert.ok(r.body.ownerChange.swap.refused, "swap with two owners needs --replace; the route refuses it");
+});
+rpcServer.close();
+await check("safeImport capability: on with a real chain, off under the harness, where the routes say NO_CHAIN", async () => {
+  const { capabilities } = await import("../services/api/src/capabilities.js");
+  const { HARNESS } = await import("../services/api/src/config.js");
+  assert.equal(capabilities().safeImport, true);
+  HARNESS.enabled = true;
+  try {
+    assert.equal(capabilities().safeImport, false);
+    chain = { ...goodChain(), owners: [EOA] };
+    assert.equal((await post("/users/u1/safe/import/prepare", { address: SAFE })).body.code, "NO_CHAIN");
+  } finally {
+    HARNESS.enabled = false;
+  }
 });
 await check("prepare refuses a Safe confirm would refuse anyway", async () => {
   chain = { ...goodChain(), owners: [EOA], modules: [SAFE_4337_MODULE, STRANGER_MODULE] };
