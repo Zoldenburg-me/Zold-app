@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<!-- viewport-fit=cover so a standalone install can paint under the notch and
+     home indicator; use env(safe-area-inset-*) in any full-bleed chrome. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<!-- Installable app. The manifest sets start_url=/app, so an installed icon
+     opens the account rather than the marketing page. -->
+<link rel="manifest" href="/manifest.webmanifest" />
+<meta name="theme-color" content="#08080b" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Zold" />
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="/vendor/fonts/text.css" />
+<!-- Material Symbols, as the design specifies. display=block so an icon never
+     flashes as its ligature text before the font arrives. -->
+<link rel="stylesheet" href="/vendor/fonts/material-symbols.css" />
+<title>Zold</title>
+<meta name="description" content="Your Zold euro account: your own IBAN, and payments only you can approve." />
+<meta name="robots" content="noindex" />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<!-- UI v2: tokens first, the old stylesheet (which now reads them), then the
+     components, so a component class wins a tie with an old element rule. -->
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/ui.css">
+</head>
+<body>
+  <!-- Network state. Outside every screen because it applies to all of them.
+       The API refuses to serve a stale balance, so the user needs the reason. -->
+  <div id="offline-bar" class="hidden" role="status" aria-live="polite">You’re offline. Balances and quotes can’t be refreshed.</div>
+  <!-- Screen-reader announcements (announce() in app/core.js). -->
+  <div id="sr-announce" class="sr-only" role="status" aria-live="polite"></div>
+
+  <!-- ============ sign-in and onboarding ============
+       One screen at a time, rendered by app/onboarding.js from the account's
+       real state (design/ui-v2: Auth, AccountType, Install-*, Personal-*,
+       Business-*, Recovery-Choice, Monerium-Connect, Welcome). The URL hash
+       names the screen, so back and reload land where the user was. -->
+  <section id="onboard" aria-live="off">
+    <a class="z-skip" href="#main">Skip to content</a>
+    <div id="ob-root"></div>
+  </section>
+
+  <!-- ============ the app ============
+       Home, Activity, Send, Add money, Get paid, Contacts and More, rendered
+       one screen at a time by app/phone.js (design/ui-v2 step 4). The hash
+       names the screen. -->
+  <section id="phone" hidden>
+    <div id="ph-root"></div>
+  </section>
+
+  <!-- ============ older screens ============
+       Settings and what hangs off it (recovery, documents, signers, Monerium
+       keys), the card and Zold Plus, until their own redesign steps. -->
+  <section id="dashboard">
+    <aside class="side">
+      <div class="logo"><span class="tri" aria-hidden="true">▽</span> Zold</div>
+      <div class="userpill" id="userpill"><span class="avatar" id="avatar">?</span><span id="pillname"></span></div>
+      <nav class="nav">
+        <a class="active" href="#" data-view="dashboard" aria-current="page"><span aria-hidden="true">▦</span> Dashboard</a>
+        <a href="#" data-view="transactions"><span aria-hidden="true">⇅</span> Transactions</a>
+        <a href="#" data-view="accounts"><span aria-hidden="true">▤</span> Accounts</a>
+        <a href="#" data-view="contacts"><span aria-hidden="true">◔</span> Contacts</a>
+        <a href="#" data-view="settings"><span aria-hidden="true">⚙</span> Settings</a>
+      </nav>
+      <div class="foot"><a href="mailto:support@zoldhq.com">Need help?</a><br/><span style="opacity:.6"><span aria-hidden="true">🦄</span> by Zoldenburg</span></div>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div id="view-title" class="view-title">Dashboard</div>
+      </div>
+
+      <section class="view active" id="view-dashboard">
+
+      <!-- ================= Card (Gnosis Pay, connected) =================
+           Not a Zold card. Gnosis Pay issues it, holds its KYC and owns the
+           card Safe; permissionless mode gives us no webhooks or attribution.
+           The screen shows a connected account and says whose it is. Every
+           figure carries the time it was read, since nothing pushes updates. -->
+      <div class="m-screen" id="m-card-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Card</div>
+        <div class="m-lede" id="m-card-lede">A Gnosis Pay card, connected to Zold. Gnosis Pay issues it and holds its KYC.</div>
+        <div id="m-card-body" style="margin-top:24px"></div>
+      </div>
+
+<!-- ================= Zold Plus (preview) ================= -->
+      <div class="m-screen" id="m-plus-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-card">
+          <div class="brandline">
+            <div>Zold <span style="color:var(--m-pink)">Plus</span></div>
+            <span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px;color:var(--m-dim);transform:rotate(90deg)">wifi</span>
+          </div>
+          <div class="pan">•••• •••• •••• 4471</div>
+          <div class="foot"><span id="m-card-name">—</span><span>09/29</span></div>
+        </div>
+        <!-- The design prices this at €7.99. No such tier exists, so the price
+             is not shown and the CTA cannot be pressed. -->
+        <div class="m-h1" style="font-size:28px;margin-top:24px">Everything, coming soon</div>
+        <div class="m-perks">
+          <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">credit_card</span><div><div class="t">Zold card</div><div class="d">Virtual today, metal on request</div></div></div>
+          <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">vpn_lock</span><div><div class="t">Mysterium VPN</div><div class="d">Unlimited, device to node</div></div></div>
+          <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">sim_card</span><div><div class="t">Kokio eSIM</div><div class="d">20 GB data in 120 countries</div></div></div>
+          <div class="m-perk"><span class="material-symbols-rounded" aria-hidden="true">percent</span><div><div class="t">No FX margin</div><div class="d">First €2,000 sent each month</div></div></div>
+        </div>
+        <button class="m-cta" disabled>Coming soon</button>
+        <!-- Two of those perks ship today under a different name, so the real
+             thing stays reachable rather than being hidden behind a preview. -->
+        <button class="m-optrow" id="m-go-bundle" style="margin-top:16px">
+          <span class="material-symbols-rounded ic" aria-hidden="true">check_circle</span>
+          <span class="tx"><span class="t">Available now: Privacy Bundle</span><span class="d" id="m-bundle-sub">eSIM and VPN, live today</span></span>
+          <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
+        </button>
+      </div>
+
+<!-- ================= Share receipt (composer) =================
+           Pick what a recipient sees. Every selection is enforced server-side
+           at /api/r/:slug — the page never receives a withheld value, so this
+           screen is choosing what leaves the building, not what gets hidden. -->
+      <div class="m-screen" id="m-share-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="detail" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
+        <div style="padding:4px 0 2px">
+          <div style="font-size:14.5px;font-weight:600;letter-spacing:-.01em">Share receipt</div>
+          <div style="font-size:12px;line-height:1.5;color:var(--m-dim);margin-top:4px">Pick what recipients see. Everything else stays sealed.</div>
+        </div>
+        <div id="m-share-groups"></div>
+        <div id="m-share-toggles"></div>
+        <div class="m-shprev" id="m-share-preview"></div>
+        <button class="m-cta" id="m-share-copy" style="margin-top:16px">Copy share link</button>
+        <button class="m-cta quiet hidden" id="m-share-revoke" style="min-height:44px;font-size:13px;background:transparent;border:1px solid var(--m-line-strong);color:var(--m-pink)">Turn this link off</button>
+        <div class="m-shlink" id="m-share-foot"></div>
+        <div class="m-note warn hidden" id="m-share-err"></div>
+      </div>
+
+
+<!-- ================= Statements & documents =================
+           Every document is a frozen, signed snapshot under a verification
+           code and opens on /v/<code>, where anyone holding the code sees a
+           live verdict. The PDF is that page printed. -->
+      <div class="m-screen" id="m-documents-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Statements &amp; documents</div>
+        <div class="m-lede">Each document opens at a verification link. Anyone with it can check the document; you print it to PDF from there.</div>
+        <div id="m-doc-body" style="margin-top:24px"></div>
+      </div>
+
+      <!-- ================= Signers & rules =================
+           The Safe's owners, threshold and Allowance-module spending limits,
+           read from the chain on every visit. Changes are passkey-signed. -->
+      <div class="m-screen" id="m-signers-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back"><span class="material-symbols-rounded" style="font-size:24px" aria-hidden="true">arrow_back</span></button></div>
+        <div class="m-h1">Signers &amp; rules</div>
+        <div class="m-lede">Who can sign for your smart account, and what they need. Read live from the chain.</div>
+        <div id="m-sg-body" style="margin-top:24px"></div>
+      </div>
+
+      <!-- ================= Recovery (Zoldenburg guardian, email/SMS) =================
+           Candide's guardian on the smart account. Enrolment is two passkey
+           ceremonies and one code; nothing is listed as protected until the
+           guardian is actually in the module's guardian set. -->
+      <div class="m-screen" id="m-recovery-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Recovery</div>
+        <div class="m-lede">Who can move this account to a new passkey if you lose this device. Every recovery waits on chain first, and this device can cancel it until it lands.</div>
+        <div id="m-rc-body" style="margin-top:24px"></div>
+      </div>
+
+      <!-- ================= Monerium: your own API keys =================
+           For testing against YOUR Monerium account. The keys are that
+           account's own app credentials (client id + secret). The secret goes
+           to the server once, is verified against Monerium, stored encrypted
+           and never shown again — not even to the person who pasted it. -->
+      <div class="m-screen" id="m-monerium-screen">
+        <div class="m-sheadrow"><button class="m-backbtn" data-mback="profile" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
+        <div class="m-h1">Monerium keys</div>
+        <div class="m-lede" id="m-mon-lede">Connect the API keys of your own Monerium account.</div>
+        <div id="m-mon-body" style="margin-top:24px"></div>
+      </div>
+
+      <!-- Sub-screen header for the desktop cards still reached from the nav. -->
+      <div class="m-head m-subhead">
+        <button class="m-iconbtn" id="m-back" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:19px">arrow_back</span></button>
+        <div class="m-name" id="m-subtitle">Zold Plus</div>
+      </div>
+
+      <div class="card hidden" id="kyc-card">
+        <h2>Identity review</h2>
+        <div class="kyc-status" style="margin-top:0">
+          <div class="ks" id="dash-kyc-label">PENDING</div>
+          <div class="kt" id="dash-kyc-main">Review in progress</div>
+          <div class="kd" id="dash-kyc-detail">Funding and transfers unlock after approval.</div>
+        </div>
+        <button class="ghost wide" id="btn-dash-kyc-refresh">Refresh status</button>
+      </div>
+
+      <div class="card acct">
+        <div class="acct-top">
+          <div>
+            <div class="label">Primary account <span class="chip eur">EUR</span> <span class="chip ok" id="fund-chip">ACTIVE</span></div>
+            <div class="amount" id="balance"><span class="cur">€</span>0.00</div>
+          </div>
+          <svg class="spark" width="220" height="64" viewBox="0 0 220 64" aria-hidden="true">
+            <defs>
+              <linearGradient id="sg" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" style="stop-color:var(--z-pink-soft)"/><stop offset="1" stop-color="#ed188d"/>
+              </linearGradient>
+              <linearGradient id="sf" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="rgba(225,63,163,.22)"/><stop offset="1" stop-color="rgba(225,63,163,0)"/>
+              </linearGradient>
+            </defs>
+            <path d="M0 50 L14 46 L28 48 L42 40 L56 44 L70 34 L84 38 L98 30 L112 33 L126 24 L140 28 L154 18 L168 23 L182 14 L196 18 L210 8 L220 12"
+                  fill="none" stroke="url(#sg)" stroke-width="2.2" stroke-linejoin="round"/>
+            <path d="M0 50 L14 46 L28 48 L42 40 L56 44 L70 34 L84 38 L98 30 L112 33 L126 24 L140 28 L154 18 L168 23 L182 14 L196 18 L210 8 L220 12 L220 64 L0 64 Z"
+                  fill="url(#sf)"/>
+          </svg>
+        </div>
+        <div class="detail">
+          <span class="k">SAFE EURe</span>
+          <span class="v" id="safe-balance">€0.00</span>
+        </div>
+        <div class="detail">
+          <span class="k">ACCOUNT LEDGER</span>
+          <span class="v" id="vault-balance">€0.00</span>
+        </div>
+        <div class="detail">
+          <span class="k">IBAN</span>
+          <span class="v" id="iban">—</span>
+          <button class="copybtn" data-copy="iban" aria-label="Copy IBAN">copy</button>
+        </div>
+        <div class="detail">
+          <span class="k">SMART ACCOUNT</span>
+          <span class="v" id="address">—</span>
+          <button class="copybtn" data-copy="address" aria-label="Copy smart account address">copy</button>
+        </div>
+        <div class="row2 hidden" id="funding-actions" style="margin-top:1rem">
+          <button class="ghost" id="btn-finish-safe">Finish smart wallet</button>
+          <button class="ghost hidden" id="btn-finish-import">Finish bringing in your Safe</button>
+          <button id="btn-monerium-dashboard">Verify with Monerium</button>
+        </div>
+        <div class="hint hidden" id="funding-action-hint"></div>
+      </div>
+
+      <div class="card" id="privacy-card">
+        <h2>Premium</h2>
+        <div class="bundle-head">
+          <div>
+            <div class="bundle-title">Privacy Bundle</div>
+            <div class="bundle-sub">Kokio eSIM data plus Mysterium VPN with clear monthly allowances.</div>
+          </div>
+          <span class="chip pend" id="privacy-chip">OPTIONAL</span>
+        </div>
+        <div class="bundle-grid" id="privacy-plans"></div>
+        <div class="bundle-status hidden" id="privacy-status"></div>
+        <div class="error hidden" role="alert" id="privacy-err"></div>
+      </div>
+
+      <div class="card" id="fund-card">
+        <h2>Add money</h2>
+        <div id="fund-real">
+          <div class="hint" id="fund-real-hint"></div>
+        </div>
+        <div class="error hidden" role="alert" id="dep-err"></div>
+      </div>
+
+      <div class="card" id="paylink-card">
+        <h2>Payment page</h2>
+        <div class="row2">
+          <div>
+            <label style="margin-top:0">Your handle</label>
+            <input id="handle-input" placeholder="miriam" autocapitalize="none" spellcheck="false" />
+          </div>
+          <button id="btn-handle">Claim</button>
+        </div>
+        <div class="detail" id="paylink-row" style="display:none">
+          <span class="k">YOUR LINK</span>
+          <span class="v" id="paylink">—</span>
+          <button class="copybtn" data-copy="paylink" aria-label="Copy payment page link">copy</button>
+        </div>
+        <div class="detail" id="payaddr-row" style="display:none">
+          <span class="k">PAGE ADDRESS</span>
+          <span class="v" id="payaddr">—</span>
+          <button class="copybtn" data-copy="payaddr" aria-label="Copy payment page address">copy</button>
+        </div>
+        <div class="hint">
+          A page anyone can open to pay you in digital dollars (USDC), without an account of their
+          own. It has its own address, so your main currency applies to payments to the page, not to
+          every transfer into your account.
+        </div>
+        <div class="error hidden" role="alert" id="handle-err"></div>
+        <button class="ghost wide" id="btn-links" style="margin-top:.6rem">Payment links — ask for an amount</button>
+      </div>
+
+      <div class="card">
+        <h2>Transaction history</h2>
+        <div id="history"><div class="empty">No transfers yet</div></div>
+      </div>
+      </section>
+
+      <section class="view" id="view-transactions">
+        <div class="metric-row">
+          <div class="metric"><div class="mk">Sent</div><div class="mv" id="tx-total-sent">€0.00</div></div>
+          <div class="metric"><div class="mk">Completed</div><div class="mv" id="tx-total-paid">0</div></div>
+          <div class="metric"><div class="mk">In flight</div><div class="mv" id="tx-total-open">0</div></div>
+        </div>
+        <div class="card">
+          <h2>Ledger</h2>
+          <div class="toolbar">
+            <button class="filter-btn active" data-tx-filter="all" aria-pressed="true">All</button>
+            <button class="filter-btn" data-tx-filter="cash" aria-pressed="false">Cash</button>
+            <button class="filter-btn" data-tx-filter="sepa" aria-pressed="false">SEPA</button>
+            <button class="ghost" id="btn-refresh-tx">Refresh</button>
+          </div>
+          <div id="tx-page-list"><div class="empty">No transfers yet</div></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-accounts">
+        <div class="split-grid">
+          <div class="card acct">
+            <h2>EUR Safe</h2>
+            <div class="amount" id="acct-balance"><span class="cur">€</span>0.00</div>
+            <div class="info-list">
+              <div class="detail"><span class="k">IBAN</span><span class="v" id="acct-iban">—</span><button class="copybtn" data-copy="acct-iban" aria-label="Copy IBAN">copy</button></div>
+              <div class="detail"><span class="k">SMART ACCOUNT</span><span class="v" id="acct-address">—</span><button class="copybtn" data-copy="acct-address" aria-label="Copy smart account address">copy</button></div>
+              <div class="detail"><span class="k">SAFE POLICY</span><span class="v" id="acct-owner">—</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Funding</h2>
+            <div class="setting-row"><div><div class="st">Identity status</div><div class="sd" id="acct-kyc">—</div></div><span class="chip review" id="acct-kyc-chip">REVIEW</span></div>
+            <div class="setting-row"><div><div class="st">Funding rail</div><div class="sd" id="acct-funding">—</div></div><span class="chip pend" id="acct-funding-chip">PENDING</span></div>
+            <div class="setting-row"><div><div class="st">Device authorizer</div><div class="sd" id="acct-authorizer">—</div></div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-contacts">
+        <div class="card">
+          <h2>Saved contacts</h2>
+          <div class="contact-form">
+            <div><label style="margin-top:0">Name</label><input id="contact-name" placeholder="Joseph Otieno" /></div>
+            <div><label style="margin-top:0">Destination</label><input id="contact-dest" placeholder="+254… or IBAN" /></div>
+            <button id="btn-add-contact">Save</button>
+          </div>
+          <div id="contact-list"><div class="empty">No saved contacts yet</div></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="split-grid">
+          <div class="card">
+            <h2>Security</h2>
+            <div class="setting-row"><div><div class="st">Passkey</div><div class="sd" id="set-passkey">—</div></div></div>
+            <div class="setting-row"><div><div class="st">Device spending key</div><div class="sd" id="set-device">—</div></div></div>
+            <div class="setting-row"><div><div class="st">Wallet policy</div><div class="sd" id="set-wallet-policy">—</div></div></div>
+            <div class="setting-row"><div><div class="st">Recovery</div><div class="sd" id="set-recovery">—</div></div><button class="ghost" id="btn-recovery-start">Start</button></div>
+            <div class="error hidden" role="alert" id="recovery-err"></div>
+            <div class="setting-row"><div><div class="st">Session</div><div class="sd">Stored only in this browser.</div></div><button class="ghost" id="btn-signout">Sign out</button></div>
+          </div>
+          <div class="card">
+            <h2>Privacy bundle</h2>
+            <div class="setting-row"><div><div class="st">Traffic routing</div><div class="sd">VPN traffic should go device to Mysterium nodes, not through Zold.</div></div></div>
+            <div class="setting-row"><div><div class="st">Data stored</div><div class="sd">Billing status and aggregate allowance only.</div></div></div>
+            <div class="setting-row"><div><div class="st">Live fulfillment</div><div class="sd" id="set-privacy-live">Pending partner credentials.</div></div></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div class="rail">
+      <div class="card" id="send-card">
+        <h2>Send money</h2>
+        <div id="step-quote">
+          <!-- step A: amount + destination -->
+          <div id="send-dest">
+            <label style="margin-top:0">You send</label>
+            <div class="bigamount"><span id="amount-cur">€</span><input id="send-amount" value="100" inputmode="decimal" /></div>
+            <label>Where are you sending it?</label>
+            <div class="dest-grid" id="dest-grid"></div>
+            <div class="error hidden" role="alert" id="dest-err"></div>
+          </div>
+
+          <!-- step B: delivery options, best first -->
+          <div id="send-options" class="hidden">
+            <div class="stepnav"><button type="button" class="linkbtn" id="back-dest"><span aria-hidden="true">‹</span> Amount</button><span id="opt-title"></span></div>
+            <div id="opt-list"></div>
+          </div>
+
+          <!-- step C: recipient details + quote summary -->
+          <div id="send-details" class="hidden">
+            <div class="stepnav"><button type="button" class="linkbtn" id="back-options"><span aria-hidden="true">‹</span> Delivery options</button><span id="det-title"></span></div>
+            <div class="quote" id="quote-box" style="border-top:0;padding-top:0;margin-top:.2rem">
+              <div class="qrow" id="row-mid"><span>Mid-market rate</span><span class="dotfill"></span><span id="q-mid"></span></div>
+              <div class="qrow" id="row-rate"><span>Your rate <span class="rate-badge" id="q-margin"></span></span><span class="dotfill"></span><span id="q-rate"></span></div>
+              <div class="qrow"><span>Fixed fee</span><span class="dotfill"></span><span id="q-fee"></span></div>
+              <div class="qrow total"><span id="total-label">Recipient gets</span><span class="val" id="q-recv"></span></div>
+              <!-- What the sender actually gets per EUR, fee included. Without
+                   it a small send on a rail with a fee looks like a broken
+                   rate: a €0.99 fee is a fifth of a €5 transfer, so the
+                   itemised rows all look fine while the outcome does not. -->
+              <div class="qrow" id="row-effective"><span id="q-eff-label">Effective rate</span><span class="dotfill"></span><span id="q-eff"></span></div>
+              <div class="row2" style="margin-top:.9rem" id="recipient-row">
+                <div><label style="margin-top:0">Recipient name</label><input id="rec-name" placeholder="Joseph Otieno" /></div>
+                <div id="field-phone"><label style="margin-top:0">Phone</label><input id="rec-phone" placeholder="+254 7xx…" /></div>
+                <div id="field-iban" class="hidden"><label style="margin-top:0">Recipient IBAN</label><input id="rec-iban" placeholder="DE89 3704 0044 0532 0130 00" /></div>
+              </div>
+              <button class="wide" id="btn-send">Send now</button>
+            </div>
+            <div class="error hidden" role="alert" id="send-err"></div>
+          </div>
+        </div>
+
+        <div id="step-progress" class="hidden">
+          <div class="timeline" id="timeline" aria-live="polite"></div>
+          <div class="pickup hidden" id="pickup-box">
+            <div class="plabel">MoneyGram pickup reference</div>
+            <div class="code" id="t-ref"></div>
+            <div class="pnote"><span id="p-note-text"></span> <b id="p-kes"></b><span id="p-links"></span></div>
+            <button class="ghost hidden" style="margin-top:.9rem" id="btn-refresh-payout">Refresh MoneyGram status</button>
+          </div>
+          <div class="pickup hidden" id="sepa-box" style="border-color:rgba(176,109,245,.45);background:rgba(176,109,245,.06)">
+            <div class="plabel" style="color:var(--acc2)">SEPA bank payout</div>
+            <div class="code" id="sepa-status" style="font-size:1.15rem;letter-spacing:.04em;color:var(--acc2);text-shadow:none"></div>
+            <div class="pnote" id="sepa-note"></div>
+          </div>
+          <div class="paidbox hidden" id="paid-box">
+            <div class="check" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
+            <div class="pt">Cash collected</div>
+            <div class="pd" id="paid-note"></div>
+          </div>
+          <div class="pickup hidden" id="refund-box" style="border-color:rgba(245,109,109,.45);background:rgba(245,109,109,.06)">
+            <div class="pt" id="refund-title" style="color:var(--red)">Payout couldn't be completed</div>
+            <div class="pd" id="refund-note"></div>
+          </div>
+          <button class="ghost wide hidden" id="btn-again">Send another transfer</button>
+        </div>
+      </div>
+    </div>
+
+</section>
+
+<script type="importmap">
+{
+  "imports": {
+    "crypto": "/vendor/crypto-shim.js",
+    "@noble/hashes/crypto": "/vendor/hashes/cryptoBrowser.js"
+  }
+}
+</script>
+<script type="module" src="/device.js"></script>
+<!-- The app, split by screen. CLASSIC scripts, not modules: they share one
+     scope exactly as the single inline script they were cut from did, so
+     LOAD ORDER IS LOAD-BEARING — core first, main last, and no file calls
+     forward into one loaded after it. app/core.js says more. -->
+<script src="/ui.js"></script>
+<script src="/app/core.js"></script>
+<script src="/app/dashboard.js"></script>
+<script src="/app/transactions.js"></script>
+<script src="/app/profile.js"></script>
+<script src="/app/recovery.js"></script>
+<script src="/app/monerium.js"></script>
+<script src="/app/onboarding.js"></script>
+<script src="/app/send.js"></script>
+<script src="/app/signers.js"></script>
+<script src="/app/phone.js"></script>
+<script src="/app/invoices.js"></script>
+<script src="/app/business.js"></script>
+<script src="/app/settings.js"></script>
+<script src="/app/desktop.js"></script>
+<script src="/app/errors.js"></script>
+<script src="/app/pwa.js"></script>
+<script src="/app/main.js"></script>
+<script src="/cookie-notice.js" defer></script>
+</body>
+</html>

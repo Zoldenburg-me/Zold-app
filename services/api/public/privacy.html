@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cookies and storage · Zold</title>
+<meta name="description" content="What Zold stores in your browser, and why. No analytics, advertising or tracking." />
+<meta name="theme-color" content="#08080b" />
+<!--zold:abs-->
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/vendor/fonts/text.css" />
+<link rel="stylesheet" href="/tokens.css" />
+<link rel="stylesheet" href="/site.css" />
+</head>
+<body>
+<!--zold:site-nav-->
+<div class="s-legal-bg">
+  <div class="s-legal">
+    <nav class="s-legal__nav" aria-label="Legal">
+      <h2>Legal</h2>
+      <a href="/legal">Legal notes</a>
+      <a href="/partner-terms">Partner terms</a>
+      <a href="/privacy" aria-current="page">Cookies and storage</a>
+    </nav>
+    <!-- Only the cookies section of the privacy notice is published. The rest
+         (processors, retention, data protection officer, authority) waits on
+         counsel, and a notice with placeholders in it is not published. -->
+    <main id="main">
+      <div class="s-legal__head">
+        <h1>Cookies and storage</h1>
+        <p>What Zold stores in your browser, and why.</p>
+        <span>Last updated 30 Sep 2026</span>
+      </div>
+      <!-- Keep in step with cookie-notice.js, which links to #cookies. -->
+      <section id="cookies">
+        <h2>What we store</h2>
+        <p>Zold uses no analytics, advertising or tracking, and loads no third-party scripts. It stores only what the service needs, so there is nothing to opt in or out of.</p>
+        <table>
+          <thead><tr><th scope="col">What</th><th scope="col">Why</th></tr></thead>
+          <tbody>
+            <tr><td><b>zold_monerium_connect</b> (cookie)</td><td>Only while you connect Monerium; deleted after 10 minutes. Makes sure the sign-in finishes in the browser that started it.</td></tr>
+            <tr><td><b>Sign-in session</b> (browser storage)</td><td>Keeps you signed in until you sign out.</td></tr>
+            <tr><td><b>Device key</b> (browser storage)</td><td>Part of how this device approves payments. Don’t clear site data unless recovery is set up.</td></tr>
+            <tr><td><b>Recovery in progress</b> (browser storage)</td><td>Only while you recover an account on a new device.</td></tr>
+            <tr><td><b>Contacts and selected organisation</b> (browser storage)</td><td>Conveniences that never leave this browser.</td></tr>
+            <tr><td><b>App cache</b> (service worker)</td><td>The app’s own files, so it opens offline.</td></tr>
+            <tr><td><b>Notice dismissed</b> (browser storage)</td><td>Remembers that you closed the cookie notice.</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+</div>
+<!--zold:site-footer-->
+</body>
+</html>

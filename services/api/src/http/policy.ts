@@ -1,0 +1,165 @@
+/**
+ * Origin policy + per-IP rate limiting (dependency-free).
+ *
+ * Two middlewares, kept together because they are the outermost thing every
+ * request passes through and reading them in one place is how you tell what a
+ * stranger can reach. Applied by server.ts before any route is mounted.
+ */
+import type express from "express";
+import { SECURITY } from "../config.js";
+
+/**
+ * State-changing requests from foreign origins are refused outright; allowed
+ * origins get explicit CORS headers, everyone else gets none.
+ */
+export const originPolicy: express.RequestHandler = (req, res, next) => {
+  const origin = req.header("origin");
+  if (origin && SECURITY.origins.includes(origin)) {
+    res.setHeader("access-control-allow-origin", origin);
+    res.setHeader("access-control-allow-headers", "content-type, authorization");
+    res.setHeader("access-control-allow-methods", "GET, POST, DELETE");
+    if (req.method === "OPTIONS") return res.status(204).end();
+  } else if (origin && req.method !== "GET" && req.method !== "OPTIONS") {
+    return res.status(403).json({ error: "origin not allowed" });
+  }
+  next();
+};
+
+/**
+ * Headers every response carries.
+ *
+ * `no-referrer` because several of our URLs ARE credentials (/r/<slug>,
+ * /invoice/<token>, /pay/<handle>/<code>) and any outbound request or link
+ * click would otherwise carry at least our origin, and on a same-origin
+ * navigation the full path, to wherever it lands.
+ *
+ * The CSP keeps every script, style, font, fetch and worker on our own
+ * origin: the app holds a session and a device key in localStorage, so the
+ * thing to deny an injected script is somewhere to send them. It still allows
+ * 'unsafe-inline' for scripts because every page bootstraps from an inline
+ * block today; moving those to files (or nonces) is what lets that go.
+ * frame-ancestors 'none' because nothing embeds us (the Shopify app is not
+ * embedded) and a framed pay or passkey page is a clickjacking surface.
+ */
+export const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "worker-src 'self'",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+export const securityHeaders: express.RequestHandler = (_req, res, next) => {
+  res.setHeader("referrer-policy", "no-referrer");
+  res.setHeader("x-content-type-options", "nosniff");
+  res.setHeader("content-security-policy", CONTENT_SECURITY_POLICY);
+  res.setHeader("x-frame-options", "DENY");
+  res.setHeader("cross-origin-opener-policy", "same-origin");
+  res.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  next();
+};
+
+/**
+ * The rate-limit key for a client address.
+ *
+ * An IPv6 end user is routinely handed a whole /64, so keying on the full
+ * address gives one machine 2^64 fresh buckets. Key IPv6 on its /64 prefix;
+ * an IPv4-mapped address is keyed as the IPv4 it is.
+ */
+export function clientKey(ip: string | undefined): string {
+  if (!ip) return "?";
+  const addr = ip.split("%")[0];
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(addr);
+  if (mapped) return mapped[1];
+  if (!addr.includes(":")) return addr;
+  const [head, tail] = addr.split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const groups = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t];
+  return `${groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(":")}::/64`;
+}
+
+const hits = new Map<string, { n: number; reset: number }>();
+
+export function rateLimit(key: string, perMin: number): boolean {
+  const now = Date.now();
+  const h = hits.get(key);
+  if (!h || h.reset < now) {
+    hits.set(key, { n: 1, reset: now + 60_000 });
+    if (hits.size > 10_000) for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
+    return true;
+  }
+  return ++h.n <= perMin;
+}
+
+/**
+ * Failed guesses at one secret, across every source.
+ *
+ * Per-IP buckets miss a guesser spread over many addresses, so a human-chosen
+ * secret (an invoice-link password) also counts its own failures. Only
+ * failures count, so normal use is not throttled. Trade-off: anyone with the
+ * link can lock its supplier out for one window by guessing wrong.
+ */
+const failures = new Map<string, { n: number; reset: number }>();
+
+export function tooManyFailures(key: string, max: number): boolean {
+  const f = failures.get(key);
+  return !!f && f.reset >= Date.now() && f.n >= max;
+}
+
+export function recordFailure(key: string, windowMs: number): void {
+  const now = Date.now();
+  const f = failures.get(key);
+  if (!f || f.reset < now) {
+    failures.set(key, { n: 1, reset: now + windowMs });
+    if (failures.size > 10_000) for (const [k, v] of failures) if (v.reset < now) failures.delete(k);
+  } else {
+    f.n++;
+  }
+}
+
+/**
+ * Which paths sit on the tight bucket: everything where a request is a GUESS
+ * AT A CREDENTIAL — a passkey ceremony, a recovery code, a receipt slug, a
+ * document verification code, a payment-request code, an HMAC-signed Shopify
+ * webhook, the operator bearer secret, an Invoice-Me link token, or a set of
+ * Monerium API keys being checked against a third party.
+ */
+function isAuthRoute(req: express.Request): boolean {
+  // Express routes are case-insensitive and ignore a trailing slash, so match
+  // the same way: "/api/Recovery/..." or "/webauthn/challenge/" reaches the
+  // same handler and must land in the same bucket.
+  const path = req.path.toLowerCase().replace(/\/+$/, "") || "/";
+  return (
+    path.startsWith("/passkey") ||
+    // Unauthenticated, and every call stores a challenge server-side.
+    path === "/webauthn/challenge" ||
+    path.startsWith("/recovery") ||
+    path.startsWith("/r/") ||
+    path.startsWith("/v/") ||
+    // The bare /pay/<handle> page is public by design and stays on the general
+    // bucket; only /pay/<handle>/<code> is a credential.
+    /^\/pay\/[^/]+\/[^/]+/.test(path) ||
+    path.startsWith("/shopify/") ||
+    path.startsWith("/admin") ||
+    path.startsWith("/invoice-links/") ||
+    (path.endsWith("/monerium/api-keys") && req.method === "POST") ||
+    (path === "/users" && req.method === "POST")
+  );
+}
+
+export const apiRateLimit: express.RequestHandler = (req, res, next) => {
+  const ip = clientKey(req.ip);
+  const ok = isAuthRoute(req)
+    ? rateLimit(`a:${ip}`, SECURITY.authRateLimitPerMin)
+    : rateLimit(`g:${ip}`, SECURITY.rateLimitPerMin);
+  if (!ok) return res.status(429).json({ error: "rate limited — slow down" });
+  next();
+};

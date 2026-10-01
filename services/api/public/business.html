@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<link rel="stylesheet" href="/vendor/fonts/text.css" />
+<link rel="stylesheet" href="/vendor/fonts/material-symbols.css" />
+<link rel="stylesheet" href="/tokens.css">
+<title>Zold Business</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<meta name="robots" content="noindex" />
+
+  <link rel="stylesheet" href="/business.css">
+  <link rel="stylesheet" href="/ui.css">
+
+<a class="z-skip" href="#main">Skip to content</a>
+
+<div class="zb">
+  <aside class="z-side zb-side" id="side" aria-label="Sidebar">
+    <a class="z-side__brand" href="/business"><span class="z-brand-tri" aria-hidden="true">▽</span>Zold</a>
+    <div id="side-org"></div>
+    <button type="button" class="z-side__search" id="search-btn" aria-haspopup="dialog" hidden>
+      <span class="z-ic" aria-hidden="true">search</span><span>Search</span><kbd class="z-kbd" id="search-kbd">⌘K</kbd>
+    </button>
+    <nav class="z-side__nav" id="nav" aria-label="Main"></nav>
+    <div id="side-accounts"></div>
+    <div class="z-side__foot" id="side-foot"></div>
+  </aside>
+
+  <main class="zb-main" id="main" tabindex="-1">
+    <div id="signed-out" class="hidden">
+      <div class="zb-head"><div><h1>Sign in first</h1>
+        <p class="zb-sub">The web app uses the same sign-in as the Zold app.</p></div></div>
+      <div class="z-card zb-pad">
+        <p class="zb-sub">Open <a href="/app">the app</a>, sign in with Face ID or fingerprint, then come back here.</p>
+      </div>
+    </div>
+
+    <div id="no-orgs" class="hidden">
+      <div class="zb-head"><div><h1>Create an organisation</h1>
+        <p class="zb-sub">An organisation holds the accounts. A personal one is fine; you can add a business later.</p></div></div>
+      <form class="z-card zb-pad zb-form" id="new-org" style="max-width:480px" novalidate>
+        <label for="new-org-name">Name</label><input id="new-org-name" name="organization" autocomplete="organization" placeholder="Lindner Holzbau GmbH…" />
+        <label for="new-org-type">Type</label>
+        <select id="new-org-type" name="type">
+          <option value="personal">Personal: one person, premium plan available</option>
+          <option value="business">Business: members, roles and approvals</option>
+        </select>
+        <label for="new-org-country">Country</label><input id="new-org-country" name="country" autocomplete="country" placeholder="DE…" maxlength="2" />
+        <div class="zb-actions"><button type="submit" class="z-btn z-btn--primary" id="new-org-go">Create</button></div>
+      </form>
+    </div>
+
+    <div id="app" class="hidden">
+      <div id="plan-banner"></div>
+      <div class="zb-head">
+        <div><h1 id="view-title">Home</h1><p class="zb-sub" id="view-sub"></p></div>
+        <div id="view-actions" class="zb-head__actions"></div>
+      </div>
+      <div id="view"></div>
+    </div>
+  </main>
+</div>
+
+<dialog id="dlg" aria-labelledby="dlg-title"><div id="dlg-body"></div></dialog>
+<div id="toast" class="hidden" role="status" aria-live="polite"></div>
+
+<!--
+  Device key. The import map is required: the vendored noble modules import
+  the bare specifiers `crypto` and `@noble/hashes/crypto`, and without these
+  mappings device.js never loads and signing hangs with no error (this
+  shipped once in the checkout page). Don't drop this block.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "crypto": "/vendor/crypto-shim.js",
+    "@noble/hashes/crypto": "/vendor/hashes/cryptoBrowser.js"
+  }
+}
+</script>
+<!-- Classic script: runs during parsing, so the resolver exists before the
+     deferred module below calls it. -->
+<script>
+  window.__deviceLib = new Promise((resolve) => { window.__deviceLibReady = resolve; });
+</script>
+<script type="module" src="/device.js"></script>
+
+<!-- The dashboard, split into ES modules. main.js is the only one that
+     starts anything; the rest declare. core.js owns the shared state and
+     is the only module that writes it — see its header. -->
+<!-- UI v2 components (window.Z). Classic, so it has run before any module. -->
+<script src="/ui.js"></script>
+<script type="module" src="/business/main.js"></script>
+<script src="/cookie-notice.js" defer></script>
