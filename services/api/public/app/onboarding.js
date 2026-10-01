@@ -2003,7 +2003,7 @@ async function issueAppIban() {
     activated = await offerIbanMove(choices, profileId);
     if (!activated) {
       renderUser(await api(`/api/users/${user.id}`));
-      throw new Error("IBAN not moved. Your Monerium IBAN still pays into the other wallet; move it whenever you are ready.");
+      throw new Error("Your IBAN was not moved, so it still pays into the other wallet. Press Activate IBAN again when you are ready to move it.");
     }
   }
   renderUser(activated);
@@ -2025,7 +2025,7 @@ function offerIbanMove(choices, profileId) {
   const pick = one
     ? `<div class="m-rows">
       <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">IBAN</div><div class="m-rowv">${esc(`•••• •••• •••• ${norm(one.iban).slice(-4)}`)}</div></div></div>
-      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">Pays into now</div><div class="m-rowv">${esc(fromOf(one))}</div></div></div>
+      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">Currently pays into</div><div class="m-rowv">${esc(fromOf(one))}</div></div></div>
     </div>`
     : `<fieldset class="m-rows" style="border:0;padding:0;margin:0"><legend class="m-rowk" style="padding:0 0 8px">Which IBAN to move</legend>
       ${choices.map((c) => `<label class="m-detrow" style="cursor:pointer;gap:12px"><input type="radio" name="m-mv-iban" value="${esc(norm(c.iban))}">
@@ -2036,10 +2036,10 @@ function offerIbanMove(choices, profileId) {
   dlg.className = "m-dialog";
   dlg.setAttribute("aria-labelledby", "m-mv-title");
   dlg.innerHTML = `
-    <h2 id="m-mv-title">Your Monerium IBAN already pays somewhere else</h2>
+    <h2 id="m-mv-title">Use your Monerium IBAN in Zold</h2>
     <div class="m-lede" style="font-size:13px">${one
-      ? "Monerium gives each profile one IBAN. Yours exists, so Zold cannot get a second one. You can move it to this account instead."
-      : `Monerium will not issue another IBAN on this profile, and it already has ${choices.length}. Pick the one to move to this account.`}</div>
+      ? "You already have an IBAN at Monerium, and Monerium gives one per profile. Zold uses that same IBAN: move it to this account to finish."
+      : `You already have ${choices.length} IBANs at Monerium, and it will not issue another. Pick the one Zold should use; it moves to this account.`}</div>
     ${pick}
     <div class="m-note warn" style="margin-top:16px;font-size:13px;line-height:1.45">
       After the move, payments to this IBAN arrive in your Zold account and the old wallet stops receiving them.
