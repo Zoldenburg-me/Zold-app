@@ -55,7 +55,7 @@ it" for a deleted route). Rewrite to current behaviour.
 - If the reason still matters, keep it as one clause of *why*, not *when*.
 - Do not leave a tombstone ("X removed") unless a reader would otherwise
   rebuild X — then phrase it as a rule: "Do not add a co-owner Zold holds."
-- User-facing pages (docs/gitbook, UI copy) never mention removed features.
+- User-facing pages (the zold-docs repo, UI copy) never mention removed features.
 
 ## 4. Verify
 
