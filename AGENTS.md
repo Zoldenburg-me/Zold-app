@@ -13,11 +13,11 @@ Read when the task touches it:
 - `docs/status.md` — **what has never run** (no mainnet, no real swap, no cash
   rail, no on-chain recovery, no mail). Read before saying anything works.
 - `docs/running-locally.md` — dev vs api, preflight, local funding and KYC
-  gate, the test-suite table.
+  gate, tests, the production branch.
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
 - `docs/roadmap.md` — agreed priority and parked ideas.
 - `docs/architecture/` — product (what exists, status) and technical (how,
-  routes). Design docs and `docs/gitbook/` are alongside.
+  routes). User docs: the `zold-docs` repo.
 
 ## How to write in this repo (comments, docs, this file, notes)
 
