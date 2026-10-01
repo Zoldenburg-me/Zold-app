@@ -381,6 +381,13 @@ await check("funds at the planned address refuse the import", async () => {
     assert.equal((await post("/users/u1/safe/import/confirm", { address: SAFE })).body.code, "PLAN_HAS_FUNDS");
   }
 });
+await check("a new account's zero address is not read as its funds", async () => {
+  store.updateUser("u1", { address: ZERO as Hex });
+  chain = { ...goodChain(), eth: { [ZERO]: 10n ** 21n } };
+  const r = await post("/users/u1/safe/import/prepare", { address: SAFE });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  store.updateUser("u1", { address: planAddress });
+});
 await check("a deployed own Safe is never replaced", async () => {
   chain = goodChain();
   chain.code[planAddress.toLowerCase()] = "0x6080";
