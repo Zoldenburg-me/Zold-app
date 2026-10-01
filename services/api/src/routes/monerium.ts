@@ -664,28 +664,35 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         const candidates = linkedUnder
           ? snapshot.ibans.filter((i: any) => i?.profile === linkedUnder && ibanKey(i.iban))
           : [];
-        if (candidates.length !== 1) {
-          // Fail closed: no profile to read, or not exactly one IBAN on it.
+        if (!candidates.length) {
+          // Fail closed: no profile to read, or no IBAN on it to offer.
           const why = !linkedUnder
             ? "Monerium does not say which profile this Safe is linked under"
-            : `Monerium lists ${candidates.length} IBANs on profile ${linkedUnder}`;
+            : `Monerium lists no IBAN on profile ${linkedUnder}`;
           return say(409, {
             error: `Monerium says this profile already has an IBAN, but ${why}, so Zold cannot tell which one to offer. Nothing was changed.`,
             code: "IBAN_EXISTS_UNRESOLVED",
           }, `Monerium profile already has an IBAN; ${why}`);
         }
-        const existing = candidates[0];
-        const existingIban = ibanKey(existing.iban);
+        // Every IBAN on the profile, each with where it pays now. With more
+        // than one, the user picks; nothing is chosen for them. `existing` is
+        // set only when there is exactly one.
+        const choices = candidates.map((i: any) => ({
+          iban: ibanKey(i.iban),
+          address: i.address ?? null,
+          chain: i.chain ?? null,
+          profileId: linkedUnder,
+        }));
+        const one = choices.length === 1 ? choices[0] : undefined;
+        const where = one
+          ? `(${maskIban(one.iban)}). It pays into ${one.address ?? "another address"} on ${one.chain ?? "another chain"}, not this account`
+          : `on this profile: Monerium lists ${choices.length}, none paying into this account`;
         return say(409, {
-          error: `Your Monerium profile already has an IBAN (${maskIban(existingIban)}). It pays into ${existing.address ?? "another address"} on ${existing.chain ?? "another chain"}, not this account. You can move it here; nothing has changed yet.`,
+          error: `Your Monerium profile already has an IBAN ${where}. You can move ${one ? "it" : "one of them"} here; nothing has changed yet.`,
           code: "IBAN_EXISTS_ELSEWHERE",
-          existing: {
-            iban: existingIban,
-            address: existing.address ?? null,
-            chain: existing.chain ?? null,
-            profileId: linkedUnder,
-          },
-        }, `Your Monerium profile already has an IBAN (${maskIban(existingIban)}) paying into ${existing.address ?? "another address"} on ${existing.chain ?? "another chain"} — move it to this account, or keep it where it is`);
+          ...(one ? { existing: one } : {}),
+          choices,
+        }, `Your Monerium profile already has an IBAN ${where} — move ${one ? "it" : "one"} to this account, or keep ${one ? "it" : "them"} where ${one ? "it is" : "they are"}`);
       }
 
       const updated = store.updateUser(user.id, {
