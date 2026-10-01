@@ -732,3 +732,34 @@ button.z-side__org:hover { border-color: var(--z-line-hover); }
 .z-cmdk__foot { display: flex; gap: var(--z-space-4); padding: 10px var(--z-space-5); border-top: 1px solid var(--z-line); font-size: 12.5px; color: var(--z-dim); }
 .z-cmdk__foot .z-kbd { margin-right: 4px; padding: 0 5px; }
 @media (max-width: 639px) { .z-scrim--top { padding: var(--z-space-4) var(--z-space-4) 0; } }
+
+/* ---- Recovery and whole-screen states (build step 9) ---------------- */
+.z-screen__fine--flush { padding: 0; }
+.z-screen__logo { display: inline-flex; align-items: center; gap: var(--z-space-2); font-size: 18px; font-weight: 600; letter-spacing: -.02em; color: var(--z-text); }
+/* Offline, error, link: the tile and the words sit in the middle. */
+.z-state { gap: 22px; padding: 0 var(--z-space-6); }
+.z-tile--xl { width: 64px; height: 64px; border-radius: var(--z-radius-md); }
+.z-tile--xl .z-ic { font-size: 21px; }
+/* Recovery done: one centred mark, bigger. */
+.z-result { align-items: center; gap: 22px; padding: 0 var(--z-space-6); text-align: center; }
+.z-result .z-tile--xl { width: 88px; height: 88px; border-radius: var(--z-radius-sheet); }
+.z-result .z-tile--xl .z-ic { font-size: 44px; }
+/* The old phone's alert: no top bar, the tile starts the page. */
+.z-app__main--state { gap: 22px; padding-top: var(--z-space-12); }
+.z-warn-fig { font-weight: 600; color: var(--z-amber); }
+
+/* One code field, the length the partner's code happens to be. */
+.z-code { height: 58px; border-radius: var(--z-radius-note); font-size: 24px; font-weight: 600; letter-spacing: .3em; text-align: center; font-variant-numeric: tabular-nums; }
+.z-code::placeholder { font-size: 16px; font-weight: 400; letter-spacing: 0; }
+
+/* Waiting period: time left, when it ends, how much has passed. */
+.z-count { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: var(--z-space-5); text-align: center; }
+.z-count__label { margin: 0; font: 400 12.5px/1.4 var(--z-font); color: var(--z-dim); }
+.z-count__fig { margin: 0; font: 600 44px/1.1 var(--z-font); letter-spacing: -.04em; color: var(--z-heading); font-variant-numeric: tabular-nums; }
+.z-count__sub { margin: 0; font-size: 13px; color: var(--z-dim); }
+.z-count__track { align-self: stretch; height: 6px; margin-top: var(--z-space-2); border-radius: 3px; background: var(--z-line); overflow: hidden; }
+.z-count__bar { display: block; height: 100%; background: var(--z-pink); transform-origin: left center; }
+/* The support reference reads out loud: larger, spaced. */
+.z-screen .z-copy .z-mono { font-size: 20px; letter-spacing: .08em; color: var(--z-heading); }
+/* The whole-screen offline state says it already; the bar would repeat it. */
+html:has(#ob-root [data-screen^="state-"]) #offline-bar { display: none; }

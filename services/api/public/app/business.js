@@ -193,6 +193,8 @@ PH.company = {
       return;
     }
     phCoFreshen("company");
+    // A recovery moves this login's own account, whichever company is shown.
+    phRecoveryCheck();
     const sw = root.querySelector("#ph-co-switch");
     if (sw) sw.onclick = () => phSwitchSheet(sw);
     const hide = root.querySelector("#ph-hide");
