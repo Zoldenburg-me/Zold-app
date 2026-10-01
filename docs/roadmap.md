@@ -22,5 +22,7 @@ Linked from `AGENTS.md`.
    EEA issuer channel (Dec 2025), Kulipa is dead, and Exodus now owns Baanx and
    Monavate. Proposal only; nothing card-side is built.
 
+Before going public: domain and trademark clearance for "Zold" in fintech.
+
 Parked deliberately: NEAR Intents, Metastable, Flexa/AMP (wrong market).
 
