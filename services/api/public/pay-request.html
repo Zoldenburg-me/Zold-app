@@ -324,10 +324,16 @@ function render(p) {
 async function load() {
   try {
     const res = await fetch(API);
-    if (!res.ok) throw new Error("not found");
+    if (!res.ok) throw Object.assign(new Error("not found"), { status: res.status });
     render(await res.json());
-  } catch {
-    hide("loading"); show("notfound");
+  } catch (e) {
+    // Only the server saying so means the link is wrong; a dropped
+    // connection or an outage says nothing about it.
+    hide("loading"); if (e?.status !== 404) {
+      $("notfound").querySelector("h1").textContent = "Couldn’t load this page";
+      $("notfound").querySelector("p").textContent = "Check your connection, then reload the page.";
+    }
+    show("notfound");
   }
 }
 

@@ -99,7 +99,9 @@ async function api(path, body, method, extraHeaders) {
        with a readable body, but it only controls the page once it is active —
        first load, and browsers without one, land here. */
     setReachable(false);
-    throw new Error("you appear to be offline — Zold could not be reached");
+    const err = new Error("you appear to be offline. Zold could not be reached");
+    err.offline = true;
+    throw err;
   }
   const data = await res.json().catch(() => ({}));
   // 503 is what the service worker returns when it could not reach us at all.
@@ -109,6 +111,8 @@ async function api(path, body, method, extraHeaders) {
   if (!res.ok) {
     const err = new Error(data.error || res.statusText || `request failed (HTTP ${res.status})`);
     err.status = res.status;
+    // The service worker's own 503: the network, not our server, failed.
+    err.offline = res.headers.get("x-zold-offline") === "1";
     // A refusal the UI answers with its own screen (IBAN_EXISTS_ELSEWHERE)
     // needs the code and the fields that came with it.
     err.code = data.code;

@@ -19,9 +19,18 @@ function enterDashboard(name) {
   let invite = null;
   try { invite = sessionStorage.getItem("zold-invite"); sessionStorage.removeItem("zold-invite"); } catch {}
   if (invite) {
+    // Used once: a reload must not redeem (or fail on) the same link again.
+    const qs = new URLSearchParams(location.search);
+    if (qs.has("invite")) {
+      qs.delete("invite");
+      history.replaceState(history.state, "", `${location.pathname}${qs.size ? `?${qs}` : ""}${location.hash}`);
+    }
     api("/api/orgs/invites/accept", { token: invite })
       .then(() => location.replace("/business"))
-      .catch((e) => alert(`The invitation could not be accepted: ${e.message}`));
+      // 404 and 410 are a dead link; a 403 or 409 says why this account
+      // cannot take it (another email, already a member).
+      .catch((e) => errShow("link", [404, 410].includes(e?.status) ? {}
+        : { title: "This invitation can’t be accepted", sub: obMessage(e) }));
   }
   obScreen = null;
   $("onboard").style.display = "none";
@@ -85,7 +94,12 @@ function obGuard(name) {
   const signedUp = !!user?.id;
   const kind = OB[name].kind;
   if (kind === "blocked") return obBlockedCode ? name : "auth";
-  if (kind === "recover") return caps.emailSmsRecovery || caps.zoldenburgRecovery ? name : "auth";
+  if (kind === "state") return errState && name === `state-${errState.kind}` ? name : "auth";
+  if (kind === "recover") {
+    if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery) return "auth";
+    // A later recovery step is shown only while the request's state names it.
+    return name === "recover" ? name : rcRouteFor(rcState);
+  }
   if (kind === "after") {
     if (!signedUp) return "auth";
     if (name === "welcome") return name;
@@ -945,7 +959,11 @@ async function obSignIn(btn) {
     renderUser(u);
     const next = obNextAfterAccount();
     if (next) obGo(next, { replace: true });
-    else enterDashboard(user.name);
+    else {
+      enterDashboard(user.name);
+      if (obAfterSignIn) phGo(obAfterSignIn);
+    }
+    obAfterSignIn = null;
   } catch (e) {
     obShowErr(e?.name === "NotAllowedError"
       ? new Error("Sign-in was cancelled, or this phone has no Zold sign-in saved. Create an account, or recover one you lost.")
@@ -1318,33 +1336,187 @@ function obWelcomeCards() {
   ];
 }
 
-/* ---- Recover (lost device). The states are app/recovery.js's; this is the
-   frame they render into. The recovery screens get their own design later. */
+/* ---- Recover (lost device) ------------------------------------------------
+   The state and the calls are app/recovery.js's; these are the screens. Every
+   one reads rcState, and the guard sends a screen the state does not name
+   back to the one it does (a reload lands on the email step, which resumes
+   the same request from this browser's saved secret). Recovery has never run
+   on chain, so every screen carries a Beta tag. */
+
+const rcBeta = () => Z.tag("Beta");
+const rcHead = (step, label, back) =>
+  `<div class="z-screen__head">${Z.progress({ step, of: 3, label, back: back ? { href: `#${back}` } : null, tag: rcBeta(), barLabel: "Recovery progress" })}</div>`;
+const rcGrace = (r) => graceText(r?.recoveryDelayHours != null ? r.recoveryDelayHours * 3600 : r?.candide?.gracePeriodSeconds);
+
+/* One step of the move, in the timeline shape payment progress uses. */
+function rcTimeline(steps) {
+  const now = steps.findIndex((s) => !s.done);
+  return `<ol class="z-timeline">${steps.map((s, i) => `<li class="${s.done ? "is-done" : i === now ? "is-now" : ""}">
+      <span class="z-timeline__mark" aria-hidden="true">${s.done ? Z.icon("check") : ""}</span>
+      <span class="z-timeline__main"><span class="z-timeline__title">${esc(s.t)}<span class="z-sr">${s.done ? ", done" : i === now ? ", in progress" : ", not yet"}</span></span><span class="z-timeline__sub">${s.d}</span></span></li>`).join("")}</ol>`;
+}
+
+/* "Email and phone", from the channels this recovery asked codes on. */
+function rcChannelWords(r) {
+  const kinds = [...new Set((r?.candide?.auths || []).map((a) => (a.channel === "sms" ? "phone" : "email")))];
+  const words = kinds.map((k, i) => (i ? k : k[0].toUpperCase() + k.slice(1)));
+  return words.join(" and ") || "Codes";
+}
+
 OB.recover = {
   kind: "recover",
   title: "Recover your account",
-  html: () => `${obBackHead("auth", Z.tag("Beta"))}
-    <main id="main" class="z-screen__main">
-      ${obIntro("Recover your account", "Enter the email on your account. You’ll set up Face ID on this phone, then confirm a code or contact Zoldenburg support, depending on how the account is protected.")}
+  html: () => `${rcHead(1, "Recovery", "auth")}
+    <main id="main" class="z-screen__main z-screen__main--tight">
+      ${obIntro("Recover your account", "Enter the email on your account. You’ll set up Face ID or fingerprint sign-in on this phone, then confirm a code or contact support.")}
+      ${rcNotice ? Z.note({ tone: "a", text: rcNotice, role: "status" }) : ""}
       <form class="z-form" id="rc-start" novalidate>
-        ${Z.field({ id: "rc-email", name: "email", type: "email", label: "Email", autocomplete: "email", inputmode: "email", placeholder: "miriam@example.com…" })}
-        ${Z.button({ variant: "primary", full: true, label: "Continue", type: "submit", id: "btn-rc-start" })}
+        ${Z.field({ id: "rc-email", name: "email", type: "email", label: "Email", autocomplete: "email", inputmode: "email", placeholder: "you@example.com…", value: rcEmail || undefined })}
       </form>
-      <div id="rc-otp" class="z-form hidden"></div>
-      <div id="rc-status" class="z-form hidden"></div>
-      <div class="z-alert hidden" role="alert" id="rc-err"></div>
-    </main>`,
+      ${obAlert("rc-err")}
+    </main>
+    <div class="z-screen__foot">
+      ${Z.button({ variant: "primary", full: true, label: "Continue", type: "submit", id: "btn-rc-start" }).replace("<button", '<button form="rc-start"')}
+      <p class="z-screen__fine z-screen__fine--flush">After that, a waiting period starts. Your old phone can cancel it.</p>
+    </div>`,
   bind: (root) => {
     rcState = null;
-    root.querySelector("#rc-start").addEventListener("submit", (e) => { e.preventDefault(); recoverStart(); });
+    clearTimeout(rcTimer);
+    root.querySelector("#rc-start").addEventListener("submit", (e) => { e.preventDefault(); recoverStart($("btn-rc-start")); });
   },
 };
 
-/* app/recovery.js calls this for its own back and "sign in" links. */
-function showRecoverPanel(on) {
-  obShow();
-  obGo(on ? "recover" : "auth");
-}
+OB["recover/codes"] = {
+  kind: "recover",
+  title: "Enter the code",
+  html: () => {
+    const r = rcState;
+    // Codes confirm the sign-in THIS browser made. Without its ticket, they
+    // would hand the account to a sign-in someone else made.
+    if (!rcOtpTicket) {
+      return `${rcHead(2, "Recovery", "recover")}
+        <main id="main" class="z-screen__main z-screen__main--tight">
+          ${obIntro("Don’t enter any codes", "The Face ID or fingerprint sign-in this recovery would install wasn’t set up in this browser. If you didn’t start it, someone may be trying to take the account.")}
+          ${Z.note({ tone: "a", text: "Don’t share codes with anyone. Once this recovery expires, start again from this phone." })}
+        </main>
+        <div class="z-screen__foot">${Z.button({ variant: "secondary", full: true, label: "Back to sign-in", href: "#auth" })}</div>`;
+    }
+    const auths = r.candide?.auths || [];
+    const cur = rcCurrentAuth(r);
+    const a = auths[cur] || auths[0];
+    const where = a ? esc(a.target) : "your email or phone";
+    const rows = auths.map((x, i) => Z.row({
+      lead: Z.iconTile({ icon: x.channel === "sms" ? "sms" : "mail", tone: i === cur ? "p" : "n" }),
+      title: x.channel === "sms" ? "Phone" : "Email",
+      sub: x.target,
+      right: x.verified ? Z.tag("Done") : i === cur ? Z.tag("Entering", "pink") : Z.tag("Next"),
+    }));
+    return `${rcHead(2, "Recovery", "recover")}
+      <main id="main" class="z-screen__main z-screen__main--tight">
+        ${obIntro("Enter the code", `Check <span translate="no">${where}</span> for a code from Candide, our recovery partner.${auths.length > 1 ? " Each one needs its own code." : ""}`)}
+        <form class="z-form" id="rc-codes" novalidate>
+          <div class="z-field"><label for="rc-code">Code for ${a?.channel === "sms" ? "your phone" : "your email"}</label>
+            <input class="z-input z-code" id="rc-code" name="one-time-code" inputmode="numeric" autocomplete="one-time-code" spellcheck="false" placeholder="Code…" aria-describedby="rc-code-hint">
+            <p class="z-hint" id="rc-code-hint">Only enter it if you started this recovery on this phone.</p>
+            <p class="z-err" id="rc-code-err" hidden></p></div>
+        </form>
+        ${auths.length ? Z.listGroup({ label: "Codes needed on", rows }) : ""}
+        ${obAlert("rc-err")}
+      </main>
+      <div class="z-screen__foot">${Z.button({ variant: "primary", full: true, label: "Continue", type: "submit", id: "btn-rc-code" }).replace("<button", '<button form="rc-codes"')}</div>`;
+  },
+  bind: (root) => {
+    root.querySelector("#rc-codes")?.addEventListener("submit", (e) => { e.preventDefault(); recoverConfirmCode($("btn-rc-code")); });
+  },
+};
+
+OB["recover/wait"] = {
+  kind: "recover",
+  title: "Your account is moving to this phone",
+  html: () => {
+    const r = rcState;
+    const until = rcFinalizeAfter(r);
+    const ms = until ? until.getTime() - Date.now() : 0;
+    const zold = rcMode === "zoldenburg";
+    return `${rcHead(3, "Waiting period", null)}
+      <main id="main" class="z-screen__main z-screen__main--tight">
+        ${obIntro("Your account is moving to this phone", "For your safety there’s a waiting period. Your old phone can still cancel it.")}
+        <section class="z-count z-card" aria-labelledby="rc-left-label">
+          <h2 class="z-count__label" id="rc-left-label">Time left</h2>
+          <p class="z-count__fig" id="rc-left">${until ? esc(ms > 0 ? rcLeftText(ms) : "Finishing…") : "Not known yet"}</p>
+          ${until ? `<p class="z-count__sub">Done on ${esc(rcWhenText(until))}</p>` : ""}
+          <span class="z-count__track" aria-hidden="true"><span class="z-count__bar" id="rc-bar" style="transform:scaleX(${rcElapsed(r)})"></span></span>
+        </section>
+        ${rcTimeline([
+          { t: "Face ID or fingerprint set up", d: "On this phone", done: true },
+          zold ? { t: "ID check by Zoldenburg", d: "Done", done: true } : { t: "Codes confirmed", d: esc(rcChannelWords(r)), done: true },
+          { t: "Waiting period", d: `${esc(rcGrace(r))}, so you can cancel if it wasn’t you`, done: false },
+          { t: "Your account is on this phone", d: "Sign in and pay as usual", done: false },
+        ])}
+        ${Z.note({ icon: "lock", text: "Until the waiting period ends, this phone can’t sign in or send money. Your balance stays where it is. The move finishes on its own, so you can close this page." })}
+        ${obAlert("rc-err")}
+      </main>
+      <div class="z-screen__foot z-screen__foot--quiet">
+        <div id="rc-finish-wrap" class="z-stack"${until && ms > 0 ? " hidden" : ""}>${Z.button({ variant: "primary", full: true, label: "Finish recovery", id: "btn-rc-finish" })}</div>
+        <a class="z-link-btn" href="#auth">Close</a>
+      </div>`;
+  },
+  bind: (root) => {
+    root.querySelector("#btn-rc-finish").onclick = (e) => recoverFinalize(e.currentTarget);
+  },
+};
+
+OB["recover/zoldenburg"] = {
+  kind: "recover",
+  title: "We’re checking it’s you",
+  html: () => {
+    const r = rcState;
+    const ref = r.zoldenburg?.reference || "";
+    const checked = RC_ZOLD_SIGNING.includes(r.status);
+    const mail = `mailto:support@zoldhq.com?subject=${encodeURIComponent(`Account recovery ${ref}`)}`;
+    return `${obBackHead("recover", rcBeta())}
+      <main id="main" class="z-screen__main z-screen__main--tight">
+        ${obIntro("We’re checking it’s you", "Zoldenburg compares you with the ID you gave Monerium. A person does this, not a machine.")}
+        ${ref ? `<div class="z-card">${Z.copyRow({ label: "Your reference", value: ref, mono: true })}</div>` : ""}
+        ${rcTimeline([
+          { t: "Face ID or fingerprint set up", d: "On this phone", done: true },
+          { t: "ID check by Zoldenburg", d: checked ? "Done" : "Email support@zoldhq.com with your reference", done: checked },
+          { t: "Waiting period", d: `${esc(rcGrace(r))}. Your old phone can cancel it`, done: false },
+          { t: "Your account is on this phone", d: "Sign in and pay as usual", done: false },
+        ])}
+        ${Z.note({ icon: "shield", text: "Zoldenburg can only start a move. It can’t send your money, and the waiting period always applies." })}
+      </main>
+      <div class="z-screen__foot z-screen__foot--quiet">
+        ${checked ? "" : Z.button({ variant: "primary", full: true, icon: "mail", label: "Email support", href: mail })}
+        <p class="z-screen__fine z-screen__fine--flush">Write from the email on your account. Keep this browser: only it can follow the request.</p>
+      </div>`;
+  },
+};
+
+/* After sign-in, open this app screen instead of Home (Recovery-Done's link). */
+let obAfterSignIn = null;
+
+OB["recover/done"] = {
+  kind: "recover",
+  title: "Your account is on this phone",
+  html: () => `<main id="main" class="z-screen__main z-screen__main--center z-result">
+      <span class="z-tile z-tile--m z-tile--xl" aria-hidden="true">${Z.icon("verified_user")}</span>
+      ${obIntro("Your account is on this phone", "This phone now approves everything on your account. Your old phone can’t approve payments any more.", false)}
+    </main>
+    <div class="z-screen__foot z-screen__foot--quiet">
+      ${Z.button({ variant: "primary", full: true, icon: "passkey", label: "Sign in", id: "btn-rc-signin" })}
+      <button type="button" class="z-link-btn" id="btn-rc-settings">Check your recovery settings</button>
+    </div>`,
+  bind: (root) => {
+    const signIn = (after) => {
+      obAfterSignIn = after;
+      obGo("auth", { replace: true });
+      $("link-signin")?.click();
+    };
+    root.querySelector("#btn-rc-signin").onclick = () => signIn(null);
+    root.querySelector("#btn-rc-settings").onclick = () => signIn("recovery-settings");
+  },
+};
 
 /* ==========================================================================
    The Monerium gate's actions (shared with Home's KYC card)
@@ -1758,8 +1930,10 @@ async function handlePayDeepLink() {
   try {
     const p = await api(`/api/pay/${encodeURIComponent(handle)}/${encodeURIComponent(code)}`);
     const b = p.methods?.bank;
-    if (!b) throw new Error("this request cannot be paid from a Zold account — it takes crypto only");
-    if (p.state !== "OPEN") throw new Error(`this payment request is ${p.state.toLowerCase()}`);
+    if (!b) {
+      return errShow("link", { title: "This link can’t be paid from Zold", sub: "It takes digital dollars (USDC) only. Open it in a crypto wallet instead." });
+    }
+    if (p.state !== "OPEN") return errShow("link");
     const amount = p.outstandingEur ?? Number(qs.get("amount") || 0);
     phSend = {
       payee: { name: b.holder, iban: String(b.iban).replace(/\s+/g, "").toUpperCase() },
@@ -1767,7 +1941,9 @@ async function handlePayDeepLink() {
     };
     phGo("send/amount", "new");
   } catch (e) {
-    alert(e.message);
+    const state = errFromStartup(e);
+    if (state) return errShow(state);
+    errShow("link", e?.status === 404 ? {} : { sub: obMessage(e) });
   }
 }
 
@@ -1806,7 +1982,14 @@ async function resumeSession(capabilitiesLoaded) {
     const want = location.hash.slice(1);
     // Reload on a later step it may still see (keys form, welcome) stays there.
     obGo(OB[want]?.kind === "after" && obGuard(want) === want ? want : next, { replace: true, focus: false });
-  } catch {
+  } catch (e) {
+    // No network or a server error is not a dead session: keep it, and say
+    // what happened instead of signing the person out.
+    const state = errFromStartup(e);
+    if (state) {
+      await capabilitiesLoaded;
+      return errShow(state);
+    }
     sessionToken = null;
     localStorage.removeItem("zold-session");
     localStorage.removeItem("zoll-session");

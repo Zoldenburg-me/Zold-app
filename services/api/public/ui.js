@@ -82,11 +82,11 @@
     return `<h1 class="z-title">${esc(o.title)}</h1>${o.sub ? `<p class="z-sub">${esc(o.sub)}</p>` : ""}`;
   }
 
-  /** Onboarding progress: back, "Step i of n · Label", a bar of n segments. */
+  /** Onboarding progress: back, "Step i of n · Label" (plus an optional tag), a bar of n segments. */
   function progress(o) {
     const segs = Array.from({ length: o.of }, (_, i) => `<span${i < o.step ? ' class="is-done"' : ""}></span>`).join("");
-    return `<div class="z-progress"><div class="z-progress__head">${o.back ? iconButton({ icon: "arrow_back", label: "Back", href: o.back.href, id: o.back.id }) : ""}<span>Step ${o.step} of ${o.of}${o.label ? ` · ${esc(o.label)}` : ""}</span></div>`
-      + `<div class="z-progress__bar" role="progressbar" aria-label="Setup progress" aria-valuemin="0" aria-valuemax="${o.of}" aria-valuenow="${o.step}" aria-valuetext="Step ${o.step} of ${o.of}">${segs}</div></div>`;
+    return `<div class="z-progress"><div class="z-progress__head">${o.back ? iconButton({ icon: "arrow_back", label: "Back", href: o.back.href, id: o.back.id }) : ""}<span>Step ${o.step} of ${o.of}${o.label ? ` · ${esc(o.label)}` : ""}${o.tag ? ` ${o.tag}` : ""}</span></div>`
+      + `<div class="z-progress__bar" role="progressbar" aria-label="${esc(o.barLabel || "Setup progress")}" aria-valuemin="0" aria-valuemax="${o.of}" aria-valuenow="${o.step}" aria-valuetext="Step ${o.step} of ${o.of}">${segs}</div></div>`;
   }
 
   /**
