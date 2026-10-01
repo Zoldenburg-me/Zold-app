@@ -68,6 +68,9 @@ function enterKycReview(_name) {
 
 let obScreen = null;
 let obBlockedCode = null;
+/* An import of the company's existing Safe on this screen visit:
+   { address, prepared, mode }. Nothing here is the truth; `prepare` is. */
+let obImport = null;
 /* Recovery choice made on this screen: shows its confirmation before moving on. */
 let obRecoveryDone = null;
 
@@ -103,9 +106,17 @@ function obGuard(name) {
   if (kind === "after") {
     if (!signedUp) return "auth";
     if (name === "welcome") return name;
-    if (name === "recovery-email") return caps.emailSmsRecovery && user.passkeySafe?.status === "active" ? name : obNextAfterAccount() || "monerium";
+    if (name === "recovery-email") return caps.emailSmsRecovery && user.passkeySafe?.status === "active" && recoveryOfferedFor() ? name : obNextAfterAccount() || "monerium";
     if (name === "monerium-keys") return caps.moneriumApiKeys && !kycApproved(user) ? name : obNextAfterAccount() || "monerium";
     if (name === "recovery") return recoveryEnrolmentPending() || obRecoveryDone ? name : obNextAfterAccount() || "monerium";
+    return name;
+  }
+  if (kind === "import") {
+    if (!signedUp) return "auth";
+    if (!safeImportOffered(user)) return obNextAfterAccount() || "monerium";
+    // The owner-change screen needs a `prepare` answer; confirm needs an address.
+    if (name === "b-import-sign" && !obImport?.prepared) return safeImportFlag() ? "b-import-confirm" : "b-import-address";
+    if (name === "b-import-confirm" && !safeImportFlag()) return "b-import-address";
     return name;
   }
   // A link from the website straight to a path's first step picks the path.
@@ -113,7 +124,7 @@ function obGuard(name) {
   // Before the account: an account that exists goes to its own next step.
   if (signedUp && user.passkey && !needsPasskeySafeSetup(user)) return obNextAfterAccount() || "monerium";
   if (kind === "entry") return name;
-  if (signedUp) return user.accountType === "company" ? "b-passkey" : "p-passkey";
+  if (signedUp) return obSetupScreen(user);
   const path = name.startsWith("b-") ? "company" : "individual";
   if (obDraft.type !== path) return "account-type";
   const order = path === "company" ? B_STEPS : P_STEPS;
@@ -125,10 +136,18 @@ function obGuard(name) {
   return name;
 }
 
+/* An account with no live Safe yet. A company that may still bring in its own
+   Safe never goes back to b-passkey, whose button deploys a new one: it gets
+   the choice, or the import it started on this device. */
+function obSetupScreen(u) {
+  if (u.passkey && safeImportOffered(u)) return safeImportFlag(u) ? "b-import-confirm" : "b-safe-choice";
+  return u.accountType === "company" ? "b-passkey" : "p-passkey";
+}
+
 /* Where an account that exists goes next. null: nothing left, open the app. */
 function obNextAfterAccount(u = user) {
   if (!u) return "auth";
-  if (!u.passkey || needsPasskeySafeSetup(u)) return u.accountType === "company" ? "b-passkey" : "p-passkey";
+  if (!u.passkey || needsPasskeySafeSetup(u)) return obSetupScreen(u);
   if (zoldenburgChoicePending(u)) return "recovery";
   if (u.kycStatus === "rejected") return "monerium";
   if (kycApproved(u)) return null;
@@ -363,7 +382,7 @@ const B_STEPS = ["account-type", "b-entity", "b-registration", "b-you", "b-owner
 /* The steps after the account exists, numbered from what this deployment
    offers: no recovery service, no recovery step. */
 function obAfterSteps() {
-  return [...(caps.emailSmsRecovery || caps.zoldenburgRecovery ? ["recovery"] : []), "monerium", "activate"];
+  return [...((caps.emailSmsRecovery || caps.zoldenburgRecovery) && !user?.passkeySafe?.importedAt ? ["recovery"] : []), "monerium", "activate"];
 }
 function obAfterProgress(name, label) {
   const steps = obAfterSteps();
@@ -753,6 +772,317 @@ OB["b-passkey"] = {
   bind: (root) => { root.querySelector("#btn-passkey").onclick = (e) => obCreateAccount(e.currentTarget); },
 };
 
+/* ---- Bringing in the company's existing Safe --------------------------------
+   Instead of deploying a new Safe, a company can bring in the Safe it already
+   has (routes/safe-import.ts). The Safe's current owner, usually a hardware
+   wallet, adds this phone's passkey as an owner in Safe{Wallet}; Zold never
+   collects, relays or asks for that signature. Then `confirm` reads the chain
+   and binds the Safe. Until it returns 201 nothing is imported, and these
+   screens say so. Sending the owner change from a connected wallet here is
+   not built: the file goes to Safe{Wallet}. */
+
+const OB_CHAINS = { 8453: "Base", 84532: "Base Sepolia" };
+const obChainName = (id) => OB_CHAINS[id] || `network ${id}`;
+const SAFE_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/* One plain sentence per refusal. The server's own text is never shown alone. */
+function obImportSentence(e) {
+  const chain = obImport?.prepared ? obChainName(obImport.prepared.chainId) : "the network Zold uses";
+  const s = {
+    NO_CHAIN: "This Zold server can’t bring in a Safe.",
+    NO_PASSKEY: "Set up Face ID sign-in on this phone first.",
+    SAFE_ACTIVE: "This login already has its own account, so it can’t take a second one.",
+    BAD_ADDRESS: "That isn’t a Safe address. It starts with 0x, followed by 40 letters and digits.",
+    OWN_PLAN: "That’s the new account Zold prepared for you, not your company’s existing Safe.",
+    ADDRESS_IN_USE: "Another Zold login already uses that Safe.",
+    SAFE_DEPLOYED: "This login’s own account has already been set up, so it can’t switch to another Safe.",
+    PLAN_HAS_FUNDS: "Money has already arrived at the new account Zold prepared for this login, so it can’t switch to another Safe.",
+    RPC_FAILED: "Zold couldn’t read the network just now. Nothing was changed. Try again in a minute.",
+    NO_CODE: `There’s no Safe at that address on ${chain}. Check the address, and that the Safe is on ${chain}.`,
+    WRONG_SINGLETON: "This Safe is a version Zold can’t sign for. Zold works with Safe version 1.4.1 set up for ERC-4337.",
+    MODULE_4337_DISABLED: "This Safe isn’t set up for the kind of payments Zold sends (its ERC-4337 module is off).",
+    WRONG_FALLBACK_HANDLER: "This Safe isn’t set up for the kind of payments Zold sends (its fallback handler isn’t the ERC-4337 module).",
+    EXTRA_MODULES: "This Safe has other modules switched on. Remove them in Safe{Wallet} under Settings → Modules, then try again.",
+    GUARD_SET: "This Safe has a transaction guard. Remove it in Safe{Wallet} settings, then try again.",
+    THRESHOLD_NOT_ONE: "This Safe needs more than one approval per payment. Zold collects only this phone’s approval, so lower it to 1 in Safe{Wallet} first.",
+    TOO_MANY_OWNERS: "This Safe has more owners than Zold allows: this phone plus at most one of your own wallets. Remove the others in Safe{Wallet} first.",
+    VERIFIER_NOT_OWNER: "The owner change isn’t on the network yet. Wait a minute after sending it, then try again.",
+    VERIFIER_NO_CODE: "Zold couldn’t set up this phone’s signer on the network yet. Try again in a minute.",
+  }[e?.code];
+  if (s) return s;
+  if (e?.offline) return "You appear to be offline. Zold could not be reached.";
+  return `Zold couldn’t check this Safe (${obMessage(e).replace(/\.$/, "")}).`;
+}
+
+function obImportErr(e) { obShowErr(new Error(obImportSentence(e))); }
+
+/* Every import screen offers the way back until confirm succeeds. */
+const obNewAccountLink = () => `<button type="button" class="z-link-btn" id="btn-import-new">Use a new account instead</button>`;
+function obBindNewAccountLink(root) {
+  const b = root.querySelector("#btn-import-new");
+  if (b) b.onclick = () => { clearSafeImportFlag(); obImport = null; obGo("b-safe-choice"); };
+}
+
+/* The Safe as the chain shows it, from the last `prepare`. */
+function obSafeSummary(p) {
+  const owners = p.owners.map((o) => `<span class="z-mono" translate="no" style="display:block;word-break:break-all">${esc(o)}${o.toLowerCase() === p.verifier.toLowerCase() ? " (this phone)" : ""}</span>`).join("");
+  return Z.kv([
+    { key: "Safe", valueHtml: `<span class="z-mono" translate="no" style="word-break:break-all">${esc(p.safeAddress)}</span>` },
+    { key: "Network", value: obChainName(p.chainId) },
+    { key: p.owners.length === 1 ? "Owner now" : "Owners now", valueHtml: owners },
+    { key: "Approvals needed", value: `${p.threshold} of ${p.owners.length}` },
+  ]);
+}
+
+/* Ask the server again. The flag says which Safe; `prepare` says what is true. */
+async function obPrepareImport(address) {
+  const p = await api(`/api/users/${user.id}/safe/import/prepare`, { address });
+  obImport = { ...(obImport || {}), address: p.safeAddress, prepared: p };
+  setSafeImportFlag(p.safeAddress);
+  return p;
+}
+
+function obDownloadFile(file) {
+  const url = URL.createObjectURL(new Blob([file.json], { type: "application/json" }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: file.fileName });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const obChoiceHtml = (name, v, title, text, checked) =>
+  `<label class="z-choice"><input type="radio" name="${name}" value="${v}"${checked ? " checked" : ""}><span class="z-choice__main"><span class="z-choice__title">${title}</span><span class="z-choice__text">${text}</span></span></label>`;
+
+OB["b-safe-choice"] = {
+  kind: "import",
+  title: "Business: choose the account",
+  html: () => `${obBackHead(null)}
+    <main id="main" class="z-screen__main z-screen__main--tight">
+      ${obIntro("Where should the money sit?", `Your Face ID sign-in is saved. Choose the account ${esc(obCompany())} uses in Zold.`)}
+      <form class="z-form z-form--tight" id="ob-form" novalidate>
+        <fieldset class="z-form z-form--tight" style="border:0;margin:0;padding:0;min-width:0">
+          <legend class="z-sr">Which account</legend>
+          ${obChoiceHtml("safe-choice", "new", "Open a new account", "Zold sets up a new account for the company. One more Face ID approval.", true)}
+          ${obChoiceHtml("safe-choice", "import", "Use our company’s existing Safe", "You already have a Safe, owned by a wallet such as a Ledger. Its owner adds this phone as an owner. No money moves.", false)}
+        </fieldset>
+      </form>
+      ${obSetupSteps()}
+      ${obAlert()}
+    </main>
+    <div class="z-screen__foot">${obSubmit("Continue")}</div>`,
+  bind: (root) => {
+    obBindForm(root, async () => {
+      const btn = root.querySelector("#btn-next");
+      if (Z.isDisabled(btn)) return;
+      if (root.querySelector('input[name="safe-choice"]:checked')?.value === "import") return obGo("b-import-address");
+      obClearErr();
+      clearSafeImportFlag();
+      obImport = null;
+      Z.setLoading(btn, true);
+      try { await obOpenOwnSafe(btn); } catch (e) { obSetupFailed(e); } finally {
+        Z.setLoading(btn, false);
+        const label = btn.querySelector("span:last-child");
+        if (label) label.textContent = "Continue";
+      }
+    });
+  },
+};
+
+OB["b-import-address"] = {
+  kind: "import",
+  title: "Business: your Safe’s address",
+  html: () => {
+    const p = obImport?.prepared;
+    return `${obBackHead("b-safe-choice")}
+    <main id="main" class="z-screen__main z-screen__main--tight">
+      ${obIntro(p ? "Is this your Safe?" : "Your company’s Safe", p
+        ? "This is what the network shows for that address."
+        : "Paste the Safe’s address. You find it at the top left of app.safe.global. It starts with 0x.")}
+      <form class="z-form" id="ob-form" novalidate>
+        ${Z.field({ id: "safe-addr", name: "safe-address", label: "Safe address", autocomplete: "off", value: obImport?.address || "", maxlength: 42, placeholder: "0x…", spellcheck: false })}
+      </form>
+      ${p ? obSafeSummary(p) : ""}
+      ${p?.alreadyOwner ? Z.note({ icon: "check_circle", text: "This phone is already an owner of the Safe. Nothing needs signing; finish on the next screen." }) : ""}
+      ${obAlert()}
+    </main>
+    <div class="z-screen__foot">${p ? Z.button({ variant: "primary", full: true, label: "Yes, continue", id: "btn-import-next" }) : ""}${obSubmit(p ? "Check another address" : "Check this Safe").replace("z-btn--primary", p ? "z-btn--secondary" : "z-btn--primary")}${obNewAccountLink()}</div>`;
+  },
+  bind: (root) => {
+    obBindNewAccountLink(root);
+    const next = root.querySelector("#btn-import-next");
+    if (next) next.onclick = () => obGo(obImport.prepared.alreadyOwner ? "b-import-confirm" : "b-import-sign");
+    obBindForm(root, async () => {
+      const btn = root.querySelector("#btn-next");
+      if (Z.isDisabled(btn)) return;
+      obClearErr();
+      const input = root.querySelector("#safe-addr");
+      const address = input.value.trim();
+      if (!SAFE_ADDRESS_RE.test(address)) {
+        Z.setFieldError(input, address ? obImportSentence({ code: "BAD_ADDRESS" }) : "Enter the Safe’s address.");
+        return input.focus();
+      }
+      Z.setLoading(btn, true);
+      try {
+        obImport = { address, prepared: null };
+        await obPrepareImport(address);
+        obRender({ focus: true });
+      } catch (e) {
+        // No answer, no download: nothing from a failed prepare is kept.
+        obImport = { address, prepared: null };
+        obImportErr(e);
+      } finally { Z.setLoading(btn, false); }
+    });
+  },
+};
+
+OB["b-import-sign"] = {
+  kind: "import",
+  title: "Business: add this phone to your Safe",
+  html: () => {
+    const p = obImport.prepared;
+    const add = p.ownerChange?.add, swap = p.ownerChange?.swap;
+    const canAdd = !!add && !add.refused, canSwap = !!swap && !swap.refused;
+    if (!canAdd && !canSwap) {
+      return `${obBackHead("b-import-address")}
+      <main id="main" class="z-screen__main">
+        ${obIntro("Zold can’t add this phone to that Safe", obImportSentence({ code: "TOO_MANY_OWNERS" }))}
+        ${obSafeSummary(p)}
+      </main>
+      <div class="z-screen__foot">${obNewAccountLink()}</div>`;
+    }
+    const mode = obImport.mode === "swap" && canSwap ? "swap" : canAdd ? "add" : "swap";
+    obImport.mode = mode;
+    const c = p.ownerChange[mode];
+    const chain = obChainName(p.chainId);
+    return `${obBackHead("b-import-address")}
+    <main id="main" class="z-screen__main z-screen__main--tight">
+      ${obIntro("Add this phone as an owner", "Whoever controls the Safe today approves one change in Safe{Wallet}. Zold never sees or sends that approval.")}
+      ${canAdd && canSwap ? `<form class="z-form z-form--tight" id="ob-form" novalidate>
+        <fieldset class="z-form z-form--tight" style="border:0;margin:0;padding:0;min-width:0">
+          <legend class="z-sr">How to add this phone</legend>
+          ${obChoiceHtml("import-mode", "add", "Keep your wallet as a second owner", "Afterwards this phone or your wallet can each approve on their own (1 of 2).", mode === "add")}
+          ${obChoiceHtml("import-mode", "swap", "Replace your wallet with this phone", "Afterwards only this phone can approve.", mode === "swap")}
+        </fieldset>
+      </form>` : `<p class="z-sub">${mode === "add" ? "Your wallet stays a second owner: afterwards this phone or your wallet can each approve on their own (1 of 2)." : "This replaces your wallet with this phone."}</p>`}
+      ${mode === "swap" ? Z.note({ tone: "a", icon: "warning", text: "This removes your wallet as an owner for good. If you then lose this phone, nobody can move the money in this Safe." }) : ""}
+      <ol class="z-howto">
+        ${[["download", "Download the file", "The button below saves it on this device."],
+          ["link", "Open app.safe.global", `Connect the wallet that owns this Safe, and pick the Safe on ${esc(chain)}.`],
+          ["apps", "Open Apps → Transaction Builder", "Drag the file in, or choose it."],
+          ["draw", "Check it, then sign and send", "Sign with your wallet. Then come back here."]]
+          .map(([ic, t, d]) => `<li>${Z.iconTile({ icon: ic })}<span class="z-howto__main"><span class="z-howto__title">${t}</span><span class="z-howto__text">${d}</span></span></li>`).join("")}
+      </ol>
+      <details class="z-card" style="padding:12px 16px">
+        <summary>Send it another way</summary>
+        <p class="z-sub" style="margin:8px 0">A transaction from the Safe to itself, to send with any Safe tool:</p>
+        ${Z.copyRow({ label: "To", value: c.to, mono: true })}
+        ${Z.copyRow({ label: "Value", value: c.value, mono: true })}
+        ${Z.copyRow({ label: "Data", value: c.data, display: `${c.data.slice(0, 26)}…`, mono: true })}
+        ${p.deployVerifier ? `<p class="z-sub" style="margin-top:8px">The file also sets up this phone’s signer on the network first. Sent another way, Zold sets that up itself when you finish.</p>` : ""}
+      </details>
+      ${obAlert()}
+    </main>
+    <div class="z-screen__foot">
+      ${Z.button({ variant: "primary", full: true, icon: "download", label: "Download for Safe{Wallet}", id: "btn-import-download" })}
+      ${Z.button({ variant: "secondary", full: true, label: "I’ve sent it", id: "btn-import-sent" })}
+      ${obNewAccountLink()}
+    </div>`;
+  },
+  bind: (root) => {
+    obBindNewAccountLink(root);
+    const form = root.querySelector("#ob-form");
+    if (form) form.addEventListener("change", () => {
+      obImport.mode = root.querySelector('input[name="import-mode"]:checked')?.value || "add";
+      obRender();
+      root.querySelector(`input[value="${obImport.mode}"]`)?.focus();
+    });
+    const dl = root.querySelector("#btn-import-download");
+    if (dl) dl.onclick = () => {
+      const file = obImport?.prepared?.ownerChange?.[obImport.mode]?.txBuilder;
+      if (file) obDownloadFile(file);
+    };
+    const sent = root.querySelector("#btn-import-sent");
+    if (sent) sent.onclick = () => obGo("b-import-confirm");
+  },
+};
+
+/* Confirm is one request, retried by hand. The chain needs a block or two
+   after the owner sends the change; no endless polling. */
+let obImportChecking = false;
+OB["b-import-confirm"] = {
+  kind: "import",
+  title: "Business: finish bringing in your Safe",
+  html: () => {
+    const p = obImport?.prepared;
+    const retry = obImport?.notYet;
+    return `${obBackHead(p && !p.alreadyOwner ? "b-import-sign" : "b-import-address")}
+    <main id="main" class="z-screen__main z-screen__main--tight">
+      ${obIntro("Finish bringing in your Safe", "Once the owner change is on the network, Zold checks the Safe and makes it this company’s account.")}
+      ${p ? obSafeSummary(p) : Z.skeletonRows(2, "Checking your Safe…")}
+      ${p?.alreadyOwner ? Z.note({ icon: "check_circle", text: "This phone is an owner of the Safe." }) : ""}
+      <p class="z-sub hidden" id="import-wait" role="status">Checking the network. This can take up to two minutes.</p>
+      ${obAlert()}
+    </main>
+    <div class="z-screen__foot">
+      ${Z.button({ variant: "primary", full: true, label: retry ? "Check again" : "I’ve sent it", id: "btn-import-confirm" })}
+      ${obNewAccountLink()}
+    </div>`;
+  },
+  bind: (root) => {
+    obBindNewAccountLink(root);
+    const flag = safeImportFlag();
+    // A reload or another screen: ask the server again, the flag is only a hint.
+    if (!obImport?.prepared && flag && !obImportChecking) {
+      obImportChecking = true;
+      obImport = { address: flag.address, prepared: null };
+      obPrepareImport(flag.address)
+        .then(() => { if (obScreen === "b-import-confirm") obRender(); })
+        .catch(async (e) => {
+          if (e?.code === "SAFE_ACTIVE") return obImportDone(await api(`/api/users/${user.id}`));
+          if (obScreen === "b-import-confirm") obImportErr(e);
+        })
+        .finally(() => { obImportChecking = false; });
+    }
+    root.querySelector("#btn-import-confirm").onclick = async (ev) => {
+      const btn = ev.currentTarget;
+      if (Z.isDisabled(btn)) return;
+      obClearErr();
+      const address = obImport?.address || flag?.address;
+      if (!address) return obGo("b-import-address");
+      Z.setLoading(btn, true);
+      $("import-wait")?.classList.remove("hidden");
+      let bound;
+      try {
+        bound = await api(`/api/users/${user.id}/safe/import/confirm`, { address });
+      } catch (e) {
+        if (e?.code === "VERIFIER_NOT_OWNER") {
+          obImport = { ...(obImport || {}), address, notYet: true };
+          btn.querySelector("span:last-child").textContent = "Check again";
+        }
+        return obImportErr(e);
+      } finally {
+        Z.setLoading(btn, false);
+        $("import-wait")?.classList.add("hidden");
+      }
+      // Bound on the server: whatever happens drawing the next screen, this
+      // is not an import failure.
+      obImportDone(bound);
+    };
+  },
+};
+
+/* 201 from confirm: the Safe is this account's. Same next step as after a
+   fresh deployment, and never a deployment of the account's own Safe. */
+function obImportDone(bound) {
+  clearSafeImportFlag();
+  renderUser({ ...bound, balanceEur: bound.balanceEur ?? 0, safeBalanceEur: bound.safeBalanceEur ?? 0 });
+  obImport = null;
+  obClearDraft();
+  const next = obNextAfterAccount();
+  return next ? obGo(next, { replace: true }) : obFinish();
+}
+
 /* Shared form parts. */
 const obSubmit = (label = "Continue") =>
   Z.button({ variant: "primary", full: true, label, type: "submit", id: "btn-next" }).replace("<button", '<button form="ob-form"');
@@ -840,7 +1170,6 @@ async function obCreateAccount(btn) {
     return obShowErr(new Error("This browser can’t set up Face ID or fingerprint sign-in. Open Zold in Safari or Chrome to create an account."));
   }
   Z.setLoading(btn, true);
-  const rerender = () => { const m = $("ob-root").querySelector(".z-steps"); if (m) m.outerHTML = obSetupSteps(); else $("ob-err")?.insertAdjacentHTML("beforebegin", obSetupSteps()); };
   try {
     if (!user?.id) {
       pendingInfo = obSignupBody();
@@ -873,7 +1202,7 @@ async function obCreateAccount(btn) {
     if (user.accountType === "company") await obEnsureOrg();
 
     if (!user.passkey) {
-      obSetup = { step: 0, state: "now" }; rerender();
+      obSetup = { step: 0, state: "now" }; obRerenderSteps();
       // Some environments leave the ceremony pending forever instead of
       // rejecting: never strand the user on it.
       await Promise.race([
@@ -881,30 +1210,53 @@ async function obCreateAccount(btn) {
         new Promise((_, rej) => setTimeout(() => rej(new Error("No answer from this phone. Is a screen lock set up?")), 30000)),
       ]);
     }
-    obSetup = { step: 1, state: "now" }; rerender();
-    btn.querySelector("span:last-child").textContent = "Approve with Face ID again";
-    await finishPasskeySafeSetup();
-    obSetup = null;
-    // Only the hardhat harness auto-approves; a real account goes on to
-    // recovery and Monerium.
-    if (kycApproved(user) && !user.iban && (user.funding || {}).mode === "sandbox") {
-      try { await issueAppIban(); } catch { /* retried from Home */ }
+    // A company may bring in the Safe it already has: stop before deploying
+    // one. The choice screen deploys only if they pick a new account.
+    if (safeImportOffered(user)) {
+      obSetup = null;
+      obClearDraft();
+      return obGo(obSetupScreen(user), { replace: true });
     }
-    obClearDraft();
-    const next = obNextAfterAccount();
-    return next ? obGo(next, { replace: true }) : obFinish();
+    await obOpenOwnSafe(btn);
   } catch (e) {
-    if (obSetup) obSetup.state = "fail";
-    rerender();
-    obShowErr(obSetup?.step === 1
-      ? new Error(`Your Face ID sign-in is saved, but setting up the account didn’t finish (${obMessage(e).replace(/\.$/, "")}). Try again; nothing needs setting up twice.`)
-      : e);
+    obSetupFailed(e);
   } finally {
     Z.setLoading(btn, false);
     const label = btn.querySelector("span:last-child");
     if (label) label.textContent = obPasskeyLabel();
   }
 }
+/* Redraw the two set-up steps in place, or add them above the error. */
+function obRerenderSteps() {
+  const m = $("ob-root").querySelector(".z-steps");
+  if (m) m.outerHTML = obSetupSteps(); else $("ob-err")?.insertAdjacentHTML("beforebegin", obSetupSteps());
+}
+
+/* The account's own Safe: the second Face ID approval deploys it, then on to
+   the account's next step. Throws; the caller says what failed. */
+async function obOpenOwnSafe(btn) {
+  obSetup = { step: 1, state: "now" }; obRerenderSteps();
+  btn.querySelector("span:last-child").textContent = "Approve with Face ID again";
+  await finishPasskeySafeSetup();
+  obSetup = null;
+  // Only the hardhat harness auto-approves; a real account goes on to
+  // recovery and Monerium.
+  if (kycApproved(user) && !user.iban && (user.funding || {}).mode === "sandbox") {
+    try { await issueAppIban(); } catch { /* retried from Home */ }
+  }
+  obClearDraft();
+  const next = obNextAfterAccount();
+  return next ? obGo(next, { replace: true }) : obFinish();
+}
+
+function obSetupFailed(e) {
+  if (obSetup) obSetup.state = "fail";
+  obRerenderSteps();
+  obShowErr(obSetup?.step === 1
+    ? new Error(`Your Face ID sign-in is saved, but setting up the account didn’t finish (${obMessage(e).replace(/\.$/, "")}). Try again; nothing needs setting up twice.`)
+    : e);
+}
+
 /* Set when signup refused the email: the email field says why, once. */
 let obEmailInUse = false;
 
@@ -977,7 +1329,7 @@ async function obSignIn(btn) {
    deployment has a guardian, the account is set up, and they neither added it
    nor declined it. */
 function zoldenburgChoicePending(u = user) {
-  return !!(caps.zoldenburgRecovery && u?.passkeySafe?.status === "active"
+  return !!(caps.zoldenburgRecovery && u?.passkeySafe?.status === "active" && recoveryOfferedFor(u)
     && !u.passkeySafe.recoveryChoice && u.passkeySafe.recovery?.status !== "active"
     // Recovery by email is the other answer to the same question.
     && u.passkeySafe.candideRecovery?.guardianStatus !== "active");
@@ -986,7 +1338,7 @@ function zoldenburgChoicePending(u = user) {
 /* Is there Candide (email) enrolment left? True only where the deployment has
    the service, the account is set up and the guardian is not yet on it. */
 function candideEnrolmentPending(u = user) {
-  return !!(caps.emailSmsRecovery && u?.passkeySafe?.status === "active"
+  return !!(caps.emailSmsRecovery && u?.passkeySafe?.status === "active" && recoveryOfferedFor(u)
     && u.passkeySafe.candideRecovery?.guardianStatus !== "active");
 }
 
@@ -1804,6 +2156,9 @@ async function activatePasskeySafe() {
 
 async function finishPasskeySafeSetup(timeoutMs = 45000) {
   if (!user?.passkeySafe || user.passkeySafe.status === "active") return;
+  // Deploying now would end the import started on this device for good.
+  // "Use a new account instead" clears the flag first.
+  if (safeImportFlag()) throw new Error("you started bringing in your company’s existing Safe. Finish that, or choose a new account instead");
   await Promise.race([
     activatePasskeySafe(),
     new Promise((_, rej) =>
@@ -1906,6 +2261,7 @@ async function registerDeviceKey(u) {
    ========================================================================== */
 $("btn-monerium-dashboard").onclick = () => activateConnectedMonerium();
 $("btn-finish-safe").onclick = () => finishDashboardSmartWallet();
+$("btn-finish-import").onclick = () => { obShow(); obGo(obNextAfterAccount() || "monerium", { replace: true }); };
 $("btn-dash-kyc-refresh").onclick = async () => {
   await refresh();
   if (kycApproved(user)) enterDashboard(user.name);

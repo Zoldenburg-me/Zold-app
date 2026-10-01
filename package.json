@@ -32,6 +32,7 @@
     "safe-signers:test": "tsx scripts/safe-signers-test.ts",
     "safe-import:test": "tsx scripts/safe-import-test.ts",
     "safe:import-tx": "tsx scripts/safe-import-owner-tx.ts",
+    "safe-import:ui:test": "tsx scripts/safe-import-ui-test.ts",
     "execution:test": "tsx scripts/safe-execution-test.ts",
     "gas:test": "tsx scripts/safe-gas-test.ts",
     "preflight": "tsx scripts/mainnet-preflight.ts",

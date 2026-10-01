@@ -33,7 +33,7 @@ function phRecovery(u) {
   const zold = safe.recovery?.status === "active";
   const cr = safe.candideRecovery;
   const codes = cr?.guardianStatus === "active";
-  const offered = caps.emailSmsRecovery || caps.zoldenburgRecovery;
+  const offered = (caps.emailSmsRecovery || caps.zoldenburgRecovery) && recoveryOfferedFor(u);
   return { zold, cr, codes, on: zold || codes, offered, pending: !zold && cr?.guardianStatus === "pending_setup" };
 }
 
