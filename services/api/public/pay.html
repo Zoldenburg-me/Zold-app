@@ -140,7 +140,7 @@ async function load() {
   const handle = decodeURIComponent(location.pathname.replace(/^\/pay\//, "")).trim();
   try {
     const res = await fetch(`/api/pay/${encodeURIComponent(handle)}`);
-    if (!res.ok) throw new Error("not found");
+    if (!res.ok) throw Object.assign(new Error("not found"), { status: res.status });
     const p = await res.json();
     hide("loading");
     show("payee");
@@ -181,8 +181,14 @@ async function load() {
       }
     };
     $("open").href = paymentUri(p);
-  } catch {
+  } catch (e) {
+    // Only the server saying so means the link is wrong; a dropped
+    // connection or an outage says nothing about it.
     hide("loading");
+    if (e?.status !== 404) {
+      $("notfound").querySelector("h1").textContent = "Couldn’t load this page";
+      $("notfound").querySelector("p").textContent = "Check your connection, then reload the page.";
+    }
     show("notfound");
     $("card").setAttribute("aria-busy", "false");
   }

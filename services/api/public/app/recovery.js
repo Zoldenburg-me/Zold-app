@@ -258,15 +258,21 @@ async function recoveryRemoveChannel(registrationId) {
   } catch (e) { showErr("m-rc-err", e); }
 }
 
+/* Cancel the recovery under way on chain: one passkey signature from this
+   (the old) device. Also used by the Recovery-Alert screen in app/phone.js. */
+async function recoveryCancelRun() {
+  const prep = await api(`/api/users/${user.id}/recovery/candide/cancel`, {});
+  const sig = await passkeySignPrepared(prep);
+  await api(prep.submitTo, sig);
+}
+
 async function recoveryCancelOnChain() {
   clearErr("m-rc-err");
   if (!confirm("Cancel the recovery in progress? The new passkey will not take over this account.")) return;
   const btn = $("m-rc-cancel");
   if (btn) btn.disabled = true;
   try {
-    const prep = await api(`/api/users/${user.id}/recovery/candide/cancel`, {});
-    const sig = await passkeySignPrepared(prep);
-    await api(prep.submitTo, sig);
+    await recoveryCancelRun();
     mobileNav("recovery");
   } catch (e) { showErr("m-rc-err", e); }
   finally { if (btn) btn.disabled = false; }
@@ -312,102 +318,140 @@ function rcTicketSave(email, ticket) {
     localStorage.setItem(RC_TICKET_KEY, JSON.stringify(all));
   } catch { /* private mode: the recovery still works in this tab */ }
 }
+/* The recovery screens themselves are OB entries in app/onboarding.js
+   (#recover, #recover/codes, #recover/wait, #recover/zoldenburg,
+   #recover/done). This half holds the state they draw from and the calls
+   that move it; each call ends in rcShow(), which opens the screen the
+   request's state names. */
 
-/* showRecoverPanel() lives in app/onboarding.js, which draws this screen. */
+/* Why the email step is showing again, when a recovery ended or failed. */
+let rcNotice = "";
+let rcTimer = null;
 
-function renderRecoverState() {
-  const r = rcState;
-  const otp = $("rc-otp");
-  const st = $("rc-status");
-  $("rc-start").classList.toggle("hidden", !!r);
-  otp.classList.add("hidden");
-  st.classList.add("hidden");
-  if (!r) return;
-  if (r.status === "OTP_PENDING" && !rcOtpTicket) {
-    st.classList.remove("hidden");
-    st.innerHTML = `<h2 class="z-rc-h">Don’t enter any codes</h2><p class="z-sub">The Face ID sign-in this recovery would install wasn’t made in this browser. If you didn’t start it, someone else may be trying to take the account. Don’t share codes with anyone. Start recovery again from this phone once it expires.</p>`;
-    return;
-  }
-  if (r.status === "OTP_PENDING") {
-    const auths = (r.candide?.auths || []);
-    otp.classList.remove("hidden");
-    otp.innerHTML = auths.map((a, i) => `
-      <div class="z-field"><label for="rc-code-${i}">${a.channel === "sms" ? "Code sent by SMS to" : "Code sent to"} ${esc(a.target)}${a.verified ? ", confirmed" : ""}</label>
-      <div class="z-rc-row">
-        <input class="z-input" id="rc-code-${i}" name="one-time-code" inputmode="numeric" autocomplete="one-time-code" spellcheck="false" ${a.verified ? "disabled" : ""} />
-        <button type="button" class="z-btn z-btn--secondary" data-rc-confirm="${i}" ${a.verified ? "disabled" : ""}><span>Confirm</span></button>
-      </div></div>`).join("") +
-      `<p class="z-sub">These codes hand the account to the Face ID sign-in you just set up in THIS browser. If you didn’t just set one up here, stop. Every channel must confirm before anything happens. Then the waiting period starts.</p>`;
-    otp.querySelectorAll("[data-rc-confirm]").forEach((b) => {
-      b.onclick = async () => {
-        clearErr("rc-err");
-        const i = Number(b.dataset.rcConfirm);
-        try {
-          rcState = await rcApi(`/api/recovery/candide/${r.id}/otp`, { challengeId: auths[i].challengeId, otp: $(`rc-code-${i}`).value });
-          renderRecoverState();
-        } catch (e) {
-          if (e?.status === 403) {
-            rcOtpTicket = ""; rcTicketSave(rcEmail, ""); renderRecoverState();
-          }
-          showErr("rc-err", e);
-        }
-      };
-    });
-    return;
-  }
-  st.classList.remove("hidden");
-  if (rcMode === "zoldenburg" && r.status === "REVIEW_PENDING") {
-    const ref = r.zoldenburg?.reference || "";
-    const mail = `mailto:support@zoldhq.com?subject=${encodeURIComponent(`Account recovery ${ref}`)}`;
-    st.innerHTML = `<h2 class="z-rc-h">Now contact Zoldenburg support</h2>
-      <p class="z-sub">Your new Face ID sign-in is saved in this browser. Email <a href="${mail}">support@zoldhq.com</a> from the address on your account and quote this reference:</p>
-      <div class="z-card z-rc-ref z-mono" translate="no">${esc(ref)}</div>
-      <p class="z-sub">We check you against the identity Monerium verified before we sign anything. Then the recovery waits ${esc(graceText(r.recoveryDelayHours * 3600))} before this phone owns the account. If the old phone still works, it can cancel in that time.</p>
-      <p class="z-sub">Keep using this browser: only this browser can follow the request.</p>`;
-    setTimeout(async () => {
-      try { rcState = await rcApi(`/api/recovery/zoldenburg/${r.id}`); if (rcState.status !== r.status) renderRecoverState(); } catch { /* keep the screen */ }
-    }, 60000);
-    return;
-  }
-  if (r.status === "GRACE_PERIOD") {
-    const until = (r.candide?.finalizeAfter || r.zoldenburg?.finalizeAfter) ? new Date(r.candide?.finalizeAfter || r.zoldenburg.finalizeAfter) : null;
-    const ready = until && Date.now() >= until.getTime();
-    st.innerHTML = `<h2 class="z-rc-h">Recovery is under way</h2>
-      <p class="z-sub">The account moves to this phone ${until ? `after ${esc(until.toLocaleString())}` : "after the waiting period"}. Until then the old phone can still cancel it. That delay is the protection, so it can’t be skipped.</p>
-      <button class="z-btn z-btn--primary z-btn--full" id="btn-rc-finalize" ${ready ? "" : "disabled"}><span>${ready ? "Finish recovery" : "Waiting…"}</span></button>
-      <p class="z-sub">You can close this page. Zold finishes the recovery once the period has passed; come back and sign in with Face ID.</p>`;
-    $("btn-rc-finalize").onclick = async () => {
-      clearErr("rc-err");
-      try {
-        // No session comes back: once finalized, the new passkey signs in
-        // through the ordinary login, which the FINALIZED state offers.
-        rcState = await rcApi(`/api/recovery/${rcMode}/${r.id}/finalize`, {});
-        renderRecoverState();
-      } catch (e) { showErr("rc-err", e); }
-    };
-    if (!ready && until) setTimeout(async () => {
-      try { rcState = await rcApi(`/api/recovery/${rcMode}/${r.id}`); renderRecoverState(); } catch { /* keep the screen */ }
-    }, Math.min(60000, Math.max(2000, until.getTime() - Date.now() + 1000)));
-    return;
-  }
-  if (r.status === "FINALIZED") {
-    rcSave(rcEmail, "");
-    rcTicketSave(rcEmail, "");
-    st.innerHTML = `<h2 class="z-rc-h">Recovered</h2><p class="z-sub">This phone now owns the account. Sign in with Face ID.</p>
-      <button class="z-btn z-btn--primary z-btn--full" id="btn-rc-signin"><span>Sign in with Face ID</span></button>`;
-    $("btn-rc-signin").onclick = () => { showRecoverPanel(false); $("link-signin").click(); };
-    return;
-  }
-  st.innerHTML = `<h2 class="z-rc-h">${esc(r.status.replaceAll("_", " ").toLowerCase())}</h2><p class="z-sub">${esc(r.error || r.cancelReason || "This recovery can’t continue. Start again.")}</p>`;
+/* Statuses of a Zoldenburg request before the chain has it: support checks
+   the person, then an operator signs from a hardware wallet. */
+const RC_ZOLD_REVIEW = ["KYC_PENDING", "REVIEW_PENDING"];
+const RC_ZOLD_SIGNING = ["DELAYING", "READY_FOR_GUARDIAN", "GUARDIAN_SUBMITTED"];
+
+/** The screen a request's state belongs on. */
+function rcRouteFor(r) {
+  if (!r) return "recover";
+  if (r.status === "OTP_PENDING") return "recover/codes";
+  if (r.status === "GRACE_PERIOD") return "recover/wait";
+  if (r.status === "FINALIZED") return "recover/done";
+  if (rcMode === "zoldenburg" && [...RC_ZOLD_REVIEW, ...RC_ZOLD_SIGNING].includes(r.status)) return "recover/zoldenburg";
+  return "recover";
 }
 
-async function recoverStart() {
-  clearErr("rc-err");
-  rcEmail = $("rc-email").value.trim();
-  const btn = $("btn-rc-start");
-  btn.disabled = true;
+/* One sentence for a request that cannot go on, shown on the email step. */
+function rcEndedText(r) {
+  if (r.status === "CANCELED") return "This recovery was cancelled, most likely from your old phone. Start again only if you still need to.";
+  if (r.status === "EXPIRED") return "This recovery expired before it finished. Start again.";
+  if (r.status === "PASSKEY_PENDING") return "Face ID or fingerprint sign-in wasn’t set up on this phone. Try again.";
+  return r.error || r.cancelReason || "This recovery can’t continue. Start again.";
+}
+
+/** When the waiting period ends, from whichever guardian ran it. */
+function rcFinalizeAfter(r) {
+  const iso = r?.candide?.finalizeAfter || r?.zoldenburg?.finalizeAfter;
+  const d = iso ? new Date(iso) : null;
+  return d && !Number.isNaN(d.getTime()) ? d : null;
+}
+
+/* "2d 21h", "5h 12m", "12m". Under a minute is "Less than a minute". */
+function rcLeftText(ms) {
+  if (ms <= 60000) return "Less than a minute";
+  const m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d > 0) return `${d}d ${h % 24}h`;
+  if (h > 0) return `${h}h ${m % 60}m`;
+  return `${m}m`;
+}
+
+/* "Thu 2 Oct at 14:05", in the phone's own time zone. */
+function rcWhenText(d) {
+  const day = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short" }).format(d);
+  const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(d);
+  return `${day} at ${time}`;
+}
+
+/** Open the screen the current state names, and keep following it. */
+function rcShow() {
+  clearTimeout(rcTimer);
+  const r = rcState;
+  const name = rcRouteFor(r);
+  if (name === "recover" && r) {
+    rcNotice = rcEndedText(r);
+    rcState = null;
+  }
+  if (name === "recover/done") {
+    rcSave(rcEmail, "");
+    rcTicketSave(rcEmail, "");
+  }
+  // Moving between the later steps replaces history: back from the waiting
+  // period is the email step, not a code form that no longer applies.
+  obGo(name, { replace: obScreen !== "recover" || name === "recover" });
+  if (name === "recover/wait" || name === "recover/zoldenburg") rcFollow();
+}
+
+/* Re-read the request while it waits: every minute, or just after the
+   waiting period ends. The countdown on screen is redrawn in place. */
+function rcFollow() {
+  clearTimeout(rcTimer);
+  const r = rcState;
+  if (!r) return;
+  const until = rcFinalizeAfter(r);
+  const wait = until ? Math.min(60000, Math.max(2000, until.getTime() - Date.now() + 1000)) : 60000;
+  rcTimer = setTimeout(async () => {
+    if (!obScreen?.startsWith("recover/") || rcState?.id !== r.id) return;
+    try {
+      const next = await rcApi(`/api/recovery/${rcMode}/${r.id}`);
+      if (rcState?.id !== r.id) return;
+      rcState = next;
+      if (rcRouteFor(next) !== obScreen || (next.status !== r.status)) return rcShow();
+    } catch (e) {
+      // 410: the request expired while this phone waited. The body is the
+      // request, now EXPIRED, so the email step can say so.
+      if (e?.status === 410 && e.body?.status) { rcState = e.body; return rcShow(); }
+      /* anything else: keep the screen; the next tick tries again */
+    }
+    rcTick();
+    rcFollow();
+  }, wait);
+}
+
+/* Redraw the countdown on the waiting screen without re-rendering it. */
+function rcTick() {
+  const until = rcFinalizeAfter(rcState);
+  const left = $("rc-left"), bar = $("rc-bar"), fin = $("rc-finish-wrap");
+  if (!until || !left) return;
+  const ms = until.getTime() - Date.now();
+  left.textContent = ms > 0 ? rcLeftText(ms) : "Finishing…";
+  if (bar) bar.style.transform = `scaleX(${rcElapsed(rcState)})`;
+  if (fin) fin.hidden = ms > 0;
+}
+
+/* How much of the waiting period has passed, 0 to 1. */
+function rcElapsed(r) {
+  const until = rcFinalizeAfter(r);
+  const total = (r?.recoveryDelayHours || 0) * 3600000;
+  if (!until || !total) return 0;
+  return Math.min(1, Math.max(0, 1 - (until.getTime() - Date.now()) / total));
+}
+
+/** Email step: start (or resume) a recovery, then set up Face ID on this phone. */
+async function recoverStart(btn) {
+  if (Z.isDisabled(btn)) return;
+  obClearErr("rc-err");
+  const input = $("rc-email");
+  rcEmail = input.value.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rcEmail)) {
+    Z.setFieldError(input, "Enter the email on your account.");
+    return Z.focusFirstError(input.form);
+  }
+  Z.setFieldError(input, "");
+  Z.setLoading(btn, true);
   try {
-    if (!window.PublicKeyCredential) throw new Error("passkeys aren't supported in this browser");
+    if (!window.PublicKeyCredential) throw new Error("This browser can’t use Face ID or fingerprint sign-in. Open Zold in Safari or Chrome.");
     rcSecret = rcSaved(rcEmail);
     rcOtpTicket = rcTicketSaved(rcEmail);
     // Email/SMS first where the deployment has it; an account without it
@@ -441,8 +485,68 @@ async function recoverStart() {
       });
       if (r.otpTicket) { rcOtpTicket = r.otpTicket; rcTicketSave(rcEmail, rcOtpTicket); }
     }
+    rcNotice = "";
     rcState = r;
-    renderRecoverState();
-  } catch (e) { showErr("rc-err", e); }
-  finally { btn.disabled = false; }
+    rcShow();
+  } catch (e) {
+    obShowErr(e?.name === "NotAllowedError"
+      ? new Error("Face ID or fingerprint setup was cancelled. Try again when you’re ready.")
+      // Only the browser that started a recovery may continue it.
+      : e?.code === "RECOVERY_IN_PROGRESS"
+        ? new Error("A recovery of this account is already under way in another browser. Continue it there, or email support@zoldhq.com.")
+        : e, "rc-err");
+  } finally { if (btn.isConnected) Z.setLoading(btn, false); }
+}
+
+/* The channel whose code is asked for now: the first one not confirmed. */
+const rcCurrentAuth = (r = rcState) => (r?.candide?.auths || []).findIndex((a) => !a.verified);
+
+/** Code step: confirm the code for the current channel. */
+async function recoverConfirmCode(btn) {
+  if (Z.isDisabled(btn)) return;
+  obClearErr("rc-err");
+  const r = rcState;
+  const i = rcCurrentAuth(r);
+  const input = $("rc-code");
+  const code = input.value.replace(/\s+/g, "");
+  if (i < 0) return rcShow();
+  if (!code) {
+    Z.setFieldError(input, "Enter the code.");
+    return Z.focusFirstError(input.form);
+  }
+  Z.setFieldError(input, "");
+  Z.setLoading(btn, true);
+  try {
+    rcState = await rcApi(`/api/recovery/candide/${r.id}/otp`, { challengeId: r.candide.auths[i].challengeId, otp: code });
+    if (rcRouteFor(rcState) === "recover/codes") {
+      obRender({ focus: false });
+      const next = rcState.candide.auths[rcCurrentAuth()];
+      Z.announce(`Confirmed. Now the code for ${next?.channel === "sms" ? "your phone" : "your email"}.`);
+      $("rc-code")?.focus();
+      return;
+    }
+    rcShow();
+  } catch (e) {
+    if (e?.status === 403) {
+      // The ticket is gone: this browser did not make the new sign-in.
+      rcOtpTicket = ""; rcTicketSave(rcEmail, "");
+      return obRender({ focus: true });
+    }
+    Z.setFieldError(input, obMessage(e));
+    input.focus();
+  } finally { if (btn.isConnected) Z.setLoading(btn, false); }
+}
+
+/** Waiting step, once the period is over: finish now rather than wait for Zold's sweep. */
+async function recoverFinalize(btn) {
+  if (Z.isDisabled(btn)) return;
+  obClearErr("rc-err");
+  Z.setLoading(btn, true);
+  try {
+    // No session comes back: once finalized, the new passkey signs in
+    // through the ordinary login, which the done screen offers.
+    rcState = await rcApi(`/api/recovery/${rcMode}/${rcState.id}/finalize`, {});
+    rcShow();
+  } catch (e) { obShowErr(e, "rc-err"); }
+  finally { if (btn.isConnected) Z.setLoading(btn, false); }
 }

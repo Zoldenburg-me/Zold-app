@@ -477,6 +477,127 @@ PH.home = {
       if (b) b.onclick = () => enterKycReview(user?.name || "Account");
     }
     phBindRetry(root);
+    phRecoveryCheck();
+  },
+};
+
+/* ==========================================================================
+   Recovery under way (the old phone's alert)
+   ========================================================================== */
+
+/* What the guardians report: { chain: pendingRecovery|null, request: a
+   Zoldenburg request nobody has signed yet|null, method: words|null }.
+   null until the first read; `none` when nothing is under way. */
+let phRec = null;
+let phRecReadAt = 0;
+let phRecDone = false;       // this phone just cancelled it
+const PH_REC_SEEN = "zold-recovery-seen";
+const phRecSig = (r) => (r?.chain ? `chain:${r.chain.executeAfter}` : r?.request ? `req:${r.request.id}` : "");
+
+/* Read both guardians, at most once a minute. Home and the company's Home
+   (app/business.js) call this; a recovery found here opens the alert, unless
+   "It was me" hid that same one. */
+async function phRecoveryCheck({ force = false } = {}) {
+  const here = () => phRoute?.name === "recovery-alert";
+  // No guardian can run a recovery here: there is nothing to find.
+  if (!user?.id || user.passkeySafe?.status !== "active" || (!caps.emailSmsRecovery && !caps.zoldenburgRecovery)) {
+    if (here()) { phRec = { none: true }; phRender(); }
+    return;
+  }
+  if (!force && Date.now() - phRecReadAt < 60000) return;
+  phRecReadAt = Date.now();
+  const [c, z] = await Promise.all([
+    caps.emailSmsRecovery ? api(`/api/users/${user.id}/recovery/candide`).catch(() => null) : null,
+    caps.zoldenburgRecovery ? api(`/api/users/${user.id}/recovery/zoldenburg`).catch(() => null) : null,
+  ]);
+  if (!c && !z) {
+    if (here()) { phRec = { failed: true }; phRender(); }
+    return;
+  }
+  const chain = z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || null;
+  const reqs = z?.requests || [];
+  const request = chain ? null : reqs.find((r) => ["PASSKEY_PENDING", "KYC_PENDING", "REVIEW_PENDING"].includes(r.status)) || null;
+  // Which guardian is moving it, where the reads say so; otherwise left out.
+  const kinds = [...new Set((c?.channels || []).map((x) => (x.channel === "sms" ? "phone" : "email")))];
+  const codes = kinds.length ? `${kinds.join(" and ").replace(/^./, (x) => x.toUpperCase())} ${kinds.length > 1 ? "codes" : "code"}` : "Email or phone codes";
+  const method = !chain ? "Zoldenburg ID check"
+    : reqs.some((r) => r.status === "GRACE_PERIOD") ? "Zoldenburg ID check"
+      : c?.guardianStatus === "active" && !z?.active ? codes : null;
+  phRec = chain || request ? { chain, request, method } : { none: true };
+  if (phRec.none) return phRoute?.name === "recovery-alert" && phRender();
+  let seen = "";
+  try { seen = sessionStorage.getItem(PH_REC_SEEN) || ""; } catch { /* no storage: always show */ }
+  if (phRoute?.name === "recovery-alert") return phRender();
+  if (["home", "company"].includes(phRoute?.name) && seen !== phRecSig(phRec)) phGo("recovery-alert");
+}
+
+PH["recovery-alert"] = {
+  title: "Recovery under way",
+  html() {
+    if (phRecDone) {
+      return phMain(`
+        <span class="z-tile z-tile--m z-tile--lg" aria-hidden="true">${Z.icon("verified_user")}</span>
+        <div class="z-intro"><h1 class="z-title">Recovery cancelled</h1><p class="z-sub">Your account stays with this phone. If you didn’t start that recovery, someone may know your email. Check your recovery settings.</p></div>
+      `, "z-app__main--state")
+        + phFoot(`${Z.button({ variant: "primary", full: true, label: "Back to Home", href: "#home" })}<a class="z-link-btn" href="#recovery-settings">Recovery settings</a>`);
+    }
+    if (!phRec) return `${Z.topbar({ srTitle: "Recovery under way", back: { href: "#home", label: "Back to Home" } })}${phMain(Z.skeletonRows(2, "Checking for a recovery…"))}`;
+    if (phRec.failed) {
+      return `${Z.topbar({ srTitle: "Recovery under way", back: { href: "#home", label: "Back to Home" } })}${phMain(`
+        <div class="z-intro"><h2 class="z-title">Couldn’t check for a recovery</h2><p class="z-sub">Zold didn’t answer. Try again, or open Recovery settings.</p></div>`)}${phFoot(`${Z.button({ variant: "primary", full: true, label: "Try again", id: "ph-rec-retry" })}<a class="z-link-btn" href="#recovery-settings">Recovery settings</a>`)}`;
+    }
+    if (phRec.none) {
+      return `${Z.topbar({ srTitle: "No recovery under way", back: { href: "#home", label: "Back to Home" } })}${phMain(`
+        <div class="z-intro"><h2 class="z-title">No recovery under way</h2><p class="z-sub">Nobody is moving your account to another phone.</p></div>`)}${phFoot(Z.button({ variant: "primary", full: true, label: "Back to Home", href: "#home" }))}`;
+    }
+    const { chain, request, method } = phRec;
+    const until = chain ? new Date(Number(chain.executeAfter) * 1000) : null;
+    const left = until ? until.getTime() - Date.now() : 0;
+    const title = chain ? "Someone is moving your account to a new phone" : "Someone asked to move your account to a new phone";
+    const lede = chain
+      ? `It completes on ${rcWhenText(until)} unless you cancel.`
+      : `They asked Zoldenburg support${request.requestedAt ? ` on ${rcWhenText(new Date(request.requestedAt))}` : ""}. Nothing has been signed yet.`;
+    const rows = [
+      ...(method ? [{ key: "Recovery method", value: method }] : []),
+      ...(chain ? [{ key: "Time left to cancel", valueHtml: `<span class="z-warn-fig">${esc(left > 0 ? rcLeftText(left) : "Finishing…")}</span>` }] : []),
+      ...(request?.zoldenburg?.reference ? [{ key: "Their reference", value: request.zoldenburg.reference, mono: true }] : []),
+    ];
+    return phMain(`
+      <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("gpp_maybe")}</span>
+      <div class="z-intro"><h1 class="z-title">${esc(title)}</h1><p class="z-sub">${esc(lede)}</p></div>
+      ${rows.length ? Z.kv(rows) : ""}
+      <p class="z-sub">If this wasn’t you, cancel now. Nothing moves while you decide, and your money stays in your account.</p>
+      <div class="z-alert hidden" role="alert" id="ph-rec-err"></div>
+    `, "z-app__main--state")
+      + phFoot(`${Z.button({ variant: "primary", full: true, icon: chain ? "passkey" : "block", label: chain ? "Cancel with Face ID" : "Cancel the request", id: "ph-rec-cancel" })}
+        ${Z.button({ variant: "secondary", full: true, label: "It was me", id: "ph-rec-mine" })}
+        <p class="z-screen__fine z-screen__fine--flush">“It was me” only hides this on this phone. ${chain ? "The move goes ahead." : "The request stays open."}</p>`);
+  },
+  bind(root) {
+    if (!phRec) phRecoveryCheck({ force: true });
+    const retry = root.querySelector("#ph-rec-retry");
+    if (retry) retry.onclick = () => { phRec = null; phRender({ focus: true }); };
+    const cancel = root.querySelector("#ph-rec-cancel");
+    if (cancel) cancel.onclick = async () => {
+      if (Z.isDisabled(cancel)) return;
+      clearErr("ph-rec-err");
+      Z.setLoading(cancel, true);
+      try {
+        if (phRec.chain) await recoveryCancelRun();
+        else await api(`/api/users/${user.id}/recovery/zoldenburg/requests/${phRec.request.id}/cancel`, {});
+        phRec = null;
+        phRecDone = true;
+        phRender({ focus: true });
+        phRecDone = false;
+      } catch (e) {
+        showErr("ph-rec-err", e?.name === "NotAllowedError" ? new Error("Face ID or fingerprint was cancelled. The recovery is still under way.") : e);
+      } finally { if (cancel.isConnected) Z.setLoading(cancel, false); }
+    };
+    const mine = root.querySelector("#ph-rec-mine");
+    if (mine) mine.onclick = () => {
+      try { sessionStorage.setItem(PH_REC_SEEN, phRecSig(phRec)); } catch { /* shows again next time */ }
+      phGo("home", null, { replace: true });
+    };
   },
 };
 

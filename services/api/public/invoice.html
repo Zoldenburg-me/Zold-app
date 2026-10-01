@@ -144,16 +144,22 @@ const token = location.pathname.split("/").filter(Boolean).pop();
 let password = "";
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    ...opts,
-    headers: {
-      ...(opts.body ? { "content-type": "application/json" } : {}),
-      ...(password ? { "x-invoice-password": password } : {}),
-    },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      ...opts,
+      headers: {
+        ...(opts.body ? { "content-type": "application/json" } : {}),
+        ...(password ? { "x-invoice-password": password } : {}),
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch {
+    // A network failure reads as "Failed to fetch", which tells nobody anything.
+    throw new Error("Couldn’t reach Zold. Check your connection, then reload the page.");
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) { const e = new Error(data.error || res.statusText); Object.assign(e, data); throw e; }
+  if (!res.ok) { const e = new Error(data.error || res.statusText); Object.assign(e, data, { status: res.status }); throw e; }
   return data;
 }
 
@@ -470,7 +476,12 @@ async function boot() {
     data = await api(`/api/invoice-links/${encodeURIComponent(token)}`);
   } catch (e) {
     if (e.passwordRequired) return renderPassword(e.message);
-    $("#content").innerHTML = `<div class="err" role="alert">${esc(e.message)}</div>`;
+    // Only the server's 404 means the link is wrong; a dropped connection
+    // says nothing about it.
+    const msg = e.status === 404
+      ? "This link doesn’t work. It may have expired, been closed, or been typed wrong. Ask the person who sent it for a new one."
+      : e.message;
+    $("#content").innerHTML = `<div class="err" role="alert">${esc(msg)}</div>`;
     return;
   }
   render(data.invoice);
