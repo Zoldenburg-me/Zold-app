@@ -184,6 +184,26 @@ function hasConnectedMonerium(u = user) {
   return !!u?.monerium?.connectedAt;
 }
 
+/* The IBAN has been asked for and the account waits on Monerium, not on the
+   user. null when there is something to do here (or nothing left to wait for).
+   `idCheck` reads the profile state Zold last saw, which only says "still
+   checking" while Monerium itself says so. */
+function ibanWait(u = user) {
+  if (!u || kycApproved(u) || u.iban || u.funding?.status !== "iban_pending") return null;
+  const detail = String(u.funding?.detail || "");
+  if (/linked under Monerium profile/.test(detail)) {
+    return { support: true, title: "Monerium needs to fix a link",
+      sub: "Your account is linked to a different Monerium profile than the one you signed in with. Only Monerium support can move it. Write to us and we’ll raise it with them." };
+  }
+  const profile = (u.monerium?.profiles || []).find((p) => p.id === u.monerium?.profileId);
+  const idCheck = !!profile && profile.state !== "approved";
+  return idCheck
+    ? { idCheck, title: "Monerium is checking your ID",
+        sub: "Your IBAN is requested. Monerium issues it once they’ve verified you. If they ask for anything, it comes by email from Monerium." }
+    : { idCheck, title: "Monerium is issuing your IBAN",
+        sub: "Your IBAN is requested. It usually appears within minutes." };
+}
+
 function renderFundingActions(u = user) {
   const row = $("funding-actions");
   const hint = $("funding-action-hint");
