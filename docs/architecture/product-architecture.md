@@ -668,8 +668,8 @@ receivable difference and the gain or loss, gas and who paid it. The PDF is
 produced in-process (`bookkeeping/pdf.ts`, Helvetica, WinAnsi, no
 dependency).
 
-**Monthly export (LIVE).** Business dashboard → Books → Accountant export:
-prepare a month (issues the Belege), then download a **Lexware Office
+**Monthly export (LIVE).** Business dashboard → Books:
+issue a month's Belege, then download a **Lexware Office
 bank-import CSV** (the help centre's `Bankimport-Vorlage.csv`: seven columns,
 semicolon, `DD.MM.YYYY`, decimal comma, ISO-8859-1, CSV-injection guarded,
 the Beleg code in Zusatzinfo) and a **ZIP of the Belege** named
@@ -720,7 +720,7 @@ go (Lexware CSV, a GetMyInvoices bank account, MT940 or CAMT).
 |---|---|---|
 | `/` | public | Marketing landing page |
 | `/app` | account holder | Consumer PWA with onboarding, home, send, activity, payment page and links, the personal organisation's invoices and accounting connections, settings, security, plan, documents, recovery and card. A member can switch it to a company: that company's home, account details, approvals (approve or send back), members and invites. Drafting and sending a company payment stay in `/business`. From 1024px it has a sidebar, a wide home, payment details in a drawer and a search (Cmd or Ctrl K) over the payments, contacts and invoices already loaded; picking a company there opens `/business`. Installable, and works offline for the shell. |
-| `/business` | org member | Org dashboard: overview, accounts, payments, invoices, Shopify, contacts, wallets, transactions, assets, chart of accounts, members, settings |
+| `/business` | org member | The organisation's desktop: a sidebar (Home, Approvals, Send, Get paid, Invoices, Contacts, Books, Members, the accounts list, Settings) and search (Cmd or Ctrl K) over contacts, payment runs and invoices. Approvals reviews in a drawer and sends one approved run at a time; Books holds the month's lines with category, memo and Beleg, the exports, Connections, the chart of accounts, assets, wallets and every transaction; Get paid holds the bank details and Shopify; the invoice editor draws the invoice as paper beside the form. A balance shows only to the member whose own account a company account spends from |
 | `/pay/<handle>` | payer | Payment page |
 | `/pay/<handle>/<code>` | payer | Payment link, which also serves as the payer's receipt |
 | `/r/<slug>` | anyone with the link | Redacted transfer receipt |
@@ -758,7 +758,7 @@ does not support.
 | `business/accounts-and-currencies.md` | USD accounts "through Bridge" | The currency registry names **Iron** as the USD/GBP provider. Bridge appears in code only as the cash-rail transfer seam. |
 | `business/bulk-payments.md` | CSV destination "an IBAN, or a wallet address"; Payments → New draft → Import CSV | The importer produces wallet lines only (`chainId: 0`), and wallet lines are refused from an issued account. There is no Import CSV button in `/business`. The API parses and returns lines but does not create a draft. |
 | `business/imported-wallets.md` | "its balance shown"; history and backfill on Premium/Business | Nothing reads an imported wallet's balance or history. `sync.status` stays `pending` forever. |
-| `business/payments-and-approvals.md` | Send from the business dashboard | Send from `/business` does not yet produce the passkey assertion a Safe debit needs. There is no reject or re-point UI. |
+| `business/payments-and-approvals.md` | Send from the business dashboard | Send from `/business` does not yet produce the passkey assertion a Safe debit needs. A reviewer can send a run back with a reason; there is no re-point UI. |
 | `get-paid/payment-page.md` | QR on the page | The QR image route is currently unreachable: it is shadowed by the payment-link route (see the technical doc). |
 | `add-money/crypto-deposit.md` and app copy | Converted "at the live mid rate on arrival" | Converted on passkey approval, at the venue's rate, checked against the mid. |
 | `landing.html` | "Live on Base" | Base Sepolia only. (The "custodial in practice" footnote was fixed in PR #193.) |
