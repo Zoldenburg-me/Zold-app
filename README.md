@@ -11,7 +11,8 @@ passkey on your device, and that passkey is its only owner. Every payment is a
 user operation you sign at send time; the server can prepare a debit but holds
 no key that can make or block one.
 
-Product documentation for users: [docs/gitbook](docs/gitbook/README.md).
+Product documentation for users lives in the
+[zold-docs](https://github.com/Zoldenburg-me/zold-docs) repository.
 
 ## Status
 
