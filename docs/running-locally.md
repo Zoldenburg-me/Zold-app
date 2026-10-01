@@ -33,6 +33,13 @@ sets `KYC_AUTO_APPROVE=1`). Run a second API against the chain dev.ts started �
 with the operator `*_KEY` vars **blanked** (.env holds real Base Sepolia keys
 that do not own the local deployment).
 
+## Browser pane and new pages
+
+- In the embedded browser pane, click coordinates are in SCREENSHOT space, and
+  WebAuthn ceremonies never resolve — test passkeys in a real browser.
+- Check `document.compatMode === "CSS1Compat"` on any new page: without
+  `<!DOCTYPE html>` tables do not inherit colour.
+
 ## The production branch
 
 Deploys run `production`, not main. It holds only what the server needs at
@@ -47,9 +54,24 @@ git push origin production
 ```
 
 Each run adds one commit whose tree is main's tree through that allowlist and
-whose message names the main commit. Main is never merged into it, and it is
-never edited by hand. On the host: `npm ci --omit=dev`, write
+whose message names the main commit. On the host: `npm ci --omit=dev`, write
 `deployments.json`, `npm start`; there is no `hardhat compile` step.
+
+Rules, because whatever is on `production` is what zoldhq.com runs:
+
+- **Only the script writes it**, and only from `origin/main` after a merge.
+  Never commit, merge main, cherry-pick, rebase, reset or force-push. A fix
+  goes through a PR to main, then a rebuild.
+- **Never build from an unmerged branch.** The script's argument exists for
+  re-snapshotting an older main commit, not for shipping a branch.
+- **Roll back by deploying an older production commit** (`ZOLD_COMMIT=<sha>`
+  for `make-sdl.mjs`), never by moving the branch back. History only grows.
+- **A file the server newly needs at runtime goes in the script's allowlist**
+  in the same PR. Then check a clean checkout boots: `npm ci --omit=dev`,
+  `npm start`, `/api/health`. The ABIs were found this way.
+- On GitHub, `production` should be protected against force-pushes and
+  deletion (Settings → Branches). Regular pushes stay allowed, since the
+  script only adds commits.
 
 ## Test suites
 
