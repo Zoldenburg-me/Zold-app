@@ -1,47 +1,145 @@
-/** The left-hand navigation and the plan banner above it. */
-import { $, cap, esc, org, setView, view } from "./core.js";
-import { render } from "./shell.js";
+/**
+ * The sidebar (design/ui-v2 build step 8b) and the plan banner.
+ *
+ * The nav is the reference's: Home, Approvals, Send, Get paid, Invoices,
+ * Contacts, Books, Members, then the ACCOUNTS list, Coming soon and Settings.
+ * The older views keep their ?view= ids and sit under one of these (PARENT):
+ * Books holds the ledger, the export, the chart of accounts, assets, wallets
+ * and connections; Get paid holds Shopify; Settings the invoicing profile.
+ */
+import { $, Z, api, cap, esc, eur, me, org, orgs, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
+import { loadOrg, render } from "./shell.js";
 
 export const VIEWS = [
-  { id: "overview", label: "Overview", section: "" },
-  { id: "accounts", label: "Accounts", section: "" },
-  { id: "payments", label: "Payments", section: "Money", capability: "transfers.drafts" },
-  { id: "invoices", label: "Invoices", section: "Money", capability: "invoices" },
-  { id: "shopify", label: "Shopify", section: "Money" },
-  { id: "contacts", label: "Contacts", section: "Money" },
-  { id: "wallets", label: "Wallets", section: "Treasury" },
-  { id: "ledger", label: "Transactions", section: "Books", capability: "ledger.transactions" },
-  { id: "assets", label: "Assets", section: "Books", capability: "assets.costBasis" },
-  { id: "coa", label: "Chart of accounts", section: "Books", capability: "coa.manage" },
-  { id: "export", label: "Accountant export", section: "Books", capability: "export.ledger" },
-  { id: "members", label: "Members", section: "Admin", capability: "members.manage" },
-  { id: "settings", label: "Settings", section: "Admin" },
+  { id: "overview", label: "Home", icon: "home" },
+  { id: "payments", label: "Approvals", icon: "inbox", capability: "transfers.drafts" },
+  { id: "send", label: "Send", icon: "arrow_outward", capability: "transfers.drafts" },
+  { id: "get-paid", label: "Get paid", icon: "south_west" },
+  { id: "invoices", label: "Invoices", icon: "receipt_long", capability: "invoices" },
+  { id: "contacts", label: "Contacts", icon: "contacts" },
+  { id: "books", label: "Books", icon: "menu_book", capability: "ledger.transactions" },
+  { id: "members", label: "Members", icon: "group", capability: "members.manage" },
 ];
 
+/** Which nav item an older view belongs to. */
+export const PARENT = {
+  ledger: "books", export: "books", coa: "books", assets: "books", wallets: "books", integrations: "books",
+  shopify: "get-paid", "invoice-new": "invoices", "invoicing-settings": "settings", accounts: "accounts",
+};
+/** Every view id the router accepts, including those without a nav item. */
+export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT), "settings"]);
+
+/* What the sidebar shows beside the nav: the org's accounts, and how many
+   payment runs wait for this person. Read after each render, drawn from
+   here; a failed read leaves the last one. */
+export const side = { orgId: null, accounts: null, drafts: null };
+
+/** Waiting for this person: drafted by someone else, and their role approves. */
+export const waitingForMe = (drafts) => (drafts || []).filter((d) =>
+  d.state === "PENDING_REVIEW" && d.createdByMemberId !== org.memberId && roleCan(org.role, "approve"));
+
+export async function refreshSide() {
+  const id = org?.id;
+  if (!id) return;
+  const [a, d] = await Promise.allSettled([
+    api(`/api/orgs/${id}/accounts`),
+    cap("transfers.drafts").allowed ? api(`/api/orgs/${id}/drafts`) : Promise.resolve({ drafts: [] }),
+  ]);
+  if (org?.id !== id) return;
+  if (side.orgId !== id) { side.accounts = null; side.drafts = null; side.orgId = id; }
+  if (a.status === "fulfilled") side.accounts = a.value.accounts;
+  if (d.status === "fulfilled") side.drafts = d.value.drafts;
+  renderNav();
+}
+
+function link(it, active) {
+  const here = it.id === active;
+  const verdict = it.capability ? cap(it.capability) : { allowed: true };
+  const locked = it.capability && !verdict.allowed;
+  const href = it.href || `?view=${encodeURIComponent(it.id)}`;
+  return `<a class="z-side__link" href="${esc(href)}"${it.href ? "" : ` data-view="${esc(it.id)}"`}${here ? ' aria-current="page"' : ""}>${Z.icon(it.icon)}<span>${esc(it.label)}</span>`
+    + `${it.badge ? `<span class="z-side__badge"><span class="z-sr">, </span>${esc(it.badge)}<span class="z-sr"> waiting for you</span></span>` : ""}`
+    + `${locked ? `${Z.icon("lock", "z-side__out")}<span class="z-sr"> (not in your plan)</span>` : ""}`
+    + `${it.out ? `${Z.icon("open_in_new", "z-side__out")}<span class="z-sr"> (the app)</span>` : ""}</a>`;
+}
+
+/* The sidebar's balance column: only the account that spends from YOUR
+   account shows a figure, and it is your account's. There is no company
+   balance in the API. */
+function accountRight(a) {
+  if (a.status !== "active") return a.status === "gated" ? "Not open" : "Waiting";
+  if (a.backingUserId && me && a.backingUserId === me.id && typeof me.balanceEur === "number") return eur(me.balanceEur);
+  const iban = a.identifier?.iban;
+  return iban ? `•••• ${String(iban).replace(/\s+/g, "").slice(-4)}` : "";
+}
+
 export function renderNav() {
-  let html = "";
-  let section = null;
-  for (const v of VIEWS) {
-    // Business-only entries stay out of a personal org entirely — that is a
-    // product boundary, not a paywall.
+  if (!org) return;
+  const active = PARENT[view] || view;
+  const waiting = waitingForMe(side.drafts).length;
+  const items = VIEWS.filter((v) => {
+    // Business-only entries stay out of a personal org entirely: a product
+    // boundary, not a paywall. A plan limit keeps the entry, with a lock.
     const verdict = v.capability ? cap(v.capability) : { allowed: true };
-    if (v.capability && !verdict.allowed && !verdict.requiresPlan && !verdict.unavailable) continue;
-    if (v.section !== section) { section = v.section; if (section) html += `<div class="sect">${esc(section)}</div>`; }
-    const locked = v.capability && !verdict.allowed;
-    const here = view === v.id;
-    html += `<a href="?view=${esc(v.id)}" data-view="${esc(v.id)}" class="${here ? "active" : ""}"${here ? ` aria-current="page"` : ""}>${esc(v.label)}
-      ${locked ? `<span class="lock">${verdict.unavailable ? "—" : "PRO"}</span>` : ""}</a>`;
-  }
-  $("#nav").innerHTML = html;
+    return !v.capability || verdict.allowed || verdict.requiresPlan || verdict.unavailable;
+  }).map((v) => ({
+    ...v,
+    label: v.id === "payments" && !cap("transfers.approvals").allowed ? "Payments" : v.label,
+    badge: v.id === "payments" && waiting ? String(waiting) : "",
+  }));
+  $("#nav").innerHTML = items.map((it) => link(it, active)).join("");
+
+  const who = org.type === "personal" ? "Personal" : `Business · ${(ROLE_WORD[org.role] || org.role || "").toLowerCase()}`;
+  const card = `${Z.avatar({ name: org.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(org.name)}</span><span class="z-row__sub">${esc(who)}</span></span>`;
+  $("#side-org").innerHTML = `<button type="button" class="z-side__org" id="org-btn" aria-haspopup="dialog" aria-label="Switch organisation. Current: ${esc(org.name)}">${card}${Z.icon("unfold_more", "z-row__chev")}</button>`;
+
+  const accts = side.accounts;
+  $("#side-accounts").innerHTML = accts && accts.length
+    ? `<section class="zb-accts" aria-labelledby="side-acc-h"><h2 class="z-eyebrow" id="side-acc-h">Accounts</h2>${accts.map((a) =>
+      `<a class="zb-acct" href="?view=accounts" data-view="accounts"${view === "accounts" ? ' aria-current="page"' : ""}>${Z.icon("account_balance_wallet")}<span>${esc(a.label || a.currency)}</span><span class="zb-acct__right">${esc(accountRight(a))}</span></a>`).join("")}</section>`
+    : "";
+  $("#side-foot").innerHTML = `${link({ id: "soon", href: "/app#soon", icon: "hourglass_top", label: "Coming soon", out: true }, active)}
+    ${link({ id: "settings", icon: "settings", label: "Settings" }, active)}
+    <div id="side-test"></div>`;
+  if (testMode !== undefined) $("#side-test").innerHTML = Z.testModePill(testMode);
+
   // A real link, so a modifier-click or middle-click opens the view in a new
   // tab (boot reads ?view=). A plain click stays in the page.
-  $("#nav").querySelectorAll("a").forEach((a) =>
+  document.querySelectorAll("#side a[data-view]").forEach((a) => {
     a.onclick = (e) => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       setView(a.dataset.view);
-      render();
-    });
+      render({ focus: true });
+    };
+  });
+  $("#org-btn").onclick = () => switchSheet($("#org-btn"));
+}
+
+/** Pick an organisation: here, in place. The personal app is one link away. */
+function switchSheet(trigger) {
+  document.getElementById("org-switch")?.remove();
+  const row = (o) => {
+    const here = o.id === org.id;
+    const sub = o.type === "personal" ? "Personal · books and invoices" : `Business · ${(ROLE_WORD[o.role] || o.role || "").toLowerCase()}`;
+    return `<li><button type="button" class="z-row z-row--btn" data-org="${esc(o.id)}"${here ? ' aria-current="true"' : ""}>${Z.avatar({ name: o.name, tone: here ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(o.name)}</span><span class="z-row__sub">${esc(sub)}</span></span>${here ? `<span class="z-row__right">${Z.icon("check")}<span class="z-sr">(current)</span></span>` : ""}</button></li>`;
+  };
+  document.body.insertAdjacentHTML("beforeend", Z.overlay({
+    id: "org-switch", title: "Switch organisation",
+    body: `<div class="z-sheet__body"><ul class="z-list z-card">${orgs.map(row).join("")}</ul>
+      <ul class="z-list z-card"><li>${Z.row({ lead: Z.iconTile({ icon: "smartphone" }), title: "Your personal account", sub: "Home, send and get paid, in the app", href: "/app", right: Z.icon("open_in_new", "z-row__chev") })}</li></ul></div>`,
+  }));
+  const scrim = $("#org-switch");
+  scrim.querySelectorAll("[data-org]").forEach((b) => {
+    b.onclick = async () => {
+      Z.closeOverlay("org-switch");
+      if (b.dataset.org === org.id) return;
+      await loadOrg(b.dataset.org);
+      setView("overview");
+      render({ focus: true });
+    };
+  });
+  Z.openOverlay("org-switch", trigger);
 }
 
 export function planBanner() {
@@ -49,14 +147,13 @@ export function planBanner() {
   const t = org.trial;
   if (t && !t.endedAt && new Date(t.endsAt) > new Date()) {
     const days = Math.ceil((new Date(t.endsAt) - new Date()) / 86400000);
-    return `<div class="banner info">Trial of <b>${esc(t.grantsPlan)}</b> — ${days} day${days === 1 ? "" : "s"} left.
-      When it ends you go back to ${esc(org.plan)}; nothing is deleted.
-      <button class="sm" data-act="upgrade" data-plan="${esc(t.grantsPlan)}">Keep it</button></div>`;
+    return `<div class="banner info">${Z.icon("hourglass_top")}<span>Trial of <b>${esc(t.grantsPlan)}</b>: ${days} day${days === 1 ? "" : "s"} left.
+      When it ends you go back to ${esc(org.plan)}. Nothing is deleted.</span></div>`;
   }
-  if (org.plan === "starter") {
-    return `<div class="banner warn">You are on <b>Starter</b> — payouts, contacts and history.
-      ${org.trial ? "Your trial has been used." : "One 30-day trial is available."}
-      ${org.trial ? "" : `<button class="sm" data-act="trial">Start trial</button>`}</div>`;
+  if (org.plan === "starter" && org.type !== "personal") {
+    return `<div class="banner warn">${Z.icon("info")}<span>You’re on <b>Starter</b>: payouts, contacts and history.
+      ${org.trial ? "Your trial has been used." : "One 30-day trial is available."}</span>
+      ${org.trial || org.role !== "owner" ? "" : `<button class="z-btn z-btn--secondary z-btn--sm" data-act="trial">Start trial</button>`}</div>`;
   }
   return "";
 }
