@@ -71,7 +71,12 @@ Say this plainly rather than letting the surface imply otherwise:
   Builder JSON on app.safe.global (its checksum is written from the
   tx-builder source, untested), a hardware wallet sending the owner change,
   an IBAN on an imported Safe, and anything on Base mainnet — Zoldenburg's
-  Safe has not been touched. No UI calls the import routes.
+  Safe has not been touched. The onboarding screens for it (a company
+  account's choice after the passkey, then address → owner change → confirm)
+  have run only in the browser pane against a canned API, never against a
+  chain, with a real passkey, or through a user's Monerium OAuth. Recovery
+  has never run on an imported Safe, so the screens do not offer it there;
+  the API does not refuse it.
 - **No mail transport exists.** Invitations, invoice links and recovery emails
   are never sent by Zold; routes return the token to the caller and say so. Do
   not add a "we emailed them" string without adding a transport.

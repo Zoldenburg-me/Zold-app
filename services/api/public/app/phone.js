@@ -384,7 +384,7 @@ function phBalance(value, label) {
 
 /* The set-up list for a new account. Only what the API confirms is ticked. */
 function phChecklist(u) {
-  const recoveryOffered = caps.emailSmsRecovery || caps.zoldenburgRecovery;
+  const recoveryOffered = (caps.emailSmsRecovery || caps.zoldenburgRecovery) && recoveryOfferedFor(u);
   const safe = u.passkeySafe || {};
   const recoveryOn = safe.recovery?.status === "active" || safe.candideRecovery?.guardianStatus === "active";
   const connected = hasConnectedMonerium(u);

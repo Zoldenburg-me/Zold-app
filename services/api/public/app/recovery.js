@@ -24,6 +24,13 @@ async function passkeySignPrepared(prepared) {
   };
 }
 
+/* Adding a guardian enables a recovery module on the Safe, and that has never
+   run on a Safe brought in from outside (passkeySafe.importedAt). Until it
+   has, an imported Safe is not offered recovery anywhere: onboarding skips
+   the step and Security says so. The API does not refuse it yet; only the
+   screens hold it back. */
+const recoveryOfferedFor = (u = user) => !u?.passkeySafe?.importedAt;
+
 let recoveryScreen = null;   // last GET /recovery/candide
 let recoveryOtpStage = null; // { submitTo, channel, target } while a code is outstanding
 
@@ -58,6 +65,12 @@ async function renderRecoveryScreen() {
   if (!user?.passkeySafe || user.passkeySafe.status !== "active") {
     el.innerHTML = `<div class="m-rows">${row("Status", "Needs your smart account")}</div>
       <div class="m-lede" style="font-size:13px;margin-top:16px">Recovery is a guardian on your smart account. Finish the passkey and smart-account setup first.</div>`;
+    return;
+  }
+  if (!recoveryOfferedFor()) {
+    el.innerHTML = `<div class="m-rows">${row("Status", "Not available yet")}</div>
+      <div class="m-lede" style="font-size:13px;margin-top:16px">Recovery adds a guardian to your Safe, and Zold has not yet tested that on a Safe brought in from outside. Until it has, it isn’t offered. Your Safe’s other owner, if you kept one, can still add or replace owners in Safe{Wallet}.</div>
+      <div style="margin-top:16px">${zoldWarnHtml()}</div>`;
     return;
   }
   el.innerHTML = `<div id="m-rz"></div><div id="m-rc-candide"></div><div class="m-err hidden" role="alert" id="m-rc-err" style="margin-top:12px"></div>`;

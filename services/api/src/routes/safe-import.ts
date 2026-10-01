@@ -37,6 +37,7 @@ import {
   verifierDeploymentTransaction,
   type ChainReader,
 } from "../wallet/safe-import.js";
+import { ownerChangeTxBuilderJson, txBuilderFileName } from "../wallet/safe-tx-builder.js";
 
 export interface SafeImportDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -46,6 +47,8 @@ export interface SafeImportDeps {
   deployVerifier?: (owner: { x: bigint; y: bigint }) => Promise<string | undefined>;
   /** Tests name the tokens; production reads EURe and USDC from deployments.json. */
   tokens?: () => Hex[];
+  /** Tests fix the Transaction Builder file's createdAt. */
+  now?: () => number;
 }
 
 type Hex = `0x${string}`;
@@ -68,6 +71,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
   const reader = deps.reader ?? (() => jsonRpcReader(CANDIDE.rpcUrl, () => partnerTimeout()));
   const deployVerifier = deps.deployVerifier ?? deployVerifierForOwner;
   const tokens = deps.tokens ?? (() => [addrs().eure, addrs().usdc]);
+  const now = deps.now ?? Date.now;
 
   /** Anything at `address` on the smart-account chain: ETH, EURe or USDC. */
   const holdsFunds = async (r: ChainReader, address: Hex): Promise<boolean> => {
@@ -145,12 +149,24 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
         const verifierCode = await r.getCode(verifier);
         const verifierDeployed = Boolean(verifierCode && verifierCode !== "0x");
         const alreadyOwner = state.owners.some((o) => o.toLowerCase() === verifier.toLowerCase());
+        const deploy = verifierDeployed ? null : verifierDeploymentTransaction(owner.x, owner.y);
+        const createdAt = now();
         const changes: Record<string, unknown> = {};
         if (!alreadyOwner) {
           for (const mode of ["add", "swap"] as const) {
             try {
               const c = ownerChangeTransaction({ safe: address, owners: state.owners, threshold: state.threshold, verifier, mode });
-              changes[mode] = { ...tx(c), resultOwners: c.resultOwners };
+              changes[mode] = {
+                ...tx(c),
+                resultOwners: c.resultOwners,
+                // The browser only downloads this; it cannot build it.
+                txBuilder: {
+                  fileName: txBuilderFileName(address, CANDIDE.chainId.toString()),
+                  json: ownerChangeTxBuilderJson({
+                    chainId: CANDIDE.chainId.toString(), safe: address, owners: state.owners, verifier, mode, change: c, deploy, createdAt,
+                  }),
+                },
+              };
             } catch (err: any) {
               changes[mode] = { refused: err?.message ?? String(err) };
             }
@@ -165,7 +181,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
           verifierDeployed,
           alreadyOwner,
           // Any key may send this; confirm also sends it from the deployer if needed.
-          deployVerifier: verifierDeployed ? null : tx(verifierDeploymentTransaction(owner.x, owner.y)),
+          deployVerifier: deploy ? tx(deploy) : null,
           ownerChange: alreadyOwner ? null : changes,
           script: `npm run safe:import-tx -- --chain ${CANDIDE.chainId} --safe ${address} --verifier ${verifier}`,
         });

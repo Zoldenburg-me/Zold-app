@@ -271,8 +271,41 @@ proxy (`passkeyAccountAddress`), not the shared signer (`isInit: !deployed`).
 | fallbackHandler | 4337 module |
 
 Such a Safe depends only on the EOA, so its address can be mined before any
-passkey exists. Zold has no path that adopts one: `accountForPlan` accepts a
-stored address only for a recovered Safe (`recoveredAt`).
+passkey exists. Zold adopts one through the import routes (§5.1.2):
+`accountForPlan` builds the account from the stored address for an imported
+Safe (`importedAt`) as for a recovered one (`recoveredAt`).
+
+#### 5.1.2 Importing an existing Safe (`routes/safe-import.ts`, `wallet/safe-import.ts`, `wallet/safe-tx-builder.ts`)
+
+- `POST /users/:id/safe/import/prepare {address}` checks that the account may
+  still switch (a passkey; its own planned Safe not active, not deployed and
+  empty) and the Safe's shape, and returns owners, threshold, the passkey's
+  verifier, and each owner change (`add`, `swap`) with its Safe{Wallet}
+  Transaction Builder file (`txBuilder: {fileName, json}`). It stores nothing.
+- `POST /users/:id/safe/import/confirm {address}` reads the chain again,
+  deploys the verifier from the deployer if it has no code, and binds the
+  account (`passkeySafe.status` `active`, `importedAt`). 201 with the user.
+- The Transaction Builder file is built once, in `wallet/safe-tx-builder.ts`;
+  `npm run safe:import-tx` writes the same bytes for the same input
+  (`safe-import:test` compares them). The browser only downloads it.
+- `capabilities().safeImport` is false under the harness, where both routes
+  answer `NO_CHAIN`.
+- Onboarding (`public/app/onboarding.js`): for a company account with
+  `caps.safeImport`, `obCreateAccount` stops after the passkey at
+  `b-safe-choice` instead of deploying. "Open a new account" deploys as
+  before; "Use our company's existing Safe" runs `b-import-address` (prepare)
+  → `b-import-sign` (download, or to/value/data) → `b-import-confirm`
+  (confirm, retried by hand). Zold never collects or relays the owner's
+  signature; no wallet connection is built.
+- `localStorage["zold-safe-import"]` `{userId, address}` marks an import
+  started on this device. While it is set, `finishPasskeySafeSetup` refuses
+  to deploy and Home offers "Finish bringing in your Safe" instead of
+  "Finish smart wallet". It is per device: `prepare` stores nothing, so the
+  server cannot know an owner change is on its way. Every screen that reads
+  the flag calls `prepare` again.
+- An imported Safe is not offered recovery: onboarding skips the step and
+  Security says it is not available, because enabling a recovery module has
+  never run on one. The recovery routes do not refuse it yet.
 
 ### 5.2 Device key (`public/device.js`)
 
@@ -789,6 +822,8 @@ overlap guards make that safe.
   server-supplied `submitTo` cannot redirect the bearer token.
 - Capabilities come from `GET /api/health`. They default to *closed* if that
   call fails, and a control is drawn only where the API would accept it.
+- A company account's onboarding branches after the passkey: a new Safe, or
+  an existing one brought in (§5.1.2).
 - `sw.js` (`zold-shell-v4`) handles requests as follows:
   - `/api/*` is network-only, with a synthetic 503 offline.
   - Navigations are network-first. Only SHELL paths are stored, so credential
@@ -963,6 +998,8 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one. |
 | `POST /users/:id/passkey` (U) | Register a passkey. Needs a step-up if one already exists. |
 | `POST /users/:id/passkey-safe/deployment[/:requestId]` (U) | Prepare, then submit, the Safe deploy. |
+| `POST /users/:id/safe/import/prepare` (U) | Check a Safe for import; owner changes and Transaction Builder files. Stores nothing. |
+| `POST /users/:id/safe/import/confirm` (U) | Bind the account to an existing Safe the passkey's verifier already owns. |
 | `POST /passkey/login` (A) | Passkey sign-in. |
 | `GET /users/:id` (U) | Account read. |
 | `GET /users/:id/kyc` (U) | Account read. |

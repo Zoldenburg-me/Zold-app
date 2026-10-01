@@ -52,3 +52,6 @@ Identity and authority. Each of these was a bug once.
   address. The Safe's current owner makes the passkey an owner themselves
   (`npm run safe:import-tx`, no key taken): `add` keeps the EOA as the user's
   own second owner (1 of 2), `swap` removes it. Zold never signs that change.
+  An imported Safe is not offered a recovery guardian: enabling the module
+  has never run on one, so onboarding skips the step and Security says so.
+  The recovery routes do not refuse it yet.
