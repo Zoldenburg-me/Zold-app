@@ -389,6 +389,7 @@ function phChecklist(u) {
   const recoveryOn = safe.recovery?.status === "active" || safe.candideRecovery?.guardianStatus === "active";
   const connected = hasConnectedMonerium(u);
   const approved = kycApproved(u);
+  const wait = ibanWait(u);
   const items = [
     { title: "Face ID sign-in", sub: "This phone approves payments.", done: !!u.passkey?.credentialId },
     { title: "Account created", sub: safe.status === "active" ? "Your account is live." : "Finish setting up your account.",
@@ -398,9 +399,14 @@ function phChecklist(u) {
       : []),
     { title: "Verify with Monerium", sub: approved || connected ? "Connected." : "ID check, a few minutes.",
       done: approved || connected, action: { id: "ph-ck-verify", label: "Start" } },
-    { title: "IBAN active", sub: u.iban && approved ? "Ready to receive bank transfers." : "Follows your verification.",
+    { title: "IBAN active",
+      sub: u.iban && approved ? "Ready to receive bank transfers."
+        : wait ? (wait.support ? "Needs Monerium support. Tap for details." : `Requested. ${wait.idCheck ? "Monerium is checking your ID." : "Monerium is issuing it."} Nothing to do.`)
+        : "Follows your verification.",
       done: !!u.iban && approved,
-      action: connected && !approved ? { id: "ph-ck-verify2", label: "Activate" } : null },
+      // While Monerium works there is nothing to press: the row shows Waiting.
+      // A support case keeps a button to the screen that explains it.
+      action: connected && !approved && (!wait || wait.support) ? { id: "ph-ck-verify2", label: wait ? "Details" : "Activate" } : null },
   ];
   return phChecklistCard("Finish setting up", items);
 }
