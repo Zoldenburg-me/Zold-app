@@ -14,7 +14,7 @@
  * needs no bump. Bump SHELL_CACHE when the SHELL list itself changes or a
  * vendored file does; activate deletes every other cache this origin owns.
  */
-const SHELL_CACHE = "zold-shell-v11";
+const SHELL_CACHE = "zold-shell-v12";
 
 /**
  * The device key and the vendored crypto matter most here. If /device.js or
@@ -46,6 +46,7 @@ const SHELL = [
   "/app/business.js",
   "/app/settings.js",
   "/app/desktop.js",
+  "/app/errors.js",
   "/app/pwa.js",
   "/app/main.js",
   "/device.js",
@@ -102,8 +103,9 @@ self.addEventListener("activate", (event) => {
  *  "Failed to fetch". */
 function offlineApiResponse() {
   return new Response(
-    JSON.stringify({ error: "you appear to be offline — Zold could not be reached" }),
-    { status: 503, headers: { "content-type": "application/json" } },
+    JSON.stringify({ error: "you appear to be offline. Zold could not be reached" }),
+    // The header tells the app this 503 is the network, not the server.
+    { status: 503, headers: { "content-type": "application/json", "x-zold-offline": "1" } },
   );
 }
 
