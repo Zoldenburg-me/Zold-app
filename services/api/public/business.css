@@ -169,6 +169,17 @@ a.zb-acc:hover { border-color: var(--z-line-hover); color: var(--z-text); }
 .zb-conn__logo { display: grid; place-items: center; width: 44px; height: 44px; flex: none; border-radius: var(--z-radius-md); border: 1px solid var(--z-line-strong); background: var(--z-ghost); font-size: 12px; font-weight: 700; letter-spacing: .02em; color: var(--z-text); }
 .zb-conn p { margin: 0; font-size: 14px; color: var(--z-dim); }
 .zb-conn .zb-actions { margin-top: auto; }
+/* The live connection spans the page, text left and action right; the file exports sit below in one row. */
+.zb-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--z-space-4); }
+.zb-conn--wide { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: var(--z-space-6, 32px); row-gap: 10px; }
+.zb-conn--wide .zb-conn__head, .zb-conn--wide p { grid-column: 1; }
+.zb-conn--wide p { max-width: 62ch; }
+@media (min-width: 721px) { .zb-conn--wide .zb-conn__head .z-row__main { flex: none; } }
+.zb-conn--wide .zb-actions { grid-column: 2; grid-row: 1 / span 2; margin-top: 0; justify-content: flex-end; }
+h2.zb-conn__group { margin: 32px 0 12px; }
+h2.zb-conn__group--first { margin-top: 0; }
+@media (max-width: 1023px) { .zb-grid3 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) { .zb-conn--wide { grid-template-columns: minmax(0, 1fr); } .zb-conn--wide .zb-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; } }
 .zb-steps { margin: 0; padding-left: 20px; font-size: 14.5px; line-height: 1.9; }
 .zb-plan { display: flex; flex-direction: column; gap: var(--z-space-2); padding: 18px; border-radius: var(--z-radius-card); border: 1px solid var(--z-line); background: var(--z-ghost); }
 .zb-plan.is-current { border-color: var(--z-pink-border); background: var(--z-pink-tint); }

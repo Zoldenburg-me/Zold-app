@@ -306,24 +306,26 @@ RENDER.export = async () => {
    Connections
    ========================================================================== */
 
-META.integrations = () => ({ title: "Connections", sub: "Get your books into the software your accountant already uses.", actions: booksBack() });
+META.integrations = () => ({ title: "Connections", sub: "Get your books into the software your accountant already uses.", actions: linkBtn("Settings", "settings", "arrow_back") });
 
 RENDER.integrations = async () => {
   if (!cap("integrations.accounting").allowed) return gateHtml("integrations.accounting");
   const r = await api(`/api/orgs/${org.id}/integrations`);
   const g = r.integrations.getmyinvoices;
-  const conn = (logo, title, sub, tag, text, act) => `<section class="z-card zb-conn" aria-label="${esc(title)}">
+  const conn = (logo, title, sub, tag, text, act, wide = false) => `<section class="z-card zb-conn${wide ? " zb-conn--wide" : ""}" aria-label="${esc(title)}">
       <div class="zb-conn__head"><span class="zb-conn__logo" aria-hidden="true">${esc(logo)}</span><span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag}</div>
       <p>${text}</p><div class="zb-actions">${act}</div></section>`;
   const gmi = g.connected
     ? conn("GMI", "GetMyInvoices", `Connected to ${g.accountName || "your account"}${g.accountEmail ? ` (${g.accountEmail})` : ""} since ${day(g.connectedAt)}`, Z.tag("Beta"),
       "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
-      `${linkBtn("Send a month’s Belege", "export", "upload")}${secondary("Remove key", 'data-act="gmi-disconnect"')}`)
+      `${linkBtn("Send a month’s Belege", "export", "upload")}${secondary("Remove key", 'data-act="gmi-disconnect"')}`, true)
     : conn("GMI", "GetMyInvoices", "API key · sends Belege each month", Z.tag("Beta"),
       "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
-      r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`);
-  return `<div class="zb-grid2">
-      ${gmi}
+      r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`, true);
+  return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends for you</h2>
+    ${gmi}
+    <h2 class="z-eyebrow zb-conn__group">File exports</h2>
+    <div class="zb-grid3">
       ${conn("LO", "Lexware Office", "CSV import", "", "Download the month’s bank lines as a Lexware CSV and import them as an offline account.", linkBtn("Download from Books", "books", "download"))}
       ${conn("sev", "sevDesk", "Not built yet", Z.tag("Soon"), "Until it’s built, use the Lexware CSV and the Belege ZIP from Books. sevDesk imports both.", linkBtn("CSV and ZIP", "books", "folder_zip"))}
       ${conn("DATEV", "DATEV", "Not built yet", Z.tag("Soon"), "Your tax adviser can take the Belege ZIP for now.", linkBtn("Exports", "books", "download"))}
@@ -351,7 +353,8 @@ RENDER.settings = async () => {
           : free ? "" : '<span class="desc">By trial, or ask Zold</span>';
     return `<div class="zb-plan${current ? " is-current" : ""}"><div class="zb-plan__head"><b>${esc(p.name)}</b><span class="desc">${esc(p.price)}</span></div><p>${esc(p.blurb)}</p><div>${act}</div></div>`;
   }).join("");
-  return `<form class="card" id="org-form" onsubmit="return false"><div class="h"><div><h2>Organisation</h2><p class="desc">Printed on every invoice you issue. The country decides which invoicing rules apply.</p></div>
+  return `${cap("integrations.accounting").allowed ? `<section class="card"><div class="h"><div><h2>Connections</h2><p class="desc">Send your books to GetMyInvoices, or export them for Lexware, sevDesk and DATEV.</p></div>${linkBtn("Open", "integrations", "hub")}</div></section>` : ""}
+    <form class="card" id="org-form" onsubmit="return false"><div class="h"><div><h2>Organisation</h2><p class="desc">Printed on every invoice you issue. The country decides which invoicing rules apply.</p></div>
       <button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="save-org">Save</button></div>
       <div class="grid g2">
         <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}" /></div>
@@ -374,7 +377,6 @@ RENDER.settings = async () => {
       <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px"${reporting ? "" : " disabled"} />
     </form>
     ${cap("invoices").allowed ? `<section class="card"><div class="h"><div><h2>Invoicing profile</h2><p class="desc">Your tax numbers, bank details and number series, set once for every invoice.</p></div>${linkBtn("Open", "invoicing-settings")}</div></section>` : ""}
-    ${cap("integrations.accounting").allowed ? `<section class="card"><div class="h"><div><h2>Connections</h2><p class="desc">GetMyInvoices, Lexware, sevDesk and DATEV.</p></div>${linkBtn("Open", "integrations")}</div></section>` : ""}
     <section class="card"><div class="h"><div><h2>Plan</h2><p class="desc">Zold takes no payments yet: a paid plan comes with the trial, or Zold grants it. Switching down pauses features and deletes nothing.</p></div>
       ${plan.trialAvailable && owner ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="trial">Start the ${plan.trialDays}-day trial</button>` : ""}</div>
       <div class="grid g3">${plans}</div></section>`;
