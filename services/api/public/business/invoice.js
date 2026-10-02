@@ -158,9 +158,9 @@ RENDER["invoice-new"] = async () => {
           <p class="zb-hint" id="inv-vat-status" aria-live="polite" style="margin-top:6px"></p></div>` : ""}
       </div>
       <div class="zb-row zb-row--3">
-        ${f("inv-r-addr", "Street and number", r.addressLine, 'placeholder="Ostengasse 4…"')}
-        ${f("inv-r-zip", "Postcode", r.postalCode, 'inputmode="numeric" placeholder="93047…"')}
-        ${f("inv-r-city", "City", r.city, 'placeholder="Regensburg…"')}
+        ${f("inv-r-addr", "Street and number", r.addressLine, 'placeholder="Lindenstraße 4…"')}
+        ${f("inv-r-zip", "Postcode", r.postalCode, 'inputmode="numeric" placeholder="34117…"')}
+        ${f("inv-r-city", "City", r.city, 'placeholder="Kassel…"')}
       </div>
       <div class="zb-row zb-row--3">
         ${f("inv-issue", "Invoice date", invoiceDraft.issueDate || today(), 'type="date"')}
@@ -282,7 +282,7 @@ function paper(check) {
   const reason = invoiceDraft.vat.kind === "exempt"
     ? [...(profile.reference.exemptionReasons || []), ...(profile.reference.customReasons || [])].find((x) => x.id === invoiceDraft.vat.reason) : null;
   const vatNote = reason ? (lang === "en" && reason.invoiceNoteEn ? reason.invoiceNoteEn : reason.invoiceNote) : "";
-  const bank = profile.profile.bank;
+  const bank = profile.invoiceBank;
   const lines = invoiceDraft.lines;
   const qty = (q) => String(q || "").replace(".", lang === "de" ? "," : ".");
   // translate="no": a browser translating the document would change what the

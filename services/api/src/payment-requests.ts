@@ -30,6 +30,7 @@
 import { randomBytes } from "node:crypto";
 import { MONERIUM, PAYMENT_REQUESTS } from "./config.js";
 import type { CryptoDeposit, Transfer, User } from "./store.js";
+import { reportedBic } from "./sepa.js";
 
 export type PaymentMethod = "crypto" | "bank";
 export type PaymentRequestState = "OPEN" | "PAID" | "EXPIRED" | "CANCELLED";
@@ -602,10 +603,14 @@ export function publicPaymentRequest(
   ctx: {
     chainId: number;
     token: { symbol: string; address: `0x${string}`; decimals: number };
-    bicFor: (iban?: string) => string | undefined;
     baseUrl: string;
     now?: Date;
     quote?: CryptoQuote;
+    /** A company's name, for a link booked under it: the holder of the IBAN. */
+    payeeName?: string;
+    /** False when the page's deposit address may not be shown (a lapsed
+     *  forwarder activation): the crypto method is then left out. */
+    cryptoLive?: boolean;
   },
 ): PublicPaymentRequest {
   const now = ctx.now ?? new Date();
@@ -613,7 +618,7 @@ export function publicPaymentRequest(
   const paid = paidEur(r);
   const page = user.paymentPage;
   const methods: PublicPaymentRequest["methods"] = {};
-  if (r.methods.includes("crypto") && page?.depositAddress) {
+  if (r.methods.includes("crypto") && page?.depositAddress && ctx.cryptoLive !== false) {
     const q = ctx.quote;
     methods.crypto = {
       chainId: ctx.chainId,
@@ -627,8 +632,8 @@ export function publicPaymentRequest(
   if (r.methods.includes("bank") && user.iban) {
     methods.bank = {
       iban: user.iban,
-      bic: ctx.bicFor(user.iban),
-      holder: user.name,
+      ...(reportedBic(user) ? { bic: reportedBic(user) } : {}),
+      holder: ctx.payeeName ?? user.name,
       reference: displayCode(r.code),
       appUrl: `${ctx.baseUrl}/app?pay=${encodeURIComponent(r.handle)}/${displayCode(r.code)}`,
     };
@@ -636,7 +641,7 @@ export function publicPaymentRequest(
   return {
     code: displayCode(r.code),
     handle: r.handle,
-    ...(page?.displayName ? { displayName: page.displayName } : {}),
+    ...(ctx.payeeName ? { displayName: ctx.payeeName } : page?.displayName ? { displayName: page.displayName } : {}),
     state,
     ...(r.amountEur !== undefined ? { amountEur: r.amountEur, outstandingEur: Math.max(0, Math.round((r.amountEur - paid) * 100) / 100) } : {}),
     paidEur: paid,

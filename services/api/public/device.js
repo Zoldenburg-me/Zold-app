@@ -17,9 +17,7 @@
  * touches localStorage. Without the authenticator the stored blob is useless,
  * and every payment needs a fresh ceremony to unwrap.
  *
- * Not every authenticator supports PRF. Without it the key is stored
- * unprotected and labelled `protection: "none"`. That still stops the server
- * spending, but not someone with access to this browser profile.
+ * The stored blob records its `protection`, which the app reads back.
  *
  * Crypto is vendored @noble/secp256k1 + @noble/hashes (audited, no build
  * step; see /vendor). Signing is RFC6979 deterministic with low-s enforced,

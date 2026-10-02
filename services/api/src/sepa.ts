@@ -77,6 +77,14 @@ export function normalizeIban(iban: string): string {
   return iban.replace(/\s/g, "").toUpperCase();
 }
 
+/** The BIC Monerium listed for the account's current IBAN, and only for it:
+ *  a read from before a move belongs to the old IBAN. Unknown is undefined,
+ *  never a BIC guessed from the country code. */
+export function reportedBic(user: { iban?: string; ibanBic?: { iban: string; bic: string } }): string | undefined {
+  const b = user.ibanBic;
+  return b && user.iban && normalizeIban(b.iban) === normalizeIban(user.iban) ? b.bic : undefined;
+}
+
 export function moneriumRedeemMessage(amountEur: number, iban: string, issuedAt: string): {
   amount: string;
   iban: string;

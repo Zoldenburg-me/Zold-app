@@ -371,20 +371,32 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
   router.get(
     "/monerium/oauth/callback",
     wrap(async (req, res) => {
+      // A person lands here from Monerium's site, so every refusal goes back
+      // to the app, which shows the reason on the IBAN step, never raw JSON.
+      // Nothing is connected on any of these paths.
+      const backToApp = (userId: string | undefined, error: string) => {
+        if (userId) {
+          store.updateUser(userId, {
+            moneriumConnect: undefined,
+            moneriumRefusal: { code: "MONERIUM_CONNECT_FAILED", error, at: new Date().toISOString() },
+          });
+        }
+        return res.redirect("/app?monerium=refused");
+      };
       const state = typeof req.query.state === "string" ? req.query.state : "";
       const code = typeof req.query.code === "string" ? req.query.code : "";
-      if (!state || !code) return res.status(400).json({ error: "state and code required" });
-      const user = store.users.find((u) => u.moneriumConnect?.state === state);
-      if (!user?.moneriumConnect) return res.status(400).json({ error: "unknown or expired OAuth state" });
+      const user = state ? store.users.find((u) => u.moneriumConnect?.state === state) : undefined;
+      if (!state || !code || !user?.moneriumConnect) {
+        return backToApp(user?.id, "The sign-in at Monerium did not finish. Connect again from here.");
+      }
       if (Date.now() - Date.parse(user.moneriumConnect.createdAt) > 10 * 60_000) {
-        store.updateUser(user.id, { moneriumConnect: undefined });
-        return res.status(410).json({ error: "OAuth state expired; start Monerium connect again" });
+        return backToApp(user.id, "The sign-in at Monerium took longer than 10 minutes, so it expired. Connect again from here.");
       }
       const nonce = cookieValue(req, CONNECT_COOKIE);
       if (!nonce || sha256Hex(nonce) !== user.moneriumConnect.nonceHash) {
-        return res.status(400).json({
-          error: "this Monerium connection was started in a different browser — start it again from the app",
-        });
+        // Not the browser that started it: leave that browser's attempt as
+        // it is, and tell this one nothing about the account.
+        return res.redirect("/app?monerium=refused");
       }
 
       // A code is single-use: a reload or the back button lands here with a

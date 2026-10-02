@@ -27,6 +27,7 @@ import { CHAIN_ID, HARNESS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import { operatorLabel, requireOperator } from "../http/guards.js";
 import { publicRecoveryRequest } from "../recovery.js";
+import { recoveryEnrolment } from "../admin/onboarding.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import {
   ZoldenburgRecoveryError,
@@ -640,11 +641,23 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         .sort((a, b) => Date.parse(b.requestedAt) - Date.parse(a.requestedAt))
         .slice(0, 200)
         .map(adminView);
+      // Who chose Zoldenburg as guardian (or declined), so the recovery page
+      // shows which accounts an operator could ever be asked to recover.
+      const enrolments = store.users
+        .filter((u) => u.passkeySafe?.recoveryChoice || u.passkeySafe?.recovery)
+        .map((u) => ({
+          userId: u.id,
+          name: u.name,
+          email: u.email,
+          safeAddress: u.passkeySafe!.address,
+          ...recoveryEnrolment(u),
+        }));
       res.json({
         enabled: zoldenburgRecoveryEnabled(),
         guardianAddress: zoldenburgGuardianAddress() ?? null,
         chainId: CHAIN_ID,
         requests: rows,
+        enrolments,
       });
     }),
   );

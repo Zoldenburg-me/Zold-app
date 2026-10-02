@@ -27,6 +27,7 @@ import { createUserRouter } from "./routes/users.js";
 import { createCryptoDepositRouter } from "./routes/crypto-deposits.js";
 import { createPaymentPageRouter } from "./routes/payment-page.js";
 import { createReceiptShareRouter } from "./routes/receipt-shares.js";
+import { createFaucetRouter } from "./routes/faucet.js";
 import { capabilities } from "./capabilities.js";
 import { publicUser } from "./users/public-user.js";
 import { apiRateLimit, originPolicy, securityHeaders } from "./http/policy.js";
@@ -192,6 +193,8 @@ app.use("/api", createCryptoDepositRouter({ requireUserSession }));
 app.use("/api", createPaymentPageRouter({ requireUserSession }));
 // Shareable receipts. The slug IS the credential, hence the tight bucket.
 app.use("/api", createReceiptShareRouter({ requireUserSession }));
+// Testnet faucet: one EURe grant per account, testnet chains only.
+app.use("/api", createFaucetRouter({ requireUserSession }));
 // Monerium: connect by OAuth or by your own API keys, and activate the IBAN.
 // Connecting is not approval — an address-matched IBAN is.
 app.use("/api", createMoneriumRouter({ requireUserSession }));

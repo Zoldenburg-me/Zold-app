@@ -14,10 +14,14 @@ import { wrap } from "./util.js";
 import { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient } from "../chain.js";
 import { publicUser } from "../users/public-user.js";
 import { store, type CryptoDeposit, type Transfer } from "../store.js";
-import { requireOperator } from "../http/guards.js";
+import { operatorLabel, requireOperator } from "../http/guards.js";
 import { recentServerErrors } from "../http/error-log.js";
 import { plansFor, trialIsActive } from "../domain/plans.js";
 import type { PlanId } from "../domain/types.js";
+import { onboardingOf, recoveryEnrolment } from "../admin/onboarding.js";
+import { issues, overview } from "../admin/overview.js";
+import { liveMonerium, moneriumOverview, storedMonerium } from "../admin/monerium.js";
+import { maskIdentifier } from "../admin/mask.js";
 
 function adminUserSummary(userId: string) {
   const u = store.findUser(userId);
@@ -37,13 +41,6 @@ function adminUserSummary(userId: string) {
 
 function lastHash(txs: { step: string; hash: string }[] = []) {
   return txs.at(-1)?.hash;
-}
-
-/** Keep enough to recognise a payee, never the whole identifier. */
-function maskIdentifier(v?: string): string | undefined {
-  if (!v) return v;
-  const s = String(v).replace(/\s+/g, "");
-  return s.length <= 6 ? s : `${s.slice(0, 4)}…${s.slice(-2)}`;
 }
 
 function adminTransfer(transfer: Transfer) {
@@ -250,12 +247,92 @@ export function createAdminRouter() {
     res.json({ errors: recentServerErrors() });
   });
 
+  /** Counts for the dashboard's first screen, plus the gas wallets. */
+  router.get(
+    "/admin/overview",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      res.json({
+        ...overview(),
+        deployer: await deployerFloat().catch(() => null),
+        operatorGas: await operatorGas().catch(() => null),
+      });
+    }),
+  );
+
+  /** Every open problem from every place one is recorded (admin/overview.ts). */
+  router.get("/admin/issues", (req, res) => {
+    if (!requireOperator(req, res)) return;
+    res.json({ issues: issues() });
+  });
+
+  // The same allowlisted projection the app gets, plus where the account
+  // stands. No token, secret or ciphertext is in either.
+  const adminUser = (u: Parameters<typeof publicUser>[0]) => ({
+    ...publicUser(u),
+    onboarding: onboardingOf(u),
+    recoveryEnrolment: recoveryEnrolment(u),
+  });
+
   router.get(
     "/admin/users",
     wrap(async (req, res) => {
       if (!requireOperator(req, res)) return;
-      const list = store.users.map((u) => publicUser(u));
-      res.json(list);
+      res.json(store.users.map(adminUser));
+    }),
+  );
+
+  /** One account and everything that hangs off it. */
+  router.get(
+    "/admin/users/:id",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      const u = store.findUser(String(req.params.id));
+      if (!u) return res.status(404).json({ error: "user not found" });
+      res.json({
+        user: adminUser(u),
+        transactions: [
+          ...store.transfers.filter((t) => t.userId === u.id).map(adminTransfer),
+          ...store.cryptoDeposits.filter((d) => d.userId === u.id).map(adminFunding),
+        ].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
+        recoveries: store.recoveryRequestsForUser(u.id).map((r) => ({
+          id: r.id, mode: r.mode, status: r.status, requestedAt: r.requestedAt,
+          reference: r.zoldenburg?.reference, finalizedAt: r.finalizedAt, canceledAt: r.canceledAt,
+        })),
+        memberships: store.members
+          .filter((m) => m.userId === u.id)
+          .map((m) => ({ orgId: m.orgId, org: store.findOrganisation(m.orgId)?.name, role: m.role, status: m.status })),
+        issues: issues().filter((i) => i.userId === u.id),
+        audit: store.auditFor(u.id, 100),
+      });
+    }),
+  );
+
+  /**
+   * Monerium for one account. Stored always; `?live=1` also asks Monerium now
+   * on the account's own connection (admin/monerium.ts), stores nothing and
+   * audits the read.
+   */
+  router.get(
+    "/admin/users/:id/monerium",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      const u = store.findUser(String(req.params.id));
+      if (!u) return res.status(404).json({ error: "user not found" });
+      res.json({
+        stored: storedMonerium(u),
+        ...(req.query.live === "1" ? { live: await liveMonerium(u, operatorLabel(req)) } : {}),
+      });
+    }),
+  );
+
+  /** Monerium across the deployment; `?live=1` also checks the app's own
+   *  credentials against Monerium. */
+  router.get(
+    "/admin/monerium",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      res.json(await moneriumOverview(req.query.live === "1"));
     }),
   );
 

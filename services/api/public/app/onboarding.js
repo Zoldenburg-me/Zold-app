@@ -192,7 +192,7 @@ document.addEventListener("click", (e) => {
   else obGo(target);
 });
 
-// Leaving with answers typed and no account yet loses them.
+// Leaving with answers typed, no account yet and no saved copy loses them.
 window.addEventListener("beforeunload", (e) => {
   if (!user?.id && obScreen && OB[obScreen].kind === "form" && obDraftTouched) e.preventDefault();
 });
@@ -263,8 +263,18 @@ const obClearErr = (id = "ob-err") => $(id)?.classList.add("hidden");
 
 /* A cancelled Face ID prompt is the user's choice, not a fault: say so plainly. */
 function obMessage(e) {
-  if (e?.name === "NotAllowedError") return "Face ID or fingerprint was cancelled, or it timed out. Try again when you’re ready.";
-  if (e?.name === "InvalidStateError") return "This phone already has a Zold sign-in for this account. Sign in instead.";
+  // A touch screen is a phone or tablet, where the prompt is Face ID or a
+  // fingerprint; on a computer it may be Touch ID, Windows Hello, a phone by
+  // QR code or a security key, so it is named for what it is: a passkey.
+  const phone = window.matchMedia?.("(pointer: coarse)").matches;
+  if (e?.name === "NotAllowedError") {
+    return phone
+      ? "Face ID or fingerprint was cancelled, or it timed out. Try again when you’re ready."
+      : "The passkey prompt was cancelled, or it timed out. Try again when you’re ready.";
+  }
+  if (e?.name === "InvalidStateError") {
+    return `This ${phone ? "phone" : "device"} already has a Zold sign-in for this account. Sign in instead.`;
+  }
   const m = String(e?.message || e || "Something went wrong.");
   return m.charAt(0).toUpperCase() + m.slice(1);
 }
@@ -284,8 +294,10 @@ const obDraft = (() => {
 })();
 function obSaveDraft(patch) {
   Object.assign(obDraft, patch);
-  obDraftTouched = true;
-  try { sessionStorage.setItem(OB_DRAFT_KEY, JSON.stringify(obDraft)); } catch { /* private mode: kept in memory */ }
+  // Only answers held in memory alone are lost on a reload: saved ones come
+  // back, so "Leave site?" asks only when the save failed (private mode).
+  try { sessionStorage.setItem(OB_DRAFT_KEY, JSON.stringify(obDraft)); obDraftTouched = false; }
+  catch { obDraftTouched = true; }
 }
 function obClearDraft() {
   try { sessionStorage.removeItem(OB_DRAFT_KEY); } catch {}
@@ -1363,7 +1375,7 @@ OB.recovery = {
     }
     const opts = [];
     if (caps.emailSmsRecovery && user?.email) opts.push(["email", `Email code ${Z.tag("Recommended", "pink")}${Z.tag("Beta")}`, "A code to your email starts recovery on a new phone. A waiting period lets you cancel it."]);
-    if (caps.zoldenburgRecovery) opts.push(["zoldenburg", `Zoldenburg can help ${Z.tag("Beta")}`, `Zoldenburg verifies you against your Monerium ID and starts recovery. You sign once to allow it. The move waits <span id="rec-grace">${esc(obGrace || "several days")}</span>, and you can cancel it from this phone.`]);
+    if (caps.zoldenburgRecovery) opts.push(["zoldenburg", `Zoldenburg can help ${Z.tag("Beta")}`, `Zoldenburg checks you against the ID you verified and starts recovery. You sign once to allow it. The move waits <span id="rec-grace">${esc(obGrace || "several days")}</span>, and you can cancel it from this phone.`]);
     opts.push(["skip", "Skip for now", "No one can recover this account."]);
     return `${obAfterProgress("recovery", "Recovery")}
     <main id="main" class="z-screen__main z-screen__main--tight">
@@ -1523,21 +1535,20 @@ OB.monerium = {
     const any = caps.moneriumOAuth || caps.moneriumApiKeys;
     return `${obAfterProgress("monerium", "Your IBAN")}
     <main id="main" class="z-screen__main z-screen__main--tight">
-      ${obIntro("Get your IBAN", "Monerium checks your ID and issues an IBAN in your name. You sign in or sign up on Monerium’s site, then come back here.")}
+      ${obIntro("Get your IBAN", "A quick ID check, then an IBAN in your name. You do it on our partner’s site and come back here.")}
       <div class="z-card z-partner">
         <span class="z-partner__name"><img src="/assets/logo-monerium.png" alt="" width="33" height="40" style="object-fit:contain">Monerium ehf.</span>
         <ul>
           <li>Takes a few minutes with your ID at hand.</li>
-          <li>You can use Zold while Monerium reviews it.</li>
+          <li>You can use Zold while the check runs.</li>
           <li>Your IBAN switches on with one Face ID approval.</li>
         </ul>
       </div>
       ${any ? "" : Z.note({ tone: "a", text: "Monerium can’t be connected on this version of Zold yet, so no IBAN can be issued here." })}
-      ${user?.moneriumRefusal && !hasConnectedMonerium(user)
-        ? Z.note({ tone: "a", text: user.moneriumRefusal.error })
-        : Z.note({ text: user?.accountType === "company"
-          ? "Use your company’s email at Monerium. Zold uses only a company profile there, never a personal one."
-          : "Use your personal email at Monerium. Zold uses only a personal profile there, never a company’s." })}
+      ${user?.moneriumRefusal && !hasConnectedMonerium(user) ? Z.note({ tone: "a", text: user.moneriumRefusal.error }) : ""}
+      ${Z.note({ text: user?.accountType === "company"
+        ? "When asked, choose Company. A personal profile can’t be used for a company account."
+        : "When asked, choose Personal. A company profile can’t be used for a personal account." })}
       <p class="z-hint">Monerium’s own terms apply. <a href="/partner-terms#monerium" target="_blank" rel="noopener">Partner terms</a></p>
       ${obAlert()}
     </main>
@@ -1599,7 +1610,7 @@ OB.activate = {
   html: () => obIbanReady && user?.iban ? obIbanReadyHtml() : ibanWait(user) ? obIbanWaitHtml(ibanWait(user)) : `${obAfterProgress("activate", "Switch on")}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("account_balance")}</span>
-      ${obIntro("Switch on your IBAN", "Your Monerium account is connected. One Face ID approval links it to your Zold account and asks Monerium for your IBAN.")}
+      ${obIntro("Switch on your IBAN", "You’re signed in at our partner. One approval links it to Zold and asks for your IBAN.")}
       ${Z.kv([
         { key: "Monerium", valueHtml: Z.tag("Connected", "mint") },
         { key: "How", value: user?.monerium?.method === "api_keys" ? "Your own API keys" : "Signed in with Monerium" },
@@ -1700,8 +1711,8 @@ function obIbanReadyHtml() {
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("check_circle")}</span>
       ${obIntro("Your IBAN is ready", user?.accountType === "company"
-        ? "Monerium issued your company’s IBAN. Share it to get paid by bank transfer."
-        : "Monerium issued your IBAN. Share it to get paid by bank transfer.")}
+        ? "Your company’s IBAN is ready. Share it to get paid by bank transfer."
+        : "Your IBAN is ready. Share it to get paid by bank transfer.")}
       ${Z.kv([{ key: "IBAN", valueHtml: `<span class="z-mono" translate="no">${esc(Z.groupIban(user.iban))}</span>` }])}
       ${obAlert()}
     </main>
@@ -1719,13 +1730,13 @@ function obIbanReadyHtml() {
    tell an existing IBAN from one being issued. */
 function obIbanWaitHtml(w) {
   const steps = [
-    { t: "Monerium connected", d: "Signed in with your Monerium account.", done: true },
+    { t: "Signed in", d: "At our partner, Monerium.", done: true },
     { t: "IBAN requested", d: "Approved with your Face ID.", done: true },
-    { t: w.idCheck ? "Monerium checks your ID" : "Monerium issues your IBAN",
+    { t: w.idCheck ? "Your ID is checked" : "Your IBAN is issued",
       d: w.idCheck ? "Usually minutes, sometimes a day or two." : "Usually within minutes.", done: false },
     { t: "IBAN on your dashboard", d: "Share it and get paid by bank transfer.", done: false },
   ];
-  return `${obAfterProgress("activate", "Waiting on Monerium")}
+  return `${obAfterProgress("activate", "Almost there")}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon(w.support ? "support_agent" : "schedule")}</span>
       ${obIntro(w.title, w.sub)}
@@ -1800,7 +1811,7 @@ function obWelcomeCards() {
         title: "Your IBAN is ready.", sub: "Share it to get paid by bank transfer. You’ll find it on Home." }
     : connected
       ? { tag: Z.tag("In review"), value: `<div class="z-tour__value z-tour__value--text">Not issued yet</div>`, note: "Monerium is checking your ID",
-          title: "Your IBAN is on its way.", sub: "We’ll show it on Home the moment Monerium approves. Until then you can look around." }
+          title: "Your IBAN is on its way.", sub: "We’ll show it on Home the moment it’s approved. Until then you can look around." }
       : { tag: Z.tag("Waiting"), value: `<div class="z-tour__value z-tour__value--text">Not connected yet</div>`, note: "Connect Monerium from Home",
           title: "Get your IBAN when you’re ready.", sub: "It takes a few minutes with your ID at hand. Until then you can look around." };
   const plain = (icon, label, text) => `<div class="z-tour__row"><span>${label}</span>${Z.iconTile({ icon, tone: "p" })}</div><div class="z-tour__value z-tour__value--text">${text}</div>`;
@@ -2110,11 +2121,11 @@ function offerIbanMove(choices, profileId) {
   const norm = (i) => String(i || "").replace(/\s+/g, "").toUpperCase();
   const one = choices.length === 1 ? choices[0] : null;
   const ibanOf = () => one ? norm(one.iban) : norm(dlg.querySelector('input[name="m-mv-iban"]:checked')?.value);
-  const fromOf = (c) => c.address ? String(c.address) : "another address";
+  const fromOf = (c) => { const a = c.address ? String(c.address) : ""; return a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a || "another address"; };
   const pick = one
     ? `<div class="m-rows">
       <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">IBAN</div><div class="m-rowv">${esc(`•••• •••• •••• ${norm(one.iban).slice(-4)}`)}</div></div></div>
-      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">Currently pays into</div><div class="m-rowv">${esc(fromOf(one))}</div></div></div>
+      <div class="m-detrow"><div style="min-width:0"><div class="m-rowk">Pays into now</div><div class="m-rowv">${esc(fromOf(one))}</div></div></div>
     </div>`
     : `<fieldset class="m-rows" style="border:0;padding:0;margin:0"><legend class="m-rowk" style="padding:0 0 8px">Which IBAN to move</legend>
       ${choices.map((c) => `<label class="m-detrow" style="cursor:pointer;gap:12px"><input type="radio" name="m-mv-iban" value="${esc(norm(c.iban))}">
@@ -2125,14 +2136,13 @@ function offerIbanMove(choices, profileId) {
   dlg.className = "m-dialog";
   dlg.setAttribute("aria-labelledby", "m-mv-title");
   dlg.innerHTML = `
-    <h2 id="m-mv-title">Use your Monerium IBAN in Zold</h2>
+    <h2 id="m-mv-title">Move your IBAN to Zold</h2>
     <div class="m-lede" style="font-size:13px">${one
-      ? "You already have an IBAN at Monerium, and Monerium gives one per profile. Zold uses that same IBAN: move it to this account to finish."
-      : `You already have ${choices.length} IBANs at Monerium, and it will not issue another. Pick the one Zold should use; it moves to this account.`}</div>
+      ? `You already have an IBAN ending ${esc(norm(one.iban).slice(-4))}. Zold will use it.`
+      : `You already have ${choices.length} IBANs. Pick the one Zold should use.`}</div>
     ${pick}
     <div class="m-note warn" style="margin-top:16px;font-size:13px;line-height:1.45">
-      After the move, payments to this IBAN arrive in your Zold account and the old wallet stops receiving them.
-      Anyone paying you keeps using the same IBAN. You can move it back from Monerium.
+      New payments arrive in Zold, and the old wallet stops getting them. People who pay you keep the same IBAN. You can move it back later.
     </div>
     <div class="m-field" style="margin-top:16px"><label for="m-mv-confirm">Type MOVE to confirm</label>
       <input id="m-mv-confirm" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>

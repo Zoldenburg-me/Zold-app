@@ -6,9 +6,10 @@
  * Extracted from server.ts so /api/health is not the reason this lives in a
  * 3,800-line file.
  */
-import { HARNESS, MONERIUM, SHOPIFY, moneriumOAuthEnabled } from "./config.js";
+import { FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
+import { faucetEnabled } from "./faucet.js";
 import { shopifyAvailable } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
@@ -57,6 +58,13 @@ export function capabilities() {
      *  local harness both import routes answer NO_CHAIN. Whether one account
      *  is still eligible is per user, and only `prepare` can tell. */
     safeImport: !HARNESS.enabled,
+    /** Does a payment page take tokens from other chains? Only through a
+     *  Candide forwarder; without one the page's address is the Safe and
+     *  takes the app's USDC on this chain alone. */
+    paymentPageForwarding: Boolean(FORWARDING.rpcUrl),
+    /** Test EURe per account from the testnet faucet, or 0 when there is
+     *  none — never on a chain where EURe is real money. */
+    faucetEur: faucetEnabled() ? TESTNET_FAUCET.grantEur : 0,
     moneriumHost: (() => { try { return new URL(MONERIUM.baseUrl).host; } catch { return MONERIUM.baseUrl; } })(),
   };
 }

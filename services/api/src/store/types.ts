@@ -26,6 +26,10 @@ export interface User {
    *  store only its address — the private half stays in the user's browser. */
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
+  /** Testnet faucet grant, so one account is funded exactly once. txHash is
+   *  empty while the transfer is in flight (the synchronous claim that stops a
+   *  second call from paying twice). */
+  faucet?: { grantedEur: number; txHash: string; at: string };
     /**
    * Passkey Safe state. The passkey is the only owner (threshold 1).
    */
@@ -196,11 +200,17 @@ export interface User {
       expiresAt?: string;
       activatedAt: string;
     };
+    /** What a payer may send to depositAddress, as the forwarder's routes
+     *  said at the last activation (adapters/candide-forwarder.ts). */
     supportedTokens?: {
       chainId: number;
-      symbol: "EURE" | "USDC";
+      chainName?: string;
+      symbol: string;
       address: `0x${string}`;
       decimals: number;
+      /** Smallest unit; below it the deposit is not forwarded. */
+      minAmount?: string;
+      feeBps?: number;
     }[];
     settlementAsset: "EURE" | "USDC";
     autoConvert: boolean;
@@ -258,6 +268,10 @@ export interface User {
       accountEmail?: string;
     };
     profiles?: any[];
+    /** Monerium's answer the last time Zold read the connected profile live
+     *  (adopt, fund, re-check, execute). Newer than `profiles`, which is the
+     *  snapshot taken at connect. */
+    profileSeen?: { id: string; kind: string; state: string; at: string };
     ibans?: any[];
     addresses?: any[];
   };
