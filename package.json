@@ -77,6 +77,7 @@
     "async-errors:test": "tsx scripts/async-errors-test.ts",
     "input-errors:test": "tsx scripts/input-errors-test.ts",
     "vat:test": "tsx scripts/vat-test.ts",
+    "org-accounts:test": "tsx scripts/org-accounts-test.ts",
     "custody:test": "tsx scripts/custody-test.ts",
     "segments:test": "tsx scripts/segments-test.ts",
     "onboarding:test": "tsx scripts/onboarding-segments-test.ts",

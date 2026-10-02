@@ -152,7 +152,7 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, 
  * theirs, not the company's. `Account.backingUserId` records whose Safe an
  * account actually is.
  */
-function orgsBackedBy(userId: string): Set<string> {
+export function orgsBackedBy(userId: string): Set<string> {
   return new Set(store.accounts.filter((a) => a.backingUserId === userId).map((a) => a.orgId));
 }
 
@@ -238,10 +238,27 @@ function fail(res: express.Response, err: unknown) {
   throw err;
 }
 
-/** The personal org a request is booked under by default. */
-function defaultOrgId(userId: string): string | undefined {
-  const orgs = store.organisationsForUser(userId);
+/**
+ * The org a link from the app is booked under: the user's company when they
+ * signed up as one and their Safe backs its account, else their personal org.
+ * A company the Safe does not back would book money the member received
+ * into the company's books.
+ */
+function defaultOrgId(user: User): string | undefined {
+  const orgs = store.organisationsForUser(user.id);
+  if (user.accountType === "company") {
+    const backed = orgsBackedBy(user.id);
+    const company = orgs.find((o) => o.org.type === "business" && backed.has(o.org.id));
+    if (company) return company.org.id;
+  }
   return (orgs.find((o) => o.org.type === "personal") ?? orgs[0])?.org.id;
+}
+
+/** The name a payer sees for a link booked under a company: the company's,
+ *  since the IBAN it pays into is the company's. */
+function payeeNameFor(r: PaymentRequest): string | undefined {
+  const org = r.orgId ? store.findOrganisation(r.orgId) : undefined;
+  return org?.type === "business" ? (org.legalName?.trim() || org.name) : undefined;
 }
 
 export function createPaymentRequestRouter(requireUserSession: SessionCheck): express.Router {
@@ -265,7 +282,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (!requireUserSession(req, res, user.id)) return;
       try {
         const input = validateCreate(req.body, user);
-        const r = await createPaymentRequest(user, input, { kind: "app" }, defaultOrgId(user.id));
+        const r = await createPaymentRequest(user, input, { kind: "app" }, defaultOrgId(user));
         res.status(201).json(ownerPaymentRequest(r, baseUrlFor(req)));
       } catch (err) {
         fail(res, err);
@@ -341,7 +358,10 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     return { r, user };
   };
 
-  const publicCtx = (req: express.Request, quote?: CryptoQuote) => payerContext(req, quote);
+  const publicCtx = (req: express.Request, r: PaymentRequest, quote?: CryptoQuote) => ({
+    ...payerContext(req, quote),
+    payeeName: payeeNameFor(r),
+  });
 
   router.get(
     "/pay/:handle/:code",
@@ -352,7 +372,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       const hit = resolvePublic(req, res);
       if (!hit) return;
       const { request, quote } = await ensureQuote(hit.r, hit.r.amountEur);
-      res.json(publicPaymentRequest(request, hit.user, publicCtx(req, quote)));
+      res.json(publicPaymentRequest(request, hit.user, publicCtx(req, request, quote)));
     }),
   );
 
@@ -381,7 +401,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       try {
         const { request, quote } = await ensureQuote(hit.r, n);
         if (!quote) return res.status(503).json({ error: "no live EUR/USD rate right now — try bank transfer, or try again shortly" });
-        res.json(publicPaymentRequest(request, hit.user, publicCtx(req, quote)));
+        res.json(publicPaymentRequest(request, hit.user, publicCtx(req, request, quote)));
       } catch (err) {
         fail(res, err);
       }

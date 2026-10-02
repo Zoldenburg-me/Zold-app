@@ -6,7 +6,7 @@
  * and nowhere else. An action that opens a drawer returns "keep", so the
  * shell does not draw the page again under it.
  */
-import { $, Z, api, cap, day, dialog, esc, eur, maskIban, org, plain, roleCan, ROLE_WORD, setView, toast, token, view } from "./core.js";
+import { $, Z, api, cap, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setView, toast, token, view } from "./core.js";
 import { exportMonth, sendState, setExportMonth } from "./views.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
@@ -268,8 +268,25 @@ export const ACTIONS = {
       toast(plain(r.note));
     }, { okLabel: "Import wallet" }),
   async "fund-account"(el) {
-    const r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
+    let r;
+    try {
+      r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
+    } catch (e) {
+      // A refusal can carry Monerium's newer answer (a profile still pending):
+      // draw the row again so it shows it.
+      render();
+      throw e;
+    }
     toast(plain(r.warning ? `${r.note} ${r.warning}` : r.note));
+  },
+  async "invoice-pay-link"(el) {
+    // Offer every method the payee's account can take; the server picks the
+    // amount from the invoice.
+    const { methods } = await api(`/api/users/${me.id}/payment-requests/methods`);
+    const usable = methods.filter((m) => m.available).map((m) => m.method);
+    if (!usable.length) throw new Error(plain(methods.map((m) => m.needs).filter(Boolean).join(" ")) || "No way to get paid is set up on this account yet.");
+    const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { invoiceId: el.dataset.id, methods: usable } });
+    setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.`, r.url), 0);
   },
   async "check-profile"(el) {
     const r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/profile-check`, { method: "POST" });
