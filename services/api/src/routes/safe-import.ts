@@ -54,6 +54,7 @@ export interface SafeImportDeps {
 type Hex = `0x${string}`;
 const ZERO = "0x0000000000000000000000000000000000000000";
 /** Chosen, not measured: up to 20 s for the RPC to show the verifier's code. */
+const VERIFIER_RECEIPT_TIMEOUT_MS = 60_000;
 const VERIFIER_CODE_POLLS = 10;
 const VERIFIER_CODE_POLL_MS = 2_000;
 const ERC20 = parseAbi(["function balanceOf(address) view returns (uint256)"]);
@@ -210,7 +211,15 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
           // factory deployment; send it, wait for it, then check everything again.
           const hash = await deployVerifier(owner);
           if (!hash) throw err;
-          const receipt = await relayReader().waitForTransactionReceipt({ hash: hash as Hex, timeout: 120_000 });
+          // Bounded under Cloudflare's 100 s: past it the caller gets a 524
+          // while this carries on. A slow block is "try again", not an error;
+          // a retry finds the verifier deployed and goes straight through. 409,
+          // not 504: Cloudflare replaces an origin 5xx body with its own page.
+          const receipt = await relayReader()
+            .waitForTransactionReceipt({ hash: hash as Hex, timeout: VERIFIER_RECEIPT_TIMEOUT_MS })
+            .catch(() => {
+              throw new Refusal(409, "the verifier deployment is still confirming on chain; try again in a minute", "VERIFIER_PENDING");
+            });
           if (receipt.status !== "success") throw err;
           // A load-balanced RPC can answer from a node behind the receipt
           // (seen on sepolia.base.org). Wait for the code, bounded; still

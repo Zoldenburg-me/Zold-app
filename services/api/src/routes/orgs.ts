@@ -43,6 +43,8 @@ import { KYC } from "../config.js";
 import { wrap } from "./util.js";
 import { accountProfileStanding } from "../domain/monerium-profile.js";
 import { adoptionHint, auditProfileCheck, checkBackingProfile } from "../adapters/monerium-profile.js";
+import { emailLooksValid } from "../domain/email.js";
+import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 
@@ -289,7 +291,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const email = String(req.body?.email ?? "").trim().toLowerCase();
     const role = String(req.body?.role ?? "viewer") as Role;
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    if (!emailLooksValid(email)) {
       return res.status(400).json({ error: "A member needs a valid email address." });
     }
     if (!ROLES.includes(role)) {
@@ -699,6 +701,10 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const name = String(req.body?.name ?? "").trim();
     if (name.length < 2) return res.status(400).json({ error: "A contact needs a name." });
+    if (name.length > 200) return res.status(400).json({ error: "A contact's name is limited to 200 characters." });
+    if (store.contactsOf(ctx.org.id).length >= CEILINGS.contactsPerOrg) {
+      return res.status(409).json(ceilingRefusal("contacts in this organisation", CEILINGS.contactsPerOrg));
+    }
 
     try {
       const now = new Date().toISOString();

@@ -56,6 +56,8 @@ process.env.TRUSTED_PROXY_HOPS = "0";
 // route now shares the tight auth bucket. security-hardening-test.ts sets the
 // production value back and asserts the 429 itself.
 process.env.AUTH_RATE_LIMIT_PER_MIN = "1000";
+process.env.PARTNER_RATE_LIMIT_PER_MIN = "1000";
+process.env.DOCUMENT_RATE_LIMIT_PER_MIN = "1000";
 
 /**
  * KYC_AUTO_APPROVE is a gate: with "0" a new user starts pending and never

@@ -350,8 +350,39 @@ export function seedChartOfAccounts(orgId: string, at = new Date().toISOString()
   }
 }
 
+/* Every write rewrites the whole file, synchronously, so the state is on disk
+ * before the caller goes on to the chain or a partner. A loop of writes inside
+ * one request runs in `batched` and lands as one write at its end; nothing is
+ * deferred past the call that made it. */
+let batchDepth = 0;
+let batchDirty = false;
+
 export function persist() {
+  if (batchDepth > 0) {
+    batchDirty = true;
+    return;
+  }
   const tmp = DB_PATH + ".tmp";
   writeFileSync(tmp, JSON.stringify(db, null, 2));
   renameSync(tmp, DB_PATH);
+}
+
+/** Run `fn` with its writes collected into one, written before this returns
+ *  (also when `fn` throws, so a partial batch is never only in memory).
+ *  Synchronous only: an await inside would hold writes across I/O. */
+export function batched<T>(fn: () => T): T {
+  batchDepth++;
+  try {
+    const out = fn();
+    if (out && typeof (out as { then?: unknown }).then === "function") {
+      throw new Error("batched() takes a synchronous function");
+    }
+    return out;
+  } finally {
+    batchDepth--;
+    if (batchDepth === 0 && batchDirty) {
+      batchDirty = false;
+      persist();
+    }
+  }
 }

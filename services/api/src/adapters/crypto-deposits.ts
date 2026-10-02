@@ -571,12 +571,19 @@ export async function sweepPendingCryptoDeposits(): Promise<number> {
 }
 
 export function startCryptoDepositPoller() {
+  // One tick at a time: a slow partner or RPC must not stack a second pass
+  // over the same rows on top of the first.
+  let busy = false;
   const tick = async () => {
+    if (busy) return;
+    busy = true;
     try {
       await sweepPendingCryptoDeposits();
       await pollCryptoDepositsOnce();
     } catch (err: any) {
       console.error(`crypto-in poll failed: ${err?.message ?? err}`);
+    } finally {
+      busy = false;
     }
   };
   void tick();
