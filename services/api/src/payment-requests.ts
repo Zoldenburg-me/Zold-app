@@ -608,9 +608,10 @@ export function publicPaymentRequest(
     quote?: CryptoQuote;
     /** A company's name, for a link booked under it: the holder of the IBAN. */
     payeeName?: string;
-    /** False when the page's deposit address may not be shown (a lapsed
-     *  forwarder activation): the crypto method is then left out. */
-    cryptoLive?: boolean;
+    /** Whether the page's deposit address may be shown (livePaymentPage).
+     *  Required, and only true shows it: a caller that did not ask gets no
+     *  address, rather than a lapsed forwarder's. */
+    cryptoLive: boolean;
   },
 ): PublicPaymentRequest {
   const now = ctx.now ?? new Date();
@@ -618,7 +619,7 @@ export function publicPaymentRequest(
   const paid = paidEur(r);
   const page = user.paymentPage;
   const methods: PublicPaymentRequest["methods"] = {};
-  if (r.methods.includes("crypto") && page?.depositAddress && ctx.cryptoLive !== false) {
+  if (r.methods.includes("crypto") && page?.depositAddress && ctx.cryptoLive === true) {
     const q = ctx.quote;
     methods.crypto = {
       chainId: ctx.chainId,

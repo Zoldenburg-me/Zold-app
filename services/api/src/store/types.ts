@@ -212,6 +212,10 @@ export interface User {
       minAmount?: string;
       feeBps?: number;
     }[];
+    /** When supportedTokens was read from the forwarder's routes. Absent on a
+     *  page whose list predates that (a hard-coded EURe + USDC); such a list
+     *  is never served (routes/payment-page.ts livePaymentPage). */
+    routesReadAt?: string;
     settlementAsset: "EURE" | "USDC";
     autoConvert: boolean;
     createdAt: string;

@@ -562,7 +562,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // It carries no payment code: not `code`, and not the return/cancel/page
       // URLs built from it. The page link is the order's own /pay route.
       const { code: _code, returnUrl: _ret, cancelUrl: _cancel, ...payer } =
-        publicPaymentRequest(request, user, payerContext(req, quote));
+        publicPaymentRequest(request, user, await payerContext(req, request, user, quote));
       res.json({
         ...payer,
         pageUrl: `${base}/api/shopify/orders/${encodeURIComponent(r.source.shop!)}/${r.source.orderGid!.split("/").pop()}/pay`,

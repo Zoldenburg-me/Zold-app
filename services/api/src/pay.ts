@@ -116,7 +116,9 @@ export function publicPayee(
     address: page.depositAddress,
     chainId: chain.chainId,
     token: chain.token,
-    ...(page.supportedTokens?.length ? { supportedTokens: page.supportedTokens } : {}),
+    // Only a list read from the forwarder's routes: an older page stored a
+    // hard-coded EURe + USDC, and Candide strands what its routes do not list.
+    ...(page.routesReadAt && page.supportedTokens?.length ? { supportedTokens: page.supportedTokens } : {}),
     settlementAsset: page.settlementAsset,
     autoConvert: page.autoConvert,
   };
