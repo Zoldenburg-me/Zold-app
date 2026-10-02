@@ -353,7 +353,12 @@ RENDER.settings = async () => {
           : free ? "" : '<span class="desc">By trial, or ask Zold</span>';
     return `<div class="zb-plan${current ? " is-current" : ""}"><div class="zb-plan__head"><b>${esc(p.name)}</b><span class="desc">${esc(p.price)}</span></div><p>${esc(p.blurb)}</p><div>${act}</div></div>`;
   }).join("");
-  return `${cap("integrations.accounting").allowed ? `<section class="card"><div class="h"><div><h2>Connections</h2><p class="desc">Send your books to GetMyInvoices, or export them for Lexware, sevDesk and DATEV.</p></div>${linkBtn("Open", "integrations", "hub")}</div></section>` : ""}
+  // Shown on every plan: a hidden feature reads as a missing one. Open leads to the gate.
+  const conn = cap("integrations.accounting");
+  const connNeeds = conn.allowed ? "" : conn.requiresPlan?.length
+    ? ` Needs the ${conn.requiresPlan.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" or ")} plan, or a trial.`
+    : ` ${conn.reason || ""}`;
+  return `<section class="card"><div class="h"><div><h2>Connections</h2><p class="desc">Send your books to GetMyInvoices, or export them for Lexware, sevDesk and DATEV.${esc(connNeeds)}</p></div>${linkBtn("Open", "integrations", "hub")}</div></section>
     <form class="card" id="org-form" onsubmit="return false"><div class="h"><div><h2>Organisation</h2><p class="desc">Printed on every invoice you issue. The country decides which invoicing rules apply.</p></div>
       <button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="save-org">Save</button></div>
       <div class="grid g2">
