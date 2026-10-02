@@ -139,9 +139,8 @@ Each of these was a bug once.
   at execution. The gap between approval and execution is where an address-book
   edit lands.
 - **An org can never lose its last owner** — by role change or by deactivation.
-- **PRF is a per-authenticator capability, not a design guarantee.** Real
-  hardware reported no PRF support, so the device key was stored unwrapped:
-  anything that can read localStorage can spend there. Detect and surface it.
+- **The device key's protection is per-authenticator.** `device.js` reports
+  it; the Security screen shows what it reports.
 
 **Data and exposure**
 - **Collect per call, store nothing.** `SenderDetails` (name, birth date, ID

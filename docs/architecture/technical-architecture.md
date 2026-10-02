@@ -311,8 +311,8 @@ Safe (`importedAt`) as for a recovered one (`recoveredAt`).
 
 - A secp256k1 key is generated in the browser and stored in
   `localStorage["zold-device-key"]`. It is wrapped with AES-GCM under
-  HKDF(WebAuthn PRF output, salt `"zoll/device-key/v1"`) where PRF exists, and
-  stored as a plaintext hex key where it does not. **Do not rename the salt**:
+  HKDF(WebAuthn PRF output, salt `"zoll/device-key/v1"`) where PRF exists.
+  **Do not rename the salt**:
   it is a KDF input.
 - It is bound once through `POST /users/:id/authorizer` with a passkey
   step-up. Binding is trust-on-first-use and there is no rotation route.

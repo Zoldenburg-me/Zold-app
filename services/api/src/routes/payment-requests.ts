@@ -240,9 +240,9 @@ function fail(res: express.Response, err: unknown) {
 
 /**
  * The org a link from the app is booked under: the user's company when they
- * signed up as one and their Safe backs its account, else their personal org.
- * A company the Safe does not back would book money the member received
- * into the company's books.
+ * signed up as one and their Safe backs its account, else their personal org,
+ * else none. A company the Safe does not back would book money the member
+ * received into the company's books.
  */
 function defaultOrgId(user: User): string | undefined {
   const orgs = store.organisationsForUser(user.id);
@@ -251,14 +251,16 @@ function defaultOrgId(user: User): string | undefined {
     const company = orgs.find((o) => o.org.type === "business" && backed.has(o.org.id));
     if (company) return company.org.id;
   }
-  return (orgs.find((o) => o.org.type === "personal") ?? orgs[0])?.org.id;
+  return orgs.find((o) => o.org.type === "personal")?.org.id;
 }
 
 /** The name a payer sees for a link booked under a company: the company's,
- *  since the IBAN it pays into is the company's. */
+ *  only when the payee's Safe backs that company's account, so the IBAN it
+ *  pays into is the company's. */
 function payeeNameFor(r: PaymentRequest): string | undefined {
   const org = r.orgId ? store.findOrganisation(r.orgId) : undefined;
-  return org?.type === "business" ? (org.legalName?.trim() || org.name) : undefined;
+  if (org?.type !== "business" || !orgsBackedBy(r.userId).has(org.id)) return undefined;
+  return org.legalName?.trim() || org.name;
 }
 
 export function createPaymentRequestRouter(requireUserSession: SessionCheck): express.Router {

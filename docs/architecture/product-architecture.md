@@ -239,9 +239,7 @@ A send needs up to three prompts on the same device:
 
 The device key is a secp256k1 key generated in the browser and bound once
 with a passkey step-up. Where the authenticator supports WebAuthn PRF, the key
-is wrapped with it. **On the hardware tested, PRF was not supported and the
-key is stored unwrapped in localStorage.** That is a known weakness and is
-surfaced in the profile.
+is wrapped with it, and the profile shows how this browser holds it.
 
 ### 4.3 Segments and partner capabilities — LIVE
 
@@ -352,9 +350,9 @@ wrong handle returns 404.
 | **Zold account** | The app opens a pre-filled SEPA send. | As bank. |
 
 A link is booked under an org: from the app, the company a company signup's
-Safe backs, else the personal org; from `/orgs/:orgId/payment-requests`, that
-org. Under a business org the payer sees the company's registered name as the
-holder.
+Safe backs, else the personal org, else none; from
+`/orgs/:orgId/payment-requests`, that org. The payer sees the company's
+registered name as the holder only when the payee's Safe backs that company.
 
 There is no EPC/GiroCode QR. The link becomes PAID when funds reach the
 payee's address. Conversion to euros is separate (§6.3).
