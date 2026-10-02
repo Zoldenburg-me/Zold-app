@@ -532,11 +532,29 @@ An org can list external wallets (EOA, Safe or MPC) read-only. They **never
 sync**, so their ledger is empty. Drafts sourced from an imported wallet just
 echo the lines back as "unsigned".
 
-### 7.8 Operator console — LIVE, read-only
+### 7.8 Operator console — LIVE, read-only except recovery signing
 
-`/admin` shows users, stats, operator gas balances and a merged transaction
-feed, with a triage strip for stuck states. It is token-gated and has no write
-actions. It does not show organisations, drafts or invoices.
+`/admin` is a dashboard with six sections, each with its own path
+(`/admin/recoveries` etc.): **Overview** (counts, the onboarding funnel, 14-day
+signups and transfers, operator gas, newest issues); **Users** (filtered by
+onboarding stage — the first of account → passkey → Safe → recovery choice →
+Monerium → IBAN not done — and one account in full); **Monerium** (the
+deployment's Monerium settings, every connected account and its profile state,
+company accounts backed by a profile, incoming issue and outgoing redeem
+orders, the partner audit trail); **Transactions**; **Recoveries** (every
+Zoldenburg request from "passkey registered" to "recovered", the review and
+guardian signing, and who enrolled or declined Zoldenburg); **Errors** (one
+feed of server 500s by `E-` reference, failed and stuck transfers, refused
+deposits, Monerium refusals and provisioning errors, recoveries that would not
+finalize, partner calls refused by policy).
+
+Monerium data is what Zold stored at connect, plus a **live read** an operator
+asks for on one account: it uses that person's own OAuth token or API keys,
+refuses an account without one (the app's credentials would answer with every
+app account), stores nothing and writes an `operator.monerium_read` audit
+entry. Token-gated; the only writes are the recovery review actions. It does
+not show drafts or invoices. Server errors are held in memory, so a restart
+empties that part of the Errors feed.
 
 ---
 
@@ -735,7 +753,7 @@ go (Lexware CSV, a GetMyInvoices bank account, MT940 or CAMT).
 | `/r/<slug>` | anyone with the link | Redacted transfer receipt |
 | `/v/<code>` | anyone with the code | Verified account document |
 | `/invoice/<token>` | supplier / customer | Invoice-Me form, or an issued invoice sheet |
-| `/admin` | operator | Read-only console |
+| `/admin` | operator | Operator dashboard (read-only except recovery signing) |
 | Shopify Thank-you and Order-status blocks | buyer | Payment instructions with live status |
 
 ---

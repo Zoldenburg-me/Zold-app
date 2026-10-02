@@ -36,7 +36,10 @@ export type AuditKind =
   | "partner.documents_pushed"
   /** An org account's Monerium profile was checked (adopt, fund, re-check or
    *  execution): which profile, which kind, and whether it passed. */
-  | "account.monerium_profile_checked";
+  | "account.monerium_profile_checked"
+  /** An operator read an account's Monerium data live, on the account's own
+   *  connection (admin dashboard). Which operator, which profile. */
+  | "operator.monerium_read";
 
 export interface AuditEntry {
   id: string;

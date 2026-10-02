@@ -3,217 +3,62 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Zold Admin — Operator Control Tower</title>
+  <title>Zold Operator</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <meta name="robots" content="noindex, nofollow">
   <link rel="stylesheet" href="/vendor/fonts/text.css">
+  <link rel="stylesheet" href="/tokens.css">
   <link rel="stylesheet" href="/admin.css">
 </head>
 <body>
-  <div class="bg-glow"></div>
+  <div class="shell">
+    <nav class="side" aria-label="Operator sections">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">Z</span><span>Zold Operator</span></div>
+      <a href="#/overview" data-nav="overview"><span class="ni" aria-hidden="true">◧</span>Overview</a>
+      <a href="#/users" data-nav="users"><span class="ni" aria-hidden="true">◉</span>Users<span class="nb" id="navUsers"></span></a>
+      <a href="#/monerium" data-nav="monerium"><span class="ni" aria-hidden="true">€</span>Monerium</a>
+      <a href="#/transactions" data-nav="transactions"><span class="ni" aria-hidden="true">⇄</span>Transactions</a>
+      <a href="#/recoveries" data-nav="recoveries"><span class="ni" aria-hidden="true">⟲</span>Recoveries<span class="nb warn" id="navRecoveries"></span></a>
+      <a href="#/errors" data-nav="errors"><span class="ni" aria-hidden="true">!</span>Errors<span class="nb bad" id="navErrors"></span></a>
+      <div class="side-foot" id="sideFoot">—</div>
+    </nav>
 
-  <div class="container">
-    <header>
-      <div class="logo-group">
-        <div class="logo-badge">Z</div>
-        <div>
-          <h1 class="brand-title">Zold Operator Tower</h1>
-          <div class="brand-subtitle">Base • passkey-owned Safe • Monerium (OAuth / own API keys)</div>
+    <div class="main">
+      <header class="top">
+        <h1 id="viewTitle">Overview</h1>
+        <div class="top-right">
+          <span class="updated" id="updatedAt" aria-live="polite"></span>
+          <button type="button" class="btn ghost" id="refreshBtn">Refresh</button>
+          <label class="token">
+            <span class="z-sr">Operator token</span>
+            <input type="password" id="operatorToken" placeholder="Operator token" autocomplete="off" spellcheck="false">
+          </label>
+          <span class="auth" id="authPill" role="status" aria-live="polite"><span class="dot"></span><span id="authText">No token</span></span>
         </div>
-      </div>
-      <div class="auth-bar">
-        <label for="operatorToken" style="font-size: 12px; color: var(--text-muted);">Operator Token:</label>
-        <input type="password" id="operatorToken" placeholder="Enter operator token..." aria-label="Operator token" autocomplete="off" spellcheck="false">
-        <div class="auth-status online" id="authPill" role="status" aria-live="polite">
-          <span class="status-dot"></span>
-          <span id="authText">Connected</span>
-        </div>
-      </div>
-    </header>
-
-    <!-- KPI tiles. Clicking a tile jumps to the panel it summarises with the
-         matching filter applied. -->
-    <div class="stats-grid">
-      <button type="button" class="stat-card clickable" onclick="jumpToUsers('all')">
-        <span class="stat-label">Total Users</span>
-        <span class="stat-value" id="statUsers">--</span>
-        <span class="stat-sub">Accounts registered</span>
-      </button>
-      <button type="button" class="stat-card clickable" onclick="jumpToUsers('pending')">
-        <span class="stat-label">Pending at Monerium</span>
-        <span class="stat-value" id="statPending" style="color: var(--warning);">--</span>
-        <span class="stat-sub">Not yet activated</span>
-      </button>
-      <button type="button" class="stat-card clickable" onclick="jumpToUsers('approved')">
-        <span class="stat-label">Active Safes</span>
-        <span class="stat-value" id="statSafes" style="color: var(--primary);">--</span>
-        <span class="stat-sub">Deployed on Base</span>
-      </button>
-      <button type="button" class="stat-card clickable" onclick="jumpToTx('all')">
-        <span class="stat-label">Transfers</span>
-        <span class="stat-value" id="statTransfers" style="color: var(--success);">--</span>
-        <span class="stat-sub" id="statVolume">Volume —</span>
-      </button>
-      <button type="button" class="stat-card clickable" onclick="jumpToTx('attention')">
-        <span class="stat-label">Needs Attention</span>
-        <span class="stat-value" id="statAttention">--</span>
-        <span class="stat-sub">KYC · IBANs · failed & stuck transfers</span>
-      </button>
-      <div class="stat-card">
-        <div class="stat-label">Deployer Float</div>
-        <div class="stat-value" id="statFloat">--</div>
-        <div class="stat-sub" id="statFloatSub">gas source</div>
-      </div>
-    </div>
-
-    <!-- Triage queue: everything actionable, in one bounded list above the fold. -->
-    <div class="attention-card calm" id="attentionCard">
-      <div class="attention-head">
-        <div class="attention-title">Needs attention <span class="attention-count" id="attentionCount">0</span></div>
-        <span style="font-size:12px;color:var(--text-dim)">KYC reviews, missing IBANs, failed / stuck transfers, dry float</span>
-      </div>
-      <div class="attention-list" id="attentionList"></div>
-    </div>
-
-    <!-- Zoldenburg-guardian recoveries. A person who lost their passkey asks
-         support; the operator checks them against Monerium's verification and
-         signs as guardian from a hardware wallet (Safe Cover, or here via
-         eth_signTypedData_v4). The API moves a request only on what the chain
-         shows. -->
-    <div class="panel" id="recoveriesPanel">
-      <div class="panel-head">
-        <div class="panel-title">Recoveries <span class="panel-count" id="recoveriesCount"></span></div>
-        <div class="rv-actions">
-          <span style="font-size:12px;color:var(--text-dim)" id="recoveriesGuardian">Zoldenburg guardian</span>
-          <button type="button" class="btn btn-icon" id="rvCheckBtn">Test guardian wallet</button>
-        </div>
-      </div>
-      <div id="rvCheckMsg" role="status" aria-live="polite" style="padding:0 18px"></div>
-      <div class="panel-scroll" style="max-height:320px">
-        <table>
-          <thead>
-            <tr>
-              <th>Reference</th>
-              <th>Account</th>
-              <th>Monerium KYC</th>
-              <th>Status</th>
-              <th>Requested</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="recoveriesTableBody">
-            <tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">Loading recoveries…</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div id="recoveryDetail" class="rv-detail" hidden></div>
-    </div>
-
-    <!-- Server errors by reference: a ref a user quotes ("E-…") leads to the
-         route and stack. In memory on the API, so a restart empties it. -->
-    <div class="panel" id="errorsPanel">
-      <div class="panel-head">
-        <div class="panel-title">Server errors <span class="panel-count" id="errorsCount"></span></div>
-        <input type="search" id="errorsSearch" aria-label="Find a server error by reference" placeholder="E-… reference" style="max-width:200px">
-      </div>
-      <div class="panel-scroll" style="max-height:320px">
-        <table>
-          <thead><tr><th>Reference</th><th>When</th><th>Route</th><th>Error</th></tr></thead>
-          <tbody id="errorsTableBody">
-            <tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-muted);">Loading server errors…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- One search filters both panels. -->
-    <div class="controls">
-      <div class="search-box">
-        <svg class="search-icon" aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="search" id="searchInput" aria-label="Search users and transactions" placeholder="Search users and transactions — name, id, Safe, IBAN, state, tx hash...">
-      </div>
-    </div>
-
-    <!-- Accounts panel: bounded height, own scroll, sticky header. -->
-    <div class="panel" id="usersPanel">
-      <div class="panel-head">
-        <div class="panel-title">Accounts <span class="panel-count" id="usersCount"></span></div>
-        <div class="filter-tabs" id="userFilterTabs" role="group" aria-label="Filter accounts">
-          <button type="button" class="tab-btn active" aria-pressed="true" data-filter="all">All</button>
-          <button type="button" class="tab-btn" aria-pressed="false" data-filter="pending">Pending</button>
-          <button type="button" class="tab-btn" aria-pressed="false" data-filter="approved">Approved</button>
-          <button type="button" class="tab-btn" aria-pressed="false" data-filter="rejected">Rejected</button>
-          <button type="button" class="tab-btn" aria-pressed="false" data-filter="no-iban">No IBAN</button>
-        </div>
-      </div>
-      <div class="panel-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>User</th>
-              <th>Country</th>
-              <th>KYC</th>
-              <th>Safe</th>
-              <th>IBAN</th>
-              <th>Balance</th>
-              <th>Created</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="usersTableBody">
-            <tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">Loading system accounts...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Transactions panel: same shape, immediately below — no long scroll to
-         reach it because the accounts panel above is height-bounded. -->
-    <div class="panel" id="txPanel">
-      <div class="panel-head">
-        <div class="panel-title">Transaction Operations <span class="panel-count" id="txCount"></span></div>
-        <div class="filter-tabs" id="txFilterTabs" role="group" aria-label="Filter transactions">
-          <button type="button" class="tab-btn active" aria-pressed="true" data-tx-filter="all">All</button>
-          <button type="button" class="tab-btn" aria-pressed="false" data-tx-filter="sepa">Monerium</button>
-          <button type="button" class="tab-btn" aria-pressed="false" data-tx-filter="cash">MoneyGram</button>
-          <button type="button" class="tab-btn" aria-pressed="false" data-tx-filter="funding">Funding</button>
-          <button type="button" class="tab-btn" aria-pressed="false" data-tx-filter="inflight">In Flight</button>
-          <button type="button" class="tab-btn" aria-pressed="false" data-tx-filter="attention">Needs Attention</button>
-        </div>
-      </div>
-      <div class="panel-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Transaction</th>
-              <th>User</th>
-              <th>Rail</th>
-              <th>Status</th>
-              <th>Amount</th>
-              <th>Route / Backend TXs</th>
-              <th>Updated</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="transactionsTableBody">
-            <tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted);">Loading transaction operations...</td></tr>
-          </tbody>
-        </table>
-      </div>
+      </header>
+      <main id="view" tabindex="-1"></main>
     </div>
   </div>
 
-  <!-- Detail JSON Modal -->
   <div class="modal-overlay" id="modalOverlay">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-header">
-        <h2 class="modal-title" id="modalTitle" tabindex="-1">User Raw Details</h2>
-        <button type="button" class="close-btn" onclick="closeModal()" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+        <h2 class="modal-title" id="modalTitle" tabindex="-1">Raw data</h2>
+        <button type="button" class="close-btn" id="modalClose" aria-label="Close"><span aria-hidden="true">&times;</span></button>
       </div>
-      <pre class="json-code" id="modalJson"></pre>
+      <pre class="json" id="modalJson"></pre>
     </div>
   </div>
 
-  <script src="/admin.js"></script>
+  <div class="tip" id="chartTip" role="tooltip" hidden></div>
+
+  <script src="/admin/core.js"></script>
+  <script src="/admin/overview.js"></script>
+  <script src="/admin/users.js"></script>
+  <script src="/admin/monerium.js"></script>
+  <script src="/admin/transactions.js"></script>
+  <script src="/admin/recoveries.js"></script>
+  <script src="/admin/errors.js"></script>
+  <script src="/admin/main.js"></script>
 </body>
 </html>
