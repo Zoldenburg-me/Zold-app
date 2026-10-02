@@ -26,6 +26,7 @@ import {
   initialStatusFor,
   suggestedCurrency,
 } from "../services/api/src/domain/accounts.js";
+import { MONERIUM } from "../services/api/src/config.js";
 import {
   ContactError,
   destinationFingerprint,
@@ -209,6 +210,24 @@ check("an invitation seat needs a PROVEN email, not the one typed at signup", ()
 console.log("\nLocal accounts");
 
 check("only EUR can be live, and every gated currency names what it needs", () => {
+  // EUR's rail opens on the operator's Monerium config, so pin both states
+  // rather than inherit whatever .env this checkout has.
+  const saved = { oauthClientId: MONERIUM.oauthClientId, tokenEncryptionKey: MONERIUM.tokenEncryptionKey };
+  const eurWith = (open: boolean) => {
+    MONERIUM.oauthClientId = "";
+    MONERIUM.tokenEncryptionKey = open ? "k".repeat(32) : "";
+    try {
+      return currencyAvailability();
+    } finally {
+      Object.assign(MONERIUM, saved);
+    }
+  };
+  const closed = eurWith(false).find((c) => c.code === "EUR")!;
+  assert.equal(closed.available, false);
+  assert.equal(closed.token?.heldByUs, false, "a closed EUR rail must not show EURe as held");
+  const open = eurWith(true).find((c) => c.code === "EUR")!;
+  assert.equal(open.available, true);
+  assert.equal(open.token?.heldByUs, true, "an open EUR rail shows EURe as held");
   const list = currencyAvailability();
   for (const c of list) {
     if (c.available) {
