@@ -58,6 +58,7 @@ const scripts = [
   "draft:failure:test",
   "security:test",
   "plan:test",
+  "admin:test",
   "invoicing:test",
   "async-errors:test",
   "input-errors:test",
