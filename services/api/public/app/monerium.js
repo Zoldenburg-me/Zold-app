@@ -184,6 +184,21 @@ function hasConnectedMonerium(u = user) {
   return !!u?.monerium?.connectedAt;
 }
 
+/* Which Monerium login and profile the connection stands for, as rows for
+   Z.kv. A browser still signed in at Monerium skips its login form, so this
+   is the one place the user sees which login Zold got. */
+function moneriumConnectedRows(u = user) {
+  const m = u?.monerium;
+  if (!m) return [];
+  const p = (m.profiles || []).find((x) => x?.id === m.profileId);
+  const kind = p?.kind === "corporate" ? "Company" : p?.kind === "personal" ? "Personal" : "";
+  const state = p?.state && p.state !== "approved" ? ` · ${p.state}` : "";
+  return [
+    ...(m.accountEmail ? [{ key: "Monerium login", value: m.accountEmail }] : []),
+    ...(p ? [{ key: "Profile", value: `${p.name || "Unnamed"}${kind ? ` (${kind})` : ""}${state}` }] : []),
+  ];
+}
+
 /* The IBAN has been asked for and the account waits on Monerium, not on the
    user. null when there is something to do here (or nothing left to wait for).
    `idCheck` reads the profile state Zold last saw, which only says "still

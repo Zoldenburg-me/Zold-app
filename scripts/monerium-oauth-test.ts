@@ -495,6 +495,11 @@ try {
     assert.equal(me.data.monerium.profileId, PROFILE_ID, "connected profile should be visible");
   });
 
+  await t("the Monerium login's email is shown back, so a stale browser session is noticed", async () => {
+    const me = await call(`/api/users/${userId}`);
+    assert.equal(me.data.monerium.accountEmail, "user@example.com", "the email from /auth/context should be on the projection");
+  });
+
   await t("the state is single-use — replaying the callback is refused", async () => {
     const r = await call(`/api/monerium/oauth/callback?state=${encodeURIComponent(state)}&code=${AUTH_CODE}`, undefined, "GET", { cookie: connectCookie });
     assert.equal(r.status, 302, "a consumed OAuth state must not be reusable");
