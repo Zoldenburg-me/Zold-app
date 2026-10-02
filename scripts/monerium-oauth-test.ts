@@ -454,9 +454,10 @@ try {
     assert.equal(me.data.moneriumConnect, undefined, "OAuth state must not be exposed to the client");
   });
 
-  await t("a callback with an unknown state is refused", async () => {
+  await t("a callback with an unknown state is refused, back to the app rather than as raw JSON", async () => {
     const r = await call(`/api/monerium/oauth/callback?state=not-a-real-state&code=${AUTH_CODE}`, undefined, "GET");
-    assert.equal(r.status, 400);
+    assert.equal(r.status, 302);
+    assert.match(r.location ?? "", /\/app\?monerium=refused/);
   });
 
   const state = new URL(redirectUrl).searchParams.get("state")!;
@@ -464,7 +465,8 @@ try {
   await t("a callback from a browser that did not start the connect is refused (login CSRF)", async () => {
     assert.ok(connectCookie, "connect/start must set the nonce cookie");
     const r = await call(`/api/monerium/oauth/callback?state=${encodeURIComponent(state)}&code=${AUTH_CODE}`, undefined, "GET");
-    assert.equal(r.status, 400, `expected the cookie-less callback to be refused: ${JSON.stringify(r.data)}`);
+    assert.equal(r.status, 302, `expected the cookie-less callback to be refused: ${JSON.stringify(r.data)}`);
+    assert.match(r.location ?? "", /monerium=refused/);
     assert.equal(seen.grantTypes.includes("authorization_code"), false, "no code exchange may happen without the nonce");
   });
 
@@ -495,7 +497,10 @@ try {
 
   await t("the state is single-use — replaying the callback is refused", async () => {
     const r = await call(`/api/monerium/oauth/callback?state=${encodeURIComponent(state)}&code=${AUTH_CODE}`, undefined, "GET", { cookie: connectCookie });
-    assert.equal(r.status, 400, "a consumed OAuth state must not be reusable");
+    assert.equal(r.status, 302, "a consumed OAuth state must not be reusable");
+    assert.match(r.location ?? "", /monerium=refused/);
+    const me = await call(`/api/users/${userId}`);
+    assert.equal(me.data.moneriumRefusal, undefined, "a replay must not mark the connected account refused");
   });
 
   await t("accounts lists the user's existing Monerium IBANs", async () => {

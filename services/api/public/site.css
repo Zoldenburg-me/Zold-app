@@ -34,6 +34,7 @@ img { max-width: 100%; }
 .s-num { font-variant-numeric: tabular-nums; }
 .s-mono { font-family: var(--z-mono); }
 @media (max-width: 760px) { .s-hide-sm { display: none !important; } }
+@media (min-width: 761px) { .s-show-sm { display: none !important; } }
 
 /* Phosphor, the landing subset (RULES: Phosphor on the landing, Material
    Symbols in the app). */
@@ -73,6 +74,13 @@ img { max-width: 100%; }
 .s-nav__links a { color: var(--z-dim); }
 .s-nav__links a:hover { color: var(--z-text); }
 .s-nav__gap { flex: 1; }
+.s-menu { position: static; }
+.s-menu > summary { list-style: none; display: inline-grid; place-items: center; min-width: var(--z-touch); min-height: var(--z-touch); font-size: 20px; color: var(--z-text); cursor: pointer; border-radius: 10px; }
+.s-menu > summary::-webkit-details-marker { display: none; }
+.s-menu > summary:focus-visible { outline: 2px solid var(--z-pink); outline-offset: 2px; }
+.s-menu__panel { position: absolute; left: 0; right: 0; top: 100%; display: flex; flex-direction: column; gap: 2px; padding: 8px 16px 16px; background: var(--z-bg); border-bottom: 1px solid var(--z-line); }
+.s-menu__panel a:not(.s-btn) { display: flex; align-items: center; min-height: var(--z-touch); padding: 0 8px; color: var(--z-text); font-size: 15px; border-radius: 10px; }
+.s-menu__panel .s-btn { margin-top: 8px; justify-content: center; }
 .s-nav__login { font-size: 13.5px; font-weight: 500; white-space: nowrap; min-height: 36px; display: inline-flex; align-items: center; }
 @media (max-width: 760px) { .s-nav__in { padding: 6px 16px 6px 24px; } .s-brand, .s-nav__login { min-height: var(--z-touch); } .s-nav__login { padding: 0 8px; margin-right: -8px; } }
 
