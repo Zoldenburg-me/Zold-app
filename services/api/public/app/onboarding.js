@@ -1596,7 +1596,7 @@ OB["monerium-keys"] = {
 OB.activate = {
   kind: "after",
   title: "Switch on your IBAN",
-  html: () => ibanWait(user) ? obIbanWaitHtml(ibanWait(user)) : `${obAfterProgress("activate", "Switch on")}
+  html: () => obIbanReady && user?.iban ? obIbanReadyHtml() : ibanWait(user) ? obIbanWaitHtml(ibanWait(user)) : `${obAfterProgress("activate", "Switch on")}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("account_balance")}</span>
       ${obIntro("Switch on your IBAN", "Your Monerium account is connected. One Face ID approval links it to your Zold account and asks Monerium for your IBAN.")}
@@ -1621,8 +1621,94 @@ OB.activate = {
     ref.onclick = async () => { Z.setLoading(ref, true); await refreshKycStatus({ continueWhenApproved: true }); Z.setLoading(ref, false); };
     const re = root.querySelector("#btn-kyc-reconnect");
     if (re) re.onclick = () => obReconnect(re);
+    // A redraw keeps the check already due; restarting it on every redraw
+    // meant a screen redrawn every few seconds never checked at all.
+    const w = ibanWait(user);
+    if (w && !w.support) { if (!obIbanTimer) obIbanFollow(); }
+    else { clearTimeout(obIbanTimer); obIbanTimer = null; }
   },
 };
+
+/* While the wait screen is open, ask again in the background. GET /users/:id
+   is what asks Monerium (refreshPendingIban), so it runs here, not /kyc, which
+   only reads what is stored. Often at first, when an IBAN usually lands, then
+   less: a profile Monerium is still checking can take a day. A hidden tab
+   does not ask. Every few checks the profile list is read again too, so
+   "checking your ID" turns into "issuing" when Monerium approves, and the
+   state Zold keeps for the profile is Monerium's latest, not the one from
+   before the approval. */
+let obIbanTimer = null;
+let obIbanSince = 0;
+let obIbanChecks = 0;
+let obIbanCheckedAt = null;
+let obIbanReady = false;
+
+function obIbanFollow() {
+  clearTimeout(obIbanTimer);
+  if (!obIbanSince) obIbanSince = Date.now();
+  const age = Date.now() - obIbanSince;
+  obIbanTimer = setTimeout(obIbanCheck, age < 2 * 60000 ? 5000 : age < 15 * 60000 ? 15000 : 60000);
+}
+
+async function obIbanCheck() {
+  obIbanTimer = null;
+  if (obScreen !== "activate" || !user?.id || !ibanWait(user)) { obIbanSince = 0; return; }
+  if (document.hidden) return obIbanFollow();
+  const was = ibanWait(user);
+  try {
+    let fresh = await api(`/api/users/${user.id}`);
+    obIbanChecks++;
+    if (hasConnectedMonerium(fresh) && (fresh.iban || obIbanChecks % 6 === 0)) {
+      const monerium = await api(`/api/users/${fresh.id}/monerium/accounts`).catch(() => null);
+      if (monerium) fresh = { ...fresh, monerium: { ...(fresh.monerium || {}), ...monerium } };
+    }
+    obIbanCheckedAt = new Date();
+    // Not renderUser: it redraws this screen on every tick. The screen is
+    // redrawn only when what it says changes.
+    user = { ...user, ...fresh };
+    if (obScreen !== "activate") return;
+    if (user.iban && kycApproved(user)) {
+      obIbanReady = true;
+      obIbanSince = 0;
+      return obRender({ focus: true });
+    }
+    const now = ibanWait(user);
+    if (!now || now.support !== was?.support || now.idCheck !== was?.idCheck) return obRender({ focus: true });
+    const stamp = $("ob-iban-checked");
+    if (stamp) stamp.textContent = obIbanStamp();
+  } catch { /* the next tick tries again */ }
+  if (obScreen === "activate") obIbanFollow();
+}
+
+// Back on the tab: ask now rather than at the next tick.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || obScreen !== "activate" || !ibanWait(user) || ibanWait(user).support) return;
+  clearTimeout(obIbanTimer);
+  obIbanCheck();
+});
+
+function obIbanStamp() {
+  return obIbanCheckedAt
+    ? `Checking with Monerium. Last checked ${obIbanCheckedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}.`
+    : "Checking with Monerium…";
+}
+
+/* The IBAN landed while the person watched. Shown once, from the poll; a
+   reload of an approved account goes straight on. */
+function obIbanReadyHtml() {
+  return `${obAfterProgress("activate", "IBAN ready")}
+    <main id="main" class="z-screen__main">
+      <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("check_circle")}</span>
+      ${obIntro("Your IBAN is ready", user?.accountType === "company"
+        ? "Monerium issued your company’s IBAN. Share it to get paid by bank transfer."
+        : "Monerium issued your IBAN. Share it to get paid by bank transfer.")}
+      ${Z.kv([{ key: "IBAN", valueHtml: `<span class="z-mono" translate="no">${esc(Z.groupIban(user.iban))}</span>` }])}
+      ${obAlert()}
+    </main>
+    <div class="z-screen__foot z-screen__foot--quiet">
+      ${Z.button({ variant: "primary", full: true, label: "Go to dashboard", id: "btn-kyc-home" })}
+    </div>`;
+}
 
 /* The IBAN is requested and the rest is Monerium's. Says what happens next and
    what (nothing, mostly) the person has to do, and sends them to Home: the
@@ -1635,7 +1721,7 @@ function obIbanWaitHtml(w) {
     { t: "IBAN requested", d: "Approved with your Face ID.", done: true },
     { t: w.idCheck ? "Monerium checks your ID" : "Monerium issues your IBAN",
       d: w.idCheck ? "Usually minutes, sometimes a day or two." : "Usually within minutes.", done: false },
-    { t: "IBAN on Home", d: "Share it and get paid by bank transfer.", done: false },
+    { t: "IBAN on your dashboard", d: "Share it and get paid by bank transfer.", done: false },
   ];
   return `${obAfterProgress("activate", "Waiting on Monerium")}
     <main id="main" class="z-screen__main">
@@ -1644,14 +1730,15 @@ function obIbanWaitHtml(w) {
       ${w.support ? "" : rcTimeline(steps)}
       ${Z.note({ icon: "info", text: w.support
         ? "Your money and your account are safe meanwhile. Adding money by bank transfer opens once the IBAN is yours."
-        : "You can leave this screen. Your IBAN shows on Home once it’s issued, and bank transfers open then." })}
+        : "You can leave this screen. Your IBAN shows on your dashboard once it’s issued, and bank transfers open then." })}
+      ${w.support ? "" : `<p class="z-live" role="status"><span class="z-live__spin" aria-hidden="true"></span><span id="ob-iban-checked">${obIbanStamp()}</span></p>`}
       ${obAlert()}
     </main>
     <div class="z-screen__foot z-screen__foot--quiet">
       ${w.support
         ? Z.button({ variant: "primary", full: true, label: "Email support", href: "mailto:support@zoldhq.com" })
-        : Z.button({ variant: "primary", full: true, label: "Go to Home", id: "btn-kyc-home" })}
-      ${w.support ? Z.button({ variant: "quiet", full: true, label: "Go to Home", id: "btn-kyc-home" }) : ""}
+        : Z.button({ variant: "primary", full: true, label: "Go to dashboard", id: "btn-kyc-home" })}
+      ${w.support ? Z.button({ variant: "quiet", full: true, label: "Go to dashboard", id: "btn-kyc-home" }) : ""}
       <button type="button" class="z-link-btn" id="btn-kyc-refresh">Check again</button>
       ${w.support ? "" : `<button type="button" class="z-link-btn z-link-btn--small" id="btn-kyc-activate">Ask Monerium again</button>`}
     </div>`;
