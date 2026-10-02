@@ -160,8 +160,14 @@ const CHALLENGE_TTL_MS = 5 * 60_000;
  *  its memory. */
 const MAX_CHALLENGES = 50_000;
 
+/* Every challenge lives CHALLENGE_TTL_MS, so the Map (insertion order) is
+ * also expiry order: stop at the first live one instead of scanning up to
+ * MAX_CHALLENGES on every unauthenticated issue. */
 function pruneChallenges(now = Date.now()) {
-  for (const [k, v] of challenges) if (v.exp < now) challenges.delete(k);
+  for (const [k, v] of challenges) {
+    if (v.exp >= now) break;
+    challenges.delete(k);
+  }
 }
 
 /**

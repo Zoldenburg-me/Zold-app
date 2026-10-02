@@ -24,6 +24,10 @@ import { requireKycApproved } from "../http/guards.js";
 import { publicUser, withSession } from "../users/public-user.js";
 import { findIbanBic, refreshPendingIban } from "../adapters/monerium-sandbox.js";
 import { normalizeIban } from "../sepa.js";
+import { emailLooksValid } from "../domain/email.js";
+
+/** Consents a signup body may carry; the client sends one or two. */
+const MAX_SIGNUP_CONSENTS = 4;
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
@@ -96,7 +100,7 @@ export function createUserRouter(deps: UserDeps) {
        */
       const emailNorm = typeof email === "string" ? email.trim() : "";
       if (!emailNorm) return res.status(400).json({ error: "name, email and country required" });
-      if (emailNorm.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailNorm)) {
+      if (!emailLooksValid(emailNorm)) {
         return res.status(400).json({ error: "invalid email" });
       }
       // One claimable account per email. Recovery resolves an email to an
@@ -238,17 +242,27 @@ export function createUserRouter(deps: UserDeps) {
         answeredAt: new Date().toISOString(),
         version: combined ? US_QUESTION_COMBINED_VERSION : US_QUESTIONS_VERSION,
       });
-      for (const c of Array.isArray(consents) ? consents : []) {
+      // One consent per kind and partner, at most MAX_SIGNUP_CONSENTS, in one
+      // write: the list comes from an unauthenticated body, and each entry
+      // used to be its own full rewrite of the database file.
+      const given = new Map<string, any>();
+      for (const c of Array.isArray(consents) ? consents.slice(0, MAX_SIGNUP_CONSENTS) : []) {
         if (c?.kind !== "zold_terms" && c?.kind !== "partner_share") continue;
-        store.addConsent(user.id, {
-          kind: c.kind,
-          ...(typeof c.partner === "string" && c.partner ? { partner: c.partner.slice(0, 80) } : {}),
-          version: typeof c.version === "string" && c.version ? c.version.slice(0, 40) : CONSENT_VERSION,
-          at: new Date().toISOString(),
-          // No IP: the consent is tied to the account that gave it, and an
-          // address stored here was echoed to the operator's user list.
-        });
+        const partner = typeof c.partner === "string" && c.partner ? c.partner.slice(0, 80) : undefined;
+        given.set(`${c.kind}:${partner ?? ""}`, { ...c, partner });
       }
+      store.batched(() => {
+        for (const c of given.values()) {
+          store.addConsent(user.id, {
+            kind: c.kind,
+            ...(c.partner ? { partner: c.partner } : {}),
+            version: typeof c.version === "string" && c.version ? c.version.slice(0, 40) : CONSENT_VERSION,
+            at: new Date().toISOString(),
+            // No IP: the consent is tied to the account that gave it, and an
+            // address stored here was echoed to the operator's user list.
+          });
+        }
+      });
       store.audit(auditEntry("segment.decided", {
         residence: user.country,
         accountType: type,

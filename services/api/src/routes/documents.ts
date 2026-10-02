@@ -46,6 +46,7 @@ import {
   verifyZoldAttestation,
 } from "../documents.js";
 import { belegPdf, belegStillAgrees, belegFileName } from "../bookkeeping/beleg.js";
+import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 
 export interface DocumentsDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -269,6 +270,15 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     return user;
   };
 
+  /** Checked before any chain read: a statement is about fifty of them. */
+  const underDocumentCeiling = (user: User, res: express.Response): boolean => {
+    const since = Date.now() - 24 * 60 * 60_000;
+    const today = store.documentsForUser(user.id).filter((d) => Date.parse(d.createdAt) > since).length;
+    if (today < CEILINGS.documentsPerUserPerDay) return true;
+    res.status(409).json(ceilingRefusal("documents made in the last 24 hours", CEILINGS.documentsPerUserPerDay));
+    return false;
+  };
+
   /** No smart account, no account of record: a document naming the zero
    *  address would be a letter about an account that does not exist yet. */
   const hasAccountOfRecord = (user: User, res: express.Response): boolean => {
@@ -311,7 +321,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = userFor(req, res);
       if (!user) return;
-      if (!hasAccountOfRecord(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
       const transfer = store.findTransfer(String(req.body?.transferId ?? ""));
       if (!transfer || transfer.userId !== user.id) return res.status(404).json({ error: "transfer not found" });
       let snapshot: ReceiptSnapshot;
@@ -329,7 +339,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = userFor(req, res);
       if (!user) return;
-      if (!hasAccountOfRecord(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
       const { from, to } = periodFrom(req.body);
       if (!from || !to || from >= to) return res.status(400).json({ error: "from and to must be ISO dates with from before to" });
       if (to.getTime() - from.getTime() > 400 * 24 * 3600_000) return res.status(400).json({ error: "a statement covers at most one year" });
@@ -343,7 +353,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = userFor(req, res);
       if (!user) return;
-      if (!hasAccountOfRecord(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
       const snapshot = await buildBalance(user);
       res.status(201).json(publicDocument(await issue(user, snapshot)));
     }),
@@ -356,7 +366,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = userFor(req, res);
       if (!user) return;
-      if (!hasAccountOfRecord(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
       const holder = holderBlock(user);
       const date = new Date().toISOString().slice(0, 10);
       const code = newDocumentCode();

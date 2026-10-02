@@ -95,7 +95,8 @@ export function writeStatementLines(): { added: number; updated: number } {
     let updated = 0;
     for (const u of store.users) {
       try {
-        const r = writeStatementLinesFor(u);
+        // One file write per user, not one per line.
+        const r = store.batched(() => writeStatementLinesFor(u));
         added += r.added;
         updated += r.updated;
       } catch (err: any) {

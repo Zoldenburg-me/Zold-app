@@ -23,14 +23,11 @@ export function shopBase(shop: string): string {
   return SHOPIFY.shopBaseUrl ? `${SHOPIFY.shopBaseUrl.replace(/\/$/, "")}/${shop}` : `https://${shop}`;
 }
 
+/* The signal stays armed after the headers arrive, so it also bounds reading
+ * the body: a response that sends headers and then trickles would otherwise
+ * hold the request open indefinitely. */
 async function withTimeout<T>(p: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), SHOPIFY.timeoutMs);
-  try {
-    return await p(ctl.signal);
-  } finally {
-    clearTimeout(t);
-  }
+  return p(AbortSignal.timeout(SHOPIFY.timeoutMs));
 }
 
 /** The merchant's install URL. `state` is our nonce, checked on the callback. */

@@ -68,6 +68,8 @@ export function custodyBlockerBeforeFunding(user: User): string | null {
  * refusing would lock them out of a funded account. `npm run segments:test`
  * covers the resolver; this fallback is the migration seam and stays narrow.
  */
+const refusalAudited = new Map<string, number>();
+
 export function requireCapability(
   user: User,
   capability: Parameters<typeof can>[1],
@@ -75,7 +77,15 @@ export function requireCapability(
 ): boolean {
   const segment: Segment = user.segment?.value ?? "EU_FULL";
   if (can(segment, capability)) return true;
-  store.audit(auditEntry("partner.call_refused", { segment, capability }, user.id));
+  // One audit row per user and capability per hour: each row is a write of
+  // the whole store, and a client retrying a refused call would add one per
+  // request.
+  const key = `${user.id}:${capability}`;
+  const last = refusalAudited.get(key);
+  if (!last || Date.now() - last > 60 * 60_000) {
+    refusalAudited.set(key, Date.now());
+    store.audit(auditEntry("partner.call_refused", { segment, capability }, user.id));
+  }
   res.status(403).json({
     error: "This is not part of your account.",
     code: "CAPABILITY_UNAVAILABLE",
