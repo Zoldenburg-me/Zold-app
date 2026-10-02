@@ -14,7 +14,8 @@
 import express from "express";
 import { wrap } from "./util.js";
 import { randomUUID } from "node:crypto";
-import { CHAIN_ID, HARNESS, SECURITY } from "../config.js";
+import { CHAIN_ID, EMAIL_VERIFICATION, HARNESS, SECURITY } from "../config.js";
+import { emailHeldBy } from "../domain/email.js";
 import { accountBalances } from "../chain.js";
 import { store, type User } from "../store.js";
 import { rateLimit } from "../http/policy.js";
@@ -178,7 +179,7 @@ export function createAuthRouter(deps: AuthDeps) {
       // passkey is what makes a row claimable, so it is where the invariant
       // has to hold. Nothing is awaited between this check and the write.
       if (!user.passkey?.publicKey && user.email &&
-          store.usersByEmail(user.email).some((u) => u.id !== user.id && !!u.passkey)) {
+          emailHeldBy(store.usersByEmail(user.email).filter((u) => u.id !== user.id), EMAIL_VERIFICATION.enabled)) {
         return res.status(409).json({
           error: "an account already uses this email — sign in with your passkey, or recover the account if you lost the device",
           code: "EMAIL_IN_USE",

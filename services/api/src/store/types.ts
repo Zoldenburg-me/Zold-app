@@ -19,6 +19,19 @@ export interface User {
   /** The BIC Monerium lists for `iban` (GET /ibans). Keyed by the IBAN it was
    *  read for: after a move it no longer matches and is not published. */
   ibanBic?: { iban: string; bic: string; checkedAt: string };
+  /** When a code sent to `email` was typed back (routes/email-verification.ts).
+   *  Cleared nowhere: there is no route that changes the email. */
+  emailVerifiedAt?: string;
+  /** The outstanding code, hashed. Never in any projection. */
+  emailCode?: {
+    hash: string;
+    /** The address the code went to; a code for another address is void. */
+    email: string;
+    expiresAt: string;
+    attempts: number;
+    /** Send times within the last hour, for the resend limits. */
+    sentAt: string[];
+  };
   /** Candide Safe smart-account address — the user's identity and balance
    *  account, and the address Monerium attaches the IBAN to. */
   address: `0x${string}`;
@@ -212,6 +225,10 @@ export interface User {
       minAmount?: string;
       feeBps?: number;
     }[];
+    /** When supportedTokens was read from the forwarder's routes. Absent on a
+     *  page whose list predates that (a hard-coded EURe + USDC); such a list
+     *  is never served (routes/payment-page.ts livePaymentPage). */
+    routesReadAt?: string;
     settlementAsset: "EURE" | "USDC";
     autoConvert: boolean;
     createdAt: string;

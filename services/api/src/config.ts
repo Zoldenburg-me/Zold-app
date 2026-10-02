@@ -327,7 +327,9 @@ function assertProductionConfig() {
   for (const dead of ["ALLOW_SIMULATION", "ALLOW_MOCK_FALLBACK", "KYC_PROVIDER", "SUMSUB_APP_TOKEN"]) {
     if (process.env[dead]) fail(`${dead} no longer exists — the mock, simulation and Sumsub paths were removed; unset it`);
   }
-  if (process.env.FAUCET_KEY || process.env.TESTNET_FAUCET_EUR) fail("FAUCET_KEY / TESTNET_FAUCET_EUR are testnet-only and forbidden in production");
+  if (process.env.FAUCET_KEY || process.env.TESTNET_FAUCET_EUR || process.env.FAUCET_DRIPS) {
+    fail("FAUCET_KEY / TESTNET_FAUCET_EUR / FAUCET_DRIPS are testnet-only and forbidden in production");
+  }
   /**
    * Mainnet means mainnet everywhere. A production deployment pointed at the
    * Monerium sandbox, a testnet chain, or a Monerium chain name from the other
@@ -530,6 +532,41 @@ export const VIES = {
   url: process.env.VIES_URL ?? "https://ec.europa.eu/taxation_customs/vies/rest-api/check-vat-number",
   timeoutMs: Number(process.env.VIES_TIMEOUT_MS ?? 10_000),
 } as const;
+
+/**
+ * Email verification: a 6-digit code sent over SMTP (adapters/mailer.ts).
+ * Off unless EMAIL_VERIFICATION=1, and then every SMTP field must be set:
+ * a flag that is on with no way to send would show a code screen for a mail
+ * that never leaves. Off, signup and recovery treat the email as they always
+ * have (docs/email-verification.md).
+ */
+export const EMAIL_VERIFICATION = (() => {
+  const enabled = process.env.EMAIL_VERIFICATION === "1";
+  const smtp = {
+    host: process.env.SMTP_HOST ?? "",
+    port: Number(process.env.SMTP_PORT ?? 587),
+    user: process.env.SMTP_USER ?? "",
+    pass: process.env.SMTP_PASS ?? "",
+    from: process.env.MAIL_FROM ?? "",
+    /** Port 465 speaks TLS from the first byte; others upgrade with STARTTLS. */
+    secure: (process.env.SMTP_PORT ?? "587") === "465",
+  };
+  if (enabled) {
+    const missing = (["host", "user", "pass", "from"] as const).filter((k) => !smtp[k]);
+    if (missing.length) {
+      throw new Error(`EMAIL_VERIFICATION=1 needs ${missing.map((k) => (k === "from" ? "MAIL_FROM" : `SMTP_${k.toUpperCase()}`)).join(", ")}`);
+    }
+    if (!Number.isInteger(smtp.port) || smtp.port <= 0) throw new Error("SMTP_PORT must be a port number");
+  }
+  return {
+    enabled,
+    smtp,
+    codeTtlMs: 15 * 60_000,
+    maxAttempts: 5,
+    resendAfterMs: 60_000,
+    maxSendsPerHour: 5,
+  } as const;
+})();
 
 export const GNOSIS_PAY = {
   baseUrl: process.env.GNOSIS_PAY_BASE_URL ?? "https://api.gnosispay.com",
@@ -865,11 +902,44 @@ export const TESTNET_FAUCET = (() => {
   const grantEur = envNumber("TESTNET_FAUCET_EUR", 0, { min: 0 });
   const raw = process.env.FAUCET_KEY?.trim();
   if (raw && !/^0x[0-9a-fA-F]{64}$/.test(raw)) throw new Error("FAUCET_KEY is not a 32-byte hex private key");
-  if ((raw || grantEur > 0) && IS_REAL_MONEY_CHAIN) {
-    throw new Error(`FAUCET_KEY / TESTNET_FAUCET_EUR are testnet-only; chain ${CHAIN_ID} carries real EURe — unset them`);
+  const drips = parseFaucetDrips(process.env.FAUCET_DRIPS);
+  if ((raw || grantEur > 0 || drips.length) && IS_REAL_MONEY_CHAIN) {
+    throw new Error(`FAUCET_KEY / TESTNET_FAUCET_EUR / FAUCET_DRIPS are testnet-only; chain ${CHAIN_ID} carries real EURe — unset them`);
   }
-  return { grantEur, key: raw ? (raw as `0x${string}`) : undefined };
+  return {
+    grantEur,
+    key: raw ? (raw as `0x${string}`) : undefined,
+    /** The public faucet page's tokens: what one drip sends, per token. */
+    drips,
+    /** One drip per address and token in this window. */
+    cooldownMs: envNumber("FAUCET_COOLDOWN_HOURS", 24, { min: 0 }) * 3600_000,
+    /** Drips one IP may take in that window, across addresses and tokens. */
+    perIpPerWindow: envNumber("FAUCET_DRIPS_PER_IP", 6, { min: 1, integer: true }),
+    /** Drips per token in that window, all callers together. */
+    perTokenPerWindow: envNumber("FAUCET_DRIPS_PER_TOKEN", 50, { min: 1, integer: true }),
+  };
 })();
+
+/**
+ * FAUCET_DRIPS: `SYMBOL:amount` for the app's own EURe and USDC (their
+ * addresses come from deployments.json), or `SYMBOL:0xaddress:amount` for any
+ * other token on the app chain — e.g. `EURe:100,USDC:5,EURC:0x8084…359F:5`.
+ */
+function parseFaucetDrips(raw: string | undefined): { symbol: string; address?: `0x${string}`; amount: number }[] {
+  if (!raw?.trim()) return [];
+  return raw.split(",").map((part) => {
+    const bits = part.trim().split(":");
+    const [symbol, address, amountText] = bits.length === 3 ? bits : [bits[0], undefined, bits[1]];
+    const amount = Number(amountText);
+    if (!/^[A-Za-z][A-Za-z0-9]{1,9}$/.test(symbol ?? "")) throw new Error(`FAUCET_DRIPS: "${part}" has no valid token symbol`);
+    if (address !== undefined && !/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error(`FAUCET_DRIPS: "${part}" has no valid token address`);
+    if (address === undefined && !/^(EURe|USDC)$/.test(symbol)) {
+      throw new Error(`FAUCET_DRIPS: "${part}" needs an address — only EURe and USDC are known from deployments.json`);
+    }
+    if (!(amount > 0)) throw new Error(`FAUCET_DRIPS: "${part}" needs a positive amount`);
+    return { symbol, ...(address ? { address: address as `0x${string}` } : {}), amount };
+  });
+}
 
 export const CRYPTO_IN = {
   enabled: process.env.CRYPTO_IN_ENABLED !== "0",
