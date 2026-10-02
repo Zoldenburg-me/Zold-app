@@ -44,6 +44,7 @@
     "anchor:safety": "tsx scripts/anchor-safety-test.ts",
     "anchor:sweep:test": "tsx scripts/anchor-sweep-test.ts",
     "refund:guard:test": "tsx scripts/refund-guard-test.ts",
+    "final-state:test": "tsx scripts/final-state-test.ts",
     "authorize:test": "tsx scripts/authorize-claim-test.ts",
     "recovery:test": "tsx scripts/zoldenburg-recovery-test.ts",
     "recovery:candide:test": "tsx scripts/candide-recovery-test.ts",
