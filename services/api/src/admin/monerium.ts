@@ -24,6 +24,7 @@ import {
 import { MoneriumApiError } from "../adapters/monerium-client.js";
 import { checkConnection } from "../adapters/monerium-sandbox.js";
 import { moneriumProfileState } from "./onboarding.js";
+import { maskIdentifier } from "./mask.js";
 
 const asList = (v: any, key: string): any[] => (Array.isArray(v) ? v : Array.isArray(v?.[key]) ? v[key] : []);
 
@@ -80,7 +81,7 @@ function redeemOrdersOf(userId?: string) {
       amountEur: t.sendEur,
       receiveEur: t.receiveEur,
       recipientName: t.recipientName,
-      recipientIban: t.recipientIban,
+      recipientIban: maskIdentifier(t.recipientIban),
       memo: t.moneriumRedeem?.memo,
       signedAt: t.moneriumRedeem?.signedAt,
       error: t.error,
@@ -119,7 +120,10 @@ export function storedMonerium(u: User) {
     ibanBic: u.ibanBic,
     ibanMoves: u.moneriumIbanMoves ?? [],
     refusal: u.moneriumRefusal,
-    issueOrders: store.moneriumIssueOrders.filter((r) => r.userId === u.id).slice().sort((a, b) => Date.parse(b.processedAt) - Date.parse(a.processedAt)),
+    issueOrders: store.moneriumIssueOrders
+      .filter((r) => r.userId === u.id)
+      .map((r) => ({ ...r, counterpartyIban: maskIdentifier(r.counterpartyIban) }))
+      .sort((a, b) => Date.parse(b.processedAt) - Date.parse(a.processedAt)),
     redeemOrders: redeemOrdersOf(u.id),
     audit: moneriumAudit(u.id),
   };
@@ -185,7 +189,7 @@ export async function moneriumOverview(live: boolean) {
       .slice()
       .sort((a, b) => Date.parse(b.processedAt) - Date.parse(a.processedAt))
       .slice(0, 300)
-      .map((r) => ({ ...r, userName: names.get(r.userId) })),
+      .map((r) => ({ ...r, counterpartyIban: maskIdentifier(r.counterpartyIban), userName: names.get(r.userId) })),
     redeemOrders: redeemOrdersOf().slice(0, 300).map((r) => ({ ...r, userName: names.get(r.userId) })),
     audit: moneriumAudit(undefined, 300).map((e) => ({ ...e, userName: e.userId ? names.get(e.userId) : undefined })),
   };
