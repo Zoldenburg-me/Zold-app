@@ -88,9 +88,13 @@ Say this plainly rather than letting the surface imply otherwise:
   chain, with a real passkey, or through a user's Monerium OAuth. Recovery
   has never run on an imported Safe, so the screens do not offer it there;
   the API does not refuse it.
-- **No mail transport exists.** Invitations, invoice links and recovery emails
-  are never sent by Zold; routes return the token to the caller and say so. Do
-  not add a "we emailed them" string without adding a transport.
+- **One mail transport exists, and it is off.** `adapters/mailer.ts` sends
+  only email verification codes over SMTP, and only with
+  `EMAIL_VERIFICATION=1` (docs/email-verification.md). It has run only against
+  a fake SMTP server in `email:test`; no real mail has been sent. Invitations,
+  invoice links and recovery emails are still never sent by Zold; routes
+  return the token to the caller and say so. Do not add a "we emailed them"
+  string for those without routing them through the mailer.
 - **Imported wallets never sync** (`sync.status` stays `pending`), so the ledger
   is empty and the screens say so.
 - **No billing is taken for paid plans.**
