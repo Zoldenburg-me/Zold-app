@@ -108,7 +108,7 @@ export function jurisdictionFor(country?: string): JurisdictionProfile {
         "whether a supply is exempt — and which exemption applies — is your decision with your Steuerberater.",
       notVerified: [
         "Whether the exemption you choose actually applies to the supply.",
-        "Whether your customer's VAT ID is valid and registered (no VIES check is performed).",
+        "A Swiss or UK customer's VAT ID beyond its format: EU numbers are checked in VIES, theirs are not, and a VIES that does not answer leaves an EU number unconfirmed.",
         "XRechnung / ZUGFeRD (EN 16931). German B2B must already be able to receive e-invoices; " +
           "the obligation to issue them phases in from 2027.",
       ],
@@ -138,7 +138,7 @@ export function jurisdictionFor(country?: string): JurisdictionProfile {
         `${name}'s small-business scheme: the threshold and the required note differ per state, ` +
           "so you supply the wording.",
         "National e-invoicing mandates (for example Poland's KSeF or Italy's SdI), which we do not produce.",
-        "Whether your customer's VAT ID is valid and registered (no VIES check is performed).",
+        "A Swiss or UK customer's VAT ID beyond its format: EU numbers are checked in VIES, theirs are not, and a VIES that does not answer leaves an EU number unconfirmed.",
       ],
     };
   }
