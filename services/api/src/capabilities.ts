@@ -9,7 +9,7 @@
 import { FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
-import { faucetEnabled } from "./faucet.js";
+import { dripTokens, faucetEnabled } from "./faucet.js";
 import { shopifyAvailable } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
@@ -65,6 +65,8 @@ export function capabilities() {
     /** Test EURe per account from the testnet faucet, or 0 when there is
      *  none — never on a chain where EURe is real money. */
     faucetEur: faucetEnabled() ? TESTNET_FAUCET.grantEur : 0,
+    /** Tokens the public /faucet page drips, or none — same refusals. */
+    faucetTokens: dripTokens().map((t) => t.symbol),
     moneriumHost: (() => { try { return new URL(MONERIUM.baseUrl).host; } catch { return MONERIUM.baseUrl; } })(),
   };
 }

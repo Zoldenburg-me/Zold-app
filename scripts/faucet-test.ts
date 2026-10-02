@@ -18,7 +18,7 @@ import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID, randomBytes } from "node:crypto";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -68,10 +68,16 @@ try {
   const dep = spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit", env: process.env });
   assert.equal(dep.status, 0, "deploy failed");
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
+  // The drip list, set after the deploy so the SYMBOL:address:amount form can
+  // name a real local token: "USDX" is the local USDC under another name, with
+  // a drip too large for the faucet to cover (the dry case).
+  const local = JSON.parse(readFileSync(path.join(ROOT, "deployments.json"), "utf8"))["31337"];
+  process.env.FAUCET_DRIPS = `EURe:5,USDC:2,USDX:${local.usdc}:1000000`;
+  process.env.FAUCET_DRIPS_PER_IP = "4";
 
   const { initStore, store } = await import("../services/api/src/store.js");
   const { abis, addrs, eur, publicClient, writeAndWait, deployerWallet, faucetWallet } = await import("../services/api/src/chain.js");
-  const { faucetEnabled, faucetFundSafe } = await import("../services/api/src/faucet.js");
+  const { faucetEnabled, faucetFundSafe, drip, dripTokens } = await import("../services/api/src/faucet.js");
   const { capabilities } = await import("../services/api/src/capabilities.js");
   initStore();
   assert.ok(faucetWallet, "faucet wallet missing");
@@ -153,6 +159,36 @@ try {
   const z = await faucetFundSafe(zero.id);
   check("a zero address is never funded", !z.ok && store.findUser(zero.id)?.faucet === undefined);
 
+  console.log("5b/6 the public drip: any address, chosen token, limits…");
+  await writeAndWait(deployerWallet, { address: addrs().usdc, abi: abis.MockToken, functionName: "mint", args: [faucetAddress, 100_000_000n] }); // 100 USDC
+  await mintToFaucet(1000);
+  const usdcOf = async (who: `0x${string}`) =>
+    Number((await publicClient.readContract({ address: addrs().usdc, abi: abis.MockToken, functionName: "balanceOf", args: [who] })) as bigint) / 1e6;
+  check("the page lists EURe, USDC and the configured extra token", dripTokens().map((t) => t.symbol).join(",") === "EURe,USDC,USDX");
+  check("/api/health advertises the drip tokens", capabilities().faucetTokens.join(",") === "EURe,USDC,USDX");
+  const payer = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
+  const d1 = await drip(payer, "eure", "10.0.0.1");
+  check("a drip sends the chosen token to any address", d1.ok && (await balanceOf(payer)) === 5);
+  const d2 = await drip(payer, "EURe", "10.0.0.2");
+  check("the same address and token again is COOLDOWN, whatever the IP", !d2.ok && d2.code === "COOLDOWN" && !!d2.retryAt && (await balanceOf(payer)) === 5);
+  const d3 = await drip(payer, "USDC", "10.0.0.1");
+  check("another token to the same address is allowed, at its own decimals", d3.ok && (await usdcOf(payer)) === 2);
+  const bad = await drip("0x1234", "EURe", "10.0.0.3");
+  const self = await drip(faucetAddress, "EURe", "10.0.0.3");
+  const unknown = await drip(payer, "DOGE", "10.0.0.3");
+  check("a malformed address or the faucet itself is BAD_ADDRESS", !bad.ok && bad.code === "BAD_ADDRESS" && !self.ok && self.code === "BAD_ADDRESS");
+  check("a token not in FAUCET_DRIPS is UNKNOWN_TOKEN", !unknown.ok && unknown.code === "UNKNOWN_TOKEN");
+  const dry1 = await drip(payer, "USDX", "10.0.0.4");
+  const dry2 = await drip(payer, "USDX", "10.0.0.4");
+  check("a drip larger than the faucet holds is FAUCET_DRY and frees its slot", !dry1.ok && dry1.code === "FAUCET_DRY" && !dry2.ok && dry2.code === "FAUCET_DRY");
+  const many = Array.from({ length: 5 }, () => `0x${randomBytes(20).toString("hex")}` as `0x${string}`);
+  const burst = await Promise.all(many.map((a, i) => drip(a, "EURe", `10.1.0.${i}`)));
+  const landed = await Promise.all(many.map((a) => balanceOf(a)));
+  check("five parallel drips from one wallet all land (sends are queued)", burst.every((r) => r.ok) && landed.every((b) => b === 5), JSON.stringify(burst.filter((r) => !r.ok)));
+  const ipRuns = [];
+  for (let i = 0; i < 5; i++) ipRuns.push(await drip(`0x${randomBytes(20).toString("hex")}`, "EURe", "10.9.9.9"));
+  check("one IP gets FAUCET_DRIPS_PER_IP drips, then IP_LIMIT", ipRuns.slice(0, 4).every((r) => r.ok) && !ipRuns[4].ok && ipRuns[4].code === "IP_LIMIT");
+
   console.log("6/6 a real-money chain refuses to start with a faucet key…");
   const real = spawnSync(process.execPath, [bin("tsx"), "-e", 'import("./services/api/src/config.ts").catch((e) => { console.error(e.message); process.exit(1); })'], {
     cwd: ROOT,
@@ -160,8 +196,14 @@ try {
     env: { ...process.env, TRANSF_CHAIN_ID: "8453", LOCAL_HARNESS: "", TRANSF_DB_PATH: path.join(ROOT, "data/never-written.json") },
   });
   check("chain 8453 with FAUCET_KEY set fails at config load", real.status !== 0 && /testnet-only/.test(real.stderr), real.stderr.slice(-300));
+  const realDrips = spawnSync(process.execPath, [bin("tsx"), "-e", 'import("./services/api/src/config.ts").catch((e) => { console.error(e.message); process.exit(1); })'], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: { ...process.env, TRANSF_CHAIN_ID: "8453", LOCAL_HARNESS: "", FAUCET_KEY: "", TESTNET_FAUCET_EUR: "0", FAUCET_DRIPS: "EURe:5", TRANSF_DB_PATH: path.join(ROOT, "data/never-written.json") },
+  });
+  check("chain 8453 with only FAUCET_DRIPS set fails at config load too", realDrips.status !== 0 && /testnet-only/.test(realDrips.stderr), realDrips.stderr.slice(-300));
 
-  console.log(`\nFAUCET TEST PASSED — ${passed} checks: one grant per Safe from the faucet wallet, dry faucet refuses, real-money chain refuses`);
+  console.log(`\nFAUCET TEST PASSED — ${passed} checks: one grant per Safe, drips per address and token, limits hold, real-money chain refuses`);
 } finally {
   for (const c of children) c.kill();
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
