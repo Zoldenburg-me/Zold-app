@@ -179,12 +179,13 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
 {
   const user: any = {
     id: "user-secret-id", name: "Miriam Zoldenburg", email: "miriam@example.com", iban: "EE123456789012345678", country: "DE",
+    ibanBic: { iban: "EE12 3456 7890 1234 5678", bic: "FAKEFK01", checkedAt: "2026-10-01T00:00:00.000Z" },
     kycStatus: "approved", address: `0x${"aa".repeat(20)}`, authorizerAddress: `0x${"cc".repeat(20)}`,
     paymentPage: { handle: "miriam", displayName: "Miriam Z", depositAddress: `0x${"dd".repeat(20)}`, recipientAddress: `0x${"aa".repeat(20)}`,
       forwarder: { custodialWithdrawer: `0x${"ee".repeat(20)}` }, settlementAsset: "EURE", autoConvert: false },
     monerium: { accessTokenEnc: "tokentoken" },
   };
-  const ctx = { chainId: 31337, token: { symbol: "USDC", address: `0x${"11".repeat(20)}` as `0x${string}`, decimals: 6 }, bicFor: () => "LHVBEE22", baseUrl: "https://zoldhq.com", now };
+  const ctx = { chainId: 31337, token: { symbol: "USDC", address: `0x${"11".repeat(20)}` as `0x${string}`, decimals: 6 }, baseUrl: "https://zoldhq.com", now };
   const cryptoOnly = pr.publicPaymentRequest(mkReq({ methods: ["crypto"], cryptoQuotes: [q25] }), user, { ...ctx, quote: q25 });
   const s = JSON.stringify(cryptoOnly);
   for (const secret of ["miriam@example.com", "user-secret-id", "EE123456789012345678", "Miriam Zoldenburg", user.authorizerAddress, user.paymentPage.recipientAddress, user.paymentPage.forwarder.custodialWithdrawer, "tokentoken", "approved"]) {
@@ -194,7 +195,12 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
   check("it carries the quoted amount, the page address and the URI", cryptoOnly.methods.crypto?.amountUsdc === q25.amountUsdc && cryptoOnly.methods.crypto?.address === user.paymentPage.depositAddress && cryptoOnly.methods.crypto?.uri.includes("uint256"));
   const withBank = pr.publicPaymentRequest(mkReq(), user, ctx);
   check("a link offering bank transfer names the IBAN, the holder and the code as reference — a SEPA transfer needs all three",
-    withBank.methods.bank?.iban === user.iban && withBank.methods.bank?.holder === "Miriam Zoldenburg" && withBank.methods.bank?.reference === pr.displayCode(withBank.code.replace(/-/g, "")) && withBank.methods.bank?.bic === "LHVBEE22");
+    withBank.methods.bank?.iban === user.iban && withBank.methods.bank?.holder === "Miriam Zoldenburg" && withBank.methods.bank?.reference === pr.displayCode(withBank.code.replace(/-/g, "")) && withBank.methods.bank?.bic === "FAKEFK01");
+  check("the BIC is the one Monerium reported for this IBAN, and absent when none was",
+    pr.publicPaymentRequest(mkReq(), { ...user, ibanBic: undefined }, ctx).methods.bank?.bic === undefined &&
+    pr.publicPaymentRequest(mkReq(), { ...user, ibanBic: { ...user.ibanBic, iban: "EE00OTHER" } }, ctx).methods.bank?.bic === undefined);
+  check("a lapsed forwarder leaves the crypto method out rather than show its address",
+    pr.publicPaymentRequest(mkReq(), user, { ...ctx, cryptoLive: false }).methods.crypto === undefined);
   check("but still no email or id", !JSON.stringify(withBank).includes("miriam@example.com") && !JSON.stringify(withBank).includes("user-secret-id"));
   check("without a live quote the crypto method is offered with no amount, not a made-up one", withBank.methods.crypto !== undefined && withBank.methods.crypto?.amountUsdc === undefined);
 }
@@ -545,6 +551,22 @@ try {
   const list = await call("GET", `/api/users/${miriam.id}/payment-requests`, undefined, miriam.id);
   // 9, not 14: the five refused invoice links left no row behind.
   check("the owner's list carries every link, newest first, with what the payee can offer — and nothing a refusal created", list.body.requests.length === 9 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt), `${list.body.requests.length}`);
+
+  {
+    // A share target that glued the message onto the link.
+    const { createPageRouter } = await import("../services/api/src/routes/pages.js");
+    const pages = express().use(createPageRouter());
+    const ps = pages.listen(0);
+    const port = (ps.address() as any).port;
+    const get = (p: string) => fetch(`http://127.0.0.1:${port}${p}`, { redirect: "manual" });
+    const glued = await get(`/pay/miriam/HSC94-E52WR-26M44%20%E2%82%AC400.00:%20you%20can%20pay%20me%20here:`);
+    check("a link with the share message glued on goes to the clean link",
+      glued.status === 302 && glued.headers.get("location") === "/pay/miriam/HSC94-E52WR-26M44", `${glued.status} ${glued.headers.get("location")}`);
+    check("a clean link is served as it is", (await get("/pay/miriam/HSC94-E52WR-26M44")).status === 200);
+    check("a short or broken code is not stretched into a match",
+      (await get("/pay/miriam/HSC94-E52WR%20extra")).status === 200 && (await get("/pay/miriam/HSC94-E52WR-26M4%20x")).status === 200);
+    ps.close();
+  }
 
   server.close();
   console.log(`\nPAYMENT REQUESTS TEST PASSED — ${passed} checks`);

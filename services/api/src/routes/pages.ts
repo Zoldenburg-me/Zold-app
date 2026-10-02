@@ -27,6 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PUBLIC_URL } from "../config.js";
+import { displayCode, isRequestCode, normaliseCode } from "../payment-requests.js";
 
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../public");
 const site = path.join(pub, "../site");
@@ -64,6 +65,20 @@ function page(file: string, canonicalPath?: string): express.RequestHandler {
     res.type("html").send(html);
   };
 }
+
+/**
+ * A shared link with the message glued on ("…/HSC94-E52WR-26M44 €400.00: you
+ * can pay me here:"), as some share targets paste it, goes to the clean link.
+ * Only a complete, well-formed code followed by whitespace and more text is
+ * trimmed; anything shorter or different is served as it came and draws its
+ * own not-found, so nothing here widens what a code matches.
+ */
+const tidyRequestCode: express.RequestHandler = (req, res, next) => {
+  const m = /^([0-9A-Za-z]{5}-?[0-9A-Za-z]{5}-?[0-9A-Za-z]{5})\s+\S/.exec(String(req.params.code ?? ""));
+  const code = m ? normaliseCode(m[1]) : "";
+  if (!isRequestCode(code)) return next();
+  res.redirect(302, `/pay/${encodeURIComponent(String(req.params.handle))}/${displayCode(code)}`);
+};
 
 /** Served after every router: an unknown path gets the site's own page, not
  *  express's "Cannot GET", and an unknown API path gets JSON. */
@@ -132,7 +147,7 @@ export function createPageRouter() {
   router.get("/v/:code", (_req, res) => res.sendFile(path.join(pub, "document.html")));
   /** A payment page, and a payment request against it. */
   router.get("/pay/:handle", page("pay.html"));
-  router.get("/pay/:handle/:code", page("pay-request.html"));
+  router.get("/pay/:handle/:code", tidyRequestCode, page("pay-request.html"));
   /** A shared receipt. */
   router.get("/r/:slug", page("receipt.html"));
 

@@ -17,7 +17,7 @@ import { isDeployed } from "../wallet/candide.js";
 import { activatePaymentForwarder } from "../adapters/candide-forwarder.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from "../pay.js";
 import { qrSvg } from "../qr.js";
-import { store } from "../store.js";
+import { store, type User } from "../store.js";
 import { publicUser } from "../users/public-user.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
@@ -60,6 +60,56 @@ function payChain() {
  */
 /** The QR image, rendered server-side. Carries the bare address: see the note
  *  in pay.ts on why the EIP-681 URI is a link instead. */
+
+/** Renew a Candide activation this long before it lapses. */
+const RENEW_BEFORE_MS = 24 * 3600 * 1000;
+const renewing = new Map<string, Promise<boolean>>();
+
+/**
+ * May this page's deposit address be shown to a payer right now? A Candide
+ * activation lapses after a TTL, and an address shown past it takes deposits
+ * that are never forwarded. So it is renewed (idempotent at Candide, same
+ * address) when close to lapsing, which also refreshes the token list. A
+ * failed renewal still answers yes while the old activation runs; once it has
+ * lapsed the answer is no, and the caller shows no address.
+ */
+export async function livePaymentPage(user: User): Promise<boolean> {
+  const page = user.paymentPage;
+  const f = page?.forwarder;
+  if (!page || !f || f.provider !== "candide" || !f.expiresAt) return true;
+  const expires = Date.parse(f.expiresAt);
+  if (expires - Date.now() > RENEW_BEFORE_MS) return true;
+  let run = renewing.get(user.id);
+  if (!run) {
+    run = (async () => {
+      try {
+        const next = await activatePaymentForwarder({ userId: user.id, handle: page.handle, recipient: f.recipient, token: addrs().usdc });
+        if (next.address.toLowerCase() !== page.depositAddress.toLowerCase()) {
+          console.error(`payment page: renewal for ${user.id} gave ${next.address}, page shows ${page.depositAddress}`);
+          return false;
+        }
+        const fresh = store.findUser(user.id);
+        if (fresh?.paymentPage?.handle !== page.handle) return false;
+        store.updateUser(user.id, {
+          paymentPage: { ...fresh.paymentPage, forwarder: next.forwarder, supportedTokens: next.accepts, updatedAt: new Date().toISOString() },
+        });
+        return true;
+      } catch (err: any) {
+        console.error(`payment page: renewing forwarder for ${user.id} failed: ${err?.message ?? err}`);
+        return expires > Date.now();
+      } finally {
+        renewing.delete(user.id);
+      }
+    })();
+    renewing.set(user.id, run);
+  }
+  return run;
+}
+
+const PAGE_CLOSED = {
+  error: "This payment page can't take payments just now. Try again in a few minutes.",
+  code: "PAGE_UNAVAILABLE",
+};
 
 export function createPaymentPageRouter(deps: PaymentPageDeps) {
   const { requireUserSession } = deps;
@@ -114,10 +164,6 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
           code: "FORWARDER_UNAVAILABLE",
         });
       }
-      const tokens = [
-        { chainId: CHAIN_ID, symbol: "EURE" as const, address: addrs().eure, decimals: 18 },
-        { chainId: CHAIN_ID, symbol: "USDC" as const, address: addrs().usdc, decimals: 6 },
-      ];
       // The partner round trip above yields the event loop, so another claim
       // of the same handle can land while this one waits. Handle uniqueness
       // is a check-then-write invariant: re-assert it in the same synchronous
@@ -136,7 +182,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
           depositAddress: forwarder.address,
           recipientAddress: user.address,
           forwarder: forwarder.forwarder,
-          supportedTokens: tokens,
+          supportedTokens: forwarder.accepts,
           settlementAsset,
           autoConvert: existing?.autoConvert ?? false,
           createdAt: existing?.createdAt ?? now,
@@ -157,7 +203,23 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
     wrap(async (req, res) => {
       const user = store.findUserByHandle(req.params.handle);
       if (!user?.paymentPage?.handle) return res.status(404).json({ error: "no such payment page" });
-      res.json(publicPayee(user, payChain()));
+      if (!(await livePaymentPage(user))) return res.status(503).json(PAGE_CLOSED);
+      res.json(publicPayee(store.findUser(user.id) ?? user, payChain()));
+    }),
+  );
+
+  /** The account's own Safe address as a QR, for the in-app receive screen.
+   *  Signed-in only: unlike a payment page, this address is not published. */
+  router.get(
+    "/users/:id/address/qr.svg",
+    wrap(async (req, res) => {
+      const user = store.findUser(req.params.id);
+      if (!user) return res.status(404).json({ error: "user not found" });
+      if (!requireUserSession(req, res, user.id)) return;
+      if (user.passkeySafe?.status !== "active") return res.status(409).json({ error: "this account has no wallet address yet" });
+      res.type("image/svg+xml");
+      res.setHeader("cache-control", "private, no-store");
+      res.send(qrSvg(user.address));
     }),
   );
 
@@ -166,6 +228,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
     wrap(async (req, res) => {
       const user = store.findUserByHandle(req.params.handle);
       if (!user?.paymentPage?.handle) return res.status(404).json({ error: "no such payment page" });
+      if (!(await livePaymentPage(user))) return res.status(503).json(PAGE_CLOSED);
       res.type("image/svg+xml");
       res.setHeader("cache-control", "public, max-age=300");
       res.send(qrSvg(publicPayee(user, payChain()).address));

@@ -61,6 +61,10 @@ Say this plainly rather than letting the surface imply otherwise:
   Safe. `recovery:test` runs the flow under the harness only.
 - **No Candide recovery service has been called** (stub only); no on-chain
   guardian add, execute or finalise, no real OTP.
+- **No Candide forwarder has forwarded a deposit.** Candide routes nothing on
+  testnets, so zoldhq.com's payment pages show the Safe itself; the
+  multi-chain token list, minimums and TTL renewal run only against a stub
+  (`forwarder:test`).
 - **Importing an existing Safe** (`routes/safe-import.ts`,
   `npm run safe:import-tx`) has run only on Base Sepolia, with a throwaway
   EOA and a software P-256 key standing in for the passkey (2026-09-30, two

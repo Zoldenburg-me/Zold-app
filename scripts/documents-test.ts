@@ -101,9 +101,11 @@ await t("the digest is canonical and the signature round-trips", async () => {
   assert.equal((await docs.verifyZoldAttestation(tampered)).ok, false, "a changed figure must fail");
 });
 
-await t("the BIC is LHV's, and only next to an Estonian IBAN", () => {
-  assert.equal(docs.bicFor("EE43 7777 0001 3752 9827"), "LHVBEE22");
-  assert.equal(docs.bicFor("IS14 0159 2600 7654 5510 7303 39"), undefined);
+await t("the BIC is the one Monerium reported for the current IBAN, never one guessed from the country", () => {
+  const base: any = { name: "A", iban: "EE43 7777 0001 3752 9827", address: `0x${"aa".repeat(20)}`, createdAt: "x" };
+  assert.equal(docs.holderBlock(base).bic, undefined);
+  assert.equal(docs.holderBlock({ ...base, ibanBic: { iban: "EE437777000137529827", bic: "FAKEFK01", checkedAt: "x" } }).bic, "FAKEFK01");
+  assert.equal(docs.holderBlock({ ...base, ibanBic: { iban: "EE00OTHER", bic: "FAKEFK01", checkedAt: "x" } }).bic, undefined);
   assert.match(docs.PARTIES.footer, /AS LHV Pank/);
   assert.match(docs.PARTIES.footer, /Monerium ehf/);
 });
