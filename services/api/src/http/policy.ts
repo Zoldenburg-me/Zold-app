@@ -131,9 +131,9 @@ export function recordFailure(key: string, windowMs: number): void {
   }
 }
 
-/* Expired buckets are dropped on a timer, not by the request that happens to
- * find the map large: with addresses rotating through fresh IPv6 /64s that
- * scan ran on every request. */
+/* Expired buckets are dropped on a timer, not by a request: a scan on the
+ * request path would run on every request once a caller rotating through
+ * fresh IPv6 /64s keeps the map large. */
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
