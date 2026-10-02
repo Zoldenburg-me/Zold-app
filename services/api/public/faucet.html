@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Test token faucet · Zold</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<meta name="robots" content="noindex" />
+<!-- The testnet faucet: test tokens to any address, so an invoice or a
+     payment link can be paid from a test wallet. The token list and the
+     limits come from GET /api/faucet; this page draws only what it answers,
+     and nothing at all on a deployment without a faucet. -->
+<style>
+  :root {
+    --bg: #0a0a0c; --card: #121216; --row: #17171c; --border: #24242b; --border2: #2e2e37;
+    --text: #f4f4f6; --muted: #a7a7b2; --faint: #6e6e7a; --pink: #ff2d78; --ok: #5ee9a4; --warn: #ffb547;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); min-height: 100vh;
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 1.5rem 1rem;
+  }
+  .wrap { width: 100%; max-width: 440px; }
+  .brand { display: flex; align-items: center; gap: .5rem; justify-content: center; margin-bottom: 1.25rem; }
+  .brand .mark { color: var(--pink); font-size: 1.1rem; }
+  .brand .name { font-weight: 700; letter-spacing: -.01em; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem; }
+  h1 { font-size: 1.25rem; margin: 0 0 .35rem; letter-spacing: -.01em; }
+  .tag { display: inline-block; font-size: .7rem; font-weight: 700; letter-spacing: .06em; color: var(--warn);
+    border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); border-radius: 999px; padding: .1rem .5rem; margin-left: .4rem; vertical-align: middle; }
+  .sub { color: var(--muted); font-size: .9rem; line-height: 1.45; margin: 0 0 1.25rem; }
+  label, .lbl { display: block; font-size: .72rem; font-weight: 700; letter-spacing: .08em; color: var(--faint); margin: 0 0 .45rem; }
+  input {
+    width: 100%; background: var(--row); color: var(--text); border: 1px solid var(--border2); border-radius: 10px;
+    padding: .8rem .9rem; font: 500 .9rem ui-monospace, SFMono-Regular, Menlo, monospace; margin-bottom: 1.1rem;
+  }
+  input:focus-visible, button:focus-visible, .tok input:focus-visible + span { outline: 2px solid var(--pink); outline-offset: 2px; }
+  fieldset { border: 0; padding: 0; margin: 0 0 1.25rem; }
+  .toks { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: .5rem; }
+  .tok { position: relative; margin: 0; }
+  .tok input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+  .tok span { display: block; text-align: center; background: var(--row); border: 1px solid var(--border2); border-radius: 10px; padding: .7rem .5rem; cursor: pointer; }
+  .tok b { display: block; font-size: .95rem; color: var(--text); letter-spacing: 0; }
+  .tok small { color: var(--muted); font-size: .78rem; font-weight: 500; letter-spacing: 0; }
+  .tok input:checked + span { border-color: var(--pink); background: color-mix(in srgb, var(--pink) 10%, var(--row)); }
+  button {
+    width: 100%; background: var(--pink); color: #fff; border: 0; border-radius: 10px; padding: .85rem;
+    font-weight: 600; font-size: .95rem; font-family: inherit; cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+  .msg { margin: 1rem 0 0; font-size: .88rem; line-height: 1.45; overflow-wrap: anywhere; min-height: 1.3em; }
+  .msg.ok { color: var(--ok); }
+  .msg.err { color: var(--warn); }
+  .msg a { color: inherit; }
+  .note { color: var(--faint); font-size: .8rem; line-height: 1.5; margin: 1.1rem 0 0; }
+  .note a { color: var(--muted); }
+  .hidden { display: none; }
+  .foot { text-align: center; color: var(--faint); font-size: .78rem; margin-top: 1rem; }
+  .foot a { color: var(--muted); }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="brand"><span class="mark" aria-hidden="true">▽</span><span class="name">Zold</span></div>
+  <div class="card" aria-busy="true" id="card">
+    <h1>Test token faucet<span class="tag">TESTNET</span></h1>
+    <p class="sub" id="lede">Loading…</p>
+
+    <form id="form" class="hidden" novalidate>
+      <label for="addr">YOUR WALLET ADDRESS</label>
+      <input id="addr" name="address" autocomplete="off" spellcheck="false" placeholder="0x…" />
+
+      <fieldset>
+        <legend class="lbl">TOKEN</legend>
+        <div class="toks" id="toks"></div>
+      </fieldset>
+
+      <button id="go" type="submit">Send test tokens</button>
+      <p class="msg" id="msg" role="status" aria-live="polite"></p>
+    </form>
+
+    <p class="note" id="notes" hidden>
+      These are test tokens on <span id="chain">a test chain</span>, worth nothing. To pay from a wallet
+      like MetaMask you also need a little test ETH for gas — get it from a
+      <a href="https://docs.base.org/base-chain/tools/network-faucets" target="_blank" rel="noopener">Base Sepolia ETH faucet</a>.
+      A Zold account pays no gas.
+    </p>
+  </div>
+  <div class="foot">Zoldenburg · <a href="/app">open Zold</a></div>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const EXPLORERS = { 84532: "https://sepolia.basescan.org", 11155111: "https://sepolia.etherscan.io" };
+  const CHAINS = { 84532: "Base Sepolia", 11155111: "Ethereum Sepolia", 31337: "a local test chain" };
+  let explorer = "";
+
+  // An address from a link (?address=0x…) is filled in, nothing more.
+  const fromLink = new URLSearchParams(location.search).get("address");
+  if (fromLink && /^0x[0-9a-fA-F]{40}$/.test(fromLink)) $("addr").value = fromLink;
+
+  const say = (text, kind, link) => {
+    const m = $("msg");
+    m.className = `msg ${kind || ""}`;
+    m.textContent = text;
+    if (link) {
+      m.append(" ");
+      const a = document.createElement("a");
+      a.href = link; a.target = "_blank"; a.rel = "noopener"; a.textContent = "See the transaction";
+      m.append(a);
+    }
+  };
+
+  async function load() {
+    const [faucet, health] = await Promise.all([
+      fetch("/api/faucet").then((r) => r.json().then((b) => ({ ok: r.ok, b }))),
+      fetch("/api/health").then((r) => r.json()).catch(() => ({})),
+    ]);
+    $("card").setAttribute("aria-busy", "false");
+    if (!faucet.ok || !faucet.b.tokens?.length) {
+      $("lede").textContent = "This deployment has no test faucet.";
+      return;
+    }
+    explorer = EXPLORERS[health.chainId] || "";
+    $("chain").textContent = CHAINS[health.chainId] || `chain ${health.chainId}`;
+    $("lede").textContent = `Get test tokens to try paying an invoice or a payment link. One drip per address and token every ${faucet.b.cooldownHours} hours.`;
+    const toks = $("toks");
+    faucet.b.tokens.forEach((t, i) => {
+      const lab = document.createElement("label");
+      lab.className = "tok";
+      const input = document.createElement("input");
+      input.type = "radio"; input.name = "token"; input.value = t.symbol; input.checked = i === 0;
+      const span = document.createElement("span");
+      const b = document.createElement("b"); b.textContent = t.symbol;
+      const small = document.createElement("small"); small.textContent = `${t.amount} per drip`;
+      span.append(b, small);
+      lab.append(input, span);
+      toks.append(lab);
+    });
+    $("form").classList.remove("hidden");
+    $("notes").hidden = false;
+  }
+
+  $("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const address = $("addr").value.trim();
+    const token = new FormData($("form")).get("token");
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      say("Enter a wallet address: 0x followed by 40 hex characters.", "err");
+      $("addr").focus();
+      return;
+    }
+    $("go").disabled = true;
+    say(`Sending ${token}… this takes a few seconds.`);
+    try {
+      const r = await fetch("/api/faucet/drip", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ address, token }),
+      });
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const when = b.retryAt ? ` You can try again ${new Date(b.retryAt).toLocaleString()}.` : "";
+        const why = (b.error || "the faucet could not send").replace(/^./, (c) => c.toUpperCase());
+        say(`${why}.${when}`, "err");
+      } else {
+        say(`Sent ${b.amount} ${b.symbol} to ${b.to.slice(0, 6)}…${b.to.slice(-4)}.`, "ok", explorer ? `${explorer}/tx/${b.txHash}` : "");
+      }
+    } catch {
+      say("Zold could not be reached. Check your connection and try again.", "err");
+    } finally {
+      $("go").disabled = false;
+    }
+  });
+
+  load().catch(() => { $("lede").textContent = "The faucet could not be loaded. Try again shortly."; });
+})();
+</script>
+</body>
+</html>

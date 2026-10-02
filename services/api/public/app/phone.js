@@ -1322,13 +1322,21 @@ PH.add = {
    like any deposit. */
 function phFaucetCard() {
   const grant = caps.faucetEur || 0;
-  if (!grant || user?.passkeySafe?.status !== "active") return "";
-  if (user.faucet?.txHash) return Z.note({ icon: "science", text: `This account received its ${phEur(user.faucet.grantedEur)} of test EURe.` });
+  const tokens = caps.faucetTokens || [];
+  if (user?.passkeySafe?.status !== "active" || (!grant && !tokens.length)) return "";
+  // The public faucet page funds any address, this account's included, and a
+  // test payer's own wallet for paying an invoice or a link.
+  const more = tokens.length
+    ? Z.note({ icon: "water_drop", html: `More test tokens (${esc(tokens.join(", "))}), for this account or a payer’s wallet: <a href="/faucet?address=${encodeURIComponent(user.address)}" target="_blank" rel="noopener">open the faucet</a>` })
+    : "";
+  if (!grant || user.faucet?.txHash) {
+    return `${grant ? Z.note({ icon: "science", text: `This account received its ${phEur(user.faucet.grantedEur)} of test EURe.` }) : ""}${more}`;
+  }
   return `<div class="z-card">
       ${Z.row({ lead: Z.iconTile({ icon: "science", tone: "p" }), title: "Test EURe", sub: `${phEur(grant)} to try the app with. Test chain only, not real money.`, right: Z.tag("Testnet") })}
       ${Z.button({ variant: "primary", full: true, label: `Get ${phEur(grant)} test EURe`, id: "ph-faucet" })}
       <p class="z-err" id="ph-faucet-err" role="alert" hidden></p>
-    </div>`;
+    </div>${more}`;
 }
 
 PH["add/wallet"] = {
