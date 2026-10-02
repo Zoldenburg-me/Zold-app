@@ -26,6 +26,7 @@ import { createPageRouter, notFound } from "./routes/pages.js";
 import { createUserRouter } from "./routes/users.js";
 import { createCryptoDepositRouter } from "./routes/crypto-deposits.js";
 import { createPaymentPageRouter } from "./routes/payment-page.js";
+import { createEmailVerificationRouter } from "./routes/email-verification.js";
 import { createReceiptShareRouter } from "./routes/receipt-shares.js";
 import { createFaucetRouter } from "./routes/faucet.js";
 import { capabilities } from "./capabilities.js";
@@ -187,6 +188,8 @@ onPaymentRequestPaid(resolveShopifyRequest);
 
 // Accounts: signup, the account read, KYC state and the privacy bundle.
 app.use("/api", createUserRouter({ requireUserSession }));
+// Confirming the account's email with a code. Off unless EMAIL_VERIFICATION.
+app.use("/api", createEmailVerificationRouter({ requireUserSession }));
 // Crypto in: what arrived at the payment page, and converting it to euros.
 app.use("/api", createCryptoDepositRouter({ requireUserSession }));
 // The payment page: claiming a handle, and the public payee read.

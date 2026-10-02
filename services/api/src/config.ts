@@ -533,6 +533,41 @@ export const VIES = {
   timeoutMs: Number(process.env.VIES_TIMEOUT_MS ?? 10_000),
 } as const;
 
+/**
+ * Email verification: a 6-digit code sent over SMTP (adapters/mailer.ts).
+ * Off unless EMAIL_VERIFICATION=1, and then every SMTP field must be set:
+ * a flag that is on with no way to send would show a code screen for a mail
+ * that never leaves. Off, signup and recovery treat the email as they always
+ * have (docs/email-verification.md).
+ */
+export const EMAIL_VERIFICATION = (() => {
+  const enabled = process.env.EMAIL_VERIFICATION === "1";
+  const smtp = {
+    host: process.env.SMTP_HOST ?? "",
+    port: Number(process.env.SMTP_PORT ?? 587),
+    user: process.env.SMTP_USER ?? "",
+    pass: process.env.SMTP_PASS ?? "",
+    from: process.env.MAIL_FROM ?? "",
+    /** Port 465 speaks TLS from the first byte; others upgrade with STARTTLS. */
+    secure: (process.env.SMTP_PORT ?? "587") === "465",
+  };
+  if (enabled) {
+    const missing = (["host", "user", "pass", "from"] as const).filter((k) => !smtp[k]);
+    if (missing.length) {
+      throw new Error(`EMAIL_VERIFICATION=1 needs ${missing.map((k) => (k === "from" ? "MAIL_FROM" : `SMTP_${k.toUpperCase()}`)).join(", ")}`);
+    }
+    if (!Number.isInteger(smtp.port) || smtp.port <= 0) throw new Error("SMTP_PORT must be a port number");
+  }
+  return {
+    enabled,
+    smtp,
+    codeTtlMs: 15 * 60_000,
+    maxAttempts: 5,
+    resendAfterMs: 60_000,
+    maxSendsPerHour: 5,
+  } as const;
+})();
+
 export const GNOSIS_PAY = {
   baseUrl: process.env.GNOSIS_PAY_BASE_URL ?? "https://api.gnosispay.com",
   siweChainId: Number(process.env.GNOSIS_PAY_SIWE_CHAIN_ID ?? 100),

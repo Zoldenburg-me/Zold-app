@@ -165,7 +165,9 @@ function isAuthRoute(req: express.Request): boolean {
     path.startsWith("/admin") ||
     path.startsWith("/invoice-links/") ||
     (path.endsWith("/monerium/api-keys") && req.method === "POST") ||
-    (path === "/users" && req.method === "POST")
+    (path === "/users" && req.method === "POST") ||
+    // A 6-digit code is a guessable credential; sending one spends mail.
+    /^\/users\/[^/]+\/email\/(code|verify)$/.test(path)
   );
 }
 

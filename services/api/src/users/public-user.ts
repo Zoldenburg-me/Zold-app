@@ -15,7 +15,7 @@ import type { User } from "../store.js";
 
 /** Never send payment-page deposit keys, OAuth state, or encrypted tokens to the client. */
 export const publicUser = (
-  { moneriumConnect, monerium, passkey, paymentPage, segment, usPersonAnswers, ibanBic, ...u }:
+  { moneriumConnect, monerium, passkey, paymentPage, segment, usPersonAnswers, ibanBic, emailCode: _emailCode, ...u }:
     User & { [k: string]: any },
 ) => ({
   ...u,

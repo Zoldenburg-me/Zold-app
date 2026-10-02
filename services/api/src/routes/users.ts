@@ -14,7 +14,7 @@
 import express from "express";
 import { wrap } from "./util.js";
 import { randomUUID } from "node:crypto";
-import { KYC, PRIVACY_BUNDLE } from "../config.js";
+import { EMAIL_VERIFICATION, KYC, PRIVACY_BUNDLE } from "../config.js";
 import { accountBalances } from "../chain.js";
 import { auditEntry, redact } from "../audit.js";
 import { normaliseCountryCode } from "../country-policy.js";
@@ -24,7 +24,7 @@ import { requireKycApproved } from "../http/guards.js";
 import { publicUser, withSession } from "../users/public-user.js";
 import { findIbanBic, refreshPendingIban } from "../adapters/monerium-sandbox.js";
 import { normalizeIban } from "../sepa.js";
-import { emailLooksValid } from "../domain/email.js";
+import { emailHeldBy, emailLooksValid } from "../domain/email.js";
 
 /** Consents a signup body may carry; the client sends one or two. */
 const MAX_SIGNUP_CONSENTS = 4;
@@ -108,7 +108,7 @@ export function createUserRouter(deps: UserDeps) {
       // lookup ambiguous. A row with no passkey is onboarding that stopped
       // before any credential existed (nothing can sign in to it), so the same
       // person may start again after a failed ceremony.
-      if (store.usersByEmail(emailNorm).some((u) => !!u.passkey)) {
+      if (emailHeldBy(store.usersByEmail(emailNorm), EMAIL_VERIFICATION.enabled)) {
         return res.status(409).json({
           error: "an account already uses this email — sign in with your passkey, or recover the account if you lost the device",
           code: "EMAIL_IN_USE",

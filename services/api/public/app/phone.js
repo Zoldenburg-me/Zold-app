@@ -398,6 +398,10 @@ function phChecklist(u) {
     { title: "Face ID sign-in", sub: "This phone approves payments.", done: !!u.passkey?.credentialId },
     { title: "Account created", sub: safe.status === "active" ? "Your account is live." : "Finish setting up your account.",
       done: safe.status === "active", action: { id: "ph-ck-account", label: "Finish" } },
+    ...(caps.emailVerification && u.email
+      ? [{ title: "Confirm your email", sub: u.emailVerifiedAt ? "Confirmed." : "A 6-digit code to your email.",
+          done: !!u.emailVerifiedAt, action: { id: "ph-ck-email", label: "Confirm" } }]
+      : []),
 
     { title: "Verify with Monerium", sub: approved || connected ? "Connected." : "ID check, a few minutes.",
       done: approved || connected, action: { id: "ph-ck-verify", label: "Start" } },
@@ -452,7 +456,7 @@ PH.home = {
   title: "Home",
   tab: "home",
   live: () => JSON.stringify([user?.balanceEur, user?.iban, user?.kycStatus, user?.monerium?.connectedAt, user?.passkeySafe?.status,
-    user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig()]),
+    user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig()]),
   html() {
     const u = user || {};
     const name = u.name || "Account";
@@ -499,6 +503,8 @@ PH.home = {
       const b = root.querySelector(`#${id}`);
       if (b) b.onclick = () => enterKycReview(user?.name || "Account");
     }
+    const emailBtn = root.querySelector("#ph-ck-email");
+    if (emailBtn) emailBtn.onclick = () => enterEmailConfirm();
     const recX = root.querySelector("#ph-rec-x");
     if (recX) recX.onclick = () => {
       try { localStorage.setItem(phRecoveryBannerKey(user), "1"); } catch { /* shown again next visit */ }
