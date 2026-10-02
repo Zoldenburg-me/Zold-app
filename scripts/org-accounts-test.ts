@@ -7,6 +7,8 @@
  * - A company makes its own payment links, for an issued invoice too; only
  *   the member whose Safe backs the account can, and the payer sees the
  *   company as the account holder.
+ * - Any other member's link stays theirs: it is not booked under the
+ *   company, and the payer sees the member's own name.
  * - Invoices print the account's own IBAN unless the profile names another.
  *
  *   npm run org-accounts:test
@@ -151,6 +153,22 @@ await check("a company signup's link from the app is booked under the company it
   const r = await call("POST", "/api/users/u_co/payment-requests", { amountEur: 20, methods: ["bank"] });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.equal(r.body.orgId, "org_co");
+});
+
+await check("a member whose Safe does not back the company keeps their links out of its books", async () => {
+  store.updateUser("u_admin", { iban: "DE44500105175407324931", paymentPage: { handle: "jonas", depositAddress: `0x${"bb".repeat(20)}` } } as any);
+  const r = await call("POST", "/api/users/u_admin/payment-requests", { amountEur: 30, methods: ["bank"] }, "u_admin");
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.orgId, undefined);
+  const pub = await fetch(`${API}/api/pay/jonas/${r.body.code}`).then((x) => x.json());
+  assert.equal(pub.methods.bank.holder, "Jonas Weber");
+});
+await check("a link under a company names it only when the payee's Safe backs it", async () => {
+  const r = await call("POST", "/api/users/u_admin/payment-requests", { amountEur: 31, methods: ["bank"] }, "u_admin");
+  store.updatePaymentRequest(r.body.id, { orgId: "org_co" });
+  const pub = await fetch(`${API}/api/pay/jonas/${r.body.code}`).then((x) => x.json());
+  assert.equal(pub.methods.bank.holder, "Jonas Weber");
+  assert.notEqual(pub.displayName, "Lindner Holzbau GmbH");
 });
 
 console.log("invoice IBAN");

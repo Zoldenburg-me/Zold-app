@@ -54,9 +54,6 @@ A send carries **two signatures**, checked in two places:
    commitment and deadline. The server verifies it
    (`assertDeviceAuthorization` in `orchestrator.ts`) against the terms stored
    on the transfer.
-   *Caveat*: some real authenticators report no PRF support; there the device
-   key is stored unwrapped in `localStorage`, and the app detects and surfaces
-   this.
 2. **Passkey → user operation hash.** `POST /api/transfers` prepares the Safe
    user operation that *is* the debit, for the exact token, amount and
    destination. The passkey signs its hash at send time; the chain enforces
