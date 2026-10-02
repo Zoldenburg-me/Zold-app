@@ -42,6 +42,8 @@ import {
 import {
   contactsById, reconcileDrift, releaseInvoicesOf, withExecutionState,
 } from "./state.js";
+import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
+import { knownError } from "../../http/known-errors.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -75,6 +77,13 @@ export function createDraftRoutes(
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.create")) return;
+    const open = store.draftsOf(ctx.org.id).filter((d) => !["EXECUTED", "FAILED", "REJECTED"].includes(d.state)).length;
+    if (open >= CEILINGS.openDraftsPerOrg) {
+      return res.status(409).json(ceilingRefusal("payment runs not yet executed", CEILINGS.openDraftsPerOrg));
+    }
+    if (!Array.isArray(req.body?.lines) || req.body.lines.length > CEILINGS.linesPerDraft) {
+      return res.status(400).json({ error: `A draft needs a list of lines, at most ${CEILINGS.linesPerDraft}.` });
+    }
 
     // The funding source is resolved INSIDE this org and stored as an id only:
     // an account or wallet id from another org must not be accepted, and the
@@ -96,7 +105,7 @@ export function createDraftRoutes(
       const contacts = contactsById(ctx.org.id);
       const lines = (req.body?.lines ?? []).map((l: Record<string, unknown>) => ({
         id: `dl_${randomUUID()}`,
-        ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
+        ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
       if (!lines.length) return res.status(400).json({ error: "A draft needs at least one line." });
 
@@ -135,9 +144,12 @@ export function createDraftRoutes(
     try {
       const contacts = contactsById(ctx.org.id);
       const replaced = Array.isArray(req.body?.lines);
+      if (replaced && req.body.lines.length > CEILINGS.linesPerDraft) {
+        return res.status(400).json({ error: `A draft is limited to ${CEILINGS.linesPerDraft} lines.` });
+      }
       const lines = (replaced ? req.body.lines : draft.lines).map((l: Record<string, unknown>) => ({
-        id: typeof l.id === "string" ? l.id : `dl_${randomUUID()}`,
-        ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
+        id: typeof l?.id === "string" ? l.id : `dl_${randomUUID()}`,
+        ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
       const updated = store.updateDraft(draft.id, {
         lines,
@@ -301,7 +313,7 @@ export function createDraftRoutes(
     if (!account.backingUserId) {
       return res.status(409).json({
         error:
-          "This account has no funding identity yet. Provisioning a Safe and a Monerium profile per organisation is not built — only accounts carried over from an existing personal account can be spent from today.",
+          "No IBAN is connected to this account yet, so nothing can be sent from it. Connect one on the Accounts screen first.",
       });
     }
     // Spending authority is a device key in one person's browser. A `payer` on
@@ -474,7 +486,13 @@ export function createDraftRoutes(
             : `${ctx.org.name} ${claimed.id.slice(0, 8)}`.slice(0, 140),
         });
       } catch (err) {
-        built = { ok: false as const, status: 500, body: { error: (err as Error).message } };
+        // A quote or build that threw is a partner or rate failure (a refusal
+        // comes back as built.ok === false): 503 with what failed, and the
+        // known kinds (rates down, Monerium refused) in their own words.
+        const known = knownError(err);
+        built = known
+          ? { ok: false as const, status: known.status, body: known.body }
+          : { ok: false as const, status: 503, body: { error: `Line ${plan.name}: the payment could not be prepared (${(err as Error).message}).` } };
       }
 
       if (!built.ok) {

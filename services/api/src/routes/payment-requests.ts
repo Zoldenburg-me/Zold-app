@@ -28,6 +28,7 @@ import {
   effectiveState,
   isRequestCode,
   matchDepositToRequests,
+  MAX_REQUEST_EUR,
   matchMoneriumOrder,
   matchTransfer,
   newRequestCode,
@@ -42,6 +43,7 @@ import {
   type PaymentRequest,
   type PaymentRequestSource,
 } from "../payment-requests.js";
+import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 
 type SessionCheck = (req: express.Request, res: express.Response, userId: string) => unknown;
 
@@ -170,6 +172,12 @@ export async function createPaymentRequest(
 ): Promise<PaymentRequest> {
   const handle = user.paymentPage?.handle;
   if (!handle) throw new PaymentRequestError("claim a payment page before creating a payment link", 409);
+  // Not for Shopify: its checkouts open requests at the shop's volume, signed
+  // by Shopify, and each expires with its checkout.
+  const open = source.kind === "shopify" ? 0 : store.paymentRequestsForUser(user.id).filter((r) => effectiveState(r) === "OPEN").length;
+  if (open >= CEILINGS.openPaymentRequestsPerUser) {
+    throw new PaymentRequestError(ceilingRefusal("open payment links", CEILINGS.openPaymentRequestsPerUser).error, 409);
+  }
   /**
    * A link for an invoice collects THAT invoice's amount.
    *
@@ -361,8 +369,8 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (effectiveState(hit.r) !== "OPEN") return res.status(409).json({ error: `this request is ${effectiveState(hit.r).toLowerCase()}` });
       if (!hit.r.methods.includes("crypto")) return res.status(409).json({ error: "this request does not take crypto" });
       const n = Number(req.body?.amountEur);
-      if (!Number.isFinite(n) || n <= 0 || Math.round(n * 100) !== n * 100) {
-        return res.status(400).json({ error: "amountEur must be a positive amount with at most two decimals" });
+      if (!Number.isFinite(n) || n <= 0 || n > MAX_REQUEST_EUR || Math.round(n * 100) !== n * 100) {
+        return res.status(400).json({ error: "amountEur must be a positive amount up to €1,000,000 with at most two decimals" });
       }
       if (hit.r.amountEur !== undefined && n !== hit.r.amountEur) {
         return res.status(409).json({ error: `this request is for €${hit.r.amountEur.toFixed(2)}` });

@@ -115,9 +115,11 @@ export function validateLines(input: unknown): { lines: InvoiceLine[]; total: st
   }
   let totalCents = 0;
   const lines: InvoiceLine[] = input.map((raw, i) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new InvoiceError(`Line ${i + 1} is not an invoice line.`);
     const r = raw as Record<string, unknown>;
     const description = String(r.description ?? "").trim();
     if (!description) throw new InvoiceError(`Line ${i + 1} needs a description.`);
+    if (description.length > 500) throw new InvoiceError(`Line ${i + 1}'s description is limited to 500 characters.`);
     const quantity = String(r.quantity ?? "1").trim();
     const unitPrice = String(r.unitPrice ?? "").trim();
     if (!AMOUNT_RE.test(quantity) || Number(quantity) <= 0) {

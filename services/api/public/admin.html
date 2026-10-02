@@ -109,6 +109,23 @@
       <div id="recoveryDetail" class="rv-detail" hidden></div>
     </div>
 
+    <!-- Server errors by reference: a ref a user quotes ("E-…") leads to the
+         route and stack. In memory on the API, so a restart empties it. -->
+    <div class="panel" id="errorsPanel">
+      <div class="panel-head">
+        <div class="panel-title">Server errors <span class="panel-count" id="errorsCount"></span></div>
+        <input type="search" id="errorsSearch" aria-label="Find a server error by reference" placeholder="E-… reference" style="max-width:200px">
+      </div>
+      <div class="panel-scroll" style="max-height:320px">
+        <table>
+          <thead><tr><th>Reference</th><th>When</th><th>Route</th><th>Error</th></tr></thead>
+          <tbody id="errorsTableBody">
+            <tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-muted);">Loading server errors…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- One search filters both panels. -->
     <div class="controls">
       <div class="search-box">

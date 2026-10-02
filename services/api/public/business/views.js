@@ -10,7 +10,7 @@
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
-import { $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ymd } from "./core.js";
+import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ymd } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -356,10 +356,10 @@ RENDER.settings = async () => {
       <input id="s-addr1" name="address-line1" autocomplete="address-line1" value="${esc(org.address?.line1 || "")}" placeholder="Street and number…" />
       <label for="s-addr2" class="z-sr">Address line 2</label>
       <input id="s-addr2" name="address-line2" autocomplete="address-line2" value="${esc(org.address?.line2 || "")}" placeholder="Address line 2 (optional)…" style="margin-top:8px" />
-      <div style="display:grid;grid-template-columns:140px 1fr 110px;gap:12px">
+      <div style="display:grid;grid-template-columns:140px 1fr 200px;gap:12px">
         <div><label for="s-zip">Postcode</label><input id="s-zip" name="postal-code" autocomplete="postal-code" spellcheck="false" value="${esc(org.address?.postalCode || "")}" /></div>
         <div><label for="s-city">City</label><input id="s-city" name="city" autocomplete="address-level2" value="${esc(org.address?.city || "")}" /></div>
-        <div><label for="s-country">Country</label><input id="s-country" name="country" autocomplete="country" value="${esc(org.address?.country || "")}" placeholder="DE…" maxlength="2" /></div>
+        <div><label for="s-country">Country</label>${countrySelect("s-country", org.address?.country)}</div>
       </div>
       <div class="grid g2">
         <div><label for="s-tax">Tax ID</label><input id="s-tax" name="tax" autocomplete="off" value="${esc(org.taxId || "")}" /></div>
@@ -411,15 +411,30 @@ RENDER["invoicing-settings"] = async () => {
   const p = d.profile, iss = d.issuer, ref = d.reference, j = d.jurisdiction;
   const on = (k) => (p.display?.[k] !== false ? "checked" : "");
   const f = (id, label, value, extra = "") => `<label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" value="${esc(value ?? "")}" ${extra} />`;
+  const sug = d.suggested || {};
+  const de = j.ruleSet === "DE";
   return jurisdictionBanner(j, d.disclaimer, d.notVerified) + `
+  ${card(org.type === "business" ? "Your company" : "You", "Printed at the top of every invoice. The country decides which invoicing rules apply.",
+    `<div class="grid g2"><div>
+        ${f("i-legal", org.type === "business" ? "Registered name" : "Name on invoices", org.legalName || sug.name || org.name,)}
+        ${!org.legalName && sug.source === "monerium" ? '<p class="desc" style="margin-top:6px">Filled in from your Monerium profile. Check it matches the register, then save.</p>' : ""}
+        <label for="i-country">Country</label>${countrySelect("i-country", org.address?.country)}
+      </div><div>
+        ${f("i-addr1", "Street and number", org.address?.line1, 'placeholder="Franz-Josef-Str. 11…"')}
+        ${f("i-addr2", "Address line 2 (optional)", org.address?.line2)}
+        <div style="display:grid;grid-template-columns:120px 1fr;gap:12px">
+          <div>${f("i-zip", "Postcode", org.address?.postalCode, 'spellcheck="false"')}</div>
+          <div>${f("i-city", "City", org.address?.city)}</div>
+        </div>
+      </div></div>`)}
   ${card("Your details on an invoice", esc(j.ruleSet === "DE"
       ? "§ 14 Abs. 4 UStG requires your full name, address and either a Steuernummer or a USt-IdNr. on every invoice."
       : j.ruleSet === "EU"
         ? "Art. 226 of the VAT Directive requires your full name, address and VAT number on every invoice."
         : `Almost every country requires your full name, address and a tax number on an invoice. Zold doesn’t know which one ${j.countryName} wants: add it as your own rule if these don’t fit.`),
     `<div class="grid g2"><div>
-        ${f("i-vatid", "USt-IdNr.", p.vatId, 'placeholder="DE123456789…"')}
-        ${f("i-taxno", "Steuernummer", p.taxNumber, 'placeholder="123/456/78901…"')}
+        ${f("i-vatid", de ? "USt-IdNr." : "VAT ID", p.vatId, 'placeholder="DE123456789…"')}
+        ${f("i-taxno", de ? "Steuernummer" : "Tax number", p.taxNumber, 'placeholder="123/456/78901…"')}
         <label for="i-rate">Usual VAT rate</label>
         ${ref.vatRates
           ? `<select id="i-rate" name="i-rate">${ref.vatRates.map((r) => `<option value="${r}" ${p.defaultVatRate === r ? "selected" : ""}>${r} %</option>`).join("")}</select>`
@@ -441,9 +456,9 @@ RENDER["invoicing-settings"] = async () => {
         ${f("i-bank-iban", "IBAN", p.bank?.iban, 'spellcheck="false"')}
         ${f("i-bank-bic", "BIC", p.bank?.bic, 'spellcheck="false"')}
       </div><div>
-        ${f("i-court", "Amtsgericht", p.registerCourt, 'placeholder="Amtsgericht Regensburg…"')}
-        ${f("i-reg", "Registernummer", p.registerNumber, 'placeholder="HRB 12345…"')}
-        ${f("i-gf", "Geschäftsführer", p.managingDirector)}
+        ${f("i-court", de ? "Amtsgericht" : "Register court", p.registerCourt, 'placeholder="Amtsgericht Regensburg…"')}
+        ${f("i-reg", de ? "Registernummer" : "Register number", p.registerNumber, 'placeholder="HRB 12345…"')}
+        ${f("i-gf", de ? "Geschäftsführer" : "Managing director", p.managingDirector)}
       </div></div>
       ${f("i-footer", "Footer note", p.footerNote)}`)}
   ${card("What appears on the invoice", "Optional blocks only. Everything § 14 UStG requires is always printed: a switch that can produce an invalid invoice is worse than no switch.",
@@ -454,11 +469,7 @@ RENDER["invoicing-settings"] = async () => {
           <td class="mono">${esc(c.id)}</td><td>${esc(c.label)}${c.legalBasis ? `<p class="desc">${esc(c.legalBasis)}</p>` : ""}</td><td class="desc">${esc(c.invoiceNote)}</td>
           <td><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="del-custom-reason" data-id="${esc(c.id)}">Remove</button></td></tr>`).join("")}</tbody></table>`
       : `<p class="empty">No rules of your own.${j.ruleSet === "GENERIC" ? " You’ll probably need some: Zold applies no tax rules here." : ""}</p>`,
-    secondary("Add rule", 'data-act="add-custom-reason"', "add"))}
-  ${card("From your organisation", "", `<table><tbody>${[["Name", iss.name], ["Address", [iss.addressLine, [iss.postalCode, iss.city].filter(Boolean).join(" "), iss.country].filter(Boolean).join(", ")],
-      ["USt-IdNr.", iss.vatId], ["Steuernummer", iss.taxNumber]]
-      .map(([k, v]) => `<tr><td class="desc">${esc(k)}</td><td>${v ? esc(v) : Z.tag("Missing", "amber")}</td></tr>`).join("")}</tbody></table>`,
-    linkBtn("Edit", "settings"))}`;
+    secondary("Add rule", 'data-act="add-custom-reason"', "add"))}`;
 };
 
 /* ==========================================================================

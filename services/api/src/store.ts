@@ -14,7 +14,7 @@
  * ./store/db.ts; both are re-exported here.
  */
 import { randomUUID } from "node:crypto";
-import { db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
+import { batched, db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
 import type {
   Account,
   AccountRule,
@@ -49,6 +49,8 @@ export { initStore } from "./store/db.js";
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
 
 export const store = {
+  /** Several writes, one file write (store/db.ts). */
+  batched,
   get users() {
     return db.users;
   },
@@ -190,6 +192,11 @@ export const store = {
     persist();
   },
   addQuote(q: Quote) {
+    // A quote nobody took is worth nothing a day after it expired, and every
+    // POST /quotes adds one: drop those, so asking for prices cannot grow the
+    // file without end. A CONSUMED quote is a transfer's terms and stays.
+    const stale = Date.now() - 24 * 60 * 60_000;
+    db.quotes = db.quotes.filter((x) => x.status === "CONSUMED" || Date.parse(x.expiresAt) > stale);
     db.quotes.push(q);
     persist();
   },

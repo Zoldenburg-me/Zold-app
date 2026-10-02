@@ -147,6 +147,17 @@ function ownIbanOf(ibans: any[], address: string, profileId: string | undefined)
   );
 }
 
+/**
+ * May an IBAN this account already stores stay through a (re)connect under
+ * `profileId`? Only when the connected login lists it on that profile. A
+ * login connected earlier under its personal profile and now under its
+ * corporate one would otherwise keep a personal IBAN on a company account.
+ */
+function storedIbanOnProfile(user: User, ibans: any[], profileId: string): boolean {
+  const stored = ibanKey(user.iban);
+  return Boolean(stored) && ibans.some((i: any) => ibanKey(i?.iban) === stored && i?.profile === profileId);
+}
+
 type Hex = `0x${string}`;
 type ActiveSafeUser = User & {
   passkey: NonNullable<User["passkey"]>;
@@ -376,19 +387,37 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         });
       }
 
-      const token = await exchangeAuthorizationCode(
-        {
-          baseUrl: MONERIUM.baseUrl,
-          clientId: MONERIUM.oauthClientId,
-          clientSecret: MONERIUM.clientSecret,
-        },
-        {
-          code,
-          codeVerifier: user.moneriumConnect.codeVerifier,
-          redirectUri: user.moneriumConnect.redirectUri,
-        },
-      );
-      const snapshot = await readMoneriumAccountSnapshot(user, token.access_token);
+      // A code is single-use: a reload or the back button lands here with a
+      // spent one. Back to the app with the reason, not an error page.
+      const connect = user.moneriumConnect;
+      let token: Awaited<ReturnType<typeof exchangeAuthorizationCode>>;
+      let snapshot: Awaited<ReturnType<typeof readMoneriumAccountSnapshot>>;
+      try {
+        token = await exchangeAuthorizationCode(
+          {
+            baseUrl: MONERIUM.baseUrl,
+            clientId: MONERIUM.oauthClientId,
+            clientSecret: MONERIUM.clientSecret,
+          },
+          {
+            code,
+            codeVerifier: connect.codeVerifier,
+            redirectUri: connect.redirectUri,
+          },
+        );
+        snapshot = await readMoneriumAccountSnapshot(user, token.access_token);
+      } catch (err: any) {
+        console.error(`monerium oauth: callback for ${user.id} failed: ${err?.message ?? err}`);
+        store.updateUser(user.id, {
+          moneriumConnect: undefined,
+          moneriumRefusal: {
+            code: "MONERIUM_CONNECT_FAILED",
+            error: "Monerium did not complete the sign-in (a link can be used only once, and this one may have been used already). Connect again from here.",
+            at: new Date().toISOString(),
+          },
+        });
+        return res.redirect("/app?monerium=refused");
+      }
       // A personal signup uses only its personal profile, a company signup
       // only its corporate one. No profile of that kind: nothing is stored,
       // not even the token, and the app shows why.
@@ -406,10 +435,13 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         return res.redirect("/app?monerium=refused");
       }
       const profileId = pick.profile.id;
+      // An IBAN from another profile is not carried into this connection.
+      const dropIban = Boolean(user.iban) && !storedIbanOnProfile(user, snapshot.ibans, profileId);
 
       store.updateUser(user.id, {
         moneriumConnect: undefined,
         moneriumRefusal: undefined,
+        ...(dropIban ? { iban: undefined } : {}),
         kyc: {
           provider: "monerium",
           onboardingPath: "existing_monerium",
@@ -588,29 +620,49 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           return res.status(401).json({ error: String(err?.message ?? err) });
         }
       }
-      /**
-       * Wrong-profile bindings are detected and parked. Don't unlink them. An
-       * address linked under the app's default profile has its IBAN request
-       * park forever, and POST /addresses answers "already linked" without
-       * moving the binding. Unlinking to re-link burns the address: Monerium
-       * answers every later link with "Cannot link, please contact support",
-       * and a Safe's address cannot change (seen on 0x9650E5…). Detection tells
-       * the operator what to raise with Monerium.
-       */
-      let wrongProfileBinding: string | undefined;
-      if (viaApp && profileId) {
-        try {
-          const rec = await moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", `/addresses/${user.address}`);
-          if (rec?.profile && rec.profile !== profileId) wrongProfileBinding = rec.profile;
-        } catch {
-          // not linked yet — the normal first-run case
-        }
+      // The address is linked under the ONE profile this login was connected
+      // with (pickProfileForSignup: corporate for a company signup). Without a
+      // recorded profile, POST /addresses would fall back to the token's
+      // default profile, which for a company's Monerium login can be its
+      // personal one.
+      if (!profileId) {
+        return res.status(409).json({
+          error: "Zold has no Monerium profile recorded for this account, so it cannot tell whose IBAN to activate. Connect your Monerium account again, then activate.",
+          code: "MONERIUM_NOT_CONNECTED",
+        });
       }
       const linkRefused = await linkSafeAddress(user, accessToken, signature, profileId);
       if (linkRefused) {
         // 400, not 502: Cloudflare swallows origin 502 bodies with its own
         // error page, so the reason never reached the user.
         return res.status(400).json({ error: linkRefused });
+      }
+      /**
+       * Check where the address actually is before asking for an IBAN: POST
+       * /addresses answers "already linked" without moving an earlier binding,
+       * and POST /ibans issues under whatever profile the address is linked
+       * to. A company Safe linked under its owner's personal profile would get
+       * a personal IBAN. Refuse, and don't unlink: unlinking burns the address
+       * (Monerium answers every later link with "Cannot link, please contact
+       * support", and a Safe's address cannot change).
+       */
+      const linkedUnder = await linkedProfileOf(accessToken, user.address);
+      if (linkedUnder !== profileId) {
+        const kindOf = (id: string | undefined) =>
+          (user.monerium?.profiles ?? []).find((p: any) => p?.id === id)?.kind as string | undefined;
+        const other = kindOf(linkedUnder);
+        const detail = linkedUnder
+          ? `address is linked under Monerium profile ${linkedUnder}${other ? ` (${other})` : ""}, not ${profileId}; needs Monerium support to move; do NOT unlink`
+          : `Monerium does not show this address linked under profile ${profileId}`;
+        store.updateUser(user.id, {
+          funding: { ...(user.funding ?? { mode: "sandbox" as const, status: "provisioning" as const }), detail },
+        });
+        return res.status(409).json({
+          error: linkedUnder
+            ? `Monerium has this account's address under your ${other ?? "other"} profile, not the ${kindOf(profileId) ?? "connected"} one Zold uses, so no IBAN was requested. Monerium support has to move it; write to support@zoldhq.com and we will raise it with them.`
+            : "Monerium did not confirm which profile this account's address is linked under, so no IBAN was requested. Try again in a moment.",
+          code: "ADDRESS_NOT_ON_PROFILE",
+        });
       }
       // A Monerium profile has ONE IBAN. For a profile that already has it,
       // POST /ibans answers 304: not a refusal, but not an IBAN for this Safe
@@ -672,7 +724,6 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
             error: "Monerium says this profile already has an IBAN. Connect your own Monerium account to see it and move it here.",
           }, "Monerium profile already has an IBAN; connect your own Monerium account to move it");
         }
-        const linkedUnder = await linkedProfileOf(accessToken, user.address);
         const candidates = linkedUnder
           ? snapshot.ibans.filter((i: any) => i?.profile === linkedUnder && ibanKey(i.iban))
           : [];
@@ -731,11 +782,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           mode: "sandbox",
           status: iban ? "active" : "iban_pending",
           moneriumProfileId: profileId,
-          detail: iban
-            ? undefined
-            : wrongProfileBinding
-              ? `address is linked under Monerium profile ${wrongProfileBinding} instead of this account's — needs Monerium support to move; do NOT unlink`
-              : "Monerium IBAN requested; waiting for activation",
+          detail: iban ? undefined : "Monerium IBAN requested; waiting for activation",
         },
         monerium: { ...user.monerium!, profileId, ...snapshot },
       });
@@ -846,8 +893,13 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       }
       // The profile the server recorded for this connection wins over the one
       // the browser named when it started the ceremony.
+      // No recorded profile is a refusal, not a pass: any profile of the login
+      // would do, and a company account could take its owner's personal IBAN.
       const accountProfile = user.monerium?.profileId ?? user.funding?.moneriumProfileId ?? pending.profileId;
-      if (accountProfile && accountProfile !== ibanProfile) {
+      if (!accountProfile) {
+        return notOnProfile("this account has no Monerium profile recorded; connect your Monerium account again first");
+      }
+      if (accountProfile !== ibanProfile) {
         return notOnProfile(
           `${maskIban(requested)} belongs to Monerium profile ${ibanProfile}, but this account is connected under profile ${accountProfile}`,
         );
@@ -1007,6 +1059,9 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       // ADDRESS-MATCHED ONLY, for the reason activate gives: any other IBAN in
       // the snapshot is somebody's money routing, not this account's.
       const ownIban = ownIbanOf(verified.ibans, user.address, profileId);
+      // A stored IBAN stays only if this login lists it on the picked profile.
+      const keepsIban = !ownIban && user.funding?.status === "active" && storedIbanOnProfile(user, verified.ibans, profileId);
+      const dropIban = Boolean(user.iban) && !ownIban && !keepsIban;
       const now = new Date().toISOString();
       const wasApproved = user.kycStatus === "approved";
 
@@ -1034,21 +1089,19 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
                   reason: "own Monerium API keys connected; activate IBAN with passkey",
                 },
               }),
-        ...(ownIban ? { iban: ownIban } : {}),
+        ...(ownIban ? { iban: ownIban } : dropIban ? { iban: undefined } : {}),
         funding: {
           ...(user.funding ?? {}),
           mode: "sandbox" as const,
-          status: ownIban
-            ? ("active" as const)
-            : user.funding?.status === "active"
-              ? ("active" as const)
-              : ("provisioning" as const),
+          status: ownIban || keepsIban ? ("active" as const) : ("provisioning" as const),
           moneriumProfileId: profileId,
           detail: ownIban
             ? `IBAN attributed to this account by your Monerium (${moneriumEnvironment()}) account`
-            : user.funding?.status === "active"
+            : keepsIban
                 ? "own Monerium keys connected; the existing IBAN is kept and Monerium calls for this account now use your keys"
-                : "own Monerium account connected — approve IBAN issuance with your passkey",
+                : dropIban
+                  ? "the IBAN this account had is not on the Monerium profile now connected; approve IBAN issuance with your passkey"
+                  : "own Monerium account connected — approve IBAN issuance with your passkey",
         },
         monerium: {
           connectedAt: now,

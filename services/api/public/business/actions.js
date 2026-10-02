@@ -374,6 +374,18 @@ export const ACTIONS = {
   },
   async "save-invoicing"() {
     const val = (id) => $("#" + id)?.value?.trim() ?? "";
+    // Who the issuer is lives on the organisation; sent only when changed, so
+    // a member who may manage invoices but not the organisation can still
+    // save the rest.
+    const a = org.address || {};
+    const issuer = {
+      legalName: val("i-legal"),
+      address: { line1: val("i-addr1"), line2: val("i-addr2"), postalCode: val("i-zip"), city: val("i-city"), country: val("i-country") },
+    };
+    if (!issuer.address.country) throw new Error("Choose your country: it decides which invoicing rules apply.");
+    const changed = issuer.legalName !== (org.legalName || "") ||
+      ["line1", "line2", "postalCode", "city", "country"].some((k) => issuer.address[k] !== (a[k] || ""));
+    if (changed) await api(`/api/orgs/${org.id}`, { method: "PATCH", body: issuer });
     const display = {};
     document.querySelectorAll("[data-display]").forEach((el) => { display[el.dataset.display] = el.checked; });
     await api(`/api/orgs/${org.id}/invoicing/profile`, {
@@ -392,6 +404,7 @@ export const ACTIONS = {
       },
     });
     toast("Invoicing profile saved.");
+    if (changed) await loadOrg(org.id);
   },
   "pay-invoice": async (el) => {
     const r = await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}/pay`, { method: "POST", body: {} });

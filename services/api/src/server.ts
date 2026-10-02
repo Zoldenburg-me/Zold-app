@@ -55,6 +55,9 @@ import {
   publicClient,
   } from "./chain.js";
 import { CANDIDE, SafeGasError, SafeThresholdError } from "./wallet/candide.js";
+import { routeAsyncRejections } from "./http/async-errors.js";
+import { recordServerError } from "./http/error-log.js";
+import { knownError } from "./http/known-errors.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -103,10 +106,27 @@ const wrap =
     Promise.resolve(fn(req, res, next)).catch(next);
 
 
+/* The latest block, read at most once per HEALTH_BLOCK_MS however often
+ * /api/health is asked (unauthenticated; it used to be one RPC call per hit).
+ * Concurrent misses share one read. */
+const HEALTH_BLOCK_MS = 5_000;
+let healthBlock: { at: number; read: Promise<bigint> } | undefined;
+function latestBlock(): Promise<bigint> {
+  if (!healthBlock || Date.now() - healthBlock.at > HEALTH_BLOCK_MS) {
+    const read = publicClient.getBlockNumber();
+    healthBlock = { at: Date.now(), read };
+    // A failed read is not cached: the next caller asks again.
+    read.catch(() => {
+      if (healthBlock?.read === read) healthBlock = undefined;
+    });
+  }
+  return healthBlock.read;
+}
+
 app.get(
   "/api/health",
   wrap(async (_req, res) => {
-    const block = await publicClient.getBlockNumber();
+    const block = await latestBlock();
     // chainId and realMoney let the landing page name the network it runs on
     // instead of hardcoding "Live on Base" over a testnet deployment.
     res.json({ ok: true, chainId: CHAIN_ID, realMoney: IS_REAL_MONEY_CHAIN, block: Number(block), contracts: addrs(), capabilities: capabilities() });
@@ -190,8 +210,18 @@ app.use("/api", createMoneriumWebhookRouter());
 // Last: nothing above claimed the path.
 app.use(notFound());
 
-app.use(((err, _req, res, next) => {
-  console.error(err);
+app.use(((err, req, res, next) => {
+  // Every unexpected error gets a reference: logged with its stack, kept for
+  // the operator dashboard, and handed to the caller to quote.
+  const mapped = knownError(err);
+  if (mapped) {
+    if (mapped.log) recordServerError(err, req, mapped.status);
+    if (res.headersSent) return next(err);
+    return res.status(mapped.status).json(mapped.body);
+  }
+  const known = err instanceof SafeGasError || err instanceof SafeThresholdError;
+  const logged = known ? undefined : recordServerError(err, req);
+  if (known) console.error(err);
   // A handler that already began answering cannot be given a 500 body: setting
   // headers twice throws inside the error handler itself, which express can
   // only answer by destroying the socket — the caller sees a truncated
@@ -207,8 +237,19 @@ app.use(((err, _req, res, next) => {
     return res.status(err.status).json({ error: err.message, code: err.code });
   }
   const detail = String(err?.shortMessage ?? err?.message ?? err);
-  res.status(500).json({ error: SECURITY.exposeInternalErrors ? detail : "internal server error" });
+  res.setHeader("x-zold-error-ref", logged!.ref);
+  res.status(500).json({
+    error: SECURITY.exposeInternalErrors
+      ? detail
+      : `Something went wrong on our side. Check whether it went through before trying again; if it happens again, quote ${logged!.ref}.`,
+    code: "INTERNAL",
+    ref: logged!.ref,
+  });
 }) as express.ErrorRequestHandler);
+
+// After the last route: a rejected handler promise is a 500, not a process
+// exit (http/async-errors.ts).
+routeAsyncRejections(app);
 
 initStore();
 // Fail fast on a chain mismatch: signatures built for the wrong chain id are
