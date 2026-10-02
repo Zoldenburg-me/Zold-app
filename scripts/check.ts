@@ -52,6 +52,7 @@ const scripts = [
   "anchor:safety",
   "anchor:sweep:test",
   "refund:guard:test",
+  "final-state:test",
   "business:test",
   "draft:test",
   "draft:failure:test",
