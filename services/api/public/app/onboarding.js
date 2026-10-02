@@ -1691,6 +1691,7 @@ OB.activate = {
       ${Z.kv([
         { key: "Monerium", valueHtml: Z.tag("Connected", "mint") },
         { key: "How", value: user?.monerium?.method === "api_keys" ? "Your own API keys" : "Signed in with Monerium" },
+        ...moneriumConnectedRows(),
         { key: "IBAN", valueHtml: user?.iban ? esc(Z.groupIban(user.iban)) : Z.tag("Waiting") },
       ])}
       ${obAlert()}
@@ -1698,7 +1699,8 @@ OB.activate = {
     <div class="z-screen__foot z-screen__foot--quiet">
       ${user?.iban ? "" : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: "Switch on with Face ID", id: "btn-kyc-activate" })}
       <button type="button" class="z-link-btn" id="btn-kyc-refresh">Check again</button>
-      <button type="button" class="z-link-btn z-link-btn--small" id="btn-kyc-reconnect">Use a different Monerium account</button>
+      <button type="button" class="z-link-btn z-link-btn--small" id="btn-kyc-reconnect">Not your login? Use a different Monerium account</button>
+      ${user?.monerium?.method === "api_keys" ? "" : `<p class="z-sub" style="font-size:12px;text-align:center;margin:4px 0 0">Sign out at Monerium first, or it signs you back in to the same login.</p>`}
     </div>`,
   bind: (root) => {
     const act = root.querySelector("#btn-kyc-activate");
@@ -2209,6 +2211,9 @@ function offerIbanMove(choices, profileId) {
         <div style="min-width:0"><div class="m-rowv">${esc(Z.groupIban(norm(c.iban)))}</div>
         <div class="m-rowk" style="word-break:break-all">Pays into ${esc(fromOf(c))}${c.chain ? ` on ${esc(c.chain)}` : ""}</div></div></label>`).join("")}
     </fieldset>`;
+  // The login the IBAN moves from: a browser still signed in at Monerium may
+  // have connected a login the user did not expect.
+  const connectedAs = moneriumConnectedRows().map((r) => `<div class="m-detrow"><div style="min-width:0"><div class="m-rowk">${esc(r.key)}</div><div class="m-rowv" style="word-break:break-all">${esc(r.value)}</div></div></div>`).join("");
   const dlg = document.createElement("dialog");
   dlg.className = "m-dialog";
   dlg.setAttribute("aria-labelledby", "m-mv-title");
@@ -2218,6 +2223,7 @@ function offerIbanMove(choices, profileId) {
       ? `You already have an IBAN ending ${esc(norm(one.iban).slice(-4))}. Zold will use it.`
       : `You already have ${choices.length} IBANs. Pick the one Zold should use.`}</div>
     ${pick}
+    ${connectedAs ? `<div class="m-rows" style="margin-top:12px">${connectedAs}</div>` : ""}
     <div class="m-note warn" style="margin-top:16px;font-size:13px;line-height:1.45">
       New payments arrive in Zold, and the old wallet stops getting them. People who pay you keep the same IBAN. You can move it back later.
     </div>
