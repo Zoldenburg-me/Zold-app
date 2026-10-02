@@ -361,25 +361,17 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
 
   // ── Shopify side: session webhooks, HMAC-signed ────────────────────────
 
-  /**
-   * Authenticate a request from Shopify and find the store it is about.
-   *
-   * Webhooks (orders/create, orders/cancelled) sign with
-   * `X-Shopify-Hmac-Sha256` and name the store in `X-Shopify-Shop-Domain`;
-   * payments-app session requests use the same names without `X-`. Either is
-   * accepted: the HMAC over the raw body is what authenticates, not the name.
-   */
+  /** Authenticate a request from Shopify and find the store it is about. */
   const fromShopify = (req: express.Request, res: express.Response): ShopifyConnection | undefined => {
     if (!SHOPIFY.enabled) {
       res.status(503).json({ error: "Shopify is not configured on this deployment" });
       return undefined;
     }
-    const hmac = req.header("x-shopify-hmac-sha256") ?? req.header("shopify-hmac-sha256");
-    if (!verifyBodyHmac((req as any).rawBody, hmac, SHOPIFY.apiSecret)) {
+    if (!verifyBodyHmac((req as any).rawBody, req.header("shopify-hmac-sha256"), SHOPIFY.apiSecret)) {
       res.status(401).json({ error: "signature did not verify" });
       return undefined;
     }
-    const shop = normaliseShop(req.header("x-shopify-shop-domain") ?? req.header("shopify-shop-domain") ?? "");
+    const shop = normaliseShop(req.header("shopify-shop-domain") ?? "");
     const c = shop ? store.findShopifyConnectionByShop(shop) : undefined;
     if (!c) {
       res.status(404).json({ error: "this store is not connected to Zold" });
