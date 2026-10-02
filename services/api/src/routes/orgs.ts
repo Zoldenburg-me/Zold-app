@@ -48,8 +48,8 @@ import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 
-/** Why an EUR account with no IBAN behind it cannot send, in the words the
- *  Accounts screen shows. The API's `useMyAccount` flag is not named here. */
+/** Why an EUR account with no IBAN behind it cannot send, and what connects
+ *  one, in the words the Accounts screen shows: no API field names. */
 function noIbanGate(type: OrgType): NonNullable<Account["gate"]> {
   return type === "business"
     ? {

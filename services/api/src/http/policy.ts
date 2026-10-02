@@ -131,9 +131,9 @@ export function recordFailure(key: string, windowMs: number): void {
   }
 }
 
-/* Expired buckets are dropped on a timer, not by the request that happens to
- * find the map large: with addresses rotating through fresh IPv6 /64s that
- * scan ran on every request. */
+/* Expired buckets are dropped on a timer, not by a request: a scan on the
+ * request path would run on every request once a caller rotating through
+ * fresh IPv6 /64s keeps the map large. */
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
@@ -171,8 +171,8 @@ function isAuthRoute(req: express.Request): boolean {
 
 /**
  * Paths where each call makes us call a partner or the chain: a quote, any
- * Monerium route, Gnosis Pay, an accounting integration, a conversion quote,
- * a payment run. They also count on the general bucket; this one keeps a
+ * Monerium route, Gnosis Pay, an accounting integration, a VIES lookup, a
+ * conversion quote, a payment run. They also count on the general bucket; this one keeps a
  * caller from spending our partner quota (and getting our keys throttled)
  * at the general rate. Documents get their own, tighter one: a statement is
  * about fifty chain reads.
@@ -185,6 +185,7 @@ function partnerBucket(req: express.Request): "p" | "d" | undefined {
     /^\/users\/[^/]+\/monerium(\/|$)/.test(path) ||
     path.startsWith("/gnosis-pay/") ||
     /^\/orgs\/[^/]+\/integrations(\/|$)/.test(path) ||
+    /^\/orgs\/[^/]+\/invoicing\/vat-check$/.test(path) ||
     /^\/users\/[^/]+\/crypto-deposits\/[^/]+\/convert\/prepare$/.test(path) ||
     /^\/orgs\/[^/]+\/drafts\/[^/]+\/execute$/.test(path)
   ) return "p";

@@ -1,8 +1,8 @@
 /**
  * Express 4 does not catch a rejected promise from a handler, and server.ts
- * exits the process on an unhandled rejection. So one `async (req, res)`
- * handler that throws took the whole API down, and Cloudflare answered every
- * caller with a 502 until the supervisor restarted it.
+ * exits the process on an unhandled rejection. Unguarded, one `async (req, res)`
+ * handler that throws takes the whole API down, and Cloudflare answers every
+ * caller with a 502 until the supervisor restarts it.
  *
  * `routeAsyncRejections` walks every layer mounted on the app, nested routers
  * included, and makes each handler pass a rejection to `next`, so it reaches

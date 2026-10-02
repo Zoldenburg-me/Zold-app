@@ -54,7 +54,7 @@ const N = 1 << 15, R = 8, P = 1, KEYLEN = 32;
 const MAXMEM = 64 * 1024 * 1024;
 
 /* scrypt off the event loop: about 30 ms and 32 MiB per call, which run
- * synchronously held every other request for each password checked. */
+ * synchronously would hold every other request for each password checked. */
 const scryptAsync = (pw: string, salt: Buffer, len: number, opts: ScryptOptions) =>
   new Promise<Buffer>((resolve, reject) => scrypt(pw, salt, len, opts, (err, key) => (err ? reject(err) : resolve(key))));
 
