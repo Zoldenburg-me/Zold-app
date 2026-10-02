@@ -28,7 +28,7 @@ import { keccak256, toBytes, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { IS_PRODUCTION, CHAIN_ID, KEYS, PUBLIC_URL } from "./config.js";
 import type { Transfer, User } from "./store.js";
-import { paymentMemo } from "./sepa.js";
+import { paymentMemo, reportedBic } from "./sepa.js";
 
 export type DocumentKind = "receipt" | "statement" | "balance" | "ownership" | "beleg";
 
@@ -43,8 +43,7 @@ export const PARTIES = {
 } as const;
 
 /** LHV's BIC, shown only next to an Estonian IBAN it actually applies to. */
-export const LHV_BIC = "LHVBEE22";
-export const bicFor = (iban?: string) => (iban && /^EE/i.test(iban.replace(/\s/g, "")) ? LHV_BIC : undefined);
+
 
 /** Verification codes: 15 Crockford characters (~75 bits), grouped for
  *  reading aloud. Holding one is the whole authorisation to read the page. */
@@ -174,7 +173,7 @@ export function holderBlock(user: User): HolderBlock {
   return {
     name: user.name,
     addressLines: lines,
-    ...(iban ? { iban, bic: bicFor(iban) } : {}),
+    ...(iban ? { iban, ...(reportedBic(user) ? { bic: reportedBic(user) } : {}) } : {}),
     safeAddress: user.address as `0x${string}`,
     chainId: CHAIN_ID,
     accountSince: user.createdAt,

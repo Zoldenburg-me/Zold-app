@@ -73,6 +73,9 @@
       try { localStorage.setItem(KEY, "1"); } catch (_) { /* shows again next visit */ }
       var hadFocus = box.contains(document.activeElement);
       box.remove();
+      if (watch) watch.disconnect();
+      root.style.removeProperty("--zold-notice-h");
+      document.body.style.paddingBottom = "";
       if (!hadFocus) return;
       var back = cameFrom && document.contains(cameFrom) ? cameFrom : document.querySelector("main, h1");
       if (!back) return;
@@ -89,6 +92,19 @@
     box.appendChild(text);
     box.appendChild(ok);
     document.body.appendChild(box);
+
+    // The notice must never cover an action. Its height (plus its gap) is
+    // published as --zold-notice-h, which lifts a screen's sticky action bar
+    // (ui.css .z-screen__foot), and the page gets that much room to scroll.
+    var root = document.documentElement;
+    function reserve() {
+      var h = Math.ceil(box.getBoundingClientRect().height + lift + 8);
+      root.style.setProperty("--zold-notice-h", h + "px");
+      if (!onLanding) document.body.style.paddingBottom = h + "px";
+    }
+    var watch = window.ResizeObserver ? new ResizeObserver(reserve) : null;
+    if (watch) watch.observe(box);
+    reserve();
   }
 
   if (document.body) show();

@@ -347,13 +347,17 @@ const phMain = (inner, cls = "") => `<main id="main" class="z-app__main${cls ? `
 const phFoot = (inner) => `<div class="z-app__foot">${inner}</div>`;
 
 /* Share text, or copy it where the browser has no share sheet. */
+/* One text with the link on its own last line. Passed as separate `text` and
+   `url`, some share targets glue the text straight onto the link, and the
+   pasted link then points at nothing. */
 async function phShare(title, text, url) {
+  const body = url ? `${text}\n${url}` : text;
   if (navigator.share) {
-    try { await navigator.share({ title, text, ...(url ? { url } : {}) }); return; }
+    try { await navigator.share({ title, text: body }); return; }
     catch (e) { if (e?.name === "AbortError") return; }
   }
   try {
-    await navigator.clipboard.writeText(url ? `${text}\n${url}` : text);
+    await navigator.clipboard.writeText(body);
     Z.announce("Copied. Paste it where you want to share it.");
   } catch {
     Z.announce("Could not copy. Select the text and copy it yourself.");
@@ -394,9 +398,7 @@ function phChecklist(u) {
     { title: "Face ID sign-in", sub: "This phone approves payments.", done: !!u.passkey?.credentialId },
     { title: "Account created", sub: safe.status === "active" ? "Your account is live." : "Finish setting up your account.",
       done: safe.status === "active", action: { id: "ph-ck-account", label: "Finish" } },
-    ...(recoveryOffered || recoveryOn
-      ? [{ title: "Set up recovery", sub: "Get back in if you lose this phone.", done: recoveryOn, action: { href: "#recovery-settings", label: "Set up" } }]
-      : []),
+
     { title: "Verify with Monerium", sub: approved || connected ? "Connected." : "ID check, a few minutes.",
       done: approved || connected, action: { id: "ph-ck-verify", label: "Start" } },
     { title: "IBAN active",
@@ -408,16 +410,31 @@ function phChecklist(u) {
       // A support case keeps a button to the screen that explains it.
       action: connected && !approved && (!wait || wait.support) ? { id: "ph-ck-verify2", label: wait ? "Details" : "Activate" } : null },
   ];
+  const open = items.some((i) => !i.done);
+  // Recovery is optional, so it is not a set-up step: a skipped choice is an
+  // answer, and an unset recovery is one line the user may close. Security
+  // keeps saying it is off.
+  const declined = u.passkeySafe?.recoveryChoice?.choice === "declined";
+  if (!recoveryOn && (recoveryOffered || declined) && !open && !phRecoveryBannerHidden(u)) {
+    return `<div class="z-banner" role="note">${Z.icon("shield")}<span>Recovery isn’t set up. If you lose this phone, no one can get you back in. <a href="#recovery-settings">Set up</a></span>
+      <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-rec-x" aria-label="Hide this">${Z.icon("close")}</button></div>`;
+  }
   return phChecklistCard("Finish setting up", items);
 }
 
-/* A set-up card: a row per item, ticked only when `done`. An item with an
-   `action` ({ id } for a button, { href } for a link) offers it; one without
-   waits on someone else. Nothing left to do: no card. */
+const phRecoveryBannerKey = (u) => `zold-hide-recovery-banner:${u.id}`;
+function phRecoveryBannerHidden(u) {
+  try { return localStorage.getItem(phRecoveryBannerKey(u)) === "1"; } catch { return false; }
+}
+
+/* A set-up card: a row per open item; the finished ones are a count in the
+   head, never rows. An item with an `action` ({ id } for a button, { href }
+   for a link) offers it; one without waits on someone else. Nothing left to
+   do: no card. */
 function phChecklistCard(title, items) {
   const done = items.filter((i) => i.done).length;
   if (done === items.length) return "";
-  const rows = items.map((i) => {
+  const rows = items.filter((i) => !i.done).map((i) => {
     const mark = `<span class="z-check-mark${i.done ? " is-done" : i.action ? "" : " is-wait"}" aria-hidden="true">${Z.icon(i.done ? "check" : i.action ? "radio_button_unchecked" : "schedule")}</span>`;
     const right = i.done ? Z.tag("Done")
       : i.action ? (i.action.href
@@ -427,7 +444,7 @@ function phChecklistCard(title, items) {
     return `<div class="z-row z-row--check${i.done ? " is-done" : ""}">${mark}<span class="z-row__main"><span class="z-row__title">${esc(i.title)}${i.done ? '<span class="z-sr"> (done)</span>' : ""}</span><span class="z-row__sub">${esc(i.sub)}</span></span><span class="z-row__right">${right}</span></div>`;
   });
   return `<section class="z-card z-checklist" aria-labelledby="ph-ck-title">
-    <div class="z-checklist__head"><h2 id="ph-ck-title">${esc(title)}</h2><span class="z-fig">${done} of ${items.length}</span></div>
+    <div class="z-checklist__head"><h2 id="ph-ck-title">${esc(title)}</h2><span class="z-fig">${done} of ${items.length} done</span></div>
     <ul class="z-list">${rows.map((r) => `<li>${r}</li>`).join("")}</ul></section>`;
 }
 
@@ -435,7 +452,7 @@ PH.home = {
   title: "Home",
   tab: "home",
   live: () => JSON.stringify([user?.balanceEur, user?.iban, user?.kycStatus, user?.monerium?.connectedAt, user?.passkeySafe?.status,
-    user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig()]),
+    user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig()]),
   html() {
     const u = user || {};
     const name = u.name || "Account";
@@ -482,6 +499,11 @@ PH.home = {
       const b = root.querySelector(`#${id}`);
       if (b) b.onclick = () => enterKycReview(user?.name || "Account");
     }
+    const recX = root.querySelector("#ph-rec-x");
+    if (recX) recX.onclick = () => {
+      try { localStorage.setItem(phRecoveryBannerKey(user), "1"); } catch { /* shown again next visit */ }
+      recX.closest(".z-banner")?.remove();
+    };
     phBindRetry(root);
     phRecoveryCheck();
   },
@@ -1050,7 +1072,7 @@ PH["send/amount"] = {
       root.querySelector("#ph-quote").innerHTML = phQuoteRows(null, payee);
       if (!typed) { setNext("Enter an amount", false); return; }
       const n = parseEurInput(typed);
-      if (!(n > 0)) { setNext("Enter an amount", false); showErr("Enter euros and cents, like 120 or 120,50."); return; }
+      if (!(n > 0)) { setNext("Enter an amount", false); showErr(eurInputError(typed)); return; }
       if (phSendBlocked()) { setNext("Sending is not open yet", false); return; }
       if (n > (user?.balanceEur ?? 0)) { setNext("More than your balance", false); showErr(`You have ${phEur(user?.balanceEur ?? 0)}.`); return; }
       setNext("Pricing…", false);
@@ -1281,7 +1303,9 @@ PH["add/wallet"] = {
   html() {
     const u = user || {};
     const page = u.paymentPage || {};
-    const address = page.depositAddress || (u.passkeySafe?.status === "active" ? u.address : "");
+    // Always the Safe itself: the payment page's address may be a forwarder,
+    // and one screen never shows two addresses (or a QR of another one).
+    const address = u.passkeySafe?.status === "active" ? u.address : "";
     const deps = phCache.deposits;
     const waiting = (deps || []).filter((d) => d.state === "DETECTED" && d.token === "USDC");
     // Refused by the poller, or submitted without a confirmed result. The
@@ -1292,12 +1316,15 @@ PH["add/wallet"] = {
     const autoConvert = phCache.autoConvert ?? page.autoConvert;
     const change = page.handle ? ` <a href="#settings/currency/wallet">Change</a>` : "";
     return `${phTop("From a crypto wallet", "add", Z.tag("Beta"))}${phMain(`
-      ${page.handle
-        ? `<div class="z-qr"><img src="/api/pay/${encodeURIComponent(page.handle)}/qr.svg" width="168" height="168" alt="QR code of your wallet address"></div>`
-        : address ? Z.note({ html: `A QR code comes with your payment page. <a href="#get-paid/page">Set up your page</a>` }) : ""}
+      ${address ? `<div class="z-qr"><img src="/api/users/${encodeURIComponent(u.id)}/address/qr.svg" width="168" height="168" alt="QR code of your wallet address"></div>` : ""}
       ${address ? `<div class="z-card">${Z.copyRow({ label: "Your wallet address", value: address, mono: true })}</div>`
         : Z.note({ tone: "a", text: "Your account is not set up yet, so it has no wallet address." })}
       ${Z.note({ tone: "a", text: "Only USDC on the Base network. Anything else sent here is lost." })}
+      ${!address ? "" : caps.paymentPageForwarding
+        ? Z.note({ icon: "link", html: page.handle
+          ? `Your payment page takes more tokens from other chains. <a href="/pay/${encodeURIComponent(page.handle)}" target="_blank" rel="noopener">See the list</a>`
+          : `Set up a payment page to take more tokens from other chains. <a href="#get-paid/page">Set it up</a>` })
+        : page.handle ? "" : Z.note({ icon: "link", html: `Set up a payment page: a link and QR anyone can pay. <a href="#get-paid/page">Set it up</a>` })}
       ${Z.note({ icon: "currency_exchange", html: `${asset === "USDC" || !autoConvert
         ? "Digital dollars that arrive stay as USDC."
         : "Your main currency is euro, so we ask before converting dollars."}${change}` })}
@@ -1799,6 +1826,30 @@ PH["get-paid/details"] = {
   },
 };
 
+/* What the page's address takes, as the API read it from the forwarder's
+   routes at the last activation. */
+function phAcceptsList(page) {
+  const list = page?.supportedTokens || [];
+  if (!list.length) return "";
+  const unitsOf = (raw, dec) => {
+    const v = BigInt(raw), d = 10n ** BigInt(dec);
+    const frac = (v % d).toString().padStart(dec, "0").replace(/0+$/, "");
+    return `${v / d}${frac ? `.${frac}` : ""}`;
+  };
+  return Z.listGroup({
+    label: "Your page takes",
+    rows: list.map((t) => Z.row({
+      lead: Z.iconTile({ icon: "currency_exchange" }),
+      title: `${t.symbol} on ${t.chainName || phChainName(t.chainId)}`,
+      sub: t.minAmount ? `At least ${unitsOf(t.minAmount, t.decimals)} ${t.symbol}` : "Arrives directly",
+    })),
+  });
+}
+
+function phChainName(id) {
+  return { 1: "Ethereum", 10: "Optimism", 56: "BNB Chain", 100: "Gnosis", 137: "Polygon", 8453: "Base", 42161: "Arbitrum", 84532: "Base Sepolia", 31337: "local chain" }[id] || `chain ${id}`;
+}
+
 PH["get-paid/page"] = {
   title: "Your page",
   tab: "get-paid",
@@ -1811,6 +1862,7 @@ PH["get-paid/page"] = {
           <div class="z-page__head">${Z.avatar({ name: page.displayName || u.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(page.displayName || u.name || "")}</span><span class="z-row__sub z-mono" translate="no">${esc(url)}</span></span></div>
           <p class="z-hint">Anyone with this link can pay you in digital dollars (USDC). They see your name, never your balance. The page is public.</p>
         </div>
+        ${phAcceptsList(page)}
         <div class="z-pair">
           ${Z.button({ icon: "tune", label: "Page settings", href: "#page-settings" })}
           ${Z.button({ variant: "primary", icon: "ios_share", label: "Share", id: "ph-page-share" })}
@@ -1912,7 +1964,7 @@ PH.link = {
         const desc = root.querySelector("#ph-lk-desc");
         const raw = amount.value.trim();
         const n = raw ? parseEurInput(raw) : undefined;
-        Z.setFieldError(amount, raw && !(n > 0) ? "Enter euros and cents, like 40 or 40,50." : "");
+        Z.setFieldError(amount, raw && !(n > 0) ? eurInputError(raw, "40,50") : "");
         Z.setFieldError(desc, desc.value.trim() ? "" : "Say what it’s for. The payer sees this.");
         if (Z.focusFirstError(form)) return;
         const methods = [...form.querySelectorAll('input[name="methods"]:checked')].map((i) => i.value);
@@ -1932,7 +1984,10 @@ PH.link = {
     }
     const r = phCache.links.find((x) => x.id === id);
     const share = root.querySelector("#ph-lk-share");
-    if (share && r) share.onclick = () => phShare(r.description || "Payment link", r.amountEur == null ? "You can pay me here:" : `${phEur(r.amountEur)}: you can pay me here:`, r.url);
+    if (share && r) share.onclick = () => {
+      const lead = [r.amountEur == null ? "" : phEur(r.amountEur), r.description || ""].filter(Boolean).join(" for ");
+      phShare(r.description || "Payment link", `${lead ? `${lead}. ` : ""}You can pay me here:`, r.url);
+    };
     const close = root.querySelector("#ph-lk-close");
     if (close && r) close.onclick = () => phConfirm({
       id: "ph-lk-confirm",

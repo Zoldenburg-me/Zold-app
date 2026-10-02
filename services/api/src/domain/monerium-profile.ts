@@ -74,8 +74,8 @@ export function pickProfileForSignup(accountType: SignupAccountType | undefined,
     code: "MONERIUM_PROFILE_KIND_MISSING",
     error:
       kind === "corporate"
-        ? "This Monerium account is a personal one, and your Zold account is for a company. Sign out of Monerium, then connect again with your company's email and make a company account at Monerium with it."
-        : "This Monerium account is already connected with a company profile, and your Zold account is personal. Sign out of Monerium, then connect again with your personal email and make a personal account at Monerium with it.",
+        ? "This Monerium login has only a personal profile, and your Zold account is for a company. Add a company profile to it at Monerium, or sign in there with your company's email and choose Company."
+        : "This Monerium login has only a company profile, and your Zold account is personal. Add a personal profile to it at Monerium, or sign in there with a different email and choose Personal.",
   };
 }
 

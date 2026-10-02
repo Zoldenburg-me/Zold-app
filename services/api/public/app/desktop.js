@@ -258,9 +258,9 @@ PH.home.desk = {
         <div class="z-dhome__col">
           ${inflight ? phDeskInFlight(inflight) : ""}
           ${phDeskGetPaid(u)}
+          ${phChecklist(u)}
         </div>
       </div>
-      ${phChecklist(u)}
       ${phDeskActivity(hist.slice(0, 6), u)}
     `, "z-dhome");
   },

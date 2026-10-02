@@ -10,14 +10,35 @@ can pay: `/pay/alice`.
 | Identifier | `/pay/name` path on the app origin |
 | Address shown | one Candide Forwarding Address per payment page, routing supported tokens into the merchant Safe |
 | Account type | merchant-owned Candide Safe as the account of record |
-| Networks | one, whichever `TRANSF_CHAIN_ID` names |
+| Networks | the app chain, plus every source chain in `CANDIDE_FORWARDING_SOURCE_CHAIN_IDS` whose Candide route delivers the app's USDC |
+| Tokens listed | exactly what `forwarding_getRoutes` says arrives as USDC on the app chain, each with its lowest bridge minimum (`forwarding_getMinimumAmount`); stored as `paymentPage.supportedTokens` at activation |
 | Payer inputs | none — QR plus copy-address |
 | Privacy | **none**, and the page says so |
 
-Two things are deliberately absent: stealth addresses (ERC-5564-style
-per-payment unlinkable accounts — see below for why not yet) and multi-chain.
+Stealth addresses (ERC-5564-style per-payment unlinkable accounts) are
+deliberately absent; see below for why not yet.
 The page is otherwise deliberately plain: no amount field, no wallet
 connection. A payer's wallet does both better than a web page can.
+
+## What the page takes, and for how long
+
+A token is listed only when its route delivers the app's USDC, the one asset
+the crypto-in converter turns into euros; a route that would land ETH or USDT
+in the Safe is not offered. No listed token, or a minimum Candide does not
+state, refuses activation (fail closed). Candide routes nothing to or from any
+testnet, so on Base Sepolia there is no forwarder: outside production the page
+address is the Safe itself (`local-safe`) and takes USDC on the app chain only.
+`capabilities().paymentPageForwarding` tells the app which case it is in.
+
+An activation lapses after Candide's TTL. `livePaymentPage` renews it a day
+before (same salt, same address, fresh token list) whenever the page or a
+payment request is read; once it has lapsed and renewal fails, the page answers
+503 `PAGE_UNAVAILABLE` and a request leaves out the crypto method, so no
+address is shown that would not forward. Deposits are detected in the Safe,
+after forwarding, by `crypto-deposits.ts`.
+
+The in-app receive screen always shows the Safe address with a QR of that same
+address; the forwarder address appears only on the payment page.
 
 ## Page address, not main wallet
 

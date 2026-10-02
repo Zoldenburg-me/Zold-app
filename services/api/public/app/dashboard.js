@@ -298,3 +298,12 @@ function parseEurInput(raw) {
   const n = Number(v.replace(",", "."));
   return n >= 0.01 ? n : NaN;
 }
+
+/* Why parseEurInput refused what was typed, in the words that fix it. */
+function eurInputError(raw, example = "120,50") {
+  const v = String(raw ?? "").replace(/\s/g, "");
+  if (/^-/.test(v)) return "The amount can’t be negative.";
+  if (/^\d+[.,]\d{3,}$/.test(v)) return `Use at most two decimals for cents, like ${example}.`;
+  if (/^\d+([.,]\d*)?$/.test(v)) return "Enter more than €0.00.";
+  return `Enter euros and cents, like ${example}.`;
+}

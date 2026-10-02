@@ -19,6 +19,7 @@ import {
   type MoneriumOrderLike,
 } from "../domain/invoices.js";
 import { addrs } from "../chain.js";
+import { livePaymentPage } from "./payment-page.js";
 import { midRates } from "../rates.js";
 import {
   applyPayment,
@@ -56,15 +57,12 @@ function payToken() {
   return { symbol: "USDC", address: addrs().usdc, decimals: 6 };
 }
 
-/** LHV's BIC, only beside an Estonian IBAN it applies to (documents.ts holds
- *  the same rule; duplicated here to keep this module free of that import). */
 /** What the payer-facing projection needs from this deployment. Exported so
  *  the Shopify order lookup renders the SAME projection the pay page does. */
 export function payerContext(req: express.Request, quote?: CryptoQuote) {
-  return { chainId: CHAIN_ID, token: payToken(), bicFor, baseUrl: baseUrlFor(req), quote };
+  return { chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), quote };
 }
 
-const bicFor = (iban?: string) => (iban && /^EE/i.test(iban.replace(/\s/g, "")) ? "LHVBEE22" : undefined);
 
 /** Amounts this payee has quoted on requests still open — the set a new quote
  *  must not collide with. */
@@ -373,8 +371,10 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     wrap(async (req, res) => {
       const hit = resolvePublic(req, res);
       if (!hit) return;
+      const cryptoLive = await livePaymentPage(hit.user);
       const { request, quote } = await ensureQuote(hit.r, hit.r.amountEur);
-      res.json(publicPaymentRequest(request, hit.user, publicCtx(req, request, quote)));
+      const user = store.findUser(hit.user.id) ?? hit.user;
+      res.json(publicPaymentRequest(request, user, { ...publicCtx(req, request, quote), cryptoLive }));
     }),
   );
 

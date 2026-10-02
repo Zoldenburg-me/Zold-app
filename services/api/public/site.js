@@ -23,6 +23,12 @@
     if (el) el.scrollIntoView();
   }
 
+  // The phone menu is a <details>: a link to a section of this same page
+  // scrolls but would leave it open over the content.
+  document.querySelectorAll(".s-menu a").forEach(function (a) {
+    a.addEventListener("click", function () { var d = a.closest("details"); if (d) d.open = false; });
+  });
+
   var NETWORK = { 8453: "Base", 84532: "Base test network", 31337: "Local test network" };
 
   fetch("/api/health", { headers: { accept: "application/json" } })

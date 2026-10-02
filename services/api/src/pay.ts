@@ -83,7 +83,15 @@ export interface PublicPayee {
   address: `0x${string}`;
   chainId: number;
   token: { symbol: string; address: `0x${string}`; decimals: number };
-  supportedTokens?: { chainId: number; symbol: "EURE" | "USDC"; address: `0x${string}`; decimals: number }[];
+  supportedTokens?: {
+    chainId: number;
+    chainName?: string;
+    symbol: string;
+    address: `0x${string}`;
+    decimals: number;
+    minAmount?: string;
+    feeBps?: number;
+  }[];
   settlementAsset: "EURE" | "USDC";
   autoConvert: boolean;
 }

@@ -10,7 +10,7 @@ import { capabilitiesFor } from "../domain/segments.js";
 import { connectionMethod, publicApiKeys } from "../adapters/monerium-connection.js";
 import { maskTarget } from "../recovery/candide-guardian.js";
 import { issueSession } from "../http/sessions.js";
-import { normalizeIban } from "../sepa.js";
+import { reportedBic } from "../sepa.js";
 import type { User } from "../store.js";
 
 /** Never send payment-page deposit keys, OAuth state, or encrypted tokens to the client. */
@@ -21,7 +21,7 @@ export const publicUser = (
   ...u,
   // The BIC Monerium listed for this IBAN, and only for this IBAN: one read
   // before a move belongs to the old IBAN and is not sent.
-  ...(ibanBic && u.iban && normalizeIban(ibanBic.iban) === normalizeIban(u.iban) ? { bic: ibanBic.bic } : {}),
+  ...(reportedBic({ iban: u.iban, ibanBic }) ? { bic: reportedBic({ iban: u.iban, ibanBic }) } : {}),
   // Consent rows written before Sep 2026 carry the caller's IP. It is never
   // sent: the admin user list renders this same projection for every account.
   ...(u.consents ? { consents: u.consents.map(({ ip: _ip, ...c }: { ip?: string }) => c) } : {}),

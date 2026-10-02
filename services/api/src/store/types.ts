@@ -196,11 +196,17 @@ export interface User {
       expiresAt?: string;
       activatedAt: string;
     };
+    /** What a payer may send to depositAddress, as the forwarder's routes
+     *  said at the last activation (adapters/candide-forwarder.ts). */
     supportedTokens?: {
       chainId: number;
-      symbol: "EURE" | "USDC";
+      chainName?: string;
+      symbol: string;
       address: `0x${string}`;
       decimals: number;
+      /** Smallest unit; below it the deposit is not forwarded. */
+      minAmount?: string;
+      feeBps?: number;
     }[];
     settlementAsset: "EURE" | "USDC";
     autoConvert: boolean;

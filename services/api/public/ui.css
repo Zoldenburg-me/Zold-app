@@ -207,7 +207,7 @@ html:has(.z-bnav) { scroll-padding-bottom: 88px; }
 .z-screen__main { flex: 1; display: flex; flex-direction: column; gap: var(--z-space-7); padding: var(--z-space-7) var(--z-space-4) 0; }
 .z-screen__main--center { justify-content: center; }
 .z-screen__main--tight { gap: 18px; padding-top: var(--z-space-6); }
-.z-screen__foot { position: sticky; bottom: 0; display: flex; flex-direction: column; gap: var(--z-space-3); padding: var(--z-space-4) var(--z-space-4) calc(var(--z-space-7) + env(safe-area-inset-bottom, 0px)); background: linear-gradient(180deg, transparent, var(--z-bg) 24px); }
+.z-screen__foot { position: sticky; bottom: var(--zold-notice-h, 0px); display: flex; flex-direction: column; gap: var(--z-space-3); padding: var(--z-space-4) var(--z-space-4) calc(var(--z-space-7) + env(safe-area-inset-bottom, 0px)); background: linear-gradient(180deg, transparent, var(--z-bg) 24px); }
 /* Keep a focused field clear of the pinned actions. */
 html:has(.z-screen__foot) { scroll-padding-bottom: 140px; }
 .z-screen__foot--quiet { gap: 6px; padding-bottom: calc(var(--z-space-5) + env(safe-area-inset-bottom, 0px)); }
