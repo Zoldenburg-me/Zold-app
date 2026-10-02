@@ -213,6 +213,8 @@ export function draftFrom(org: Organisation, body: Record<string, any>): Invoice
         : undefined,
     issuer: issuerParty(org),
     recipient,
+    ...(typeof body.recipient?.isBusiness === "boolean" ? { recipientIsBusiness: body.recipient.isBusiness } : {}),
+    ...(body.supplyKind === "goods" || body.supplyKind === "services" ? { supplyKind: body.supplyKind } : {}),
     lines: lineInputs(body.lines),
     treatment,
     selfBilled: body.selfBilled === true,

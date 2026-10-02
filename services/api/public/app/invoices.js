@@ -266,7 +266,8 @@ function phInvFresh(org, prof) {
   const due = new Date(today); due.setDate(due.getDate() + (Number.isFinite(terms) ? terms : 14));
   const rates = prof.reference.vatRates;
   return {
-    recipient: { name: "", addressLine: "", postalCode: "", city: "", country: org.address?.country || "", vatId: "" },
+    recipient: { name: "", addressLine: "", postalCode: "", city: "", country: org.address?.country || "", vatId: "", isBusiness: true },
+    supplyKind: "services",
     number: phNextNumber(prof.profile.numberSeries, today),
     // German where the issuer is in a German-speaking country, else English,
     // unless the profile chose.
@@ -306,9 +307,13 @@ const phQty = (raw) => {
 /* The request body for check and issue. The number is left out while it is
    still the series' own, so issuing advances the series. */
 function phInvBody(d, prof) {
+  // d.vat: a rate, "exempt" (the small-business rule), or "exempt:<reason>"
+  // for a treatment taken from the suggestion (reverse charge, export…).
   const vat = d.vat === "exempt"
     ? { kind: "exempt", ...(prof.jurisdiction.ruleSet === "DE" ? { reason: "kleinunternehmer" } : {}) }
-    : { kind: "standard", rate: Number(d.vat) };
+    : String(d.vat).startsWith("exempt:")
+      ? { kind: "exempt", reason: String(d.vat).slice(7) }
+      : { kind: "standard", rate: Number(d.vat) };
   const own = phNextNumber(prof.profile.numberSeries, new Date(`${d.issueDate}T12:00:00`));
   return {
     ...(d.number.trim() && d.number.trim() !== own ? { number: d.number.trim() } : {}),
@@ -318,8 +323,11 @@ function phInvBody(d, prof) {
     ...(phPeriod(d.period) ? { supplyPeriod: phPeriod(d.period) } : {}),
     recipient: {
       name: d.recipient.name.trim(), addressLine: d.recipient.addressLine.trim(), postalCode: d.recipient.postalCode.trim(),
-      city: d.recipient.city.trim(), country: d.recipient.country, ...(d.recipient.vatId.trim() ? { vatId: d.recipient.vatId.trim() } : {}),
+      city: d.recipient.city.trim(), country: d.recipient.country,
+      isBusiness: d.recipient.isBusiness !== false,
+      ...(d.recipient.isBusiness !== false && (d.recipient.vatId || "").trim() ? { vatId: d.recipient.vatId.trim() } : {}),
     },
+    supplyKind: d.supplyKind === "goods" ? "goods" : "services",
     lines: d.lines.map((l) => {
       const p = phPrice(l.price), q = phQty(l.quantity);
       return { description: l.description.trim(), quantity: Number.isFinite(q) ? String(q) : String(l.quantity).trim(), unitPriceNet: Number.isFinite(p) && p !== null ? p.toFixed(2) : "" };
@@ -357,6 +365,12 @@ function phVatChoices(prof, d) {
     return `<div class="z-invvat">${Z.kv([{ key: "VAT", value: j.ruleSet === "DE" ? "No VAT, § 19" : "No VAT, small business" }]).replace('class="z-kv z-card"', 'class="z-kv z-kv--flat"')}
       <p class="z-hint">${j.ruleSet === "DE" ? "Small-business rule (Kleinunternehmer). The invoice says why no VAT is charged." : "Small-business scheme. The invoice has to say why no VAT is charged."} <a href="#invoice/profile/new">Change</a></p></div>`;
   }
+  if (String(d.vat).startsWith("exempt:")) {
+    const id = String(d.vat).slice(7);
+    const r = prof.reference.exemptionReasons.find((x) => x.id === id);
+    return `<div class="z-invvat">${Z.kv([{ key: "VAT", value: `No VAT: ${r?.label || id}` }]).replace('class="z-kv z-card"', 'class="z-kv z-kv--flat"')}
+      <p class="z-hint">${esc(r?.hint || "")} <button type="button" class="z-link-btn z-link-btn--small" id="ph-vat-charge">Charge VAT instead</button></p></div>`;
+  }
   const rates = prof.reference.vatRates;
   if (!rates) {
     return Z.field({ id: "ph-inv-rate", label: "VAT rate, %", name: "vat", value: d.vat, inputmode: "decimal", hint: `Zold keeps no rate table for ${j.countryName}. Enter the rate you charge.` });
@@ -364,6 +378,52 @@ function phVatChoices(prof, d) {
   return `<fieldset class="z-fieldset"><legend class="z-eyebrow">VAT</legend>
     <div class="z-seg">${rates.map((r) => `<label><input type="radio" name="vat" value="${r}"${String(r) === d.vat ? " checked" : ""}><span>${r} %</span></label>`).join("")}</div>
   </fieldset>`;
+}
+
+/* VAT IDs: each country's shape comes with the profile (domain/vat-ids.ts). */
+const phVatFormat = (prof, country) =>
+  Object.values(prof.reference.vatIdFormats || {}).find((f) => f.country === String(country || "").toUpperCase() && f.prefix !== "XI");
+const phVatExample = (prof, country) => phVatFormat(prof, country)?.example || "";
+function phVatShape(prof, raw) {
+  const s = String(raw || "").toUpperCase().replace(/[\s.\-/]/g, "");
+  if (!s) return null;
+  const f = (prof.reference.vatIdFormats || {})[s.slice(0, 2)];
+  if (!f) return { ok: false, text: "It needs the country prefix, like DE, FR, ATU, CHE or GB." };
+  if (!new RegExp(`^(?:${f.body})$`).test(s.slice(2))) return { ok: false, text: `That doesn’t look like a VAT ID from ${f.country}. It’s written like ${f.example}.` };
+  return { ok: true, vies: f.vies, id: s };
+}
+/* What the field's number is known to be: its shape, then VIES's answer. */
+function phVatStatus(prof, d) {
+  const shape = phVatShape(prof, d.recipient.vatId);
+  if (!shape) return "Needed for reverse charge or a tax-free supply to another EU country.";
+  if (!shape.ok) return esc(shape.text);
+  const c = d.vies && d.vies.vatId === shape.id ? d.vies : null;
+  if (!shape.vies) return "Swiss and UK numbers aren’t in the EU register; only the format is checked.";
+  if (!c) return "Format looks right. It’s checked in the EU register when you leave the field.";
+  if (c.status === "valid") return `Registered${c.name ? `: ${esc(c.name)}` : ""}.${c.requestIdentifier ? ` Reference ${esc(c.requestIdentifier)}.` : ""}`;
+  if (c.status === "invalid") return "The EU register says this number isn’t registered.";
+  return "The EU register didn’t answer just now. Zold asks again when you create the invoice.";
+}
+async function phCheckVatId(org, prof, d) {
+  const shape = phVatShape(prof, d.recipient.vatId);
+  if (!shape?.ok || !shape.vies || d.vies?.vatId === shape.id) return;
+  try {
+    const r = await api(phOrgPath(org, "/invoicing/vat-check"), { vatId: d.recipient.vatId });
+    if (r.check) d.vies = r.check;
+  } catch { d.vies = { vatId: shape.id, status: "unavailable" }; }
+}
+/* The treatment the API's check suggests, with a button to take it. */
+function phSuggestion(prof, d, check) {
+  const sug = check?.suggestion;
+  if (!sug || prof.profile.smallBusiness) return "";
+  const v = String(d.vat);
+  const applied = sug.reason ? v === `exempt:${sug.reason}` : !v.startsWith("exempt");
+  const label = sug.reason ? `No VAT: ${prof.reference.exemptionReasons.find((x) => x.id === sug.reason)?.label || sug.reason}` : "Charge your VAT";
+  return Z.note({
+    tone: applied ? undefined : "a",
+    icon: applied ? "check_circle" : "info",
+    html: `<b>${applied ? "Matches" : "Suggested"}: ${esc(label)}.</b> ${esc(phPlain(sug.why))}${sug.confident ? "" : " Check this one before you create it."}${applied ? "" : ` <button type="button" class="z-link-btn z-link-btn--small" id="ph-sug-use">Use this</button>`}`,
+  });
 }
 
 function phTotals(check) {
@@ -400,7 +460,7 @@ PH["invoice/new"] = {
     // charges no VAT, and anyone else needs a rate this issuer can use.
     const rates = prof.reference.vatRates;
     if (prof.profile.smallBusiness) d.vat = "exempt";
-    else if (d.vat === "exempt" || (rates && !rates.map(String).includes(String(d.vat)))) {
+    else if (d.vat === "exempt" || (!String(d.vat).startsWith("exempt:") && rates && !rates.map(String).includes(String(d.vat)))) {
       d.vat = String(prof.profile.defaultVatRate ?? (rates ? rates[0] : ""));
     }
     const missing = !phIssuerTaxId(prof);
@@ -417,7 +477,14 @@ PH["invoice/new"] = {
           ${Z.field({ id: "ph-r-city", label: "City", name: "address-level2", autocomplete: "address-level2", value: d.recipient.city, maxlength: 80 })}
         </div>
         ${Z.select({ id: "ph-r-country", label: "Country", name: "country", autocomplete: "country", value: d.recipient.country, options: phCountries(d.recipient.country) })}
-        ${Z.field({ id: "ph-r-vat", label: "Customer’s VAT ID", optional: true, name: "vat-id", value: d.recipient.vatId, maxlength: 20, spellcheck: false, hint: "For business customers in another EU country." })}
+        <div class="z-seg" role="radiogroup" aria-label="Customer">
+          <label><input type="radio" name="biz" value="yes"${d.recipient.isBusiness !== false ? " checked" : ""}><span>A business</span></label>
+          <label><input type="radio" name="biz" value="no"${d.recipient.isBusiness === false ? " checked" : ""}><span>A private person</span></label>
+        </div>
+        ${d.recipient.isBusiness !== false
+          ? `${Z.field({ id: "ph-r-vat", label: "Customer’s VAT ID", optional: true, name: "vat-id", value: d.recipient.vatId, maxlength: 24, spellcheck: false, placeholder: phVatExample(prof, d.recipient.country) })}
+             <p class="z-hint" id="ph-r-vat-status" aria-live="polite">${phVatStatus(prof, d)}</p>`
+          : ""}
       </fieldset>
       <fieldset class="z-fieldset z-form--tight"><legend class="z-eyebrow">Details</legend>
         <div class="z-cols">
@@ -434,6 +501,11 @@ PH["invoice/new"] = {
         <div class="z-stack" id="ph-lines">${d.lines.map((l, i) => phLineCard(l, i, d.lines.length)).join("")}</div>
         <button type="button" class="z-addline" id="ph-add-line">${Z.icon("add")}<span>Add line</span></button>
       </fieldset>
+      <div class="z-seg" role="radiogroup" aria-label="What you are invoicing">
+        <label><input type="radio" name="supply" value="services"${d.supplyKind !== "goods" ? " checked" : ""}><span>Services</span></label>
+        <label><input type="radio" name="supply" value="goods"${d.supplyKind === "goods" ? " checked" : ""}><span>Goods</span></label>
+      </div>
+      <div id="ph-inv-suggest" aria-live="polite">${phSuggestion(prof, d, phInv.check)}</div>
       ${phVatChoices(prof, d)}
       <div id="ph-inv-totals">${phTotals(phInv.check)}</div>
       <div id="ph-inv-issues" aria-live="polite">${phIssues(phInv.check)}</div>
@@ -460,15 +532,19 @@ PH["invoice/new"] = {
     const val = (id) => root.querySelector(`#${id}`)?.value ?? "";
 
     const read = () => {
+      const biz = root.querySelector('input[name="biz"]:checked')?.value !== "no";
       d.recipient = {
         name: val("ph-r-name"), addressLine: val("ph-r-addr"), postalCode: val("ph-r-zip"),
-        city: val("ph-r-city"), country: val("ph-r-country"), vatId: val("ph-r-vat"),
+        city: val("ph-r-city"), country: val("ph-r-country"),
+        vatId: biz ? (root.querySelector("#ph-r-vat") ? val("ph-r-vat") : d.recipient.vatId || "") : "",
+        isBusiness: biz,
       };
+      d.supplyKind = root.querySelector('input[name="supply"]:checked')?.value === "goods" ? "goods" : "services";
       d.number = val("ph-i-num"); d.language = val("ph-i-lang");
       d.issueDate = val("ph-i-date"); d.dueDate = val("ph-i-due"); d.period = val("ph-i-period");
       d.lines = d.lines.map((l, i) => ({ description: val(`ph-l${i}-d`), quantity: val(`ph-l${i}-q`), price: val(`ph-l${i}-p`) }));
       const rate = root.querySelector('input[name="vat"]:checked') || root.querySelector("#ph-inv-rate");
-      if (rate) d.vat = rate.value;
+      if (rate && !String(d.vat).startsWith("exempt:")) d.vat = rate.value;
     };
     const save = () => {
       clearTimeout(phInv.saveTimer);
@@ -495,6 +571,12 @@ PH["invoice/new"] = {
         const t = root.querySelector("#ph-inv-totals"), s = root.querySelector("#ph-inv-issues");
         if (t) t.innerHTML = phTotals(phInv.check);
         if (s) s.innerHTML = phIssues(phInv.check);
+        const g = root.querySelector("#ph-inv-suggest");
+        if (g) { g.innerHTML = phSuggestion(prof, d, phInv.check); bindSuggestion(); }
+        const st = root.querySelector("#ph-r-vat-status");
+        if (st) st.innerHTML = phVatStatus(prof, d);
+        const vi = root.querySelector("#ph-r-vat");
+        if (vi) vi.placeholder = phVatExample(prof, d.recipient.country);
       }, 350);
     };
     const sums = () => d.lines.forEach((l, i) => {
@@ -503,7 +585,32 @@ PH["invoice/new"] = {
       if (el) el.textContent = Number.isFinite(p) && p !== null && Number.isFinite(q) ? phEur(Math.round(p * q * 100) / 100) : "";
     });
     form.addEventListener("input", () => { read(); sums(); save(); check(); });
-    form.addEventListener("change", () => { read(); save(); check(); });
+    form.addEventListener("change", (e) => {
+      read(); save();
+      // Business or private shows or hides the VAT ID field.
+      if (e.target?.name === "biz") return redraw();
+      // Leaving the VAT ID field looks it up in VIES, then checks again.
+      if (e.target?.id === "ph-r-vat") return phCheckVatId(org, prof, d).then(() => { if (phRoute?.name === "invoice/new") check(); });
+      check();
+    });
+    /* "Use this" on the suggestion, and "Charge VAT instead" on a taken one. */
+    const bindSuggestion = () => {
+      const use = root.querySelector("#ph-sug-use");
+      if (use) use.onclick = () => {
+        read();
+        const sug = phInv.check?.suggestion;
+        if (!sug) return;
+        d.vat = sug.reason ? `exempt:${sug.reason}` : String(prof.profile.defaultVatRate ?? (prof.reference.vatRates ? prof.reference.vatRates[0] : ""));
+        save(); redraw(); check();
+      };
+      const charge = root.querySelector("#ph-vat-charge");
+      if (charge) charge.onclick = () => {
+        read();
+        d.vat = String(prof.profile.defaultVatRate ?? (prof.reference.vatRates ? prof.reference.vatRates[0] : ""));
+        save(); redraw(); check();
+      };
+    };
+    bindSuggestion();
     check();
 
     const redraw = () => {
