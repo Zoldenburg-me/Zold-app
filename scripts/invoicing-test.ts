@@ -54,8 +54,8 @@ const check = (name: string, fn: () => void) => {
 const issuer = {
   name: "Acme GmbH",
   addressLine: "Hauptstraße 1",
-  postalCode: "93047",
-  city: "Regensburg",
+  postalCode: "34117",
+  city: "Kassel",
   country: "DE",
   vatId: "DE123456789",
   taxNumber: "1234567890",

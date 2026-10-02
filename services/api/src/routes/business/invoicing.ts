@@ -38,7 +38,7 @@ import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import {
-  customReasonsOf, draftDueDate, draftFrom, issuerParty, issuerSuggestions,
+  accountBankOf, customReasonsOf, draftDueDate, draftFrom, invoiceBankOf, issuerParty, issuerSuggestions,
   jurisdictionOf, str, withConversion, } from "./shared.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
@@ -71,6 +71,10 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       // else Zold knows that the form can offer.
       issuer: issuerParty(ctx.org),
       suggested: issuerSuggestions(ctx.org, ctx.userId),
+      // What invoices print (`profile.bank` when it names an IBAN, else the
+      // account's), and the account's own, which is the one payments match on.
+      invoiceBank: invoiceBankOf(ctx.org),
+      accountBank: accountBankOf(ctx.org),
       jurisdiction: jur,
       reference: {
         // Only the reasons this jurisdiction actually offers. A Swedish entity

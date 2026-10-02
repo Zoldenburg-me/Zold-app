@@ -62,6 +62,7 @@ const scripts = [
   "async-errors:test",
   "input-errors:test",
   "vat:test",
+  "org-accounts:test",
   "custody:test",
   "segments:test",
   "gnosispay:test",
