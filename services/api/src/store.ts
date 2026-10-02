@@ -296,7 +296,9 @@ export const store = {
     // sender was already repaid for; the late write keeps its other fields.
     if ((t.state === "REFUNDED" || t.state === "PAID") && patch.state && patch.state !== t.state) {
       console.error(`store: refusing to move transfer ${id} from ${t.state} to ${patch.state}`);
-      patch = { ...patch, state: undefined };
+      // Omit state. Assigning `state: undefined` copies the key and erases the field.
+      const { state: _dropped, ...rest } = patch;
+      patch = rest;
     }
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
     persist();
