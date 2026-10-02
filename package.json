@@ -35,6 +35,7 @@
     "safe-import:ui:test": "tsx scripts/safe-import-ui-test.ts",
     "execution:test": "tsx scripts/safe-execution-test.ts",
     "gas:test": "tsx scripts/safe-gas-test.ts",
+    "faucet:test": "tsx scripts/faucet-test.ts",
     "preflight": "tsx scripts/mainnet-preflight.ts",
     "webhook:test": "tsx scripts/webhook-test.ts",
     "reconcile": "tsx scripts/reconcile.ts",

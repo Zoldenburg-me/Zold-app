@@ -1293,9 +1293,43 @@ PH.add = {
     if (HAS("monerium")) rows.push(Z.row({ lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To your IBAN, from any bank in Europe", href: "#account-details" }));
     if (HAS("onchain_balance")) rows.push(Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: "Digital dollars (USDC) from any wallet or exchange", right: Z.tag("Beta"), href: "#add/wallet" }));
     rows.push(Z.soonRow({ lead: Z.iconTile({ icon: "attach_money" }), title: "USD account", sub: "ACH and wire in" }));
-    return `${phTop("Add money")}${phMain(`<p class="z-sub">Both land in the same account.</p>${Z.listGroup({ rows })}`)}`;
+    return `${phTop("Add money")}${phMain(`<p class="z-sub">Both land in the same account.</p>${Z.listGroup({ rows })}${phFaucetCard()}`)}`;
+  },
+  bind(root) {
+    const b = root.querySelector("#ph-faucet");
+    if (!b) return;
+    b.onclick = async () => {
+      const err = root.querySelector("#ph-faucet-err");
+      err.hidden = true;
+      b.disabled = true;
+      try {
+        const r = await api(`/api/users/${user.id}/faucet`, {});
+        if (r.user) user = r.user;
+        Z.announce(`${phEur(r.grantedEur)} test EURe sent.`);
+        phRender();
+      } catch (e) {
+        err.textContent = e?.message || "The test faucet could not send.";
+        err.hidden = false;
+        b.disabled = false;
+      }
+    };
   },
 };
+
+/* The testnet faucet: only where /api/health offers one (never on a chain
+   where EURe is real money), once per account, after the Safe exists. The
+   grant is a real token transfer on the test chain, so it shows in Activity
+   like any deposit. */
+function phFaucetCard() {
+  const grant = caps.faucetEur || 0;
+  if (!grant || user?.passkeySafe?.status !== "active") return "";
+  if (user.faucet?.txHash) return Z.note({ icon: "science", text: `This account received its ${phEur(user.faucet.grantedEur)} of test EURe.` });
+  return `<div class="z-card">
+      ${Z.row({ lead: Z.iconTile({ icon: "science", tone: "p" }), title: "Test EURe", sub: `${phEur(grant)} to try the app with. Test chain only, not real money.`, right: Z.tag("Testnet") })}
+      ${Z.button({ variant: "primary", full: true, label: `Get ${phEur(grant)} test EURe`, id: "ph-faucet" })}
+      <p class="z-err" id="ph-faucet-err" role="alert" hidden></p>
+    </div>`;
+}
 
 PH["add/wallet"] = {
   title: "From a crypto wallet",

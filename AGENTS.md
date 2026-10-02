@@ -59,8 +59,9 @@ THREE RULES OVERRIDE CONVENIENCE:
 - **Custody**: `LIQUIDITY.PROVIDER` defaults to `best` over `lifi,dex`, both
   Safe-executable, so the default deployment is non-custodial. The fee always
   lands at the orchestrator and `transfer.custody` records it.
-- **No simulation**: no mock deposits, faucet or mock IBANs (`config.ts`
-  refuses the old env vars). `/api/health` publishes `capabilities()`
+- **No simulation**: no mock deposits or mock IBANs (`config.ts` refuses
+  the old env vars). The testnet faucet (`faucet.ts`, `FAUCET_KEY`) sends
+  real test-chain EURe and refuses a real-money chain. `/api/health` publishes `capabilities()`
   (capabilities.ts), and the UI renders a control only where the API would
   accept it.
 - **The one harness seam that stays**: `KYC_AUTO_APPROVE=1` is honoured only on
