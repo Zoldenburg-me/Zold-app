@@ -157,11 +157,13 @@ export const store = {
     if (!needle) return [];
     return db.users.filter((u) => (u.email ?? "").trim().toLowerCase() === needle);
   },
-  /** Case-insensitive email match. Prefers an account that can actually be
+  /** Case-insensitive email match. Prefers the account that confirmed the
+   *  address (routes/email-verification.ts), then one that can actually be
    *  recovered when the same address was used more than once. */
   findUserByEmail(email: string) {
     const matches = store.usersByEmail(email);
     return (
+      matches.find((u) => !!u.emailVerifiedAt) ??
       matches.find((u) => u.passkeySafe?.candideRecovery?.guardianStatus === "active") ??
       matches.find((u) => u.passkeySafe?.status === "active") ??
       matches[0]

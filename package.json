@@ -66,6 +66,7 @@
     "dex:test": "tsx scripts/dex-test.ts",
     "lifi:test": "tsx scripts/lifi-test.ts",
     "forwarder:test": "tsx scripts/candide-forwarder-test.ts",
+    "email:test": "tsx scripts/email-verification-test.ts",
     "best:test": "tsx scripts/best-execution-test.ts",
     "dex:setup": "tsx scripts/dex-setup.ts",
     "business:test": "tsx scripts/business-test.ts",
@@ -96,6 +97,7 @@
   "devDependencies": {
     "@types/express": "^4.17.25",
     "@types/node": "^22.20.1",
+    "@types/nodemailer": "^8.0.2",
     "hardhat": "^3.11.1",
     "jsqr": "^1.4.0",
     "tsx": "^4.19.0",
@@ -106,6 +108,7 @@
     "abstractionkit": "^0.4.0",
     "express": "^4.19.0",
     "lz-string": "1.5.0",
+    "nodemailer": "^10.0.13",
     "safe-recovery-service-sdk": "^0.0.4",
     "viem": "^2.21.0"
   },
