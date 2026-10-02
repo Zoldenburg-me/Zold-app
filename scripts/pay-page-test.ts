@@ -69,6 +69,7 @@ const user: any = {
     supportedTokens: [
       { chainId: 31337, symbol: "USDC", address: CHAIN.token.address, decimals: 6 },
     ],
+    routesReadAt: new Date().toISOString(),
     settlementAsset: "EURE",
     autoConvert: true,
     createdAt: new Date().toISOString(),
@@ -132,6 +133,13 @@ check("the public projection returns exactly the expected payment-page keys", ()
     "supportedTokens",
     "token",
   ]);
+});
+
+check("a token list not read from the forwarder's routes is not served", () => {
+  // Pages claimed before the list came from Candide stored EURe + USDC, and
+  // Candide forwards only what its routes list.
+  const p = publicPayee({ ...user, paymentPage: { ...user.paymentPage!, routesReadAt: undefined } }, CHAIN);
+  assert.equal(p.supportedTokens, undefined);
 });
 
 check("and leaks no account data — this is the security-relevant one", () => {
