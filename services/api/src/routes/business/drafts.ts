@@ -313,7 +313,7 @@ export function createDraftRoutes(
     if (!account.backingUserId) {
       return res.status(409).json({
         error:
-          "This account has no funding identity yet. Provisioning a Safe and a Monerium profile per organisation is not built — only accounts carried over from an existing personal account can be spent from today.",
+          "No IBAN is connected to this account yet, so nothing can be sent from it. Connect one on the Accounts screen first.",
       });
     }
     // Spending authority is a device key in one person's browser. A `payer` on

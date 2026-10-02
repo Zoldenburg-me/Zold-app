@@ -147,7 +147,10 @@ flowchart TB
   holds both. A personal signup that wants to use a company IBAN is refused
   and pointed to support@zoldhq.com, which sets up a separate account with
   its own Safe by hand: one Safe behind two IBANs would mix the balances.
-  The profile is re-checked at every draft execution
+  A company signup's first business org gets a gated EUR account when it is
+  created; the owner connects the company's IBAN to it once Monerium has
+  issued it. That login's Safe is the company's, so the business desk does
+  not link it to the personal app. The profile is re-checked at every draft execution
   (technical-architecture §13.1).
 
 ---

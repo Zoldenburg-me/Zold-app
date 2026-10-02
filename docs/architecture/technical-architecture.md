@@ -662,7 +662,9 @@ flowchart LR
   credentials: `GET /profiles/:id` for `kind` and `state`,
   and the `GET /profiles?kind=` list for `name`, since the sandbox's
   single-profile answer has no name. Kind and name never come from the client.
-  Checked at adoption (`POST /accounts` with adoption, `/fund`), at re-check
+  The account list's `adoption` hint judges only the stored profile's kind;
+  its stored state can predate Monerium's approval, so the live check at
+  adoption decides that. Checked at adoption (`POST /accounts` with adoption, `/fund`), at re-check
   (`/profile-check`) and at execution. Refusals: `MONERIUM_PROFILE_KIND_MISMATCH`,
   `MONERIUM_PROFILE_NOT_APPROVED`, `MONERIUM_PROFILE_NOT_FOUND` (the login
   cannot see the id; Monerium answers 403), `MONERIUM_NOT_CONNECTED` (409),
