@@ -267,6 +267,10 @@ export interface User {
      *  API-key connector existed, which were all OAuth. */
     method?: "oauth" | "api_keys";
     profileId?: string;
+    /** The email of the Monerium login the connection signed in with, from
+     *  Monerium's /auth/context. Shown back so a browser still signed in to
+     *  another Monerium login is noticed before an IBAN is moved. */
+    accountEmail?: string;
     accessTokenEnc?: string;
     refreshTokenEnc?: string;
     expiresAt?: string;
