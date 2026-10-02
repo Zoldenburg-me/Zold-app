@@ -84,8 +84,8 @@ async function gpFetch(
   if (cookie) headers.cookie = cookie;
   if (rest.body) headers["content-type"] = "application/json";
 
-  // Still armed while the caller reads the body, which a timer cleared on the
-  // headers did not cover.
+  // The signal stays armed while the caller reads the body, so a response
+  // that sends headers and then stalls is bounded too.
   try {
     return await fetch(`${baseUrl()}${path}`, { ...rest, headers, signal: AbortSignal.timeout(GNOSIS_PAY.timeoutMs) });
   } catch (err: any) {

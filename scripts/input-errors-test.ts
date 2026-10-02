@@ -1,10 +1,10 @@
 /**
  * Bad input is a 4xx with a reason, never a 500.
  *
- * Each case here was a 500 (and before the async-rejection guard, some took
- * the process down): a field of the wrong type reached `.trim()`, a `null`
- * line reached a property read, an amount overflowed to Infinity, a revoked
- * Monerium login surfaced as an internal error.
+ * Each case is input that reaches code expecting another type or range: a
+ * field of the wrong type at `.trim()`, a `null` line at a property read, an
+ * amount that overflows to Infinity, a revoked Monerium login. Unguarded,
+ * each is a 500.
  *
  *   npm run input-errors:test
  */

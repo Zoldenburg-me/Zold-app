@@ -28,14 +28,75 @@ export function storedDraft() {
 export function storeDraft() {
   readInvoiceEditor();
   try {
-    const { _reasons, _defaultRate, ...keep } = invoiceDraft;
-    localStorage.setItem(draftKey(), JSON.stringify(keep));
+    localStorage.setItem(draftKey(), JSON.stringify(invoiceBody()));
     return true;
   } catch { return false; }
 }
 export function forgetDraft() { try { localStorage.removeItem(draftKey()); } catch { /* nothing kept */ } }
 
 const today = () => new Date().toISOString().slice(0, 10);
+
+/* VAT IDs: the shape per country comes from the profile (domain/vat-ids.ts),
+   so the field says what it expects while the number is typed. */
+const vatFormatFor = (d, country) =>
+  Object.values(d?.reference?.vatIdFormats || {}).find((x) => x.country === String(country || "").toUpperCase() && x.prefix !== "XI");
+const vatExample = (d, country) => vatFormatFor(d, country)?.example || "Their tax ID…";
+function vatShape(d, raw) {
+  const s = String(raw || "").toUpperCase().replace(/[\s.\-/]/g, "");
+  if (!s) return null;
+  const f = (d?.reference?.vatIdFormats || {})[s.slice(0, 2)];
+  if (!f) return { ok: false, text: "Starts with no country prefix Zold knows (DE, FR, ATU…, CHE, GB…)." };
+  if (!new RegExp(`^(?:${f.body})$`).test(s.slice(2))) return { ok: false, text: `Doesn’t look like a VAT ID from ${f.country}. It’s written like ${f.example}.` };
+  return { ok: true, vies: f.vies, id: s };
+}
+/** The last VIES answer for the number in the field, kept with the draft. */
+const VIES_WORDS = {
+  valid: (c) => `${Z.tag("Valid", "mint")} Registered in VIES${c.name ? `: ${esc(c.name)}${c.address ? `, ${esc(c.address)}` : ""}` : ""}.${c.requestIdentifier ? ` Reference ${esc(c.requestIdentifier)}.` : ""}`,
+  invalid: () => `${Z.tag("Not valid", "amber")} VIES says this number is not registered.`,
+  unavailable: () => `${Z.tag("Not confirmed", "amber")} VIES didn’t answer just now. Zold asks again when you issue.`,
+  not_checkable: () => "Swiss and UK numbers aren’t in VIES; only the format is checked.",
+};
+function drawVatStatus() {
+  const el = $("#inv-vat-status");
+  if (!el || !invoiceDraft) return;
+  const raw = $("#inv-r-vat")?.value || "";
+  const shape = vatShape(profile, raw);
+  const known = invoiceDraft._vies && shape?.ok && invoiceDraft._vies.vatId === shape.id ? invoiceDraft._vies : null;
+  el.innerHTML = !shape ? "For reverse charge or a tax-free supply, their VAT ID has to be on the invoice."
+    : !shape.ok ? esc(shape.text)
+    : known ? VIES_WORDS[known.status](known)
+    : shape.vies ? "Format looks right. Checking it in VIES when you leave the field…"
+    : VIES_WORDS.not_checkable();
+}
+
+/** Look the number up in VIES (on leaving the field), then check again. */
+export async function checkCustomerVatId() {
+  const raw = $("#inv-r-vat")?.value || "";
+  const shape = vatShape(profile, raw);
+  if (!shape?.ok || !shape.vies || invoiceDraft?._vies?.vatId === shape.id) return drawVatStatus();
+  try {
+    const r = await api(`/api/orgs/${org.id}/invoicing/vat-check`, { method: "POST", body: { vatId: raw } });
+    if (r.check && invoiceDraft) invoiceDraft._vies = r.check;
+  } catch {
+    if (invoiceDraft) invoiceDraft._vies = { vatId: shape.id, status: "unavailable" };
+  }
+  drawVatStatus();
+  refreshInvoiceCheck();
+}
+
+/** The treatment the API suggests, with a button to use it. */
+function drawSuggestion(sug) {
+  const el = $("#inv-suggest");
+  if (!el || !invoiceDraft) return;
+  invoiceDraft._suggestion = sug || null;
+  if (!sug) { el.innerHTML = ""; return; }
+  const v = invoiceDraft.vat;
+  const label = sug.reason ? (profile.reference.exemptionReasons.find((x) => x.id === sug.reason)?.label || sug.reason) : "Charge your VAT";
+  const applied = sug.reason ? v.kind === "exempt" && v.reason === sug.reason : v.kind === "standard";
+  el.innerHTML = `<div class="zb-note${applied ? "" : " zb-note--a"}" style="margin-bottom:10px">${Z.icon(applied ? "check_circle" : "info")}<span>
+    <b>${applied ? "Matches" : "Suggested"}: ${esc(label)}.</b> ${esc(sug.why)}${sug.confident ? "" : " Check this one before you issue."}
+    ${applied ? "" : ` <button type="button" class="z-link-btn" data-act="inv-apply-suggestion">Use this</button>`}</span></div>`;
+}
 const plusDays = (ymdStr, n) => { const d = new Date(`${ymdStr}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 
 META["invoice-new"] = () => ({
@@ -57,7 +118,9 @@ RENDER["invoice-new"] = async () => {
     issueDate: today(),
     supplyDate: today(),
     dueDate: plusDays(today(), Number.isFinite(p.paymentTermsDays) ? p.paymentTermsDays : 14),
-    recipient: { country: d.jurisdiction.country },
+    // A business account mostly invoices businesses; untick for a private one.
+    recipient: { country: d.jurisdiction.country, isBusiness: org.type === "business" },
+    supplyKind: "services",
     vat: p.smallBusiness
       ? { kind: "exempt", reason: d.jurisdiction.ruleSet === "DE" ? "kleinunternehmer" : "small_business_national" }
       : { kind: "standard", rate: p.defaultVatRate ?? (d.jurisdiction.ruleSet === "DE" ? 19 : "") },
@@ -87,6 +150,13 @@ RENDER["invoice-new"] = async () => {
         <div><label for="inv-lang">Language</label><select id="inv-lang" name="language"><option value="de"${invoiceDraft.language !== "en" ? " selected" : ""}>Deutsch</option><option value="en"${invoiceDraft.language === "en" ? " selected" : ""}>English</option></select></div>
       </div>
       ${contacts.length ? `<datalist id="inv-contacts">${contacts.map((c) => `<option value="${esc(c.name)}"></option>`).join("")}</datalist>` : ""}
+      <label class="zb-check" style="margin:10px 0 4px"><input type="checkbox" id="inv-r-biz" data-act="inv-biz" ${r.isBusiness ? "checked" : ""} />
+        <span><b>The customer is a business</b>Then their VAT ID can go on the invoice, and VAT may be theirs to pay, not yours.</span></label>
+      <div class="zb-row zb-row--2">
+        <div><label for="inv-r-country">Country</label>${countrySelect("inv-r-country", r.country || org.address?.country)}</div>
+        ${r.isBusiness ? `<div>${f("inv-r-vat", "Customer’s VAT ID", r.vatId, `placeholder="${esc(vatExample(d, r.country || org.address?.country))}" spellcheck="false" aria-describedby="inv-vat-status"`).replace(/^<div>|<\/div>$/g, "")}
+          <p class="zb-hint" id="inv-vat-status" aria-live="polite" style="margin-top:6px"></p></div>` : ""}
+      </div>
       <div class="zb-row zb-row--3">
         ${f("inv-r-addr", "Street and number", r.addressLine, 'placeholder="Ostengasse 4…"')}
         ${f("inv-r-zip", "Postcode", r.postalCode, 'inputmode="numeric" placeholder="93047…"')}
@@ -107,6 +177,11 @@ RENDER["invoice-new"] = async () => {
         <button type="button" class="z-link-btn" data-act="inv-add-line" style="margin-top:10px">${Z.icon("add")}Add line</button>
       </fieldset>
       <fieldset><legend>VAT</legend>
+        <div class="zb-seg" role="group" aria-label="What you are invoicing" style="margin-bottom:10px">
+          <button type="button" class="zb-pill" data-act="inv-supply" data-kind="services" aria-current="${invoiceDraft.supplyKind !== "goods"}">Services</button>
+          <button type="button" class="zb-pill" data-act="inv-supply" data-kind="goods" aria-current="${invoiceDraft.supplyKind === "goods"}">Goods</button>
+        </div>
+        <div id="inv-suggest" aria-live="polite"></div>
         <div class="zb-seg" role="group" aria-label="VAT">
           <button type="button" class="zb-pill" data-act="inv-vat-mode" data-mode="standard" aria-current="${v.kind === "standard"}"${p.smallBusiness ? ' aria-disabled="true" title="Kleinunternehmer: turn it off in the invoicing profile first"' : ""}>Charge VAT</button>
           <button type="button" class="zb-pill" data-act="inv-vat-mode" data-mode="exempt" aria-current="${v.kind === "exempt"}">Don’t charge VAT</button>
@@ -120,10 +195,8 @@ RENDER["invoice-new"] = async () => {
              <p class="zb-hint" style="margin-top:6px">${esc(reasons.find((x) => x.id === v.reason)?.hint || "")}</p>
              ${v.reason === "other" ? `<label for="inv-note">Exemption and legal basis</label><input id="inv-note" name="note" autocomplete="off" value="${esc(v.note || "")}" placeholder="Steuerfrei nach § 4 Nr. … UStG…" />` : ""}`}
       </fieldset>
-      <details class="zb-more" style="margin-top:16px"><summary style="cursor:pointer;font-weight:600">More: customer’s VAT ID, currency, order number</summary>
-        <div class="zb-row zb-row--3">
-          <div><label for="inv-r-country">Country</label>${countrySelect("inv-r-country", r.country || org.address?.country)}</div>
-          ${f("inv-r-vat", "Customer’s VAT ID", r.vatId, 'placeholder="For reverse charge…"')}
+      <details class="zb-more" style="margin-top:16px"><summary style="cursor:pointer;font-weight:600">More: currency, order number</summary>
+        <div class="zb-row zb-row--2">
           ${f("inv-po", "Order number", invoiceDraft.purchaseOrder)}
         </div>
         ${f("inv-currency", "Currency", invoiceDraft.currency || "EUR", 'maxlength="3" style="max-width:120px;text-transform:uppercase"')}
@@ -147,9 +220,14 @@ RENDER["invoice-new"] = async () => {
 export function readInvoiceEditor() {
   if (!invoiceDraft || !$("#inv-form")) return;
   const val = (id) => $("#" + id)?.value?.trim() ?? "";
+  const before = invoiceDraft.recipient || {};
+  const isBusiness = before.isBusiness === true;
   invoiceDraft.recipient = {
     name: val("inv-r-name"), addressLine: val("inv-r-addr"), postalCode: val("inv-r-zip"),
-    city: val("inv-r-city"), country: val("inv-r-country").toUpperCase(), vatId: val("inv-r-vat"),
+    city: val("inv-r-city"), country: val("inv-r-country").toUpperCase(),
+    // A private customer's VAT ID is not asked for and not sent.
+    vatId: isBusiness ? ($("#inv-r-vat") ? val("inv-r-vat") : before.vatId || "") : "",
+    isBusiness,
   };
   invoiceDraft.language = val("inv-lang") === "en" ? "en" : "de";
   invoiceDraft.issueDate = val("inv-issue");
@@ -173,7 +251,7 @@ export function readInvoiceEditor() {
 }
 
 /* What the API needs: the draft without the editor's own keys. */
-export const invoiceBody = () => { const { _reasons, _defaultRate, ...b } = invoiceDraft; return b; };
+export const invoiceBody = () => Object.fromEntries(Object.entries(invoiceDraft).filter(([k]) => !k.startsWith("_")));
 
 /* ── The paper ─────────────────────────────────────────────────────────── */
 
@@ -249,6 +327,10 @@ export async function refreshInvoiceCheck() {
     box.innerHTML = `${r.ok ? `<p class="zb-hint">${Z.tag("Done")} Every required field is there.</p>` : `<p class="zb-hint" style="margin-top:6px"><b style="color:var(--z-text)">${r.errors.length} thing${r.errors.length === 1 ? "" : "s"} still needed</b></p>`}${issues.join("")}
       ${conv ? `<p class="zb-hint">Collected as ${esc(pMoney(conv.grossCents, conv.to, "en"))} · 1 ${esc(conv.to)} = ${esc(String(conv.rate))} ${esc(conv.from)}</p>` : ""}`;
     $("#inv-paper").innerHTML = paper(r);
+    drawSuggestion(r.suggestion);
+    const vatInput = $("#inv-r-vat");
+    if (vatInput) vatInput.placeholder = vatExample(profile, invoiceDraft.recipient?.country);
+    drawVatStatus();
   } catch (e) {
     if (mine !== checkSeq) return;
     box.innerHTML = `<div class="zb-note zb-note--a">${Z.icon("error")}<span>${esc(e.message)}</span></div>`;

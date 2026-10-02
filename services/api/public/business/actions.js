@@ -312,6 +312,24 @@ export const ACTIONS = {
     readInvoiceEditor();
     invoiceDraft.lines.splice(Number(el.dataset.i), 1);
   },
+  "inv-biz"() {
+    readInvoiceEditor();
+    invoiceDraft.recipient.isBusiness = !invoiceDraft.recipient.isBusiness;
+    if (!invoiceDraft.recipient.isBusiness) invoiceDraft.recipient.vatId = "";
+  },
+  "inv-supply"(el) {
+    readInvoiceEditor();
+    invoiceDraft.supplyKind = el.dataset.kind === "goods" ? "goods" : "services";
+  },
+  /** Take the treatment the check suggested. Replaces, like inv-vat-mode. */
+  "inv-apply-suggestion"() {
+    readInvoiceEditor();
+    const s = invoiceDraft._suggestion;
+    if (!s) return "keep";
+    invoiceDraft.vat = s.reason
+      ? { kind: "exempt", reason: s.reason }
+      : { kind: "standard", rate: invoiceDraft._defaultRate ?? "" };
+  },
   "inv-vat-mode"(el) {
     readInvoiceEditor();
     // Switching mode REPLACES the treatment rather than merging: carrying a

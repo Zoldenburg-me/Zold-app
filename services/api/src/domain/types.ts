@@ -699,6 +699,19 @@ export interface Invoice {
     language?: "de" | "en";
     /** Compliance warnings accepted at issue, kept for the audit trail. */
     acceptedWarnings?: string[];
+    /** Business or private customer, and goods or services, as declared. */
+    recipientIsBusiness?: boolean;
+    supplyKind?: "services" | "goods";
+    /** VIES's answer for the customer's VAT ID at issue: the proof that
+     *  reverse charge or an intra-community supply rests on. */
+    recipientVatCheck?: {
+      vatId: string;
+      status: "valid" | "invalid" | "unavailable" | "not_checkable";
+      name?: string;
+      address?: string;
+      checkedAt: string;
+      requestIdentifier?: string;
+    };
     /**
      * Which rules were applied and how deep the check went. Frozen with the
      * document: the entity may later move country, and a 2026 invoice must keep

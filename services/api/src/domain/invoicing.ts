@@ -27,6 +27,7 @@
  * §4 Nr. 1a/1b i.V.m. §§ 6, 6a UStG (export and intra-community supply).
  */
 
+import { euVatIdLooksValid, vatIdShape } from "./vat-ids.js";
 import {
   jurisdictionFor,
   type CustomExemptionReason,
@@ -361,31 +362,13 @@ export function computeTotals(
 
 // ── Identifiers ─────────────────────────────────────────────────────────────
 
-/** DE + 9 digits. Other member states have their own lengths and check digits;
- *  those are shape-checked only, and the shape must still start with a real VAT
- *  country prefix and contain a digit — otherwise any capitalised word passes.
- *  (It did: "nonsense" uppercases to NONSENSE, which matched a bare
- *  two-letters-then-alphanumerics pattern.) */
-const DE_VAT_ID = /^DE\d{9}$/;
-const VAT_PREFIXES = new Set([
-  "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "HU", "IE",
-  "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE",
-  // Greece files VAT under EL, not GR. XI is Northern Ireland post-Brexit.
-  "EL", "XI",
-]);
+/* VAT ID shapes live in vat-ids.ts, one pattern per country. */
+export { normaliseVatId } from "./vat-ids.js";
 
-export function normaliseVatId(v: string): string {
-  return v.toUpperCase().replace(/[\s.\-/]/g, "");
-}
-
+/** An EU VAT ID (a member state's, or XI), by its country's own shape: the
+ *  identifier reverse charge and intra-community supply require. */
 export function vatIdLooksValid(v: string): boolean {
-  const s = normaliseVatId(v);
-  if (s.startsWith("DE")) return DE_VAT_ID.test(s);
-  const prefix = s.slice(0, 2);
-  const body = s.slice(2);
-  if (!VAT_PREFIXES.has(prefix)) return false;
-  if (!/^[0-9A-Z]{2,12}$/.test(body)) return false;
-  return /\d/.test(body);
+  return euVatIdLooksValid(v);
 }
 
 /** German Steuernummer: 10–13 digits, commonly written with / and spaces. */
@@ -539,6 +522,110 @@ export interface InvoiceDraft {
   /** The settlement-currency restatement, resolved before the check runs. Its
    *  ABSENCE on a foreign-currency invoice is itself a compliance error. */
   conversion?: InvoiceConversion;
+  /** Whether the customer is a business; undefined from a client that does
+   *  not ask. Decides which treatment is suggested, and reverse charge to a
+   *  customer marked private is refused. */
+  recipientIsBusiness?: boolean;
+  /** What is invoiced; the place of supply differs for goods and services. */
+  supplyKind?: "services" | "goods";
+  /** VIES's answer for the customer's VAT ID, looked up by the server (never
+   *  taken from the request) and frozen on the issued invoice as proof. */
+  recipientVatCheck?: VatCheck;
+}
+
+/** One VIES lookup, as kept on an invoice. */
+export interface VatCheck {
+  vatId: string;
+  /** `unavailable`: VIES or the member state's service did not answer;
+   *  `not_checkable`: not an EU number (Swiss, UK), shape-checked only. */
+  status: "valid" | "invalid" | "unavailable" | "not_checkable";
+  name?: string;
+  address?: string;
+  checkedAt: string;
+  /** VIES's consultation number, given when our own VAT ID was sent with
+   *  the request: the reference a tax office asks for. */
+  requestIdentifier?: string;
+}
+
+/**
+ * The treatment Zold would pick from where the customer is, whether they are
+ * a business, their VAT ID, and goods or services. A suggestion the user
+ * confirms, never applied on its own; `null` reason means "charge your VAT".
+ * Only under the German and EU rule sets; elsewhere Zold applies no tax law
+ * and suggests nothing.
+ */
+export interface TreatmentSuggestion {
+  reason: ExemptionReasonId | null;
+  why: string;
+  /** False when it rests on something unconfirmed (no VIES answer yet). */
+  confident: boolean;
+}
+
+export function suggestTreatment(
+  draft: Pick<InvoiceDraft, "recipient" | "recipientIsBusiness" | "supplyKind" | "recipientVatCheck" | "treatment">,
+  jur: JurisdictionProfile,
+): TreatmentSuggestion | undefined {
+  if (jur.ruleSet === "GENERIC") return undefined;
+  // A small business charges no VAT whoever the customer is; which note its
+  // cross-border invoices need is a question for its accountant.
+  const t = draft.treatment;
+  if (t.kind === "exempt" && (t.reason === "kleinunternehmer" || t.reason === "small_business_national")) return undefined;
+  const to = draft.recipient.country?.toUpperCase();
+  const business = draft.recipientIsBusiness;
+  if (!to || business === undefined) return undefined;
+  const goods = draft.supplyKind === "goods";
+  const offered = (r: ExemptionReasonId) => (jur.reasons.includes(r) ? r : null);
+
+  if (to === jur.country) {
+    return { reason: null, why: `Your customer is in ${jur.countryName} too, so you charge your VAT.`, confident: true };
+  }
+  if (isEuCountry(to)) {
+    if (!business) {
+      return {
+        reason: null,
+        why: "A private customer in another EU country pays your VAT. Past €10,000 a year of such sales EU-wide, the customer's country's VAT applies instead (OSS), which Zold does not work out.",
+        confident: false,
+      };
+    }
+    const check = draft.recipientVatCheck;
+    const shapeOk = Boolean(draft.recipient.vatId && euVatIdLooksValid(draft.recipient.vatId));
+    if (!shapeOk || check?.status === "invalid") {
+      return {
+        reason: null,
+        why: check?.status === "invalid"
+          ? "VIES says this VAT ID is not valid, so the customer is treated as private: you charge your VAT."
+          : "Without the customer's EU VAT ID, a business in another EU country is treated as private: you charge your VAT.",
+        confident: true,
+      };
+    }
+    const reason = offered(goods ? "intra_community_supply" : "reverse_charge_eu");
+    return {
+      reason,
+      why: goods
+        ? "Goods to a business in another EU country with a valid VAT ID: a tax-free intra-community supply. Keep proof the goods left your country."
+        : "Services to a business in another EU country with a valid VAT ID: the customer accounts for the VAT (reverse charge).",
+      confident: check?.status === "valid",
+    };
+  }
+  if (goods) {
+    return {
+      reason: offered("export_third_country"),
+      why: "Goods leaving the EU are a tax-free export. Keep the customs export proof.",
+      confident: true,
+    };
+  }
+  if (business) {
+    return {
+      reason: offered("not_taxable_place_of_supply"),
+      why: "Services to a business outside the EU are taxed where the customer is, so not in your country.",
+      confident: true,
+    };
+  }
+  return {
+    reason: null,
+    why: "Services to a private customer outside the EU are usually taxed where you are. Some (consulting, digital services and others) are not: check with your accountant.",
+    confident: false,
+  };
 }
 
 export type IssueSeverity = "error" | "warning";
@@ -553,6 +640,8 @@ export interface ComplianceIssue {
 }
 
 export interface ComplianceReport {
+  /** The treatment Zold would pick (suggestTreatment), when it can tell. */
+  suggestion?: TreatmentSuggestion;
   /** Which content regime applies to this invoice. */
   regime: "standard" | "kleinbetrag" | "kleinunternehmer";
   /** Which jurisdiction's rules ran, and how deep they go. Reported so that
@@ -830,7 +919,7 @@ export function checkCompliance(
     if (
       (t.reason === "reverse_charge_eu" || t.reason === "intra_community_supply") &&
       recipientCountry &&
-      (!isEuCountry(recipientCountry) || recipientCountry === "DE")
+      (!isEuCountry(recipientCountry) || recipientCountry === jur.country)
     ) {
       add(
         "warning",
@@ -851,8 +940,32 @@ export function checkCompliance(
   if (has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
     add("warning", "issuer.vatId", `${draft.issuer.vatId} does not look like a VAT ID.`);
   }
-  if (has(draft.recipient.vatId) && !vatIdLooksValid(draft.recipient.vatId!)) {
-    add("warning", "recipient.vatId", `${draft.recipient.vatId} does not look like a VAT ID.`);
+  if (has(draft.recipient.vatId)) {
+    // By its own country's shape. A number from a country Zold has no format
+    // for (an Indian GSTIN, say) is not second-guessed.
+    const shape = vatIdShape(draft.recipient.vatId!);
+    const recipientCountry = draft.recipient.country?.toUpperCase();
+    if (!shape.ok && (shape.example || isEuCountry(recipientCountry) || ["CH", "GB"].includes(recipientCountry ?? ""))) {
+      add("warning", "recipient.vatId", shape.reason);
+    } else if (shape.ok && recipientCountry && shape.country !== recipientCountry) {
+      add("warning", "recipient.vatId", `This VAT ID is from ${shape.country}, but the customer's address is in ${recipientCountry}.`);
+    }
+    const check = draft.recipientVatCheck;
+    const needsId = draft.treatment.kind === "exempt" &&
+      (draft.treatment.reason === "reverse_charge_eu" || draft.treatment.reason === "intra_community_supply");
+    if (check?.status === "invalid") {
+      add(needsId ? "error" : "warning", "recipient.vatId",
+        `VIES says ${check.vatId} is not a valid VAT ID${needsId ? ", so this invoice cannot go out without VAT" : ""}.`,
+        needsId ? basis("§ 4 Nr. 1b, § 6a UStG", "Art. 138, 196 VAT Directive") : undefined);
+    } else if (check?.status === "unavailable" && needsId) {
+      add("warning", "recipient.vatId",
+        "VIES did not answer, so the customer's VAT ID is not confirmed. Check it again before you rely on it, and keep the confirmation.");
+    }
+  }
+  if (draft.recipientIsBusiness === false && draft.treatment.kind === "exempt" &&
+      (draft.treatment.reason === "reverse_charge_eu" || draft.treatment.reason === "intra_community_supply" || draft.treatment.reason === "not_taxable_place_of_supply")) {
+    add("error", "recipient.isBusiness",
+      "This treatment is for business customers only, and the customer is marked as private. Charge VAT, or mark them as a business.");
   }
   if (draft.selfBilled) {
     add(
@@ -865,7 +978,9 @@ export function checkCompliance(
 
   const errors = issues.filter((i) => i.severity === "error");
   const warnings = issues.filter((i) => i.severity === "warning");
+  const suggestion = suggestTreatment(draft, jur);
   return {
+    ...(suggestion ? { suggestion } : {}),
     regime,
     // Carried on every result so the caller can say how far the check went.
     // `ok: true` under GENERIC means "the document is coherent", not "this is
