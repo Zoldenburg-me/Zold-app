@@ -520,6 +520,16 @@ export const FORWARDING = {
  * Pay account lives on their chain wherever Zold runs, and they reject a SIWE
  * message for any other chain.
  */
+/**
+ * VIES, the EU's VAT number register (adapters/vies.ts). Public, no key. The
+ * URL is overridable so tests can stand a stub in; `VIES_URL=off` turns the
+ * lookup off, and every check then reads "unavailable".
+ */
+export const VIES = {
+  url: process.env.VIES_URL ?? "https://ec.europa.eu/taxation_customs/vies/rest-api/check-vat-number",
+  timeoutMs: Number(process.env.VIES_TIMEOUT_MS ?? 10_000),
+} as const;
+
 export const GNOSIS_PAY = {
   baseUrl: process.env.GNOSIS_PAY_BASE_URL ?? "https://api.gnosispay.com",
   siweChainId: Number(process.env.GNOSIS_PAY_SIWE_CHAIN_ID ?? 100),

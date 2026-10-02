@@ -75,6 +75,7 @@
     "invoicing:test": "tsx scripts/invoicing-test.ts",
     "async-errors:test": "tsx scripts/async-errors-test.ts",
     "input-errors:test": "tsx scripts/input-errors-test.ts",
+    "vat:test": "tsx scripts/vat-test.ts",
     "custody:test": "tsx scripts/custody-test.ts",
     "segments:test": "tsx scripts/segments-test.ts",
     "onboarding:test": "tsx scripts/onboarding-segments-test.ts",

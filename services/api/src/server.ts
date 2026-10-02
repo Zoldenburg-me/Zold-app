@@ -107,7 +107,7 @@ const wrap =
 
 
 /* The latest block, read at most once per HEALTH_BLOCK_MS however often
- * /api/health is asked (unauthenticated; it used to be one RPC call per hit).
+ * /api/health is asked: it is unauthenticated, so a caller sets the rate.
  * Concurrent misses share one read. */
 const HEALTH_BLOCK_MS = 5_000;
 let healthBlock: { at: number; read: Promise<bigint> } | undefined;

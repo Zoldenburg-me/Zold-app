@@ -1,8 +1,8 @@
 /**
  * The one email shape check. The length cap runs first, and the pattern
- * cannot backtrack: the old `[^@\s]+@[^@\s]+\.[^@\s]+` let the domain part
- * and the dot overlap, so a 60,000-character "a@...@" held the event loop
- * for about two seconds per request.
+ * cannot backtrack: domain labels exclude the dot, so no two parts can match
+ * the same characters. A pattern where they overlap (`[^@\s]+\.[^@\s]+`)
+ * takes seconds of event loop on a 60,000-character "a@...@".
  */
 const EMAIL_SHAPE = /^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$/;
 

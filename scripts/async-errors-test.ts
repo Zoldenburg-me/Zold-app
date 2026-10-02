@@ -1,8 +1,8 @@
 /**
  * An async handler that throws answers 500 with a reference; it does not end
- * the process. Express 4 drops a handler's rejected promise, and server.ts
- * exits on an unhandled rejection, so one throwing route used to take the API
- * down and Cloudflare answered every caller with a 502.
+ * the process. Express 4 drops a handler's rejected promise and server.ts
+ * exits on an unhandled rejection, so without the guard one throwing route
+ * takes the API down and Cloudflare answers every caller with a 502.
  *
  *   npm run async-errors:test
  */
