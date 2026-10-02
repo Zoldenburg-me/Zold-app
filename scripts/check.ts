@@ -39,6 +39,7 @@ const scripts = [
   "safe-import:ui:test",
   "execution:test",
   "gas:test",
+  "faucet:test",
   "quote-binding:test",
   "fx:test",
   "jit:test",

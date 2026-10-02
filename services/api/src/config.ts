@@ -324,9 +324,10 @@ function assertProductionConfig() {
   if (!KYC.operatorToken) fail("KYC_OPERATOR_TOKEN is required in production");
   if (process.env.KYC_AUTO_APPROVE === "1") fail("KYC_AUTO_APPROVE=1 is forbidden in production");
   if (process.env.LOCAL_HARNESS === "1") fail("LOCAL_HARNESS=1 is forbidden in production");
-  for (const dead of ["ALLOW_SIMULATION", "ALLOW_MOCK_FALLBACK", "TESTNET_FAUCET_EUR", "KYC_PROVIDER", "SUMSUB_APP_TOKEN"]) {
-    if (process.env[dead]) fail(`${dead} no longer exists — the mock, simulation, faucet and Sumsub paths were removed; unset it`);
+  for (const dead of ["ALLOW_SIMULATION", "ALLOW_MOCK_FALLBACK", "KYC_PROVIDER", "SUMSUB_APP_TOKEN"]) {
+    if (process.env[dead]) fail(`${dead} no longer exists — the mock, simulation and Sumsub paths were removed; unset it`);
   }
+  if (process.env.FAUCET_KEY || process.env.TESTNET_FAUCET_EUR) fail("FAUCET_KEY / TESTNET_FAUCET_EUR are testnet-only and forbidden in production");
   /**
    * Mainnet means mainnet everywhere. A production deployment pointed at the
    * Monerium sandbox, a testnet chain, or a Monerium chain name from the other
@@ -853,6 +854,22 @@ export function envNumber(
   }
   return n;
 }
+
+/**
+ * Testnet faucet: EURe granted to each passkey Safe from the faucet wallet
+ * (FAUCET_KEY), so a fresh test account has something to send. Off unless
+ * both are set. Refused at startup on a chain where EURe is real money and in
+ * production, so the key can never hold real euros for this purpose.
+ */
+export const TESTNET_FAUCET = (() => {
+  const grantEur = envNumber("TESTNET_FAUCET_EUR", 0, { min: 0 });
+  const raw = process.env.FAUCET_KEY?.trim();
+  if (raw && !/^0x[0-9a-fA-F]{64}$/.test(raw)) throw new Error("FAUCET_KEY is not a 32-byte hex private key");
+  if ((raw || grantEur > 0) && IS_REAL_MONEY_CHAIN) {
+    throw new Error(`FAUCET_KEY / TESTNET_FAUCET_EUR are testnet-only; chain ${CHAIN_ID} carries real EURe — unset them`);
+  }
+  return { grantEur, key: raw ? (raw as `0x${string}`) : undefined };
+})();
 
 export const CRYPTO_IN = {
   enabled: process.env.CRYPTO_IN_ENABLED !== "0",
