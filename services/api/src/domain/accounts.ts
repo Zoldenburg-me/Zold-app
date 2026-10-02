@@ -266,8 +266,8 @@ export interface CurrencyAvailability {
   /**
    * A settlement token that exists for this currency, shown even when the rail
    * is closed. `heldByUs` is the field that stops this being a claim: it is
-   * false for every token we do not custody, so a client rendering a token can
-   * never imply a balance.
+   * true only for a token we custody on a rail that is open, so a client
+   * rendering a token can never imply a balance.
    */
   token?: {
     symbol: string;
@@ -296,7 +296,7 @@ export function currencyAvailability(): CurrencyAvailability[] {
       ...(mode === false ? { needs: c.needs } : {}),
       // Shown whether or not the rail is open: a currency with a liquid token
       // but no account is a different state from one with no token at all.
-      ...(c.token ? { token: { ...c.token, heldByUs: c.tokenised } } : {}),
+      ...(c.token ? { token: { ...c.token, heldByUs: c.tokenised && mode !== false } } : {}),
     };
   });
 }
