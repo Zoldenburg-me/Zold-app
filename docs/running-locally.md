@@ -37,6 +37,10 @@ that do not own the local deployment).
 
 - In the embedded browser pane, click coordinates are in SCREENSHOT space, and
   WebAuthn ceremonies never resolve — test passkeys in a real browser.
+- An agent or scanner that needs a signed-in account (a pentest, say) uses
+  `scripts/pentest-user.ts`: a software passkey that signs up and logs in
+  through the real routes and prints a 24h session token. Its key files sit in
+  the git-ignored `.private/pentest/`; holding one is holding the account.
 - Check `document.compatMode === "CSS1Compat"` on any new page: without
   `<!DOCTYPE html>` tables do not inherit colour.
 
