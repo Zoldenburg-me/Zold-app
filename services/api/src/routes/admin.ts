@@ -21,6 +21,7 @@ import type { PlanId } from "../domain/types.js";
 import { onboardingOf, recoveryEnrolment } from "../admin/onboarding.js";
 import { issues, overview } from "../admin/overview.js";
 import { liveMonerium, moneriumOverview, storedMonerium } from "../admin/monerium.js";
+import { maskIdentifier } from "../admin/mask.js";
 
 function adminUserSummary(userId: string) {
   const u = store.findUser(userId);
@@ -40,13 +41,6 @@ function adminUserSummary(userId: string) {
 
 function lastHash(txs: { step: string; hash: string }[] = []) {
   return txs.at(-1)?.hash;
-}
-
-/** Keep enough to recognise a payee, never the whole identifier. */
-function maskIdentifier(v?: string): string | undefined {
-  if (!v) return v;
-  const s = String(v).replace(/\s+/g, "");
-  return s.length <= 6 ? s : `${s.slice(0, 4)}…${s.slice(-2)}`;
 }
 
 function adminTransfer(transfer: Transfer) {

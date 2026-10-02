@@ -14,6 +14,7 @@ import {
   CHAIN_ID,
   KEYS,
   RPC_URL,
+  TESTNET_FAUCET,
   loadAbi,
   loadDeployments,
   type Deployments,
@@ -98,6 +99,8 @@ function wallet(key: `0x${string}`) {
 }
 
 export const deployerWallet = wallet(KEYS.deployer);
+/** The testnet faucet's own wallet; unset means no faucet (faucet.ts). */
+export const faucetWallet = TESTNET_FAUCET.key ? wallet(TESTNET_FAUCET.key) : undefined;
 export const orchestratorWallet = wallet(KEYS.orchestrator);
 export const orchestratorAddress = orchestratorWallet.account.address;
 

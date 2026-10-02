@@ -252,6 +252,22 @@ await check("the order lookup answers CORS-open with the pay-page projection, th
   assert.equal(r.body.code, undefined, "the lookup handed out the payment code");
   for (const secret of ["EE123456789012345678", "shop@example.com", merchant.id, "buyer@example.com", TOKEN, code, shown]) assert.ok(!text.includes(secret), `leaked ${secret}`);
 });
+await check("a lapsed forwarder's address is not handed out by the order lookup either", async () => {
+  // A Candide page past its activation, whose renewal cannot give back the
+  // address it shows: the pay page shows no address, and neither may this.
+  const page = store.findUser(merchant.id)!.paymentPage!;
+  const forwarded = `0x${"33".repeat(20)}` as `0x${string}`;
+  store.updateUser(merchant.id, { paymentPage: { ...page, depositAddress: forwarded, routesReadAt: now,
+    forwarder: { provider: "candide", recipient: owner, destinationChainId: 31337, sourceChainIds: [31337], custodialWithdrawer: owner, active: true, expiresAt: new Date(Date.now() - 60_000).toISOString(), activatedAt: now } } });
+  try {
+    const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.methods.crypto, undefined, JSON.stringify(r.body.methods));
+    assert.ok(!JSON.stringify(r.body).includes(forwarded), "the lapsed address went out");
+  } finally {
+    store.updateUser(merchant.id, { paymentPage: page });
+  }
+});
 await check("the lookup accepts the gid form too, and an order we do not know is a 404 marked pending", async () => {
   assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${encodeURIComponent(o1.admin_graphql_api_id)}`)).status, 200);
   const r = await call("GET", `/api/shopify/orders/${SHOP}/999`);

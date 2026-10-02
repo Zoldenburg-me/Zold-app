@@ -39,6 +39,10 @@ export interface User {
    *  store only its address — the private half stays in the user's browser. */
   authorizerAddress?: `0x${string}`;
   wallet?: { type: "candide-safe"; deployed: boolean; deployOpHash?: string };
+  /** Testnet faucet grant, so one account is funded exactly once. txHash is
+   *  empty while the transfer is in flight (the synchronous claim that stops a
+   *  second call from paying twice). */
+  faucet?: { grantedEur: number; txHash: string; at: string };
     /**
    * Passkey Safe state. The passkey is the only owner (threshold 1).
    */
@@ -221,6 +225,10 @@ export interface User {
       minAmount?: string;
       feeBps?: number;
     }[];
+    /** When supportedTokens was read from the forwarder's routes. Absent on a
+     *  page whose list predates that (a hard-coded EURe + USDC); such a list
+     *  is never served (routes/payment-page.ts livePaymentPage). */
+    routesReadAt?: string;
     settlementAsset: "EURE" | "USDC";
     autoConvert: boolean;
     createdAt: string;

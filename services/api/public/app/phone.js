@@ -39,7 +39,7 @@ let phRoute = null;            // { name, arg }
 let phSig = "";                // what the open screen was drawn from, for the poll
 const phCache = { deposits: null, links: null, methods: null, orgs: null, contacts: null, bic: undefined, bicFor: "", currencyPending: null,
   invoices: null, invProfile: null, invError: null, integrations: null, invIssued: null, invRequest: null,
-  co: null, approvalsWaiting: 0, inviteLinks: {}, plans: {}, signers: undefined, soon: null };
+  co: null, approvalsWaiting: 0, inviteLinks: {}, plans: {}, signers: undefined, soon: null, walletQr: null };
 
 /* The company the phone acts for, or null for the personal account. Kept per
    user on this device, and dropped when the user is no longer a member. */
@@ -1299,9 +1299,51 @@ PH.add = {
     if (HAS("monerium")) rows.push(Z.row({ lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To your IBAN, from any bank in Europe", href: "#account-details" }));
     if (HAS("onchain_balance")) rows.push(Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: "Digital dollars (USDC) from any wallet or exchange", right: Z.tag("Beta"), href: "#add/wallet" }));
     rows.push(Z.soonRow({ lead: Z.iconTile({ icon: "attach_money" }), title: "USD account", sub: "ACH and wire in" }));
-    return `${phTop("Add money")}${phMain(`<p class="z-sub">Both land in the same account.</p>${Z.listGroup({ rows })}`)}`;
+    return `${phTop("Add money")}${phMain(`<p class="z-sub">Both land in the same account.</p>${Z.listGroup({ rows })}${phFaucetCard()}`)}`;
+  },
+  bind(root) {
+    const b = root.querySelector("#ph-faucet");
+    if (!b) return;
+    b.onclick = async () => {
+      const err = root.querySelector("#ph-faucet-err");
+      err.hidden = true;
+      b.disabled = true;
+      try {
+        const r = await api(`/api/users/${user.id}/faucet`, {});
+        if (r.user) user = r.user;
+        Z.announce(`${phEur(r.grantedEur)} test EURe sent.`);
+        phRender();
+      } catch (e) {
+        err.textContent = e?.message || "The test faucet could not send.";
+        err.hidden = false;
+        b.disabled = false;
+      }
+    };
   },
 };
+
+/* The testnet faucet: only where /api/health offers one (never on a chain
+   where EURe is real money), once per account, after the Safe exists. The
+   grant is a real token transfer on the test chain, so it shows in Activity
+   like any deposit. */
+function phFaucetCard() {
+  const grant = caps.faucetEur || 0;
+  const tokens = caps.faucetTokens || [];
+  if (user?.passkeySafe?.status !== "active" || (!grant && !tokens.length)) return "";
+  // The public faucet page funds any address, this account's included, and a
+  // test payer's own wallet for paying an invoice or a link.
+  const more = tokens.length
+    ? Z.note({ icon: "water_drop", html: `More test tokens (${esc(tokens.join(", "))}), for this account or a payer’s wallet: <a href="/faucet?address=${encodeURIComponent(user.address)}" target="_blank" rel="noopener">open the faucet</a>` })
+    : "";
+  if (!grant || user.faucet?.txHash) {
+    return `${grant ? Z.note({ icon: "science", text: `This account received its ${phEur(user.faucet.grantedEur)} of test EURe.` }) : ""}${more}`;
+  }
+  return `<div class="z-card">
+      ${Z.row({ lead: Z.iconTile({ icon: "science", tone: "p" }), title: "Test EURe", sub: `${phEur(grant)} to try the app with. Test chain only, not real money.`, right: Z.tag("Testnet") })}
+      ${Z.button({ variant: "primary", full: true, label: `Get ${phEur(grant)} test EURe`, id: "ph-faucet" })}
+      <p class="z-err" id="ph-faucet-err" role="alert" hidden></p>
+    </div>${more}`;
+}
 
 PH["add/wallet"] = {
   title: "From a crypto wallet",
@@ -1322,7 +1364,7 @@ PH["add/wallet"] = {
     const autoConvert = phCache.autoConvert ?? page.autoConvert;
     const change = page.handle ? ` <a href="#settings/currency/wallet">Change</a>` : "";
     return `${phTop("From a crypto wallet", "add", Z.tag("Beta"))}${phMain(`
-      ${address ? `<div class="z-qr"><img src="/api/users/${encodeURIComponent(u.id)}/address/qr.svg" width="168" height="168" alt="QR code of your wallet address"></div>` : ""}
+      ${address ? `<div class="z-qr"><img id="ph-wallet-qr" ${phCache.walletQr?.key === `${u.id}:${address}` ? `src="${phCache.walletQr.url}"` : "hidden"} width="168" height="168" alt="QR code of your wallet address"></div>` : ""}
       ${address ? `<div class="z-card">${Z.copyRow({ label: "Your wallet address", value: address, mono: true })}</div>`
         : Z.note({ tone: "a", text: "Your account is not set up yet, so it has no wallet address." })}
       ${Z.note({ tone: "a", text: "Only USDC on the Base network. Anything else sent here is lost." })}
@@ -1351,10 +1393,31 @@ PH["add/wallet"] = {
       }) : ""}
     `)}`;
   },
-  bind() {
+  bind(root) {
     if (phCache.deposits === null) phLoadDeposits().then(() => { if (phRoute?.name === "add/wallet") phRender(); });
+    const img = root.querySelector("#ph-wallet-qr");
+    if (img?.hidden) phLoadWalletQr(img);
   },
 };
+
+/* The wallet QR route is signed-in only, and an <img> request carries no
+   bearer header, so the SVG is fetched with the session and shown from a
+   blob URL. Kept per user and address so a redraw does not refetch. */
+async function phLoadWalletQr(img) {
+  const key = `${user.id}:${user.address}`;
+  try {
+    const res = await fetch(`/api/users/${encodeURIComponent(user.id)}/address/qr.svg`, {
+      headers: sessionToken ? { authorization: `Bearer ${sessionToken}` } : {},
+    });
+    if (!res.ok) return;
+    const url = URL.createObjectURL(await res.blob());
+    if (phCache.walletQr) URL.revokeObjectURL(phCache.walletQr.url);
+    phCache.walletQr = { key, url };
+    if (img.isConnected) { img.src = url; img.hidden = false; }
+  } catch {
+    // No QR is better than a broken image; the address is copyable below it.
+  }
+}
 
 async function phLoadDeposits() {
   if (!user?.id) return;

@@ -6,6 +6,8 @@ Say this plainly rather than letting the surface imply otherwise:
 
 - **No mainnet deploy.** No 8453 entry in `deployments.json`; needs funded
   operator keys the user holds.
+- **The testnet faucet has not sent on Base Sepolia**, neither the Add money
+  grant nor a /faucet page drip. `faucet:test` proves both on hardhat.
 - **No real money has moved through a swap.** No dex/LI.FI/RFQ/CoW swap has
   executed; no Base Sepolia send has exercised execution → debit.
 - **The cash rail has never opened.** Bridge live mode is entirely unexercised,
@@ -64,7 +66,7 @@ Say this plainly rather than letting the surface imply otherwise:
 - **No Candide forwarder has forwarded a deposit.** Candide routes nothing on
   testnets, so zoldhq.com's payment pages show the Safe itself; the
   multi-chain token list, minimums and TTL renewal run only against a stub
-  (`forwarder:test`).
+  (`forwarder:test`, `paylinks:test`).
 - **Importing an existing Safe** (`routes/safe-import.ts`,
   `npm run safe:import-tx`) has run only on Base Sepolia, with a throwaway
   EOA and a software P-256 key standing in for the passkey (2026-09-30, two

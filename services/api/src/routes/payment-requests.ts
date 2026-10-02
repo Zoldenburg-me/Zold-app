@@ -57,10 +57,23 @@ function payToken() {
   return { symbol: "USDC", address: addrs().usdc, decimals: 6 };
 }
 
-/** What the payer-facing projection needs from this deployment. Exported so
- *  the Shopify order lookup renders the SAME projection the pay page does. */
-export function payerContext(req: express.Request, quote?: CryptoQuote) {
-  return { chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), quote };
+/**
+ * Everything the payer-facing projection needs beyond the request: this
+ * deployment's chain and token, whether the page's deposit address may be
+ * shown (a lapsed forwarder's may not), and the company name a link booked
+ * under a company carries. Every public route that renders a request builds
+ * its context here, so none can forget a part: the pay page, its quote, and
+ * the Shopify order lookup.
+ */
+export async function payerContext(req: express.Request, r: PaymentRequest, user: User, quote?: CryptoQuote) {
+  return {
+    chainId: CHAIN_ID,
+    token: payToken(),
+    baseUrl: baseUrlFor(req),
+    quote,
+    payeeName: payeeNameFor(r),
+    cryptoLive: await livePaymentPage(user),
+  };
 }
 
 
@@ -358,11 +371,6 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     return { r, user };
   };
 
-  const publicCtx = (req: express.Request, r: PaymentRequest, quote?: CryptoQuote) => ({
-    ...payerContext(req, quote),
-    payeeName: payeeNameFor(r),
-  });
-
   router.get(
     "/pay/:handle/:code",
     // /pay/:handle/qr.svg belongs to the payment-page router, mounted after
@@ -371,10 +379,10 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     wrap(async (req, res) => {
       const hit = resolvePublic(req, res);
       if (!hit) return;
-      const cryptoLive = await livePaymentPage(hit.user);
       const { request, quote } = await ensureQuote(hit.r, hit.r.amountEur);
+      const ctx = await payerContext(req, request, hit.user, quote);
       const user = store.findUser(hit.user.id) ?? hit.user;
-      res.json(publicPaymentRequest(request, user, { ...publicCtx(req, request, quote), cryptoLive }));
+      res.json(publicPaymentRequest(request, user, ctx));
     }),
   );
 
@@ -390,6 +398,10 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (!hit) return;
       if (effectiveState(hit.r) !== "OPEN") return res.status(409).json({ error: `this request is ${effectiveState(hit.r).toLowerCase()}` });
       if (!hit.r.methods.includes("crypto")) return res.status(409).json({ error: "this request does not take crypto" });
+      // No address to send to, so no amount to quote for it.
+      if (!(await livePaymentPage(hit.user))) {
+        return res.status(503).json({ error: "crypto payment is unavailable on this link just now — try bank transfer, or try again in a few minutes" });
+      }
       const n = Number(req.body?.amountEur);
       if (!Number.isFinite(n) || n <= 0 || n > MAX_REQUEST_EUR || Math.round(n * 100) !== n * 100) {
         return res.status(400).json({ error: "amountEur must be a positive amount up to €1,000,000 with at most two decimals" });
@@ -403,7 +415,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       try {
         const { request, quote } = await ensureQuote(hit.r, n);
         if (!quote) return res.status(503).json({ error: "no live EUR/USD rate right now — try bank transfer, or try again shortly" });
-        res.json(publicPaymentRequest(request, hit.user, publicCtx(req, request, quote)));
+        res.json(publicPaymentRequest(request, hit.user, await payerContext(req, request, hit.user, quote)));
       } catch (err) {
         fail(res, err);
       }

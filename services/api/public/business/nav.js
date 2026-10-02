@@ -5,7 +5,8 @@
  * Contacts, Books, Members, then the ACCOUNTS list, Coming soon and Settings.
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * Books holds the ledger, the export, the chart of accounts, assets, wallets
- * and connections; Get paid holds Shopify; Settings the invoicing profile.
+ * and the chart of accounts; Get paid holds Shopify; Settings the invoicing profile
+ * and connections.
  */
 import { $, Z, api, cap, esc, eur, me, org, orgs, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
@@ -23,8 +24,8 @@ export const VIEWS = [
 
 /** Which nav item an older view belongs to. */
 export const PARENT = {
-  ledger: "books", export: "books", coa: "books", assets: "books", wallets: "books", integrations: "books",
-  shopify: "get-paid", "invoice-new": "invoices", "invoicing-settings": "settings", accounts: "accounts",
+  ledger: "books", export: "books", coa: "books", assets: "books", wallets: "books",
+  shopify: "get-paid", "invoice-new": "invoices", "invoicing-settings": "settings", integrations: "settings", accounts: "accounts",
 };
 /** Every view id the router accepts, including those without a nav item. */
 export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT), "settings"]);

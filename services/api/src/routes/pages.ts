@@ -146,6 +146,8 @@ export function createPageRouter() {
   /** An account document, re-verified on every visit. */
   router.get("/v/:code", (_req, res) => res.sendFile(path.join(pub, "document.html")));
   /** A payment page, and a payment request against it. */
+  // The testnet faucet page; it draws "no faucet" itself where there is none.
+  router.get("/faucet", page("faucet.html"));
   router.get("/pay/:handle", page("pay.html"));
   router.get("/pay/:handle/:code", tidyRequestCode, page("pay-request.html"));
   /** A shared receipt. */
