@@ -11,7 +11,7 @@ import {
 } from "./core.js";
 import { KNOWN, planBanner, refreshSide, renderNav } from "./nav.js";
 import { META, RENDER, setExportMonth } from "./views.js";
-import { refreshInvoiceCheck } from "./invoice.js";
+import { checkCustomerVatId, refreshInvoiceCheck } from "./invoice.js";
 import { ACTIONS } from "./actions.js";
 import { initSearch } from "./search.js";
 
@@ -99,7 +99,12 @@ export async function render({ focus = false } = {}) {
         clearTimeout(t);
         t = setTimeout(refreshInvoiceCheck, 400);
       }, { signal: invoiceInputListener.signal });
-      box.addEventListener("change", () => refreshInvoiceCheck(), { signal: invoiceInputListener.signal });
+      box.addEventListener("change", (e) => {
+        // Leaving the VAT ID field looks it up in VIES (which then checks
+        // again); any other change just checks again.
+        if (e.target?.id === "inv-r-vat") checkCustomerVatId();
+        else refreshInvoiceCheck();
+      }, { signal: invoiceInputListener.signal });
     }
   } catch (e) {
     if (mine !== seq) return;

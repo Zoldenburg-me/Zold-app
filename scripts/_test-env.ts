@@ -57,6 +57,8 @@ process.env.TRUSTED_PROXY_HOPS = "0";
 // production value back and asserts the 429 itself.
 process.env.AUTH_RATE_LIMIT_PER_MIN = "1000";
 process.env.PARTNER_RATE_LIMIT_PER_MIN = "1000";
+// Tests never reach the EU's VAT register; a suite that needs answers stubs it.
+process.env.VIES_URL ??= "off";
 process.env.DOCUMENT_RATE_LIMIT_PER_MIN = "1000";
 
 /**

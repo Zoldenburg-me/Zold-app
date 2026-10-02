@@ -31,6 +31,8 @@ import {
   vatNoteFor,
   } from "../../domain/invoicing.js";
 import { EU_MEMBER_STATES, validateCustomReason } from "../../domain/jurisdictions.js";
+import { VAT_ID_FORMATS, vatIdShape } from "../../domain/vat-ids.js";
+import { cachedVatCheck, checkVatId } from "../../adapters/vies.js";
 import { newLinkToken, ownerInvoiceView } from "../../domain/invoices.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
@@ -84,6 +86,8 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
         displayOptions: Object.keys(DEFAULT_DISPLAY),
         simplifiedLimitCents: jur.simplifiedLimitCents ?? null,
         euMemberStates: EU_MEMBER_STATES,
+        // Per-country VAT ID shapes, so the form checks a number as it is typed.
+        vatIdFormats: VAT_ID_FORMATS,
       },
       disclaimer: jur.disclaimer,
       notVerified: jur.notVerified,
@@ -206,6 +210,10 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       // Converted here too, or the live panel would show a missing-euro-amount
       // error against every foreign-currency draft while it is being typed.
       const draft = await withConversion(draftFrom(ctx.org, req.body ?? {}));
+      // What VIES already said about this number; this route runs on every
+      // keystroke and never asks VIES itself (POST …/vat-check does).
+      const known = draft.recipient.vatId ? cachedVatCheck(draft.recipient.vatId) : undefined;
+      if (known) draft.recipientVatCheck = known;
       const language = invoiceLanguage(req.body?.language, ctx.org.invoicing?.language);
       const dueDate = invoiceDueDate(req.body?.dueDate, draft.issueDate!, draftDueDate(ctx.org, draft.issueDate!));
       const report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
@@ -226,6 +234,25 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       }
       throw err;
     }
+  });
+
+  /**
+   * Look a customer's VAT ID up in VIES. Called when the field is left, not
+   * per keystroke; the answer is kept a day (adapters/vies.ts), so the live
+   * check and the issue reuse it. The org's own VAT ID goes along as the
+   * requester, which makes VIES return a consultation number.
+   */
+  r.post("/:orgId/invoicing/vat-check", async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "invoices.read")) return;
+    const raw = typeof req.body?.vatId === "string" ? req.body.vatId.slice(0, 40) : "";
+    if (!raw.trim()) return res.status(400).json({ error: "vatId is required." });
+    const shape = vatIdShape(raw);
+    if (!shape.ok) return res.status(200).json({ shape, check: null });
+    const check = await checkVatId(raw, ctx.org.invoicing?.vatId);
+    res.json({ shape, check });
   });
 
   /**
@@ -250,6 +277,11 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       // defaults.
       language = invoiceLanguage(req.body?.language, ctx.org.invoicing?.language);
       dueDate = invoiceDueDate(req.body?.dueDate, draft.issueDate!, draftDueDate(ctx.org, draft.issueDate!));
+      // The customer's VAT ID is looked up here, by the server, and the answer
+      // goes on the document: an answer the browser sent would prove nothing.
+      if (draft.recipient.vatId && vatIdShape(draft.recipient.vatId).ok) {
+        draft.recipientVatCheck = await checkVatId(draft.recipient.vatId, ctx.org.invoicing?.vatId);
+      }
       // Inside the try: computing the totals refuses a line it cannot price.
       report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
     } catch (err) {
@@ -331,6 +363,9 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
         customFields: ctx.org.invoicing?.customFields,
         language,
         acceptedWarnings: report.warnings.map((w) => `${w.field}: ${w.message}`),
+        ...(draft.recipientIsBusiness !== undefined ? { recipientIsBusiness: draft.recipientIsBusiness } : {}),
+        ...(draft.supplyKind ? { supplyKind: draft.supplyKind } : {}),
+        ...(draft.recipientVatCheck ? { recipientVatCheck: draft.recipientVatCheck } : {}),
         // Frozen with the document: which rules ran, and how far they went.
         jurisdiction: report.jurisdiction,
       },

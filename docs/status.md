@@ -39,6 +39,13 @@ Say this plainly rather than letting the surface imply otherwise:
   profile of the other kind keeps it until it reconnects.
   The check gates sending only: invoices and pay links still receive into
   an account whose profile has not been checked.
+- **The VIES lookup of a customer's VAT ID** (`adapters/vies.ts`) has run
+  against the real service once, by hand: a made-up Austrian number on
+  2026-10-02 answered `valid: false` in the shape the client parses. No valid
+  number and no consultation number (`requestIdentifier`, only given when our
+  own VAT ID is sent as requester) has been seen live. The suggested treatment
+  (`suggestTreatment`) covers domestic, EU B2B/B2C and non-EU cases; OSS and
+  § 13b domestic reverse charge are not worked out.
 - **Open questions for Monerium** about the profile-kind rule:
   - Which terms apply to sole traders and freelancers, who are not legal
     persons: Personal or Business? Today a business org requires `corporate`.
