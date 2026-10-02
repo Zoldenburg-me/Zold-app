@@ -29,6 +29,7 @@ import { MONERIUM, moneriumSandboxEnabled } from "../config.js";
 import { decryptField, encryptField } from "../crypto-at-rest.js";
 import { store, type User } from "../store.js";
 import {
+  MoneriumAccessError,
   MoneriumApiError,
   MoneriumClient,
   refreshAuthorizationToken,
@@ -183,7 +184,7 @@ const refreshing = new Map<string, Promise<string>>();
 export async function moneriumAccessToken(user: User): Promise<string> {
   const keyed = apiKeyClient(user);
   if (keyed) return keyed.bearerToken();
-  if (!user.monerium?.accessTokenEnc) throw new Error("Monerium account is not connected");
+  if (!user.monerium?.accessTokenEnc) throw new MoneriumAccessError("Monerium account is not connected");
   if (
     user.monerium.refreshTokenEnc &&
     user.monerium.expiresAt &&
@@ -254,7 +255,7 @@ export function moneriumClientFor(user: User): MoneriumClient {
     });
   }
   if (!MONERIUM.clientSecret) {
-    throw new Error(
+    throw new MoneriumAccessError(
       "no Monerium access for this account — connect a Monerium account (API keys or OAuth), or set MONERIUM_CLIENT_SECRET for app-level calls",
     );
   }
@@ -271,7 +272,7 @@ export async function moneriumLinkAccessToken(user: User): Promise<{ accessToken
     return { accessToken: await moneriumAccessToken(user), viaApp: false };
   }
   if (!MONERIUM.clientSecret) {
-    throw new Error(
+    throw new MoneriumAccessError(
       "no Monerium access for this account — connect a Monerium account, or set MONERIUM_CLIENT_SECRET for app-level address linking",
     );
   }

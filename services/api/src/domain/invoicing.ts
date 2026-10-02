@@ -576,7 +576,7 @@ export interface ComplianceReport {
 /** §33 UStDV: simplified content up to €250 GROSS. */
 export const KLEINBETRAG_LIMIT_CENTS = 250_00;
 
-const has = (v?: string) => Boolean(v && v.trim());
+const has = (v?: unknown) => typeof v === "string" && v.trim() !== "";
 
 /**
  * Check a draft against the content rules and report every problem at once.

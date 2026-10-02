@@ -40,6 +40,7 @@ import {
   spendingLimitTransactions,
   type SafeSignerState,
 } from "../wallet/safe-signers.js";
+import { checkOpAssertion } from "../http/passkey-assertion.js";
 
 export interface SafeSignerDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -52,7 +53,7 @@ const PERIOD_MINUTES: Record<string, number> = { once: 0, day: 24 * 60, week: 7 
 const ZERO = "0x0000000000000000000000000000000000000000";
 
 type OpKind = "add-owner" | "remove-owner" | "threshold" | "limit" | "remove-delegate";
-const pendingOps = new Map<string, { userId: string; kind: OpKind; userOperation: any; expiresAt: number }>();
+const pendingOps = new Map<string, { userId: string; kind: OpKind; userOperation: any; expiresAt: number; challenge: string }>();
 
 function prune(now = Date.now()) {
   for (const [id, entry] of pendingOps) if (entry.expiresAt < now) pendingOps.delete(id);
@@ -146,14 +147,15 @@ export function createSafeSignerRouter(deps: SafeSignerDeps) {
     const prepared = await prepareSafeSetupOperation(plan, txs);
     prune();
     const requestId = randomUUID();
-    pendingOps.set(requestId, { userId: user.id, kind, userOperation: prepared.userOperation, expiresAt: Date.now() + CEREMONY_TTL_MS });
+    const challenge = bufToB64url(Buffer.from(prepared.challenge.slice(2), "hex"));
+    pendingOps.set(requestId, { userId: user.id, kind, userOperation: prepared.userOperation, expiresAt: Date.now() + CEREMONY_TTL_MS, challenge });
     res.status(201).json({
       requestId,
       kind,
       summary,
       credentialId: user.passkey!.credentialId,
       rpId: user.passkey!.rpId ?? SECURITY.rpId,
-      challenge: bufToB64url(Buffer.from(prepared.challenge.slice(2), "hex")),
+      challenge,
       submitTo: `/api/users/${user.id}/safe/ops/${requestId}`,
     });
   };
@@ -318,8 +320,15 @@ export function createSafeSignerRouter(deps: SafeSignerDeps) {
       if (!authenticatorData || !clientDataJSON || !signature) {
         return refuse(res, 400, "authenticatorData, clientDataJSON and signature required");
       }
-      const plan = activePlan(user);
+      let plan;
+      try {
+        plan = activePlan(user);
+      } catch (err) {
+        if (err instanceof Refusal) return refuse(res, err.status, err.message);
+        throw err;
+      }
       pendingOps.delete(req.params.requestId);
+      if (!(await checkOpAssertion(user, req.body, pending.challenge, res))) return;
       const op = await submitPasskeySafeOperationWithReceipt(plan, pending.userOperation, toAssertion(req.body));
       if (op.success === false) {
         return res.status(502).json({ error: "the operation was included but the Safe call reverted — nothing changed", txHash: op.txHash });

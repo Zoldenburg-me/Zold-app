@@ -57,6 +57,7 @@ import {
 import { CANDIDE, SafeGasError, SafeThresholdError } from "./wallet/candide.js";
 import { routeAsyncRejections } from "./http/async-errors.js";
 import { recordServerError } from "./http/error-log.js";
+import { knownError } from "./http/known-errors.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -212,6 +213,12 @@ app.use(notFound());
 app.use(((err, req, res, next) => {
   // Every unexpected error gets a reference: logged with its stack, kept for
   // the operator dashboard, and handed to the caller to quote.
+  const mapped = knownError(err);
+  if (mapped) {
+    if (mapped.log) recordServerError(err, req, mapped.status);
+    if (res.headersSent) return next(err);
+    return res.status(mapped.status).json(mapped.body);
+  }
   const known = err instanceof SafeGasError || err instanceof SafeThresholdError;
   const logged = known ? undefined : recordServerError(err, req);
   if (known) console.error(err);
@@ -234,7 +241,7 @@ app.use(((err, req, res, next) => {
   res.status(500).json({
     error: SECURITY.exposeInternalErrors
       ? detail
-      : `Something went wrong on our side, and nothing was changed by this request. If it happens again, quote ${logged!.ref}.`,
+      : `Something went wrong on our side. Check whether it went through before trying again; if it happens again, quote ${logged!.ref}.`,
     code: "INTERNAL",
     ref: logged!.ref,
   });

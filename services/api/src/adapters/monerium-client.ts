@@ -20,6 +20,26 @@ export class MoneriumApiError extends Error {
   }
 }
 
+/**
+ * Zold cannot act on this account at Monerium: nothing is connected, or
+ * Monerium refused the credentials it holds (revoked, expired, a spent OAuth
+ * code). The user can fix it by connecting again, so it answers 409
+ * MONERIUM_NOT_CONNECTED (http/known-errors.ts), not a 500.
+ */
+export class MoneriumAccessError extends Error {
+  constructor(message: string, readonly partnerStatus?: number) {
+    super(message);
+    this.name = "MoneriumAccessError";
+  }
+}
+
+/** Monerium's own refusal of a token request is an access error; its 5xx
+ *  (or a proxy's) is a transient and stays a plain Error. */
+const tokenError = (what: string, status: number, body: string) =>
+  status >= 400 && status < 500
+    ? new MoneriumAccessError(`${what} (${status}): ${body}`, status)
+    : new Error(`${what} (${status}): ${body}`);
+
 export interface MoneriumConfig {
   baseUrl: string; // https://api.monerium.dev (sandbox) | .app (production)
   clientId: string;
@@ -67,7 +87,7 @@ export class MoneriumClient {
       }),
     });
     if (!res.ok) {
-      throw new Error(`Monerium auth failed (${res.status}): ${await res.text()}`);
+      throw tokenError("Monerium auth failed", res.status, await res.text());
     }
     const data = (await res.json()) as { access_token: string; expires_in: number };
     this.token = { value: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
@@ -236,7 +256,7 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
     }),
   });
   if (!res.ok) {
-    throw new Error(`Monerium OAuth code exchange failed (${res.status}): ${await res.text()}`);
+    throw tokenError("Monerium OAuth code exchange failed", res.status, await res.text());
   }
   return (await res.json()) as MoneriumTokenResponse;
 }
@@ -257,7 +277,7 @@ export async function refreshAuthorizationToken(
     }),
   });
   if (!res.ok) {
-    throw new Error(`Monerium OAuth refresh failed (${res.status}): ${await res.text()}`);
+    throw tokenError("Monerium OAuth refresh failed", res.status, await res.text());
   }
   return (await res.json()) as MoneriumTokenResponse;
 }

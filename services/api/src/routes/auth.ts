@@ -36,6 +36,7 @@ import {
 } from "../wallet/candide.js";
 import { b64urlToBuf, issueChallenge, verifyAssertion, verifyRegistration } from "../webauthn.js";
 import { publicUser, withSession } from "../users/public-user.js";
+import { checkOpAssertion } from "../http/passkey-assertion.js";
 
 /**
  * requireUserSession is injected so that server.ts stays the only place that
@@ -247,6 +248,7 @@ export function createAuthRouter(deps: AuthDeps) {
         userId: user.id,
         expiresAt: Date.now() + 5 * 60_000,
         userOperation: deployment.userOperation,
+        challenge: passkeySafeChallenge(deployment.challenge),
       });
       res.status(201).json({
         requestId,
@@ -271,7 +273,8 @@ export function createAuthRouter(deps: AuthDeps) {
         return res.status(404).json({ error: "passkey Safe deployment request not found or expired" });
       }
       const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
-      if (!authenticatorData || !clientDataJSON || !signature) {
+      if (typeof authenticatorData !== "string" || typeof clientDataJSON !== "string" || typeof signature !== "string" ||
+          !authenticatorData || !clientDataJSON || !signature) {
         return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
       }
       const balances = await accountBalances(user.address);
@@ -284,6 +287,8 @@ export function createAuthRouter(deps: AuthDeps) {
       // Claimed BEFORE the await: two parallel submits of one signature must
       // not both send the deployment operation.
       pendingPasskeySafeDeployments.delete(req.params.requestId);
+      const approved = await checkOpAssertion(user, req.body, pending.challenge, res);
+      if (!approved) return;
       const opHash = await submitPasskeySafeOperation(user.passkeySafe, pending.userOperation, {
         authenticatorData: b64urlToBuf(authenticatorData),
         clientDataJSON: b64urlToBuf(clientDataJSON),

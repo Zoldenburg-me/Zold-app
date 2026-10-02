@@ -58,6 +58,7 @@ import {
 } from "../wallet/candide.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyRegistration } from "../webauthn.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
+import { checkOpAssertion } from "../http/passkey-assertion.js";
 
 export interface ZoldenburgRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -66,7 +67,7 @@ export interface ZoldenburgRecoveryDeps {
 const CEREMONY_TTL_MS = 5 * 60_000;
 const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"] as const;
 
-const pendingOps = new Map<string, { userId: string; kind: "add" | "remove"; userOperation: any; expiresAt: number }>();
+const pendingOps = new Map<string, { userId: string; kind: "add" | "remove"; userOperation: any; expiresAt: number; challenge: string }>();
 const prune = (now = Date.now()) => {
   for (const [id, e] of pendingOps) if (e.expiresAt < now) pendingOps.delete(id);
 };
@@ -101,7 +102,9 @@ function fail(res: express.Response, err: unknown) {
   if (err instanceof ZoldenburgRecoveryError) {
     return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
-  return res.status(502).json({ error: String((err as any)?.message ?? err).slice(0, 300) });
+  // 503, not 502: Cloudflare replaces an origin 502's body with its own page.
+  console.error(`recovery (zoldenburg): ${(err as any)?.stack ?? err}`);
+  return res.status(503).json({ error: String((err as any)?.message ?? err).slice(0, 300) });
 }
 
 function activePlan(user: User): PasskeySafeDeploymentPlan {
@@ -316,7 +319,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const prepared = await prepareSafeSetupOperation(plan, txs);
       prune();
       const requestId = randomUUID();
-      pendingOps.set(requestId, { userId: user.id, kind: "add", userOperation: prepared.userOperation, expiresAt: Date.now() + CEREMONY_TTL_MS });
+      pendingOps.set(requestId, { userId: user.id, kind: "add", userOperation: prepared.userOperation, expiresAt: Date.now() + CEREMONY_TTL_MS, challenge: passkeySafeChallenge(prepared.challenge) });
       res.status(201).json({
         requestId,
         credentialId: user.passkey!.credentialId,
@@ -344,7 +347,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const prepared = await prepareSafeSetupOperation(plan, [tx]);
       prune();
       const requestId = randomUUID();
-      pendingOps.set(requestId, { userId: user.id, kind: "remove", userOperation: prepared.userOperation, expiresAt: Date.now() + CEREMONY_TTL_MS });
+      pendingOps.set(requestId, { userId: user.id, kind: "remove", userOperation: prepared.userOperation, expiresAt: Date.now() + CEREMONY_TTL_MS, challenge: passkeySafeChallenge(prepared.challenge) });
       res.status(201).json({
         requestId,
         credentialId: user.passkey!.credentialId,
@@ -363,11 +366,13 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       prune();
       const pending = pendingOps.get(req.params.requestId);
       if (!pending || pending.userId !== user.id) return res.status(404).json({ error: "request not found or expired — start again" });
-      const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
-      if (!authenticatorData || !clientDataJSON || !signature) {
-        return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
+      let plan;
+      try {
+        plan = activePlan(user);
+      } catch (err) {
+        return fail(res, err);
       }
-      const plan = activePlan(user);
+      if (!(await checkOpAssertion(user, req.body, pending.challenge, res))) return;
       const op = await submitPasskeySafeOperationWithReceipt(plan, pending.userOperation, toAssertion(req.body));
       pendingOps.delete(req.params.requestId);
       if (op.success === false) {

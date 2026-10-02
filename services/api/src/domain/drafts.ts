@@ -69,7 +69,7 @@ export function validateLine(raw: unknown, contact?: Contact): Omit<DraftLine, "
   if (!asset) throw new DraftError("Each line needs an asset or currency.");
 
   const d = input.destination;
-  if (!d || (d.kind !== "wallet" && d.kind !== "bank")) {
+  if (!d || typeof d !== "object" || (d.kind !== "wallet" && d.kind !== "bank")) {
     throw new DraftError("Each line needs a destination of kind wallet or bank.");
   }
   const displayName = String(d.displayName ?? "").trim();
@@ -97,14 +97,15 @@ export function validateLine(raw: unknown, contact?: Contact): Omit<DraftLine, "
   }
 
   return {
-    contactId: input.contactId,
-    ...(input.invoiceId ? { invoiceId: input.invoiceId } : {}),
+    // Only strings are kept: these are ids and a code, stored as given.
+    contactId: typeof input.contactId === "string" ? input.contactId : undefined,
+    ...(typeof input.invoiceId === "string" && input.invoiceId ? { invoiceId: input.invoiceId } : {}),
     destination,
     asset,
     amount,
-    accountCode: input.accountCode,
-    note: input.note?.trim() || undefined,
-    tags: Array.isArray(input.tags) ? input.tags.map(String) : [],
+    accountCode: typeof input.accountCode === "string" ? input.accountCode : undefined,
+    note: (typeof input.note === "string" ? input.note.trim().slice(0, 500) : "") || undefined,
+    tags: Array.isArray(input.tags) ? input.tags.slice(0, 20).map((t) => String(t).slice(0, 60)) : [],
   };
 }
 

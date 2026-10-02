@@ -74,6 +74,7 @@
     "draft:failure:test": "tsx scripts/draft-batch-failure-test.ts",
     "invoicing:test": "tsx scripts/invoicing-test.ts",
     "async-errors:test": "tsx scripts/async-errors-test.ts",
+    "input-errors:test": "tsx scripts/input-errors-test.ts",
     "custody:test": "tsx scripts/custody-test.ts",
     "segments:test": "tsx scripts/segments-test.ts",
     "onboarding:test": "tsx scripts/onboarding-segments-test.ts",

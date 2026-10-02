@@ -44,7 +44,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { MONERIUM, PAYMENT_REQUESTS, SHOPIFY } from "../config.js";
 import { store, type User } from "../store.js";
 import { decryptField, encryptField, EncryptionUnavailableError } from "../crypto-at-rest.js";
-import { displayCode, effectiveState, normaliseCode, type PaymentRequest } from "../payment-requests.js";
+import { MAX_REQUEST_EUR, displayCode, effectiveState, normaliseCode, type PaymentRequest } from "../payment-requests.js";
 import { baseUrlFor, createPaymentRequest, ensureQuote, payerContext } from "./payment-requests.js";
 import { publicPaymentRequest } from "../payment-requests.js";
 import { requirePermission, resolveOrg, type SessionResolver } from "./org-context.js";
@@ -398,7 +398,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         return res.status(422).json({ error: `Zold settles in EUR; this store presented ${b.currency}. Restrict the payment method to EUR in the store's payment settings.` });
       }
       const amount = Number(b.amount);
-      if (!(amount > 0)) return res.status(400).json({ error: "amount must be positive" });
+      if (!(amount > 0) || amount > MAX_REQUEST_EUR) return res.status(400).json({ error: "amount must be positive and at most €1,000,000" });
       if (String(b.kind ?? "sale") !== "sale") {
         // Manual capture asks for a hold we cannot place on a wallet transfer.
         // Tell the merchant in their admin, then decline the session.
@@ -491,7 +491,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         return res.status(200).json({ ok: true, ignored: `currency ${o.currency}` });
       }
       const amount = Number(o.total_price);
-      if (!(amount > 0)) return res.status(200).json({ ok: true, ignored: "amount" });
+      if (!(amount > 0) || amount > MAX_REQUEST_EUR) return res.status(200).json({ ok: true, ignored: "amount" });
       const payee = store.findUser(c.payeeUserId);
       if (!payee?.paymentPage?.handle) {
         console.error(`shopify: order ${o.name} at ${c.shop}: the receiving account has no payment page`);
