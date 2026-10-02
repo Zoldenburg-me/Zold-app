@@ -116,7 +116,12 @@ export function createPageRouter() {
 
   router.get("/favicon.ico", (_req, res) => res.redirect(301, "/icons/icon-192.png"));
   router.get(["/app", "/app/"], (_req, res) => res.sendFile(path.join(pub, "index.html")));
-  router.get(["/admin", "/admin/"], (_req, res) => res.sendFile(path.join(pub, "admin.html")));
+  /** The operator dashboard; each section has its own path (the page reads
+   *  it), and its scripts are under /admin/*.js. */
+  router.get(
+    ["/admin", "/admin/", "/admin/:view(overview|users|monerium|transactions|recoveries|errors)"],
+    (_req, res) => res.sendFile(path.join(pub, "admin.html")),
+  );
   /** The org dashboard — business and premium personal accounts. */
   router.get(["/business", "/business/"], (_req, res) =>
     res.sendFile(path.join(pub, "business.html")),

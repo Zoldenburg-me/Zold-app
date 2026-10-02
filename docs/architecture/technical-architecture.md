@@ -1179,5 +1179,9 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 
 | | |
 |---|---|
-| `GET /admin/{stats, users, transactions}` (operator token, A) | Read-only console. |
+| `GET /admin/{stats, overview, issues, users, transactions, errors}` (operator token, A) | Dashboard reads; derived views in `src/admin/`. |
+| `GET /admin/users/:id` (operator token, A) | One account: projection, onboarding stage, transactions, recoveries, issues, audit. |
+| `GET /admin/users/:id/monerium[?live=1]` (operator token, A) | What Zold stored from Monerium; `live=1` also reads Monerium on the account's own connection (refused without one), stores nothing, audits the read. |
+| `GET /admin/monerium[?live=1]` (operator token, A) | Deployment-wide Monerium view; `live=1` checks the app credentials. |
+| `GET /admin/recoveries` (operator token, A) | Zoldenburg requests and guardian enrolments. |
 | `POST /admin/orgs/:orgId/plan` (operator token, A) | Grant a plan. The only way onto a paid plan while there is no billing. |
