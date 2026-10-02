@@ -111,7 +111,8 @@ async function readMoneriumAccountSnapshot(user: User, accessToken?: string) {
   const profiles = Array.isArray(profileRes) ? profileRes : (profileRes?.profiles ?? []);
   const ibans = Array.isArray(ibanRes) ? ibanRes : (ibanRes?.ibans ?? []);
   const addresses = Array.isArray(addressRes) ? addressRes : (addressRes?.addresses ?? []);
-  return { context, profiles, ibans, addresses };
+  const accountEmail = typeof context?.email === "string" ? context.email : undefined;
+  return { context, accountEmail, profiles, ibans, addresses };
 }
 
 /**
@@ -470,6 +471,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         monerium: {
           connectedAt: new Date().toISOString(),
           profileId,
+          accountEmail: snapshot.accountEmail,
           accessTokenEnc: encryptToken(token.access_token),
           refreshTokenEnc: token.refresh_token ? encryptToken(token.refresh_token) : undefined,
           expiresAt: token.expires_in

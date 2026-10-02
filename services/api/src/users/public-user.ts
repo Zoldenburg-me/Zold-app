@@ -94,6 +94,8 @@ export const publicUser = (
           connectedAt: monerium.connectedAt,
           method: connectionMethod({ monerium } as User) ?? undefined,
           profileId: monerium.profileId,
+          // Which Monerium login this is: the user's own email, shown back to them.
+          accountEmail: monerium.accountEmail ?? monerium.apiKeys?.accountEmail,
           profiles: monerium.profiles,
           ibans: monerium.ibans,
           addresses: monerium.addresses,
