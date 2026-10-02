@@ -57,8 +57,13 @@ store.addUser({
 } as any);
 store.addTransfer({
   id: "t_fail", userId: "u_live", quoteId: "q", rail: "sepa", state: "FAILED", sendEur: 10, receiveEur: 10, txs: [],
+  recipientName: "Payee GmbH", recipientIban: "DE02120300000000202051",
   error: "redeem refused", createdAt: hourAgo, updatedAt: hourAgo,
 } as any);
+store.recordMoneriumIssue({
+  orderId: "o_in", userId: "u_live", amountEur: 25, counterpartyName: "Payer AG", counterpartyIban: "DE12500105170648489890",
+  processedAt: hourAgo, recordedAt: hourAgo,
+});
 
 // Monerium answers through this stub; anything else goes to the real fetch.
 const realFetch = globalThis.fetch;
@@ -156,6 +161,14 @@ await check("a live read uses the account's own token, stores nothing and is aud
   assert.equal(JSON.stringify(store.findUser("u_live")), before, "the live read wrote nothing to the account");
   const audit = store.auditFor("u_live", 10).find((e: any) => e.kind === "operator.monerium_read");
   assert.ok(audit && String(audit.data.operator).startsWith("operator:"));
+});
+
+await check("third-party IBANs are masked on the Monerium views, as on the transactions list", async () => {
+  for (const path of ["/api/admin/monerium", "/api/admin/users/u_live/monerium"]) {
+    const text = (await get(path)).text;
+    for (const full of ["DE02120300000000202051", "DE12500105170648489890"]) assert.ok(!text.includes(full), `${full} in ${path}`);
+    assert.ok(text.includes("DE02…51") && text.includes("DE12…90"), `masked IBANs missing in ${path}`);
+  }
 });
 
 server.close();

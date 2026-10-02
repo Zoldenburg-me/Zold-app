@@ -8,6 +8,7 @@
  * Run: npm run pay:test
  */
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
 import * as jsqrModule from "jsqr";
 
 /** jsqr ships CommonJS, so the callable is the default under Node ESM. */
@@ -68,6 +69,7 @@ const user: any = {
     supportedTokens: [
       { chainId: 31337, symbol: "USDC", address: CHAIN.token.address, decimals: 6 },
     ],
+    routesReadAt: new Date().toISOString(),
     settlementAsset: "EURE",
     autoConvert: true,
     createdAt: new Date().toISOString(),
@@ -131,6 +133,13 @@ check("the public projection returns exactly the expected payment-page keys", ()
     "supportedTokens",
     "token",
   ]);
+});
+
+check("a token list not read from the forwarder's routes is not served", () => {
+  // Pages claimed before the list came from Candide stored EURe + USDC, and
+  // Candide forwards only what its routes list.
+  const p = publicPayee({ ...user, paymentPage: { ...user.paymentPage!, routesReadAt: undefined } }, CHAIN);
+  assert.equal(p.supportedTokens, undefined);
 });
 
 check("and leaks no account data — this is the security-relevant one", () => {
@@ -270,6 +279,17 @@ check("the QR served by the payment page decodes, at its rendered size", () => {
   assert.ok(qrSvg(addr).includes("<path"), "svg has a path");
   const { px, span } = rasterise(qrMatrix(addr), 4);
   assert.equal(jsQR(px, span, span)?.data, addr, "decodes at 4px per module");
+});
+
+check("no <img> in the app points at a signed-in route (an image request carries no bearer header)", () => {
+  // /api/users/:id/address/qr.svg answers only with the session; the wallet
+  // screen fetches it and shows a blob URL instead.
+  const dir = new URL("../services/api/public/app/", import.meta.url);
+  for (const f of readdirSync(dir).filter((n) => n.endsWith(".js"))) {
+    const src = readFileSync(new URL(f, dir), "utf8");
+    assert.ok(!/<img[^>]*src="\/api\/users\//.test(src), `${f} renders an <img> from /api/users/`);
+  }
+  assert.ok(readFileSync(new URL("phone.js", dir), "utf8").includes("phLoadWalletQr"), "the wallet QR is loaded with the session");
 });
 
 check("a QR of an address round-trips back to the same string", () => {

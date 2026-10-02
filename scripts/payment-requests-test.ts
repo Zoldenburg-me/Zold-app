@@ -15,6 +15,7 @@
 import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createServer } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import path from "node:path";
@@ -30,6 +31,35 @@ process.env.MG_ANCHOR_DOMAIN = "";
 const MID = 1.1379;
 process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: MID, INR: 109.87, KES: 147.53 });
 process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(MID * 1e6));
+
+// A Candide forwarding stub, for the pages whose deposit address is a
+// forwarder. Configured before config.js reads the environment; it answers
+// with the app's USDC once the chain half has deployed it.
+const FORWARDER = `0x${"33".repeat(20)}` as `0x${string}`;
+const candide = { up: true, usdc: "", calls: 0 };
+const candideStub = createServer((req, res) => {
+  let raw = "";
+  req.on("data", (c) => (raw += c));
+  req.on("end", () => {
+    candide.calls++;
+    const { id, method } = JSON.parse(raw);
+    res.setHeader("content-type", "application/json");
+    if (!candide.up) return res.end(JSON.stringify({ jsonrpc: "2.0", id, error: { message: "stub: down" } }));
+    const result =
+      method === "forwarding_getRoutes"
+        ? { routes: [{ sourceChainId: 31337, destinationChainId: 31337, tokens: [{ address: candide.usdc, symbol: "USDC", decimals: 6, destinationAddress: candide.usdc }] }] }
+        : method === "forwarding_getAddress"
+          ? { address: FORWARDER }
+          : { address: FORWARDER, active: true, expiresAt: Math.floor(Date.now() / 1000) + 30 * 86_400 };
+    res.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
+  });
+});
+await new Promise<void>((r) => candideStub.listen(0, "127.0.0.1", () => r()));
+candideStub.unref();
+process.env.CANDIDE_FORWARDING_RPC_URL = `http://127.0.0.1:${(candideStub.address() as any).port}`;
+process.env.CANDIDE_FORWARDING_ACCOUNT_API_KEY = "test-key";
+process.env.CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER = `0x${"ee".repeat(20)}`;
+process.env.CANDIDE_FORWARDING_SOURCE_CHAIN_IDS = "31337";
 
 const bin = (n: string) => path.join(ROOT, "node_modules/.bin", n);
 const children: ChildProcess[] = [];
@@ -185,7 +215,7 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
       forwarder: { custodialWithdrawer: `0x${"ee".repeat(20)}` }, settlementAsset: "EURE", autoConvert: false },
     monerium: { accessTokenEnc: "tokentoken" },
   };
-  const ctx = { chainId: 31337, token: { symbol: "USDC", address: `0x${"11".repeat(20)}` as `0x${string}`, decimals: 6 }, baseUrl: "https://zoldhq.com", now };
+  const ctx = { chainId: 31337, token: { symbol: "USDC", address: `0x${"11".repeat(20)}` as `0x${string}`, decimals: 6 }, baseUrl: "https://zoldhq.com", now, cryptoLive: true };
   const cryptoOnly = pr.publicPaymentRequest(mkReq({ methods: ["crypto"], cryptoQuotes: [q25] }), user, { ...ctx, quote: q25 });
   const s = JSON.stringify(cryptoOnly);
   for (const secret of ["miriam@example.com", "user-secret-id", "EE123456789012345678", "Miriam Zoldenburg", user.authorizerAddress, user.paymentPage.recipientAddress, user.paymentPage.forwarder.custodialWithdrawer, "tokentoken", "approved"]) {
@@ -201,6 +231,9 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
     pr.publicPaymentRequest(mkReq(), { ...user, ibanBic: { ...user.ibanBic, iban: "EE00OTHER" } }, ctx).methods.bank?.bic === undefined);
   check("a lapsed forwarder leaves the crypto method out rather than show its address",
     pr.publicPaymentRequest(mkReq(), user, { ...ctx, cryptoLive: false }).methods.crypto === undefined);
+  const { cryptoLive: _live, ...unasked } = ctx;
+  check("a caller that did not say whether the address is live gets no address",
+    pr.publicPaymentRequest(mkReq(), user, unasked as any).methods.crypto === undefined);
   check("but still no email or id", !JSON.stringify(withBank).includes("miriam@example.com") && !JSON.stringify(withBank).includes("user-secret-id"));
   check("without a live quote the crypto method is offered with no amount, not a made-up one", withBank.methods.crypto !== undefined && withBank.methods.crypto?.amountUsdc === undefined);
 }
@@ -551,6 +584,62 @@ try {
   const list = await call("GET", `/api/users/${miriam.id}/payment-requests`, undefined, miriam.id);
   // 9, not 14: the five refused invoice links left no row behind.
   check("the owner's list carries every link, newest first, with what the payee can offer — and nothing a refusal created", list.body.requests.length === 9 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt), `${list.body.requests.length}`);
+
+  {
+    // A page whose deposit address is a Candide forwarder, claimed before the
+    // token list came from Candide's routes: it stored EURe + USDC, and
+    // Candide forwards only USDC, so an EURe send would be stranded.
+    const { livePaymentPage, RENEW_RETRY_MS } = await import("../services/api/src/routes/payment-page.js");
+    const { publicPayee } = await import("../services/api/src/pay.js");
+    candide.usdc = addrs().usdc;
+    const safe = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
+    const ravi: any = {
+      ...miriam, id: randomUUID(), email: "ravi@example.com", address: safe, passkeySafe: { status: "active", address: safe },
+      paymentPage: {
+        handle: "ravi", depositAddress: FORWARDER, recipientAddress: safe,
+        forwarder: { provider: "candide", recipient: safe, destinationChainId: 31337, sourceChainIds: [31337], custodialWithdrawer: `0x${"ee".repeat(20)}`, active: true, expiresAt: new Date(Date.now() + 10 * 86_400_000).toISOString(), activatedAt: nowIso },
+        supportedTokens: [
+          { chainId: 31337, symbol: "EURE", address: addrs().eure, decimals: 18 },
+          { chainId: 31337, symbol: "USDC", address: addrs().usdc, decimals: 6 },
+        ],
+        settlementAsset: "EURE", autoConvert: false, createdAt: nowIso, updatedAt: nowIso,
+      },
+    };
+    store.addUser(ravi);
+    const tip = await call("POST", `/api/users/${ravi.id}/payment-requests`, { methods: ["crypto", "bank"] }, ravi.id);
+    const fixed = await call("POST", `/api/users/${ravi.id}/payment-requests`, { amountEur: 20 }, ravi.id);
+
+    candide.up = false;
+    check("an old page's EURe + USDC list is never served", publicPayee(store.findUser(ravi.id)!, { chainId: 31337, token: { symbol: "USDC", address: addrs().usdc, decimals: 6 } }).supportedTokens === undefined);
+    check("and while Candide cannot refresh it, the page is closed", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+    const closed = await call("GET", `/api/pay/ravi/${fixed.body.code}`);
+    check("its request page shows no crypto address, only the bank method", closed.status === 200 && closed.body.methods.crypto === undefined && closed.body.methods.bank?.iban === ravi.iban && !JSON.stringify(closed.body).includes(FORWARDER), JSON.stringify(closed.body.methods));
+    const refused = await call("POST", `/api/pay/ravi/${tip.body.code}/quote`, { amountEur: 7 });
+    check("and the quote route refuses rather than quote for an address it may not show", refused.status === 503 && store.findPaymentRequest(tip.body.id)!.cryptoQuotes.length === 0, JSON.stringify(refused));
+    const before = candide.calls;
+    await livePaymentPage(store.findUser(ravi.id)!);
+    await call("GET", `/api/pay/ravi/${fixed.body.code}`);
+    check("a failed renewal is not retried on every hit", candide.calls === before, `${candide.calls - before} calls`);
+
+    candide.up = true;
+    const realNow = Date.now;
+    Date.now = () => realNow() + RENEW_RETRY_MS + 1000;
+    try {
+      check("after the back-off a renewal is tried again, and opens the page", (await livePaymentPage(store.findUser(ravi.id)!)) === true && candide.calls > before);
+    } finally {
+      Date.now = realNow;
+    }
+    const page = store.findUser(ravi.id)!.paymentPage!;
+    check("the refreshed list is what Candide's routes forward: USDC only", !!page.routesReadAt && page.supportedTokens?.map((t) => t.symbol).join() === "USDC", JSON.stringify(page.supportedTokens));
+    const open = await call("GET", `/api/pay/ravi/${fixed.body.code}`);
+    check("and the request page shows the forwarder again", open.body.methods.crypto?.address === FORWARDER, JSON.stringify(open.body.methods));
+
+    store.updateUser(ravi.id, { paymentPage: { ...page, forwarder: { ...page.forwarder!, expiresAt: new Date(Date.now() - 60_000).toISOString() } } });
+    candide.up = false;
+    const lapsed = await call("POST", `/api/pay/ravi/${tip.body.code}/quote`, { amountEur: 7 });
+    check("a lapsed forwarder is not quoted against on the quote route", lapsed.status === 503, JSON.stringify(lapsed));
+    candide.up = true;
+  }
 
   {
     // A share target that glued the message onto the link.

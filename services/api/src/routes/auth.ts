@@ -38,6 +38,7 @@ import {
 import { b64urlToBuf, issueChallenge, verifyAssertion, verifyRegistration } from "../webauthn.js";
 import { publicUser, withSession } from "../users/public-user.js";
 import { checkOpAssertion } from "../http/passkey-assertion.js";
+import { faucetFundSafe } from "../faucet.js";
 
 /**
  * requireUserSession is injected so that server.ts stays the only place that
@@ -316,6 +317,9 @@ export function createAuthRouter(deps: AuthDeps) {
           },
         });
       }
+      // Fire-and-forget: the testnet faucet seeds the new Safe with EURe, and
+      // its failure must never fail a deployment that already succeeded.
+      void faucetFundSafe(user.id);
       res.status(201).json({ ...publicUser(updated), deployOpHash: opHash });
     }),
   );
