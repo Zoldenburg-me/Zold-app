@@ -12,11 +12,14 @@
  *  - off unless both the key and a positive grant are set;
  *  - one grant per account, claimed synchronously before the first await
  *    (the authorize-race lesson), so two calls cannot pay twice;
- *  - a dry faucet or an RPC failure releases the claim and reports — a faucet
- *    problem must never break onboarding.
+ *  - a dry faucet or a failure BEFORE the transfer is sent releases the claim
+ *    and reports — a faucet problem must never break onboarding;
+ *  - once the transfer is sent the claim keeps its tx hash, even if waiting
+ *    for the receipt then fails: the transfer may still land, and releasing
+ *    the claim would let the same account be paid twice.
  */
 import { CHAIN_ID, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, TESTNET_FAUCET } from "./config.js";
-import { abis, addrs, eur, faucetWallet, publicClient, writeAndWait } from "./chain.js";
+import { abis, addrs, eur, faucetWallet, publicClient } from "./chain.js";
 import { store } from "./store.js";
 
 export function faucetEnabled(): boolean {
@@ -56,13 +59,27 @@ export async function faucetFundSafe(userId: string): Promise<FaucetResult> {
       console.warn(`faucet: ${from} holds ${eur.fromWei(have)} EURe on chain ${CHAIN_ID}, below the ${grantEur} EURe grant — top it up; skipped ${user.id}`);
       return { ok: false, code: "FAUCET_DRY", error: "the test faucet is empty — try again later" };
     }
-    const txHash = await writeAndWait(faucetWallet, {
+    const { request } = await publicClient.simulateContract({
+      account: faucetWallet.account,
       address: addrs().eure,
       abi: abis.MockToken,
       functionName: "transfer",
       args: [to, grantWei],
     });
+    const txHash = await faucetWallet.writeContract(request);
+    // Sent: from here on the claim is never released (see the header).
     store.updateUser(user.id, { faucet: { grantedEur: grantEur, txHash, at: new Date().toISOString() } });
+    try {
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      if (receipt.status !== "success") {
+        // A reverted transfer moved nothing, so the account may claim again.
+        store.updateUser(user.id, { faucet: undefined });
+        console.error(`faucet: transfer to ${to} (${user.id}) reverted: ${txHash}`);
+        return { ok: false, code: "FAUCET_FAILED", error: "the test faucet could not send — try again later" };
+      }
+    } catch (err: any) {
+      console.warn(`faucet: ${txHash} to ${user.id} sent but unconfirmed (${err?.message ?? err}); claim kept`);
+    }
     console.log(`faucet: ${grantEur} EURe -> ${to} (${user.id}) ${txHash}`);
     return { ok: true, grantedEur: grantEur, txHash };
   } catch (err: any) {
