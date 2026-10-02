@@ -131,6 +131,18 @@ try {
   const b2 = await faucetFundSafe(bob.id);
   check("after a top-up the same account is funded", b2.ok && (await balanceOf(bob.address)) === 50);
 
+  console.log("4b/6 a sent transfer whose receipt wait fails keeps the claim…");
+  // The RPC drops while waiting for the receipt, after the transfer is out.
+  const realWait = publicClient.waitForTransactionReceipt;
+  (publicClient as any).waitForTransactionReceipt = async () => { throw new Error("receipt wait timed out"); };
+  const gus = addUser("Faucet Gus");
+  let g1: Awaited<ReturnType<typeof faucetFundSafe>>;
+  try { g1 = await faucetFundSafe(gus.id); } finally { (publicClient as any).waitForTransactionReceipt = realWait; }
+  const kept = store.findUser(gus.id)?.faucet;
+  check("the claim keeps the sent tx hash", g1.ok && /^0x[0-9a-f]{64}$/i.test(kept?.txHash ?? ""));
+  const g2 = await faucetFundSafe(gus.id);
+  check("a retry pays nothing: the account was paid once", !g2.ok && g2.code === "ALREADY_GRANTED" && (await balanceOf(gus.address)) === 50);
+
   console.log("5/6 accounts without a Safe are refused…");
   const noSafe = addUser("No-Safe Nia", { deployed: false });
   const n = await faucetFundSafe(noSafe.id);

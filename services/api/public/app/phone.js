@@ -39,7 +39,7 @@ let phRoute = null;            // { name, arg }
 let phSig = "";                // what the open screen was drawn from, for the poll
 const phCache = { deposits: null, links: null, methods: null, orgs: null, contacts: null, bic: undefined, bicFor: "", currencyPending: null,
   invoices: null, invProfile: null, invError: null, integrations: null, invIssued: null, invRequest: null,
-  co: null, approvalsWaiting: 0, inviteLinks: {}, plans: {}, signers: undefined, soon: null };
+  co: null, approvalsWaiting: 0, inviteLinks: {}, plans: {}, signers: undefined, soon: null, walletQr: null };
 
 /* The company the phone acts for, or null for the personal account. Kept per
    user on this device, and dropped when the user is no longer a member. */
@@ -1350,7 +1350,7 @@ PH["add/wallet"] = {
     const autoConvert = phCache.autoConvert ?? page.autoConvert;
     const change = page.handle ? ` <a href="#settings/currency/wallet">Change</a>` : "";
     return `${phTop("From a crypto wallet", "add", Z.tag("Beta"))}${phMain(`
-      ${address ? `<div class="z-qr"><img src="/api/users/${encodeURIComponent(u.id)}/address/qr.svg" width="168" height="168" alt="QR code of your wallet address"></div>` : ""}
+      ${address ? `<div class="z-qr"><img id="ph-wallet-qr" ${phCache.walletQr?.key === `${u.id}:${address}` ? `src="${phCache.walletQr.url}"` : "hidden"} width="168" height="168" alt="QR code of your wallet address"></div>` : ""}
       ${address ? `<div class="z-card">${Z.copyRow({ label: "Your wallet address", value: address, mono: true })}</div>`
         : Z.note({ tone: "a", text: "Your account is not set up yet, so it has no wallet address." })}
       ${Z.note({ tone: "a", text: "Only USDC on the Base network. Anything else sent here is lost." })}
@@ -1379,10 +1379,31 @@ PH["add/wallet"] = {
       }) : ""}
     `)}`;
   },
-  bind() {
+  bind(root) {
     if (phCache.deposits === null) phLoadDeposits().then(() => { if (phRoute?.name === "add/wallet") phRender(); });
+    const img = root.querySelector("#ph-wallet-qr");
+    if (img?.hidden) phLoadWalletQr(img);
   },
 };
+
+/* The wallet QR route is signed-in only, and an <img> request carries no
+   bearer header, so the SVG is fetched with the session and shown from a
+   blob URL. Kept per user and address so a redraw does not refetch. */
+async function phLoadWalletQr(img) {
+  const key = `${user.id}:${user.address}`;
+  try {
+    const res = await fetch(`/api/users/${encodeURIComponent(user.id)}/address/qr.svg`, {
+      headers: sessionToken ? { authorization: `Bearer ${sessionToken}` } : {},
+    });
+    if (!res.ok) return;
+    const url = URL.createObjectURL(await res.blob());
+    if (phCache.walletQr) URL.revokeObjectURL(phCache.walletQr.url);
+    phCache.walletQr = { key, url };
+    if (img.isConnected) { img.src = url; img.hidden = false; }
+  } catch {
+    // No QR is better than a broken image; the address is copyable below it.
+  }
+}
 
 async function phLoadDeposits() {
   if (!user?.id) return;
