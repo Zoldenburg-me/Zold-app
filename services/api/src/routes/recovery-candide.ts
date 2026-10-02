@@ -154,8 +154,10 @@ function fail(res: express.Response, err: unknown) {
   if (err instanceof CandideGuardianError) {
     return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
+  // 503, not 502: Cloudflare replaces an origin 502's body with its own page.
+  console.error(`recovery (candide): ${(err as any)?.stack ?? err}`);
   const message = String((err as any)?.message ?? err);
-  return res.status(502).json({ error: message.slice(0, 300) });
+  return res.status(503).json({ error: message.slice(0, 300) });
 }
 
 // ---------------------------------------------------------------------------
@@ -199,23 +201,29 @@ function activePlan(user: User): PasskeySafeDeploymentPlan {
 }
 
 async function verifyOwnerAssertion(user: User, body: any, challenge: string): Promise<User> {
-  const { authenticatorData, clientDataJSON, signature } = (body ?? {}) as Partial<Assertion>;
-  if (!authenticatorData || !clientDataJSON || !signature) {
+  const { authenticatorData, clientDataJSON, signature } = (body ?? {}) as Record<string, unknown>;
+  if (typeof authenticatorData !== "string" || typeof clientDataJSON !== "string" || typeof signature !== "string" ||
+      !authenticatorData || !clientDataJSON || !signature) {
     throw new CandideGuardianError("authenticatorData, clientDataJSON and signature required", 400, "BAD_ASSERTION");
   }
   const passkey = user.passkey!;
-  const { signCount } = await verifyAssertionForChallenge(
-    authenticatorData,
-    clientDataJSON,
-    signature,
-    passkey.publicKey!,
-    passkey.signCount ?? 0,
-    passkey.rpId ?? SECURITY.rpId,
-    SECURITY.origins,
-    challenge,
-    true,
-  );
-  return store.updateUser(user.id, { passkey: { ...passkey, signCount } });
+  try {
+    const { signCount } = await verifyAssertionForChallenge(
+      authenticatorData,
+      clientDataJSON,
+      signature,
+      passkey.publicKey!,
+      passkey.signCount ?? 0,
+      passkey.rpId ?? SECURITY.rpId,
+      SECURITY.origins,
+      challenge,
+      true,
+    );
+    return store.updateUser(user.id, { passkey: { ...passkey, signCount } });
+  } catch (err: any) {
+    // A wrong approval is the caller's to redo, not a partner failure.
+    throw new CandideGuardianError(`That passkey approval did not check out (${err?.message ?? err}). Start again.`, 401, "BAD_ASSERTION");
+  }
 }
 
 const toAssertion = (body: any) => ({

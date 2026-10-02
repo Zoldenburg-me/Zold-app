@@ -18,7 +18,9 @@ export type PendingPasskeySafeDeployment =
 /** Safe deployments awaiting the passkey signature that authorises them. */
 export const pendingPasskeySafeDeployments = new Map<
   string,
-  { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment }
+  /** `challenge`: what the passkey signs (base64url), checked before the
+   *  operation goes to the bundler. */
+  { userId: string; expiresAt: number; userOperation: PendingPasskeySafeDeployment; challenge: string }
 >();
 
 /**

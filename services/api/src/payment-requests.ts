@@ -225,7 +225,7 @@ export function validateCreate(body: any, user: User, now = new Date()): CreateI
     const n = Number(b.amountEur);
     if (!Number.isFinite(n) || n <= 0) throw new PaymentRequestError("amountEur must be a positive number");
     if (Math.round(n * 100) !== n * 100) throw new PaymentRequestError("amountEur has at most two decimals");
-    if (n > 1_000_000) throw new PaymentRequestError("amountEur is above the €1,000,000 ceiling");
+    if (n > MAX_REQUEST_EUR) throw new PaymentRequestError("amountEur is above the €1,000,000 ceiling");
     amountEur = n;
   }
   let description: string | undefined;
@@ -285,6 +285,8 @@ export function validateCreate(body: any, user: User, now = new Date()): CreateI
 // ── Crypto quotes ────────────────────────────────────────────────────────────
 
 const USDC_UNITS = 1_000_000;
+/** The largest amount one payment request may ask for. */
+export const MAX_REQUEST_EUR = 1_000_000;
 
 export function usdcToUnits(amount: number): bigint {
   return BigInt(Math.round(amount * USDC_UNITS));
@@ -307,6 +309,12 @@ export function quoteCrypto(
   allowanceBps = PAYMENT_REQUESTS.cryptoAllowanceBps,
 ): CryptoQuote {
   if (!(mid.usdPerEur > 0)) throw new PaymentRequestError("no live EUR/USD rate to quote from", 503);
+  // Every caller's amount passes here, including an open-amount page's and
+  // Shopify's: past the ceiling the USDC figure overflows to Infinity, which
+  // BigInt refuses with a RangeError.
+  if (!(amountEur > 0) || amountEur > MAX_REQUEST_EUR) {
+    throw new PaymentRequestError("the amount must be above €0 and at most €1,000,000");
+  }
   const cents = Math.round(amountEur * 100);
   let units = BigInt(Math.ceil(cents * mid.usdPerEur * (1 + allowanceBps / 10_000) * 10_000));
   const taken = new Set(Array.from(takenUsdcAmounts, (a) => usdcToUnits(a).toString()));

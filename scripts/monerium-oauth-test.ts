@@ -522,7 +522,7 @@ try {
     assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
     assert.equal(start.data.credentialId, passkey.credentialId);
     assert.equal(start.data.message, "I hereby declare that I am the address owner.");
-    const approval = await passkey.assert(start.data.challenge, 1);
+    const approval = await passkey.assert(start.data.challenge, 2);
     const r = await call(`/api/users/${userId}/monerium/activate`, {
       profileId: PROFILE_ID,
       linkSignatureRequestId: start.data.requestId,
