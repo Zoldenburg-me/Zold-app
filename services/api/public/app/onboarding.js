@@ -1621,8 +1621,8 @@ OB.activate = {
     ref.onclick = async () => { Z.setLoading(ref, true); await refreshKycStatus({ continueWhenApproved: true }); Z.setLoading(ref, false); };
     const re = root.querySelector("#btn-kyc-reconnect");
     if (re) re.onclick = () => obReconnect(re);
-    // A redraw keeps the check already due; restarting it on every redraw
-    // meant a screen redrawn every few seconds never checked at all.
+    // A redraw keeps the check already due: this screen can be redrawn every
+    // few seconds, and a timer restarted on each redraw never fires.
     const w = ibanWait(user);
     if (w && !w.support) { if (!obIbanTimer) obIbanFollow(); }
     else { clearTimeout(obIbanTimer); obIbanTimer = null; }
@@ -1711,8 +1711,10 @@ function obIbanReadyHtml() {
 }
 
 /* The IBAN is requested and the rest is Monerium's. Says what happens next and
-   what (nothing, mostly) the person has to do, and sends them to Home: the
-   checklist there carries the wait and the poller approves when it lands.
+   what (nothing, mostly) the person has to do, checks in the background while
+   open (obIbanFollow), and offers Go to dashboard at any time: Home's
+   checklist carries the wait, and the server's poller approves when the IBAN
+   lands.
    "Ask Monerium again" stays for an account parked before the server could
    tell an existing IBAN from one being issued. */
 function obIbanWaitHtml(w) {

@@ -184,9 +184,9 @@ export function adoptionHint(
   if (harnessProfile(user)) return { allowed: true };
   // Only the kind is judged from the stored copy: a profile does not change
   // kind. Its state does, and the copy is from the last connect or activation,
-  // often from before Monerium approved it. A stored "pending" hid the one
-  // button whose live check would have passed, so the state is left to that
-  // check (checkBackingProfile), which refuses a profile still pending.
+  // often from before Monerium approved it. The state is left to the live
+  // check (checkBackingProfile), which refuses a profile still pending, so a
+  // stale "pending" never hides the button that runs it.
   const known = (user.monerium?.profiles ?? []).find((p: any) => p?.id === profileId);
   if (known && typeof known.kind === "string" && known.kind !== expectedProfileKind(org.type)) {
     const refused = kindMismatch(org);
