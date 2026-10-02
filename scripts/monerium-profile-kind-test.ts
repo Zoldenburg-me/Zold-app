@@ -387,6 +387,55 @@ await check("a legacy business account backed by a personal profile fails its re
   assert.equal(store.findAccount("acc_legacy_p")!.moneriumProfile, undefined);
 });
 
+console.log("\nCompany signup");
+
+await check("a stored 'pending' copy does not hide the button: the list offers it and the live check connects the IBAN", async () => {
+  // Stored at activation, before Monerium approved; Monerium now says approved.
+  addUser("u_stale", CORP, 4);
+  store.updateUser("u_stale", { monerium: { ...store.findUser("u_stale")!.monerium!, profiles: [{ id: CORP.id, kind: "corporate", state: "pending" }] } } as any);
+  addOrg("org_stale", "business", "u_stale", "Acme Technik GmbH");
+  addGatedEur("acc_stale", "org_stale");
+  const list = await call("GET", "/api/orgs/org_stale/accounts", "u_stale");
+  assert.equal(list.data.adoption.allowed, true, JSON.stringify(list.data.adoption));
+  const r = await call("POST", "/api/orgs/org_stale/accounts/acc_stale/fund", "u_stale");
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(store.findAccount("acc_stale")!.status, "active");
+});
+
+await check("a stored copy of the other kind still refuses in the list", async () => {
+  const list = await call("GET", "/api/orgs/org_biz_p/accounts", "u_personal");
+  assert.equal(list.data.adoption.allowed, false);
+  assert.equal(list.data.adoption.code, "MONERIUM_PROFILE_KIND_MISMATCH");
+});
+
+await check("a company signup's first business org gets a gated EUR account that names no API flag", async () => {
+  addUser("u_signup", CORP_PENDING, 5);
+  store.updateUser("u_signup", { accountType: "company" } as any);
+  const r = await call("POST", "/api/orgs", "u_signup", { type: "business", name: "Acme Technik", legalName: "Acme Technik GmbH", country: "DE" });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const accts = store.accountsOf(r.data.organisation.id);
+  assert.equal(accts.length, 1);
+  assert.equal(accts[0].currency, "EUR");
+  assert.equal(accts[0].status, "gated");
+  assert.equal(accts[0].backingUserId, undefined, "no IBAN is connected until the owner's live check passes");
+  assert.doesNotMatch(JSON.stringify(accts[0].gate), /useMyAccount|provisioning/);
+  assert.match(accts[0].gate!.needs, /company’s IBAN/);
+});
+
+await check("a second business org, or one made by a personal signup, opens no account by itself", async () => {
+  const second = await call("POST", "/api/orgs", "u_signup", { type: "business", name: "Other Co", country: "DE" });
+  assert.equal(store.accountsOf(second.data.organisation.id).length, 0);
+  const personal = await call("POST", "/api/orgs", "u_personal", { type: "business", name: "Side Co", country: "DE" });
+  assert.equal(store.accountsOf(personal.data.organisation.id).length, 0);
+});
+
+await check("opening an EUR account by hand without an IBAN says what it needs in plain words", async () => {
+  addOrg("org_hand", "business", "u_signup", "Hand GmbH");
+  const r = await call("POST", "/api/orgs/org_hand/accounts", "u_signup", { currency: "EUR" });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.doesNotMatch(`${r.data.note} ${JSON.stringify(r.data.account.gate)}`, /useMyAccount|provisioning/);
+});
+
 server.close();
 monerium.close();
 console.log(`\n${passed} passed${process.exitCode ? ", with failures" : ""}`);

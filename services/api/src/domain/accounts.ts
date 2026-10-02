@@ -349,7 +349,7 @@ export function accountIsSpendable(account: Account): {
     return {
       ok: false,
       reason: `This ${def.name} account is ${account.status}${
-        account.gate ? ` — ${account.gate.reason}` : ""
+        account.gate ? ` — ${account.gate.reason.replace(/\.$/, "")}` : ""
       }.`,
     };
   }
