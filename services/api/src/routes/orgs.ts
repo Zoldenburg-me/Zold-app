@@ -63,9 +63,9 @@ function noIbanGate(type: OrgType): NonNullable<Account["gate"]> {
 }
 
 /**
- * The gate an account shows, worked out at read time from what it lacks now.
- * The text stored on the row is from when it was opened and goes stale when
- * the wording or the rail changes; it is only a fallback.
+ * The gate an account shows, from what it lacks when it is read. A row's
+ * stored `gate` keeps the wording it was opened with, so it is only the
+ * fallback.
  */
 function gateOf(org: Pick<Organisation, "type">, a: Account): Account["gate"] {
   if (a.status !== "gated") return undefined;
