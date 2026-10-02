@@ -346,8 +346,8 @@ export function accountIsSpendable(account: Account): {
     };
   }
   if (account.status !== "active") {
-    // The stored gate text is from when the account was opened; an EUR
-    // account without an IBAN says so in today's words.
+    // An EUR account without an IBAN gives the current reason, not the
+    // wording stored when it was opened.
     const why = account.currency === "EUR" && !account.backingUserId
       ? "No IBAN is connected to this account yet, so nothing can be sent from it"
       : account.gate?.reason.replace(/\.$/, "");

@@ -1,8 +1,8 @@
 /**
  * An organisation's accounts screen, payment links and invoice IBAN.
  *
- * - An account's "why it cannot send" text is worked out when it is read, so
- *   a row opened under older wording shows today's.
+ * - An account's "why it cannot send" text is worked out when it is read,
+ *   whatever wording its row stored.
  * - A business account waiting on Monerium says so, from the latest answer.
  * - A company makes its own payment links, for an issued invoice too; only
  *   the member whose Safe backs the account can, and the payer sees the
@@ -39,8 +39,8 @@ const SAFE = `0x${"aa".repeat(20)}`;
 const IBAN = "DE89370400440532013000";
 const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" } as const;
 
-// A company signup: their Safe holds the company's IBAN, the corporate profile
-// is still pending at Monerium as of connect.
+// A company signup: their Safe holds the company's IBAN, and the snapshot
+// taken at connect has the corporate profile pending.
 store.addUser({
   id: "u_co", name: "Sara Lindner", country: "DE", kycStatus: "approved", accountType: "company",
   address: SAFE, iban: IBAN, funding: { status: "active", moneriumProfileId: "prof_co" },
@@ -62,7 +62,7 @@ member("m2", "org_co", "u_co", "owner");
 member("m3", "org_co", "u_admin", "admin");
 member("m4", "org_p", "u_co", "owner");
 
-// Opened under older wording: the stored gate text is stale.
+// A row whose stored gate text is not the current wording.
 store.addAccount({
   id: "acc_old", orgId: "org_new", currency: "EUR", label: "main", status: "gated", provider: "monerium", identifier: {},
   gate: { reason: "This account has no funding identity, so nothing can be sent from it.", needs: "per-organisation account provisioning, which is not built." },
@@ -106,7 +106,7 @@ const call = async (method: string, p: string, body?: unknown, asUser = "u_co") 
 };
 
 console.log("accounts");
-await check("an account opened under older wording shows today's reason", async () => {
+await check("an account whose row stored other wording shows the current reason", async () => {
   const r = await call("GET", "/api/orgs/org_new/accounts");
   const a = r.body.accounts.find((x: any) => x.id === "acc_old");
   assert.match(a.gate.reason, /No IBAN is connected/);
