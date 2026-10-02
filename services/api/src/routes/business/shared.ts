@@ -213,11 +213,39 @@ export function draftFrom(org: Organisation, body: Record<string, any>): Invoice
         : undefined,
     issuer: issuerParty(org),
     recipient,
-    lines: Array.isArray(body.lines) ? body.lines : [],
+    lines: lineInputs(body.lines),
     treatment,
     selfBilled: body.selfBilled === true,
     currency,
   };
+}
+
+/**
+ * The request's lines as line inputs, or a refusal naming the line: every
+ * field read later is a string (a number is taken as its digits), so a
+ * `null` line or a numeric description is a 400 here, not a crash in the
+ * totals.
+ */
+function lineInputs(raw: unknown): InvoiceDraft["lines"] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new InvoiceComplianceError("lines must be a list of invoice lines.");
+  if (raw.length > 200) throw new InvoiceComplianceError("An invoice is limited to 200 lines.");
+  const text = (v: unknown) =>
+    typeof v === "string" ? v : typeof v === "number" && Number.isFinite(v) ? String(v) : "";
+  return raw.map((l, i) => {
+    if (!l || typeof l !== "object" || Array.isArray(l)) {
+      throw new InvoiceComplianceError(`Line ${i + 1} is not an invoice line.`);
+    }
+    const line = l as Record<string, unknown>;
+    const description = text(line.description).trim();
+    if (description.length > 500) throw new InvoiceComplianceError(`Line ${i + 1}'s description is limited to 500 characters.`);
+    return {
+      description,
+      quantity: text(line.quantity ?? "1"),
+      unitPriceNet: text(line.unitPriceNet),
+      ...(line.vatRate !== undefined && line.vatRate !== null ? { vatRate: Number(line.vatRate) } : {}),
+    };
+  });
 }
 
 /**

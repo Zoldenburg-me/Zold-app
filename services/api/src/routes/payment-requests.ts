@@ -28,6 +28,7 @@ import {
   effectiveState,
   isRequestCode,
   matchDepositToRequests,
+  MAX_REQUEST_EUR,
   matchMoneriumOrder,
   matchTransfer,
   newRequestCode,
@@ -368,8 +369,8 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (effectiveState(hit.r) !== "OPEN") return res.status(409).json({ error: `this request is ${effectiveState(hit.r).toLowerCase()}` });
       if (!hit.r.methods.includes("crypto")) return res.status(409).json({ error: "this request does not take crypto" });
       const n = Number(req.body?.amountEur);
-      if (!Number.isFinite(n) || n <= 0 || Math.round(n * 100) !== n * 100) {
-        return res.status(400).json({ error: "amountEur must be a positive amount with at most two decimals" });
+      if (!Number.isFinite(n) || n <= 0 || n > MAX_REQUEST_EUR || Math.round(n * 100) !== n * 100) {
+        return res.status(400).json({ error: "amountEur must be a positive amount up to €1,000,000 with at most two decimals" });
       }
       if (hit.r.amountEur !== undefined && n !== hit.r.amountEur) {
         return res.status(409).json({ error: `this request is for €${hit.r.amountEur.toFixed(2)}` });

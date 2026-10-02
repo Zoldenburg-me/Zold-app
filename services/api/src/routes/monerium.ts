@@ -387,19 +387,37 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         });
       }
 
-      const token = await exchangeAuthorizationCode(
-        {
-          baseUrl: MONERIUM.baseUrl,
-          clientId: MONERIUM.oauthClientId,
-          clientSecret: MONERIUM.clientSecret,
-        },
-        {
-          code,
-          codeVerifier: user.moneriumConnect.codeVerifier,
-          redirectUri: user.moneriumConnect.redirectUri,
-        },
-      );
-      const snapshot = await readMoneriumAccountSnapshot(user, token.access_token);
+      // A code is single-use: a reload or the back button lands here with a
+      // spent one. Back to the app with the reason, not an error page.
+      const connect = user.moneriumConnect;
+      let token: Awaited<ReturnType<typeof exchangeAuthorizationCode>>;
+      let snapshot: Awaited<ReturnType<typeof readMoneriumAccountSnapshot>>;
+      try {
+        token = await exchangeAuthorizationCode(
+          {
+            baseUrl: MONERIUM.baseUrl,
+            clientId: MONERIUM.oauthClientId,
+            clientSecret: MONERIUM.clientSecret,
+          },
+          {
+            code,
+            codeVerifier: connect.codeVerifier,
+            redirectUri: connect.redirectUri,
+          },
+        );
+        snapshot = await readMoneriumAccountSnapshot(user, token.access_token);
+      } catch (err: any) {
+        console.error(`monerium oauth: callback for ${user.id} failed: ${err?.message ?? err}`);
+        store.updateUser(user.id, {
+          moneriumConnect: undefined,
+          moneriumRefusal: {
+            code: "MONERIUM_CONNECT_FAILED",
+            error: "Monerium did not complete the sign-in (a link can be used only once, and this one may have been used already). Connect again from here.",
+            at: new Date().toISOString(),
+          },
+        });
+        return res.redirect("/app?monerium=refused");
+      }
       // A personal signup uses only its personal profile, a company signup
       // only its corporate one. No profile of that kind: nothing is stored,
       // not even the token, and the app shows why.

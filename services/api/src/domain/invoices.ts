@@ -115,6 +115,7 @@ export function validateLines(input: unknown): { lines: InvoiceLine[]; total: st
   }
   let totalCents = 0;
   const lines: InvoiceLine[] = input.map((raw, i) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new InvoiceError(`Line ${i + 1} is not an invoice line.`);
     const r = raw as Record<string, unknown>;
     const description = String(r.description ?? "").trim();
     if (!description) throw new InvoiceError(`Line ${i + 1} needs a description.`);
