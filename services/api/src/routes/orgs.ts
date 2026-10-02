@@ -48,6 +48,20 @@ import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 
+/** Why an EUR account with no IBAN behind it cannot send, in the words the
+ *  Accounts screen shows. The API's `useMyAccount` flag is not named here. */
+function noIbanGate(type: OrgType): NonNullable<Account["gate"]> {
+  return type === "business"
+    ? {
+        reason: "No IBAN is connected to this account yet, so nothing can be sent from it.",
+        needs: "the company’s IBAN from its company profile at Monerium. Once Monerium has issued it, connect it here.",
+      }
+    : {
+        reason: "No IBAN is connected to this account yet, so nothing can be sent from it.",
+        needs: "your own IBAN from Monerium. Once it is issued, fund this account from it.",
+      };
+}
+
 export function createOrgRouter(requireSession: SessionResolver): express.Router {
   const r = express.Router();
   const ctxOf = (req: express.Request, res: express.Response) =>
@@ -127,6 +141,33 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       invitedAt: now,
       acceptedAt: now,
     });
+
+    /**
+     * A company signup's first business org is the company that login was
+     * made for, so it gets its EUR account now and the Accounts screen is not
+     * empty. Without an IBAN behind it: the owner connects the company's IBAN
+     * (POST .../fund) once Monerium has issued it, and that call is the live
+     * profile check. Any further business org opens its accounts by hand.
+     */
+    const caller = store.findUser(session.userId);
+    const firstCompanyOrg =
+      orgType === "business" &&
+      caller?.accountType === "company" &&
+      !store.organisationsForUser(session.userId).some(({ org: o }) => o.id !== org.id && o.type === "business");
+    if (firstCompanyOrg) {
+      store.addAccount({
+        id: `acc_${randomUUID()}`,
+        orgId: org.id,
+        currency: "EUR",
+        label: defaultLabel("EUR"),
+        status: "gated",
+        provider: CURRENCY_REGISTRY.EUR.provider,
+        identifier: {},
+        gate: noIbanGate("business"),
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
 
     res.status(201).json({ organisation: publicOrg(org, member) });
   });
@@ -542,12 +583,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const status = wantsAdoption ? "active" : "gated";
     const gate = wantsAdoption
       ? undefined
-      : (initial.gate ?? {
-          reason:
-            "This account has no funding identity, so nothing can be sent from it.",
-          needs:
-            "per-organisation account provisioning (a Safe and a Monerium profile of its own), which is not built. Until then an organisation can be funded from a member's own account with useMyAccount: true.",
-        });
+      : (initial.gate ?? noIbanGate(ctx.org.type));
 
     const account = store.addAccount({
       id: `acc_${randomUUID()}`,
@@ -567,13 +603,11 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     let note: string | undefined;
     if (account.status === "gated") {
-      note = `Recorded, but ${CURRENCY_REGISTRY[currency].name} accounts cannot be opened yet: ${account.gate?.needs}`;
+      note = currency === "EUR"
+        ? `Opened. ${account.gate?.reason} It needs ${account.gate?.needs}`
+        : `Recorded, but ${CURRENCY_REGISTRY[currency].name} accounts cannot be opened yet: ${account.gate?.needs}`;
     } else if (wantsAdoption && ctx.org.type === "business") {
       note = `This organisation is now funded from the Monerium company profile${profileRecord?.name ? ` "${profileRecord.name}"` : ""} connected to your login. Only your device key can authorise its payments.`;
-    } else if (!wantsAdoption && currency === "EUR") {
-      note = callerFunded
-        ? "Opened without a funding identity. Pass useMyAccount: true to fund it from your own account until per-organisation provisioning exists."
-        : "Opened without a funding identity — your own account is not funded yet, and per-organisation provisioning is not built. Nothing can be sent from this account.";
     }
 
     res.status(201).json({
