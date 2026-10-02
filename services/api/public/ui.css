@@ -38,6 +38,9 @@
   border: 2px solid currentColor; border-right-color: transparent; animation: z-spin .8s linear infinite;
 }
 @keyframes z-spin { to { transform: rotate(360deg); } }
+/* A background check in progress, with when it last ran. */
+.z-live { display: flex; align-items: center; justify-content: center; gap: var(--z-space-2); margin: var(--z-space-3) 0 0; font-size: 13px; color: var(--z-dim); }
+.z-live__spin { width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid var(--z-pink); border-right-color: transparent; animation: z-spin .8s linear infinite; }
 .z-reason { margin: var(--z-space-2) 0 0; font-size: 13px; line-height: 1.5; color: var(--z-dim); text-align: center; }
 
 .z-iconbtn {
@@ -472,6 +475,7 @@ a.z-switch:hover { border-color: var(--z-line-hover); color: var(--z-text); }
 
 @media (prefers-reduced-motion: reduce) {
   .z-btn[aria-busy="true"]::before { animation: none; border-right-color: currentColor; opacity: .6; }
+  .z-live__spin { animation: none; border-right-color: var(--z-pink); opacity: .6; }
   .z-disclose[open] > summary .z-ic { transform: none; }
 }
 
