@@ -258,6 +258,10 @@ export interface User {
       accountEmail?: string;
     };
     profiles?: any[];
+    /** Monerium's answer the last time Zold read the connected profile live
+     *  (adopt, fund, re-check, execute). Newer than `profiles`, which is the
+     *  snapshot taken at connect. */
+    profileSeen?: { id: string; kind: string; state: string; at: string };
     ibans?: any[];
     addresses?: any[];
   };

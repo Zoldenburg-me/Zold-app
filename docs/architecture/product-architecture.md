@@ -351,6 +351,11 @@ wrong handle returns 404.
 | **Bank (SEPA)** | Pay the IBAN with the code as reference. | The Monerium poller finds the code in the memo. |
 | **Zold account** | The app opens a pre-filled SEPA send. | As bank. |
 
+A link is booked under an org: from the app, the company a company signup's
+Safe backs, else the personal org; from `/orgs/:orgId/payment-requests`, that
+org. Under a business org the payer sees the company's registered name as the
+holder.
+
 There is no EPC/GiroCode QR. The link becomes PAID when funds reach the
 payee's address. Conversion to euros is separate (§6.3).
 
@@ -569,8 +574,8 @@ LINK_CREATED → SUBMITTED → PAYING → PAID → RECONCILED     (+ soft DELETE
   issued.
 - **Getting paid on an outgoing invoice** only *records settlements*:
   - a SEPA credit whose memo names the invoice number,
-  - a pay link bound to the invoice (API only, and it currently works only for
-    personal-org invoices),
+  - a pay link bound to the invoice ("Payment link" on the invoice, console and
+    app), created only by the member whose Safe backs the org's account,
   - or a manual link of a crypto deposit.
 
   Once the recorded settlements cover what the invoice is payable as (its

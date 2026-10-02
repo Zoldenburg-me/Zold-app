@@ -35,7 +35,7 @@ const fake = createServer((req, res) => {
     const send = (code: number, b: any) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
     if (req.headers["x-api-key"] !== GOOD_KEY) return send(401, { success: false, detail: "Unauthorized", error_code: 401 });
     if (!req.headers["user-agent"]) return send(400, { success: false, detail: "Bad request. User-Agent malformed" });
-    if (url.pathname === "/account") return send(200, { name: "Tony", organization: "Zoldenburg UG", accountId: 4711, email: "books@example.com", hasBankingAccess: true, apiKeyType: "FULL_PERMISSION", currency: "EUR" });
+    if (url.pathname === "/account") return send(200, { name: "Sara Lindner", organization: "Zoldenburg UG", accountId: 4711, email: "books@example.com", hasBankingAccess: true, apiKeyType: "FULL_PERMISSION", currency: "EUR" });
     if (url.pathname === "/bankAccounts") return send(200, { totalCount: 1, records: [{ bankAccountUid: 77, accountType: "CUSTOM", name: "Zold clearing", currencyCode: "EUR" }] });
     if (url.pathname === "/documents" && req.method === "GET") {
       const num = url.searchParams.get("documentNumberFilter") ?? "";
@@ -109,7 +109,7 @@ initStore();
 const SAFE = `0x${"aa".repeat(20)}` as const;
 const now = new Date().toISOString();
 const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
-store.addUser({ id: "u_owner", name: "Tony", country: "DE", kycStatus: "approved", address: SAFE, createdAt: now } as any);
+store.addUser({ id: "u_owner", name: "Sara Lindner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: now } as any);
 store.addUser({ id: "u_viewer", name: "Viewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
 store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
 store.addOrganisation({ id: "org_starter", type: "business", name: "Starter GmbH", plan: "starter", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });

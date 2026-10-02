@@ -1,8 +1,8 @@
 /**
- * /api/orgs/:orgId: the business surface, composed from four route modules.
+ * /api/orgs/:orgId: the business surface, composed from route modules.
  *
  * One router per subject, mounted on the same path: drafts, incoming invoices,
- * issued invoices, and bookkeeping. They share the derived-state helpers in
+ * issued invoices, bookkeeping, integrations and payment links. They share the derived-state helpers in
  * ./business/state.ts and the request helpers in ./business/shared.ts, so the
  * cross-cutting rules (four eyes, INVALID_DATA, gating as a read-time filter)
  * each live in one place.
@@ -22,6 +22,7 @@ import { createInvoicingRoutes } from "./business/invoicing.js";
 import { createBookkeepingRoutes } from "./business/bookkeeping.js";
 import { createBookkeepingExportRoutes } from "./business/bookkeeping-export.js";
 import { createIntegrationRoutes } from "./business/integrations.js";
+import { createPaymentLinkRoutes } from "./business/payment-links.js";
 import type { TransferFactory } from "./business/shared.js";
 
 export type { TransferFactory } from "./business/shared.js";
@@ -42,6 +43,7 @@ export function createBusinessRouter(
   r.use(createBookkeepingRoutes(deps));
   r.use(createBookkeepingExportRoutes(deps));
   r.use(createIntegrationRoutes(deps));
+  r.use(createPaymentLinkRoutes(deps));
 
   return r;
 }

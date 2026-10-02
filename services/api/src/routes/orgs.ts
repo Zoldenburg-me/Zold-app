@@ -42,7 +42,7 @@ import { emailIsProven, roleCan, wouldOrphanOrg } from "../domain/roles.js";
 import { KYC } from "../config.js";
 import { wrap } from "./util.js";
 import { accountProfileStanding } from "../domain/monerium-profile.js";
-import { adoptionHint, auditProfileCheck, checkBackingProfile } from "../adapters/monerium-profile.js";
+import { adoptionHint, auditProfileCheck, checkBackingProfile, profileWait } from "../adapters/monerium-profile.js";
 import { emailLooksValid } from "../domain/email.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 
@@ -60,6 +60,22 @@ function noIbanGate(type: OrgType): NonNullable<Account["gate"]> {
         reason: "No IBAN is connected to this account yet, so nothing can be sent from it.",
         needs: "your own IBAN from Monerium. Once it is issued, fund this account from it.",
       };
+}
+
+/**
+ * The gate an account shows, worked out at read time from what it lacks now.
+ * The text stored on the row is from when it was opened and goes stale when
+ * the wording or the rail changes; it is only a fallback.
+ */
+function gateOf(org: Pick<Organisation, "type">, a: Account): Account["gate"] {
+  if (a.status !== "gated") return undefined;
+  if (a.currency === "EUR" && !a.backingUserId) return noIbanGate(org.type);
+  return initialStatusFor(a.currency).gate ?? a.gate;
+}
+
+/** An account as the API returns it: read-time gate and profile standing. */
+function accountView(org: Organisation, a: Account) {
+  return { ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a) };
 }
 
 export function createOrgRouter(requireSession: SessionResolver): express.Router {
@@ -487,16 +503,20 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!ctx) return;
     if (!requirePermission(ctx, res, "accounts.read")) return;
     const accounts = store.accountsOf(ctx.org.id);
+    const caller = store.findUser(ctx.userId);
+    const adoption = roleCan(ctx.member.role, "accounts.open")
+      ? adoptionHint(ctx.org, caller)
+      : { allowed: false, reason: `Your role (${ctx.member.role}) cannot open or fund accounts.` };
     res.json({
-      // `profile` is derived here, at read time: an account adopted before the
-      // Monerium profile check existed reads as needing one, and no row is
-      // rewritten to say so.
-      accounts: accounts.map((a) => ({ ...a, profile: accountProfileStanding(ctx.org, a) })),
+      // `gate` and `profile` are derived here, at read time: no row is
+      // rewritten when the wording or the Monerium check changes.
+      accounts: accounts.map((a) => accountView(ctx.org, a)),
       // Whether "fund from my account" would pass, from stored facts only, so
       // the UI offers it only where the API would accept it.
-      adoption: roleCan(ctx.member.role, "accounts.open")
-        ? adoptionHint(ctx.org, store.findUser(ctx.userId))
-        : { allowed: false, reason: `Your role (${ctx.member.role}) cannot open or fund accounts.` },
+      adoption,
+      // Monerium has not approved the caller's profile yet (as last seen), so
+      // connecting would be refused until it does.
+      ...(adoption.allowed ? { profileWait: profileWait(caller) } : {}),
       mayManageAccounts: roleCan(ctx.member.role, "accounts.open"),
       currencies: currencyAvailability(),
       // What a second account would cost, so the UI can show the ceiling
@@ -611,7 +631,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
 
     res.status(201).json({
-      account: { ...account, profile: accountProfileStanding(ctx.org, account) },
+      account: accountView(ctx.org, account),
       note,
       ...(profileWarning ? { warning: profileWarning } : {}),
     });
@@ -679,7 +699,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       gate: undefined,
     });
     res.json({
-      account: { ...funded, profile: accountProfileStanding(ctx.org, funded) },
+      account: accountView(ctx.org, funded),
       note:
         ctx.org.type === "business"
           ? `This organisation is now funded from the Monerium company profile${checked.record.name ? ` "${checked.record.name}"` : ""} connected to your login. Only your device key can authorise its payments.`
@@ -714,7 +734,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     const updated = store.updateAccount(account.id, { moneriumProfile: checked.record });
     res.json({
-      account: { ...updated, profile: accountProfileStanding(ctx.org, updated) },
+      account: accountView(ctx.org, updated),
       ...(checked.warning ? { warning: checked.warning } : {}),
     });
   }));

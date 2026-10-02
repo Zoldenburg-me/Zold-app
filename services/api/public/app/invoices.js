@@ -464,14 +464,14 @@ PH["invoice/new"] = {
       d.vat = String(prof.profile.defaultVatRate ?? (rates ? rates[0] : ""));
     }
     const missing = !phIssuerTaxId(prof);
-    const bank = prof.profile.bank?.iban;
+    const bank = prof.invoiceBank?.iban;
     const matchable = String(d.number).replace(/[^A-Za-z0-9]/g, "").length >= 6;
     return `${phTop("New invoice", "invoices", `<span class="z-hint" id="ph-inv-saved" aria-live="polite">${phInvStored(org) ? "Draft saved on this phone" : ""}</span>`)}
     <form id="ph-inv" class="z-app__form" novalidate>${phMain(`
       ${missing ? `<a class="z-banner" href="#invoice/profile/new">${Z.icon("badge")}<span>Add your tax number once. It goes on every invoice.</span>${Z.icon("chevron_right", "z-row__chev")}</a>` : ""}
       <fieldset class="z-fieldset z-form--tight"><legend class="z-eyebrow">Bill to</legend>
         ${Z.field({ id: "ph-r-name", label: "Customer", name: "organization", autocomplete: "organization", value: d.recipient.name, maxlength: 120, placeholder: "Café Ostwind…" })}
-        ${Z.field({ id: "ph-r-addr", label: "Street and number", name: "address-line1", autocomplete: "address-line1", value: d.recipient.addressLine, maxlength: 120, placeholder: "Ostengasse 4…" })}
+        ${Z.field({ id: "ph-r-addr", label: "Street and number", name: "address-line1", autocomplete: "address-line1", value: d.recipient.addressLine, maxlength: 120, placeholder: "Lindenstraße 4…" })}
         <div class="z-cols">
           ${Z.field({ id: "ph-r-zip", label: "Postcode", name: "postal-code", autocomplete: "postal-code", value: d.recipient.postalCode, maxlength: 12, spellcheck: false })}
           ${Z.field({ id: "ph-r-city", label: "City", name: "address-level2", autocomplete: "address-level2", value: d.recipient.city, maxlength: 80 })}
@@ -779,7 +779,7 @@ function phInvPreview(d, prof, trigger) {
       supplyPeriod: phPeriod(d.period), dueDate: d.dueDate, issuer: prof.issuer, recipient: d.recipient,
       lines: c.totals.lines.map((l) => ({ description: l.description, quantity: l.quantity, netCents: l.netCents })),
       netCents: c.totals.netCents, vatCents: c.totals.vatCents, grossCents: c.totals.grossCents, buckets: c.totals.buckets,
-      vatNote: note ? (d.language === "en" ? note.invoiceNoteEn : note.invoiceNote) : "", bank: prof.profile.bank,
+      vatNote: note ? (d.language === "en" ? note.invoiceNoteEn : note.invoiceNote) : "", bank: prof.invoiceBank,
     })
     : Z.note({ tone: "a", text: phPlain(c?.refused || "Add at least one line with a price to see the invoice.") });
   document.getElementById("ph-inv-sheet")?.remove();
@@ -794,7 +794,7 @@ function phInvPreview(d, prof, trigger) {
 /* One invoice: an issued one as paper, a supplier's as its details. */
 PH.invoice = {
   title: (id) => { const i = phCache.invoices?.find((x) => x.id === id); return i?.issued ? `Invoice ${i.issued.number}` : "Invoice"; },
-  live: (id) => { const i = phCache.invoices?.find((x) => x.id === id); return `${phCache.invoices === null}|${i?.state}|${i?.overdue}|${(i?.settlements || []).length}`; },
+  live: (id) => { const i = phCache.invoices?.find((x) => x.id === id); return `${phCache.invoices === null}|${i?.state}|${i?.overdue}|${(i?.settlements || []).length}|${phCache.invPayLink?.id === id}`; },
   html(id) {
     const i = phCache.invoices?.find((x) => x.id === id);
     if (!i) {
@@ -805,6 +805,7 @@ PH.invoice = {
     const w = phInvWord(i);
     if (i.direction !== "outgoing") return phSupplierInvoice(i, w);
     const fresh = phCache.invIssued?.id === i.id ? phCache.invIssued.url : null;
+    const payLink = phCache.invPayLink?.id === i.id ? phCache.invPayLink.url : null;
     const pays = (i.settlements || []).map((s) => Z.row({
       lead: Z.iconTile({ icon: s.method === "bank" ? "account_balance" : "currency_exchange", tone: "m" }),
       title: s.method === "bank" ? (s.counterpartyName ? `From ${s.counterpartyName}` : "Bank transfer") : "Digital dollars (USDC)",
@@ -818,6 +819,13 @@ PH.invoice = {
         ? `<div class="z-card">${Z.copyRow({ label: "Invoice link", value: fresh, display: fresh.replace(/^https?:\/\//, ""), mono: true })}</div>
            ${Z.note({ text: "Send the link or the PDF yourself. Zold doesn’t email your customers. The link is shown only now." })}`
         : Z.note({ text: "The invoice link was shown once, when you created the invoice. Zold keeps no copy of it, so it can’t show it again." })}
+      ${payLink
+        ? `<div class="z-card">${Z.copyRow({ label: "Payment link", value: payLink, display: payLink.replace(/^https?:\/\//, ""), mono: true })}</div>
+           ${Z.button({ full: true, icon: "ios_share", label: "Share the payment link", id: "ph-inv-paylink-share" })}`
+        : i.state === "SUBMITTED"
+          ? `${Z.button({ full: true, icon: "add_link", label: "Payment link", id: "ph-inv-paylink" })}
+             <p class="z-hint">A link your customer pays by bank transfer or in digital dollars. It asks for this invoice’s amount and marks it paid when the money arrives.</p>`
+          : ""}
       <p class="z-err" id="ph-inv-err" role="alert" hidden></p>
     `)}${fresh ? phFoot(`<div class="z-pair"><a class="z-btn z-btn--secondary" href="${esc(fresh)}" target="_blank" rel="noopener">${Z.icon("download")}<span>PDF</span></a>${Z.button({ variant: "primary", icon: "ios_share", label: "Share", id: "ph-inv-share" })}</div>`) : ""}`;
   },
@@ -829,6 +837,31 @@ PH.invoice = {
     if (!phCache.invProfile && phInvOrg()) phLoadInvProfile().then(() => { if (phRoute?.name === "invoice") phRender(); });
     phInvFreshen("invoice");
     const i = phCache.invoices.find((x) => x.id === id);
+    const make = root.querySelector("#ph-inv-paylink");
+    if (make && i) {
+      make.onclick = async () => {
+        const err = root.querySelector("#ph-inv-err");
+        err.hidden = true;
+        Z.setLoading(make, true);
+        try {
+          // Every method the payee's account can take; the server sets the
+          // amount from the invoice.
+          const { methods } = await api(`/api/users/${user.id}/payment-requests/methods`);
+          const usable = methods.filter((m) => m.available).map((m) => m.method);
+          if (!usable.length) throw new Error(methods.map((m) => m.needs).filter(Boolean).join(" ") || "No way to get paid is set up on this account yet.");
+          const r = await api(phOrgPath(phInvOrg(), "/payment-requests"), { invoiceId: id, methods: usable });
+          phCache.invPayLink = { id, url: r.url };
+          phRender();
+        } catch (e) {
+          Z.setLoading(make, false);
+          err.textContent = phPlain(e.message); err.hidden = false;
+        }
+      };
+    }
+    const payShare = root.querySelector("#ph-inv-paylink-share");
+    if (payShare && i && phCache.invPayLink?.id === id) {
+      payShare.onclick = () => phShare(`Invoice ${i.issued.number}`, `Pay invoice ${i.issued.number}:`, phCache.invPayLink.url);
+    }
     const share = root.querySelector("#ph-inv-share");
     if (share && i && phCache.invIssued?.id === id) {
       const a = phInvAmount(i);
@@ -879,7 +912,7 @@ PH["invoice/profile"] = {
       <div class="z-form z-form--tight">
         ${Z.field({ id: "ph-p-name", label: "Name on invoices", name: "name", autocomplete: org.type === "business" ? "organization" : "name", value: org.legalName || prof.suggested?.name || org.name || u.name || "", maxlength: 120,
           hint: !org.legalName && prof.suggested?.source === "monerium" ? "Filled in from your Monerium profile. Check it matches the register." : org.type === "business" ? "The company’s registered name." : "Your full name, or your business’s registered name." })}
-        ${Z.field({ id: "ph-p-addr", label: "Street and number", name: "address-line1", autocomplete: "address-line1", value: org.address?.line1 || "", maxlength: 120, placeholder: "Franz-Josef-Str. 11…" })}
+        ${Z.field({ id: "ph-p-addr", label: "Street and number", name: "address-line1", autocomplete: "address-line1", value: org.address?.line1 || "", maxlength: 120, placeholder: "Gartenstraße 11…" })}
         <div class="z-cols">
           ${Z.field({ id: "ph-p-zip", label: "Postcode", name: "postal-code", autocomplete: "postal-code", value: org.address?.postalCode || "", maxlength: 12, spellcheck: false })}
           ${Z.field({ id: "ph-p-city", label: "City", name: "address-level2", autocomplete: "address-level2", value: org.address?.city || "", maxlength: 80 })}

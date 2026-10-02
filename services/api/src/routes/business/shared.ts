@@ -76,6 +76,24 @@ export function issuerParty(org: Organisation): InvoiceParty {
  * org's accounts when its profile was checked, else the caller's own
  * connected profile.
  */
+type InvoiceBank = NonNullable<NonNullable<Organisation["invoicing"]>["bank"]>;
+
+/** The IBAN of the org's own EUR account, when one is connected: the only
+ *  one whose incoming payments Zold sees and matches to invoices. */
+export function accountBankOf(org: Organisation): InvoiceBank | undefined {
+  const acc = store.accountsOf(org.id).find((a) => a.currency === "EUR" && a.status === "active" && a.identifier?.iban);
+  if (!acc?.identifier?.iban) return undefined;
+  return { holder: org.legalName?.trim() || org.name, iban: normaliseIban(acc.identifier.iban) };
+}
+
+/** The bank details an invoice prints: the profile's when it names an IBAN,
+ *  else the org account's own. */
+export function invoiceBankOf(org: Organisation): InvoiceBank | undefined {
+  const set = org.invoicing?.bank;
+  if (set?.iban) return { ...set, holder: set.holder || org.legalName?.trim() || org.name };
+  return accountBankOf(org);
+}
+
 export function issuerSuggestions(org: Organisation, callerId: string): { name?: string; source?: "monerium" } {
   if (org.legalName?.trim()) return {};
   const kind = org.type === "business" ? "corporate" : "personal";

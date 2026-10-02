@@ -92,7 +92,7 @@ await check("a supplier's null invoice line is refused", () => {
 console.log("issuing an invoice");
 const org: any = {
   id: "org_t", type: "business", name: "Acme", legalName: "Acme GmbH", plan: "business",
-  address: { line1: "Hauptstraße 1", postalCode: "93047", city: "Regensburg", country: "DE" },
+  address: { line1: "Hauptstraße 1", postalCode: "34117", city: "Kassel", country: "DE" },
   invoicing: { vatId: "DE123456789" },
   reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" },
 };

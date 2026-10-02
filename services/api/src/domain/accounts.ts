@@ -346,11 +346,14 @@ export function accountIsSpendable(account: Account): {
     };
   }
   if (account.status !== "active") {
+    // The stored gate text is from when the account was opened; an EUR
+    // account without an IBAN says so in today's words.
+    const why = account.currency === "EUR" && !account.backingUserId
+      ? "No IBAN is connected to this account yet, so nothing can be sent from it"
+      : account.gate?.reason.replace(/\.$/, "");
     return {
       ok: false,
-      reason: `This ${def.name} account is ${account.status}${
-        account.gate ? ` — ${account.gate.reason.replace(/\.$/, "")}` : ""
-      }.`,
+      reason: `This ${def.name} account is ${account.status}${why ? ` — ${why}` : ""}.`,
     };
   }
   return { ok: true };

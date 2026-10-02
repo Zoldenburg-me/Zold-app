@@ -606,6 +606,8 @@ export function publicPaymentRequest(
     baseUrl: string;
     now?: Date;
     quote?: CryptoQuote;
+    /** A company's name, for a link booked under it: the holder of the IBAN. */
+    payeeName?: string;
   },
 ): PublicPaymentRequest {
   const now = ctx.now ?? new Date();
@@ -628,7 +630,7 @@ export function publicPaymentRequest(
     methods.bank = {
       iban: user.iban,
       bic: ctx.bicFor(user.iban),
-      holder: user.name,
+      holder: ctx.payeeName ?? user.name,
       reference: displayCode(r.code),
       appUrl: `${ctx.baseUrl}/app?pay=${encodeURIComponent(r.handle)}/${displayCode(r.code)}`,
     };
@@ -636,7 +638,7 @@ export function publicPaymentRequest(
   return {
     code: displayCode(r.code),
     handle: r.handle,
-    ...(page?.displayName ? { displayName: page.displayName } : {}),
+    ...(ctx.payeeName ? { displayName: ctx.payeeName } : page?.displayName ? { displayName: page.displayName } : {}),
     state,
     ...(r.amountEur !== undefined ? { amountEur: r.amountEur, outstandingEur: Math.max(0, Math.round((r.amountEur - paid) * 100) / 100) } : {}),
     paidEur: paid,
