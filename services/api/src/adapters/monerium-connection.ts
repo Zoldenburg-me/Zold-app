@@ -57,18 +57,37 @@ export function decryptToken(value: string): string {
   return decryptField("monerium", MONERIUM.tokenEncryptionKey, value);
 }
 
-/** How a stored connection authenticates. Rows written before `method`
- *  existed are OAuth connections. */
+/** How a stored connection authenticates, or null when the row holds no
+ *  secret for it. A `method` is a claim, not a credential: `api_keys` counts
+ *  only with an encrypted client secret stored, `oauth` only with an
+ *  encrypted access token. Rows written before `method` existed are OAuth
+ *  connections. */
 export function connectionMethod(user: User): MoneriumConnectionMethod | null {
   const m = user.monerium;
   if (!m) return null;
-  if (m.method) return m.method;
-  return m.accessTokenEnc ? "oauth" : null;
+  const method = m.method ?? (m.apiKeys ? "api_keys" : m.accessTokenEnc ? "oauth" : null);
+  if (method === "api_keys") return m.apiKeys?.clientSecretEnc ? "api_keys" : null;
+  if (method === "oauth") return m.accessTokenEnc ? "oauth" : null;
+  return null;
 }
 
 /** Does this user carry Monerium credentials of their own? */
 export function hasOwnMoneriumCredentials(user: User): boolean {
   return connectionMethod(user) !== null;
+}
+
+/** A row that says the user connected Monerium but holds no secret for it.
+ *  Such a user is refused, never served on the app's credentials, which see
+ *  every app-provisioned account's profiles, IBANs and orders. */
+function claimsConnectionWithoutSecret(user: User): boolean {
+  const m = user.monerium;
+  return Boolean(m && (m.method || m.accessTokenEnc || m.apiKeys)) && !hasOwnMoneriumCredentials(user);
+}
+
+function refuseEmptyConnection(): never {
+  throw new MoneriumAccessError(
+    "this account's Monerium connection holds no credential — connect Monerium again (OAuth or your own API keys)",
+  );
 }
 
 /** The refusal for a SEPA send from an account with no Monerium connection.
@@ -154,7 +173,7 @@ const userClients = new Map<string, { key: string; client: MoneriumClient }>();
 
 function apiKeyClient(user: User): MoneriumClient | null {
   const keys = user.monerium?.apiKeys;
-  if (!keys) return null;
+  if (!keys || connectionMethod(user) !== "api_keys") return null;
   const cacheKey = `${keys.clientId}:${keys.clientSecretEnc}`;
   const hit = userClients.get(user.id);
   if (hit && hit.key === cacheKey) return hit.client;
@@ -184,7 +203,9 @@ const refreshing = new Map<string, Promise<string>>();
 export async function moneriumAccessToken(user: User): Promise<string> {
   const keyed = apiKeyClient(user);
   if (keyed) return keyed.bearerToken();
-  if (!user.monerium?.accessTokenEnc) throw new MoneriumAccessError("Monerium account is not connected");
+  if (connectionMethod(user) !== "oauth" || !user.monerium?.accessTokenEnc) {
+    throw new MoneriumAccessError("Monerium account is not connected");
+  }
   if (
     user.monerium.refreshTokenEnc &&
     user.monerium.expiresAt &&
@@ -240,20 +261,23 @@ export function moneriumAppClient(): MoneriumClient {
  * The client that can see this user's Monerium objects.
  *
  * API keys and OAuth both return a client bound to the user's own account.
- * Otherwise the app client — which only works for accounts the app itself
- * provisioned, and throws a clear error rather than a 401 when the app has no
- * secret at all.
+ * A row that claims a connection but holds no secret for it is refused (a
+ * MoneriumAccessError, answered as 409 MONERIUM_NOT_CONNECTED). Only a user
+ * with no connection at all gets the app client, which works only for
+ * accounts the app itself provisioned, and throws a clear error rather than a
+ * 401 when the app has no secret at all.
  */
 export function moneriumClientFor(user: User): MoneriumClient {
   const keyed = apiKeyClient(user);
   if (keyed) return keyed;
-  if (user.monerium?.accessTokenEnc) {
+  if (connectionMethod(user) === "oauth") {
     return new MoneriumClient({
       baseUrl: MONERIUM.baseUrl,
       clientId: MONERIUM.oauthClientId,
       tokenProvider: () => moneriumAccessToken(user),
     });
   }
+  if (claimsConnectionWithoutSecret(user)) refuseEmptyConnection();
   if (!MONERIUM.clientSecret) {
     throw new MoneriumAccessError(
       "no Monerium access for this account — connect a Monerium account (API keys or OAuth), or set MONERIUM_CLIENT_SECRET for app-level calls",
@@ -271,6 +295,7 @@ export async function moneriumLinkAccessToken(user: User): Promise<{ accessToken
   if (hasOwnMoneriumCredentials(user)) {
     return { accessToken: await moneriumAccessToken(user), viaApp: false };
   }
+  if (claimsConnectionWithoutSecret(user)) refuseEmptyConnection();
   if (!MONERIUM.clientSecret) {
     throw new MoneriumAccessError(
       "no Monerium access for this account — connect a Monerium account, or set MONERIUM_CLIENT_SECRET for app-level address linking",

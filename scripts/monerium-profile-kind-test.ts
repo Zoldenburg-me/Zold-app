@@ -13,6 +13,10 @@
  * GET /profiles list, and an id the token cannot see is a 403. No network,
  * no chain: the routers run in-process.
  *
+ * Also here: a stored connection that names a method but holds no secret is
+ * refused, never served on the app's own credentials (which see every
+ * app-provisioned profile).
+ *
  * Run: npm run monerium:profile:test
  */
 import "./_test-env.js";
@@ -33,12 +37,19 @@ process.env.MONERIUM_CLIENT_SECRET = "";
 type Profile = { id: string; kind: "personal" | "corporate"; state: string; name: string };
 /** What each bearer token can see at the fake Monerium. */
 const visible = new Map<string, Profile[]>();
-const fake = { down: false, reads: 0 };
+const fake = { down: false, reads: 0, appGrants: 0 };
+const APP_TOKEN = "tok-app";
 
 const monerium = createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://fake");
   const send = (code: number, b: any) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
   if (fake.down) return send(503, { code: 503, status: "Service Unavailable" });
+  // The app's own credentials: a token that sees every app-provisioned
+  // profile, like the sandbox's GET /profiles on MONERIUM_CLIENT_SECRET.
+  if (url.pathname === "/auth/token") {
+    fake.appGrants++;
+    return send(200, { access_token: APP_TOKEN, token_type: "Bearer", expires_in: 3600 });
+  }
   const token = String(req.headers.authorization ?? "").replace(/^Bearer /, "");
   const mine = visible.get(token);
   if (!mine) return send(401, { code: 401, status: "Unauthorized" });
@@ -64,9 +75,12 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
-const { encryptToken } = await import("../services/api/src/adapters/monerium-connection.js");
+const { encryptToken, hasOwnMoneriumCredentials, connectionMethod, moneriumClientFor, moneriumLinkAccessToken } = await import("../services/api/src/adapters/monerium-connection.js");
+const { readMoneriumProfile } = await import("../services/api/src/adapters/monerium-profile.js");
+const { publicUser } = await import("../services/api/src/users/public-user.js");
+const { MoneriumAccessError } = await import("../services/api/src/adapters/monerium-client.js");
 const { normaliseLegalName, nameWarning, pickProfileForSignup } = await import("../services/api/src/domain/monerium-profile.js");
-const { HARNESS } = await import("../services/api/src/config.js");
+const { HARNESS, MONERIUM } = await import("../services/api/src/config.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -434,6 +448,41 @@ await check("opening an EUR account by hand without an IBAN says what it needs i
   const r = await call("POST", "/api/orgs/org_hand/accounts", "u_signup", { currency: "EUR" });
   assert.equal(r.status, 201, JSON.stringify(r.data));
   assert.doesNotMatch(`${r.data.note} ${JSON.stringify(r.data.account.gate)}`, /useMyAccount|provisioning/);
+});
+
+await check("a row that names a method but stores no secret is not a connection, and never falls back to the app's credentials", async () => {
+  // The app's credentials are present here, so a fallback would succeed and
+  // GET /profiles would list every app-provisioned profile.
+  visible.set(APP_TOKEN, [CORP, PERSONAL, CORP_PENDING]);
+  MONERIUM.clientId = "app-client";
+  MONERIUM.clientSecret = "app-secret";
+  try {
+    const empty = [
+      { id: "u_empty_oauth", monerium: { connectedAt: now, method: "oauth", profileId: CORP.id } },
+      { id: "u_empty_keys", monerium: { connectedAt: now, method: "api_keys", profileId: CORP.id } },
+      { id: "u_keys_claim_oauth_token", monerium: { connectedAt: now, method: "api_keys", profileId: CORP.id, accessTokenEnc: encryptToken(corpToken) } },
+    ];
+    for (const row of empty) {
+      store.addUser({ id: row.id, name: row.id, country: "DE", kycStatus: "approved", createdAt: now, address: "0x" + "e".repeat(40), monerium: row.monerium } as any);
+      const user = store.findUser(row.id)!;
+      assert.equal(connectionMethod(user), null, row.id);
+      assert.equal(hasOwnMoneriumCredentials(user), false, row.id);
+      assert.throws(() => moneriumClientFor(user), MoneriumAccessError, row.id);
+      await assert.rejects(moneriumLinkAccessToken(user), MoneriumAccessError, row.id);
+      await assert.rejects(readMoneriumProfile(user, CORP.id), (e: any) => e.code === "MONERIUM_NOT_CONNECTED", row.id);
+      assert.equal(publicUser(user).monerium?.method, undefined, `${row.id}: the app must not show a method it cannot use`);
+    }
+    assert.equal(fake.appGrants, 0, "no app token was requested for a user who claims a connection");
+    // A user with no connection at all still gets the app client.
+    store.addUser({ id: "u_none", name: "u_none", country: "DE", kycStatus: "approved", createdAt: now, address: "0x" + "d".repeat(40) } as any);
+    await moneriumClientFor(store.findUser("u_none")!).bearerToken();
+    assert.equal(fake.appGrants, 1);
+    // And a real OAuth row is unaffected.
+    assert.equal(connectionMethod(store.findUser("u_corp")!), "oauth");
+  } finally {
+    MONERIUM.clientId = "";
+    MONERIUM.clientSecret = "";
+  }
 });
 
 server.close();
