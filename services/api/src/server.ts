@@ -55,6 +55,8 @@ import {
   publicClient,
   } from "./chain.js";
 import { CANDIDE, SafeGasError, SafeThresholdError } from "./wallet/candide.js";
+import { routeAsyncRejections } from "./http/async-errors.js";
+import { recordServerError } from "./http/error-log.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -190,8 +192,12 @@ app.use("/api", createMoneriumWebhookRouter());
 // Last: nothing above claimed the path.
 app.use(notFound());
 
-app.use(((err, _req, res, next) => {
-  console.error(err);
+app.use(((err, req, res, next) => {
+  // Every unexpected error gets a reference: logged with its stack, kept for
+  // the operator dashboard, and handed to the caller to quote.
+  const known = err instanceof SafeGasError || err instanceof SafeThresholdError;
+  const logged = known ? undefined : recordServerError(err, req);
+  if (known) console.error(err);
   // A handler that already began answering cannot be given a 500 body: setting
   // headers twice throws inside the error handler itself, which express can
   // only answer by destroying the socket — the caller sees a truncated
@@ -207,8 +213,19 @@ app.use(((err, _req, res, next) => {
     return res.status(err.status).json({ error: err.message, code: err.code });
   }
   const detail = String(err?.shortMessage ?? err?.message ?? err);
-  res.status(500).json({ error: SECURITY.exposeInternalErrors ? detail : "internal server error" });
+  res.setHeader("x-zold-error-ref", logged!.ref);
+  res.status(500).json({
+    error: SECURITY.exposeInternalErrors
+      ? detail
+      : `Something went wrong on our side, and nothing was changed by this request. If it happens again, quote ${logged!.ref}.`,
+    code: "INTERNAL",
+    ref: logged!.ref,
+  });
 }) as express.ErrorRequestHandler);
+
+// After the last route: a rejected handler promise is a 500, not a process
+// exit (http/async-errors.ts).
+routeAsyncRejections(app);
 
 initStore();
 // Fail fast on a chain mismatch: signatures built for the wrong chain id are

@@ -13,7 +13,7 @@
  * "Create and share". There is no repeat-monthly invoice in the API, so the
  * editor offers none. Zold sends no emails: the link is shared by you.
  */
-import { $, Z, api, esc, org } from "./core.js";
+import { $, Z, api, countrySelect, esc, org } from "./core.js";
 import { META, RENDER, jurisdictionBanner } from "./views.js";
 
 export let invoiceDraft = null;
@@ -74,7 +74,7 @@ RENDER["invoice-new"] = async () => {
   ];
   const r = invoiceDraft.recipient || {};
   const missing = [
-    !(d.issuer.addressLine && d.issuer.postalCode && d.issuer.city) ? "your address" : "",
+    !(d.issuer.addressLine && d.issuer.postalCode && d.issuer.city && d.issuer.country) ? "your address" : "",
     !(d.issuer.taxNumber || d.issuer.vatId) ? "a tax number" : "",
   ].filter(Boolean);
   const f = (id, label, value, extra = "") => `<div><label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" value="${esc(value ?? "")}" ${extra} /></div>`;
@@ -122,7 +122,7 @@ RENDER["invoice-new"] = async () => {
       </fieldset>
       <details class="zb-more" style="margin-top:16px"><summary style="cursor:pointer;font-weight:600">More: customer’s VAT ID, currency, order number</summary>
         <div class="zb-row zb-row--3">
-          ${f("inv-r-country", "Country", r.country || d.jurisdiction.country, 'maxlength="2"')}
+          <div><label for="inv-r-country">Country</label>${countrySelect("inv-r-country", r.country || org.address?.country)}</div>
           ${f("inv-r-vat", "Customer’s VAT ID", r.vatId, 'placeholder="For reverse charge…"')}
           ${f("inv-po", "Order number", invoiceDraft.purchaseOrder)}
         </div>
