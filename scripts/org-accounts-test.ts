@@ -128,6 +128,12 @@ await check("Monerium's newer answer wins over the snapshot from connect", async
 });
 
 console.log("payment links");
+await check("a company whose euro account is not open is told that, not that the account is someone else's", async () => {
+  const r = await call("POST", "/api/orgs/org_new/payment-requests", { amountEur: 50, methods: ["bank"] });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.code, "ACCOUNT_NOT_OPEN");
+  assert.doesNotMatch(r.body.error, /not yours/);
+});
 await check("only the member whose Safe backs the account can make a company's link", async () => {
   const r = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 50, methods: ["bank"] }, "u_admin");
   assert.equal(r.status, 403);
