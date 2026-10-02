@@ -243,8 +243,8 @@ export function createUserRouter(deps: UserDeps) {
         version: combined ? US_QUESTION_COMBINED_VERSION : US_QUESTIONS_VERSION,
       });
       // One consent per kind and partner, at most MAX_SIGNUP_CONSENTS, in one
-      // write: the list comes from an unauthenticated body, and each entry
-      // used to be its own full rewrite of the database file.
+      // write: the list comes from an unauthenticated body, and every store
+      // write rewrites the whole database file.
       const given = new Map<string, any>();
       for (const c of Array.isArray(consents) ? consents.slice(0, MAX_SIGNUP_CONSENTS) : []) {
         if (c?.kind !== "zold_terms" && c?.kind !== "partner_share") continue;
