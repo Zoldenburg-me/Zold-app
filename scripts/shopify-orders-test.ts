@@ -120,10 +120,9 @@ const call = async (method: string, p: string, opts: { body?: unknown; raw?: str
   try { body = JSON.parse(text); } catch { body = { text }; }
   return { status: res.status, body, location: res.headers.get("location") ?? "", headers: res.headers };
 };
-// The header names a real webhook carries (X-Shopify-…), not the payments-app ones.
 const webhook = (topic: string, payload: unknown, shop = SHOP, secret = "shpss_test_secret") => {
   const raw = JSON.stringify(payload);
-  return call("POST", "/api/shopify/webhooks/orders", { raw, headers: { "x-shopify-hmac-sha256": signBody(raw, secret), "x-shopify-shop-domain": shop, "x-shopify-topic": topic, "x-shopify-webhook-id": randomUUID() } });
+  return call("POST", "/api/shopify/webhooks/orders", { raw, headers: { "shopify-hmac-sha256": signBody(raw, secret), "shopify-shop-domain": shop, "x-shopify-topic": topic, "x-shopify-webhook-id": randomUUID() } });
 };
 const until = async (fn: () => boolean, ms = 3000) => { const t0 = Date.now(); while (!fn() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 25)); return fn(); };
 
