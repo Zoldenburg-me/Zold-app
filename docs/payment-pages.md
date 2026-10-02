@@ -11,7 +11,7 @@ can pay: `/pay/alice`.
 | Address shown | one Candide Forwarding Address per payment page, routing supported tokens into the merchant Safe |
 | Account type | merchant-owned Candide Safe as the account of record |
 | Networks | the app chain, plus every source chain in `CANDIDE_FORWARDING_SOURCE_CHAIN_IDS` whose Candide route delivers the app's USDC |
-| Tokens listed | exactly what `forwarding_getRoutes` says arrives as USDC on the app chain, each with its lowest bridge minimum (`forwarding_getMinimumAmount`); stored as `paymentPage.supportedTokens` at activation |
+| Tokens listed | exactly what `forwarding_getRoutes` says arrives as USDC on the app chain, each with its lowest bridge minimum (`forwarding_getMinimumAmount`); stored as `paymentPage.supportedTokens` (with `routesReadAt`) at activation and each renewal |
 | Payer inputs | none — QR plus copy-address |
 | Privacy | **none**, and the page says so |
 
@@ -33,9 +33,18 @@ address is the Safe itself (`local-safe`) and takes USDC on the app chain only.
 An activation lapses after Candide's TTL. `livePaymentPage` renews it a day
 before (same salt, same address, fresh token list) whenever the page or a
 payment request is read; once it has lapsed and renewal fails, the page answers
-503 `PAGE_UNAVAILABLE` and a request leaves out the crypto method, so no
-address is shown that would not forward. Deposits are detected in the Safe,
-after forwarding, by `crypto-deposits.ts`.
+503 `PAGE_UNAVAILABLE`, a request leaves out the crypto method and its quote
+route answers 503, so no address is shown that would not forward. Every public
+route that renders a request (the request page, its quote, the Shopify order
+lookup) builds its context in `payerContext`, and `publicPaymentRequest` shows
+the address only when told `cryptoLive: true`. A failed renewal is not retried
+for `RENEW_RETRY_MS` (5 minutes). Deposits are detected in the Safe, after
+forwarding, by `crypto-deposits.ts`.
+
+A token list is served only with `paymentPage.routesReadAt`, the time it was
+read from Candide's routes. Pages claimed before that stored a hard-coded EURe +
+USDC; Candide forwards only what its routes list, so such a page is renewed on
+first read and stays closed until the renewal succeeds.
 
 The in-app receive screen always shows the Safe address with a QR of that same
 address; the forwarder address appears only on the payment page.

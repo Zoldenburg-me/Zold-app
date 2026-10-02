@@ -63,22 +63,39 @@ function payChain() {
 
 /** Renew a Candide activation this long before it lapses. */
 const RENEW_BEFORE_MS = 24 * 3600 * 1000;
+/** After a failed renewal, wait this long before asking Candide again. Every
+ *  public GET lands here, so without it a Candide outage is retried per hit. */
+export const RENEW_RETRY_MS = 5 * 60 * 1000;
 const renewing = new Map<string, Promise<boolean>>();
+/** Per user: until when not to retry, and whether the last renewal moved the
+ *  address (then the page stays closed, whatever the old activation says). */
+const renewFailed = new Map<string, { until: number; addressMoved: boolean }>();
 
 /**
  * May this page's deposit address be shown to a payer right now? A Candide
  * activation lapses after a TTL, and an address shown past it takes deposits
  * that are never forwarded. So it is renewed (idempotent at Candide, same
- * address) when close to lapsing, which also refreshes the token list. A
- * failed renewal still answers yes while the old activation runs; once it has
- * lapsed the answer is no, and the caller shows no address.
+ * address) when close to lapsing, which also refreshes the token list.
+ *
+ * A page whose token list was not read from Candide's routes (no
+ * `routesReadAt`: the hard-coded EURe + USDC of older pages) is renewed on
+ * first read, because Candide forwards only what its routes list and an EURe
+ * deposit to the forwarder is stranded. Until that renewal succeeds the page
+ * is closed.
+ *
+ * A failed renewal still answers yes while the old activation runs and its
+ * list came from the routes; once it has lapsed the answer is no, and the
+ * caller shows no address. Failures back off for RENEW_RETRY_MS.
  */
 export async function livePaymentPage(user: User): Promise<boolean> {
   const page = user.paymentPage;
   const f = page?.forwarder;
-  if (!page || !f || f.provider !== "candide" || !f.expiresAt) return true;
-  const expires = Date.parse(f.expiresAt);
-  if (expires - Date.now() > RENEW_BEFORE_MS) return true;
+  if (!page || !f || f.provider !== "candide") return true;
+  const listed = !!page.routesReadAt;
+  const expires = f.expiresAt ? Date.parse(f.expiresAt) : Number.POSITIVE_INFINITY;
+  if (listed && expires - Date.now() > RENEW_BEFORE_MS) return true;
+  const failed = renewFailed.get(user.id);
+  if (failed && failed.until > Date.now()) return !failed.addressMoved && listed && expires > Date.now();
   let run = renewing.get(user.id);
   if (!run) {
     run = (async () => {
@@ -86,17 +103,21 @@ export async function livePaymentPage(user: User): Promise<boolean> {
         const next = await activatePaymentForwarder({ userId: user.id, handle: page.handle, recipient: f.recipient, token: addrs().usdc });
         if (next.address.toLowerCase() !== page.depositAddress.toLowerCase()) {
           console.error(`payment page: renewal for ${user.id} gave ${next.address}, page shows ${page.depositAddress}`);
+          renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, addressMoved: true });
           return false;
         }
+        renewFailed.delete(user.id);
         const fresh = store.findUser(user.id);
         if (fresh?.paymentPage?.handle !== page.handle) return false;
+        const now = new Date().toISOString();
         store.updateUser(user.id, {
-          paymentPage: { ...fresh.paymentPage, forwarder: next.forwarder, supportedTokens: next.accepts, updatedAt: new Date().toISOString() },
+          paymentPage: { ...fresh.paymentPage, forwarder: next.forwarder, supportedTokens: next.accepts, routesReadAt: now, updatedAt: now },
         });
         return true;
       } catch (err: any) {
         console.error(`payment page: renewing forwarder for ${user.id} failed: ${err?.message ?? err}`);
-        return expires > Date.now();
+        renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, addressMoved: false });
+        return listed && expires > Date.now();
       } finally {
         renewing.delete(user.id);
       }
@@ -183,6 +204,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
           recipientAddress: user.address,
           forwarder: forwarder.forwarder,
           supportedTokens: forwarder.accepts,
+          routesReadAt: now,
           settlementAsset,
           autoConvert: existing?.autoConvert ?? false,
           createdAt: existing?.createdAt ?? now,

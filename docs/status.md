@@ -66,7 +66,7 @@ Say this plainly rather than letting the surface imply otherwise:
 - **No Candide forwarder has forwarded a deposit.** Candide routes nothing on
   testnets, so zoldhq.com's payment pages show the Safe itself; the
   multi-chain token list, minimums and TTL renewal run only against a stub
-  (`forwarder:test`).
+  (`forwarder:test`, `paylinks:test`).
 - **Importing an existing Safe** (`routes/safe-import.ts`,
   `npm run safe:import-tx`) has run only on Base Sepolia, with a throwaway
   EOA and a software P-256 key standing in for the passkey (2026-09-30, two
