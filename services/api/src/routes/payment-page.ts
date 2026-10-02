@@ -97,12 +97,23 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
       }
       const now = new Date().toISOString();
       const existing = user.paymentPage;
-      const forwarder = await activatePaymentForwarder({
-        userId: user.id,
-        handle,
-        recipient: user.address,
-        token: addrs().usdc,
-      });
+      let forwarder: Awaited<ReturnType<typeof activatePaymentForwarder>>;
+      try {
+        forwarder = await activatePaymentForwarder({
+          userId: user.id,
+          handle,
+          recipient: user.address,
+          token: addrs().usdc,
+        });
+      } catch (err: any) {
+        // The forwarding address is set up at a partner and on chain: its
+        // failure is "try again", not ours to report as a 500.
+        console.error(`payment page: forwarder for ${user.id} failed: ${err?.message ?? err}`);
+        return res.status(503).json({
+          error: "The address that receives USDC for your page could not be set up just now. Nothing was saved; try again in a minute.",
+          code: "FORWARDER_UNAVAILABLE",
+        });
+      }
       const tokens = [
         { chainId: CHAIN_ID, symbol: "EURE" as const, address: addrs().eure, decimals: 18 },
         { chainId: CHAIN_ID, symbol: "USDC" as const, address: addrs().usdc, decimals: 6 },

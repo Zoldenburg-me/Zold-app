@@ -43,6 +43,7 @@ import {
   contactsById, reconcileDrift, releaseInvoicesOf, withExecutionState,
 } from "./state.js";
 import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
+import { knownError } from "../../http/known-errors.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -104,7 +105,7 @@ export function createDraftRoutes(
       const contacts = contactsById(ctx.org.id);
       const lines = (req.body?.lines ?? []).map((l: Record<string, unknown>) => ({
         id: `dl_${randomUUID()}`,
-        ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
+        ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
       if (!lines.length) return res.status(400).json({ error: "A draft needs at least one line." });
 
@@ -147,8 +148,8 @@ export function createDraftRoutes(
         return res.status(400).json({ error: `A draft is limited to ${CEILINGS.linesPerDraft} lines.` });
       }
       const lines = (replaced ? req.body.lines : draft.lines).map((l: Record<string, unknown>) => ({
-        id: typeof l.id === "string" ? l.id : `dl_${randomUUID()}`,
-        ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
+        id: typeof l?.id === "string" ? l.id : `dl_${randomUUID()}`,
+        ...validateLine(l, typeof l?.contactId === "string" ? contacts.get(l.contactId) : undefined),
       }));
       const updated = store.updateDraft(draft.id, {
         lines,
@@ -485,7 +486,13 @@ export function createDraftRoutes(
             : `${ctx.org.name} ${claimed.id.slice(0, 8)}`.slice(0, 140),
         });
       } catch (err) {
-        built = { ok: false as const, status: 500, body: { error: (err as Error).message } };
+        // A quote or build that threw is a partner or rate failure (a refusal
+        // comes back as built.ok === false): 503 with what failed, and the
+        // known kinds (rates down, Monerium refused) in their own words.
+        const known = knownError(err);
+        built = known
+          ? { ok: false as const, status: known.status, body: known.body }
+          : { ok: false as const, status: 503, body: { error: `Line ${plan.name}: the payment could not be prepared (${(err as Error).message}).` } };
       }
 
       if (!built.ok) {

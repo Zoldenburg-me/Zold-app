@@ -750,7 +750,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       if (typeof req.body?.notes === "string") patch.notes = req.body.notes;
       if (Array.isArray(req.body?.wallets)) {
         patch.wallets = req.body.wallets.map((w: Record<string, unknown>) => ({
-          id: typeof w.id === "string" ? w.id : `cw_${randomUUID()}`,
+          id: typeof w?.id === "string" ? w.id : `cw_${randomUUID()}`,
           ...validateWallet(w),
         }));
       }
@@ -759,7 +759,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         // account keeps pointing at it — and so an edit shows up as DRIFT on
         // that draft rather than silently re-targeting the payment.
         patch.bankAccounts = req.body.bankAccounts.map((b: Record<string, unknown>) => ({
-          id: typeof b.id === "string" ? b.id : `cb_${randomUUID()}`,
+          id: typeof b?.id === "string" ? b.id : `cb_${randomUUID()}`,
           ...validateBankAccount(b),
         }));
       }
