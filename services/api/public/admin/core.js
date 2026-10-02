@@ -145,6 +145,10 @@ function dist(obj, toneOf = () => 'plain') {
 const tokenInput = document.getElementById('operatorToken');
 const authPill = document.getElementById('authPill');
 const authText = document.getElementById('authText');
+/** The last token the server refused. The background refresh does not resend
+ *  it; a password manager that fills the field would otherwise get a 401
+ *  every 15 seconds. */
+let rejectedToken = null;
 
 function setAuth(state) {
   authPill.className = `auth ${state === 'ok' ? 'ok' : state === 'bad' ? 'bad' : ''}`;
@@ -169,9 +173,13 @@ async function api(path, options = {}) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(options.headers || {}) },
   });
   if (res.status === 401 || res.status === 403) {
+    rejectedToken = token;
     setAuth('bad');
     clearData();
-  } else setAuth('ok');
+  } else {
+    rejectedToken = null;
+    setAuth('ok');
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`);
   return data;

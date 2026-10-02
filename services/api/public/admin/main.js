@@ -73,4 +73,4 @@ document.getElementById('refreshBtn').addEventListener('click', () => refresh(tr
 window.addEventListener('hashchange', onRoute);
 
 onRoute();
-setInterval(() => refresh(false), 15_000);
+setInterval(() => { if (tokenInput.value.trim() !== rejectedToken) refresh(false); }, 15_000);
