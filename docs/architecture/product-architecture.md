@@ -239,9 +239,7 @@ A send needs up to three prompts on the same device:
 
 The device key is a secp256k1 key generated in the browser and bound once
 with a passkey step-up. Where the authenticator supports WebAuthn PRF, the key
-is wrapped with it. **On the hardware tested, PRF was not supported and the
-key is stored unwrapped in localStorage.** That is a known weakness and is
-surfaced in the profile.
+is wrapped with it, and the profile shows how this browser holds it.
 
 ### 4.3 Segments and partner capabilities — LIVE
 
@@ -350,6 +348,11 @@ wrong handle returns 404.
 | **Crypto (USDC)** | Send the exact quoted USDC amount to the page address. | By amount. Each open quote on a page gets a distinct micro-unit, so amounts never collide. It tolerates a 50 bps underpay, a partial payment from 20%, and an overpay up to 10%. |
 | **Bank (SEPA)** | Pay the IBAN with the code as reference. | The Monerium poller finds the code in the memo. |
 | **Zold account** | The app opens a pre-filled SEPA send. | As bank. |
+
+A link is booked under an org: from the app, the company a company signup's
+Safe backs, else the personal org, else none; from
+`/orgs/:orgId/payment-requests`, that org. The payer sees the company's
+registered name as the holder only when the payee's Safe backs that company.
 
 There is no EPC/GiroCode QR. The link becomes PAID when funds reach the
 payee's address. Conversion to euros is separate (§6.3).
@@ -569,8 +572,8 @@ LINK_CREATED → SUBMITTED → PAYING → PAID → RECONCILED     (+ soft DELETE
   issued.
 - **Getting paid on an outgoing invoice** only *records settlements*:
   - a SEPA credit whose memo names the invoice number,
-  - a pay link bound to the invoice (API only, and it currently works only for
-    personal-org invoices),
+  - a pay link bound to the invoice ("Payment link" on the invoice, console and
+    app), created only by the member whose Safe backs the org's account,
   - or a manual link of a crypto deposit.
 
   Once the recorded settlements cover what the invoice is payable as (its

@@ -346,11 +346,14 @@ export function accountIsSpendable(account: Account): {
     };
   }
   if (account.status !== "active") {
+    // An EUR account without an IBAN gives the current reason, not the
+    // wording stored when it was opened.
+    const why = account.currency === "EUR" && !account.backingUserId
+      ? "No IBAN is connected to this account yet, so nothing can be sent from it"
+      : account.gate?.reason.replace(/\.$/, "");
     return {
       ok: false,
-      reason: `This ${def.name} account is ${account.status}${
-        account.gate ? ` — ${account.gate.reason.replace(/\.$/, "")}` : ""
-      }.`,
+      reason: `This ${def.name} account is ${account.status}${why ? ` — ${why}` : ""}.`,
     };
   }
   return { ok: true };

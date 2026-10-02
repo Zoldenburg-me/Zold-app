@@ -132,7 +132,7 @@ await check("no suggestion without knowing business or private, under GENERIC ru
 });
 
 console.log("the check");
-const issuer = { name: "Acme GmbH", addressLine: "Hauptstraße 1", postalCode: "93047", city: "Regensburg", country: "DE", vatId: "DE123456789" };
+const issuer = { name: "Acme GmbH", addressLine: "Hauptstraße 1", postalCode: "34117", city: "Kassel", country: "DE", vatId: "DE123456789" };
 const draft = (over: any) => ({
   issuer, number: "RE-1", issueDate: "2026-10-02", supplyDate: "2026-10-02",
   recipient: { name: "Kunde AG", addressLine: "Bahnhofstr. 1", postalCode: "8001", city: "Zürich", country: "CH", vatId: "CH12345678" },

@@ -66,6 +66,12 @@ export async function readMoneriumProfile(user: User, profileId: string): Promis
   if (!one || one.id !== profileId || typeof one.kind !== "string" || typeof one.state !== "string") {
     throw unreachable();
   }
+  const fresh = store.findUser(user.id);
+  if (fresh?.monerium) {
+    store.updateUser(user.id, {
+      monerium: { ...fresh.monerium, profileSeen: { id: profileId, kind: one.kind, state: one.state, at: new Date().toISOString() } },
+    });
+  }
   let name: string | undefined = typeof one.name === "string" ? one.name : undefined;
   if (!name) {
     // The name only feeds a warning, so a failed list read leaves it unknown
@@ -193,4 +199,22 @@ export function adoptionHint(
     return { allowed: false, code: refused.code, reason: refused.error };
   }
   return { allowed: true };
+}
+
+/**
+ * What Monerium last said about the caller's profile when it was not yet
+ * approved, for the Accounts screen: the latest live read if there is one,
+ * else the snapshot from connect. Stored facts only; `at` says how old they
+ * are, and the live check on "connect" is what decides.
+ */
+export function profileWait(user: User | undefined): { state: string; at: string } | undefined {
+  if (!user || harnessProfile(user)) return undefined;
+  const id = backingProfileIdOf(user);
+  if (!id) return undefined;
+  const seen = user.monerium?.profileSeen;
+  if (seen?.id === id) return seen.state === "approved" ? undefined : { state: seen.state, at: seen.at };
+  const known = (user.monerium?.profiles ?? []).find((p: any) => p?.id === id);
+  const at = user.monerium?.connectedAt;
+  if (known && typeof known.state === "string" && known.state !== "approved" && at) return { state: known.state, at };
+  return undefined;
 }

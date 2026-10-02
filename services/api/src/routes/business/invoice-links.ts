@@ -22,7 +22,7 @@ import {
 } from "../../domain/invoices.js";
 import { passwordMatches } from "../../domain/passwords.js";
 import { forgetFailure, recordFailure, tooManyFailures } from "../../http/policy.js";
-import { parsePayTo } from "./shared.js";
+import { invoiceBankOf, parsePayTo } from "./shared.js";
 import type { Invoice } from "../../domain/types.js";
 
 /** Wrong passwords one link absorbs, from any number of addresses, per window. */
@@ -87,7 +87,7 @@ export function createInvoiceLinkRouter(): express.Router {
     ]
       .filter(Boolean)
       .join(" · ");
-    return { bank: org?.invoicing?.bank, footerNote: footerNote || undefined };
+    return { bank: org ? invoiceBankOf(org) : undefined, footerNote: footerNote || undefined };
   };
 
   r.get("/:token", async (req, res) => {

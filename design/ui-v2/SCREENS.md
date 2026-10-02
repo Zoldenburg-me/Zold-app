@@ -189,7 +189,7 @@ Implement in: `app/profile.js, app/signers.js, business/*` (confirm against docs
 - **Members** (412px). An org can never lose its last owner. 
 - **Invite-Dialog** (412px). No email transport exists: never say 'we emailed them'. 
 - **Settings** (412px). status tags: 1 to check.
-- **Security** (412px). The storage warning is real (PRF missing); show only when detected. status tags: ACTIVE, OFF, This device.
+- **Security** (412px). The storage warning shows only when device.js reports it. status tags: ACTIVE, OFF, This device.
 - **Plan** (412px). No upgrade button until billing exists. status tags: ACTIVE.
 - **Pending** (412px). status tags: SOON.
 - **Integrations** (412px). GetMyInvoices is tested only against a stand-in: keep Beta. sevDesk and DATEV are not built. status tags: Beta, Soon.
