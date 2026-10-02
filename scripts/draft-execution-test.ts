@@ -185,7 +185,7 @@ try {
   });
   check("a business account without a funding identity says so", () => {
     assert.equal(unfunded.account.backingUserId, undefined);
-    assert.match(unfunded.note, /useMyAccount/);
+    assert.match(unfunded.note, /No IBAN is connected/);
   });
 
   const draftNoFunding = await ok("POST", `/api/orgs/${org.id}/drafts`, {
@@ -208,7 +208,7 @@ try {
   );
   check("execution refuses an account with no funding identity, by name", () => {
     assert.equal(refusedNoFunding.status, 409);
-    assert.match(refusedNoFunding.data.error, /no funding identity/i);
+    assert.match(refusedNoFunding.data.error, /No IBAN is connected/);
   });
 
   // Fund the account the org already has, from the owner's own balance.

@@ -116,7 +116,9 @@ export function renderNav() {
   $("#org-btn").onclick = () => switchSheet($("#org-btn"));
 }
 
-/** Pick an organisation: here, in place. The personal app is one link away. */
+/** Pick an organisation: here, in place. The personal app is one link away,
+ *  except for a company signup: its login's Safe is the company's, so the app
+ *  would show the company's money under "personal". */
 function switchSheet(trigger) {
   document.getElementById("org-switch")?.remove();
   const row = (o) => {
@@ -127,7 +129,7 @@ function switchSheet(trigger) {
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "org-switch", title: "Switch organisation",
     body: `<div class="z-sheet__body"><ul class="z-list z-card">${orgs.map(row).join("")}</ul>
-      <ul class="z-list z-card"><li>${Z.row({ lead: Z.iconTile({ icon: "smartphone" }), title: "Your personal account", sub: "Home, send and get paid, in the app", href: "/app", right: Z.icon("open_in_new", "z-row__chev") })}</li></ul></div>`,
+      ${me?.accountType === "company" ? "" : `<ul class="z-list z-card"><li>${Z.row({ lead: Z.iconTile({ icon: "smartphone" }), title: "Your personal account", sub: "Home, send and get paid, in the app", href: "/app", right: Z.icon("open_in_new", "z-row__chev") })}</li></ul>`}</div>`,
   }));
   const scrim = $("#org-switch");
   scrim.querySelectorAll("[data-org]").forEach((b) => {

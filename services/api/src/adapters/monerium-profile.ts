@@ -11,7 +11,9 @@ import { auditEntry } from "../audit.js";
 import { store, type User } from "../store.js";
 import type { Account, Organisation } from "../domain/types.js";
 import {
+  expectedProfileKind,
   judgeProfile,
+  kindMismatch,
   nameWarning,
   type MoneriumProfileFacts,
   type ProfileRefusal,
@@ -180,10 +182,15 @@ export function adoptionHint(
       : "Connect your Monerium account first." };
   }
   if (harnessProfile(user)) return { allowed: true };
+  // Only the kind is judged from the stored copy: a profile does not change
+  // kind. Its state does, and the copy is from the last connect or activation,
+  // often from before Monerium approved it. A stored "pending" hid the one
+  // button whose live check would have passed, so the state is left to that
+  // check (checkBackingProfile), which refuses a profile still pending.
   const known = (user.monerium?.profiles ?? []).find((p: any) => p?.id === profileId);
-  if (known && typeof known.kind === "string" && typeof known.state === "string") {
-    const refused = judgeProfile(org, known);
-    if (refused) return { allowed: false, code: refused.code, reason: refused.error };
+  if (known && typeof known.kind === "string" && known.kind !== expectedProfileKind(org.type)) {
+    const refused = kindMismatch(org);
+    return { allowed: false, code: refused.code, reason: refused.error };
   }
   return { allowed: true };
 }
