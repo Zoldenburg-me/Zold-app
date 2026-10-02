@@ -29,6 +29,7 @@ import {
 import { RECOVERY } from "../config.js";
 import { CANDIDE, recoveryGracePeriodSeconds } from "../wallet/candide.js";
 import { PARTNER_TIMEOUT_MS, partnerTimeout } from "../http.js";
+import { emailLooksValid } from "../domain/email.js";
 
 export type RecoveryChannel = "email" | "sms";
 
@@ -101,7 +102,6 @@ function translate(err: unknown, fallback: string): never {
 // ---------------------------------------------------------------------------
 // channel targets
 
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 
 /** Normalise and validate a channel target BEFORE it is sent to Candide. A
@@ -111,7 +111,7 @@ export function normaliseChannelTarget(channel: string, target: unknown): { chan
   const value = String(target ?? "").trim();
   if (channel === "email") {
     const email = value.toLowerCase();
-    if (!EMAIL_RE.test(email) || email.length > 254) {
+    if (!emailLooksValid(email)) {
       throw new CandideGuardianError("a valid email address is required", 400, "BAD_TARGET");
     }
     return { channel, target: email };

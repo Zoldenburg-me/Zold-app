@@ -28,6 +28,7 @@ import {
   badRequest, } from "./shared.js";
 import {
   syncInvoicePayment, } from "./state.js";
+import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -54,24 +55,29 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
   });
 
   /** Create the one-time "Invoice-Me" link. The token is shown once. */
-  r.post("/:orgId/invoices", (req, res) => {
+  r.post("/:orgId/invoices", async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.manage")) return;
 
+    const waiting = store.invoicesOf(ctx.org.id).filter((i) => i.state === "LINK_CREATED").length;
+    if (waiting >= CEILINGS.openInvoiceLinksPerOrg) {
+      return res.status(409).json(ceilingRefusal("invoice links not yet filled in", CEILINGS.openInvoiceLinksPerOrg));
+    }
     const password = typeof req.body?.password === "string" ? req.body.password : "";
     if (password) {
       const problem = passwordProblem(password, [ctx.org.name]);
       if (problem) return res.status(400).json({ error: `Link password refused: ${problem}` });
     }
+    const passwordHash = password ? await hashPassword(password) : undefined;
     const { token, hash } = newLinkToken();
     const now = new Date().toISOString();
     const invoice = store.addInvoice({
       id: `inv_${randomUUID()}`,
       orgId: ctx.org.id,
       linkTokenHash: hash,
-      linkPasswordHash: password ? hashPassword(password) : undefined,
+      linkPasswordHash: passwordHash,
       state: "LINK_CREATED",
       lines: [],
       currency: String(req.body?.currency ?? ctx.org.reporting.currency).toUpperCase(),

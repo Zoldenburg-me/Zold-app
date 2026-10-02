@@ -273,6 +273,11 @@ export const SECURITY = {
   /** Simple per-IP rate limits (requests per minute). */
   rateLimitPerMin: Number(process.env.RATE_LIMIT_PER_MIN ?? 300),
   authRateLimitPerMin: Number(process.env.AUTH_RATE_LIMIT_PER_MIN ?? 20),
+  /** Routes that call a partner or the chain per request (http/policy.ts). */
+  partnerRateLimitPerMin: Number(process.env.PARTNER_RATE_LIMIT_PER_MIN ?? 30),
+  documentRateLimitPerMin: Number(process.env.DOCUMENT_RATE_LIMIT_PER_MIN ?? 10),
+  /** Shopify's HMAC-signed calls, from Shopify's shared addresses. */
+  shopifyRateLimitPerMin: Number(process.env.SHOPIFY_RATE_LIMIT_PER_MIN ?? 600),
   /** Maximum JSON request body accepted by the API. */
   jsonBodyLimit: process.env.JSON_BODY_LIMIT ?? "64kb",
   /** Opaque bearer session lifetime. Default: 24 hours. */

@@ -42,6 +42,7 @@ import {
   type PaymentRequest,
   type PaymentRequestSource,
 } from "../payment-requests.js";
+import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 
 type SessionCheck = (req: express.Request, res: express.Response, userId: string) => unknown;
 
@@ -170,6 +171,12 @@ export async function createPaymentRequest(
 ): Promise<PaymentRequest> {
   const handle = user.paymentPage?.handle;
   if (!handle) throw new PaymentRequestError("claim a payment page before creating a payment link", 409);
+  // Not for Shopify: its checkouts open requests at the shop's volume, signed
+  // by Shopify, and each expires with its checkout.
+  const open = source.kind === "shopify" ? 0 : store.paymentRequestsForUser(user.id).filter((r) => effectiveState(r) === "OPEN").length;
+  if (open >= CEILINGS.openPaymentRequestsPerUser) {
+    throw new PaymentRequestError(ceilingRefusal("open payment links", CEILINGS.openPaymentRequestsPerUser).error, 409);
+  }
   /**
    * A link for an invoice collects THAT invoice's amount.
    *

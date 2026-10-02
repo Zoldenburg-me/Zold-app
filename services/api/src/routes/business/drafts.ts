@@ -42,6 +42,7 @@ import {
 import {
   contactsById, reconcileDrift, releaseInvoicesOf, withExecutionState,
 } from "./state.js";
+import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -75,6 +76,13 @@ export function createDraftRoutes(
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "drafts.create")) return;
+    const open = store.draftsOf(ctx.org.id).filter((d) => !["EXECUTED", "FAILED", "REJECTED"].includes(d.state)).length;
+    if (open >= CEILINGS.openDraftsPerOrg) {
+      return res.status(409).json(ceilingRefusal("payment runs not yet executed", CEILINGS.openDraftsPerOrg));
+    }
+    if (!Array.isArray(req.body?.lines) || req.body.lines.length > CEILINGS.linesPerDraft) {
+      return res.status(400).json({ error: `A draft needs a list of lines, at most ${CEILINGS.linesPerDraft}.` });
+    }
 
     // The funding source is resolved INSIDE this org and stored as an id only:
     // an account or wallet id from another org must not be accepted, and the
@@ -135,6 +143,9 @@ export function createDraftRoutes(
     try {
       const contacts = contactsById(ctx.org.id);
       const replaced = Array.isArray(req.body?.lines);
+      if (replaced && req.body.lines.length > CEILINGS.linesPerDraft) {
+        return res.status(400).json({ error: `A draft is limited to ${CEILINGS.linesPerDraft} lines.` });
+      }
       const lines = (replaced ? req.body.lines : draft.lines).map((l: Record<string, unknown>) => ({
         id: typeof l.id === "string" ? l.id : `dl_${randomUUID()}`,
         ...validateLine(l, typeof l.contactId === "string" ? contacts.get(l.contactId) : undefined),
