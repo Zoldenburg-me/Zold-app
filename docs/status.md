@@ -6,6 +6,8 @@ Say this plainly rather than letting the surface imply otherwise:
 
 - **No mainnet deploy.** No 8453 entry in `deployments.json`; needs funded
   operator keys the user holds.
+- **The testnet faucet has not sent on Base Sepolia.** `faucet:test` proves it
+  on hardhat; the zoldhq.com deployment has not run it yet.
 - **No real money has moved through a swap.** No dex/LI.FI/RFQ/CoW swap has
   executed; no Base Sepolia send has exercised execution → debit.
 - **The cash rail has never opened.** Bridge live mode is entirely unexercised,

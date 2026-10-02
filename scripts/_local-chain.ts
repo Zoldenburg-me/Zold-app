@@ -53,6 +53,14 @@ for (const [role, key] of Object.entries(DEV_KEYS)) {
   process.env[`${role}_KEY`] = key;
 }
 
+/**
+ * The faucet wallet is hardhat account #3, and the faucet is OFF unless a
+ * suite turns the grant on — a developer's testnet FAUCET_KEY in .env must
+ * never sign on the local chain. Set, not deleted, for the reason above.
+ */
+process.env.FAUCET_KEY = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6";
+process.env.TESTNET_FAUCET_EUR = "0";
+
 // A real Monerium chain name would send provisioning at the wrong network.
 process.env.MONERIUM_CHAIN = "sepolia";
 
