@@ -58,6 +58,7 @@ const scripts = [
   "security:test",
   "plan:test",
   "invoicing:test",
+  "async-errors:test",
   "custody:test",
   "segments:test",
   "gnosispay:test",

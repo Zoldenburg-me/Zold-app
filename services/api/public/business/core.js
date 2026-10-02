@@ -12,6 +12,12 @@ export const $ = (s) => document.querySelector(s);
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+/** A country picker over every country (window.Z.countries). `name` stays
+ *  "country" so the browser's address autofill fills it. */
+export const countrySelect = (id, current) =>
+  `<select id="${id}" name="country" autocomplete="country">${Z.countries(current).map((o) =>
+    `<option value="${esc(o.value)}"${o.value === (current || "") ? " selected" : ""}${o.disabled ? " disabled" : ""}>${esc(o.label)}</option>`).join("")}</select>`;
+
 export let token = localStorage.getItem("zold-session") || localStorage.getItem("zoll-session");
 export let invoiceInputListener = null;
 export let orgs = [];
@@ -51,7 +57,13 @@ export async function api(path, opts = {}) {
   let data = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
   if (!res.ok) {
-    const err = new Error(data.error || `${res.status} ${res.statusText}`);
+    // A 5xx without JSON came from in front of the API (Cloudflare, the
+    // tunnel): the API never answers an error without a body.
+    const ray = res.headers.get("cf-ray");
+    const gateway = res.status >= 500 && !data.error
+      ? `Zold's server did not answer (HTTP ${res.status}${ray ? `, ray ${ray}` : ""}). The request may or may not have gone through: check before you try it again.`
+      : "";
+    const err = new Error(data.error || gateway || `${res.status} ${res.statusText}`);
     Object.assign(err, data, { status: res.status });
     throw err;
   }

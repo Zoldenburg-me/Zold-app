@@ -36,7 +36,7 @@ import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import {
-  customReasonsOf, draftDueDate, draftFrom, issuerParty,
+  customReasonsOf, draftDueDate, draftFrom, issuerParty, issuerSuggestions,
   jurisdictionOf, str, withConversion, } from "./shared.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
@@ -65,8 +65,10 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
         numberSeries: inv.numberSeries ?? DEFAULT_SERIES,
         customReasons: custom,
       },
-      // Prefill: who the issuer is, straight off the organisation.
+      // Prefill: who the issuer is, straight off the organisation, and what
+      // else Zold knows that the form can offer.
       issuer: issuerParty(ctx.org),
+      suggested: issuerSuggestions(ctx.org, ctx.userId),
       jurisdiction: jur,
       reference: {
         // Only the reasons this jurisdiction actually offers. A Swedish entity
@@ -241,22 +243,25 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     let draft;
     let language: "de" | "en";
     let dueDate: string | undefined;
+    let report;
     try {
       draft = await withConversion(draftFrom(ctx.org, req.body ?? {}));
       // Chosen per invoice; the profile's language and payment terms are the
       // defaults.
       language = invoiceLanguage(req.body?.language, ctx.org.invoicing?.language);
       dueDate = invoiceDueDate(req.body?.dueDate, draft.issueDate!, draftDueDate(ctx.org, draft.issueDate!));
+      // Inside the try: computing the totals refuses a line it cannot price.
+      report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
     } catch (err) {
       if (err instanceof InvoiceComplianceError) {
         return res.status(400).json({ error: err.message });
       }
       throw err;
     }
-    const report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
     if (!report.ok) {
+      const first = report.errors[0]?.message;
       return res.status(422).json({
-        error: `This invoice is missing ${report.errors.length} thing(s) German law requires. It has not been issued.`,
+        error: `This invoice is missing ${report.errors.length === 1 ? "one required detail" : `${report.errors.length} required details`}${first ? `, starting with: ${first}` : ""} It has not been issued.`,
         ...report,
       });
     }

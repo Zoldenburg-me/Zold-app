@@ -73,6 +73,17 @@ function setReachable(ok) {
 }
 window.setReachable = setReachable;
 
+/* A 5xx with no JSON body came from in front of the API (Cloudflare, the
+   tunnel), not from it: the API never answers an error without a body. The
+   request may or may not have reached us, so the message says that, and
+   carries Cloudflare's ray id for the operator to look up. */
+function gatewayMessage(res) {
+  if (res.status < 500 || res.headers.get("x-zold-offline") === "1") return "";
+  const ray = res.headers.get("cf-ray");
+  return `Zold's server did not answer (HTTP ${res.status}${ray ? `, ray ${ray}` : ""}). ` +
+    "The request may or may not have gone through: check before you try it again.";
+}
+
 /**
  * `method` is explicit only where the verb is not implied by the body: a body
  * means POST and no body means GET, which covers every call but DELETE.
@@ -109,8 +120,9 @@ async function api(path, body, method, extraHeaders) {
   // statusText is EMPTY over HTTP/2, so a non-JSON error (a proxy's HTML 502,
   // a dropped tunnel) would otherwise surface as a blank "Error".
   if (!res.ok) {
-    const err = new Error(data.error || res.statusText || `request failed (HTTP ${res.status})`);
+    const err = new Error(data.error || gatewayMessage(res) || res.statusText || `request failed (HTTP ${res.status})`);
     err.status = res.status;
+    err.ref = data.ref;
     // The service worker's own 503: the network, not our server, failed.
     err.offline = res.headers.get("x-zold-offline") === "1";
     // A refusal the UI answers with its own screen (IBAN_EXISTS_ELSEWHERE)

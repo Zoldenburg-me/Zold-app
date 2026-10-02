@@ -29,9 +29,16 @@
    sign-out clears. */
 const phInv = { check: null, checkSeq: 0, checkTimer: null, saveTimer: null, loadedAt: 0 };
 
-/* The organisation whose invoices these are: the personal one, when its plan
-   includes invoices. */
-const phInvOrg = () => { const o = phPersonalOrg(); return o && phCan(o, "invoices") ? o : null; };
+/* The organisation whose invoices these are, when its plan includes them:
+   for a login that signed up as a company, its company (an invoice issued in
+   the founder's own name would be the wrong issuer); otherwise the personal
+   one. A company the login only belongs to invoices from the web app. */
+const phInvOrg = () => {
+  const o = user?.accountType === "company"
+    ? (phCache.orgs || []).find((x) => x.type === "business") || null
+    : phPersonalOrg();
+  return o && phCan(o, "invoices") ? o : null;
+};
 const phOrgPath = (org, rest) => `/api/orgs/${encodeURIComponent(org.id)}${rest}`;
 
 async function phLoadInvoices() {
@@ -259,9 +266,11 @@ function phInvFresh(org, prof) {
   const due = new Date(today); due.setDate(due.getDate() + (Number.isFinite(terms) ? terms : 14));
   const rates = prof.reference.vatRates;
   return {
-    recipient: { name: "", addressLine: "", postalCode: "", city: "", country: org.address?.country || "DE", vatId: "" },
+    recipient: { name: "", addressLine: "", postalCode: "", city: "", country: org.address?.country || "", vatId: "" },
     number: phNextNumber(prof.profile.numberSeries, today),
-    language: prof.profile.language === "en" ? "en" : "de",
+    // German where the issuer is in a German-speaking country, else English,
+    // unless the profile chose.
+    language: prof.profile.language || (["DE", "AT", "CH", "LI"].includes(org.address?.country) ? "de" : "en"),
     issueDate: phYmd(today),
     dueDate: phYmd(due),
     period: phYmd(today).slice(0, 7),
@@ -271,7 +280,7 @@ function phInvFresh(org, prof) {
 }
 
 /* The profile is complete enough to issue: § 14 Abs. 4 Nr. 1 and 2. */
-const phIssuerAddress = (p) => !!(p.issuer?.addressLine && p.issuer?.postalCode && p.issuer?.city);
+const phIssuerAddress = (p) => !!(p.issuer?.addressLine && p.issuer?.postalCode && p.issuer?.city && p.issuer?.country);
 const phIssuerTaxId = (p) => !!(p.issuer?.taxNumber || p.issuer?.vatId);
 
 /* A month ("2026-09") as the supply period the API takes. */
@@ -319,15 +328,9 @@ function phInvBody(d, prof) {
   };
 }
 
-/* Countries to pick from: the EU member states the profile names (code to
-   name), plus the one already chosen and Europe's other neighbours. */
-function phCountries(prof, current) {
-  const eu = prof.reference.euMemberStates || {};
-  const codes = [...new Set([...Object.keys(eu), current, "CH", "GB", "NO"].filter(Boolean))];
-  let names;
-  try { names = new Intl.DisplayNames(["en"], { type: "region" }); } catch { names = null; }
-  return codes.map((c) => ({ value: c, label: eu[c] || names?.of(c) || c })).sort((a, b) => a.label.localeCompare(b.label));
-}
+/* Countries to pick from: all of them. The issuer's decides which rules
+   apply, and a customer can be anywhere. */
+const phCountries = (current) => Z.countries(current);
 
 const phNum = (html) => html.replace('class="z-input"', 'class="z-input z-input--num"');
 
@@ -413,7 +416,7 @@ PH["invoice/new"] = {
           ${Z.field({ id: "ph-r-zip", label: "Postcode", name: "postal-code", autocomplete: "postal-code", value: d.recipient.postalCode, maxlength: 12, spellcheck: false })}
           ${Z.field({ id: "ph-r-city", label: "City", name: "address-level2", autocomplete: "address-level2", value: d.recipient.city, maxlength: 80 })}
         </div>
-        ${Z.select({ id: "ph-r-country", label: "Country", name: "country", autocomplete: "country", value: d.recipient.country, options: phCountries(prof, d.recipient.country) })}
+        ${Z.select({ id: "ph-r-country", label: "Country", name: "country", autocomplete: "country", value: d.recipient.country, options: phCountries(d.recipient.country) })}
         ${Z.field({ id: "ph-r-vat", label: "Customer’s VAT ID", optional: true, name: "vat-id", value: d.recipient.vatId, maxlength: 20, spellcheck: false, hint: "For business customers in another EU country." })}
       </fieldset>
       <fieldset class="z-fieldset z-form--tight"><legend class="z-eyebrow">Details</legend>
@@ -603,7 +606,9 @@ function phPaperPeriod(p, lang) {
   if (whole) return new Intl.DateTimeFormat(lang === "en" ? "en-GB" : "de-DE", { month: "long", year: "numeric" }).format(f);
   return `${phPaperDate(p.from, lang)} ${PH_PAPER[lang].to} ${phPaperDate(p.to, lang)}`;
 }
-const phAddr = (p) => [p?.addressLine, [p?.postalCode, p?.city].filter(Boolean).join(" "), p?.country && p.country !== "DE" ? p.country : ""].filter(Boolean).join(", ");
+/* The country is printed when it differs from the issuer's: a domestic
+   invoice reads without it, a cross-border one needs it. */
+const phAddr = (p, home) => [p?.addressLine, [p?.postalCode, p?.city].filter(Boolean).join(" "), p?.country && p.country !== home ? p.country : ""].filter(Boolean).join(", ");
 
 /**
  * The invoice as paper, in the invoice's language, never the app's. The
@@ -624,10 +629,10 @@ function phPaper(x) {
   // customer is billed for.
   return `<article class="z-paper" lang="${lang}" translate="no" aria-label="${esc(`${t.invoice} ${x.number}`)}">
     <header class="z-paper__head">
-      <div><p class="z-paper__who">${esc(x.issuer.name || "")}</p><p>${esc(phAddr(x.issuer))}</p></div>
+      <div><p class="z-paper__who">${esc(x.issuer.name || "")}</p><p>${esc(phAddr(x.issuer, x.issuer.country))}</p></div>
       ${taxId ? `<p class="z-paper__tax">${esc(taxId[0])}<br>${esc(taxId[1])}</p>` : ""}
     </header>
-    <p class="z-paper__to">${esc(x.recipient.name || "")}<br>${esc(phAddr(x.recipient))}</p>
+    <p class="z-paper__to">${esc(x.recipient.name || "")}<br>${esc(phAddr(x.recipient, x.issuer.country))}</p>
     <h2 class="z-paper__title">${esc(t.invoice)} ${esc(x.number)}</h2>
     <p class="z-paper__meta">${meta.map(([k, v]) => `<span>${esc(k)} ${esc(v)}</span>`).join("")}</p>
     <table class="z-paper__lines">
@@ -765,13 +770,14 @@ PH["invoice/profile"] = {
     return `${phTop("Your invoice details", back)}<form id="ph-prof" class="z-app__form" novalidate>${phMain(`
       <p class="z-sub">Set these once. They go on every invoice you issue.</p>
       <div class="z-form z-form--tight">
-        ${Z.field({ id: "ph-p-name", label: "Name on invoices", name: "name", autocomplete: "name", value: org.legalName || org.name || u.name || "", maxlength: 120, hint: "Your full name, or your business’s registered name." })}
+        ${Z.field({ id: "ph-p-name", label: "Name on invoices", name: "name", autocomplete: org.type === "business" ? "organization" : "name", value: org.legalName || prof.suggested?.name || org.name || u.name || "", maxlength: 120,
+          hint: !org.legalName && prof.suggested?.source === "monerium" ? "Filled in from your Monerium profile. Check it matches the register." : org.type === "business" ? "The company’s registered name." : "Your full name, or your business’s registered name." })}
         ${Z.field({ id: "ph-p-addr", label: "Street and number", name: "address-line1", autocomplete: "address-line1", value: org.address?.line1 || "", maxlength: 120, placeholder: "Franz-Josef-Str. 11…" })}
         <div class="z-cols">
           ${Z.field({ id: "ph-p-zip", label: "Postcode", name: "postal-code", autocomplete: "postal-code", value: org.address?.postalCode || "", maxlength: 12, spellcheck: false })}
           ${Z.field({ id: "ph-p-city", label: "City", name: "address-level2", autocomplete: "address-level2", value: org.address?.city || "", maxlength: 80 })}
         </div>
-        ${Z.select({ id: "ph-p-country", label: "Country", name: "country", autocomplete: "country", value: org.address?.country || "DE", options: phCountries(prof, org.address?.country || "DE"), hint: "It decides which invoicing rules apply." })}
+        ${Z.select({ id: "ph-p-country", label: "Country", name: "country", autocomplete: "country", value: org.address?.country || u.country || "", options: phCountries(org.address?.country || u.country), hint: "It decides which invoicing rules apply." })}
       </div>
       <fieldset class="z-fieldset"><legend class="z-eyebrow">Tax</legend>
         <div class="z-seg">
@@ -809,6 +815,7 @@ PH["invoice/profile"] = {
       Z.setFieldError(f("ph-p-addr"), line1 ? "" : "Invoices need your full address.");
       Z.setFieldError(f("ph-p-zip"), zip ? "" : "Add the postcode.");
       Z.setFieldError(f("ph-p-city"), city ? "" : "Add the city.");
+      Z.setFieldError(f("ph-p-country"), f("ph-p-country").value ? "" : "Choose the country.");
       Z.setFieldError(f("ph-p-tax"), "");
       if (Z.focusFirstError(form)) return;
       const tax = f("ph-p-tax").value.trim();
