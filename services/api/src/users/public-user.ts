@@ -7,7 +7,7 @@
  * to be named here to be sent.
  */
 import { capabilitiesFor } from "../domain/segments.js";
-import { publicApiKeys } from "../adapters/monerium-connection.js";
+import { connectionMethod, publicApiKeys } from "../adapters/monerium-connection.js";
 import { maskTarget } from "../recovery/candide-guardian.js";
 import { issueSession } from "../http/sessions.js";
 import { normalizeIban } from "../sepa.js";
@@ -92,7 +92,7 @@ export const publicUser = (
     ? {
         monerium: {
           connectedAt: monerium.connectedAt,
-          method: monerium.method ?? (monerium.accessTokenEnc ? "oauth" : undefined),
+          method: connectionMethod({ monerium } as User) ?? undefined,
           profileId: monerium.profileId,
           profiles: monerium.profiles,
           ibans: monerium.ibans,
