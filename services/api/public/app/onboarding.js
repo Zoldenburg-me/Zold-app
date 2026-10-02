@@ -62,6 +62,21 @@ function enterKycReview(_name) {
   obGo(obNextAfterAccount() || "monerium", { replace: true });
 }
 
+/* Home's "Confirm your email" row: the code screen, then back to wherever
+   the account is. */
+function enterEmailConfirm() {
+  obEmailSkipped = false;
+  obShow();
+  obGo("email", { replace: true });
+}
+
+/* Is the account's email still to be confirmed on this visit? "Do this later"
+   holds until the app is reopened; Home keeps a row for it meanwhile. */
+let obEmailSkipped = false;
+function emailConfirmPending(u = user) {
+  return !!(caps.emailVerification && u?.email && !u.emailVerifiedAt && !obEmailSkipped);
+}
+
 /* ==========================================================================
    Router
    ========================================================================== */
@@ -106,6 +121,7 @@ function obGuard(name) {
   if (kind === "after") {
     if (!signedUp) return "auth";
     if (name === "welcome") return name;
+    if (name === "email") return caps.emailVerification && user.email && !user.emailVerifiedAt ? name : obNextAfterAccount() || "monerium";
     if (name === "recovery-email") return caps.emailSmsRecovery && user.passkeySafe?.status === "active" && recoveryOfferedFor() ? name : obNextAfterAccount() || "monerium";
     if (name === "monerium-keys") return caps.moneriumApiKeys && !kycApproved(user) ? name : obNextAfterAccount() || "monerium";
     if (name === "recovery") return recoveryEnrolmentPending() || obRecoveryDone ? name : obNextAfterAccount() || "monerium";
@@ -148,6 +164,7 @@ function obSetupScreen(u) {
 function obNextAfterAccount(u = user) {
   if (!u) return "auth";
   if (!u.passkey || needsPasskeySafeSetup(u)) return obSetupScreen(u);
+  if (emailConfirmPending(u)) return "email";
   if (zoldenburgChoicePending(u)) return "recovery";
   if (u.kycStatus === "rejected") return "monerium";
   if (kycApproved(u)) return null;
@@ -394,7 +411,7 @@ const B_STEPS = ["account-type", "b-entity", "b-registration", "b-you", "b-owner
 /* The steps after the account exists, numbered from what this deployment
    offers: no recovery service, no recovery step. */
 function obAfterSteps() {
-  return [...((caps.emailSmsRecovery || caps.zoldenburgRecovery) && !user?.passkeySafe?.importedAt ? ["recovery"] : []), "monerium", "activate"];
+  return [...(caps.emailVerification && !user?.emailVerifiedAt ? ["email"] : []), ...((caps.emailSmsRecovery || caps.zoldenburgRecovery) && !user?.passkeySafe?.importedAt ? ["recovery"] : []), "monerium", "activate"];
 }
 function obAfterProgress(name, label) {
   const steps = obAfterSteps();
@@ -1359,6 +1376,66 @@ function recoveryEnrolmentPending(u = user) {
 }
 
 let obGrace = null;
+/* ---- Email ---------------------------------------------------------------
+   A 6-digit code to the signup email. The first visit asks for one by
+   itself; "Send a new code" respects the server's wait, which it states. */
+let obEmailSent = null; // { to, at } for this screen visit, or null
+OB.email = {
+  kind: "after",
+  title: "Confirm your email",
+  html: () => `${obAfterProgress("email", "Your email")}
+    <main id="main" class="z-screen__main">
+      ${obIntro("Confirm your email", obEmailSent
+        ? `We sent a 6-digit code to ${esc(obEmailSent.to)}. It works for 15 minutes.`
+        : `We’re sending a 6-digit code to ${esc(user?.email || "your email")}.`)}
+      <form class="z-form" id="ob-form" novalidate>
+        ${Z.field({ id: "em-code", name: "code", label: "Code", inputmode: "numeric", autocomplete: "one-time-code", maxlength: 6, spellcheck: false, placeholder: "123456…" })}
+      </form>
+      ${Z.note({ text: "Recovery and sign-in help find your account by this email, so only an email you’ve confirmed counts." })}
+      ${obAlert()}
+    </main>
+    <div class="z-screen__foot z-screen__foot--quiet">
+      ${obSubmit("Confirm")}
+      <button type="button" class="z-link-btn" id="btn-em-resend">Send a new code</button>
+      <button type="button" class="z-link-btn" id="btn-em-later">Do this later</button>
+    </div>`,
+  bind: (root) => {
+    const send = async () => {
+      obClearErr();
+      try {
+        const r = await api(`/api/users/${user.id}/email/code`, {});
+        obEmailSent = { to: r.sentTo, at: Date.now() };
+        obRender();
+        root.querySelector("#em-code")?.focus();
+      } catch (e) { obShowErr(e); }
+    };
+    if (!obEmailSent) send();
+    root.querySelector("#btn-em-resend").onclick = send;
+    root.querySelector("#btn-em-later").onclick = () => {
+      obEmailSkipped = true;
+      const next = obNextAfterAccount();
+      return next ? obGo(next) : obFinish();
+    };
+    root.querySelector("#ob-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      obClearErr();
+      const input = root.querySelector("#em-code");
+      const code = input.value.replace(/\s/g, "");
+      Z.setFieldError(input, /^\d{6}$/.test(code) ? "" : "Enter the 6 digits from the email.");
+      if (obFocusError(root)) return;
+      const btn = root.querySelector("#btn-next");
+      Z.setLoading(btn, true);
+      try {
+        const updated = await api(`/api/users/${user.id}/email/verify`, { code });
+        renderUser(updated);
+        obEmailSent = null;
+        const next = obNextAfterAccount();
+        return next ? obGo(next) : obFinish();
+      } catch (e2) { obShowErr(e2); } finally { Z.setLoading(btn, false); }
+    });
+  },
+};
+
 OB.recovery = {
   kind: "after",
   title: "Recovery choice",
