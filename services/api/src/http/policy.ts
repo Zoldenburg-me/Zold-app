@@ -93,7 +93,6 @@ export function rateLimit(key: string, perMin: number): boolean {
   const h = hits.get(key);
   if (!h || h.reset < now) {
     hits.set(key, { n: 1, reset: now + 60_000 });
-    if (hits.size > 10_000) for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
     return true;
   }
   return ++h.n <= perMin;
@@ -114,22 +113,38 @@ export function tooManyFailures(key: string, max: number): boolean {
   return !!f && f.reset >= Date.now() && f.n >= max;
 }
 
+/** Take back one recorded failure: a guess is counted before an async check
+ *  runs, so concurrent guesses cannot all pass the limit, and a right one
+ *  returns its count. */
+export function forgetFailure(key: string): void {
+  const f = failures.get(key);
+  if (f && f.n > 0) f.n--;
+}
+
 export function recordFailure(key: string, windowMs: number): void {
   const now = Date.now();
   const f = failures.get(key);
   if (!f || f.reset < now) {
     failures.set(key, { n: 1, reset: now + windowMs });
-    if (failures.size > 10_000) for (const [k, v] of failures) if (v.reset < now) failures.delete(k);
   } else {
     f.n++;
   }
 }
 
+/* Expired buckets are dropped on a timer, not by the request that happens to
+ * find the map large: with addresses rotating through fresh IPv6 /64s that
+ * scan ran on every request. */
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
+  for (const [k, v] of failures) if (v.reset < now) failures.delete(k);
+}, 10_000).unref();
+
 /**
  * Which paths sit on the tight bucket: everything where a request is a GUESS
  * AT A CREDENTIAL — a passkey ceremony, a recovery code, a receipt slug, a
- * document verification code, a payment-request code, an HMAC-signed Shopify
- * webhook, the operator bearer secret, an Invoice-Me link token, or a set of
+ * document verification code, a payment-request code, the operator bearer
+ * secret, an Invoice-Me link token, or a set of
  * Monerium API keys being checked against a third party.
  */
 function isAuthRoute(req: express.Request): boolean {
@@ -147,7 +162,6 @@ function isAuthRoute(req: express.Request): boolean {
     // The bare /pay/<handle> page is public by design and stays on the general
     // bucket; only /pay/<handle>/<code> is a credential.
     /^\/pay\/[^/]+\/[^/]+/.test(path) ||
-    path.startsWith("/shopify/") ||
     path.startsWith("/admin") ||
     path.startsWith("/invoice-links/") ||
     (path.endsWith("/monerium/api-keys") && req.method === "POST") ||
@@ -155,11 +169,43 @@ function isAuthRoute(req: express.Request): boolean {
   );
 }
 
+/**
+ * Paths where each call makes us call a partner or the chain: a quote, any
+ * Monerium route, Gnosis Pay, an accounting integration, a conversion quote,
+ * a payment run. They also count on the general bucket; this one keeps a
+ * caller from spending our partner quota (and getting our keys throttled)
+ * at the general rate. Documents get their own, tighter one: a statement is
+ * about fifty chain reads.
+ */
+function partnerBucket(req: express.Request): "p" | "d" | undefined {
+  const path = req.path.toLowerCase().replace(/\/+$/, "") || "/";
+  if (req.method === "POST" && /^\/users\/[^/]+\/documents\/(statement|balance|ownership|receipt)$/.test(path)) return "d";
+  if (
+    (path === "/quotes" && req.method === "POST") ||
+    /^\/users\/[^/]+\/monerium(\/|$)/.test(path) ||
+    path.startsWith("/gnosis-pay/") ||
+    /^\/orgs\/[^/]+\/integrations(\/|$)/.test(path) ||
+    /^\/users\/[^/]+\/crypto-deposits\/[^/]+\/convert\/prepare$/.test(path) ||
+    /^\/orgs\/[^/]+\/drafts\/[^/]+\/execute$/.test(path)
+  ) return "p";
+  return undefined;
+}
+
 export const apiRateLimit: express.RequestHandler = (req, res, next) => {
   const ip = clientKey(req.ip);
-  const ok = isAuthRoute(req)
-    ? rateLimit(`a:${ip}`, SECURITY.authRateLimitPerMin)
-    : rateLimit(`g:${ip}`, SECURITY.rateLimitPerMin);
+  const path = req.path.toLowerCase();
+  // Shopify's calls arrive from Shopify's shared addresses and each carries a
+  // 256-bit HMAC, so it is not a guess; its own bucket keeps real merchant
+  // volume off the 20/min one.
+  const ok = path.startsWith("/shopify/")
+    ? rateLimit(`s:${ip}`, SECURITY.shopifyRateLimitPerMin)
+    : isAuthRoute(req)
+      ? rateLimit(`a:${ip}`, SECURITY.authRateLimitPerMin)
+      : rateLimit(`g:${ip}`, SECURITY.rateLimitPerMin);
   if (!ok) return res.status(429).json({ error: "rate limited — slow down" });
+  const bucket = partnerBucket(req);
+  if (bucket && !rateLimit(`${bucket}:${ip}`, bucket === "d" ? SECURITY.documentRateLimitPerMin : SECURITY.partnerRateLimitPerMin)) {
+    return res.status(429).json({ error: "rate limited — slow down" });
+  }
   next();
 };

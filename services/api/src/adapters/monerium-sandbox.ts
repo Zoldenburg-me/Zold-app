@@ -474,7 +474,12 @@ export async function pollRedeemOrdersOnce(): Promise<void> {
 }
 
 export function startDepositPoller() {
+  // One tick at a time: a slow partner or RPC must not stack a second pass
+  // over the same rows on top of the first.
+  let busy = false;
   const tick = async () => {
+    if (busy) return;
+    busy = true;
     try {
       await pollDepositsOnce();
       await pollRedeemOrdersOnce();
@@ -483,6 +488,8 @@ export function startDepositPoller() {
       }
     } catch (err: any) {
       console.error(`monerium poll failed: ${err?.message ?? err}`);
+    } finally {
+      busy = false;
     }
   };
   void tick();

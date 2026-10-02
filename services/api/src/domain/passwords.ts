@@ -8,7 +8,7 @@
  * (NIST 800-63B shape: length and a blocklist, no composition rules) and a
  * salted, deliberately slow hash.
  */
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { tokenMatches } from "./invoices.js";
 
 export const PASSWORD_MIN = 12;
@@ -53,10 +53,15 @@ function isSequence(s: string): boolean {
 const N = 1 << 15, R = 8, P = 1, KEYLEN = 32;
 const MAXMEM = 64 * 1024 * 1024;
 
+/* scrypt off the event loop: about 30 ms and 32 MiB per call, which run
+ * synchronously held every other request for each password checked. */
+const scryptAsync = (pw: string, salt: Buffer, len: number, opts: ScryptOptions) =>
+  new Promise<Buffer>((resolve, reject) => scrypt(pw, salt, len, opts, (err, key) => (err ? reject(err) : resolve(key))));
+
 /** `scrypt$N$r$p$salt$hash`, both base64url. */
-export function hashPassword(pw: string): string {
+export async function hashPassword(pw: string): Promise<string> {
   const salt = randomBytes(16);
-  const hash = scryptSync(pw, salt, KEYLEN, { N, r: R, p: P, maxmem: MAXMEM });
+  const hash = await scryptAsync(pw, salt, KEYLEN, { N, r: R, p: P, maxmem: MAXMEM });
   return ["scrypt", N, R, P, salt.toString("base64url"), hash.toString("base64url")].join("$");
 }
 
@@ -64,12 +69,12 @@ export function hashPassword(pw: string): string {
  * Constant-time check. A row written before scrypt holds a bare SHA-256 hex
  * digest; it still verifies, so no existing link stops working.
  */
-export function passwordMatches(pw: string, stored: string): boolean {
+export async function passwordMatches(pw: string, stored: string): Promise<boolean> {
   if (!stored.startsWith("scrypt$")) return tokenMatches(pw, stored);
   const [, n, r, p, saltB64, hashB64] = stored.split("$");
   const expected = Buffer.from(hashB64 ?? "", "base64url");
   if (!expected.length) return false;
-  const got = scryptSync(pw, Buffer.from(saltB64 ?? "", "base64url"), expected.length, {
+  const got = await scryptAsync(pw, Buffer.from(saltB64 ?? "", "base64url"), expected.length, {
     N: Number(n), r: Number(r), p: Number(p), maxmem: MAXMEM,
   });
   return timingSafeEqual(got, expected);

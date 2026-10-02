@@ -105,10 +105,27 @@ const wrap =
     Promise.resolve(fn(req, res, next)).catch(next);
 
 
+/* The latest block, read at most once per HEALTH_BLOCK_MS however often
+ * /api/health is asked (unauthenticated; it used to be one RPC call per hit).
+ * Concurrent misses share one read. */
+const HEALTH_BLOCK_MS = 5_000;
+let healthBlock: { at: number; read: Promise<bigint> } | undefined;
+function latestBlock(): Promise<bigint> {
+  if (!healthBlock || Date.now() - healthBlock.at > HEALTH_BLOCK_MS) {
+    const read = publicClient.getBlockNumber();
+    healthBlock = { at: Date.now(), read };
+    // A failed read is not cached: the next caller asks again.
+    read.catch(() => {
+      if (healthBlock?.read === read) healthBlock = undefined;
+    });
+  }
+  return healthBlock.read;
+}
+
 app.get(
   "/api/health",
   wrap(async (_req, res) => {
-    const block = await publicClient.getBlockNumber();
+    const block = await latestBlock();
     // chainId and realMoney let the landing page name the network it runs on
     // instead of hardcoding "Live on Base" over a testnet deployment.
     res.json({ ok: true, chainId: CHAIN_ID, realMoney: IS_REAL_MONEY_CHAIN, block: Number(block), contracts: addrs(), capabilities: capabilities() });
