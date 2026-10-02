@@ -67,6 +67,8 @@ const seen = {
   linkedAddress: "",
   linkSignature: "",
   linkedProfile: "",
+  /** Where GET /addresses/:a says the Safe is, when an earlier binding put it elsewhere. */
+  boundElsewhere: "",
   ibanRequestedFor: "",
   ibanRequestAnswered: 0,
   patches: [] as { iban: string; address: string; chain: string }[],
@@ -225,7 +227,7 @@ const stub = createServer((req, res) => {
     if (url.pathname.startsWith("/addresses/")) {
       const addr = decodeURIComponent(url.pathname.slice("/addresses/".length)).toLowerCase();
       if (seen.linkedAddress && addr === seen.linkedAddress.toLowerCase()) {
-        return send(200, { address: seen.linkedAddress, chain: "sepolia", profile: seen.linkedProfile || PROFILE_ID });
+        return send(200, { address: seen.linkedAddress, chain: "sepolia", profile: seen.boundElsewhere || seen.linkedProfile || PROFILE_ID });
       }
       return send(404, { error: "address not linked" });
     }
@@ -520,11 +522,33 @@ try {
     assert.equal(seen.linkedAddress, "", "nothing may be linked under the other profile");
   });
 
+  await t("an address Monerium already holds under the other profile gets no IBAN request", async () => {
+    // POST /addresses answers "linked" without moving an earlier binding, and
+    // POST /ibans would issue under whichever profile holds the address.
+    seen.boundElsewhere = BUSINESS_PROFILE_ID;
+    try {
+      const start = await call(`/api/users/${userId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
+      assert.equal(start.status, 201, `link-signature start failed: ${start.text}`);
+      const approval = await passkey.assert(start.data.challenge, ++count);
+      const before = seen.ibanRequestedFor;
+      const r = await call(`/api/users/${userId}/monerium/activate`, { linkSignatureRequestId: start.data.requestId, ...approval });
+      assert.equal(r.status, 409, `expected 409, got ${r.status}: ${r.text}`);
+      assert.equal(r.data.code, "ADDRESS_NOT_ON_PROFILE");
+      assert.match(r.data.error, /corporate profile/);
+      assert.equal(seen.ibanRequestedFor, before, "no IBAN may be requested for an address on another profile");
+      const me = await call(`/api/users/${userId}`);
+      assert.equal(me.data.iban, "");
+      assert.match(me.data.funding.detail ?? "", /do NOT unlink/);
+    } finally {
+      seen.boundElsewhere = "";
+    }
+  });
+
   await t("activate on a profile that already has an IBAN answers IBAN_EXISTS_ELSEWHERE, not an error", async () => {
     const start = await call(`/api/users/${userId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
     assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
     safeAddress = start.data.address;
-    const approval = await passkey.assert(start.data.challenge, count);
+    const approval = await passkey.assert(start.data.challenge, ++count);
     const r = await call(`/api/users/${userId}/monerium/activate`, {
       profileId: PROFILE_ID,
       linkSignatureRequestId: start.data.requestId,

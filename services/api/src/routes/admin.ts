@@ -15,6 +15,7 @@ import { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient } f
 import { publicUser } from "../users/public-user.js";
 import { store, type CryptoDeposit, type Transfer } from "../store.js";
 import { requireOperator } from "../http/guards.js";
+import { recentServerErrors } from "../http/error-log.js";
 import { plansFor, trialIsActive } from "../domain/plans.js";
 import type { PlanId } from "../domain/types.js";
 
@@ -241,6 +242,13 @@ export function createAdminRouter() {
       res.json({ id: updated.id, plan: updated.plan, trial: updated.trial });
     }),
   );
+
+  /** The last server errors by reference (http/error-log.ts), newest first,
+   *  so a ref a user quotes leads straight to its stack. */
+  router.get("/admin/errors", (req, res) => {
+    if (!requireOperator(req, res)) return;
+    res.json({ errors: recentServerErrors() });
+  });
 
   router.get(
     "/admin/users",

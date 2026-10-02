@@ -106,10 +106,41 @@ async function loadDashboard() {
     renderTransactions();
     renderAttention();
     await loadRecoveries();
+    await loadServerErrors();
   } catch (err) {
     console.error("Dashboard error:", err);
   }
 }
+
+/* ---------- Server errors (by the ref a 500 hands the caller) ---------- */
+
+let serverErrors = [];
+async function loadServerErrors() {
+  const res = await fetchApi('/api/admin/errors');
+  if (!res.ok) return;
+  serverErrors = (await res.json()).errors || [];
+  renderServerErrors();
+}
+
+function renderServerErrors() {
+  const body = document.getElementById('errorsTableBody');
+  const q = document.getElementById('errorsSearch').value.trim().toUpperCase();
+  const rows = q ? serverErrors.filter((e) => e.ref.includes(q)) : serverErrors;
+  document.getElementById('errorsCount').textContent = serverErrors.length ? `(${serverErrors.length})` : '';
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-muted);">${
+      q ? 'No error with that reference since the API last started.' : 'No server errors since the API last started.'}</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows.map((e) => `<tr>
+      <td><span class="code-pill" translate="no">${escapeHtml(e.ref)}</span></td>
+      <td>${escapeHtml(new Date(e.at).toLocaleString())}</td>
+      <td><span class="user-id" translate="no">${escapeHtml(`${e.method} ${e.route}`)}</span></td>
+      <td><details><summary>${escapeHtml(`${e.name}: ${e.message}`)}</summary>
+        <pre class="json-code" style="white-space:pre-wrap;margin:8px 0 0">${escapeHtml(e.stack.join('\n'))}</pre></details></td>
+    </tr>`).join('');
+}
+document.getElementById('errorsSearch').addEventListener('input', renderServerErrors);
 
 /* ---------- Recoveries (Zoldenburg guardian) ---------- */
 
