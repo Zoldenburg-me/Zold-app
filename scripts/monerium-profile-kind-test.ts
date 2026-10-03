@@ -200,6 +200,7 @@ await check("a corporate profile is adopted into a business org, and the account
   assert.equal(r.data.account.profile.status, "verified");
   assert.equal(r.data.warning, undefined, "matching names raise no warning");
   assert.equal(audits().at(-1)!.data.outcome, "passed");
+  assert.equal(audits().at(-1)!.data.viaIssuedIban, false);
 });
 
 await check("POST /accounts with useMyAccount adopts a corporate profile the same way", async () => {
@@ -292,6 +293,7 @@ await check("a pending company profile backs the account once Monerium has issue
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(store.findAccount("acc_lind")!.status, "active");
   assert.equal(audits().at(-1)!.data.outcome, "passed");
+  assert.equal(audits().at(-1)!.data.viaIssuedIban, true, "the audit says this pass rests on an issued IBAN, not an approved profile");
 });
 
 await check("a pending company profile with no issued IBAN is still refused", async () => {

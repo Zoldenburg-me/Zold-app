@@ -122,13 +122,30 @@ export function judgeProfile(
 /** Has Monerium issued an approved IBAN on this profile that pays into this
  *  address? `ibans` is GET /ibans as Monerium answered it. */
 export function ibanIssuedTo(ibans: unknown, profileId: string, address: string): boolean {
-  const list: any[] = Array.isArray(ibans) ? ibans : Array.isArray((ibans as any)?.ibans) ? (ibans as any).ibans : [];
-  return list.some((i) =>
-    i?.profile === profileId &&
-    i?.state === "approved" &&
-    typeof i?.iban === "string" && i.iban.trim() !== "" &&
-    typeof i?.address === "string" && i.address.toLowerCase() === address.toLowerCase(),
+  return moneriumIbanList(ibans).some((i) =>
+    i.profile === profileId &&
+    i.state === "approved" &&
+    i.iban.trim() !== "" &&
+    typeof i.address === "string" && i.address.toLowerCase() === address.toLowerCase(),
   );
+}
+
+/** One IBAN as Monerium's GET /ibans reports it; only the fields Zold reads. */
+export interface MoneriumIbanFacts {
+  iban: string;
+  profile?: unknown;
+  address?: unknown;
+  state?: unknown;
+  name?: unknown;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+
+/** GET /ibans answers `{ ibans: [...] }`; a stored snapshot may hold the bare
+ *  list. Either way, the entries that carry an IBAN string. */
+export function moneriumIbanList(raw: unknown): MoneriumIbanFacts[] {
+  const list: unknown[] = Array.isArray(raw) ? raw : isRecord(raw) && Array.isArray(raw.ibans) ? raw.ibans : [];
+  return list.filter((i): i is MoneriumIbanFacts => isRecord(i) && typeof i.iban === "string");
 }
 
 /* Legal-form words that differ between how a company writes its name and how

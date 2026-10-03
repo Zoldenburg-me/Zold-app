@@ -195,6 +195,14 @@ function partnerBucket(req: express.Request): "p" | "d" | undefined {
   return undefined;
 }
 
+/** The one per-IP bucket every /api call counts against, and its limit. */
+function primaryBucket(req: express.Request, path: string): [string, number] {
+  if (path.startsWith("/shopify/")) return ["s", SECURITY.shopifyRateLimitPerMin];
+  if (path.startsWith("/admin") && isOperator(req)) return ["o", SECURITY.operatorRateLimitPerMin];
+  if (isAuthRoute(req)) return ["a", SECURITY.authRateLimitPerMin];
+  return ["g", SECURITY.rateLimitPerMin];
+}
+
 export const apiRateLimit: express.RequestHandler = (req, res, next) => {
   const ip = clientKey(req.ip);
   const path = req.path.toLowerCase();
@@ -202,13 +210,8 @@ export const apiRateLimit: express.RequestHandler = (req, res, next) => {
   // 256-bit HMAC, so it is not a guess; its own bucket keeps real merchant
   // volume off the 20/min one. A valid operator token is not a guess either;
   // a wrong one stays on the credential bucket.
-  const ok = path.startsWith("/shopify/")
-    ? rateLimit(`s:${ip}`, SECURITY.shopifyRateLimitPerMin)
-    : path.startsWith("/admin") && isOperator(req)
-      ? rateLimit(`o:${ip}`, SECURITY.operatorRateLimitPerMin)
-    : isAuthRoute(req)
-      ? rateLimit(`a:${ip}`, SECURITY.authRateLimitPerMin)
-      : rateLimit(`g:${ip}`, SECURITY.rateLimitPerMin);
+  const [primary, perMin] = primaryBucket(req, path);
+  const ok = rateLimit(`${primary}:${ip}`, perMin);
   if (!ok) return res.status(429).json({ error: "rate limited — slow down" });
   const bucket = partnerBucket(req);
   if (bucket && !rateLimit(`${bucket}:${ip}`, bucket === "d" ? SECURITY.documentRateLimitPerMin : SECURITY.partnerRateLimitPerMin)) {
