@@ -213,11 +213,11 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
     try {
       const ctx = ctxOf(req, res);
       if (!ctx) return;
-      // One send per organisation at a time: two would both look a bank line
-      // up, both miss it, and both add it.
-      if (pushing.has(ctx.org.id)) return res.status(409).json({ error: "A send to GetMyInvoices is already running for this organisation. Wait for it, then send again." });
       if (!requireCapability(ctx, res, "integrations.accounting")) return;
       if (!requirePermission(ctx, res, "reports.run")) return;
+      // One send per organisation at a time (asked once permitted): two would
+      // both look a bank line up, both miss it, and both add it.
+      if (pushing.has(ctx.org.id)) return res.status(409).json({ error: "A send to GetMyInvoices is already running for this organisation. Wait for it, then send again." });
       const client = gmiClientFor(ctx.org);
       if (!client) return res.status(409).json({ error: "connect a GetMyInvoices API key first" });
       const month = String(req.body?.month ?? "");
