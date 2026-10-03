@@ -35,6 +35,9 @@ export function publicStatementLine(e: LedgerEntry) {
     counterparty: s.counterparty,
     reference: s.reference,
     accountCode: e.accountCode,
+    // A rule chose it (true) or a person did (false): Books overview counts
+    // the lines only the default rule sorted.
+    ...(e.accountCode ? { accountCodeAuto: e.accountCodeAuto !== false } : {}),
     tags: e.tags,
     note: e.note,
     links: s.links,

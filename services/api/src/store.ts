@@ -466,6 +466,11 @@ export const store = {
   findUser(id: string) {
     return db.users.find((u) => u.id === id);
   },
+  /** An organisation's payment page handle, compared like a user's. */
+  findOrgByHandle(handle: string) {
+    const h = handle.trim().toLowerCase();
+    return db.organisations.find((o) => o.paymentPage?.handle === h);
+  },
   findUserByIban(iban: string) {
     const norm = iban.replace(/\s/g, "").toUpperCase();
     return db.users.find((u) => u.iban.replace(/\s/g, "").toUpperCase() === norm);

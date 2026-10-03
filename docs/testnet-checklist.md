@@ -146,7 +146,7 @@ Receipt shares [LIVE]
 - [ ] Bulk CSV import (500 rows)
 - [ ] Business Send completes a passkey send (doc says it may not)
 - [ ] /app company switch: approve / send back
-- [ ] Settings tiles; Shopify under Connections; Coming soon stays in /business
+- [ ] Banking/Books switch; Shopify under Apps; accounting under Books, Connections; Coming soon stays in /business
 - [ ] Balance only for the backing member
 - [ ] Imported wallets add / remove, say "never syncs"
 - [ ] Cmd/Ctrl-K search
