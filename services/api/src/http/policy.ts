@@ -175,7 +175,8 @@ function isAuthRoute(req: express.Request): boolean {
 /**
  * Paths where each call makes us call a partner or the chain: a quote, any
  * Monerium route, Gnosis Pay, an accounting integration, a VIES lookup, a
- * conversion quote, a payment run. They also count on the general bucket; this one keeps a
+ * conversion quote, a payment run, a wallet ownership check, a price retry,
+ * issuing a draft from receipts (a VIES lookup and a chain check). They also count on the general bucket; this one keeps a
  * caller from spending our partner quota (and getting our keys throttled)
  * at the general rate. Documents get their own, tighter one: a statement is
  * about fifty chain reads.
@@ -190,7 +191,10 @@ function partnerBucket(req: express.Request): "p" | "d" | undefined {
     /^\/orgs\/[^/]+\/integrations(\/|$)/.test(path) ||
     /^\/orgs\/[^/]+\/invoicing\/vat-check$/.test(path) ||
     /^\/users\/[^/]+\/crypto-deposits\/[^/]+\/convert\/prepare$/.test(path) ||
-    /^\/orgs\/[^/]+\/drafts\/[^/]+\/execute$/.test(path)
+    /^\/orgs\/[^/]+\/drafts\/[^/]+\/execute$/.test(path) ||
+    /^\/orgs\/[^/]+\/wallets\/[^/]+\/ownership(\/recheck)?$/.test(path) ||
+    /^\/orgs\/[^/]+\/ledger\/([^/]+\/)?revalue$/.test(path) ||
+    /^\/orgs\/[^/]+\/income-invoices\/[^/]+\/issue$/.test(path)
   ) return "p";
   return undefined;
 }

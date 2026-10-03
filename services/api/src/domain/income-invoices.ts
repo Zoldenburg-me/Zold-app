@@ -291,6 +291,18 @@ export interface IncomePlanInput {
   memberId: string;
   /** Hash of a link token nobody holds; issuing replaces it. */
   newLinkTokenHash: () => string;
+  /** Whether the imported wallet a row arrived in is proven to be the
+   *  organisation's, read now; `removed` when it is no longer imported. */
+  walletProof: (walletId: string) => WalletProof;
+}
+
+export type WalletProof = "proven" | "lapsed" | "unproven" | "removed";
+
+/** Why a receipt from a wallet that is not proven is not invoiced. */
+export function unprovenReason(proof: Exclude<WalletProof, "proven">): string {
+  if (proof === "lapsed") return "The wallet it arrived in is not proven any more: its ownership proof lapsed. Check or prove it again under Wallets.";
+  if (proof === "removed") return "The wallet it arrived in is no longer imported, so it is not proven to be yours.";
+  return "The wallet it arrived in is not proven to be yours. Prove it under Wallets, then collect again.";
 }
 
 export interface ContactOutcome {
@@ -390,7 +402,9 @@ export function planIncomeDrafts(input: IncomePlanInput): IncomePlan {
     } else if (verdict.kind === "excluded") {
       push(excluded, payer.id, excludedFor(entry, verdict.reason));
     } else {
-      push(receipts, payer.id, { entry, eurCents: verdict.eurCents, txHash: verdict.txHash });
+      const proof = entry.source.kind === "wallet" ? input.walletProof(entry.source.walletId) : "removed";
+      if (proof !== "proven") push(excluded, payer.id, excludedFor(entry, unprovenReason(proof)));
+      else push(receipts, payer.id, { entry, eurCents: verdict.eurCents, txHash: verdict.txHash });
     }
   }
 

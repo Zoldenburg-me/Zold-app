@@ -16,8 +16,14 @@ import {
   ledgerExportRows,
   monthlyBalances,
   positions,
+  realisedByMonth,
   toCsv,
 } from "../../domain/ledger.js";
+import { IncomeInvoiceError } from "../../domain/income-invoices.js";
+import { proofStateOf } from "../../domain/wallet-ownership.js";
+import { revaluable, revalueEntry } from "../../wallet-sync/revalue.js";
+import { CHAIN_ID } from "../../config.js";
+import { wrap } from "../util.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { limitsFor } from "../../domain/plans.js";
 import {
@@ -27,6 +33,27 @@ import {
  *  module cannot acquire its own way of deciding who is calling. */
 export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
+}
+
+/** Rows retried by one call of the bulk revalue: each is a price call, so a
+ *  call stays short and the client pages with `after`. */
+const REVALUE_BATCH = 10;
+
+/** What every cost-basis answer says about itself. */
+const COST_BASIS_NOTES = [
+  "First in, first out, per token contract on its chain, pooled across the organisation's imported wallets.",
+  "A swap is booked as a sale of what left and a purchase of what arrived, each at its own EUR value; they are not paired.",
+  "A gain is shown only where the sale, and every lot it used, has a EUR value and nothing was sold beyond the booked lots.",
+  "Whether a disposal is taxable, the holding period and the cost-basis method are for your tax adviser (Steuerberater) to decide; Zold computes, it does not classify.",
+];
+
+/** The cost basis over the organisation's whole ledger. */
+function basisOf(ctx: OrgContext) {
+  const ownAccounts = store.accounts
+    .filter((a) => a.orgId === ctx.org.id && a.address)
+    .map((a) => ({ chainId: CHAIN_ID, address: a.address! }));
+  const ownWallets = store.importedWalletsOf(ctx.org.id).map((w) => ({ chainId: w.chainId, address: w.address }));
+  return computeCostBasis(store.ledgerOf(ctx.org.id), { ownWallets, ownAccounts });
 }
 
 export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
@@ -179,21 +206,104 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     res.json({ entry: store.updateLedgerEntry(entry.id, patch) });
   });
 
+  /**
+   * Holdings per token with their lots, every disposal, and what is not
+   * valued. Each figure names the ledger rows behind it. A wallet that is
+   * not proven to be the organisation's is still counted, and labelled.
+   */
   r.get("/:orgId/assets", (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "assets.costBasis")) return;
     if (!requirePermission(ctx, res, "ledger.read")) return;
-    const basis = computeCostBasis(store.ledgerOf(ctx.org.id));
+    const basis = basisOf(ctx);
+    const wallets = store.importedWalletsOf(ctx.org.id);
+    const proof = new Map(wallets.map((w) => [w.id, proofStateOf(w)]));
+    const proofOfLot = (walletId?: string) => (walletId ? proof.get(walletId) ?? "removed" : undefined);
     res.json({
-      positions: positions(basis),
+      positions: positions(basis).map((p) => ({
+        ...p,
+        lots: p.lots.map((l) => ({ ...l, ...(l.walletId ? { walletProofState: proofOfLot(l.walletId) } : {}) })),
+      })),
       disposals: basis.disposals,
+      moved: basis.moved,
       // Surfaced rather than folded into profit: an unmatched disposal usually
       // means history is missing, and booking it at zero cost overstates income.
       shortfalls: basis.shortfalls,
+      quantityOnly: basis.quantityOnly,
+      unreadable: basis.unreadable,
+      needsValuation: revaluable(ctx.org.id).map((e) => ({
+        entryId: e.id, at: e.at, direction: e.direction, asset: e.asset, amount: e.amount, chainId: e.chainId,
+        token: e.token, txHash: e.txHash, note: e.note, walletId: e.source.kind === "wallet" ? e.source.walletId : undefined,
+      })),
+      wallets: wallets.map((w) => ({ id: w.id, label: w.label, chainId: w.chainId, address: w.address, proofState: proofStateOf(w) })),
       costBasisMethod: ctx.org.reporting.costBasisMethod,
+      notes: COST_BASIS_NOTES,
     });
   });
+
+  /** Measured gains and losses per month, with every disposal behind them. */
+  r.get("/:orgId/reports/realised-gains", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "assets.costBasis")) return;
+    if (!requirePermission(ctx, res, "ledger.read")) return;
+    const basis = basisOf(ctx);
+    try {
+      res.json({
+        timeZone: ctx.org.reporting.timeZone,
+        months: realisedByMonth(basis.disposals, ctx.org.reporting.timeZone),
+        disposals: basis.disposals,
+        shortfalls: basis.shortfalls,
+        moved: basis.moved,
+        unreadable: basis.unreadable,
+        costBasisMethod: ctx.org.reporting.costBasisMethod,
+        notes: COST_BASIS_NOTES,
+      });
+    } catch (err) {
+      if (err instanceof IncomeInvoiceError) return res.status(400).json({ error: err.message });
+      throw err;
+    }
+  });
+
+  /** Ask the price feed again for a row synced without a value. */
+  r.post("/:orgId/ledger/:entryId/revalue", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "ledger.transactions")) return;
+    if (!requirePermission(ctx, res, "ledger.categorise")) return;
+    const outcome = await revalueEntry(ctx.org.id, String(req.params.entryId), { memberId: ctx.member.id });
+    if (!outcome) return res.status(404).json({ error: "no such transaction" });
+    if (outcome.status === "valued") return res.json({ entry: outcome.entry });
+    const status = outcome.status === "refused" ? 409 : outcome.status === "no-price" ? 422 : 503;
+    res.status(status).json({ error: `Not valued: ${outcome.reason}`, status: outcome.status });
+  }));
+
+  /** The same for the rows synced without a value, a page at a time in id
+   *  order: `after` is the last id of the previous page, `next` this one's
+   *  when more remain. A row that still has no price does not hold back the
+   *  rows after it. */
+  r.post("/:orgId/ledger/revalue", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "ledger.transactions")) return;
+    if (!requirePermission(ctx, res, "ledger.categorise")) return;
+    const after = typeof req.body?.after === "string" ? req.body.after : "";
+    const rows = revaluable(ctx.org.id).filter((e) => e.id > after);
+    const page = rows.slice(0, REVALUE_BATCH);
+    const results: { entryId: string; status: string; reason?: string; fiatValue?: string }[] = [];
+    for (const row of page) {
+      const outcome = await revalueEntry(ctx.org.id, row.id, { memberId: ctx.member.id });
+      if (!outcome) continue;
+      results.push(
+        outcome.status === "valued"
+          ? { entryId: row.id, status: "valued", fiatValue: outcome.entry.fiatValue }
+          : { entryId: row.id, status: outcome.status === "refused" ? "skipped" : outcome.status, reason: outcome.reason },
+      );
+    }
+    const remaining = rows.length - page.length;
+    res.json({ results, remaining, ...(remaining ? { next: page[page.length - 1].id } : {}) });
+  }));
 
   r.get("/:orgId/reports/monthly-balance", (req, res) => {
     const ctx = ctxOf(req, res);

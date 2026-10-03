@@ -119,11 +119,31 @@ Say this plainly rather than letting the surface imply otherwise:
   issued and marked paid, all through the business screens). No draft has
   been made from a mainnet receipt, and no priced governance-token receipt
   has reached one, because the price feed has never run live. Nothing runs the collection on a schedule: a
-  member starts it per month. No row's value is ever filled in later, so a
-  receipt booked without a value stays off every draft. The tax line on a
+  member starts it per month. A receipt booked without a value gets one only
+  when a member asks the price feed again for it (Holdings, "Ask again"),
+  which has run only against a stub feed. The tax line on a
   payer rule is whatever the organisation chose; nothing checks it suits the
   payer. A receipt that is a refund from a payer with a rule is drafted like
   any other receipt.
+- **Wallet ownership proofs have been checked only on local hardhat**, against
+  a test contract that answers EIP-1271 like a Safe without the Safe's
+  SafeMessage wrapping, and with ordinary hardhat keys. No real Safe's
+  `isValidSignature` has been asked, neither for owner signatures pasted from
+  Safe{Wallet} nor for a message signed on chain, and nothing confirms that
+  Safe{Wallet} shows a signature in a form the screen accepts. Every
+  deployment wallet is unproven until someone proves it, so no deployed
+  receipt is collected into a draft before then. A proof is checked again
+  when a member asks and when a draft from receipts is issued; nothing
+  re-checks on a schedule, so collecting reads the last answer. A message a
+  Safe signed on chain stays valid after its owners change, so such a proof
+  does not lapse when the Safe changes hands.
+- **Holdings and realised gains have run only on fixtures and local
+  hardhat.** No priced governance token has been bought, sold or swapped
+  through them, so no gain on screen comes from a real disposal. Lots are
+  pooled per token contract per chain across the organisation's wallets; a
+  bridge to another chain reads as a sale and a purchase, and a swap as two
+  unpaired legs. Whether any of that is how the disposals should be taxed is
+  for the tax adviser.
 - **No billing is taken for paid plans.**
 - **PWA install on iOS is untested**: a home-screen web app may get storage
   separate from Safari, and the device key lives in localStorage — onboarding in

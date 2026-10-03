@@ -20,7 +20,7 @@ Organisations
 ```
 organisations ─┬─ members (role, status, invite)
                ├─ accounts (currency, backingUserId → users, gate, profile)
-               ├─ importedWallets
+               ├─ importedWallets (sync cursor; ownership proof and pending challenge on the row)
                ├─ contacts (bankAccounts, fingerprint)
                ├─ drafts (payment runs: DRAFT→PENDING_REVIEW→REVIEWED→EXECUTING→EXECUTED)
                ├─ invoices (incoming via link; outgoing issued snapshot; DRAFT from wallet receipts, settled by ledger rows)
@@ -32,4 +32,5 @@ organisations ─┬─ members (role, status, invite)
 - Nothing in store.ts deletes an org, account, invoice or ledger row.
 - Gating is read-time (plans/capabilities), never a write-time delete.
 - Ledger accountCode: set by a rule (`accountCodeAuto`) or a person (PATCH).
+- Ledger `valuation`: set once when an unvalued wallet row is valued by a price retry, with its source.
 - Invoice link tokens are stored hashed (linkTokenHash); sessions by tokenHash.

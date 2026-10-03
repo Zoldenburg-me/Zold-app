@@ -637,11 +637,11 @@ check("FIFO consumes the oldest lot first", () => {
     led({ id: "d1", direction: "out", amount: "10", fiatValue: "250", at: "2026-03-01T00:00:00.000Z" }),
   ]);
   assert.equal(basis.disposals.length, 1);
-  assert.equal(basis.disposals[0].costBasis, 100, "the 10-at-100 lot goes first");
-  assert.equal(basis.disposals[0].realised, 150);
+  assert.equal(basis.disposals[0].costBasisCents, 10000, "the 10-at-100 lot goes first");
+  assert.equal(basis.disposals[0].realisedCents, 15000);
   const [pos] = positions(basis);
-  assert.equal(pos.quantity, 10);
-  assert.equal(pos.costBasis, 200);
+  assert.equal(pos.quantity, "10");
+  assert.equal(pos.costBasisCents, 20000);
 });
 
 check("EURe is e-money: no lot opens for it and spending it is no disposal", () => {
@@ -659,7 +659,8 @@ check("a disposal with no matching acquisition is a shortfall, not free profit",
     led({ id: "d1", direction: "out", amount: "5", fiatValue: "100", at: "2026-03-01T00:00:00.000Z" }),
   ]);
   assert.equal(basis.shortfalls.length, 1);
-  assert.equal(basis.shortfalls[0].quantity, 5);
+  assert.equal(basis.shortfalls[0].quantity, "5");
+  assert.equal(basis.disposals[0].realisedCents, undefined, "not measured, rather than booked as pure profit");
 });
 
 check("CSV export neutralises formula injection", () => {
