@@ -212,7 +212,27 @@ await check("a viewer cannot claim the company's page", async () => {
   const r = await call("POST", "/api/orgs/org_co/payment-page", { handle: "lindnerholzbau" }, "u_view");
   assert.equal(r.status, 403);
 });
-await check("an owner claims it, and a payer sees the company's bank details and nothing else", async () => {
+await check("a personal organisation cannot claim a company page", async () => {
+  store.addAccount({ id: "acc_p", orgId: "org_p", currency: "EUR", label: "main", status: "active", provider: "monerium", identifier: { iban: IBAN }, address: SAFE, backingUserId: "u_co", createdAt: now, updatedAt: now } as any);
+  const r = await call("POST", "/api/orgs/org_p/payment-page", { handle: "sara-lindner" });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.code, "PAGE_NOT_AVAILABLE");
+});
+await check("an IBAN Monerium has not confirmed as the company's is not published: no claim, and the reason says so", async () => {
+  const r = await call("POST", "/api/orgs/org_co/payment-page", { handle: "lindnerholzbau" });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.code, "PAGE_NOT_AVAILABLE");
+  const g = await call("GET", "/api/orgs/org_co/payment-page");
+  assert.equal(g.body.ready, false);
+  assert.match(g.body.reason, /company profile at Monerium/);
+});
+await check("nor when the IBAN sits on a member's personal profile", async () => {
+  store.updateAccount("acc_co", { moneriumProfile: { id: "prof_sara", kind: "personal", name: "Sara Lindner", checkedAt: now } } as any);
+  const r = await call("POST", "/api/orgs/org_co/payment-page", { handle: "lindnerholzbau" });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+});
+await check("an owner claims it once the profile is the company's, and a payer sees the company's bank details and nothing else", async () => {
+  store.updateAccount("acc_co", { moneriumProfile: { id: "prof_co", kind: "corporate", name: "Lindner Holzbau GmbH", checkedAt: now } } as any);
   const r = await call("POST", "/api/orgs/org_co/payment-page", { handle: "LindnerHolzbau" });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.payUrl, "/pay/lindnerholzbau");
@@ -245,6 +265,28 @@ await check("a link whose payee does not back the company does not open under it
   const own = store.paymentRequests.find((p) => p.userId === "u_admin" && p.orgId === "org_co")!;
   assert.ok(own, "fixture: the re-booked member link above");
   assert.equal((await call("GET", `/api/pay/lindnerholzbau/${own.code}`, undefined, "")).status, 404);
+});
+await check("the holder shown is the name Monerium has for the profile", async () => {
+  store.updateAccount("acc_co", { moneriumProfile: { id: "prof_co", kind: "corporate", name: "Lindner Holzbau GmbH & Co. KG", checkedAt: now } } as any);
+  try {
+    const p = await call("GET", "/api/pay/lindnerholzbau", undefined, "");
+    assert.equal(p.body.bank.holder, "Lindner Holzbau GmbH & Co. KG");
+  } finally { store.updateAccount("acc_co", { moneriumProfile: { id: "prof_co", kind: "corporate", name: "Lindner Holzbau GmbH", checkedAt: now } } as any); }
+});
+await check("a claimed page closes, without bank details, when the profile turns out personal", async () => {
+  store.updateAccount("acc_co", { moneriumProfile: { id: "prof_sara", kind: "personal", name: "Sara Lindner", checkedAt: now } } as any);
+  try {
+    const p = await call("GET", "/api/pay/lindnerholzbau", undefined, "");
+    assert.equal(p.status, 503);
+    assert.ok(!JSON.stringify(p.body).includes(IBAN));
+  } finally { store.updateAccount("acc_co", { moneriumProfile: { id: "prof_co", kind: "corporate", name: "Lindner Holzbau GmbH", checkedAt: now } } as any); }
+});
+await check("a company link stops opening under the company's address once its payee no longer backs the company", async () => {
+  store.updateAccount("acc_co", { backingUserId: "u_admin" } as any);
+  try {
+    assert.equal((await call("GET", `/api/pay/lindnerholzbau/${pageCode}`, undefined, "")).status, 404);
+    assert.equal((await call("GET", `/api/pay/lindner/${pageCode}`, undefined, "")).status, 200, "the payee's own address still opens it");
+  } finally { store.updateAccount("acc_co", { backingUserId: "u_co" } as any); }
 });
 await check("a member cannot then claim the company's handle for a personal page", async () => {
   const r = await call("POST", "/api/users/u_admin/handle", { handle: "lindnerholzbau" }, "u_admin");
