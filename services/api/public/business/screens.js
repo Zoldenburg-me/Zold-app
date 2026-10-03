@@ -16,7 +16,6 @@ import {
   $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ROLE_CAN, ROLE_WORD, toast, when, ymd,
 } from "./core.js";
 import { META, RENDER, invoiceActions, settlementRows } from "./views.js";
-import { side, waitingForMe } from "./nav.js";
 
 const primary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--primary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
 const secondary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--secondary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
