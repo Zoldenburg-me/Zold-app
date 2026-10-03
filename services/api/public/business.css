@@ -435,3 +435,8 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-app__setup .zb-steps { margin: 12px 0; }
 @media (max-width: 599px) { .zb-app__row { flex-direction: column; } }
 .zb-bo-scope-note { margin-top: 10px; }
+
+/* Search (Cmd K): whose books, and the Ask Zold row that is not built yet. */
+.zb-cmdk__org { margin: 0; padding: 14px var(--z-space-5) 0; }
+#zb-search .z-cmdk__bar { height: 56px; }
+.zb-cmdk__ask { margin: var(--z-space-2) var(--z-space-1) 0; border-radius: var(--z-radius-md); border: 1px dashed var(--z-line-strong); }
