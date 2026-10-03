@@ -16,7 +16,7 @@ import { addrs } from "../chain.js";
 import { isDeployed } from "../wallet/candide.js";
 import { activatePaymentForwarder } from "../adapters/candide-forwarder.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicOrgPayee, publicPayee } from "../pay.js";
-import { payableEurAccount } from "./business/org-payment-page.js";
+import { orgPageAccount } from "./business/org-payment-page.js";
 import { qrSvg } from "../qr.js";
 import { store, type User } from "../store.js";
 import { publicUser } from "../users/public-user.js";
@@ -227,12 +227,12 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
       const user = store.findUserByHandle(req.params.handle);
       if (!user?.paymentPage?.handle) {
         // An organisation's page: bank details of its euro account, or closed
-        // while no active account has an IBAN.
+        // while no active account has an IBAN on the company's own profile.
         const org = store.findOrgByHandle(req.params.handle);
         if (!org) return res.status(404).json({ error: "no such payment page" });
-        const account = payableEurAccount(org.id);
-        if (!account) return res.status(503).json(PAGE_CLOSED);
-        return res.json(publicOrgPayee(org, account));
+        const page = orgPageAccount(org);
+        if ("reason" in page) return res.status(503).json(PAGE_CLOSED);
+        return res.json(publicOrgPayee(org, page.account, page.holder));
       }
       if (!(await livePaymentPage(user))) return res.status(503).json(PAGE_CLOSED);
       res.json(publicPayee(store.findUser(user.id) ?? user, payChain()));
