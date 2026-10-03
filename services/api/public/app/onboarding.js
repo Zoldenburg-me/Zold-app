@@ -2522,13 +2522,6 @@ $("btn-dash-kyc-refresh").onclick = async () => {
 $("btn-recovery-start").onclick = startRecoveryRequest;
 $("btn-links").onclick = () => phGo("get-paid");
 
-/**
- * /app?pay=<handle>/<code> — "Open in Zold" from a payment request page.
- *
- * Reads the public request and enters the SEPA send flow with the payee's
- * account, the amount and the reference filled in. Filled in, not hidden: the
- * IBAN is what the device signs a commitment over, so it stays on screen.
- */
 /** Kept until the app opens: sign-in and onboarding drop the query. */
 function parkPayLink() {
   const target = new URLSearchParams(location.search).get("pay");
@@ -2538,6 +2531,13 @@ function parkPayLink() {
   return target;
 }
 
+/**
+ * /app?pay=<handle>/<code> — "Open in Zold" from a payment request page.
+ *
+ * Reads the public request and enters the SEPA send flow with the payee's
+ * account, the amount and the reference filled in. Filled in, not hidden: the
+ * IBAN is what the device signs a commitment over, so it stays on screen.
+ */
 async function handlePayDeepLink() {
   const qs = new URLSearchParams(location.search);
   let target = parkPayLink();
