@@ -289,7 +289,7 @@ check("no <img> in the app points at a signed-in route (an image request carries
     const src = readFileSync(new URL(f, dir), "utf8");
     assert.ok(!/<img[^>]*src="\/api\/users\//.test(src), `${f} renders an <img> from /api/users/`);
   }
-  assert.ok(readFileSync(new URL("phone.js", dir), "utf8").includes("phLoadWalletQr"), "the wallet QR is loaded with the session");
+  assert.ok(readFileSync(new URL("phone-add.js", dir), "utf8").includes("phLoadWalletQr"), "the wallet QR is loaded with the session");
 });
 
 check("a QR of an address round-trips back to the same string", () => {
