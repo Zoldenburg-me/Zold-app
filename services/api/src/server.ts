@@ -1,5 +1,5 @@
 import express from "express";
-import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY } from "./config.js";
+import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY, WALLET_SYNC } from "./config.js";
 import { initStore, store } from "./store.js";
 import {
   moneriumApiKeysAvailable,
@@ -50,6 +50,7 @@ import { createPaymentRequestRouter, onPaymentRequestPaid, sweepPaymentRequests 
 import { createShopifyRouter, resolveShopifyRequest } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
 import { writeStatementLines } from "./bookkeeping/writer.js";
+import { pollWalletSyncOnce } from "./wallet-sync/sync.js";
 import {
   addrs,
   assertChainMatches,
@@ -323,6 +324,15 @@ setTimeout(() => {
 setInterval(() => {
   try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${e?.message ?? e}`); }
 }, 60_000).unref();
+
+// Imported wallets: ERC-20 transfers on their own chains, read only.
+setInterval(
+  () =>
+    pollWalletSyncOnce()
+      .then((n) => n && console.log(`wallet sync: booked ${n} transfer(s)`))
+      .catch((e) => console.error(`wallet sync failed: ${e?.message ?? e}`)),
+  WALLET_SYNC.pollMs,
+).unref();
 
 // Reconciler: log-only, never repairs. Drift between Monerium's ledger and
 // local receipt state should be loud rather than discovered later by a user

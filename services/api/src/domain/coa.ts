@@ -39,6 +39,10 @@ export const DEFAULT_CHART: {
 export const TX_TYPES = [
   "transfer_in",
   "transfer_out",
+  /** Between two addresses the org holds. No default rule: neither income nor expense. */
+  "internal_transfer",
+  /** A token on no curated list, booked as a quantity. No default rule. */
+  "unlisted_token",
   "payout",
   "invoice_payment",
   "gas_fee",
