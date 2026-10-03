@@ -6,7 +6,10 @@
  * a third party or to hold or move clients' money; the Business Terms are for
  * legal persons. So a business org's account may only be backed by a
  * `corporate` profile and a personal org's by a `personal` one, and in both
- * cases only once Monerium has approved the profile.
+ * cases only once Monerium has approved the profile, or, while it is still
+ * `pending`, has issued an approved IBAN on it to the backing Safe. That is
+ * the same fact that approves the user in the app, so one IBAN is never open
+ * in the app and "Not open" for the org it backs.
  *
  * Which profile a Zold login uses is decided once, at connect, by how the
  * login signed up (`pickProfileForSignup`): a personal signup uses only its
@@ -103,9 +106,10 @@ export function kindMismatch(org: Pick<Organisation, "type" | "name" | "legalNam
 export function judgeProfile(
   org: Pick<Organisation, "type" | "name" | "legalName">,
   profile: MoneriumProfileFacts,
+  ibanIssued = false,
 ): ProfileRefusal | null {
   if (profile.kind !== expectedProfileKind(org.type)) return kindMismatch(org);
-  if (profile.state !== "approved") {
+  if (profile.state !== "approved" && !(profile.state === "pending" && ibanIssued)) {
     return {
       status: 409,
       code: "MONERIUM_PROFILE_NOT_APPROVED",
@@ -113,6 +117,18 @@ export function judgeProfile(
     };
   }
   return null;
+}
+
+/** Has Monerium issued an approved IBAN on this profile that pays into this
+ *  address? `ibans` is GET /ibans as Monerium answered it. */
+export function ibanIssuedTo(ibans: unknown, profileId: string, address: string): boolean {
+  const list: any[] = Array.isArray(ibans) ? ibans : Array.isArray((ibans as any)?.ibans) ? (ibans as any).ibans : [];
+  return list.some((i) =>
+    i?.profile === profileId &&
+    i?.state === "approved" &&
+    typeof i?.iban === "string" && i.iban.trim() !== "" &&
+    typeof i?.address === "string" && i.address.toLowerCase() === address.toLowerCase(),
+  );
 }
 
 /* Legal-form words that differ between how a company writes its name and how

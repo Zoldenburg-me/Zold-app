@@ -5,6 +5,9 @@ const viewRoot = document.getElementById('view');
 const updatedAt = document.getElementById('updatedAt');
 let seq = 0;
 let inFlight = 0;
+const REFRESH_EVERY_MS = 15_000;
+const BADGES_EVERY_MS = 60_000;
+let badgesAt = 0;
 
 // The operator token is kept for this tab only: any same-origin script can
 // read localStorage. Debounced: a request per keystroke would fire a 401 for
@@ -32,15 +35,18 @@ function markNav() {
    draw. `force` redraws even when the operator is working in the view. */
 async function refresh(force) {
   const v = VIEWS[route.view];
-  if (!force && (inFlight || isModalOpen() || v.busy?.() || viewRoot.contains(document.activeElement) && document.activeElement.matches('textarea, input'))) return;
+  if (!force && (document.hidden || inFlight || isModalOpen() || v.busy?.() || viewRoot.contains(document.activeElement) && document.activeElement.matches('textarea, input'))) return;
   const mine = ++seq;
   inFlight++;
   const { view, arg } = route;
   try {
     // Nav badges need the overview and the recoveries; they load beside the
     // view and never hold its first draw (the overview reads gas over RPC).
-    if (view !== 'overview') loadOverview().then(setNavBadges, () => {});
-    if (view !== 'recoveries' && view !== 'overview') loadRecoveries().then(setNavBadges, () => {});
+    // They change slowly: a background refresh reloads them once a minute.
+    const badgesDue = force || Date.now() - badgesAt >= BADGES_EVERY_MS;
+    if (badgesDue) badgesAt = Date.now();
+    if (badgesDue && view !== 'overview') loadOverview().then(setNavBadges, () => {});
+    if (badgesDue && view !== 'recoveries' && view !== 'overview') loadRecoveries().then(setNavBadges, () => {});
     await v.load(arg);
     if (mine !== seq) return;
     // A redraw of the same page keeps the sections the operator opened.
@@ -73,4 +79,7 @@ document.getElementById('refreshBtn').addEventListener('click', () => refresh(tr
 window.addEventListener('hashchange', onRoute);
 
 onRoute();
-setInterval(() => { if (tokenInput.value.trim() !== rejectedToken) refresh(false); }, 15_000);
+const backgroundRefresh = () => { if (tokenInput.value.trim() !== rejectedToken) refresh(false); };
+setInterval(backgroundRefresh, REFRESH_EVERY_MS);
+// A hidden tab skips its refreshes and catches up when it is shown again.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) backgroundRefresh(); });

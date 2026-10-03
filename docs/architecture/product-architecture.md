@@ -616,7 +616,10 @@ can additionally be signed by the Safe with the passkey. Each document is:
 - **re-verified on every visit**: signature, a chain re-read of the balance,
   statement reconciliation, and the Safe's EIP-1271 signature.
 
-A revoked document still resolves but shows as failing verification. These
+A revoked document still resolves but shows as failing verification. The
+holder named on a document is the one Monerium reports for the IBAN; when
+that is not the Zold user (a company signup's IBAN sits on the company's
+profile), the document names the company and adds "operated by" the user. These
 belong to a *user's* account, not an org. Only the account holder can create
 them.
 

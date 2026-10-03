@@ -110,6 +110,24 @@ await t("the BIC is the one Monerium reported for the current IBAN, never one gu
   assert.match(docs.PARTIES.footer, /Monerium ehf/);
 });
 
+await t("the holder is who Monerium names for the IBAN; the Zold user, when different, operates it", () => {
+  const base: any = { name: "Christian Lindner", iban: "EE32 5315 1162 8202 5727", address: `0x${"aa".repeat(20)}`, createdAt: "2026-10-02T23:00:22.550Z" };
+  const entry = { iban: "EE32 5315 1162 8202 5727", address: base.address, profile: "p1", name: "Linder GmBh" };
+  const company = docs.holderBlock({ ...base, monerium: { ibans: [entry] } });
+  assert.equal(company.name, "Linder GmBh");
+  assert.equal(company.operatedBy, "Christian Lindner");
+  assert.match(docs.ownershipStatement(company, "2026-10-03"), /^This confirms that Linder GmBh, operated by Christian Lindner, holds/);
+  // Monerium's snapshot may come wrapped as { ibans: [...] }.
+  assert.equal(docs.holderBlock({ ...base, monerium: { ibans: { ibans: [entry] } } }).name, "Linder GmBh");
+  // The same person, written differently: no "operated by".
+  const own = docs.holderBlock({ ...base, monerium: { ibans: [{ ...entry, name: "CHRISTIAN  LINDNER" }] } });
+  assert.equal(own.name, "Christian Lindner");
+  assert.equal(own.operatedBy, undefined);
+  // An entry for another IBAN, or no name from Monerium, says nothing.
+  assert.equal(docs.holderBlock({ ...base, monerium: { ibans: [{ ...entry, iban: "EE00OTHER" }] } }).name, "Christian Lindner");
+  assert.equal(docs.holderBlock({ ...base, monerium: { ibans: [{ ...entry, name: "" }] } }).operatedBy, undefined);
+});
+
 // ---------------------------------------------------------------------------
 // online: a funded account, the routes, the verifier
 
