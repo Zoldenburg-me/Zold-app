@@ -22,3 +22,4 @@ export * from "./config/liquidity.js";
 export * from "./config/accounting.js";
 export * from "./config/faucet.js";
 export * from "./config/payments.js";
+export * from "./config/wallet-sync.js";
