@@ -378,7 +378,11 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     // company page their Safe backs, but a code under anyone else's handle is
     // a 404, so a page cannot impersonate another payee.
     const handles = r && user ? [r.handle, user.paymentPage?.handle, companyPageHandle(r.userId, r.orgId)] : [];
-    if (!r || !user || !handles.includes(req.params.handle)) {
+    // A company's address opens only that company's links, and only while
+    // their payee still backs it; the payee's own address still opens them.
+    const companyAddress = !!store.findOrgByHandle(req.params.handle);
+    if (!r || !user || !handles.includes(req.params.handle)
+      || (companyAddress && companyPageHandle(r.userId, r.orgId) !== req.params.handle)) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
