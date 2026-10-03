@@ -334,6 +334,13 @@ export interface ImportedWallet {
     /** Last block scanned, as a string — JSON has no bigint. */
     cursor?: string;
     error?: string;
+    /** First day to book, YYYY-MM-DD. Absent: book from the import onwards.
+     *  Earlier history is the `ledger.historicalSync` capability. */
+    from?: string;
+    /** Transfers seen but not booked (a token whose decimals could not be
+     *  read), and the last reason. Counted rather than dropped silently. */
+    skipped?: number;
+    lastSkipReason?: string;
   };
   createdAt: string;
 }
@@ -785,6 +792,9 @@ export interface LedgerEntry {
   logIndex?: number;
   direction: "in" | "out";
   asset: string;
+  /** The token contract, on rows synced from an imported wallet. The symbol
+   *  in `asset` is whatever the contract says, so this is the identity. */
+  token?: `0x${string}`;
   /** Decimal string in asset units. */
   amount: string;
   /** Value in the org's reporting currency at `at`, and the rate used. Both

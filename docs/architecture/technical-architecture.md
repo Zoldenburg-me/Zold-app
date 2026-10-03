@@ -756,7 +756,41 @@ flowchart LR
   guards against formula injection and uses CRLF.
 - **`bookkeeping/writer.ts` fills the ledger** through `store.addLedgerEntries`:
   one EUR statement line per economic event (product-architecture §8.3).
-  Imported wallets never sync, so they contribute no rows.
+- **`wallet-sync/sync.ts` adds the imported wallets' rows** (`source.kind:
+  "wallet"`, keyed `wallet:<chainId>:<address>:<tx>:<logIndex>`: the address,
+  not the wallet row, so removing and re-importing an address books nothing
+  twice). Per wallet a cursor walks windows of at most
+  `WALLET_SYNC.maxBlockSpan` (halved while the RPC refuses a range as too
+  large), `windowsPerTick` per poll, `confirmations` behind the head, and is
+  written with its window's rows. An RPC error, a token read that fails in
+  transport, or a price feed / ECB outage HOLDS the window: nothing is
+  written, the cursor stays, and the wallet shows the reason with every URL
+  removed (`publicSyncError`; an RPC URL carries its key). The first run
+  starts at the head, or at the first block of `sync.from`. `getLogs` is
+  topic-filtered on the wallet as `to` and as `from`, across all tokens,
+  decoded `strict` (NFT transfers drop out). A token whose `decimals()`
+  reverts is counted in `sync.skipped`, not booked. A counterparty that is
+  another of the org's imported wallets or Zold accounts on that chain makes
+  the row `internal_transfer`, which no default rule books. The org's own Zold
+  account cannot be imported (409) and is not synced. The RPC's chain id is
+  checked against the wallet's every run.
+- **Token class** (`wallet-sync/token-class.ts`, `token-lists.ts`): EURe by
+  Monerium's contract address per chain (`EMONEY_TOKENS`, plus the app
+  chain's deployment) is e-money, booked at par, tagged `e-money`, and
+  `computeCostBasis` opens no lot for it. USDC/USDT by address and any token
+  on a curated list (`WALLET_SYNC.tokenLists`: Uniswap's and CoinGecko's per
+  chain, refreshed daily, a stale copy kept through an outage) is a listed
+  virtual asset. Anything else is `unlisted_token`: a quantity row with no
+  value, no price call and no default rule. A list that has never loaded
+  holds the window; nothing is called unlisted because a host was down.
+- **Valuation** (`wallet-sync/valuation.ts`): a USD stablecoin recognised by
+  contract address (`USD_STABLECOINS`) is 1 USD; anything else is DefiLlama's
+  USD price by chain and address at the block time, refused below
+  `minPriceConfidence` or further than `priceSearchWidthSec` from the block.
+  Both go through the ECB USD rate for the block's day. A price that does not
+  exist (no feed name, no point, low or missing confidence) books
+  the row unvalued with `needs-valuation`, and the asset becomes
+  `SYMBOL@chain:address` so it cannot join a real token's FIFO lots.
 
 ---
 
@@ -1121,7 +1155,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /:orgId/accounts/:a/profile-check` (P(accounts.open)) | Re-read the backing user's Monerium profile and record it if it passes. |
 | `GET/POST /:orgId/payment-requests` (P(invoices.read / invoices.manage)) | List or create the org's payment links. Creating needs the caller's Safe to back the org's account (403 `NOT_THE_PAYEE`). |
 | `GET/POST/PATCH/DELETE /:orgId/contacts[/:c]` (P(contacts.*)) | Address book. |
-| `GET/POST/DELETE /:orgId/wallets[/:w]` (P(wallets.*)) | Imported wallets. |
+| `GET/POST/DELETE /:orgId/wallets[/:w]` (P(wallets.*)) | Imported wallets. POST takes an optional `syncFrom` day (YYYY-MM-DD, not in the future), which needs `ledger.historicalSync`; without it the wallet is booked from the import on. |
 
 **Drafts** (`/orgs`)
 

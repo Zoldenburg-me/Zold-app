@@ -644,6 +644,16 @@ check("FIFO consumes the oldest lot first", () => {
   assert.equal(pos.costBasis, 200);
 });
 
+check("EURe is e-money: no lot opens for it and spending it is no disposal", () => {
+  const basis = computeCostBasis([
+    led({ id: "e1", asset: "EURe", direction: "in", amount: "100", fiatValue: "100", at: "2026-01-01T00:00:00.000Z" }),
+    led({ id: "e2", asset: "EURe", direction: "out", amount: "40", fiatValue: "40", at: "2026-02-01T00:00:00.000Z" }),
+  ]);
+  assert.equal(basis.lots.length, 0);
+  assert.equal(basis.disposals.length, 0);
+  assert.equal(basis.shortfalls.length, 0);
+});
+
 check("a disposal with no matching acquisition is a shortfall, not free profit", () => {
   const basis = computeCostBasis([
     led({ id: "d1", direction: "out", amount: "5", fiatValue: "100", at: "2026-03-01T00:00:00.000Z" }),

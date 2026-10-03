@@ -92,14 +92,35 @@ RENDER.accounts = async () => {
 
 const booksBack = () => linkBtn("Books", "books", "arrow_back");
 
+/** What the sync has done with a wallet, in words. An error names its cause. */
+const walletSyncCell = (s = {}) => {
+  const skipped = s.skipped ? `<span class="zb-sub2">${esc(String(s.skipped))} transfer${s.skipped === 1 ? "" : "s"} not booked: ${esc(plain(s.lastSkipReason || ""))}</span>` : "";
+  if (s.status === "error") return `${Z.tag("Not syncing", "amber")}<span class="zb-sub2">${esc(plain(s.error || ""))}</span>${skipped}`;
+  if (s.status === "pending") return `<span class="z-dim">Waiting${s.from ? `, from ${esc(day(s.from))}` : ""}</span>`;
+  const when = s.lastSyncedAt ? `<span class="zb-sub2">checked ${esc(day(s.lastSyncedAt))}</span>` : "";
+  return `${s.status === "syncing" ? "Catching up" : "Up to date"}${when}${skipped}`;
+};
+
 META.wallets = () => ({ title: "Wallets", sub: "Addresses you want counted in your books. Read only: Zold never holds a key for one.", actions: secondary("Import wallet", 'data-act="import-wallet"', "add") });
 RENDER.wallets = async () => {
   const { wallets } = await api(`/api/orgs/${org.id}/wallets`);
   return wallets.length
-    ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Label</th><th scope="col">Address</th><th scope="col">Network</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${wallets.map((w) => `<tr>
+    ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Label</th><th scope="col">Address</th><th scope="col">Network</th><th scope="col">Sync</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${wallets.map((w) => `<tr>
         <td>${esc(w.label)}<span class="zb-sub2">${esc(w.kind.toUpperCase())}</span></td><td class="z-mono" translate="no">${esc(w.address)}</td><td>${esc(String(w.chainId))}</td>
+        <td>${walletSyncCell(w.sync)}</td>
         <td><div class="zb-cellact"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="del-wallet" data-id="${esc(w.id)}">Remove<span class="z-sr">: ${esc(w.label)}</span></button></div></td></tr>`).join("")}</tbody></table></div>`
     : `<div class="z-card"><p class="empty">No wallets imported.</p></div>`;
+};
+
+/** A synced token with no feed price is booked as SYMBOL@chain:address, so it
+ *  cannot merge into the real token's lots; show the symbol and the contract,
+ *  and say why it has no value: on no token list, or listed but unpriced. */
+const assetCell = (e) => {
+  if (e.asset === "EURe") return "Euros";
+  const m = /^(.*)@\d+:(0x[0-9a-f]{40})$/.exec(e.asset);
+  if (!m) return esc(e.asset);
+  const why = (e.tags || []).includes("unlisted") ? "not on a token list" : "no price";
+  return `${esc(m[1])}<span class="zb-sub2 z-mono" translate="no">${esc(`${m[2].slice(0, 6)}…${m[2].slice(-4)}`)} · ${why}</span>`;
 };
 
 META.ledger = () => ({ title: "Every transaction", sub: "Every movement across your accounts and imported wallets.", actions: `${booksBack()}${cap("export.ledger").allowed ? secondary("Download CSV", 'data-act="export-ledger"', "download") : ""}` });
@@ -108,7 +129,7 @@ RENDER.ledger = async () => {
   const { entries } = await api(`/api/orgs/${org.id}/ledger`);
   return entries.length
     ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Date</th><th scope="col">Currency</th><th scope="col">Category</th><th scope="col">Tags</th><th scope="col" class="z-tbl__num">Amount</th></tr></thead><tbody>${entries.map((e) => `<tr>
-        <td class="z-dim">${esc(day(e.at))}</td><td>${esc(e.asset === "EURe" ? "Euros" : e.asset)}</td><td>${esc(e.accountCode || "None")}</td><td class="z-dim">${esc(e.tags.join(", ") || "None")}</td>
+        <td class="z-dim">${esc(day(e.at))}</td><td>${assetCell(e)}</td><td>${esc(e.accountCode || "None")}</td><td class="z-dim">${esc(e.tags.join(", ") || "None")}</td>
         <td class="z-tbl__num"><span class="z-amount${e.direction === "in" ? " z-amount--in" : ""}">${e.direction === "in" ? "+" : "−"}${esc(e.amount)}</span></td></tr>`).join("")}</tbody></table></div>`
     : `<div class="z-card"><p class="empty">Nothing yet. Transactions appear once money moves or a wallet syncs.</p></div>`;
 };

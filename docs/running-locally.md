@@ -24,6 +24,15 @@ forwarding — and exits 1 on any FAIL. `--chain 8453 --gas token` overrides.
 `npm run dev` wiping its own db is why test accounts vanish between runs — and
 why the live accounts in `data/db.json` must never be exercised with it.
 
+Imported wallets sync only on chains with an RPC: `WALLET_SYNC_RPC_1=https://…`
+(or `WALLET_SYNC_RPCS='{"1":"https://…"}'`). Locally, point
+`WALLET_SYNC_RPC_31337` at the hardhat node and set
+`WALLET_SYNC_CONFIRMATIONS=0`; a MockToken mint to an imported address is then
+booked within one poll (`WALLET_SYNC_POLL_MS`, default 60 s). Classing a
+token needs the curated lists (`WALLET_SYNC_TOKEN_LISTS`, default Uniswap +
+CoinGecko) fetched once a day; offline, point it at a local JSON in the
+tokenlists.org shape, or the window holds with "Waiting for the token lists".
+
 To fund locally: mint MockToken EURe straight to the user's Safe from hardhat
 account 0 (the token owner) and `refresh()` picks it up.
 
