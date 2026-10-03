@@ -192,7 +192,7 @@ Implement in: `app/profile.js, app/signers.js, business/*` (confirm against docs
 - **Security** (412px). The storage warning shows only when device.js reports it. status tags: ACTIVE, OFF, This device.
 - **Plan** (412px). No upgrade button until billing exists. status tags: ACTIVE.
 - **Pending** (412px). status tags: SOON.
-- **Integrations** (412px). GetMyInvoices is tested only against a stand-in: keep Beta. sevDesk and DATEV are not built. status tags: Beta, Soon.
+- **Integrations** (412px). GetMyInvoices has run one live push, with test data: keep Beta. sevDesk and DATEV are not built. status tags: Beta, Soon.
 
 ## Desktop (sidebar layout)
 
@@ -218,7 +218,7 @@ Implement in: `index.html at >=1024px (personal), business.html + business/*.js 
 - **Desk-Invoices** (1440px). status tags: OPEN, OVERDUE, PAID.
 - **Desk-Invoice-Editor** (1440px). Preview follows the invoice language, not the app language. fields: customer, language, invoice_date, service_date, due, description, quantity, unit_price.
 - **Desk-Members** (1440px). status tags: ACTIVE.
-- **Desk-Integrations** (1440px). Say where to find the key in GetMyInvoices. Beta label stays until a real account has been used. fields: api_key; status tags: Beta, Ready, Soon.
+- **Desk-Integrations** (1440px). Say where to find the key in GetMyInvoices. Beta label stays until a month of real Belege has gone up. fields: api_key; status tags: Beta, Ready, Soon.
 
 ## Account recovery
 
