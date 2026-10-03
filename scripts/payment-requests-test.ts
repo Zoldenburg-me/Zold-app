@@ -454,7 +454,7 @@ try {
 
   const invAfter = store.findInvoice(theirs)!;
   const st0 = (invAfter.settlements ?? [])[0];
-  const st = st0?.method === "bank" ? undefined : st0;
+  const st = st0?.method === "bank" || st0?.method === "wallet-receipt" ? undefined : st0;
   check("and the settlement is recorded even though auto-convert is off, because acquiring the asset is itself the event the books need",
     Boolean(st) && st!.depositId === dInv.id && st!.receivedAsset === "USDC" && st!.receivedAmount === qInv, JSON.stringify(invAfter.settlements));
   check("it carries the wallet transaction and the euro value at receipt, with the rate and whose feed it came from",

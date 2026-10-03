@@ -496,6 +496,13 @@ RENDER["invoicing-settings"] = async () => {
    when the supplier gave an IBAN: a wallet-only invoice says so instead of
    offering a button that the API would refuse. */
 export function invoiceActions(i) {
+  if (i.state === "DRAFT") {
+    // Issue only where the API would accept it: receipts on the draft, and a
+    // total that net plus VAT can reach.
+    const issuable = i.lines.length && !i.fromReceipts?.mismatchCents;
+    return `${issuable ? `<button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="issue-receipt-draft" data-id="${esc(i.id)}">Issue invoice</button>` : ""}
+      <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="discard-receipt-draft" data-id="${esc(i.id)}">Discard draft</button>`;
+  }
   if (i.direction === "outgoing") {
     return i.state === "SUBMITTED"
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-pay-link" data-id="${esc(i.id)}">Payment link</button>`
@@ -531,6 +538,10 @@ export function settlementRows(list) {
         <div>${esc(eur(p.amountEur))} from ${esc(p.counterpartyName || "a payer without a name")}</div>
         <p class="desc">${esc(p.counterpartyIban ? maskIban(p.counterpartyIban) : "No IBAN given")}${p.memo ? ` · “${esc(p.memo)}”` : ""}</p>
         <p class="desc">Matched on ${esc(p.matchedOn === "payment-link" ? "the payment link code" : "the invoice number")} · ${esc(day(p.at))}</p>
+      </div></div>` : p.method === "wallet-receipt" ? `
+      <div class="issue">${Z.tag(p.asset || "Token")}<div>
+        <div>${esc(p.receivedAmount)} ${esc(p.asset)} received in your wallet · ${tx(p.txHash)}</div>
+        <p class="desc">Worth ${esc(eur(p.amountEur))} when it arrived · ${esc(day(p.at))}</p>
       </div></div>` : `
       <div class="issue">${Z.tag(p.receivedAsset || "Crypto")}<div>
         <div>${esc(n(p.receivedAmount, 6))} ${esc(p.receivedAsset)} received · ${tx(p.receiptTxHash)}</div>

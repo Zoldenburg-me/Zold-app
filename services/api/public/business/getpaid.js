@@ -123,7 +123,7 @@ function otherWays(invoices) {
   const way = (icon, title, sub, v) => `<li><a class="z-row" href="?view=${v}" data-view-link="${v}">${Z.iconTile({ icon })}<span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${Z.icon("chevron_right", "z-row__chev")}</a></li>`;
   let invSub = "Issue one, or ask a supplier for theirs with a link";
   if (invoices) {
-    const open = invoices.filter((i) => i.direction === "outgoing" && !["PAID", "RECONCILED", "DELETED"].includes(i.state));
+    const open = invoices.filter((i) => i.direction === "outgoing" && !["PAID", "RECONCILED", "DELETED", "DRAFT"].includes(i.state));
     const late = open.filter((i) => i.overdue);
     if (open.length) invSub = `${open.length} open${late.length ? ` · ${late.length} overdue` : ""}`;
   }

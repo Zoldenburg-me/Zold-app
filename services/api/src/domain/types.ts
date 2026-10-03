@@ -384,8 +384,29 @@ export interface Contact {
   wallets: ContactWallet[];
   bankAccounts: ContactBankAccount[];
   notes?: string;
+  /** How this contact's wallet receipts are invoiced. Absent: they are not. */
+  payerRule?: PayerRule;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A contact that pays for a service in amounts it decides itself (a DAO
+ * paying a delegate): each month's wallet receipts from it become one draft
+ * invoice. The rule holds what the receipts cannot say: what was supplied, to
+ * whom the invoice is addressed, and the tax line. The organisation chooses
+ * that line; Zold supplies no default for it.
+ */
+export interface PayerRule {
+  serviceDescription: string;
+  vat: { kind: "standard"; rate: number } | { kind: "exempt"; reason: string; note?: string };
+  recipient: InvoiceParty;
+  recipientIsBusiness?: boolean;
+  supplyKind?: "services" | "goods";
+  language?: "de" | "en";
+  notes?: string;
+  updatedAt: string;
+  updatedByMemberId: string;
 }
 
 // ── Draft payments (create -> review -> execute) ────────────────────────────
@@ -473,6 +494,9 @@ export interface DraftPayment {
  * and locked". Deleting is only allowed while unpaid.
  */
 export type InvoiceState =
+  /** An outgoing invoice collected from wallet receipts and not yet issued:
+   *  no number, no issue date, nothing a customer has seen. */
+  | "DRAFT"
   | "LINK_CREATED"
   | "SUBMITTED"
   | "PAYING"
@@ -485,6 +509,33 @@ export interface InvoiceLine {
   quantity: string;
   unitPrice: string;
   amount: string;
+  /** The wallet receipt this line invoices, on an invoice made from receipts. */
+  receipt?: InvoiceLineReceipt;
+}
+
+/** What arrived, as the ledger row recorded it when the line was written. */
+export interface InvoiceLineReceipt {
+  ledgerEntryId: string;
+  /** Block time. */
+  at: string;
+  chainId?: number;
+  asset: string;
+  token?: `0x${string}`;
+  /** Decimal string in asset units. */
+  amount: string;
+  txHash: string;
+  /** EUR value at receipt, in cents: what the row's `fiatValue` said. */
+  eurCents: number;
+}
+
+/** A wallet row of the payer's that is on no invoice line, and why. */
+export interface ExcludedReceipt {
+  ledgerEntryId: string;
+  at: string;
+  asset: string;
+  amount: string;
+  txHash?: string;
+  reason: string;
 }
 
 /**
@@ -600,7 +651,23 @@ export interface BankInvoiceSettlement extends InvoiceSettlementCommon {
  * written: a bank credit with a conversion rate, or a crypto receipt with a
  * counterparty IBAN, are not merely discouraged, they do not typecheck.
  */
-export type InvoiceSettlement = CryptoInvoiceSettlement | BankInvoiceSettlement;
+/**
+ * A transfer into an imported wallet that an invoice was written for after
+ * the fact. The invoice line and this record name the same ledger row, and
+ * `amountEur` is that row's value at receipt, so the invoice is paid by
+ * exactly what it bills.
+ */
+export interface WalletReceiptSettlement extends InvoiceSettlementCommon {
+  method: "wallet-receipt";
+  ledgerEntryId: string;
+  chainId?: number;
+  txHash: string;
+  asset: string;
+  /** Decimal string in asset units. */
+  receivedAmount: string;
+}
+
+export type InvoiceSettlement = CryptoInvoiceSettlement | BankInvoiceSettlement | WalletReceiptSettlement;
 
 
 export interface Invoice {
@@ -740,6 +807,33 @@ export interface Invoice {
   /** On-chain payments that settled this invoice. Appended, never replaced —
    *  an invoice can legitimately be paid more than once. */
   settlements?: InvoiceSettlement[];
+  /**
+   * Set on an invoice collected from a payer's wallet receipts: whose, for
+   * which calendar month in which time zone, and the rows of that payer and
+   * month that were left out. `mismatchCents` is set when the rule charges a
+   * VAT rate and no net amount plus its VAT equals what was received; such a
+   * draft is not issuable.
+   */
+  fromReceipts?: {
+    contactId: string;
+    /** The contact's name, and the rule's recipient and tax line, when the
+     *  draft was last collected: what the person issuing it is shown. Issuing
+     *  refuses if the rule has been saved since (`ruleUpdatedAt`). */
+    payerName?: string;
+    recipientName?: string;
+    vat?: PayerRule["vat"];
+    ruleUpdatedAt?: string;
+    /** What the wallets' sync state left uncertain about the month when the
+     *  draft was last collected: a wallet behind, or transfers it could not
+     *  read. Empty or absent: nothing known to be missing. */
+    syncWarnings?: string[];
+    /** YYYY-MM in `timeZone`. */
+    month: string;
+    timeZone: string;
+    excluded: ExcludedReceipt[];
+    mismatchCents?: number;
+    runAt: string;
+  };
 }
 
 // ── Chart of accounts + bookkeeping ─────────────────────────────────────────

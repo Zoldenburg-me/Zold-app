@@ -144,7 +144,7 @@ function attention({ waiting, invoices, lines, accounts }) {
       `${sum ? `${esc(eur(sum))} in total · ` : ""}oldest drafted ${esc(when(oldest.createdAt).replace(/^(Today|Yesterday)/, (w) => w.toLowerCase()))} by ${esc(memberName(oldest.createdByMemberId))}`,
       linkBtn("Review", "payments", "", "primary")));
   }
-  const late = (invoices || []).filter((i) => i.direction === "outgoing" && i.overdue && !["PAID", "RECONCILED", "DELETED"].includes(i.state));
+  const late = (invoices || []).filter((i) => i.direction === "outgoing" && i.overdue && !["PAID", "RECONCILED", "DELETED", "DRAFT"].includes(i.state));
   if (late.length) {
     const first = late[0];
     const who = first.issued?.recipient?.name || "Customer";

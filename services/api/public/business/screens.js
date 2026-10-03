@@ -231,7 +231,16 @@ RENDER.members = async () => {
 const INV_FILTERS = [["open", "Open"], ["paid", "Paid"], ["overdue", "Overdue"]];
 export const iv = { filter: "open", side: "issued", invoices: [] };
 
+/* Who an invoice is to or from. A draft made from receipts has no recipient
+   yet: it is named after the contact whose payments it collects. */
+const invWho = (i) => {
+  if (i.direction !== "outgoing") return i.supplier?.orgName || "Waiting for your supplier";
+  return i.issued?.recipient?.name || i.fromReceipts?.payerName || "Customer";
+};
+const monthWord = (m) => new Date(`${m}-15T12:00:00Z`).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+
 export function invWord(i) {
+  if (i.state === "DRAFT") return "DRAFT";
   if (["PAID", "RECONCILED"].includes(i.state)) return "PAID";
   if (i.state === "PAYING") return "IN FLIGHT";
   if (i.state === "LINK_CREATED") return "WAITING";
@@ -249,7 +258,7 @@ META.invoices = () => ({
   title: "Invoices",
   sub: "",
   actions: cap("invoices").allowed
-    ? `${secondary("Request an invoice", 'data-act="new-invoice"', "move_to_inbox")}${primary("Issue invoice", 'data-act="issue-invoice"', "add")}`
+    ? `${secondary("Collect receipts", 'data-act="collect-receipts"', "account_balance_wallet")}${secondary("Request an invoice", 'data-act="new-invoice"', "move_to_inbox")}${primary("Issue invoice", 'data-act="issue-invoice"', "add")}`
     : "",
 });
 
@@ -265,13 +274,13 @@ RENDER.invoices = async () => {
   const rows = list.map((i) => {
     const out = i.direction === "outgoing";
     const w = invWord(i);
-    const who = (out ? i.issued?.recipient?.name : i.supplier?.orgName) || (out ? "Customer" : "Waiting for your supplier");
+    const who = invWho(i);
     const num = (out ? i.issued?.number : i.supplier?.invoiceNumber) || "";
     const a = invAmount(i);
     const fig = w === "WAITING" ? '<span class="z-dim">Not filled in</span>'
       : w === "PAID" ? Z.amount({ value: a.value, currency: a.currency, direction: out ? "in" : "out" })
         : `<span class="z-amount">${esc(Z.formatMoney(a.value, a.currency))}</span>`;
-    return `<tr><td class="z-mono">${esc(num) || '<span class="z-dim">None</span>'}</td>
+    return `<tr><td class="z-mono">${esc(num) || `<span class="z-dim">${w === "DRAFT" ? "Not issued" : "None"}</span>`}</td>
       <td><span class="z-tbl__who">${Z.avatar({ name: who })}<button type="button" class="z-tbl__link" data-act="invoice-detail" data-id="${esc(i.id)}">${esc(who)}</button></span></td>
       <td class="${w === "OVERDUE" ? "zb-due--late" : "z-dim"}">${i.dueDate ? esc(day(ymd(i.dueDate))) : "None"}</td>
       <td>${Z.tag(w)}</td>
@@ -284,13 +293,46 @@ RENDER.invoices = async () => {
     <div class="zb-notes">${note(`An invoice marks itself paid when a bank transfer with its number arrives. Your details on every invoice come from the <a href="?view=invoicing-settings" data-view-link="invoicing-settings">invoicing profile</a>.`, "auto_awesome")}</div>`;
 };
 
+/* A draft made from wallet receipts: each receipt it bills, then the payer's
+   rows of that month it leaves out, each with the reason. */
+function receiptDraftSections(i) {
+  const tx = (h) => (h ? `<span class="mono" title="${esc(h)}">${esc(h.slice(0, 10))}…${esc(h.slice(-6))}</span>` : "none");
+  // An unpriced token is booked as SYMBOL@chain:address; the symbol is enough here.
+  const tokenWord = (asset) => String(asset).split("@")[0];
+  const fr = i.fromReceipts;
+  const lines = i.lines.filter((l) => l.receipt);
+  const billed = lines.length
+    ? `<dl class="z-kv z-card">${lines.map((l) => `<div><dt>${esc(day(l.receipt.at))} · ${esc(l.receipt.amount)} ${esc(l.receipt.asset)} · ${tx(l.receipt.txHash)}</dt><dd class="z-fig">${esc(eur(l.receipt.eurCents / 100))}</dd></div>`).join("")}</dl>`
+    : '<p class="zb-hint">No receipt of this month can be invoiced.</p>';
+  const left = fr.excluded.length
+    ? `<section><h3 class="z-eyebrow" style="margin-bottom:8px">Not included</h3>
+        <ul class="z-list z-card">${fr.excluded.map((x) => `<li class="zb-left"><div>${esc(day(x.at))} · ${esc(x.amount)} ${esc(tokenWord(x.asset))}${x.txHash ? ` · ${tx(x.txHash)}` : ""}</div><p class="desc">${esc(x.reason)}</p></li>`).join("")}</ul></section>`
+    : "";
+  const gap = fr.mismatchCents
+    ? note(`At this payer’s VAT rate no net amount plus VAT adds up to ${esc(eur(Number(i.total)))}, so the invoice would differ from the money by ${esc(eur(Math.abs(fr.mismatchCents) / 100))}. It can’t be issued from here.`, "warning", "a")
+    : "";
+  const behind = (fr.syncWarnings || []).length
+    ? note(`This month may be incomplete: ${fr.syncWarnings.map(esc).join(" ")} Collect the month again once the wallets have caught up.`, "warning", "a")
+    : "";
+  return `${behind}<section><h3 class="z-eyebrow" style="margin-bottom:8px">Receipts, at their value on arrival</h3>${billed}</section>${left}${gap}
+    ${note("Issuing gives it the next invoice number and today’s date, and marks it paid by these receipts. Collected " + esc(when(fr.runAt)) + ".", "info")}`;
+}
+
 /** One invoice in a drawer: its parties, what it is for, how it was paid. */
 export function invoiceDrawer(i, trigger) {
   const out = i.direction === "outgoing";
   const a = invAmount(i);
-  const who = (out ? i.issued?.recipient?.name : i.supplier?.orgName) || "Not filled in yet";
+  const isDraft = i.state === "DRAFT";
+  const who = out ? invWho(i) : i.supplier?.orgName || "Not filled in yet";
   const num = (out ? i.issued?.number : i.supplier?.invoiceNumber) || "";
-  const rows = [
+  const rows = isDraft ? [
+    ["Payer", who],
+    ["Addressed to", i.fromReceipts.recipientName || "Set in the payer rule"],
+    ["Tax line", i.fromReceipts.vat ? (i.fromReceipts.vat.kind === "standard" ? `${i.fromReceipts.vat.rate}% VAT, contained in what was received` : `No VAT (${i.fromReceipts.vat.reason.replace(/_/g, " ")})`) : "Set in the payer rule"],
+    ["Receipts of", monthWord(i.fromReceipts.month)],
+    ["Total received", Z.formatMoney(a.value, a.currency)],
+    ["Number and date", "Given when you issue it"],
+  ] : [
     ["Number", num || "None"],
     [out ? "Customer" : "Supplier", who],
     ["Amount", Z.formatMoney(a.value, a.currency)],
@@ -299,10 +341,10 @@ export function invoiceDrawer(i, trigger) {
   ];
   document.getElementById("inv-drawer")?.remove();
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
-    id: "inv-drawer", title: num ? `Invoice ${num}` : "Invoice",
+    id: "inv-drawer", title: isDraft ? `Draft for ${monthWord(i.fromReceipts.month)}` : num ? `Invoice ${num}` : "Invoice",
     body: `<div class="z-sheet__body"><div>${Z.tag(invWord(i))}</div>
       <dl class="z-kv z-card">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
-      ${i.settlements?.length ? settlementRows(i.settlements) : ""}
+      ${isDraft ? receiptDraftSections(i) : i.settlements?.length ? settlementRows(i.settlements) : ""}
       <div class="zb-actions" style="margin-top:0">${invoiceActions(i)}</div></div>`,
   }));
   Z.openOverlay("inv-drawer", trigger);

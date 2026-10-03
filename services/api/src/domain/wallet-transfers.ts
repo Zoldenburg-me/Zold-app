@@ -100,7 +100,9 @@ export const MAX_DECIMALS = 77;
 export const usableDecimals = (d: unknown): d is number =>
   typeof d === "number" && Number.isInteger(d) && d >= 0 && d <= MAX_DECIMALS;
 
-function contactFor(contacts: Contact[], chainId: number, address: string): Contact | undefined {
+/** The one contact that lists `address` (lowercase) on that chain. Two that
+ *  both list it name neither: a guess would book the money to the wrong payer. */
+export function contactFor(contacts: Contact[], chainId: number, address: string): Contact | undefined {
   const hits = contacts.filter((c) =>
     c.wallets.some((w) => w.chainId === chainId && w.address.toLowerCase() === address),
   );

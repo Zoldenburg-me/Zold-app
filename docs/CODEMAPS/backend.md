@@ -4,7 +4,7 @@
 ## Middleware chain (server.ts)
 json → securityHeaders → originPolicy → /api rate limit → pages → routers → notFound → error log
 
-## Routers (217 routes) — file: route groups
+## Routers (221 routes) — file: route groups
 | Mount | File | Routes |
 |---|---|---|
 | /api | routes/auth.ts | session, webauthn challenge, passkey register/login, passkey-Safe deployment |
@@ -23,7 +23,7 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | /api | routes/shopify.ts | install/callback, payments app hooks, order pay pages |
 | /api | routes/email-verification.ts, faucet.ts, admin.ts | codes, testnet faucet, operator stats |
 | /api/orgs | routes/orgs.ts (24) | orgs, plans, members, invites, accounts, contacts, wallets |
-| /api/orgs | routes/business.ts → business/* | drafts (four-eyes runs), invoices, invoicing (§14 UStG), payment-links, bookkeeping (coa, rules, ledger), bookkeeping-export (statement, Belege, Lexware, ZIP), integrations (GetMyInvoices) |
+| /api/orgs | routes/business.ts → business/* | drafts (four-eyes runs), invoices, invoicing (§14 UStG; issue-outgoing is the one issue path), income-invoices (payer rules, monthly drafts from wallet receipts, issuing a draft), payment-links, bookkeeping (coa, rules, ledger), bookkeeping-export (statement, Belege, Lexware, ZIP), integrations (GetMyInvoices) |
 | /api/invoice-links | business/invoice-links.ts | supplier fills an invoice by token |
 | /api/gnosis-pay | routes/gnosis-pay.ts | SIWE, account, transactions |
 | — | server.ts | GET /api/health, GET /api/rates |
@@ -36,7 +36,7 @@ payment-requests.ts (702) · pay.ts · documents.ts · receipt.ts · audit.ts
 
 ## Domain (pure rules)
 roles (5 roles → permissions) · plans (capabilities) · drafts (state machine) ·
-invoices/invoicing/vat-ids/jurisdictions · coa (chart + default rules) · ledger ·
+invoices/invoicing/vat-ids/jurisdictions · income-invoices (drafts from wallet receipts) · coa (chart + default rules) · ledger ·
 accounts · ceilings · residency · monerium-profile
 
 ## HTTP layer (http/)

@@ -29,6 +29,7 @@ import {
 import {
   PLANS,
   TRIAL_DAYS,
+  can,
   effectivePlan,
   limitsFor,
   plansFor,
@@ -754,7 +755,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "contacts.read")) return;
-    res.json({ contacts: store.contactsOf(ctx.org.id) });
+    // A payer rule belongs to invoicing: without that capability it is left
+    // out of the answer, and stays on the row.
+    const showRules = can(ctx.org, "invoices").allowed;
+    res.json({
+      contacts: store.contactsOf(ctx.org.id).map((c) => (showRules ? c : { ...c, payerRule: undefined })),
+    });
   });
 
   r.post("/:orgId/contacts", (req, res) => {
@@ -826,7 +832,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
           ...validateBankAccount(b),
         }));
       }
-      res.json({ contact: store.updateContact(contact.id, patch) });
+      const saved = store.updateContact(contact.id, patch);
+      res.json({ contact: can(ctx.org, "invoices").allowed ? saved : { ...saved, payerRule: undefined } });
     } catch (err) {
       if (err instanceof ContactError) return res.status(400).json({ error: err.message });
       throw err;
