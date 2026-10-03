@@ -154,7 +154,7 @@ RENDER["get-paid"] = async () => {
   const way = (icon, title, sub, v, tag = "") => `<li><a class="z-row" href="?view=${v}" data-view-link="${v}">${Z.iconTile({ icon })}<span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag ? `<span class="z-row__right">${tag}</span>` : ""}${Z.icon("chevron_right", "z-row__chev")}</a></li>`;
   const ways = [
     cap("invoices").allowed ? way("receipt_long", "Invoices", "Issue one, or ask a supplier for theirs with a link", "invoices") : "",
-    way("hub", "Shopify and other connections", "Take payments from your store, send your books on", "integrations"),
+    way("storefront", "Shopify checkout", "Take payments from your store, in Apps", "apps"),
   ].join("");
   return `<h2 class="zb-h2" style="margin-bottom:12px">Bank details</h2>${details}
     <h2 class="zb-h2" style="margin:28px 0 12px">Other ways</h2><ul class="z-list z-card">${ways}</ul>`;
@@ -166,7 +166,12 @@ RENDER["get-paid"] = async () => {
    printed here rather than discovered by a customer at checkout.
    ========================================================================== */
 
-META.shopify = () => ({ title: "Shopify", sub: "Customers pay an order in digital dollars (USDC).", actions: `${Z.tag("Beta")}${linkBtn("Connections", "integrations", "arrow_back")}` });
+META.shopify = () => ({ title: "Shopify", sub: "Customers pay an order in digital dollars (USDC).", actions: `${Z.tag("Beta")}${linkBtn("Apps", "apps", "arrow_back")}` });
+
+/* Apps: tools that take payments for the org. Shopify is the only one;
+   accounting software lives in Books, Connections. */
+META.apps = () => ({ title: "Apps", sub: `Tools that take payments for ${org.name}. Accounting software is in Books, Connections.`, actions: "" });
+RENDER.apps = async () => `<h2 class="zb-h2" style="display:flex;align-items:center;gap:8px;margin-bottom:12px">Shopify ${Z.tag("Beta")}</h2>${await RENDER.shopify()}`;
 /** A reason from the API, closed with a full stop before the next sentence. */
 const sentence = (s) => (s = String(s).trim()) && !/[.!?]$/.test(s) ? `${s}.` : s;
 
@@ -309,16 +314,14 @@ RENDER.export = async () => {
    Connections
    ========================================================================== */
 
-META.integrations = () => ({ title: "Connections", sub: "Your store, and the software your accountant already uses.", actions: linkBtn("Settings", "settings", "arrow_back") });
+META.integrations = () => ({ title: "Connections", sub: "Get your books into the software your accountant already uses.", actions: "" });
 
 const conn = (logo, title, sub, tag, text, act, wide = false) => `<section class="z-card zb-conn${wide ? " zb-conn--wide" : ""}" aria-label="${esc(title)}">
     <div class="zb-conn__head"><span class="zb-conn__logo" aria-hidden="true">${esc(logo)}</span><span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag}</div>
     <p>${text}</p><div class="zb-actions">${act}</div></section>`;
 
 RENDER.integrations = async () => {
-  const shop = `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Take payments</h2>
-    ${conn("SH", "Shopify", "Your store’s checkout", Z.tag("Beta"), "Customers pay an order in digital dollars (USDC), and Zold marks it paid in Shopify once the money arrives.", linkBtn("Open", "shopify", "storefront"), true)}`;
-  if (!cap("integrations.accounting").allowed) return `${shop}<h2 class="z-eyebrow zb-conn__group">Your books</h2>${gateHtml("integrations.accounting")}`;
+  if (!cap("integrations.accounting").allowed) return gateHtml("integrations.accounting");
   const r = await api(`/api/orgs/${org.id}/integrations`);
   const g = r.integrations.getmyinvoices;
   const gmi = g.connected
@@ -328,7 +331,7 @@ RENDER.integrations = async () => {
     : conn("GMI", "GetMyInvoices", "API key · sends Belege each month", Z.tag("Beta"),
       "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
       r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`, true);
-  return `${shop}<h2 class="z-eyebrow zb-conn__group">Sends your books for you</h2>
+  return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends your books for you</h2>
     ${gmi}
     <h2 class="z-eyebrow zb-conn__group">File exports</h2>
     <div class="zb-grid3">
@@ -447,7 +450,8 @@ RENDER.settings = async () => {
   return `<ul class="zb-tiles">
     ${tile("domain", "Organisation", "Name, legal name, address, tax ID", "organisation")}
     ${cap("invoices").allowed ? tile("receipt_long", "Invoicing profile", "Tax numbers, bank details, number series", "invoicing-settings") : ""}
-    ${tile("hub", "Connections", "Shopify, GetMyInvoices, Lexware, sevDesk, DATEV", "integrations")}
+    ${tile("apps", "Apps", "Shopify", "apps")}
+    ${tile("cable", "Accounting connections", "GetMyInvoices, Lexware, sevDesk, DATEV", "integrations")}
     ${tile("group", "Members and access", "Who is in, and what each role may do", "members")}
     ${tile("workspace_premium", "Plan", `${planName(org.effectivePlan)}${org.effectivePlan !== org.plan ? " (trial)" : ""}`, "plan")}
   </ul>`;
