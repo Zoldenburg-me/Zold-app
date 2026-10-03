@@ -31,7 +31,7 @@ let nextUid = 1000;
 const bank = { lines: [] as any[], assigned: [] as { transactionUid: number; documentUid: number }[] };
 /** normal | slow (records, answers after 1.5 s) | slow-drop (answers after
  *  1.5 s, records nothing) | reject (422). readDelayMs slows GET /account. */
-const fakeMode = { upload: "normal" as "normal" | "slow" | "slow-drop" | "reject", readDelayMs: 0 };
+const fakeMode = { upload: "normal" as "normal" | "slow" | "slow-drop" | "reject", readDelayMs: 0, banksDown: false };
 const SLOW_MS = 1500;
 
 const fake = createServer((req, res) => {
@@ -46,7 +46,8 @@ const fake = createServer((req, res) => {
     if (!req.headers["user-agent"]) return send(400, { success: false, detail: "Bad request. User-Agent malformed" });
     if (url.pathname === "/account" && fakeMode.readDelayMs) return void setTimeout(() => send(200, { accountId: 4711 }), fakeMode.readDelayMs);
     if (url.pathname === "/account") return send(200, { name: "Sara Lindner", organization: "Zoldenburg UG", accountId: 4711, email: "books@example.com", hasBankingAccess: true, apiKeyType: "FULL_PERMISSION", currency: "EUR" });
-    if (url.pathname === "/bankAccounts") return send(200, { totalCount: 1, records: [{ bankAccountUid: 77, accountType: "CUSTOM", name: "Zold clearing", currencyCode: "EUR" }] });
+    if (url.pathname === "/bankAccounts" && fakeMode.banksDown) return send(503, { success: false, detail: "down" });
+    if (url.pathname === "/bankAccounts") return send(200, { totalCount: 2, records: [{ bankAccountUid: 77, accountType: "CUSTOM", name: "Zold clearing", currencyCode: "EUR" }, { bankAccountUid: 88, accountType: "BANKCONNECT", name: "Sparkasse", currencyCode: "EUR" }] });
     if (url.pathname === "/documents" && req.method === "GET") {
       const num = url.searchParams.get("documentNumberFilter") ?? "";
       const uid = seen.uploaded.get(num);
@@ -336,6 +337,28 @@ await check("push adds each line to the manual bank account once, with its Beleg
   assert.equal(bank.lines.length, total, "no line twice");
   assert.equal(new Set(bank.assigned.map((a) => `${a.transactionUid}:${a.documentUid}`)).size, bank.assigned.length, "no Beleg assigned twice");
   assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09", bankAccountUid: 999 })).status, 400, "a bank account that is not theirs is refused");
+  assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09", bankAccountUid: 88 })).status, 400, "a connected bank's own account is refused: lines go to a manual one");
+  assert.equal(bank.lines.filter((t) => t.bankAccountUid === 88).length, 0);
+});
+
+await check("with the bank account list unavailable the Belege still go up, and the answer says why there are no lines", async () => {
+  fakeMode.banksDown = true;
+  try {
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.results.every((x: any) => ["uploaded", "exists"].includes(x.outcome) && !x.bankLine));
+    assert.equal(r.body.bankAccountUid, null);
+    assert.match(r.body.bankAccountsError, /503/);
+  } finally { fakeMode.banksDown = false; }
+});
+
+await check("a long reference and memo never cut the Beleg code out of the bank line's description", async () => {
+  const { bankLineFor } = await import("../services/api/src/routes/business/integrations.js");
+  const snap: any = { line: { reference: "R".repeat(200), bookingDate: "2026-09-10", valueDate: "2026-09-10", amountCents: 500, counterparty: {}, links: { txHashes: [] } }, bank: { memo: "M".repeat(140) } };
+  const d = bankLineFor(snap, "ABCDEFGHJKMNPQR").description;
+  assert.ok(d.length <= 250, `${d.length}`);
+  assert.ok(d.endsWith("Beleg ABCDEFGHJKMNPQR"));
+  assert.equal(bankLineFor({ ...snap, line: { ...snap.line, reference: "" }, bank: undefined }, "ABC").description, "Beleg ABC");
 });
 
 await check("push: an upload that times out but landed is reported uploaded (tags may be missing), not failed; nothing is sent twice", async () => {

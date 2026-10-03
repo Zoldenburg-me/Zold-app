@@ -2529,14 +2529,18 @@ $("btn-links").onclick = () => phGo("get-paid");
  * account, the amount and the reference filled in. Filled in, not hidden: the
  * IBAN is what the device signs a commitment over, so it stays on screen.
  */
+/** Kept until the app opens: sign-in and onboarding drop the query. */
+function parkPayLink() {
+  const target = new URLSearchParams(location.search).get("pay");
+  if (!target) return null;
+  try { sessionStorage.setItem("zold-pay", target); } catch {}
+  history.replaceState(null, "", `${location.pathname}${location.hash}`);
+  return target;
+}
+
 async function handlePayDeepLink() {
   const qs = new URLSearchParams(location.search);
-  let target = qs.get("pay");
-  if (target) {
-    // Kept until someone is signed in: sign-in and onboarding drop the query.
-    try { sessionStorage.setItem("zold-pay", target); } catch {}
-    history.replaceState(null, "", `${location.pathname}${location.hash}`);
-  }
+  let target = parkPayLink();
   if (!user) return;
   try { target = sessionStorage.getItem("zold-pay"); sessionStorage.removeItem("zold-pay"); } catch {}
   if (!target) return;
@@ -2579,7 +2583,7 @@ async function resumeSession(capabilitiesLoaded) {
   }
   if (!sessionToken) {
     await capabilitiesLoaded;
-    void handlePayDeepLink(); // signed out: keeps the link for after sign-in
+    parkPayLink(); // signed out: kept for after sign-in
     return obStart();
   }
   try {
@@ -2594,6 +2598,7 @@ async function resumeSession(capabilitiesLoaded) {
       enterDashboard(user.name);
       return;
     }
+    parkPayLink(); // onboarding first: kept for when the app opens
     obShow();
     const want = location.hash.slice(1);
     // Reload on a later step it may still see (keys form, welcome) stays there.

@@ -16,7 +16,7 @@ import { MONERIUM } from "../../config.js";
 import { decryptField, encryptField, EncryptionUnavailableError } from "../../crypto-at-rest.js";
 import { store } from "../../store.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
-import { GetMyInvoicesClient, GmiApiError, gmiUserAgent, type GmiBankLineResult, type GmiBankTransaction, type GmiDocumentUpload } from "../../adapters/getmyinvoices.js";
+import { GetMyInvoicesClient, GmiApiError, gmiUserAgent, type GmiBankAccount, type GmiBankLineResult, type GmiBankTransaction, type GmiDocumentUpload } from "../../adapters/getmyinvoices.js";
 import { belegFileName, belegPdf, belegTitle, type BelegSnapshot } from "../../bookkeeping/beleg.js";
 import { isMonth, linesInMonth } from "../../bookkeeping/statement.js";
 import { statementLinesOf } from "../../bookkeeping/writer.js";
@@ -58,6 +58,10 @@ export function publicIntegrations(org: Organisation) {
 
 /** The upload body for one Beleg: the accountant's inbox sees the document
  *  number, amounts, paid state and the transaction hashes as tags. */
+const DESCRIPTION_MAX = 250;
+/** Organisations with a send to GetMyInvoices running. */
+const pushing = new Set<string>();
+
 /** The statement line as a GetMyInvoices bank transaction. The Beleg code
  *  in the description is what finds it again on a re-send. */
 export function bankLineFor(snap: BelegSnapshot, code: string): GmiBankTransaction {
@@ -66,7 +70,8 @@ export function bankLineFor(snap: BelegSnapshot, code: string): GmiBankTransacti
   return {
     bookingDate: l.bookingDate,
     valueDate: l.valueDate,
-    description: [l.reference, memo, `Beleg ${code}`].filter(Boolean).join(" · ").slice(0, 250),
+    // The code is what a re-send finds the line by, so it is never the part cut.
+    description: `${[l.reference, memo].filter(Boolean).join(" · ").slice(0, DESCRIPTION_MAX - code.length - 10)} · Beleg ${code}`.replace(/^ · /, ""),
     amount: l.amountCents / 100,
     currencyCode: "EUR",
     ...(l.counterparty.iban ? { clientIban: l.counterparty.iban.replace(/\s+/g, "") } : {}),
@@ -204,9 +209,13 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
    * on, so a line whose Beleg cannot be issued is reported, not uploaded.
    */
   r.post("/:orgId/integrations/getmyinvoices/push", async (req, res, next) => {
+    let held: string | undefined;
     try {
       const ctx = ctxOf(req, res);
       if (!ctx) return;
+      // One send per organisation at a time: two would both look a bank line
+      // up, both miss it, and both add it.
+      if (pushing.has(ctx.org.id)) return res.status(409).json({ error: "A send to GetMyInvoices is already running for this organisation. Wait for it, then send again." });
       if (!requireCapability(ctx, res, "integrations.accounting")) return;
       if (!requirePermission(ctx, res, "reports.run")) return;
       const client = gmiClientFor(ctx.org);
@@ -214,17 +223,29 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       const month = String(req.body?.month ?? "");
       if (!isMonth(month)) return res.status(400).json({ error: "month must be YYYY-MM" });
       const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
+      pushing.add(ctx.org.id);
+      held = ctx.org.id;
       // Where the bank lines go: the account asked for, else the one picked
       // last time, else the only manual account there is. None of those: the
       // Belege still go up, and the answer says a bank account is needed.
       const gmi = ctx.org.integrations!.getmyinvoices!;
-      const banks = await client.bankAccounts();
-      const manual = banks.filter((b) => b.accountType === "CUSTOM");
-      const asked = req.body?.bankAccountUid === undefined ? undefined : Number(req.body.bankAccountUid);
-      if (asked !== undefined && !banks.some((b) => b.bankAccountUid === asked)) {
-        return res.status(400).json({ error: "that bank account is not in this GetMyInvoices account" });
+      // A list GetMyInvoices will not give (a key without banking access, the
+      // service down) costs the bank lines, not the Belege.
+      let manual: GmiBankAccount[] = [];
+      let bankAccountsError: string | undefined;
+      try {
+        manual = (await client.bankAccounts()).filter((b) => b.accountType === "CUSTOM");
+      } catch (err: any) {
+        bankAccountsError = String(err?.message ?? err).slice(0, 200);
       }
-      const bankAccountUid = asked ?? (banks.some((b) => b.bankAccountUid === gmi.bankAccountUid) ? gmi.bankAccountUid : manual.length === 1 ? manual[0].bankAccountUid : undefined);
+      // Lines go to a manual account only: a connected bank's feed is that
+      // bank's own, and writing into it would double what it imports.
+      const asked = req.body?.bankAccountUid === undefined ? undefined : Number(req.body.bankAccountUid);
+      if (asked !== undefined && !bankAccountsError && !manual.some((b) => b.bankAccountUid === asked)) {
+        return res.status(400).json({ error: "that is not a manual bank account in this GetMyInvoices account" });
+      }
+      const bankAccountUid = bankAccountsError ? undefined
+        : asked ?? (manual.some((b) => b.bankAccountUid === gmi.bankAccountUid) ? gmi.bankAccountUid : manual.length === 1 ? manual[0].bankAccountUid : undefined);
       if (bankAccountUid !== undefined && bankAccountUid !== gmi.bankAccountUid) {
         store.updateOrganisation(ctx.org.id, { integrations: { ...ctx.org.integrations, getmyinvoices: { ...gmi, bankAccountUid } } });
       }
@@ -260,9 +281,11 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         results.push(pushed);
       }
       store.audit(auditEntry("partner.documents_pushed", { partner: "getmyinvoices", orgId: ctx.org.id, month, uploaded: results.filter((x) => x.outcome === "uploaded").length, existing: results.filter((x) => x.outcome === "exists").length, unknown: results.filter((x) => x.outcome === "unknown").length, failed: results.filter((x) => x.outcome === "failed").length }, ctx.userId));
-      res.json({ month, results, bankAccountUid: bankAccountUid ?? null, ...(bankAccountUid === undefined ? { bankAccounts: manual } : {}) });
+      res.json({ month, results, bankAccountUid: bankAccountUid ?? null, ...(bankAccountUid === undefined ? { bankAccounts: manual } : {}), ...(bankAccountsError ? { bankAccountsError } : {}) });
     } catch (err) {
       next(err);
+    } finally {
+      if (held) pushing.delete(held);
     }
   });
 
