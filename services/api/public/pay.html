@@ -69,6 +69,15 @@
   .missing h1 { font-size: 1.05rem; margin: 0 0 .4rem; }
   .missing p { color: var(--faint); font-size: .84rem; margin: 0; }
   .hidden { display: none; }
+  /* An organisation's page: bank details, one copy button per field. */
+  .bank { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; }
+  .bank li { display: flex; align-items: center; gap: .75rem; padding: .6rem .7rem; background: var(--row); }
+  .bank li + li { border-top: 1px solid var(--border2); }
+  .bank .k { font-size: .66rem; font-weight: 700; letter-spacing: .07em; color: var(--faint); }
+  .bank .v { font-size: .9rem; color: var(--text); word-break: break-all; }
+  .bank .v.mono { font-family: ui-monospace, Menlo, monospace; font-size: .82rem; }
+  .bank .f { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+  .bank button { width: auto; margin: 0; padding: .4rem .7rem; font-size: .78rem; background: var(--card); border: 1px solid var(--border2); color: var(--text); }
   .foot { text-align: center; margin-top: 1rem; font-size: .7rem; color: var(--faint); }
   .foot a { color: var(--faint); }
 </style>
@@ -92,6 +101,15 @@
         <div class="hd" id="hd"></div>
       </div>
 
+      <div id="bank-pane" class="hidden">
+        <div class="lbl">PAY BY BANK TRANSFER</div>
+        <ul class="bank" id="bank"></ul>
+        <div id="bank-live" class="sr-only" aria-live="polite"></div>
+        <p class="note">Use your own bank’s transfer. The money arrives in euros on this company’s account.
+          Zold shows these details; it does not hold the money or see your bank.</p>
+      </div>
+
+      <div id="crypto-pane">
       <div class="qrbox"><img id="qr" alt="QR code of the receiving address" /></div>
 
       <div class="lbl">RECEIVING ADDRESS</div>
@@ -112,6 +130,7 @@
         <strong>This address is public.</strong> Anyone who knows or guesses this handle can find it
         and read its full history and balance on a block explorer.
       </p>
+      </div>
     </div>
   </div>
 
@@ -141,6 +160,48 @@ function paymentUri(p) {
   return `ethereum:${p.token.address}@${p.chainId}/transfer?address=${p.address}`;
 }
 
+/* An organisation's page: the company's euro account, bank transfer only.
+   No QR or address, because no wallet address belongs to the company. */
+function showBank(bank) {
+  hide("crypto-pane");
+  show("bank-pane");
+  const say = (msg) => { $("bank-live").textContent = ""; setTimeout(() => { $("bank-live").textContent = msg; }, 50); };
+  const group = (iban) => iban.replace(/(.{4})/g, "$1 ").trim();
+  const rows = [["ACCOUNT HOLDER", bank.holder, bank.holder, false], ["IBAN", group(bank.iban), bank.iban, true]];
+  if (bank.bic) rows.push(["BIC", bank.bic, bank.bic, true]);
+  $("bank").replaceChildren(...rows.map(([label, shown, value, mono]) => {
+    const li = document.createElement("li");
+    const f = document.createElement("div");
+    f.className = "f";
+    const k = document.createElement("span");
+    k.className = "k";
+    k.textContent = label;
+    const v = document.createElement("span");
+    v.className = mono ? "v mono" : "v";
+    v.textContent = shown;
+    f.append(k, v);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "Copy";
+    b.setAttribute("aria-label", `Copy ${label.toLowerCase()}`);
+    let t;
+    b.onclick = async () => {
+      clearTimeout(t);
+      try {
+        await navigator.clipboard.writeText(value);
+        b.textContent = "Copied";
+        say(`${label.toLowerCase()} copied`);
+      } catch {
+        b.textContent = "Select it";
+        say("Could not copy. Select the text and copy it by hand.");
+      }
+      t = setTimeout(() => (b.textContent = "Copy"), 1400);
+    };
+    li.append(f, b);
+    return li;
+  }));
+}
+
 async function load() {
   const handle = decodeURIComponent(location.pathname.replace(/^\/pay\//, "")).trim();
   try {
@@ -160,6 +221,7 @@ async function load() {
     $("hd").textContent = `@${p.handle}`;
     document.title = `Pay ${label} · Zold`;
 
+    if (p.kind === "organisation") return showBank(p.bank);
     $("addr").textContent = p.address;
     $("qr").src = `/api/pay/${encodeURIComponent(p.handle)}/qr.svg`;
     // What the forwarder's routes accept, as the API read them. A page from

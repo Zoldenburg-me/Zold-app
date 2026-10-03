@@ -1,6 +1,6 @@
 /**
  * The renderer registry, and the views without a design/ui-v2 reference:
- * Accounts, Send, Get paid, Shopify, Wallets, Transactions, Assets, Chart of
+ * Accounts, Send, Shopify, Wallets, Transactions, Assets, Chart of
  * accounts, the month's statement lines, Connections, Settings and the
  * invoicing profile. The reference screens are in screens.js, the invoice
  * editor in invoice.js; both register here.
@@ -126,38 +126,6 @@ RENDER.send = async () => {
       <p class="zb-err" id="send-err" role="alert"></p>
       <div class="zb-actions">${primary(cap("transfers.approvals").allowed ? "Submit for approval" : "Save payment", 'data-act="send-create"', "")}${linkBtn("Cancel", "payments")}</div>
     </form>`;
-};
-
-/* ==========================================================================
-   Get paid
-   ========================================================================== */
-
-META["get-paid"] = () => ({
-  title: "Get paid",
-  sub: "Your bank details, invoices and a shop checkout.",
-  actions: cap("invoices").allowed ? primary("Issue invoice", 'data-act="issue-invoice"', "receipt_long") : "",
-});
-
-RENDER["get-paid"] = async () => {
-  const { accounts } = await api(`/api/orgs/${org.id}/accounts`);
-  const live = accounts.filter((a) => a.status === "active" && a.identifier?.iban);
-  const holder = org.legalName || org.name;
-  const details = live.length
-    ? `<div class="zb-grid2">${live.map((a) => `<section class="z-card zb-pad zb-stack" style="gap:12px" aria-label="${esc(a.label || a.currency)}">
-        <h2 class="zb-h2">${esc(a.label || a.currency)}</h2>
-        <ul class="z-list z-card">
-          <li>${Z.copyRow({ label: "Account holder", value: holder })}</li>
-          <li>${Z.copyRow({ label: "IBAN", value: String(a.identifier.iban).replace(/\s+/g, ""), display: Z.groupIban(a.identifier.iban), mono: true })}</li>
-          ${a.identifier.bic ? `<li>${Z.copyRow({ label: "BIC", value: a.identifier.bic, mono: true })}</li>` : ""}
-        </ul></section>`).join("")}</div>`
-    : `<div class="z-card"><p class="empty">No account has an IBAN yet. ${linkBtn("Accounts", "accounts")}</p></div>`;
-  const way = (icon, title, sub, v, tag = "") => `<li><a class="z-row" href="?view=${v}" data-view-link="${v}">${Z.iconTile({ icon })}<span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag ? `<span class="z-row__right">${tag}</span>` : ""}${Z.icon("chevron_right", "z-row__chev")}</a></li>`;
-  const ways = [
-    cap("invoices").allowed ? way("receipt_long", "Invoices", "Issue one, or ask a supplier for theirs with a link", "invoices") : "",
-    way("storefront", "Shopify checkout", "Take payments from your store, in Apps", "apps"),
-  ].join("");
-  return `<h2 class="zb-h2" style="margin-bottom:12px">Bank details</h2>${details}
-    <h2 class="zb-h2" style="margin:28px 0 12px">Other ways</h2><ul class="z-list z-card">${ways}</ul>`;
 };
 
 /* ==========================================================================
