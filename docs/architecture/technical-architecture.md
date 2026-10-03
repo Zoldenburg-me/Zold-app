@@ -884,7 +884,7 @@ only self-hosted fonts.
   id. On a real chain it holds only EURe and USDC, and `scripts/deploy.ts`
   deploys nothing there.
 - **`assertProductionConfig`** runs when `NODE_ENV=production` or
-  `TRANSF_PRODUCTION=1` (`config.ts:330-454`). It refuses to boot on any of
+  `TRANSF_PRODUCTION=1` (`config/production.ts`). It refuses to boot on any of
   the following:
   - Operator token: missing.
   - Harness settings: `KYC_AUTO_APPROVE` or `LOCAL_HARNESS` set, or any dead

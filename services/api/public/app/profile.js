@@ -1,4 +1,4 @@
-/** Account documents. Settings is app/settings.js; payment links are app/phone.js. */
+/** Account documents. Settings is app/settings.js; payment links are app/phone-getpaid.js. */
 /* ---------- Statements & documents ---------- */
 const DOC_KIND_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership" };
 
