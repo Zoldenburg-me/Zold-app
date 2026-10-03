@@ -108,7 +108,7 @@ async function renderZoldenburgSection(el) {
       ${z.active && z.guardianAddress ? row("Guardian", `Zoldenburg · ${z.guardianAddress.slice(0, 10)}…`) : ""}
     </div>
     ${z.active ? `
-      <div class="m-lede" style="font-size:13px;margin-top:12px">If you lose your passkey, choose "Lost your passkey?" on the sign-in page, create a new passkey there and contact Zoldenburg support with the reference it shows. We check you against the identity Monerium verified before signing. The recovery then waits ${esc(grace)}, and this passkey can cancel it until then.</div>
+      <div class="m-lede" style="font-size:13px;margin-top:12px">If you lose your passkey, choose "Recover your account" on the sign-in page, create a new passkey there and contact Zoldenburg support with the reference it shows. We check you against the identity Monerium verified before signing. The recovery then waits ${esc(grace)}, and this passkey can cancel it until then.</div>
       <button class="m-link" id="m-rz-remove" style="margin-top:12px">Remove Zoldenburg as guardian</button>`
     : `
       <div style="margin-top:16px">${zoldWarnHtml()}</div>
