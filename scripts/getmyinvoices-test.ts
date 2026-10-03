@@ -63,6 +63,9 @@ const fake = createServer((req, res) => {
     }
     const txPath = /^\/bankAccounts\/(\d+)\/transactions$/.exec(url.pathname);
     if (txPath && req.method === "POST") {
+      // As live (2026-10-03): an identical line is refused, naming the one there.
+      const same = bank.lines.find((t) => t.bankAccountUid === Number(txPath[1]) && t.description === body.description && t.bookingDate === body.bookingDate && t.amount === body.amount);
+      if (same) return send(422, { errors: [{ code: 127, detail: "Transaction Record Already Exist.", transactionUid: same.transactionUid }] });
       const transactionUid = nextUid++;
       bank.lines.push({ transactionUid, bankAccountUid: Number(txPath[1]), ...body });
       return send(200, { success: true, meta_data: { transactionUid } });
@@ -71,7 +74,8 @@ const fake = createServer((req, res) => {
       const text = url.searchParams.get("textFilter") ?? "";
       const day = url.searchParams.get("startDateFilter");
       const records = bank.lines.filter((t) => t.bankAccountUid === Number(txPath[1]) && String(t.description).includes(text) && (!day || t.bookingDate === day));
-      return send(200, { totalCount: records.length, records });
+      // Live answers key the records by transactionUid, not as an array.
+      return send(200, { totalCount: records.length, records: Object.fromEntries(records.map((t) => [String(t.transactionUid), t])) });
     }
     const assignPath = /^\/bankAccounts\/\d+\/transactions\/(\d+)\/assign$/.exec(url.pathname);
     if (assignPath && req.method === "GET") return send(200, { records: bank.assigned.filter((a) => a.transactionUid === Number(assignPath[1])).map((a) => ({ documentUid: a.documentUid })) });
@@ -339,6 +343,17 @@ await check("push adds each line to the manual bank account once, with its Beleg
   assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09", bankAccountUid: 999 })).status, 400, "a bank account that is not theirs is refused");
   assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09", bankAccountUid: 88 })).status, 400, "a connected bank's own account is refused: lines go to a manual one");
   assert.equal(bank.lines.filter((t) => t.bankAccountUid === 88).length, 0);
+});
+
+await check("a line the lookup misses is found by GetMyInvoices' own duplicate refusal (code 127), not added twice", async () => {
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent() });
+  const tx = { bookingDate: "2026-09-20", valueDate: "2026-09-20", description: "Ref · Beleg MISSME", amount: 7, currencyCode: "EUR" };
+  const first = await c.pushBankLine(77, tx, "MISSME");
+  // A marker the lookup cannot see: only their refusal can find it.
+  const second = await c.pushBankLine(77, tx, "NOT-IN-DESCRIPTION");
+  assert.equal(first.outcome, "added");
+  assert.equal(second.outcome, "exists");
+  assert.equal(second.transactionUid, first.transactionUid);
 });
 
 await check("with the bank account list unavailable the Belege still go up, and the answer says why there are no lines", async () => {

@@ -44,6 +44,9 @@ export type GmiPushResult =
   | { outcome: "unknown"; error: string };
 
 export class GmiApiError extends Error {
+  /** `errors[]` from their body, where they give it: code 127 "Transaction
+   *  Record Already Exist." names the existing transactionUid. */
+  public errors: { code?: number; detail?: string; transactionUid?: number }[] = [];
   constructor(public status: number, message: string) {
     super(message);
     this.name = "GmiApiError";
@@ -173,8 +176,11 @@ export class GetMyInvoicesClient {
     }
     if (!res.ok || data?.success === false) {
       // Their error body names the problem; the key is never part of it.
-      const detail = String(data?.detail ?? data?.message ?? data?.error ?? res.statusText).slice(0, 200);
-      throw new GmiApiError(res.status, `GetMyInvoices ${method} ${path} failed (${res.status}): ${detail}`);
+      const errors = Array.isArray(data?.errors) ? data.errors : [];
+      const detail = String(data?.detail ?? data?.message ?? data?.error ?? errors[0]?.detail ?? res.statusText).slice(0, 200);
+      const err = new GmiApiError(res.status, `GetMyInvoices ${method} ${path} failed (${res.status}): ${detail}`);
+      err.errors = errors;
+      throw err;
     }
     return data as T;
   }
@@ -252,15 +258,19 @@ export class GetMyInvoicesClient {
   /** Lines of one bank account whose description carries `marker`, on one
    *  booking day. The text filter is a search; matches are kept exact. */
   async findBankTransactions(bankAccountUid: number, marker: string, day: string): Promise<GmiBankTransactionRecord[]> {
-    const r = await this.call<{ records?: GmiBankTransactionRecord[] }>("GET", `/bankAccounts/${bankAccountUid}/transactions`, {
+    const r = await this.call<{ records?: GmiBankTransactionRecord[] | Record<string, GmiBankTransactionRecord> }>("GET", `/bankAccounts/${bankAccountUid}/transactions`, {
       textFilter: marker, startDateFilter: day, endDateFilter: day, limit: "50",
     });
-    return (Array.isArray(r.records) ? r.records : []).filter((t) => String(t.description ?? "").includes(marker));
+    // An object keyed by transactionUid, as the live API answers (2026-10-03);
+    // an array, as their spec reads.
+    const list = Array.isArray(r.records) ? r.records : r.records ? Object.values(r.records) : [];
+    return list.filter((t) => String(t.description ?? "").includes(marker));
   }
 
   async assignedDocumentUids(bankAccountUid: number, transactionUid: number): Promise<number[]> {
-    const r = await this.call<{ records?: { documentUid?: number }[] }>("GET", `/bankAccounts/${bankAccountUid}/transactions/${transactionUid}/assign`);
-    return (Array.isArray(r.records) ? r.records : []).map((d) => Number(d.documentUid)).filter((n) => Number.isInteger(n));
+    const r = await this.call<{ records?: { documentUid?: number }[] | Record<string, { documentUid?: number }> }>("GET", `/bankAccounts/${bankAccountUid}/transactions/${transactionUid}/assign`);
+    const list = Array.isArray(r.records) ? r.records : r.records ? Object.values(r.records) : [];
+    return list.map((d) => Number(d.documentUid)).filter((n) => Number.isInteger(n));
   }
 
   assignDocument(bankAccountUid: number, transactionUid: number, documentUid: number): Promise<unknown> {
@@ -281,13 +291,19 @@ export class GetMyInvoicesClient {
       try {
         transactionUid = await this.addBankTransaction(bankAccountUid, tx);
       } catch (err) {
-        if (!(err instanceof GmiApiError) || (err.status !== 0 && err.status < 500)) throw err;
-        for (const wait of this.relookupDelaysMs) {
+        // Their own guard: an identical line is refused with code 127 and the
+        // uid of the one already there. That is the line, found.
+        const same = err instanceof GmiApiError ? err.errors.find((e) => e.code === 127 && Number.isInteger(e.transactionUid)) : undefined;
+        if (same) {
+          transactionUid = same.transactionUid!;
+          outcome = "exists";
+        } else if (!(err instanceof GmiApiError) || (err.status !== 0 && err.status < 500)) throw err;
+        for (const wait of transactionUid ? [] : this.relookupDelaysMs) {
           await new Promise((r) => setTimeout(r, wait));
           transactionUid = (await this.findBankTransactions(bankAccountUid, marker, tx.bookingDate).catch(() => []))[0]?.transactionUid;
           if (transactionUid) break;
         }
-        if (!transactionUid) return { outcome: "unknown", error: err.message };
+        if (!transactionUid) return { outcome: "unknown", error: (err as Error).message };
       }
     }
     if (!documentUid) return { outcome, transactionUid, assigned: false };
