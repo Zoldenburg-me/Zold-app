@@ -120,6 +120,9 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         ? store.membersOf(invoice.orgId).some((m) => m.userId === user.id && m.status === "active")
         : false;
       if (!invoice || !member) return res.status(404).json({ error: "invoice not found" });
+      // A draft made from receipts is settled by its own ledger rows; a
+      // deposit tied to it would be a second payment once it is issued.
+      if (invoice.state === "DRAFT") return res.status(409).json({ error: "That invoice is a draft and has not been issued." });
 
       const linked = store.updateCryptoDeposit(deposit.id, { invoiceId: invoice.id });
       // Already converted? Then the whole thread is known now and belongs on the

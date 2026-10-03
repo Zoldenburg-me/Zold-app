@@ -113,6 +113,17 @@ Say this plainly rather than letting the surface imply otherwise:
   no list is booked as a quantity with no value and no income rule; a listed
   but thinly traded token the feed prices at confidence ≥ 0.9 is booked at
   that price. Nothing caps rows per wallet.
+- **Invoices made from wallet receipts have run only against local hardhat**
+  (2026-10-03: a payer rule saved, one EURe receipt of €300.00 collected into
+  a draft, two unlisted-token receipts listed as not included, and the draft
+  issued and marked paid, all through the business screens). No draft has
+  been made from a mainnet receipt, and no priced governance-token receipt
+  has reached one, because the price feed has never run live. Nothing runs the collection on a schedule: a
+  member starts it per month. No row's value is ever filled in later, so a
+  receipt booked without a value stays off every draft. The tax line on a
+  payer rule is whatever the organisation chose; nothing checks it suits the
+  payer. A receipt that is a refund from a payer with a rule is drafted like
+  any other receipt.
 - **No billing is taken for paid plans.**
 - **PWA install on iOS is untested**: a home-screen web app may get storage
   separate from Safari, and the device key lives in localStorage — onboarding in

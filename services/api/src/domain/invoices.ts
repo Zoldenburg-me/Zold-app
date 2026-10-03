@@ -30,6 +30,7 @@ export class InvoiceError extends Error {}
  *  PAID is an outgoing invoice whose attributed payments cover it
  *  (`settlementUpdate`); an incoming one goes through PAYING. */
 const TRANSITIONS: Record<InvoiceState, InvoiceState[]> = {
+  DRAFT: ["SUBMITTED", "DELETED"],
   LINK_CREATED: ["SUBMITTED", "DELETED"],
   SUBMITTED: ["PAYING", "PAID", "RECONCILED", "DELETED"],
   PAYING: ["PAID", "SUBMITTED"],
@@ -171,7 +172,9 @@ export function supplierView(
       ? { bank: issuerExtras.bank, footerNote: issuerExtras.footerNote }
       : {}),
     supplier: invoice.supplier,
-    lines: invoice.lines,
+    // The printed columns only: a line's `receipt` names a ledger row and is
+    // the organisation's own record.
+    lines: invoice.lines.map(({ description, quantity, unitPrice, amount }) => ({ description, quantity, unitPrice, amount })),
     currency: invoice.currency,
     total: invoice.total,
     dueDate: invoice.dueDate,
@@ -371,10 +374,16 @@ export function settlementUpdate(
 
 /** Rows written before `ref` existed are keyed by their deposit id. */
 export function settlementRef(s: InvoiceSettlement): string {
-  return s.ref ?? (s.method === "bank" ? `monerium:${s.orderId}` : `deposit:${s.depositId}`);
+  if (s.ref) return s.ref;
+  if (s.method === "bank") return `monerium:${s.orderId}`;
+  if (s.method === "wallet-receipt") return `ledger:${s.ledgerEntryId}`;
+  return `deposit:${s.depositId}`;
 }
 
 export function assertDeletable(invoice: Invoice) {
+  // A draft made from receipts carries their settlements from the start, and
+  // nobody has been sent it: discarding it frees its rows for the next run.
+  if (invoice.state === "DRAFT") return;
   if (invoice.payment?.transferId || invoice.payment?.paidAt || invoice.settlements?.length) {
     throw new InvoiceError(
       "This invoice has a payment against it and cannot be deleted. Reconcile it instead.",

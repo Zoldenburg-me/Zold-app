@@ -717,8 +717,10 @@ flowchart LR
 
 ### 13.3 Invoicing (`domain/invoices.ts`, `domain/invoicing.ts`, `domain/jurisdictions.ts`)
 
-- The invoice state machine is in `domain/invoices.ts:31-38`. Outgoing
-  invoices are written directly in SUBMITTED at issue. DELETED is a soft
+- The invoice state machine is in `domain/invoices.ts` (`TRANSITIONS`).
+  Outgoing invoices typed into the editor are written directly in SUBMITTED
+  at issue (`routes/business/issue-outgoing.ts`, the one issue path); one
+  made from wallet receipts is a DRAFT until it is issued. DELETED is a soft
   state. `syncInvoicePayment` *writes* PAYING → PAID or back to SUBMITTED from
   the linked draft and transfer.
 - Arithmetic uses integer cents. VAT is rounded once per rate bucket and
@@ -732,6 +734,53 @@ flowchart LR
 - Invoice-Me links use a 32-byte token (SHA-256 stored) and an optional
   password (scrypt N=2^15 with a policy check), limited to 10 failures per
   15 min per link.
+- **Invoices from wallet receipts** (`domain/income-invoices.ts`,
+  `routes/business/income-invoices.ts`). A contact's `payerRule` holds the
+  service description, the recipient and the tax line the organisation chose
+  (read through `draftFrom`, nothing defaulted), saved with the addresses the
+  payer sends from. `planIncomeDrafts` is pure: for one calendar month in
+  `org.reporting.timeZone` it takes the inbound wallet rows, names the payer
+  (`payerOf`: the contact sync named while it still lists the address, else
+  the one contact that lists it now), and per contact with a rule builds one
+  DRAFT invoice with one line per receipt (`line.receipt`: row id, block
+  time, token, quantity, transaction, EUR cents) and one `wallet-receipt`
+  settlement per row (`ref` `ledger:<entryId>`). The draft's total is the sum
+  of the rows' `fiatValue`. A row is eligible only with a positive EUR
+  `fiatValue` and a transaction hash, and not when tagged or typed internal,
+  unlisted or needs-valuation. Every other inbound wallet row of the month is
+  accounted for: in the draft's `fromReceipts.excluded` with the reason,
+  counted under `withoutRule` or `withoutContact` (valued and `unvalued`),
+  under `alreadyInvoiced`, or under `onOtherDrafts`. A row held by a
+  non-deleted invoice that the run does not rebuild is never taken again; a
+  run rebuilds only DRAFTs of contacts that still have a rule, and writes
+  nothing over an invoice past DRAFT. The id is
+  `inv_rcpt_` + sha256(org, contact, month, sequence), where the sequence
+  counts that payer-month's invoices that are no longer drafts, so a receipt
+  arriving after the month was issued gets a further draft. A draft holds 200
+  lines (`MAX_RECEIPT_LINES`); the rest are listed as excluded until it is
+  issued. With a VAT rate the receipts are the gross: `netLinesFor` finds a
+  net total whose net plus VAT, rounded once as `computeTotals` rounds it,
+  equals the receipts, and sets `mismatchCents` when none exists. The run
+  stores on each draft what the imported wallets' sync state leaves uncertain
+  (`syncWarnings`: not synced, last synced before the month ended, booked
+  from after the month began, transfers skipped). Read and write happen with
+  nothing awaited between, inside `store.batched`.
+- **Issuing a draft** (`POST …/income-invoices/:id/issue`) plans the month
+  again and refuses with 409, replacing the stored draft, when the rows it
+  bills, their amounts or descriptions, or the rule's `updatedAt` are not the
+  ones the stored draft showed. It refuses 422 for a draft with no lines or
+  with `mismatchCents`, and 409 for one with `syncWarnings` until the request
+  carries `acceptWarnings`. It then calls `issueOutgoing` with the rule's
+  template and the draft's lines: the same `draftFrom`, VIES lookup,
+  `checkCompliance`, warning acceptance and number series as the editor. The
+  request supplies only `acceptWarnings`, `language` and optionally `number`.
+  The issue date is the day of issue, the supply period is the month, and
+  there is no due date. `issueOutgoing` refuses when the computed gross is not
+  the receipts' sum, and when the draft's `updatedAt` or state changed across
+  its awaits. The draft becomes SUBMITTED in place and `settlementUpdate`
+  closes it PAID from the settlements it carries. A DRAFT is refused by
+  payment-link creation, by the deposit-link route and by the invoice-link
+  route; `supplierView` passes only a line's printed columns.
 
 ### 13.4 Account documents (`documents.ts`, `routes/documents.ts`)
 
@@ -1177,6 +1226,9 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /:orgId/invoices/:i/{pay, reconcile}` (C(invoices)) | Pay via a draft, or reconcile by hand. |
 | `GET/PATCH /:orgId/invoicing/profile` (C(invoices)) | Invoicing profile. |
 | `POST /:orgId/invoicing/{check, issue}` (C(invoices)) | Compliance dry run, or issue. `language` (`de`/`en`) and `dueDate` may be set per invoice; the profile's language and payment terms are the defaults. |
+| `PUT/DELETE /:orgId/contacts/:c/payer-rule` (C(invoices), P(invoices.manage)) | Set or remove a contact's payer rule; PUT may carry `wallets`, saved with it. |
+| `POST /:orgId/income-invoices/run` (C(invoices), P(invoices.manage)) | Collect a month's wallet receipts into draft invoices. `{ month: "YYYY-MM" }`, not a future month. |
+| `POST /:orgId/income-invoices/:i/issue` (C(invoices), P(invoices.manage)) | Issue a draft made from receipts. |
 | `GET /invoice-links/:token` (A) | Supplier side. |
 | `POST /invoice-links/:token/submit` (A) | Supplier side. |
 
