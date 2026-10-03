@@ -70,6 +70,8 @@ export const CRYPTO_IN = {
    *  refuse more than 1,000 blocks; a stricter RPC is met by halving
    *  (log-range.ts). The cursor catches up over several ticks instead. */
   maxBlockSpan: BigInt(envNumber("CRYPTO_IN_MAX_BLOCK_SPAN", 1_000, { min: 1 })),
+  /** How far back a fresh install looks: 5,000 Base blocks is under 3 hours. */
+  firstLookbackBlocks: BigInt(envNumber("CRYPTO_IN_FIRST_LOOKBACK_BLOCKS", 5_000, { min: 1 })),
   /** Windows per tick: 20 × 1,000 Base blocks is about 11 hours of chain. */
   windowsPerTick: envNumber("CRYPTO_IN_WINDOWS_PER_TICK", 20, { min: 1, integer: true }),
 };

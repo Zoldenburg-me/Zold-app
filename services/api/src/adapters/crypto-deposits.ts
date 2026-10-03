@@ -426,7 +426,8 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
   // can still appear in Activity after the scanner deploys or restarts.
   const cursor = store.cryptoDepositCursor(cursorKey);
   if (cursor === undefined) {
-    const lookback = CRYPTO_IN.maxBlockSpan;
+    // Read later in windows of maxBlockSpan, so it can be longer than one.
+    const lookback = CRYPTO_IN.firstLookbackBlocks;
     store.setCryptoDepositCursor(cursorKey, safeHead > lookback ? safeHead - lookback : 0n);
     return { found: 0, more: false };
   }

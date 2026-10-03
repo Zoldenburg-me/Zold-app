@@ -127,6 +127,16 @@ await check("issuing is once per line and the code is written back onto the line
   assert.equal(store.documentsForOrg("org_1").length, 1);
 });
 
+await check("two issues for one line at once make one Beleg, not two", async () => {
+  const fresh = { ...line, id: "led_race", statement: { ...line.statement!, key: "race", documentCode: undefined } } as any;
+  store.addLedgerEntries([fresh]);
+  const before = store.documents.length;
+  const [a, b] = await Promise.all([issueBelegForLine(fresh), issueBelegForLine(fresh)]);
+  assert.equal(a.doc.code, b.doc.code);
+  assert.deepEqual([a.issued, b.issued].sort(), [false, true]);
+  assert.equal(store.documents.length - before, 1);
+});
+
 await check("the signature verifies; a changed figure fails", async () => {
   const doc = store.documentsForOrg("org_1")[0];
   assert.deepEqual(await verifyZoldAttestation(doc), { ok: true });

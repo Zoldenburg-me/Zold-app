@@ -74,7 +74,8 @@ export const store = {
     const u = db.users.find((x) => x.id === id);
     if (!u) throw new Error(`unknown user ${id}`);
     // The one place an IBAN changes, so the one place its date is kept.
-    const ibanChanged = typeof patch.iban === "string" && patch.iban !== "" && patch.iban !== u.iban;
+    const bare = (v?: string) => (v ?? "").replace(/\s+/g, "").toUpperCase();
+    const ibanChanged = typeof patch.iban === "string" && bare(patch.iban) !== "" && bare(patch.iban) !== bare(u.iban);
     Object.assign(u, patch, ibanChanged && !patch.ibanSince ? { ibanSince: new Date().toISOString() } : {});
     persist();
     return u;
