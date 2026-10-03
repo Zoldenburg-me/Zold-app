@@ -106,7 +106,7 @@ assert.ok(
   /const newOwners: `0x\$\{string\}`\[\] = \[passkeyAccountAddress\(owner\)\];/.test(recoverySource),
   "recovery must install the new passkey as the only owner",
 );
-const configSource = readFileSync(path.join(ROOT, "services/api/src/config.ts"), "utf8");
+const configSource = readFileSync(path.join(ROOT, "services/api/src/config/production.ts"), "utf8");
 assert.ok(!/fail\([^)]*CANDIDE_COSIGNER/.test(configSource), "production must not require a co-signer");
 
 const deploymentSources = [
