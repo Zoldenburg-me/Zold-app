@@ -4,10 +4,10 @@
  *
  * Two spaces behind one switch. Banking: Home, Approvals, Send, Get paid,
  * Invoices, Contacts, Members, Apps, then the ACCOUNTS list, Coming soon and
- * Settings. Books: Overview, Statement, Categories, Export, Connections, then
- * Settings.
+ * Settings. Books: Overview, Statement, Wallets, Categories, Export,
+ * Connections, then Settings.
  * The older views keep their ?view= ids and sit under one of these (PARENT):
- * the ledger, assets and wallets under Statement, Shopify under Apps.
+ * the ledger and assets under Statement, Shopify under Apps.
  */
 import { $, Z, api, cap, esc, eur, me, org, orgs, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
@@ -26,6 +26,7 @@ export const SPACES = {
   books: [
     { id: "books-overview", label: "Overview", icon: "monitoring", capability: "ledger.transactions" },
     { id: "books", label: "Statement", icon: "list_alt", capability: "ledger.transactions" },
+    { id: "wallets", label: "Wallets", icon: "wallet", capability: "wallets.manage" },
     { id: "coa", label: "Categories", icon: "category", capability: "coa.manage" },
     { id: "export", label: "Export", icon: "download", capability: "export.ledger" },
     { id: "integrations", label: "Connections", icon: "cable" },
@@ -37,7 +38,7 @@ const SPACE_HOME = { banking: "overview", books: "books-overview" };
 
 /** Which nav item an older view belongs to. */
 export const PARENT = {
-  ledger: "books", assets: "books", wallets: "books",
+  ledger: "books", assets: "books",
   shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", plan: "settings", documents: "accounts", accounts: "accounts",
 };
 /** Every view id the router accepts, including those without a nav item. */

@@ -2,9 +2,12 @@
  * Books overview (design canvas "Books overview"): cash in and out, then
  * expenses and revenue by category, for a month or the last 30 days.
  *
- * Every figure is summed from the statement lines Books shows, grouped by the
- * category on each line and the type of that category in the chart of
- * accounts. Lines nobody categorised are counted as such, never guessed.
+ * Every figure is summed from the euro account's statement lines plus the
+ * ledger rows synced from imported wallets, grouped by the category on each
+ * and the type of that category in the chart of accounts. Lines nobody
+ * categorised are counted as such, never guessed. A wallet row counts only at
+ * the euro value it was booked with; one without, and a transfer between the
+ * organisation's own addresses, is left out and said so.
  */
 import { Z, api, cap, esc, eur, gateHtml, org, plain } from "./core.js";
 import { META, RENDER } from "./views.js";
@@ -19,6 +22,25 @@ const DEFAULT_OUT_CODE = "6000";
 const CHART_FAILED = "failed";
 
 const bo = { period: null };
+
+/**
+ * Imported-wallet ledger rows as statement-shaped lines, and what was left
+ * out: rows with no euro value yet, and moves between the org's own addresses
+ * (tagged `internal` by the sync), which are neither income nor spending.
+ */
+function walletLines(entries) {
+  const rows = (entries || []).filter((e) => e.source?.kind === "wallet");
+  const internal = rows.filter((e) => e.tags?.includes("internal"));
+  const rest = rows.filter((e) => !e.tags?.includes("internal"));
+  const valued = rest.filter((e) => e.fiatCurrency === "EUR" && Number.isFinite(Number(e.fiatValue)));
+  const toLine = (e) => ({
+    valueDate: e.at.slice(0, 10),
+    amountCents: Math.round(Number(e.fiatValue) * 100) * (e.direction === "in" ? 1 : -1),
+    accountCode: e.accountCode, accountCodeAuto: e.accountCodeAuto, fromWallet: true,
+  });
+  const day = (e) => ({ valueDate: e.at.slice(0, 10) });
+  return { lines: valued.map(toLine), unvalued: rest.filter((e) => !valued.includes(e)).map(day), internal: internal.map(day) };
+}
 const isoDay = (d) => d.toISOString().slice(0, 10);
 const linkBtn = (label, view, icon) => `<a class="z-btn z-btn--secondary" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
 const monthName = (m, long = true) => long
@@ -89,9 +111,23 @@ function categoryCard(id, title, dir, now, before, r, chart) {
         : `<p class="zb-hint">Categories need the chart of accounts, which your plan doesn’t include.</p>`}</section>`;
 }
 
-function body(lines, months, chart) {
+/** What the cash card covers, and what it leaves out in this period. */
+function scope(w, r) {
+  const n = w.wallets.length;
+  const label = n ? `Euro account and ${n} wallet${n === 1 ? "" : "s"}` : "Euro account";
+  const notes = [];
+  if (w.failed) notes.push("Wallet transfers couldn’t load, so these figures cover the euro account only.");
+  const unvalued = inRange(w.unvalued, r).length, internal = inRange(w.internal, r).length;
+  if (unvalued) notes.push(`${unvalued} wallet transfer${unvalued === 1 ? " has" : "s have"} no euro value yet and ${unvalued === 1 ? "is" : "are"} left out.`);
+  if (internal) notes.push(`${internal} transfer${internal === 1 ? "" : "s"} between your own addresses ${internal === 1 ? "is" : "are"} left out: ${internal === 1 ? "it isn’t" : "they aren’t"} income or spending.`);
+  const note = notes.length ? `<p class="zb-hint zb-bo-scope-note">${esc(notes.join(" "))} <a href="?view=ledger" data-view-link="ledger">Every transaction</a></p>` : "";
+  return { label, note };
+}
+
+function body(lines, months, chart, w) {
   const r = ranges(bo.period);
   const now = inRange(lines, r), before = inRange(lines, r.prev);
+  const sc = scope(w, r);
   const inC = cents(now, "in"), outC = cents(now, "out"), net = inC - outC;
   const signed = (sign, c) => `${c ? sign : ""}${esc(eur(Math.abs(c) / 100))}`;
   const pills = [["30d", "Last 30 days"], ...months.slice(0, MONTH_PILLS).map((m) => [m, monthName(m, false)])]
@@ -99,10 +135,11 @@ function body(lines, months, chart) {
   return `<div class="zb-h-chips zb-bo-periods" role="group" aria-label="Period">${pills}</div>
     <p class="zb-hint zb-bo-range">${esc(r.title)}</p>
     <section class="z-card zb-side-card zb-bo-cash" aria-labelledby="bo-cash">
-      <div class="zb-bo-cash__figs"><h2 id="bo-cash">Cash<span class="z-sr">,</span> <span class="zb-bo-scope">Euro account</span></h2>
+      <div class="zb-bo-cash__figs"><h2 id="bo-cash">Cash<span class="z-sr">,</span> <span class="zb-bo-scope">${esc(sc.label)}</span></h2>
         <div class="zb-h-fig"><span class="zb-h-fig__label">Net cash flow</span><span class="zb-h-fig__value zb-bo-big">${signed(net < 0 ? "−" : "+", net)}</span>${versus(net, cents(before, "in") - cents(before, "out"), r.label)}</div>
         <dl class="zb-bo-io"><div><dt><span class="zb-h-key zb-h-key--in" aria-hidden="true"></span>Money in</dt><dd class="is-in">${signed("+", inC)}</dd></div><div><dt><span class="zb-h-key zb-h-key--out" aria-hidden="true"></span>Money out</dt><dd>${signed("−", outC)}</dd></div></dl></div>
       ${now.length ? barsHtml(weeks(now, r.from, r.to), `Money in and out per week, ${r.title}`) : `<p class="zb-hint">No money moved in this period.</p>`}
+      ${sc.note}
     </section>
     <div class="zb-grid2 zb-bo-split">${categoryCard("bo-exp", "Expenses", "out", now, before, r, chart)}${categoryCard("bo-rev", "Revenue", "in", now, before, r, chart)}</div>`;
 }
@@ -115,22 +152,28 @@ META["books-overview"] = () => ({
 
 RENDER["books-overview"] = async () => {
   if (!cap("ledger.transactions").allowed) return gateHtml("ledger.transactions");
-  const [st, coa] = await Promise.all([
+  const [st, coa, led, wal] = await Promise.all([
     api(`/api/orgs/${org.id}/bookkeeping/statement`),
     cap("coa.manage").allowed ? api(`/api/orgs/${org.id}/chart-of-accounts`).then((r) => r.accounts).catch(() => CHART_FAILED) : Promise.resolve(null),
+    api(`/api/orgs/${org.id}/ledger`).then((r) => r.entries).catch(() => null),
+    api(`/api/orgs/${org.id}/wallets`).then((r) => r.wallets).catch(() => []),
   ]);
-  const { lines, months } = st;
+  const fromWallets = walletLines(led);
+  const w = { ...fromWallets, wallets: wal, failed: led === null && wal.length > 0 };
+  const lines = [...st.lines, ...fromWallets.lines];
+  // Months with money on the account or in a wallet, newest first.
+  const months = [...new Set([...st.months, ...fromWallets.lines.map((l) => l.valueDate.slice(0, 7))])].sort().reverse();
   if (!bo.period || (bo.period !== "30d" && !months.includes(bo.period))) bo.period = months[0] || "30d";
-  if (!lines.length) return `<div class="z-card"><p class="empty">No money has moved on this organisation’s accounts yet. Lines appear once money moves on an account backed by a member’s own account.</p></div>`;
+  if (!lines.length && !fromWallets.unvalued.length) return `<div class="z-card"><p class="empty">No money has moved on this organisation’s accounts or imported wallets yet. Lines appear once money moves on an account backed by a member’s own account, or a wallet syncs.</p></div>`;
   return {
-    html: `<div id="bo-body">${body(lines, months, coa)}</div>`,
+    html: `<div id="bo-body">${body(lines, months, coa, w)}</div>`,
     bind(box) {
       // On #bo-body, which each render replaces: #view itself outlives renders.
       box.querySelector("#bo-body").addEventListener("click", (ev) => {
         const b = ev.target.closest("[data-bo]");
         if (!b) return;
         bo.period = b.dataset.bo;
-        box.querySelector("#bo-body").innerHTML = body(lines, months, coa);
+        box.querySelector("#bo-body").innerHTML = body(lines, months, coa, w);
         box.querySelector(`[data-bo="${bo.period}"]`)?.focus();
       });
     },
