@@ -398,9 +398,9 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-kv b { color: var(--z-text); font-weight: 600; text-align: right; }
 .zb-send #send-summary .zb-h3 + .zb-kv { margin-top: 10px; border-top: 0; }
 .zb-kv--total b { color: var(--z-heading); font-size: 16px; }
-.zb-steps { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.zb-steps li { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; color: var(--z-text); }
-.zb-steps .z-ic { color: var(--z-dim); font-size: 20px; }
+.zb-next { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.zb-next li { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; color: var(--z-text); }
+.zb-next .z-ic { color: var(--z-dim); font-size: 20px; }
 
 /* Settings: grouped menu beside the chosen section from 1024px. */
 .zb-set { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--z-space-5); align-items: start; }
@@ -420,3 +420,17 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-set-plan b { font: 600 20px/1.2 var(--z-font); color: var(--z-heading); }
 @media (max-width: 599px) { .zb-set-rows > div { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
 .zb-bo-scope { margin-left: 6px; font: 500 12.5px/1 var(--z-font); color: var(--z-dim); }
+
+/* Apps: one card per app, its connect form inside. */
+.zb-app { display: flex; flex-direction: column; gap: var(--z-space-4); }
+.zb-app__head { display: flex; gap: 14px; align-items: flex-start; }
+.zb-app__head .zb-h2 { display: flex; align-items: center; gap: 8px; }
+.zb-app__head .desc { margin-top: 4px; }
+.zb-app__row { display: flex; gap: 10px; }
+.zb-app__row input { flex: 1; min-width: 0; }
+.zb-app__form .zb-hint { margin-top: 8px; }
+.zb-app__setup { margin-top: var(--z-space-5); }
+.zb-app__setup summary { cursor: pointer; font: 600 15px/1.3 var(--z-font); color: var(--z-heading); }
+.zb-app__setup[open] summary { margin-bottom: 12px; }
+.zb-app__setup .zb-steps { margin: 12px 0; }
+@media (max-width: 599px) { .zb-app__row { flex-direction: column; } }

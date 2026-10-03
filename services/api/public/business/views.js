@@ -1,9 +1,9 @@
 /**
- * The renderer registry, and the views without a design/ui-v2 reference:
- * Accounts, Shopify, Wallets, Transactions, Assets, Chart of
- * accounts, the month's statement lines, Connections, Settings and the
- * invoicing profile. The reference screens are in screens.js, the invoice
- * editor in invoice.js; both register here.
+ * The renderer registry, and the views without a module of their own:
+ * Accounts, Wallets, Transactions, Assets, Chart of accounts, the month's
+ * statement lines, Connections, Organisation, Plan and the invoicing profile.
+ * The other screens (screens.js, home.js, getpaid.js, send.js, settings.js,
+ * apps.js, invoice.js and the rest) register here.
  *
  * RENDER maps a view id to its body (an HTML string, or { html, bind });
  * META to its title, subtitle and header actions. A map rather than a switch,
@@ -84,64 +84,6 @@ RENDER.accounts = async () => {
     <h2 class="zb-h2" style="margin:28px 0 6px">Currencies</h2>
     <p class="zb-hint" style="margin-bottom:12px">Which currencies Zold supports, for every organisation. Whether your own account in one is open is shown in the table above.</p>
     <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Currency</th><th scope="col">Network</th><th scope="col">Settles in</th><th scope="col">Status</th></tr></thead><tbody>${cur.join("")}</tbody></table></div>`;
-};
-
-/* ==========================================================================
-   Shopify: Zold as a payment method on a merchant's store.
-   Crypto only, sale only, refunds by hand: every one of those limits is
-   printed here rather than discovered by a customer at checkout.
-   ========================================================================== */
-
-META.shopify = () => ({ title: "Shopify", sub: "Customers pay an order in digital dollars (USDC).", actions: `${Z.tag("Beta")}${linkBtn("Apps", "apps", "arrow_back")}` });
-
-/* Apps: tools that take payments for the org. Shopify is the only one;
-   accounting software lives in Books, Connections. */
-META.apps = () => ({ title: "Apps", sub: `Tools that take payments for ${org.name}. Accounting software is in Books, Connections.`, actions: "" });
-RENDER.apps = async () => `<h2 class="zb-h2" style="display:flex;align-items:center;gap:8px;margin-bottom:12px">Shopify ${Z.tag("Beta")}</h2>${await RENDER.shopify()}`;
-/** A reason from the API, closed with a full stop before the next sentence. */
-const sentence = (s) => (s = String(s).trim()) && !/[.!?]$/.test(s) ? `${s}.` : s;
-
-RENDER.shopify = async () => {
-  const d = await api(`/api/orgs/${org.id}/shopify`);
-  const custom = d.mode === "custom-app";
-  let html = card("How it works", custom
-    ? `Your store offers a manual payment method named <b>${esc(d.manualGateway || "Zold")}</b>. When a customer places an order with it, Zold opens a payment in digital dollars (USDC) for the order total, shows it on the thank-you page (with the Zold extension installed) or by link, and marks the order paid in Shopify once the money arrives. The order exists before the money does: unpaid orders stay “payment pending” for ${esc(String(d.orderTtlHours || 24))} hours and are yours to cancel.`
-    : "Customers pay a euro order in digital dollars (USDC) on your payment page, and the order is marked paid once the money arrives. Bank transfer isn’t offered at checkout (too slow for a session), refunds are made by you from Zold, and manual capture isn’t supported.",
-  d.available
-    ? `<form class="zb-form" onsubmit="return false"><label for="sh-shop">Store address</label>
-        <div style="display:flex;gap:10px"><input id="sh-shop" name="shop" autocomplete="off" spellcheck="false" placeholder="my-store.myshopify.com…" style="flex:1" />
-        <button type="button" class="z-btn z-btn--primary" data-act="shopify-connect">Connect store</button></div>
-        <p class="desc" style="margin-top:8px">You approve the app at Shopify. The store’s access key is stored encrypted and never shown.${custom ? " Connecting subscribes Zold to the store’s new orders." : ""}</p></form>`
-    : `<div class="banner warn">${Z.icon("info")}<span><b>Not available here.</b> ${esc(sentence(plain(d.reason || "")))} ${custom
-        ? "A Shopify app has to be created in a Partner account, and its key set on this deployment."
-        : "A Shopify payments app has to be approved into Shopify’s Payments Apps program first. Nobody has done that yet."}</span></div>`);
-  html += card("Connected stores", "", d.connections.length
-    ? `<table><thead><tr><th>Store</th><th>Pays into</th><th>Status</th><th>Installed</th><th></th></tr></thead><tbody>${d.connections.map((c) => `<tr>
-        <td><b>${esc(c.shop)}</b></td><td class="mono">@${esc(c.payeeHandle || "")}</td>
-        <td>${c.ready ? Z.tag("Active") : `${Z.tag("Needs setup", "amber")}${c.configureError ? `<p class="desc">${esc(plain(c.configureError))}</p>` : ""}`}</td>
-        <td class="desc">${esc(day(c.installedAt))}${c.lastSessionAt ? `<br>last order ${esc(day(c.lastSessionAt))}` : ""}</td>
-        <td><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="shopify-disconnect" data-id="${esc(c.id)}">Disconnect</button></td></tr>`).join("")}</tbody></table>`
-    : `<p class="empty">No store connected.</p>`);
-  html += card(custom ? "Orders" : "Checkouts", custom ? "Every order a connected store sent with the Zold method." : "Every payment a connected store started.", d.requests.length
-    ? `<table><thead><tr><th>When</th><th>Store</th><th class="num">Amount</th><th>Status</th><th>Shopify told</th><th></th></tr></thead><tbody>${d.requests.map((r) => `<tr>
-        <td class="desc">${esc(day(r.createdAt))}${r.test ? ` ${Z.tag("Test", "amber")}` : ""}</td>
-        <td>${esc(r.shop)}${r.orderName ? `<div class="mono">${esc(r.orderName)}</div>` : ""}</td>
-        <td class="num">${esc(eur(r.amountEur ?? 0))}${r.payments?.length ? `<div class="desc">${r.payments.map((p) => `${esc(String(p.amountUsdc ?? ""))} USDC${p.settledEur !== undefined ? ` → ${esc(eur(p.settledEur))}` : " (kept as USDC)"}`).join("<br>")}</div>` : ""}</td>
-        <td>${Z.tag(r.state === "PAID" ? "Paid" : r.state === "OPEN" ? "Open" : r.state.toLowerCase())}</td>
-        <td>${r.resolvedAt ? Z.tag("Done") : r.state === "PAID" ? `${Z.tag("Not yet", "amber")}${r.resolveError ? `<p class="desc">${esc(plain(r.resolveError))}</p>` : ""}` : '<span class="desc">Not yet</span>'}</td>
-        <td><a class="btn sm" href="${esc(r.url)}" target="_blank" rel="noopener">Page<span class="z-sr"> (opens in a new tab)</span></a></td></tr>`).join("")}</tbody></table>`
-    : `<p class="empty">${custom ? "No orders yet." : "No checkouts yet."}</p>`);
-  const endpoints = `<table><tbody>${Object.entries(d.endpoints).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join("")}</tbody></table>`;
-  html += custom
-    ? card("Set up the store", `Three steps in Shopify, in this order. The app asks for: <span class="mono">${esc(d.scopes || "")}</span>.`,
-      `<ol class="zb-steps">
-        <li><b>Payment method.</b> Settings, Payments, Manual payment methods, Create custom payment method. Name it so it contains “<b>${esc(d.manualGateway || "zold")}</b>”: that’s how Zold recognises its orders. Keep the store’s checkout currency to euros; other orders are ignored.</li>
-        <li><b>Connect the store</b> above. Zold subscribes to the store’s new and cancelled orders itself.</li>
-        <li><b>Thank-you page</b> (recommended). Install the Zold checkout extension from the <span class="mono">shopify-app/</span> project and add its block to the Thank you and Order status pages, pointing at this deployment. Without it, put the pay link in the order confirmation email.</li>
-      </ol>${endpoints}
-      <p class="desc" style="margin-top:12px">Limits, plainly: the buyer pays after placing the order, so stock is held while it waits; refunds are made by you from Zold; a payment that arrives after ${esc(String(d.orderTtlHours || 24))} hours lands on your payment page without its order, and you mark the order paid yourself.</p>`)
-    : card("Partner Dashboard settings", "Paste these into the app’s payments extension. Currency: euros. Payment method type: offsite.", endpoints);
-  return html;
 };
 
 /* ==========================================================================
