@@ -26,3 +26,11 @@ Before going public: domain and trademark clearance for "Zold" in fintech.
 
 Parked deliberately: NEAR Intents, Metastable, Flexa/AMP (wrong market).
 
+Parked until wanted: an AI assistant in the business console ("ask a question
+or give a command", as Mercury's Command does). No language model runs in the
+product, so an empty prompt box would promise something that does not exist.
+Search (⌘K) stays the command surface; it may offer real actions next to its
+results. Picking this up means choosing a model provider, what data it may
+read, and which actions it may prepare (never send: a payment still needs the
+user's signature).
+
