@@ -365,23 +365,6 @@ RENDER.soon = async () => {
 };
 
 const settingsBack = () => linkBtn("Settings", "settings", "arrow_back");
-const planName = (id) => `${id.charAt(0).toUpperCase()}${id.slice(1)}`;
-
-META.settings = () => ({ title: "Settings", sub: `${org.name}, on the ${planName(org.effectivePlan)} plan${org.effectivePlan !== org.plan ? " (trial)" : ""}.`, actions: "" });
-
-/* One tile per area; each opens its own screen. A tile whose feature the
-   plan lacks stays, and its screen says what it needs. */
-RENDER.settings = async () => {
-  const tile = (icon, title, sub, v) => `<li><a class="z-card zb-tile" href="?view=${esc(v)}" data-view-link="${esc(v)}">${Z.iconTile({ icon })}<span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${Z.icon("chevron_right", "z-row__chev")}</a></li>`;
-  return `<ul class="zb-tiles">
-    ${tile("domain", "Organisation", "Name, legal name, address, tax ID", "organisation")}
-    ${cap("invoices").allowed ? tile("receipt_long", "Invoicing profile", "Tax numbers, bank details, number series", "invoicing-settings") : ""}
-    ${tile("apps", "Apps", "Shopify", "apps")}
-    ${tile("cable", "Accounting connections", "GetMyInvoices, Lexware, sevDesk, DATEV", "integrations")}
-    ${tile("group", "Members and access", "Who is in, and what each role may do", "members")}
-    ${tile("workspace_premium", "Plan", `${planName(org.effectivePlan)}${org.effectivePlan !== org.plan ? " (trial)" : ""}`, "plan")}
-  </ul>`;
-};
 
 META.organisation = () => ({ title: "Organisation", sub: "Printed on every invoice you issue. The country decides which invoicing rules apply.", actions: `${settingsBack()}${primary("Save", 'data-act="save-org"')}` });
 

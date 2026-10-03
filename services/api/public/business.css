@@ -401,3 +401,22 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-steps { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .zb-steps li { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; color: var(--z-text); }
 .zb-steps .z-ic { color: var(--z-dim); font-size: 20px; }
+
+/* Settings: grouped menu beside the chosen section from 1024px. */
+.zb-set { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--z-space-5); align-items: start; }
+@media (min-width: 1024px) { .zb-set { grid-template-columns: 240px minmax(0, 760px); } }
+.zb-set-menu { display: flex; flex-direction: column; gap: 2px; }
+.zb-set-menu .z-eyebrow { margin: 14px 12px 6px; }
+.zb-set-menu .z-eyebrow:first-child { margin-top: 0; }
+.zb-set-menu__item { height: 38px; padding: 0 12px; display: flex; align-items: center; gap: 8px; border-radius: var(--z-radius-pill); border: 1px solid transparent; background: transparent; font: 500 14px/1 var(--z-font); color: var(--z-dim); text-align: left; text-decoration: none; cursor: pointer; }
+.zb-set-menu__item:hover { color: var(--z-text); }
+.zb-set-menu__item[aria-current="true"] { font-weight: 600; border-color: var(--z-pink-border); background: var(--z-pink-tint); color: var(--z-heading); }
+.zb-set-menu__out { margin-left: auto; font-size: 16px; }
+.zb-set-rows { margin: 0; display: flex; flex-direction: column; }
+.zb-set-rows > div { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid var(--z-line); }
+.zb-set-rows dt { color: var(--z-dim); font-size: 13.5px; }
+.zb-set-rows dd { margin: 0; color: var(--z-text); font-size: 14px; }
+.zb-set-plan { display: flex; align-items: center; gap: 10px; }
+.zb-set-plan b { font: 600 20px/1.2 var(--z-font); color: var(--z-heading); }
+@media (max-width: 599px) { .zb-set-rows > div { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+.zb-bo-scope { margin-left: 6px; font: 500 12.5px/1 var(--z-font); color: var(--z-dim); }
