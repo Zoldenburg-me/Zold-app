@@ -39,7 +39,10 @@ export type AuditKind =
   | "account.monerium_profile_checked"
   /** An operator read an account's Monerium data live, on the account's own
    *  connection (admin dashboard). Which operator, which profile. */
-  | "operator.monerium_read";
+  | "operator.monerium_read"
+  /** An imported wallet's ownership proof was checked on its chain: prove or
+   *  re-check, and what the chain answered. */
+  | "wallet.ownership_checked";
 
 export interface AuditEntry {
   id: string;

@@ -17,12 +17,17 @@ import {
   IncomeInvoiceError,
   assertCollectableMonth,
   changedReceipts,
+  classifyReceipt,
   dayOf,
   monthOf,
   monthPeriod,
   planIncomeDrafts,
   type IncomePlan,
+  type WalletProof,
 } from "../../domain/income-invoices.js";
+import { proofStateOf } from "../../domain/wallet-ownership.js";
+import { verifyOwnership } from "../../wallet-sync/ownership.js";
+import { auditEntry } from "../../audit.js";
 import { ContactError, validateWallet } from "../../domain/contacts.js";
 import { InvoiceComplianceError } from "../../domain/invoicing.js";
 import { newLinkToken, ownerInvoiceView } from "../../domain/invoices.js";
@@ -166,7 +171,14 @@ function planFrom(ctx: OrgContext, month: string, now: string): IncomePlan {
     now,
     memberId: ctx.member.id,
     newLinkTokenHash: () => newLinkToken().hash,
+    walletProof: (walletId) => walletProofIn(ctx, walletId),
   });
+}
+
+/** The proof state of an imported wallet of this organisation, read now. */
+function walletProofIn(ctx: OrgContext, walletId: string): WalletProof {
+  const wallet = store.findImportedWallet(walletId);
+  return wallet && wallet.orgId === ctx.org.id ? proofStateOf(wallet) : "removed";
 }
 
 /** An id held by anything but this organisation's own draft is a bug in the
@@ -306,6 +318,57 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
       });
     }
 
+    // Every wallet the draft bills from must be proven now, not only when it
+    // was collected. Nothing is written: collecting again moves the rows.
+    const rows = new Map(store.ledgerOf(ctx.org.id).map((e) => [e.id, e]));
+    const unproven = new Map<string, { walletId: string; label: string; proof: WalletProof }>();
+    for (const line of stored.lines) {
+      const source = line.receipt ? rows.get(line.receipt.ledgerEntryId)?.source : undefined;
+      const walletId = source?.kind === "wallet" ? source.walletId : "";
+      const proof = walletId ? walletProofIn(ctx, walletId) : "removed";
+      if (proof !== "proven") {
+        const label = store.findImportedWallet(walletId)?.label ?? (walletId || `the wallet of row ${line.receipt?.ledgerEntryId ?? "?"}`);
+        unproven.set(walletId || label, { walletId, label, proof });
+      }
+    }
+    // The stored state says proven; the chain is asked now, so a Safe whose
+    // owners changed since the last check does not issue on an old answer.
+    if (!unproven.size) {
+      const billedWallets = new Set(stored.lines.flatMap((l) => {
+        const source = l.receipt ? rows.get(l.receipt.ledgerEntryId)?.source : undefined;
+        return source?.kind === "wallet" ? [source.walletId] : [];
+      }));
+      for (const walletId of billedWallets) {
+        const wallet = store.findImportedWallet(walletId)!;
+        const proof = wallet.ownership!;
+        const result = await verifyOwnership(wallet, proof.message, proof.signature, proof.method);
+        store.audit(auditEntry("wallet.ownership_checked", {
+          orgId: ctx.org.id, walletId, chainId: wallet.chainId, address: wallet.address,
+          check: "issue", outcome: result.verdict, ...(result.verdict !== "valid" ? { reason: result.reason } : {}),
+        }, ctx.userId));
+        if (result.verdict === "unverified") {
+          return res.status(503).json({ error: `${wallet.label} could not be checked on its network (${result.reason}), so nothing was issued. Try again.` });
+        }
+        if (result.verdict === "rejected") {
+          const at = new Date().toISOString();
+          const latest = store.findImportedWallet(walletId);
+          if (latest?.ownership && latest.ownership.signature === proof.signature && latest.ownership.message === proof.message) {
+            store.updateImportedWallet(walletId, {
+              ownership: { ...latest.ownership, status: "lapsed", checkedAt: at, lapsedAt: latest.ownership.lapsedAt ?? at, lapseReason: result.reason },
+            });
+          }
+          unproven.set(walletId, { walletId, label: wallet.label, proof: "lapsed" });
+        }
+      }
+    }
+    if (unproven.size) {
+      const named = [...unproven.values()].map((w) => `${w.label} (${w.proof === "unproven" ? "not proven" : w.proof})`);
+      return res.status(409).json({
+        error: `This draft bills receipts from ${named.join(", ")}, which ${unproven.size === 1 ? "is" : "are"} not proven to be this organisation's. Nothing was issued.`,
+        unprovenWallets: [...unproven.values()],
+      });
+    }
+
     let fresh: Invoice | undefined;
     try {
       fresh = planFor(ctx, stored.fromReceipts.month, new Date().toISOString()).drafts.find((d) => d.id === stored.id);
@@ -351,7 +414,23 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
       });
     }
 
-    const answer = await issueOutgoing(ctx, issueBodyFor(current, stored.fromReceipts.month, rule, req.body ?? {}), current);
+    // What it bills must not change while the VIES and rate lookups run: the
+    // wallets still proven, the rows still at the values on the lines.
+    const stillIssuable = () => {
+      const now = new Map(store.ledgerOf(ctx.org.id).map((e) => [e.id, e]));
+      for (const line of current.lines) {
+        const row = line.receipt ? now.get(line.receipt.ledgerEntryId) : undefined;
+        const walletId = row?.source.kind === "wallet" ? row.source.walletId : "";
+        if (!row || walletProofIn(ctx, walletId) !== "proven") {
+          return "A wallet this draft bills from stopped being proven while it was being issued. Nothing was issued.";
+        }
+        if (classifyReceipt(row).kind !== "eligible" || (classifyReceipt(row) as { eurCents: number }).eurCents !== line.receipt!.eurCents) {
+          return "A receipt on this draft changed while it was being issued. Nothing was issued; collect the month again.";
+        }
+      }
+      return undefined;
+    };
+    const answer = await issueOutgoing(ctx, issueBodyFor(current, stored.fromReceipts.month, rule, req.body ?? {}), current, stillIssuable);
     res.status(answer.status).json(answer.body);
   }));
 

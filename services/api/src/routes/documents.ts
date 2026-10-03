@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { CHAIN_ID, HARNESS, SECURITY } from "../config.js";
 import { store, type Transfer, type User } from "../store.js";
 import { abis, addrs, eur, publicClient } from "../chain.js";
+import { checkSignedMessage, type SignatureCheck } from "../wallet/signature-check.js";
 import { moneriumClientFor, moneriumLiveFor } from "../adapters/monerium-connection.js";
 import { safeMessageHash, signMessageAsPasskeySafe, type PasskeySafeDeploymentPlan } from "../wallet/candide.js";
 import { b64urlToBuf, bufToB64url, verifyAssertionForChallenge } from "../webauthn.js";
@@ -242,15 +243,26 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
     if (HARNESS.enabled) {
       checks.push({ name: "Signed by the account's smart account", ok: true, detail: "recorded; not checked on the local harness chain" });
     } else {
-      try {
-        const ok = await publicClient.verifyMessage({ address: safe.address, message: safe.message, signature: safe.signature });
-        checks.push({ name: "Signed by the account's smart account", ok, detail: ok ? `EIP-1271 valid for ${safe.address}` : "the smart account rejects this signature" });
-      } catch (err: any) {
-        checks.push({ name: "Signed by the account's smart account", ok: false, detail: `could not check: ${String(err?.message ?? err).slice(0, 100)}` });
-      }
+      checks.push(safeAttestationCheck(
+        await checkSignedMessage(publicClient, { address: safe.address, message: safe.message, signature: safe.signature }),
+        safe.address,
+      ));
     }
   }
   return { ok: checks.every((c) => c.ok), checks };
+}
+
+/** The Safe attestation's line on the verification page: only a valid
+ *  answer passes; a chain that could not be asked fails as "could not check". */
+export function safeAttestationCheck(r: SignatureCheck, address: string): { name: string; ok: boolean; detail: string } {
+  return {
+    name: "Signed by the account's smart account",
+    ok: r.verdict === "valid",
+    detail:
+      r.verdict === "valid" ? `${r.method === "eip1271" ? "EIP-1271" : "ECDSA"} valid for ${address}`
+      : r.verdict === "rejected" ? "the smart account rejects this signature"
+      : `could not check: ${r.reason}`,
+  };
 }
 
 // ---------------------------------------------------------------------------

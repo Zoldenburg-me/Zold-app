@@ -381,6 +381,59 @@ export const ACTIONS = {
   async "del-wallet"(el) {
     await api(`/api/orgs/${org.id}/wallets/${el.dataset.id}`, { method: "DELETE" });
   },
+  /**
+   * Prove a wallet is the organisation's: Zold issues a challenge, the person
+   * signs it in the wallet itself, and the wallet's chain is asked. Nothing
+   * here signs: the screen gives the exact text and takes back the
+   * signature, or nothing from a Safe that signed the message on chain.
+   */
+  async "prove-wallet"(el) {
+    const id = el.dataset.id;
+    const { challenge } = await api(`/api/orgs/${org.id}/wallets/${id}/ownership/challenge`, { method: "POST" });
+    dialog("Prove this wallet is yours",
+      `<p class="desc">Sign this exact text in the wallet itself. It moves no funds and approves no transaction. Zold then asks the wallet’s own network whether the signature is valid.</p>
+       <label for="pw-msg">Text to sign</label>
+       <textarea id="pw-msg" rows="11" readonly class="z-mono" style="width:100%;font-size:12px" translate="no">${esc(challenge.message)}</textarea>
+       <div class="zb-actions" style="margin:8px 0 12px"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(challenge.message)}" data-said="Text copied">Copy the text</button></div>
+       <ol class="zb-steps">
+         <li>An ordinary wallet: sign the text as a message and paste the signature below.</li>
+         <li>A Safe: sign it as a message in Safe{Wallet}. When enough owners have signed, paste the signature it shows. If the Safe signed the message on chain instead, leave the field empty.</li>
+       </ol>
+       <label for="pw-sig">Signature <span class="desc">(empty for a message the Safe signed on chain)</span></label>
+       <textarea id="pw-sig" rows="3" class="z-mono" spellcheck="false" autocomplete="off" placeholder="0x…" style="width:100%"></textarea>
+       <p class="zb-hint">The text is valid until ${esc(day(challenge.expiresAt))}. Hash, for checking: <span class="z-mono" translate="no">${esc(challenge.messageHash)}</span></p>`,
+      async () => {
+        const signature = $("#pw-sig").value.trim();
+        await api(`/api/orgs/${org.id}/wallets/${id}/ownership`, { method: "POST", body: { challengeId: challenge.id, ...(signature ? { signature } : {}) } });
+        toast("Proven: the wallet’s network accepted the signature.");
+      }, { okLabel: "Check the signature" });
+    return "keep";
+  },
+  async "recheck-wallet"(el) {
+    const r = await api(`/api/orgs/${org.id}/wallets/${el.dataset.id}/ownership/recheck`, { method: "POST" });
+    toast(r.wallet.proofState === "proven" ? "Checked: the proof still holds." : `The proof has lapsed: ${plain(r.wallet.ownership.lapseReason || "")}.`, r.wallet.proofState !== "proven");
+  },
+  async "revalue-row"(el) {
+    const r = await api(`/api/orgs/${org.id}/ledger/${el.dataset.id}/revalue`, { method: "POST" });
+    toast(`Valued at ${eur(Number(r.entry.fiatValue))}.`);
+  },
+  async "revalue-all"() {
+    // A page of rows per call, in order, until none are left.
+    const results = [];
+    let after;
+    do {
+      const r = await api(`/api/orgs/${org.id}/ledger/revalue`, { method: "POST", body: after ? { after } : {} });
+      results.push(...r.results);
+      after = r.next;
+      if (after) toast(`Asked for ${results.length} prices…`);
+    } while (after);
+    const count = (s) => results.filter((x) => x.status === s).length;
+    const parts = [`${count("valued")} of ${results.length} valued.`];
+    if (count("no-price")) parts.push(`${count("no-price")} still have no price.`);
+    if (count("unreachable")) parts.push(`${count("unreachable")} could not be asked: the price source did not answer. Try again later.`);
+    if (count("skipped")) parts.push(`${count("skipped")} cannot be revalued.`);
+    toast(parts.join(" "), count("unreachable") > 0);
+  },
   invite: () => {
     const roles = Object.keys(ROLE_WORD).filter((r) => r !== "owner" || org.role === "owner");
     const says = { viewer: "Viewer: sees everything, changes nothing", accountant: "Accountant: books and exports, no money", payer: "Payer: proposes and sends", admin: "Admin: proposes, approves, sends, invites", owner: "Owner: everything, including the plan" };
