@@ -90,6 +90,8 @@
     "statement:test": "tsx scripts/statement-lines-test.ts",
     "wallet-sync:test": "tsx scripts/wallet-sync-test.ts",
     "income-invoices:test": "tsx scripts/income-invoices-test.ts",
+    "wallet-proof:test": "tsx scripts/wallet-proof-test.ts",
+    "holdings:test": "tsx scripts/holdings-test.ts",
     "beleg:test": "tsx scripts/beleg-test.ts",
     "lexware:csv:test": "tsx scripts/lexware-csv-test.ts",
     "exact-output:test": "tsx scripts/exact-output-test.ts",

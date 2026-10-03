@@ -75,6 +75,8 @@ const scripts = [
   "statement:test",
   "wallet-sync:test",
   "income-invoices:test",
+  "wallet-proof:test",
+  "holdings:test",
   "beleg:test",
   "lexware:csv:test",
   "exact-output:test",

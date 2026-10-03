@@ -72,13 +72,13 @@ const PRICE_CACHE_MAX = 5000;
 /** For tests that change the stubbed feed between calls. */
 export const clearPriceCache = () => priceCache.clear();
 
-async function usdPrice(q: ValuationQuery): Promise<UsdPrice> {
+async function usdPrice(q: ValuationQuery, fresh: boolean): Promise<UsdPrice> {
   const token = q.token.toLowerCase();
   const stable = USD_STABLECOINS[q.chainId]?.[token];
   if (stable) return { usd: 1, symbol: stable, source: `${stable} at 1 USD` };
   const hour = Math.floor(Date.parse(q.blockTime) / 3_600_000);
   const cacheKey = `${q.chainId}:${token}:${hour}`;
-  const hit = priceCache.get(cacheKey);
+  const hit = fresh ? undefined : priceCache.get(cacheKey);
   if (hit) return hit;
   const answer = await fetchUsdPrice(q, token);
   if (!("transient" in answer && answer.transient)) {
@@ -131,9 +131,11 @@ async function fetchUsdPrice(q: ValuationQuery, token: string): Promise<UsdPrice
   return { usd: p.price, symbol, source: `${symbol} at ${p.price} USD (DefiLlama, ${at})` };
 }
 
-export async function valueTransfer(q: ValuationQuery): Promise<ValuationResult> {
+/** `fresh` asks the feed again instead of answering from the hour's cache:
+ *  a retry of a refused price must not get the cached refusal back. */
+export async function valueTransfer(q: ValuationQuery, opts: { fresh?: boolean } = {}): Promise<ValuationResult> {
   if (!Number.isFinite(Date.parse(q.blockTime))) return { ok: false, reason: "no block time", transient: true };
-  const price = await usdPrice(q);
+  const price = await usdPrice(q, opts.fresh === true);
   if ("reason" in price) return { ok: false, reason: price.reason, transient: price.transient };
   let ecb;
   try {

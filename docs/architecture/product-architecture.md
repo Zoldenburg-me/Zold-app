@@ -542,11 +542,30 @@ tokens on Uniswap's or CoinGecko's lists are virtual assets with FIFO lots;
 a token on no list is booked as a quantity with no value and no income
 rule, so an airdrop never reads as revenue. A listed token without a price
 is still booked, tagged `needs-valuation` and under its contract address,
-never at €0. Without an RPC
+never at €0; a member can ask the price feed again for its block time, and
+nothing else gives it a value. Without an RPC
 the wallet reads "Not syncing" and books nothing. Booking from a past day is
 the `ledger.historicalSync` capability (Business). Native ETH, NFTs and
 rebasing balances are not booked. Drafts sourced from an imported wallet echo
 the lines back as "unsigned".
+
+Importing an address claims nothing, so a wallet is **proven** before its
+receipts are invoiced: Zold issues a short text naming the organisation, the
+address and the network, the member signs it in the wallet itself (a Safe in
+Safe{Wallet}, or on chain), and the wallet's own network is asked whether the
+signature is valid. Zold holds no key and proposes no transaction. A proof
+can be checked again; a Safe whose owners changed can fail, and the wallet
+then shows the proof as lapsed. An unproven or lapsed wallet still syncs and
+counts in the books, labelled; only collecting its receipts into drafts and
+issuing them wait for the proof.
+
+**Holdings and realised gains** (Books): per token, what is held, what it
+cost first in first out, and every lot with the row it came from; per month,
+the EUR value of what left minus the cost of the lots it used. Where a value
+or a cost is missing, or more left than was ever booked, the gain is shown as
+not measurable rather than as zero. EURe opens no lot, a token on no list is
+a quantity only, and moving tokens between the organisation's own wallets
+realises nothing. Zold asserts no tax treatment.
 
 ### 7.8 Operator console — LIVE, read-only except recovery signing
 
@@ -618,10 +637,11 @@ LINK_CREATED → SUBMITTED → PAYING → PAID → RECONCILED     (+ soft DELETE
   who the invoice is addressed to, the tax line the organisation chooses, and
   the addresses the payer sends from. "Collect receipts" on the Invoices
   screen takes a month and makes one draft per contact with a rule: one line
-  per receipt into an imported wallet (date, token, quantity, EUR value at
-  receipt, transaction), total the sum of those values. Receipts that cannot
+  per receipt into a proven imported wallet (date, token, quantity, EUR
+  value at receipt, transaction), total the sum of those values. Receipts that cannot
   be invoiced (no value yet, a token on no list, a transfer between own
-  addresses) are listed on the draft with the reason, and the summary also
+  addresses, a wallet not proven to be the organisation's) are listed on the
+  draft with the reason, and the summary also
   counts receipts from contacts without a rule, from unknown senders, and
   those an issued invoice already bills. Collecting again updates drafts and
   leaves issued invoices alone. Nothing is issued until a member who may

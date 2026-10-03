@@ -136,11 +136,11 @@ export function maskIban(iban) {
 /* What each role may do, as the API's permission table has it. */
 export const ROLE_WORD = { owner: "Owner", admin: "Admin", payer: "Payer", accountant: "Accountant", viewer: "Viewer" };
 export const ROLE_CAN = {
-  owner: { propose: true, approve: true, send: true },
-  admin: { propose: true, approve: true, send: true },
-  payer: { propose: true, approve: false, send: true },
-  accountant: { propose: true, approve: false, send: false },
-  viewer: { propose: false, approve: false, send: false },
+  owner: { propose: true, approve: true, send: true, categorise: true, wallets: true },
+  admin: { propose: true, approve: true, send: true, categorise: true, wallets: true },
+  payer: { propose: true, approve: false, send: true, categorise: false, wallets: false },
+  accountant: { propose: true, approve: false, send: false, categorise: true, wallets: false },
+  viewer: { propose: false, approve: false, send: false, categorise: false, wallets: false },
 };
 export const roleCan = (role, what) => !!ROLE_CAN[role]?.[what];
 

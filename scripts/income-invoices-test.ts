@@ -19,11 +19,28 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import express from "express";
+import { privateKeyToAccount } from "viem/accounts";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-income-invoices-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
 // Config refuses hardhat's public key on a remote RPC; nothing here dials it.
 process.env.TRANSF_RPC_URL = "http://127.0.0.1:8545";
+
+// Issuing asks the wallet's own chain whether its proof still holds. A stub
+// node for chain 1 with no code at any address: the wallets are ordinary
+// keys, and their proofs are real signatures (wallet-proof-test.ts covers
+// the proof against a real chain).
+const rpcStub = express();
+rpcStub.use(express.json());
+rpcStub.post("/", (req, res) => {
+  const { id, method } = req.body ?? {};
+  const result = method === "eth_chainId" ? "0x1" : method === "eth_getCode" ? "0x" : undefined;
+  res.json(result === undefined ? { jsonrpc: "2.0", id, error: { code: -32601, message: "not here" } } : { jsonrpc: "2.0", id, result });
+});
+const rpcServer = rpcStub.listen(0, "127.0.0.1");
+await new Promise<void>((r) => rpcServer.once("listening", () => r()));
+process.env.WALLET_SYNC_RPC_1 = `http://127.0.0.1:${(rpcServer.address() as any).port}`;
+process.env.WALLET_SYNC_ENABLED = "0";
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
@@ -84,12 +101,25 @@ addContact("c_norule", "org_1", "No Rule DAO", [NO_RULE]);
 addContact("c_dao2", "org_2", "Example DAO", [DAO]);
 addContact("c_free", "org_free", "Example DAO", [DAO]);
 
+// Each organisation's wallet, proven: only a proven wallet's receipts are
+// invoiced (wallet-proof-test.ts covers the proof itself).
+for (const [id, orgId, key] of [["iw_1", "org_1", `0x${"a1".repeat(32)}`], ["iw_org2", "org_2", `0x${"a2".repeat(32)}`]] as const) {
+  const owner = privateKeyToAccount(key as `0x${string}`);
+  const message = `proof for ${orgId}`;
+  store.addImportedWallet({
+    id, orgId, address: owner.address.toLowerCase() as `0x${string}`, chainId: 1, label: "Treasury", kind: "eoa", custody: "external",
+    sync: { status: "synced", lastSyncedAt: NOW },
+    ownership: { status: "proven", method: "ecdsa", message, signature: await owner.signMessage({ message }), provenAt: NOW, checkedAt: NOW },
+    createdAt: "2025-01-01T00:00:00.000Z",
+  });
+}
+
 let seq = 0;
 /** A row as wallet sync writes it: an inbound, listed, valued receipt from the DAO. */
 const row = (over: Partial<LedgerEntry> & { id: string }): LedgerEntry => {
   seq++;
   return {
-    orgId: "org_1", source: { kind: "wallet", walletId: "iw_1" }, chainId: 1, txHash: H(seq), logIndex: seq,
+    orgId: "org_1", source: { kind: "wallet", walletId: over.orgId === "org_2" ? "iw_org2" : "iw_1" }, chainId: 1, txHash: H(seq), logIndex: seq,
     direction: "in", asset: "USDC", token: USDC, amount: "1000", fiatValue: "800.00", fiatCurrency: "EUR", fiatRate: "0.8",
     counterparty: { address: DAO, contactId: "c_dao", name: "Example DAO" },
     tags: ["wallet"], txType: "transfer_in", at: "2026-08-10T10:00:00.000Z", createdAt: NOW, ...over,
@@ -688,4 +718,6 @@ await check("a plan change hides rules and drafts and deletes neither", async ()
 });
 
 server.close();
+rpcServer.closeAllConnections();
+rpcServer.close();
 console.log(`\n${passed} checks passed${process.exitCode ? ", with failures" : ""}`);
