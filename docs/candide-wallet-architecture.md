@@ -74,7 +74,7 @@ authorizer binding without a verified passkey is refused.
 ## Production Gate
 
 Production mode is `NODE_ENV=production` or `TRANSF_PRODUCTION=1`. The source
-of truth is `assertProductionConfig` in `services/api/src/config.ts`, which
+of truth is `assertProductionConfig` in `services/api/src/config/production.ts`, which
 refuses to start on any failure. The checks that concern the wallet:
 
 - `KYC_OPERATOR_TOKEN` set (operator console and recovery approvals).
