@@ -221,6 +221,31 @@ await check("an owner claims it, and a payer sees the company's bank details and
   assert.deepEqual(p.body, { kind: "organisation", handle: "lindnerholzbau", displayName: "Lindner Holzbau GmbH", bank: { holder: "Lindner Holzbau GmbH", iban: IBAN } });
   for (const secret of ["u_co", "acc_co", SAFE, "Sara"]) assert.ok(!JSON.stringify(p.body).includes(secret), `leaked ${secret}`);
 });
+let pageCode = "";
+await check("once the company has a page, a link made in the console carries its address", async () => {
+  const r = await call("POST", "/api/orgs/org_co/payment-requests", { amountEur: 75, methods: ["bank"] });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.handle, "lindnerholzbau");
+  assert.match(r.body.url, /\/pay\/lindnerholzbau\//);
+  pageCode = r.body.code;
+  const pub = await call("GET", `/api/pay/lindnerholzbau/${pageCode}`, undefined, "");
+  assert.equal(pub.status, 200, JSON.stringify(pub.body));
+  assert.equal(pub.body.handle, "lindnerholzbau");
+  assert.equal(pub.body.displayName, "Lindner Holzbau GmbH");
+  assert.equal(pub.body.methods.bank.holder, "Lindner Holzbau GmbH");
+});
+await check("the same code resolves under the payee's own handle, never under another page", async () => {
+  assert.equal((await call("GET", `/api/pay/lindner/${pageCode}`, undefined, "")).status, 200);
+  assert.equal((await call("GET", `/api/pay/jonas/${pageCode}`, undefined, "")).status, 404);
+});
+await check("a link made before the page opens under the company's address too", async () => {
+  assert.equal((await call("GET", `/api/pay/lindnerholzbau/${code}`, undefined, "")).status, 200);
+});
+await check("a link whose payee does not back the company does not open under its address", async () => {
+  const own = store.paymentRequests.find((p) => p.userId === "u_admin" && p.orgId === "org_co")!;
+  assert.ok(own, "fixture: the re-booked member link above");
+  assert.equal((await call("GET", `/api/pay/lindnerholzbau/${own.code}`, undefined, "")).status, 404);
+});
 await check("a member cannot then claim the company's handle for a personal page", async () => {
   const r = await call("POST", "/api/users/u_admin/handle", { handle: "lindnerholzbau" }, "u_admin");
   assert.equal(r.status, 409);

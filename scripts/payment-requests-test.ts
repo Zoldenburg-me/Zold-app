@@ -351,6 +351,10 @@ try {
   const leak = JSON.stringify(pub.body);
   check("and no email, user id or KYC state", !leak.includes("miriam@example.com") && !leak.includes(miriam.id) && !leak.includes("approved"));
   check("the code under someone else's handle is a 404", (await call("GET", `/api/pay/someone/${code}`)).status === 404);
+  check("a link under the payee's own page shows the page's QR, with no code in it", pub.body.methods.crypto.qrUrl.endsWith("/api/pay/miriam/qr.svg"), pub.body.methods.crypto.qrUrl);
+  const qr = await fetch(`${API}/api/pay/miriam/${code}/qr.svg`);
+  check("the link's own QR route serves the deposit address as an SVG", qr.status === 200 && (qr.headers.get("content-type") || "").includes("svg") && (await qr.text()).includes("<svg"));
+  check("the QR under someone else's handle is a 404", (await fetch(`${API}/api/pay/someone/${code}/qr.svg`)).status === 404);
   check("a malformed code is a 404, not an error", (await call("GET", `/api/pay/miriam/not-a-code`)).status === 404);
 
   console.log("3/4 a USDC deposit of the quoted amount pays it…");
