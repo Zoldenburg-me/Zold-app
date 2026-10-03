@@ -50,7 +50,7 @@ These deviations are decided. Do not undo them, and do not add new ones without 
 
 - **Show only what the API can do.** Render a control only when `/api/health` capabilities and the plan allow it. Hide it or mark it as not available, never fake success.
 - **Label features that are not live.** A feature that is not live shows a **Soon** tag and is not pressable (opacity .55, no link). Use the words "Coming soon" or "Soon", never "Not yet". Examples: crypto wallet send, USD account, dollar/pound/yen accounts, sevDesk, DATEV.
-- **Label features that work but are not proven.** These carry a **Beta** tag. Example: the GetMyInvoices connector, which has only been tested against a stand-in.
+- **Label features that work but are not proven.** These carry a **Beta** tag. Example: the GetMyInvoices connector, which has run one live push, with test data.
 - **Label the test environment.** Every screen shows the amber pill "Test mode, no real money" while `capabilities.sandbox` is true.
 - **Label mockups.** Every marketing mockup of the app carries an "Illustration" tag.
 - **Show measured amounts.** Amounts that arrived are measured amounts (`creditedEur`), never the quote. A quote says "about".

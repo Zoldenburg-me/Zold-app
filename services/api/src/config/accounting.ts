@@ -14,5 +14,10 @@ export const VIES = {
  *  organisation and encrypted at rest; nothing here holds one. */
 export const GETMYINVOICES = {
   BASE_URL: process.env.GETMYINVOICES_BASE_URL ?? "https://api.getmyinvoices.com/accounts/v3",
+  /** Reads: GET /account, /bankAccounts, /documents. */
   TIMEOUT_MS: envNumber("GETMYINVOICES_TIMEOUT_MS", 20_000, { min: 1000 }),
+  /** POST /documents. Their upload answers in ~10 s for a tiny PDF and past
+   *  20 s for a real Beleg, and aborting it cuts their processing short: the
+   *  document lands without its tags. */
+  UPLOAD_TIMEOUT_MS: envNumber("GETMYINVOICES_UPLOAD_TIMEOUT_MS", 120_000, { min: 1000 }),
 };

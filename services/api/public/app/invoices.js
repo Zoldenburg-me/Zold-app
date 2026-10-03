@@ -16,7 +16,7 @@
  *   and keeps only as a hash. It is shown right after issuing and never again.
  * - Drafts live only on this phone (localStorage). The API has none.
  * - Zold sends nothing: the user shares the link or the PDF.
- * - GetMyInvoices has only met a stand-in (Beta). sevDesk and DATEV are not
+ * - GetMyInvoices has run one live push, with test data (Beta). sevDesk and DATEV are not
  *   built (Soon).
  */
 
@@ -1088,7 +1088,7 @@ PH.integrations = {
         Z.soonRow({ lead: phInitials("DAT"), title: "DATEV", sub: "Exports for your Steuerberater" }),
       ] })}
       ${phCache.integrations?.error ? Z.note({ tone: "a", text: phPlain(phCache.integrations.error) }) : ""}
-      ${Z.note({ tone: "a", icon: "science", text: "GetMyInvoices is in beta: tested against a stand-in, not a live account yet." })}
+      ${Z.note({ tone: "a", icon: "science", text: "GetMyInvoices is in beta: one push has run against a real account, with test data. Check the first upload before you close a month on it." })}
     `)}`;
   },
   bind(root) {
