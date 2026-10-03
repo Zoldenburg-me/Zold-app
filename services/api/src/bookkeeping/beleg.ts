@@ -234,40 +234,89 @@ const EVENT_TITLES: Record<StatementFacts["event"], string> = {
 
 export const belegTitle = (s: BelegSnapshot) => EVENT_TITLES[s.line.event];
 
-/** The document as lines of text — what the PDF and the tests read. */
+const longDay = (iso?: string) => {
+  const d = iso ? new Date(iso.length === 10 ? `${iso}T12:00:00Z` : iso) : undefined;
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString("en-GB", { dateStyle: "long", timeZone: "UTC" }) : "—";
+};
+const shortAddr = (a: string) => `${a.slice(0, 8)}…${a.slice(-6)}`;
+const CHAIN_NAME: Record<number, string> = { 8453: "Base", 84532: "Base Sepolia", 31337: "local hardhat" };
+/** Room for a value right of its label, in Helvetica points at 9pt. */
+const VALUE_ROOM = 300;
+const fits = (t: string, size = 9) => t.length * 0.55 * size <= VALUE_ROOM;
+
+/**
+ * The document as the PDF draws it, laid out like the page at /v/<code>:
+ * header, account, the payment as one statement row, what it is booked
+ * against, the crypto facts where there are any, the record ids last in
+ * small type. `text` on every line is its plain reading, for the tests.
+ */
 export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string): PdfLine[] {
   const L: PdfLine[] = [];
-  const kv = (k: string, v: string | undefined, indent = 12) => {
-    if (v !== undefined && v !== "" && v !== "—") L.push({ text: `${k}: ${v}`, indent });
+  const cellsLine = (cells: PdfLine["cells"] & object, extra: Partial<PdfLine> = {}): void => {
+    L.push({ text: cells.map((c) => c.text).filter(Boolean).join(" "), cells, ...extra });
   };
-  L.push({ text: "Zold — Beleg", size: 16, bold: true });
-  L.push({ text: belegTitle(snap), size: 12, bold: true, gap: 4 });
-  L.push({ text: `Verification ${code} · issued ${when(issuedAt)} · verify at /v/${code}`, size: 8.5 });
-  L.push({ text: "Account", bold: true, gap: 10 });
-  kv("Holder", snap.holder.name);
-  if (snap.holder.operatedBy) kv("Operated by", snap.holder.operatedBy);
-  kv("IBAN", snap.holder.iban);
-  const mp = snap.holder.moneriumProfile;
-  if (mp) kv("IBAN owner at Monerium", `${mp.name ?? "name not given"} (${mp.kind} profile, checked ${mp.checkedAt.slice(0, 10)})`);
-  kv("Account of record", `${snap.holder.safeAddress} (chain ${snap.chainId})`);
-  // The movement once, as a bank statement prints it.
+  const heading = (t: string) => L.push({ text: t.toUpperCase(), size: 8, bold: true, muted: true, gap: 16, rule: "strong" });
+  const kv = (k: string, v: string | undefined) => {
+    if (v === undefined || v === "" || v === "—") return;
+    if (fits(v)) {
+      L.push({ text: `${k}: ${v}`, size: 9, cells: [{ text: k, at: 0, muted: true }, { text: v, at: 1, align: "right" }], rule: "thin" });
+    } else {
+      L.push({ text: k, size: 9, muted: true });
+      L.push({ text: `${k}: ${v}`.slice(k.length + 2), size: 9, indent: 24, rule: "thin" });
+    }
+  };
+
+  // Header
+  cellsLine([{ text: "Zold", at: 0, bold: true, size: 16 }, { text: "Beleg", at: 1, align: "right", bold: true, size: 11 }]);
+  cellsLine([{ text: belegTitle(snap), at: 0, muted: true, size: 10 }, { text: `Generated ${longDay(issuedAt)}`, at: 1, align: "right", muted: true, size: 9 }]);
+  cellsLine([{ text: `Verification ${code}`, at: 1, align: "right", muted: true, size: 9 }]);
+
+  // Account: who on the left, the account's facts on the right
+  const h = snap.holder;
+  const left = [h.name.toUpperCase(), h.operatedBy ? `Operated by ${h.operatedBy}` : "", ...h.addressLines].filter(Boolean);
+  const right: [string, string][] = [
+    ...(h.iban ? [["IBAN", h.iban] as [string, string]] : []),
+    ...(h.bic ? [["BIC", h.bic] as [string, string]] : []),
+    ["Currency", "EUR"],
+    ["Account of record", shortAddr(h.safeAddress)],
+    ["Chain", CHAIN_NAME[snap.chainId] ? `${CHAIN_NAME[snap.chainId]} (${snap.chainId})` : `chain ${snap.chainId}`],
+  ];
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const cells: NonNullable<PdfLine["cells"]> = [];
+    if (left[i]) cells.push({ text: left[i], at: 0, bold: i === 0 });
+    if (right[i]) cells.push({ text: right[i][0], at: 0.55, muted: true, size: 9 }, { text: right[i][1], at: 1, align: "right", size: 9 });
+    cellsLine(cells, { size: 10, gap: i === 0 ? 18 : 0 });
+  }
+
+  // The movement once, as a bank statement prints it
   const line = snap.line;
   const bank = snap.bank;
   const out = line.amountCents < 0 || line.event === "sepa_out";
-  const who = [line.counterparty.name ?? bank?.counterpartyName, line.counterparty.iban ?? bank?.counterpartyIban ?? line.counterparty.address].filter(Boolean).join(" · ");
-  L.push({ text: "Payment", bold: true, gap: 10 });
-  kv("Amount", `${out ? "-" : "+"}${eur(Math.abs(line.amountCents) / 100)}`);
-  kv("Date", line.bookingDate === line.valueDate ? line.valueDate : `${line.valueDate} (booked ${line.bookingDate})`);
-  kv(out ? "To" : "From", who || undefined);
-  kv("Reference", line.reference);
-  if (bank?.memo && bank.memo !== line.reference) kv("Memo", bank.memo);
-  L.push({ text: "Booked against", bold: true, gap: 10 });
+  const name = line.counterparty.name ?? bank?.counterpartyName ?? "—";
+  const account = line.counterparty.iban ?? bank?.counterpartyIban ?? (line.counterparty.address ? shortAddr(line.counterparty.address) : "");
+  const memo = bank?.memo && bank.memo !== line.reference ? bank.memo : "";
+  const memoInRow = memo && memo.length <= 46;
+  cellsLine([
+    { text: "DATE", at: 0 }, { text: out ? "TO" : "FROM", at: 0.2 }, { text: "REFERENCE", at: 0.52 }, { text: "AMOUNT", at: 1, align: "right" },
+  ], { size: 8, bold: true, muted: true, gap: 20, rule: "strong" });
+  cellsLine([
+    { text: longDay(line.valueDate), at: 0 }, { text: name, at: 0.2 }, { text: line.reference || "—", at: 0.52 },
+    { text: `${out ? "-" : "+"}${eur(Math.abs(line.amountCents) / 100)}`, at: 1, align: "right", bold: true },
+  ], { size: 10 });
+  cellsLine([
+    { text: line.bookingDate !== line.valueDate ? `booked ${longDay(line.bookingDate)}` : "", at: 0 },
+    { text: account, at: 0.2 }, { text: memoInRow ? memo : "", at: 0.52 },
+  ], { size: 8.5, muted: true, rule: "thin" });
+
+  heading("Booked against");
   if (snap.invoice) kv("Invoice", `${snap.invoice.number}${snap.invoice.payer ? ` · ${snap.invoice.payer}` : ""}${snap.invoice.source === "external" ? " (issued outside Zold)" : ""}`);
   kv("Account code", line.accountCode);
+  if (memo && !memoInRow) kv("Memo", memo);
   kv("Zold fee", bank?.feeEur !== undefined ? eur(bank.feeEur) : undefined);
   if (bank?.refund) kv("Refund", `${eur(bank.refund.amountEur)} at ${when(bank.refund.at)} — ${bank.refund.deductions}`);
+
   if (snap.receipt) {
-    L.push({ text: "Receipt (crypto)", bold: true, gap: 10 });
+    heading("Received on chain");
     kv("Received", `${snap.receipt.amount} ${snap.receipt.asset}`);
     kv("Arrived", when(snap.receipt.blockTime));
     if (snap.receipt.valueEur !== undefined) {
@@ -278,42 +327,49 @@ export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string):
     }
   }
   if (snap.conversion) {
-    L.push({ text: snap.sweep ? "Sweep conversion" : "Conversion", bold: true, gap: 10 });
+    const c = snap.conversion;
+    heading(snap.sweep ? "Sweep conversion" : "Conversion");
     if (snap.sweep) kv("Leftovers from", `${snap.sweep.depositIds.length} conversion(s) in ${snap.sweep.month}`);
-    kv("Time", when(snap.conversion.at));
-    kv("Venue", snap.conversion.venue);
-    kv("Rate", snap.conversion.rate !== undefined ? `${snap.conversion.rate} USD/EUR${snap.conversion.midRate ? ` (independent mid ${snap.conversion.midRate})` : ""}` : undefined);
-    kv("Amount in", snap.conversion.amountInUsdc !== undefined ? `${snap.conversion.amountInUsdc} USDC` : undefined);
-    kv("Venue fee", snap.conversion.venueFeeUsdc !== undefined ? `${snap.conversion.venueFeeUsdc} USDC` : undefined);
-    kv("EURe credited", eur(snap.conversion.creditedEur));
-    kv("Left in the account", snap.conversion.leftoverUsdc !== undefined ? `${snap.conversion.leftoverUsdc} USDC (swept monthly)` : undefined);
-    kv("Receivable difference", snap.conversion.receivableDifferenceEur !== undefined ? eur(snap.conversion.receivableDifferenceEur) : undefined);
-    kv("Gain / loss on conversion", snap.conversion.gainEur !== undefined ? eur(snap.conversion.gainEur) : undefined);
+    kv("Time", when(c.at));
+    kv("Venue", c.venue);
+    kv("Rate", c.rate !== undefined ? `${c.rate} USD/EUR${c.midRate ? ` (independent mid ${c.midRate})` : ""}` : undefined);
+    kv("Amount in", c.amountInUsdc !== undefined ? `${c.amountInUsdc} USDC` : undefined);
+    kv("Venue fee", c.venueFeeUsdc !== undefined ? `${c.venueFeeUsdc} USDC` : undefined);
+    kv("EURe credited", eur(c.creditedEur));
+    kv("Left in the account", c.leftoverUsdc !== undefined ? `${c.leftoverUsdc} USDC (swept monthly)` : undefined);
+    kv("Receivable difference", c.receivableDifferenceEur !== undefined ? eur(c.receivableDifferenceEur) : undefined);
+    kv("Gain / loss on conversion", c.gainEur !== undefined ? eur(c.gainEur) : undefined);
   }
   if (snap.gas && (snap.gas.costWei || snap.gas.paidBy)) {
-    L.push({ text: "Gas", bold: true, gap: 10 });
+    heading("Gas");
     kv("Cost", snap.gas.costWei ? `${snap.gas.costWei} wei` : undefined);
     kv("Paid by", snap.gas.paidBy === "sponsored" ? "the paymaster (sponsored)" : snap.gas.paidBy === "safe-native" ? "the account, in ETH" : snap.gas.paidBy === "safe-token" ? "the account, in the gas token (USDC)" : undefined);
   }
+  if (snap.unexecutedNote) L.push({ text: snap.unexecutedNote, size: 9, gap: 12 });
+
   // For an auditor tracing the line back to its records.
+  const mp = h.moneriumProfile;
   const ids = [
+    ["Account of record", `${h.safeAddress} (chain ${snap.chainId})`],
+    ["IBAN owner at Monerium", mp ? `${mp.name ?? "name not given"}, ${mp.kind} profile ${mp.id}, checked ${mp.checkedAt.slice(0, 10)}` : undefined],
     ["Monerium order", line.links.orderId ?? bank?.orderId],
     ["Transfer", line.links.transferId ?? bank?.transferId],
     ["Deposit", line.links.depositId],
     ["Payment link", line.links.paymentRequestId],
-    ...line.links.txHashes.map((h) => ["Transaction", h]),
+    ...line.links.txHashes.map((x) => ["Transaction", x]),
     ["UserOperation", snap.conversion?.userOpHash],
-    ["Monerium profile", mp?.id],
     ["Line", line.key],
   ].filter(([, v]) => v) as [string, string][];
-  L.push({ text: "Record IDs", bold: true, size: 9, gap: 10 });
-  for (const [k, v] of ids) L.push({ text: `${k}: ${v}`, indent: 12, size: 8 });
-  if (snap.unexecutedNote) L.push({ text: snap.unexecutedNote, size: 9, gap: 10 });
+  L.push({ text: "RECORD IDS", size: 7.5, bold: true, muted: true, gap: 18 });
+  for (const [k, v] of ids) L.push({ text: `${k}: ${v}`, size: 7.5, muted: true });
+
+  L.push({ text: `Verify this document at /v/${code}. Zold signed it; a changed word or figure fails the check.`, size: 8, gap: 14 });
   L.push({
     text:
       "Euros on this account are e-money (EURe) issued by Monerium ehf.; the IBAN and SEPA payments are provided by AS LHV Pank. Zold is software and holds no licence of its own.",
     size: 8,
-    gap: 12,
+    muted: true,
+    gap: 4,
   });
   return L;
 }
