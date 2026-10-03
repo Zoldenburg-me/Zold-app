@@ -244,6 +244,7 @@ export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string):
   L.push({ text: `Verification ${code} · issued ${when(issuedAt)} · verify at /v/${code}`, size: 8.5 });
   L.push({ text: "Account", bold: true, gap: 10 });
   kv("Holder", snap.holder.name);
+  if (snap.holder.operatedBy) kv("Operated by", snap.holder.operatedBy);
   kv("IBAN", snap.holder.iban);
   const mp = snap.holder.moneriumProfile;
   if (mp) kv("IBAN owner at Monerium", `${mp.name ?? "name not given"} (${mp.kind} profile ${mp.id}, checked ${mp.checkedAt.slice(0, 10)})`);

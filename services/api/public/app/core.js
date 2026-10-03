@@ -48,6 +48,9 @@ const safeUrl = (u) => {
 /* An absent status is NOT approval: reading a missing field as "approved"
    would open funding on any payload that dropped it. */
 const kycApproved = (u = user) => u?.kycStatus === "approved";
+/* A company signup's own Safe is the company's account, not a personal one:
+   its IBAN sits on the company's profile at Monerium. */
+const ownAccountKind = (u = user) => (u?.accountType === "company" ? "Company" : "Personal");
 const kycCopy = (status = "pending", u = user) => {
   if (status !== "approved" && hasConnectedMonerium(u)) {
     return ["MONERIUM", "Activate your IBAN", "Your Monerium account is connected. One passkey confirmation links your wallet to it and asks Monerium for the IBAN."];

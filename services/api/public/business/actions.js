@@ -7,7 +7,7 @@
  * shell does not draw the page again under it.
  */
 import { $, Z, api, cap, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setView, toast, token, view } from "./core.js";
-import { exportMonth, sendState, setExportMonth } from "./views.js";
+import { docHref, docMonth, exportMonth, sendState, setExportMonth } from "./views.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
@@ -184,7 +184,40 @@ function gmiDrawer(el) {
   };
 }
 
+/* A document opens in a new tab; the list below the buttons then shows it. */
+function openDocument(d) {
+  const url = docHref(d?.url);
+  if (url) window.open(url, "_blank", "noopener");
+  toast("Document issued.");
+}
+
 export const ACTIONS = {
+  // ── Documents (views.js RENDER.documents) ────────────────────────────────
+  async "doc-statement"() {
+    const v = $("#doc-month").value;
+    docMonth.value = v;
+    const [y, m] = v.split("-").map(Number);
+    const from = new Date(Date.UTC(y, m - 1, 1)).toISOString();
+    const to = new Date(Date.UTC(y, m, 1) - 1).toISOString();
+    openDocument(await api(`/api/users/${me.id}/documents/statement`, { method: "POST", body: { from, to } }));
+  },
+  async "doc-balance"() {
+    openDocument(await api(`/api/users/${me.id}/documents/balance`, { method: "POST", body: {} }));
+  },
+  async "doc-ownership"() {
+    let d = await api(`/api/users/${me.id}/documents/ownership`, { method: "POST", body: {} });
+    if (d.safeSignature) {
+      // The account's own signature: the part a screenshot cannot fake.
+      const lib = await window.__deviceLib;
+      const sig = await lib.passkeyAssertion(d.safeSignature);
+      d = await api(d.safeSignature.submitTo, { method: "POST", body: sig });
+    }
+    openDocument(d);
+  },
+  async "doc-receipt"(el) {
+    openDocument(await api(`/api/users/${me.id}/documents/receipt`, { method: "POST", body: { transferId: el.dataset.id } }));
+  },
+
   /* Filters and tabs: state in the screen's module, then a redraw. */
   "ap-tab"(el) { ap.tab = el.dataset.tab; },
   "inv-filter"(el) { iv.filter = el.dataset.f; },

@@ -180,6 +180,19 @@ h2.zb-conn__group { margin: 32px 0 12px; }
 h2.zb-conn__group--first { margin-top: 0; }
 @media (max-width: 1023px) { .zb-grid3 { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 720px) { .zb-conn--wide { grid-template-columns: minmax(0, 1fr); } .zb-conn--wide .zb-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; } }
+/* Documents: the month picker and the three create buttons on one row. */
+.zb-doc-create { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--z-space-3); }
+.zb-doc-create > div { min-width: 200px; }
+.zb-doc-create label { margin-top: 0; }
+
+/* Settings: one tile per area, each opens its own screen. */
+.zb-tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--z-space-4); }
+.zb-tile { display: flex; align-items: center; gap: var(--z-space-3); padding: var(--z-space-5); color: inherit; text-decoration: none; height: 100%; }
+.zb-tile:hover { border-color: var(--z-line-strong); }
+.zb-tile:focus-visible { outline: 2px solid var(--z-pink-border); outline-offset: 2px; }
+.zb-tile .z-row__main { flex: 1; min-width: 0; }
+.zb-addr3 { display: grid; grid-template-columns: 140px 1fr 200px; gap: 12px; }
+@media (max-width: 720px) { .zb-addr3 { grid-template-columns: minmax(0, 1fr); } }
 .zb-steps { margin: 0; padding-left: 20px; font-size: 14.5px; line-height: 1.9; }
 .zb-plan { display: flex; flex-direction: column; gap: var(--z-space-2); padding: 18px; border-radius: var(--z-radius-card); border: 1px solid var(--z-line); background: var(--z-ghost); }
 .zb-plan.is-current { border-color: var(--z-pink-border); background: var(--z-pink-tint); }

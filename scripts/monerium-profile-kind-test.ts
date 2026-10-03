@@ -37,6 +37,8 @@ process.env.MONERIUM_CLIENT_SECRET = "";
 type Profile = { id: string; kind: "personal" | "corporate"; state: string; name: string };
 /** What each bearer token can see at the fake Monerium. */
 const visible = new Map<string, Profile[]>();
+/** The IBANs each bearer token sees at GET /ibans (none unless set). */
+const ibansOf = new Map<string, any[]>();
 const fake = { down: false, reads: 0, appGrants: 0 };
 const APP_TOKEN = "tok-app";
 
@@ -59,6 +61,7 @@ const monerium = createServer((req, res) => {
     const list = mine.filter((p) => !kind || p.kind === kind);
     return send(200, { profiles: list, total: list.length });
   }
+  if (url.pathname === "/ibans") return send(200, { ibans: ibansOf.get(token) ?? [] });
   const m = /^\/profiles\/([^/]+)$/.exec(url.pathname);
   if (m) {
     const p = mine.find((x) => x.id === decodeURIComponent(m[1]));
@@ -197,6 +200,7 @@ await check("a corporate profile is adopted into a business org, and the account
   assert.equal(r.data.account.profile.status, "verified");
   assert.equal(r.data.warning, undefined, "matching names raise no warning");
   assert.equal(audits().at(-1)!.data.outcome, "passed");
+  assert.equal(audits().at(-1)!.data.viaIssuedIban, false);
 });
 
 await check("POST /accounts with useMyAccount adopts a corporate profile the same way", async () => {
@@ -272,6 +276,60 @@ await check("a corporate profile Monerium has not approved is refused", async ()
   assert.equal(r.data.code, "MONERIUM_PROFILE_NOT_APPROVED");
   assert.match(r.data.error, /pending/);
   assert.equal(store.findAccount("acc_biz_pend")!.status, "gated");
+});
+
+const CORP_PENDING_IBAN: Profile = { id: "11111111-aaaa-4bbb-8ccc-000000000004", kind: "corporate", state: "pending", name: "Linder GmbH" };
+const pendingIbanToken = addUser("u_pending_iban", CORP_PENDING_IBAN, 4);
+const pendingIbanUser = () => store.findUser("u_pending_iban")!;
+const issued = (over: Record<string, unknown> = {}) => ({
+  profile: CORP_PENDING_IBAN.id, address: pendingIbanUser().address, iban: pendingIbanUser().iban, chain: "basesepolia", state: "approved", ...over,
+});
+
+await check("a pending company profile backs the account once Monerium has issued an IBAN on it to this Safe", async () => {
+  ibansOf.set(pendingIbanToken, [issued()]);
+  addOrg("org_lind", "business", "u_pending_iban", "Linder GmbH");
+  addGatedEur("acc_lind", "org_lind");
+  const r = await call("POST", "/api/orgs/org_lind/accounts/acc_lind/fund", "u_pending_iban");
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(store.findAccount("acc_lind")!.status, "active");
+  assert.equal(audits().at(-1)!.data.outcome, "passed");
+  assert.equal(audits().at(-1)!.data.viaIssuedIban, true, "the audit says this pass rests on an issued IBAN, not an approved profile");
+});
+
+await check("a pending company profile with no issued IBAN is still refused", async () => {
+  ibansOf.set(pendingIbanToken, []);
+  addOrg("org_lind_none", "business", "u_pending_iban", "Linder GmbH");
+  addGatedEur("acc_lind_none", "org_lind_none");
+  const r = await call("POST", "/api/orgs/org_lind_none/accounts/acc_lind_none/fund", "u_pending_iban");
+  assert.equal(r.status, 409);
+  assert.equal(r.data.code, "MONERIUM_PROFILE_NOT_APPROVED");
+  assert.equal(store.findAccount("acc_lind_none")!.status, "gated");
+});
+
+await check("an IBAN on the pending profile that pays into another address, or is not approved, does not count", async () => {
+  addOrg("org_lind_other", "business", "u_pending_iban", "Linder GmbH");
+  const cases = [[issued({ address: `0x${"9".repeat(40)}` })], [issued({ state: "pending" })], [issued({ profile: CORP.id })]];
+  for (const [i, ibans] of cases.entries()) {
+    ibansOf.set(pendingIbanToken, ibans);
+    addGatedEur(`acc_lind_other_${i}`, "org_lind_other");
+    const r = await call("POST", `/api/orgs/org_lind_other/accounts/acc_lind_other_${i}/fund`, "u_pending_iban");
+    assert.equal(r.status, 409, JSON.stringify(ibans));
+    assert.equal(r.data.code, "MONERIUM_PROFILE_NOT_APPROVED");
+  }
+});
+
+await check("a closed company profile is refused even with an IBAN issued to this Safe", async () => {
+  ibansOf.set(pendingIbanToken, [issued()]);
+  visible.set(pendingIbanToken, [{ ...CORP_PENDING_IBAN, state: "closed" }]);
+  try {
+    addOrg("org_lind_closed", "business", "u_pending_iban", "Linder GmbH");
+    addGatedEur("acc_lind_closed", "org_lind_closed");
+    const r = await call("POST", "/api/orgs/org_lind_closed/accounts/acc_lind_closed/fund", "u_pending_iban");
+    assert.equal(r.status, 409);
+    assert.equal(r.data.code, "MONERIUM_PROFILE_NOT_APPROVED");
+  } finally {
+    visible.set(pendingIbanToken, [CORP_PENDING_IBAN]);
+  }
 });
 
 await check("the client cannot claim a kind: a body saying corporate changes nothing", async () => {

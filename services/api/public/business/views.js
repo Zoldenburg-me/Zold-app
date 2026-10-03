@@ -61,6 +61,7 @@ RENDER.accounts = async () => {
         ${a.gate ? `<p class="desc" style="margin-top:6px">${esc(plain(a.gate.reason))}<br>Needs: ${esc(plain(a.gate.needs))}</p>` : ""}
         ${!a.backingUserId && a.currency === "EUR" ? waitHtml : ""}
         ${a.backingUserId ? `<p class="desc" style="margin-top:6px">${mine ? "Spends from your own account" : "Spends from a member’s own account"}</p>` : ""}
+        ${mine && a.currency === "EUR" && a.status === "active" ? `<p style="margin-top:6px"><a href="?view=documents" data-view-link="documents">Statements and documents</a></p>` : ""}
         ${profileHtml(a, mayManageAccounts)}</td>
       <td class="zb-top">${!a.backingUserId && a.currency === "EUR"
         ? adoption?.allowed
@@ -153,7 +154,7 @@ RENDER["get-paid"] = async () => {
   const way = (icon, title, sub, v, tag = "") => `<li><a class="z-row" href="?view=${v}" data-view-link="${v}">${Z.iconTile({ icon })}<span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag ? `<span class="z-row__right">${tag}</span>` : ""}${Z.icon("chevron_right", "z-row__chev")}</a></li>`;
   const ways = [
     cap("invoices").allowed ? way("receipt_long", "Invoices", "Issue one, or ask a supplier for theirs with a link", "invoices") : "",
-    way("storefront", "Shopify", "Customers pay an order in digital dollars (USDC)", "shopify", Z.tag("Beta")),
+    way("hub", "Shopify and other connections", "Take payments from your store, send your books on", "integrations"),
   ].join("");
   return `<h2 class="zb-h2" style="margin-bottom:12px">Bank details</h2>${details}
     <h2 class="zb-h2" style="margin:28px 0 12px">Other ways</h2><ul class="z-list z-card">${ways}</ul>`;
@@ -165,7 +166,9 @@ RENDER["get-paid"] = async () => {
    printed here rather than discovered by a customer at checkout.
    ========================================================================== */
 
-META.shopify = () => ({ title: "Shopify", sub: "Customers pay an order in digital dollars (USDC).", actions: Z.tag("Beta") });
+META.shopify = () => ({ title: "Shopify", sub: "Customers pay an order in digital dollars (USDC).", actions: `${Z.tag("Beta")}${linkBtn("Connections", "integrations", "arrow_back")}` });
+/** A reason from the API, closed with a full stop before the next sentence. */
+const sentence = (s) => (s = String(s).trim()) && !/[.!?]$/.test(s) ? `${s}.` : s;
 
 RENDER.shopify = async () => {
   const d = await api(`/api/orgs/${org.id}/shopify`);
@@ -178,7 +181,7 @@ RENDER.shopify = async () => {
         <div style="display:flex;gap:10px"><input id="sh-shop" name="shop" autocomplete="off" spellcheck="false" placeholder="my-store.myshopify.com…" style="flex:1" />
         <button type="button" class="z-btn z-btn--primary" data-act="shopify-connect">Connect store</button></div>
         <p class="desc" style="margin-top:8px">You approve the app at Shopify. The store’s access key is stored encrypted and never shown.${custom ? " Connecting subscribes Zold to the store’s new orders." : ""}</p></form>`
-    : `<div class="banner warn">${Z.icon("info")}<span><b>Not available here.</b> ${esc(plain(d.reason || ""))} ${custom
+    : `<div class="banner warn">${Z.icon("info")}<span><b>Not available here.</b> ${esc(sentence(plain(d.reason || "")))} ${custom
         ? "A Shopify app has to be created in a Partner account, and its key set on this deployment."
         : "A Shopify payments app has to be approved into Shopify’s Payments Apps program first. Nobody has done that yet."}</span></div>`);
   html += card("Connected stores", "", d.connections.length
@@ -306,15 +309,18 @@ RENDER.export = async () => {
    Connections
    ========================================================================== */
 
-META.integrations = () => ({ title: "Connections", sub: "Get your books into the software your accountant already uses.", actions: linkBtn("Settings", "settings", "arrow_back") });
+META.integrations = () => ({ title: "Connections", sub: "Your store, and the software your accountant already uses.", actions: linkBtn("Settings", "settings", "arrow_back") });
+
+const conn = (logo, title, sub, tag, text, act, wide = false) => `<section class="z-card zb-conn${wide ? " zb-conn--wide" : ""}" aria-label="${esc(title)}">
+    <div class="zb-conn__head"><span class="zb-conn__logo" aria-hidden="true">${esc(logo)}</span><span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag}</div>
+    <p>${text}</p><div class="zb-actions">${act}</div></section>`;
 
 RENDER.integrations = async () => {
-  if (!cap("integrations.accounting").allowed) return gateHtml("integrations.accounting");
+  const shop = `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Take payments</h2>
+    ${conn("SH", "Shopify", "Your store’s checkout", Z.tag("Beta"), "Customers pay an order in digital dollars (USDC), and Zold marks it paid in Shopify once the money arrives.", linkBtn("Open", "shopify", "storefront"), true)}`;
+  if (!cap("integrations.accounting").allowed) return `${shop}<h2 class="z-eyebrow zb-conn__group">Your books</h2>${gateHtml("integrations.accounting")}`;
   const r = await api(`/api/orgs/${org.id}/integrations`);
   const g = r.integrations.getmyinvoices;
-  const conn = (logo, title, sub, tag, text, act, wide = false) => `<section class="z-card zb-conn${wide ? " zb-conn--wide" : ""}" aria-label="${esc(title)}">
-      <div class="zb-conn__head"><span class="zb-conn__logo" aria-hidden="true">${esc(logo)}</span><span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag}</div>
-      <p>${text}</p><div class="zb-actions">${act}</div></section>`;
   const gmi = g.connected
     ? conn("GMI", "GetMyInvoices", `Connected to ${g.accountName || "your account"}${g.accountEmail ? ` (${g.accountEmail})` : ""} since ${day(g.connectedAt)}`, Z.tag("Beta"),
       "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
@@ -322,7 +328,7 @@ RENDER.integrations = async () => {
     : conn("GMI", "GetMyInvoices", "API key · sends Belege each month", Z.tag("Beta"),
       "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
       r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`, true);
-  return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends for you</h2>
+  return `${shop}<h2 class="z-eyebrow zb-conn__group">Sends your books for you</h2>
     ${gmi}
     <h2 class="z-eyebrow zb-conn__group">File exports</h2>
     <div class="zb-grid3">
@@ -337,11 +343,147 @@ RENDER.integrations = async () => {
    Settings
    ========================================================================== */
 
-META.settings = () => ({ title: "Settings", sub: `${org.name}, on the ${org.effectivePlan.charAt(0).toUpperCase()}${org.effectivePlan.slice(1)} plan${org.effectivePlan !== org.plan ? " (trial)" : ""}.`, actions: "" });
+/* ==========================================================================
+   Documents: statements, balance confirmations, proofs of ownership and
+   receipts. They belong to the account that backs the org's euro account
+   (documents are a user's, routes/documents.ts), so they are offered here
+   only to the member whose own account it is.
+   ========================================================================== */
 
+const DOC_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership" };
+const DOC_ICON = { statement: "description", receipt: "receipt_long", balance: "account_balance", ownership: "verified_user" };
+export const docMonth = { value: null };
+/** Receipts list the most recent paid transfers only. */
+const RECEIPT_ROWS = 50;
+/** A document link from the API, opened only if it is ours or https. */
+export const docHref = (url) => (typeof url === "string" && (url.startsWith("/") || /^https:\/\//i.test(url)) ? url : null);
+
+META.documents = () => ({ title: "Statements and documents", sub: "Signed documents for this account. Anyone you give one to can check it at the address printed on it.", actions: linkBtn("Accounts", "accounts", "arrow_back") });
+
+RENDER.documents = async () => {
+  const { accounts } = await api(`/api/orgs/${org.id}/accounts`);
+  const euro = accounts.find((a) => a.currency === "EUR" && a.status === "active");
+  if (!euro) return `<div class="z-card"><p class="empty">The euro account isn’t open yet, so there is nothing to document. ${linkBtn("Accounts", "accounts")}</p></div>`;
+  if (!me || euro.backingUserId !== me.id) {
+    return `<div class="z-card"><p class="empty">This account spends from a member’s own account, and its documents are issued from there. Ask that member for a statement or proof of ownership.</p></div>`;
+  }
+  const [docs, tx] = await Promise.all([
+    api(`/api/users/${me.id}/documents`).then((r) => r.documents || []),
+    // The documents still render without the payment list; it says it failed.
+    api(`/api/users/${me.id}/transfers`).then((r) => r.transfers || []).catch(() => null),
+  ]);
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const now = new Date();
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    return { value: d.toISOString().slice(0, 7), label: d.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }) };
+  });
+  const chosen = docMonth.value || months[0].value;
+  const paid = (tx || []).filter((t) => t.rail === "sepa" && t.state === "PAID").slice(0, RECEIPT_ROWS);
+  const create = `<section class="card"><div class="h"><div><h2>Create</h2><p class="desc">Each one opens in a new tab, ready to print or save as PDF.</p></div></div>
+    <div class="zb-doc-create">
+      <div><label for="doc-month">Statement month</label><select id="doc-month">${months.map((m) => `<option value="${m.value}"${m.value === chosen ? " selected" : ""}>${esc(m.label)}</option>`).join("")}</select></div>
+      ${primary("Statement", 'data-act="doc-statement"', "description")}
+      ${secondary("Balance confirmation", 'data-act="doc-balance"', "account_balance")}
+      ${secondary("Proof of ownership", 'data-act="doc-ownership"', "verified_user")}
+    </div>
+    <p class="desc" style="margin-top:12px">The proof of ownership asks for your Face ID or fingerprint: the account itself signs it, which shows you control it.</p></section>`;
+  const issued = docs.length
+    ? table([["Document"], ["Details"], ["Issued"], [""]], docs.map((d) => `<tr>
+        <td>${Z.icon(DOC_ICON[d.kind] || "description")} ${esc(DOC_LABEL[d.kind] || d.kind)}</td>
+        <td>${esc(d.summary || "")}${d.revokedAt ? ` ${Z.tag("Revoked")}` : ""}</td>
+        <td class="mono">${esc(day(d.createdAt))}</td>
+        <td class="num">${docHref(d.url) ? `<a class="z-btn z-btn--secondary z-btn--sm" href="${esc(docHref(d.url))}" target="_blank" rel="noopener">Open</a>` : ""}</td></tr>`))
+    : `<div class="z-card"><p class="empty">Nothing issued yet.</p></div>`;
+  const payments = tx === null
+    ? `<div class="z-card"><p class="empty">Your payments could not be loaded, so their receipts aren’t listed. Reload to try again.</p></div>`
+    : paid.length
+    ? table([["Paid"], ["To"], ["Amount", "num"], [""]], paid.map((t) => `<tr>
+        <td class="mono">${esc(day(t.updatedAt || t.createdAt))}</td>
+        <td>${esc(t.recipientName || "—")}</td>
+        <td class="num">${esc(eur(t.sendEur))}</td>
+        <td class="num"><span class="zb-actions" style="justify-content:flex-end">${secondary("Receipt", `data-act="doc-receipt" data-id="${esc(t.id)}"`)}<a class="z-btn z-btn--secondary z-btn--sm" href="/app#share/${encodeURIComponent(t.id)}" target="_blank" rel="noopener">Share</a></span></td></tr>`))
+    : `<div class="z-card"><p class="empty">No bank transfer from this account has been paid yet.</p></div>`;
+  return `${create}
+    <h2 class="zb-h2" style="margin:28px 0 12px">Issued</h2>${issued}
+    <h2 class="zb-h2" style="margin:28px 0 12px">Receipts for payments</h2>${payments}`;
+};
+
+const table = (head, rows) => `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr>${head.map(([h, cls]) => `<th scope="col"${cls ? ` class="${cls}"` : ""}>${h ? esc(h) : `<span class="z-sr">Actions</span>`}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+
+/* ==========================================================================
+   Coming soon: what this organisation can't do yet, and why. The personal
+   app has its own list; linking there showed a company its owner's account.
+   ========================================================================== */
+
+META.soon = () => ({ title: "Coming soon", sub: "What this organisation can’t do yet, and why. Each one switches on here as soon as it works.", actions: "" });
+
+RENDER.soon = async () => {
+  // Each list is read on its own; one that fails leaves its row out rather
+  // than claiming something the API did not say.
+  const [acc, cur] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), api("/api/orgs/currencies")]);
+  const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
+  const later = (cur.status === "fulfilled" ? cur.value.currencies || [] : []).filter((c) => !c.available && c.code !== "EUR").map((c) => c.code);
+  const lead = Z.iconTile({ icon: "hourglass_top", tone: "a" });
+  const euroClosed = accounts !== null && !accounts.some((a) => a.currency === "EUR" && a.status === "active");
+  const rows = [
+    ...(euroClosed ? [Z.row({ lead, title: "Euro account", sub: org.type === "business" ? "Opens once the company’s IBAN is connected" : "Opens once your IBAN is connected", href: "?view=accounts" })] : []),
+    ...(later.length ? [Z.row({ lead, title: "Accounts in other currencies", sub: `${later.length > 1 ? `${later.slice(0, -1).join(", ")} and ${later.at(-1)}` : later[0]}: waiting on an account provider`, soon: true })] : []),
+    Z.row({ lead, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
+    Z.row({ lead, title: "Paying a crypto wallet", sub: "Not built yet", soon: true }),
+    Z.row({ lead, title: "sevDesk and DATEV", sub: "Use the Lexware CSV and the Belege ZIP until then", soon: true }),
+  ];
+  return Z.listGroup({ rows });
+};
+
+const settingsBack = () => linkBtn("Settings", "settings", "arrow_back");
+const planName = (id) => `${id.charAt(0).toUpperCase()}${id.slice(1)}`;
+
+META.settings = () => ({ title: "Settings", sub: `${org.name}, on the ${planName(org.effectivePlan)} plan${org.effectivePlan !== org.plan ? " (trial)" : ""}.`, actions: "" });
+
+/* One tile per area; each opens its own screen. A tile whose feature the
+   plan lacks stays, and its screen says what it needs. */
 RENDER.settings = async () => {
-  const plan = await api(`/api/orgs/${org.id}/plan`);
+  const tile = (icon, title, sub, v) => `<li><a class="z-card zb-tile" href="?view=${esc(v)}" data-view-link="${esc(v)}">${Z.iconTile({ icon })}<span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${Z.icon("chevron_right", "z-row__chev")}</a></li>`;
+  return `<ul class="zb-tiles">
+    ${tile("domain", "Organisation", "Name, legal name, address, tax ID", "organisation")}
+    ${cap("invoices").allowed ? tile("receipt_long", "Invoicing profile", "Tax numbers, bank details, number series", "invoicing-settings") : ""}
+    ${tile("hub", "Connections", "Shopify, GetMyInvoices, Lexware, sevDesk, DATEV", "integrations")}
+    ${tile("group", "Members and access", "Who is in, and what each role may do", "members")}
+    ${tile("workspace_premium", "Plan", `${planName(org.effectivePlan)}${org.effectivePlan !== org.plan ? " (trial)" : ""}`, "plan")}
+  </ul>`;
+};
+
+META.organisation = () => ({ title: "Organisation", sub: "Printed on every invoice you issue. The country decides which invoicing rules apply.", actions: `${settingsBack()}${primary("Save", 'data-act="save-org"')}` });
+
+RENDER.organisation = async () => {
   const reporting = cap("settings.reportingCurrency").allowed;
+  return `<form class="card" id="org-form" onsubmit="return false">
+      <div class="grid g2">
+        <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}" /></div>
+        <div><label for="s-legal">Legal name</label><input id="s-legal" name="legal" autocomplete="off" value="${esc(org.legalName || "")}" /></div>
+      </div>
+      <label for="s-addr1">Registered address</label>
+      <input id="s-addr1" name="address-line1" autocomplete="address-line1" value="${esc(org.address?.line1 || "")}" placeholder="Street and number…" />
+      <label for="s-addr2" class="z-sr">Address line 2</label>
+      <input id="s-addr2" name="address-line2" autocomplete="address-line2" value="${esc(org.address?.line2 || "")}" placeholder="Address line 2 (optional)…" style="margin-top:8px" />
+      <div class="zb-addr3">
+        <div><label for="s-zip">Postcode</label><input id="s-zip" name="postal-code" autocomplete="postal-code" spellcheck="false" value="${esc(org.address?.postalCode || "")}" /></div>
+        <div><label for="s-city">City</label><input id="s-city" name="city" autocomplete="address-level2" value="${esc(org.address?.city || "")}" /></div>
+        <div><label for="s-country">Country</label>${countrySelect("s-country", org.address?.country)}</div>
+      </div>
+      <div class="grid g2">
+        <div><label for="s-tax">Tax ID</label><input id="s-tax" name="tax" autocomplete="off" value="${esc(org.taxId || "")}" /></div>
+        <div><label for="s-notify">Notification email</label><input id="s-notify" name="email" type="email" autocomplete="email" spellcheck="false" value="${esc(org.notificationEmail || "")}" /></div>
+      </div>
+      <label for="s-currency">Reporting currency${reporting ? "" : ' <span class="desc">(in a paid plan)</span>'}</label>
+      <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px"${reporting ? "" : " disabled"} />
+    </form>`;
+};
+
+META.plan = () => ({ title: "Plan", sub: "Zold takes no payments yet: a paid plan comes with the trial, or Zold grants it. Switching down pauses features and deletes nothing.", actions: settingsBack() });
+
+RENDER.plan = async () => {
+  const plan = await api(`/api/orgs/${org.id}/plan`);
   const owner = org.role === "owner";
   const plans = plan.available.map((p) => {
     const current = p.id === org.effectivePlan;
@@ -353,38 +495,8 @@ RENDER.settings = async () => {
           : free ? "" : '<span class="desc">By trial, or ask Zold</span>';
     return `<div class="zb-plan${current ? " is-current" : ""}"><div class="zb-plan__head"><b>${esc(p.name)}</b><span class="desc">${esc(p.price)}</span></div><p>${esc(p.blurb)}</p><div>${act}</div></div>`;
   }).join("");
-  // Shown on every plan: a hidden feature reads as a missing one. Open leads to the gate.
-  const conn = cap("integrations.accounting");
-  const connNeeds = conn.allowed ? "" : conn.requiresPlan?.length
-    ? ` Needs the ${conn.requiresPlan.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" or ")} plan, or a trial.`
-    : ` ${conn.reason || ""}`;
-  return `<section class="card"><div class="h"><div><h2>Connections</h2><p class="desc">Send your books to GetMyInvoices, or export them for Lexware, sevDesk and DATEV.${esc(connNeeds)}</p></div>${linkBtn("Open", "integrations", "hub")}</div></section>
-    <form class="card" id="org-form" onsubmit="return false"><div class="h"><div><h2>Organisation</h2><p class="desc">Printed on every invoice you issue. The country decides which invoicing rules apply.</p></div>
-      <button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="save-org">Save</button></div>
-      <div class="grid g2">
-        <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}" /></div>
-        <div><label for="s-legal">Legal name</label><input id="s-legal" name="legal" autocomplete="off" value="${esc(org.legalName || "")}" /></div>
-      </div>
-      <label for="s-addr1">Registered address</label>
-      <input id="s-addr1" name="address-line1" autocomplete="address-line1" value="${esc(org.address?.line1 || "")}" placeholder="Street and number…" />
-      <label for="s-addr2" class="z-sr">Address line 2</label>
-      <input id="s-addr2" name="address-line2" autocomplete="address-line2" value="${esc(org.address?.line2 || "")}" placeholder="Address line 2 (optional)…" style="margin-top:8px" />
-      <div style="display:grid;grid-template-columns:140px 1fr 200px;gap:12px">
-        <div><label for="s-zip">Postcode</label><input id="s-zip" name="postal-code" autocomplete="postal-code" spellcheck="false" value="${esc(org.address?.postalCode || "")}" /></div>
-        <div><label for="s-city">City</label><input id="s-city" name="city" autocomplete="address-level2" value="${esc(org.address?.city || "")}" /></div>
-        <div><label for="s-country">Country</label>${countrySelect("s-country", org.address?.country)}</div>
-      </div>
-      <div class="grid g2">
-        <div><label for="s-tax">Tax ID</label><input id="s-tax" name="tax" autocomplete="off" value="${esc(org.taxId || "")}" /></div>
-        <div><label for="s-notify">Notification email</label><input id="s-notify" name="email" type="email" autocomplete="email" spellcheck="false" value="${esc(org.notificationEmail || "")}" /></div>
-      </div>
-      <label for="s-currency">Reporting currency${reporting ? "" : ' <span class="desc">(in a paid plan)</span>'}</label>
-      <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px"${reporting ? "" : " disabled"} />
-    </form>
-    ${cap("invoices").allowed ? `<section class="card"><div class="h"><div><h2>Invoicing profile</h2><p class="desc">Your tax numbers, bank details and number series, set once for every invoice.</p></div>${linkBtn("Open", "invoicing-settings")}</div></section>` : ""}
-    <section class="card"><div class="h"><div><h2>Plan</h2><p class="desc">Zold takes no payments yet: a paid plan comes with the trial, or Zold grants it. Switching down pauses features and deletes nothing.</p></div>
-      ${plan.trialAvailable && owner ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="trial">Start the ${plan.trialDays}-day trial</button>` : ""}</div>
-      <div class="grid g3">${plans}</div></section>`;
+  return `${plan.trialAvailable && owner ? `<div class="zb-actions" style="margin-bottom:16px"><button type="button" class="z-btn z-btn--primary" data-act="trial">Start the ${plan.trialDays}-day trial</button></div>` : ""}
+    <div class="grid g3">${plans}</div>`;
 };
 
 /* ==========================================================================

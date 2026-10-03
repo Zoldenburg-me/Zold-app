@@ -276,6 +276,9 @@ export const SECURITY = {
   /** Routes that call a partner or the chain per request (http/policy.ts). */
   partnerRateLimitPerMin: Number(process.env.PARTNER_RATE_LIMIT_PER_MIN ?? 30),
   documentRateLimitPerMin: Number(process.env.DOCUMENT_RATE_LIMIT_PER_MIN ?? 10),
+  /** The operator dashboard with a valid token. Its refresh loop alone sends
+   *  ~16 requests a minute; a wrong token stays on the auth bucket. */
+  operatorRateLimitPerMin: Number(process.env.OPERATOR_RATE_LIMIT_PER_MIN ?? 300),
   /** Shopify's HMAC-signed calls, from Shopify's shared addresses. */
   shopifyRateLimitPerMin: Number(process.env.SHOPIFY_RATE_LIMIT_PER_MIN ?? 600),
   /** Maximum JSON request body accepted by the API. */
