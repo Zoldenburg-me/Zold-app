@@ -7,7 +7,8 @@
  * shell does not draw the page again under it.
  */
 import { $, Z, api, cap, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setView, toast, token, view } from "./core.js";
-import { docHref, docMonth, exportMonth, sendState, setExportMonth } from "./views.js";
+import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
+import { sendState } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
@@ -620,14 +621,16 @@ export const ACTIONS = {
       $("#d-amt").focus();
       return "keep";
     }
+    const picked = (name) => $(`#send-form input[name="${name}"]:checked`)?.value;
+    if (!picked("contact")) { err.textContent = "Pick who you’re paying."; return "keep"; }
     const { contacts } = await api(`/api/orgs/${org.id}/contacts`);
-    const c = contacts.find((x) => x.id === $("#d-con").value);
+    const c = contacts.find((x) => x.id === picked("contact"));
     const b = c?.bankAccounts.find((x) => x.iban);
     if (!b) { err.textContent = "That contact has no IBAN."; return "keep"; }
     const r = await api(`/api/orgs/${org.id}/drafts`, {
       method: "POST",
       body: {
-        source: { kind: "account", accountId: $("#d-acct").value },
+        source: { kind: "account", accountId: picked("account") },
         lines: [{
           contactId: c.id,
           destination: { kind: "bank", bankAccountId: b.id, displayName: b.holderName || c.name },

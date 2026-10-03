@@ -1,6 +1,6 @@
 /**
  * The renderer registry, and the views without a design/ui-v2 reference:
- * Accounts, Send, Shopify, Wallets, Transactions, Assets, Chart of
+ * Accounts, Shopify, Wallets, Transactions, Assets, Chart of
  * accounts, the month's statement lines, Connections, Settings and the
  * invoicing profile. The reference screens are in screens.js, the invoice
  * editor in invoice.js; both register here.
@@ -10,7 +10,7 @@
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
-import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ymd } from "./core.js";
+import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, plain, ymd } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -84,48 +84,6 @@ RENDER.accounts = async () => {
     <h2 class="zb-h2" style="margin:28px 0 6px">Currencies</h2>
     <p class="zb-hint" style="margin-bottom:12px">Which currencies Zold supports, for every organisation. Whether your own account in one is open is shown in the table above.</p>
     <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Currency</th><th scope="col">Network</th><th scope="col">Settles in</th><th scope="col">Status</th></tr></thead><tbody>${cur.join("")}</tbody></table></div>`;
-};
-
-/* ==========================================================================
-   Send: a new payment run
-   ========================================================================== */
-
-export const sendState = { contactId: null };
-
-META.send = () => ({
-  title: "New payment",
-  sub: cap("transfers.approvals").allowed
-    ? "It goes to Approvals: someone other than you approves it, then it’s sent with Face ID or fingerprint."
-    : "Save it, then send it from Payments with Face ID or fingerprint.",
-  actions: "",
-});
-
-RENDER.send = async () => {
-  if (!cap("transfers.drafts").allowed) return gateHtml("transfers.drafts");
-  if (!roleCan(org.role, "propose")) return `<div class="gate"><h3>Not for your role</h3><p>As a viewer you can see payments, not propose them.</p></div>`;
-  const [{ contacts }, { accounts }] = await Promise.all([
-    api(`/api/orgs/${org.id}/contacts`),
-    api(`/api/orgs/${org.id}/accounts`),
-  ]);
-  const payable = contacts.filter((c) => c.bankAccounts.some((b) => b.iban));
-  const fundable = accounts.filter((a) => a.status === "active" && a.backingUserId && a.profile?.status !== "needs_check");
-  if (!fundable.length) {
-    return `<div class="gate"><h3>No account can pay yet</h3><p>${org.type === "business"
-      ? "Connect the company’s Monerium profile to an account first."
-      : "Open an account and fund it from your own account first."}</p><div class="zb-actions">${linkBtn("Accounts", "accounts")}</div></div>`;
-  }
-  if (!payable.length) {
-    return `<div class="gate"><h3>Add who you’re paying</h3><p>A payment goes to a contact with bank details, so a later change to them is caught before sending.</p><div class="zb-actions">${primary("Add contact", 'data-act="new-contact"', "person_add")}</div></div>`;
-  }
-  const chosen = payable.find((c) => c.id === sendState.contactId) || null;
-  return `<form class="z-card zb-pad" id="send-form" style="max-width:560px" novalidate>
-      <label for="d-acct">From</label><select id="d-acct" name="account">${fundable.map((a) => `<option value="${esc(a.id)}">${esc(a.label || a.currency)} (${esc(maskIban(a.identifier?.iban || ""))})</option>`).join("")}</select>
-      <label for="d-con">To</label><select id="d-con" name="contact">${payable.map((c) => `<option value="${esc(c.id)}"${chosen?.id === c.id ? " selected" : ""}>${esc(c.name)} (${esc(maskIban(c.bankAccounts.find((b) => b.iban).iban))})</option>`).join("")}</select>
-      <label for="d-amt">Amount in euros</label><input id="d-amt" name="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" />
-      <label for="d-note">Reference <span class="desc">(on their bank statement)</span></label><input id="d-note" name="reference" autocomplete="off" maxlength="140" placeholder="Invoice 2026-114…" />
-      <p class="zb-err" id="send-err" role="alert"></p>
-      <div class="zb-actions">${primary(cap("transfers.approvals").allowed ? "Submit for approval" : "Save payment", 'data-act="send-create"', "")}${linkBtn("Cancel", "payments")}</div>
-    </form>`;
 };
 
 /* ==========================================================================
