@@ -74,6 +74,7 @@ const scripts = [
   "tx:audit:test",
   "statement:test",
   "wallet-sync:test",
+  "income-invoices:test",
   "beleg:test",
   "lexware:csv:test",
   "exact-output:test",

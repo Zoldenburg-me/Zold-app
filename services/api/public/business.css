@@ -81,6 +81,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .zb-stack { display: flex; flex-direction: column; gap: var(--z-space-5); }
 .zb-h2 { margin: 0; font: 600 18px/1.3 var(--z-font); letter-spacing: -.02em; color: var(--z-heading); }
 .zb-hint { margin: 0; font-size: 13.5px; color: var(--z-dim); }
+/* A receipt left off a draft: what it was, then why, on two lines. */
+.zb-left { padding: 10px 14px; font-size: 14px; }
+.zb-left .desc { margin: 2px 0 0; }
 .zb-err { margin: 12px 0 0; padding: 10px 14px; border-radius: var(--z-radius-sm); border: 1px solid var(--z-amber-border); background: var(--z-amber-tint); font-size: 14px; color: var(--z-amber); }
 .zb-err:empty { display: none; }
 

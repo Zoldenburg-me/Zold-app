@@ -38,7 +38,7 @@ export function createInvoiceLinkRouter(): express.Router {
   ): Promise<Invoice | undefined> => {
     const token = String(req.params.token ?? "");
     const invoice = store.findInvoiceByLinkHash(hashToken(token));
-    if (!invoice || invoice.state === "DELETED") {
+    if (!invoice || invoice.state === "DELETED" || invoice.state === "DRAFT") {
       res.status(404).json({ error: "That invoice link is not valid." });
       return undefined;
     }

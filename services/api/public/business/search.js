@@ -57,13 +57,13 @@ function results(raw) {
       return { group: "Contacts", go: { view: "contacts" }, lead: Z.avatar({ name: c.name }), title: mark(c.name, q), right: iban ? esc(maskIban(iban)) : "" };
     });
   const invoices = st.data.invoices
-    .filter((i) => hit(i.issued?.recipient?.name, i.supplier?.orgName, i.issued?.number, i.supplier?.invoiceNumber))
+    .filter((i) => hit(i.issued?.recipient?.name, i.fromReceipts?.payerName, i.supplier?.orgName, i.issued?.number, i.supplier?.invoiceNumber))
     .slice(0, 4).map((i) => {
       const out = i.direction === "outgoing";
-      const who = (out ? i.issued?.recipient?.name : i.supplier?.orgName) || "";
+      const who = (out ? i.issued?.recipient?.name || i.fromReceipts?.payerName : i.supplier?.orgName) || "";
       const num = (out ? i.issued?.number : i.supplier?.invoiceNumber) || "";
       const a = invAmount(i);
-      return { group: "Invoices", go: { view: "invoices" }, lead: Z.iconTile({ icon: out ? "receipt_long" : "move_to_inbox" }), title: mark(`Invoice ${num} ${out ? "to" : "from"} ${who}`.replace(/\s+/g, " "), q), right: `${esc(Z.formatMoney(a.value, a.currency))} · ${esc(invWord(i).toLowerCase())}` };
+      return { group: "Invoices", go: { view: "invoices" }, lead: Z.iconTile({ icon: out ? "receipt_long" : "move_to_inbox" }), title: mark(`${i.state === "DRAFT" ? "Draft invoice" : "Invoice"} ${num} ${out ? "to" : "from"} ${who}`.replace(/\s+/g, " "), q), right: `${esc(Z.formatMoney(a.value, a.currency))} · ${esc(invWord(i).toLowerCase())}` };
     });
   const payments = st.data.drafts
     .filter((d) => d.lines.some((l) => hit(l.destination?.displayName, l.note)))
