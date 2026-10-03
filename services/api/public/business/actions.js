@@ -7,10 +7,12 @@
  * shell does not draw the page again under it.
  */
 import { $, Z, api, cap, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setView, toast, token, view } from "./core.js";
-import { exportMonth, sendState, setExportMonth } from "./views.js";
+import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
+import { sendState } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
+import { payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
 
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
@@ -117,7 +119,8 @@ function contactDrawer(el) {
       <button type="button" class="z-btn z-btn--secondary" id="ct-edit">${Z.icon("edit")}<span>Edit</span></button>
       ${canPay ? `<button type="button" class="z-btn z-btn--primary" id="ct-pay">${Z.icon("arrow_outward")}<span>Pay ${esc(c.name)}</span></button>` : ""}
       <button type="button" class="z-link-btn" id="ct-del">Delete contact</button>
-    </div>`;
+    </div>
+    ${payerRuleSection(c)}`;
   const scrim = drawer("contact-drawer", c.name, body, el);
   scrim.querySelector("#ct-pay")?.addEventListener("click", () => {
     Z.closeOverlay("contact-drawer");
@@ -126,6 +129,10 @@ function contactDrawer(el) {
     render({ focus: true });
   });
   scrim.querySelector("#ct-edit").onclick = () => { Z.closeOverlay("contact-drawer"); editContact(c); };
+  scrim.querySelector("#ct-rule")?.addEventListener("click", () => {
+    Z.closeOverlay("contact-drawer");
+    payerRuleDialog(c).catch((e) => toast(e.message, true));
+  });
   scrim.querySelector("#ct-del").onclick = () => {
     Z.closeOverlay("contact-drawer");
     dialog(`Delete ${c.name}?`, `<p class="desc">Past payments keep their record. A payment run that still uses these details stops and has to be pointed somewhere else.</p>`,
@@ -184,7 +191,40 @@ function gmiDrawer(el) {
   };
 }
 
+/* A document opens in a new tab; the list below the buttons then shows it. */
+function openDocument(d) {
+  const url = docHref(d?.url);
+  if (url) window.open(url, "_blank", "noopener");
+  toast("Document issued.");
+}
+
 export const ACTIONS = {
+  // ── Documents (views.js RENDER.documents) ────────────────────────────────
+  async "doc-statement"() {
+    const v = $("#doc-month").value;
+    docMonth.value = v;
+    const [y, m] = v.split("-").map(Number);
+    const from = new Date(Date.UTC(y, m - 1, 1)).toISOString();
+    const to = new Date(Date.UTC(y, m, 1) - 1).toISOString();
+    openDocument(await api(`/api/users/${me.id}/documents/statement`, { method: "POST", body: { from, to } }));
+  },
+  async "doc-balance"() {
+    openDocument(await api(`/api/users/${me.id}/documents/balance`, { method: "POST", body: {} }));
+  },
+  async "doc-ownership"() {
+    let d = await api(`/api/users/${me.id}/documents/ownership`, { method: "POST", body: {} });
+    if (d.safeSignature) {
+      // The account's own signature: the part a screenshot cannot fake.
+      const lib = await window.__deviceLib;
+      const sig = await lib.passkeyAssertion(d.safeSignature);
+      d = await api(d.safeSignature.submitTo, { method: "POST", body: sig });
+    }
+    openDocument(d);
+  },
+  async "doc-receipt"(el) {
+    openDocument(await api(`/api/users/${me.id}/documents/receipt`, { method: "POST", body: { transferId: el.dataset.id } }));
+  },
+
   /* Filters and tabs: state in the screen's module, then a redraw. */
   "ap-tab"(el) { ap.tab = el.dataset.tab; },
   "inv-filter"(el) { iv.filter = el.dataset.f; },
@@ -259,11 +299,15 @@ export const ACTIONS = {
      ${field("d-chain", "Network id", 'inputmode="numeric" value="8453"')}
      <label for="d-kind">Type</label><select id="d-kind" name="kind"><option value="eoa">Ordinary wallet</option>
        <option value="safe">Safe</option><option value="mpc">MPC</option></select>
-     ${field("d-label", "Name")}`,
+     ${field("d-label", "Name")}
+     ${cap("ledger.historicalSync").allowed
+       ? `${field("d-from", "Book from (optional)", 'type="date"')}<p class="zb-hint">Token transfers from this day on are booked. Leave empty to start from today.</p>`
+       : ""}`,
     async () => {
+      const from = $("#d-from")?.value;
       const r = await api(`/api/orgs/${org.id}/wallets`, {
         method: "POST",
-        body: { address: $("#d-addr").value, chainId: Number($("#d-chain").value), kind: $("#d-kind").value, label: $("#d-label").value },
+        body: { address: $("#d-addr").value, chainId: Number($("#d-chain").value), kind: $("#d-kind").value, label: $("#d-label").value, ...(from ? { syncFrom: from } : {}) },
       });
       toast(plain(r.note));
     }, { okLabel: "Import wallet" }),
@@ -287,6 +331,48 @@ export const ACTIONS = {
     if (!usable.length) throw new Error(plain(methods.map((m) => m.needs).filter(Boolean).join(" ")) || "No way to get paid is set up on this account yet.");
     const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { invoiceId: el.dataset.id, methods: usable } });
     setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.`, r.url), 0);
+  },
+  async "new-pay-link"() {
+    // A link opens under the company page when there is one; say which.
+    const page = await api(`/api/orgs/${org.id}/payment-page`).catch(() => null);
+    const where = page?.paymentPage
+      ? ` It opens at ${esc(location.host)}/pay/${esc(page.paymentPage.handle)}/….`
+      : " Set up the company’s payment page first, and links open under its address instead of yours.";
+    dialog("New payment link",
+      `<p class="desc">Your customer pays it into ${esc(org.name)}’s euro account. Leave the amount empty to let them enter it.${where}</p>
+       ${field("d-desc", "What it’s for", 'maxlength="140" placeholder="Deposit, roof Weber…"')}
+       ${field("d-amt", "Amount in euros (optional)", 'inputmode="decimal" placeholder="1200.00…"')}`,
+      async () => {
+        const { methods } = await api(`/api/users/${me.id}/payment-requests/methods`);
+        const usable = methods.filter((m) => m.available).map((m) => m.method);
+        if (!usable.length) throw new Error(plain(methods.map((m) => m.needs).filter(Boolean).join(" ")) || "No way to get paid is set up on this account yet.");
+        const amount = $("#d-amt").value.trim().replace(",", ".");
+        const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { description: $("#d-desc").value, ...(amount ? { amountEur: amount } : {}), methods: usable } });
+        setTimeout(() => linkDialog("Payment link ready", `Send your customer this link.${typeof r.amountEur === "number" ? ` It asks for ${eur(r.amountEur)}.` : ""} It shows as paid here when the money arrives.`, r.url), 0);
+      }, { okLabel: "Create link" });
+  },
+  async "org-page"() {
+    const { paymentPage } = await api(`/api/orgs/${org.id}/payment-page`);
+    const guess = (org.name || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30);
+    dialog(paymentPage ? "Edit your payment page" : "Set up your payment page",
+      `<p class="desc">A public page at ${esc(location.host)}/pay/… with this company’s name and the bank details of its euro account. Bank transfer only.</p>
+       ${field("d-handle", "Address", `spellcheck="false" maxlength="30" value="${esc(paymentPage?.handle || guess)}"`)}
+       <p class="zb-hint">3 to 30 lowercase letters, numbers and hyphens. A changed address stops the old link working.</p>
+       ${field("d-dn", "Name on the page (optional)", `maxlength="40" value="${esc(paymentPage?.displayName || "")}" placeholder="${esc(org.legalName || org.name)}…"`)}`,
+      async () => {
+        await api(`/api/orgs/${org.id}/payment-page`, { method: "POST", body: { handle: $("#d-handle").value, displayName: $("#d-dn").value } });
+        toast("Payment page saved.");
+      }, { okLabel: paymentPage ? "Save" : "Create page" });
+    return "keep";
+  },
+  async "copy-text"(el) {
+    try {
+      await navigator.clipboard.writeText(el.dataset.text);
+      toast(el.dataset.said || "Copied");
+    } catch {
+      toast("Couldn’t copy. Select the link and copy it by hand.", true);
+    }
+    return "keep";
   },
   async "check-profile"(el) {
     const r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/profile-check`, { method: "POST" });
@@ -441,6 +527,61 @@ export const ACTIONS = {
     toast("Invoicing profile saved.");
     if (changed) await loadOrg(org.id);
   },
+  "collect-receipts": () => {
+    const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const d = new Date();
+    const current = ym(d);
+    d.setDate(1);
+    d.setMonth(d.getMonth() - 1);
+    dialog("Collect receipts into draft invoices",
+      `<p class="desc">For each contact with a payer rule, the month’s payments into your imported wallets become one draft invoice. Collecting a month again updates its drafts and never touches an issued invoice. A month that is still running can be collected; what arrives later joins its draft the next time you collect.</p>
+       <label for="rc-month">Month</label><input id="rc-month" name="rc-month" type="month" value="${ym(d)}" max="${current}" />`,
+      async () => {
+        const r = await api(`/api/orgs/${org.id}/income-invoices/run`, { method: "POST", body: { month: $("#rc-month").value } });
+        // After this dialog has closed.
+        setTimeout(() => dialog("Receipts collected", runSummary(r), null, { closeOnly: true }), 0);
+      }, { okLabel: "Collect" });
+    return "keep";
+  },
+  async "issue-receipt-draft"(el) {
+    const id = el.dataset.id;
+    const issue = async (acceptWarnings) => {
+      const r = await api(`/api/orgs/${org.id}/income-invoices/${id}/issue`, { method: "POST", body: acceptWarnings ? { acceptWarnings: true } : {} });
+      Z.closeOverlay("inv-drawer");
+      // The link is shown once: it is queued whether or not the redraw
+      // works, and after it, so a dialog that led here has closed by then.
+      const showLink = () => setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} is issued`, "It is marked paid by the receipts it bills. This link shows the invoice. It’s shown once: copy it now.", location.origin + r.linkPath), 0);
+      try { await render(); } finally { showLink(); }
+    };
+    try {
+      await issue(false);
+    } catch (e) {
+      if (e.status === 409 && e.warnings?.length) {
+        // An open drawer makes the rest of the page inert, a dialog included.
+        Z.closeOverlay("inv-drawer");
+        dialog("Issue it with these warnings?", `<ul class="desc" style="margin:8px 0 0 18px">${e.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>
+          <p class="desc" style="margin-top:12px">Your acceptance is recorded on the invoice.</p>`, () => issue(true), { okLabel: "Issue anyway" });
+        return "keep";
+      }
+      // The draft was rebuilt under us: show the new one, not the stale drawer.
+      if (e.changed) {
+        Z.closeOverlay("inv-drawer");
+        await render();
+      }
+      throw e;
+    }
+    return "keep";
+  },
+  "discard-receipt-draft": (el) => {
+    Z.closeOverlay("inv-drawer");
+    dialog("Discard this draft?",
+      `<p class="desc">Its receipts go back to being uninvoiced. Collecting the month again makes a new draft from them.</p>`,
+      async () => {
+        await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}`, { method: "DELETE" });
+        toast("Draft discarded.");
+      }, { okLabel: "Discard" });
+    return "keep";
+  },
   "pay-invoice": async (el) => {
     const r = await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}/pay`, { method: "POST", body: {} });
     toast(plain(r.note) || "Payment run drafted. It’s in Approvals.");
@@ -550,14 +691,16 @@ export const ACTIONS = {
       $("#d-amt").focus();
       return "keep";
     }
+    const picked = (name) => $(`#send-form input[name="${name}"]:checked`)?.value;
+    if (!picked("contact")) { err.textContent = "Pick who you’re paying."; return "keep"; }
     const { contacts } = await api(`/api/orgs/${org.id}/contacts`);
-    const c = contacts.find((x) => x.id === $("#d-con").value);
+    const c = contacts.find((x) => x.id === picked("contact"));
     const b = c?.bankAccounts.find((x) => x.iban);
     if (!b) { err.textContent = "That contact has no IBAN."; return "keep"; }
     const r = await api(`/api/orgs/${org.id}/drafts`, {
       method: "POST",
       body: {
-        source: { kind: "account", accountId: $("#d-acct").value },
+        source: { kind: "account", accountId: picked("account") },
         lines: [{
           contactId: c.id,
           destination: { kind: "bank", bankAccountId: b.id, displayName: b.holderName || c.name },

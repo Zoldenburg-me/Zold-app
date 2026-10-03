@@ -1,11 +1,15 @@
 /**
- * Search (Cmd or Ctrl K) over this organisation's contacts, payment runs and
- * invoices. There is no search route: it reads those three lists once when it
- * opens, and searches what the API returned. Esc closes it, the arrows move,
- * Enter opens.
+ * Search (Cmd or Ctrl K) over this organisation's screens, contacts, money in
+ * and out, payment runs and invoices (design canvas "Desk-Search-Ask"). There
+ * is no search route: it reads those lists when it opens, and searches what
+ * the API returned. Esc closes it, the arrows move, Enter opens.
+ *
+ * Ask Zold, the assistant drawn on the canvas, is a Soon row: there is no
+ * model behind it, so it is not pressable and nothing pretends to answer.
  */
 import { $, Z, api, cap, day, esc, eur, maskIban, org, setView } from "./core.js";
-import { draftTitle, draftTotal, invAmount, invWord } from "./screens.js";
+import { VIEWS } from "./nav.js";
+import { bk, draftTitle, draftTotal, invAmount, invWord } from "./screens.js";
 import { render } from "./shell.js";
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
@@ -13,10 +17,11 @@ const st = { q: "", results: [], active: 0, data: null, orgId: null };
 
 async function load() {
   const id = org.id;
-  const [c, d, i] = await Promise.allSettled([
+  const [c, d, i, l] = await Promise.allSettled([
     api(`/api/orgs/${id}/contacts`),
     cap("transfers.drafts").allowed ? api(`/api/orgs/${id}/drafts`) : Promise.resolve({ drafts: [] }),
     cap("invoices").allowed ? api(`/api/orgs/${id}/invoices`) : Promise.resolve({ invoices: [] }),
+    cap("ledger.transactions").allowed ? api(`/api/orgs/${id}/ledger`) : Promise.resolve({ entries: [] }),
   ]);
   if (org.id !== id) return;
   st.orgId = id;
@@ -24,6 +29,8 @@ async function load() {
     contacts: c.status === "fulfilled" ? c.value.contacts : [],
     drafts: d.status === "fulfilled" ? d.value.drafts : [],
     invoices: i.status === "fulfilled" ? i.value.invoices : [],
+    // The euro account's statement lines, newest first, as Books shows them.
+    lines: l.status === "fulfilled" ? l.value.entries.filter((e) => e.statement).map((e) => e.statement) : [],
   };
 }
 
@@ -39,6 +46,10 @@ function results(raw) {
   if (!q || !st.data) return [];
   const hit = (...xs) => xs.some((x) => String(x || "").toLowerCase().includes(q));
   const compact = q.replace(/\s+/g, "");
+  // Screens by name, where this plan opens them.
+  const screens = [...VIEWS, { id: "settings", label: "Settings", icon: "settings" }]
+    .filter((v) => (!v.capability || cap(v.capability).allowed) && hit(v.label))
+    .slice(0, 3).map((v) => ({ group: "Go to", go: { view: v.id }, lead: Z.iconTile({ icon: v.icon }), title: mark(v.label, q), right: "" }));
   const contacts = st.data.contacts
     .filter((c) => hit(c.name, c.email) || (compact.length > 3 && c.bankAccounts.some((b) => String(b.iban || "").toLowerCase().includes(compact))))
     .slice(0, 4).map((c) => {
@@ -46,13 +57,13 @@ function results(raw) {
       return { group: "Contacts", go: { view: "contacts" }, lead: Z.avatar({ name: c.name }), title: mark(c.name, q), right: iban ? esc(maskIban(iban)) : "" };
     });
   const invoices = st.data.invoices
-    .filter((i) => hit(i.issued?.recipient?.name, i.supplier?.orgName, i.issued?.number, i.supplier?.invoiceNumber))
+    .filter((i) => hit(i.issued?.recipient?.name, i.fromReceipts?.payerName, i.supplier?.orgName, i.issued?.number, i.supplier?.invoiceNumber))
     .slice(0, 4).map((i) => {
       const out = i.direction === "outgoing";
-      const who = (out ? i.issued?.recipient?.name : i.supplier?.orgName) || "";
+      const who = (out ? i.issued?.recipient?.name || i.fromReceipts?.payerName : i.supplier?.orgName) || "";
       const num = (out ? i.issued?.number : i.supplier?.invoiceNumber) || "";
       const a = invAmount(i);
-      return { group: "Invoices", go: { view: "invoices" }, lead: Z.iconTile({ icon: out ? "receipt_long" : "move_to_inbox" }), title: mark(`Invoice ${num} ${out ? "to" : "from"} ${who}`.replace(/\s+/g, " "), q), right: `${esc(Z.formatMoney(a.value, a.currency))} · ${esc(invWord(i).toLowerCase())}` };
+      return { group: "Invoices", go: { view: "invoices" }, lead: Z.iconTile({ icon: out ? "receipt_long" : "move_to_inbox" }), title: mark(`${i.state === "DRAFT" ? "Draft invoice" : "Invoice"} ${num} ${out ? "to" : "from"} ${who}`.replace(/\s+/g, " "), q), right: `${esc(Z.formatMoney(a.value, a.currency))} · ${esc(invWord(i).toLowerCase())}` };
     });
   const payments = st.data.drafts
     .filter((d) => d.lines.some((l) => hit(l.destination?.displayName, l.note)))
@@ -61,7 +72,15 @@ function results(raw) {
       title: mark([draftTitle(d), d.lines.find((l) => l.note)?.note].filter(Boolean).join(" · "), q),
       right: `−${esc(draftTotal(d))} · ${esc(day(d.createdAt))}`,
     }));
-  return [...contacts, ...invoices, ...payments];
+  const money = st.data.lines
+    .filter((l) => hit(l.counterparty?.name, l.reference))
+    .slice(0, 4).map((l) => ({
+      group: "Money in and out", go: { view: "books", month: String(l.valueDate).slice(0, 7) },
+      lead: Z.iconTile({ icon: l.amountCents < 0 ? "north_east" : "call_received" }),
+      title: mark([l.counterparty?.name, l.reference].filter(Boolean).join(" · "), q),
+      right: `${l.amountCents < 0 ? "−" : "+"}${esc(eur(Math.abs(l.amountCents) / 100))} · ${esc(day(l.valueDate))}`,
+    }));
+  return [...screens, ...contacts, ...money, ...invoices, ...payments];
 }
 
 function draw() {
@@ -70,8 +89,10 @@ function draw() {
   if (!box || !input) return;
   const q = st.q.trim();
   const r = st.results;
-  if (!q) box.innerHTML = `<p class="z-cmdk__hint">Search contacts, payments and invoices of ${esc(org.name)}.</p>`;
-  else if (!r.length) box.innerHTML = `<p class="z-cmdk__hint" role="status">${st.data ? `Nothing matches “${esc(q)}”.` : "Still loading, one moment…"}</p>`;
+  if (!q) {
+    box.innerHTML = `<div class="z-row z-row--soon zb-cmdk__ask" aria-disabled="true">${Z.iconTile({ icon: "auto_awesome" })}<span class="z-row__main"><span class="z-row__title">Ask Zold about your money</span><span class="z-row__sub">Questions answered from your statement, invoices and contacts. Not built yet.</span></span><span class="z-row__right">${Z.tag("Soon")}</span></div>
+      <p class="z-cmdk__hint">Search screens, contacts, money in and out, payments and invoices.</p>`;
+  } else if (!r.length) box.innerHTML = `<p class="z-cmdk__hint" role="status">${st.data ? "No screens, payments, invoices or contacts match." : "Still loading, one moment…"}</p>`;
   else {
     let html = "", group = "";
     r.forEach((x, i) => {
@@ -93,6 +114,7 @@ function pick(i) {
   const x = st.results[i];
   if (!x) return;
   Z.closeOverlay("zb-search");
+  if (x.go.month) bk.month = x.go.month;
   setView(x.go.view);
   render({ focus: true });
 }
@@ -102,9 +124,10 @@ function open(trigger) {
   if (!$("#zb-search")) {
     document.body.insertAdjacentHTML("beforeend", `<div class="z-scrim z-scrim--dialog z-scrim--top" id="zb-search" hidden>
       <div class="z-dialog z-cmdk" role="dialog" aria-modal="true" aria-label="Search">
+        <p class="z-eyebrow zb-cmdk__org" id="zb-search-org"></p>
         <div class="z-cmdk__bar">${Z.icon("search")}
-          <label class="z-sr" for="zb-q">Search contacts, payments and invoices</label>
-          <input id="zb-q" class="z-cmdk__input" type="search" name="q" role="combobox" aria-expanded="false" aria-controls="zb-results" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search contacts, payments, invoices…">
+          <label class="z-sr" for="zb-q">Search screens, contacts, money in and out, payments and invoices</label>
+          <input id="zb-q" class="z-cmdk__input" type="search" name="q" role="combobox" aria-expanded="false" aria-controls="zb-results" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search payments, invoices, contacts…">
           <kbd class="z-kbd">esc</kbd></div>
         <div class="z-cmdk__list" id="zb-results" role="listbox" aria-label="Results"></div>
         <div class="z-cmdk__foot" aria-hidden="true"><span><kbd class="z-kbd">↑</kbd><kbd class="z-kbd">↓</kbd> to move</span><span><kbd class="z-kbd">↵</kbd> to open</span></div>
@@ -128,6 +151,7 @@ function open(trigger) {
     };
   }
   if (st.orgId !== org.id) { st.data = null; st.q = ""; }
+  $("#zb-search-org").textContent = org.legalName || org.name;
   const input = $("#zb-q");
   input.value = st.q;
   st.results = results(st.q);

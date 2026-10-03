@@ -39,11 +39,11 @@
 
   /* Sticky rather than fixed: as the first child of <body> it takes part in
      the flow, so showing it pushes the screen down instead of covering the
-     logo — and it still pins to the top once the page scrolls. The safe-area
-     inset keeps it clear of the notch in a standalone install. */
+     logo — and it still pins to the top once the page scrolls. It pins below
+     the status-bar inset, which the body already clears (ui.css). */
   #offline-bar {
-    position: sticky; top: 0; z-index: 200;
-    padding: calc(env(safe-area-inset-top, 0px) + .5rem) 1rem .5rem;
+    position: sticky; top: env(safe-area-inset-top, 0px); z-index: 200;
+    padding: .5rem 1rem;
     text-align: center; font-size: .8rem; font-weight: 500;
     color: #0b0b0e; background: var(--amber);
   }
@@ -483,8 +483,10 @@
   .m-head .m-name { font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: #fff; }
   .m-head .m-status { display: flex; align-items: center; gap: 6px; margin-top: 1px; font-size: 11px; }
   .m-dot { width: 5px; height: 5px; border-radius: 50%; }
+  /* padding: 0 overrides the base button's .6rem 1.1rem, which left a content
+     box narrower than the icon and pushed the arrow off-centre. */
   .m-iconbtn {
-    width: 38px; height: 38px; flex: none; border-radius: 10px;
+    width: 38px; height: 38px; flex: none; border-radius: 10px; padding: 0;
     background: var(--m-sunken); border: 1px solid var(--m-line);
     color: var(--m-dim); display: grid; place-items: center; cursor: pointer;
   }
@@ -817,33 +819,21 @@
 
      Uses the app's tokens (pink, radii), since it sits between Activity and
      transaction detail. The public page uses the handoff's own palette. */
-  .m-sharegroup { padding: 13px 0; border-bottom: 1px solid var(--m-line-faint); }
-  .m-sharegroup .lab { font-size: 12.5px; font-weight: 500; color: #c9ccd1; }
-  .m-segs { display: flex; gap: 5px; margin-top: 8px; }
-  .m-segs button {
-    flex: 1; min-width: 0; padding: 7px 4px; border-radius: 7px; cursor: pointer;
-    font: 500 11px Inter, sans-serif; background: var(--m-raised);
-    border: 1px solid var(--m-line); color: var(--m-dim); transition: all .15s;
-  }
-  .m-segs button:hover { border-color: var(--m-line-strong); }
-  .m-segs button.on {
-    background: var(--m-pink-tint); border-color: var(--m-pink-border); color: var(--m-pink-soft);
-  }
-  .m-shtoggle {
-    width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
-    background: transparent; border: 0; border-bottom: 1px solid var(--m-line-faint);
-    padding: 13px 0; cursor: pointer; color: var(--m-text); font-family: inherit;
-  }
-  .m-shtoggle .lab { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; color: #c9ccd1; }
-  .m-shtoggle .sub { display: block; font-size: 11px; color: var(--m-faint); font-weight: 400; margin-top: 3px; }
+  .m-shfield { border: 0; padding: 0; margin: 18px 0 0; min-width: 0; }
+  .m-shfield legend { padding: 0; margin-bottom: 8px; font-size: 14px; font-weight: 600; color: var(--z-heading, var(--m-text)); }
+  .m-shfield .z-seg label { font-size: 13px; padding: 0 6px; }
+  .m-shhead { margin: 24px 0 8px; font-size: 14px; font-weight: 600; color: var(--z-heading, var(--m-text)); }
+  .m-shswitch { padding: 0; }
+  .m-shswitch .z-row__sub { white-space: normal; }
   .m-track {
-    flex: none; width: 36px; height: 21px; border-radius: 11px; padding: 2px;
+    flex: none; width: 44px; height: 26px; border-radius: 13px; padding: 2px;
     display: flex; justify-content: flex-start; background: var(--m-raised);
-    border: 1px solid var(--m-line-strong); transition: all .18s;
+    border: 1px solid var(--m-line-strong); transition: background-color .18s, border-color .18s;
   }
-  .m-track .knob { width: 15px; height: 15px; border-radius: 50%; background: #34343a; transition: all .18s; }
-  .m-shtoggle[aria-pressed="true"] .m-track { background: var(--m-pink); border-color: var(--m-pink); justify-content: flex-end; }
-  .m-shtoggle[aria-pressed="true"] .m-track .knob { background: #fff; }
+  .m-track .knob { width: 20px; height: 20px; border-radius: 50%; background: #5a5a62; transition: transform .18s, background-color .18s; }
+  .m-shswitch[aria-checked="true"] .m-track { background: var(--m-pink); border-color: var(--m-pink); }
+  .m-shswitch[aria-checked="true"] .m-track .knob { background: #fff; transform: translateX(18px); }
+  .m-shswitch:focus-visible { outline: 2px solid var(--m-pink); outline-offset: -2px; }
   .m-shprev { margin-top: 16px; border: 1px solid var(--m-line); border-radius: 12px; background: var(--m-surface); padding: 4px 14px; }
   .m-shprev .r { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--m-line-faint); font-size: 12px; }
   .m-shprev .r:first-child { border-top: 0; }
@@ -909,7 +899,7 @@
 
   .m-sheadrow { display: flex; align-items: center; height: 64px; }
   .m-backbtn {
-    width: 48px; height: 48px; margin-left: -12px; border-radius: 50%;
+    width: 48px; height: 48px; margin-left: -12px; border-radius: 50%; padding: 0;
     background: transparent; border: 0; color: #fff; display: grid; place-items: center; cursor: pointer;
   }
   .m-backbtn:hover { background: rgba(255, 45, 139, .10); filter: none; }

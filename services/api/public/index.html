@@ -14,6 +14,10 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Zold" />
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+<!-- Dark before any stylesheet arrives: an installed app otherwise opens on
+     a white page while tokens.css loads. -->
+<meta name="color-scheme" content="dark" />
+<style>html, body { background: #08080b; }</style>
 <link rel="stylesheet" href="/vendor/fonts/text.css" />
 <!-- Material Symbols, as the design specifies. display=block so an icon never
      flashes as its ligature text before the font arrives. -->
@@ -126,8 +130,8 @@
       <div class="m-screen" id="m-share-screen">
         <div class="m-sheadrow"><button class="m-backbtn" data-mback="detail" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:24px">arrow_back</span></button></div>
         <div style="padding:4px 0 2px">
-          <div style="font-size:14.5px;font-weight:600;letter-spacing:-.01em">Share receipt</div>
-          <div style="font-size:12px;line-height:1.5;color:var(--m-dim);margin-top:4px">Pick what recipients see. Everything else stays sealed.</div>
+          <h1 style="font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0">Share receipt</h1>
+          <p style="font-size:14px;line-height:1.5;color:var(--m-dim);margin:6px 0 0">Pick what the person with the link sees. Everything else stays off the link.</p>
         </div>
         <div id="m-share-groups"></div>
         <div id="m-share-toggles"></div>
@@ -469,6 +473,12 @@
 <script src="/app/send.js"></script>
 <script src="/app/signers.js"></script>
 <script src="/app/phone.js"></script>
+<script src="/app/phone-home.js"></script>
+<script src="/app/phone-activity.js"></script>
+<script src="/app/phone-send.js"></script>
+<script src="/app/phone-add.js"></script>
+<script src="/app/phone-getpaid.js"></script>
+<script src="/app/phone-more.js"></script>
 <script src="/app/invoices.js"></script>
 <script src="/app/business.js"></script>
 <script src="/app/settings.js"></script>

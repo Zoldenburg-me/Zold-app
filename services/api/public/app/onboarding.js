@@ -1443,20 +1443,21 @@ OB.recovery = {
     if (obRecoveryDone) {
       return `${obAfterProgress("recovery", "Recovery")}
       <main id="main" class="z-screen__main">
-        ${obIntro(obRecoveryDone === "zoldenburg" ? "Zoldenburg can help you back in" : obRecoveryDone === "email" ? "Recovery by email is on" : "Recovery skipped",
-          obRecoveryDone === "zoldenburg" ? "If you lose this phone, contact Zoldenburg support from the sign-in screen. The move waits, and this phone can cancel it."
+        ${obIntro(obRecoveryDone === "zoldenburg" ? "Zoldenburg is your guardian" : obRecoveryDone === "email" ? "Recovery by email is on" : "Recovery skipped",
+          obRecoveryDone === "zoldenburg" ? "If you lose this phone, tap Recover your account on the sign-in screen. The move waits, and this phone can cancel it."
             : obRecoveryDone === "email" ? `A code to ${esc(user.email)} and a waiting period can move this account to a new phone.`
               : "You can set up recovery later in Security.")}
       </main>
       <div class="z-screen__foot">${Z.button({ variant: "primary", full: true, label: "Continue", id: "btn-rec-next" })}</div>`;
     }
     const opts = [];
-    if (caps.emailSmsRecovery && user?.email) opts.push(["email", `Email code ${Z.tag("Recommended", "pink")}${Z.tag("Beta")}`, "A code to your email starts recovery on a new phone. A waiting period lets you cancel it."]);
-    if (caps.zoldenburgRecovery) opts.push(["zoldenburg", `Zoldenburg can help ${Z.tag("Beta")}`, `Zoldenburg checks you against the ID you verified and starts recovery. You sign once to allow it. The move waits <span id="rec-grace">${esc(obGrace || "several days")}</span>, and you can cancel it from this phone.`]);
+    if (caps.emailSmsRecovery && user?.email) opts.push(["email", `Email code ${Z.tag("Recommended", "pink")}${Z.tag("Beta")}`, "A code to your email starts recovery. You can cancel it while it waits."]);
+    if (caps.zoldenburgRecovery) opts.push(["zoldenburg", `Add Zoldenburg as a guardian ${Z.tag("Beta")}`, `Only with an ID Monerium verified. Zoldenburg can’t send your money. A move to a new phone waits <span id="rec-grace">${esc(obGrace || "several days")}</span>, and you can cancel it.`]);
     opts.push(["skip", "Skip for now", "No one can recover this account."]);
     return `${obAfterProgress("recovery", "Recovery")}
     <main id="main" class="z-screen__main z-screen__main--tight">
-      ${obIntro("If you lose this phone", "Pick how you’d get back in. You can change this later in Security.")}
+      ${obIntro("If you lose access", "You can change this later in Security.")}
+      <button type="button" class="z-link-btn z-link-btn--small" id="btn-rec-custody" style="align-self:flex-start;padding:0">${Z.icon("info")}You alone control this account</button>
       <form class="z-form z-form--tight" id="ob-form" novalidate>
         <fieldset class="z-form z-form--tight" style="border:0;margin:0;padding:0;min-width:0" aria-describedby="rec-choice-err">
           <legend class="z-sr">How to get back in</legend>
@@ -1464,9 +1465,7 @@ OB.recovery = {
         </fieldset>
         <p class="z-err" id="rec-choice-err" hidden></p>
         <div id="rec-skip" class="z-form z-form--tight" hidden>
-          ${Z.note({ tone: "a", icon: "warning", text: caps.zoldenburgRecovery
-            ? "If you skip and lose this phone, Zoldenburg can’t recover the account. Only your euros can be reclaimed from Monerium."
-            : "If you skip and lose this phone, no one can recover the account. Only your euros can be reclaimed from Monerium." })}
+          ${Z.note({ tone: "a", icon: "warning", text: "Lose this device and only your EURe can be recovered, from Monerium under Icelandic e-money law. Other assets are lost." })}
           <label class="z-check" for="c-skip"><input id="c-skip" type="checkbox" aria-describedby="c-skip-err"><span>I understand. Skip recovery for now.</span></label>
           <p class="z-err" id="c-skip-err" hidden></p>
         </div>
@@ -1485,6 +1484,8 @@ OB.recovery = {
       };
       return;
     }
+    const custody = root.querySelector("#btn-rec-custody");
+    custody.onclick = () => obCustodySheet(custody);
     if (!obGrace && caps.zoldenburgRecovery) {
       api(`/api/users/${user.id}/recovery/zoldenburg`)
         .then((r) => { obGrace = graceText(r.gracePeriodSeconds); const g = $("rec-grace"); if (g) g.textContent = obGrace; })
@@ -1524,6 +1525,22 @@ OB.recovery = {
   },
 };
 const obChoice = (root) => root.querySelector('input[name="recovery"]:checked')?.value || null;
+
+/* Self-custody, said before the recovery choice: why no one can reset this
+   account, and what a guardian can and cannot do. */
+function obCustodySheet(trigger) {
+  document.getElementById("ob-custody")?.remove();
+  document.body.insertAdjacentHTML("beforeend", Z.overlay({
+    id: "ob-custody", title: "You control this account",
+    body: `<div class="z-sheet__body">
+      <p class="z-sub">Your passkey is the only owner. Zold can’t move your money.</p>
+      <p class="z-sub">So no one can reset your access. Without recovery, a lost phone is a lost account.</p>
+      <p class="z-sub">Recovery moves the account to a new phone after a wait you can cancel.</p>
+      <p class="z-sub">Monerium, the issuer, can still freeze EURe under the law.</p>
+    </div>`,
+  }));
+  Z.openOverlay("ob-custody", trigger);
+}
 
 /* Candide email enrolment: register (Face ID) -> code -> guardian (Face ID),
    against the signup email. Candide sends the code; Zold sends nothing. */
@@ -1691,6 +1708,7 @@ OB.activate = {
       ${Z.kv([
         { key: "Monerium", valueHtml: Z.tag("Connected", "mint") },
         { key: "How", value: user?.monerium?.method === "api_keys" ? "Your own API keys" : "Signed in with Monerium" },
+        ...moneriumConnectedRows(),
         { key: "IBAN", valueHtml: user?.iban ? esc(Z.groupIban(user.iban)) : Z.tag("Waiting") },
       ])}
       ${obAlert()}
@@ -1698,7 +1716,8 @@ OB.activate = {
     <div class="z-screen__foot z-screen__foot--quiet">
       ${user?.iban ? "" : Z.button({ variant: "primary", full: true, icon: "fingerprint", label: "Switch on with Face ID", id: "btn-kyc-activate" })}
       <button type="button" class="z-link-btn" id="btn-kyc-refresh">Check again</button>
-      <button type="button" class="z-link-btn z-link-btn--small" id="btn-kyc-reconnect">Use a different Monerium account</button>
+      <button type="button" class="z-link-btn z-link-btn--small" id="btn-kyc-reconnect">Not your login? Use a different Monerium account</button>
+      ${user?.monerium?.method === "api_keys" ? "" : `<p class="z-sub" style="font-size:12px;text-align:center;margin:4px 0 0">Sign out at Monerium first, or it signs you back in to the same login.</p>`}
     </div>`,
   bind: (root) => {
     const act = root.querySelector("#btn-kyc-activate");
@@ -2209,6 +2228,9 @@ function offerIbanMove(choices, profileId) {
         <div style="min-width:0"><div class="m-rowv">${esc(Z.groupIban(norm(c.iban)))}</div>
         <div class="m-rowk" style="word-break:break-all">Pays into ${esc(fromOf(c))}${c.chain ? ` on ${esc(c.chain)}` : ""}</div></div></label>`).join("")}
     </fieldset>`;
+  // The login the IBAN moves from: a browser still signed in at Monerium may
+  // have connected a login the user did not expect.
+  const connectedAs = moneriumConnectedRows().map((r) => `<div class="m-detrow"><div style="min-width:0"><div class="m-rowk">${esc(r.key)}</div><div class="m-rowv" style="word-break:break-all">${esc(r.value)}</div></div></div>`).join("");
   const dlg = document.createElement("dialog");
   dlg.className = "m-dialog";
   dlg.setAttribute("aria-labelledby", "m-mv-title");
@@ -2218,6 +2240,7 @@ function offerIbanMove(choices, profileId) {
       ? `You already have an IBAN ending ${esc(norm(one.iban).slice(-4))}. Zold will use it.`
       : `You already have ${choices.length} IBANs. Pick the one Zold should use.`}</div>
     ${pick}
+    ${connectedAs ? `<div class="m-rows" style="margin-top:12px">${connectedAs}</div>` : ""}
     <div class="m-note warn" style="margin-top:16px;font-size:13px;line-height:1.45">
       New payments arrive in Zold, and the old wallet stops getting them. People who pay you keep the same IBAN. You can move it back later.
     </div>

@@ -15,7 +15,8 @@ import { CHAIN_ID } from "../config.js";
 import { addrs } from "../chain.js";
 import { isDeployed } from "../wallet/candide.js";
 import { activatePaymentForwarder } from "../adapters/candide-forwarder.js";
-import { HandleError, normaliseDisplayName, normaliseHandle, publicPayee } from "../pay.js";
+import { HandleError, normaliseDisplayName, normaliseHandle, publicOrgPayee, publicPayee } from "../pay.js";
+import { orgPageAccount } from "./business/org-payment-page.js";
 import { qrSvg } from "../qr.js";
 import { store, type User } from "../store.js";
 import { publicUser } from "../users/public-user.js";
@@ -154,7 +155,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
         throw e;
       }
       const taken = store.findUserByHandle(handle);
-      if (taken && taken.id !== user.id) {
+      if ((taken && taken.id !== user.id) || store.findOrgByHandle(handle)) {
         return res.status(409).json({ error: `"${handle}" is already taken` });
       }
       if (
@@ -190,7 +191,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
       // is a check-then-write invariant: re-assert it in the same synchronous
       // window as the write (the claimAuthorization / holdDailyCap pattern).
       const takenNow = store.findUserByHandle(handle);
-      if (takenNow && takenNow.id !== user.id) {
+      if ((takenNow && takenNow.id !== user.id) || store.findOrgByHandle(handle)) {
         return res.status(409).json({ error: `"${handle}" is already taken` });
       }
       const updated = store.updateUser(user.id, {
@@ -224,7 +225,15 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
     "/pay/:handle",
     wrap(async (req, res) => {
       const user = store.findUserByHandle(req.params.handle);
-      if (!user?.paymentPage?.handle) return res.status(404).json({ error: "no such payment page" });
+      if (!user?.paymentPage?.handle) {
+        // An organisation's page: bank details of its euro account, or closed
+        // while no active account has an IBAN on the company's own profile.
+        const org = store.findOrgByHandle(req.params.handle);
+        if (!org) return res.status(404).json({ error: "no such payment page" });
+        const page = orgPageAccount(org);
+        if ("reason" in page) return res.status(503).json(PAGE_CLOSED);
+        return res.json(publicOrgPayee(org, page.account, page.holder));
+      }
       if (!(await livePaymentPage(user))) return res.status(503).json(PAGE_CLOSED);
       res.json(publicPayee(store.findUser(user.id) ?? user, payChain()));
     }),

@@ -27,17 +27,23 @@
   function show() {
     if (document.getElementById("zold-cookie-notice")) return;
     var onLanding = location.pathname === "/" || location.pathname === "/landing.html";
-    // The personal app has a fixed bottom nav on phones; sit above it when it
-    // is actually on screen (it is in the DOM, hidden, during onboarding).
-    var nav = document.getElementById("m-nav");
-    var lift = nav && nav.getClientRects().length && getComputedStyle(nav).display !== "none" ? 88 : 16;
+    // The personal app has a bottom nav on phones; sit above it when it is
+    // actually on screen. It can appear after the notice does (onboarding
+    // ends, the app renders), so the lift is measured again while shown.
+    function navLift() {
+      var nav = document.querySelector(".z-bnav, #m-nav");
+      return nav && nav.getClientRects().length && getComputedStyle(nav).display !== "none" ? 88 : 16;
+    }
+    var lift = navLift();
     var box = document.createElement("div");
     box.id = "zold-cookie-notice";
     box.setAttribute("role", "region");
     box.setAttribute("aria-label", "Cookies and storage");
     box.style.cssText =
       "position:fixed;left:16px;right:16px;bottom:calc(" + lift + "px + env(safe-area-inset-bottom,0px));" +
-      "z-index:2147483000;max-width:560px;margin:0 auto;padding:14px 16px;border-radius:14px;" +
+      // Above the page's sticky bars (200 at most), below a sheet's scrim
+      // (ui.css .z-scrim, 250): an open sheet is never covered.
+      "z-index:240;max-width:560px;margin:0 auto;padding:14px 16px;border-radius:14px;" +
       "background:rgba(19,19,23,.97);border:1px solid #2c2c33;color:#ededf0;" +
       "box-shadow:0 18px 50px rgba(0,0,0,.55);font:13px/1.5 Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;" +
       "display:flex;gap:14px;align-items:center;flex-wrap:wrap";
@@ -74,6 +80,7 @@
       var hadFocus = box.contains(document.activeElement);
       box.remove();
       if (watch) watch.disconnect();
+      clearInterval(relift);
       root.style.removeProperty("--zold-notice-h");
       document.body.style.paddingBottom = "";
       if (!hadFocus) return;
@@ -105,6 +112,13 @@
     var watch = window.ResizeObserver ? new ResizeObserver(reserve) : null;
     if (watch) watch.observe(box);
     reserve();
+    var relift = setInterval(function () {
+      var now = navLift();
+      if (now === lift) return;
+      lift = now;
+      box.style.bottom = "calc(" + lift + "px + env(safe-area-inset-bottom,0px))";
+      reserve();
+    }, 500);
   }
 
   if (document.body) show();

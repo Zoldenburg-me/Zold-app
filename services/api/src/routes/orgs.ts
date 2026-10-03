@@ -29,6 +29,7 @@ import {
 import {
   PLANS,
   TRIAL_DAYS,
+  can,
   effectivePlan,
   limitsFor,
   plansFor,
@@ -39,7 +40,7 @@ import { ROLES, type Account, type OrgType, type Organisation, type PlanId, type
 import { ADDRESS_RE, ContactError, validateBankAccount, validateWallet } from "../domain/contacts.js";
 import { hashToken } from "../domain/invoices.js";
 import { emailIsProven, roleCan, wouldOrphanOrg } from "../domain/roles.js";
-import { KYC } from "../config.js";
+import { CHAIN_ID, KYC } from "../config.js";
 import { wrap } from "./util.js";
 import { accountProfileStanding } from "../domain/monerium-profile.js";
 import { adoptionHint, auditProfileCheck, checkBackingProfile, profileWait } from "../adapters/monerium-profile.js";
@@ -75,7 +76,16 @@ function gateOf(org: Pick<Organisation, "type">, a: Account): Account["gate"] {
 
 /** An account as the API returns it: read-time gate and profile standing. */
 function accountView(org: Organisation, a: Account) {
-  return { ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a) };
+  // Who backs it, by the name members already see on Members: Home says
+  // "Spends from Jonas's account" instead of a bare user id.
+  const backer = a.backingUserId
+    ? store.membersOf(org.id).find((m) => m.userId === a.backingUserId && m.status === "active")
+    : undefined;
+  return {
+    ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
+    // As Members shows them: the name, else the email.
+    ...(backer?.name || backer?.email ? { backingMemberName: backer.name || backer.email } : {}),
+  };
 }
 
 export function createOrgRouter(requireSession: SessionResolver): express.Router {
@@ -745,7 +755,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "contacts.read")) return;
-    res.json({ contacts: store.contactsOf(ctx.org.id) });
+    // A payer rule belongs to invoicing: without that capability it is left
+    // out of the answer, and stays on the row.
+    const showRules = can(ctx.org, "invoices").allowed;
+    res.json({
+      contacts: store.contactsOf(ctx.org.id).map((c) => (showRules ? c : { ...c, payerRule: undefined })),
+    });
   });
 
   r.post("/:orgId/contacts", (req, res) => {
@@ -817,7 +832,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
           ...validateBankAccount(b),
         }));
       }
-      res.json({ contact: store.updateContact(contact.id, patch) });
+      const saved = store.updateContact(contact.id, patch);
+      res.json({ contact: can(ctx.org, "invoices").allowed ? saved : { ...saved, payerRule: undefined } });
     } catch (err) {
       if (err instanceof ContactError) return res.status(400).json({ error: err.message });
       throw err;
@@ -878,6 +894,31 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!requireWithinLimit(ctx, res, "importedWallets", existing.length, "imported wallet")) {
       return;
     }
+    // The org's own Zold account is already in the books (statement lines);
+    // watching it too would book every movement twice.
+    if (
+      chainId === CHAIN_ID &&
+      store.accounts.some((a) => a.orgId === ctx.org.id && a.address?.toLowerCase() === address.toLowerCase())
+    ) {
+      return res.status(409).json({ error: "That is this organisation's own Zold account. It is already in the books." });
+    }
+    // Books from a past day: the sync starts at that day's first block.
+    // Without it, the wallet is booked from now on.
+    const syncFrom = req.body?.syncFrom ? String(req.body.syncFrom).trim() : undefined;
+    if (syncFrom !== undefined) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(syncFrom) || !Number.isFinite(Date.parse(`${syncFrom}T00:00:00Z`))) {
+        return res.status(400).json({ error: "Start day must be a date, YYYY-MM-DD." });
+      }
+      if (Date.parse(`${syncFrom}T00:00:00Z`) > Date.now()) {
+        return res.status(400).json({ error: "Start day is in the future." });
+      }
+      // No ERC-20 exists before Ethereum's first block; an earlier day only
+      // costs the binary search over block times.
+      if (syncFrom < "2015-07-30") {
+        return res.status(400).json({ error: "Start day is before any chain existed; the earliest is 2015-07-30." });
+      }
+      if (!requireCapability(ctx, res, "ledger.historicalSync")) return;
+    }
 
     const wallet = store.addImportedWallet({
       id: `iw_${randomUUID()}`,
@@ -887,12 +928,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       label: String(req.body?.label ?? "").trim() || `${kind.toUpperCase()} ${address.slice(0, 8)}`,
       kind,
       custody: "external",
-      sync: { status: "pending" },
+      sync: { status: "pending", ...(syncFrom ? { from: syncFrom } : {}) },
       createdAt: new Date().toISOString(),
     });
     res.status(201).json({
       wallet,
-      note: "Imported read-only. We never hold a key for this wallet — payments from it are built here and signed by you.",
+      note: "Imported read-only. We never hold a key for this wallet — payments from it are built here and signed by you. Token transfers in and out are booked from " + (syncFrom ? syncFrom : "now") + " on, once an RPC is configured for its chain.",
     });
   });
 

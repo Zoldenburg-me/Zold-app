@@ -1,16 +1,16 @@
 /**
- * The renderer registry, and the views without a design/ui-v2 reference:
- * Accounts, Send, Get paid, Shopify, Wallets, Transactions, Assets, Chart of
- * accounts, the month's statement lines, Connections, Settings and the
- * invoicing profile. The reference screens are in screens.js, the invoice
- * editor in invoice.js; both register here.
+ * The renderer registry, and the views without a module of their own:
+ * Accounts, Wallets, Transactions, Assets, Chart of accounts, the month's
+ * statement lines, Connections, Organisation, Plan and the invoicing profile.
+ * The other screens (screens.js, home.js, getpaid.js, send.js, settings.js,
+ * apps.js, invoice.js and the rest) register here.
  *
  * RENDER maps a view id to its body (an HTML string, or { html, bind });
  * META to its title, subtitle and header actions. A map rather than a switch,
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
-import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ymd } from "./core.js";
+import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, plain, ymd } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -61,6 +61,7 @@ RENDER.accounts = async () => {
         ${a.gate ? `<p class="desc" style="margin-top:6px">${esc(plain(a.gate.reason))}<br>Needs: ${esc(plain(a.gate.needs))}</p>` : ""}
         ${!a.backingUserId && a.currency === "EUR" ? waitHtml : ""}
         ${a.backingUserId ? `<p class="desc" style="margin-top:6px">${mine ? "Spends from your own account" : "Spends from a member’s own account"}</p>` : ""}
+        ${mine && a.currency === "EUR" && a.status === "active" ? `<p style="margin-top:6px"><a href="?view=documents" data-view-link="documents">Statements and documents</a></p>` : ""}
         ${profileHtml(a, mayManageAccounts)}</td>
       <td class="zb-top">${!a.backingUserId && a.currency === "EUR"
         ? adoption?.allowed
@@ -86,144 +87,40 @@ RENDER.accounts = async () => {
 };
 
 /* ==========================================================================
-   Send: a new payment run
-   ========================================================================== */
-
-export const sendState = { contactId: null };
-
-META.send = () => ({
-  title: "New payment",
-  sub: cap("transfers.approvals").allowed
-    ? "It goes to Approvals: someone other than you approves it, then it’s sent with Face ID or fingerprint."
-    : "Save it, then send it from Payments with Face ID or fingerprint.",
-  actions: "",
-});
-
-RENDER.send = async () => {
-  if (!cap("transfers.drafts").allowed) return gateHtml("transfers.drafts");
-  if (!roleCan(org.role, "propose")) return `<div class="gate"><h3>Not for your role</h3><p>As a viewer you can see payments, not propose them.</p></div>`;
-  const [{ contacts }, { accounts }] = await Promise.all([
-    api(`/api/orgs/${org.id}/contacts`),
-    api(`/api/orgs/${org.id}/accounts`),
-  ]);
-  const payable = contacts.filter((c) => c.bankAccounts.some((b) => b.iban));
-  const fundable = accounts.filter((a) => a.status === "active" && a.backingUserId && a.profile?.status !== "needs_check");
-  if (!fundable.length) {
-    return `<div class="gate"><h3>No account can pay yet</h3><p>${org.type === "business"
-      ? "Connect the company’s Monerium profile to an account first."
-      : "Open an account and fund it from your own account first."}</p><div class="zb-actions">${linkBtn("Accounts", "accounts")}</div></div>`;
-  }
-  if (!payable.length) {
-    return `<div class="gate"><h3>Add who you’re paying</h3><p>A payment goes to a contact with bank details, so a later change to them is caught before sending.</p><div class="zb-actions">${primary("Add contact", 'data-act="new-contact"', "person_add")}</div></div>`;
-  }
-  const chosen = payable.find((c) => c.id === sendState.contactId) || null;
-  return `<form class="z-card zb-pad" id="send-form" style="max-width:560px" novalidate>
-      <label for="d-acct">From</label><select id="d-acct" name="account">${fundable.map((a) => `<option value="${esc(a.id)}">${esc(a.label || a.currency)} (${esc(maskIban(a.identifier?.iban || ""))})</option>`).join("")}</select>
-      <label for="d-con">To</label><select id="d-con" name="contact">${payable.map((c) => `<option value="${esc(c.id)}"${chosen?.id === c.id ? " selected" : ""}>${esc(c.name)} (${esc(maskIban(c.bankAccounts.find((b) => b.iban).iban))})</option>`).join("")}</select>
-      <label for="d-amt">Amount in euros</label><input id="d-amt" name="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" />
-      <label for="d-note">Reference <span class="desc">(on their bank statement)</span></label><input id="d-note" name="reference" autocomplete="off" maxlength="140" placeholder="Invoice 2026-114…" />
-      <p class="zb-err" id="send-err" role="alert"></p>
-      <div class="zb-actions">${primary(cap("transfers.approvals").allowed ? "Submit for approval" : "Save payment", 'data-act="send-create"', "")}${linkBtn("Cancel", "payments")}</div>
-    </form>`;
-};
-
-/* ==========================================================================
-   Get paid
-   ========================================================================== */
-
-META["get-paid"] = () => ({
-  title: "Get paid",
-  sub: "Your bank details, invoices and a shop checkout.",
-  actions: cap("invoices").allowed ? primary("Issue invoice", 'data-act="issue-invoice"', "receipt_long") : "",
-});
-
-RENDER["get-paid"] = async () => {
-  const { accounts } = await api(`/api/orgs/${org.id}/accounts`);
-  const live = accounts.filter((a) => a.status === "active" && a.identifier?.iban);
-  const holder = org.legalName || org.name;
-  const details = live.length
-    ? `<div class="zb-grid2">${live.map((a) => `<section class="z-card zb-pad zb-stack" style="gap:12px" aria-label="${esc(a.label || a.currency)}">
-        <h2 class="zb-h2">${esc(a.label || a.currency)}</h2>
-        <ul class="z-list z-card">
-          <li>${Z.copyRow({ label: "Account holder", value: holder })}</li>
-          <li>${Z.copyRow({ label: "IBAN", value: String(a.identifier.iban).replace(/\s+/g, ""), display: Z.groupIban(a.identifier.iban), mono: true })}</li>
-          ${a.identifier.bic ? `<li>${Z.copyRow({ label: "BIC", value: a.identifier.bic, mono: true })}</li>` : ""}
-        </ul></section>`).join("")}</div>`
-    : `<div class="z-card"><p class="empty">No account has an IBAN yet. ${linkBtn("Accounts", "accounts")}</p></div>`;
-  const way = (icon, title, sub, v, tag = "") => `<li><a class="z-row" href="?view=${v}" data-view-link="${v}">${Z.iconTile({ icon })}<span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag ? `<span class="z-row__right">${tag}</span>` : ""}${Z.icon("chevron_right", "z-row__chev")}</a></li>`;
-  const ways = [
-    cap("invoices").allowed ? way("receipt_long", "Invoices", "Issue one, or ask a supplier for theirs with a link", "invoices") : "",
-    way("storefront", "Shopify", "Customers pay an order in digital dollars (USDC)", "shopify", Z.tag("Beta")),
-  ].join("");
-  return `<h2 class="zb-h2" style="margin-bottom:12px">Bank details</h2>${details}
-    <h2 class="zb-h2" style="margin:28px 0 12px">Other ways</h2><ul class="z-list z-card">${ways}</ul>`;
-};
-
-/* ==========================================================================
-   Shopify: Zold as a payment method on a merchant's store.
-   Crypto only, sale only, refunds by hand: every one of those limits is
-   printed here rather than discovered by a customer at checkout.
-   ========================================================================== */
-
-META.shopify = () => ({ title: "Shopify", sub: "Customers pay an order in digital dollars (USDC).", actions: Z.tag("Beta") });
-
-RENDER.shopify = async () => {
-  const d = await api(`/api/orgs/${org.id}/shopify`);
-  const custom = d.mode === "custom-app";
-  let html = card("How it works", custom
-    ? `Your store offers a manual payment method named <b>${esc(d.manualGateway || "Zold")}</b>. When a customer places an order with it, Zold opens a payment in digital dollars (USDC) for the order total, shows it on the thank-you page (with the Zold extension installed) or by link, and marks the order paid in Shopify once the money arrives. The order exists before the money does: unpaid orders stay “payment pending” for ${esc(String(d.orderTtlHours || 24))} hours and are yours to cancel.`
-    : "Customers pay a euro order in digital dollars (USDC) on your payment page, and the order is marked paid once the money arrives. Bank transfer isn’t offered at checkout (too slow for a session), refunds are made by you from Zold, and manual capture isn’t supported.",
-  d.available
-    ? `<form class="zb-form" onsubmit="return false"><label for="sh-shop">Store address</label>
-        <div style="display:flex;gap:10px"><input id="sh-shop" name="shop" autocomplete="off" spellcheck="false" placeholder="my-store.myshopify.com…" style="flex:1" />
-        <button type="button" class="z-btn z-btn--primary" data-act="shopify-connect">Connect store</button></div>
-        <p class="desc" style="margin-top:8px">You approve the app at Shopify. The store’s access key is stored encrypted and never shown.${custom ? " Connecting subscribes Zold to the store’s new orders." : ""}</p></form>`
-    : `<div class="banner warn">${Z.icon("info")}<span><b>Not available here.</b> ${esc(plain(d.reason || ""))} ${custom
-        ? "A Shopify app has to be created in a Partner account, and its key set on this deployment."
-        : "A Shopify payments app has to be approved into Shopify’s Payments Apps program first. Nobody has done that yet."}</span></div>`);
-  html += card("Connected stores", "", d.connections.length
-    ? `<table><thead><tr><th>Store</th><th>Pays into</th><th>Status</th><th>Installed</th><th></th></tr></thead><tbody>${d.connections.map((c) => `<tr>
-        <td><b>${esc(c.shop)}</b></td><td class="mono">@${esc(c.payeeHandle || "")}</td>
-        <td>${c.ready ? Z.tag("Active") : `${Z.tag("Needs setup", "amber")}${c.configureError ? `<p class="desc">${esc(plain(c.configureError))}</p>` : ""}`}</td>
-        <td class="desc">${esc(day(c.installedAt))}${c.lastSessionAt ? `<br>last order ${esc(day(c.lastSessionAt))}` : ""}</td>
-        <td><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="shopify-disconnect" data-id="${esc(c.id)}">Disconnect</button></td></tr>`).join("")}</tbody></table>`
-    : `<p class="empty">No store connected.</p>`);
-  html += card(custom ? "Orders" : "Checkouts", custom ? "Every order a connected store sent with the Zold method." : "Every payment a connected store started.", d.requests.length
-    ? `<table><thead><tr><th>When</th><th>Store</th><th class="num">Amount</th><th>Status</th><th>Shopify told</th><th></th></tr></thead><tbody>${d.requests.map((r) => `<tr>
-        <td class="desc">${esc(day(r.createdAt))}${r.test ? ` ${Z.tag("Test", "amber")}` : ""}</td>
-        <td>${esc(r.shop)}${r.orderName ? `<div class="mono">${esc(r.orderName)}</div>` : ""}</td>
-        <td class="num">${esc(eur(r.amountEur ?? 0))}${r.payments?.length ? `<div class="desc">${r.payments.map((p) => `${esc(String(p.amountUsdc ?? ""))} USDC${p.settledEur !== undefined ? ` → ${esc(eur(p.settledEur))}` : " (kept as USDC)"}`).join("<br>")}</div>` : ""}</td>
-        <td>${Z.tag(r.state === "PAID" ? "Paid" : r.state === "OPEN" ? "Open" : r.state.toLowerCase())}</td>
-        <td>${r.resolvedAt ? Z.tag("Done") : r.state === "PAID" ? `${Z.tag("Not yet", "amber")}${r.resolveError ? `<p class="desc">${esc(plain(r.resolveError))}</p>` : ""}` : '<span class="desc">Not yet</span>'}</td>
-        <td><a class="btn sm" href="${esc(r.url)}" target="_blank" rel="noopener">Page<span class="z-sr"> (opens in a new tab)</span></a></td></tr>`).join("")}</tbody></table>`
-    : `<p class="empty">${custom ? "No orders yet." : "No checkouts yet."}</p>`);
-  const endpoints = `<table><tbody>${Object.entries(d.endpoints).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join("")}</tbody></table>`;
-  html += custom
-    ? card("Set up the store", `Three steps in Shopify, in this order. The app asks for: <span class="mono">${esc(d.scopes || "")}</span>.`,
-      `<ol class="zb-steps">
-        <li><b>Payment method.</b> Settings, Payments, Manual payment methods, Create custom payment method. Name it so it contains “<b>${esc(d.manualGateway || "zold")}</b>”: that’s how Zold recognises its orders. Keep the store’s checkout currency to euros; other orders are ignored.</li>
-        <li><b>Connect the store</b> above. Zold subscribes to the store’s new and cancelled orders itself.</li>
-        <li><b>Thank-you page</b> (recommended). Install the Zold checkout extension from the <span class="mono">shopify-app/</span> project and add its block to the Thank you and Order status pages, pointing at this deployment. Without it, put the pay link in the order confirmation email.</li>
-      </ol>${endpoints}
-      <p class="desc" style="margin-top:12px">Limits, plainly: the buyer pays after placing the order, so stock is held while it waits; refunds are made by you from Zold; a payment that arrives after ${esc(String(d.orderTtlHours || 24))} hours lands on your payment page without its order, and you mark the order paid yourself.</p>`)
-    : card("Partner Dashboard settings", "Paste these into the app’s payments extension. Currency: euros. Payment method type: offsite.", endpoints);
-  return html;
-};
-
-/* ==========================================================================
    Books: wallets, transactions, assets, chart of accounts, statement lines
    ========================================================================== */
 
 const booksBack = () => linkBtn("Books", "books", "arrow_back");
 
-META.wallets = () => ({ title: "Imported wallets", sub: "Addresses you want counted in your books. Read only: Zold never holds a key for one.", actions: `${booksBack()}${secondary("Import wallet", 'data-act="import-wallet"', "add")}` });
+/** What the sync has done with a wallet, in words. An error names its cause. */
+const walletSyncCell = (s = {}) => {
+  const skipped = s.skipped ? `<span class="zb-sub2">${esc(String(s.skipped))} transfer${s.skipped === 1 ? "" : "s"} not booked: ${esc(plain(s.lastSkipReason || ""))}</span>` : "";
+  if (s.status === "error") return `${Z.tag("Not syncing", "amber")}<span class="zb-sub2">${esc(plain(s.error || ""))}</span>${skipped}`;
+  if (s.status === "pending") return `<span class="z-dim">Waiting${s.from ? `, from ${esc(day(s.from))}` : ""}</span>`;
+  const when = s.lastSyncedAt ? `<span class="zb-sub2">checked ${esc(day(s.lastSyncedAt))}</span>` : "";
+  return `${s.status === "syncing" ? "Catching up" : "Up to date"}${when}${skipped}`;
+};
+
+META.wallets = () => ({ title: "Wallets", sub: "Addresses you want counted in your books. Read only: Zold never holds a key for one.", actions: secondary("Import wallet", 'data-act="import-wallet"', "add") });
 RENDER.wallets = async () => {
   const { wallets } = await api(`/api/orgs/${org.id}/wallets`);
   return wallets.length
-    ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Label</th><th scope="col">Address</th><th scope="col">Network</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${wallets.map((w) => `<tr>
+    ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Label</th><th scope="col">Address</th><th scope="col">Network</th><th scope="col">Sync</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${wallets.map((w) => `<tr>
         <td>${esc(w.label)}<span class="zb-sub2">${esc(w.kind.toUpperCase())}</span></td><td class="z-mono" translate="no">${esc(w.address)}</td><td>${esc(String(w.chainId))}</td>
+        <td>${walletSyncCell(w.sync)}</td>
         <td><div class="zb-cellact"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="del-wallet" data-id="${esc(w.id)}">Remove<span class="z-sr">: ${esc(w.label)}</span></button></div></td></tr>`).join("")}</tbody></table></div>`
     : `<div class="z-card"><p class="empty">No wallets imported.</p></div>`;
+};
+
+/** A synced token with no feed price is booked as SYMBOL@chain:address, so it
+ *  cannot merge into the real token's lots; show the symbol and the contract,
+ *  and say why it has no value: on no token list, or listed but unpriced. */
+const assetCell = (e) => {
+  if (e.asset === "EURe") return "Euros";
+  const m = /^(.*)@\d+:(0x[0-9a-f]{40})$/.exec(e.asset);
+  if (!m) return esc(e.asset);
+  const why = (e.tags || []).includes("unlisted") ? "not on a token list" : "no price";
+  return `${esc(m[1])}<span class="zb-sub2 z-mono" translate="no">${esc(`${m[2].slice(0, 6)}…${m[2].slice(-4)}`)} · ${why}</span>`;
 };
 
 META.ledger = () => ({ title: "Every transaction", sub: "Every movement across your accounts and imported wallets.", actions: `${booksBack()}${cap("export.ledger").allowed ? secondary("Download CSV", 'data-act="export-ledger"', "download") : ""}` });
@@ -232,7 +129,7 @@ RENDER.ledger = async () => {
   const { entries } = await api(`/api/orgs/${org.id}/ledger`);
   return entries.length
     ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Date</th><th scope="col">Currency</th><th scope="col">Category</th><th scope="col">Tags</th><th scope="col" class="z-tbl__num">Amount</th></tr></thead><tbody>${entries.map((e) => `<tr>
-        <td class="z-dim">${esc(day(e.at))}</td><td>${esc(e.asset === "EURe" ? "Euros" : e.asset)}</td><td>${esc(e.accountCode || "None")}</td><td class="z-dim">${esc(e.tags.join(", ") || "None")}</td>
+        <td class="z-dim">${esc(day(e.at))}</td><td>${assetCell(e)}</td><td>${esc(e.accountCode || "None")}</td><td class="z-dim">${esc(e.tags.join(", ") || "None")}</td>
         <td class="z-tbl__num"><span class="z-amount${e.direction === "in" ? " z-amount--in" : ""}">${e.direction === "in" ? "+" : "−"}${esc(e.amount)}</span></td></tr>`).join("")}</tbody></table></div>`
     : `<div class="z-card"><p class="empty">Nothing yet. Transactions appear once money moves or a wallet syncs.</p></div>`;
 };
@@ -306,15 +203,16 @@ RENDER.export = async () => {
    Connections
    ========================================================================== */
 
-META.integrations = () => ({ title: "Connections", sub: "Get your books into the software your accountant already uses.", actions: linkBtn("Settings", "settings", "arrow_back") });
+META.integrations = () => ({ title: "Connections", sub: "Get your books into the software your accountant already uses.", actions: "" });
+
+const conn = (logo, title, sub, tag, text, act, wide = false) => `<section class="z-card zb-conn${wide ? " zb-conn--wide" : ""}" aria-label="${esc(title)}">
+    <div class="zb-conn__head"><span class="zb-conn__logo" aria-hidden="true">${esc(logo)}</span><span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag}</div>
+    <p>${text}</p><div class="zb-actions">${act}</div></section>`;
 
 RENDER.integrations = async () => {
   if (!cap("integrations.accounting").allowed) return gateHtml("integrations.accounting");
   const r = await api(`/api/orgs/${org.id}/integrations`);
   const g = r.integrations.getmyinvoices;
-  const conn = (logo, title, sub, tag, text, act, wide = false) => `<section class="z-card zb-conn${wide ? " zb-conn--wide" : ""}" aria-label="${esc(title)}">
-      <div class="zb-conn__head"><span class="zb-conn__logo" aria-hidden="true">${esc(logo)}</span><span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag}</div>
-      <p>${text}</p><div class="zb-actions">${act}</div></section>`;
   const gmi = g.connected
     ? conn("GMI", "GetMyInvoices", `Connected to ${g.accountName || "your account"}${g.accountEmail ? ` (${g.accountEmail})` : ""} since ${day(g.connectedAt)}`, Z.tag("Beta"),
       "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
@@ -322,7 +220,7 @@ RENDER.integrations = async () => {
     : conn("GMI", "GetMyInvoices", "API key · sends Belege each month", Z.tag("Beta"),
       "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
       r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`, true);
-  return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends for you</h2>
+  return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends your books for you</h2>
     ${gmi}
     <h2 class="z-eyebrow zb-conn__group">File exports</h2>
     <div class="zb-grid3">
@@ -337,11 +235,131 @@ RENDER.integrations = async () => {
    Settings
    ========================================================================== */
 
-META.settings = () => ({ title: "Settings", sub: `${org.name}, on the ${org.effectivePlan.charAt(0).toUpperCase()}${org.effectivePlan.slice(1)} plan${org.effectivePlan !== org.plan ? " (trial)" : ""}.`, actions: "" });
+/* ==========================================================================
+   Documents: statements, balance confirmations, proofs of ownership and
+   receipts. They belong to the account that backs the org's euro account
+   (documents are a user's, routes/documents.ts), so they are offered here
+   only to the member whose own account it is.
+   ========================================================================== */
 
-RENDER.settings = async () => {
-  const plan = await api(`/api/orgs/${org.id}/plan`);
+const DOC_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership" };
+const DOC_ICON = { statement: "description", receipt: "receipt_long", balance: "account_balance", ownership: "verified_user" };
+export const docMonth = { value: null };
+/** Receipts list the most recent paid transfers only. */
+const RECEIPT_ROWS = 50;
+/** A document link from the API, opened only if it is ours or https. */
+export const docHref = (url) => (typeof url === "string" && (url.startsWith("/") || /^https:\/\//i.test(url)) ? url : null);
+
+META.documents = () => ({ title: "Statements and documents", sub: "Signed documents for this account. Anyone you give one to can check it at the address printed on it.", actions: linkBtn("Accounts", "accounts", "arrow_back") });
+
+RENDER.documents = async () => {
+  const { accounts } = await api(`/api/orgs/${org.id}/accounts`);
+  const euro = accounts.find((a) => a.currency === "EUR" && a.status === "active");
+  if (!euro) return `<div class="z-card"><p class="empty">The euro account isn’t open yet, so there is nothing to document. ${linkBtn("Accounts", "accounts")}</p></div>`;
+  if (!me || euro.backingUserId !== me.id) {
+    return `<div class="z-card"><p class="empty">This account spends from a member’s own account, and its documents are issued from there. Ask that member for a statement or proof of ownership.</p></div>`;
+  }
+  const [docs, tx] = await Promise.all([
+    api(`/api/users/${me.id}/documents`).then((r) => r.documents || []),
+    // The documents still render without the payment list; it says it failed.
+    api(`/api/users/${me.id}/transfers`).then((r) => r.transfers || []).catch(() => null),
+  ]);
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const now = new Date();
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    return { value: d.toISOString().slice(0, 7), label: d.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }) };
+  });
+  const chosen = docMonth.value || months[0].value;
+  const paid = (tx || []).filter((t) => t.rail === "sepa" && t.state === "PAID").slice(0, RECEIPT_ROWS);
+  const create = `<section class="card"><div class="h"><div><h2>Create</h2><p class="desc">Each one opens in a new tab, ready to print or save as PDF.</p></div></div>
+    <div class="zb-doc-create">
+      <div><label for="doc-month">Statement month</label><select id="doc-month">${months.map((m) => `<option value="${m.value}"${m.value === chosen ? " selected" : ""}>${esc(m.label)}</option>`).join("")}</select></div>
+      ${primary("Statement", 'data-act="doc-statement"', "description")}
+      ${secondary("Balance confirmation", 'data-act="doc-balance"', "account_balance")}
+      ${secondary("Proof of ownership", 'data-act="doc-ownership"', "verified_user")}
+    </div>
+    <p class="desc" style="margin-top:12px">The proof of ownership asks for your Face ID or fingerprint: the account itself signs it, which shows you control it.</p></section>`;
+  const issued = docs.length
+    ? table([["Document"], ["Details"], ["Issued"], [""]], docs.map((d) => `<tr>
+        <td>${Z.icon(DOC_ICON[d.kind] || "description")} ${esc(DOC_LABEL[d.kind] || d.kind)}</td>
+        <td>${esc(d.summary || "")}${d.revokedAt ? ` ${Z.tag("Revoked")}` : ""}</td>
+        <td class="mono">${esc(day(d.createdAt))}</td>
+        <td class="num">${docHref(d.url) ? `<a class="z-btn z-btn--secondary z-btn--sm" href="${esc(docHref(d.url))}" target="_blank" rel="noopener">Open</a>` : ""}</td></tr>`))
+    : `<div class="z-card"><p class="empty">Nothing issued yet.</p></div>`;
+  const payments = tx === null
+    ? `<div class="z-card"><p class="empty">Your payments could not be loaded, so their receipts aren’t listed. Reload to try again.</p></div>`
+    : paid.length
+    ? table([["Paid"], ["To"], ["Amount", "num"], [""]], paid.map((t) => `<tr>
+        <td class="mono">${esc(day(t.updatedAt || t.createdAt))}</td>
+        <td>${esc(t.recipientName || "—")}</td>
+        <td class="num">${esc(eur(t.sendEur))}</td>
+        <td class="num"><span class="zb-actions" style="justify-content:flex-end">${secondary("Receipt", `data-act="doc-receipt" data-id="${esc(t.id)}"`)}<a class="z-btn z-btn--secondary z-btn--sm" href="/app#share/${encodeURIComponent(t.id)}" target="_blank" rel="noopener">Share</a></span></td></tr>`))
+    : `<div class="z-card"><p class="empty">No bank transfer from this account has been paid yet.</p></div>`;
+  return `${create}
+    <h2 class="zb-h2" style="margin:28px 0 12px">Issued</h2>${issued}
+    <h2 class="zb-h2" style="margin:28px 0 12px">Receipts for payments</h2>${payments}`;
+};
+
+const table = (head, rows) => `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr>${head.map(([h, cls]) => `<th scope="col"${cls ? ` class="${cls}"` : ""}>${h ? esc(h) : `<span class="z-sr">Actions</span>`}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+
+/* ==========================================================================
+   Coming soon: what this organisation can't do yet, and why. The personal
+   app has its own list; linking there showed a company its owner's account.
+   ========================================================================== */
+
+META.soon = () => ({ title: "Coming soon", sub: "What this organisation can’t do yet, and why. Each one switches on here as soon as it works.", actions: "" });
+
+RENDER.soon = async () => {
+  // Each list is read on its own; one that fails leaves its row out rather
+  // than claiming something the API did not say.
+  const [acc, cur] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), api("/api/orgs/currencies")]);
+  const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
+  const later = (cur.status === "fulfilled" ? cur.value.currencies || [] : []).filter((c) => !c.available && c.code !== "EUR").map((c) => c.code);
+  const lead = Z.iconTile({ icon: "hourglass_top", tone: "a" });
+  const euroClosed = accounts !== null && !accounts.some((a) => a.currency === "EUR" && a.status === "active");
+  const rows = [
+    ...(euroClosed ? [Z.row({ lead, title: "Euro account", sub: org.type === "business" ? "Opens once the company’s IBAN is connected" : "Opens once your IBAN is connected", href: "?view=accounts" })] : []),
+    ...(later.length ? [Z.row({ lead, title: "Accounts in other currencies", sub: `${later.length > 1 ? `${later.slice(0, -1).join(", ")} and ${later.at(-1)}` : later[0]}: waiting on an account provider`, soon: true })] : []),
+    Z.row({ lead, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
+    Z.row({ lead, title: "Paying a crypto wallet", sub: "Not built yet", soon: true }),
+    Z.row({ lead, title: "sevDesk and DATEV", sub: "Use the Lexware CSV and the Belege ZIP until then", soon: true }),
+  ];
+  return Z.listGroup({ rows });
+};
+
+const settingsBack = () => linkBtn("Settings", "settings", "arrow_back");
+
+META.organisation = () => ({ title: "Organisation", sub: "Printed on every invoice you issue. The country decides which invoicing rules apply.", actions: `${settingsBack()}${primary("Save", 'data-act="save-org"')}` });
+
+RENDER.organisation = async () => {
   const reporting = cap("settings.reportingCurrency").allowed;
+  return `<form class="card" id="org-form" onsubmit="return false">
+      <div class="grid g2">
+        <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}" /></div>
+        <div><label for="s-legal">Legal name</label><input id="s-legal" name="legal" autocomplete="off" value="${esc(org.legalName || "")}" /></div>
+      </div>
+      <label for="s-addr1">Registered address</label>
+      <input id="s-addr1" name="address-line1" autocomplete="address-line1" value="${esc(org.address?.line1 || "")}" placeholder="Street and number…" />
+      <label for="s-addr2" class="z-sr">Address line 2</label>
+      <input id="s-addr2" name="address-line2" autocomplete="address-line2" value="${esc(org.address?.line2 || "")}" placeholder="Address line 2 (optional)…" style="margin-top:8px" />
+      <div class="zb-addr3">
+        <div><label for="s-zip">Postcode</label><input id="s-zip" name="postal-code" autocomplete="postal-code" spellcheck="false" value="${esc(org.address?.postalCode || "")}" /></div>
+        <div><label for="s-city">City</label><input id="s-city" name="city" autocomplete="address-level2" value="${esc(org.address?.city || "")}" /></div>
+        <div><label for="s-country">Country</label>${countrySelect("s-country", org.address?.country)}</div>
+      </div>
+      <div class="grid g2">
+        <div><label for="s-tax">Tax ID</label><input id="s-tax" name="tax" autocomplete="off" value="${esc(org.taxId || "")}" /></div>
+        <div><label for="s-notify">Notification email</label><input id="s-notify" name="email" type="email" autocomplete="email" spellcheck="false" value="${esc(org.notificationEmail || "")}" /></div>
+      </div>
+      <label for="s-currency">Reporting currency${reporting ? "" : ' <span class="desc">(in a paid plan)</span>'}</label>
+      <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px"${reporting ? "" : " disabled"} />
+    </form>`;
+};
+
+META.plan = () => ({ title: "Plan", sub: "Zold takes no payments yet: a paid plan comes with the trial, or Zold grants it. Switching down pauses features and deletes nothing.", actions: settingsBack() });
+
+RENDER.plan = async () => {
+  const plan = await api(`/api/orgs/${org.id}/plan`);
   const owner = org.role === "owner";
   const plans = plan.available.map((p) => {
     const current = p.id === org.effectivePlan;
@@ -353,33 +371,8 @@ RENDER.settings = async () => {
           : free ? "" : '<span class="desc">By trial, or ask Zold</span>';
     return `<div class="zb-plan${current ? " is-current" : ""}"><div class="zb-plan__head"><b>${esc(p.name)}</b><span class="desc">${esc(p.price)}</span></div><p>${esc(p.blurb)}</p><div>${act}</div></div>`;
   }).join("");
-  return `${cap("integrations.accounting").allowed ? `<section class="card"><div class="h"><div><h2>Connections</h2><p class="desc">Send your books to GetMyInvoices, or export them for Lexware, sevDesk and DATEV.</p></div>${linkBtn("Open", "integrations", "hub")}</div></section>` : ""}
-    <form class="card" id="org-form" onsubmit="return false"><div class="h"><div><h2>Organisation</h2><p class="desc">Printed on every invoice you issue. The country decides which invoicing rules apply.</p></div>
-      <button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="save-org">Save</button></div>
-      <div class="grid g2">
-        <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}" /></div>
-        <div><label for="s-legal">Legal name</label><input id="s-legal" name="legal" autocomplete="off" value="${esc(org.legalName || "")}" /></div>
-      </div>
-      <label for="s-addr1">Registered address</label>
-      <input id="s-addr1" name="address-line1" autocomplete="address-line1" value="${esc(org.address?.line1 || "")}" placeholder="Street and number…" />
-      <label for="s-addr2" class="z-sr">Address line 2</label>
-      <input id="s-addr2" name="address-line2" autocomplete="address-line2" value="${esc(org.address?.line2 || "")}" placeholder="Address line 2 (optional)…" style="margin-top:8px" />
-      <div style="display:grid;grid-template-columns:140px 1fr 200px;gap:12px">
-        <div><label for="s-zip">Postcode</label><input id="s-zip" name="postal-code" autocomplete="postal-code" spellcheck="false" value="${esc(org.address?.postalCode || "")}" /></div>
-        <div><label for="s-city">City</label><input id="s-city" name="city" autocomplete="address-level2" value="${esc(org.address?.city || "")}" /></div>
-        <div><label for="s-country">Country</label>${countrySelect("s-country", org.address?.country)}</div>
-      </div>
-      <div class="grid g2">
-        <div><label for="s-tax">Tax ID</label><input id="s-tax" name="tax" autocomplete="off" value="${esc(org.taxId || "")}" /></div>
-        <div><label for="s-notify">Notification email</label><input id="s-notify" name="email" type="email" autocomplete="email" spellcheck="false" value="${esc(org.notificationEmail || "")}" /></div>
-      </div>
-      <label for="s-currency">Reporting currency${reporting ? "" : ' <span class="desc">(in a paid plan)</span>'}</label>
-      <input id="s-currency" name="currency" autocomplete="off" value="${esc(org.reporting.currency)}" style="max-width:140px"${reporting ? "" : " disabled"} />
-    </form>
-    ${cap("invoices").allowed ? `<section class="card"><div class="h"><div><h2>Invoicing profile</h2><p class="desc">Your tax numbers, bank details and number series, set once for every invoice.</p></div>${linkBtn("Open", "invoicing-settings")}</div></section>` : ""}
-    <section class="card"><div class="h"><div><h2>Plan</h2><p class="desc">Zold takes no payments yet: a paid plan comes with the trial, or Zold grants it. Switching down pauses features and deletes nothing.</p></div>
-      ${plan.trialAvailable && owner ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="trial">Start the ${plan.trialDays}-day trial</button>` : ""}</div>
-      <div class="grid g3">${plans}</div></section>`;
+  return `${plan.trialAvailable && owner ? `<div class="zb-actions" style="margin-bottom:16px"><button type="button" class="z-btn z-btn--primary" data-act="trial">Start the ${plan.trialDays}-day trial</button></div>` : ""}
+    <div class="grid g3">${plans}</div>`;
 };
 
 /* ==========================================================================
@@ -503,6 +496,13 @@ RENDER["invoicing-settings"] = async () => {
    when the supplier gave an IBAN: a wallet-only invoice says so instead of
    offering a button that the API would refuse. */
 export function invoiceActions(i) {
+  if (i.state === "DRAFT") {
+    // Issue only where the API would accept it: receipts on the draft, and a
+    // total that net plus VAT can reach.
+    const issuable = i.lines.length && !i.fromReceipts?.mismatchCents;
+    return `${issuable ? `<button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="issue-receipt-draft" data-id="${esc(i.id)}">Issue invoice</button>` : ""}
+      <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="discard-receipt-draft" data-id="${esc(i.id)}">Discard draft</button>`;
+  }
   if (i.direction === "outgoing") {
     return i.state === "SUBMITTED"
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-pay-link" data-id="${esc(i.id)}">Payment link</button>`
@@ -538,6 +538,10 @@ export function settlementRows(list) {
         <div>${esc(eur(p.amountEur))} from ${esc(p.counterpartyName || "a payer without a name")}</div>
         <p class="desc">${esc(p.counterpartyIban ? maskIban(p.counterpartyIban) : "No IBAN given")}${p.memo ? ` · “${esc(p.memo)}”` : ""}</p>
         <p class="desc">Matched on ${esc(p.matchedOn === "payment-link" ? "the payment link code" : "the invoice number")} · ${esc(day(p.at))}</p>
+      </div></div>` : p.method === "wallet-receipt" ? `
+      <div class="issue">${Z.tag(p.asset || "Token")}<div>
+        <div>${esc(p.receivedAmount)} ${esc(p.asset)} received in your wallet · ${tx(p.txHash)}</div>
+        <p class="desc">Worth ${esc(eur(p.amountEur))} when it arrived · ${esc(day(p.at))}</p>
       </div></div>` : `
       <div class="issue">${Z.tag(p.receivedAsset || "Crypto")}<div>
         <div>${esc(n(p.receivedAmount, 6))} ${esc(p.receivedAsset)} received · ${tx(p.receiptTxHash)}</div>

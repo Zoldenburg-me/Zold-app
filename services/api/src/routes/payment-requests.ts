@@ -20,6 +20,7 @@ import {
 } from "../domain/invoices.js";
 import { addrs } from "../chain.js";
 import { livePaymentPage } from "./payment-page.js";
+import { qrSvg } from "../qr.js";
 import { midRates } from "../rates.js";
 import {
   applyPayment,
@@ -149,6 +150,9 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, 
     );
   }
   if (invoice.state === "DELETED") throw new PaymentRequestError("that invoice was deleted", 409);
+  // A draft made from receipts bills money that has already arrived; nothing
+  // is collected against it, before or after it is issued.
+  if (invoice.state === "DRAFT") throw new PaymentRequestError("that invoice is a draft and has not been issued", 409);
   if (invoice.state === "PAID" || invoice.state === "RECONCILED") {
     throw new PaymentRequestError("that invoice is already settled", 409);
   }
@@ -167,6 +171,17 @@ export function orgsBackedBy(userId: string): Set<string> {
   return new Set(store.accounts.filter((a) => a.backingUserId === userId).map((a) => a.orgId));
 }
 
+/**
+ * The company page a link opens under: the business's own /pay/:handle, when
+ * it has claimed one and the payee's Safe backs it. Anyone else's link, and a
+ * Shopify checkout, keeps the payee's own handle.
+ */
+export function companyPageHandle(userId: string, orgId: string | undefined): string | undefined {
+  const org = orgId ? store.findOrganisation(orgId) : undefined;
+  if (org?.type !== "business" || !org.paymentPage || !orgsBackedBy(userId).has(org.id)) return undefined;
+  return org.paymentPage.handle;
+}
+
 export async function createPaymentRequest(
   user: User,
   input: {
@@ -181,7 +196,7 @@ export async function createPaymentRequest(
   source: PaymentRequestSource,
   orgId?: string,
 ): Promise<PaymentRequest> {
-  const handle = user.paymentPage?.handle;
+  const handle = (source.kind === "app" ? companyPageHandle(user.id, orgId) : undefined) ?? user.paymentPage?.handle;
   if (!handle) throw new PaymentRequestError("claim a payment page before creating a payment link", 409);
   // Not for Shopify: its checkouts open requests at the shop's volume, signed
   // by Shopify, and each expires with its checkout.
@@ -362,9 +377,15 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     const r = store.findPaymentRequestByCode(code);
     const user = r ? store.findUser(r.userId) : undefined;
     // The code resolves; the handle is for the reader. A link minted under an
-    // old handle keeps working, but a code under someone else's handle is a
-    // 404, so a page cannot impersonate another payee.
-    if (!r || !user || (user.paymentPage?.handle !== req.params.handle && r.handle !== req.params.handle)) {
+    // old handle keeps working, and so does the payee's own handle or the
+    // company page their Safe backs, but a code under anyone else's handle is
+    // a 404, so a page cannot impersonate another payee.
+    const handles = r && user ? [r.handle, user.paymentPage?.handle, companyPageHandle(r.userId, r.orgId)] : [];
+    // A company's address opens only that company's links, and only while
+    // their payee still backs it; the payee's own address still opens them.
+    const companyAddress = !!store.findOrgByHandle(req.params.handle);
+    if (!r || !user || !handles.includes(req.params.handle)
+      || (companyAddress && companyPageHandle(r.userId, r.orgId) !== req.params.handle)) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
@@ -383,6 +404,23 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       const ctx = await payerContext(req, request, hit.user, quote);
       const user = store.findUser(hit.user.id) ?? hit.user;
       res.json(publicPaymentRequest(request, user, ctx));
+    }),
+  );
+
+  /**
+   * The deposit address as a QR, under the link's own handle and code: a
+   * company link must not point the payer at the member's personal page.
+   */
+  router.get(
+    "/pay/:handle/:code/qr.svg",
+    wrap(async (req, res) => {
+      const hit = resolvePublic(req, res);
+      if (!hit) return;
+      const address = hit.user.paymentPage?.depositAddress;
+      if (!hit.r.methods.includes("crypto") || !address) return res.status(404).json({ error: "this request does not take crypto" });
+      if (!(await livePaymentPage(hit.user))) return res.status(503).json({ error: "crypto payment is unavailable on this link just now" });
+      res.type("image/svg+xml");
+      res.send(qrSvg(address));
     }),
   );
 

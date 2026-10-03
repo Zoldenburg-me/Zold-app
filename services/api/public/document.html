@@ -116,7 +116,7 @@ function holder(h, extra = []) {
     ...extra,
   ];
   return `<div class="holder">
-    <div class="addr"><div class="who">${esc(h.name)}</div>${h.addressLines.map((l) => `<div>${esc(l)}</div>`).join("")}</div>
+    <div class="addr"><div class="who">${esc(h.name)}</div>${h.operatedBy ? `<div>Operated by ${esc(h.operatedBy)}</div>` : ""}${h.addressLines.map((l) => `<div>${esc(l)}</div>`).join("")}</div>
     <div class="meta">${rows.map(([k, v]) => `<div><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
   </div>`;
 }
@@ -167,7 +167,9 @@ function render(doc) {
         <div><span>Money out</span><span class="neg">−${esc(eur(s.totals.outEur))}</span></div>
         <div class="grand"><span>Closing balance</span><span>${esc(bal(s.closing))}</span></div>
       </div>` +
-      (s.reconciliation.reconciles ? "" : `<div class="note">This statement does not fully reconcile: ${esc(s.reconciliation.note || "")}. The balances are read from the chain and are correct; the lines are what the issuer and this software recorded.</div>`) +
+      (s.reconciliation.reconciles ? "" : `<div class="note">${s.opening && s.closing
+        ? `This statement does not fully reconcile: ${esc(s.reconciliation.note || "")}. The opening and closing balances are read from the chain; the lines are what the issuer and Zold recorded, so a movement is missing from the lines, not from the balances.`
+        : "The balances could not be read from the chain, so these lines could not be checked against them."}</div>`) +
       (s.sources.monerium !== "ok" ? `<div class="note">Counterparty names and memos are unavailable for this statement (${esc(s.sources.monerium)}); lines carry the ledger data only.</div>` : "") +
       signatures(doc) + legal(doc, ["Balances are read from the Base ledger at the stated blocks. Transfer data is provided by the e-money issuer, Monerium."]);
   }
@@ -204,9 +206,9 @@ function render(doc) {
   if (s.kind === "ownership") {
     return head(doc, "Proof of account ownership", "Zold account document") + holder(s.holder) +
       `<div class="prose">${esc(s.statement)}</div>
-      <div class="prose sub">${doc.attestations.safe
-        ? "Signed by the account holder with the account itself; the signature is checked against the account contract on every verification."
-        : "Signed by Zold only. The holder can add the account's own signature from the app."}</div>` +
+      <div class="prose sub">Zold signed this document: if any word or number on it is changed, the check at the address below fails. ${doc.attestations.safe
+        ? "The account itself also signed it, which only the holder’s passkey can do. That shows whoever requested this document controls the account; the signature is checked against the account on every verification."
+        : "The account’s own signature has not been added yet. The holder can add it from the app, to show they control the account."}</div>` +
       signatures(doc) + legal(doc);
   }
   return `<div class="err">Unknown document kind.</div>`;
