@@ -247,7 +247,7 @@ RENDER.coa = async () => {
  */
 const EVENT_LABEL = {
   sepa_in: "Bank transfer in", sepa_out: "Bank transfer out", sepa_out_reversal: "Returned transfer",
-  crypto_converted: "Digital dollars to euros", crypto_held: "Digital dollars kept", sweep: "Exchange difference",
+  crypto_converted: "Digital dollars to euros", crypto_held: "Digital dollars kept", eure_in: "Digital euros in", sweep: "Exchange difference",
 };
 export let exportMonth = null;
 export const setExportMonth = (v) => { exportMonth = v; };

@@ -50,9 +50,9 @@ export const WALLET_SYNC = {
   /** Blocks behind the head before a transfer is booked. A reorged-away
    *  receipt would otherwise stay in the books. */
   confirmations: envNumber("WALLET_SYNC_CONFIRMATIONS", 12, { min: 0, integer: true }),
-  /** One getLogs span. Most paid RPCs accept 10k blocks for a topic filter;
-   *  2k stays under the stricter ones. */
-  maxBlockSpan: BigInt(envNumber("WALLET_SYNC_MAX_BLOCK_SPAN", 2_000, { min: 1, integer: true })),
+  /** One getLogs span. The public Base RPCs refuse more than 1,000 blocks;
+   *  a stricter RPC is met by halving (log-range.ts). */
+  maxBlockSpan: BigInt(envNumber("WALLET_SYNC_MAX_BLOCK_SPAN", 1_000, { min: 1, integer: true })),
   /** Windows per wallet per tick, so a backfill catches up without one
    *  wallet holding the loop for minutes. */
   windowsPerTick: envNumber("WALLET_SYNC_WINDOWS_PER_TICK", 20, { min: 1, integer: true }),

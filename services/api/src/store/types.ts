@@ -411,6 +411,9 @@ export interface CryptoDeposit {
   /** The sending address, as the Transfer log named it. Absent on rows
    *  recorded before it was kept. The zero address is a Monerium mint. */
   from?: `0x${string}`;
+  /** The block's time: when the money arrived, whatever the token. Absent on
+   *  rows recorded before it was kept. */
+  arrivedAt?: string;
   amountEur?: number;
   amountUsdc?: number;
   /**

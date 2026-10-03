@@ -36,9 +36,18 @@ export function swapsHaveExecuted(): boolean {
   );
 }
 
-/** The org and EUR account a user's movements are booked under, if any. */
+/**
+ * The org and EUR account a user's movements are booked under, if any.
+ *
+ * One Safe can back the person's personal account and a company's account
+ * at once: one pool of money, so one set of books. The company's books win;
+ * the personal account is the one opened by default, the company one by
+ * choice. Lines already written to the personal books stay there (nothing
+ * in the ledger is deleted).
+ */
 export function booksFor(userId: string): { orgId: string; accountId: string } | undefined {
-  const account = store.accounts.find((a) => a.backingUserId === userId && a.currency === "EUR");
+  const backed = store.accounts.filter((a) => a.backingUserId === userId && a.currency === "EUR");
+  const account = backed.find((a) => store.findOrganisation(a.orgId)?.type === "business") ?? backed[0];
   if (account) return { orgId: account.orgId, accountId: account.id };
   return undefined;
 }

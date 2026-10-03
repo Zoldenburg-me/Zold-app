@@ -562,6 +562,23 @@ await check("a window the RPC refuses as too large is halved until it answers", 
   assert.ok(BigInt(after.sync.cursor!) >= 30n);
 });
 
+await check("Base's public RPC wording (\"limited to a 1,000 range\") is a range refusal, so the window halves", async () => {
+  const { readLogWindow, isLogRangeRefusal } = await import("../services/api/src/log-range.js");
+  const refusal = new Error("eth_getLogs is limited to a 1,000 range");
+  assert.equal(isLogRangeRefusal(refusal), true);
+  assert.equal(isLogRangeRefusal(new Error("execution reverted")), false);
+  const asked: bigint[] = [];
+  const r = await readLogWindow(1n, 10_000n, 5_000n, async (from, to) => {
+    asked.push(to - from + 1n);
+    if (to - from + 1n > 1_000n) throw refusal;
+    return "ok";
+  });
+  assert.equal(r.result, "ok");
+  assert.deepEqual(asked, [5_000n, 2_500n, 1_250n, 625n]);
+  assert.equal(r.toBlock, 625n);
+  await assert.rejects(readLogWindow(1n, 10n, 10n, async () => { throw new Error("execution reverted"); }), /execution reverted/);
+});
+
 await check("a wallet removed while it syncs books nothing and does not stop the run", async () => {
   const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, txHash: H(70) })], onLogs: () => { store.removeImportedWallet(w.id); } });

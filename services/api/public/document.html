@@ -179,7 +179,7 @@ function render(doc) {
       signatures(doc) + legal(doc);
   }
   if (s.kind === "beleg") {
-    const TITLES = { sepa_in: "SEPA credit received", sepa_out: "SEPA payment sent", sepa_out_reversal: "Reversal of a failed payment", crypto_converted: "USDC received and converted to EURe", crypto_held: "USDC received and held", sweep: "Monthly conversion of leftover USDC" };
+    const TITLES = { sepa_in: "SEPA credit received", sepa_out: "SEPA payment sent", sepa_out_reversal: "Reversal of a failed payment", crypto_converted: "USDC received and converted to EURe", crypto_held: "USDC received and held", eure_in: "EURe received on chain", sweep: "Monthly conversion of leftover USDC" };
     const l = s.line;
     const row = (k, v) => v === undefined || v === null || v === "" ? "" : `<div><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
     const block = (title, rows) => rows.join("") ? `<h3 style="margin-top:22px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)">${esc(title)}</h3><div class="meta" style="min-width:0">${rows.join("")}</div>` : "";

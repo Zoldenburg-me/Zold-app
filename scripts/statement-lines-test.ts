@@ -162,6 +162,28 @@ await check("a USDC deposit held unconverted is a line at its ECB value on recei
   assert.equal(projectStatementLines(inp).length, 0, "no rate, no value, no line");
 });
 
+await check("EURe sent from another wallet is one line dated by the block; a mint, a swap's output and a refund are not lines of their own", () => {
+  const inp = base();
+  const eure = (over: any) => ({ userId: "u_1", chainId: 31337, token: "EURE", logIndex: 0, amountUnits: "100000000000000000000", amountEur: 100, creditedEur: 100,
+    settlementAsset: "EURE", state: "CONVERTED", txs: [], detectedAt: "2026-10-03T16:00:00.000Z", updatedAt: "2026-10-03T16:00:00.000Z", ...over });
+  inp.deposits = [
+    eure({ id: "e-wallet", txHash: H(20), from: `0x${"22".repeat(20)}`, arrivedAt: "2026-10-02T23:50:26.000Z" }),
+    eure({ id: "e-mint", txHash: H(21), from: `0x${"00".repeat(20)}` }),
+    eure({ id: "e-swap", txHash: H(7), from: `0x${"cc".repeat(20)}` }),
+    eure({ id: "e-refund", txHash: H(22), from: `0x${"dd".repeat(20)}` }),
+    usdcDeposit() as any,
+  ] as any;
+  inp.transfers = [{ id: "t-r", userId: "u_1", txs: [{ step: "safe.refundTransfer", hash: H(22) }] } as any];
+  const lines = projectStatementLines(inp).filter((l) => l.statement!.event === "eure_in");
+  assert.equal(lines.length, 1, JSON.stringify(lines.map((l) => l.statement!.links)));
+  const s = lines[0].statement!;
+  assert.equal(s.amountCents, 10000);
+  assert.equal(s.valueDate, "2026-10-02", "the block's day, not the day a late scan found it");
+  assert.equal(s.counterparty.address, `0x${"22".repeat(20)}`);
+  assert.deepEqual(s.links.txHashes, [H(20)]);
+  assert.equal(lines[0].txType, "transfer_in");
+});
+
 await check("a sweep is one Kursdifferenz / Restbeträge line for the month", () => {
   const inp = base();
   inp.sweeps = [{ id: "sw-1", userId: "u_1", month: "2026-09", depositIds: ["d-1", "d-2"], amountInUnits: "2310000", creditedEur: 2.01, provider: "dex", rate: 1.149, conversion: { txHash: H(9), at: "2026-10-01T06:00:00.000Z" }, txs: [], at: "2026-10-01T06:01:00.000Z" }];
@@ -227,6 +249,15 @@ await check("the writer maps a user to the org whose EUR account their Safe back
   assert.deepEqual(booksFor("u_1"), { orgId: "org_1", accountId: "acc_1" });
   assert.equal(booksFor("u_orphan"), undefined);
   assert.deepEqual(writeStatementLinesFor(store.findUser("u_orphan")!), { added: 0, updated: 0 });
+});
+
+await check("a Safe backing a personal account and a company account books into the company's books, whichever was opened first", () => {
+  store.addUser({ ...user, id: "u_both", address: `0x${"dd".repeat(20)}` });
+  store.addOrganisation({ id: "org_p", type: "personal", name: "Me", plan: "starter", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+  store.addOrganisation({ id: "org_b", type: "business", name: "Co", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+  store.addAccount({ id: "acc_p", orgId: "org_p", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_both", createdAt: now, updatedAt: now });
+  store.addAccount({ id: "acc_b", orgId: "org_b", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_both", createdAt: now, updatedAt: now });
+  assert.deepEqual(booksFor("u_both"), { orgId: "org_b", accountId: "acc_b" });
 });
 
 await check("first run writes the line with a rule-mapped code; a second run adds nothing", () => {
