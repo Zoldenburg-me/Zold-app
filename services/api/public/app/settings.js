@@ -144,7 +144,7 @@ PH.security = {
       recoveryRows.push(Z.row({
         lead: Z.iconTile({ icon: "settings_backup_restore" }),
         title: "Recovery",
-        sub: r.zold ? "Zoldenburg can help you back in" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
+        sub: r.zold ? "Zoldenburg is your guardian" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
         right: Z.tag(r.on ? "Active" : r.pending ? "Waiting" : "Off", r.on ? "mint" : undefined),
         chevron: false,
       }));
