@@ -344,3 +344,27 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 #hm-flow .zb-side-card__head { flex-wrap: wrap; }
 .zb-h-att .z-row__title { white-space: normal; }
 @media (max-width: 720px) { .zb-h-att { flex-wrap: wrap; } .zb-h-att .z-row__main { flex-basis: calc(100% - 60px); } .zb-h-att > .z-btn { margin-left: 56px; } }
+
+/* ── Books overview (books-overview.js) ────────────────────────────────── */
+.zb-bo-periods { flex-wrap: wrap; }
+.zb-bo-range { margin: 10px 0 var(--z-space-5); }
+.zb-bo-cash { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: var(--z-space-8); align-items: end; margin-bottom: var(--z-space-5); }
+.zb-bo-cash h2 { margin: 0; font: 600 15.5px/1.3 var(--z-font); color: var(--z-heading); }
+.zb-bo-cash__figs { display: flex; flex-direction: column; gap: var(--z-space-4); }
+.zb-bo-big { font-size: 36px; }
+.zb-bo-io { display: flex; flex-direction: column; gap: 10px; margin: 0; padding-top: 14px; border-top: 1px solid var(--z-line); }
+.zb-bo-io div { display: flex; justify-content: space-between; font-size: 14px; }
+.zb-bo-io dt { display: inline-flex; align-items: center; gap: 8px; color: var(--z-dim); }
+.zb-bo-io dd { margin: 0; font-variant-numeric: tabular-nums; }
+.zb-bo-io dd.is-in { color: var(--z-mint); }
+.zb-bo-split { align-items: start; }
+.zb-bo-cats { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
+.zb-bo-cat { display: flex; align-items: baseline; gap: 10px; font-size: 14px; }
+.zb-bo-cat > span:first-child { flex: 1; min-width: 0; }
+.zb-bo-cat b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.zb-bo-pct { width: 40px; text-align: right; font-size: 12.5px; color: var(--z-dim); font-variant-numeric: tabular-nums; }
+.zb-bo-track { display: block; height: 6px; margin-top: 8px; border-radius: var(--z-radius-pill); background: var(--z-line); overflow: hidden; }
+.zb-bo-fill { display: block; height: 100%; border-radius: var(--z-radius-pill); }
+.zb-bo-fill--in { background: var(--z-mint); }
+.zb-bo-fill--out { background: var(--z-dim); }
+@media (max-width: 1023px) { .zb-bo-cash { grid-template-columns: minmax(0, 1fr); } }
