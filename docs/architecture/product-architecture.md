@@ -529,11 +529,24 @@ stateDiagram-v2
     an issued account.
   - There is no UI to reject a draft or re-point lines.
 
-### 7.7 Imported wallets — INERT
+### 7.7 Imported wallets — BUILT, never run on mainnet
 
-An org can list external wallets (EOA, Safe or MPC) read-only. They **never
-sync**, so their ledger is empty. Drafts sourced from an imported wallet just
-echo the lines back as "unsigned".
+An org lists external wallets (EOA, Safe or MPC) read-only. Each one syncs on
+its own chain when the deployment has an RPC for that chain
+(`WALLET_SYNC_RPC_<chainId>`): every ERC-20 transfer in or out becomes one
+`wallet` ledger row, valued in EUR when it arrived, and the sender is named
+when exactly one contact lists the address on that chain. A DAO's multisig,
+distributor and stream contract all go on the one contact, so a claimed
+stream matches like a push. EURe is e-money at par (no tax lot); USDC and
+tokens on Uniswap's or CoinGecko's lists are virtual assets with FIFO lots;
+a token on no list is booked as a quantity with no value and no income
+rule, so an airdrop never reads as revenue. A listed token without a price
+is still booked, tagged `needs-valuation` and under its contract address,
+never at €0. Without an RPC
+the wallet reads "Not syncing" and books nothing. Booking from a past day is
+the `ledger.historicalSync` capability (Business). Native ETH, NFTs and
+rebasing balances are not booked. Drafts sourced from an imported wallet echo
+the lines back as "unsigned".
 
 ### 7.8 Operator console — LIVE, read-only except recovery signing
 
@@ -650,8 +663,8 @@ facts are refreshed, a human's account code is never overwritten.
 
 Which organisation: the one whose **EUR account is backed by the user's Safe**
 (`Account.backingUserId`). A user with no such account gets no lines and one
-log line saying so. Imported wallets still never sync, so their half of the
-ledger stays empty.
+log line saying so. Imported wallets add their own rows, one per token
+transfer (§7.7); they are ledger rows, not statement lines, and get no Beleg.
 
 **Receipts are valued at the ECB reference rate** (Frankfurter, per business
 day) for the day the chain says the money arrived. The ECB fixes once a day
@@ -790,7 +803,7 @@ does not support.
 | `docs/business-accounts.md` (role table) | Owner may delete the org | No delete route exists, by design. |
 | `business/accounts-and-currencies.md` | USD accounts "through Bridge" | The currency registry names **Iron** as the USD/GBP provider. Bridge appears in code only as the cash-rail transfer seam. |
 | `business/bulk-payments.md` | CSV destination "an IBAN, or a wallet address"; Payments → New draft → Import CSV | The importer produces wallet lines only (`chainId: 0`), and wallet lines are refused from an issued account. There is no Import CSV button in `/business`. The API parses and returns lines but does not create a draft. |
-| `business/imported-wallets.md` | "its balance shown"; history and backfill on Premium/Business | Nothing reads an imported wallet's balance or history. `sync.status` stays `pending` forever. |
+| `business/imported-wallets.md` | "its balance shown"; history and backfill on Premium/Business | No balance is shown. History is booked as ERC-20 transfers only on chains the deployment has an RPC for, which today is none; backfill is Business only. |
 | `business/payments-and-approvals.md` | Send from the business dashboard | Send from `/business` does not yet produce the passkey assertion a Safe debit needs. A reviewer can send a run back with a reason; there is no re-point UI. |
 | `get-paid/payment-page.md` | QR on the page | The QR image route is currently unreachable: it is shadowed by the payment-link route (see the technical doc). |
 | `add-money/crypto-deposit.md` and app copy | Converted "at the live mid rate on arrival" | Converted on passkey approval, at the venue's rate, checked against the mid. |

@@ -60,7 +60,11 @@ const num = (v: string | undefined, fallback = 0) => {
  * Entries are sorted by time; an `in` opens a lot, an `out` consumes the oldest
  * open lots first. An entry with no fiat value cannot price a lot, so it opens
  * one at zero cost AND is recorded as a shortfall when later disposed against.
+ *
+ * EURe is e-money, euro at par: it is money, not a virtual asset, so it opens
+ * no lot and its spending is no disposal.
  */
+const EMONEY_ASSETS = new Set(["EURE"]);
 export function computeCostBasis(entries: LedgerEntry[]): CostBasisResult {
   const sorted = [...entries].sort(
     (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime(),
@@ -75,6 +79,7 @@ export function computeCostBasis(entries: LedgerEntry[]): CostBasisResult {
     const qty = num(e.amount);
     if (qty <= 0) continue;
     const asset = e.asset.toUpperCase();
+    if (EMONEY_ASSETS.has(asset)) continue;
     const value = num(e.fiatValue);
 
     if (e.direction === "in") {
