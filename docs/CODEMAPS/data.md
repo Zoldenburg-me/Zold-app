@@ -23,7 +23,7 @@ organisations ─┬─ members (role, status, invite)
                ├─ importedWallets
                ├─ contacts (bankAccounts, fingerprint)
                ├─ drafts (payment runs: DRAFT→PENDING_REVIEW→REVIEWED→EXECUTING→EXECUTED)
-               ├─ invoices (incoming via link; outgoing issued snapshot)
+               ├─ invoices (incoming via link; outgoing issued snapshot; DRAFT from wallet receipts, settled by ledger rows)
                ├─ chartAccounts + accountRules (default rules on org create)
                └─ ledger (entries; `statement` = the euro account's lines, Belege)
 ```

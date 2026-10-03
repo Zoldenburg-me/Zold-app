@@ -612,6 +612,24 @@ LINK_CREATED → SUBMITTED → PAYING → PAID → RECONCILED     (+ soft DELETE
   of that it stays SUBMITTED, collectable for the rest. A SEPA credit is
   matched only when the invoice number has at least six letters and digits
   and exactly one open invoice is named; anything else is left for a person.
+- **Invoices from wallet receipts** (BUILT, run only on local hardhat). For a
+  payer that decides its own amounts, such as a DAO paying a delegate, the
+  invoice follows the money. A contact gets a payer rule: what is invoiced,
+  who the invoice is addressed to, the tax line the organisation chooses, and
+  the addresses the payer sends from. "Collect receipts" on the Invoices
+  screen takes a month and makes one draft per contact with a rule: one line
+  per receipt into an imported wallet (date, token, quantity, EUR value at
+  receipt, transaction), total the sum of those values. Receipts that cannot
+  be invoiced (no value yet, a token on no list, a transfer between own
+  addresses) are listed on the draft with the reason, and the summary also
+  counts receipts from contacts without a rule, from unknown senders, and
+  those an issued invoice already bills. Collecting again updates drafts and
+  leaves issued invoices alone. Nothing is issued until a member who may
+  issue invoices issues the draft; it then gets the next number and that
+  day's date, and is paid by its receipts, so there is no difference between
+  what was billed and what arrived. A draft does not count as money owed on
+  Home. Zold chooses no tax treatment; issuing is by one member, as for any
+  issued invoice (four-eyes review exists only for payment runs).
 - **Not built:** credit notes and cancellations, a void state, XRechnung or
   ZUGFeRD, invoice signing, PDF generation, email delivery.
 - **Product decision on record:** Zold pays from invoices and keeps the

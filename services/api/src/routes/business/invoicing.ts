@@ -12,7 +12,6 @@
  * verification level so `ok` claims no more coverage than we have.
  */
 import express from "express";
-import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
 import {
   DEFAULT_DISPLAY,
@@ -21,21 +20,19 @@ import {
   InvoiceComplianceError,
   SETTLEMENT_CURRENCY,
   checkCompliance,
-  fromCents,
   invoiceDueDate,
   invoiceLanguage,
   normaliseVatId,
   reasonForRuleSet,
   taxNumberLooksValid,
   vatIdLooksValid,
-  vatNoteFor,
   } from "../../domain/invoicing.js";
 import { EU_MEMBER_STATES, validateCustomReason } from "../../domain/jurisdictions.js";
 import { VAT_ID_FORMATS, vatIdShape } from "../../domain/vat-ids.js";
 import { cachedVatCheck, checkVatId } from "../../adapters/vies.js";
-import { newLinkToken, ownerInvoiceView } from "../../domain/invoices.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
+import { issueOutgoing } from "./issue-outgoing.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import {
   accountBankOf, customReasonsOf, draftDueDate, draftFrom, invoiceBankOf, issuerParty, issuerSuggestions,
@@ -259,141 +256,15 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     res.json({ shape, check });
   });
 
-  /**
-   * Issue an outgoing invoice.
-   *
-   * Refuses on any compliance error. Warnings can be accepted, and the
-   * acceptance is recorded on the document.
-   */
+  /** Issue an outgoing invoice (issue-outgoing.ts). */
   r.post("/:orgId/invoicing/issue", async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.manage")) return;
 
-    let draft;
-    let language: "de" | "en";
-    let dueDate: string | undefined;
-    let report;
-    try {
-      draft = await withConversion(draftFrom(ctx.org, req.body ?? {}));
-      // Chosen per invoice; the profile's language and payment terms are the
-      // defaults.
-      language = invoiceLanguage(req.body?.language, ctx.org.invoicing?.language);
-      dueDate = invoiceDueDate(req.body?.dueDate, draft.issueDate!, draftDueDate(ctx.org, draft.issueDate!));
-      // The customer's VAT ID is looked up here, by the server, and the answer
-      // goes on the document: an answer the browser sent would prove nothing.
-      if (draft.recipient.vatId && vatIdShape(draft.recipient.vatId).ok) {
-        draft.recipientVatCheck = await checkVatId(draft.recipient.vatId, ctx.org.invoicing?.vatId);
-      }
-      // Inside the try: computing the totals refuses a line it cannot price.
-      report = checkCompliance(draft, jurisdictionOf(ctx.org), customReasonsOf(ctx.org));
-    } catch (err) {
-      if (err instanceof InvoiceComplianceError) {
-        return res.status(400).json({ error: err.message });
-      }
-      throw err;
-    }
-    if (!report.ok) {
-      const first = report.errors[0]?.message;
-      return res.status(422).json({
-        error: `This invoice is missing ${report.errors.length === 1 ? "one required detail" : `${report.errors.length} required details`}${first ? `, starting with: ${first}` : ""} It has not been issued.`,
-        ...report,
-      });
-    }
-    if (report.warnings.length && req.body?.acceptWarnings !== true) {
-      return res.status(409).json({
-        error: "There are warnings on this invoice. Re-send with acceptWarnings: true to issue it anyway.",
-        ...report,
-      });
-    }
-
-    const series = ctx.org.invoicing?.numberSeries ?? DEFAULT_SERIES;
-    // §14 Abs. 4 Nr. 4: one number, once. A caller may supply its own number,
-    // so uniqueness is checked against what this org has issued rather than
-    // assumed from the series.
-    if (store.invoicesOf(ctx.org.id).some((i) => i.issued?.number === draft.number)) {
-      return res.status(409).json({ error: `Invoice number ${draft.number} has already been issued.` });
-    }
-    const numberSupplied = typeof req.body?.number === "string" && req.body.number.trim() !== "";
-    const now = new Date();
-    const { token, hash } = newLinkToken();
-    const display: Record<string, boolean> = {
-      ...DEFAULT_DISPLAY,
-      ...(ctx.org.invoicing?.display as Record<string, boolean> | undefined),
-    };
-
-    const invoice = store.addInvoice({
-      id: `inv_${randomUUID()}`,
-      direction: "outgoing",
-      orgId: ctx.org.id,
-      linkTokenHash: hash,
-      state: "SUBMITTED", // issued and locked; nothing for a supplier to fill in
-      lines: report.totals.lines.map((l) => ({
-        description: l.description,
-        quantity: l.quantity,
-        unitPrice: l.unitPriceNet,
-        amount: fromCents(l.netCents),
-      })),
-      currency: draft.currency ?? SETTLEMENT_CURRENCY,
-      total: fromCents(report.totals.grossCents),
-      dueDate,
-      supplier: {
-        orgName: draft.issuer.name ?? ctx.org.name,
-        email: ctx.org.email ?? "",
-        invoiceNumber: draft.number!,
-      },
-      issued: {
-        number: draft.number!,
-        issueDate: draft.issueDate!,
-        supplyDate: draft.supplyDate,
-        supplyPeriod: draft.supplyPeriod,
-        issuer: draft.issuer,
-        recipient: draft.recipient,
-        vatTreatment: draft.treatment,
-        vatNote: vatNoteFor(draft.treatment, language),
-        netCents: report.totals.netCents,
-        vatCents: report.totals.vatCents,
-        grossCents: report.totals.grossCents,
-        buckets: report.totals.buckets,
-        // The document's own currency, and its settlement-currency restatement
-        // at the rate that was live when it was issued. Frozen, never re-derived.
-        currency: draft.currency ?? SETTLEMENT_CURRENCY,
-        ...(draft.conversion ? { conversion: draft.conversion } : {}),
-        purchaseOrder: str(req.body?.purchaseOrder),
-        paymentTerms: str(req.body?.paymentTerms) ?? ctx.org.invoicing?.paymentTermsNote,
-        notes: str(req.body?.notes),
-        display,
-        customFields: ctx.org.invoicing?.customFields,
-        language,
-        acceptedWarnings: report.warnings.map((w) => `${w.field}: ${w.message}`),
-        ...(draft.recipientIsBusiness !== undefined ? { recipientIsBusiness: draft.recipientIsBusiness } : {}),
-        ...(draft.supplyKind ? { supplyKind: draft.supplyKind } : {}),
-        ...(draft.recipientVatCheck ? { recipientVatCheck: draft.recipientVatCheck } : {}),
-        // Frozen with the document: which rules ran, and how far they went.
-        jurisdiction: report.jurisdiction,
-      },
-      submittedAt: now.toISOString(),
-      createdByMemberId: ctx.member.id,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-    });
-
-    // Burn the number only once the invoice exists: §14 Abs. 4 Nr. 4 wants each
-    // number assigned once, and advancing before the write would leave a gap
-    // pointing at an invoice that was never issued.
-    if (!numberSupplied) {
-      store.updateOrganisation(ctx.org.id, {
-        invoicing: { ...(ctx.org.invoicing ?? {}), numberSeries: { ...series, next: series.next + 1 } },
-      });
-    }
-
-    res.status(201).json({
-      invoice: ownerInvoiceView(invoice),
-      linkToken: token,
-      linkPath: `/invoice/${token}`,
-      warnings: report.warnings,
-    });
+    const answer = await issueOutgoing(ctx, req.body ?? {});
+    res.status(answer.status).json(answer.body);
   });
 
   // ── Chart of accounts ─────────────────────────────────────────────────────

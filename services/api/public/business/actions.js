@@ -12,6 +12,7 @@ import { sendState } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
+import { payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
 
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
@@ -118,7 +119,8 @@ function contactDrawer(el) {
       <button type="button" class="z-btn z-btn--secondary" id="ct-edit">${Z.icon("edit")}<span>Edit</span></button>
       ${canPay ? `<button type="button" class="z-btn z-btn--primary" id="ct-pay">${Z.icon("arrow_outward")}<span>Pay ${esc(c.name)}</span></button>` : ""}
       <button type="button" class="z-link-btn" id="ct-del">Delete contact</button>
-    </div>`;
+    </div>
+    ${payerRuleSection(c)}`;
   const scrim = drawer("contact-drawer", c.name, body, el);
   scrim.querySelector("#ct-pay")?.addEventListener("click", () => {
     Z.closeOverlay("contact-drawer");
@@ -127,6 +129,10 @@ function contactDrawer(el) {
     render({ focus: true });
   });
   scrim.querySelector("#ct-edit").onclick = () => { Z.closeOverlay("contact-drawer"); editContact(c); };
+  scrim.querySelector("#ct-rule")?.addEventListener("click", () => {
+    Z.closeOverlay("contact-drawer");
+    payerRuleDialog(c).catch((e) => toast(e.message, true));
+  });
   scrim.querySelector("#ct-del").onclick = () => {
     Z.closeOverlay("contact-drawer");
     dialog(`Delete ${c.name}?`, `<p class="desc">Past payments keep their record. A payment run that still uses these details stops and has to be pointed somewhere else.</p>`,
@@ -520,6 +526,61 @@ export const ACTIONS = {
     });
     toast("Invoicing profile saved.");
     if (changed) await loadOrg(org.id);
+  },
+  "collect-receipts": () => {
+    const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const d = new Date();
+    const current = ym(d);
+    d.setDate(1);
+    d.setMonth(d.getMonth() - 1);
+    dialog("Collect receipts into draft invoices",
+      `<p class="desc">For each contact with a payer rule, the month’s payments into your imported wallets become one draft invoice. Collecting a month again updates its drafts and never touches an issued invoice. A month that is still running can be collected; what arrives later joins its draft the next time you collect.</p>
+       <label for="rc-month">Month</label><input id="rc-month" name="rc-month" type="month" value="${ym(d)}" max="${current}" />`,
+      async () => {
+        const r = await api(`/api/orgs/${org.id}/income-invoices/run`, { method: "POST", body: { month: $("#rc-month").value } });
+        // After this dialog has closed.
+        setTimeout(() => dialog("Receipts collected", runSummary(r), null, { closeOnly: true }), 0);
+      }, { okLabel: "Collect" });
+    return "keep";
+  },
+  async "issue-receipt-draft"(el) {
+    const id = el.dataset.id;
+    const issue = async (acceptWarnings) => {
+      const r = await api(`/api/orgs/${org.id}/income-invoices/${id}/issue`, { method: "POST", body: acceptWarnings ? { acceptWarnings: true } : {} });
+      Z.closeOverlay("inv-drawer");
+      // The link is shown once: it is queued whether or not the redraw
+      // works, and after it, so a dialog that led here has closed by then.
+      const showLink = () => setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} is issued`, "It is marked paid by the receipts it bills. This link shows the invoice. It’s shown once: copy it now.", location.origin + r.linkPath), 0);
+      try { await render(); } finally { showLink(); }
+    };
+    try {
+      await issue(false);
+    } catch (e) {
+      if (e.status === 409 && e.warnings?.length) {
+        // An open drawer makes the rest of the page inert, a dialog included.
+        Z.closeOverlay("inv-drawer");
+        dialog("Issue it with these warnings?", `<ul class="desc" style="margin:8px 0 0 18px">${e.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>
+          <p class="desc" style="margin-top:12px">Your acceptance is recorded on the invoice.</p>`, () => issue(true), { okLabel: "Issue anyway" });
+        return "keep";
+      }
+      // The draft was rebuilt under us: show the new one, not the stale drawer.
+      if (e.changed) {
+        Z.closeOverlay("inv-drawer");
+        await render();
+      }
+      throw e;
+    }
+    return "keep";
+  },
+  "discard-receipt-draft": (el) => {
+    Z.closeOverlay("inv-drawer");
+    dialog("Discard this draft?",
+      `<p class="desc">Its receipts go back to being uninvoiced. Collecting the month again makes a new draft from them.</p>`,
+      async () => {
+        await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}`, { method: "DELETE" });
+        toast("Draft discarded.");
+      }, { okLabel: "Discard" });
+    return "keep";
   },
   "pay-invoice": async (el) => {
     const r = await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}/pay`, { method: "POST", body: {} });

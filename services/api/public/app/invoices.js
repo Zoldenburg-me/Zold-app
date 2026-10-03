@@ -46,7 +46,9 @@ async function phLoadInvoices() {
   const org = phInvOrg();
   if (!org) { phCache.invoices = []; return; }
   try {
-    phCache.invoices = (await api(phOrgPath(org, "/invoices"))).invoices || [];
+    // Drafts made from wallet receipts have no number yet and are worked on
+    // in /business; this list is of invoices that exist for a customer.
+    phCache.invoices = ((await api(phOrgPath(org, "/invoices"))).invoices || []).filter((i) => i.state !== "DRAFT");
     phCache.invError = null;
     phInv.loadedAt = Date.now();
   } catch (e) {
@@ -808,8 +810,9 @@ PH.invoice = {
     const payLink = phCache.invPayLink?.id === i.id ? phCache.invPayLink.url : null;
     const pays = (i.settlements || []).map((s) => Z.row({
       lead: Z.iconTile({ icon: s.method === "bank" ? "account_balance" : "currency_exchange", tone: "m" }),
-      title: s.method === "bank" ? (s.counterpartyName ? `From ${s.counterpartyName}` : "Bank transfer") : "Digital dollars (USDC)",
-      sub: [s.method === "bank" ? "Bank transfer" : "From a crypto wallet", s.at ? phDay(s.at) : ""].filter(Boolean).join(" · "),
+      title: s.method === "bank" ? (s.counterpartyName ? `From ${s.counterpartyName}` : "Bank transfer")
+        : s.method === "wallet-receipt" ? `${s.receivedAmount} ${s.asset}` : "Digital dollars (USDC)",
+      sub: [s.method === "bank" ? "Bank transfer" : s.method === "wallet-receipt" ? "Received in your wallet" : "From a crypto wallet", s.at ? phDay(s.at) : ""].filter(Boolean).join(" · "),
       right: Z.amount({ value: s.amountEur, direction: "in" }),
     }));
     return `${phTop(`Invoice ${i.issued.number}`, "invoices", Z.tag(w))}${phMain(`

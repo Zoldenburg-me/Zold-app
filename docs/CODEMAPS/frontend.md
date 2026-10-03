@@ -25,7 +25,7 @@ shell.js  one delegated click handler, render(), router (?view=)
 nav.js    sidebar: VIEWS, PARENT (old ids → nav item), plan banner
 views.js  META/RENDER registry + older views (send, get-paid, shopify,
           ledger, coa, export, integrations, documents, settings, plan…)
-actions.js data-act handlers · search.js ⌘K over loaded lists
+actions.js data-act handlers · receipts.js payer rule + collection summary · search.js ⌘K over loaded lists
 ```
 Render contract: `META[view]()` → title/sub/actions; `RENDER[view]()` → html
 or `{ html, bind(box) }`.

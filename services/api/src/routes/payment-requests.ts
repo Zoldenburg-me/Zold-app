@@ -150,6 +150,9 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, 
     );
   }
   if (invoice.state === "DELETED") throw new PaymentRequestError("that invoice was deleted", 409);
+  // A draft made from receipts bills money that has already arrived; nothing
+  // is collected against it, before or after it is issued.
+  if (invoice.state === "DRAFT") throw new PaymentRequestError("that invoice is a draft and has not been issued", 409);
   if (invoice.state === "PAID" || invoice.state === "RECONCILED") {
     throw new PaymentRequestError("that invoice is already settled", 409);
   }

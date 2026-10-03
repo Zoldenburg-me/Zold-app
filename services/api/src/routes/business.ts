@@ -19,6 +19,7 @@ import { resolveOrg, type SessionResolver } from "./org-context.js";
 import { createDraftRoutes } from "./business/drafts.js";
 import { createInvoiceRoutes } from "./business/invoices.js";
 import { createInvoicingRoutes } from "./business/invoicing.js";
+import { createIncomeInvoiceRoutes } from "./business/income-invoices.js";
 import { createBookkeepingRoutes } from "./business/bookkeeping.js";
 import { createBookkeepingExportRoutes } from "./business/bookkeeping-export.js";
 import { createIntegrationRoutes } from "./business/integrations.js";
@@ -41,6 +42,7 @@ export function createBusinessRouter(
   r.use(createDraftRoutes(deps, buildTransferFromQuote));
   r.use(createInvoiceRoutes(deps));
   r.use(createInvoicingRoutes(deps));
+  r.use(createIncomeInvoiceRoutes(deps));
   r.use(createBookkeepingRoutes(deps));
   r.use(createBookkeepingExportRoutes(deps));
   r.use(createIntegrationRoutes(deps));
