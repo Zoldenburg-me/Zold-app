@@ -411,7 +411,7 @@ RENDER.books = async () => {
       <div class="zb-notes"><div class="zb-note">${Z.icon("person")}<span>${who}</span>
         ${linkBtn("Connections", "integrations", "hub")}${cap("coa.manage").allowed ? linkBtn("Chart of accounts", "coa") : ""}</div>
         <div class="zb-note">${Z.icon("more_horiz")}<span>Also in your books:
-          <a href="?view=ledger" data-view-link="ledger">every transaction</a>${cap("assets.costBasis").allowed ? `, <a href="?view=assets" data-view-link="assets">assets and tax lots</a>` : ""},
+          <a href="?view=ledger" data-view-link="ledger">every transaction</a>${cap("assets.costBasis").allowed ? `, <a href="?view=assets" data-view-link="assets">holdings and tax lots</a>, <a href="?view=gains" data-view-link="gains">realised gains</a>` : ""},
           <a href="?view=wallets" data-view-link="wallets">imported wallets</a> and the
           <a href="?view=export" data-view-link="export">month’s statement lines</a>.</span></div></div>`,
     bind(box) {

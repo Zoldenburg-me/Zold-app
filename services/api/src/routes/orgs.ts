@@ -16,6 +16,7 @@ import {
   requirePermission,
   requireWithinLimit,
   resolveOrg,
+  type OrgContext,
   type SessionResolver,
 } from "./org-context.js";
 import {
@@ -42,6 +43,11 @@ import { hashToken } from "../domain/invoices.js";
 import { emailIsProven, roleCan, wouldOrphanOrg } from "../domain/roles.js";
 import { CHAIN_ID, KYC } from "../config.js";
 import { wrap } from "./util.js";
+import { hashMessage } from "viem";
+import { auditEntry } from "../audit.js";
+import { newChallenge, parseSignature, publicWallet } from "../domain/wallet-ownership.js";
+import { verifyOwnership } from "../wallet-sync/ownership.js";
+import { walletEntryId } from "../domain/wallet-transfers.js";
 import { accountProfileStanding } from "../domain/monerium-profile.js";
 import { adoptionHint, auditProfileCheck, checkBackingProfile, profileWait } from "../adapters/monerium-profile.js";
 import { emailLooksValid } from "../domain/email.js";
@@ -858,7 +864,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "wallets.read")) return;
-    res.json({ wallets: store.importedWalletsOf(ctx.org.id) });
+    res.json({ wallets: store.importedWalletsOf(ctx.org.id).map(publicWallet) });
   });
 
   /**
@@ -920,7 +926,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       if (!requireCapability(ctx, res, "ledger.historicalSync")) return;
     }
 
-    const wallet = store.addImportedWallet({
+    const wallet = store.batched(() => {
+      const added = store.addImportedWallet({
       id: `iw_${randomUUID()}`,
       orgId: ctx.org.id,
       address: address.toLowerCase() as `0x${string}`,
@@ -930,12 +937,144 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       custody: "external",
       sync: { status: "pending", ...(syncFrom ? { from: syncFrom } : {}) },
       createdAt: new Date().toISOString(),
+      });
+      // Rows booked for this address while it was imported before (removing a
+      // wallet keeps its rows) point at the removed wallet. They are this
+      // address's rows exactly when their id is this address's row id, and
+      // they follow the new wallet, its sync and its proof.
+      const live = new Set(store.importedWalletsOf(ctx.org.id).map((w) => w.id));
+      const orphans = store.ledgerOf(ctx.org.id).flatMap((e) =>
+        e.source.kind === "wallet" && !live.has(e.source.walletId) && e.chainId === chainId && e.txHash && e.logIndex !== undefined &&
+        e.id === walletEntryId(ctx.org.id, added.address, chainId, e.txHash, e.logIndex)
+          ? [{ ...e, source: { kind: "wallet" as const, walletId: added.id } }]
+          : [],
+      );
+      if (orphans.length) store.replaceLedgerEntries(orphans);
+      return added;
     });
     res.status(201).json({
       wallet,
       note: "Imported read-only. We never hold a key for this wallet — payments from it are built here and signed by you. Token transfers in and out are booked from " + (syncFrom ? syncFrom : "now") + " on, once an RPC is configured for its chain.",
     });
   });
+
+  // ── Proving an imported wallet is this organisation's ───────────────────
+  //
+  // The person signs a challenge in their own wallet; the wallet's chain is
+  // asked whether the signature is valid. Zold holds no key and proposes no
+  // transaction. See domain/wallet-ownership.ts.
+
+  const walletOf = (ctx: OrgContext, req: express.Request) => {
+    const wallet = store.findImportedWallet(String(req.params.walletId));
+    return wallet && wallet.orgId === ctx.org.id ? wallet : undefined;
+  };
+  const mayProve = (ctx: OrgContext, res: express.Response) =>
+    requirePermission(ctx, res, "wallets.manage") && requireCapability(ctx, res, "wallets.manage");
+
+  /** A new challenge for the wallet, replacing any that is waiting. */
+  r.post("/:orgId/wallets/:walletId/ownership/challenge", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!mayProve(ctx, res)) return;
+    const wallet = walletOf(ctx, req);
+    if (!wallet) return res.status(404).json({ error: "no such wallet" });
+    const challenge = newChallenge(ctx.org, wallet, randomBytes(16).toString("hex"), new Date());
+    store.updateImportedWallet(wallet.id, { ownershipChallenge: challenge });
+    res.status(201).json({
+      challenge: { ...challenge, messageHash: hashMessage(challenge.message) },
+      howToSign:
+        "Sign this exact text in the wallet itself. An ordinary wallet: sign it as a message and send back the signature. " +
+        "A Safe: sign it as a message in Safe{Wallet}; send back the signature it shows once enough owners have signed, " +
+        "or nothing if the Safe signed the message on chain. Zold then asks the wallet's own chain.",
+    });
+  });
+
+  /** Prove the wallet with its current challenge. Only the chain's answer
+   *  writes anything; a challenge is spent by the proof it produces. */
+  r.post("/:orgId/wallets/:walletId/ownership", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!mayProve(ctx, res)) return;
+    const wallet = walletOf(ctx, req);
+    if (!wallet) return res.status(404).json({ error: "no such wallet" });
+    const challengeId = String(req.body?.challengeId ?? "");
+    const pending = wallet.ownershipChallenge;
+    if (!pending || pending.id !== challengeId) {
+      return res.status(409).json({ error: "That is not this wallet's current challenge. Ask for a new one and sign that." });
+    }
+    if (Date.parse(pending.expiresAt) <= Date.now()) {
+      store.updateImportedWallet(wallet.id, { ownershipChallenge: undefined });
+      return res.status(410).json({ error: "The challenge has expired. Ask for a new one and sign that." });
+    }
+    const signature = parseSignature(req.body?.signature);
+    if (!signature) return res.status(400).json({ error: "The signature is hex, starting 0x." });
+
+    const result = await verifyOwnership(wallet, pending.message, signature);
+    const audit = (outcome: string, reason?: string) =>
+      store.audit(auditEntry("wallet.ownership_checked", {
+        orgId: ctx.org.id, walletId: wallet.id, chainId: wallet.chainId, address: wallet.address,
+        check: "prove", outcome, ...(reason ? { reason } : {}),
+      }, ctx.userId));
+    if (result.verdict === "unverified") {
+      audit("unverified", result.reason);
+      return res.status(503).json({ proven: false, error: `Not verified: ${result.reason}. Nothing was recorded; try again with the same challenge.` });
+    }
+    if (result.verdict === "rejected") {
+      audit("rejected", result.reason);
+      return res.status(422).json({ proven: false, error: `The chain does not accept this as the wallet's signature of the challenge: ${result.reason}.` });
+    }
+    const answer = store.batched(() => {
+      // Another request may have spent or replaced the challenge meanwhile.
+      const current = store.findImportedWallet(wallet.id);
+      if (!current || current.orgId !== ctx.org.id || current.ownershipChallenge?.id !== pending.id) return undefined;
+      const at = new Date().toISOString();
+      audit("proven");
+      return store.updateImportedWallet(wallet.id, {
+        ownershipChallenge: undefined,
+        ownership: {
+          status: "proven", method: result.method, message: pending.message, signature,
+          provenAt: at, checkedAt: at, provenByMemberId: ctx.member.id,
+        },
+      });
+    });
+    if (!answer) return res.status(409).json({ error: "This challenge was used or replaced while it was being checked. Nothing was recorded." });
+    res.json({ proven: true, wallet: publicWallet(answer) });
+  }));
+
+  /** Ask the chain again about the stored proof. A refusal lapses it; a
+   *  chain that cannot be asked changes nothing. */
+  r.post("/:orgId/wallets/:walletId/ownership/recheck", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!mayProve(ctx, res)) return;
+    const wallet = walletOf(ctx, req);
+    if (!wallet) return res.status(404).json({ error: "no such wallet" });
+    const proof = wallet.ownership;
+    if (!proof) return res.status(409).json({ error: "This wallet has no proof to check. Prove it first." });
+
+    const result = await verifyOwnership(wallet, proof.message, proof.signature, proof.method);
+    store.audit(auditEntry("wallet.ownership_checked", {
+      orgId: ctx.org.id, walletId: wallet.id, chainId: wallet.chainId, address: wallet.address,
+      check: "recheck", outcome: result.verdict, ...(result.verdict !== "valid" ? { reason: result.reason } : {}),
+    }, ctx.userId));
+    if (result.verdict === "unverified") {
+      return res.status(503).json({ error: `Not checked: ${result.reason}. The proof stays as it was.`, wallet: publicWallet(wallet) });
+    }
+    const updated = store.batched(() => {
+      const current = store.findImportedWallet(wallet.id);
+      // Proven again meanwhile with another signature: this answer is about the old one.
+      if (!current?.ownership || current.ownership.signature !== proof.signature || current.ownership.message !== proof.message) return undefined;
+      const at = new Date().toISOString();
+      return store.updateImportedWallet(wallet.id, {
+        ownership:
+          result.verdict === "valid"
+            ? { ...current.ownership, status: "proven", checkedAt: at, lapsedAt: undefined, lapseReason: undefined }
+            : { ...current.ownership, status: "lapsed", checkedAt: at, lapsedAt: current.ownership.lapsedAt ?? at, lapseReason: result.reason },
+      });
+    });
+    if (!updated) return res.status(409).json({ error: "The proof changed while it was being checked. Check again." });
+    res.json({ wallet: publicWallet(updated) });
+  }));
 
   r.delete("/:orgId/wallets/:walletId", (req, res) => {
     const ctx = ctxOf(req, res);

@@ -44,6 +44,9 @@ export async function issueOutgoing(
   ctx: OrgContext,
   requestBody: Record<string, any>,
   fromDraft?: Invoice,
+  /** Run with nothing awaited before the write: a reason the draft may no
+   *  longer be issued (what it bills changed during the lookups), or none. */
+  stillIssuable?: () => string | undefined,
 ): Promise<IssueAnswer> {
   const body = fromDraft ? { ...requestBody, issueDate: undefined, dueDate: undefined } : requestBody;
   // Taken now: the store hands out the row itself, so after the lookups below
@@ -113,6 +116,8 @@ export async function issueOutgoing(
     if (!current || current.state !== "DRAFT" || current.updatedAt !== draftReadAt) {
       return refusal(409, "This draft changed while it was being issued. Nothing was issued; look at it again.");
     }
+    const changed = stillIssuable?.();
+    if (changed) return refusal(409, changed);
   }
   const numberSupplied = typeof body.number === "string" && body.number.trim() !== "";
   const now = new Date();

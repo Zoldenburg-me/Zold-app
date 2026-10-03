@@ -38,7 +38,7 @@ const SPACE_HOME = { banking: "overview", books: "books-overview" };
 
 /** Which nav item an older view belongs to. */
 export const PARENT = {
-  ledger: "books", assets: "books",
+  ledger: "books", assets: "books", gains: "books",
   shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", plan: "settings", documents: "accounts", accounts: "accounts",
 };
 /** Every view id the router accepts, including those without a nav item. */

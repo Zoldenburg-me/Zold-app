@@ -747,7 +747,10 @@ flowchart LR
   settlement per row (`ref` `ledger:<entryId>`). The draft's total is the sum
   of the rows' `fiatValue`. A row is eligible only with a positive EUR
   `fiatValue` and a transaction hash, and not when tagged or typed internal,
-  unlisted or needs-valuation. Every other inbound wallet row of the month is
+  unlisted or needs-valuation. An eligible row is drafted only while the
+  imported wallet it arrived in is proven (§13.5, `walletProof`); otherwise
+  it is excluded with the reason (not proven, lapsed, or the wallet no longer
+  imported). Every other inbound wallet row of the month is
   accounted for: in the draft's `fromReceipts.excluded` with the reason,
   counted under `withoutRule` or `withoutContact` (valued and `unvalued`),
   under `alreadyInvoiced`, or under `onOtherDrafts`. A row held by a
@@ -765,7 +768,11 @@ flowchart LR
   (`syncWarnings`: not synced, last synced before the month ended, booked
   from after the month began, transfers skipped). Read and write happen with
   nothing awaited between, inside `store.batched`.
-- **Issuing a draft** (`POST …/income-invoices/:id/issue`) plans the month
+- **Issuing a draft** (`POST …/income-invoices/:id/issue`) first refuses
+  with 409, writing nothing, when a wallet any line came from is not proven,
+  then asks each such wallet's chain about its stored proof: 503 when it
+  cannot be asked, and a refusal lapses the proof and answers 409. It then
+  plans the month
   again and refuses with 409, replacing the stored draft, when the rows it
   bills, their amounts or descriptions, or the rule's `updatedAt` are not the
   ones the stored draft showed. It refuses 422 for a draft with no lines or
@@ -776,8 +783,10 @@ flowchart LR
   request supplies only `acceptWarnings`, `language` and optionally `number`.
   The issue date is the day of issue, the supply period is the month, and
   there is no due date. `issueOutgoing` refuses when the computed gross is not
-  the receipts' sum, and when the draft's `updatedAt` or state changed across
-  its awaits. The draft becomes SUBMITTED in place and `settlementUpdate`
+  the receipts' sum, when the draft's `updatedAt` or state changed across its
+  awaits, and (`stillIssuable`, run with nothing awaited before the write)
+  when a billed wallet stopped being proven or a billed row's EUR value
+  changed meanwhile. The draft becomes SUBMITTED in place and `settlementUpdate`
   closes it PAID from the settlements it carries. A DRAFT is refused by
   payment-link creation, by the deposit-link route and by the invoice-link
   route; `supplierView` passes only a line's printed columns.
@@ -788,7 +797,10 @@ flowchart LR
   The digest is signed with EIP-191 as `"Zold account document <CODE> —
   content digest <digest>"` using `DOCUMENT_SIGNING_KEY`. Production needs
   that key; elsewhere the orchestrator key is used.
-- The optional Safe attestation (EIP-1271) is held beside the snapshot.
+- The optional Safe attestation (EIP-1271) is held beside the snapshot and
+  checked by `wallet/signature-check.ts`, the one verifier for signed
+  messages (also used by the wallet ownership proof). On the hardhat harness
+  the document skips it and says so.
 - Every `GET /api/v/:code` re-checks the signature and digest and the revoked
   flag, re-reads the balance at the stored block, re-runs the statement
   reconciliation, and verifies the Safe signature.
@@ -800,8 +812,30 @@ flowchart LR
 - Rule specificity: contact (40), then asset+wallet (30), then wallet (20),
   then asset (10), then default (0), with +1 for an explicit direction.
   `applyRules` skips rows a human categorised (`accountCodeAuto === false`).
-- FIFO lots per asset, disposals, and `shortfalls` for unmatched outflows.
-  The monthly balance is per month × source × chain × asset. The CSV writer
+- **Cost basis** (`computeCostBasis`, `positions`, `realisedByMonth`). FIFO,
+  pooled across the org's imported wallets, per holding: `chainId:token` for
+  a wallet row, so two contracts sharing a symbol never share lots, the asset
+  for anything else. Quantities are exact (decimal strings read into
+  integers at the holding's finest scale), money is integer EUR cents, and a
+  partly used lot's cost is split half up with the last piece taking the
+  remainder. Not lots: EURe (e-money, by tag or symbol) and fiat assets on
+  account rows (the statement lines). An unlisted token is `quantityOnly`.
+  Where a transfer's other side is, is decided from the wallets and accounts
+  the org has NOW (`ownWallets`, `ownAccounts`), not from the `internal` tag
+  sync wrote from the wallets imported then: between imported wallets it
+  moves nothing; to the org's Zold account, or tagged internal to an address
+  that is neither, it consumes lots at cost into `moved` (`to`), and from
+  one it opens a lot with no known cost. A lot from a row with no EUR value has no
+  cost. A disposal's `realisedCents` is proceeds minus cost and is ABSENT,
+  with `notMeasurable` saying why, when the row has no value, a lot it used
+  has no cost, or it sold beyond the booked lots (`shortfall`). A swap is a
+  disposal and an acquisition at their own values, not paired; the disposal
+  lists the transaction's other rows (`sameTransaction`). `positions` and
+  `realisedByMonth` sum only measured gains and count the rest; a sum with
+  nothing measured is absent, and so is the cost of a holding none of whose
+  units has a known cost. Rows whose amount is not a decimal or whose time
+  does not parse are listed in `unreadable`.
+- The monthly balance is per month × source × chain × asset. The CSV writer
   guards against formula injection and uses CRLF.
 - **`bookkeeping/writer.ts` fills the ledger** through `store.addLedgerEntries`:
   one EUR statement line per economic event (product-architecture §8.3).
@@ -839,7 +873,45 @@ flowchart LR
   Both go through the ECB USD rate for the block's day. A price that does not
   exist (no feed name, no point, low or missing confidence) books
   the row unvalued with `needs-valuation`, and the asset becomes
-  `SYMBOL@chain:address` so it cannot join a real token's FIFO lots.
+  `SYMBOL@chain:address`.
+- **Revaluation** (`wallet-sync/revalue.ts`). The one way an unvalued wallet
+  row gains a value: `valueTransfer` again for its chain, token, quantity
+  and block time, with `fresh` so the hour's cached refusal is not the
+  answer. It writes `fiatValue`, `fiatRate`, the feed's symbol as `asset`,
+  the `revalued` tag, a note and `valuation` (source, ECB day, when, who,
+  the previous asset), then re-applies the rules. Refused for a row that is
+  not a wallet row, already valued, e-money or unlisted, or held by an
+  invoice past DRAFT. The request carries no price. Sync's "Not valued" note
+  is replaced; a note a person wrote is kept. The bulk route takes 10 rows
+  per call in id order and pages with `after`/`next`, so rows the feed still
+  cannot price do not hold back the rest.
+- **Ownership proof** (`domain/wallet-ownership.ts`,
+  `wallet-sync/ownership.ts`, routes in `routes/orgs.ts`). A challenge
+  (random id, 72 h) names the org (legal name and id), the checksummed
+  address and the chain id; it is stored on the wallet row, one at a time,
+  and spent by the proof it produces (the write re-reads the row inside
+  `store.batched`). The check uses only `WALLET_SYNC.rpcs[wallet.chainId]`,
+  requires the node to report that chain id, and goes through
+  `checkSignedMessage`: code at the address means an `eth_call` of
+  `isValidSignature(hashMessage(text), signature)` whose whole first return
+  word must be the magic value followed by zeros (a contract echoing its
+  calldata is no yes); a revert (code 3, or revert data) is a refusal, a
+  node's error without revert data is not. No code or an EIP-7702
+  delegation means ECDSA, except on a re-check of an EIP-1271 proof, which is
+  then `unverified`. An ERC-6492 wrapper goes to viem's validator while the
+  wallet is undeployed, where only a valid answer counts, and is unwrapped
+  once it is deployed. The code is read first, so a node that fails is
+  `unverified` rather than an ECDSA fallback. The org name in the text is
+  folded to one line. Signatures are at most 8 KiB. The proof routes, the
+  revalue routes and the receipt-draft issue are in the partner rate bucket. An empty signature is a Safe
+  that signed the message on chain. `ownership` keeps the text and
+  signature; a re-check the chain refuses sets `lapsed` (owner signatures
+  stop verifying after an owner change; a message signed on chain does
+  not), one it cannot ask changes nothing. Every attempt writes a
+  `wallet.ownership_checked` audit entry. Removing a wallet deletes its row
+  and its proof; its rows stay and read as unproven until the address is
+  imported again, when rows whose id is that address's row id are pointed at
+  the new wallet.
 
 ---
 
@@ -1204,7 +1276,10 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /:orgId/accounts/:a/profile-check` (P(accounts.open)) | Re-read the backing user's Monerium profile and record it if it passes. |
 | `GET/POST /:orgId/payment-requests` (P(invoices.read / invoices.manage)) | List or create the org's payment links. Creating needs the caller's Safe to back the org's account (403 `NOT_THE_PAYEE`). |
 | `GET/POST/PATCH/DELETE /:orgId/contacts[/:c]` (P(contacts.*)) | Address book. |
-| `GET/POST/DELETE /:orgId/wallets[/:w]` (P(wallets.*)) | Imported wallets. POST takes an optional `syncFrom` day (YYYY-MM-DD, not in the future), which needs `ledger.historicalSync`; without it the wallet is booked from the import on. |
+| `GET/POST/DELETE /:orgId/wallets[/:w]` (P(wallets.*)) | Imported wallets. POST takes an optional `syncFrom` day (YYYY-MM-DD, not in the future), which needs `ledger.historicalSync`; without it the wallet is booked from the import on. GET adds `proofState` (`proven`, `lapsed`, `unproven`). |
+| `POST /:orgId/wallets/:w/ownership/challenge` (C(wallets.manage), P(wallets.manage)) | Issue the wallet's ownership challenge, replacing a pending one (§13.5). |
+| `POST /:orgId/wallets/:w/ownership` (C(wallets.manage), P(wallets.manage)) | Prove the wallet: `{ challengeId, signature? }`. 409 not the current challenge, 410 expired, 422 refused by the chain, 503 not verified. |
+| `POST /:orgId/wallets/:w/ownership/recheck` (C(wallets.manage), P(wallets.manage)) | Check the stored proof again; a refusal makes it `lapsed`, 503 changes nothing. |
 
 **Drafts** (`/orgs`)
 
@@ -1240,7 +1315,10 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /:orgId/account-rules[/apply]` (C(coa.rules)) | Add a rule, or re-run rules. |
 | `GET /:orgId/ledger` (C(ledger.transactions)) | Ledger. |
 | `PATCH /:orgId/ledger/:e` (C(ledger.transactions)) | Categorise a ledger row. |
-| `GET /:orgId/assets` (C(assets.costBasis)) | Assets and cost basis. |
+| `GET /:orgId/assets` (C(assets.costBasis), P(ledger.read)) | Holdings per token with their lots, disposals, moves to the Zold account, shortfalls, quantity-only tokens, unvalued rows and each wallet's proof state. |
+| `GET /:orgId/reports/realised-gains` (C(assets.costBasis), P(ledger.read)) | Measured gains and losses per month in the reporting time zone, with every disposal. |
+| `POST /:orgId/ledger/:e/revalue` (C(ledger.transactions), P(ledger.categorise)) | Ask the price feed again for an unvalued wallet row. 409 not revaluable, 422 still no price, 503 feed or ECB down. |
+| `POST /:orgId/ledger/revalue` (C(ledger.transactions), P(ledger.categorise)) | The same for every unvalued wallet row, 100 per call. |
 | `GET /:orgId/reports/monthly-balance` (C(reports.monthlyBalance)) | Monthly balance report. |
 | `GET /:orgId/export/ledger.csv` (C(export.ledger)) | Ledger CSV. |
 | `GET /:orgId/bookkeeping/statement[?month=]` (C(ledger.transactions)) | Statement lines: one per economic event, with links and Beleg codes. |

@@ -342,7 +342,38 @@ export interface ImportedWallet {
     skipped?: number;
     lastSkipReason?: string;
   };
+  /** The proof that the wallet is this organisation's (wallet-sync/ownership.ts).
+   *  Absent: unproven. Kept when a later check fails, as `lapsed`. */
+  ownership?: WalletOwnership;
+  /** The one challenge waiting to be signed. Spent by the proof it produces. */
+  ownershipChallenge?: WalletOwnershipChallenge;
   createdAt: string;
+}
+
+export interface WalletOwnershipChallenge {
+  id: string;
+  message: string;
+  issuedAt: string;
+  expiresAt: string;
+}
+
+export interface WalletOwnership {
+  /** `proven`: the chain accepted the signature at `checkedAt`. `lapsed`: a
+   *  later check was refused by the chain (owner signatures of a Safe whose
+   *  owners changed; a message the Safe signed on chain stays valid). */
+  status: "proven" | "lapsed";
+  /** EIP-1271 when the address holds code, ECDSA when it does not. */
+  method: "eip1271" | "ecdsa";
+  /** The challenge text that was signed, and the signature: "0x" for a Safe
+   *  that signed the message on chain. Re-checks use exactly these. */
+  message: string;
+  signature: `0x${string}`;
+  provenAt: string;
+  checkedAt: string;
+  lapsedAt?: string;
+  /** What the chain answered when the proof lapsed. */
+  lapseReason?: string;
+  provenByMemberId?: string;
 }
 
 // ── Address book ────────────────────────────────────────────────────────────
@@ -906,6 +937,17 @@ export interface LedgerEntry {
   txType?: string;
   at: string;
   createdAt: string;
+  /** Set when a row booked without a value was valued later by the same
+   *  price lookup sync uses, for its block time (wallet-sync/revalue.ts). */
+  valuation?: {
+    source: string;
+    /** The day the EUR rate was fixed. */
+    asOf: string;
+    revaluedAt: string;
+    revaluedByMemberId?: string;
+    /** The asset as booked unvalued (SYMBOL@chain:address). */
+    previousAsset: string;
+  };
   /**
    * Set on rows the statement-line writer projects from the account's real
    * activity (bookkeeping/statement.ts): one EUR line per economic event, the
