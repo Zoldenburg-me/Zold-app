@@ -137,3 +137,33 @@ export function paymentUri(payee: PublicPayee, amount?: number): string {
   const units = BigInt(Math.round(amount * 10 ** payee.token.decimals));
   return `${base}&uint256=${units}`;
 }
+
+/** What a stranger may read about an organisation's payment page: its name and
+ *  the bank details of its euro account. An allowlist, like publicPayee: no
+ *  member, no backing account, no balance. The BIC is Monerium's as reported,
+ *  left out when unknown rather than guessed. */
+export interface PublicOrgPayee {
+  kind: "organisation";
+  handle: string;
+  displayName: string;
+  bank: { holder: string; iban: string; bic?: string };
+}
+
+export function publicOrgPayee(
+  org: { name: string; legalName?: string; paymentPage?: { handle: string; displayName?: string } },
+  account: { identifier: { iban?: string; bic?: string } },
+): PublicOrgPayee {
+  const page = org.paymentPage;
+  const iban = account.identifier.iban;
+  if (!page?.handle || !iban) throw new HandleError("organisation has no payment page");
+  return {
+    kind: "organisation",
+    handle: page.handle,
+    displayName: page.displayName || org.legalName || org.name,
+    bank: {
+      holder: org.legalName || org.name,
+      iban: iban.replace(/\s+/g, ""),
+      ...(account.identifier.bic ? { bic: account.identifier.bic } : {}),
+    },
+  };
+}

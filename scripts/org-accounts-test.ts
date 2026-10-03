@@ -10,6 +10,9 @@
  * - Any other member's link stays theirs: it is not booked under the
  *   company, and the payer sees the member's own name.
  * - Invoices print the account's own IBAN unless the profile names another.
+ * - An account names the member whose Safe backs it.
+ * - A company's own payment page shows its bank details under its name; its
+ *   handle shares one namespace with members' pages.
  *
  *   npm run org-accounts:test
  */
@@ -27,6 +30,7 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createBusinessRouter } = await import("../services/api/src/routes/business.js");
 const { createPaymentRequestRouter } = await import("../services/api/src/routes/payment-requests.js");
+const { createPaymentPageRouter } = await import("../services/api/src/routes/payment-page.js");
 const { accountIsSpendable } = await import("../services/api/src/domain/accounts.js");
 
 let failed = 0;
@@ -63,6 +67,8 @@ member("m1", "org_new", "u_co", "owner");
 member("m2", "org_co", "u_co", "owner");
 member("m3", "org_co", "u_admin", "admin");
 member("m4", "org_p", "u_co", "owner");
+store.addUser({ id: "u_view", name: "Birgit Falk", country: "DE", kycStatus: "approved", address: `0x${"cc".repeat(20)}`, createdAt: now } as any);
+member("m5", "org_co", "u_view", "viewer");
 
 // A row whose stored gate text is not the current wording.
 store.addAccount({
@@ -98,6 +104,7 @@ const requireUserSession = (req: any, res: any, userId: string) => {
 app.use("/api/orgs", createOrgRouter(requireSession as any));
 app.use("/api/orgs", createBusinessRouter(requireSession as any, (async () => { throw new Error("no transfers here"); }) as any));
 app.use("/api", createPaymentRequestRouter(requireUserSession));
+app.use("/api", createPaymentPageRouter({ requireUserSession }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -175,6 +182,56 @@ await check("a link under a company names it only when the payee's Safe backs it
   const pub = await fetch(`${API}/api/pay/jonas/${r.body.code}`).then((x) => x.json());
   assert.equal(pub.methods.bank.holder, "Jonas Weber");
   assert.notEqual(pub.displayName, "Lindner Holzbau GmbH");
+});
+
+
+console.log("backing member");
+await check("an account names the member whose Safe backs it, as Members shows them", async () => {
+  const name = () => call("GET", "/api/orgs/org_co/accounts", undefined, "u_admin").then((r) => r.body.accounts.find((a: any) => a.id === "acc_co").backingMemberName);
+  assert.equal(await name(), undefined, "no name and no email: nothing to show");
+  store.updateMember("m2", { email: "sara@lindner.example" } as any);
+  assert.equal(await name(), "sara@lindner.example");
+  store.updateMember("m2", { name: "Sara Lindner" } as any);
+  assert.equal(await name(), "Sara Lindner");
+});
+
+console.log("organisation payment page");
+await check("a company whose euro account is not open cannot claim a page, and is told why", async () => {
+  const r = await call("POST", "/api/orgs/org_new/payment-page", { handle: "lindner-neu" });
+  assert.equal(r.status, 409);
+  assert.equal(r.body.code, "ACCOUNT_NOT_OPEN");
+  const g = await call("GET", "/api/orgs/org_new/payment-page");
+  assert.equal(g.body.ready, false);
+  assert.match(g.body.reason, /No euro account with an IBAN/);
+});
+await check("a handle a member's own page holds is taken for the company too", async () => {
+  const r = await call("POST", "/api/orgs/org_co/payment-page", { handle: "lindner" });
+  assert.equal(r.status, 409);
+});
+await check("a viewer cannot claim the company's page", async () => {
+  const r = await call("POST", "/api/orgs/org_co/payment-page", { handle: "lindnerholzbau" }, "u_view");
+  assert.equal(r.status, 403);
+});
+await check("an owner claims it, and a payer sees the company's bank details and nothing else", async () => {
+  const r = await call("POST", "/api/orgs/org_co/payment-page", { handle: "LindnerHolzbau" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.payUrl, "/pay/lindnerholzbau");
+  const p = await call("GET", "/api/pay/lindnerholzbau", undefined, "");
+  assert.equal(p.status, 200);
+  assert.deepEqual(p.body, { kind: "organisation", handle: "lindnerholzbau", displayName: "Lindner Holzbau GmbH", bank: { holder: "Lindner Holzbau GmbH", iban: IBAN } });
+  for (const secret of ["u_co", "acc_co", SAFE, "Sara"]) assert.ok(!JSON.stringify(p.body).includes(secret), `leaked ${secret}`);
+});
+await check("a member cannot then claim the company's handle for a personal page", async () => {
+  const r = await call("POST", "/api/users/u_admin/handle", { handle: "lindnerholzbau" }, "u_admin");
+  assert.equal(r.status, 409);
+});
+await check("the page closes, without bank details, while the account is not active", async () => {
+  store.updateAccount("acc_co", { status: "gated" } as any);
+  try {
+    const p = await call("GET", "/api/pay/lindnerholzbau", undefined, "");
+    assert.equal(p.status, 503);
+    assert.ok(!JSON.stringify(p.body).includes(IBAN));
+  } finally { store.updateAccount("acc_co", { status: "active" } as any); }
 });
 
 console.log("invoice IBAN");

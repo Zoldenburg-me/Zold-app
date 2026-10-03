@@ -22,6 +22,7 @@ import {
   normaliseDisplayName,
   normaliseHandle,
   paymentUri,
+  publicOrgPayee,
   publicPayee,
 } from "../services/api/src/pay.js";
 import { dataModuleOrder, qrMatrix, qrSvg } from "../services/api/src/qr.js";
@@ -339,6 +340,50 @@ check("the SVG is self-contained and includes a quiet zone", () => {
   assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
   assert.match(svg, new RegExp(`viewBox="0 0 ${modules + 8} ${modules + 8}"`));
   assert.ok(!/https?:\/\/(?!www\.w3\.org)/.test(svg), "no external references");
+});
+
+
+// ── An organisation's page: bank details only, under the company's name ──
+
+const orgFull: any = {
+  id: "org_1", name: "Lindner Holzbau", legalName: "Lindner Holzbau GmbH", taxId: "DE298451736",
+  email: "office@example.com", plan: "business", memberIds: ["m1"],
+  paymentPage: { handle: "lindnerholzbau", createdAt: "2026-10-03T00:00:00Z", updatedAt: "2026-10-03T00:00:00Z" },
+};
+const orgAccount: any = {
+  id: "acc_1", currency: "EUR", status: "active", backingUserId: "u1", label: "Operating",
+  identifier: { iban: "DE89 3704 0044 0532 0133 10", bic: "EAPFESM2XXX" },
+};
+
+check("an organisation's page carries its legal name and the account's bank details", () => {
+  const p = publicOrgPayee(orgFull, orgAccount);
+  assert.deepEqual(p, {
+    kind: "organisation", handle: "lindnerholzbau", displayName: "Lindner Holzbau GmbH",
+    bank: { holder: "Lindner Holzbau GmbH", iban: "DE89370400440532013310", bic: "EAPFESM2XXX" },
+  });
+});
+
+check("the organisation projection leaks no member, backing account, tax id or email", () => {
+  const json = JSON.stringify(publicOrgPayee(orgFull, orgAccount));
+  for (const secret of ["u1", "acc_1", "m1", "DE298451736", "office@example.com", "backingUserId", "Operating"]) {
+    assert.ok(!json.includes(secret), `leaked ${secret}`);
+  }
+});
+
+check("an unknown BIC is left out, not guessed", () => {
+  const p = publicOrgPayee(orgFull, { identifier: { iban: "DE89370400440532013310" } });
+  assert.equal("bic" in p.bank, false);
+});
+
+check("a display name the organisation chose wins over its legal name", () => {
+  const p = publicOrgPayee({ ...orgFull, paymentPage: { ...orgFull.paymentPage, displayName: "Lindner Holzbau" } }, orgAccount);
+  assert.equal(p.displayName, "Lindner Holzbau");
+  assert.equal(p.bank.holder, "Lindner Holzbau GmbH");
+});
+
+check("no page or no IBAN is refused rather than half-rendered", () => {
+  throws(() => publicOrgPayee({ name: "X" }, orgAccount), /no payment page/);
+  throws(() => publicOrgPayee(orgFull, { identifier: {} }), /no payment page/);
 });
 
 console.log(`\nPAY PAGE TEST PASSED — ${n} checks`);

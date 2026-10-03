@@ -82,7 +82,8 @@ function accountView(org: Organisation, a: Account) {
     : undefined;
   return {
     ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
-    ...(backer?.name ? { backingMemberName: backer.name } : {}),
+    // As Members shows them: the name, else the email.
+    ...(backer?.name || backer?.email ? { backingMemberName: backer.name || backer.email } : {}),
   };
 }
 
