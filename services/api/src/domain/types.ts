@@ -77,6 +77,10 @@ export interface Organisation {
     country: string;
   };
   plan: PlanId;
+  /** The organisation's public page at /pay/:handle: bank transfer details of
+   *  its euro account, under its own name. Handles share one namespace with
+   *  users' pages, so a link never resolves to the wrong payee. */
+  paymentPage?: { handle: string; displayName?: string; createdAt: string; updatedAt: string };
   /** A trial is a grant with an end date, not a plan change: when it lapses the
    *  org is back on `plan` with nothing deleted. One per org, ever. */
   trial?: {

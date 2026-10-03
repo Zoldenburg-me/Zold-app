@@ -627,7 +627,12 @@ export function publicPaymentRequest(
       address: page.depositAddress,
       ...(q ? { amountUsdc: q.amountUsdc, rate: q.rate, allowanceBps: q.allowanceBps, validUntil: q.validUntil } : {}),
       uri: requestPaymentUri(ctx.token, ctx.chainId, page.depositAddress, q?.amountUsdc),
-      qrUrl: `${ctx.baseUrl}/api/pay/${encodeURIComponent(page.handle)}/qr.svg`,
+      // Under the payee's own page, the page's QR, which needs no code (the
+      // Shopify order lookup must never hand the code out). A company link
+      // gets its own, so it does not name the member's personal page.
+      qrUrl: r.handle === page.handle
+        ? `${ctx.baseUrl}/api/pay/${encodeURIComponent(page.handle)}/qr.svg`
+        : `${ctx.baseUrl}/api/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}/qr.svg`,
     };
   }
   if (r.methods.includes("bank") && user.iban) {

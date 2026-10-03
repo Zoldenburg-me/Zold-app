@@ -7,7 +7,8 @@
  * shell does not draw the page again under it.
  */
 import { $, Z, api, cap, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setView, toast, token, view } from "./core.js";
-import { docHref, docMonth, exportMonth, sendState, setExportMonth } from "./views.js";
+import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
+import { sendState } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
@@ -325,6 +326,48 @@ export const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { invoiceId: el.dataset.id, methods: usable } });
     setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.`, r.url), 0);
   },
+  async "new-pay-link"() {
+    // A link opens under the company page when there is one; say which.
+    const page = await api(`/api/orgs/${org.id}/payment-page`).catch(() => null);
+    const where = page?.paymentPage
+      ? ` It opens at ${esc(location.host)}/pay/${esc(page.paymentPage.handle)}/….`
+      : " Set up the company’s payment page first, and links open under its address instead of yours.";
+    dialog("New payment link",
+      `<p class="desc">Your customer pays it into ${esc(org.name)}’s euro account. Leave the amount empty to let them enter it.${where}</p>
+       ${field("d-desc", "What it’s for", 'maxlength="140" placeholder="Deposit, roof Weber…"')}
+       ${field("d-amt", "Amount in euros (optional)", 'inputmode="decimal" placeholder="1200.00…"')}`,
+      async () => {
+        const { methods } = await api(`/api/users/${me.id}/payment-requests/methods`);
+        const usable = methods.filter((m) => m.available).map((m) => m.method);
+        if (!usable.length) throw new Error(plain(methods.map((m) => m.needs).filter(Boolean).join(" ")) || "No way to get paid is set up on this account yet.");
+        const amount = $("#d-amt").value.trim().replace(",", ".");
+        const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { description: $("#d-desc").value, ...(amount ? { amountEur: amount } : {}), methods: usable } });
+        setTimeout(() => linkDialog("Payment link ready", `Send your customer this link.${typeof r.amountEur === "number" ? ` It asks for ${eur(r.amountEur)}.` : ""} It shows as paid here when the money arrives.`, r.url), 0);
+      }, { okLabel: "Create link" });
+  },
+  async "org-page"() {
+    const { paymentPage } = await api(`/api/orgs/${org.id}/payment-page`);
+    const guess = (org.name || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30);
+    dialog(paymentPage ? "Edit your payment page" : "Set up your payment page",
+      `<p class="desc">A public page at ${esc(location.host)}/pay/… with this company’s name and the bank details of its euro account. Bank transfer only.</p>
+       ${field("d-handle", "Address", `spellcheck="false" maxlength="30" value="${esc(paymentPage?.handle || guess)}"`)}
+       <p class="zb-hint">3 to 30 lowercase letters, numbers and hyphens. A changed address stops the old link working.</p>
+       ${field("d-dn", "Name on the page (optional)", `maxlength="40" value="${esc(paymentPage?.displayName || "")}" placeholder="${esc(org.legalName || org.name)}…"`)}`,
+      async () => {
+        await api(`/api/orgs/${org.id}/payment-page`, { method: "POST", body: { handle: $("#d-handle").value, displayName: $("#d-dn").value } });
+        toast("Payment page saved.");
+      }, { okLabel: paymentPage ? "Save" : "Create page" });
+    return "keep";
+  },
+  async "copy-text"(el) {
+    try {
+      await navigator.clipboard.writeText(el.dataset.text);
+      toast(el.dataset.said || "Copied");
+    } catch {
+      toast("Couldn’t copy. Select the link and copy it by hand.", true);
+    }
+    return "keep";
+  },
   async "check-profile"(el) {
     const r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/profile-check`, { method: "POST" });
     toast(plain(r.warning) || "Checked with Monerium. This account can send again.");
@@ -587,14 +630,16 @@ export const ACTIONS = {
       $("#d-amt").focus();
       return "keep";
     }
+    const picked = (name) => $(`#send-form input[name="${name}"]:checked`)?.value;
+    if (!picked("contact")) { err.textContent = "Pick who you’re paying."; return "keep"; }
     const { contacts } = await api(`/api/orgs/${org.id}/contacts`);
-    const c = contacts.find((x) => x.id === $("#d-con").value);
+    const c = contacts.find((x) => x.id === picked("contact"));
     const b = c?.bankAccounts.find((x) => x.iban);
     if (!b) { err.textContent = "That contact has no IBAN."; return "keep"; }
     const r = await api(`/api/orgs/${org.id}/drafts`, {
       method: "POST",
       body: {
-        source: { kind: "account", accountId: $("#d-acct").value },
+        source: { kind: "account", accountId: picked("account") },
         lines: [{
           contactId: c.id,
           destination: { kind: "bank", bankAccountId: b.id, displayName: b.holderName || c.name },

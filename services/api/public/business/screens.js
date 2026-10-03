@@ -1,6 +1,6 @@
 /**
  * The screens drawn from the design/ui-v2 desktop references (build step 8b):
- * Home, Approvals, Contacts, Members, Invoices and Books. The older views are
+ * Approvals, Contacts, Members, Invoices and Books. The older views are
  * in views.js; the invoice editor in invoice.js. Each registers into RENDER
  * (the body) and META (title, subtitle, header actions).
  *
@@ -16,7 +16,6 @@ import {
   $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ROLE_CAN, ROLE_WORD, toast, when, ymd,
 } from "./core.js";
 import { META, RENDER, invoiceActions, settlementRows } from "./views.js";
-import { side, waitingForMe } from "./nav.js";
 
 const primary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--primary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
 const secondary = (label, attrs, icon) => `<button type="button" class="z-btn z-btn--secondary" ${attrs}>${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></button>`;
@@ -28,7 +27,7 @@ const empty = (text) => `<div class="z-card"><p class="empty">${text}</p></div>`
 /* ── Members and payment runs, shared by several screens ─────────────────── */
 
 let members = null;          // this org's, read once per render that needs them
-async function loadMembers() {
+export async function loadMembers() {
   if (!cap("members.manage").allowed && org.type === "personal") return [];
   try { members = (await api(`/api/orgs/${org.id}/members`)).members; } catch { members = members || []; }
   return members;
@@ -62,112 +61,6 @@ export function mayReview(d) {
   if (d.createdByMemberId === org.memberId) return { allowed: false, reason: "You drafted this, so someone else has to approve it." };
   return { allowed: true };
 }
-
-/* ==========================================================================
-   Home
-   ========================================================================== */
-
-/* A statement line's status, from its event: money out is Sent (it left
-   the account; the bank's confirmation is not on the line), never Paid. */
-const LINE_WORD = { sepa_in: "Received", sepa_out: "Sent", sepa_out_reversal: "Refunded", crypto_converted: "Received", crypto_held: "Received", sweep: "Done" };
-
-META.overview = () => ({
-  title: org.name,
-  sub: "",
-  actions: "",
-});
-
-RENDER.overview = async () => {
-  const drafts = cap("transfers.drafts").allowed;
-  const [acc, dr, inv, mem, st] = await Promise.allSettled([
-    api(`/api/orgs/${org.id}/accounts`),
-    drafts ? api(`/api/orgs/${org.id}/drafts`) : Promise.resolve({ drafts: [] }),
-    cap("invoices").allowed ? api(`/api/orgs/${org.id}/invoices`) : Promise.resolve(null),
-    loadMembers(),
-    cap("ledger.transactions").allowed ? api(`/api/orgs/${org.id}/bookkeeping/statement`) : Promise.resolve(null),
-  ]);
-  const accounts = acc.status === "fulfilled" ? acc.value.accounts : [];
-  const runs = dr.status === "fulfilled" ? dr.value.drafts : [];
-  const invoices = inv.status === "fulfilled" && inv.value ? inv.value.invoices : null;
-  const lines = st.status === "fulfilled" && st.value ? st.value.lines : null;
-  const team = (mem.status === "fulfilled" ? mem.value : []).filter((m) => m.status === "active");
-
-  // Payment runs waiting for this person.
-  const waiting = waitingForMe(runs);
-  const sum = waiting.reduce((n, d) => n + Number(d.totals?.EUR || d.totals?.EURe || 0), 0);
-  const oldest = [...waiting].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
-  const review = waiting.length
-    ? `<section class="zb-review" aria-labelledby="home-rv">${Z.iconTile({ icon: "inbox", tone: "p" })}
-        <div class="zb-review__main"><b id="home-rv">${waiting.length} payment${waiting.length === 1 ? "" : "s"} wait${waiting.length === 1 ? "s" : ""} for your review</b>
-        <span>${sum ? `${esc(eur(sum))} in total · ` : ""}oldest drafted ${esc(when(oldest.createdAt).replace(/^(Today|Yesterday)/, (w) => w.toLowerCase()))} by ${esc(memberName(oldest.createdByMemberId))}</span></div>
-        ${linkBtn("Review", "payments", "", "primary")}</section>`
-    : "";
-
-  // No company balance: your own account's, when it is the one that pays.
-  const mine = accounts.find((a) => a.status === "active" && a.backingUserId && me && a.backingUserId === me.id);
-  const fig = (v) => {
-    const s = eur(v);
-    const m = /^€([\d,]+)(\.\d{2})$/.exec(s);
-    return m ? `<span class="z-balance__fig"><span class="z-balance__cur">€</span>${esc(m[1])}<span class="z-balance__cents">${esc(m[2])}</span></span>` : `<span class="z-balance__fig">${esc(s)}</span>`;
-  };
-  const accCards = accounts.map((a) => {
-    const iban = a.identifier?.iban;
-    const isMine = a === mine;
-    return `<a class="zb-acc" href="?view=accounts" data-view-link="accounts"><span class="zb-acc__name">${esc(a.label || a.currency)}</span>
-      <span>${a.status === "active" ? Z.tag("Active") : Z.tag(a.status === "gated" ? "Not open" : "Waiting")}${isMine ? ' <span class="zb-hint">Spends from your account</span>' : ""}</span>
-      ${iban ? `<span class="z-mono" translate="no">${esc(maskIban(iban))}</span>` : ""}</a>`;
-  }).join("");
-  const canPropose = drafts && roleCan(org.role, "propose");
-  const acts = [
-    canPropose ? (waiting.length ? linkBtn("New payment", "send", "arrow_outward") : linkBtn("New payment", "send", "arrow_outward", "primary")) : "",
-    cap("invoices").allowed ? secondary("Issue invoice", 'data-act="issue-invoice"', "receipt_long") : "",
-  ].filter(Boolean).join("");
-  const balance = `<section class="z-card zb-bal" aria-labelledby="home-bal">
-      ${mine && typeof me?.balanceEur === "number"
-        ? `<div><p class="zb-bal__label" id="home-bal">Balance of your account</p><p class="z-balance" style="margin-top:6px">${fig(me.balanceEur)}</p>
-           <p class="zb-hint" style="margin-top:8px">Your own account pays for ${esc(org.name)}, so its payments come from here.</p></div>`
-        : `<div><h2 class="zb-h2" id="home-bal">Accounts</h2><p class="zb-hint" style="margin-top:4px">${accounts.some((a) => a.backingUserId)
-          ? "A company account spends from one member’s own account. Only that member sees its balance."
-          : "No account can pay yet. Connect the company’s Monerium profile on the Accounts screen."}</p></div>`}
-      ${accounts.length ? `<div class="zb-accgrid">${accCards}</div>` : ""}
-      ${acts ? `<div class="zb-actions" style="margin-top:0">${acts}</div>` : ""}
-    </section>`;
-
-  // Invoices: what is open and what is late, from the invoices themselves.
-  let invCard = "";
-  if (invoices) {
-    const out = invoices.filter((i) => i.direction === "outgoing" && !["PAID", "RECONCILED", "DELETED"].includes(i.state));
-    const late = out.filter((i) => i.overdue);
-    const total = (list) => list.reduce((n, i) => n + (i.issued ? i.issued.grossCents / 100 : Number(i.total) || 0), 0);
-    invCard = `<section class="z-card zb-side-card" aria-labelledby="home-inv">
-      <div class="zb-side-card__head"><h2 id="home-inv">Invoices</h2><a href="?view=invoices" data-view-link="invoices">Open</a></div>
-      <p class="zb-kv"><span>${out.length} open</span><b>${esc(eur(total(out)))}</b></p>
-      <p class="zb-kv"><span>${late.length} overdue</span><b class="${late.length ? "is-late" : ""}">${esc(eur(total(late)))}</b></p>
-    </section>`;
-  }
-  const teamCard = org.type === "personal" ? "" : `<section class="z-card zb-side-card" aria-labelledby="home-team">
-      <div class="zb-side-card__head"><h2 id="home-team">Team</h2>${cap("members.manage").allowed ? '<a href="?view=members" data-view-link="members">Manage</a>' : ""}</div>
-      <div class="zb-team">${team.map((m) => `<span title="${esc(m.name || m.email)}">${Z.avatar({ name: m.name || m.email, tone: m.id === org.memberId ? "p" : "n" })}<span class="z-sr">${esc(m.name || m.email)}</span></span>`).join("")}</div>
-      <p class="zb-hint">${cap("transfers.approvals").allowed ? "Every payment needs a second person to approve it." : "On this plan, payments go out without a second approval."}</p>
-    </section>`;
-
-  // Recent activity: the statement lines, newest first.
-  let activity = "";
-  if (lines) {
-    const rows = [...lines].sort((a, b) => b.valueDate.localeCompare(a.valueDate)).slice(0, 6).map((l) => {
-      const inbound = l.amountCents >= 0;
-      const who = l.counterparty?.name || (inbound ? "Money in" : "Payment");
-      return `<tr><td class="z-dim">${esc(when(ymd(l.valueDate)))}</td>
-        <td><span class="z-tbl__who">${Z.avatar({ name: who })}<a class="z-tbl__link" href="?view=books" data-view-link="books">${esc(who)}</a></span></td>
-        <td>${l.note ? esc(l.note) : l.reference ? esc(plain(l.reference)) : '<span class="z-dim">No memo</span>'}</td>
-        <td>${Z.tag(LINE_WORD[l.event] || (inbound ? "Received" : "Sent"))}</td>
-        <td class="z-tbl__num">${Z.amount({ value: Math.abs(l.amountCents) / 100, direction: inbound ? "in" : "out" })}</td></tr>`;
-    });
-    activity = `<section class="zb-stack" style="margin-top:22px;gap:12px"><div class="z-group__head" style="padding:0"><h2 class="zb-h2">Recent activity</h2>${rows.length ? '<a class="z-group__action" href="?view=books" data-view-link="books">See all</a>' : ""}</div>
-      ${rows.length ? table([["Date"], ["Who"], ["Memo"], ["Status"], ["Amount", "z-tbl__num"]], rows) : empty("No money has moved on this organisation’s accounts yet.")}</section>`;
-  }
-  return `${review}<div class="zb-home">${balance}<div class="zb-home__col">${invCard}${teamCard}</div></div>${activity}`;
-};
 
 /* ==========================================================================
    Approvals (the payments view)

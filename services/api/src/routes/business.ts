@@ -23,6 +23,7 @@ import { createBookkeepingRoutes } from "./business/bookkeeping.js";
 import { createBookkeepingExportRoutes } from "./business/bookkeeping-export.js";
 import { createIntegrationRoutes } from "./business/integrations.js";
 import { createPaymentLinkRoutes } from "./business/payment-links.js";
+import { createOrgPaymentPageRoutes } from "./business/org-payment-page.js";
 import type { TransferFactory } from "./business/shared.js";
 
 export type { TransferFactory } from "./business/shared.js";
@@ -44,6 +45,7 @@ export function createBusinessRouter(
   r.use(createBookkeepingExportRoutes(deps));
   r.use(createIntegrationRoutes(deps));
   r.use(createPaymentLinkRoutes(deps));
+  r.use(createOrgPaymentPageRoutes(deps));
 
   return r;
 }

@@ -1,6 +1,6 @@
 /**
  * The renderer registry, and the views without a design/ui-v2 reference:
- * Accounts, Send, Get paid, Shopify, Wallets, Transactions, Assets, Chart of
+ * Accounts, Shopify, Wallets, Transactions, Assets, Chart of
  * accounts, the month's statement lines, Connections, Settings and the
  * invoicing profile. The reference screens are in screens.js, the invoice
  * editor in invoice.js; both register here.
@@ -10,7 +10,7 @@
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
-import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ymd } from "./core.js";
+import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, plain, ymd } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -87,86 +87,17 @@ RENDER.accounts = async () => {
 };
 
 /* ==========================================================================
-   Send: a new payment run
-   ========================================================================== */
-
-export const sendState = { contactId: null };
-
-META.send = () => ({
-  title: "New payment",
-  sub: cap("transfers.approvals").allowed
-    ? "It goes to Approvals: someone other than you approves it, then it’s sent with Face ID or fingerprint."
-    : "Save it, then send it from Payments with Face ID or fingerprint.",
-  actions: "",
-});
-
-RENDER.send = async () => {
-  if (!cap("transfers.drafts").allowed) return gateHtml("transfers.drafts");
-  if (!roleCan(org.role, "propose")) return `<div class="gate"><h3>Not for your role</h3><p>As a viewer you can see payments, not propose them.</p></div>`;
-  const [{ contacts }, { accounts }] = await Promise.all([
-    api(`/api/orgs/${org.id}/contacts`),
-    api(`/api/orgs/${org.id}/accounts`),
-  ]);
-  const payable = contacts.filter((c) => c.bankAccounts.some((b) => b.iban));
-  const fundable = accounts.filter((a) => a.status === "active" && a.backingUserId && a.profile?.status !== "needs_check");
-  if (!fundable.length) {
-    return `<div class="gate"><h3>No account can pay yet</h3><p>${org.type === "business"
-      ? "Connect the company’s Monerium profile to an account first."
-      : "Open an account and fund it from your own account first."}</p><div class="zb-actions">${linkBtn("Accounts", "accounts")}</div></div>`;
-  }
-  if (!payable.length) {
-    return `<div class="gate"><h3>Add who you’re paying</h3><p>A payment goes to a contact with bank details, so a later change to them is caught before sending.</p><div class="zb-actions">${primary("Add contact", 'data-act="new-contact"', "person_add")}</div></div>`;
-  }
-  const chosen = payable.find((c) => c.id === sendState.contactId) || null;
-  return `<form class="z-card zb-pad" id="send-form" style="max-width:560px" novalidate>
-      <label for="d-acct">From</label><select id="d-acct" name="account">${fundable.map((a) => `<option value="${esc(a.id)}">${esc(a.label || a.currency)} (${esc(maskIban(a.identifier?.iban || ""))})</option>`).join("")}</select>
-      <label for="d-con">To</label><select id="d-con" name="contact">${payable.map((c) => `<option value="${esc(c.id)}"${chosen?.id === c.id ? " selected" : ""}>${esc(c.name)} (${esc(maskIban(c.bankAccounts.find((b) => b.iban).iban))})</option>`).join("")}</select>
-      <label for="d-amt">Amount in euros</label><input id="d-amt" name="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" />
-      <label for="d-note">Reference <span class="desc">(on their bank statement)</span></label><input id="d-note" name="reference" autocomplete="off" maxlength="140" placeholder="Invoice 2026-114…" />
-      <p class="zb-err" id="send-err" role="alert"></p>
-      <div class="zb-actions">${primary(cap("transfers.approvals").allowed ? "Submit for approval" : "Save payment", 'data-act="send-create"', "")}${linkBtn("Cancel", "payments")}</div>
-    </form>`;
-};
-
-/* ==========================================================================
-   Get paid
-   ========================================================================== */
-
-META["get-paid"] = () => ({
-  title: "Get paid",
-  sub: "Your bank details, invoices and a shop checkout.",
-  actions: cap("invoices").allowed ? primary("Issue invoice", 'data-act="issue-invoice"', "receipt_long") : "",
-});
-
-RENDER["get-paid"] = async () => {
-  const { accounts } = await api(`/api/orgs/${org.id}/accounts`);
-  const live = accounts.filter((a) => a.status === "active" && a.identifier?.iban);
-  const holder = org.legalName || org.name;
-  const details = live.length
-    ? `<div class="zb-grid2">${live.map((a) => `<section class="z-card zb-pad zb-stack" style="gap:12px" aria-label="${esc(a.label || a.currency)}">
-        <h2 class="zb-h2">${esc(a.label || a.currency)}</h2>
-        <ul class="z-list z-card">
-          <li>${Z.copyRow({ label: "Account holder", value: holder })}</li>
-          <li>${Z.copyRow({ label: "IBAN", value: String(a.identifier.iban).replace(/\s+/g, ""), display: Z.groupIban(a.identifier.iban), mono: true })}</li>
-          ${a.identifier.bic ? `<li>${Z.copyRow({ label: "BIC", value: a.identifier.bic, mono: true })}</li>` : ""}
-        </ul></section>`).join("")}</div>`
-    : `<div class="z-card"><p class="empty">No account has an IBAN yet. ${linkBtn("Accounts", "accounts")}</p></div>`;
-  const way = (icon, title, sub, v, tag = "") => `<li><a class="z-row" href="?view=${v}" data-view-link="${v}">${Z.iconTile({ icon })}<span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag ? `<span class="z-row__right">${tag}</span>` : ""}${Z.icon("chevron_right", "z-row__chev")}</a></li>`;
-  const ways = [
-    cap("invoices").allowed ? way("receipt_long", "Invoices", "Issue one, or ask a supplier for theirs with a link", "invoices") : "",
-    way("hub", "Shopify and other connections", "Take payments from your store, send your books on", "integrations"),
-  ].join("");
-  return `<h2 class="zb-h2" style="margin-bottom:12px">Bank details</h2>${details}
-    <h2 class="zb-h2" style="margin:28px 0 12px">Other ways</h2><ul class="z-list z-card">${ways}</ul>`;
-};
-
-/* ==========================================================================
    Shopify: Zold as a payment method on a merchant's store.
    Crypto only, sale only, refunds by hand: every one of those limits is
    printed here rather than discovered by a customer at checkout.
    ========================================================================== */
 
-META.shopify = () => ({ title: "Shopify", sub: "Customers pay an order in digital dollars (USDC).", actions: `${Z.tag("Beta")}${linkBtn("Connections", "integrations", "arrow_back")}` });
+META.shopify = () => ({ title: "Shopify", sub: "Customers pay an order in digital dollars (USDC).", actions: `${Z.tag("Beta")}${linkBtn("Apps", "apps", "arrow_back")}` });
+
+/* Apps: tools that take payments for the org. Shopify is the only one;
+   accounting software lives in Books, Connections. */
+META.apps = () => ({ title: "Apps", sub: `Tools that take payments for ${org.name}. Accounting software is in Books, Connections.`, actions: "" });
+RENDER.apps = async () => `<h2 class="zb-h2" style="display:flex;align-items:center;gap:8px;margin-bottom:12px">Shopify ${Z.tag("Beta")}</h2>${await RENDER.shopify()}`;
 /** A reason from the API, closed with a full stop before the next sentence. */
 const sentence = (s) => (s = String(s).trim()) && !/[.!?]$/.test(s) ? `${s}.` : s;
 
@@ -330,16 +261,14 @@ RENDER.export = async () => {
    Connections
    ========================================================================== */
 
-META.integrations = () => ({ title: "Connections", sub: "Your store, and the software your accountant already uses.", actions: linkBtn("Settings", "settings", "arrow_back") });
+META.integrations = () => ({ title: "Connections", sub: "Get your books into the software your accountant already uses.", actions: "" });
 
 const conn = (logo, title, sub, tag, text, act, wide = false) => `<section class="z-card zb-conn${wide ? " zb-conn--wide" : ""}" aria-label="${esc(title)}">
     <div class="zb-conn__head"><span class="zb-conn__logo" aria-hidden="true">${esc(logo)}</span><span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${tag}</div>
     <p>${text}</p><div class="zb-actions">${act}</div></section>`;
 
 RENDER.integrations = async () => {
-  const shop = `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Take payments</h2>
-    ${conn("SH", "Shopify", "Your store’s checkout", Z.tag("Beta"), "Customers pay an order in digital dollars (USDC), and Zold marks it paid in Shopify once the money arrives.", linkBtn("Open", "shopify", "storefront"), true)}`;
-  if (!cap("integrations.accounting").allowed) return `${shop}<h2 class="z-eyebrow zb-conn__group">Your books</h2>${gateHtml("integrations.accounting")}`;
+  if (!cap("integrations.accounting").allowed) return gateHtml("integrations.accounting");
   const r = await api(`/api/orgs/${org.id}/integrations`);
   const g = r.integrations.getmyinvoices;
   const gmi = g.connected
@@ -349,7 +278,7 @@ RENDER.integrations = async () => {
     : conn("GMI", "GetMyInvoices", "API key · sends Belege each month", Z.tag("Beta"),
       "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
       r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`, true);
-  return `${shop}<h2 class="z-eyebrow zb-conn__group">Sends your books for you</h2>
+  return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends your books for you</h2>
     ${gmi}
     <h2 class="z-eyebrow zb-conn__group">File exports</h2>
     <div class="zb-grid3">
@@ -457,22 +386,6 @@ RENDER.soon = async () => {
 };
 
 const settingsBack = () => linkBtn("Settings", "settings", "arrow_back");
-const planName = (id) => `${id.charAt(0).toUpperCase()}${id.slice(1)}`;
-
-META.settings = () => ({ title: "Settings", sub: `${org.name}, on the ${planName(org.effectivePlan)} plan${org.effectivePlan !== org.plan ? " (trial)" : ""}.`, actions: "" });
-
-/* One tile per area; each opens its own screen. A tile whose feature the
-   plan lacks stays, and its screen says what it needs. */
-RENDER.settings = async () => {
-  const tile = (icon, title, sub, v) => `<li><a class="z-card zb-tile" href="?view=${esc(v)}" data-view-link="${esc(v)}">${Z.iconTile({ icon })}<span class="z-row__main"><span class="z-row__title">${esc(title)}</span><span class="z-row__sub">${esc(sub)}</span></span>${Z.icon("chevron_right", "z-row__chev")}</a></li>`;
-  return `<ul class="zb-tiles">
-    ${tile("domain", "Organisation", "Name, legal name, address, tax ID", "organisation")}
-    ${cap("invoices").allowed ? tile("receipt_long", "Invoicing profile", "Tax numbers, bank details, number series", "invoicing-settings") : ""}
-    ${tile("hub", "Connections", "Shopify, GetMyInvoices, Lexware, sevDesk, DATEV", "integrations")}
-    ${tile("group", "Members and access", "Who is in, and what each role may do", "members")}
-    ${tile("workspace_premium", "Plan", `${planName(org.effectivePlan)}${org.effectivePlan !== org.plan ? " (trial)" : ""}`, "plan")}
-  </ul>`;
-};
 
 META.organisation = () => ({ title: "Organisation", sub: "Printed on every invoice you issue. The country decides which invoicing rules apply.", actions: `${settingsBack()}${primary("Save", 'data-act="save-org"')}` });
 
