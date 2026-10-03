@@ -99,7 +99,7 @@ function body(lines, months, chart) {
   return `<div class="zb-h-chips zb-bo-periods" role="group" aria-label="Period">${pills}</div>
     <p class="zb-hint zb-bo-range">${esc(r.title)}</p>
     <section class="z-card zb-side-card zb-bo-cash" aria-labelledby="bo-cash">
-      <div class="zb-bo-cash__figs"><h2 id="bo-cash">Cash</h2>
+      <div class="zb-bo-cash__figs"><h2 id="bo-cash">Cash<span class="z-sr">,</span> <span class="zb-bo-scope">Euro account</span></h2>
         <div class="zb-h-fig"><span class="zb-h-fig__label">Net cash flow</span><span class="zb-h-fig__value zb-bo-big">${signed(net < 0 ? "−" : "+", net)}</span>${versus(net, cents(before, "in") - cents(before, "out"), r.label)}</div>
         <dl class="zb-bo-io"><div><dt><span class="zb-h-key zb-h-key--in" aria-hidden="true"></span>Money in</dt><dd class="is-in">${signed("+", inC)}</dd></div><div><dt><span class="zb-h-key zb-h-key--out" aria-hidden="true"></span>Money out</dt><dd>${signed("−", outC)}</dd></div></dl></div>
       ${now.length ? barsHtml(weeks(now, r.from, r.to), `Money in and out per week, ${r.title}`) : `<p class="zb-hint">No money moved in this period.</p>`}
