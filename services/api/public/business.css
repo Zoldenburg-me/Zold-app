@@ -85,6 +85,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .zb-err:empty { display: none; }
 
 /* Sidebar extras: the org card as a button, the accounts list. */
+/* Banking and Books: one switch, two sidebars. */
+.zb-space { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: var(--z-radius-pill); border: 1px solid var(--z-line-strong); background: var(--z-field); }
+.zb-space[hidden] { display: none; }
+.zb-space__btn { display: flex; align-items: center; justify-content: center; gap: 6px; height: 34px; border-radius: var(--z-radius-pill); border: 1px solid transparent; font-size: 13.5px; font-weight: 500; color: var(--z-dim); transition: color var(--z-ease), background-color var(--z-ease); }
+.zb-space__btn .z-ic { font-size: 18px; }
+.zb-space__btn:hover { color: var(--z-text); }
+.zb-space__btn[aria-current="page"] { border-color: var(--z-pink-border); background: var(--z-pink-tint); font-weight: 600; color: var(--z-heading); }
+.zb-space__btn[aria-current="page"] .z-ic { color: var(--z-pink); }
 .zb-side .z-side__org { cursor: default; }
 .zb-side button.z-side__org { cursor: pointer; }
 .zb-accts { display: flex; flex-direction: column; gap: 2px; margin-top: var(--z-space-3); }

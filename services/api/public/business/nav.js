@@ -1,34 +1,61 @@
 /**
- * The sidebar (design/ui-v2 build step 8b) and the plan banner.
+ * The sidebar (design canvas "Desktop: Banking and Books") and the plan
+ * banner.
  *
- * The nav is the reference's: Home, Approvals, Send, Get paid, Invoices,
- * Contacts, Books, Members, then the ACCOUNTS list, Coming soon and Settings.
+ * Two spaces behind one switch. Banking: Home, Approvals, Send, Get paid,
+ * Invoices, Contacts, Members, Apps, then the ACCOUNTS list, Coming soon and
+ * Settings. Books: Statement, Categories, Export, Connections, then Settings.
  * The older views keep their ?view= ids and sit under one of these (PARENT):
- * Books holds the ledger, the export, the chart of accounts, assets, wallets
- * and the chart of accounts; Settings the invoicing profile and connections,
- * and Connections holds Shopify.
+ * the ledger, assets and wallets under Statement, Shopify under Apps.
  */
 import { $, Z, api, cap, esc, eur, me, org, orgs, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 
-export const VIEWS = [
-  { id: "overview", label: "Home", icon: "home" },
-  { id: "payments", label: "Approvals", icon: "inbox", capability: "transfers.drafts" },
-  { id: "send", label: "Send", icon: "arrow_outward", capability: "transfers.drafts" },
-  { id: "get-paid", label: "Get paid", icon: "south_west" },
-  { id: "invoices", label: "Invoices", icon: "receipt_long", capability: "invoices" },
-  { id: "contacts", label: "Contacts", icon: "contacts" },
-  { id: "books", label: "Books", icon: "menu_book", capability: "ledger.transactions" },
-  { id: "members", label: "Members", icon: "group", capability: "members.manage" },
-];
+export const SPACES = {
+  banking: [
+    { id: "overview", label: "Home", icon: "home" },
+    { id: "payments", label: "Approvals", icon: "inbox", capability: "transfers.drafts" },
+    { id: "send", label: "Send", icon: "arrow_outward", capability: "transfers.drafts" },
+    { id: "get-paid", label: "Get paid", icon: "south_west" },
+    { id: "invoices", label: "Invoices", icon: "receipt_long", capability: "invoices" },
+    { id: "contacts", label: "Contacts", icon: "contacts" },
+    { id: "members", label: "Members", icon: "group", capability: "members.manage" },
+    { id: "apps", label: "Apps", icon: "apps" },
+  ],
+  books: [
+    { id: "books", label: "Statement", icon: "list_alt", capability: "ledger.transactions" },
+    { id: "coa", label: "Categories", icon: "category", capability: "coa.manage" },
+    { id: "export", label: "Export", icon: "download", capability: "export.ledger" },
+    { id: "integrations", label: "Connections", icon: "cable" },
+  ],
+};
+export const VIEWS = [...SPACES.banking, ...SPACES.books];
+/** Where the Banking and Books switch lands. */
+const SPACE_HOME = { banking: "overview", books: "books" };
 
 /** Which nav item an older view belongs to. */
 export const PARENT = {
-  ledger: "books", export: "books", coa: "books", assets: "books", wallets: "books",
-  shopify: "settings", "invoice-new": "invoices", "invoicing-settings": "settings", integrations: "settings", organisation: "settings", plan: "settings", documents: "accounts", accounts: "accounts",
+  ledger: "books", assets: "books", wallets: "books",
+  shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", plan: "settings", documents: "accounts", accounts: "accounts",
 };
 /** Every view id the router accepts, including those without a nav item. */
 export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT), "settings", "soon"]);
+
+/** The space a view lives in. Settings and Coming soon stay in the one you came from. */
+let lastSpace = "banking";
+export function spaceOf(v) {
+  const item = PARENT[v] || v;
+  if (SPACES.books.some((it) => it.id === item)) lastSpace = "books";
+  else if (SPACES.banking.some((it) => it.id === item) || item === "accounts") lastSpace = "banking";
+  return lastSpace;
+}
+
+/* A plan limit keeps the entry, with a lock; a feature this kind of org can
+   never have (a business-only entry in a personal org) leaves it out. */
+function shown(v) {
+  const verdict = v.capability ? cap(v.capability) : { allowed: true };
+  return !v.capability || verdict.allowed || verdict.requiresPlan || verdict.unavailable;
+}
 
 /* What the sidebar shows beside the nav: the org's accounts, and how many
    payment runs wait for this person. Read after each render, drawn from
@@ -77,29 +104,33 @@ function accountRight(a) {
 export function renderNav() {
   if (!org) return;
   const active = PARENT[view] || view;
+  // No Books item this org can open: no switch, Banking alone.
+  const hasBooks = SPACES.books.some((v) => v.capability && shown(v));
+  const space = hasBooks ? spaceOf(view) : "banking";
   const waiting = waitingForMe(side.drafts).length;
-  const items = VIEWS.filter((v) => {
-    // Business-only entries stay out of a personal org entirely: a product
-    // boundary, not a paywall. A plan limit keeps the entry, with a lock.
-    const verdict = v.capability ? cap(v.capability) : { allowed: true };
-    return !v.capability || verdict.allowed || verdict.requiresPlan || verdict.unavailable;
-  }).map((v) => ({
+  const items = SPACES[space].filter(shown).map((v) => ({
     ...v,
     label: v.id === "payments" && !cap("transfers.approvals").allowed ? "Payments" : v.label,
     badge: v.id === "payments" && waiting ? String(waiting) : "",
   }));
   $("#nav").innerHTML = items.map((it) => link(it, active)).join("");
+  $("#nav").setAttribute("aria-label", space === "books" ? "Books" : "Main");
+  $("#side-space").innerHTML = hasBooks
+    ? [["banking", "Banking", "account_balance_wallet"], ["books", "Books", "menu_book"]].map(([id, label, icon]) =>
+      `<a class="zb-space__btn" href="?view=${SPACE_HOME[id]}" data-view="${SPACE_HOME[id]}"${space === id ? ' aria-current="page"' : ""}>${Z.icon(icon)}${label}</a>`).join("")
+    : "";
+  $("#side-space").hidden = !hasBooks;
 
   const who = org.type === "personal" ? "Personal" : `Business · ${(ROLE_WORD[org.role] || org.role || "").toLowerCase()}`;
   const card = `${Z.avatar({ name: org.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(org.name)}</span><span class="z-row__sub">${esc(who)}</span></span>`;
   $("#side-org").innerHTML = `<button type="button" class="z-side__org" id="org-btn" aria-haspopup="dialog" aria-label="Switch organisation. Current: ${esc(org.name)}">${card}${Z.icon("unfold_more", "z-row__chev")}</button>`;
 
   const accts = side.accounts;
-  $("#side-accounts").innerHTML = accts && accts.length
+  $("#side-accounts").innerHTML = space === "banking" && accts && accts.length
     ? `<section class="zb-accts" aria-labelledby="side-acc-h"><h2 class="z-eyebrow" id="side-acc-h">Accounts</h2>${accts.map((a) =>
       `<a class="zb-acct" href="?view=accounts" data-view="accounts"${view === "accounts" ? ' aria-current="page"' : ""}>${Z.icon("account_balance_wallet")}<span>${esc(a.label || a.currency)}</span><span class="zb-acct__right">${esc(accountRight(a))}</span></a>`).join("")}</section>`
     : "";
-  $("#side-foot").innerHTML = `${link({ id: "soon", icon: "hourglass_top", label: "Coming soon" }, active)}
+  $("#side-foot").innerHTML = `${space === "banking" ? link({ id: "soon", icon: "hourglass_top", label: "Coming soon" }, active) : ""}
     ${link({ id: "settings", icon: "settings", label: "Settings" }, active)}
     <div id="side-test"></div>`;
   if (testMode !== undefined) $("#side-test").innerHTML = Z.testModePill(testMode);
