@@ -1,0 +1,4 @@
+# Values the pre-commit leak scan may let through, one regex per line.
+# The published example Estonian IBAN (IBAN registry / ECBS), used as a fixture
+# in tests and the local preview seed. Not an account anyone holds.
+^EE382200221020145685$

@@ -183,6 +183,15 @@ await check("legal-form suffixes, case and punctuation do not make a name mismat
   assert.match(nameWarning({ type: "business", name: "Acme", legalName: "Acme Technik GmbH" }, "Other Holding AG")!, /Other Holding AG/);
 });
 
+/** These checks are about Monerium's profile answer, so they connect one
+ *  Safe to several companies; a Safe belongs to one, so the company accounts
+ *  it is active in step aside for the check and come back after. */
+async function withSafeFree(userId: string, fn: () => Promise<void>) {
+  const held = store.accounts.filter((a) => a.backingUserId === userId && a.status === "active").map((a) => a.id);
+  for (const id of held) store.updateAccount(id, { status: "gated" });
+  try { await fn(); } finally { for (const id of held) store.updateAccount(id, { status: "active" }); }
+}
+
 console.log("\nAdoption");
 
 await check("a corporate profile is adopted into a business org, and the account records whose IBAN it is", async () => {
@@ -203,15 +212,30 @@ await check("a corporate profile is adopted into a business org, and the account
   assert.equal(audits().at(-1)!.data.viaIssuedIban, false);
 });
 
-await check("POST /accounts with useMyAccount adopts a corporate profile the same way", async () => {
+await check("a Safe connected to one company can't be connected to another, by either route; the account records when its books start", async () => {
+  assert.ok(store.findAccount("acc_biz")!.backedSince, "backedSince is recorded at the connection");
+  addOrg("org_biz_second", "business", "u_corp", "Acme Technik GmbH");
+  addGatedEur("acc_biz_second", "org_biz_second");
+  const fund = await call("POST", "/api/orgs/org_biz_second/accounts/acc_biz_second/fund", "u_corp");
+  assert.equal(fund.status, 409, JSON.stringify(fund.data));
+  assert.equal(fund.data.code, "SAFE_IN_OTHER_ORG");
+  assert.match(fund.data.error, /connected to Acme Technik GmbH/);
+  assert.equal(store.findAccount("acc_biz_second")!.backingUserId, undefined, "nothing written");
+  addOrg("org_biz_third", "business", "u_corp", "Acme Technik GmbH");
+  const open = await call("POST", "/api/orgs/org_biz_third/accounts", "u_corp", { currency: "EUR", useMyAccount: true });
+  assert.equal(open.status, 409);
+  assert.equal(open.data.code, "SAFE_IN_OTHER_ORG");
+});
+
+await check("POST /accounts with useMyAccount adopts a corporate profile the same way", () => withSafeFree("u_corp", async () => {
   addOrg("org_biz_new", "business", "u_corp", "Acme Technik GmbH");
   const r = await call("POST", "/api/orgs/org_biz_new/accounts", "u_corp", { currency: "EUR", useMyAccount: true });
   assert.equal(r.status, 201, JSON.stringify(r.data));
   assert.equal(r.data.account.moneriumProfile.kind, "corporate");
   assert.match(r.data.note, /company profile "Acme Technik GmbH"/);
-});
+}));
 
-await check("a different legal name is a visible warning, not a block", async () => {
+await check("a different legal name is a visible warning, not a block", () => withSafeFree("u_corp", async () => {
   addOrg("org_biz_other", "business", "u_corp", "Beta Handel UG (haftungsbeschränkt)");
   addGatedEur("acc_biz_other", "org_biz_other");
   const r = await call("POST", "/api/orgs/org_biz_other/accounts/acc_biz_other/fund", "u_corp");
@@ -219,7 +243,7 @@ await check("a different legal name is a visible warning, not a block", async ()
   assert.match(r.data.warning, /Acme Technik GmbH.*Beta Handel/);
   const list = await call("GET", "/api/orgs/org_biz_other/accounts", "u_corp");
   assert.match(list.data.accounts[0].profile.warning, /still go through/);
-});
+}));
 
 await check("a personal profile is refused for a business org, in plain words, and the account stays gated", async () => {
   addOrg("org_biz_p", "business", "u_personal", "Gamma GmbH");
@@ -251,14 +275,14 @@ await check("useMyAccount with a personal profile on a business org opens nothin
   assert.equal(store.accountsOf("org_biz_p").length, before);
 });
 
-await check("a corporate profile is refused for a personal org", async () => {
+await check("a corporate profile is refused for a personal org", () => withSafeFree("u_corp", async () => {
   addOrg("org_pers_c", "personal", "u_corp");
   addGatedEur("acc_pers_c", "org_pers_c");
   const r = await call("POST", "/api/orgs/org_pers_c/accounts/acc_pers_c/fund", "u_corp");
   assert.equal(r.status, 409);
   assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISMATCH");
   assert.equal(store.findAccount("acc_pers_c")!.status, "gated");
-});
+}));
 
 await check("a personal profile is adopted into a personal org", async () => {
   addOrg("org_pers", "personal", "u_personal");
@@ -296,7 +320,7 @@ await check("a pending company profile backs the account once Monerium has issue
   assert.equal(audits().at(-1)!.data.viaIssuedIban, true, "the audit says this pass rests on an issued IBAN, not an approved profile");
 });
 
-await check("a pending company profile with no issued IBAN is still refused", async () => {
+await check("a pending company profile with no issued IBAN is still refused", () => withSafeFree("u_pending_iban", async () => {
   ibansOf.set(pendingIbanToken, []);
   addOrg("org_lind_none", "business", "u_pending_iban", "Linder GmbH");
   addGatedEur("acc_lind_none", "org_lind_none");
@@ -304,9 +328,9 @@ await check("a pending company profile with no issued IBAN is still refused", as
   assert.equal(r.status, 409);
   assert.equal(r.data.code, "MONERIUM_PROFILE_NOT_APPROVED");
   assert.equal(store.findAccount("acc_lind_none")!.status, "gated");
-});
+}));
 
-await check("an IBAN on the pending profile that pays into another address, or is not approved, does not count", async () => {
+await check("an IBAN on the pending profile that pays into another address, or is not approved, does not count", () => withSafeFree("u_pending_iban", async () => {
   addOrg("org_lind_other", "business", "u_pending_iban", "Linder GmbH");
   const cases = [[issued({ address: `0x${"9".repeat(40)}` })], [issued({ state: "pending" })], [issued({ profile: CORP.id })]];
   for (const [i, ibans] of cases.entries()) {
@@ -316,9 +340,9 @@ await check("an IBAN on the pending profile that pays into another address, or i
     assert.equal(r.status, 409, JSON.stringify(ibans));
     assert.equal(r.data.code, "MONERIUM_PROFILE_NOT_APPROVED");
   }
-});
+}));
 
-await check("a closed company profile is refused even with an IBAN issued to this Safe", async () => {
+await check("a closed company profile is refused even with an IBAN issued to this Safe", () => withSafeFree("u_pending_iban", async () => {
   ibansOf.set(pendingIbanToken, [issued()]);
   visible.set(pendingIbanToken, [{ ...CORP_PENDING_IBAN, state: "closed" }]);
   try {
@@ -330,7 +354,7 @@ await check("a closed company profile is refused even with an IBAN issued to thi
   } finally {
     visible.set(pendingIbanToken, [CORP_PENDING_IBAN]);
   }
-});
+}));
 
 await check("the client cannot claim a kind: a body saying corporate changes nothing", async () => {
   addGatedEur("acc_biz_p_claim", "org_biz_p");
@@ -339,7 +363,7 @@ await check("the client cannot claim a kind: a body saying corporate changes not
   assert.equal(r.data.code, "MONERIUM_PROFILE_KIND_MISMATCH");
 });
 
-await check("Monerium unreachable: refused with 503 and nothing written", async () => {
+await check("Monerium unreachable: refused with 503 and nothing written", () => withSafeFree("u_corp", async () => {
   addOrg("org_biz_down", "business", "u_corp", "Acme Technik GmbH");
   addGatedEur("acc_biz_down", "org_biz_down");
   const snapshot = JSON.stringify(store.findAccount("acc_biz_down"));
@@ -356,7 +380,7 @@ await check("Monerium unreachable: refused with 503 and nothing written", async 
   } finally {
     fake.down = false;
   }
-});
+}));
 
 console.log("\nExecution");
 

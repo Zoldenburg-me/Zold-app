@@ -200,7 +200,7 @@ initStore();
 const SAFE = `0x${"aa".repeat(20)}` as const;
 const now = new Date().toISOString();
 const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
-store.addUser({ id: "u_owner", name: "Sara Lindner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: now } as any);
+store.addUser({ id: "u_owner", name: "Sara Lindner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: "2026-01-01T00:00:00.000Z" } as any);
 store.addUser({ id: "u_viewer", name: "Viewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
 store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
 store.addOrganisation({ id: "org_starter", type: "business", name: "Starter GmbH", plan: "starter", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });

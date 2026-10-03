@@ -285,6 +285,12 @@ export interface Account {
    */
   backingUserId?: string;
   /**
+   * From when the backing Safe's movements are this account's, fixed when the
+   * Safe was connected (domain/safe-books.ts). Absent on accounts connected
+   * before it was recorded; the books then work it out from the Safe.
+   */
+  backedSince?: string;
+  /**
    * The Monerium profile that owns the IBAN, as Monerium reported it when the
    * backing user's account was adopted or last re-checked: the legal entity a
    * bookkeeper or auditor needs to see. Read on the backing user's own
