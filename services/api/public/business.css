@@ -434,3 +434,4 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-app__setup[open] summary { margin-bottom: 12px; }
 .zb-app__setup .zb-steps { margin: 12px 0; }
 @media (max-width: 599px) { .zb-app__row { flex-direction: column; } }
+.zb-bo-scope-note { margin-top: 10px; }

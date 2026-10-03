@@ -92,7 +92,7 @@ RENDER.accounts = async () => {
 
 const booksBack = () => linkBtn("Books", "books", "arrow_back");
 
-META.wallets = () => ({ title: "Imported wallets", sub: "Addresses you want counted in your books. Read only: Zold never holds a key for one.", actions: `${booksBack()}${secondary("Import wallet", 'data-act="import-wallet"', "add")}` });
+META.wallets = () => ({ title: "Wallets", sub: "Addresses you want counted in your books. Read only: Zold never holds a key for one.", actions: secondary("Import wallet", 'data-act="import-wallet"', "add") });
 RENDER.wallets = async () => {
   const { wallets } = await api(`/api/orgs/${org.id}/wallets`);
   return wallets.length
