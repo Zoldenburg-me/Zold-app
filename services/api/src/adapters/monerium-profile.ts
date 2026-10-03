@@ -12,6 +12,7 @@ import { store, type User } from "../store.js";
 import type { Account, Organisation } from "../domain/types.js";
 import {
   expectedProfileKind,
+  ibanIssuedTo,
   judgeProfile,
   kindMismatch,
   nameWarning,
@@ -87,7 +88,7 @@ export async function readMoneriumProfile(user: User, profileId: string): Promis
 }
 
 export type BackingCheck =
-  | { ok: true; record: NonNullable<Account["moneriumProfile"]>; warning?: string }
+  | { ok: true; record: NonNullable<Account["moneriumProfile"]>; warning?: string; /** Passed while the profile is still pending, on an IBAN Monerium issued to this Safe. */ viaIssuedIban?: true }
   | ({ ok: false } & ProfileRefusal);
 
 /**
@@ -121,7 +122,8 @@ export async function checkBackingProfile(
     if (isRefusal(err)) return { ok: false, ...err };
     return { ok: false, ...unreachable() };
   }
-  const refused = judgeProfile(org, facts);
+  const viaIssuedIban = facts.state === "pending" && await ibanIssuedLive(user, profileId);
+  const refused = judgeProfile(org, facts, viaIssuedIban);
   if (refused) return { ok: false, ...refused };
   const warning = nameWarning(org, facts.name) ?? undefined;
   return {
@@ -133,7 +135,20 @@ export async function checkBackingProfile(
       checkedAt: now,
     },
     ...(warning ? { warning } : {}),
+    ...(viaIssuedIban ? { viaIssuedIban: true } : {}),
   };
+}
+
+/** GET /ibans on the user's own connection, read only for a pending profile.
+ *  A failed read counts as no IBAN: the profile stays refused. */
+async function ibanIssuedLive(user: User, profileId: string): Promise<boolean> {
+  if (!user.address) return false;
+  try {
+    return ibanIssuedTo(await moneriumClientFor(user).ibans(), profileId, user.address);
+  } catch (err) {
+    console.warn(`monerium-profile: GET /ibans failed for ${user.id} (profile ${profileId}); the pending profile stays refused: ${(err as Error)?.message ?? err}`);
+    return false;
+  }
 }
 
 function refusal(status: number, code: ProfileRefusal["code"], error: string): ProfileRefusal {
@@ -163,7 +178,7 @@ export function auditProfileCheck(
     ...(where.accountId ? { accountId: where.accountId } : {}),
     backingUserId,
     ...(result.ok
-      ? { outcome: "passed", profileId: result.record.id, profileKind: result.record.kind, profileName: result.record.name ?? null, nameWarning: Boolean(result.warning) }
+      ? { outcome: "passed", profileId: result.record.id, profileKind: result.record.kind, profileName: result.record.name ?? null, nameWarning: Boolean(result.warning), viaIssuedIban: Boolean(result.viaIssuedIban) }
       : { outcome: "refused", code: result.code }),
   }, actorId));
 }

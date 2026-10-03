@@ -107,7 +107,10 @@ Order in `server.ts`:
    two buckets. **auth** (20/min) covers `/passkey*`, `/webauthn/challenge`,
    `/recovery*`, `/r/`, `/v/`, `/pay/<h>/<code>`, `/shopify/`, `/admin*`,
    `/invoice-links/`, `POST …/monerium/api-keys` and `POST /users`. **general**
-   (300/min) covers everything else. Matching uses the mount-relative path.
+   (300/min) covers everything else. `/admin*` with a valid operator token
+   has its own **operator** bucket (`OPERATOR_RATE_LIMIT_PER_MIN`, 300/min):
+   the dashboard's refresh loop alone sends about 16 a minute; a wrong token
+   stays on auth. Matching uses the mount-relative path.
 6. The page router serves the HTML routes, then `express.static(public)`. It
    is mounted before any `/api` router.
 7. Routers are mounted at `/api`. Mount order matters: the payment-request
@@ -666,7 +669,9 @@ flowchart LR
   its stored state can predate Monerium's approval, so the live check at
   adoption decides that. Checked at adoption (`POST /accounts` with adoption, `/fund`), at re-check
   (`/profile-check`) and at execution. Refusals: `MONERIUM_PROFILE_KIND_MISMATCH`,
-  `MONERIUM_PROFILE_NOT_APPROVED`, `MONERIUM_PROFILE_NOT_FOUND` (the login
+  `MONERIUM_PROFILE_NOT_APPROVED` (unless the profile is `pending` and a live
+  `GET /ibans` lists an approved IBAN on it paying into the backing Safe, the
+  same fact that approves the user in `/app`), `MONERIUM_PROFILE_NOT_FOUND` (the login
   cannot see the id; Monerium answers 403), `MONERIUM_NOT_CONNECTED` (409),
   and `MONERIUM_UNREACHABLE` (503, fail closed, nothing written). A pass is
   recorded on `Account.moneriumProfile` (`id`, `kind`, `name`, `checkedAt`),

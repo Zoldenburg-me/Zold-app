@@ -79,6 +79,16 @@ await t("three sources merge without double-counting the same money", () => {
   assert.equal(docs.statementTotals(merged).outEur, 40.99);
 });
 
+await t("the faucet's test EURe is a line of its own, so a statement with a drip reconciles", () => {
+  const at = "2026-10-02T23:50:24.460Z";
+  const lines = docs.linesFromFaucet({ grantedEur: 100, txHash: "0x5a68", at });
+  assert.deepEqual(lines, [{ at, direction: "in", amountEur: 100, counterpartyName: "Zold test faucet", memo: "Test EURe, testnet only", source: "chain", txHash: "0x5a68" }]);
+  assert.deepEqual(docs.linesFromFaucet(undefined), []);
+  assert.deepEqual(docs.linesFromFaucet({ grantedEur: 100, txHash: "", at }), [], "a claim whose send never went out moved nothing");
+  const merged = docs.mergeLines([], [], lines);
+  assert.equal(docs.reconcile(0, 100, docs.statementTotals(merged)).reconciles, true);
+});
+
 await t("reconciliation names the gap instead of hiding it", () => {
   assert.deepEqual(docs.reconcile(100, 59.01, { inEur: 0, outEur: 40.99 }), { reconciles: true, deltaEur: 0 });
   const r = docs.reconcile(100, 50, { inEur: 0, outEur: 40.99 });
@@ -108,6 +118,30 @@ await t("the BIC is the one Monerium reported for the current IBAN, never one gu
   assert.equal(docs.holderBlock({ ...base, ibanBic: { iban: "EE00OTHER", bic: "FAKEFK01", checkedAt: "x" } }).bic, undefined);
   assert.match(docs.PARTIES.footer, /AS LHV Pank/);
   assert.match(docs.PARTIES.footer, /Monerium ehf/);
+});
+
+await t("the holder is who Monerium names for the IBAN; the Zold user, when different, operates it", () => {
+  const base: any = { name: "Christian Lindner", iban: "EE32 5315 1162 8202 5727", address: `0x${"aa".repeat(20)}`, createdAt: "2026-10-02T23:00:22.550Z" };
+  const entry = { iban: "EE32 5315 1162 8202 5727", address: base.address, profile: "p1", name: "Linder GmBh" };
+  const company = docs.holderBlock({ ...base, monerium: { ibans: [entry] } });
+  assert.equal(company.name, "Linder GmBh");
+  assert.equal(company.operatedBy, "Christian Lindner");
+  const text = docs.ownershipStatement({ ...company, chainId: 84532 }, "2026-10-03");
+  assert.match(text, /^Linder GmBh holds the euro account with IBAN EE32 5315 1162 8202 5727\./);
+  assert.match(text, /Christian Lindner operates it for Linder GmBh\./);
+  assert.match(text, /Base Sepolia \(chain 84532\)/);
+  assert.match(text, /Only the holder can move money out/);
+  assert.match(text, /opened on 2026-10-02.*Issued 2026-10-03\./s);
+  // Monerium's snapshot may come wrapped as { ibans: [...] }.
+  assert.equal(docs.holderBlock({ ...base, monerium: { ibans: { ibans: [entry] } } }).name, "Linder GmBh");
+  // The same person, written differently: no "operated by".
+  const own = docs.holderBlock({ ...base, monerium: { ibans: [{ ...entry, name: "CHRISTIAN  LINDNER" }] } });
+  assert.equal(own.name, "Christian Lindner");
+  assert.equal(own.operatedBy, undefined);
+  assert.doesNotMatch(docs.ownershipStatement(own, "2026-10-03"), /operates it/);
+  // An entry for another IBAN, or no name from Monerium, says nothing.
+  assert.equal(docs.holderBlock({ ...base, monerium: { ibans: [{ ...entry, iban: "EE00OTHER" }] } }).name, "Christian Lindner");
+  assert.equal(docs.holderBlock({ ...base, monerium: { ibans: [{ ...entry, name: "" }] } }).operatedBy, undefined);
 });
 
 // ---------------------------------------------------------------------------

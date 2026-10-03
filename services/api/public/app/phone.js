@@ -469,7 +469,7 @@ PH.home = {
     return `<h1 class="z-sr">Home</h1><header class="z-apphead">
         ${Z.avatar({ name, tone: "p" })}
         <span class="z-apphead__name">${esc(phFirst(name) || name)}</span>
-        ${checklist ? Z.tag("Personal") : ""}
+        ${checklist ? Z.tag(ownAccountKind(u)) : ""}
       </header>
       ${phMain(`
         ${gate ? Z.note({ tone: "a", html: `<strong>${esc(gate.reason)}</strong> ${esc(gate.needs)} <a href="mailto:support@zoldhq.com">Ask us about it</a>` }) : ""}
@@ -1106,6 +1106,9 @@ PH["send/amount"] = {
   },
 };
 
+/* Same IBAN, however it is spaced or cased. */
+const phSameIban = (a, b) => Boolean(a && b) && String(a).replace(/\s+/g, "").toUpperCase() === String(b).replace(/\s+/g, "").toUpperCase();
+
 PH["send/review"] = {
   title: "Review payment",
   html() {
@@ -1116,13 +1119,14 @@ PH["send/review"] = {
       <div><p class="z-eyebrow">You send</p>${phBalanceFig(q.sendEur)}</div>
       <div class="z-card z-payee">${Z.avatar({ name: payee.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(payee.name)}</span><span class="z-mono z-dim" translate="no">${esc(Z.groupIban(payee.iban))}</span></span>${Z.tag("Beta")}</div>
       ${Z.kv([
-        { key: "From", value: "Personal account" },
+        { key: "From", value: `${ownAccountKind()} account` },
         { key: "Zold fee", value: phEur(q.fixedFeeEur) },
         { key: "Exchange", value: "None, euro to euro" },
         { key: "Sent as", value: "Bank transfer" },
         ...(phSend.reference ? [{ key: "Reference", value: phSend.reference }] : []),
         { key: `${first} receives`, value: phEur(q.receiveEur), strong: true },
       ])}
+      ${phSameIban(payee.iban, user?.iban) ? Z.note({ tone: "a", icon: "sync_alt", text: "This is your own IBAN. The money leaves and comes back to this account, minus the Zold fee." }) : ""}
       ${Z.note({ icon: "verified_user", text: "Your Face ID approves this amount to this IBAN only. If either changes, nothing is sent." })}
       <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([
         { key: "Price", value: q.id, mono: true },
@@ -2204,7 +2208,7 @@ function phSwitchSheet(trigger) {
   document.getElementById("ph-switch")?.remove();
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "ph-switch", title: "Switch account",
-    body: `<ul class="z-list z-card">${choice(null, u.name || "Personal", "Personal account")}${companies.map((o) => choice(o.id, o.name, `Business · you are ${phRoleWord(o.role).toLowerCase()}`)).join("")}</ul>`,
+    body: `<ul class="z-list z-card">${choice(null, u.name || ownAccountKind(u), `${ownAccountKind(u)} account`)}${companies.map((o) => choice(o.id, o.name, `Business · you are ${phRoleWord(o.role).toLowerCase()}`)).join("")}</ul>`,
   }));
   const scrim = $("ph-switch");
   scrim.dataset.ph = "1";
@@ -2230,7 +2234,7 @@ PH.more = {
     const has = (cap) => orgs.some((o) => phCan(o, cap));
     const who = co
       ? { name: co.name, sub: `Business · you are ${phRoleWord(co.role).toLowerCase()}` }
-      : { name: u.name || "", sub: companies.length ? `Personal · switch to ${companies.map((o) => o.name).join(", ")}` : "Personal account" };
+      : { name: u.name || "", sub: companies.length ? `${ownAccountKind(u)} · switch to ${companies.map((o) => o.name).join(", ")}` : `${ownAccountKind(u)} account` };
     const switcher = companies.length
       ? `<button type="button" class="z-card z-switch" id="ph-switch-btn" aria-haspopup="dialog">${Z.avatar({ name: who.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(who.name)}</span><span class="z-row__sub">${esc(who.sub)}</span></span>${Z.icon("unfold_more", "z-row__chev")}</button>`
       : `<div class="z-card z-switch">${Z.avatar({ name: who.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(who.name)}</span><span class="z-row__sub">${esc(who.sub)}</span></span></div>`;

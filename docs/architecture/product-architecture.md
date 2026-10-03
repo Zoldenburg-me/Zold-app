@@ -616,7 +616,10 @@ can additionally be signed by the Safe with the passkey. Each document is:
 - **re-verified on every visit**: signature, a chain re-read of the balance,
   statement reconciliation, and the Safe's EIP-1271 signature.
 
-A revoked document still resolves but shows as failing verification. These
+A revoked document still resolves but shows as failing verification. The
+holder named on a document is the one Monerium reports for the IBAN; when
+that is not the Zold user (a company signup's IBAN sits on the company's
+profile), the document names the company and adds "operated by" the user. These
 belong to a *user's* account, not an org. Only the account holder can create
 them.
 
@@ -750,7 +753,7 @@ go (Lexware CSV, a GetMyInvoices bank account, MT940 or CAMT).
 |---|---|---|
 | `/` | public | Marketing landing page |
 | `/app` | account holder | Consumer PWA with onboarding, home, send, activity, payment page and links, the personal organisation's invoices and accounting connections, settings, security, plan, documents, recovery and card. A member can switch it to a company: that company's home, account details, approvals (approve or send back), members and invites. Drafting and sending a company payment stay in `/business`. From 1024px it has a sidebar, a wide home, payment details in a drawer and a search (Cmd or Ctrl K) over the payments, contacts and invoices already loaded; picking a company there opens `/business`. Installable, and works offline for the shell. |
-| `/business` | org member | The organisation's desktop: a sidebar (Home, Approvals, Send, Get paid, Invoices, Contacts, Books, Members, the accounts list, Settings) and search (Cmd or Ctrl K) over contacts, payment runs and invoices. Approvals reviews in a drawer and sends one approved run at a time; Books holds the month's lines with category, memo and Beleg, the exports, Connections, the chart of accounts, assets, wallets and every transaction; Get paid holds the bank details and Shopify; the invoice editor draws the invoice as paper beside the form. A balance shows only to the member whose own account a company account spends from |
+| `/business` | org member | The organisation's desktop: a sidebar (Home, Approvals, Send, Get paid, Invoices, Contacts, Books, Members, the accounts list, Coming soon, Settings) and search (Cmd or Ctrl K) over contacts, payment runs and invoices. Approvals reviews in a drawer and sends one approved run at a time; Books holds the month's lines with category, memo and Beleg, the exports, the chart of accounts, assets, wallets and every transaction; Get paid holds the bank details; Settings is one tile per area (Organisation, Invoicing profile, Connections with Shopify and the accounting tools, Members and access, Plan), each its own screen; Accounts → Statements and documents issues the backing member's statements, balance confirmations, proofs of ownership and receipts; Coming soon lists what the organisation cannot do yet; the invoice editor draws the invoice as paper beside the form. A balance shows only to the member whose own account a company account spends from |
 | `/pay/<handle>` | payer | Payment page |
 | `/pay/<handle>/<code>` | payer | Payment link, which also serves as the payer's receipt |
 | `/r/<slug>` | anyone with the link | Redacted transfer receipt |
