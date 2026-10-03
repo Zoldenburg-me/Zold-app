@@ -5,7 +5,9 @@
  * document number), and the gates in front of both.
  *
  * The fake answers only to the one known key, records every request, and
- * plays a document as "already there" once uploaded. No network.
+ * plays a document as "already there" once uploaded. It can also answer an
+ * upload too slowly (keeping or dropping the document), refuse it, or answer
+ * reads too slowly, the way the live account answered uploads. No network.
  *
  * Run: npm run gmi:test
  */
@@ -20,10 +22,16 @@ import express from "express";
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-gmi-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
 process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-getmyinvoices-32";
+// Shorter than the fake's slow upload, so the routes see a timeout.
+process.env.GETMYINVOICES_UPLOAD_TIMEOUT_MS = "1000";
 
 const GOOD_KEY = "gmi_test_key_0123456789abcdef";
 const seen = { requests: [] as { method: string; path: string; key: string | undefined; ua: string | undefined; body: any }[], uploaded: new Map<string, number>() };
 let nextUid = 1000;
+/** normal | slow (records, answers after 1.5 s) | slow-drop (answers after
+ *  1.5 s, records nothing) | reject (422). readDelayMs slows GET /account. */
+const fakeMode = { upload: "normal" as "normal" | "slow" | "slow-drop" | "reject", readDelayMs: 0 };
+const SLOW_MS = 1500;
 
 const fake = createServer((req, res) => {
   let raw = "";
@@ -32,9 +40,10 @@ const fake = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://fake");
     const body = raw ? JSON.parse(raw) : undefined;
     seen.requests.push({ method: req.method!, path: url.pathname + url.search, key: req.headers["x-api-key"] as string | undefined, ua: req.headers["user-agent"], body });
-    const send = (code: number, b: any) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
+    const send = (code: number, b: any) => { if (res.destroyed) return; res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
     if (req.headers["x-api-key"] !== GOOD_KEY) return send(401, { success: false, detail: "Unauthorized", error_code: 401 });
     if (!req.headers["user-agent"]) return send(400, { success: false, detail: "Bad request. User-Agent malformed" });
+    if (url.pathname === "/account" && fakeMode.readDelayMs) return void setTimeout(() => send(200, { accountId: 4711 }), fakeMode.readDelayMs);
     if (url.pathname === "/account") return send(200, { name: "Sara Lindner", organization: "Zoldenburg UG", accountId: 4711, email: "books@example.com", hasBankingAccess: true, apiKeyType: "FULL_PERMISSION", currency: "EUR" });
     if (url.pathname === "/bankAccounts") return send(200, { totalCount: 1, records: [{ bankAccountUid: 77, accountType: "CUSTOM", name: "Zold clearing", currencyCode: "EUR" }] });
     if (url.pathname === "/documents" && req.method === "GET") {
@@ -44,9 +53,11 @@ const fake = createServer((req, res) => {
     }
     if (url.pathname === "/documents" && req.method === "POST") {
       if (!body?.fileName || !body?.fileContent || !body?.documentType) return send(400, { success: false, detail: "fileName, documentType and fileContent are required" });
+      if (fakeMode.upload === "reject") return send(422, { success: false, detail: "documentDate is invalid" });
       const uid = nextUid++;
-      seen.uploaded.set(body.documentNumber, uid);
-      return send(200, { success: true, documentUid: uid });
+      if (fakeMode.upload !== "slow-drop") seen.uploaded.set(body.documentNumber, uid);
+      if (fakeMode.upload === "normal") return send(200, { success: true, documentUid: uid });
+      return void setTimeout(() => send(200, { success: true, documentUid: uid }), SLOW_MS);
     }
     if (/^\/bankAccounts\/\d+\/transactions$/.test(url.pathname) && req.method === "POST") return send(200, { success: true, meta_data: {} });
     send(404, { success: false, detail: "unhandled " + url.pathname });
@@ -101,6 +112,71 @@ await check("pushDocument uploads once, then reports the existing document; the 
   assert.equal(second.outcome, "exists");
   assert.equal(second.documentUid, first.documentUid);
   assert.equal(seen.requests.filter((r) => r.method === "POST" && r.path === "/documents").length, 1);
+});
+
+const uploadsOf = (num: string) => seen.requests.filter((r) => r.method === "POST" && r.path === "/documents" && r.body?.documentNumber === num).length;
+const slowDoc = (documentNumber: string) => ({ fileName: "s.pdf", file: Buffer.from("%PDF-1.4 slow"), documentType: "PAYMENT_RECEIPT" as const, documentNumber, documentDate: "2026-09-11", grossAmount: "10.00", currency: "EUR", tags: ["tx:0xabc"] });
+
+await check("uploads have their own, longer timeout; reads keep the short one", async () => {
+  const { GETMYINVOICES } = await import("../services/api/src/config.js");
+  assert.equal(GETMYINVOICES.TIMEOUT_MS, 20_000, "reads default to 20 s");
+  assert.equal(GETMYINVOICES.UPLOAD_TIMEOUT_MS, 1000, "uploads read GETMYINVOICES_UPLOAD_TIMEOUT_MS");
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent(), timeoutMs: 1000, uploadTimeoutMs: 3000, relookupDelaysMs: [] });
+  fakeMode.upload = "slow";
+  try {
+    const r = await c.pushDocument(slowDoc("SLOWBUTINTIME01"));
+    assert.equal(r.outcome, "uploaded");
+    assert.equal((r as any).verifiedAfterTimeout, undefined, "a 1.5 s upload is inside the upload timeout, though past the read one");
+  } finally { fakeMode.upload = "normal"; }
+  fakeMode.readDelayMs = SLOW_MS;
+  try {
+    await assert.rejects(() => c.account(), (e: any) => e instanceof GmiApiError && e.status === 0, "a 1.5 s read is past the read timeout");
+  } finally { fakeMode.readDelayMs = 0; }
+});
+
+await check("an upload that times out but landed is found by its number: uploaded, tags may be missing, never sent twice", async () => {
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent(), uploadTimeoutMs: 1000, relookupDelaysMs: [10, 10] });
+  fakeMode.upload = "slow";
+  try {
+    const r = await c.pushDocument(slowDoc("SLOWLANDED00001"));
+    assert.equal(r.outcome, "uploaded", JSON.stringify(r));
+    assert.equal((r as any).documentUid, seen.uploaded.get("SLOWLANDED00001"));
+    assert.equal((r as any).verifiedAfterTimeout, true);
+    assert.equal((r as any).tagsMayBeMissing, true);
+    assert.equal(uploadsOf("SLOWLANDED00001"), 1);
+  } finally { fakeMode.upload = "normal"; }
+});
+
+await check("an upload that times out and cannot be found is unknown, not failed, and is not re-sent", async () => {
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent(), uploadTimeoutMs: 1000, relookupDelaysMs: [10, 10, 10] });
+  fakeMode.upload = "slow-drop";
+  const lookupsBefore = seen.requests.filter((r) => r.method === "GET" && r.path.includes("SLOWDROPPED0001")).length;
+  try {
+    const r = await c.pushDocument(slowDoc("SLOWDROPPED0001"));
+    assert.equal(r.outcome, "unknown", JSON.stringify(r));
+    assert.match((r as any).error, /unreachable/);
+    assert.equal(uploadsOf("SLOWDROPPED0001"), 1, "one upload, then lookups only");
+    assert.equal(seen.requests.filter((r) => r.method === "GET" && r.path.includes("SLOWDROPPED0001")).length - lookupsBefore, 4, "one lookup before, three after");
+  } finally { fakeMode.upload = "normal"; }
+});
+
+await check("a refused upload (4xx) still throws, so the route reports it failed; no re-lookup", async () => {
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent(), relookupDelaysMs: [10] });
+  fakeMode.upload = "reject";
+  try {
+    await assert.rejects(() => c.pushDocument(slowDoc("REJECTED0000001")), (e: any) => e instanceof GmiApiError && e.status === 422);
+    assert.equal(seen.requests.filter((r) => r.method === "GET" && r.path.includes("REJECTED0000001")).length, 1, "only the lookup before");
+  } finally { fakeMode.upload = "normal"; }
+});
+
+await check("deleteDocument sends DELETE with a JSON content type and an {} body", async () => {
+  const seenDelete: any[] = [];
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent(), fetchImpl: (async (url: any, init: any) => { seenDelete.push({ url: String(url), init }); return new Response(JSON.stringify({ success: true }), { status: 200 }); }) as any });
+  await c.deleteDocument(1234);
+  assert.equal(seenDelete[0].init.method, "DELETE");
+  assert.match(seenDelete[0].url, /\/documents\/1234$/);
+  assert.equal(seenDelete[0].init.headers["content-type"], "application/json");
+  assert.equal(seenDelete[0].init.body, "{}");
 });
 
 console.log("\nRoutes");
@@ -225,6 +301,34 @@ await check("push uploads each Beleg once; a second push uploads nothing", async
   assert.ok(audit, "the push is audited");
 });
 
+await check("push: an upload that times out but landed is reported uploaded (tags may be missing), not failed; nothing is sent twice", async () => {
+  seen.uploaded.clear();
+  const before = seen.requests.filter((r) => r.method === "POST" && r.path === "/documents").length;
+  fakeMode.upload = "slow";
+  try {
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body.results.map((x: any) => x.outcome), ["uploaded", "uploaded"], JSON.stringify(r.body));
+    assert.ok(r.body.results.every((x: any) => x.verifiedAfterTimeout === true && x.tagsMayBeMissing === true && typeof x.documentUid === "number"));
+  } finally { fakeMode.upload = "normal"; }
+  assert.equal(seen.requests.filter((r) => r.method === "POST" && r.path === "/documents").length - before, 2);
+  const again = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  assert.deepEqual(again.body.results.map((x: any) => x.outcome), ["exists", "exists"]);
+});
+
+await check("push: a refused upload (4xx) is still failed, and audited as such", async () => {
+  seen.uploaded.clear();
+  fakeMode.upload = "reject";
+  try {
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    assert.deepEqual(r.body.results.map((x: any) => x.outcome), ["failed", "failed"]);
+    assert.match(r.body.results[0].error, /422/);
+  } finally { fakeMode.upload = "normal"; }
+  const audit = store.auditFor("u_owner").find((a) => a.kind === "partner.documents_pushed") as any; // newest first
+  assert.equal(audit.data.failed, 2, JSON.stringify(audit));
+  assert.equal(audit.data.unknown, 0);
+});
+
 await check("removing the key stops pushes and leaves nothing of it in the org", async () => {
   assert.equal((await call("DELETE", "/api/orgs/org_1/integrations/getmyinvoices")).status, 200);
   assert.equal(store.findOrganisation("org_1")!.integrations?.getmyinvoices, undefined);
@@ -234,4 +338,4 @@ await check("removing the key stops pushes and leaves nothing of it in the org",
 server.close();
 fake.close();
 console.log(`\ngetmyinvoices: ${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);
-console.log("NOT PROVEN HERE: no upload has been made to the real account. Only GET /account and GET /bankAccounts have been called there.");
+console.log("NOT PROVEN HERE: this script calls no real account. One live push (2026-10-03, fake data, deleted after) is the only upload made to a real one.");

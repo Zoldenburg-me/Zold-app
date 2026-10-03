@@ -196,7 +196,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       const month = String(req.body?.month ?? "");
       if (!isMonth(month)) return res.status(400).json({ error: "month must be YYYY-MM" });
       const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
-      const results: { lineId: string; code?: string; outcome: "uploaded" | "exists" | "no-beleg" | "failed"; documentUid?: number; error?: string }[] = [];
+      const results: { lineId: string; code?: string; outcome: "uploaded" | "exists" | "unknown" | "no-beleg" | "failed"; documentUid?: number; verifiedAfterTimeout?: true; tagsMayBeMissing?: true; error?: string }[] = [];
       for (const line of lines) {
         const code = line.statement!.documentCode;
         const doc = code ? store.findDocumentByCode(code) : undefined;
@@ -211,7 +211,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
           results.push({ lineId: line.id, code: doc.code, outcome: "failed", error: String(err?.message ?? err).slice(0, 200) });
         }
       }
-      store.audit(auditEntry("partner.documents_pushed", { partner: "getmyinvoices", orgId: ctx.org.id, month, uploaded: results.filter((x) => x.outcome === "uploaded").length, existing: results.filter((x) => x.outcome === "exists").length, failed: results.filter((x) => x.outcome === "failed").length }, ctx.userId));
+      store.audit(auditEntry("partner.documents_pushed", { partner: "getmyinvoices", orgId: ctx.org.id, month, uploaded: results.filter((x) => x.outcome === "uploaded").length, existing: results.filter((x) => x.outcome === "exists").length, unknown: results.filter((x) => x.outcome === "unknown").length, failed: results.filter((x) => x.outcome === "failed").length }, ctx.userId));
       res.json({ month, results });
     } catch (err) {
       next(err);

@@ -167,7 +167,7 @@ Receipt shares [LIVE]
 - [ ] Prepare month → Belege → `/v/<code>` + `beleg.pdf`
 - [ ] Lexware CSV imports into Lexware; Belege ZIP naming
 - [ ] Chart of accounts, rules, ledger edit, assets, monthly report, ledger CSV
-- [ ] GetMyInvoices key verified; push a month [NEVER uploaded]
+- [x] GetMyInvoices key verified; push a month — verified live 2026-10-03 on the Zoldenburg UG account with fake data, documents deleted after. Uploads take 10–20+ s; a push of 4 needed the 120 s upload timeout to keep its tags
 
 ## 13. Add-ons
 - [ ] Gnosis Pay (EU_FULL): SIWE, account, transactions, disconnect [NEVER] — test before December, when Gnosis Pay discontinues it
