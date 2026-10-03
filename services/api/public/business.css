@@ -443,3 +443,15 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-cmdk__org { margin: 0; padding: 14px var(--z-space-5) 0; }
 #zb-search .z-cmdk__bar { height: 56px; }
 .zb-cmdk__ask { margin: var(--z-space-2) var(--z-space-1) 0; border-radius: var(--z-radius-md); border: 1px dashed var(--z-line-strong); }
+
+/* Accounts: one card per account, the full IBAN on its own line. */
+.zb-accts { display: flex; flex-direction: column; gap: var(--z-space-4); }
+.zb-acard { padding: var(--z-space-5); }
+.zb-acard__head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.zb-acard__name { font: 600 17px/1.3 var(--z-font); color: var(--z-heading); }
+.zb-acard__cur { margin-left: 8px; font-size: 13px; color: var(--z-dim); }
+.zb-acard__act { margin-left: auto; }
+.zb-acard__iban { margin: 16px 0 12px; display: flex; flex-direction: column; gap: 6px; }
+.zb-acard__ibanrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.zb-acard__ibanrow .z-mono { font-size: 20px; letter-spacing: .02em; color: var(--z-heading); white-space: nowrap; }
+@media (max-width: 599px) { .zb-acard__ibanrow .z-mono { font-size: 16px; } }
