@@ -251,13 +251,13 @@ await check("the writer maps a user to the org whose EUR account their Safe back
   assert.deepEqual(writeStatementLinesFor(store.findUser("u_orphan")!), { added: 0, updated: 0 });
 });
 
-await check("a Safe backing a personal account and a company account books into the company's books, whichever was opened first", () => {
+await check("a Safe backing a personal account and a company account keeps booking into the first (personal) books: no private history in the company's", () => {
   store.addUser({ ...user, id: "u_both", address: `0x${"dd".repeat(20)}` });
   store.addOrganisation({ id: "org_p", type: "personal", name: "Me", plan: "starter", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
   store.addOrganisation({ id: "org_b", type: "business", name: "Co", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
   store.addAccount({ id: "acc_p", orgId: "org_p", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_both", createdAt: now, updatedAt: now });
   store.addAccount({ id: "acc_b", orgId: "org_b", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: `0x${"dd".repeat(20)}`, backingUserId: "u_both", createdAt: now, updatedAt: now });
-  assert.deepEqual(booksFor("u_both"), { orgId: "org_b", accountId: "acc_b" });
+  assert.deepEqual(booksFor("u_both"), { orgId: "org_p", accountId: "acc_p" });
 });
 
 await check("first run writes the line with a rule-mapped code; a second run adds nothing", () => {

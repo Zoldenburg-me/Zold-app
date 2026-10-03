@@ -37,17 +37,17 @@ export function swapsHaveExecuted(): boolean {
 }
 
 /**
- * The org and EUR account a user's movements are booked under, if any.
+ * The org and EUR account a user's movements are booked under, if any: the
+ * first account their Safe backs, which is their personal one.
  *
- * One Safe can back the person's personal account and a company's account
- * at once: one pool of money, so one set of books. The company's books win;
- * the personal account is the one opened by default, the company one by
- * choice. Lines already written to the personal books stay there (nothing
- * in the ledger is deleted).
+ * Not the company's when the same Safe also backs a company account: every
+ * movement of the Safe, from before the company was connected too, would
+ * land in books its accountants and viewers read, and ledger rows are never
+ * deleted. Booking company money there needs the day the Safe started
+ * backing the company's account, which is not recorded yet.
  */
 export function booksFor(userId: string): { orgId: string; accountId: string } | undefined {
-  const backed = store.accounts.filter((a) => a.backingUserId === userId && a.currency === "EUR");
-  const account = backed.find((a) => store.findOrganisation(a.orgId)?.type === "business") ?? backed[0];
+  const account = store.accounts.find((a) => a.backingUserId === userId && a.currency === "EUR");
   if (account) return { orgId: account.orgId, accountId: account.id };
   return undefined;
 }
