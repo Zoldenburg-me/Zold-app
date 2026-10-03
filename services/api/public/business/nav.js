@@ -5,8 +5,8 @@
  * Contacts, Books, Members, then the ACCOUNTS list, Coming soon and Settings.
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * Books holds the ledger, the export, the chart of accounts, assets, wallets
- * and the chart of accounts; Get paid holds Shopify; Settings the invoicing profile
- * and connections.
+ * and the chart of accounts; Settings the invoicing profile and connections,
+ * and Connections holds Shopify.
  */
 import { $, Z, api, cap, esc, eur, me, org, orgs, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
@@ -25,10 +25,10 @@ export const VIEWS = [
 /** Which nav item an older view belongs to. */
 export const PARENT = {
   ledger: "books", export: "books", coa: "books", assets: "books", wallets: "books",
-  shopify: "get-paid", "invoice-new": "invoices", "invoicing-settings": "settings", integrations: "settings", accounts: "accounts",
+  shopify: "settings", "invoice-new": "invoices", "invoicing-settings": "settings", integrations: "settings", organisation: "settings", plan: "settings", documents: "accounts", accounts: "accounts",
 };
 /** Every view id the router accepts, including those without a nav item. */
-export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT), "settings"]);
+export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT), "settings", "soon"]);
 
 /* What the sidebar shows beside the nav: the org's accounts, and how many
    payment runs wait for this person. Read after each render, drawn from
@@ -99,7 +99,7 @@ export function renderNav() {
     ? `<section class="zb-accts" aria-labelledby="side-acc-h"><h2 class="z-eyebrow" id="side-acc-h">Accounts</h2>${accts.map((a) =>
       `<a class="zb-acct" href="?view=accounts" data-view="accounts"${view === "accounts" ? ' aria-current="page"' : ""}>${Z.icon("account_balance_wallet")}<span>${esc(a.label || a.currency)}</span><span class="zb-acct__right">${esc(accountRight(a))}</span></a>`).join("")}</section>`
     : "";
-  $("#side-foot").innerHTML = `${link({ id: "soon", href: "/app#soon", icon: "hourglass_top", label: "Coming soon", out: true }, active)}
+  $("#side-foot").innerHTML = `${link({ id: "soon", icon: "hourglass_top", label: "Coming soon" }, active)}
     ${link({ id: "settings", icon: "settings", label: "Settings" }, active)}
     <div id="side-test"></div>`;
   if (testMode !== undefined) $("#side-test").innerHTML = Z.testModePill(testMode);

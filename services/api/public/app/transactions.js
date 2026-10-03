@@ -11,7 +11,7 @@ const SHARE_GROUPS = [
   { key: "sender", label: "Your name", options: [["full", "Full"], ["first", "First"], ["last", "Last"], ["hidden", "None"]] },
   { key: "recipient", label: "Recipient name", options: [["full", "Full"], ["first", "First"], ["last", "Last"], ["hidden", "None"]] },
   { key: "account", label: "Payout account", options: [["full", "Full"], ["short", "Short"], ["hidden", "Hide"]] },
-  { key: "fx", label: "Currency shown", options: [["both", "Both"], ["sender", "EUR only"], ["recipient", "They get"]] },
+  { key: "fx", label: "Amounts shown", options: [["both", "Both"], ["sender", "What you sent"], ["recipient", "What they got"]] },
 ];
 
 /* "Reference & purpose" in the handoff. There is no purpose field on a
@@ -20,7 +20,7 @@ const SHARE_GROUPS = [
 const SHARE_TOGGLES = [
   { key: "showRate", label: "Rate, fee & margin", sub: "The rate you got and what Zold charged" },
   { key: "showRef", label: "Your reference", sub: "The note that rides on the payment" },
-  { key: "route", label: "Stats for nerds", sub: "Every settlement hop, with references" },
+  { key: "route", label: "Settlement route", sub: "Every hop the money took, with its references" },
 ];
 
 const SHARE_DEFAULTS = { sender: "last", recipient: "full", account: "short", fx: "both", showRate: true, showRef: true, route: false };
@@ -47,21 +47,37 @@ async function renderShareScreen() {
   paintShare();
 }
 
-function paintShare() {
-  const f = mShare.fields;
-  $("m-share-groups").innerHTML = SHARE_GROUPS.map((g) => `
-    <div class="m-sharegroup" role="group" aria-labelledby="m-sg-${g.key}">
-      <div class="lab" id="m-sg-${g.key}">${esc(g.label)}</div>
-      <div class="m-segs">${g.options.map(([id, label]) =>
-        `<button data-sgroup="${g.key}" data-sval="${id}" class="${f[g.key] === id ? "on" : ""}" aria-pressed="${f[g.key] === id}">${esc(label)}</button>`
-      ).join("")}</div>
-    </div>`).join("");
+/* paintShare redraws the controls; put focus back on the one in use, so arrow
+   keys keep moving through a radio group and a switch stays focused. */
+function shareFocusKey() {
+  const el = document.activeElement;
+  if (el?.dataset?.sgroup) return `input[data-sgroup="${el.dataset.sgroup}"][value="${el.value}"]`;
+  if (el?.dataset?.stoggle) return `[data-stoggle="${el.dataset.stoggle}"]`;
+  return null;
+}
 
-  $("m-share-toggles").innerHTML = SHARE_TOGGLES.map((t) => `
-    <button class="m-shtoggle" data-stoggle="${t.key}" aria-pressed="${!!f[t.key]}">
-      <span class="lab">${esc(t.label)}<span class="sub">${esc(t.sub)}</span></span>
-      <span class="m-track"><span class="knob"></span></span>
-    </button>`).join("");
+function paintShare() {
+  const refocus = shareFocusKey();
+  paintShareControls();
+  if (refocus) document.querySelector(refocus)?.focus();
+}
+
+function paintShareControls() {
+  const f = mShare.fields;
+  // One radio group per choice (arrow keys move within it), then the extras
+  // as switches: each control says what it is to a screen reader.
+  $("m-share-groups").innerHTML = SHARE_GROUPS.map((g) => `
+    <fieldset class="m-shfield"><legend>${esc(g.label)}</legend>
+      <div class="z-seg">${g.options.map(([id, label]) =>
+        `<label><input type="radio" name="m-sg-${g.key}" value="${id}" data-sgroup="${g.key}"${f[g.key] === id ? " checked" : ""} />${esc(label)}</label>`
+      ).join("")}</div>
+    </fieldset>`).join("");
+
+  $("m-share-toggles").innerHTML = `<h3 class="m-shhead">Also show</h3><ul class="z-list z-card">${SHARE_TOGGLES.map((t) => `
+    <li><button type="button" class="z-row z-row--btn m-shswitch" role="switch" data-stoggle="${t.key}" aria-checked="${!!f[t.key]}">
+      <span class="z-row__main"><span class="z-row__title">${esc(t.label)}</span><span class="z-row__sub">${esc(t.sub)}</span></span>
+      <span class="m-track" aria-hidden="true"><span class="knob"></span></span>
+    </button></li>`).join("")}</ul>`;
 
   paintSharePreview();
   $("m-share-revoke").classList.toggle("hidden", !mShare.link);
@@ -73,8 +89,8 @@ function paintShare() {
     foot.textContent = "A link is created when you copy it, and stays live for 30 days.";
   }
 
-  $("m-share-groups").querySelectorAll("button").forEach((b) => {
-    b.onclick = () => setShare(b.dataset.sgroup, b.dataset.sval);
+  $("m-share-groups").querySelectorAll("input[data-sgroup]").forEach((r) => {
+    r.onchange = () => setShare(r.dataset.sgroup, r.value);
   });
   $("m-share-toggles").querySelectorAll("button").forEach((b) => {
     b.onclick = () => setShare(b.dataset.stoggle, !mShare.fields[b.dataset.stoggle]);

@@ -297,6 +297,22 @@ export function linesFromChainCredits(credits: ChainCreditLike[]): StatementLine
     }));
 }
 
+/** The onboarding faucet grant (faucet.ts, test chains only): test EURe sent
+ *  straight to the Safe, which no other source records. A claim with no
+ *  txHash is one whose send never went out. */
+export function linesFromFaucet(grant: { grantedEur: number; txHash: string; at: string } | undefined): StatementLine[] {
+  if (!grant?.txHash || !(grant.grantedEur > 0)) return [];
+  return [{
+    at: grant.at,
+    direction: "in",
+    amountEur: grant.grantedEur,
+    counterpartyName: "Zold test faucet",
+    memo: "Test EURe, testnet only",
+    source: "chain",
+    txHash: grant.txHash,
+  }];
+}
+
 /**
  * Merge the three sources into one list, most authoritative wins.
  *
@@ -425,13 +441,22 @@ export function ownershipMessage(holder: HolderBlock, code: string, date: string
   );
 }
 
+const CHAIN_NAMES: Record<number, string> = { 8453: "Base", 84532: "Base Sepolia", 31337: "a local test chain" };
+
+/** The proof in words a bank or an authority reads: who holds which IBAN,
+ *  where it pays into, and who can move the money. The signatures below it
+ *  are explained on the page. */
 export function ownershipStatement(holder: HolderBlock, date: string): string {
-  return (
-    `This confirms that ${holder.name}${holder.operatedBy ? `, operated by ${holder.operatedBy},` : ""} holds a Zold account, opened on ${holder.accountSince.slice(0, 10)}, ` +
-    `whose account of record is the smart account ${holder.safeAddress} on chain ${holder.chainId}` +
-    (holder.iban ? `, to which the IBAN ${holder.iban} is linked` : "") +
-    `. Issued ${date}.`
-  );
+  const chain = `${CHAIN_NAMES[holder.chainId] ?? "chain"} (chain ${holder.chainId})`;
+  return [
+    holder.iban
+      ? `${holder.name} holds the euro account with IBAN ${holder.iban}${holder.bic ? ` (BIC ${holder.bic})` : ""}.`
+      : `${holder.name} holds a Zold account. It has no IBAN yet.`,
+    ...(holder.operatedBy ? [`${holder.operatedBy} operates it for ${holder.name}.`] : []),
+    `Money sent to ${holder.iban ? "this IBAN" : "it"} lands in a Zold smart account at address ${holder.safeAddress} on ${chain}.`,
+    "Only the holder can move money out: every payment needs their passkey, and Zold cannot pay out on its own.",
+    `The account was opened on ${holder.accountSince.slice(0, 10)}. Issued ${date}.`,
+  ].join(" ");
 }
 
 export const documentUrl = (code: string) => `${PUBLIC_URL || ""}/v/${normaliseCode(code)}`;

@@ -1106,6 +1106,9 @@ PH["send/amount"] = {
   },
 };
 
+/* Same IBAN, however it is spaced or cased. */
+const phSameIban = (a, b) => Boolean(a && b) && String(a).replace(/\s+/g, "").toUpperCase() === String(b).replace(/\s+/g, "").toUpperCase();
+
 PH["send/review"] = {
   title: "Review payment",
   html() {
@@ -1123,6 +1126,7 @@ PH["send/review"] = {
         ...(phSend.reference ? [{ key: "Reference", value: phSend.reference }] : []),
         { key: `${first} receives`, value: phEur(q.receiveEur), strong: true },
       ])}
+      ${phSameIban(payee.iban, user?.iban) ? Z.note({ tone: "a", icon: "sync_alt", text: "This is your own IBAN. The money leaves and comes back to this account, minus the Zold fee." }) : ""}
       ${Z.note({ icon: "verified_user", text: "Your Face ID approves this amount to this IBAN only. If either changes, nothing is sent." })}
       <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([
         { key: "Price", value: q.id, mono: true },
