@@ -7,6 +7,7 @@
  */
 import type express from "express";
 import { SECURITY } from "../config.js";
+import { isOperator } from "./guards.js";
 
 /**
  * State-changing requests from foreign origins are refused outright; allowed
@@ -199,9 +200,12 @@ export const apiRateLimit: express.RequestHandler = (req, res, next) => {
   const path = req.path.toLowerCase();
   // Shopify's calls arrive from Shopify's shared addresses and each carries a
   // 256-bit HMAC, so it is not a guess; its own bucket keeps real merchant
-  // volume off the 20/min one.
+  // volume off the 20/min one. A valid operator token is not a guess either;
+  // a wrong one stays on the credential bucket.
   const ok = path.startsWith("/shopify/")
     ? rateLimit(`s:${ip}`, SECURITY.shopifyRateLimitPerMin)
+    : path.startsWith("/admin") && isOperator(req)
+      ? rateLimit(`o:${ip}`, SECURITY.operatorRateLimitPerMin)
     : isAuthRoute(req)
       ? rateLimit(`a:${ip}`, SECURITY.authRateLimitPerMin)
       : rateLimit(`g:${ip}`, SECURITY.rateLimitPerMin);

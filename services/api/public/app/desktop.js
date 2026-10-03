@@ -92,7 +92,7 @@ PH_DESK.side = (route) => {
   const u = user || {};
   const co = phCompany();
   const companies = (phCache.orgs || []).filter((o) => o.type !== "personal");
-  const who = co ? { name: co.name, sub: `Business · ${phRoleWord(co.role).toLowerCase()}` } : { name: u.name || "Account", sub: "Personal" };
+  const who = co ? { name: co.name, sub: `Business · ${phRoleWord(co.role).toLowerCase()}` } : { name: u.name || "Account", sub: ownAccountKind(u) };
   const card = `${Z.avatar({ name: who.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(who.name)}</span><span class="z-row__sub">${esc(who.sub)}</span></span>`;
   const switcher = companies.length
     ? `<button type="button" class="z-side__org" id="dk-switch-btn" aria-haspopup="dialog" aria-label="Switch account. Current: ${esc(who.name)}">${card}${Z.icon("unfold_more", "z-row__chev")}</button>`
@@ -125,7 +125,7 @@ function phDeskSwitch(trigger) {
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "dk-switch", title: "Switch account",
     body: `<div class="z-sheet__body"><ul class="z-list z-card">
-      <li><button type="button" class="z-row z-row--btn" data-dk-personal${here(null) ? ' aria-current="true"' : ""}>${Z.avatar({ name: u.name || "Personal", tone: here(null) ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(u.name || "Personal")}</span><span class="z-row__sub">Personal account</span></span>${mark(null)}</button></li>
+      <li><button type="button" class="z-row z-row--btn" data-dk-personal${here(null) ? ' aria-current="true"' : ""}>${Z.avatar({ name: u.name || "Personal", tone: here(null) ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(u.name || "Personal")}</span><span class="z-row__sub">${ownAccountKind(u)} account</span></span>${mark(null)}</button></li>
       ${companies.map((o) => `<li><a class="z-row" href="/business" data-ph-org="${esc(o.id)}">${Z.avatar({ name: o.name, tone: here(o.id) ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(o.name)}</span><span class="z-row__sub">Business · opens the web app</span></span>${mark(o.id) || Z.icon("open_in_new", "z-row__chev")}</a></li>`).join("")}
     </ul></div>`,
   }));

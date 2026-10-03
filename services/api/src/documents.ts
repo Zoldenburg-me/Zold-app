@@ -28,7 +28,7 @@ import { keccak256, toBytes, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { IS_PRODUCTION, CHAIN_ID, KEYS, PUBLIC_URL } from "./config.js";
 import type { Transfer, User } from "./store.js";
-import { paymentMemo, reportedBic } from "./sepa.js";
+import { normalizeIban, paymentMemo, reportedBic } from "./sepa.js";
 
 export type DocumentKind = "receipt" | "statement" | "balance" | "ownership" | "beleg";
 
@@ -62,7 +62,10 @@ export const isDocumentCode = (raw: string) => /^[0-9A-HJKMNP-TV-Z]{15}$/.test(n
 // snapshots
 
 export interface HolderBlock {
+  /** Who holds the IBAN: the name Monerium reports for it, else the user's. */
   name: string;
+  /** The Zold user, when Monerium names someone else (a company) as holder. */
+  operatedBy?: string;
   addressLines: string[];
   iban?: string;
   bic?: string;
@@ -170,8 +173,11 @@ export function holderBlock(user: User): HolderBlock {
   const lines: string[] = [];
   if (user.country) lines.push(user.country.toUpperCase());
   const iban = user.iban || undefined;
+  const reported = iban ? moneriumIbanHolder(user, iban) : undefined;
+  const differs = reported !== undefined && personKey(reported) !== personKey(user.name);
   return {
-    name: user.name,
+    name: differs ? reported : user.name,
+    ...(differs ? { operatedBy: user.name } : {}),
     addressLines: lines,
     ...(iban ? { iban, ...(reportedBic(user) ? { bic: reportedBic(user) } : {}) } : {}),
     safeAddress: user.address as `0x${string}`,
@@ -179,6 +185,19 @@ export function holderBlock(user: User): HolderBlock {
     accountSince: user.createdAt,
   };
 }
+
+/** The holder name Monerium reported for this IBAN in the stored snapshot. */
+function moneriumIbanHolder(user: User, iban: string): string | undefined {
+  const raw: unknown = user.monerium?.ibans;
+  const list: any[] = Array.isArray(raw) ? raw : Array.isArray((raw as any)?.ibans) ? (raw as any).ibans : [];
+  const entry = list.find((i) => typeof i?.iban === "string" && normalizeIban(i.iban) === normalizeIban(iban));
+  const name = typeof entry?.name === "string" ? entry.name.trim() : "";
+  return name || undefined;
+}
+
+/** "CHRISTIAN  LINDNER" and "Lindner Christian" are the same person. */
+const personKey = (name: string) =>
+  name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).sort().join(" ");
 
 // ---------------------------------------------------------------------------
 // statement lines from the three sources
@@ -408,7 +427,7 @@ export function ownershipMessage(holder: HolderBlock, code: string, date: string
 
 export function ownershipStatement(holder: HolderBlock, date: string): string {
   return (
-    `This confirms that ${holder.name} holds a Zold account, opened on ${holder.accountSince.slice(0, 10)}, ` +
+    `This confirms that ${holder.name}${holder.operatedBy ? `, operated by ${holder.operatedBy},` : ""} holds a Zold account, opened on ${holder.accountSince.slice(0, 10)}, ` +
     `whose account of record is the smart account ${holder.safeAddress} on chain ${holder.chainId}` +
     (holder.iban ? `, to which the IBAN ${holder.iban} is linked` : "") +
     `. Issued ${date}.`

@@ -15,6 +15,9 @@ process.env.AUTH_RATE_LIMIT_PER_MIN = "20";
 process.env.PARTNER_RATE_LIMIT_PER_MIN = "30";
 process.env.DOCUMENT_RATE_LIMIT_PER_MIN = "10";
 process.env.SHOPIFY_RATE_LIMIT_PER_MIN = "600";
+process.env.OPERATOR_RATE_LIMIT_PER_MIN = "300";
+const OPERATOR = "operator-token-for-rate-limit-tests-0123";
+process.env.KYC_OPERATOR_TOKEN = OPERATOR;
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
 const express = (await import("express")).default;
@@ -78,6 +81,7 @@ app.post("/api/webauthn/challenge", (_req, res) => res.json({ challenge: "x" }))
 app.post("/api/quotes", (_req, res) => res.json({}));
 app.post("/api/users/:id/documents/statement", (_req, res) => res.json({}));
 app.post("/api/shopify/payment", (_req, res) => res.json({}));
+app.get("/api/admin/overview", (_req, res) => res.json({}));
 app.use("/api/invoice-links", createInvoiceLinkRouter());
 const server = app.listen(0);
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -109,6 +113,17 @@ await check("Shopify's signed calls are not on the 20/min credential bucket", as
   let last = 0;
   for (let i = 0; i < 25; i++) last = (await fetch(`${base}/api/shopify/payment`, { method: "POST" })).status;
   assert.equal(last, 200);
+});
+await check("a valid operator token has its own bucket: the dashboard's refresh loop is not the 20/min one", async () => {
+  // The challenge test above has already spent this IP's credential bucket.
+  const auth = { authorization: `Bearer ${OPERATOR}` };
+  const statuses = [];
+  for (let i = 0; i < 40; i++) statuses.push((await fetch(`${base}/api/admin/overview`, { headers: auth })).status);
+  assert.deepEqual([...new Set(statuses)], [200]);
+});
+await check("a wrong operator token stays on the credential bucket", async () => {
+  const r = await fetch(`${base}/api/admin/overview`, { headers: { authorization: "Bearer guess-guess-guess-guess-guess" } });
+  assert.equal(r.status, 429);
 });
 await check("every response says no-referrer and nosniff", async () => {
   const r = await fetch(`${base}/api/invoice-links/nothing`);

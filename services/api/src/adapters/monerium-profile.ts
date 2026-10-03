@@ -12,6 +12,7 @@ import { store, type User } from "../store.js";
 import type { Account, Organisation } from "../domain/types.js";
 import {
   expectedProfileKind,
+  ibanIssuedTo,
   judgeProfile,
   kindMismatch,
   nameWarning,
@@ -121,7 +122,7 @@ export async function checkBackingProfile(
     if (isRefusal(err)) return { ok: false, ...err };
     return { ok: false, ...unreachable() };
   }
-  const refused = judgeProfile(org, facts);
+  const refused = judgeProfile(org, facts, facts.state === "pending" && await ibanIssuedLive(user, profileId));
   if (refused) return { ok: false, ...refused };
   const warning = nameWarning(org, facts.name) ?? undefined;
   return {
@@ -134,6 +135,17 @@ export async function checkBackingProfile(
     },
     ...(warning ? { warning } : {}),
   };
+}
+
+/** GET /ibans on the user's own connection, read only for a pending profile.
+ *  A failed read counts as no IBAN: the profile stays refused. */
+async function ibanIssuedLive(user: User, profileId: string): Promise<boolean> {
+  if (!user.address) return false;
+  try {
+    return ibanIssuedTo(await moneriumClientFor(user).ibans(), profileId, user.address);
+  } catch {
+    return false;
+  }
 }
 
 function refusal(status: number, code: ProfileRefusal["code"], error: string): ProfileRefusal {
