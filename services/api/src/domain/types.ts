@@ -162,6 +162,9 @@ export interface Organisation {
       connectedByMemberId: string;
       /** Uploads land under this company; absent means the account's own. */
       companyId?: number;
+      /** The manual bank account statement lines are added to, as picked at
+       *  the last send. */
+      bankAccountUid?: number;
     };
   };
   createdAt: string;

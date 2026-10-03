@@ -10,8 +10,9 @@
  * clients — bank transactions CAN be created:
  * `POST /bankAccounts/{uid}/transactions` takes bookingDate, valueDate,
  * description, amount, currencyCode, clientIban and paymentPartnerName.
- * So bank lines have two doors: a GetMyInvoices bank account by API, or
- * Lexware's own CSV import. Which one the accountant wants is open.
+ * Zold adds each statement line to a manual bank account the organisation
+ * picked there, and assigns the line's Beleg to it, so the accountant sees
+ * the payment with its document attached.
  *
  * Idempotent by construction: before an upload the document number is
  * looked up, and a hit is returned rather than re-uploaded. The key is never
@@ -110,6 +111,21 @@ export interface GmiBankTransaction {
   clientIban?: string;
   paymentPartnerName?: string;
   tags?: string[];
+}
+
+export interface GmiBankTransactionRecord {
+  transactionUid: number;
+  bookingDate?: string;
+  description?: string;
+  amount?: number;
+}
+
+export interface GmiBankLineResult {
+  outcome: "added" | "exists" | "unknown";
+  transactionUid?: number;
+  /** The Beleg is attached to the line in GetMyInvoices. */
+  assigned?: boolean;
+  error?: string;
 }
 
 export class GetMyInvoicesClient {
@@ -226,8 +242,58 @@ export class GetMyInvoicesClient {
     }
   }
 
-  addBankTransaction(bankAccountUid: number, tx: GmiBankTransaction): Promise<{ success: boolean }> {
-    return this.call("POST", `/bankAccounts/${bankAccountUid}/transactions`, undefined, tx);
+  async addBankTransaction(bankAccountUid: number, tx: GmiBankTransaction): Promise<number> {
+    const r = await this.call<{ meta_data?: { transactionUid?: number } }>("POST", `/bankAccounts/${bankAccountUid}/transactions`, undefined, tx);
+    const uid = Number(r.meta_data?.transactionUid);
+    if (!Number.isInteger(uid) || uid <= 0) throw new GmiApiError(502, "GetMyInvoices added the transaction but returned no transactionUid");
+    return uid;
+  }
+
+  /** Lines of one bank account whose description carries `marker`, on one
+   *  booking day. The text filter is a search; matches are kept exact. */
+  async findBankTransactions(bankAccountUid: number, marker: string, day: string): Promise<GmiBankTransactionRecord[]> {
+    const r = await this.call<{ records?: GmiBankTransactionRecord[] }>("GET", `/bankAccounts/${bankAccountUid}/transactions`, {
+      textFilter: marker, startDateFilter: day, endDateFilter: day, limit: "50",
+    });
+    return (Array.isArray(r.records) ? r.records : []).filter((t) => String(t.description ?? "").includes(marker));
+  }
+
+  async assignedDocumentUids(bankAccountUid: number, transactionUid: number): Promise<number[]> {
+    const r = await this.call<{ records?: { documentUid?: number }[] }>("GET", `/bankAccounts/${bankAccountUid}/transactions/${transactionUid}/assign`);
+    return (Array.isArray(r.records) ? r.records : []).map((d) => Number(d.documentUid)).filter((n) => Number.isInteger(n));
+  }
+
+  assignDocument(bankAccountUid: number, transactionUid: number, documentUid: number): Promise<unknown> {
+    return this.call("POST", `/bankAccounts/${bankAccountUid}/transactions/${transactionUid}/assign`, undefined, { documentUid });
+  }
+
+  /**
+   * The bank line for one Beleg, once, with the Beleg assigned to it.
+   *
+   * `marker` (the Beleg code) is in the description, and is what makes a
+   * re-send find the line instead of adding it twice. An add that got no
+   * answer may have landed, so it is looked up again rather than retried.
+   */
+  async pushBankLine(bankAccountUid: number, tx: GmiBankTransaction, marker: string, documentUid?: number): Promise<GmiBankLineResult> {
+    let transactionUid: number | undefined = (await this.findBankTransactions(bankAccountUid, marker, tx.bookingDate))[0]?.transactionUid;
+    let outcome: GmiBankLineResult["outcome"] = transactionUid ? "exists" : "added";
+    if (!transactionUid) {
+      try {
+        transactionUid = await this.addBankTransaction(bankAccountUid, tx);
+      } catch (err) {
+        if (!(err instanceof GmiApiError) || (err.status !== 0 && err.status < 500)) throw err;
+        for (const wait of this.relookupDelaysMs) {
+          await new Promise((r) => setTimeout(r, wait));
+          transactionUid = (await this.findBankTransactions(bankAccountUid, marker, tx.bookingDate).catch(() => []))[0]?.transactionUid;
+          if (transactionUid) break;
+        }
+        if (!transactionUid) return { outcome: "unknown", error: err.message };
+      }
+    }
+    if (!documentUid) return { outcome, transactionUid, assigned: false };
+    const already = await this.assignedDocumentUids(bankAccountUid, transactionUid).catch(() => [] as number[]);
+    if (!already.includes(documentUid)) await this.assignDocument(bankAccountUid, transactionUid, documentUid);
+    return { outcome, transactionUid, assigned: true };
   }
 }
 

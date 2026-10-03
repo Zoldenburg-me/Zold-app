@@ -271,7 +271,7 @@ RENDER.export = async () => {
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-prepare">Issue Belege for ${esc(exportMonth)}</button>
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-csv"${dis}>Lexware CSV</button>
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-zip"${dis}>Belege as ZIP</button>
-        ${integrations?.getmyinvoices?.connected ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="gmi-push"${dis}>Send Belege to GetMyInvoices</button>` : ""}
+        ${integrations?.getmyinvoices?.connected ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="gmi-push"${dis}>Send to GetMyInvoices</button>` : ""}
       </div></div>
     <p class="zb-hint" style="margin-bottom:12px">${d.lines.length} line${d.lines.length === 1 ? "" : "s"}, ${withBeleg} with a Beleg.${integrations && !integrations.getmyinvoices?.connected ? ` <a href="?view=integrations" data-view-link="integrations">Connect GetMyInvoices</a> to send the Belege there.` : ""}</p>
     ${d.lines.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Value date</th><th scope="col">Event</th><th scope="col">Who</th><th scope="col">Reference</th><th scope="col" class="z-tbl__num">Euros</th><th scope="col">Beleg</th></tr></thead><tbody>${d.lines.map((l) => `<tr>
@@ -300,10 +300,10 @@ RENDER.integrations = async () => {
   const g = r.integrations.getmyinvoices;
   const gmi = g.connected
     ? conn("GMI", "GetMyInvoices", `Connected to ${g.accountName || "your account"}${g.accountEmail ? ` (${g.accountEmail})` : ""} since ${day(g.connectedAt)}`, Z.tag("Beta"),
-      "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
-      `${linkBtn("Send a month’s Belege", "export", "upload")}${secondary("Remove key", 'data-act="gmi-disconnect"')}`, true)
+      "A month’s bank lines go to a manual bank account there, each with its Beleg attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
+      `${primary("Send a month’s Belege", 'data-act="gmi-push"', "upload")}${secondary("Remove key", 'data-act="gmi-disconnect"')}`, true)
     : conn("GMI", "GetMyInvoices", "API key · sends Belege each month", Z.tag("Beta"),
-      "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
+      "A month’s bank lines go to a manual bank account there, each with its Beleg attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
       r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`, true);
   return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends your books for you</h2>
     ${gmi}
@@ -327,15 +327,15 @@ RENDER.integrations = async () => {
    only to the member whose own account it is.
    ========================================================================== */
 
-const DOC_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership" };
-const DOC_ICON = { statement: "description", receipt: "receipt_long", balance: "account_balance", ownership: "verified_user" };
+const DOC_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership", beleg: "Beleg" };
+const DOC_ICON = { statement: "description", receipt: "receipt_long", balance: "account_balance", ownership: "verified_user", beleg: "attach_file" };
 export const docMonth = { value: null };
 /** Receipts list the most recent paid transfers only. */
 const RECEIPT_ROWS = 50;
 /** A document link from the API, opened only if it is ours or https. */
 export const docHref = (url) => (typeof url === "string" && (url.startsWith("/") || /^https:\/\//i.test(url)) ? url : null);
 
-META.documents = () => ({ title: "Statements and documents", sub: "Signed documents for this account. Anyone you give one to can check it at the address printed on it.", actions: linkBtn("Accounts", "accounts", "arrow_back") });
+META.documents = () => ({ title: "Statements and documents", sub: "Statements, balance confirmations, proof of ownership and the Beleg for each line. Anyone you give one to can check it at the address printed on it.", actions: "" });
 
 RENDER.documents = async () => {
   const { accounts } = await api(`/api/orgs/${org.id}/accounts`);
