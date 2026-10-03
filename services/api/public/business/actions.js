@@ -322,9 +322,14 @@ export const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { invoiceId: el.dataset.id, methods: usable } });
     setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.`, r.url), 0);
   },
-  "new-pay-link"() {
+  async "new-pay-link"() {
+    // A link opens under the company page when there is one; say which.
+    const page = await api(`/api/orgs/${org.id}/payment-page`).catch(() => null);
+    const where = page?.paymentPage
+      ? ` It opens at ${esc(location.host)}/pay/${esc(page.paymentPage.handle)}/….`
+      : " Set up the company’s payment page first, and links open under its address instead of yours.";
     dialog("New payment link",
-      `<p class="desc">Your customer pays it into ${esc(org.name)}’s euro account. Leave the amount empty to let them enter it.</p>
+      `<p class="desc">Your customer pays it into ${esc(org.name)}’s euro account. Leave the amount empty to let them enter it.${where}</p>
        ${field("d-desc", "What it’s for", 'maxlength="140" placeholder="Deposit, roof Weber…"')}
        ${field("d-amt", "Amount in euros (optional)", 'inputmode="decimal" placeholder="1200.00…"')}`,
       async () => {

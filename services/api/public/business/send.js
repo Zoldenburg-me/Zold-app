@@ -59,7 +59,7 @@ function nextSteps(account, approvers) {
     ? [["edit_note", "You submit it. It waits in Approvals."], ["how_to_reg", approve], ["fingerprint", `It’s sent with Face ID or fingerprint ${signer}.`]]
     : [["edit_note", "You save it. It waits in Payments."], ["fingerprint", `It’s sent with Face ID or fingerprint ${signer}.`]];
   steps.push(["account_balance", "It leaves as a bank transfer. Its status turns to Paid when the bank confirms."]);
-  return `<ol class="zb-steps">${steps.map(([icon, text]) => `<li>${Z.icon(icon)}<span>${esc(text)}</span></li>`).join("")}</ol>`;
+  return `<ol class="zb-next">${steps.map(([icon, text]) => `<li>${Z.icon(icon)}<span>${esc(text)}</span></li>`).join("")}</ol>`;
 }
 
 function summary(form, accounts, contacts, approvers) {
