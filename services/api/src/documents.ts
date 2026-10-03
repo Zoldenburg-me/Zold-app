@@ -29,6 +29,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { IS_PRODUCTION, CHAIN_ID, KEYS, PUBLIC_URL } from "./config.js";
 import type { Transfer, User } from "./store.js";
 import { normalizeIban, paymentMemo, reportedBic } from "./sepa.js";
+import { moneriumIbanList } from "./domain/monerium-profile.js";
 
 export type DocumentKind = "receipt" | "statement" | "balance" | "ownership" | "beleg";
 
@@ -188,9 +189,7 @@ export function holderBlock(user: User): HolderBlock {
 
 /** The holder name Monerium reported for this IBAN in the stored snapshot. */
 function moneriumIbanHolder(user: User, iban: string): string | undefined {
-  const raw: unknown = user.monerium?.ibans;
-  const list: any[] = Array.isArray(raw) ? raw : Array.isArray((raw as any)?.ibans) ? (raw as any).ibans : [];
-  const entry = list.find((i) => typeof i?.iban === "string" && normalizeIban(i.iban) === normalizeIban(iban));
+  const entry = moneriumIbanList(user.monerium?.ibans).find((i) => normalizeIban(i.iban) === normalizeIban(iban));
   const name = typeof entry?.name === "string" ? entry.name.trim() : "";
   return name || undefined;
 }

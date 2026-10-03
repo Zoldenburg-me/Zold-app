@@ -353,6 +353,10 @@ RENDER.integrations = async () => {
 const DOC_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership" };
 const DOC_ICON = { statement: "description", receipt: "receipt_long", balance: "account_balance", ownership: "verified_user" };
 export const docMonth = { value: null };
+/** Receipts list the most recent paid transfers only. */
+const RECEIPT_ROWS = 50;
+/** A document link from the API, opened only if it is ours or https. */
+export const docHref = (url) => (typeof url === "string" && (url.startsWith("/") || /^https:\/\//i.test(url)) ? url : null);
 
 META.documents = () => ({ title: "Statements and documents", sub: "Signed documents for this account. Anyone you give one to can check it at the address printed on it.", actions: linkBtn("Accounts", "accounts", "arrow_back") });
 
@@ -365,7 +369,8 @@ RENDER.documents = async () => {
   }
   const [docs, tx] = await Promise.all([
     api(`/api/users/${me.id}/documents`).then((r) => r.documents || []),
-    api(`/api/users/${me.id}/transfers`).then((r) => r.transfers || []).catch(() => []),
+    // The documents still render without the payment list; it says it failed.
+    api(`/api/users/${me.id}/transfers`).then((r) => r.transfers || []).catch(() => null),
   ]);
   const months = Array.from({ length: 12 }, (_, i) => {
     const now = new Date();
@@ -373,7 +378,7 @@ RENDER.documents = async () => {
     return { value: d.toISOString().slice(0, 7), label: d.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }) };
   });
   const chosen = docMonth.value || months[0].value;
-  const paid = tx.filter((t) => t.rail === "sepa" && t.state === "PAID").slice(0, 50);
+  const paid = (tx || []).filter((t) => t.rail === "sepa" && t.state === "PAID").slice(0, RECEIPT_ROWS);
   const create = `<section class="card"><div class="h"><div><h2>Create</h2><p class="desc">Each one opens in a new tab, ready to print or save as PDF.</p></div></div>
     <div class="zb-doc-create">
       <div><label for="doc-month">Statement month</label><select id="doc-month">${months.map((m) => `<option value="${m.value}"${m.value === chosen ? " selected" : ""}>${esc(m.label)}</option>`).join("")}</select></div>
@@ -387,9 +392,11 @@ RENDER.documents = async () => {
         <td>${Z.icon(DOC_ICON[d.kind] || "description")} ${esc(DOC_LABEL[d.kind] || d.kind)}</td>
         <td>${esc(d.summary || "")}${d.revokedAt ? ` ${Z.tag("Revoked")}` : ""}</td>
         <td class="mono">${esc(day(d.createdAt))}</td>
-        <td class="num"><a class="z-btn z-btn--secondary z-btn--sm" href="${esc(d.url)}" target="_blank" rel="noopener">Open</a></td></tr>`))
+        <td class="num">${docHref(d.url) ? `<a class="z-btn z-btn--secondary z-btn--sm" href="${esc(docHref(d.url))}" target="_blank" rel="noopener">Open</a>` : ""}</td></tr>`))
     : `<div class="z-card"><p class="empty">Nothing issued yet.</p></div>`;
-  const payments = paid.length
+  const payments = tx === null
+    ? `<div class="z-card"><p class="empty">Your payments could not be loaded, so their receipts aren’t listed. Reload to try again.</p></div>`
+    : paid.length
     ? table([["Paid"], ["To"], ["Amount", "num"], [""]], paid.map((t) => `<tr>
         <td class="mono">${esc(day(t.updatedAt || t.createdAt))}</td>
         <td>${esc(t.recipientName || "—")}</td>
@@ -411,13 +418,15 @@ const table = (head, rows) => `<div class="z-card z-tbl-wrap"><table class="z-tb
 META.soon = () => ({ title: "Coming soon", sub: "What this organisation can’t do yet, and why. Each one switches on here as soon as it works.", actions: "" });
 
 RENDER.soon = async () => {
+  // Each list is read on its own; one that fails leaves its row out rather
+  // than claiming something the API did not say.
   const [acc, cur] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), api("/api/orgs/currencies")]);
-  const accounts = acc.status === "fulfilled" ? acc.value.accounts : [];
+  const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
   const later = (cur.status === "fulfilled" ? cur.value.currencies || [] : []).filter((c) => !c.available && c.code !== "EUR").map((c) => c.code);
   const lead = Z.iconTile({ icon: "hourglass_top", tone: "a" });
-  const euroOpen = accounts.some((a) => a.currency === "EUR" && a.status === "active");
+  const euroClosed = accounts !== null && !accounts.some((a) => a.currency === "EUR" && a.status === "active");
   const rows = [
-    ...(!euroOpen ? [Z.row({ lead, title: "Euro account", sub: org.type === "business" ? "Opens once the company’s IBAN is connected" : "Opens once your IBAN is connected", href: "?view=accounts" })] : []),
+    ...(euroClosed ? [Z.row({ lead, title: "Euro account", sub: org.type === "business" ? "Opens once the company’s IBAN is connected" : "Opens once your IBAN is connected", href: "?view=accounts" })] : []),
     ...(later.length ? [Z.row({ lead, title: "Accounts in other currencies", sub: `${later.length > 1 ? `${later.slice(0, -1).join(", ")} and ${later.at(-1)}` : later[0]}: waiting on an account provider`, soon: true })] : []),
     Z.row({ lead, title: "More countries", sub: "Bank transfers reach Europe only, for now", soon: true }),
     Z.row({ lead, title: "Paying a crypto wallet", sub: "Not built yet", soon: true }),

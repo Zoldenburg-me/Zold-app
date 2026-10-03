@@ -7,7 +7,7 @@
  * shell does not draw the page again under it.
  */
 import { $, Z, api, cap, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setView, toast, token, view } from "./core.js";
-import { docMonth, exportMonth, sendState, setExportMonth } from "./views.js";
+import { docHref, docMonth, exportMonth, sendState, setExportMonth } from "./views.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
@@ -186,7 +186,7 @@ function gmiDrawer(el) {
 
 /* A document opens in a new tab; the list below the buttons then shows it. */
 function openDocument(d) {
-  const url = typeof d?.url === "string" && (d.url.startsWith("/") || /^https:\/\//i.test(d.url)) ? d.url : null;
+  const url = docHref(d?.url);
   if (url) window.open(url, "_blank", "noopener");
   toast("Document issued.");
 }
