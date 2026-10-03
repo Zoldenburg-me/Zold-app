@@ -4,7 +4,8 @@
  *
  * Two spaces behind one switch. Banking: Home, Approvals, Send, Get paid,
  * Invoices, Contacts, Members, Apps, then the ACCOUNTS list, Coming soon and
- * Settings. Books: Statement, Categories, Export, Connections, then Settings.
+ * Settings. Books: Overview, Statement, Categories, Export, Connections, then
+ * Settings.
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger, assets and wallets under Statement, Shopify under Apps.
  */
@@ -23,6 +24,7 @@ export const SPACES = {
     { id: "apps", label: "Apps", icon: "apps" },
   ],
   books: [
+    { id: "books-overview", label: "Overview", icon: "monitoring", capability: "ledger.transactions" },
     { id: "books", label: "Statement", icon: "list_alt", capability: "ledger.transactions" },
     { id: "coa", label: "Categories", icon: "category", capability: "coa.manage" },
     { id: "export", label: "Export", icon: "download", capability: "export.ledger" },
@@ -31,7 +33,7 @@ export const SPACES = {
 };
 export const VIEWS = [...SPACES.banking, ...SPACES.books];
 /** Where the Banking and Books switch lands. */
-const SPACE_HOME = { banking: "overview", books: "books" };
+const SPACE_HOME = { banking: "overview", books: "books-overview" };
 
 /** Which nav item an older view belongs to. */
 export const PARENT = {

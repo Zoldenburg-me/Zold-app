@@ -17,7 +17,7 @@ import { invAmount, loadMembers, memberName } from "./screens.js";
 
 const DAY = 86400000;
 /* "Sep", not the "Sept" some locales give, to match dates elsewhere in the app. */
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const BAR_MAX_PX = 120;
 const TOP_N = 4;
 const ACTIVITY_ROWS = 8;
@@ -29,7 +29,7 @@ const hs = { period: "30d", tab: "all", month: null };
 
 const linkBtn = (label, view, icon, variant = "secondary") => `<a class="z-btn z-btn--${variant}" href="?view=${esc(view)}" data-view-link="${esc(view)}">${icon ? Z.icon(icon) : ""}<span>${esc(label)}</span></a>`;
 const isoDay = (d) => d.toISOString().slice(0, 10);
-const cents = (lines, dir) => lines.reduce((n, l) => n + (dir === "in" ? Math.max(l.amountCents, 0) : Math.max(-l.amountCents, 0)), 0);
+export const cents = (lines, dir) => lines.reduce((n, l) => n + (dir === "in" ? Math.max(l.amountCents, 0) : Math.max(-l.amountCents, 0)), 0);
 const sumEur = (d) => Number(d.totals?.EUR || d.totals?.EURe || 0);
 const within = (iso, days) => !!iso && Date.now() - Date.parse(iso) <= days * DAY;
 
@@ -43,7 +43,7 @@ function windowOf(period) {
 }
 
 /** Weekly buckets from the Monday on or before `from`. */
-function weeks(lines, from, to) {
+export function weeks(lines, from, to) {
   const start = new Date(`${from}T12:00:00Z`);
   start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
   const out = [];
@@ -55,13 +55,21 @@ function weeks(lines, from, to) {
   return out;
 }
 
+/** Paired weekly bars, money in beside money out, with a list for screen readers. */
+export function barsHtml(buckets, caption) {
+  const max = Math.max(1, ...buckets.flatMap((b) => [b.in, b.out]));
+  const h = (v) => (v ? Math.max(4, Math.round((v / max) * BAR_MAX_PX)) : 0);
+  return `<figure class="zb-h-chart"><figcaption class="z-sr">${esc(caption)}</figcaption>
+      <div class="zb-h-bars" style="--n:${buckets.length}">${buckets.map((b) => `<div class="zb-h-bar" title="${esc(b.label)}: in ${esc(eur(b.in / 100))}, out ${esc(eur(b.out / 100))}"><span class="zb-h-bar__in" style="height:${h(b.in)}px"></span><span class="zb-h-bar__out" style="height:${h(b.out)}px"></span></div>`).join("")}</div>
+      <div class="zb-h-axis" style="--n:${buckets.length}" aria-hidden="true">${buckets.map((b) => `<span>${esc(b.label)}</span>`).join("")}</div>
+      <ul class="z-sr">${buckets.map((b) => `<li>Week of ${esc(b.label)}: in ${esc(eur(b.in / 100))}, out ${esc(eur(b.out / 100))}</li>`).join("")}</ul></figure>`;
+}
+
 function flowCard(all) {
   const { from, to } = windowOf(hs.period);
   const lines = all.filter((l) => l.valueDate >= from && l.valueDate <= to);
   const inC = cents(lines, "in"), outC = cents(lines, "out");
   const buckets = weeks(lines, from, to);
-  const max = Math.max(1, ...buckets.flatMap((b) => [b.in, b.out]));
-  const h = (v) => (v ? Math.max(4, Math.round((v / max) * BAR_MAX_PX)) : 0);
   const label = PERIODS.find((p) => p[0] === hs.period)[1];
   const pills = PERIODS.map(([id, text]) => `<button type="button" class="zb-h-pill" data-hp="${id}" aria-pressed="${hs.period === id}">${text}</button>`).join("");
   const signed = (sign, c) => `${c ? sign : ""}${esc(eur(Math.abs(c) / 100))}`;
@@ -70,10 +78,7 @@ function flowCard(all) {
     <div class="zb-h-figs">${figure(`<span class="zb-h-key zb-h-key--in" aria-hidden="true"></span>Money in`, signed("+", inC), "is-in")}
       ${figure(`<span class="zb-h-key zb-h-key--out" aria-hidden="true"></span>Money out`, signed("−", outC), "")}
       ${figure("Net", signed(inC - outC < 0 ? "−" : "+", inC - outC), "")}</div>
-    ${lines.length ? `<figure class="zb-h-chart"><figcaption class="z-sr">Money in and out per week, ${esc(label.toLowerCase())}</figcaption>
-      <div class="zb-h-bars" style="--n:${buckets.length}">${buckets.map((b) => `<div class="zb-h-bar" title="${esc(b.label)}: in ${esc(eur(b.in / 100))}, out ${esc(eur(b.out / 100))}"><span class="zb-h-bar__in" style="height:${h(b.in)}px"></span><span class="zb-h-bar__out" style="height:${h(b.out)}px"></span></div>`).join("")}</div>
-      <div class="zb-h-axis" style="--n:${buckets.length}" aria-hidden="true">${buckets.map((b) => `<span>${esc(b.label)}</span>`).join("")}</div>
-      <ul class="z-sr">${buckets.map((b) => `<li>Week of ${esc(b.label)}: in ${esc(eur(b.in / 100))}, out ${esc(eur(b.out / 100))}</li>`).join("")}</ul></figure>`
+    ${lines.length ? barsHtml(buckets, `Money in and out per week, ${label.toLowerCase()}`)
       : `<p class="zb-hint">No money moved in this period.</p>`}`;
 }
 
