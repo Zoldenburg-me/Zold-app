@@ -27,6 +27,13 @@ async function download(path, filename) {
 
 /* The month an export acts on: Books' month there, the statement's month on
    the statement screen. */
+/** When a Safe's books start; the same rule as domain/safe-books.ts. */
+function safeBooksStart(u) {
+  const safe = u?.passkeySafe;
+  if (safe?.importedAt) return u.ibanSince && u.ibanSince > safe.importedAt ? u.ibanSince : safe.importedAt;
+  return safe?.createdAt ?? u?.createdAt;
+}
+
 function monthChosen() {
   const v = $("#x-month")?.value || (view === "books" ? bk.month : exportMonth);
   setExportMonth(v);
@@ -312,16 +319,29 @@ export const ACTIONS = {
       toast(plain(r.note));
     }, { okLabel: "Import wallet" }),
   async "fund-account"(el) {
-    let r;
-    try {
-      r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
-    } catch (e) {
-      // A refusal can carry Monerium's newer answer (a profile still pending):
-      // draw the row again so it shows it.
-      render();
-      throw e;
-    }
-    toast(plain(r.warning ? `${r.note} ${r.warning}` : r.note));
+    const connect = async () => {
+      let r;
+      try {
+        r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
+      } catch (e) {
+        // A refusal can carry Monerium's newer answer (a profile still pending):
+        // draw the row again so it shows it.
+        render();
+        throw e;
+      }
+      setTimeout(() => toast(plain(r.warning ? `${r.note} ${r.warning}` : r.note)), 0);
+    };
+    if (org.type !== "business") return connect();
+    // Said before, not after: from here the account is the company's.
+    const from = safeBooksStart(me);
+    const since = from ? new Date(from).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "";
+    dialog(`Connect your account to ${org.name}?`, `<ul class="zb-next" style="margin-top:6px">
+        <li>${Z.icon("domain")}<span>Your account${me?.iban ? `, IBAN ${esc(Z.groupIban(me.iban))},` : ""} then belongs to ${esc(org.name)}, with everything on it.</span></li>
+        <li>${Z.icon("menu_book")}<span>Its transactions${since ? ` since ${esc(since)}` : ""} appear in ${esc(org.name)}’s books and statements. Members who can see the books see them.</span></li>
+        <li>${Z.icon("block")}<span>While it is connected here, it can’t be connected to another organisation.</span></li>
+        <li>${Z.icon("fingerprint")}<span>Only your Face ID or fingerprint can approve its payments.</span></li>
+      </ul>`, connect, { okLabel: "Connect" });
+    return "keep";
   },
   async "invoice-pay-link"(el) {
     // Offer every method the payee's account can take; the server picks the
