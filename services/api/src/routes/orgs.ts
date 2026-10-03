@@ -75,7 +75,15 @@ function gateOf(org: Pick<Organisation, "type">, a: Account): Account["gate"] {
 
 /** An account as the API returns it: read-time gate and profile standing. */
 function accountView(org: Organisation, a: Account) {
-  return { ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a) };
+  // Who backs it, by the name members already see on Members: Home says
+  // "Spends from Jonas's account" instead of a bare user id.
+  const backer = a.backingUserId
+    ? store.membersOf(org.id).find((m) => m.userId === a.backingUserId && m.status === "active")
+    : undefined;
+  return {
+    ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
+    ...(backer?.name ? { backingMemberName: backer.name } : {}),
+  };
 }
 
 export function createOrgRouter(requireSession: SessionResolver): express.Router {
