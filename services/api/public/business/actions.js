@@ -292,11 +292,15 @@ export const ACTIONS = {
      ${field("d-chain", "Network id", 'inputmode="numeric" value="8453"')}
      <label for="d-kind">Type</label><select id="d-kind" name="kind"><option value="eoa">Ordinary wallet</option>
        <option value="safe">Safe</option><option value="mpc">MPC</option></select>
-     ${field("d-label", "Name")}`,
+     ${field("d-label", "Name")}
+     ${cap("ledger.historicalSync").allowed
+       ? `${field("d-from", "Book from (optional)", 'type="date"')}<p class="zb-hint">Token transfers from this day on are booked. Leave empty to start from today.</p>`
+       : ""}`,
     async () => {
+      const from = $("#d-from")?.value;
       const r = await api(`/api/orgs/${org.id}/wallets`, {
         method: "POST",
-        body: { address: $("#d-addr").value, chainId: Number($("#d-chain").value), kind: $("#d-kind").value, label: $("#d-label").value },
+        body: { address: $("#d-addr").value, chainId: Number($("#d-chain").value), kind: $("#d-kind").value, label: $("#d-label").value, ...(from ? { syncFrom: from } : {}) },
       });
       toast(plain(r.note));
     }, { okLabel: "Import wallet" }),

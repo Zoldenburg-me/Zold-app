@@ -103,8 +103,16 @@ Say this plainly rather than letting the surface imply otherwise:
   invoice links and recovery emails are still never sent by Zold; routes
   return the token to the caller and say so. Do not add a "we emailed them"
   string for those without routing them through the mailer.
-- **Imported wallets never sync** (`sync.status` stays `pending`), so the ledger
-  is empty and the screens say so.
+- **Imported-wallet sync has run only against local hardhat** (2026-10-03:
+  mints in and a send out were booked, unpriced). It has never read mainnet,
+  and the DefiLlama price feed has never been called live. A wallet syncs only
+  on a chain with `WALLET_SYNC_RPC_<chainId>` set; the deployment sets none,
+  so every imported wallet shows "Not syncing". Native ETH, NFTs and rebasing
+  balances are not booked. The Uniswap and CoinGecko token lists have never
+  been fetched by the server (shape checked by hand 2026-10-03). A token on
+  no list is booked as a quantity with no value and no income rule; a listed
+  but thinly traded token the feed prices at confidence ≥ 0.9 is booked at
+  that price. Nothing caps rows per wallet.
 - **No billing is taken for paid plans.**
 - **PWA install on iOS is untested**: a home-screen web app may get storage
   separate from Safari, and the device key lives in localStorage — onboarding in
