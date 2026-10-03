@@ -25,18 +25,21 @@ const statusTag = (s) => Z.tag(s === "active" ? "Active" : s === "gated" ? "Not 
    Accounts
    ========================================================================== */
 
-/** Whose IBAN it is at Monerium, from the server's read-time verdict. The
- *  "Check again" control is drawn only for a role the API would accept. */
-const profileHtml = (a, mayManage) => {
+/** Whose IBAN it is at Monerium, from the server's read-time verdict, as
+ *  detail rows. The "Check again" control is drawn only for a role the API
+ *  would accept. */
+const profileRows = (a, mayManage) => {
   const p = a.profile;
-  if (!p || p.status === "not_applicable") return "";
+  if (!p || p.status === "not_applicable") return [];
   if (p.status === "needs_check") {
-    return `<p class="desc" style="margin-top:6px">${Z.tag("Needs a check", "amber")} ${esc(plain(p.reason))}</p>
-      ${mayManage ? `<div style="margin-top:8px"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="check-profile" data-id="${esc(a.id)}">Check again</button></div>` : ""}`;
+    return [["Profile at Monerium", `${Z.tag("Needs a check", "amber")} ${esc(plain(p.reason))}
+      ${mayManage ? `<div style="margin-top:8px"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="check-profile" data-id="${esc(a.id)}">Check again</button></div>` : ""}`]];
   }
-  const who = p.kind === "corporate" ? "Company profile at Monerium" : "Personal profile at Monerium";
-  return `<p class="desc" style="margin-top:6px">${who}${p.name ? `: <b>${esc(p.name)}</b>` : ""}</p>
-    ${p.warning ? `<p class="desc" style="margin-top:6px">${Z.tag(p.name ? "Name differs" : "Name not compared", "amber")} ${esc(plain(p.warning))}</p>` : ""}`;
+  const kind = p.kind === "corporate" ? "Company profile" : "Personal profile";
+  return [
+    ["Profile at Monerium", `${p.name ? `<b>${esc(p.name)}</b> <span class="z-dim">· ${kind}</span>` : kind}`],
+    p.warning ? ["Name check", `${Z.tag(p.name ? "Name differs" : "Name not compared", "amber")} ${esc(plain(p.warning))}`] : null,
+  ].filter(Boolean);
 };
 
 META.accounts = () => ({
@@ -49,40 +52,50 @@ RENDER.accounts = async () => {
   const { accounts, currencies, adoption, profileWait, mayManageAccounts } = await api(`/api/orgs/${org.id}/accounts`);
   const who = org.type === "business" ? "the company profile" : "your profile";
   const waitHtml = profileWait
-    ? `<p class="desc" style="margin-top:6px">${Z.tag("Waiting for Monerium", "amber")} Monerium had ${who} as ${esc(plain(profileWait.state))} on ${esc(new Date(profileWait.at).toLocaleString())}.</p>`
+    ? `${Z.tag("Waiting for Monerium", "amber")} Monerium had ${who} as ${esc(plain(profileWait.state))} on ${esc(new Date(profileWait.at).toLocaleString())}.`
     : "";
-  const rows = accounts.map((a) => {
+  const cards = accounts.map((a) => {
     const ident = a.identifier?.iban || a.identifier?.accountNumber || a.identifier?.mobile || "";
+    const identLabel = a.identifier?.iban ? "IBAN" : a.identifier?.accountNumber ? "Account number" : a.identifier?.mobile ? "Mobile" : "IBAN";
     const mine = a.backingUserId && me && a.backingUserId === me.id;
-    return `<tr>
-      <td class="zb-top"><b>${esc(a.label || a.currency)}</b><span class="zb-sub2">${esc(a.currency)}</span></td>
-      <td class="zb-top z-mono" translate="no">${ident ? esc(Z.groupIban(ident)) : '<span class="z-dim">None yet</span>'}</td>
-      <td class="zb-top">${statusTag(a.status)}
-        ${a.gate ? `<p class="desc" style="margin-top:6px">${esc(plain(a.gate.reason))}<br>Needs: ${esc(plain(a.gate.needs))}</p>` : ""}
-        ${!a.backingUserId && a.currency === "EUR" ? waitHtml : ""}
-        ${a.backingUserId ? `<p class="desc" style="margin-top:6px">${mine ? "Spends from your own account" : "Spends from a member’s own account"}</p>` : ""}
-        ${mine && a.currency === "EUR" && a.status === "active" ? `<p style="margin-top:6px"><a href="?view=documents" data-view-link="documents">Statements and documents</a></p>` : ""}
-        ${profileHtml(a, mayManageAccounts)}</td>
-      <td class="zb-top">${!a.backingUserId && a.currency === "EUR"
-        ? adoption?.allowed
-          ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="fund-account" data-id="${esc(a.id)}">${profileWait ? "Check with Monerium again" : org.type === "business" ? "Connect the company’s IBAN" : "Fund from my account"}</button>`
-          : adoption?.reason ? `<p class="desc">${esc(plain(adoption.reason))}</p>` : ""
-        : ""}</td></tr>`;
+    const action = !a.backingUserId && a.currency === "EUR"
+      ? adoption?.allowed
+        ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="fund-account" data-id="${esc(a.id)}">${profileWait ? "Check with Monerium again" : org.type === "business" ? "Connect the company’s IBAN" : "Fund from my account"}</button>`
+        : adoption?.reason ? `<p class="desc">${esc(plain(adoption.reason))}</p>` : ""
+      : "";
+    const details = [
+      a.gate ? ["Not open because", `${esc(plain(a.gate.reason))}<br>Needs: ${esc(plain(a.gate.needs))}`] : null,
+      !a.backingUserId && a.currency === "EUR" && waitHtml ? ["Monerium", waitHtml] : null,
+      a.backingUserId ? ["Spends from", mine ? "Your own account" : "A member’s own account"] : null,
+      ...profileRows(a, mayManageAccounts),
+      mine && a.currency === "EUR" && a.status === "active" ? ["Documents", `<a href="?view=documents" data-view-link="documents">Statements and documents</a>`] : null,
+    ].filter(Boolean);
+    return `<section class="z-card zb-acard">
+      <div class="zb-acard__head">
+        <div><b class="zb-acard__name">${esc(a.label || a.currency)}</b><span class="zb-acard__cur">${esc(a.currency)}</span></div>
+        ${statusTag(a.status)}
+        ${action ? `<div class="zb-acard__act">${action}</div>` : ""}
+      </div>
+      <div class="zb-acard__iban">
+        <span class="z-eyebrow">${identLabel}</span>
+        ${ident
+          ? `<div class="zb-acard__ibanrow"><span class="z-mono" translate="no">${esc(Z.groupIban(ident))}</span>
+             <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(ident.replace(/\s+/g, ""))}" data-said="${identLabel} copied">${Z.icon("content_copy")}<span>Copy</span></button></div>`
+          : '<span class="z-dim">None yet</span>'}
+      </div>
+      ${details.length ? `<dl class="zb-set-rows">${details.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>` : ""}
+    </section>`;
   });
   const cur = currencies.map((c) => `<tr>
-      <td class="zb-top"><b>${esc(c.code)}</b><span class="zb-sub2">${esc(plain(c.name))}</span></td>
-      <td class="zb-top">${esc(plain(c.railName))}<span class="zb-sub2">${esc(c.provider === "none" ? "No provider yet" : c.provider)}</span></td>
-      <td class="zb-top">${c.token
-        ? `<span class="z-mono">${esc(plain(c.token.symbol))}</span> ${Z.tag(c.token.heldByUs ? "Held" : "Not held")}
-           <p class="desc" style="margin-top:6px">${esc(plain(c.token.issuer))}. ${esc(plain(c.token.backing))}</p>
-           ${c.token.liquidityNote ? `<p class="desc" style="margin-top:6px">${esc(plain(c.token.liquidityNote))}</p>` : ""}`
-        : '<span class="z-dim">None</span>'}</td>
-      <td class="zb-top">${c.available ? Z.tag("Available on Zold", "mint") : `${Z.tag("Soon")}<p class="desc" style="margin-top:6px">${esc(plain(c.needs))}</p>`}</td></tr>`);
+      <td><b>${esc(c.code)}</b> <span class="z-dim">${esc(plain(c.name))}</span></td>
+      <td>${esc(plain(c.railName))}</td>
+      <td>${c.token ? `<span class="z-mono">${esc(plain(c.token.symbol))}</span> ${Z.tag(c.token.heldByUs ? "Held" : "Not held")}` : '<span class="z-dim">None</span>'}</td>
+      <td>${c.available ? Z.tag("Available", "mint") : `<span title="${esc(plain(c.needs))}">${Z.tag("Soon")}</span>`}</td></tr>`);
   return `${accounts.length
-      ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Account</th><th scope="col">IBAN</th><th scope="col">Status</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`
+      ? `<div class="zb-accts">${cards.join("")}</div>`
       : `<div class="z-card"><p class="empty">No accounts yet.</p></div>`}
     <h2 class="zb-h2" style="margin:28px 0 6px">Currencies</h2>
-    <p class="zb-hint" style="margin-bottom:12px">Which currencies Zold supports, for every organisation. Whether your own account in one is open is shown in the table above.</p>
+    <p class="zb-hint" style="margin-bottom:12px">Currencies Zold supports.</p>
     <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Currency</th><th scope="col">Network</th><th scope="col">Settles in</th><th scope="col">Status</th></tr></thead><tbody>${cur.join("")}</tbody></table></div>`;
 };
 
