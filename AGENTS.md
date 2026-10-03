@@ -16,8 +16,8 @@ Read when the task touches it:
   gate, tests, the production branch.
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
 - `docs/roadmap.md` — agreed priority and parked ideas.
-- `docs/architecture/` — product (what exists, status) and technical (how,
-  routes).
+- `docs/architecture/` — product (what exists) and technical (how).
+- `docs/CODEMAPS/` — routes, modules, data, deps.
 
 ## How to write in this repo (comments, docs, this file, notes)
 
