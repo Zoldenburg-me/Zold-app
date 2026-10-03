@@ -92,7 +92,7 @@ RENDER.accounts = async () => {
       <td>${c.token ? `<span class="z-mono">${esc(plain(c.token.symbol))}</span> ${Z.tag(c.token.heldByUs ? "Held" : "Not held")}` : '<span class="z-dim">None</span>'}</td>
       <td>${c.available ? Z.tag("Available", "mint") : `<span title="${esc(plain(c.needs))}">${Z.tag("Soon")}</span>`}</td></tr>`);
   return `${accounts.length
-      ? `<div class="zb-accts">${cards.join("")}</div>`
+      ? `<div class="zb-acards">${cards.join("")}</div>`
       : `<div class="z-card"><p class="empty">No accounts yet.</p></div>`}
     <h2 class="zb-h2" style="margin:28px 0 6px">Currencies</h2>
     <p class="zb-hint" style="margin-bottom:12px">Currencies Zold supports.</p>
