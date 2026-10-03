@@ -6,8 +6,6 @@ Say this plainly rather than letting the surface imply otherwise:
 
 - **No mainnet deploy.** No 8453 entry in `deployments.json`; needs funded
   operator keys the user holds.
-- **The testnet faucet has not sent on Base Sepolia**, neither the Add money
-  grant nor a /faucet page drip. `faucet:test` proves both on hardhat.
 - **No real money has moved through a swap.** No dex/LI.FI/RFQ/CoW swap has
   executed; no Base Sepolia send has exercised execution → debit.
 - **The cash rail has never opened.** Bridge live mode is entirely unexercised,
@@ -24,19 +22,23 @@ Say this plainly rather than letting the surface imply otherwise:
   sandbox allows PATCH to a `basesepolia` address is unverified, and so is
   the `profile` field on GET /ibans items that the move and the
   `IBAN_EXISTS_ELSEWHERE` answer rely on (without it both refuse).
-- **The Monerium profile-kind check has never read a corporate profile.**
-  The app's sandbox login holds only `personal` profiles (none approved, read
-  2026-09-30), so the corporate path and the `name` a corporate profile
-  carries have run only against the fake Monerium in
-  `monerium:profile:test`. Which profile a login uses is fixed at connect
+- **The Monerium profile-kind check has read one corporate profile, never an
+  approved one.** On 2026-10-03 a company signup on zoldhq.com connected by
+  its own OAuth to a `corporate` sandbox profile in state `pending`, its
+  `name` came through, and Monerium issued the Safe's IBAN on that profile.
+  An approved corporate profile has never been seen, and the pending-profile
+  pass and the document holder name built on that case have run only
+  against the fake Monerium in `monerium:profile:test` until they are
+  deployed. The app's own sandbox login holds only `personal` profiles. Which profile a login uses is fixed at connect
   by its signup kind (personal or corporate, the other kind never), so a
   company needs its own Zold login. A founder who signed up personally and
   wants a company IBAN is sent to support@zoldhq.com for a separate account
   with its own Safe, set up by hand; no such account has been set up yet.
   A wrong-kind OAuth login is refused only after the user has signed in at
   Monerium (its `/auth` takes no profile kind; the signup email is
-  prefilled). Whether Monerium then keeps them signed in, so that "connect
-  again" returns the same login until they sign out there, is unverified.
+  prefilled). Monerium keeps that login until the user signs out there or
+  the session expires, so "connect again" returns the same login until then;
+  the refusal and the activation screen both say to sign out first.
   Logins connected before this rule are not re-read: one connected to a
   profile of the other kind keeps it until it reconnects.
   The check gates sending only: invoices and pay links still receive into
@@ -80,14 +82,18 @@ Say this plainly rather than letting the surface imply otherwise:
   app's client-credentials token, so it landed on the app's own sandbox
   profile, not through a user's OAuth. The same call with a signature made
   for another Safe was refused 400 "Invalid signature: … GS024": Monerium
-  checks ERC-1271 on the Safe. Never run: a real passkey, the Transaction
-  Builder JSON on app.safe.global (its checksum is written from the
-  tx-builder source, untested), a hardware wallet sending the owner change,
-  an IBAN on an imported Safe, and anything on Base mainnet — Zoldenburg's
-  Safe has not been touched. The onboarding screens for it (a company
-  account's choice after the passkey, then address → owner change → confirm)
-  have run only in the browser pane against a canned API, never against a
-  chain, with a real passkey, or through a user's Monerium OAuth. Recovery
+  checks ERC-1271 on the Safe. One company account on zoldhq.com (the
+  2026-10-03 testing round) then ran the whole path for real: the onboarding
+  screens with a real passkey, the owner change through the Transaction
+  Builder JSON on app.safe.global, confirm, and the user's own Monerium
+  OAuth, after which Monerium issued an IBAN paying into the imported Safe
+  (on a `pending` corporate profile). The deployed app then mishandled that
+  IBAN — it labelled the Safe personal, showed the account active in /app
+  and not open in /business, and named the user rather than the company on
+  documents; the fixes are not deployed, so an IBAN on an imported Safe has
+  not yet worked end to end. Never run: a hardware wallet sending
+  the owner change, and anything on Base mainnet — Zoldenburg's Safe has
+  not been touched. Recovery
   has never run on an imported Safe, so the screens do not offer it there;
   the API does not refuse it.
 - **One mail transport exists, and it is off.** `adapters/mailer.ts` sends
