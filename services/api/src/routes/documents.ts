@@ -32,6 +32,7 @@ import {
   holderBlock,
   isDocumentCode,
   linesFromChainCredits,
+  linesFromFaucet,
   linesFromMoneriumOrders,
   linesFromTransfers,
   mergeLines,
@@ -120,7 +121,7 @@ export async function buildStatement(user: User, from: Date, to: Date): Promise<
   const lines = mergeLines(
     linesFromMoneriumOrders(mon.orders, user.address),
     linesFromTransfers(transfers),
-    linesFromChainCredits(credits),
+    [...linesFromChainCredits(credits), ...linesFromFaucet(user.faucet)],
   ).filter((l) => inPeriod(l.at));
 
   let opening: StatementSnapshot["opening"] = null;
