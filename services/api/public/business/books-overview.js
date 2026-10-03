@@ -15,6 +15,8 @@ const MONTH_PILLS = 5;
 /* The account the default rule files every unsorted payment out under
    (domain/coa.ts DEFAULT_RULES, transfer_out). */
 const DEFAULT_OUT_CODE = "6000";
+/* The chart was allowed but its read failed: said as such, not as a plan limit. */
+const CHART_FAILED = "failed";
 
 const bo = { period: null };
 const isoDay = (d) => d.toISOString().slice(0, 10);
@@ -64,8 +66,9 @@ function byCategory(lines, dir, chart) {
 }
 
 function categoryCard(id, title, dir, now, before, r, chart) {
+  const names = Array.isArray(chart) ? chart : [];
   const total = cents(now, dir);
-  const rows = byCategory(now, dir, chart);
+  const rows = byCategory(now, dir, names);
   const list = rows.length
     ? `<ul class="zb-bo-cats">${rows.map(([cat, v]) => {
       const pct = Math.round((v / total) * 100);
@@ -75,12 +78,15 @@ function categoryCard(id, title, dir, now, before, r, chart) {
     : `<p class="zb-hint">Nothing ${dir === "in" ? "came in" : "went out"} in this period.</p>`;
   let hint = "";
   if (dir === "out") {
-    const auto = now.filter((l) => l.amountCents < 0 && l.accountCode === DEFAULT_OUT_CODE && l.accountCodeAuto);
-    if (auto.length) hint = `<div class="zb-note zb-note--a">${Z.icon("rule")}<span>${auto.length} payment${auto.length === 1 ? "" : "s"} out ${auto.length === 1 ? "is" : "are"} in ${esc((chart || []).find((c) => c.code === DEFAULT_OUT_CODE)?.name || "Transaction fees")} only because the default rule put ${auto.length === 1 ? "it" : "them"} there. <a href="?view=books" data-view-link="books">Sort them</a></span></div>`;
+    const auto = now.filter((l) => l.amountCents < 0 && l.accountCode === DEFAULT_OUT_CODE && l.accountCodeAuto === true);
+    // A line records that a rule chose its category, not which rule did.
+    if (auto.length) hint = `<div class="zb-note zb-note--a">${Z.icon("rule")}<span>${auto.length} payment${auto.length === 1 ? "" : "s"} out ${auto.length === 1 ? "was" : "were"} filed under ${esc(names.find((c) => c.code === DEFAULT_OUT_CODE)?.name || "Transaction fees")} by a rule, not by a person. <a href="?view=books" data-view-link="books">Check them</a></span></div>`;
   }
   return `<section class="z-card zb-side-card" aria-labelledby="${id}"><div class="zb-side-card__head"><h2 id="${id}">${title}</h2><a href="?view=books" data-view-link="books">View lines</a></div>
     <div class="zb-h-fig"><span class="zb-h-fig__value">${esc(eur(total / 100))}</span>${versus(total, cents(before, dir), r.label)}</div>
-    ${chart ? `<h3 class="zb-h-sub">By category</h3>${list}${hint}` : `<p class="zb-hint">Categories need the chart of accounts, which your plan doesn’t include.</p>`}</section>`;
+    ${Array.isArray(chart) ? `<h3 class="zb-h-sub">By category</h3>${list}${hint}`
+      : chart === CHART_FAILED ? `<p class="zb-hint">Categories couldn’t load. Open Books again to retry.</p>`
+        : `<p class="zb-hint">Categories need the chart of accounts, which your plan doesn’t include.</p>`}</section>`;
 }
 
 function body(lines, months, chart) {
@@ -111,7 +117,7 @@ RENDER["books-overview"] = async () => {
   if (!cap("ledger.transactions").allowed) return gateHtml("ledger.transactions");
   const [st, coa] = await Promise.all([
     api(`/api/orgs/${org.id}/bookkeeping/statement`),
-    cap("coa.manage").allowed ? api(`/api/orgs/${org.id}/chart-of-accounts`).then((r) => r.accounts).catch(() => null) : Promise.resolve(null),
+    cap("coa.manage").allowed ? api(`/api/orgs/${org.id}/chart-of-accounts`).then((r) => r.accounts).catch(() => CHART_FAILED) : Promise.resolve(null),
   ]);
   const { lines, months } = st;
   if (!bo.period || (bo.period !== "30d" && !months.includes(bo.period))) bo.period = months[0] || "30d";
@@ -119,7 +125,8 @@ RENDER["books-overview"] = async () => {
   return {
     html: `<div id="bo-body">${body(lines, months, coa)}</div>`,
     bind(box) {
-      box.addEventListener("click", (ev) => {
+      // On #bo-body, which each render replaces: #view itself outlives renders.
+      box.querySelector("#bo-body").addEventListener("click", (ev) => {
         const b = ev.target.closest("[data-bo]");
         if (!b) return;
         bo.period = b.dataset.bo;

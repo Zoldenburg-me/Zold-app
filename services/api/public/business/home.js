@@ -10,7 +10,7 @@
  *   without Books gets no chart, never a row of zeros.
  * - Money out is Sent, never Paid: the bank's confirmation is not on a line.
  */
-import { Z, api, cap, esc, eur, maskIban, me, org, roleCan, when, ymd } from "./core.js";
+import { $, Z, api, cap, esc, eur, maskIban, me, org, roleCan, view, when, ymd } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { side, waitingForMe } from "./nav.js";
 import { invAmount, loadMembers, memberName } from "./screens.js";
@@ -155,7 +155,7 @@ function attention({ waiting, invoices, lines, accounts }) {
   const noReceipt = (lines || []).filter((l) => l.amountCents < 0 && !l.documentCode && within(ymd(l.valueDate), 60));
   if (noReceipt.length) {
     rows.push(row("attach_file", "n", `${noReceipt.length} payment${noReceipt.length === 1 ? " has" : "s have"} no receipt`,
-      "Your accountant needs one for each payment out.", linkBtn("Add receipts", "books")));
+      "In the last 60 days. Your accountant needs one for each payment out.", linkBtn("Add receipts", "books")));
   }
   for (const a of accounts.filter((x) => x.profile?.status === "needs_check")) {
     rows.push(row("verified_user", "a", `${esc(a.label || a.currency)} needs its Monerium profile checked`, "Payments from it wait until the check passes.", linkBtn("Accounts", "accounts")));
@@ -186,19 +186,18 @@ function statCard(id, title, view, cells) {
 
 /* ── Screen ───────────────────────────────────────────────────────────────── */
 
-META.overview = () => {
+/* New payment is the page's one pink action unless runs wait for you: then
+   Review in Needs attention is, and New payment steps back. */
+function headerActions(waiting) {
   const drafts = cap("transfers.drafts").allowed && roleCan(org.role, "propose");
-  const waiting = waitingForMe(side.drafts).length;
-  return {
-    title: org.name,
-    sub: "",
-    actions: [
-      drafts ? linkBtn("New payment", "send", "arrow_outward", waiting ? "secondary" : "primary") : "",
-      cap("invoices").allowed ? `<button type="button" class="z-btn z-btn--secondary" data-act="issue-invoice">${Z.icon("receipt_long")}<span>Issue invoice</span></button>` : "",
-      linkBtn("Request payment", "get-paid", "south_west"),
-    ].join(""),
-  };
-};
+  return [
+    drafts ? linkBtn("New payment", "send", "arrow_outward", waiting ? "secondary" : "primary") : "",
+    cap("invoices").allowed ? `<button type="button" class="z-btn z-btn--secondary" data-act="issue-invoice">${Z.icon("receipt_long")}<span>Issue invoice</span></button>` : "",
+    linkBtn("Request payment", "get-paid", "south_west"),
+  ].join("");
+}
+
+META.overview = () => ({ title: org.name, sub: "", actions: headerActions(waitingForMe(side.drafts).length) });
 
 RENDER.overview = async () => {
   const books = cap("ledger.transactions").allowed;
@@ -211,6 +210,8 @@ RENDER.overview = async () => {
   ]);
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : [];
   const runs = dr.status === "fulfilled" ? dr.value.drafts : [];
+  // Only while Home is still the open view: a slow load must not overwrite another header.
+  if (view === "overview") $("#view-actions").innerHTML = headerActions(waitingForMe(runs).length);
   const invoices = inv.status === "fulfilled" && inv.value ? inv.value.invoices : null;
   const lines = st.status === "fulfilled" && st.value ? st.value.lines : null;
   const months = st.status === "fulfilled" && st.value ? st.value.months : [];
@@ -226,21 +227,26 @@ RENDER.overview = async () => {
   }
   if (cap("transfers.drafts").allowed) {
     const by = (s) => runs.filter((d) => d.state === s);
-    const sent = runs.filter((d) => d.state === "EXECUTED" && within(d.updatedAt, 30));
     const total = (list) => list.reduce((n, d) => n + sumEur(d), 0);
-    cards.push(statCard("home-pay", "Payments", "payments", [["Waiting for review", by("PENDING_REVIEW").length, total(by("PENDING_REVIEW"))], ["Approved, not sent", by("REVIEWED").length, total(by("REVIEWED"))], ["Sent, last 30 days", sent.length, total(sent)]]));
+    // What left the account, from the statement; without Books, the runs marked sent.
+    const out30 = (lines || []).filter((l) => l.amountCents < 0 && within(ymd(l.valueDate), 30));
+    const sent = lines
+      ? ["Sent, last 30 days", out30.length, cents(out30, "out") / 100]
+      : ["Sent", by("EXECUTED").length, total(by("EXECUTED"))];
+    cards.push(statCard("home-pay", "Payments", "payments", [["Waiting for review", by("PENDING_REVIEW").length, total(by("PENDING_REVIEW"))], ["Approved, not sent", by("REVIEWED").length, total(by("REVIEWED"))], sent]));
   }
 
-  const html = `${attention({ waiting: waitingForMe(runs), invoices, lines, accounts })}
+  const html = `<div id="hm-root">${attention({ waiting: waitingForMe(runs), invoices, lines, accounts })}
     <div class="zb-h-top">${lines ? `<section class="z-card zb-side-card zb-h-flow" id="hm-flow" aria-labelledby="home-flow">${flowCard(lines)}</section>` : ""}${accountsCard(accounts)}</div>
     ${cards.length ? `<div class="zb-grid2">${cards.join("")}</div>` : ""}
     ${lines && months.length ? `<section class="zb-h-section" id="hm-move" aria-labelledby="home-move">${movement(lines, months)}</section>` : ""}
-    ${lines ? `<section class="zb-h-section" id="hm-act" aria-labelledby="home-act">${activity(lines)}</section>` : ""}`;
+    ${lines ? `<section class="zb-h-section" id="hm-act" aria-labelledby="home-act">${activity(lines)}</section>` : ""}</div>`;
 
   return {
     html,
     bind(box) {
-      box.addEventListener("click", (ev) => {
+      // On #hm-root, which each render replaces: #view itself outlives renders.
+      box.querySelector("#hm-root").addEventListener("click", (ev) => {
         const b = ev.target.closest("[data-hp],[data-ht],[data-hm]");
         if (!b || !lines) return;
         // Redraw only the section, then put focus back on the control that was pressed.
