@@ -248,38 +248,28 @@ export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string):
   if (snap.holder.operatedBy) kv("Operated by", snap.holder.operatedBy);
   kv("IBAN", snap.holder.iban);
   const mp = snap.holder.moneriumProfile;
-  if (mp) kv("IBAN owner at Monerium", `${mp.name ?? "name not given"} (${mp.kind} profile ${mp.id}, checked ${mp.checkedAt.slice(0, 10)})`);
+  if (mp) kv("IBAN owner at Monerium", `${mp.name ?? "name not given"} (${mp.kind} profile, checked ${mp.checkedAt.slice(0, 10)})`);
   kv("Account of record", `${snap.holder.safeAddress} (chain ${snap.chainId})`);
-  L.push({ text: "Statement line", bold: true, gap: 10 });
-  kv("Amount", eur(snap.line.amountCents / 100));
-  kv("Booking date", snap.line.bookingDate);
-  kv("Value date", snap.line.valueDate);
-  kv("Counterparty", [snap.line.counterparty.name, snap.line.counterparty.iban, snap.line.counterparty.address].filter(Boolean).join(" · ") || undefined);
-  kv("Reference", snap.line.reference);
-  kv("Account code", snap.line.accountCode);
-  kv("Line key", snap.line.key);
-  if (snap.invoice) {
-    L.push({ text: "Invoice", bold: true, gap: 10 });
-    kv("Number", `${snap.invoice.number}${snap.invoice.source === "external" ? " (issued outside Zold)" : ""}`);
-    kv("Payer", snap.invoice.payer);
-  }
-  if (snap.bank) {
-    L.push({ text: "Bank", bold: true, gap: 10 });
-    kv("Monerium order", snap.bank.orderId);
-    kv("Counterparty", snap.bank.counterpartyName);
-    kv("Counterparty IBAN", snap.bank.counterpartyIban);
-    kv("Memo", snap.bank.memo);
-    kv("Processed", when(snap.bank.processedAt));
-    kv("Transfer", snap.bank.transferId);
-    kv("Zold fee", snap.bank.feeEur !== undefined ? eur(snap.bank.feeEur) : undefined);
-    if (snap.bank.refund) kv("Refund", `${eur(snap.bank.refund.amountEur)} at ${when(snap.bank.refund.at)} — ${snap.bank.refund.deductions}`);
-  }
+  // The movement once, as a bank statement prints it.
+  const line = snap.line;
+  const bank = snap.bank;
+  const out = line.amountCents < 0 || line.event === "sepa_out";
+  const who = [line.counterparty.name ?? bank?.counterpartyName, line.counterparty.iban ?? bank?.counterpartyIban ?? line.counterparty.address].filter(Boolean).join(" · ");
+  L.push({ text: "Payment", bold: true, gap: 10 });
+  kv("Amount", `${out ? "-" : "+"}${eur(Math.abs(line.amountCents) / 100)}`);
+  kv("Date", line.bookingDate === line.valueDate ? line.valueDate : `${line.valueDate} (booked ${line.bookingDate})`);
+  kv(out ? "To" : "From", who || undefined);
+  kv("Reference", line.reference);
+  if (bank?.memo && bank.memo !== line.reference) kv("Memo", bank.memo);
+  L.push({ text: "Booked against", bold: true, gap: 10 });
+  if (snap.invoice) kv("Invoice", `${snap.invoice.number}${snap.invoice.payer ? ` · ${snap.invoice.payer}` : ""}${snap.invoice.source === "external" ? " (issued outside Zold)" : ""}`);
+  kv("Account code", line.accountCode);
+  kv("Zold fee", bank?.feeEur !== undefined ? eur(bank.feeEur) : undefined);
+  if (bank?.refund) kv("Refund", `${eur(bank.refund.amountEur)} at ${when(bank.refund.at)} — ${bank.refund.deductions}`);
   if (snap.receipt) {
     L.push({ text: "Receipt (crypto)", bold: true, gap: 10 });
     kv("Received", `${snap.receipt.amount} ${snap.receipt.asset}`);
-    kv("Transaction", `${snap.receipt.txHash} (log ${snap.receipt.logIndex})`);
-    kv("Block time", when(snap.receipt.blockTime));
-    kv("From", snap.receipt.from);
+    kv("Arrived", when(snap.receipt.blockTime));
     if (snap.receipt.valueEur !== undefined) {
       kv("Value at receipt", `${eur(snap.receipt.valueEur)} at ${snap.receipt.rate} USD/EUR`);
       kv("Rate source", `${snap.receipt.rateProvider}, ECB reference rate for ${snap.receipt.rateAsOf} (fixed once per business day; not an intraday rate)`);
@@ -290,9 +280,6 @@ export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string):
   if (snap.conversion) {
     L.push({ text: snap.sweep ? "Sweep conversion" : "Conversion", bold: true, gap: 10 });
     if (snap.sweep) kv("Leftovers from", `${snap.sweep.depositIds.length} conversion(s) in ${snap.sweep.month}`);
-    kv("Transaction", snap.conversion.txHash);
-    kv("UserOperation", snap.conversion.userOpHash);
-    kv("Block", snap.conversion.blockNumber !== undefined ? String(snap.conversion.blockNumber) : undefined);
     kv("Time", when(snap.conversion.at));
     kv("Venue", snap.conversion.venue);
     kv("Rate", snap.conversion.rate !== undefined ? `${snap.conversion.rate} USD/EUR${snap.conversion.midRate ? ` (independent mid ${snap.conversion.midRate})` : ""}` : undefined);
@@ -308,12 +295,19 @@ export function belegLines(snap: BelegSnapshot, code: string, issuedAt: string):
     kv("Cost", snap.gas.costWei ? `${snap.gas.costWei} wei` : undefined);
     kv("Paid by", snap.gas.paidBy === "sponsored" ? "the paymaster (sponsored)" : snap.gas.paidBy === "safe-native" ? "the account, in ETH" : snap.gas.paidBy === "safe-token" ? "the account, in the gas token (USDC)" : undefined);
   }
-  L.push({ text: "Records", bold: true, gap: 10 });
-  kv("Transfer id", snap.line.links.transferId);
-  kv("Deposit id", snap.line.links.depositId);
-  kv("Order id", snap.line.links.orderId);
-  kv("Payment link", snap.line.links.paymentRequestId);
-  for (const h of snap.line.links.txHashes) kv("Transaction", h);
+  // For an auditor tracing the line back to its records.
+  const ids = [
+    ["Monerium order", line.links.orderId ?? bank?.orderId],
+    ["Transfer", line.links.transferId ?? bank?.transferId],
+    ["Deposit", line.links.depositId],
+    ["Payment link", line.links.paymentRequestId],
+    ...line.links.txHashes.map((h) => ["Transaction", h]),
+    ["UserOperation", snap.conversion?.userOpHash],
+    ["Monerium profile", mp?.id],
+    ["Line", line.key],
+  ].filter(([, v]) => v) as [string, string][];
+  L.push({ text: "Record IDs", bold: true, size: 9, gap: 10 });
+  for (const [k, v] of ids) L.push({ text: `${k}: ${v}`, indent: 12, size: 8 });
   if (snap.unexecutedNote) L.push({ text: snap.unexecutedNote, size: 9, gap: 10 });
   L.push({
     text:
