@@ -228,6 +228,7 @@ const EVENT_TITLES: Record<StatementFacts["event"], string> = {
   sepa_out_reversal: "Reversal of a failed payment",
   crypto_converted: "USDC received and converted to EURe",
   crypto_held: "USDC received and held",
+  eure_in: "EURe received on chain",
   sweep: "Monthly conversion of leftover USDC",
 };
 

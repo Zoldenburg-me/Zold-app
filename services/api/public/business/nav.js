@@ -18,6 +18,7 @@ export const SPACES = {
     { id: "payments", label: "Approvals", icon: "inbox", capability: "transfers.drafts" },
     { id: "send", label: "Send", icon: "arrow_outward", capability: "transfers.drafts" },
     { id: "get-paid", label: "Get paid", icon: "south_west" },
+    { id: "transactions", label: "Transactions", icon: "swap_vert", capability: "ledger.transactions" },
     { id: "invoices", label: "Invoices", icon: "receipt_long", capability: "invoices" },
     { id: "contacts", label: "Contacts", icon: "contacts" },
     { id: "members", label: "Members", icon: "group", capability: "members.manage" },

@@ -329,8 +329,16 @@ export const ACTIONS = {
     const { methods } = await api(`/api/users/${me.id}/payment-requests/methods`);
     const usable = methods.filter((m) => m.available).map((m) => m.method);
     if (!usable.length) throw new Error(plain(methods.map((m) => m.needs).filter(Boolean).join(" ")) || "No way to get paid is set up on this account yet.");
-    const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { invoiceId: el.dataset.id, methods: usable } });
-    setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.`, r.url), 0);
+    const [r, page] = await Promise.all([
+      api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { invoiceId: el.dataset.id, methods: usable } }),
+      api(`/api/orgs/${org.id}/payment-page`).catch(() => null),
+    ]);
+    // Without a company page the link opens under the member's own page
+    // address; the money still lands in this organisation's account.
+    const personal = page && !page.paymentPage
+      ? ` It opens under your own page address (/pay/${r.handle}/…) because ${org.name} has no payment page yet; set one up under Get paid for links in the company’s name. The money goes to ${org.name}’s account either way.`
+      : "";
+    setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.${personal}`, r.url), 0);
   },
   async "new-pay-link"() {
     // A link opens under the company page when there is one; say which.

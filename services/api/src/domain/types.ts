@@ -964,6 +964,7 @@ export type StatementEvent =
   | "sepa_out_reversal"
   | "crypto_converted"
   | "crypto_held"
+  | "eure_in"
   | "sweep";
 
 export interface StatementFacts {
