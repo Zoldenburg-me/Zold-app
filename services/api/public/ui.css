@@ -193,7 +193,7 @@ html:has(.z-bnav) { scroll-padding-bottom: 88px; }
 /* ---- Full-screen step (sign-in, onboarding) -------------------------
    One phone column: test-mode pill, head (brand or progress), main, and the
    actions pinned at the bottom. From 1024px the same column sits centred. */
-.z-screen { position: relative; isolation: isolate; display: flex; flex-direction: column; width: 100%; max-width: 480px; min-height: 100dvh; margin: 0 auto; }
+.z-screen { position: relative; isolation: isolate; display: flex; flex-direction: column; width: 100%; max-width: 480px; min-height: calc(100dvh - env(safe-area-inset-top, 0px)); margin: 0 auto; }
 /* app.css drops the outline on input:focus; keyboard focus must still show. */
 .z-screen input[type="radio"]:focus-visible, .z-screen input[type="checkbox"]:focus-visible, #ph-root input[type="checkbox"]:focus-visible { outline: 2px solid var(--z-pink); outline-offset: 2px; box-shadow: none; }
 /* A component's own display must not beat the hidden attribute. */
@@ -333,7 +333,7 @@ html:has(.z-screen__foot) { scroll-padding-bottom: 140px; }
    Test-mode pill, header or top bar, main, the pinned action area, and the
    bottom nav on the tab roots. */
 #phone[hidden] { display: none; }
-#ph-root { position: relative; isolation: isolate; display: flex; flex-direction: column; width: 100%; max-width: 560px; min-height: 100dvh; margin: 0 auto; }
+#ph-root { position: relative; isolation: isolate; display: flex; flex-direction: column; width: 100%; max-width: 560px; min-height: calc(100dvh - env(safe-area-inset-top, 0px)); margin: 0 auto; }
 #ph-root::before { content: ""; position: absolute; inset: -160px 0 auto; z-index: -1; height: 520px; pointer-events: none; background: var(--z-hero-glow); }
 #ph-root [hidden] { display: none !important; }
 #ph-root h1[tabindex="-1"]:focus { outline: none; }
@@ -767,3 +767,12 @@ button.z-side__org:hover { border-color: var(--z-line-hover); }
 .z-screen .z-copy .z-mono { font-size: 20px; letter-spacing: .08em; color: var(--z-heading); }
 /* The whole-screen offline state says it already; the bar would repeat it. */
 html:has(#ob-root [data-screen^="state-"]) #offline-bar { display: none; }
+
+/* ---- Installed app: the status bar ---------------------------------------
+   index.html asks for viewport-fit=cover and a black-translucent status bar,
+   so an app added to the Home Screen paints from the very top, under the
+   clock and the Dynamic Island. The page starts below that inset, and an
+   opaque strip fills it so content scrolling up does not run under the
+   clock. Where the inset is 0 (a desktop browser) none of this shows. */
+body { padding-top: env(safe-area-inset-top, 0px); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; z-index: 210; height: env(safe-area-inset-top, 0px); background: var(--z-bg); pointer-events: none; }

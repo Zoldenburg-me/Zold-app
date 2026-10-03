@@ -14,6 +14,10 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Zold" />
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+<!-- Dark before any stylesheet arrives: an installed app otherwise opens on
+     a white page while tokens.css loads. -->
+<meta name="color-scheme" content="dark" />
+<style>html, body { background: #08080b; }</style>
 <link rel="stylesheet" href="/vendor/fonts/text.css" />
 <!-- Material Symbols, as the design specifies. display=block so an icon never
      flashes as its ligature text before the font arrives. -->
