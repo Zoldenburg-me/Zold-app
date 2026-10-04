@@ -61,6 +61,14 @@ runtime: `services/api/{src,public,site}`, the compiled contract ABIs that
 (tsx included) and its lock. No docs, design, tests, scripts, Solidity, hardhat
 or Shopify extension.
 
+Merging a PR to main is the whole deploy. `.github/workflows/production.yml`
+runs `npm run check`, then `scripts/build-production-branch.sh` on the merged
+commit, and pushes `production`; a red check stops it there. zoldhq.com
+follows `refs/heads/production` (never main) and switches to each new commit
+within a few minutes, backing up `/data/db.json` first and rolling back a
+commit that fails `/api/health` (technical-architecture §18.1). By hand, the
+same build is:
+
 ```bash
 scripts/build-production-branch.sh
 git push origin production
@@ -72,13 +80,17 @@ whose message names the main commit. On the host: `npm ci --omit=dev`, write
 
 Rules, because whatever is on `production` is what zoldhq.com runs:
 
-- **Only the script writes it**, and only from `origin/main` after a merge.
+- **Only the script writes it** (in the workflow, or by hand), and only from
+  merged main.
   Never commit, merge main, cherry-pick, rebase, reset or force-push. A fix
   goes through a PR to main, then a rebuild.
 - **Never build from an unmerged branch.** The script's argument exists for
   re-snapshotting an older main commit, not for shipping a branch.
-- **Roll back by deploying an older production commit** (`ZOLD_COMMIT=<sha>`
-  for `make-sdl.mjs`), never by moving the branch back. History only grows.
+- **Roll back with a revert PR to main**, which deploys like any merge. To
+  hold the site on an older production commit meanwhile, set
+  `ZOLD_COMMIT=<sha>` on the lease: a pinned lease stops following the
+  branch until `ZOLD_COMMIT=production` is set again. Never move the branch
+  back. History only grows.
 - **A file the server newly needs at runtime goes in the script's allowlist**
   in the same PR. Then check a clean checkout boots: `npm ci --omit=dev`,
   `npm start`, `/api/health`. The ABIs were found this way.
