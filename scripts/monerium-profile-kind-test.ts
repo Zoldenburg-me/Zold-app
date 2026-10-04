@@ -531,6 +531,20 @@ await check("a company login cannot make a personal org: its Safe is the company
   assert.equal(r.data.code, "PERSONAL_ORG_COMPANY_LOGIN");
 });
 
+await check("an organisation name with a hidden direction mark is refused, at creation and on rename", async () => {
+  addUser("u_names", PERSONAL, 7);
+  const made = await call("POST", "/api/orgs", "u_names", { type: "business", name: "Acme\u202e GmbH", country: "DE" });
+  assert.equal(made.status, 400, JSON.stringify(made.data));
+  assert.equal(made.data.code, "NAME_INVALID");
+  const legal = await call("POST", "/api/orgs", "u_names", { type: "business", name: "Acme", legalName: "Acme\u2066 GmbH", country: "DE" });
+  assert.equal(legal.status, 400, JSON.stringify(legal.data));
+  const ok = await call("POST", "/api/orgs", "u_names", { type: "business", name: "  Acme   Technik ", country: "DE" });
+  assert.equal(ok.status, 201, JSON.stringify(ok.data));
+  assert.equal(ok.data.organisation.name, "Acme Technik");
+  const renamed = await call("PATCH", `/api/orgs/${ok.data.organisation.id}`, "u_names", { name: "Ac\u00adme" });
+  assert.equal(renamed.status, 400, JSON.stringify(renamed.data));
+});
+
 await check("a person has one personal org: a second is refused", async () => {
   addUser("u_fresh", PERSONAL, 6);
   const first = await call("POST", "/api/orgs", "u_fresh", { type: "personal", name: "Fresh", country: "DE" });
