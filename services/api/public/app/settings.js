@@ -74,7 +74,7 @@ PH.settings = {
     const mon = u.monerium?.method === "api_keys" ? "Connected with your own keys" : hasConnectedMonerium(u) ? "Connected" : "Not connected";
     const plus = u.privacyBundle && u.privacyBundle.status !== "canceled";
     const account = [
-      Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [u.name, u.email].filter(Boolean).join(" · "), href: "#account-details" }),
+      Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [ownAccountName(u), u.email].filter(Boolean).join(" · "), href: "#account-details" }),
       Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in and this phone’s key", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
       Z.row({ lead: Z.iconTile({ icon: "key" }), title: "Who approves payments", sub: "Owners, signatures and spending limits", href: "#signers" }),
       ...(HAS("monerium") ? [Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Monerium", sub: mon, href: "#monerium-settings" })] : []),
@@ -168,7 +168,7 @@ PH.security = {
         right: keyHere ? Z.tag(phKey.protection === "none" ? "Not encrypted" : "This device", phKey.protection === "none" ? "amber" : "pink") : "",
         chevron: false,
       });
-    return `${phTop("Security", "settings")}${phMain(`
+    return `${phSecurityTop()}${phMain(`
       ${phKeyUnprotected() ? Z.note({ tone: "a", text: "Your payment key is stored unencrypted in this browser: the passkey here can’t encrypt it. The key signs what a payment is (amount and payee). On its own it moves nothing: every payment also needs your Face ID or fingerprint, which your account checks on the chain. Someone with a copy could still sign payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust." }) : ""}
       ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: { href: "#recovery-settings", label: r.on ? "Change" : "Set up" }, rows: recoveryRows }) : ""}
       ${Z.listGroup({ label: "Sign-in and keys", rows: [

@@ -525,6 +525,21 @@ await check("a second business org, or one made by a personal signup, opens no a
   assert.equal(store.accountsOf(personal.data.organisation.id).length, 0);
 });
 
+await check("a company login cannot make a personal org: its Safe is the company's", async () => {
+  const r = await call("POST", "/api/orgs", "u_signup", { type: "personal", name: "Me", country: "DE" });
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.equal(r.data.code, "PERSONAL_ORG_COMPANY_LOGIN");
+});
+
+await check("a person has one personal org: a second is refused", async () => {
+  addUser("u_fresh", PERSONAL, 6);
+  const first = await call("POST", "/api/orgs", "u_fresh", { type: "personal", name: "Fresh", country: "DE" });
+  assert.equal(first.status, 201, JSON.stringify(first.data));
+  const again = await call("POST", "/api/orgs", "u_fresh", { type: "personal", name: "Fresh 2", country: "DE" });
+  assert.equal(again.status, 409, JSON.stringify(again.data));
+  assert.equal(again.data.code, "PERSONAL_ORG_EXISTS");
+});
+
 await check("opening an EUR account by hand without an IBAN says what it needs in plain words", async () => {
   addOrg("org_hand", "business", "u_signup", "Hand GmbH");
   const r = await call("POST", "/api/orgs/org_hand/accounts", "u_signup", { currency: "EUR" });

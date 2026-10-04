@@ -159,6 +159,22 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         .json({ error: "Country must be an ISO 3166-1 alpha-2 code, e.g. DE." });
     }
 
+    /**
+     * A personal org is the person's own books, so there is one per person,
+     * and none for a company login: its Safe and IBAN are the company's.
+     */
+    if (orgType === "personal") {
+      if (store.findUser(session.userId)?.accountType === "company") {
+        return res.status(409).json({
+          code: "PERSONAL_ORG_COMPANY_LOGIN",
+          error: "This is a company login, so it has no personal space. For your own money, sign up for Zold as a person with your own email.",
+        });
+      }
+      if (store.organisationsForUser(session.userId).some(({ org: o }) => o.type === "personal")) {
+        return res.status(409).json({ code: "PERSONAL_ORG_EXISTS", error: "You already have a personal space." });
+      }
+    }
+
     const now = new Date().toISOString();
     const org: Organisation = {
       id: `org_${randomUUID()}`,

@@ -16,6 +16,7 @@
    ========================================================================== */
 
 function enterDashboard(name) {
+  name = ownAccountName() || name;
   let invite = null;
   try { invite = sessionStorage.getItem("zold-invite"); sessionStorage.removeItem("zold-invite"); } catch {}
   if (invite) {

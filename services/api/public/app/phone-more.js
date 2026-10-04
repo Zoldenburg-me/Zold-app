@@ -118,7 +118,7 @@ function phSwitchSheet(trigger) {
   document.getElementById("ph-switch")?.remove();
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "ph-switch", title: "Switch account",
-    body: `<ul class="z-list z-card">${choice(null, u.name || ownAccountKind(u), `${ownAccountKind(u)} account`)}${companies.map((o) => choice(o.id, o.name, `Business · you are ${phRoleWord(o.role).toLowerCase()}`)).join("")}</ul>`,
+    body: `<ul class="z-list z-card">${choice(null, ownAccountName(u) || ownAccountKind(u), `${ownAccountKind(u)} account`)}${companies.map((o) => choice(o.id, o.name, `Business · you are ${phRoleWord(o.role).toLowerCase()}`)).join("")}</ul>`,
   }));
   const scrim = $("ph-switch");
   scrim.dataset.ph = "1";
@@ -144,7 +144,7 @@ PH.more = {
     const has = (cap) => orgs.some((o) => phCan(o, cap));
     const who = co
       ? { name: co.name, sub: `Business · you are ${phRoleWord(co.role).toLowerCase()}` }
-      : { name: u.name || "", sub: companies.length ? `${ownAccountKind(u)} · switch to ${companies.map((o) => o.name).join(", ")}` : `${ownAccountKind(u)} account` };
+      : { name: ownAccountName(u), sub: companies.length ? `${ownAccountKind(u)} · switch to ${companies.map((o) => o.name).join(", ")}` : `${ownAccountKind(u)} account` };
     const switcher = companies.length
       ? `<button type="button" class="z-card z-switch" id="ph-switch-btn" aria-haspopup="dialog">${Z.avatar({ name: who.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(who.name)}</span><span class="z-row__sub">${esc(who.sub)}</span></span>${Z.icon("unfold_more", "z-row__chev")}</button>`
       : `<div class="z-card z-switch">${Z.avatar({ name: who.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(who.name)}</span><span class="z-row__sub">${esc(who.sub)}</span></span></div>`;
@@ -191,7 +191,7 @@ function phReset() {
   phCache.invoices = null; phCache.invProfile = null; phCache.invError = null; phCache.integrations = null;
   phCache.invIssued = null; phCache.invRequest = null;
   phCache.co = null; phCache.approvalsWaiting = 0; phCache.inviteLinks = {}; phCache.plans = {}; phCache.signers = undefined; phCache.soon = null;
-  phCompanyId = null;
+  phCompanyId = null; ownCompanyOrg = null;
   phCache.contacts = null; phCache.bic = undefined; phCache.bicFor = ""; phCache.linksError = null;
   phSend = { payee: null, amount: "", reference: "", quote: null, transferId: null, error: null };
   phQuery = "";
