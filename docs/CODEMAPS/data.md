@@ -1,4 +1,4 @@
-<!-- Generated: 2026-10-03 | Files scanned: 3 (store/db.ts, store/types.ts, domain/types.ts) | Token estimate: ~650 -->
+<!-- Generated: 2026-10-04 | Files scanned: 3 (store/db.ts, store/types.ts, domain/types.ts) | Token estimate: ~650 -->
 # Data
 
 One JSON file (`TRANSF_DB_PATH`, default data/db.json), read/written whole by
@@ -9,17 +9,17 @@ No SQL, no migrations tool: db.ts runs idempotent migrations at load
 
 ## Collections
 Personal side
-- users (passkey, passkeySafe, iban/ibanBic, monerium, paymentPage) · sessions
+- users (passkey, passkeySafe, iban/ibanBic + ibanSince, monerium, paymentPage) · sessions
 - quotes → transfers (orchestrator states, custody, marginBps)
 - paymentRequests (source: app | shopify) · receiptShares · documents
-- cryptoDeposits · conversionSweeps · moneriumIssueOrders
+- cryptoDeposits (arrivedAt = block time) · conversionSweeps · moneriumIssueOrders
 - processedMoneriumOrders / processedMoneriumWebhooks (idempotency)
 - recoveryRequests · shopifyConnections · audit
 
 Organisations
 ```
 organisations ─┬─ members (role, status, invite)
-               ├─ accounts (currency, backingUserId → users, gate, profile)
+               ├─ accounts (currency, backingUserId → users, backedSince, gate, profile)
                ├─ importedWallets (sync cursor; ownership proof and pending challenge on the row)
                ├─ contacts (bankAccounts, fingerprint)
                ├─ drafts (payment runs: DRAFT→PENDING_REVIEW→REVIEWED→EXECUTING→EXECUTED)

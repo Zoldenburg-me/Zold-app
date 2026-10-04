@@ -1,4 +1,4 @@
-<!-- Generated: 2026-10-03 | Files scanned: 189 (144 .ts, 45 .js) | Token estimate: ~700 -->
+<!-- Generated: 2026-10-04 | Files scanned: 192 (151 .ts, 41 .js) | Token estimate: ~750 -->
 # Architecture
 
 Single Node/Express app (`services/api`) serving the API, the website and three
@@ -6,10 +6,11 @@ front ends, plus Solidity contracts used only on local hardhat.
 
 ```
 browser ─┬─ /            landing (site.css/site.js)
-         ├─ /app         consumer app  (public/app/*.js, classic scripts)
-         ├─ /business    org console   (public/business/*.js, ES modules)
+         ├─ /app         the person's own account (public/app/*.js, classic scripts)
+         ├─ /business    Zold Business: companies (public/business/*.js, ES modules)
          ├─ /admin       operator view (admin.html)
-         └─ /pay, /invoice, /v, /r   public pages (no session)
+         ├─ /pay, /invoice, /v, /r   public pages (no session)
+         └─ ENS wallets ─► /api/ens/gateway (CCIP-Read for <handle>.zoldhq.com)
                 │
         services/api/src/server.ts  (wiring only: middleware → routers)
                 │
@@ -38,9 +39,11 @@ browser ─┬─ /            landing (site.css/site.js)
 → reconcile.ts reports drift, never repairs.
 
 ## Money flow (receive)
-Monerium issue to the Safe (IBAN in) · payment page / request (`/pay`) ·
+Monerium issue to the Safe (IBAN in) · payment page / request (`/pay`, or
+its ENS name `<handle>.zoldhq.com`) ·
 crypto deposit via Candide forwarder → optional convert to EURe.
 
 ## Deploy
-Akash lease at zoldhq.com, chain `TRANSF_CHAIN_ID` (Base Sepolia today).
+Akash lease at zoldhq.com, chain `TRANSF_CHAIN_ID` (Base Sepolia today; its
+dollar token is zUSD, see usd-token.ts).
 `production` branch is built only by `scripts/build-production-branch.sh`.
