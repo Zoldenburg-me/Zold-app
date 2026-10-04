@@ -29,6 +29,7 @@
  * on a testnet. The grant row is in the store and survives.
  */
 import { formatUnits, parseUnits } from "viem";
+import { usdToken } from "./usd-token.js";
 import { CHAIN_ID, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, TESTNET_FAUCET } from "./config.js";
 import { addrs, eur, faucetWallet, publicClient } from "./chain.js";
 import { store } from "./store.js";
@@ -134,14 +135,20 @@ export async function faucetFundSafe(userId: string): Promise<FaucetResult> {
 
 export type DripToken = { symbol: string; amount: number; address: `0x${string}` };
 
-/** The public page's tokens, with the app's EURe and USDC resolved. */
+/**
+ * The public page's tokens, with the app's EURe and USDC resolved.
+ *
+ * A bare `USDC:amount` means the app's dollar token, so it is labelled by that
+ * token's own symbol: on a staging chain it drips zUSD and must say so. An
+ * entry with an address keeps the name it was given.
+ */
 export function dripTokens(): DripToken[] {
   if (!faucetLive()) return [];
-  return TESTNET_FAUCET.drips.map((d) => ({
-    symbol: d.symbol,
-    amount: d.amount,
-    address: d.address ?? (d.symbol === "EURe" ? addrs().eure : addrs().usdc),
-  }));
+  return TESTNET_FAUCET.drips.map((d) => {
+    if (d.address) return { symbol: d.symbol, amount: d.amount, address: d.address };
+    if (d.symbol === "EURe") return { symbol: d.symbol, amount: d.amount, address: addrs().eure };
+    return { symbol: usdToken().symbol, amount: d.amount, address: addrs().usdc };
+  });
 }
 
 export type DripResult =
