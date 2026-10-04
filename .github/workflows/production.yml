@@ -35,8 +35,8 @@ jobs:
       - run: npm run check
       - name: Build production from this main commit
         run: |
-          git config user.name "zold-production-bot"
-          git config user.email "aurel@zoldhq.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           scripts/build-production-branch.sh "$GITHUB_SHA"
       - name: Push production
         run: |
