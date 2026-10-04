@@ -19,7 +19,7 @@
     "tsx": "^4.19.0"
   },
   "overrides": {
-    "adm-zip": "0.6.0"
+    "adm-zip": "0.6.1"
   },
   "optionalDependencies": {
     "@esbuild/darwin-x64": "^0.28.1"
