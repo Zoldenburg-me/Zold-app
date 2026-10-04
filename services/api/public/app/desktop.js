@@ -38,7 +38,7 @@ function phSideActive(name) {
   if (/^invoice/.test(name)) return "invoices";
   if (name === "contacts") return "contacts";
   if (name === "soon") return "soon";
-  if (["settings", "security", "plan", "settings/currency"].includes(name)) return "settings";
+  if (["more", "settings", "security", "plan", "settings/currency"].includes(name)) return "settings";
   if (name === "members") return "members";
   if (/^(tx|send)/.test(name)) return name.startsWith("tx") ? "activity" : "send";
   if (/^(get-paid|link)/.test(name)) return "get-paid";
@@ -108,7 +108,7 @@ PH_DESK.side = (route) => {
     <nav class="z-side__nav" aria-label="Main">${phSideItems().map((it) => phSideLink(it, active)).join("")}</nav>
     <div class="z-side__foot">
       ${phSideLink({ id: "soon", href: "#soon", icon: "hourglass_top", label: "Coming soon" }, active)}
-      ${phSideLink({ id: "settings", href: "#settings", icon: "settings", label: "Settings" }, active)}
+      ${phSideLink({ id: "settings", href: "#more", icon: "person", label: "Profile" }, active)}
       ${Z.testModePill(!realMoney)}
     </div>
   </aside>`;

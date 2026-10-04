@@ -19,6 +19,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 export type AuditKind =
   | "segment.decided"
+  | "user.name_changed"
   | "segment.changed_by_admin"
   | "us_questions.answered"
   | "consent.given"

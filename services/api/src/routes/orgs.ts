@@ -253,6 +253,13 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const patch: Partial<Organisation> = {};
     const b = req.body ?? {};
     if (typeof b.name === "string" && b.name.trim().length >= 2) patch.name = b.name.trim();
+    // A personal space is named after its person: one name, changed in the app.
+    if (ctx.org.type === "personal" && patch.name !== undefined && patch.name !== ctx.org.name.trim()) {
+      return res.status(409).json({
+        code: "PERSONAL_ORG_NAME",
+        error: "Your personal space is named after you. Change your name in the Zold app, under Profile.",
+      });
+    }
     if (typeof b.legalName === "string") patch.legalName = b.legalName.trim();
     if (typeof b.taxId === "string") patch.taxId = b.taxId.trim();
     if (typeof b.email === "string") patch.email = b.email.trim();
