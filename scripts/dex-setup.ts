@@ -9,7 +9,13 @@
  * nothing about real pricing.
  *
  *   npm run dex:setup          report what exists and what is missing
- *   npm run dex:setup -- --fix create the pool and mint a full-range position
+ *   npm run dex:setup -- --fix create the pool and mint a position
+ *
+ * --from-faucet signs with FAUCET_KEY instead of DEPLOY_DEPLOYER_KEY: on a test
+ * chain the faucet wallet owns zUSD (DEX_USDC) and holds the test EURe.
+ * DEX_SETUP_RANGE_BPS=500 concentrates the position to ±5% around the live
+ * mid instead of full range, so the same EURe quotes far deeper; if EUR/USD
+ * leaves the band, the pool turns one-sided and every quote refuses.
  *
  * Mirrors `npm run stellar:setup`: read-only unless asked to change anything.
  */
@@ -46,6 +52,10 @@ const TICK_SPACING: Record<number, number> = { 100: 1, 500: 10, 3000: 60, 10000:
 const FEE = Number(process.env.DEX_SETUP_FEE ?? 500);
 /** How much of each side to post. Small on purpose — enough to quote, not a book. */
 const SEED_EUR = Number(process.env.DEX_SEED_EUR ?? 5);
+/** ±band around the mid in bps; 0 = full range. */
+const RANGE_BPS = Number(process.env.DEX_SETUP_RANGE_BPS ?? 0);
+const FROM_FAUCET = process.argv.includes("--from-faucet");
+const MAX_TICK = 887272;
 
 const erc20 = parseAbi([
   "function balanceOf(address) view returns (uint256)",
@@ -95,11 +105,28 @@ function sqrtPriceX96For(amount0Raw: bigint, amount1Raw: bigint): bigint {
   return isqrt((amount1Raw << 192n) / amount0Raw);
 }
 
+/**
+ * Tick bounds for the position. Full range by default; with RANGE_BPS, the
+ * ticks bracketing price*(1±RANGE_BPS) around the seeding price, which is the
+ * raw token1/token0 ratio (decimals included, as in sqrtPriceX96For).
+ */
+function ticksFor(amount0Raw: bigint, amount1Raw: bigint, spacing: number) {
+  const full = Math.floor(MAX_TICK / spacing) * spacing;
+  if (!RANGE_BPS) return { tickLower: -full, tickUpper: full };
+  const log = (x: number) => Math.log(x) / Math.log(1.0001);
+  const tick = log(Number(amount1Raw) / Number(amount0Raw));
+  const width = log(1 + RANGE_BPS / 10_000);
+  return {
+    tickLower: Math.max(-full, Math.floor((tick - width) / spacing) * spacing),
+    tickUpper: Math.min(full, Math.ceil((tick + width) / spacing) * spacing),
+  };
+}
+
 async function main() {
   const rpc = process.env.TRANSF_RPC_URL!;
   const pub = createPublicClient({ chain, transport: http(rpc) });
-  const key = (process.env.DEPLOY_DEPLOYER_KEY ?? process.env.DEPLOYER_KEY) as `0x${string}` | undefined;
-  if (!key) throw new Error("DEPLOY_DEPLOYER_KEY is required to seed a pool");
+  const key = (FROM_FAUCET ? process.env.FAUCET_KEY : process.env.DEPLOY_DEPLOYER_KEY ?? process.env.DEPLOYER_KEY) as `0x${string}` | undefined;
+  if (!key) throw new Error(`${FROM_FAUCET ? "FAUCET_KEY" : "DEPLOY_DEPLOYER_KEY"} is required to seed a pool`);
   const account = privateKeyToAccount(key);
   const wallet = createWalletClient({ account, chain, transport: http(rpc) });
 
@@ -200,9 +227,8 @@ async function main() {
   const [token0, token1] = eure.toLowerCase() < usdc.toLowerCase() ? [eure, usdc] : [usdc, eure];
   const [amount0, amount1] = token0 === eure ? [needEure, needUsdc] : [needUsdc, needEure];
   const sqrtPriceX96 = sqrtPriceX96For(amount0, amount1);
-  const spacing = TICK_SPACING[FEE] ?? 60;
-  const tickLower = -Math.floor(887272 / spacing) * spacing;
-  const tickUpper = -tickLower;
+  const { tickLower, tickUpper } = ticksFor(amount0, amount1, TICK_SPACING[FEE] ?? 60);
+  console.log(`range ${RANGE_BPS ? `±${RANGE_BPS}bps around the mid` : "full"}: ticks ${tickLower}..${tickUpper}`);
 
   console.log(`\ncreating pool token0=${token0} token1=${token1} sqrtPriceX96=${sqrtPriceX96}`);
   const createHash = await wallet.writeContract({
@@ -243,7 +269,12 @@ async function main() {
   await pub.waitForTransactionReceipt({ hash: mintHash });
   console.log(`  ✓ mint ${mintHash}`);
 
-  const now = await bestPool(eure, usdc);
+  // A public RPC can lag the mint by a few blocks; poll before calling it empty.
+  let now = await bestPool(eure, usdc);
+  for (let i = 0; !now && i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 2_000));
+    now = await bestPool(eure, usdc);
+  }
   console.log(now ? `\n✓ seeded: ${now.address} liquidity ${now.liquidity}` : "\n✗ pool still reads empty — check the mint receipt");
   if (!now) process.exitCode = 1;
 }
