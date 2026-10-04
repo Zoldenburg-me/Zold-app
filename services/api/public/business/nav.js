@@ -9,7 +9,7 @@
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, recoveryPending, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 
 export const SPACES = {
@@ -42,24 +42,31 @@ const SPACE_HOME = { banking: "overview", books: "books-overview" };
 const TABS = { banking: ["overview", "payments", "send", "get-paid"], books: ["books-overview", "books", "export"] };
 
 /* Under 1024px the sidebar is a top bar, and Menu opens the rest of it as a
-   full-screen panel. Closed by Menu again, Escape, or picking a screen. */
-export function setMenu(open) {
+   full-screen panel. Opening it is a history entry, so Back closes it, as do
+   Menu again and Escape (both go back); picking a screen or the organisation
+   closes it in place (`viaHistory: false`). The page behind it is inert. */
+export function setMenu(open, { viaHistory = true } = {}) {
   const shell = document.querySelector(".zb");
   const btn = $("#menu-btn");
   if (!shell || !btn) return;
   const was = shell.classList.contains("is-menu");
+  if (!open && was && viaHistory && history.state?.zbMenu) { history.back(); return; }  // popstate closes it
   shell.classList.toggle("is-menu", open);
+  for (const id of ["#main", "#tabs"]) { const el = $(id); if (el) el.inert = open; }
   btn.setAttribute("aria-expanded", String(open));
   btn.setAttribute("aria-label", open ? "Close menu" : "Menu");
   btn.querySelector(".z-ic").textContent = open ? "close" : "menu";
-  if (open && !was) $("#side-menu").querySelector("a, button:not([hidden])")?.focus();
-  if (!open && was && $("#side-menu").contains(document.activeElement)) btn.focus();
+  if (open && !was) {
+    history.pushState({ ...(history.state || {}), zbMenu: true }, "");
+    $("#side-menu").querySelector("a, button:not([hidden])")?.focus();
+  }
+  if (!open && was && (!document.activeElement || document.activeElement === document.body || $("#side-menu").contains(document.activeElement))) btn.focus();
 }
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && document.querySelector(".zb.is-menu")) setMenu(false);
 });
 // Search opens its own dialog over the page; the panel gets out of its way.
-document.addEventListener("click", (e) => { if (e.target.closest?.("#search-btn")) setMenu(false); });
+document.addEventListener("click", (e) => { if (e.target.closest?.("#search-btn")) setMenu(false, { viaHistory: false }); });
 
 /** Which nav item an older view belongs to. */
 export const PARENT = {
@@ -145,6 +152,7 @@ export function renderNav() {
   const tabs = TABS[space].map((id) => items.find((it) => it.id === id)).filter(Boolean);
   $("#tabs").innerHTML = `<nav class="z-bnav zb-tabs" aria-label="Quick" style="grid-template-columns:repeat(${tabs.length + 1},1fr)">${tabs.map((it) =>
     `<a href="?view=${esc(it.id)}" data-view="${esc(it.id)}"${it.id === active ? ' aria-current="page"' : ""}>${Z.icon(it.icon)}<span>${esc(it.id === "overview" ? "Home" : it.label)}</span>`
+    + `${it.capability && !cap(it.capability).allowed ? `${Z.icon("lock", "zb-tabs__lock")}<span class="z-sr"> (not in your plan)</span>` : ""}`
     + `${it.badge ? `<span class="z-bnav__badge"><span class="z-sr">, </span>${esc(it.badge)}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`).join("")}
     <button type="button" data-menu${TABS[space].includes(active) ? "" : ' aria-current="page"'}>${Z.icon("menu")}<span>Menu</span></button></nav>`;
   $("#nav").setAttribute("aria-label", space === "books" ? "Books" : "Main");
@@ -174,12 +182,12 @@ export function renderNav() {
     a.onclick = (e) => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
-      setMenu(false);
+      setMenu(false, { viaHistory: false });
       setView(a.dataset.view);
       render({ focus: true });
     };
   });
-  $("#org-btn").onclick = () => { setMenu(false); switchSheet($("#org-btn")); };
+  $("#org-btn").onclick = () => { setMenu(false, { viaHistory: false }); switchSheet($("#org-btn")); };
   $("#menu-btn").onclick = () => setMenu(!document.querySelector(".zb.is-menu"));
   $("#tabs [data-menu]").onclick = () => setMenu(true);
 }
@@ -221,9 +229,16 @@ function personalBanner() {
     <button class="z-btn z-btn--quiet z-btn--sm" data-act="personal-later">Not now</button></div>`;
 }
 
+/* The app holds the recovery screens; this says one is under way and goes there. */
+function recoveryBanner() {
+  if (!recoveryPending) return "";
+  return `<div class="banner warn">${Z.icon("warning")}<span><b>A recovery is under way on your sign-in.</b> If you did not start it, stop it now: it would replace your passkey.</span>
+    <a class="z-btn z-btn--primary z-btn--sm" href="/app?from=business#recovery-alert">Check it</a></div>`;
+}
+
 export function planBanner() {
   if (!org) return "";
-  return personalBanner() + planNotice();
+  return recoveryBanner() + personalBanner() + planNotice();
 }
 
 function planNotice() {

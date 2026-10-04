@@ -61,6 +61,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .zb .zb-side .zb-menu-btn { display: none; }
 #tabs .z-bnav button { position: relative; display: grid; align-content: center; justify-items: center; gap: 4px; border: 0; background: none; font: 500 12px var(--z-font); color: var(--z-dim); }
 #tabs .z-bnav button:hover, #tabs .z-bnav button[aria-current="page"] { color: var(--z-text); }
+#tabs .zb-tabs__lock { position: absolute; top: 10px; left: calc(50% + 6px); font-size: 14px; color: var(--z-dim); }
 @media (min-width: 1024px) { #tabs { display: none; } }
 
 /* Under 1024px: the sidebar is a top bar (the mark, the organisation, Menu),

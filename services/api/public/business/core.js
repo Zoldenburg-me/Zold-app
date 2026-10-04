@@ -214,6 +214,20 @@ export async function createPersonalOrg() {
   location.reload();
 }
 
+/** A recovery under way on the signed-in login's own Safe: a new passkey
+ *  about to replace theirs. Read once per visit (shell.js); for a company
+ *  login that Safe is the company's. */
+export let recoveryPending = false;
+export async function readRecovery() {
+  if (!me?.id || me.passkeySafe?.status !== "active") return;
+  const [c, z] = await Promise.all([
+    api(`/api/users/${me.id}/recovery/candide`).catch(() => null),
+    api(`/api/users/${me.id}/recovery/zoldenburg`).catch(() => null),
+  ]);
+  const open = ["PASSKEY_PENDING", "KYC_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"];
+  recoveryPending = Boolean(z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || (z?.requests || []).some((r) => open.includes(r.status)));
+}
+
 /** The bindings other modules reassign. Every READ of them stays live. */
 export const setOrg = (v) => { org = v; };
 export const setOrgs = (v) => { orgs = v; };
