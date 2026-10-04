@@ -10,12 +10,19 @@
  * clients — bank transactions CAN be created:
  * `POST /bankAccounts/{uid}/transactions` takes bookingDate, valueDate,
  * description, amount, currencyCode, clientIban and paymentPartnerName.
- * So bank lines have two doors: a GetMyInvoices bank account by API, or
- * Lexware's own CSV import. Which one the accountant wants is open.
+ * Zold adds each statement line to a manual bank account the organisation
+ * picked there, and assigns the line's Beleg to it, so the accountant sees
+ * the payment with its document attached.
  *
  * Idempotent by construction: before an upload the document number is
  * looked up, and a hit is returned rather than re-uploaded. The key is never
  * logged and never appears in an error.
+ *
+ * An upload that times out or loses its connection may still have landed
+ * (a live push, 2026-10-03, had three of four do exactly that, without their
+ * tags). So such an upload is never reported failed and never retried: the
+ * number is looked up again, and the answer is "uploaded" (tags may be
+ * missing) or "unknown".
  */
 import { GETMYINVOICES } from "../config.js";
 
@@ -25,10 +32,21 @@ export interface GmiConfig {
   userAgent: string;
   baseUrl?: string;
   timeoutMs?: number;
+  uploadTimeoutMs?: number;
+  /** Waits before each re-lookup after an upload that did not answer; their
+   *  index may lag the upload. */
+  relookupDelaysMs?: number[];
   fetchImpl?: typeof fetch;
 }
 
+export type GmiPushResult =
+  | { outcome: "uploaded" | "exists"; documentUid: number; verifiedAfterTimeout?: true; tagsMayBeMissing?: true; error?: string }
+  | { outcome: "unknown"; error: string };
+
 export class GmiApiError extends Error {
+  /** `errors[]` from their body, where they give it: code 127 "Transaction
+   *  Record Already Exist." names the existing transactionUid. */
+  public errors: { code?: number; detail?: string; transactionUid?: number }[] = [];
   constructor(public status: number, message: string) {
     super(message);
     this.name = "GmiApiError";
@@ -98,19 +116,38 @@ export interface GmiBankTransaction {
   tags?: string[];
 }
 
+export interface GmiBankTransactionRecord {
+  transactionUid: number;
+  bookingDate?: string;
+  description?: string;
+  amount?: number;
+}
+
+export interface GmiBankLineResult {
+  outcome: "added" | "exists" | "unknown";
+  transactionUid?: number;
+  /** The Beleg is attached to the line in GetMyInvoices. */
+  assigned?: boolean;
+  error?: string;
+}
+
 export class GetMyInvoicesClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
+  private readonly uploadTimeoutMs: number;
+  private readonly relookupDelaysMs: number[];
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly cfg: GmiConfig) {
     if (!cfg.apiKey) throw new Error("GetMyInvoices: no API key");
     this.baseUrl = (cfg.baseUrl ?? GETMYINVOICES.BASE_URL).replace(/\/$/, "");
     this.timeoutMs = cfg.timeoutMs ?? GETMYINVOICES.TIMEOUT_MS;
+    this.uploadTimeoutMs = cfg.uploadTimeoutMs ?? GETMYINVOICES.UPLOAD_TIMEOUT_MS;
+    this.relookupDelaysMs = cfg.relookupDelaysMs ?? [1000, 3000, 6000];
     this.fetchImpl = cfg.fetchImpl ?? fetch;
   }
 
-  private async call<T>(method: "GET" | "POST" | "PUT", path: string, query?: Record<string, string>, body?: unknown): Promise<T> {
+  private async call<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, query?: Record<string, string>, body?: unknown, timeoutMs = this.timeoutMs): Promise<T> {
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
     let res: Response;
@@ -125,7 +162,7 @@ export class GetMyInvoicesClient {
           ...(body ? { "content-type": "application/json" } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (e: any) {
       throw new GmiApiError(0, `GetMyInvoices unreachable: ${String(e?.message ?? e).slice(0, 160)}`);
@@ -139,8 +176,11 @@ export class GetMyInvoicesClient {
     }
     if (!res.ok || data?.success === false) {
       // Their error body names the problem; the key is never part of it.
-      const detail = String(data?.detail ?? data?.message ?? data?.error ?? res.statusText).slice(0, 200);
-      throw new GmiApiError(res.status, `GetMyInvoices ${method} ${path} failed (${res.status}): ${detail}`);
+      const errors = Array.isArray(data?.errors) ? data.errors : [];
+      const detail = String(data?.detail ?? data?.message ?? data?.error ?? errors[0]?.detail ?? res.statusText).slice(0, 200);
+      const err = new GmiApiError(res.status, `GetMyInvoices ${method} ${path} failed (${res.status}): ${detail}`);
+      err.errors = errors;
+      throw err;
     }
     return data as T;
   }
@@ -167,22 +207,109 @@ export class GetMyInvoicesClient {
 
   uploadDocument(doc: GmiDocumentUpload): Promise<{ success: boolean; documentUid: number }> {
     const { file, ...rest } = doc;
-    return this.call("POST", "/documents", undefined, { ...rest, fileContent: file.toString("base64"), runOCR: doc.runOCR ?? false });
+    return this.call("POST", "/documents", undefined, { ...rest, fileContent: file.toString("base64"), runOCR: doc.runOCR ?? false }, this.uploadTimeoutMs);
+  }
+
+  /** For tests and scripts only; no route deletes. They answer 415 unless
+   *  the DELETE carries a JSON content type and a `{}` body. */
+  deleteDocument(documentUid: number): Promise<{ success: boolean }> {
+    return this.call("DELETE", `/documents/${documentUid}`, undefined, {});
   }
 
   /**
    * Upload unless a document with this number is already there. Returns
    * what happened, so the caller can record it and a re-run is a no-op.
+   *
+   * A refusal (4xx) throws. An upload that got no answer (timeout, dropped
+   * connection: status 0) or a 5xx may have landed, so it is never retried
+   * blind: the number is looked up again, and the result is "uploaded" with
+   * `verifiedAfterTimeout` if it is there, else "unknown".
    */
-  async pushDocument(doc: GmiDocumentUpload): Promise<{ outcome: "uploaded" | "exists"; documentUid: number }> {
+  async pushDocument(doc: GmiDocumentUpload): Promise<GmiPushResult> {
     const existing = await this.findDocumentsByNumber(doc.documentNumber);
     if (existing.length) return { outcome: "exists", documentUid: existing[0].documentUid };
-    const r = await this.uploadDocument(doc);
-    return { outcome: "uploaded", documentUid: r.documentUid };
+    try {
+      const r = await this.uploadDocument(doc);
+      return { outcome: "uploaded", documentUid: r.documentUid };
+    } catch (err) {
+      if (!(err instanceof GmiApiError) || (err.status !== 0 && err.status < 500)) throw err;
+      for (const wait of this.relookupDelaysMs) {
+        await new Promise((r) => setTimeout(r, wait));
+        try {
+          const found = await this.findDocumentsByNumber(doc.documentNumber);
+          if (found.length) {
+            return { outcome: "uploaded", documentUid: found[0].documentUid, verifiedAfterTimeout: true, ...(doc.tags?.length ? { tagsMayBeMissing: true as const } : {}), error: err.message };
+          }
+        } catch {
+          // A failed lookup is not an answer; try the next one.
+        }
+      }
+      return { outcome: "unknown", error: err.message };
+    }
   }
 
-  addBankTransaction(bankAccountUid: number, tx: GmiBankTransaction): Promise<{ success: boolean }> {
-    return this.call("POST", `/bankAccounts/${bankAccountUid}/transactions`, undefined, tx);
+  async addBankTransaction(bankAccountUid: number, tx: GmiBankTransaction): Promise<number> {
+    const r = await this.call<{ meta_data?: { transactionUid?: number } }>("POST", `/bankAccounts/${bankAccountUid}/transactions`, undefined, tx);
+    const uid = Number(r.meta_data?.transactionUid);
+    if (!Number.isInteger(uid) || uid <= 0) throw new GmiApiError(502, "GetMyInvoices added the transaction but returned no transactionUid");
+    return uid;
+  }
+
+  /** Lines of one bank account whose description carries `marker`, on one
+   *  booking day. The text filter is a search; matches are kept exact. */
+  async findBankTransactions(bankAccountUid: number, marker: string, day: string): Promise<GmiBankTransactionRecord[]> {
+    const r = await this.call<{ records?: GmiBankTransactionRecord[] | Record<string, GmiBankTransactionRecord> }>("GET", `/bankAccounts/${bankAccountUid}/transactions`, {
+      textFilter: marker, startDateFilter: day, endDateFilter: day, limit: "50",
+    });
+    // An object keyed by transactionUid, as the live API answers (2026-10-03);
+    // an array, as their spec reads.
+    const list = Array.isArray(r.records) ? r.records : r.records ? Object.values(r.records) : [];
+    return list.filter((t) => String(t.description ?? "").includes(marker));
+  }
+
+  async assignedDocumentUids(bankAccountUid: number, transactionUid: number): Promise<number[]> {
+    const r = await this.call<{ records?: { documentUid?: number }[] | Record<string, { documentUid?: number }> }>("GET", `/bankAccounts/${bankAccountUid}/transactions/${transactionUid}/assign`);
+    const list = Array.isArray(r.records) ? r.records : r.records ? Object.values(r.records) : [];
+    return list.map((d) => Number(d.documentUid)).filter((n) => Number.isInteger(n));
+  }
+
+  assignDocument(bankAccountUid: number, transactionUid: number, documentUid: number): Promise<unknown> {
+    return this.call("POST", `/bankAccounts/${bankAccountUid}/transactions/${transactionUid}/assign`, undefined, { documentUid });
+  }
+
+  /**
+   * The bank line for one Beleg, once, with the Beleg assigned to it.
+   *
+   * `marker` (the Beleg code) is in the description, and is what makes a
+   * re-send find the line instead of adding it twice. An add that got no
+   * answer may have landed, so it is looked up again rather than retried.
+   */
+  async pushBankLine(bankAccountUid: number, tx: GmiBankTransaction, marker: string, documentUid?: number): Promise<GmiBankLineResult> {
+    let transactionUid: number | undefined = (await this.findBankTransactions(bankAccountUid, marker, tx.bookingDate))[0]?.transactionUid;
+    let outcome: GmiBankLineResult["outcome"] = transactionUid ? "exists" : "added";
+    if (!transactionUid) {
+      try {
+        transactionUid = await this.addBankTransaction(bankAccountUid, tx);
+      } catch (err) {
+        // Their own guard: an identical line is refused with code 127 and the
+        // uid of the one already there. That is the line, found.
+        const same = err instanceof GmiApiError ? err.errors.find((e) => e.code === 127 && Number.isInteger(e.transactionUid)) : undefined;
+        if (same) {
+          transactionUid = same.transactionUid!;
+          outcome = "exists";
+        } else if (!(err instanceof GmiApiError) || (err.status !== 0 && err.status < 500)) throw err;
+        for (const wait of transactionUid ? [] : this.relookupDelaysMs) {
+          await new Promise((r) => setTimeout(r, wait));
+          transactionUid = (await this.findBankTransactions(bankAccountUid, marker, tx.bookingDate).catch(() => []))[0]?.transactionUid;
+          if (transactionUid) break;
+        }
+        if (!transactionUid) return { outcome: "unknown", error: (err as Error).message };
+      }
+    }
+    if (!documentUid) return { outcome, transactionUid, assigned: false };
+    const already = await this.assignedDocumentUids(bankAccountUid, transactionUid).catch(() => [] as number[]);
+    if (!already.includes(documentUid)) await this.assignDocument(bankAccountUid, transactionUid, documentUid);
+    return { outcome, transactionUid, assigned: true };
   }
 }
 

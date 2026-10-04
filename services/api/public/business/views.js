@@ -10,7 +10,7 @@
  * so a screen is added by naming it and the shell dispatches without knowing
  * what exists. Every renderer reads the live `org` from core.js.
  */
-import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, plain, ymd } from "./core.js";
+import { $, Z, api, cap, countrySelect, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ymd } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -25,18 +25,21 @@ const statusTag = (s) => Z.tag(s === "active" ? "Active" : s === "gated" ? "Not 
    Accounts
    ========================================================================== */
 
-/** Whose IBAN it is at Monerium, from the server's read-time verdict. The
- *  "Check again" control is drawn only for a role the API would accept. */
-const profileHtml = (a, mayManage) => {
+/** Whose IBAN it is at Monerium, from the server's read-time verdict, as
+ *  detail rows. The "Check again" control is drawn only for a role the API
+ *  would accept. */
+const profileRows = (a, mayManage) => {
   const p = a.profile;
-  if (!p || p.status === "not_applicable") return "";
+  if (!p || p.status === "not_applicable") return [];
   if (p.status === "needs_check") {
-    return `<p class="desc" style="margin-top:6px">${Z.tag("Needs a check", "amber")} ${esc(plain(p.reason))}</p>
-      ${mayManage ? `<div style="margin-top:8px"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="check-profile" data-id="${esc(a.id)}">Check again</button></div>` : ""}`;
+    return [["Profile at Monerium", `${Z.tag("Needs a check", "amber")} ${esc(plain(p.reason))}
+      ${mayManage ? `<div style="margin-top:8px"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="check-profile" data-id="${esc(a.id)}">Check again</button></div>` : ""}`]];
   }
-  const who = p.kind === "corporate" ? "Company profile at Monerium" : "Personal profile at Monerium";
-  return `<p class="desc" style="margin-top:6px">${who}${p.name ? `: <b>${esc(p.name)}</b>` : ""}</p>
-    ${p.warning ? `<p class="desc" style="margin-top:6px">${Z.tag(p.name ? "Name differs" : "Name not compared", "amber")} ${esc(plain(p.warning))}</p>` : ""}`;
+  const kind = p.kind === "corporate" ? "Company profile" : "Personal profile";
+  return [
+    ["Profile at Monerium", `${p.name ? `<b>${esc(p.name)}</b> <span class="z-dim">· ${kind}</span>` : kind}`],
+    p.warning ? ["Name check", `${Z.tag(p.name ? "Name differs" : "Name not compared", "amber")} ${esc(plain(p.warning))}`] : null,
+  ].filter(Boolean);
 };
 
 META.accounts = () => ({
@@ -49,40 +52,50 @@ RENDER.accounts = async () => {
   const { accounts, currencies, adoption, profileWait, mayManageAccounts } = await api(`/api/orgs/${org.id}/accounts`);
   const who = org.type === "business" ? "the company profile" : "your profile";
   const waitHtml = profileWait
-    ? `<p class="desc" style="margin-top:6px">${Z.tag("Waiting for Monerium", "amber")} Monerium had ${who} as ${esc(plain(profileWait.state))} on ${esc(new Date(profileWait.at).toLocaleString())}.</p>`
+    ? `${Z.tag("Waiting for Monerium", "amber")} Monerium had ${who} as ${esc(plain(profileWait.state))} on ${esc(new Date(profileWait.at).toLocaleString())}.`
     : "";
-  const rows = accounts.map((a) => {
+  const cards = accounts.map((a) => {
     const ident = a.identifier?.iban || a.identifier?.accountNumber || a.identifier?.mobile || "";
+    const identLabel = a.identifier?.iban ? "IBAN" : a.identifier?.accountNumber ? "Account number" : a.identifier?.mobile ? "Mobile" : "IBAN";
     const mine = a.backingUserId && me && a.backingUserId === me.id;
-    return `<tr>
-      <td class="zb-top"><b>${esc(a.label || a.currency)}</b><span class="zb-sub2">${esc(a.currency)}</span></td>
-      <td class="zb-top z-mono" translate="no">${ident ? esc(Z.groupIban(ident)) : '<span class="z-dim">None yet</span>'}</td>
-      <td class="zb-top">${statusTag(a.status)}
-        ${a.gate ? `<p class="desc" style="margin-top:6px">${esc(plain(a.gate.reason))}<br>Needs: ${esc(plain(a.gate.needs))}</p>` : ""}
-        ${!a.backingUserId && a.currency === "EUR" ? waitHtml : ""}
-        ${a.backingUserId ? `<p class="desc" style="margin-top:6px">${mine ? "Spends from your own account" : "Spends from a member’s own account"}</p>` : ""}
-        ${mine && a.currency === "EUR" && a.status === "active" ? `<p style="margin-top:6px"><a href="?view=documents" data-view-link="documents">Statements and documents</a></p>` : ""}
-        ${profileHtml(a, mayManageAccounts)}</td>
-      <td class="zb-top">${!a.backingUserId && a.currency === "EUR"
-        ? adoption?.allowed
-          ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="fund-account" data-id="${esc(a.id)}">${profileWait ? "Check with Monerium again" : org.type === "business" ? "Connect the company’s IBAN" : "Fund from my account"}</button>`
-          : adoption?.reason ? `<p class="desc">${esc(plain(adoption.reason))}</p>` : ""
-        : ""}</td></tr>`;
+    const action = !a.backingUserId && a.currency === "EUR"
+      ? adoption?.allowed
+        ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="fund-account" data-id="${esc(a.id)}">${profileWait ? "Check with Monerium again" : org.type === "business" ? "Connect the company’s IBAN" : "Fund from my account"}</button>`
+        : adoption?.reason ? `<p class="desc">${esc(plain(adoption.reason))}</p>` : ""
+      : "";
+    const details = [
+      a.gate ? ["Not open because", `${esc(plain(a.gate.reason))}<br>Needs: ${esc(plain(a.gate.needs))}`] : null,
+      !a.backingUserId && a.currency === "EUR" && waitHtml ? ["Monerium", waitHtml] : null,
+      a.backingUserId ? ["Spends from", mine ? "Your own account" : "A member’s own account"] : null,
+      ...profileRows(a, mayManageAccounts),
+      mine && a.currency === "EUR" && a.status === "active" ? ["Documents", `<a href="?view=documents" data-view-link="documents">Statements and documents</a>`] : null,
+    ].filter(Boolean);
+    return `<section class="z-card zb-acard">
+      <div class="zb-acard__head">
+        <div><b class="zb-acard__name">${esc(a.label || a.currency)}</b><span class="zb-acard__cur">${esc(a.currency)}</span></div>
+        ${statusTag(a.status)}
+        ${action ? `<div class="zb-acard__act">${action}</div>` : ""}
+      </div>
+      <div class="zb-acard__iban">
+        <span class="z-eyebrow">${identLabel}</span>
+        ${ident
+          ? `<div class="zb-acard__ibanrow"><span class="z-mono" translate="no">${esc(Z.groupIban(ident))}</span>
+             <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(ident.replace(/\s+/g, ""))}" data-said="${identLabel} copied">${Z.icon("content_copy")}<span>Copy</span></button></div>`
+          : '<span class="z-dim">None yet</span>'}
+      </div>
+      ${details.length ? `<dl class="zb-set-rows">${details.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>` : ""}
+    </section>`;
   });
   const cur = currencies.map((c) => `<tr>
-      <td class="zb-top"><b>${esc(c.code)}</b><span class="zb-sub2">${esc(plain(c.name))}</span></td>
-      <td class="zb-top">${esc(plain(c.railName))}<span class="zb-sub2">${esc(c.provider === "none" ? "No provider yet" : c.provider)}</span></td>
-      <td class="zb-top">${c.token
-        ? `<span class="z-mono">${esc(plain(c.token.symbol))}</span> ${Z.tag(c.token.heldByUs ? "Held" : "Not held")}
-           <p class="desc" style="margin-top:6px">${esc(plain(c.token.issuer))}. ${esc(plain(c.token.backing))}</p>
-           ${c.token.liquidityNote ? `<p class="desc" style="margin-top:6px">${esc(plain(c.token.liquidityNote))}</p>` : ""}`
-        : '<span class="z-dim">None</span>'}</td>
-      <td class="zb-top">${c.available ? Z.tag("Available on Zold", "mint") : `${Z.tag("Soon")}<p class="desc" style="margin-top:6px">${esc(plain(c.needs))}</p>`}</td></tr>`);
+      <td><b>${esc(c.code)}</b> <span class="z-dim">${esc(plain(c.name))}</span></td>
+      <td>${esc(plain(c.railName))}</td>
+      <td>${c.token ? `<span class="z-mono">${esc(plain(c.token.symbol))}</span> ${Z.tag(c.token.heldByUs ? "Held" : "Not held")}` : '<span class="z-dim">None</span>'}</td>
+      <td>${c.available ? Z.tag("Available", "mint") : `<span title="${esc(plain(c.needs))}">${Z.tag("Soon")}</span>`}</td></tr>`);
   return `${accounts.length
-      ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Account</th><th scope="col">IBAN</th><th scope="col">Status</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`
+      ? `<div class="zb-acards">${cards.join("")}</div>`
       : `<div class="z-card"><p class="empty">No accounts yet.</p></div>`}
     <h2 class="zb-h2" style="margin:28px 0 6px">Currencies</h2>
-    <p class="zb-hint" style="margin-bottom:12px">Which currencies Zold supports, for every organisation. Whether your own account in one is open is shown in the table above.</p>
+    <p class="zb-hint" style="margin-bottom:12px">Currencies Zold supports.</p>
     <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Currency</th><th scope="col">Network</th><th scope="col">Settles in</th><th scope="col">Status</th></tr></thead><tbody>${cur.join("")}</tbody></table></div>`;
 };
 
@@ -101,14 +114,28 @@ const walletSyncCell = (s = {}) => {
   return `${s.status === "syncing" ? "Catching up" : "Up to date"}${when}${skipped}`;
 };
 
+/** Whether the wallet is proven to be the organisation's, in words. */
+export const PROOF_WORD = { proven: "Proven", lapsed: "Proof lapsed", unproven: "Not proven", removed: "No longer imported" };
+const walletProofCell = (w) => {
+  const o = w.ownership;
+  if (w.proofState === "proven") return `${Z.tag("Proven", "mint")}<span class="zb-sub2">checked ${esc(day(o.checkedAt))}</span>`;
+  if (w.proofState === "lapsed") return `${Z.tag("Proof lapsed", "amber")}<span class="zb-sub2">${esc(plain(o.lapseReason || ""))}, ${esc(day(o.lapsedAt || o.checkedAt))}</span>`;
+  return `${Z.tag("Not proven", "amber")}<span class="zb-sub2">receipts are not invoiced</span>`;
+};
+
 META.wallets = () => ({ title: "Wallets", sub: "Addresses you want counted in your books. Read only: Zold never holds a key for one.", actions: secondary("Import wallet", 'data-act="import-wallet"', "add") });
 RENDER.wallets = async () => {
   const { wallets } = await api(`/api/orgs/${org.id}/wallets`);
+  const unproven = wallets.filter((w) => w.proofState !== "proven").length;
   return wallets.length
-    ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Label</th><th scope="col">Address</th><th scope="col">Network</th><th scope="col">Sync</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${wallets.map((w) => `<tr>
+    ? `${unproven ? `<div class="banner warn">${Z.icon("verified_user")}<span>Importing a wallet does not show it is yours. Prove it by signing a short message in the wallet itself: until then it is synced and counted in your books, but its receipts are not collected into invoices.</span></div>` : ""}
+      <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Label</th><th scope="col">Address</th><th scope="col">Network</th><th scope="col">Sync</th><th scope="col">Ownership</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${wallets.map((w) => `<tr>
         <td>${esc(w.label)}<span class="zb-sub2">${esc(w.kind.toUpperCase())}</span></td><td class="z-mono" translate="no">${esc(w.address)}</td><td>${esc(String(w.chainId))}</td>
         <td>${walletSyncCell(w.sync)}</td>
-        <td><div class="zb-cellact"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="del-wallet" data-id="${esc(w.id)}">Remove<span class="z-sr">: ${esc(w.label)}</span></button></div></td></tr>`).join("")}</tbody></table></div>`
+        <td>${walletProofCell(w)}</td>
+        <td><div class="zb-cellact">${w.proofState === "proven" || !roleCan(org.role, "wallets") ? "" : `<button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="prove-wallet" data-id="${esc(w.id)}">Prove<span class="z-sr">: ${esc(w.label)}</span></button>`}
+          ${w.ownership && roleCan(org.role, "wallets") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="recheck-wallet" data-id="${esc(w.id)}">Check again<span class="z-sr">: ${esc(w.label)}</span></button>` : ""}
+          <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="del-wallet" data-id="${esc(w.id)}">Remove<span class="z-sr">: ${esc(w.label)}</span></button></div></td></tr>`).join("")}</tbody></table></div>`
     : `<div class="z-card"><p class="empty">No wallets imported.</p></div>`;
 };
 
@@ -134,16 +161,87 @@ RENDER.ledger = async () => {
     : `<div class="z-card"><p class="empty">Nothing yet. Transactions appear once money moves or a wallet syncs.</p></div>`;
 };
 
-META.assets = () => ({ title: "Assets and tax lots", sub: "First in, first out: the only cost-basis method built.", actions: booksBack() });
+/** Euros from integer cents; a dash where the figure is unknown. */
+const cents = (c) => (c === undefined || c === null ? "—" : eur(c / 100));
+const shortHex = (h) => (h ? `${h.slice(0, 8)}…${h.slice(-4)}` : "");
+/** A holding: its symbol, and which contract on which chain it is. */
+const holdingCell = (x) =>
+  `${esc(x.asset)}${x.token ? `<span class="zb-sub2 z-mono" translate="no">${esc(shortHex(x.token))} · chain ${esc(String(x.chainId))}</span>` : ""}`;
+const signedCents = (c) => (c === undefined ? "—" : `<span class="z-amount${c >= 0 ? " z-amount--in" : ""}">${c < 0 ? "−" : ""}${eur(Math.abs(c) / 100)}</span>`);
+const booksNotes = (notes = []) => `<div class="zb-notes">${notes.map((n) => `<div class="zb-note">${Z.icon("info")}<span>${esc(n)}</span></div>`).join("")}</div>`;
+
+META.assets = () => ({ title: "Holdings and tax lots", sub: "What your wallets hold per token, what it cost, and the lots it came from. First in, first out.", actions: `${booksBack()}${linkBtn("Realised gains", "gains", "trending_up")}` });
 RENDER.assets = async () => {
   if (!cap("assets.costBasis").allowed) return gateHtml("assets.costBasis");
   const d = await api(`/api/orgs/${org.id}/assets`);
-  return `${d.positions.length
-      ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Asset</th><th scope="col" class="z-tbl__num">Held</th><th scope="col" class="z-tbl__num">Cost basis</th><th scope="col" class="z-tbl__num">Realised</th></tr></thead><tbody>${d.positions.map((p) => `<tr>
-          <td>${esc(p.asset === "EURe" ? "Euros" : p.asset)}</td><td class="z-tbl__num">${p.quantity.toFixed(6)}</td><td class="z-tbl__num">${p.costBasis.toFixed(2)}</td>
-          <td class="z-tbl__num"><span class="z-amount${p.realised >= 0 ? " z-amount--in" : ""}">${p.realised >= 0 ? "" : "−"}${Math.abs(p.realised).toFixed(2)}</span></td></tr>`).join("")}</tbody></table></div>`
-      : `<div class="z-card"><p class="empty">No positions yet.</p></div>`}
-    ${d.shortfalls?.length ? `<div class="banner warn" style="margin-top:16px">${Z.icon("warning")}<span>${d.shortfalls.length} disposal${d.shortfalls.length === 1 ? " has" : "s have"} no matching purchase. They’re reported rather than booked at zero cost, which would overstate income.</span></div>` : ""}`;
+  const walletName = Object.fromEntries(d.wallets.map((w) => [w.id, w.label]));
+  const unproven = d.wallets.filter((w) => w.proofState !== "proven");
+  const lotRow = (l) => `<tr>
+      <td class="z-dim">${esc(day(l.acquiredAt))}</td>
+      <td>${esc(walletName[l.walletId] || l.walletId || "Account")}${l.walletProofState && l.walletProofState !== "proven" ? ` ${Z.tag(PROOF_WORD[l.walletProofState] || l.walletProofState, "amber")}` : ""}</td>
+      <td class="z-tbl__num">${esc(l.quantity)}</td><td class="z-tbl__num">${esc(l.remaining)}</td>
+      <td class="z-tbl__num">${l.costCents === undefined ? "no value" : cents(l.costCents)}</td>
+      <td class="z-mono z-dim" translate="no">${esc(shortHex(l.txHash))}</td></tr>`;
+  const positionsHtml = d.positions.length
+    ? d.positions.map((p) => `<section class="z-card" style="margin-bottom:12px" aria-label="${esc(p.asset)}">
+        <div class="z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Token</th><th scope="col" class="z-tbl__num">Held</th><th scope="col" class="z-tbl__num">Cost of what is held</th><th scope="col" class="z-tbl__num">Realised to date</th></tr></thead><tbody><tr>
+          <td>${holdingCell(p)}</td><td class="z-tbl__num">${esc(p.quantity)}</td>
+          <td class="z-tbl__num">${cents(p.costBasisCents)}${p.uncostedQuantity !== "0" ? `<span class="zb-sub2">and ${esc(p.uncostedQuantity)} with no known cost</span>` : ""}</td>
+          <td class="z-tbl__num">${signedCents(p.realisedCents)}${p.unmeasured ? `<span class="zb-sub2">${p.unmeasured} sale${p.unmeasured === 1 ? "" : "s"} not measurable</span>` : ""}</td></tr></tbody></table></div>
+        <details style="padding:0 16px 12px"><summary>${p.lots.length} lot${p.lots.length === 1 ? "" : "s"}</summary>
+          <div class="z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Acquired</th><th scope="col">Wallet</th><th scope="col" class="z-tbl__num">Quantity</th><th scope="col" class="z-tbl__num">Left</th><th scope="col" class="z-tbl__num">Cost</th><th scope="col">Transaction</th></tr></thead><tbody>${p.lots.map(lotRow).join("")}</tbody></table></div></details>
+      </section>`).join("")
+    : `<div class="z-card"><p class="empty">No token with lots yet. A listed token a wallet receives opens one; EURe and tokens on no list do not.</p></div>`;
+  const quantityOnly = d.quantityOnly.length
+    ? `<h2 class="zb-h2" style="margin:28px 0 6px">Tokens on no list</h2><p class="zb-hint" style="margin-bottom:12px">Counted, never valued: anyone can send any token to a wallet.</p>
+      <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Token</th><th scope="col" class="z-tbl__num">Held</th><th scope="col" class="z-tbl__num">Transfers</th></tr></thead><tbody>${d.quantityOnly.map((q) => `<tr><td>${holdingCell(q)}</td><td class="z-tbl__num">${esc(q.quantity)}</td><td class="z-tbl__num">${q.entryIds.length}</td></tr>`).join("")}</tbody></table></div>`
+    : "";
+  const mayRevalue = cap("ledger.transactions").allowed && roleCan(org.role, "categorise");
+  const needs = d.needsValuation.length
+    ? `<div class="zb-bar" style="margin:28px 0 12px"><div><h2 class="zb-h2">No value yet</h2><p class="zb-hint">The price feed had no price when these were synced. Asking again uses the same lookup for the same block time; a price cannot be typed in.</p></div>${mayRevalue ? secondary("Ask for all prices again", 'data-act="revalue-all"', "refresh") : ""}</div>
+      <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Date</th><th scope="col">Token</th><th scope="col" class="z-tbl__num">Quantity</th><th scope="col">Why</th><th scope="col"><span class="z-sr">Actions</span></th></tr></thead><tbody>${d.needsValuation.map((e) => `<tr>
+        <td class="z-dim">${esc(day(e.at))}</td><td>${assetCell({ asset: e.asset, tags: [] })}</td>
+        <td class="z-tbl__num"><span class="z-amount${e.direction === "in" ? " z-amount--in" : ""}">${e.direction === "in" ? "+" : "−"}${esc(e.amount)}</span></td>
+        <td class="z-dim">${esc(plain(e.note || ""))}</td>
+        <td><div class="zb-cellact">${mayRevalue ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="revalue-row" data-id="${esc(e.entryId)}">Ask again</button>` : ""}</div></td></tr>`).join("")}</tbody></table></div>`
+    : "";
+  const moved = d.moved.length
+    ? `<h2 class="zb-h2" style="margin:28px 0 6px">Moved to your own addresses</h2><p class="zb-hint" style="margin-bottom:12px">Sent to your Zold account or to an address marked as your own: out of these holdings at cost, with no gain.</p>
+      <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Date</th><th scope="col">Token</th><th scope="col" class="z-tbl__num">Quantity</th><th scope="col">To</th><th scope="col" class="z-tbl__num">Cost</th></tr></thead><tbody>${d.moved.map((m) => `<tr>
+        <td class="z-dim">${esc(day(m.at))}</td><td>${esc(m.asset)}</td><td class="z-tbl__num">${esc(m.quantity)}</td>
+        <td>${m.to === "zold-account" ? "Your Zold account" : "An address marked as your own"}</td><td class="z-tbl__num">${cents(m.costBasisCents)}</td></tr>`).join("")}</tbody></table></div>`
+    : "";
+  const unreadable = d.unreadable.length
+    ? `<div class="banner warn" style="margin-top:16px">${Z.icon("error")}<span>${d.unreadable.length} transaction${d.unreadable.length === 1 ? " has" : "s have"} an amount or time Zold cannot read and ${d.unreadable.length === 1 ? "is" : "are"} left out of these figures (${esc(d.unreadable.slice(0, 5).join(", "))}${d.unreadable.length > 5 ? "…" : ""}).</span></div>`
+    : "";
+  const shortfalls = d.shortfalls.length
+    ? `<div class="banner warn" style="margin-top:16px">${Z.icon("warning")}<span>${d.shortfalls.length} transfer${d.shortfalls.length === 1 ? "" : "s"} out moved more than was ever booked (${d.shortfalls.map((s) => `${esc(s.quantity)} ${esc(s.asset)} on ${esc(day(s.at))}${s.kind === "moved" ? ", to your own address" : ""}`).join("; ")}). Usually history before the wallet’s sync start is missing. No gain is shown rather than one at zero cost.</span></div>`
+    : "";
+  return `${unproven.length ? `<div class="banner warn">${Z.icon("verified_user")}<span>${esc(unproven.map((w) => `${w.label} (${PROOF_WORD[w.proofState]})`).join(", "))}: counted here, and labelled on its lots, but not proven to be yours. <a href="?view=wallets" data-view-link="wallets">Prove it</a>.</span></div>` : ""}
+    ${positionsHtml}${unreadable}${shortfalls}${needs}${moved}${quantityOnly}${booksNotes(d.notes)}`;
+};
+
+META.gains = () => ({ title: "Realised gains", sub: "Per month, the EUR value of what left your wallets minus the first-in, first-out cost of what it was sold from.", actions: `${booksBack()}${linkBtn("Holdings", "assets", "account_balance_wallet")}` });
+RENDER.gains = async () => {
+  if (!cap("assets.costBasis").allowed) return gateHtml("assets.costBasis");
+  const d = await api(`/api/orgs/${org.id}/reports/realised-gains`);
+  if (!d.disposals.length) return `<div class="z-card"><p class="empty">No token with lots has left your wallets yet. EURe is money and a token on no list is only counted, so neither makes a gain or a loss.</p></div>${booksNotes(d.notes)}`;
+  const months = `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Month</th><th scope="col" class="z-tbl__num">Gains</th><th scope="col" class="z-tbl__num">Losses</th><th scope="col" class="z-tbl__num">Net</th><th scope="col" class="z-tbl__num">Not measurable</th></tr></thead><tbody>${[...d.months].reverse().map((m) => `<tr>
+      <td>${esc(m.month)}</td><td class="z-tbl__num">${cents(m.gainsCents)}</td><td class="z-tbl__num">${cents(m.lossesCents)}</td>
+      <td class="z-tbl__num">${signedCents(m.realisedCents)}</td><td class="z-tbl__num">${m.unmeasured || ""}</td></tr>`).join("")}</tbody></table></div>`;
+  const rows = [...d.disposals].reverse().map((x) => `<tr>
+      <td class="zb-top z-dim">${esc(day(x.at))}</td><td class="zb-top">${holdingCell(x)}</td><td class="zb-top z-tbl__num">${esc(x.quantity)}</td>
+      <td class="zb-top z-tbl__num">${cents(x.proceedsCents)}</td><td class="zb-top z-tbl__num">${cents(x.costBasisCents)}</td>
+      <td class="zb-top z-tbl__num">${x.realisedCents === undefined ? `<span class="z-dim">not measurable</span><span class="zb-sub2">${esc(x.notMeasurable || "")}</span>` : signedCents(x.realisedCents)}</td>
+      <td class="zb-top">${x.consumed.map((c) => `<span class="zb-sub2">${esc(c.quantity)} from ${esc(c.lotId.replace(/^lot_/, ""))}${c.costCents === undefined ? ", no cost" : `, ${cents(c.costCents)}`}</span>`).join("") || `<span class="z-dim">none</span>`}</td>
+      <td class="zb-top z-mono z-dim" translate="no">${esc(shortHex(x.txHash))}${x.sameTransaction.length ? `<span class="zb-sub2">same transaction: ${esc(x.sameTransaction.join(", "))}</span>` : ""}</td></tr>`).join("");
+  const unreadable = d.unreadable?.length
+    ? `<div class="banner warn">${Z.icon("error")}<span>${d.unreadable.length} transaction${d.unreadable.length === 1 ? " has" : "s have"} an amount or time Zold cannot read and ${d.unreadable.length === 1 ? "is" : "are"} left out of these figures.</span></div>`
+    : "";
+  return `${unreadable}${months}
+    <h2 class="zb-h2" style="margin:28px 0 12px">Every sale</h2>
+    <div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Date</th><th scope="col">Token</th><th scope="col" class="z-tbl__num">Quantity</th><th scope="col" class="z-tbl__num">Value when it left</th><th scope="col" class="z-tbl__num">Cost (FIFO)</th><th scope="col" class="z-tbl__num">Gain or loss</th><th scope="col">Lots used</th><th scope="col">Transaction</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${booksNotes(d.notes)}`;
 };
 
 META.coa = () => ({ title: "Chart of accounts", sub: "Your categories, and the rules that sort transactions into them.", actions: `${booksBack()}${secondary("Add a category", 'data-act="new-coa"', "add")}` });
@@ -162,7 +260,7 @@ RENDER.coa = async () => {
  */
 const EVENT_LABEL = {
   sepa_in: "Bank transfer in", sepa_out: "Bank transfer out", sepa_out_reversal: "Returned transfer",
-  crypto_converted: "Digital dollars to euros", crypto_held: "Digital dollars kept", sweep: "Exchange difference",
+  crypto_converted: "Digital dollars to euros", crypto_held: "Digital dollars kept", eure_in: "Digital euros in", sweep: "Exchange difference",
 };
 export let exportMonth = null;
 export const setExportMonth = (v) => { exportMonth = v; };
@@ -186,7 +284,7 @@ RENDER.export = async () => {
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-prepare">Issue Belege for ${esc(exportMonth)}</button>
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-csv"${dis}>Lexware CSV</button>
         <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="export-zip"${dis}>Belege as ZIP</button>
-        ${integrations?.getmyinvoices?.connected ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="gmi-push"${dis}>Send Belege to GetMyInvoices</button>` : ""}
+        ${integrations?.getmyinvoices?.connected ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="gmi-push"${dis}>Send to GetMyInvoices</button>` : ""}
       </div></div>
     <p class="zb-hint" style="margin-bottom:12px">${d.lines.length} line${d.lines.length === 1 ? "" : "s"}, ${withBeleg} with a Beleg.${integrations && !integrations.getmyinvoices?.connected ? ` <a href="?view=integrations" data-view-link="integrations">Connect GetMyInvoices</a> to send the Belege there.` : ""}</p>
     ${d.lines.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Value date</th><th scope="col">Event</th><th scope="col">Who</th><th scope="col">Reference</th><th scope="col" class="z-tbl__num">Euros</th><th scope="col">Beleg</th></tr></thead><tbody>${d.lines.map((l) => `<tr>
@@ -215,10 +313,10 @@ RENDER.integrations = async () => {
   const g = r.integrations.getmyinvoices;
   const gmi = g.connected
     ? conn("GMI", "GetMyInvoices", `Connected to ${g.accountName || "your account"}${g.accountEmail ? ` (${g.accountEmail})` : ""} since ${day(g.connectedAt)}`, Z.tag("Beta"),
-      "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
-      `${linkBtn("Send a month’s Belege", "export", "upload")}${secondary("Remove key", 'data-act="gmi-disconnect"')}`, true)
+      "A month’s bank lines go to a manual bank account there, each with its Beleg attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
+      `${primary("Send a month’s Belege", 'data-act="gmi-push"', "upload")}${secondary("Remove key", 'data-act="gmi-disconnect"')}`, true)
     : conn("GMI", "GetMyInvoices", "API key · sends Belege each month", Z.tag("Beta"),
-      "Every Beleg of a month goes up as a paid document, numbered with its Beleg code. Sending twice uploads nothing twice. Your accountant takes it from there.",
+      "A month’s bank lines go to a manual bank account there, each with its Beleg attached as a paid document. Sending twice adds nothing twice. Your accountant takes it from there.",
       r.available ? primary("Connect", 'data-act="gmi-drawer"', "link") : `<p class="desc">Not available here: ${esc(plain(g.needs || ""))}.</p>`, true);
   return `<h2 class="z-eyebrow zb-conn__group zb-conn__group--first">Sends your books for you</h2>
     ${gmi}
@@ -242,15 +340,15 @@ RENDER.integrations = async () => {
    only to the member whose own account it is.
    ========================================================================== */
 
-const DOC_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership" };
-const DOC_ICON = { statement: "description", receipt: "receipt_long", balance: "account_balance", ownership: "verified_user" };
+const DOC_LABEL = { statement: "Account statement", receipt: "Transfer receipt", balance: "Balance confirmation", ownership: "Proof of ownership", beleg: "Beleg" };
+const DOC_ICON = { statement: "description", receipt: "receipt_long", balance: "account_balance", ownership: "verified_user", beleg: "attach_file" };
 export const docMonth = { value: null };
 /** Receipts list the most recent paid transfers only. */
 const RECEIPT_ROWS = 50;
 /** A document link from the API, opened only if it is ours or https. */
 export const docHref = (url) => (typeof url === "string" && (url.startsWith("/") || /^https:\/\//i.test(url)) ? url : null);
 
-META.documents = () => ({ title: "Statements and documents", sub: "Signed documents for this account. Anyone you give one to can check it at the address printed on it.", actions: linkBtn("Accounts", "accounts", "arrow_back") });
+META.documents = () => ({ title: "Statements and documents", sub: "Statements, balance confirmations, proof of ownership and the Beleg for each line. Anyone you give one to can check it at the address printed on it.", actions: "" });
 
 RENDER.documents = async () => {
   const { accounts } = await api(`/api/orgs/${org.id}/accounts`);
@@ -335,7 +433,8 @@ RENDER.organisation = async () => {
   const reporting = cap("settings.reportingCurrency").allowed;
   return `<form class="card" id="org-form" onsubmit="return false">
       <div class="grid g2">
-        <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}" /></div>
+        <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}"${org.type === "personal"
+          ? ' readonly aria-describedby="s-name-hint" /><p class="zb-hint" id="s-name-hint">Your personal space is named after you. Change your name in the Zold app, under Profile.</p>' : " />"}</div>
         <div><label for="s-legal">Legal name</label><input id="s-legal" name="legal" autocomplete="off" value="${esc(org.legalName || "")}" /></div>
       </div>
       <label for="s-addr1">Registered address</label>

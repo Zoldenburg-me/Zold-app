@@ -28,6 +28,7 @@
  * traces), NFTs (dropped by the strict event decode), and rebasing tokens,
  * whose balance moves without a transfer.
  */
+import { readLogWindow } from "../log-range.js";
 import {
   BaseError,
   ContractFunctionRevertedError,
@@ -127,8 +128,6 @@ export function publicSyncError(e: unknown): string {
 /** An error this module raised with text written for the wallet row. */
 export class SyncRefusal extends Error {}
 
-const LIMIT_RE = /more than \d+ results|query returned more|limit exceeded|block range|range (is )?too (large|wide)|too many (results|logs)|exceed/i;
-
 function patchSync(walletId: string, sync: Partial<ImportedWallet["sync"]>): boolean {
   const current = store.findImportedWallet(walletId);
   if (!current) return false;
@@ -163,22 +162,10 @@ async function windowTransfers(reader: ChainReader, wallet: ImportedWallet, from
   );
 }
 
-/** The largest window from `fromBlock` the RPC will answer, halving on a
- *  result-limit refusal. Any other error goes up. */
+/** The largest window from `fromBlock` the RPC will answer. */
 async function readWindow(reader: ChainReader, wallet: ImportedWallet, fromBlock: bigint, safeHead: bigint) {
-  let span = WALLET_SYNC.maxBlockSpan;
-  for (;;) {
-    const toBlock = safeHead - fromBlock + 1n > span ? fromBlock + span - 1n : safeHead;
-    try {
-      return { toBlock, transfers: await windowTransfers(reader, wallet, fromBlock, toBlock) };
-    } catch (e) {
-      if (span > 1n && LIMIT_RE.test(String((e as any)?.details ?? (e as any)?.message ?? e))) {
-        span = span / 2n;
-        continue;
-      }
-      throw e;
-    }
-  }
+  const { toBlock, result } = await readLogWindow(fromBlock, safeHead, WALLET_SYNC.maxBlockSpan, (from, to) => windowTransfers(reader, wallet, from, to));
+  return { toBlock, transfers: result };
 }
 
 export async function syncWallet(

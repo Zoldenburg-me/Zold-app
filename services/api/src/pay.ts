@@ -38,6 +38,58 @@ const RESERVED = new Set([
   "users", "www", "zold", "zoldenburg",
 ]);
 
+/**
+ * Names a handle may not impersonate: us, staff roles, partners, and
+ * well-known people. A handle sits next to a deposit address, so one that
+ * reads as any of these collects money on borrowed trust. Not complete and
+ * cannot be; these are the names a phish reaches for first.
+ *
+ * Checked when a handle is claimed, never when one is looked up: a page that
+ * exists keeps working if a later list would have refused it.
+ */
+
+/** Refused anywhere, including inside a longer handle (`zold-support`,
+ *  `zoldpay`, `vitalikbuterin`). Only words long or rare enough that a hit is
+ *  almost always the name itself — `admin` does also catch `badminton`. */
+const BLOCKED_ANYWHERE = [
+  "zold", "support", "admin",
+  "monerium", "gnosis", "bebop", "uniswap", "cowswap", "moonpay", "shopify",
+  "sevdesk", "lexware", "coinbase", "binance", "metamask",
+  "vitalik", "buterin", "satoshi", "nakamoto", "elonmusk", "changpeng", "saylor",
+];
+
+/** Refused as the whole handle or as one hyphen-separated part, not inside a
+ *  longer word: `iron` blocks `iron-pay` but not `ironing`, and `lifi` would
+ *  otherwise block `amplifier`. */
+const BLOCKED_AS_WORD = new Set([
+  "iron", "lifi", "safe", "base", "circle", "bridge", "mony", "eure", "usdc",
+  "stellar", "elon", "musk", "sbf",
+]);
+
+/** Digits swapped in for letters (`z0ld`, `adm1n`, `5upport`). `1` stands for
+ *  both `i` and `l`, so it is folded both ways. */
+const LOOKALIKE_DIGITS: Record<string, string> = { "0": "o", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b" };
+
+function lookalikeFoldings(text: string): string[] {
+  const folded = text.replace(/[034578]/g, (d) => LOOKALIKE_DIGITS[d]);
+  return [folded.replace(/1/g, "i"), folded.replace(/1/g, "l")];
+}
+
+/** The blocked name a handle impersonates, or undefined. Expects a handle that
+ *  already passed `HANDLE_RE`. */
+export function impersonatedName(handle: string): string | undefined {
+  for (const compact of lookalikeFoldings(handle.replace(/-/g, ""))) {
+    const inside = BLOCKED_ANYWHERE.find((word) => compact.includes(word));
+    if (inside) return inside;
+    if (BLOCKED_AS_WORD.has(compact)) return compact;
+  }
+  for (const part of handle.split("-")) {
+    const word = lookalikeFoldings(part).find((folded) => BLOCKED_AS_WORD.has(folded));
+    if (word) return word;
+  }
+  return undefined;
+}
+
 export class HandleError extends Error {}
 
 /**
@@ -49,6 +101,14 @@ export class HandleError extends Error {}
 export function normaliseHandle(raw: unknown): string {
   if (typeof raw !== "string") throw new HandleError("handle must be a string");
   const handle = raw.trim().toLowerCase();
+  // Letters from other scripts (Cyrillic "а", Greek "ο", fullwidth "ｚ") can
+  // render identically to latin ones, so `zоld` with a Cyrillic о would pass
+  // every list below. Refused with its own message, not folded.
+  if (/[^\x00-\x7f]/.test(handle)) {
+    throw new HandleError(
+      "handle may only use the latin letters a-z, numbers and hyphens — letters from other alphabets can look identical",
+    );
+  }
   if (handle.length < 3 || handle.length > 30) {
     throw new HandleError("handle must be between 3 and 30 characters");
   }
@@ -60,7 +120,16 @@ export function normaliseHandle(raw: unknown): string {
       "handle may use lowercase letters, numbers and hyphens, and cannot begin or end with a hyphen",
     );
   }
+  // ENSIP-15 refuses "--" in the third and fourth place (the "xn--" punycode
+  // prefix), and a handle is also an ENS name, `<handle>.zoldhq.com`.
+  if (handle.slice(2, 4) === "--") {
+    throw new HandleError("handle cannot have two hyphens as its third and fourth characters");
+  }
   if (RESERVED.has(handle)) throw new HandleError(`"${handle}" is reserved`);
+  const impersonated = impersonatedName(handle);
+  if (impersonated) {
+    throw new HandleError(`handle cannot contain "${impersonated}" — it would read as someone else's page`);
+  }
   return handle;
 }
 

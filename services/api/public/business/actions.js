@@ -6,7 +6,7 @@
  * and nowhere else. An action that opens a drawer returns "keep", so the
  * shell does not draw the page again under it.
  */
-import { $, Z, api, cap, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setView, toast, token, view } from "./core.js";
+import { $, Z, api, cap, createPersonalOrg, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
 import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
 import { sendState } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
@@ -27,6 +27,13 @@ async function download(path, filename) {
 
 /* The month an export acts on: Books' month there, the statement's month on
    the statement screen. */
+/** When a Safe's books start; the same rule as domain/safe-books.ts. */
+function safeBooksStart(u) {
+  const safe = u?.passkeySafe;
+  if (safe?.importedAt) return u.ibanSince && u.ibanSince > safe.importedAt ? u.ibanSince : safe.importedAt;
+  return safe?.createdAt ?? u?.createdAt;
+}
+
 function monthChosen() {
   const v = $("#x-month")?.value || (view === "books" ? bk.month : exportMonth);
   setExportMonth(v);
@@ -166,7 +173,7 @@ function gmiDrawer(el) {
     <div><label for="gmi-key">API key</label><input id="gmi-key" name="gmi-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key…" /></div>
     <div><label for="gmi-company">Company id <span class="desc">(optional)</span></label><input id="gmi-company" name="gmi-company" autocomplete="off" placeholder="Empty for the account’s own company…" /></div>
     <div class="zb-note">${Z.icon("lock")}<span>Zold checks the key once, stores it encrypted and never shows it again. It can upload documents; it can’t move money.</span></div>
-    <div class="zb-note zb-note--a">${Z.icon("science")}<span>Beta: tested against a stand-in of the GetMyInvoices API, not a live account yet. Check the first upload before you close a month on it.</span></div>
+    <div class="zb-note zb-note--a">${Z.icon("science")}<span>Beta: one push has run against a real GetMyInvoices account, with test data that was deleted after. Check the first upload before you close a month on it.</span></div>
     <p class="zb-err" id="gmi-err" role="alert"></p>
     <div class="zb-actions"><button type="button" class="z-btn z-btn--secondary" id="gmi-cancel">Cancel</button><button type="button" class="z-btn z-btn--primary" id="gmi-go">Check and connect</button></div>`, el);
   scrim.querySelector("#gmi-cancel").onclick = () => Z.closeOverlay("gmi-drawer");
@@ -224,6 +231,9 @@ export const ACTIONS = {
   async "doc-receipt"(el) {
     openDocument(await api(`/api/users/${me.id}/documents/receipt`, { method: "POST", body: { transferId: el.dataset.id } }));
   },
+
+  "create-personal": () => createPersonalOrg(),
+  "personal-later"() { setPersonalLater(); },
 
   /* Filters and tabs: state in the screen's module, then a redraw. */
   "ap-tab"(el) { ap.tab = el.dataset.tab; },
@@ -312,16 +322,29 @@ export const ACTIONS = {
       toast(plain(r.note));
     }, { okLabel: "Import wallet" }),
   async "fund-account"(el) {
-    let r;
-    try {
-      r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
-    } catch (e) {
-      // A refusal can carry Monerium's newer answer (a profile still pending):
-      // draw the row again so it shows it.
-      render();
-      throw e;
-    }
-    toast(plain(r.warning ? `${r.note} ${r.warning}` : r.note));
+    const connect = async () => {
+      let r;
+      try {
+        r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
+      } catch (e) {
+        // A refusal can carry Monerium's newer answer (a profile still pending):
+        // draw the row again so it shows it.
+        render();
+        throw e;
+      }
+      setTimeout(() => toast(plain(r.warning ? `${r.note} ${r.warning}` : r.note)), 0);
+    };
+    if (org.type !== "business") return connect();
+    // Said before, not after: from here the account is the company's.
+    const from = safeBooksStart(me);
+    const since = from ? new Date(from).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "";
+    dialog(`Connect your account to ${org.name}?`, `<ul class="zb-next" style="margin-top:6px">
+        <li>${Z.icon("domain")}<span>Your account${me?.iban ? `, IBAN ${esc(Z.groupIban(me.iban))},` : ""} then belongs to ${esc(org.name)}, with everything on it.</span></li>
+        <li>${Z.icon("menu_book")}<span>Its transactions${since ? ` since ${esc(since)}` : ""} appear in ${esc(org.name)}’s books and statements. Members who can see the books see them.</span></li>
+        <li>${Z.icon("block")}<span>While it is connected here, it can’t be connected to another organisation.</span></li>
+        <li>${Z.icon("fingerprint")}<span>Only your Face ID or fingerprint can approve its payments.</span></li>
+      </ul>`, connect, { okLabel: "Connect" });
+    return "keep";
   },
   async "invoice-pay-link"(el) {
     // Offer every method the payee's account can take; the server picks the
@@ -329,8 +352,16 @@ export const ACTIONS = {
     const { methods } = await api(`/api/users/${me.id}/payment-requests/methods`);
     const usable = methods.filter((m) => m.available).map((m) => m.method);
     if (!usable.length) throw new Error(plain(methods.map((m) => m.needs).filter(Boolean).join(" ")) || "No way to get paid is set up on this account yet.");
-    const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { invoiceId: el.dataset.id, methods: usable } });
-    setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.`, r.url), 0);
+    const [r, page] = await Promise.all([
+      api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { invoiceId: el.dataset.id, methods: usable } }),
+      api(`/api/orgs/${org.id}/payment-page`).catch(() => null),
+    ]);
+    // Without a company page the link opens under the member's own page
+    // address; the money still lands in this organisation's account.
+    const personal = page && !page.paymentPage
+      ? ` It opens under your own page address (/pay/${r.handle}/…) because ${org.name} has no payment page yet; set one up under Get paid for links in the company’s name. The money goes to ${org.name}’s account either way.`
+      : "";
+    setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.${personal}`, r.url), 0);
   },
   async "new-pay-link"() {
     // A link opens under the company page when there is one; say which.
@@ -380,6 +411,59 @@ export const ACTIONS = {
   },
   async "del-wallet"(el) {
     await api(`/api/orgs/${org.id}/wallets/${el.dataset.id}`, { method: "DELETE" });
+  },
+  /**
+   * Prove a wallet is the organisation's: Zold issues a challenge, the person
+   * signs it in the wallet itself, and the wallet's chain is asked. Nothing
+   * here signs: the screen gives the exact text and takes back the
+   * signature, or nothing from a Safe that signed the message on chain.
+   */
+  async "prove-wallet"(el) {
+    const id = el.dataset.id;
+    const { challenge } = await api(`/api/orgs/${org.id}/wallets/${id}/ownership/challenge`, { method: "POST" });
+    dialog("Prove this wallet is yours",
+      `<p class="desc">Sign this exact text in the wallet itself. It moves no funds and approves no transaction. Zold then asks the wallet’s own network whether the signature is valid.</p>
+       <label for="pw-msg">Text to sign</label>
+       <textarea id="pw-msg" rows="11" readonly class="z-mono" style="width:100%;font-size:12px" translate="no">${esc(challenge.message)}</textarea>
+       <div class="zb-actions" style="margin:8px 0 12px"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(challenge.message)}" data-said="Text copied">Copy the text</button></div>
+       <ol class="zb-steps">
+         <li>An ordinary wallet: sign the text as a message and paste the signature below.</li>
+         <li>A Safe: sign it as a message in Safe{Wallet}. When enough owners have signed, paste the signature it shows. If the Safe signed the message on chain instead, leave the field empty.</li>
+       </ol>
+       <label for="pw-sig">Signature <span class="desc">(empty for a message the Safe signed on chain)</span></label>
+       <textarea id="pw-sig" rows="3" class="z-mono" spellcheck="false" autocomplete="off" placeholder="0x…" style="width:100%"></textarea>
+       <p class="zb-hint">The text is valid until ${esc(day(challenge.expiresAt))}. Hash, for checking: <span class="z-mono" translate="no">${esc(challenge.messageHash)}</span></p>`,
+      async () => {
+        const signature = $("#pw-sig").value.trim();
+        await api(`/api/orgs/${org.id}/wallets/${id}/ownership`, { method: "POST", body: { challengeId: challenge.id, ...(signature ? { signature } : {}) } });
+        toast("Proven: the wallet’s network accepted the signature.");
+      }, { okLabel: "Check the signature" });
+    return "keep";
+  },
+  async "recheck-wallet"(el) {
+    const r = await api(`/api/orgs/${org.id}/wallets/${el.dataset.id}/ownership/recheck`, { method: "POST" });
+    toast(r.wallet.proofState === "proven" ? "Checked: the proof still holds." : `The proof has lapsed: ${plain(r.wallet.ownership.lapseReason || "")}.`, r.wallet.proofState !== "proven");
+  },
+  async "revalue-row"(el) {
+    const r = await api(`/api/orgs/${org.id}/ledger/${el.dataset.id}/revalue`, { method: "POST" });
+    toast(`Valued at ${eur(Number(r.entry.fiatValue))}.`);
+  },
+  async "revalue-all"() {
+    // A page of rows per call, in order, until none are left.
+    const results = [];
+    let after;
+    do {
+      const r = await api(`/api/orgs/${org.id}/ledger/revalue`, { method: "POST", body: after ? { after } : {} });
+      results.push(...r.results);
+      after = r.next;
+      if (after) toast(`Asked for ${results.length} prices…`);
+    } while (after);
+    const count = (s) => results.filter((x) => x.status === s).length;
+    const parts = [`${count("valued")} of ${results.length} valued.`];
+    if (count("no-price")) parts.push(`${count("no-price")} still have no price.`);
+    if (count("unreachable")) parts.push(`${count("unreachable")} could not be asked: the price source did not answer. Try again later.`);
+    if (count("skipped")) parts.push(`${count("skipped")} cannot be revalued.`);
+    toast(parts.join(" "), count("unreachable") > 0);
   },
   invite: () => {
     const roles = Object.keys(ROLE_WORD).filter((r) => r !== "owner" || org.role === "owner");
@@ -652,13 +736,46 @@ export const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/bookkeeping/lines/${el.dataset.line}/beleg`, { method: "POST" });
     toast(`Beleg ${r.code} ${r.issued ? "issued" : "already existed"}.`);
   },
-  "gmi-push": () => {
-    const month = monthChosen();
-    dialog(`Send ${month}’s Belege to GetMyInvoices?`, `<p class="desc">Each Beleg goes up once; ones already there (same number) are skipped.</p>`, async () => {
-      const r = await api(`/api/orgs/${org.id}/integrations/getmyinvoices/push`, { method: "POST", body: { month } });
-      const n = (k) => r.results.filter((x) => x.outcome === k).length;
-      toast(`${n("uploaded")} uploaded, ${n("exists")} already there, ${n("no-beleg")} without a Beleg, ${n("failed")} failed.`, n("failed") > 0);
-    }, { okLabel: "Send" });
+  /** One step from Connections or the export page: pick the month, send.
+   *  The server issues any missing Beleg first; the result says what landed. */
+  async "gmi-push"() {
+    const [{ months }, banks, { integrations }] = await Promise.all([
+      api(`/api/orgs/${org.id}/bookkeeping/statement`),
+      api(`/api/orgs/${org.id}/integrations/getmyinvoices/bank-accounts`).then((r) => r.bankAccounts.filter((b) => b.accountType === "CUSTOM")).catch(() => []),
+      api(`/api/orgs/${org.id}/integrations`),
+    ]);
+    if (!months.length) return toast("There are no statement lines yet, so there is nothing to send.");
+    const preset = view === "export" ? monthChosen() : months[0];
+    const picked = integrations.getmyinvoices?.bankAccountUid;
+    const name = (m) => new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${m}-15T12:00:00`));
+    const bankField = banks.length
+      ? `<label for="gmi-bank">Bank account in GetMyInvoices</label><select id="gmi-bank" name="bank">${banks.map((b) => `<option value="${esc(String(b.bankAccountUid))}"${b.bankAccountUid === picked ? " selected" : ""}>${esc(b.name || `Account ${b.bankAccountUid}`)}</option>`).join("")}</select>`
+      : `<p class="zb-hint" style="margin-top:12px">GetMyInvoices has no manual bank account yet, so only the Belege go up. Add one there (Bank accounts → add a manual account, e.g. “Zold”) and send again to add the bank lines.</p>`;
+    dialog("Send to GetMyInvoices", `<p class="desc">Each bank line of the month goes to the bank account you pick, with its Beleg attached as the document. Lines without a Beleg get one first. Anything already there is skipped, never doubled.</p>
+      <label for="gmi-month">Month</label><select id="gmi-month" name="month">${months.map((m) => `<option value="${esc(m)}"${m === preset ? " selected" : ""}>${esc(name(m))}</option>`).join("")}</select>
+      ${bankField}`,
+      async () => {
+        const month = $("#gmi-month").value;
+        const bank = $("#gmi-bank")?.value;
+        const r = await api(`/api/orgs/${org.id}/integrations/getmyinvoices/push`, { method: "POST", body: { month, ...(bank ? { bankAccountUid: Number(bank) } : {}) } });
+        const n = (k) => r.results.filter((x) => x.outcome === k).length;
+        const bl = (k) => r.results.filter((x) => x.bankLine?.outcome === k).length;
+        const attached = r.results.filter((x) => x.bankLine?.assigned).length;
+        const late = r.results.filter((x) => x.tagsMayBeMissing).length;
+        const rows = [
+          [bl("added"), "bank lines added"], [bl("exists"), "bank lines already there"], [attached, "with their Beleg attached"],
+          [n("uploaded"), "Belege sent now"], [n("exists"), "Belege already there, skipped"],
+          [n("failed") + bl("failed"), "failed: send again; whatever did arrive is skipped"],
+          [n("unknown") + bl("unknown"), "got no answer and can’t be found there yet: send again in a few minutes"],
+          [n("no-beleg"), "lines that could not get a Beleg, so not sent"],
+          [late, "Belege that arrived slowly and may be missing their tags"],
+        ].filter(([k]) => k > 0);
+        const body = r.results.length
+          ? `<ul class="zb-next" style="margin-top:10px">${rows.map(([k, t]) => `<li><b>${k}</b>&nbsp;${esc(t)}</li>`).join("")}</ul>
+             ${r.bankAccountUid ? "" : `<p class="desc" style="margin-top:12px">No bank lines were added: GetMyInvoices has no manual bank account to add them to. Add one there and send again.</p>`}`
+          : `<p class="desc">${esc(name(month))} has no bank lines.</p>`;
+        setTimeout(() => dialog(`${name(month)} sent to GetMyInvoices`, body, null, { closeOnly: true }), 0);
+      }, { okLabel: "Send" });
   },
   "gmi-disconnect": () => dialog("Remove the GetMyInvoices key?", `<p class="desc">Nothing already uploaded is touched.</p>`,
     async () => { await api(`/api/orgs/${org.id}/integrations/getmyinvoices`, { method: "DELETE" }); toast("Key removed."); }, { okLabel: "Remove key" }),

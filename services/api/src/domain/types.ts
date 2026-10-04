@@ -162,6 +162,9 @@ export interface Organisation {
       connectedByMemberId: string;
       /** Uploads land under this company; absent means the account's own. */
       companyId?: number;
+      /** The manual bank account statement lines are added to, as picked at
+       *  the last send. */
+      bankAccountUid?: number;
     };
   };
   createdAt: string;
@@ -282,6 +285,12 @@ export interface Account {
    */
   backingUserId?: string;
   /**
+   * From when the backing Safe's movements are this account's, fixed when the
+   * Safe was connected (domain/safe-books.ts). Absent on accounts connected
+   * before it was recorded; the books then work it out from the Safe.
+   */
+  backedSince?: string;
+  /**
    * The Monerium profile that owns the IBAN, as Monerium reported it when the
    * backing user's account was adopted or last re-checked: the legal entity a
    * bookkeeper or auditor needs to see. Read on the backing user's own
@@ -342,7 +351,38 @@ export interface ImportedWallet {
     skipped?: number;
     lastSkipReason?: string;
   };
+  /** The proof that the wallet is this organisation's (wallet-sync/ownership.ts).
+   *  Absent: unproven. Kept when a later check fails, as `lapsed`. */
+  ownership?: WalletOwnership;
+  /** The one challenge waiting to be signed. Spent by the proof it produces. */
+  ownershipChallenge?: WalletOwnershipChallenge;
   createdAt: string;
+}
+
+export interface WalletOwnershipChallenge {
+  id: string;
+  message: string;
+  issuedAt: string;
+  expiresAt: string;
+}
+
+export interface WalletOwnership {
+  /** `proven`: the chain accepted the signature at `checkedAt`. `lapsed`: a
+   *  later check was refused by the chain (owner signatures of a Safe whose
+   *  owners changed; a message the Safe signed on chain stays valid). */
+  status: "proven" | "lapsed";
+  /** EIP-1271 when the address holds code, ECDSA when it does not. */
+  method: "eip1271" | "ecdsa";
+  /** The challenge text that was signed, and the signature: "0x" for a Safe
+   *  that signed the message on chain. Re-checks use exactly these. */
+  message: string;
+  signature: `0x${string}`;
+  provenAt: string;
+  checkedAt: string;
+  lapsedAt?: string;
+  /** What the chain answered when the proof lapsed. */
+  lapseReason?: string;
+  provenByMemberId?: string;
 }
 
 // ── Address book ────────────────────────────────────────────────────────────
@@ -906,6 +946,17 @@ export interface LedgerEntry {
   txType?: string;
   at: string;
   createdAt: string;
+  /** Set when a row booked without a value was valued later by the same
+   *  price lookup sync uses, for its block time (wallet-sync/revalue.ts). */
+  valuation?: {
+    source: string;
+    /** The day the EUR rate was fixed. */
+    asOf: string;
+    revaluedAt: string;
+    revaluedByMemberId?: string;
+    /** The asset as booked unvalued (SYMBOL@chain:address). */
+    previousAsset: string;
+  };
   /**
    * Set on rows the statement-line writer projects from the account's real
    * activity (bookkeeping/statement.ts): one EUR line per economic event, the
@@ -922,6 +973,7 @@ export type StatementEvent =
   | "sepa_out_reversal"
   | "crypto_converted"
   | "crypto_held"
+  | "eure_in"
   | "sweep";
 
 export interface StatementFacts {

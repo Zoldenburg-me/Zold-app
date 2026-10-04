@@ -7,6 +7,7 @@
  * `org` and the few places that reassign call a setter.
  */
 import { render } from "./shell.js";
+import { isCompanyLogin, readGuardians, recoveryStatus } from "./access-model.js";
 
 export const $ = (s) => document.querySelector(s);
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -136,11 +137,11 @@ export function maskIban(iban) {
 /* What each role may do, as the API's permission table has it. */
 export const ROLE_WORD = { owner: "Owner", admin: "Admin", payer: "Payer", accountant: "Accountant", viewer: "Viewer" };
 export const ROLE_CAN = {
-  owner: { propose: true, approve: true, send: true },
-  admin: { propose: true, approve: true, send: true },
-  payer: { propose: true, approve: false, send: true },
-  accountant: { propose: true, approve: false, send: false },
-  viewer: { propose: false, approve: false, send: false },
+  owner: { propose: true, approve: true, send: true, categorise: true, wallets: true },
+  admin: { propose: true, approve: true, send: true, categorise: true, wallets: true },
+  payer: { propose: true, approve: false, send: true, categorise: false, wallets: false },
+  accountant: { propose: true, approve: false, send: false, categorise: true, wallets: false },
+  viewer: { propose: false, approve: false, send: false, categorise: false, wallets: false },
 };
 export const roleCan = (role, what) => !!ROLE_CAN[role]?.[what];
 
@@ -193,18 +194,67 @@ export function dialog(title, bodyHtml, onSubmit, opts = {}) {
 }
 
 
+/** A person (never a company login: its Safe is the company's) with no
+ *  personal space yet. /business asks them to make one; the server refuses a
+ *  second one and any for a company login (routes/orgs.ts). */
+export const needsPersonalOrg = () =>
+  Boolean(me) && me.accountType !== "company" && !orgs.some((o) => o.type === "personal");
+
+const laterKey = () => `zold-personal-later:${me?.id}`;
+export function personalLater() {
+  try { return localStorage.getItem(laterKey()) === "1"; } catch { return false; }
+}
+export function setPersonalLater() {
+  try { localStorage.setItem(laterKey(), "1"); } catch { /* asked again next visit */ }
+}
+
+/** The personal space takes the account's name and country: nothing to fill in. */
+export async function createPersonalOrg() {
+  const r = await api("/api/orgs", { method: "POST", body: { type: "personal", name: me.name || "Personal", country: me.country } });
+  try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
+  location.reload();
+}
+
+/** A recovery under way on the signed-in login's own Safe: a new passkey
+ *  about to replace theirs. Read once per visit (shell.js); for a company
+ *  login that Safe is the company's. */
+export let recoveryPending = false;
+/** True when the check itself failed: shown, never taken as "none". */
+export let recoveryUnknown = false;
+/** A company login with no guardian that never answered the question, on a
+ *  deployment that offers one: the banner points at Access, in the login's
+ *  own company only (nav.js). A recorded "declined" is said on Access only. */
+export let recoveryNone = false;
+export async function readRecovery() {
+  if (!me?.id || me.passkeySafe?.status !== "active") return;
+  const [c, z] = await readGuardians(me.id, api);
+  const r = recoveryStatus(c, z);
+  recoveryPending = r.status === "pending";
+  recoveryUnknown = r.status === "unknown";
+  recoveryNone = r.status === "none" && r.offered && !r.declined && isCompanyLogin(me);
+}
+
 /** The bindings other modules reassign. Every READ of them stays live. */
 export const setOrg = (v) => { org = v; };
 export const setOrgs = (v) => { orgs = v; };
-export const setMe = (v) => { me = v; };
+/** The signed-in person, from the one GET /api/session per page load: boot
+ *  starts it, and a view that depends on who is signed in awaits the same
+ *  request rather than render on a guess. A failed read is retried next call. */
+let mePromise = null;
+export function ensureMe() {
+  if (me) return Promise.resolve(me);
+  mePromise ??= api("/api/session").then((u) => { me = u; return u; }, (e) => { mePromise = null; throw e; });
+  return mePromise;
+}
 export const setTestMode = (v) => { testMode = v; };
 /** Changing the view is a navigation: it gets a history entry, so Back works
  *  and the URL can be bookmarked or opened in a new tab. `push: false` is for
- *  popstate, where the browser has already moved the URL. */
-export const setView = (v, { push = true } = {}) => {
+ *  popstate, where the browser has already moved the URL; `replace: true` takes
+ *  over the current entry (the Menu's, when a screen is picked from it). */
+export const setView = (v, { push = true, replace = false } = {}) => {
   view = v;
   if (push && new URLSearchParams(location.search).get("view") !== v) {
-    history.pushState({ view: v }, "", `${location.pathname}?view=${encodeURIComponent(v)}`);
+    history[replace ? "replaceState" : "pushState"]({ view: v }, "", `${location.pathname}?view=${encodeURIComponent(v)}`);
   }
 };
 export const setInvoiceInputListener = (v) => { invoiceInputListener = v; };

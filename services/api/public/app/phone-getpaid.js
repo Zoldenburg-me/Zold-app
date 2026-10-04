@@ -37,13 +37,12 @@ function phLinkSub(r) {
   return amt;
 }
 
-/* The button says what the plan allows, in the plan's own words. Invoices on
-   the phone are the personal account's; a company's are in the web app. */
+/* The button says what the plan allows, in the plan's own words. Invoices are
+   written in Zold Business, for the personal space or a company. */
 function phInvoiceButton() {
   if (phCache.orgs === null) return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: "Checking your plan…" });
-  if (phCan(phPersonalOrg(), "invoices")) return Z.button({ icon: "receipt_long", label: "Invoice", href: "#invoice/new" });
-  const org = (phCache.orgs || []).find((o) => phCan(o, "invoices"));
-  if (org) return Z.button({ icon: "receipt_long", label: "Invoice", href: "/business" });
+  const org = phCan(phPersonalOrg(), "invoices") ? phPersonalOrg() : (phCache.orgs || []).find((o) => phCan(o, "invoices"));
+  if (org) return Z.button({ icon: "receipt_long", label: "Invoice", href: phWebHref("invoice-new") }).replace("<a ", `<a data-ph-org="${esc(org.id)}" `);
   const reason = phPersonalOrg()?.capabilities?.invoices?.reason || "Invoices are not part of this account.";
   return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: reason });
 }
@@ -129,7 +128,7 @@ PH["get-paid/page"] = {
     const url = page?.handle ? `${location.host}/pay/${page.handle}` : "";
     const body = page?.handle
       ? `<div class="z-card z-page">
-          <div class="z-page__head">${Z.avatar({ name: page.displayName || u.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(page.displayName || u.name || "")}</span><span class="z-row__sub z-mono" translate="no">${esc(url)}</span></span></div>
+          <div class="z-page__head">${Z.avatar({ name: page.displayName || ownAccountName(u), tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(page.displayName || ownAccountName(u))}</span><span class="z-row__sub z-mono" translate="no">${esc(url)}</span></span></div>
           <p class="z-hint">Anyone with this link can pay you in digital dollars (USDC). They see your name, never your balance. The page is public.</p>
         </div>
         ${phAcceptsList(page)}

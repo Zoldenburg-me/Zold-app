@@ -1,5 +1,6 @@
 /**
- * A minimal PDF writer: A4 pages of text in Helvetica, nothing else.
+ * A minimal PDF writer: A4 pages of Helvetica text in lines or columns,
+ * grey labels and hairline rules, nothing else.
  *
  * The Beleg is bytes the accountant's inbox stores, so the page's print is
  * not enough here. No dependency: the format needed is small (one font, one
@@ -19,6 +20,25 @@ export interface PdfLine {
   gap?: number;
   /** Indent from the left margin, in points. */
   indent?: number;
+  /** Grey, for labels and secondary text. */
+  muted?: boolean;
+  /**
+   * Cells on one baseline instead of `text`: `at` is a fraction of the text
+   * width, the left edge of a left-aligned cell or the right edge of a
+   * right-aligned one. Cells are not wrapped.
+   */
+  cells?: PdfCell[];
+  /** A hairline under the line: "thin" between rows, "strong" under a head. */
+  rule?: "thin" | "strong";
+}
+
+export interface PdfCell {
+  text: string;
+  at: number;
+  align?: "left" | "right";
+  bold?: boolean;
+  muted?: boolean;
+  size?: number;
 }
 
 const PAGE_W = 595.28;
@@ -57,7 +77,7 @@ function escapePdfString(b: Buffer): string {
 function approxWidth(text: string, size: number): number {
   let w = 0;
   for (const ch of text) {
-    w += /[iljtfI.,:;'|!]/.test(ch) ? 0.28 : /[mwMW]/.test(ch) ? 0.83 : /[A-Z0-9€]/.test(ch) ? 0.67 : ch === " " ? 0.28 : 0.55;
+    w += /[iljtfI.,:;'|!]/.test(ch) ? 0.28 : /[mwMW]/.test(ch) ? 0.83 : /[A-Z]/.test(ch) ? 0.67 : /[0-9€+\-]/.test(ch) ? 0.556 : ch === " " ? 0.28 : 0.55;
   }
   return w * size;
 }
@@ -93,18 +113,34 @@ export function textPdf(lines: PdfLine[], meta: { title: string; author?: string
     ops = [];
     y = PAGE_H - MARGIN;
   };
+  const text = (x: number, size: number, bold: boolean | undefined, muted: boolean | undefined, t: string) =>
+    `${muted ? "0.38 g" : "0 g"} BT ${bold ? "/F2" : "/F1"} ${size} Tf ${x.toFixed(2)} ${y.toFixed(2)} Td (${escapePdfString(winAnsi(t))}) Tj ET`;
   for (const ln of lines) {
     const size = ln.size ?? 10;
-    const font = ln.bold ? "/F2" : "/F1";
     const gap = ln.gap ?? 0;
-    const pieces = ln.text === "" ? [""] : wrap(ln.text, size, width - (ln.indent ?? 0));
     y -= gap;
-    for (const piece of pieces) {
-      if (y - size * LEADING < MARGIN) newPage();
-      y -= size * LEADING;
-      ops.push(
-        `BT ${font} ${size} Tf ${(MARGIN + (ln.indent ?? 0)).toFixed(2)} ${y.toFixed(2)} Td (${escapePdfString(winAnsi(piece))}) Tj ET`,
-      );
+    if (ln.cells) {
+      const tallest = Math.max(size, ...ln.cells.map((c) => c.size ?? size));
+      if (y - tallest * LEADING < MARGIN) newPage();
+      y -= tallest * LEADING;
+      for (const c of ln.cells) {
+        const cs = c.size ?? size;
+        const edge = MARGIN + c.at * width;
+        const x = c.align === "right" ? edge - approxWidth(c.text, cs) : edge;
+        ops.push(text(x, cs, c.bold ?? ln.bold, c.muted ?? ln.muted, c.text));
+      }
+    } else {
+      const pieces = ln.text === "" ? [""] : wrap(ln.text, size, width - (ln.indent ?? 0));
+      for (const piece of pieces) {
+        if (y - size * LEADING < MARGIN) newPage();
+        y -= size * LEADING;
+        ops.push(text(MARGIN + (ln.indent ?? 0), size, ln.bold, ln.muted, piece));
+      }
+    }
+    if (ln.rule) {
+      const ry = y - size * 0.45;
+      ops.push(`${ln.rule === "strong" ? "0 G 0.8" : "0.85 G 0.4"} w ${MARGIN.toFixed(2)} ${ry.toFixed(2)} m ${(MARGIN + width).toFixed(2)} ${ry.toFixed(2)} l S`);
+      y -= size * 0.45;
     }
   }
   newPage();
@@ -120,7 +156,9 @@ export function textPdf(lines: PdfLine[], meta: { title: string; author?: string
   add("PLACEHOLDER");
   add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
   add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>");
-  const infoStr = (s: string) => `(${escapePdfString(winAnsi(s))})`;
+  // The info dictionary is PDFDocEncoding, not WinAnsi: an em dash there read
+  // as "Š" in viewers. UTF-16BE with a byte-order mark says what it means.
+  const infoStr = (s: string) => `<FEFF${Buffer.from(s, "utf16le").swap16().toString("hex").toUpperCase()}>`;
   add(
     `<< /Title ${infoStr(meta.title)} /Producer (Zold) ${meta.author ? `/Author ${infoStr(meta.author)}` : ""} ${meta.subject ? `/Subject ${infoStr(meta.subject)}` : ""} >>`,
   );

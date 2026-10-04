@@ -6,6 +6,7 @@
  * second way to decide who is calling.
  */
 
+import { safeBooksStart } from "../domain/safe-books.js";
 import express from "express";
 import { randomBytes, randomUUID } from "node:crypto";
 import { store } from "../store.js";
@@ -16,6 +17,7 @@ import {
   requirePermission,
   requireWithinLimit,
   resolveOrg,
+  type OrgContext,
   type SessionResolver,
 } from "./org-context.js";
 import {
@@ -42,12 +44,22 @@ import { hashToken } from "../domain/invoices.js";
 import { emailIsProven, roleCan, wouldOrphanOrg } from "../domain/roles.js";
 import { CHAIN_ID, KYC } from "../config.js";
 import { wrap } from "./util.js";
+import { hashMessage } from "viem";
+import { auditEntry } from "../audit.js";
+import { newChallenge, parseSignature, publicWallet } from "../domain/wallet-ownership.js";
+import { verifyOwnership } from "../wallet-sync/ownership.js";
+import { walletEntryId } from "../domain/wallet-transfers.js";
 import { accountProfileStanding } from "../domain/monerium-profile.js";
+import { cleanName, sameName } from "../users/display-name.js";
 import { adoptionHint, auditProfileCheck, checkBackingProfile, profileWait } from "../adapters/monerium-profile.js";
 import { emailLooksValid } from "../domain/email.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
+/** An organisation's name and legal name, in characters. */
+const ORG_NAME_MAX = 120;
+/** A contact's (payee's) name, in characters. */
+const CONTACT_NAME_MAX = 200;
 
 /** Why an EUR account with no IBAN behind it cannot send, and what connects
  *  one, in the words the Accounts screen shows: no API field names. */
@@ -88,6 +100,24 @@ function accountView(org: Organisation, a: Account) {
   };
 }
 
+/**
+ * A Safe belongs to one organisation: the company whose active account it
+ * backs. The person's own (personal) space does not count, since connecting
+ * the Safe to a company is how it moves there. Returns that company, if it is
+ * not `orgId`.
+ */
+export function safeTakenBy(userId: string, orgId: string): { id: string; name: string } | undefined {
+  for (const a of store.accounts) {
+    if (a.backingUserId !== userId || a.orgId === orgId || a.status !== "active") continue;
+    const other = store.findOrganisation(a.orgId);
+    if (other?.type === "business") return { id: other.id, name: other.name };
+  }
+  return undefined;
+}
+
+const safeTakenError = (o: { name: string }) =>
+  `Your account is connected to ${o.name}, and an account belongs to one organisation. It can't be connected here as well.`;
+
 export function createOrgRouter(requireSession: SessionResolver): express.Router {
   const r = express.Router();
   const ctxOf = (req: express.Request, res: express.Response) =>
@@ -125,8 +155,14 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const { name, type, country, legalName, taxId, email } = req.body ?? {};
     const orgType: OrgType = type === "business" ? "business" : "personal";
-    if (typeof name !== "string" || name.trim().length < 2) {
-      return res.status(400).json({ error: "An organisation needs a name." });
+    // Printed on invoices and documents: the same rule as a person's name.
+    const orgName = cleanName(name, { min: 2, max: ORG_NAME_MAX });
+    if (orgName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: `An organisation needs a name of 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+    }
+    const orgLegalName = typeof legalName === "string" && legalName.trim() ? cleanName(legalName, { min: 2, max: ORG_NAME_MAX }) : undefined;
+    if (orgLegalName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
     }
     if (typeof country !== "string" || !/^[A-Za-z]{2}$/.test(country)) {
       return res
@@ -134,12 +170,28 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         .json({ error: "Country must be an ISO 3166-1 alpha-2 code, e.g. DE." });
     }
 
+    /**
+     * A personal org is the person's own books, so there is one per person,
+     * and none for a company login: its Safe and IBAN are the company's.
+     */
+    if (orgType === "personal") {
+      if (store.findUser(session.userId)?.accountType === "company") {
+        return res.status(409).json({
+          code: "PERSONAL_ORG_COMPANY_LOGIN",
+          error: "This is a company login, so it has no personal space. For your own money, sign up for Zold as a person with your own email.",
+        });
+      }
+      if (store.organisationsForUser(session.userId).some(({ org: o }) => o.type === "personal")) {
+        return res.status(409).json({ code: "PERSONAL_ORG_EXISTS", error: "You already have a personal space." });
+      }
+    }
+
     const now = new Date().toISOString();
     const org: Organisation = {
       id: `org_${randomUUID()}`,
       type: orgType,
-      name: name.trim(),
-      legalName: typeof legalName === "string" ? legalName.trim() : undefined,
+      name: orgName,
+      legalName: orgLegalName,
       taxId: typeof taxId === "string" ? taxId.trim() : undefined,
       email: typeof email === "string" ? email.trim() : undefined,
       address: { country: country.toUpperCase() },
@@ -211,8 +263,26 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const patch: Partial<Organisation> = {};
     const b = req.body ?? {};
-    if (typeof b.name === "string" && b.name.trim().length >= 2) patch.name = b.name.trim();
-    if (typeof b.legalName === "string") patch.legalName = b.legalName.trim();
+    // Settings sends every field on save: a name it did not change is left as
+    // stored, so one an older rule let in does not block the rest of the save.
+    if (typeof b.name === "string" && !sameName(b.name, ctx.org.name)) {
+      const n = cleanName(b.name, { min: 2, max: ORG_NAME_MAX });
+      if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+      patch.name = n;
+    }
+    // A personal space is named after its person: one name, changed in the app.
+    if (ctx.org.type === "personal" && patch.name !== undefined) {
+      return res.status(409).json({
+        code: "PERSONAL_ORG_NAME",
+        error: "Your personal space is named after you. Change your name in the Zold app, under Profile.",
+      });
+    }
+    if (typeof b.legalName === "string" && !sameName(b.legalName, ctx.org.legalName ?? "")) {
+      // Empty clears it; anything else follows the name rule.
+      const n = b.legalName.trim() ? cleanName(b.legalName, { min: 2, max: ORG_NAME_MAX }) : "";
+      if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+      patch.legalName = n;
+    }
     if (typeof b.taxId === "string") patch.taxId = b.taxId.trim();
     if (typeof b.email === "string") patch.email = b.email.trim();
     if (typeof b.notificationEmail === "string") {
@@ -364,6 +434,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!ROLES.includes(role)) {
       return res.status(400).json({ error: `Role must be one of ${ROLES.join(", ")}.` });
     }
+    // Optional, and shown on Members until they accept: the person name rule.
+    const rawName = req.body?.name;
+    const inviteName = typeof rawName === "string" && rawName.trim() ? cleanName(rawName, { min: 1, max: 120 }) : undefined;
+    if (inviteName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: "The name needs 1 to 120 characters, without hidden or control characters." });
+    }
     // Only an owner may mint another owner; otherwise an admin could promote
     // themselves past the person who pays the bill.
     if (role === "owner" && ctx.member.role !== "owner") {
@@ -384,7 +460,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       id: `mem_${randomUUID()}`,
       orgId: ctx.org.id,
       email,
-      name: typeof req.body?.name === "string" ? req.body.name.trim() : undefined,
+      name: inviteName,
       role,
       status: "invited",
       invite: {
@@ -596,6 +672,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     // refuses the whole request: nothing is opened half-adopted.
     let profileRecord: NonNullable<Account["moneriumProfile"]> | undefined;
     let profileWarning: string | undefined;
+    const takenBy = wantsAdoption ? safeTakenBy(callerFunded!.id, ctx.org.id) : undefined;
+    if (takenBy) return res.status(409).json({ error: safeTakenError(takenBy), code: "SAFE_IN_OTHER_ORG" });
     if (wantsAdoption) {
       const checked = await checkBackingProfile(ctx.org, callerFunded!);
       auditProfileCheck("adopt", { orgId: ctx.org.id }, callerFunded!.id, checked, ctx.userId);
@@ -608,6 +686,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       if (store.accountsOf(ctx.org.id).some((a) => a.currency === currency)) {
         return res.status(409).json({ error: `This organisation already has a ${currency} account.` });
       }
+      const lateTaken = safeTakenBy(callerFunded!.id, ctx.org.id);
+      if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
     }
 
     const status = wantsAdoption ? "active" : "gated";
@@ -625,6 +705,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       identifier: wantsAdoption ? { iban: callerFunded!.iban } : {},
       address: wantsAdoption ? callerFunded!.address : undefined,
       backingUserId: wantsAdoption ? callerFunded!.id : undefined,
+      ...(wantsAdoption ? { backedSince: safeBooksStart(callerFunded!) } : {}),
       ...(profileRecord ? { moneriumProfile: profileRecord } : {}),
       gate,
       createdAt: now,
@@ -649,6 +730,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
   /**
    * Give an existing account a funding identity, from the caller's own account.
+   * Refused while the caller's Safe is connected to another company
+   * (safeTakenBy).
    *
    * A separate endpoint because this is when a person's own balance starts
    * paying an organisation's bills: it gets its own call, permission check and
@@ -688,6 +771,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       });
     }
 
+    const takenBy = safeTakenBy(caller.id, ctx.org.id);
+    if (takenBy) return res.status(409).json({ error: safeTakenError(takenBy), code: "SAFE_IN_OTHER_ORG" });
+
     // The account stays gated on any refusal, including Monerium not
     // answering: fail closed, write nothing.
     const checked = await checkBackingProfile(ctx.org, caller);
@@ -699,12 +785,15 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (store.findAccount(account.id)?.backingUserId) {
       return res.status(409).json({ error: "This account was funded by another request while we checked with Monerium." });
     }
+    const lateTaken = safeTakenBy(caller.id, ctx.org.id);
+    if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
 
     const funded = store.updateAccount(account.id, {
       status: "active",
       identifier: { iban: caller.iban },
       address: caller.address,
       backingUserId: caller.id,
+      backedSince: safeBooksStart(caller),
       moneriumProfile: checked.record,
       gate: undefined,
     });
@@ -768,9 +857,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!ctx) return;
     if (!requirePermission(ctx, res, "contacts.manage")) return;
 
-    const name = String(req.body?.name ?? "").trim();
-    if (name.length < 2) return res.status(400).json({ error: "A contact needs a name." });
-    if (name.length > 200) return res.status(400).json({ error: "A contact's name is limited to 200 characters." });
+    // A payee: printed on payment runs and documents, so the name rule applies.
+    const name = cleanName(req.body?.name, { min: 2, max: CONTACT_NAME_MAX });
+    if (name === null) return res.status(400).json({ code: "NAME_INVALID", error: `A contact needs a name of 2 to ${CONTACT_NAME_MAX} characters, without hidden or control characters.` });
     if (store.contactsOf(ctx.org.id).length >= CEILINGS.contactsPerOrg) {
       return res.status(409).json(ceilingRefusal("contacts in this organisation", CEILINGS.contactsPerOrg));
     }
@@ -812,8 +901,11 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     try {
       const patch: Record<string, unknown> = {};
-      if (typeof req.body?.name === "string" && req.body.name.trim().length >= 2) {
-        patch.name = req.body.name.trim();
+      // The edit form sends the name on every save: unchanged is left as stored.
+      if (typeof req.body?.name === "string" && !sameName(req.body.name, contact.name)) {
+        const n = cleanName(req.body.name, { min: 2, max: CONTACT_NAME_MAX });
+        if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `A contact needs a name of 2 to ${CONTACT_NAME_MAX} characters, without hidden or control characters.` });
+        patch.name = n;
       }
       if (typeof req.body?.email === "string") patch.email = req.body.email.trim();
       if (typeof req.body?.notes === "string") patch.notes = req.body.notes;
@@ -858,7 +950,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "wallets.read")) return;
-    res.json({ wallets: store.importedWalletsOf(ctx.org.id) });
+    res.json({ wallets: store.importedWalletsOf(ctx.org.id).map(publicWallet) });
   });
 
   /**
@@ -920,7 +1012,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       if (!requireCapability(ctx, res, "ledger.historicalSync")) return;
     }
 
-    const wallet = store.addImportedWallet({
+    const wallet = store.batched(() => {
+      const added = store.addImportedWallet({
       id: `iw_${randomUUID()}`,
       orgId: ctx.org.id,
       address: address.toLowerCase() as `0x${string}`,
@@ -930,12 +1023,144 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       custody: "external",
       sync: { status: "pending", ...(syncFrom ? { from: syncFrom } : {}) },
       createdAt: new Date().toISOString(),
+      });
+      // Rows booked for this address while it was imported before (removing a
+      // wallet keeps its rows) point at the removed wallet. They are this
+      // address's rows exactly when their id is this address's row id, and
+      // they follow the new wallet, its sync and its proof.
+      const live = new Set(store.importedWalletsOf(ctx.org.id).map((w) => w.id));
+      const orphans = store.ledgerOf(ctx.org.id).flatMap((e) =>
+        e.source.kind === "wallet" && !live.has(e.source.walletId) && e.chainId === chainId && e.txHash && e.logIndex !== undefined &&
+        e.id === walletEntryId(ctx.org.id, added.address, chainId, e.txHash, e.logIndex)
+          ? [{ ...e, source: { kind: "wallet" as const, walletId: added.id } }]
+          : [],
+      );
+      if (orphans.length) store.replaceLedgerEntries(orphans);
+      return added;
     });
     res.status(201).json({
       wallet,
       note: "Imported read-only. We never hold a key for this wallet — payments from it are built here and signed by you. Token transfers in and out are booked from " + (syncFrom ? syncFrom : "now") + " on, once an RPC is configured for its chain.",
     });
   });
+
+  // ── Proving an imported wallet is this organisation's ───────────────────
+  //
+  // The person signs a challenge in their own wallet; the wallet's chain is
+  // asked whether the signature is valid. Zold holds no key and proposes no
+  // transaction. See domain/wallet-ownership.ts.
+
+  const walletOf = (ctx: OrgContext, req: express.Request) => {
+    const wallet = store.findImportedWallet(String(req.params.walletId));
+    return wallet && wallet.orgId === ctx.org.id ? wallet : undefined;
+  };
+  const mayProve = (ctx: OrgContext, res: express.Response) =>
+    requirePermission(ctx, res, "wallets.manage") && requireCapability(ctx, res, "wallets.manage");
+
+  /** A new challenge for the wallet, replacing any that is waiting. */
+  r.post("/:orgId/wallets/:walletId/ownership/challenge", (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!mayProve(ctx, res)) return;
+    const wallet = walletOf(ctx, req);
+    if (!wallet) return res.status(404).json({ error: "no such wallet" });
+    const challenge = newChallenge(ctx.org, wallet, randomBytes(16).toString("hex"), new Date());
+    store.updateImportedWallet(wallet.id, { ownershipChallenge: challenge });
+    res.status(201).json({
+      challenge: { ...challenge, messageHash: hashMessage(challenge.message) },
+      howToSign:
+        "Sign this exact text in the wallet itself. An ordinary wallet: sign it as a message and send back the signature. " +
+        "A Safe: sign it as a message in Safe{Wallet}; send back the signature it shows once enough owners have signed, " +
+        "or nothing if the Safe signed the message on chain. Zold then asks the wallet's own chain.",
+    });
+  });
+
+  /** Prove the wallet with its current challenge. Only the chain's answer
+   *  writes anything; a challenge is spent by the proof it produces. */
+  r.post("/:orgId/wallets/:walletId/ownership", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!mayProve(ctx, res)) return;
+    const wallet = walletOf(ctx, req);
+    if (!wallet) return res.status(404).json({ error: "no such wallet" });
+    const challengeId = String(req.body?.challengeId ?? "");
+    const pending = wallet.ownershipChallenge;
+    if (!pending || pending.id !== challengeId) {
+      return res.status(409).json({ error: "That is not this wallet's current challenge. Ask for a new one and sign that." });
+    }
+    if (Date.parse(pending.expiresAt) <= Date.now()) {
+      store.updateImportedWallet(wallet.id, { ownershipChallenge: undefined });
+      return res.status(410).json({ error: "The challenge has expired. Ask for a new one and sign that." });
+    }
+    const signature = parseSignature(req.body?.signature);
+    if (!signature) return res.status(400).json({ error: "The signature is hex, starting 0x." });
+
+    const result = await verifyOwnership(wallet, pending.message, signature);
+    const audit = (outcome: string, reason?: string) =>
+      store.audit(auditEntry("wallet.ownership_checked", {
+        orgId: ctx.org.id, walletId: wallet.id, chainId: wallet.chainId, address: wallet.address,
+        check: "prove", outcome, ...(reason ? { reason } : {}),
+      }, ctx.userId));
+    if (result.verdict === "unverified") {
+      audit("unverified", result.reason);
+      return res.status(503).json({ proven: false, error: `Not verified: ${result.reason}. Nothing was recorded; try again with the same challenge.` });
+    }
+    if (result.verdict === "rejected") {
+      audit("rejected", result.reason);
+      return res.status(422).json({ proven: false, error: `The chain does not accept this as the wallet's signature of the challenge: ${result.reason}.` });
+    }
+    const answer = store.batched(() => {
+      // Another request may have spent or replaced the challenge meanwhile.
+      const current = store.findImportedWallet(wallet.id);
+      if (!current || current.orgId !== ctx.org.id || current.ownershipChallenge?.id !== pending.id) return undefined;
+      const at = new Date().toISOString();
+      audit("proven");
+      return store.updateImportedWallet(wallet.id, {
+        ownershipChallenge: undefined,
+        ownership: {
+          status: "proven", method: result.method, message: pending.message, signature,
+          provenAt: at, checkedAt: at, provenByMemberId: ctx.member.id,
+        },
+      });
+    });
+    if (!answer) return res.status(409).json({ error: "This challenge was used or replaced while it was being checked. Nothing was recorded." });
+    res.json({ proven: true, wallet: publicWallet(answer) });
+  }));
+
+  /** Ask the chain again about the stored proof. A refusal lapses it; a
+   *  chain that cannot be asked changes nothing. */
+  r.post("/:orgId/wallets/:walletId/ownership/recheck", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!mayProve(ctx, res)) return;
+    const wallet = walletOf(ctx, req);
+    if (!wallet) return res.status(404).json({ error: "no such wallet" });
+    const proof = wallet.ownership;
+    if (!proof) return res.status(409).json({ error: "This wallet has no proof to check. Prove it first." });
+
+    const result = await verifyOwnership(wallet, proof.message, proof.signature, proof.method);
+    store.audit(auditEntry("wallet.ownership_checked", {
+      orgId: ctx.org.id, walletId: wallet.id, chainId: wallet.chainId, address: wallet.address,
+      check: "recheck", outcome: result.verdict, ...(result.verdict !== "valid" ? { reason: result.reason } : {}),
+    }, ctx.userId));
+    if (result.verdict === "unverified") {
+      return res.status(503).json({ error: `Not checked: ${result.reason}. The proof stays as it was.`, wallet: publicWallet(wallet) });
+    }
+    const updated = store.batched(() => {
+      const current = store.findImportedWallet(wallet.id);
+      // Proven again meanwhile with another signature: this answer is about the old one.
+      if (!current?.ownership || current.ownership.signature !== proof.signature || current.ownership.message !== proof.message) return undefined;
+      const at = new Date().toISOString();
+      return store.updateImportedWallet(wallet.id, {
+        ownership:
+          result.verdict === "valid"
+            ? { ...current.ownership, status: "proven", checkedAt: at, lapsedAt: undefined, lapseReason: undefined }
+            : { ...current.ownership, status: "lapsed", checkedAt: at, lapsedAt: current.ownership.lapsedAt ?? at, lapseReason: result.reason },
+      });
+    });
+    if (!updated) return res.status(409).json({ error: "The proof changed while it was being checked. Check again." });
+    res.json({ wallet: publicWallet(updated) });
+  }));
 
   r.delete("/:orgId/wallets/:walletId", (req, res) => {
     const ctx = ctxOf(req, res);

@@ -280,7 +280,9 @@ RENDER.invoices = async () => {
     const fig = w === "WAITING" ? '<span class="z-dim">Not filled in</span>'
       : w === "PAID" ? Z.amount({ value: a.value, currency: a.currency, direction: out ? "in" : "out" })
         : `<span class="z-amount">${esc(Z.formatMoney(a.value, a.currency))}</span>`;
-    return `<tr><td class="z-mono">${esc(num) || `<span class="z-dim">${w === "DRAFT" ? "Not issued" : "None"}</span>`}</td>
+    // The number opens the invoice too: a name alone does not read as a link.
+    const label = esc(num) || (w === "DRAFT" ? "Not issued" : "Open");
+    return `<tr><td class="z-mono"><button type="button" class="z-tbl__link" data-act="invoice-detail" data-id="${esc(i.id)}">${label}</button></td>
       <td><span class="z-tbl__who">${Z.avatar({ name: who })}<button type="button" class="z-tbl__link" data-act="invoice-detail" data-id="${esc(i.id)}">${esc(who)}</button></span></td>
       <td class="${w === "OVERDUE" ? "zb-due--late" : "z-dim"}">${i.dueDate ? esc(day(ymd(i.dueDate))) : "None"}</td>
       <td>${Z.tag(w)}</td>
@@ -411,7 +413,7 @@ RENDER.books = async () => {
       <div class="zb-notes"><div class="zb-note">${Z.icon("person")}<span>${who}</span>
         ${linkBtn("Connections", "integrations", "hub")}${cap("coa.manage").allowed ? linkBtn("Chart of accounts", "coa") : ""}</div>
         <div class="zb-note">${Z.icon("more_horiz")}<span>Also in your books:
-          <a href="?view=ledger" data-view-link="ledger">every transaction</a>${cap("assets.costBasis").allowed ? `, <a href="?view=assets" data-view-link="assets">assets and tax lots</a>` : ""},
+          <a href="?view=ledger" data-view-link="ledger">every transaction</a>${cap("assets.costBasis").allowed ? `, <a href="?view=assets" data-view-link="assets">holdings and tax lots</a>, <a href="?view=gains" data-view-link="gains">realised gains</a>` : ""},
           <a href="?view=wallets" data-view-link="wallets">imported wallets</a> and the
           <a href="?view=export" data-view-link="export">month’s statement lines</a>.</span></div></div>`,
     bind(box) {

@@ -45,7 +45,7 @@ function phSecurityChecks() {
 
 /* The account the plan belongs to: the company the phone acts for, or the
    personal one. */
-const phPlanOrg = () => phCompany() || phPersonalOrg();
+const phPlanOrg = () => phPersonalOrg();
 const phPlanName = (id) => ({ starter: "Starter", premium: "Premium", business: "Business" }[id] || id);
 function phTrialLeft(org) {
   const t = org?.trial;
@@ -67,28 +67,27 @@ function phPlanWords(org) {
 PH.settings = {
   title: "Settings",
   live: () => JSON.stringify([user?.name, user?.email, user?.monerium?.method, user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert,
-    phKey?.protection, phSecurityChecks(), phCache.orgs?.map((o) => `${o.id}:${o.plan}:${o.trial?.endsAt}`), phCompanyId, user?.privacyBundle?.status]),
+    phKey?.protection, phSecurityChecks(), phCache.orgs?.map((o) => `${o.id}:${o.plan}:${o.trial?.endsAt}`), user?.privacyBundle?.status]),
   html() {
     const u = user || {};
     const checks = phSecurityChecks();
     const mon = u.monerium?.method === "api_keys" ? "Connected with your own keys" : hasConnectedMonerium(u) ? "Connected" : "Not connected";
     const plus = u.privacyBundle && u.privacyBundle.status !== "canceled";
     const account = [
-      Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [u.name, u.email].filter(Boolean).join(" · "), href: "#account-details" }),
-      Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in and this phone’s key", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
-      Z.row({ lead: Z.iconTile({ icon: "key" }), title: "Who approves payments", sub: "Owners, signatures and spending limits", href: "#signers" }),
-      ...(HAS("monerium") ? [Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Monerium", sub: mon, href: "#monerium-settings" })] : []),
+      Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [ownAccountName(u), u.email].filter(Boolean).join(" · "), href: "#account-details" }),
+      Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in, who can sign and spend", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
+      Z.row({ lead: Z.iconTile({ icon: "currency_exchange" }), title: "Currency and auto-convert", sub: phCurrencyWords(u.paymentPage), href: "#settings/currency" }),
       Z.row({ lead: Z.iconTile({ icon: "description" }), title: "Documents", sub: "Statements and verifiable documents", href: "#documents" }),
-      Z.row({ lead: Z.iconTile({ icon: "currency_exchange" }), title: "Main currency", sub: phCurrencyWords(u.paymentPage), href: "#settings/currency" }),
-      Z.row({ lead: Z.iconTile({ icon: "hub" }), title: "Accounting connections", sub: "GetMyInvoices, Lexware CSV", href: "#integrations" }),
     ];
+    // Accounting software connects to a space in Zold Business, not here.
+    const connections = HAS("monerium") ? [Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Monerium", sub: mon, href: "#monerium-settings" })] : [];
     const plan = [
       Z.row({ lead: Z.iconTile({ icon: "workspace_premium" }), title: "Plan", sub: phCache.orgs === null ? "Loading…" : phPlanWords(phPlanOrg()) || "No plan", href: "#plan" }),
       ...(plus ? [Z.row({ lead: Z.iconTile({ icon: "stars" }), title: "Zold Plus", sub: "Privacy Bundle active", href: "#plus" })] : []),
-      Z.row({ lead: Z.iconTile({ icon: "hourglass_top" }), title: "Coming soon", sub: "What this account can’t do yet", href: "#soon" }),
     ];
     return `${phTop("Settings", "more")}${phMain(`
       ${Z.listGroup({ rows: account })}
+      ${connections.length ? `<section class="z-group"><h2 class="z-eyebrow">Connections</h2>${Z.listGroup({ rows: connections })}</section>` : ""}
       ${Z.listGroup({ rows: plan })}
       ${Z.button({ full: true, icon: "logout", label: "Sign out", id: "ph-signout" })}
     `)}`;
@@ -125,10 +124,14 @@ function phSignerRows() {
   const limits = s.allowance?.limits || [];
   const spenders = new Set(limits.map((l) => String(l.delegate).toLowerCase())).size;
   const sig = `${s.threshold} of ${owners.length}${owners.length === 1 ? ": you alone" : ""}`;
+  // Letting someone else spend is offered to people who work with a business
+  // (app/signers.js); a spender already on the account is always shown.
+  if (phCache.orgs === null) phLoadOrgs().then(() => { if (phRoute?.name === "security") phRender(); });
+  const offerSpenders = spenders > 0 || (phCache.orgs || []).some((o) => o.type === "business");
   return `<ul class="z-list z-card">${[
     Z.row({ lead: Z.iconTile({ icon: "draw" }), title: "Signatures needed", sub: sig, href: "#signers" }),
-    Z.row({ lead: Z.iconTile({ icon: "speed" }), title: "Spending limits", sub: limits.length ? `${limits.length} set` : "None set", href: "#signers" }),
-    Z.row({ lead: Z.iconTile({ icon: "person_add" }), title: "Allowed spenders", sub: spenders ? String(spenders) : "None", href: "#signers" }),
+    ...(offerSpenders ? [Z.row({ lead: Z.iconTile({ icon: "person_add" }), title: "People who can spend from your account",
+      sub: spenders ? `${spenders} ${spenders === 1 ? "person" : "people"} · ${limits.length} limit${limits.length === 1 ? "" : "s"}` : "None", href: "#signers" })] : []),
   ].map((r) => `<li>${r}</li>`).join("")}</ul>`;
 }
 
@@ -164,12 +167,12 @@ PH.security = {
       : Z.row({
         lead: Z.iconTile({ icon: "smartphone" }),
         title: "Payment key",
-        sub: phKey === undefined ? "Checking this phone…" : keyHere ? (phKey.protection === "none" ? "On this phone, without hardware protection" : "On this phone") : "On another device",
-        right: keyHere ? Z.tag(phKey.protection === "none" ? "Unprotected" : "This device", phKey.protection === "none" ? "amber" : "pink") : "",
+        sub: phKey === undefined ? "Checking this phone…" : keyHere ? (phKey.protection === "none" ? "On this phone, not encrypted" : "On this phone, encrypted by your passkey") : "On another device",
+        right: keyHere ? Z.tag(phKey.protection === "none" ? "Not encrypted" : "This device", phKey.protection === "none" ? "amber" : "pink") : "",
         chevron: false,
       });
-    return `${phTop("Security", "settings")}${phMain(`
-      ${phKeyUnprotected() ? Z.note({ tone: "a", text: "This phone stores its payment key without hardware protection, so anything that can read this browser’s storage could use it. Your Face ID or fingerprint sign-in here can’t encrypt it." }) : ""}
+    return `${phSecurityTop()}${phMain(`
+      ${phKeyUnprotected() ? Z.note({ tone: "a", text: "Your payment key is stored unencrypted in this browser: the passkey here can’t encrypt it. The key signs what a payment is (amount and payee). On its own it moves nothing: every payment also needs your Face ID or fingerprint, which your account checks on the chain. Someone with a copy could still sign payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust." }) : ""}
       ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: { href: "#recovery-settings", label: r.on ? "Change" : "Set up" }, rows: recoveryRows }) : ""}
       ${Z.listGroup({ label: "Sign-in and keys", rows: [
         Z.row({ lead: Z.iconTile({ icon: "fingerprint" }), title: "Face ID or fingerprint", sub: u.passkey?.createdAt ? `Signs you in and approves payments. Added ${phDay(u.passkey.createdAt)} ${new Date(u.passkey.createdAt).getFullYear()}` : "Not set up", right: Z.tag(u.passkey?.credentialId ? "Active" : "Off", u.passkey?.credentialId ? "mint" : undefined), chevron: false }),
@@ -197,7 +200,7 @@ async function phLoadPlans(type) {
 
 PH.plan = {
   title: "Plan",
-  live: () => JSON.stringify([phCache.orgs?.map((o) => `${o.id}:${o.plan}:${o.effectivePlan}:${o.trial?.endsAt}`), phCompanyId, Object.keys(phCache.plans)]),
+  live: () => JSON.stringify([phCache.orgs?.map((o) => `${o.id}:${o.plan}:${o.effectivePlan}:${o.trial?.endsAt}`), Object.keys(phCache.plans)]),
   html() {
     const org = phPlanOrg();
     if (phCache.orgs === null || (org && !phCache.plans[org.type])) return `${phTop("Plan", "settings")}${phMain(Z.skeletonRows(2, "Loading your plan…"))}`;
@@ -221,7 +224,6 @@ PH.plan = {
           : card(upgrade, "Try it free for 30 days", "", `<p class="z-hint">Paid plans aren’t on sale during the beta. When the trial ends, paid features pause and nothing is deleted.</p>`);
     const offer = upgrade && !org.trial && org.plan !== paid;
     return `${phTop("Plan", "settings")}${phMain(`
-      ${phCompany() ? `<p class="z-sub">For ${esc(org.name)}</p>` : ""}
       ${current ? card(current, "Current plan", Z.tag("Active", "mint")) : ""}
       ${trialCard}
       <p class="z-err" id="ph-plan-err" role="alert" hidden></p>
@@ -239,7 +241,7 @@ PH.plan = {
       Z.setLoading(b, true);
       try {
         await api(`/api/orgs/${encodeURIComponent(org.id)}/plan/trial`, {});
-        phCache.orgs = null; phCache.invoices = null; phCache.invProfile = null; phCache.co = null;
+        phCache.orgs = null;
         await phLoadOrgs();
         phRender();
         Z.announce("Trial started");

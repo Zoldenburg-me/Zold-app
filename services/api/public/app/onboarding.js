@@ -16,6 +16,7 @@
    ========================================================================== */
 
 function enterDashboard(name) {
+  name = ownAccountName() || name;
   let invite = null;
   try { invite = sessionStorage.getItem("zold-invite"); sessionStorage.removeItem("zold-invite"); } catch {}
   if (invite) {
@@ -45,6 +46,8 @@ function enterDashboard(name) {
   if (poll) clearInterval(poll);
   poll = setInterval(refresh, 5000);
   refresh();
+  // A "Pay with Zold" link opened while signed out waits for this moment.
+  void handlePayDeepLink();
 }
 
 /* Onboarding is over (or put off): the welcome cards once for an account made
@@ -2520,6 +2523,15 @@ $("btn-dash-kyc-refresh").onclick = async () => {
 $("btn-recovery-start").onclick = startRecoveryRequest;
 $("btn-links").onclick = () => phGo("get-paid");
 
+/** Kept until the app opens: sign-in and onboarding drop the query. */
+function parkPayLink() {
+  const target = new URLSearchParams(location.search).get("pay");
+  if (!target) return null;
+  try { sessionStorage.setItem("zold-pay", target); } catch {}
+  history.replaceState(null, "", `${location.pathname}${location.hash}`);
+  return target;
+}
+
 /**
  * /app?pay=<handle>/<code> — "Open in Zold" from a payment request page.
  *
@@ -2529,9 +2541,15 @@ $("btn-links").onclick = () => phGo("get-paid");
  */
 async function handlePayDeepLink() {
   const qs = new URLSearchParams(location.search);
-  const target = qs.get("pay");
-  if (!target || !user) return;
-  history.replaceState(null, "", location.pathname);
+  let target = parkPayLink();
+  if (!user) return;
+  try { target = sessionStorage.getItem("zold-pay"); sessionStorage.removeItem("zold-pay"); } catch {}
+  if (!target) return;
+  // A company pays through a payment run in Zold Business, approved like any
+  // other; this app does not move a company's money.
+  if (user.accountType === "company") {
+    return errShow("link", { title: "Pay this from Zold Business", sub: "A company account pays through a payment run, so it is approved like any other payment. Add the payee in Zold Business and create the payment there." });
+  }
   const [handle, code] = target.split("/");
   if (!handle || !code) return;
   try {
@@ -2571,6 +2589,7 @@ async function resumeSession(capabilitiesLoaded) {
   }
   if (!sessionToken) {
     await capabilitiesLoaded;
+    parkPayLink(); // signed out: kept for after sign-in
     return obStart();
   }
   try {
@@ -2583,9 +2602,9 @@ async function resumeSession(capabilitiesLoaded) {
     // is requested waits on Monerium, not on the person: Home, not the gate.
     if (!next || (["monerium", "activate"].includes(next) && (phParse(location.hash) || ibanWait(user)))) {
       enterDashboard(user.name);
-      await handlePayDeepLink();
       return;
     }
+    parkPayLink(); // onboarding first: kept for when the app opens
     obShow();
     const want = location.hash.slice(1);
     // Reload on a later step it may still see (keys form, welcome) stays there.

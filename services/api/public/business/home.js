@@ -10,7 +10,7 @@
  *   without Books gets no chart, never a row of zeros.
  * - Money out is Sent, never Paid: the bank's confirmation is not on a line.
  */
-import { $, Z, api, cap, esc, eur, maskIban, me, org, roleCan, view, when, ymd } from "./core.js";
+import { $, Z, api, cap, esc, eur, gateHtml, maskIban, me, org, roleCan, ensureMe, view, when, ymd } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { side, waitingForMe } from "./nav.js";
 import { invAmount, loadMembers, memberName } from "./screens.js";
@@ -22,7 +22,7 @@ const BAR_MAX_PX = 120;
 const TOP_N = 4;
 const ACTIVITY_ROWS = 8;
 const PERIODS = [["30d", "Last 30 days"], ["month", "This month"], ["3m", "3 months"]];
-const LINE_WORD = { sepa_in: "Received", sepa_out: "Sent", sepa_out_reversal: "Refunded", crypto_converted: "Received", crypto_held: "Received", sweep: "Done" };
+const LINE_WORD = { sepa_in: "Received", sepa_out: "Sent", sepa_out_reversal: "Refunded", crypto_converted: "Received", crypto_held: "Received", eure_in: "Received", sweep: "Done" };
 
 /* What the page remembers between redraws of one section. */
 const hs = { period: "30d", tab: "all", month: null };
@@ -73,13 +73,30 @@ function flowCard(all) {
   const label = PERIODS.find((p) => p[0] === hs.period)[1];
   const pills = PERIODS.map(([id, text]) => `<button type="button" class="zb-h-pill" data-hp="${id}" aria-pressed="${hs.period === id}">${text}</button>`).join("");
   const signed = (sign, c) => `${c ? sign : ""}${esc(eur(Math.abs(c) / 100))}`;
-  const figure = (text, value, cls) => `<div class="zb-h-fig"><span class="zb-h-fig__label">${text}</span><span class="zb-h-fig__value ${cls}">${value}</span></div>`;
-  return `<div class="zb-side-card__head"><h2 id="home-flow">Money in and out</h2><div class="zb-h-pills" role="group" aria-label="Period">${pills}</div></div>
-    <div class="zb-h-figs">${figure(`<span class="zb-h-key zb-h-key--in" aria-hidden="true"></span>Money in`, signed("+", inC), "is-in")}
-      ${figure(`<span class="zb-h-key zb-h-key--out" aria-hidden="true"></span>Money out`, signed("−", outC), "")}
-      ${figure("Net", signed(inC - outC < 0 ? "−" : "+", inC - outC), "")}</div>
+  return `<div class="zb-h-flowhead"><div class="zb-h-pills" role="group" aria-label="Period">${pills}</div>
+      <span class="zb-h-io"><span class="is-in">${Z.icon("north_east")}<span class="z-sr">Money in </span>${signed("+", inC)}</span>
+      <span class="is-out">${Z.icon("south_east")}<span class="z-sr">Money out </span>${signed("−", outC)}</span></span></div>
     ${lines.length ? barsHtml(buckets, `Money in and out per week, ${label.toLowerCase()}`)
       : `<p class="zb-hint">No money moved in this period.</p>`}`;
+}
+
+/** The balance as a figure with smaller cents, the way a bank app prints it. */
+const bigEur = (v) => {
+  const t = eur(v), m = t.match(/^(.*)([.,]\d{2})$/);
+  return m ? `${esc(m[1])}<span class="zb-h-cents">${esc(m[2])}</span>` : esc(t);
+};
+
+/** Only the account backed by YOUR own account has a figure (RULES §4). */
+function balanceCard(accounts, lines) {
+  const mine = accounts.find((a) => a.status === "active" && a.backingUserId && me && a.backingUserId === me.id);
+  const fig = mine && typeof me.balanceEur === "number";
+  const other = !mine && accounts.find((a) => a.backingUserId);
+  const head = fig
+    ? `<span class="zb-h-bal__label">${esc(mine.label || mine.currency)} balance</span><span class="zb-h-bal__fig">${bigEur(me.balanceEur)}</span>`
+    : `<span class="zb-h-bal__label">Balance</span><p class="zb-hint">${other ? `Only ${esc(other.backingMemberName || "the member who backs it")} sees this account’s balance.` : "No account is connected yet."}</p>`;
+  return `<section class="z-card zb-side-card zb-h-bal" aria-labelledby="home-bal"><h2 id="home-bal" class="z-sr">Balance and money in and out</h2>
+    <div class="zb-h-bal__head">${head}</div>
+    ${lines ? `<div id="hm-flow">${flowCard(lines)}</div>` : ""}</section>`;
 }
 
 /* ── Money movement and activity ──────────────────────────────────────────── */
@@ -114,10 +131,11 @@ function movement(all, months) {
     <div class="zb-grid2">${side2("in", "Money in", "Top payers")}${side2("out", "Money out", "Top payees")}</div>`;
 }
 
-function activity(all) {
+/** Home shows the latest few; Transactions shows them all. */
+function activity(all, limit = ACTIVITY_ROWS) {
   const tabs = [["all", "All"], ["in", "Money in"], ["out", "Money out"]].map(([id, text]) => `<button type="button" class="zb-h-chip" data-ht="${id}" aria-pressed="${hs.tab === id}">${text}</button>`).join("");
   const rows = [...all].filter((l) => hs.tab === "all" || (hs.tab === "in") === (l.amountCents >= 0))
-    .sort((a, b) => b.valueDate.localeCompare(a.valueDate)).slice(0, ACTIVITY_ROWS).map((l) => {
+    .sort((a, b) => b.valueDate.localeCompare(a.valueDate)).slice(0, limit).map((l) => {
       const inbound = l.amountCents >= 0;
       const who = l.counterparty?.name || (inbound ? "Money in" : "Payment");
       return `<tr><td class="z-dim">${esc(when(ymd(l.valueDate)))}</td>
@@ -126,8 +144,9 @@ function activity(all) {
         <td>${Z.tag(LINE_WORD[l.event] || (inbound ? "Received" : "Sent"))}</td>
         <td class="z-tbl__num">${Z.amount({ value: Math.abs(l.amountCents) / 100, direction: inbound ? "in" : "out" })}</td></tr>`;
     });
-  return `<div class="zb-h-head"><h2 class="zb-h2" id="home-act">Recent activity</h2><div class="zb-h-chips" role="group" aria-label="Show">${tabs}</div>
-      <a class="z-group__action zb-h-end" href="?view=books" data-view-link="books">See all</a></div>
+  const all_ = limit === Infinity;
+  return `<div class="zb-h-head">${all_ ? "" : `<h2 class="zb-h2" id="home-act">Recent activity</h2>`}<div class="zb-h-chips" role="group" aria-label="Show">${tabs}</div>
+      ${all_ ? "" : `<a class="z-group__action zb-h-end" href="?view=transactions" data-view-link="transactions">See all</a>`}</div>
     ${rows.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Date</th><th scope="col">Who</th><th scope="col">Memo</th><th scope="col">Status</th><th scope="col" class="z-tbl__num">Amount</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`
       : `<div class="z-card"><p class="empty">No money has moved on this organisation’s accounts yet.</p></div>`}`;
 }
@@ -164,19 +183,16 @@ function attention({ waiting, invoices, lines, accounts }) {
 }
 
 function accountsCard(accounts) {
-  if (!accounts.length) return `<section class="z-card zb-side-card" aria-labelledby="home-acc"><div class="zb-side-card__head"><h2 id="home-acc">Accounts</h2></div><p class="zb-hint">No account can pay yet. Connect the company’s Monerium profile on the Accounts screen.</p>${linkBtn("Accounts", "accounts")}</section>`;
+  if (!accounts.length) return `<section class="z-card zb-side-card" aria-labelledby="home-acc"><div class="zb-side-card__head"><h2 id="home-acc">Accounts</h2></div><p class="zb-hint">No account can pay yet. ${org.type === "personal" ? "Connect your Monerium account" : "Connect the company’s Monerium profile"} on the Accounts screen.</p>${linkBtn("Accounts", "accounts")}</section>`;
   const one = (a) => {
     const mine = a.status === "active" && a.backingUserId && me && a.backingUserId === me.id;
-    const first = (a.backingMemberName || "").split(" ")[0];
-    const sub = mine ? "Spends from your account"
-      : a.backingUserId ? `Spends from ${a.backingMemberName ? `${esc(a.backingMemberName)}’s` : "a member’s"} account. Only ${first ? esc(first) : "they"} see${first ? "s" : ""} its balance.`
-        : "Not connected to a member’s account yet.";
     const iban = a.identifier?.iban;
-    return `<div class="zb-h-acc"><span class="zb-h-acc__head"><b>${esc(a.label || a.currency)}</b>${a.status === "active" ? Z.tag("Active") : Z.tag(a.status === "gated" ? "Not open" : "Waiting")}</span>
-      ${mine && typeof me.balanceEur === "number" ? `<span class="zb-h-acc__fig">${esc(eur(me.balanceEur))}</span>` : ""}
-      <span class="zb-hint">${sub}</span>${iban ? `<span class="z-mono" translate="no">${esc(maskIban(iban))}</span>` : ""}</div>`;
+    const right = mine && typeof me.balanceEur === "number" ? `<b class="zb-h-accrow__fig">${esc(eur(me.balanceEur))}</b>`
+      : a.status === "active" ? `<span class="z-dim">${a.backingUserId ? "Member’s" : "Not connected"}</span>` : Z.tag(a.status === "gated" ? "Not open" : "Waiting");
+    return `<li><a class="zb-h-accrow" href="?view=accounts" data-view-link="accounts">${Z.iconTile({ icon: "account_balance", tone: "n" })}
+      <span class="z-row__main"><span class="z-row__title">${esc(a.label || a.currency)}</span>${iban ? `<span class="z-row__sub z-mono" translate="no">${esc(maskIban(iban))}</span>` : ""}</span>${right}</a></li>`;
   };
-  return `<section class="z-card zb-side-card" aria-labelledby="home-acc"><div class="zb-side-card__head"><h2 id="home-acc">Accounts</h2><a href="?view=get-paid" data-view-link="get-paid">Details</a></div>${accounts.map(one).join("")}</section>`;
+  return `<section class="z-card zb-side-card" aria-labelledby="home-acc"><div class="zb-side-card__head"><h2 id="home-acc">Accounts</h2><a href="?view=accounts" data-view-link="accounts">Details</a></div><ul class="zb-h-accs">${accounts.map(one).join("")}</ul></section>`;
 }
 
 function statCard(id, title, view, cells) {
@@ -190,28 +206,33 @@ function statCard(id, title, view, cells) {
    Review in Needs attention is, and New payment steps back. */
 function headerActions(waiting) {
   const drafts = cap("transfers.drafts").allowed && roleCan(org.role, "propose");
+  const sm = (html) => html.replace('class="z-btn ', 'class="z-btn z-btn--sm ');
   return [
-    drafts ? linkBtn("New payment", "send", "arrow_outward", waiting ? "secondary" : "primary") : "",
-    cap("invoices").allowed ? `<button type="button" class="z-btn z-btn--secondary" data-act="issue-invoice">${Z.icon("receipt_long")}<span>Issue invoice</span></button>` : "",
-    linkBtn("Request payment", "get-paid", "south_west"),
+    drafts ? sm(linkBtn("New payment", "send", "arrow_outward", waiting ? "secondary" : "primary")) : "",
+    cap("invoices").allowed ? `<button type="button" class="z-btn z-btn--sm z-btn--secondary" data-act="issue-invoice">${Z.icon("receipt_long")}<span>Issue invoice</span></button>` : "",
+    sm(linkBtn("Request payment", "get-paid", "south_west")),
   ].join("");
 }
 
-META.overview = () => ({ title: org.name, sub: "", actions: headerActions(waitingForMe(side.drafts).length) });
+const greeting = () => (me?.name ? `Welcome, ${me.name.trim().split(/\s+/)[0]}` : "Welcome");
+
+META.overview = () => ({ title: greeting(), sub: "", actions: "" });
 
 RENDER.overview = async () => {
   const books = cap("ledger.transactions").allowed;
+  // The greeting and the balance need the session; the shell may not have it yet.
   const [acc, dr, inv, , st] = await Promise.allSettled([
     api(`/api/orgs/${org.id}/accounts`),
     cap("transfers.drafts").allowed ? api(`/api/orgs/${org.id}/drafts`) : Promise.resolve({ drafts: [] }),
     cap("invoices").allowed ? api(`/api/orgs/${org.id}/invoices`) : Promise.resolve(null),
     loadMembers(),
     books ? api(`/api/orgs/${org.id}/bookkeeping/statement`) : Promise.resolve(null),
+    ensureMe(),
   ]);
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : [];
   const runs = dr.status === "fulfilled" ? dr.value.drafts : [];
   // Only while Home is still the open view: a slow load must not overwrite another header.
-  if (view === "overview") $("#view-actions").innerHTML = headerActions(waitingForMe(runs).length);
+  if (view === "overview") $("#view-title").textContent = greeting();
   const invoices = inv.status === "fulfilled" && inv.value ? inv.value.invoices : null;
   const lines = st.status === "fulfilled" && st.value ? st.value.lines : null;
   const months = st.status === "fulfilled" && st.value ? st.value.months : [];
@@ -236,8 +257,9 @@ RENDER.overview = async () => {
     cards.push(statCard("home-pay", "Payments", "payments", [["Waiting for review", by("PENDING_REVIEW").length, total(by("PENDING_REVIEW"))], ["Approved, not sent", by("REVIEWED").length, total(by("REVIEWED"))], sent]));
   }
 
-  const html = `<div id="hm-root">${attention({ waiting: waitingForMe(runs), invoices, lines, accounts })}
-    <div class="zb-h-top">${lines ? `<section class="z-card zb-side-card zb-h-flow" id="hm-flow" aria-labelledby="home-flow">${flowCard(lines)}</section>` : ""}${accountsCard(accounts)}</div>
+  const html = `<div id="hm-root"><div class="zb-h-actions">${headerActions(waitingForMe(runs).length)}</div>
+    <div class="zb-h-top">${balanceCard(accounts, lines)}${accountsCard(accounts)}</div>
+    ${attention({ waiting: waitingForMe(runs), invoices, lines, accounts })}
     ${cards.length ? `<div class="zb-grid2">${cards.join("")}</div>` : ""}
     ${lines && months.length ? `<section class="zb-h-section" id="hm-move" aria-labelledby="home-move">${movement(lines, months)}</section>` : ""}
     ${lines ? `<section class="zb-h-section" id="hm-act" aria-labelledby="home-act">${activity(lines)}</section>` : ""}</div>`;
@@ -260,6 +282,27 @@ RENDER.overview = async () => {
           again = `[data-hm][aria-label="${back}"]:not([disabled])`;
         }
         box.querySelector(again)?.focus();
+      });
+    },
+  };
+};
+
+/* ── Transactions: every statement line, newest first ─────────────────────── */
+
+META.transactions = () => ({ title: "Transactions", sub: "Every euro in and out of this organisation’s accounts.", actions: "" });
+
+RENDER.transactions = async () => {
+  if (!cap("ledger.transactions").allowed) return gateHtml("ledger.transactions");
+  const { lines } = await api(`/api/orgs/${org.id}/bookkeeping/statement`);
+  return {
+    html: `<section id="tx-root" aria-label="Transactions">${activity(lines, Infinity)}</section>`,
+    bind(box) {
+      box.querySelector("#tx-root").addEventListener("click", (ev) => {
+        const b = ev.target.closest("[data-ht]");
+        if (!b) return;
+        hs.tab = b.dataset.ht;
+        box.querySelector("#tx-root").innerHTML = activity(lines, Infinity);
+        box.querySelector(`[data-ht="${hs.tab}"]`)?.focus();
       });
     },
   };

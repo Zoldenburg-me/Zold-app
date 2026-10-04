@@ -14,6 +14,7 @@ import {
   sweepStrandedTransfers,
   } from "./orchestrator.js";
 import {
+  cryptoInScan,
   startCryptoDepositPoller,
   } from "./adapters/crypto-deposits.js";
 import { buildTransferFromQuote } from "./transfers/build.js";
@@ -26,6 +27,7 @@ import { createPageRouter, notFound } from "./routes/pages.js";
 import { createUserRouter } from "./routes/users.js";
 import { createCryptoDepositRouter } from "./routes/crypto-deposits.js";
 import { createPaymentPageRouter } from "./routes/payment-page.js";
+import { createEnsRouter } from "./routes/ens.js";
 import { createEmailVerificationRouter } from "./routes/email-verification.js";
 import { createReceiptShareRouter } from "./routes/receipt-shares.js";
 import { createFaucetRouter } from "./routes/faucet.js";
@@ -132,7 +134,12 @@ app.get(
     const block = await latestBlock();
     // chainId and realMoney let the landing page name the network it runs on
     // instead of hardcoding "Live on Base" over a testnet deployment.
-    res.json({ ok: true, chainId: CHAIN_ID, realMoney: IS_REAL_MONEY_CHAIN, block: Number(block), contracts: addrs(), capabilities: capabilities() });
+    res.json({
+      ok: true, chainId: CHAIN_ID, realMoney: IS_REAL_MONEY_CHAIN, block: Number(block), contracts: addrs(), capabilities: capabilities(),
+      // Whether incoming crypto is being seen. A scan that fails every tick
+      // books nothing and says so nowhere else.
+      ...(CRYPTO_IN.enabled ? { cryptoIn: { ...cryptoInScan } } : {}),
+    });
   }),
 );
 
@@ -195,6 +202,7 @@ app.use("/api", createEmailVerificationRouter({ requireUserSession }));
 app.use("/api", createCryptoDepositRouter({ requireUserSession }));
 // The payment page: claiming a handle, and the public payee read.
 app.use("/api", createPaymentPageRouter({ requireUserSession }));
+app.use("/api", createEnsRouter({ requireSession }));
 // Shareable receipts. The slug IS the credential, hence the tight bucket.
 app.use("/api", createReceiptShareRouter({ requireUserSession }));
 // Testnet faucet: one EURe grant per account, testnet chains only.

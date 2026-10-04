@@ -1,7 +1,7 @@
 /**
  * The app from 1024px (design/ui-v2 build step 8): a 256px sidebar next to
  * the open screen, Home laid out for a wide window, and Search (Cmd or Ctrl
- * K) over payments, contacts and invoices. Sheets turn into right drawers in
+ * K) over payments and contacts. Sheets turn into right drawers in
  * ui.css. Screens without a desktop layout keep their phone column, centred.
  *
  * It fills in PH_DESK and adds a `desk` layout to Home (both declared in
@@ -11,7 +11,7 @@
  *
  * Honesty rules that shape this file (design/ui-v2/RULES.md §4):
  * - Search reads only what this page already loaded from the API (payments,
- *   contacts, invoices); there is no search route, and nothing is guessed.
+ *   contacts); there is no search route, and nothing is guessed.
  * - The payment page QR the API draws holds the wallet address, not the page
  *   link, so the Get paid card shows the link without a QR next to it.
  */
@@ -35,17 +35,12 @@ const phMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent |
 
 /* Which sidebar item a screen belongs to. */
 function phSideActive(name) {
-  if (/^invoice/.test(name)) return "invoices";
   if (name === "contacts") return "contacts";
   if (name === "soon") return "soon";
-  if (["settings", "security", "plan", "settings/currency"].includes(name)) return "settings";
-  if (name === "members") return "members";
+  if (["more", "settings", "security", "plan", "settings/currency"].includes(name)) return "settings";
   if (/^(tx|send)/.test(name)) return name.startsWith("tx") ? "activity" : "send";
   if (/^(get-paid|link)/.test(name)) return "get-paid";
   if (/^(add|convert|account-details)/.test(name)) return "home";
-  if (/^company\/send/.test(name)) return "send";
-  if (/^company\/get-paid/.test(name)) return "get-paid";
-  if (/^(company|approvals)/.test(name)) return name.startsWith("approvals") ? "approvals" : "home";
   return PH[name]?.tab || "";
 }
 
@@ -57,32 +52,26 @@ function phSideLink(it, active) {
     + `${it.web ? `${Z.icon("open_in_new", "z-side__out")}<span class="z-sr"> (web app)</span>` : ""}</a>`;
 }
 
-/* The sidebar's items, as More offers them on the phone. */
+/* The sidebar's items: the person's own. Invoices and books are kept in
+   Zold Business, for the personal space and each company. */
 function phSideItems() {
   const orgs = phCache.orgs || [];
-  const co = phCompany();
-  const has = (cap) => orgs.some((o) => phCan(o, cap));
-  if (co) {
-    return [
-      { id: "home", href: "#company", icon: "home", label: "Home" },
-      { id: "approvals", href: "#approvals", icon: "inbox", label: "Approvals", badge: phCache.approvalsWaiting || "" },
-      { id: "send", href: "#company/send", icon: "arrow_outward", label: "Send" },
-      { id: "get-paid", href: "#company/get-paid", icon: "south_west", label: "Get paid" },
-      ...(phCan(co, "invoices") ? [{ id: "invoices", href: phWebHref("invoices"), icon: "receipt_long", label: "Invoices", org: co.id, web: true }] : []),
-      { id: "contacts", href: phWebHref("contacts"), icon: "contacts", label: "Contacts", org: co.id, web: true },
-      ...(phCan(co, "ledger.transactions") ? [{ id: "books", href: phWebHref("ledger"), icon: "menu_book", label: "Books", org: co.id, web: true }] : []),
-      { id: "members", href: "#members", icon: "group", label: "Members" },
-    ];
-  }
+  // The organisation that has the feature opens it: the personal space when
+  // its plan has it, otherwise the first that does (as phInvoiceButton).
+  const personal = phPersonalOrg();
+  const holder = (cap) => (phCan(personal, cap) ? personal : orgs.find((o) => phCan(o, cap)));
+  const web = (id, cap, icon, label) => {
+    const o = holder(cap);
+    return o ? [{ id, href: phWebHref(id), icon, label, web: true, org: o.id }] : [];
+  };
   return [
     { id: "home", href: "#home", icon: "home", label: "Home" },
     { id: "send", href: "#send", icon: "arrow_outward", label: "Send" },
     { id: "get-paid", href: "#get-paid", icon: "south_west", label: "Get paid" },
     { id: "activity", href: "#activity", icon: "swap_vert", label: "Activity" },
-    ...(phPersonalOrg() ? [{ id: "invoices", href: "#invoices", icon: "receipt_long", label: "Invoices" }]
-      : has("invoices") ? [{ id: "invoices", href: "/business", icon: "receipt_long", label: "Invoices", web: true }] : []),
     { id: "contacts", href: "#contacts", icon: "contacts", label: "Contacts" },
-    ...(has("ledger.transactions") ? [{ id: "books", href: "/business", icon: "menu_book", label: "Books", web: true }] : []),
+    ...web("invoices", "invoices", "receipt_long", "Invoices"),
+    ...web("books", "ledger.transactions", "menu_book", "Books"),
   ];
 }
 
@@ -90,42 +79,40 @@ PH_DESK.side = (route) => {
   // Loaded once; the sidebar is drawn again when the organisations arrive.
   if (phCache.orgs === null) phLoadOrgs().then(() => { if (PH_DESK.on() && !$("phone")?.hidden) phRender(); });
   const u = user || {};
-  const co = phCompany();
   const companies = (phCache.orgs || []).filter((o) => o.type !== "personal");
-  const who = co ? { name: co.name, sub: `Business · ${phRoleWord(co.role).toLowerCase()}` } : { name: u.name || "Account", sub: ownAccountKind(u) };
+  const who = { name: ownAccountName(u) || "Account", sub: ownAccountKind(u) };
   const card = `${Z.avatar({ name: who.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(who.name)}</span><span class="z-row__sub">${esc(who.sub)}</span></span>`;
   const switcher = companies.length
     ? `<button type="button" class="z-side__org" id="dk-switch-btn" aria-haspopup="dialog" aria-label="Switch account. Current: ${esc(who.name)}">${card}${Z.icon("unfold_more", "z-row__chev")}</button>`
     : `<div class="z-side__org">${card}</div>`;
   const active = phSideActive(route.name);
-  // Search reads the personal account's payments, contacts and invoices; a
-  // company's are in the web app.
-  const search = co ? "" : `<button type="button" class="z-side__search" id="dk-search-btn" aria-haspopup="dialog" aria-keyshortcuts="${phMac ? "Meta+K" : "Control+K"}">${Z.icon("search")}<span>Search</span><kbd class="z-kbd">${phMac ? "⌘K" : "Ctrl K"}</kbd></button>`;
+  // Search reads the person's own payments and contacts.
+  const search = `<button type="button" class="z-side__search" id="dk-search-btn" aria-haspopup="dialog" aria-keyshortcuts="${phMac ? "Meta+K" : "Control+K"}">${Z.icon("search")}<span>Search</span><kbd class="z-kbd">${phMac ? "⌘K" : "Ctrl K"}</kbd></button>`;
   return `<aside class="z-side" aria-label="Sidebar">
-    <a class="z-side__brand" href="${co ? "#company" : "#home"}"><span class="z-brand-tri" aria-hidden="true">▽</span>Zold</a>
+    <a class="z-side__brand" href="#home"><span class="z-brand-tri" aria-hidden="true">▽</span>Zold</a>
     ${phCache.orgs === null ? `<div class="z-side__org">${Z.skeletonRows(1, "Loading…")}</div>` : switcher}
     ${search}
     <nav class="z-side__nav" aria-label="Main">${phSideItems().map((it) => phSideLink(it, active)).join("")}</nav>
     <div class="z-side__foot">
       ${phSideLink({ id: "soon", href: "#soon", icon: "hourglass_top", label: "Coming soon" }, active)}
-      ${phSideLink({ id: "settings", href: "#settings", icon: "settings", label: "Settings" }, active)}
+      ${phSideLink({ id: "settings", href: "#more", icon: "person", label: "Profile" }, active)}
       ${Z.testModePill(!realMoney)}
     </div>
   </aside>`;
 };
 
-/* Switching on a desktop: the personal account stays here, a company opens
-   in the web app, which has the company's desktop screens. */
+/* Switching on a desktop: the person's own account is this app; a company
+   opens in Zold Business. */
 function phDeskSwitch(trigger) {
   const u = user || {};
   const companies = (phCache.orgs || []).filter((o) => o.type !== "personal");
-  const here = (id) => (id || null) === phCompanyId;
+  const here = (id) => !id;
   const mark = (id) => (here(id) ? `<span class="z-row__right">${Z.icon("check")}<span class="z-sr">(current)</span></span>` : "");
   document.getElementById("dk-switch")?.remove();
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "dk-switch", title: "Switch account",
     body: `<div class="z-sheet__body"><ul class="z-list z-card">
-      <li><button type="button" class="z-row z-row--btn" data-dk-personal${here(null) ? ' aria-current="true"' : ""}>${Z.avatar({ name: u.name || "Personal", tone: here(null) ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(u.name || "Personal")}</span><span class="z-row__sub">${ownAccountKind(u)} account</span></span>${mark(null)}</button></li>
+      <li><button type="button" class="z-row z-row--btn" data-dk-personal${here(null) ? ' aria-current="true"' : ""}>${Z.avatar({ name: ownAccountName(u) || "Personal", tone: here(null) ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(ownAccountName(u) || "Personal")}</span><span class="z-row__sub">${ownAccountKind(u)} account</span></span>${mark(null)}</button></li>
       ${companies.map((o) => `<li><a class="z-row" href="/business" data-ph-org="${esc(o.id)}">${Z.avatar({ name: o.name, tone: here(o.id) ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(o.name)}</span><span class="z-row__sub">Business · opens the web app</span></span>${mark(o.id) || Z.icon("open_in_new", "z-row__chev")}</a></li>`).join("")}
     </ul></div>`,
   }));
@@ -133,7 +120,6 @@ function phDeskSwitch(trigger) {
   scrim.dataset.ph = "1";
   scrim.querySelector("[data-dk-personal]").onclick = () => {
     Z.closeOverlay("dk-switch");
-    if (phCompanyId) phUseCompany(null);
     phGo("home");
   };
   Z.openOverlay("dk-switch", trigger);
@@ -251,7 +237,7 @@ PH.home.desk = {
     const gate = u.segment?.gate;
     const inflight = hist.find(phInFlight);
     return phMain(`
-      <h1 class="z-dhome__title">${esc(phGreeting(u.name))}</h1>
+      <h1 class="z-dhome__title">${esc(phGreeting(ownAccountName(u)))}</h1>
       ${gate ? Z.note({ tone: "a", html: `<strong>${esc(gate.reason)}</strong> ${esc(gate.needs)} <a href="mailto:support@zoldhq.com">Ask us about it</a>` }) : ""}
       <div class="z-dhome__grid">
         ${phDeskBalance(u)}
@@ -351,17 +337,6 @@ function phSearchResults(raw) {
     .filter((c) => hit(c.name) || (compact.length > 3 && c.iban.toLowerCase().includes(compact)))
     .slice(0, 4)
     .map((c) => ({ group: "Contacts", go: ["contacts", c.key], lead: Z.avatar({ name: c.name }), title: phMark(c.name, q), right: esc(phMaskIban(c.iban)), label: c.name }));
-  const invoices = (phCache.invoices || [])
-    .filter((i) => hit(i.issued?.recipient?.name, i.supplier?.orgName, i.issued?.number, i.supplier?.invoiceNumber))
-    .slice(0, 4)
-    .map((i) => {
-      const out = i.direction === "outgoing";
-      const who = (out ? i.issued?.recipient?.name : i.supplier?.orgName) || "";
-      const num = (out ? i.issued?.number : i.supplier?.invoiceNumber) || "";
-      const a = phInvAmount(i);
-      const title = out ? `Invoice ${num} to ${who}` : `Invoice ${num} from ${who}`;
-      return { group: "Invoices", go: ["invoice", i.id], lead: Z.iconTile({ icon: out ? "receipt_long" : "move_to_inbox" }), title: phMark(title.replace(/\s+/g, " ").trim(), q), right: `${esc(Z.formatMoney(a.value, a.currency))} · ${esc(phInvWord(i).toLowerCase())}`, label: title };
-    });
   const payments = hist
     .filter((t) => (t.kind === "funding" ? hit("digital dollars usdc", "euros received") : hit(t.recipientName, t.reference)))
     .slice(0, 5)
@@ -374,7 +349,7 @@ function phSearchResults(raw) {
       const name = [t.recipientName || "Payment", t.reference].filter(Boolean).join(" · ");
       return { group: "Payments", go: ["tx", t.id], lead: Z.iconTile({ icon: "arrow_outward" }), title: phMark(name, q), right: `${phOut(t) ? "−" : ""}${esc(phEur(t.sendEur))} · ${esc(phDay(t.createdAt))}`, label: name };
     });
-  return [...contacts, ...invoices, ...payments];
+  return [...contacts, ...payments];
 }
 
 function phSearchDraw() {
@@ -383,9 +358,9 @@ function phSearchDraw() {
   if (!box || !input) return;
   const r = phFind.results;
   const q = phFind.q.trim();
-  const loading = phCache.contacts === null || (phInvOrg() && phCache.invoices === null) || (!histLoaded && !histLoadFailed);
+  const loading = phCache.contacts === null || (!histLoaded && !histLoadFailed);
   if (!q) {
-    box.innerHTML = `<p class="z-cmdk__hint">Search your payments, contacts and invoices.</p>`;
+    box.innerHTML = `<p class="z-cmdk__hint">Search your payments and contacts.</p>`;
   } else if (!r.length) {
     box.innerHTML = `<p class="z-cmdk__hint" role="status">${loading ? "Still loading, one moment…" : `Nothing matches “${esc(q)}”.`}</p>`;
   } else {
@@ -416,13 +391,13 @@ function phSearchPick(i) {
 }
 
 function phSearchOpen(trigger) {
-  if (phCompanyId || $("phone")?.hidden) return;
+  if ($("phone")?.hidden) return;
   if (!$("dk-search")) {
     document.body.insertAdjacentHTML("beforeend", `<div class="z-scrim z-scrim--dialog z-scrim--top" id="dk-search" data-ph="1" hidden>
       <div class="z-dialog z-cmdk" role="dialog" aria-modal="true" aria-label="Search">
         <div class="z-cmdk__bar">${Z.icon("search")}
-          <label class="z-sr" for="dk-q">Search payments, contacts and invoices</label>
-          <input id="dk-q" class="z-cmdk__input" type="search" name="q" role="combobox" aria-expanded="false" aria-controls="dk-results" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search payments, contacts, invoices…">
+          <label class="z-sr" for="dk-q">Search payments and contacts</label>
+          <input id="dk-q" class="z-cmdk__input" type="search" name="q" role="combobox" aria-expanded="false" aria-controls="dk-results" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search payments and contacts…">
           <kbd class="z-kbd">esc</kbd></div>
         <div class="z-cmdk__list" id="dk-results" role="listbox" aria-label="Results"></div>
         <div class="z-cmdk__foot" aria-hidden="true"><span><kbd class="z-kbd">↑</kbd><kbd class="z-kbd">↓</kbd> to move</span><span><kbd class="z-kbd">↵</kbd> to open</span></div>
@@ -460,13 +435,12 @@ function phSearchOpen(trigger) {
   // What search reads, loaded on first use and searched again when it lands.
   const again = () => { if ($("dk-search") && !$("dk-search").hidden) { phFind.results = phSearchResults(input.value); phSearchDraw(); } };
   if (phCache.contacts === null || phCache.orgs === null) phLoadContacts().then(again);
-  if (phCache.invoices === null) phLoadInvoices().then(again);
 }
 
 /* Cmd or Ctrl K opens Search anywhere in the app; again, it closes it. */
 document.addEventListener("keydown", (e) => {
   if (e.key.toLowerCase() !== "k" || !(phMac ? e.metaKey : e.ctrlKey) || e.altKey || e.shiftKey) return;
-  if (!phRoute || obScreen || $("phone")?.hidden || phCompanyId) return;
+  if (!phRoute || obScreen || $("phone")?.hidden) return;
   e.preventDefault();
   const open = $("dk-search");
   if (open && !open.hidden) Z.closeOverlay("dk-search");
