@@ -1075,10 +1075,10 @@ in per-origin localStorage, so accounts do not move between origins.
 
 The testnet deployment runs on [Akash](https://akash.network), paid from the
 Akash Console's managed wallet. There is no image registry: the container
-starts from `node:22`, clones this repository at a pinned commit, runs
-`npm ci` and `hardhat compile` (the ABIs are read at import, and
-`contracts/artifacts/` is not committed), writes `deployments.json` from an
-environment variable, and starts the API next to `cloudflared`.
+starts from `node:22`, clones this repository, checks out the tip of the
+`production` branch (runtime files and prebuilt ABIs only), runs
+`npm ci --omit=dev`, writes `deployments.json` from an environment variable,
+and starts the API next to `cloudflared`.
 
 - **Ingress is the tunnel, not the provider.** `cloudflared` dials out to
   Cloudflare, so DNS and TLS stay in Cloudflare and the lease can move to
@@ -1094,10 +1094,17 @@ environment variable, and starts the API next to `cloudflared`.
   operator keys, the token-encryption key) and the database are readable
   there. Acceptable for a testnet with the Monerium sandbox; not a model for
   real money. The Akash account's own API key is never passed in.
+- **A merge to main deploys itself.** The `production` workflow runs
+  `npm run check`, rebuilds `production` from the merged commit and pushes
+  it. The container asks GitHub for `refs/heads/production` every two
+  minutes; when it moves, it copies `/data/db.json` to `/data/backups/`,
+  stops the API, checks the new commit out and starts it (about a minute
+  without the API). A commit that does not answer `/api/health` within three
+  minutes is rolled back to the previous one and skipped. Nothing on GitHub
+  holds an Akash credential: the lease pulls, nobody pushes to it.
 - **The database lives and dies with the lease.** Closing it deletes every
-  account, and passkeys and Safes created there cannot be moved. Shipping new
-  code means a new lease pinned to a new commit, and so an empty database,
-  unless the volume is carried over by hand.
+  account, and passkeys and Safes created there cannot be moved. A deploy
+  keeps the lease and its `/data` volume.
 - **Deploying sends the secrets, so the operator runs it.** The SDL is
   generated from `.env` on the operator's machine and never committed.
   Provider bids expire within minutes, so creating the deployment and
