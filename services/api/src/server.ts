@@ -53,6 +53,7 @@ import { createShopifyRouter, resolveShopifyRequest } from "./routes/shopify.js"
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
 import { writeStatementLines } from "./bookkeeping/writer.js";
 import { pollWalletSyncOnce } from "./wallet-sync/sync.js";
+import { loadUsdToken } from "./usd-token.js";
 import {
   addrs,
   assertChainMatches,
@@ -378,6 +379,9 @@ if (sandbox) {
  * with no watched users the poller returns before it ever calls getLogs.
  */
 if (CRYPTO_IN.enabled) startCryptoDepositPoller();
+// The dollar token is labelled by its own symbol(); a test token that cannot be
+// read is refused here rather than drawn as USDC.
+await loadUsdToken();
 app.listen(API_PORT, API_HOST, () => {
   console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
   /**

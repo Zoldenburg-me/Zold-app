@@ -7,7 +7,7 @@
  * is drafted here and that member signs it when it is sent, so the card says
  * who sends it.
  */
-import { Z, api, cap, esc, eur, gateHtml, maskIban, me, org, roleCan } from "./core.js";
+import { Z, api, cap, esc, eur, gateHtml, maskIban, me, org, roleCan, usdSymbol } from "./core.js";
 import { loadMembers } from "./screens.js";
 import { META, RENDER } from "./views.js";
 
@@ -115,7 +115,7 @@ RENDER.send = async () => {
     </form>
     <aside class="zb-send__side">
       <section class="z-card zb-pad" id="send-summary"></section>
-      <div class="z-list z-card">${Z.soonRow({ lead: Z.iconTile({ icon: "account_balance_wallet" }), title: "Crypto wallet", sub: "Send digital dollars (USDC) to a wallet" })}</div>
+      <div class="z-list z-card">${Z.soonRow({ lead: Z.iconTile({ icon: "account_balance_wallet" }), title: "Crypto wallet", sub: `Send digital dollars (${usdSymbol}) to a wallet` })}</div>
     </aside></div>`;
 
   return {

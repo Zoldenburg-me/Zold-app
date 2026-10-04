@@ -249,7 +249,7 @@ function render(p) {
   $("open").classList.toggle("hidden", !open);
   $("paid").classList.toggle("hidden", !(p.payments || []).length);
   $("paylist").innerHTML = (p.payments || []).map((x) => `<div class="row">
-      <span>${x.method === "crypto" ? `USDC ${x.amountUsdc ?? ""}` : "Bank transfer"} · ${new Date(x.at).toLocaleString()}</span>
+      <span>${x.method === "crypto" ? `${p.methods?.crypto?.token?.symbol || "USDC"} ${x.amountUsdc ?? ""}` : "Bank transfer"} · ${new Date(x.at).toLocaleString()}</span>
       <b>${eur(x.amountEur)}${x.kind === "partial" ? " (partial)" : x.kind === "over" ? " (over)" : ""}</b></div>`).join("");
   // Same guard index.html applies to anchor links. Both of these come from
   // the merchant's store by way of Shopify, so "javascript:" in one is script
@@ -268,7 +268,7 @@ function render(p) {
   if (needsAmount) return;
 
   const tabs = [];
-  if (p.methods.crypto) tabs.push(["crypto", "Crypto (USDC)"]);
+  if (p.methods.crypto) tabs.push(["crypto", `Crypto (${p.methods.crypto.token?.symbol || "USDC"})`]);
   if (p.methods.bank) tabs.push(["bank", "Bank transfer"], ["zold", "Zold account"]);
   if (!tab || !tabs.some(([id]) => id === tab)) tab = tabs[0]?.[0];
   $("tabs").innerHTML = tabs.map(([id, t]) => `<button class="tab${id === tab ? " on" : ""}" data-tab="${id}" aria-pressed="${id === tab}">${t}</button>`).join("");

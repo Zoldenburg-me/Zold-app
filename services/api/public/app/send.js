@@ -481,8 +481,8 @@ function bindHistRetry(el) {
 }
 function histRow(t) {
   if (t.kind === "funding") {
-    const token = t.token === "USDC" ? "USDC" : "EURe";
-    const amount = t.token === "USDC" ? `${fmt(t.amountUsdc || 0)} USDC` : `€${fmt(t.amountEur || 0)}`;
+    const token = t.token === "USDC" ? usdSym() : "EURe";
+    const amount = t.token === "USDC" ? `${fmt(t.amountUsdc || 0)} ${usdSym()}` : `€${fmt(t.amountEur || 0)}`;
     const color = t.state === "REFUSED" ? "var(--amber)" : "var(--green)";
     return `
     <div class="hic">IN</div>

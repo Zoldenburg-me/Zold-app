@@ -9,6 +9,7 @@
 import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
+import { usdLabel } from "./usd-token.js";
 import { dripTokens, faucetEnabled } from "./faucet.js";
 import { shopifyAvailable } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
@@ -61,7 +62,10 @@ export function capabilities() {
     /** Does a payment page take tokens from other chains? Only through a
      *  Candide forwarder; without one the page's address is the Safe and
      *  takes the app's USDC on this chain alone. */
-    paymentPageForwarding: Boolean(FORWARDING.rpcUrl),
+    paymentPageForwarding: Boolean(FORWARDING.rpcUrl) && !usdLabel().staging,
+    /** The app's dollar token, labelled by its own symbol(): "USDC" on Base
+     *  mainnet, "zUSD" on a staging chain (`staging: true`). */
+    usdToken: usdLabel(),
     /** The ENS name payment pages resolve under (`alice.zoldhq.com`), or
      *  null when this deployment runs no gateway. */
     ensParent: ENS_GATEWAY.enabled ? ENS_GATEWAY.parent : null,

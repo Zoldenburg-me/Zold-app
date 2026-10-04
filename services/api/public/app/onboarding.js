@@ -2556,7 +2556,7 @@ async function handlePayDeepLink() {
     const p = await api(`/api/pay/${encodeURIComponent(handle)}/${encodeURIComponent(code)}`);
     const b = p.methods?.bank;
     if (!b) {
-      return errShow("link", { title: "This link can’t be paid from Zold", sub: "It takes digital dollars (USDC) only. Open it in a crypto wallet instead." });
+      return errShow("link", { title: "This link can’t be paid from Zold", sub: `It takes digital dollars (${usdSym()}) only. Open it in a crypto wallet instead.` });
     }
     if (p.state !== "OPEN") return errShow("link");
     const amount = p.outstandingEur ?? Number(qs.get("amount") || 0);
