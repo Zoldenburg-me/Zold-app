@@ -204,7 +204,7 @@ async function phRecoveryCheck({ force = false } = {}) {
   let seen = "";
   try { seen = sessionStorage.getItem(PH_REC_SEEN) || ""; } catch { /* no storage: always show */ }
   if (phRoute?.name === "recovery-alert") return phRender();
-  if (["home", "company"].includes(phRoute?.name) && seen !== phRecSig(phRec)) phGo("recovery-alert");
+  if (phRoute?.name === "home" && seen !== phRecSig(phRec)) phGo("recovery-alert");
 }
 
 PH["recovery-alert"] = {

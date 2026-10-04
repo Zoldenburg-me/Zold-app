@@ -45,7 +45,7 @@ function phSecurityChecks() {
 
 /* The account the plan belongs to: the company the phone acts for, or the
    personal one. */
-const phPlanOrg = () => phCompany() || phPersonalOrg();
+const phPlanOrg = () => phPersonalOrg();
 const phPlanName = (id) => ({ starter: "Starter", premium: "Premium", business: "Business" }[id] || id);
 function phTrialLeft(org) {
   const t = org?.trial;
@@ -67,7 +67,7 @@ function phPlanWords(org) {
 PH.settings = {
   title: "Settings",
   live: () => JSON.stringify([user?.name, user?.email, user?.monerium?.method, user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert,
-    phKey?.protection, phSecurityChecks(), phCache.orgs?.map((o) => `${o.id}:${o.plan}:${o.trial?.endsAt}`), phCompanyId, user?.privacyBundle?.status]),
+    phKey?.protection, phSecurityChecks(), phCache.orgs?.map((o) => `${o.id}:${o.plan}:${o.trial?.endsAt}`), user?.privacyBundle?.status]),
   html() {
     const u = user || {};
     const checks = phSecurityChecks();
@@ -196,7 +196,7 @@ async function phLoadPlans(type) {
 
 PH.plan = {
   title: "Plan",
-  live: () => JSON.stringify([phCache.orgs?.map((o) => `${o.id}:${o.plan}:${o.effectivePlan}:${o.trial?.endsAt}`), phCompanyId, Object.keys(phCache.plans)]),
+  live: () => JSON.stringify([phCache.orgs?.map((o) => `${o.id}:${o.plan}:${o.effectivePlan}:${o.trial?.endsAt}`), Object.keys(phCache.plans)]),
   html() {
     const org = phPlanOrg();
     if (phCache.orgs === null || (org && !phCache.plans[org.type])) return `${phTop("Plan", "settings")}${phMain(Z.skeletonRows(2, "Loading your plan…"))}`;
@@ -220,7 +220,6 @@ PH.plan = {
           : card(upgrade, "Try it free for 30 days", "", `<p class="z-hint">Paid plans aren’t on sale during the beta. When the trial ends, paid features pause and nothing is deleted.</p>`);
     const offer = upgrade && !org.trial && org.plan !== paid;
     return `${phTop("Plan", "settings")}${phMain(`
-      ${phCompany() ? `<p class="z-sub">For ${esc(org.name)}</p>` : ""}
       ${current ? card(current, "Current plan", Z.tag("Active", "mint")) : ""}
       ${trialCard}
       <p class="z-err" id="ph-plan-err" role="alert" hidden></p>
@@ -238,7 +237,7 @@ PH.plan = {
       Z.setLoading(b, true);
       try {
         await api(`/api/orgs/${encodeURIComponent(org.id)}/plan/trial`, {});
-        phCache.orgs = null; phCache.invoices = null; phCache.invProfile = null; phCache.co = null;
+        phCache.orgs = null;
         await phLoadOrgs();
         phRender();
         Z.announce("Trial started");
