@@ -120,6 +120,11 @@ export function normaliseHandle(raw: unknown): string {
       "handle may use lowercase letters, numbers and hyphens, and cannot begin or end with a hyphen",
     );
   }
+  // ENSIP-15 refuses "--" in the third and fourth place (the "xn--" punycode
+  // prefix), and a handle is also an ENS name, `<handle>.zoldhq.com`.
+  if (handle.slice(2, 4) === "--") {
+    throw new HandleError("handle cannot have two hyphens as its third and fourth characters");
+  }
   if (RESERVED.has(handle)) throw new HandleError(`"${handle}" is reserved`);
   const impersonated = impersonatedName(handle);
   if (impersonated) {

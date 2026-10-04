@@ -6,7 +6,7 @@
  * Extracted from server.ts so /api/health is not the reason this lives in a
  * 3,800-line file.
  */
-import { EMAIL_VERIFICATION, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled } from "./config.js";
+import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
 import { dripTokens, faucetEnabled } from "./faucet.js";
@@ -62,6 +62,11 @@ export function capabilities() {
      *  Candide forwarder; without one the page's address is the Safe and
      *  takes the app's USDC on this chain alone. */
     paymentPageForwarding: Boolean(FORWARDING.rpcUrl),
+    /** The ENS name payment pages resolve under (`alice.zoldhq.com`), or
+     *  null when this deployment runs no gateway. */
+    ensParent: ENS_GATEWAY.enabled ? ENS_GATEWAY.parent : null,
+    /** May a signed-in user look up an ENS name (GET /api/ens/lookup)? */
+    ensLookup: ENS_LOOKUP.enabled,
     /** Does the app ask the user to confirm their email with a code? Off
      *  until EMAIL_VERIFICATION is enabled with an SMTP server. */
     emailVerification: EMAIL_VERIFICATION.enabled,
