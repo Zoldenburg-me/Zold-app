@@ -183,15 +183,16 @@ async function phRecoveryCheck({ force = false } = {}) {
   if (!force && Date.now() - phRecReadAt < 60000) return;
   phRecReadAt = Date.now();
   const [c, z] = await Promise.all([
-    caps.emailSmsRecovery ? api(`/api/users/${user.id}/recovery/candide`).catch(() => null) : null,
-    caps.zoldenburgRecovery ? api(`/api/users/${user.id}/recovery/zoldenburg`).catch(() => null) : null,
+    caps.emailSmsRecovery ? api(`/api/users/${user.id}/recovery/candide`).catch(() => null) : undefined,
+    caps.zoldenburgRecovery ? api(`/api/users/${user.id}/recovery/zoldenburg`).catch(() => null) : undefined,
   ]);
   const chain = z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || null;
   const reqs = z?.requests || [];
   const request = chain ? null : reqs.find((r) => ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING"].includes(r.status)) || null;
-  // Nothing found is only "none" when the reads worked: no answer at all, or a
-  // guardian on this account whose chain read failed, is "couldn't check".
-  const unread = (!c && !z) || (z?.active && z.onChainError) || (c?.guardianStatus === "active" && c.onChain?.error);
+  // Nothing found is only "none" when the reads worked: a guardian that is
+  // switched on and did not answer (null; undefined is one not asked), or one
+  // on this account whose chain read failed, is "couldn't check".
+  const unread = c === null || z === null || (z?.active && z.onChainError) || (c?.guardianStatus === "active" && c.onChain?.error);
   if (!chain && !request && unread) {
     phRec = { failed: true };
     if (here()) phRender();

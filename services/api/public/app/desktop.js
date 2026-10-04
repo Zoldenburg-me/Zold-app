@@ -56,16 +56,22 @@ function phSideLink(it, active) {
    Zold Business, for the personal space and each company. */
 function phSideItems() {
   const orgs = phCache.orgs || [];
-  const has = (cap) => orgs.some((o) => phCan(o, cap));
+  // The organisation that has the feature opens it: the personal space when
+  // its plan has it, otherwise the first that does (as phInvoiceButton).
   const personal = phPersonalOrg();
+  const holder = (cap) => (phCan(personal, cap) ? personal : orgs.find((o) => phCan(o, cap)));
+  const web = (id, cap, icon, label) => {
+    const o = holder(cap);
+    return o ? [{ id, href: phWebHref(id), icon, label, web: true, org: o.id }] : [];
+  };
   return [
     { id: "home", href: "#home", icon: "home", label: "Home" },
     { id: "send", href: "#send", icon: "arrow_outward", label: "Send" },
     { id: "get-paid", href: "#get-paid", icon: "south_west", label: "Get paid" },
     { id: "activity", href: "#activity", icon: "swap_vert", label: "Activity" },
     { id: "contacts", href: "#contacts", icon: "contacts", label: "Contacts" },
-    ...(has("invoices") ? [{ id: "invoices", href: phWebHref("invoices"), icon: "receipt_long", label: "Invoices", web: true, ...(personal ? { org: personal.id } : {}) }] : []),
-    ...(has("ledger.transactions") ? [{ id: "books", href: phWebHref("books"), icon: "menu_book", label: "Books", web: true, ...(personal ? { org: personal.id } : {}) }] : []),
+    ...web("invoices", "invoices", "receipt_long", "Invoices"),
+    ...web("books", "ledger.transactions", "menu_book", "Books"),
   ];
 }
 
