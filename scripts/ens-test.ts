@@ -47,7 +47,7 @@ delete process.env.ENS_RPC_URL;
 
 const { store, initStore } = await import("../services/api/src/store.js");
 const { CHAIN_ID } = await import("../services/api/src/config.js");
-const { createEnsRouter, ccipFetch, isPublicAddress } = await import("../services/api/src/routes/ens.js");
+const { createEnsRouter, ccipFetch, fetchPublic, isPublicAddress } = await import("../services/api/src/routes/ens.js");
 const { gatewaySignatureHash } = await import("../services/api/src/ens.js");
 const { HandleError, normaliseHandle } = await import("../services/api/src/pay.js");
 initStore();
@@ -155,6 +155,7 @@ try {
 
   await check("the lookup needs a session, and says when it is not configured", async () => {
     assert.equal((await fetch(`${base}/ens/lookup?name=vitalik.eth`)).status, 401);
+    assert.equal((await fetch(`${base}/ens/lookup?name=${"a".repeat(300)}.eth`, { headers: { "x-session": "1" } })).status, 400);
     const r = await fetch(`${base}/ens/lookup?name=vitalik.eth`, { headers: { "x-session": "1" } });
     assert.equal(r.status, 503);
     assert.equal((await r.json()).code, "ENS_LOOKUP_OFF");
@@ -175,6 +176,11 @@ try {
         await assert.rejects(ccipFetch({ data: "0x1234", sender: RESOLVER as any, urls: [url] }), /no usable CCIP-Read gateway/, url);
       }
       assert.equal(hits, 0, "the loopback server was never reached");
+      // Refused by the guard itself, not by a failed TLS handshake: an IP
+      // literal skips Node's lookup hook, so it is checked on its own.
+      for (const url of ["https://127.0.0.1:1/x", "https://10.0.0.5/x", "https://169.254.169.254/x", "https://[::1]:1/x", "https://[::ffff:7f00:1]/x", "https://localhost:1/x"]) {
+        await assert.rejects(fetchPublic(url), /non-public address/, url);
+      }
     } finally {
       local.close();
     }

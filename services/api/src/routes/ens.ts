@@ -14,7 +14,8 @@
  * A lookup can make this server fetch a URL that the name's owner chose: an
  * offchain resolver answers with OffchainLookup and a gateway URL. viem would
  * fetch that URL as given, so `ccipFetch` replaces it. It allows https only,
- * refuses private, loopback and link-local addresses when connecting, does not
+ * refuses private, loopback and link-local addresses (an IP literal in the
+ * URL, and every address a hostname resolves to when connecting), does not
  * follow redirects, and caps both the time and the size of the response.
  */
 import dns from "node:dns";
@@ -81,7 +82,19 @@ const publicLookup = ((hostname: string, options: dns.LookupOptions, callback: (
   });
 }) as unknown as net.LookupFunction;
 
-function fetchPublic(url: string, body?: string): Promise<string> {
+/** Name lookups bound the work: ENS names longer than this are not real. */
+const MAX_NAME_LENGTH = 255;
+
+export function fetchPublic(url: string, body?: string): Promise<string> {
+  // Node skips the `lookup` hook for an IP literal (`https://10.0.0.5/`,
+  // `https://[::1]/`), so a literal is checked here before connecting.
+  let host: string;
+  try {
+    host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return Promise.reject(new Error("not a URL"));
+  }
+  if (net.isIP(host) && !isPublicAddress(host)) return Promise.reject(new Error(`${host} is a non-public address`));
   return new Promise((resolve, reject) => {
     const req = https.request(
       url,
@@ -188,14 +201,16 @@ export function createEnsRouter({ requireSession }: EnsDeps) {
     "/ens/lookup",
     wrap(async (req, res) => {
       if (!requireSession(req, res)) return;
-      if (!client) return res.status(503).json({ error: "ENS lookups are not configured on this deployment", code: "ENS_LOOKUP_OFF" });
+      const raw = String(req.query.name ?? "").trim();
+      if (raw.length > MAX_NAME_LENGTH) return res.status(400).json({ error: "not a valid ENS name", code: "BAD_NAME" });
       let name: string;
       try {
-        name = normalize(String(req.query.name ?? "").trim());
+        name = normalize(raw);
       } catch {
         return res.status(400).json({ error: "not a valid ENS name", code: "BAD_NAME" });
       }
       if (!name.includes(".")) return res.status(400).json({ error: "not a valid ENS name", code: "BAD_NAME" });
+      if (!client) return res.status(503).json({ error: "ENS lookups are not configured on this deployment", code: "ENS_LOOKUP_OFF" });
       let address: string | null;
       try {
         address = await client.getEnsAddress({ name, coinType: toCoinType(CHAIN_ID) });
