@@ -50,11 +50,16 @@ import { newChallenge, parseSignature, publicWallet } from "../domain/wallet-own
 import { verifyOwnership } from "../wallet-sync/ownership.js";
 import { walletEntryId } from "../domain/wallet-transfers.js";
 import { accountProfileStanding } from "../domain/monerium-profile.js";
+import { cleanName, sameName } from "../users/display-name.js";
 import { adoptionHint, auditProfileCheck, checkBackingProfile, profileWait } from "../adapters/monerium-profile.js";
 import { emailLooksValid } from "../domain/email.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
+/** An organisation's name and legal name, in characters. */
+const ORG_NAME_MAX = 120;
+/** A contact's (payee's) name, in characters. */
+const CONTACT_NAME_MAX = 200;
 
 /** Why an EUR account with no IBAN behind it cannot send, and what connects
  *  one, in the words the Accounts screen shows: no API field names. */
@@ -150,8 +155,14 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const { name, type, country, legalName, taxId, email } = req.body ?? {};
     const orgType: OrgType = type === "business" ? "business" : "personal";
-    if (typeof name !== "string" || name.trim().length < 2) {
-      return res.status(400).json({ error: "An organisation needs a name." });
+    // Printed on invoices and documents: the same rule as a person's name.
+    const orgName = cleanName(name, { min: 2, max: ORG_NAME_MAX });
+    if (orgName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: `An organisation needs a name of 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+    }
+    const orgLegalName = typeof legalName === "string" && legalName.trim() ? cleanName(legalName, { min: 2, max: ORG_NAME_MAX }) : undefined;
+    if (orgLegalName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
     }
     if (typeof country !== "string" || !/^[A-Za-z]{2}$/.test(country)) {
       return res
@@ -179,8 +190,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const org: Organisation = {
       id: `org_${randomUUID()}`,
       type: orgType,
-      name: name.trim(),
-      legalName: typeof legalName === "string" ? legalName.trim() : undefined,
+      name: orgName,
+      legalName: orgLegalName,
       taxId: typeof taxId === "string" ? taxId.trim() : undefined,
       email: typeof email === "string" ? email.trim() : undefined,
       address: { country: country.toUpperCase() },
@@ -252,15 +263,26 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const patch: Partial<Organisation> = {};
     const b = req.body ?? {};
-    if (typeof b.name === "string" && b.name.trim().length >= 2) patch.name = b.name.trim();
+    // Settings sends every field on save: a name it did not change is left as
+    // stored, so one an older rule let in does not block the rest of the save.
+    if (typeof b.name === "string" && !sameName(b.name, ctx.org.name)) {
+      const n = cleanName(b.name, { min: 2, max: ORG_NAME_MAX });
+      if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+      patch.name = n;
+    }
     // A personal space is named after its person: one name, changed in the app.
-    if (ctx.org.type === "personal" && patch.name !== undefined && patch.name !== ctx.org.name.trim()) {
+    if (ctx.org.type === "personal" && patch.name !== undefined) {
       return res.status(409).json({
         code: "PERSONAL_ORG_NAME",
         error: "Your personal space is named after you. Change your name in the Zold app, under Profile.",
       });
     }
-    if (typeof b.legalName === "string") patch.legalName = b.legalName.trim();
+    if (typeof b.legalName === "string" && !sameName(b.legalName, ctx.org.legalName ?? "")) {
+      // Empty clears it; anything else follows the name rule.
+      const n = b.legalName.trim() ? cleanName(b.legalName, { min: 2, max: ORG_NAME_MAX }) : "";
+      if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+      patch.legalName = n;
+    }
     if (typeof b.taxId === "string") patch.taxId = b.taxId.trim();
     if (typeof b.email === "string") patch.email = b.email.trim();
     if (typeof b.notificationEmail === "string") {
@@ -412,6 +434,12 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!ROLES.includes(role)) {
       return res.status(400).json({ error: `Role must be one of ${ROLES.join(", ")}.` });
     }
+    // Optional, and shown on Members until they accept: the person name rule.
+    const rawName = req.body?.name;
+    const inviteName = typeof rawName === "string" && rawName.trim() ? cleanName(rawName, { min: 1, max: 120 }) : undefined;
+    if (inviteName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: "The name needs 1 to 120 characters, without hidden or control characters." });
+    }
     // Only an owner may mint another owner; otherwise an admin could promote
     // themselves past the person who pays the bill.
     if (role === "owner" && ctx.member.role !== "owner") {
@@ -432,7 +460,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       id: `mem_${randomUUID()}`,
       orgId: ctx.org.id,
       email,
-      name: typeof req.body?.name === "string" ? req.body.name.trim() : undefined,
+      name: inviteName,
       role,
       status: "invited",
       invite: {
@@ -829,9 +857,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!ctx) return;
     if (!requirePermission(ctx, res, "contacts.manage")) return;
 
-    const name = String(req.body?.name ?? "").trim();
-    if (name.length < 2) return res.status(400).json({ error: "A contact needs a name." });
-    if (name.length > 200) return res.status(400).json({ error: "A contact's name is limited to 200 characters." });
+    // A payee: printed on payment runs and documents, so the name rule applies.
+    const name = cleanName(req.body?.name, { min: 2, max: CONTACT_NAME_MAX });
+    if (name === null) return res.status(400).json({ code: "NAME_INVALID", error: `A contact needs a name of 2 to ${CONTACT_NAME_MAX} characters, without hidden or control characters.` });
     if (store.contactsOf(ctx.org.id).length >= CEILINGS.contactsPerOrg) {
       return res.status(409).json(ceilingRefusal("contacts in this organisation", CEILINGS.contactsPerOrg));
     }
@@ -873,8 +901,11 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     try {
       const patch: Record<string, unknown> = {};
-      if (typeof req.body?.name === "string" && req.body.name.trim().length >= 2) {
-        patch.name = req.body.name.trim();
+      // The edit form sends the name on every save: unchanged is left as stored.
+      if (typeof req.body?.name === "string" && !sameName(req.body.name, contact.name)) {
+        const n = cleanName(req.body.name, { min: 2, max: CONTACT_NAME_MAX });
+        if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `A contact needs a name of 2 to ${CONTACT_NAME_MAX} characters, without hidden or control characters.` });
+        patch.name = n;
       }
       if (typeof req.body?.email === "string") patch.email = req.body.email.trim();
       if (typeof req.body?.notes === "string") patch.notes = req.body.notes;
