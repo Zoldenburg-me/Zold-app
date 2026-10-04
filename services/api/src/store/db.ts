@@ -353,7 +353,11 @@ export function seedChartOfAccounts(orgId: string, at = new Date().toISOString()
 /* Every write rewrites the whole file, synchronously, so the state is on disk
  * before the caller goes on to the chain or a partner. A loop of writes inside
  * one request runs in `batched` and lands as one write at its end; nothing is
- * deferred past the call that made it. */
+ * deferred past the call that made it.
+ *
+ * Written without indentation: the serialise blocks the event loop, and on a
+ * 57 MB store indented JSON took 168 ms a write against 70 ms compact. Read it
+ * with `jq .` when a person needs to. */
 let batchDepth = 0;
 let batchDirty = false;
 
@@ -363,7 +367,7 @@ export function persist() {
     return;
   }
   const tmp = DB_PATH + ".tmp";
-  writeFileSync(tmp, JSON.stringify(db, null, 2));
+  writeFileSync(tmp, JSON.stringify(db));
   renameSync(tmp, DB_PATH);
 }
 
