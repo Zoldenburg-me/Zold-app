@@ -56,17 +56,30 @@ export const EU_FULL_RESIDENCE: readonly string[] = [
 export const SANCTIONED: readonly string[] = ["IR", "KP", "SY", "CU", "RU", "BY"];
 
 /**
- * Regions where Gnosis Pay will not issue a card, but an account is fine.
+ * Residences Gnosis Pay issues a card to, as its help centre lists them
+ * ("Gnosis card country eligibility", read 2026-10-04).
  *
- * Separate from the sanctions list: Monerium would still serve these people,
- * so this list downgrades the segment (EU_FULL -> ONCHAIN_NO_CARD) and does
- * not block.
+ * An ALLOW list, so a residence Gnosis Pay has not named gets no card: a
+ * deny list that is empty or out of date hands out cards nobody will issue.
+ * Missing from the list downgrades EU_FULL to ONCHAIN_NO_CARD and never
+ * blocks, because Monerium would still serve the account.
  *
- * Empty until read off Gnosis Pay's own terms; a guessed list would remove
- * cards from people entitled to one.
- * TODO(gnosis-pay): populate from Gnosis Pay's published prohibited regions.
+ * Brazil is left out: there the card is issued only through PicNic, not
+ * through us. French overseas territories are not served and carry their own
+ * ISO codes, so they are not here either.
  */
-export const GNOSIS_PAY_PROHIBITED: readonly string[] = [];
+export const GNOSIS_PAY_CARD_RESIDENCE: readonly string[] = [
+  // EU 27
+  "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR",
+  "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK",
+  "SI", "ES", "SE",
+  // EEA non-EU
+  "IS", "LI", "NO",
+  // UK and Switzerland
+  "GB", "CH",
+  // Latin America
+  "AR", "CO",
+];
 
 /**
  * ISO codes that count as the United States here.
@@ -108,4 +121,4 @@ export const isSanctioned = (code: string) => SANCTIONED.includes(normaliseCount
 export const isUsTerritory = (code: string) => US_TERRITORIES.includes(normaliseCountryCode(code));
 export const isEuFullResidence = (code: string) => EU_FULL_RESIDENCE.includes(normaliseCountryCode(code));
 export const isCollectionsOnly = (code: string) => COLLECTIONS_ONLY.includes(normaliseCountryCode(code));
-export const cardIsProhibited = (code: string) => GNOSIS_PAY_PROHIBITED.includes(normaliseCountryCode(code));
+export const cardIsAvailable = (code: string) => GNOSIS_PAY_CARD_RESIDENCE.includes(normaliseCountryCode(code));

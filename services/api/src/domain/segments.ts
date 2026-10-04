@@ -12,7 +12,7 @@
  *   2. Sanctions        - residence or citizenship, short explicit list.
  *   3. Collections-only - India. Overrides the issuer's view (Monerium rates
  *                         IN servable; we decline anyway).
- *   4. EU full          - allow list, minus card-prohibited regions.
+ *   4. EU full          - allow list, where Gnosis Pay issues a card.
  *   5. On-chain, no card- whoever Monerium will serve.
  *   6. Unsupported      - nobody will serve this residence.
  *
@@ -25,7 +25,7 @@
  */
 
 import {
-  cardIsProhibited,
+  cardIsAvailable,
   isCollectionsOnly,
   isEuFullResidence,
   isSanctioned,
@@ -219,9 +219,10 @@ export function resolveSegment(input: SegmentInput): SegmentDecision {
   //    open an account we have decided not to offer.
   if (isCollectionsOnly(residence)) return decide("IN_COLLECTIONS", "collections_only_residence");
 
-  // 4. Full path. A card-prohibited region falls through to (5) rather than
-  //    being blocked: the account is fine, only the card is not.
-  if (isEuFullResidence(residence) && !cardIsProhibited(residence)) {
+  // 4. Full path. An EU_FULL residence without a card falls through to (5)
+  //    rather than being blocked: the account is fine, only the card is not.
+  const euFull = isEuFullResidence(residence);
+  if (euFull && cardIsAvailable(residence)) {
     return decide("EU_FULL", "eu_residence");
   }
 
@@ -229,7 +230,7 @@ export function resolveSegment(input: SegmentInput): SegmentDecision {
   if (moneriumWillServe(residence)) {
     return decide(
       "ONCHAIN_NO_CARD",
-      cardIsProhibited(residence) ? "card_prohibited_region" : "monerium_servable_residence",
+      euFull ? "card_prohibited_region" : "monerium_servable_residence",
     );
   }
 

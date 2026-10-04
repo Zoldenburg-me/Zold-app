@@ -19,6 +19,9 @@ import assert from "node:assert/strict";
 const {
   resolveSegment, can, capabilitiesFor, SegmentInputError,
 } = await import("../services/api/src/domain/segments.js");
+const {
+  EU_FULL_RESIDENCE, GNOSIS_PAY_CARD_RESIDENCE, cardIsAvailable,
+} = await import("../services/api/src/domain/residency.js");
 
 let n = 0;
 const failures: string[] = [];
@@ -169,6 +172,25 @@ check("an Indian resident gets NO on-chain capability of any kind", () => {
   for (const c of ["monerium", "gnosis_pay", "safe", "card", "onchain_balance"] as const) {
     assert.equal(can(d.segment, c), false, `IN_COLLECTIONS must not have ${c}`);
   }
+});
+
+console.log("\nThe card is an allow list, read off Gnosis Pay");
+
+check("every EU_FULL residence is one Gnosis Pay issues a card to", () => {
+  const missing = EU_FULL_RESIDENCE.filter((c) => !GNOSIS_PAY_CARD_RESIDENCE.includes(c));
+  assert.deepEqual(missing, [], "EU_FULL promises a card Gnosis Pay will not issue");
+});
+
+check("a residence missing from Gnosis Pay's list has no card (fail closed)", () => {
+  assert.equal(cardIsAvailable("ZZ"), false);
+  assert.equal(cardIsAvailable(""), false);
+  assert.equal(cardIsAvailable("RE"), false, "French overseas territories are not served");
+});
+
+check("a non-EU resident without a card is not labelled card-prohibited", () => {
+  const d = resolveSegment(person("MX", ["MX"]));
+  assert.equal(d.segment, "ONCHAIN_NO_CARD");
+  assert.equal(d.reasonCode, "monerium_servable_residence");
 });
 
 console.log("\nOn-chain without a card, derived from the issuer's tier");
