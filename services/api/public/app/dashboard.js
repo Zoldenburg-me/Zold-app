@@ -56,7 +56,7 @@ function renderMobile(u = user) {
   const active = sub && sub.status !== "canceled";
   const plan = active ? bundlePlan(sub.planId) : null;
   applySegment();
-  $("m-card-name").textContent = (u.name || "").toUpperCase() || "—";
+  $("m-card-name").textContent = ownAccountName(u).toUpperCase() || "—";
   const cheapest = privacyCatalog?.plans?.[0];
   $("m-bundle-sub").textContent = active
     ? `${plan ? plan.name : "Subscribed"} · ${sub.status === "pending_fulfillment" ? "awaiting partner setup" : "active"}`

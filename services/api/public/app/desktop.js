@@ -38,7 +38,7 @@ function phSideActive(name) {
   if (/^invoice/.test(name)) return "invoices";
   if (name === "contacts") return "contacts";
   if (name === "soon") return "soon";
-  if (["settings", "security", "plan", "settings/currency"].includes(name)) return "settings";
+  if (["more", "settings", "security", "plan", "settings/currency"].includes(name)) return "settings";
   if (name === "members") return "members";
   if (/^(tx|send)/.test(name)) return name.startsWith("tx") ? "activity" : "send";
   if (/^(get-paid|link)/.test(name)) return "get-paid";
@@ -92,7 +92,7 @@ PH_DESK.side = (route) => {
   const u = user || {};
   const co = phCompany();
   const companies = (phCache.orgs || []).filter((o) => o.type !== "personal");
-  const who = co ? { name: co.name, sub: `Business · ${phRoleWord(co.role).toLowerCase()}` } : { name: u.name || "Account", sub: ownAccountKind(u) };
+  const who = co ? { name: co.name, sub: `Business · ${phRoleWord(co.role).toLowerCase()}` } : { name: ownAccountName(u) || "Account", sub: ownAccountKind(u) };
   const card = `${Z.avatar({ name: who.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(who.name)}</span><span class="z-row__sub">${esc(who.sub)}</span></span>`;
   const switcher = companies.length
     ? `<button type="button" class="z-side__org" id="dk-switch-btn" aria-haspopup="dialog" aria-label="Switch account. Current: ${esc(who.name)}">${card}${Z.icon("unfold_more", "z-row__chev")}</button>`
@@ -108,7 +108,7 @@ PH_DESK.side = (route) => {
     <nav class="z-side__nav" aria-label="Main">${phSideItems().map((it) => phSideLink(it, active)).join("")}</nav>
     <div class="z-side__foot">
       ${phSideLink({ id: "soon", href: "#soon", icon: "hourglass_top", label: "Coming soon" }, active)}
-      ${phSideLink({ id: "settings", href: "#settings", icon: "settings", label: "Settings" }, active)}
+      ${phSideLink({ id: "settings", href: "#more", icon: "person", label: "Profile" }, active)}
       ${Z.testModePill(!realMoney)}
     </div>
   </aside>`;
@@ -125,7 +125,7 @@ function phDeskSwitch(trigger) {
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "dk-switch", title: "Switch account",
     body: `<div class="z-sheet__body"><ul class="z-list z-card">
-      <li><button type="button" class="z-row z-row--btn" data-dk-personal${here(null) ? ' aria-current="true"' : ""}>${Z.avatar({ name: u.name || "Personal", tone: here(null) ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(u.name || "Personal")}</span><span class="z-row__sub">${ownAccountKind(u)} account</span></span>${mark(null)}</button></li>
+      <li><button type="button" class="z-row z-row--btn" data-dk-personal${here(null) ? ' aria-current="true"' : ""}>${Z.avatar({ name: ownAccountName(u) || "Personal", tone: here(null) ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(ownAccountName(u) || "Personal")}</span><span class="z-row__sub">${ownAccountKind(u)} account</span></span>${mark(null)}</button></li>
       ${companies.map((o) => `<li><a class="z-row" href="/business" data-ph-org="${esc(o.id)}">${Z.avatar({ name: o.name, tone: here(o.id) ? "p" : "n" })}<span class="z-row__main"><span class="z-row__title">${esc(o.name)}</span><span class="z-row__sub">Business · opens the web app</span></span>${mark(o.id) || Z.icon("open_in_new", "z-row__chev")}</a></li>`).join("")}
     </ul></div>`,
   }));
@@ -251,7 +251,7 @@ PH.home.desk = {
     const gate = u.segment?.gate;
     const inflight = hist.find(phInFlight);
     return phMain(`
-      <h1 class="z-dhome__title">${esc(phGreeting(u.name))}</h1>
+      <h1 class="z-dhome__title">${esc(phGreeting(ownAccountName(u)))}</h1>
       ${gate ? Z.note({ tone: "a", html: `<strong>${esc(gate.reason)}</strong> ${esc(gate.needs)} <a href="mailto:support@zoldhq.com">Ask us about it</a>` }) : ""}
       <div class="z-dhome__grid">
         ${phDeskBalance(u)}

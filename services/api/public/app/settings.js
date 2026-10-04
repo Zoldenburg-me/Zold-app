@@ -74,21 +74,20 @@ PH.settings = {
     const mon = u.monerium?.method === "api_keys" ? "Connected with your own keys" : hasConnectedMonerium(u) ? "Connected" : "Not connected";
     const plus = u.privacyBundle && u.privacyBundle.status !== "canceled";
     const account = [
-      Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [u.name, u.email].filter(Boolean).join(" · "), href: "#account-details" }),
-      Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in and this phone’s key", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
-      Z.row({ lead: Z.iconTile({ icon: "key" }), title: "Who approves payments", sub: "Owners, signatures and spending limits", href: "#signers" }),
-      ...(HAS("monerium") ? [Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Monerium", sub: mon, href: "#monerium-settings" })] : []),
+      Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [ownAccountName(u), u.email].filter(Boolean).join(" · "), href: "#account-details" }),
+      Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in, who can sign and spend", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
+      Z.row({ lead: Z.iconTile({ icon: "currency_exchange" }), title: "Currency and auto-convert", sub: phCurrencyWords(u.paymentPage), href: "#settings/currency" }),
       Z.row({ lead: Z.iconTile({ icon: "description" }), title: "Documents", sub: "Statements and verifiable documents", href: "#documents" }),
-      Z.row({ lead: Z.iconTile({ icon: "currency_exchange" }), title: "Main currency", sub: phCurrencyWords(u.paymentPage), href: "#settings/currency" }),
-      Z.row({ lead: Z.iconTile({ icon: "hub" }), title: "Accounting connections", sub: "GetMyInvoices, Lexware CSV", href: "#integrations" }),
     ];
+    // Accounting software connects to a space in Zold Business, not here.
+    const connections = HAS("monerium") ? [Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Monerium", sub: mon, href: "#monerium-settings" })] : [];
     const plan = [
       Z.row({ lead: Z.iconTile({ icon: "workspace_premium" }), title: "Plan", sub: phCache.orgs === null ? "Loading…" : phPlanWords(phPlanOrg()) || "No plan", href: "#plan" }),
       ...(plus ? [Z.row({ lead: Z.iconTile({ icon: "stars" }), title: "Zold Plus", sub: "Privacy Bundle active", href: "#plus" })] : []),
-      Z.row({ lead: Z.iconTile({ icon: "hourglass_top" }), title: "Coming soon", sub: "What this account can’t do yet", href: "#soon" }),
     ];
     return `${phTop("Settings", "more")}${phMain(`
       ${Z.listGroup({ rows: account })}
+      ${connections.length ? `<section class="z-group"><h2 class="z-eyebrow">Connections</h2>${Z.listGroup({ rows: connections })}</section>` : ""}
       ${Z.listGroup({ rows: plan })}
       ${Z.button({ full: true, icon: "logout", label: "Sign out", id: "ph-signout" })}
     `)}`;
@@ -172,7 +171,7 @@ PH.security = {
         right: keyHere ? Z.tag(phKey.protection === "none" ? "Not encrypted" : "This device", phKey.protection === "none" ? "amber" : "pink") : "",
         chevron: false,
       });
-    return `${phTop("Security", "settings")}${phMain(`
+    return `${phSecurityTop()}${phMain(`
       ${phKeyUnprotected() ? Z.note({ tone: "a", text: "Your payment key is stored unencrypted in this browser: the passkey here can’t encrypt it. The key signs what a payment is (amount and payee). On its own it moves nothing: every payment also needs your Face ID or fingerprint, which your account checks on the chain. Someone with a copy could still sign payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust." }) : ""}
       ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: { href: "#recovery-settings", label: r.on ? "Change" : "Set up" }, rows: recoveryRows }) : ""}
       ${Z.listGroup({ label: "Sign-in and keys", rows: [

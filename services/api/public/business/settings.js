@@ -18,7 +18,7 @@ function menu() {
   const groups = [
     ["Company", [here("org", "Organisation"), cap("invoices").allowed ? away("invoicing-settings", "Invoicing profile") : "", here("plan", "Plan")]],
     ["Team", [away("members", "Members and access"), here("approvals", "Who approves payments")]],
-    ["Account", [here("monerium", "Monerium"), `<a class="zb-set-menu__item" href="/app#security">Your sign-in and recovery${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`]],
+    ["Account", [here("monerium", "Monerium"), `<a class="zb-set-menu__item" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`]],
     ["Connected", [away("apps", "Apps"), away("integrations", "Accounting connections")]],
   ];
   return `<nav class="zb-set-menu" aria-label="Settings">${groups.map(([title, items]) =>

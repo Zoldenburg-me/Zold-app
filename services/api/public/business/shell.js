@@ -154,10 +154,22 @@ export async function boot() {
     if (e.status === 401) { only("#signed-out"); return; }
     throw e;
   }
-  api("/api/session").then((u) => { setMe(u); renderNav(); }).catch(() => { /* no balances */ });
+  const session = api("/api/session").then((u) => {
+    setMe(u);
+    renderNav();
+    // The personal-space banner needs to know who this is.
+    if (org && $("#plan-banner")) $("#plan-banner").innerHTML = planBanner();
+    return u;
+  }).catch(() => null);
   setOrgs(list.organisations);
   if (!orgs.length) {
+    // A person starts with their personal space, named and placed from the
+    // account; a company login has none (routes/orgs.ts refuses it).
+    const u = await session;
     only("#no-orgs");
+    if (u?.accountType === "company") $("#new-org-type option[value=personal]")?.remove();
+    else if (u?.name) $("#new-org-name").value = u.name;
+    if (u?.country) $("#new-org-country").value = u.country;
     $("#new-org").onsubmit = async (e) => {
       e.preventDefault();
       try {

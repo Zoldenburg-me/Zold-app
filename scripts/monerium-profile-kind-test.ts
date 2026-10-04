@@ -525,6 +525,31 @@ await check("a second business org, or one made by a personal signup, opens no a
   assert.equal(store.accountsOf(personal.data.organisation.id).length, 0);
 });
 
+await check("a company login cannot make a personal org: its Safe is the company's", async () => {
+  const r = await call("POST", "/api/orgs", "u_signup", { type: "personal", name: "Me", country: "DE" });
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.equal(r.data.code, "PERSONAL_ORG_COMPANY_LOGIN");
+});
+
+await check("a person has one personal org: a second is refused", async () => {
+  addUser("u_fresh", PERSONAL, 6);
+  const first = await call("POST", "/api/orgs", "u_fresh", { type: "personal", name: "Fresh", country: "DE" });
+  assert.equal(first.status, 201, JSON.stringify(first.data));
+  const again = await call("POST", "/api/orgs", "u_fresh", { type: "personal", name: "Fresh 2", country: "DE" });
+  assert.equal(again.status, 409, JSON.stringify(again.data));
+  assert.equal(again.data.code, "PERSONAL_ORG_EXISTS");
+});
+
+await check("a personal space keeps its person's name: renaming it in /business is refused, other fields save", async () => {
+  const org = store.organisationsForUser("u_fresh").find(({ org: o }) => o.type === "personal")!.org;
+  const renamed = await call("PATCH", `/api/orgs/${org.id}`, "u_fresh", { name: "Something Else" });
+  assert.equal(renamed.status, 409, JSON.stringify(renamed.data));
+  assert.equal(renamed.data.code, "PERSONAL_ORG_NAME");
+  const same = await call("PATCH", `/api/orgs/${org.id}`, "u_fresh", { name: org.name, taxId: "DE123" });
+  assert.equal(same.status, 200, JSON.stringify(same.data));
+  assert.equal(store.findOrganisation(org.id)?.taxId, "DE123");
+});
+
 await check("opening an EUR account by hand without an IBAN says what it needs in plain words", async () => {
   addOrg("org_hand", "business", "u_signup", "Hand GmbH");
   const r = await call("POST", "/api/orgs/org_hand/accounts", "u_signup", { currency: "EUR" });

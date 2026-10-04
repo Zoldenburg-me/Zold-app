@@ -51,6 +51,18 @@ const kycApproved = (u = user) => u?.kycStatus === "approved";
 /* A company signup's own Safe is the company's account, not a personal one:
    its IBAN sits on the company's profile at Monerium. */
 const ownAccountKind = (u = user) => (u?.accountType === "company" ? "Company" : "Personal");
+/* The company a company login's account belongs to; app/phone.js
+   phLoadOrgs sets it once the organisations are read. */
+let ownCompanyOrg = null;
+/* Whose account this is, by name. A company login's account is the
+   company's, so it is named after the company: Monerium's name for the
+   connected profile, else the company's legal name. Never the name of the
+   person who signed up for it, which payers would copy as the beneficiary. */
+const ownAccountName = (u = user) => {
+  if (u?.accountType !== "company") return u?.name || "";
+  const connected = (u.monerium?.profiles || []).find((p) => p?.id && p.id === u.monerium?.profileId);
+  return connected?.name || ownCompanyOrg?.legalName || ownCompanyOrg?.name || "Company account";
+};
 const kycCopy = (status = "pending", u = user) => {
   if (status !== "approved" && hasConnectedMonerium(u)) {
     return ["MONERIUM", "Activate your IBAN", "Your Monerium account is connected. One passkey confirmation links your wallet to it and asks Monerium for the IBAN."];

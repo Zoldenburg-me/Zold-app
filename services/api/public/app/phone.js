@@ -127,6 +127,8 @@ function phOpen(route, { focus = false } = {}) {
     history.replaceState({ ph: true }, "", `${location.pathname}${location.search}#company`);
   }
   phRoute = route;
+  // Out to one of the app's own tabs: the trip from /business is over.
+  if (PH[route.name]?.tab) phSetFromBusiness(false);
   if (PH_LEGACY[route.name]) {
     phShowRoot(false);
     phSig = "";
@@ -162,7 +164,7 @@ function phRender({ focus = false } = {}) {
         { id: "get-paid", href: co ? "#company/get-paid" : "#get-paid", icon: "south_west", label: "Get paid" },
         co ? { id: "approvals", href: "#approvals", icon: "inbox", label: "Approvals", badge: phCache.approvalsWaiting || "" }
           : { id: "activity", href: "#activity", icon: "swap_vert", label: "Activity" },
-        { id: "more", href: "#more", icon: "more_horiz", label: "More" },
+        { id: "more", href: "#more", icon: "person", label: "Profile" },
       ],
     })
     : "";
@@ -225,10 +227,15 @@ document.addEventListener("click", (e) => {
 /** The app's entry: the screen the URL names, or Home. */
 function phStart() {
   try { phCompanyId = localStorage.getItem(phCompanyKey()) || null; } catch { phCompanyId = null; }
+  phTakeFromBusiness();
   const r = phParse(location.hash);
   const route = r || { name: "home", arg: null };
   history.replaceState({ ph: true }, "", `${location.pathname}${location.search}${phHref(route.name, route.arg)}`);
   phOpen(route, { focus: false });
+  // A company login is named after its company, which may need the org read.
+  if (user?.accountType === "company" && phCache.orgs === null) {
+    phLoadOrgs().then(() => { if (!$("phone")?.hidden) phRender(); });
+  }
 }
 
 /* ==========================================================================
@@ -244,6 +251,8 @@ async function phLoadOrgs() {
   if (phCache.orgs !== null) return phCache.orgs;
   try {
     phCache.orgs = (await api("/api/orgs")).organisations || [];
+    const owned = user?.accountType === "company" ? phCache.orgs.filter((o) => o.type === "business") : [];
+    ownCompanyOrg = owned.find((o) => o.role === "owner") || owned[0] || null;
     // No longer a member: back to the personal account.
     if (phCompanyId && !phCompany()) phUseCompany(null);
   } catch { phCache.orgs = []; }
@@ -283,6 +292,29 @@ const phMaskIban = (iban) => {
 /* A pushed screen: top bar with back, then main. */
 const phTop = (title, back = "home", right = "") =>
   Z.topbar({ title, back: { href: `#${back}`, label: "Back" }, right });
+
+/* /business links its sign-in and recovery here as /app?from=business#security
+   (business/settings.js). Remembered for this tab, so Security's back goes to
+   /business, until the person opens one of the app's own tabs. */
+let phFromBusiness = false;
+function phSetFromBusiness(on) {
+  phFromBusiness = on;
+  try { if (on) sessionStorage.setItem("zold-from-business", "1"); else sessionStorage.removeItem("zold-from-business"); } catch { /* this screen only */ }
+}
+function phTakeFromBusiness() {
+  const qs = new URLSearchParams(location.search);
+  if (qs.get("from") === "business") {
+    phSetFromBusiness(true);
+    qs.delete("from");
+    history.replaceState(history.state, "", `${location.pathname}${qs.size ? `?${qs}` : ""}${location.hash}`);
+    return;
+  }
+  try { phFromBusiness = sessionStorage.getItem("zold-from-business") === "1"; } catch { phFromBusiness = false; }
+}
+/* Security's top bar: back to /business when that is where the person came from. */
+const phSecurityTop = () => (phFromBusiness
+  ? Z.topbar({ title: "Security", back: { href: "/business?view=settings", label: "Back to Zold Business" } })
+  : phTop("Security", "settings"));
 
 /* The transfer's state, in the status words of SYSTEM.md. */
 const PH_LIVE = ["CREATED", "DEBITED", "SWAPPED", "BRIDGED", "PAYOUT_DETAILS_PENDING", "PAYOUT_FUNDING_PENDING",
