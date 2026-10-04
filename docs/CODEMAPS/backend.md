@@ -1,18 +1,19 @@
-<!-- Generated: 2026-10-03 | Files scanned: 144 | Token estimate: ~950 -->
+<!-- Generated: 2026-10-04 | Files scanned: 151 | Token estimate: ~1000 -->
 # Backend (services/api/src)
 
 ## Middleware chain (server.ts)
 json → securityHeaders → originPolicy → /api rate limit → pages → routers → notFound → error log
 
-## Routers (221 routes) — file: route groups
+## Routers (~238 routes) — file: route groups
 | Mount | File | Routes |
 |---|---|---|
 | /api | routes/auth.ts | session, webauthn challenge, passkey register/login, passkey-Safe deployment |
-| /api | routes/users.ts | POST /users, /users/:id, bic, kyc, privacy bundles |
+| /api | routes/users.ts | POST /users, /users/:id, display name (locked once Monerium verifies), bic, kyc, privacy bundles |
 | /api | routes/transfers.ts | POST /quotes, POST /transfers, activity, authorize, refresh-payout |
 | /api | routes/monerium.ts (1175 l) | OAuth connect/callback, API keys, link-signature, activate, move-iban |
 | /api | routes/monerium-webhook.ts | POST /webhooks/monerium |
 | /api | routes/payment-page.ts | handle, /pay/:handle, QR svg |
+| /api | routes/ens.ts | GET /ens/gateway/:sender/:callData.json (CCIP-Read, signed for the L1 OffchainResolver), GET /ens/lookup?name= |
 | /api | routes/payment-requests.ts | user payment requests, /pay/:handle/:code (+quote) |
 | /api | routes/crypto-deposits.ts | deposits, convert prepare/execute, auto-convert |
 | /api | routes/documents.ts | receipt/statement/balance/ownership docs, /v/:code verify |
@@ -29,10 +30,12 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | — | server.ts | GET /api/health, GET /api/rates |
 
 ## Core modules
-orchestrator.ts (1077 l) transfer state machine · transfers/build.ts (400) build from quote ·
+orchestrator.ts (1079 l) transfer state machine · transfers/build.ts (400) build from quote ·
 liquidity.ts + liquidity/{best,lifi,uniswap,cow,rfq,fx-swapper} venues ·
 rates.ts independent mid · fx.ts · chain.ts (viem) · sepa.ts · reconcile.ts ·
-payment-requests.ts (702) · pay.ts · documents.ts · receipt.ts · audit.ts ·
+ens.ts (CCIP-Read encoding, signer) · usd-token.ts (the dollar token: USDC, or zUSD on staging) ·
+log-range.ts (eth_getLogs window halves on RPC range refusals) · users/display-name.ts ·
+payment-requests.ts (707) · pay.ts · documents.ts · receipt.ts · audit.ts ·
 wallet/signature-check.ts (the one signed-message verifier: EIP-1271, ECDSA, ERC-6492) ·
 wallet-sync/{sync,valuation,token-class,token-lists,ownership (proof checked on the wallet's chain),revalue (price retry)}
 
@@ -40,6 +43,7 @@ wallet-sync/{sync,valuation,token-class,token-lists,ownership (proof checked on 
 roles (5 roles → permissions) · plans (capabilities) · drafts (state machine) ·
 invoices/invoicing/vat-ids/jurisdictions · income-invoices (drafts from wallet receipts) · coa (chart + default rules) · ledger (FIFO holdings, disposals, gains per month) ·
 wallet-ownership (proof challenge and state) ·
+safe-books (from when a Safe's movements are an account's books) ·
 accounts · ceilings · residency · monerium-profile
 
 ## HTTP layer (http/)
