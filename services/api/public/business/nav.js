@@ -9,8 +9,9 @@
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, recoveryPending, recoveryUnknown, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
+import { isOwnCompanyOrg } from "./access-model.js";
 
 export const SPACES = {
   banking: [
@@ -79,7 +80,7 @@ matchMedia("(min-width: 1024px)").addEventListener("change", (e) => {
 /** Which nav item an older view belongs to. */
 export const PARENT = {
   ledger: "books", assets: "books", gains: "books",
-  shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", plan: "settings", accounts: "accounts",
+  shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", plan: "settings", access: "settings", accounts: "accounts",
 };
 /** Every view id the router accepts, including those without a nav item. */
 export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT), "settings", "soon"]);
@@ -238,11 +239,20 @@ function personalBanner() {
     <button class="z-btn z-btn--quiet z-btn--sm" data-act="personal-later">Not now</button></div>`;
 }
 
-/* The app holds the recovery screens; this says one is under way and goes there. */
+/* The app holds the recovery screens; this says one is under way and goes
+   there. A company login with no guardian is pointed at Access. */
 function recoveryBanner() {
+  // Only in the company this login is: elsewhere its Safe is not the
+  // organisation's account. Access says all of this in its own card.
+  const own = side.orgId === org?.id && isOwnCompanyOrg(me, org, side.accounts);
+  if (view === "access" && own) return "";
   if (recoveryUnknown) {
     return `<div class="banner warn">${Z.icon("help")}<span><b>We couldn’t check for a recovery on your sign-in.</b> Check it in the app, so a recovery you did not start cannot replace your passkey unseen.</span>
     <a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#recovery-alert">Check now</a></div>`;
+  }
+  if (recoveryNone && own) {
+    return `<div class="banner warn">${Z.icon("warning")}<span><b>No one can recover this company’s account.</b> If this sign-in’s passkey is lost, Zoldenburg UG cannot recover it.</span>
+    <a class="z-btn z-btn--secondary z-btn--sm" href="?view=access" data-view-link="access">Access</a></div>`;
   }
   if (!recoveryPending) return "";
   return `<div class="banner warn">${Z.icon("warning")}<span><b>A recovery is under way on your sign-in.</b> If you did not start it, stop it now: it would replace your passkey.</span>

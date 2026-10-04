@@ -27,6 +27,8 @@ views.js  META/RENDER registry + older views (send, get-paid, shopify,
           ledger, wallets with ownership proof, assets (holdings and lots),
           gains (realised per month), coa, export, integrations, documents, settings, plan…)
 actions.js data-act handlers · receipts.js payer rule + collection summary · search.js ⌘K over loaded lists
+access.js Settings → Access (company login only) · access-model.js its reads and
+          recoveryStatus, no imports, also behind core.js readRecovery and the banner
 ```
 Render contract: `META[view]()` → title/sub/actions; `RENDER[view]()` → html
 or `{ html, bind(box) }`.

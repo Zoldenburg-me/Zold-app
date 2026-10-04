@@ -6,7 +6,7 @@
  * leak or be lost on the next render.
  */
 import {
-  $, api, esc, invoiceInputListener, org, orgs, readRecovery, setInvoiceInputListener, setMe, setOrg,
+  $, api, esc, invoiceInputListener, org, orgs, readRecovery, setInvoiceInputListener, ensureMe, setOrg,
   setOrgs, setTestMode, setView, toast, token, view,
 } from "./core.js";
 import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
@@ -156,8 +156,7 @@ export async function boot() {
     if (e.status === 401) { only("#signed-out"); return; }
     throw e;
   }
-  const session = api("/api/session").then((u) => {
-    setMe(u);
+  const session = ensureMe().then((u) => {
     renderNav();
     // The personal-space banner needs to know who this is.
     if (org && $("#plan-banner")) $("#plan-banner").innerHTML = planBanner();

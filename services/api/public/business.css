@@ -501,3 +501,6 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 /* Sidebar icons at the size bank dashboards use. */
 .zb .z-side__link { height: 36px; }
 .zb .z-side__link .z-ic, .zb .zb-acct .z-ic { font-size: 17px; }
+
+/* Settings → Access: a Safe address wraps rather than widening the card on a phone. */
+.zb-access__addr { overflow-wrap: anywhere; }
