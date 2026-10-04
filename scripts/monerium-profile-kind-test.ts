@@ -545,6 +545,37 @@ await check("an organisation name with a hidden direction mark is refused, at cr
   assert.equal(renamed.status, 400, JSON.stringify(renamed.data));
 });
 
+await check("a name an older rule stored does not block a save that leaves it unchanged", async () => {
+  addOrg("org_old_rule", "business", "u_names", "Old​ Name");
+  const save = await call("PATCH", "/api/orgs/org_old_rule", "u_names", { name: "Old​ Name", legalName: "Old​ Name", taxId: "DE123" });
+  assert.equal(save.status, 200, JSON.stringify(save.data));
+  assert.equal(store.findOrganisation("org_old_rule")!.legalName, "Old​ Name");
+  assert.equal(store.findOrganisation("org_old_rule")!.taxId, "DE123");
+  // A personal space whose stored name has a double space: saving it as shown is no rename.
+  store.addOrganisation({ id: "org_two_space", type: "personal", name: "Anna  Maria", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+  store.addMember({ id: "m_two_space", orgId: "org_two_space", userId: "u_names", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+  const same = await call("PATCH", "/api/orgs/org_two_space", "u_names", { name: "Anna Maria", taxId: "1" });
+  assert.equal(same.status, 200, JSON.stringify(same.data));
+  const changed = await call("PATCH", "/api/orgs/org_old_rule", "u_names", { name: "Ne​w" });
+  assert.equal(changed.status, 400, "a changed name still follows the rule");
+});
+
+await check("an invited member's and a contact's name follow the same rule", async () => {
+  const invite = await call("POST", "/api/orgs/org_old_rule/members", "u_names", { email: "x@example.com", role: "viewer", name: "Ev‮il" });
+  assert.equal(invite.status, 400, JSON.stringify(invite.data));
+  assert.equal(invite.data.code, "NAME_INVALID");
+  const bad = await call("POST", "/api/orgs/org_old_rule/contacts", "u_names", { name: "Acme⁦ GmbH" });
+  assert.equal(bad.status, 400, JSON.stringify(bad.data));
+  const ok = await call("POST", "/api/orgs/org_old_rule/contacts", "u_names", { name: " Acme  GmbH " });
+  assert.equal(ok.status, 201, JSON.stringify(ok.data));
+  const id = ok.data.contact.id;
+  assert.equal(ok.data.contact.name, "Acme GmbH");
+  const short = await call("PATCH", `/api/orgs/org_old_rule/contacts/${id}`, "u_names", { name: "A" });
+  assert.equal(short.status, 400, "a too-short rename is refused, not silently dropped");
+  const kept = await call("PATCH", `/api/orgs/org_old_rule/contacts/${id}`, "u_names", { name: "Acme GmbH", notes: "n" });
+  assert.equal(kept.status, 200, JSON.stringify(kept.data));
+});
+
 await check("a person has one personal org: a second is refused", async () => {
   addUser("u_fresh", PERSONAL, 6);
   const first = await call("POST", "/api/orgs", "u_fresh", { type: "personal", name: "Fresh", country: "DE" });
