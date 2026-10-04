@@ -30,6 +30,7 @@ const scripts = [
   "monerium:oauth:test",
   "monerium:apikeys:test",
   "monerium:profile:test",
+  "monerium:ratelimit:test",
   "display-name:test",
   "sepa:test",
   "receipt:test",
