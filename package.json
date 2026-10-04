@@ -74,6 +74,7 @@
     "best:test": "tsx scripts/best-execution-test.ts",
     "dex:setup": "tsx scripts/dex-setup.ts",
     "business:test": "tsx scripts/business-test.ts",
+    "business:access:test": "tsx scripts/business-access-test.ts",
     "security:test": "tsx scripts/security-hardening-test.ts",
     "plan:test": "tsx scripts/plan-grant-test.ts",
     "admin:test": "tsx scripts/admin-dashboard-test.ts",

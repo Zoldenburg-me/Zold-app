@@ -3,8 +3,9 @@
  * chosen section on the right. Organisation, Who approves payments, Monerium
  * and Plan open in place; the other entries are their own screens.
  */
-import { Z, api, cap, day, esc, me, org, plain, ROLE_CAN, ROLE_WORD } from "./core.js";
+import { Z, api, cap, day, ensureMe, esc, me, org, plain, ROLE_CAN, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
+import { isOwnCompanyOrg } from "./access-model.js";
 
 const ss = { sec: "org" };
 const planName = (id) => `${id.charAt(0).toUpperCase()}${id.slice(1)}`;
@@ -12,13 +13,15 @@ const onTrial = () => org.effectivePlan !== org.plan;
 
 META.settings = () => ({ title: "Settings", sub: `${org.name}, on the ${planName(org.effectivePlan)} plan${onTrial() ? " (trial)" : ""}.`, actions: "" });
 
-function menu() {
+function menu(accounts) {
   const here = (id, label) => `<button type="button" class="zb-set-menu__item" data-ss="${id}"${ss.sec === id ? ' aria-current="true"' : ""}>${esc(label)}</button>`;
   const away = (v, label) => `<a class="zb-set-menu__item" href="?view=${v}" data-view-link="${v}">${esc(label)}${Z.icon("arrow_forward", "zb-set-menu__out")}</a>`;
   const groups = [
     ["Company", [here("org", "Organisation"), cap("invoices").allowed ? away("invoicing-settings", "Invoicing profile") : "", here("plan", "Plan")]],
     ["Team", [away("members", "Members and access"), here("approvals", "Who approves payments")]],
-    ["Account", [here("monerium", "Monerium"), `<a class="zb-set-menu__item" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`]],
+    ["Account", [here("monerium", "Monerium"), isOwnCompanyOrg(me, org, accounts)
+      ? away("access", "Access")
+      : `<a class="zb-set-menu__item" href="/app?from=business#security">Your sign-in and recovery${Z.icon("open_in_new", "zb-set-menu__out")}<span class="z-sr"> (the app)</span></a>`]],
     ["Connected", [away("apps", "Apps"), away("integrations", "Accounting connections")]],
   ];
   return `<nav class="zb-set-menu" aria-label="Settings">${groups.map(([title, items]) =>
@@ -92,19 +95,21 @@ function planSection(plan) {
 }
 
 RENDER.settings = async () => {
-  const [acc, plan] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), api(`/api/orgs/${org.id}/plan`)]);
+  // The menu offers Access only to the company login in its own company, so
+  // it waits for who that is and reads whose account backs this one.
+  const [acc, plan] = await Promise.allSettled([api(`/api/orgs/${org.id}/accounts`), api(`/api/orgs/${org.id}/plan`), ensureMe()]);
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
   const planData = plan.status === "fulfilled" ? plan.value : null;
   const SECTIONS = { org: orgSection, approvals: approvalsSection, monerium: () => moneriumSection(accounts), plan: () => planSection(planData) };
   return {
-    html: `<div class="zb-set" id="set-root">${menu()}<div id="set-body">${SECTIONS[ss.sec]()}</div></div>`,
+    html: `<div class="zb-set" id="set-root">${menu(accounts)}<div id="set-body">${SECTIONS[ss.sec]()}</div></div>`,
     bind(box) {
       const root = box.querySelector("#set-root");
       root.addEventListener("click", (ev) => {
         const b = ev.target.closest("[data-ss]");
         if (!b) return;
         ss.sec = b.dataset.ss;
-        root.querySelector(".zb-set-menu").outerHTML = menu();
+        root.querySelector(".zb-set-menu").outerHTML = menu(accounts);
         root.querySelector("#set-body").innerHTML = SECTIONS[ss.sec]();
         root.querySelector(`[data-ss="${ss.sec}"]`)?.focus();
         // Stacked under the menu on a narrow screen: bring the section into view.
