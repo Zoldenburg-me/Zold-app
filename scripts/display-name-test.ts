@@ -4,7 +4,7 @@
  * company. Pure rules in services/api/src/users/display-name.ts.
  */
 import assert from "node:assert/strict";
-import { cleanName, nameChange } from "../services/api/src/users/display-name.js";
+import { cleanName, nameChange, sameName } from "../services/api/src/users/display-name.js";
 
 let failed = 0;
 const check = (name: string, fn: () => void) => {
@@ -66,6 +66,27 @@ check("cleanName takes the bounds of each place a name is written", () => {
   assert.equal(cleanName("A", { min: 1, max: 120 }), "A");
   assert.equal(cleanName("Acme\u202e GmbH", { min: 2, max: 120 }), null);
   assert.equal(cleanName(42), null);
+});
+
+check("a joiner stands only between two visible characters, so no name is drawn out of nothing", () => {
+  for (const bad of ["‍‍", "‌‌", "‍An", "An‌", "An ‍na", "An‍ na", "A‌‍n"]) {
+    assert.equal(cleanName(bad, { min: 1, max: 120 }), null, JSON.stringify(bad));
+  }
+  // ZWJ inside a word, as Devanagari conjuncts write it, stays.
+  assert.equal(cleanName("क्‍ष"), "क्‍ष");
+});
+
+check("a lone surrogate is not text and is refused", () => {
+  for (const bad of ["A\ud800b", "Ab\udc00", "\ud83d"]) assert.equal(cleanName(bad, { min: 1 }), null, JSON.stringify(bad));
+});
+
+check("sameName: the stored name, as typed or as it would be stored, is unchanged", () => {
+  assert.equal(sameName("Anna  Maria", "Anna  Maria"), true);
+  assert.equal(sameName("Anna Maria ", "Anna  Maria"), true);
+  assert.equal(sameName("Zoë", "Zoë"), true);
+  assert.equal(sameName("Anna", "Anne"), false);
+  assert.equal(sameName(undefined, "Anna"), false);
+  assert.equal(sameName("", undefined), false);
 });
 
 console.log(failed ? `\ndisplay-name: ${failed} failed` : "\ndisplay-name: all checks passed");
