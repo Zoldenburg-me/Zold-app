@@ -50,6 +50,9 @@ async function renderSignersScreen(done) {
   const second = s.owners.filter((o) => o.kind !== "passkey");
   const locked = s.threshold > 1;
   const limits = s.allowance.limits.filter((l) => l.token !== "0x0000000000000000000000000000000000000000");
+  // Letting someone else spend is offered to people who work with a business.
+  // A limit already on the account is always listed, whoever set it.
+  const offerLimits = (await phLoadOrgs()).some((o) => o.type === "business");
   const bareDelegates = s.allowance.limits.filter((l) => l.token === "0x0000000000000000000000000000000000000000");
 
   el.innerHTML = `
@@ -104,13 +107,13 @@ async function renderSignersScreen(done) {
           <button class="m-copybtn" data-sg-remove-delegate="${esc(l.delegate)}" ${locked ? "disabled" : ""} aria-label="Remove delegate ${esc(l.delegate)}">Remove</button>
         </div>`).join("")}
     </div>
-    <button class="m-optrow${s.allowance.moduleDeployed && !locked ? "" : " off"}" id="m-sg-add-limit" style="margin-top:8px" ${s.allowance.moduleDeployed && !locked ? "" : "disabled"}>
+    ${offerLimits ? `<button class="m-optrow${s.allowance.moduleDeployed && !locked ? "" : " off"}" id="m-sg-add-limit" style="margin-top:8px" ${s.allowance.moduleDeployed && !locked ? "" : "disabled"}>
       <span class="material-symbols-rounded ic" aria-hidden="true">add_card</span>
-      <span class="tx"><span class="t">Add a spending limit</span><span class="d">${s.allowance.moduleDeployed
-        ? "Let an address you hold spend up to an amount per period, without an owner signature (Safe Allowance module)."
+      <span class="tx"><span class="t">Allow someone to spend from your account <span class="m-tag">ADVANCED</span></span><span class="d">${s.allowance.moduleDeployed
+        ? "Up to a limit you set, without your signature."
         : "The Allowance module is not deployed on this chain."}</span></span>
       <span class="material-symbols-rounded ch" aria-hidden="true">chevron_right</span>
-    </button>
+    </button>` : ""}
     <div class="m-err hidden" id="m-sg-err" role="alert" style="margin-top:12px"></div>
 
     <div class="m-seclabel">Recovery with two owners</div>
@@ -211,9 +214,10 @@ function renderSignersForm(el) {
 
   if (signersView === "limit") {
     el.innerHTML = `
-      <div class="m-h1" style="font-size:24px">Add a spending limit</div>
-      <div class="m-lede" style="font-size:13px">A delegate can spend up to the limit from this account without any owner signature, through Safe's Allowance module. It spends on app.safe.global (Spending limits) — never through Zold.</div>
-      <div class="m-field" style="margin-top:16px"><label for="m-sg-lim-delegate">Delegate address</label>
+      <div class="m-h1" style="font-size:24px">Allow someone to spend from your account</div>
+      <span class="m-tag">ADVANCED</span>
+      <div class="m-lede" style="font-size:13px;margin-top:8px">This person can spend up to the limit you set without your signature, through Safe's Allowance module. They spend it with their own wallet at app.safe.global, under Spending limits. Zold does not move it for them. You can remove the limit here at any time; a recovery does not remove it.</div>
+      <div class="m-field" style="margin-top:16px"><label for="m-sg-lim-delegate">Their wallet address</label>
         <input id="m-sg-lim-delegate" name="delegate-address" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="0x…" translate="no" value="${esc(second?.address || "")}" /></div>
       <div class="m-field" style="margin-top:12px"><label for="m-sg-lim-token">Token</label>
         <select id="m-sg-lim-token" name="token" style="width:100%;background:var(--m-surface);color:#fff;border:0;padding:8px 0;font:inherit">
@@ -223,14 +227,14 @@ function renderSignersForm(el) {
       <div class="m-field" style="margin-top:12px"><label for="m-sg-lim-period">Refills</label>
         <select id="m-sg-lim-period" name="period" style="width:100%;background:var(--m-surface);color:#fff;border:0;padding:8px 0;font:inherit">
           <option value="day">Every day</option><option value="week">Every week</option><option value="month">Every 30 days</option><option value="once">Never (one-time)</option></select></div>
-      ${sgAckBox("m-sg-lim-ack", "I understand the delegate can spend this without my passkey, and that a recovery does not remove it.")}
-      <button class="m-cta" id="m-sg-lim-go" type="button">Sign with Passkey to Set Limit</button>
+      ${sgAckBox("m-sg-lim-ack", "I understand this person can spend up to this limit without my passkey, and that a recovery does not remove it.")}
+      <button class="m-cta" id="m-sg-lim-go" type="button">Sign with passkey to allow</button>
       <div class="m-err hidden" id="m-sg-form-err" role="alert" style="margin-top:12px"></div>
       ${back}`;
     $("m-sg-lim-go").onclick = () => {
       const delegate = $("m-sg-lim-delegate").value.trim();
       const amount = $("m-sg-lim-amount").value.trim();
-      if (!/^0x[0-9a-fA-F]{40}$/.test(delegate)) { showErr("m-sg-form-err", new Error("Enter the delegate's 0x address.")); $("m-sg-lim-delegate").focus(); return; }
+      if (!/^0x[0-9a-fA-F]{40}$/.test(delegate)) { showErr("m-sg-form-err", new Error("Enter their wallet's 0x address.")); $("m-sg-lim-delegate").focus(); return; }
       if (!(Number(amount.replace(",", ".")) > 0)) { showErr("m-sg-form-err", new Error("Enter an amount above zero, e.g. 100.")); $("m-sg-lim-amount").focus(); return; }
       if (!$("m-sg-lim-ack").checked) { showErr("m-sg-form-err", new Error("Tick the box to confirm you have read the warning.")); $("m-sg-lim-ack").focus(); return; }
       signersRun(`/api/users/${user.id}/safe/spending-limits`, {
