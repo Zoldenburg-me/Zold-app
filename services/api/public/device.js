@@ -64,7 +64,7 @@ const concat = (...arrs) => {
 /**
  * Recompute the destination commitment the server folded into the terms, from
  * the recipient the user actually entered. Signing only proceeds when this
- * matches the server's — so a server that swapped the IBAN/VPA/phone in the
+ * matches the server's — so a server that swapped the IBAN or phone in the
  * signed terms is caught here, before the passkey ever unlocks the key.
  * Covers the recipient NAME as well as the account identifier: on the cash rail
  * the name is what the anchor is told and what the collector presents with ID,

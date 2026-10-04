@@ -755,9 +755,10 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       });
     }
     if (account.currency !== "EUR") {
+      // A row can carry a currency the registry no longer lists.
       const def = CURRENCY_REGISTRY[account.currency];
       return res.status(409).json({
-        error: `${def.name} cannot be funded this way: ${def.needs}`,
+        error: `${def?.name ?? account.currency} cannot be funded this way: ${def?.needs ?? "no rail"}`,
       });
     }
     // `active` is set exactly when Monerium attributed an IBAN to the Safe
