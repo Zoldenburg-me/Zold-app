@@ -1,5 +1,19 @@
 import { CHAIN_ID } from "./env.js";
 
+const UNISWAP_V3_BY_CHAIN: Record<number, { factory: string; router: string; quoter: string }> = {
+  8453: {
+    factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+    router: "0x2626664c2603336E57B271c5C0b26F421741e481",
+    quoter: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
+  },
+  84532: {
+    factory: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24",
+    router: "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4",
+    quoter: "0xC5290058841028F1614F3A6F0F5816cAd0df5E27",
+  },
+};
+const UNISWAP_V3 = UNISWAP_V3_BY_CHAIN[CHAIN_ID] ?? UNISWAP_V3_BY_CHAIN[8453];
+
 /**
  * Where the EURe<->USDC leg gets its liquidity.
  *
@@ -60,14 +74,14 @@ export const LIQUIDITY = {
    * Uniswap v3, on-chain. The v3 interface is identical on Base Sepolia and
    * Base mainnet, so the path tested on the testnet is the path that ships.
    *
-   * Defaults are the Base MAINNET deployments, verified with eth_getCode and
-   * a chainId read against mainnet.base.org (Sep 2026), not copied from a docs
-   * page: UniswapV3Factory, SwapRouter02, QuoterV2. Override per chain
-   * (Base Sepolia: 0x4752ba5D… / 0x94cC0AaC… / 0xC5290058…).
+   * Defaults per chain (UniswapV3Factory, SwapRouter02, QuoterV2), verified
+   * with eth_getCode; on Base Sepolia the router and quoter both report the
+   * factory below (Oct 2026). Another chain falls back to the mainnet set,
+   * which has no code there, so the DEX venue refuses rather than trades.
    */
-  DEX_FACTORY: (process.env.DEX_FACTORY ?? "0x33128a8fC17869897dcE68Ed026d694621f6FDfD") as `0x${string}`,
-  DEX_ROUTER: (process.env.DEX_ROUTER ?? "0x2626664c2603336E57B271c5C0b26F421741e481") as `0x${string}`,
-  DEX_QUOTER: (process.env.DEX_QUOTER ?? "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a") as `0x${string}`,
+  DEX_FACTORY: (process.env.DEX_FACTORY ?? UNISWAP_V3.factory) as `0x${string}`,
+  DEX_ROUTER: (process.env.DEX_ROUTER ?? UNISWAP_V3.router) as `0x${string}`,
+  DEX_QUOTER: (process.env.DEX_QUOTER ?? UNISWAP_V3.quoter) as `0x${string}`,
   /** Fee tiers probed, cheapest first. The deepest pool wins, not the first. */
   DEX_FEE_TIERS: (process.env.DEX_FEE_TIERS ?? "100,500,3000,10000")
     .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0),

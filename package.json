@@ -12,6 +12,7 @@
     "chain": "hardhat node",
     "compile": "hardhat compile",
     "deploy": "tsx scripts/deploy.ts",
+    "deploy:zusd": "tsx scripts/deploy-zusd.ts",
     "deploy:ens-resolver": "tsx scripts/deploy-ens-resolver.ts",
     "api": "tsx services/api/src/server.ts",
     "typecheck": "tsc --noEmit",
