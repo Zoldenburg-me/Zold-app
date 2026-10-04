@@ -7,6 +7,7 @@
  * `org` and the few places that reassign call a setter.
  */
 import { render } from "./shell.js";
+import { isCompanyLogin, readGuardians, recoveryStatus } from "./access-model.js";
 
 export const $ = (s) => document.querySelector(s);
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -220,25 +221,31 @@ export async function createPersonalOrg() {
 export let recoveryPending = false;
 /** True when the check itself failed: shown, never taken as "none". */
 export let recoveryUnknown = false;
+/** A company login with no guardian that never answered the question, on a
+ *  deployment that offers one: the banner points at Access, in the login's
+ *  own company only (nav.js). A recorded "declined" is said on Access only. */
+export let recoveryNone = false;
 export async function readRecovery() {
   if (!me?.id || me.passkeySafe?.status !== "active") return;
-  // A guardian's route exists only where it is switched on, so ask only those:
-  // a 404 from one that is off is not a failed check.
-  const caps = (await api("/api/health").catch(() => null))?.capabilities;
-  const ask = (on, path) => (on ? api(`/api/users/${me.id}/recovery/${path}`).catch(() => null) : undefined);
-  const [c, z] = await Promise.all([ask(caps?.emailSmsRecovery, "candide"), ask(caps?.zoldenburgRecovery, "zoldenburg")]);
-  const open = ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"];
-  recoveryPending = Boolean(z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || (z?.requests || []).some((r) => open.includes(r.status)));
-  // Which guardians are on is unknown, a guardian that is on did not answer,
-  // or one on this account could not read the chain: "couldn't check".
-  recoveryUnknown = !recoveryPending && Boolean(!caps || c === null || z === null
-    || (z?.active && z.onChainError) || (c?.guardianStatus === "active" && c.onChain?.error));
+  const [c, z] = await readGuardians(me.id, api);
+  const r = recoveryStatus(c, z);
+  recoveryPending = r.status === "pending";
+  recoveryUnknown = r.status === "unknown";
+  recoveryNone = r.status === "none" && r.offered && !r.declined && isCompanyLogin(me);
 }
 
 /** The bindings other modules reassign. Every READ of them stays live. */
 export const setOrg = (v) => { org = v; };
 export const setOrgs = (v) => { orgs = v; };
-export const setMe = (v) => { me = v; };
+/** The signed-in person, from the one GET /api/session per page load: boot
+ *  starts it, and a view that depends on who is signed in awaits the same
+ *  request rather than render on a guess. A failed read is retried next call. */
+let mePromise = null;
+export function ensureMe() {
+  if (me) return Promise.resolve(me);
+  mePromise ??= api("/api/session").then((u) => { me = u; return u; }, (e) => { mePromise = null; throw e; });
+  return mePromise;
+}
 export const setTestMode = (v) => { testMode = v; };
 /** Changing the view is a navigation: it gets a history entry, so Back works
  *  and the URL can be bookmarked or opened in a new tab. `push: false` is for

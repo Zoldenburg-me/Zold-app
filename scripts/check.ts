@@ -57,6 +57,7 @@ const scripts = [
   "refund:guard:test",
   "final-state:test",
   "business:test",
+  "business:access:test",
   "draft:test",
   "draft:failure:test",
   "security:test",

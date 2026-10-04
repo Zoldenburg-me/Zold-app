@@ -1,7 +1,7 @@
 /**
  * Entry point. Every other module holds declarations; this is the only one
  * that starts anything. The screen modules (screens.js, home.js,
- * books-overview.js, getpaid.js, send.js, settings.js, apps.js, invoice.js)
+ * books-overview.js, getpaid.js, send.js, settings.js, access.js, apps.js, invoice.js)
  * register into RENDER when they load, so they are imported before boot runs.
  */
 import { toast } from "./core.js";
@@ -11,6 +11,7 @@ import "./books-overview.js";
 import "./getpaid.js";
 import "./send.js";
 import "./settings.js";
+import "./access.js";
 import "./apps.js";
 import "./invoice.js";
 import { boot } from "./shell.js";
