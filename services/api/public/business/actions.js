@@ -272,8 +272,7 @@ export const ACTIONS = {
   "open-account": () => dialog("Open an account",
     `<label for="d-cur">Currency</label><select id="d-cur" name="currency">
       <option value="EUR">Euro: bank transfer</option><option value="USD">US dollar</option>
-      <option value="GBP">British pound</option><option value="KES">Kenyan shilling: M-Pesa</option>
-      <option value="INR">Indian rupee</option></select>
+      <option value="GBP">British pound</option><option value="KES">Kenyan shilling: M-Pesa</option></select>
      ${field("d-label", 'Name <span class="desc">(optional)</span>', 'placeholder="Operating…"')}
      <p class="desc" style="margin-top:12px">A currency that isn’t open yet says what it still needs, and nothing is simulated.</p>`,
     async () => {

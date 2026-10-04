@@ -210,13 +210,12 @@ export interface Member {
 
 /** Currencies the account model knows about. Being listed here is NOT a claim
  *  that the rail works — see `AccountStatus.gated` and accounts.ts. */
-export type CurrencyCode = "EUR" | "USD" | "GBP" | "CHF" | "KES" | "NGN" | "INR";
+export type CurrencyCode = "EUR" | "USD" | "GBP" | "CHF" | "KES" | "NGN";
 
 export type AccountProvider =
   | "monerium"
   | "iron"
   | "triplea"
-  | "dlocal"
   | "yellowcard"
   /**
    * No candidate identified yet. Keep this separate from a named partner we
@@ -248,8 +247,6 @@ export interface AccountIdentifier {
   routingNumber?: string;
   /** Mobile-money rails (KES/M-Pesa). */
   mobile?: string;
-  /** UPI virtual payment address (INR). */
-  vpa?: string;
   /** NGN: a Nigerian bank account is a 10-digit NUBAN plus its bank code. */
   nuban?: string;
   bankCode?: string;
@@ -410,9 +407,6 @@ export interface ContactBankAccount {
   sortCode?: string;
   routingNumber?: string;
   mobile?: string;
-  /** UPI id. Modelled because INR is in the currency registry; the rail is
-   *  gated, so nothing can execute against it. */
-  vpa?: string;
   label?: string;
 }
 

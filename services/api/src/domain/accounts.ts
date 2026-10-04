@@ -225,20 +225,6 @@ const CURRENCIES: CurrencyDefinition[] = [
       "seam — supports only USDC and EURC for EEA users under MiCA, so cNGN cannot move through it " +
       "for a European entity at all.",
   },
-  {
-    code: "INR",
-    name: "Indian rupee",
-    symbol: "₹",
-    decimals: 2,
-    railName: "UPI",
-    identifierFields: ["vpa"],
-    countries: ["IN"],
-    provider: "dlocal",
-    tokenised: false,
-    mode: () => false as const,
-    needs:
-      "an Indian payout partner (dLocal is the candidate). A UPI rail without one would be a mock minting its own reference numbers, which is not to be built.",
-  },
 ];
 
 export const CURRENCY_REGISTRY: Record<CurrencyCode, CurrencyDefinition> =
