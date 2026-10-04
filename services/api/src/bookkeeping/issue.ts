@@ -47,7 +47,21 @@ export function belegContextFor(entry: LedgerEntry): BelegContext & { userId: st
   };
 }
 
-export async function issueBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean }> {
+/** One issue per line at a time: two sends at once must not both find no
+ *  Beleg, sign two, and leave the line pointing at the second. */
+const issuing = new Map<string, Promise<{ doc: StoredDocument; issued: boolean }>>();
+
+export function issueBelegForLine(entry: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean }> {
+  const before = issuing.get(entry.id) ?? Promise.resolve();
+  const run = before.catch(() => undefined).then(() => issueOnce(entry));
+  issuing.set(entry.id, run);
+  void run.finally(() => { if (issuing.get(entry.id) === run) issuing.delete(entry.id); }).catch(() => undefined);
+  return run;
+}
+
+async function issueOnce(given: LedgerEntry): Promise<{ doc: StoredDocument; issued: boolean }> {
+  // The row as it is now: the caller's copy may predate a Beleg just issued.
+  const entry = store.ledgerOf(given.orgId).find((e) => e.id === given.id) ?? given;
   const s = entry.statement;
   if (!s) throw new Error("only a statement line has a Beleg");
   if (s.documentCode) {

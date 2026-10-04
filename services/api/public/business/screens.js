@@ -280,7 +280,9 @@ RENDER.invoices = async () => {
     const fig = w === "WAITING" ? '<span class="z-dim">Not filled in</span>'
       : w === "PAID" ? Z.amount({ value: a.value, currency: a.currency, direction: out ? "in" : "out" })
         : `<span class="z-amount">${esc(Z.formatMoney(a.value, a.currency))}</span>`;
-    return `<tr><td class="z-mono">${esc(num) || `<span class="z-dim">${w === "DRAFT" ? "Not issued" : "None"}</span>`}</td>
+    // The number opens the invoice too: a name alone does not read as a link.
+    const label = esc(num) || (w === "DRAFT" ? "Not issued" : "Open");
+    return `<tr><td class="z-mono"><button type="button" class="z-tbl__link" data-act="invoice-detail" data-id="${esc(i.id)}">${label}</button></td>
       <td><span class="z-tbl__who">${Z.avatar({ name: who })}<button type="button" class="z-tbl__link" data-act="invoice-detail" data-id="${esc(i.id)}">${esc(who)}</button></span></td>
       <td class="${w === "OVERDUE" ? "zb-due--late" : "z-dim"}">${i.dueDate ? esc(day(ymd(i.dueDate))) : "None"}</td>
       <td>${Z.tag(w)}</td>

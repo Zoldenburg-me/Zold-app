@@ -14,6 +14,7 @@ import {
   sweepStrandedTransfers,
   } from "./orchestrator.js";
 import {
+  cryptoInScan,
   startCryptoDepositPoller,
   } from "./adapters/crypto-deposits.js";
 import { buildTransferFromQuote } from "./transfers/build.js";
@@ -132,7 +133,12 @@ app.get(
     const block = await latestBlock();
     // chainId and realMoney let the landing page name the network it runs on
     // instead of hardcoding "Live on Base" over a testnet deployment.
-    res.json({ ok: true, chainId: CHAIN_ID, realMoney: IS_REAL_MONEY_CHAIN, block: Number(block), contracts: addrs(), capabilities: capabilities() });
+    res.json({
+      ok: true, chainId: CHAIN_ID, realMoney: IS_REAL_MONEY_CHAIN, block: Number(block), contracts: addrs(), capabilities: capabilities(),
+      // Whether incoming crypto is being seen. A scan that fails every tick
+      // books nothing and says so nowhere else.
+      ...(CRYPTO_IN.enabled ? { cryptoIn: { ...cryptoInScan } } : {}),
+    });
   }),
 );
 

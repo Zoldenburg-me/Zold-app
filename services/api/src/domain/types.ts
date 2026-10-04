@@ -162,6 +162,9 @@ export interface Organisation {
       connectedByMemberId: string;
       /** Uploads land under this company; absent means the account's own. */
       companyId?: number;
+      /** The manual bank account statement lines are added to, as picked at
+       *  the last send. */
+      bankAccountUid?: number;
     };
   };
   createdAt: string;
@@ -281,6 +284,12 @@ export interface Account {
    * rather than guessing at someone's wallet.
    */
   backingUserId?: string;
+  /**
+   * From when the backing Safe's movements are this account's, fixed when the
+   * Safe was connected (domain/safe-books.ts). Absent on accounts connected
+   * before it was recorded; the books then work it out from the Safe.
+   */
+  backedSince?: string;
   /**
    * The Monerium profile that owns the IBAN, as Monerium reported it when the
    * backing user's account was adopted or last re-checked: the legal entity a
@@ -964,6 +973,7 @@ export type StatementEvent =
   | "sepa_out_reversal"
   | "crypto_converted"
   | "crypto_held"
+  | "eure_in"
   | "sweep";
 
 export interface StatementFacts {

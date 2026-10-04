@@ -73,7 +73,10 @@ export const store = {
   updateUser(id: string, patch: Partial<User>) {
     const u = db.users.find((x) => x.id === id);
     if (!u) throw new Error(`unknown user ${id}`);
-    Object.assign(u, patch);
+    // The one place an IBAN changes, so the one place its date is kept.
+    const bare = (v?: string) => (v ?? "").replace(/\s+/g, "").toUpperCase();
+    const ibanChanged = typeof patch.iban === "string" && bare(patch.iban) !== "" && bare(patch.iban) !== bare(u.iban);
+    Object.assign(u, patch, ibanChanged && !patch.ibanSince ? { ibanSince: new Date().toISOString() } : {});
     persist();
     return u;
   },

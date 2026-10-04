@@ -28,9 +28,10 @@ process.env.GETMYINVOICES_UPLOAD_TIMEOUT_MS = "1000";
 const GOOD_KEY = "gmi_test_key_0123456789abcdef";
 const seen = { requests: [] as { method: string; path: string; key: string | undefined; ua: string | undefined; body: any }[], uploaded: new Map<string, number>() };
 let nextUid = 1000;
+const bank = { lines: [] as any[], assigned: [] as { transactionUid: number; documentUid: number }[] };
 /** normal | slow (records, answers after 1.5 s) | slow-drop (answers after
  *  1.5 s, records nothing) | reject (422). readDelayMs slows GET /account. */
-const fakeMode = { upload: "normal" as "normal" | "slow" | "slow-drop" | "reject", readDelayMs: 0 };
+const fakeMode = { upload: "normal" as "normal" | "slow" | "slow-drop" | "reject", readDelayMs: 0, banksDown: false };
 const SLOW_MS = 1500;
 
 const fake = createServer((req, res) => {
@@ -45,7 +46,8 @@ const fake = createServer((req, res) => {
     if (!req.headers["user-agent"]) return send(400, { success: false, detail: "Bad request. User-Agent malformed" });
     if (url.pathname === "/account" && fakeMode.readDelayMs) return void setTimeout(() => send(200, { accountId: 4711 }), fakeMode.readDelayMs);
     if (url.pathname === "/account") return send(200, { name: "Sara Lindner", organization: "Zoldenburg UG", accountId: 4711, email: "books@example.com", hasBankingAccess: true, apiKeyType: "FULL_PERMISSION", currency: "EUR" });
-    if (url.pathname === "/bankAccounts") return send(200, { totalCount: 1, records: [{ bankAccountUid: 77, accountType: "CUSTOM", name: "Zold clearing", currencyCode: "EUR" }] });
+    if (url.pathname === "/bankAccounts" && fakeMode.banksDown) return send(503, { success: false, detail: "down" });
+    if (url.pathname === "/bankAccounts") return send(200, { totalCount: 2, records: [{ bankAccountUid: 77, accountType: "CUSTOM", name: "Zold clearing", currencyCode: "EUR" }, { bankAccountUid: 88, accountType: "BANKCONNECT", name: "Sparkasse", currencyCode: "EUR" }] });
     if (url.pathname === "/documents" && req.method === "GET") {
       const num = url.searchParams.get("documentNumberFilter") ?? "";
       const uid = seen.uploaded.get(num);
@@ -59,7 +61,25 @@ const fake = createServer((req, res) => {
       if (fakeMode.upload === "normal") return send(200, { success: true, documentUid: uid });
       return void setTimeout(() => send(200, { success: true, documentUid: uid }), SLOW_MS);
     }
-    if (/^\/bankAccounts\/\d+\/transactions$/.test(url.pathname) && req.method === "POST") return send(200, { success: true, meta_data: {} });
+    const txPath = /^\/bankAccounts\/(\d+)\/transactions$/.exec(url.pathname);
+    if (txPath && req.method === "POST") {
+      // As live (2026-10-03): an identical line is refused, naming the one there.
+      const same = bank.lines.find((t) => t.bankAccountUid === Number(txPath[1]) && t.description === body.description && t.bookingDate === body.bookingDate && t.amount === body.amount);
+      if (same) return send(422, { errors: [{ code: 127, detail: "Transaction Record Already Exist.", transactionUid: same.transactionUid }] });
+      const transactionUid = nextUid++;
+      bank.lines.push({ transactionUid, bankAccountUid: Number(txPath[1]), ...body });
+      return send(200, { success: true, meta_data: { transactionUid } });
+    }
+    if (txPath && req.method === "GET") {
+      const text = url.searchParams.get("textFilter") ?? "";
+      const day = url.searchParams.get("startDateFilter");
+      const records = bank.lines.filter((t) => t.bankAccountUid === Number(txPath[1]) && String(t.description).includes(text) && (!day || t.bookingDate === day));
+      // Live answers key the records by transactionUid, not as an array.
+      return send(200, { totalCount: records.length, records: Object.fromEntries(records.map((t) => [String(t.transactionUid), t])) });
+    }
+    const assignPath = /^\/bankAccounts\/\d+\/transactions\/(\d+)\/assign$/.exec(url.pathname);
+    if (assignPath && req.method === "GET") return send(200, { records: bank.assigned.filter((a) => a.transactionUid === Number(assignPath[1])).map((a) => ({ documentUid: a.documentUid })) });
+    if (assignPath && req.method === "POST") { bank.assigned.push({ transactionUid: Number(assignPath[1]), documentUid: body.documentUid }); return send(200, { success: true, meta_data: { assignmentUid: nextUid++ } }); }
     send(404, { success: false, detail: "unhandled " + url.pathname });
   });
 });
@@ -185,7 +205,7 @@ initStore();
 const SAFE = `0x${"aa".repeat(20)}` as const;
 const now = new Date().toISOString();
 const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
-store.addUser({ id: "u_owner", name: "Sara Lindner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: now } as any);
+store.addUser({ id: "u_owner", name: "Sara Lindner", country: "DE", kycStatus: "approved", address: SAFE, createdAt: "2026-01-01T00:00:00.000Z" } as any);
 store.addUser({ id: "u_viewer", name: "Viewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
 store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
 store.addOrganisation({ id: "org_starter", type: "business", name: "Starter GmbH", plan: "starter", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
@@ -299,6 +319,61 @@ await check("push uploads each Beleg once; a second push uploads nothing", async
   assert.ok(pushed.every((r) => r.key === GOOD_KEY && r.ua?.includes("account 4711")), "the stored key and the account-bearing User-Agent are used");
   const audit = store.auditFor("u_owner").find((a) => a.kind === "partner.documents_pushed");
   assert.ok(audit, "the push is audited");
+});
+
+await check("push adds each line to the manual bank account once, with its Beleg assigned; a re-send adds nothing", async () => {
+  const lines = bank.lines.length;
+  const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.bankAccountUid, 77, "the only manual account is used and remembered");
+  assert.equal(store.findOrganisation("org_1")!.integrations!.getmyinvoices!.bankAccountUid, 77);
+  assert.ok(r.body.results.every((x: any) => ["added", "exists"].includes(x.bankLine?.outcome) && x.bankLine.assigned === true), JSON.stringify(r.body.results));
+  const added = bank.lines.slice(lines);
+  const total = bank.lines.length;
+  for (const x of r.body.results) {
+    const line = bank.lines.find((t) => t.transactionUid === x.bankLine.transactionUid)!;
+    assert.match(line.description, new RegExp(`Beleg ${x.code}`), "the Beleg code is what finds it again");
+    assert.ok(bank.assigned.some((a) => a.transactionUid === line.transactionUid && a.documentUid === x.documentUid), "the Beleg is attached to its line");
+  }
+  assert.ok(added.every((t) => typeof t.amount === "number" && t.currencyCode === "EUR" && /^\d{4}-\d{2}-\d{2}$/.test(t.bookingDate)));
+  const again = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+  assert.ok(again.body.results.every((x: any) => x.bankLine?.outcome === "exists"));
+  assert.equal(bank.lines.length, total, "no line twice");
+  assert.equal(new Set(bank.assigned.map((a) => `${a.transactionUid}:${a.documentUid}`)).size, bank.assigned.length, "no Beleg assigned twice");
+  assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09", bankAccountUid: 999 })).status, 400, "a bank account that is not theirs is refused");
+  assert.equal((await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09", bankAccountUid: 88 })).status, 400, "a connected bank's own account is refused: lines go to a manual one");
+  assert.equal(bank.lines.filter((t) => t.bankAccountUid === 88).length, 0);
+});
+
+await check("a line the lookup misses is found by GetMyInvoices' own duplicate refusal (code 127), not added twice", async () => {
+  const c = new GetMyInvoicesClient({ apiKey: GOOD_KEY, userAgent: gmiUserAgent() });
+  const tx = { bookingDate: "2026-09-20", valueDate: "2026-09-20", description: "Ref · Beleg MISSME", amount: 7, currencyCode: "EUR" };
+  const first = await c.pushBankLine(77, tx, "MISSME");
+  // A marker the lookup cannot see: only their refusal can find it.
+  const second = await c.pushBankLine(77, tx, "NOT-IN-DESCRIPTION");
+  assert.equal(first.outcome, "added");
+  assert.equal(second.outcome, "exists");
+  assert.equal(second.transactionUid, first.transactionUid);
+});
+
+await check("with the bank account list unavailable the Belege still go up, and the answer says why there are no lines", async () => {
+  fakeMode.banksDown = true;
+  try {
+    const r = await call("POST", "/api/orgs/org_1/integrations/getmyinvoices/push", { month: "2026-09" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.results.every((x: any) => ["uploaded", "exists"].includes(x.outcome) && !x.bankLine));
+    assert.equal(r.body.bankAccountUid, null);
+    assert.match(r.body.bankAccountsError, /503/);
+  } finally { fakeMode.banksDown = false; }
+});
+
+await check("a long reference and memo never cut the Beleg code out of the bank line's description", async () => {
+  const { bankLineFor } = await import("../services/api/src/routes/business/integrations.js");
+  const snap: any = { line: { reference: "R".repeat(200), bookingDate: "2026-09-10", valueDate: "2026-09-10", amountCents: 500, counterparty: {}, links: { txHashes: [] } }, bank: { memo: "M".repeat(140) } };
+  const d = bankLineFor(snap, "ABCDEFGHJKMNPQR").description;
+  assert.ok(d.length <= 250, `${d.length}`);
+  assert.ok(d.endsWith("Beleg ABCDEFGHJKMNPQR"));
+  assert.equal(bankLineFor({ ...snap, line: { ...snap.line, reference: "" }, bank: undefined }, "ABC").description, "Beleg ABC");
 });
 
 await check("push: an upload that times out but landed is reported uploaded (tags may be missing), not failed; nothing is sent twice", async () => {

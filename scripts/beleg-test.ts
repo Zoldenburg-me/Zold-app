@@ -38,7 +38,7 @@ const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 const now = new Date().toISOString();
 
 initStore();
-const user: any = { id: "u_1", name: "Zoldenburg UG", country: "DE", kycStatus: "approved", address: SAFE, iban: "EE382200221020145685", createdAt: now, passkey: { credentialId: "c" }, passkeySafe: { status: "active", address: SAFE } };
+const user: any = { id: "u_1", name: "Zoldenburg UG", country: "DE", kycStatus: "approved", address: SAFE, iban: "EE382200221020145685", createdAt: "2026-01-01T00:00:00.000Z", passkey: { credentialId: "c" }, passkeySafe: { status: "active", address: SAFE } };
 store.addUser(user);
 store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", legalName: "Zoldenburg UG (haftungsbeschränkt)", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
 store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: { iban: "EE382200221020145685" }, address: SAFE, backingUserId: "u_1", createdAt: now, updatedAt: now });
@@ -125,6 +125,16 @@ await check("issuing is once per line and the code is written back onto the line
   assert.equal(again.doc.code, first.doc.code);
   assert.equal(store.ledgerOf("org_1").find((e) => e.id === line.id)!.statement!.documentCode, first.doc.code);
   assert.equal(store.documentsForOrg("org_1").length, 1);
+});
+
+await check("two issues for one line at once make one Beleg, not two", async () => {
+  const fresh = { ...line, id: "led_race", statement: { ...line.statement!, key: "race", documentCode: undefined } } as any;
+  store.addLedgerEntries([fresh]);
+  const before = store.documents.length;
+  const [a, b] = await Promise.all([issueBelegForLine(fresh), issueBelegForLine(fresh)]);
+  assert.equal(a.doc.code, b.doc.code);
+  assert.deepEqual([a.issued, b.issued].sort(), [false, true]);
+  assert.equal(store.documents.length - before, 1);
 });
 
 await check("the signature verifies; a changed figure fails", async () => {
