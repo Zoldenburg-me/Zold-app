@@ -22,3 +22,4 @@ data/db*.json
 
 # Internal notes kept out of the public repo (decision history, partner docs)
 .private/
+

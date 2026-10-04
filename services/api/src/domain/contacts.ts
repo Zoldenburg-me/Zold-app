@@ -130,13 +130,6 @@ export function validateBankAccount(raw: unknown): Omit<ContactBankAccount, "id"
     }
     out.mobile = mobile;
   }
-  if (currency === "INR") {
-    const vpa = String(input.vpa).trim();
-    if (!/^[\w.\-]{2,64}@[A-Za-z]{2,32}$/.test(vpa)) {
-      throw new ContactError("A UPI id looks like name@bank.");
-    }
-    out.vpa = vpa;
-  }
 
   return out;
 }
@@ -177,7 +170,6 @@ export function destinationFingerprint(
     bank.iban ??
     bank.accountNumber ??
     bank.mobile ??
-    bank.vpa ??
     "";
   return `bank:${bank.currency}:${bank.country}:${id}:${bank.holderName}`;
 }
