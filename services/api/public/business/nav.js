@@ -9,7 +9,7 @@
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, recoveryPending, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, recoveryPending, recoveryUnknown, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 
 export const SPACES = {
@@ -231,6 +231,10 @@ function personalBanner() {
 
 /* The app holds the recovery screens; this says one is under way and goes there. */
 function recoveryBanner() {
+  if (recoveryUnknown) {
+    return `<div class="banner warn">${Z.icon("help")}<span><b>We couldn’t check for a recovery on your sign-in.</b> Check it in the app, so a recovery you did not start cannot replace your passkey unseen.</span>
+    <a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#recovery-alert">Check now</a></div>`;
+  }
   if (!recoveryPending) return "";
   return `<div class="banner warn">${Z.icon("warning")}<span><b>A recovery is under way on your sign-in.</b> If you did not start it, stop it now: it would replace your passkey.</span>
     <a class="z-btn z-btn--primary z-btn--sm" href="/app?from=business#recovery-alert">Check it</a></div>`;
