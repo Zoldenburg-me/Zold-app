@@ -10,7 +10,7 @@
  *   without Books gets no chart, never a row of zeros.
  * - Money out is Sent, never Paid: the bank's confirmation is not on a line.
  */
-import { $, Z, api, cap, esc, eur, maskIban, me, org, roleCan, setMe, view, when, ymd } from "./core.js";
+import { $, Z, api, cap, esc, eur, gateHtml, maskIban, me, org, roleCan, setMe, view, when, ymd } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { side, waitingForMe } from "./nav.js";
 import { invAmount, loadMembers, memberName } from "./screens.js";
