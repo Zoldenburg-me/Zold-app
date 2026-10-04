@@ -459,7 +459,7 @@ await check("a token whose decimals cannot be read is counted as skipped, with t
 await check("a valuation that fails still books the row, tagged needs-valuation", async () => {
   const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, txHash: H(40) })] });
-  const r = await syncWallet(w, reader, { value: async () => ({ ok: false as const, reason: "no price for this token", transient: false }), now: () => NOW });
+  const r = await syncWallet(w, reader, { value: async () => ({ ok: false as const, reason: "no price for this token", transient: false }), lists: listedAll, now: () => NOW });
   assert.equal(r.added, 1);
   const row = store.ledgerOf("org_1").find((e) => e.txHash === H(40))!;
   assert.ok(row.tags.includes("needs-valuation"));
@@ -505,7 +505,7 @@ await check("token lists that never loaded hold the window: nothing is called un
 await check("a price feed outage holds the window: nothing booked, the cursor stays, the wallet says why", async () => {
   const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, txHash: H(50) })] });
-  const r = await syncWallet(w, reader, { value: async () => ({ ok: false as const, reason: "the price feed answered 503", transient: true }), now: () => NOW });
+  const r = await syncWallet(w, reader, { value: async () => ({ ok: false as const, reason: "the price feed answered 503", transient: true }), lists: listedAll, now: () => NOW });
   assert.equal(r.added, 0);
   const after = store.findImportedWallet(w.id)!;
   assert.equal(after.sync.cursor, "0");
@@ -592,9 +592,9 @@ await check("an already-booked log is not priced again on a re-scan", async () =
   const reader = fakeReader({ head: 1000n, logs: [transfer({ blockNumber: 5n, txHash: H(80) })] });
   let priced = 0;
   const counting = async (q: any) => { priced++; return fixedValue(q); };
-  await syncWallet(w, reader, { value: counting, now: () => NOW });
+  await syncWallet(w, reader, { value: counting, lists: listedAll, now: () => NOW });
   store.updateImportedWallet(w.id, { sync: { ...store.findImportedWallet(w.id)!.sync, cursor: "0" } });
-  await syncWallet(w, reader, { value: counting, now: () => NOW });
+  await syncWallet(w, reader, { value: counting, lists: listedAll, now: () => NOW });
   assert.equal(priced, 1);
 });
 
