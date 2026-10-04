@@ -101,7 +101,7 @@ PH.home = {
     user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig()]),
   html() {
     const u = user || {};
-    const name = u.name || "Account";
+    const name = ownAccountName(u) || "Account";
     const checklist = phChecklist(u);
     const gate = u.segment?.gate;
     const inflight = hist.find(phInFlight);
@@ -298,7 +298,7 @@ async function phLoadBic() {
 }
 
 function phDetailsText(u, bic) {
-  return [`Account holder: ${u.name || ""}`, `IBAN: ${Z.groupIban(u.iban)}`, ...(bic ? [`BIC: ${bic}`] : [])].join("\n");
+  return [`Account holder: ${ownAccountName(u)}`, `IBAN: ${Z.groupIban(u.iban)}`, ...(bic ? [`BIC: ${bic}`] : [])].join("\n");
 }
 
 /* The account details body, used by the sheet and by Get paid. */
@@ -317,7 +317,7 @@ function phDetailsBody(u, bic, { loadingBic = false } = {}) {
     : "";
   return `<p class="z-sub">Share these to get paid by bank transfer.</p>
     <ul class="z-list z-card">
-      <li>${Z.copyRow({ label: "Account holder", value: u.name || "" })}</li>
+      <li>${Z.copyRow({ label: "Account holder", value: ownAccountName(u) })}</li>
       <li>${Z.copyRow({ label: "IBAN", value: String(u.iban).replace(/\s+/g, ""), display: Z.groupIban(u.iban), mono: true })}</li>
       ${bicRow}
     </ul>

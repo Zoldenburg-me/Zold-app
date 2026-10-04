@@ -6,7 +6,7 @@
  * and nowhere else. An action that opens a drawer returns "keep", so the
  * shell does not draw the page again under it.
  */
-import { $, Z, api, cap, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setView, toast, token, view } from "./core.js";
+import { $, Z, api, cap, createPersonalOrg, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
 import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
 import { sendState } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
@@ -231,6 +231,9 @@ export const ACTIONS = {
   async "doc-receipt"(el) {
     openDocument(await api(`/api/users/${me.id}/documents/receipt`, { method: "POST", body: { transferId: el.dataset.id } }));
   },
+
+  "create-personal": () => createPersonalOrg(),
+  "personal-later"() { setPersonalLater(); },
 
   /* Filters and tabs: state in the screen's module, then a redraw. */
   "ap-tab"(el) { ap.tab = el.dataset.tab; },

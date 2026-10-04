@@ -110,7 +110,7 @@ flowchart TB
   Safe["Safe smart account on Base<br/>owner: passkey only (1-of-1)"]
   IBAN["Monerium IBAN<br/>address-matched to the Safe"]
   Dev["Device key (secp256k1)<br/>browser localStorage"]
-  POrg["Personal organisation<br/>(auto-created)"]
+  POrg["Personal organisation<br/>(one per person; none for a company login)"]
   BOrg["Business organisation"]
   Acc["Account (EUR)<br/>backingUserId → User's Safe"]
   User -->|owns| Safe

@@ -193,6 +193,27 @@ export function dialog(title, bodyHtml, onSubmit, opts = {}) {
 }
 
 
+/** A person (never a company login: its Safe is the company's) with no
+ *  personal space yet. /business asks them to make one; the server refuses a
+ *  second one and any for a company login (routes/orgs.ts). */
+export const needsPersonalOrg = () =>
+  Boolean(me) && me.accountType !== "company" && !orgs.some((o) => o.type === "personal");
+
+const laterKey = () => `zold-personal-later:${me?.id}`;
+export function personalLater() {
+  try { return localStorage.getItem(laterKey()) === "1"; } catch { return false; }
+}
+export function setPersonalLater() {
+  try { localStorage.setItem(laterKey(), "1"); } catch { /* asked again next visit */ }
+}
+
+/** The personal space takes the account's name and country: nothing to fill in. */
+export async function createPersonalOrg() {
+  const r = await api("/api/orgs", { method: "POST", body: { type: "personal", name: me.name || "Personal", country: me.country } });
+  try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
+  location.reload();
+}
+
 /** The bindings other modules reassign. Every READ of them stays live. */
 export const setOrg = (v) => { org = v; };
 export const setOrgs = (v) => { orgs = v; };

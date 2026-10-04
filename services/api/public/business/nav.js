@@ -9,7 +9,7 @@
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, org, orgs, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 
 export const SPACES = {
@@ -165,7 +165,8 @@ function switchSheet(trigger) {
   };
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "org-switch", title: "Switch organisation",
-    body: `<div class="z-sheet__body"><ul class="z-list z-card">${orgs.map(row).join("")}</ul>
+    body: `<div class="z-sheet__body"><ul class="z-list z-card">${orgs.map(row).join("")}${needsPersonalOrg()
+      ? `<li><button type="button" class="z-row z-row--btn" data-act="create-personal">${Z.iconTile({ icon: "add" })}<span class="z-row__main"><span class="z-row__title">Create your personal space</span><span class="z-row__sub">Your own invoices and books</span></span></button></li>` : ""}</ul>
       ${me?.accountType === "company" ? "" : `<ul class="z-list z-card"><li>${Z.row({ lead: Z.iconTile({ icon: "smartphone" }), title: "Your personal account", sub: "Home, send and get paid, in the app", href: "/app", right: Z.icon("open_in_new", "z-row__chev") })}</li></ul>`}</div>`,
   }));
   const scrim = $("#org-switch");
@@ -181,8 +182,20 @@ function switchSheet(trigger) {
   Z.openOverlay("org-switch", trigger);
 }
 
+/* A person without a personal space is asked until they make one or say not now. */
+function personalBanner() {
+  if (!needsPersonalOrg() || personalLater()) return "";
+  return `<div class="banner info">${Z.icon("person")}<span>Your own invoices and books go in a <b>personal space</b>, next to the companies you work in.</span>
+    <button class="z-btn z-btn--primary z-btn--sm" data-act="create-personal">Create it</button>
+    <button class="z-btn z-btn--quiet z-btn--sm" data-act="personal-later">Not now</button></div>`;
+}
+
 export function planBanner() {
   if (!org) return "";
+  return personalBanner() + planNotice();
+}
+
+function planNotice() {
   const t = org.trial;
   if (t && !t.endedAt && new Date(t.endsAt) > new Date()) {
     const days = Math.ceil((new Date(t.endsAt) - new Date()) / 86400000);
