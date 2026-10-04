@@ -50,11 +50,14 @@ import { newChallenge, parseSignature, publicWallet } from "../domain/wallet-own
 import { verifyOwnership } from "../wallet-sync/ownership.js";
 import { walletEntryId } from "../domain/wallet-transfers.js";
 import { accountProfileStanding } from "../domain/monerium-profile.js";
+import { cleanName } from "../users/display-name.js";
 import { adoptionHint, auditProfileCheck, checkBackingProfile, profileWait } from "../adapters/monerium-profile.js";
 import { emailLooksValid } from "../domain/email.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
+/** An organisation's name and legal name, in characters. */
+const ORG_NAME_MAX = 120;
 
 /** Why an EUR account with no IBAN behind it cannot send, and what connects
  *  one, in the words the Accounts screen shows: no API field names. */
@@ -150,8 +153,14 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const { name, type, country, legalName, taxId, email } = req.body ?? {};
     const orgType: OrgType = type === "business" ? "business" : "personal";
-    if (typeof name !== "string" || name.trim().length < 2) {
-      return res.status(400).json({ error: "An organisation needs a name." });
+    // Printed on invoices and documents: the same rule as a person's name.
+    const orgName = cleanName(name, { min: 2, max: ORG_NAME_MAX });
+    if (orgName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: `An organisation needs a name of 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+    }
+    const orgLegalName = typeof legalName === "string" && legalName.trim() ? cleanName(legalName, { min: 2, max: ORG_NAME_MAX }) : undefined;
+    if (orgLegalName === null) {
+      return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
     }
     if (typeof country !== "string" || !/^[A-Za-z]{2}$/.test(country)) {
       return res
@@ -179,8 +188,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const org: Organisation = {
       id: `org_${randomUUID()}`,
       type: orgType,
-      name: name.trim(),
-      legalName: typeof legalName === "string" ? legalName.trim() : undefined,
+      name: orgName,
+      legalName: orgLegalName,
       taxId: typeof taxId === "string" ? taxId.trim() : undefined,
       email: typeof email === "string" ? email.trim() : undefined,
       address: { country: country.toUpperCase() },
@@ -252,15 +261,24 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
     const patch: Partial<Organisation> = {};
     const b = req.body ?? {};
-    if (typeof b.name === "string" && b.name.trim().length >= 2) patch.name = b.name.trim();
+    if (typeof b.name === "string") {
+      const n = cleanName(b.name, { min: 2, max: ORG_NAME_MAX });
+      if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+      patch.name = n;
+    }
     // A personal space is named after its person: one name, changed in the app.
-    if (ctx.org.type === "personal" && patch.name !== undefined && patch.name !== ctx.org.name.trim()) {
+    if (ctx.org.type === "personal" && patch.name !== undefined && patch.name !== ctx.org.name.normalize("NFC").trim()) {
       return res.status(409).json({
         code: "PERSONAL_ORG_NAME",
         error: "Your personal space is named after you. Change your name in the Zold app, under Profile.",
       });
     }
-    if (typeof b.legalName === "string") patch.legalName = b.legalName.trim();
+    if (typeof b.legalName === "string") {
+      // Empty clears it; anything else follows the name rule.
+      const n = b.legalName.trim() ? cleanName(b.legalName, { min: 2, max: ORG_NAME_MAX }) : "";
+      if (n === null) return res.status(400).json({ code: "NAME_INVALID", error: `The legal name needs 2 to ${ORG_NAME_MAX} characters, without hidden or control characters.` });
+      patch.legalName = n;
+    }
     if (typeof b.taxId === "string") patch.taxId = b.taxId.trim();
     if (typeof b.email === "string") patch.email = b.email.trim();
     if (typeof b.notificationEmail === "string") {
