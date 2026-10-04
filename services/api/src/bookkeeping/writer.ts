@@ -18,8 +18,16 @@
  */
 import { IS_REAL_MONEY_CHAIN } from "../config.js";
 import { applyRules } from "../domain/coa.js";
-import type { LedgerEntry } from "../domain/types.js";
-import { store, type MoneriumIssueRecord, type User } from "../store.js";
+import type { AccountRule, Invoice, LedgerEntry } from "../domain/types.js";
+import {
+  store,
+  type ConversionSweep,
+  type CryptoDeposit,
+  type MoneriumIssueRecord,
+  type PaymentRequest,
+  type Transfer,
+  type User,
+} from "../store.js";
 import { safeBooksStart } from "../domain/safe-books.js";
 import type { MoneriumOrderLike } from "../documents.js";
 import { mergeStatementLines, projectStatementLines, type StatementInputs } from "./statement.js";
@@ -56,7 +64,81 @@ export function booksFor(userId: string): { orgId: string; accountId: string; si
 
 const warned = new Set<string>();
 
-function inputsFor(user: User): StatementInputs | undefined {
+/**
+ * Where a projection reads its rows from. One user reads them straight from
+ * the store. A sweep over every user groups each table once instead: a filter
+ * per user made the sweep O(users × rows), and it runs after every Monerium
+ * poll and every minute. A group keeps store order, as the filter did.
+ */
+interface Rows {
+  transfersOf(userId: string): Transfer[];
+  depositsOf(userId: string): CryptoDeposit[];
+  issueOrdersOf(userId: string): MoneriumIssueRecord[];
+  sweepsOf(userId: string): ConversionSweep[];
+  paymentRequestsOf(userId: string): PaymentRequest[];
+  invoicesOf(orgId: string): Invoice[];
+  rulesOf(orgId: string): AccountRule[];
+  ledgerOf(orgId: string): LedgerEntry[];
+  swapsHaveExecuted(): boolean;
+  /** Lines just written, so the next user booked under the same org sees them. */
+  added(orgId: string, entries: LedgerEntry[]): void;
+}
+
+const storeRows: Rows = {
+  transfersOf: (id) => store.transfers.filter((t) => t.userId === id),
+  depositsOf: (id) => store.cryptoDeposits.filter((d) => d.userId === id),
+  issueOrdersOf: (id) => store.moneriumIssueOrders.filter((o) => o.userId === id),
+  sweepsOf: (id) => store.conversionSweeps.filter((s) => s.userId === id),
+  paymentRequestsOf: (id) => store.paymentRequestsForUser(id),
+  invoicesOf: (orgId) => store.invoicesOf(orgId),
+  rulesOf: (orgId) => store.rulesOf(orgId),
+  ledgerOf: (orgId) => store.ledgerOf(orgId),
+  swapsHaveExecuted,
+  added: () => {},
+};
+
+function groupBy<T>(rows: readonly T[], key: (row: T) => string | undefined): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  for (const row of rows) {
+    const k = key(row);
+    if (k === undefined) continue;
+    const group = out.get(k);
+    if (group) group.push(row);
+    else out.set(k, [row]);
+  }
+  return out;
+}
+
+/** Valid for one synchronous sweep: nothing else writes these tables meanwhile. */
+function groupedRows(): Rows {
+  const transfers = groupBy(store.transfers, (t) => t.userId);
+  const deposits = groupBy(store.cryptoDeposits, (d) => d.userId);
+  const issueOrders = groupBy(store.moneriumIssueOrders, (o) => o.userId);
+  const sweeps = groupBy(store.conversionSweeps, (s) => s.userId);
+  const paymentRequests = groupBy(store.paymentRequests, (r) => r.userId);
+  const invoices = groupBy(store.invoices, (i) => i.orgId);
+  const rules = groupBy(store.accountRules, (r) => r.orgId);
+  const ledger = groupBy(store.ledger, (e) => e.orgId);
+  const swaps = swapsHaveExecuted();
+  return {
+    transfersOf: (id) => transfers.get(id) ?? [],
+    depositsOf: (id) => deposits.get(id) ?? [],
+    issueOrdersOf: (id) => issueOrders.get(id) ?? [],
+    sweepsOf: (id) => sweeps.get(id) ?? [],
+    paymentRequestsOf: (id) => paymentRequests.get(id) ?? [],
+    invoicesOf: (orgId) => invoices.get(orgId) ?? [],
+    rulesOf: (orgId) => rules.get(orgId) ?? [],
+    ledgerOf: (orgId) => ledger.get(orgId) ?? [],
+    swapsHaveExecuted: () => swaps,
+    added: (orgId, entries) => {
+      const group = ledger.get(orgId);
+      if (group) group.push(...entries);
+      else ledger.set(orgId, [...entries]);
+    },
+  };
+}
+
+function inputsFor(user: User, rows: Rows): StatementInputs | undefined {
   const books = booksFor(user.id);
   if (!books) {
     if (!warned.has(user.id)) {
@@ -70,28 +152,29 @@ function inputsFor(user: User): StatementInputs | undefined {
     accountId: books.accountId,
     userId: user.id,
     safeAddress: user.address,
-    transfers: store.transfers.filter((t) => t.userId === user.id),
-    deposits: store.cryptoDeposits.filter((d) => d.userId === user.id),
-    issueOrders: store.moneriumIssueOrders.filter((o) => o.userId === user.id),
-    sweeps: store.conversionSweeps.filter((s) => s.userId === user.id),
-    invoices: store.invoicesOf(books.orgId),
-    paymentRequests: store.paymentRequestsForUser(user.id),
-    swapsHaveExecuted: swapsHaveExecuted(),
+    transfers: rows.transfersOf(user.id),
+    deposits: rows.depositsOf(user.id),
+    issueOrders: rows.issueOrdersOf(user.id),
+    sweeps: rows.sweepsOf(user.id),
+    invoices: rows.invoicesOf(books.orgId),
+    paymentRequests: rows.paymentRequestsOf(user.id),
+    swapsHaveExecuted: rows.swapsHaveExecuted(),
   };
 }
 
 /** Project and write one user's lines. Returns what changed. */
-export function writeStatementLinesFor(user: User): { added: number; updated: number } {
-  const inp = inputsFor(user);
+export function writeStatementLinesFor(user: User, rows: Rows = storeRows): { added: number; updated: number } {
+  const inp = inputsFor(user, rows);
   if (!inp) return { added: 0, updated: 0 };
   const since = booksFor(user.id)?.since;
   // Nothing from before the Safe's books start: an imported Safe's earlier life is not the account's.
   const projected = projectStatementLines(inp).filter((e) => !since || e.at >= since);
-  const existing = store.ledgerOf(inp.orgId);
+  const existing = rows.ledgerOf(inp.orgId);
   const { toAdd, toUpdate } = mergeStatementLines(existing, projected);
   if (toAdd.length) {
-    const { entries } = applyRules(store.rulesOf(inp.orgId), toAdd);
+    const { entries } = applyRules(rows.rulesOf(inp.orgId), toAdd);
     store.addLedgerEntries(entries);
+    rows.added(inp.orgId, entries);
   }
   for (const u of toUpdate) store.updateLedgerEntry(u.id, u.patch);
   return { added: toAdd.length, updated: toUpdate.length };
@@ -99,23 +182,28 @@ export function writeStatementLinesFor(user: User): { added: number; updated: nu
 
 let running = false;
 
-/** Every user. Cheap on the JSON store; one at a time. */
+/** Every user, one at a time, landing as one file write at the end. */
 export function writeStatementLines(): { added: number; updated: number } {
   if (running) return { added: 0, updated: 0 };
   running = true;
   try {
     let added = 0;
     let updated = 0;
-    for (const u of store.users) {
-      try {
-        // One file write per user, not one per line.
-        const r = store.batched(() => writeStatementLinesFor(u));
-        added += r.added;
-        updated += r.updated;
-      } catch (err: any) {
-        console.error(`bookkeeping: could not write statement lines for ${u.id}: ${err?.message ?? err}`);
+    // One file write per sweep: a write per user re-serialised the whole store
+    // once for every user with a new line. The sweep is synchronous, and
+    // batched() writes on the way out even if a user's projection throws.
+    store.batched(() => {
+      const rows = groupedRows();
+      for (const u of store.users) {
+        try {
+          const r = writeStatementLinesFor(u, rows);
+          added += r.added;
+          updated += r.updated;
+        } catch (err: any) {
+          console.error(`bookkeeping: could not write statement lines for ${u.id}: ${err?.message ?? err}`);
+        }
       }
-    }
+    });
     if (added || updated) console.log(`bookkeeping: ${added} statement line(s) added, ${updated} refreshed`);
     return { added, updated };
   } finally {

@@ -10,6 +10,7 @@
 // is the double-payout case the orchestrator guards against.
 
 import { partnerTimeout } from "../http.js";
+import { moneriumFetch } from "./monerium-limit.js";
 
 /** A non-2xx response from Monerium, carrying the status so callers can tell
  *  "this order does not exist" from "Monerium is briefly unreachable". */
@@ -76,7 +77,7 @@ export class MoneriumClient {
     if (this.token && Date.now() < this.token.expiresAt - 60_000) {
       return this.token.value;
     }
-    const res = await fetch(`${this.cfg.baseUrl}/auth/token`, {
+    const res = await moneriumFetch(`${this.cfg.baseUrl}/auth/token`, {
       signal: partnerTimeout(),
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -96,7 +97,7 @@ export class MoneriumClient {
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const token = await this.accessToken();
-    const res = await fetch(`${this.cfg.baseUrl}${path}`, {
+    const res = await moneriumFetch(`${this.cfg.baseUrl}${path}`, {
       signal: partnerTimeout(),
       method,
       headers: {
@@ -242,7 +243,7 @@ export async function exchangeAuthorizationCode(cfg: MoneriumConfig, params: {
   codeVerifier: string;
   redirectUri: string;
 }): Promise<MoneriumTokenResponse> {
-  const res = await fetch(`${cfg.baseUrl}/auth/token`, {
+  const res = await moneriumFetch(`${cfg.baseUrl}/auth/token`, {
     signal: partnerTimeout(),
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -265,7 +266,7 @@ export async function refreshAuthorizationToken(
   cfg: MoneriumConfig,
   refreshToken: string,
 ): Promise<MoneriumTokenResponse> {
-  const res = await fetch(`${cfg.baseUrl}/auth/token`, {
+  const res = await moneriumFetch(`${cfg.baseUrl}/auth/token`, {
     signal: partnerTimeout(),
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -290,7 +291,7 @@ export async function moneriumBearerRequest<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const res = await moneriumFetch(`${baseUrl}${path}`, {
     signal: partnerTimeout(),
     method,
     headers: {
