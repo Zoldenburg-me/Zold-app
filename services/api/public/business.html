@@ -18,13 +18,16 @@
   <aside class="z-side zb-side" id="side" aria-label="Sidebar">
     <a class="z-side__brand" href="/business"><span class="z-brand-tri" aria-hidden="true">▽</span>Zold</a>
     <div id="side-org"></div>
-    <nav class="zb-space" id="side-space" aria-label="Workspace" hidden></nav>
-    <button type="button" class="z-side__search" id="search-btn" aria-haspopup="dialog" hidden>
-      <span class="z-ic" aria-hidden="true">search</span><span>Search</span><kbd class="z-kbd" id="search-kbd">⌘K</kbd>
-    </button>
-    <nav class="z-side__nav" id="nav" aria-label="Main"></nav>
-    <div id="side-accounts"></div>
-    <div class="z-side__foot" id="side-foot"></div>
+    <button type="button" class="z-iconbtn zb-menu-btn" id="menu-btn" aria-expanded="false" aria-controls="side-menu" aria-label="Menu"><span class="z-ic" aria-hidden="true">menu</span></button>
+    <div class="zb-side__menu" id="side-menu">
+      <nav class="zb-space" id="side-space" aria-label="Workspace" hidden></nav>
+      <button type="button" class="z-side__search" id="search-btn" aria-haspopup="dialog" hidden>
+        <span class="z-ic" aria-hidden="true">search</span><span>Search</span><kbd class="z-kbd" id="search-kbd">⌘K</kbd>
+      </button>
+      <nav class="z-side__nav" id="nav" aria-label="Main"></nav>
+      <div id="side-accounts"></div>
+      <div class="z-side__foot" id="side-foot"></div>
+    </div>
   </aside>
 
   <main class="zb-main" id="main" tabindex="-1">
@@ -60,6 +63,7 @@
       <div id="view"></div>
     </div>
   </main>
+  <div id="tabs"></div>
 </div>
 
 <dialog id="dlg" aria-labelledby="dlg-title"><div id="dlg-body"></div></dialog>

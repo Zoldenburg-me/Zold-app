@@ -55,20 +55,40 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .zb-main { position: relative; isolation: isolate; min-width: 0; padding: var(--z-space-7) var(--z-space-10) var(--z-space-12); }
 .zb-main::before { content: ""; position: absolute; inset: -200px 0 auto; z-index: -1; height: 520px; pointer-events: none; background: var(--z-hero-glow); opacity: .6; }
 #app, #signed-out, #no-orgs { max-width: 1104px; }
-/* Under 1024px (the phone has /app): the sidebar is a block on top, its nav
-   one scrolling row, the accounts list left out. */
+/* The sidebar's lower part. A plain part of the sidebar on a desktop; on a
+   phone it is what Menu opens. */
+.zb-side__menu { display: contents; }
+.zb .zb-side .zb-menu-btn { display: none; }
+#tabs .z-bnav button { position: relative; display: grid; align-content: center; justify-items: center; gap: 4px; border: 0; background: none; font: 500 12px var(--z-font); color: var(--z-dim); }
+#tabs .z-bnav button:hover, #tabs .z-bnav button[aria-current="page"] { color: var(--z-text); }
+@media (min-width: 1024px) { #tabs { display: none; } }
+
+/* Under 1024px: the sidebar is a top bar (the mark, the organisation, Menu),
+   the main stops are a tab bar at the bottom as in the app, and Menu opens
+   everything else as a full-screen panel. */
 @media (max-width: 1023px) {
   .zb { grid-template-columns: minmax(0, 1fr); }
-  .zb .zb-side { flex-direction: column; gap: 10px; min-width: 0; padding: var(--z-space-3) var(--z-space-4); border-bottom: 1px solid var(--z-line); background: var(--z-sunk); }
-  .zb .zb-side .z-side__nav { flex-direction: row; flex-wrap: nowrap; gap: 4px; overflow-x: auto; scrollbar-width: none; }
-  .zb .zb-side .z-side__link { flex: none; }
-  .zb #side-accounts { display: none; }
-  .zb .zb-side .z-side__foot { flex-direction: row; flex-wrap: wrap; align-items: center; margin-top: 0; }
-  .zb .zb-side .z-side__foot .z-testmode { width: 100%; margin-top: 0; }
-  .zb-main { padding: var(--z-space-5) var(--z-space-4) var(--z-space-10); }
+  .zb .zb-side { position: sticky; top: 0; z-index: 30; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; height: auto; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--z-line); background: var(--z-sunk); overflow: visible; }
+  .zb .zb-side .z-side__brand { padding: 0 4px; }
+  .zb #side-org .z-side__org { min-height: 44px; padding: 4px 8px; }
+  .zb #side-org .z-side__org .z-avatar { width: 30px; height: 30px; }
+  .zb .zb-side .zb-menu-btn { display: inline-grid; }
+  .zb:not(.is-menu) .zb-side__menu { display: none; }
+  .zb.is-menu .zb-side { position: fixed; inset: 0; align-content: start; overflow-y: auto; padding-bottom: calc(var(--z-space-6) + env(safe-area-inset-bottom, 0px)); }
+  .zb.is-menu .zb-side__menu { display: flex; grid-column: 1 / -1; flex-direction: column; gap: 14px; padding-top: var(--z-space-2); }
+  .zb.is-menu #side-accounts { display: none; }
+  .zb.is-menu .z-side__foot { margin-top: 0; }
+  html:has(.zb.is-menu) { overflow: hidden; }
+  .zb-main { padding: var(--z-space-5) var(--z-space-4) var(--z-space-8); }
   .zb .zb-head { flex-direction: column; align-items: flex-start; }
   .zb .zb-head__actions { justify-content: flex-start; }
   .zb .zb-head h1 { font-size: 28px; }
+  .zb #plan-banner .banner { flex-wrap: wrap; }
+  .zb #plan-banner .banner > span:not(.z-ic) { flex: 1 1 calc(100% - 40px); }
+  #tabs { position: sticky; bottom: 0; z-index: 20; }
+  .zb .zb-note { flex-wrap: wrap; }
+  .zb .zb-note > span:not(.z-ic) { flex: 1 1 calc(100% - 40px); }
+  .zb .z-side__search .z-kbd { display: none; }
 }
 
 .zb-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--z-space-5); margin-bottom: 22px; }
