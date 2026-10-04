@@ -1,7 +1,8 @@
 /**
- * The Monerium soft limit (adapters/monerium-limit.ts): calls are spaced at
- * MONERIUM_MAX_RPS, a call past it waits rather than being refused, a timeout
- * still ends a call stuck in the queue, and nothing reaches Monerium around it.
+ * The Monerium soft limit (adapters/monerium-limit.ts): reads are spaced at
+ * MONERIUM_MAX_RPS, a read past it waits rather than being refused, writes skip
+ * the queue, a timeout still ends a call stuck in it, and nothing reaches
+ * Monerium around it.
  * Offline: global fetch is stubbed.
  */
 import "./_test-env.js";
@@ -63,6 +64,27 @@ await check("a call whose timeout fires while it waits is refused without reachi
     await assert.rejects(late, /abort|timeout/i);
     await Promise.all(queue);
     assert.equal(calls, 40, "the timed-out call never went out");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+await check("a write (POST) goes out at once, even behind a full queue of reads", async () => {
+  const realFetch = globalThis.fetch;
+  const sent: { method: string; at: number }[] = [];
+  globalThis.fetch = (async (_url: string, init: RequestInit = {}) => {
+    sent.push({ method: init.method ?? "GET", at: Date.now() });
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    const start = Date.now();
+    const reads = Array.from({ length: 40 }, () => moneriumFetch("https://api.monerium.dev/orders"));
+    await moneriumFetch("https://api.monerium.dev/orders", { method: "POST", body: "{}" });
+    const post = sent.find((s) => s.method === "POST")!;
+    assert.ok(post.at - start < 50, `the POST waited ${post.at - start} ms behind reads`);
+    assert.ok(sent.filter((s) => s.method === "GET").length < 40, "reads were still queued when the POST went");
+    await Promise.all(reads);
   } finally {
     globalThis.fetch = realFetch;
   }

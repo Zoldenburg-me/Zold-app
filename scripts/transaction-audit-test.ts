@@ -426,7 +426,9 @@ await check("every partner client on a money path bounds its own calls", () => {
   ];
   for (const f of files) {
     const src = readFileSync(f, "utf8");
-    const calls = (src.match(/\bfetch\(/g) ?? []).length;
+    // moneriumFetch (adapters/monerium-limit.ts) is fetch behind the rate
+    // limit; it passes the caller's signal through, so it counts the same.
+    const calls = (src.match(/\b(?:fetch|moneriumFetch)\(/g) ?? []).length;
     const bounded = (src.match(/partnerTimeout\(/g) ?? []).length;
     assert.ok(calls > 0, `${f} has no fetch call — has it moved?`);
     assert.ok(
