@@ -38,6 +38,29 @@ export const VIEWS = [...SPACES.banking, ...SPACES.books];
 /** Where the Banking and Books switch lands. */
 const SPACE_HOME = { banking: "overview", books: "books-overview" };
 
+/** The phone's tab bar: the first stops of each space; the rest are in Menu. */
+const TABS = { banking: ["overview", "payments", "send", "get-paid"], books: ["books-overview", "books", "export"] };
+
+/* Under 1024px the sidebar is a top bar, and Menu opens the rest of it as a
+   full-screen panel. Closed by Menu again, Escape, or picking a screen. */
+export function setMenu(open) {
+  const shell = document.querySelector(".zb");
+  const btn = $("#menu-btn");
+  if (!shell || !btn) return;
+  const was = shell.classList.contains("is-menu");
+  shell.classList.toggle("is-menu", open);
+  btn.setAttribute("aria-expanded", String(open));
+  btn.setAttribute("aria-label", open ? "Close menu" : "Menu");
+  btn.querySelector(".z-ic").textContent = open ? "close" : "menu";
+  if (open && !was) $("#side-menu").querySelector("a, button:not([hidden])")?.focus();
+  if (!open && was && $("#side-menu").contains(document.activeElement)) btn.focus();
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.querySelector(".zb.is-menu")) setMenu(false);
+});
+// Search opens its own dialog over the page; the panel gets out of its way.
+document.addEventListener("click", (e) => { if (e.target.closest?.("#search-btn")) setMenu(false); });
+
 /** Which nav item an older view belongs to. */
 export const PARENT = {
   ledger: "books", assets: "books", gains: "books",
@@ -119,6 +142,11 @@ export function renderNav() {
     badge: v.id === "payments" && waiting ? String(waiting) : "",
   }));
   $("#nav").innerHTML = items.map((it) => link(it, active)).join("");
+  const tabs = TABS[space].map((id) => items.find((it) => it.id === id)).filter(Boolean);
+  $("#tabs").innerHTML = `<nav class="z-bnav zb-tabs" aria-label="Quick" style="grid-template-columns:repeat(${tabs.length + 1},1fr)">${tabs.map((it) =>
+    `<a href="?view=${esc(it.id)}" data-view="${esc(it.id)}"${it.id === active ? ' aria-current="page"' : ""}>${Z.icon(it.icon)}<span>${esc(it.id === "overview" ? "Home" : it.label)}</span>`
+    + `${it.badge ? `<span class="z-bnav__badge"><span class="z-sr">, </span>${esc(it.badge)}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`).join("")}
+    <button type="button" data-menu${TABS[space].includes(active) ? "" : ' aria-current="page"'}>${Z.icon("menu")}<span>Menu</span></button></nav>`;
   $("#nav").setAttribute("aria-label", space === "books" ? "Books" : "Main");
   $("#side-space").innerHTML = hasBooks
     ? [["banking", "Banking", "account_balance_wallet"], ["books", "Books", "menu_book"]].map(([id, label, icon]) =>
@@ -142,15 +170,18 @@ export function renderNav() {
 
   // A real link, so a modifier-click or middle-click opens the view in a new
   // tab (boot reads ?view=). A plain click stays in the page.
-  document.querySelectorAll("#side a[data-view]").forEach((a) => {
+  document.querySelectorAll("#side a[data-view], #tabs a[data-view]").forEach((a) => {
     a.onclick = (e) => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
+      setMenu(false);
       setView(a.dataset.view);
       render({ focus: true });
     };
   });
-  $("#org-btn").onclick = () => switchSheet($("#org-btn"));
+  $("#org-btn").onclick = () => { setMenu(false); switchSheet($("#org-btn")); };
+  $("#menu-btn").onclick = () => setMenu(!document.querySelector(".zb.is-menu"));
+  $("#tabs [data-menu]").onclick = () => setMenu(true);
 }
 
 /** Pick an organisation: here, in place. The personal app is one link away,

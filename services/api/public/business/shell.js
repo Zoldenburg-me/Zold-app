@@ -9,7 +9,7 @@ import {
   $, api, esc, invoiceInputListener, org, orgs, setInvoiceInputListener, setMe, setOrg,
   setOrgs, setTestMode, setView, toast, token, view,
 } from "./core.js";
-import { KNOWN, planBanner, refreshSide, renderNav } from "./nav.js";
+import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
 import { META, RENDER, setExportMonth } from "./views.js";
 import { checkCustomerVatId, refreshInvoiceCheck } from "./invoice.js";
 import { ACTIONS } from "./actions.js";
@@ -55,6 +55,7 @@ document.addEventListener("click", (ev) => {
 // Back and Forward move between views: the URL is the source of truth there.
 window.addEventListener("popstate", () => {
   if (!org) return;
+  setMenu(false);
   const wanted = new URLSearchParams(location.search).get("view") || "overview";
   setView(KNOWN.has(wanted) ? wanted : "overview", { push: false });
   render({ focus: true });
