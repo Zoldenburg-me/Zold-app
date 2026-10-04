@@ -11,6 +11,8 @@
  * chain, and a wrong one is invisible: balances read zero and it looks like
  * the deposit never arrived.
  */
+import { moneriumFetch } from "./monerium-limit.js";
+
 const CACHE_MS = 10 * 60 * 1000;
 
 export interface MoneriumToken {
@@ -25,7 +27,7 @@ let cache: { at: number; tokens: MoneriumToken[] } | null = null;
 
 async function allTokens(baseUrl: string): Promise<MoneriumToken[]> {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.tokens;
-  const res = await fetch(`${baseUrl}/tokens`, { signal: AbortSignal.timeout(10_000) });
+  const res = await moneriumFetch(`${baseUrl}/tokens`, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`GET ${baseUrl}/tokens -> ${res.status}`);
   const raw = (await res.json()) as any[];
   const tokens = raw
