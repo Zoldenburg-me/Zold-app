@@ -125,10 +125,14 @@ function phSignerRows() {
   const limits = s.allowance?.limits || [];
   const spenders = new Set(limits.map((l) => String(l.delegate).toLowerCase())).size;
   const sig = `${s.threshold} of ${owners.length}${owners.length === 1 ? ": you alone" : ""}`;
+  // Letting someone else spend is offered to people who work with a business
+  // (app/signers.js); a spender already on the account is always shown.
+  if (phCache.orgs === null) phLoadOrgs().then(() => { if (phRoute?.name === "security") phRender(); });
+  const offerSpenders = spenders > 0 || (phCache.orgs || []).some((o) => o.type === "business");
   return `<ul class="z-list z-card">${[
     Z.row({ lead: Z.iconTile({ icon: "draw" }), title: "Signatures needed", sub: sig, href: "#signers" }),
-    Z.row({ lead: Z.iconTile({ icon: "speed" }), title: "Spending limits", sub: limits.length ? `${limits.length} set` : "None set", href: "#signers" }),
-    Z.row({ lead: Z.iconTile({ icon: "person_add" }), title: "Allowed spenders", sub: spenders ? String(spenders) : "None", href: "#signers" }),
+    ...(offerSpenders ? [Z.row({ lead: Z.iconTile({ icon: "person_add" }), title: "People who can spend from your account",
+      sub: spenders ? `${spenders} ${spenders === 1 ? "person" : "people"} · ${limits.length} limit${limits.length === 1 ? "" : "s"}` : "None", href: "#signers" })] : []),
   ].map((r) => `<li>${r}</li>`).join("")}</ul>`;
 }
 
