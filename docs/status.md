@@ -6,6 +6,11 @@ Say this plainly rather than letting the surface imply otherwise:
 
 - **No mainnet deploy.** No 8453 entry in `deployments.json`; needs funded
   operator keys the user holds.
+- **No ENS name has resolved through a live resolver.** The OffchainResolver
+  and the gateway pass end to end on local hardhat (`test:contracts`), but no
+  resolver is deployed on Sepolia or mainnet, zoldhq.com has no DNSSEC/ENS TXT
+  record, and the DNS path through ENS's OffchainDNSResolver has never run.
+  `/api/ens/lookup` has never been called against a real ENS RPC.
 - **No real money has moved through a swap.** No dex/LI.FI/RFQ/CoW swap has
   executed; no Base Sepolia send has exercised execution → debit.
 - **The cash rail has never opened.** Bridge live mode is entirely unexercised,

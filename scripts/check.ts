@@ -71,6 +71,7 @@ const scripts = [
   "gnosispay:test",
   "onboarding:test",
   "pay:test",
+  "ens:test",
   "tx:audit:test",
   "statement:test",
   "wallet-sync:test",
