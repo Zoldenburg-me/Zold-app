@@ -22,6 +22,7 @@ import { resolveSegment, type Segment } from "../domain/segments.js";
 import { store, type User } from "../store.js";
 import { requireKycApproved } from "../http/guards.js";
 import { publicUser, withSession } from "../users/public-user.js";
+import { nameChange } from "../users/display-name.js";
 import { findIbanBic, refreshPendingIban } from "../adapters/monerium-sandbox.js";
 import { normalizeIban } from "../sepa.js";
 import { emailHeldBy, emailLooksValid } from "../domain/email.js";
@@ -287,6 +288,29 @@ export function createUserRouter(deps: UserDeps) {
       }
       const balances = await accountBalances(user.address);
       res.json({ ...publicUser(user), ...balances });
+    }),
+  );
+
+  /**
+   * The person's name: editable until Monerium verifies them, never on a
+   * company login (users/display-name.ts). Their personal space is named
+   * after them, so it follows.
+   */
+  router.patch(
+    "/users/:id/name",
+    wrap(async (req, res) => {
+      const user = store.findUser(req.params.id);
+      if (!user) return res.status(404).json({ error: "user not found" });
+      if (!requireUserSession(req, res, user.id)) return;
+      const r = nameChange(user, req.body?.name);
+      if ("code" in r) return res.status(r.status).json({ code: r.code, error: r.error });
+      const updated = store.updateUser(user.id, { name: r.name });
+      // That it changed, not to what: the name itself is on the user row.
+      store.audit(auditEntry("user.name_changed", {}, user.id));
+      for (const { org } of store.organisationsForUser(user.id)) {
+        if (org.type === "personal") store.updateOrganisation(org.id, { name: r.name });
+      }
+      res.json(publicUser(updated));
     }),
   );
 

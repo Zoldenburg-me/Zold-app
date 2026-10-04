@@ -110,7 +110,7 @@ flowchart TB
   Safe["Safe smart account on Base<br/>owner: passkey only (1-of-1)"]
   IBAN["Monerium IBAN<br/>address-matched to the Safe"]
   Dev["Device key (secp256k1)<br/>browser localStorage"]
-  POrg["Personal organisation<br/>(auto-created)"]
+  POrg["Personal organisation<br/>(one per person; none for a company login)"]
   BOrg["Business organisation"]
   Acc["Account (EUR)<br/>backingUserId → User's Safe"]
   User -->|owns| Safe
@@ -803,7 +803,7 @@ go (Lexware CSV, a GetMyInvoices bank account, MT940 or CAMT).
 | URL | who | what |
 |---|---|---|
 | `/` | public | Marketing landing page |
-| `/app` | account holder | Consumer PWA with onboarding, home, send, activity, payment page and links, the personal organisation's invoices and accounting connections, settings, security, plan, documents, recovery and card. A member can switch it to a company: that company's home, account details, approvals (approve or send back), members and invites. Drafting and sending a company payment stay in `/business`. From 1024px it has a sidebar, a wide home, payment details in a drawer and a search (Cmd or Ctrl K) over the payments, contacts and invoices already loaded; picking a company there opens `/business`. Installable, and works offline for the shell. |
+| `/app` | account holder | Consumer PWA with onboarding, home, send, activity, payment page and links, a Profile tab (name, editable until Monerium verifies it; Zold tag; account, security, settings; the way into Zold Business), the personal organisation's invoices, plan, documents, recovery and card. Accounting connections are set up in `/business`. A member can switch it to a company: that company's home, account details, approvals (approve or send back), members and invites. Drafting and sending a company payment stay in `/business`. From 1024px it has a sidebar, a wide home, payment details in a drawer and a search (Cmd or Ctrl K) over the payments, contacts and invoices already loaded; picking a company there opens `/business`. Installable, and works offline for the shell. |
 | `/business` | org member | The organisation's desktop: a sidebar (Home, Approvals, Send, Get paid, Invoices, Contacts, Books, Members, the accounts list, Coming soon, Settings) and search (Cmd or Ctrl K) over contacts, payment runs and invoices. Approvals reviews in a drawer and sends one approved run at a time; Books holds the month's lines with category, memo and Beleg, the exports, the chart of accounts, assets, wallets and every transaction; Get paid holds the bank details; Settings is one tile per area (Organisation, Invoicing profile, Connections with Shopify and the accounting tools, Members and access, Plan), each its own screen; Accounts → Statements and documents issues the backing member's statements, balance confirmations, proofs of ownership and receipts; Coming soon lists what the organisation cannot do yet; the invoice editor draws the invoice as paper beside the form. A balance shows only to the member whose own account a company account spends from |
 | `/pay/<handle>` | payer | Payment page |
 | `/pay/<handle>/<code>` | payer | Payment link, which also serves as the payer's receipt |

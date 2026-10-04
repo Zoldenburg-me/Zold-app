@@ -159,6 +159,22 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
         .json({ error: "Country must be an ISO 3166-1 alpha-2 code, e.g. DE." });
     }
 
+    /**
+     * A personal org is the person's own books, so there is one per person,
+     * and none for a company login: its Safe and IBAN are the company's.
+     */
+    if (orgType === "personal") {
+      if (store.findUser(session.userId)?.accountType === "company") {
+        return res.status(409).json({
+          code: "PERSONAL_ORG_COMPANY_LOGIN",
+          error: "This is a company login, so it has no personal space. For your own money, sign up for Zold as a person with your own email.",
+        });
+      }
+      if (store.organisationsForUser(session.userId).some(({ org: o }) => o.type === "personal")) {
+        return res.status(409).json({ code: "PERSONAL_ORG_EXISTS", error: "You already have a personal space." });
+      }
+    }
+
     const now = new Date().toISOString();
     const org: Organisation = {
       id: `org_${randomUUID()}`,
@@ -237,6 +253,13 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     const patch: Partial<Organisation> = {};
     const b = req.body ?? {};
     if (typeof b.name === "string" && b.name.trim().length >= 2) patch.name = b.name.trim();
+    // A personal space is named after its person: one name, changed in the app.
+    if (ctx.org.type === "personal" && patch.name !== undefined && patch.name !== ctx.org.name.trim()) {
+      return res.status(409).json({
+        code: "PERSONAL_ORG_NAME",
+        error: "Your personal space is named after you. Change your name in the Zold app, under Profile.",
+      });
+    }
     if (typeof b.legalName === "string") patch.legalName = b.legalName.trim();
     if (typeof b.taxId === "string") patch.taxId = b.taxId.trim();
     if (typeof b.email === "string") patch.email = b.email.trim();

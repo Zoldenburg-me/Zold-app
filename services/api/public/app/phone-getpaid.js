@@ -129,7 +129,7 @@ PH["get-paid/page"] = {
     const url = page?.handle ? `${location.host}/pay/${page.handle}` : "";
     const body = page?.handle
       ? `<div class="z-card z-page">
-          <div class="z-page__head">${Z.avatar({ name: page.displayName || u.name, tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(page.displayName || u.name || "")}</span><span class="z-row__sub z-mono" translate="no">${esc(url)}</span></span></div>
+          <div class="z-page__head">${Z.avatar({ name: page.displayName || ownAccountName(u), tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(page.displayName || ownAccountName(u))}</span><span class="z-row__sub z-mono" translate="no">${esc(url)}</span></span></div>
           <p class="z-hint">Anyone with this link can pay you in digital dollars (USDC). They see your name, never your balance. The page is public.</p>
         </div>
         ${phAcceptsList(page)}

@@ -685,9 +685,12 @@ flowchart LR
   the check reads `needs_check` and no row is rewritten. On the hardhat
   harness a user with no Monerium profile stands in with one of the needed
   kind.
-- Personal orgs are created by `migrateUsersToOrganisations()` **at DB load
-  only**. A user created after the process started has no personal org until
-  the next restart or an explicit `POST /api/orgs`.
+- A person has at most one personal org, and a company login none (its Safe
+  is the company's): `POST /api/orgs` answers 409 `PERSONAL_ORG_EXISTS` /
+  `PERSONAL_ORG_COMPANY_LOGIN`. Signup creates none; `/business` asks a
+  person without one to create it (banner, switcher row, prefilled empty
+  state). `migrateUsersToOrganisations()` still creates one **at DB load**
+  for any user with no membership at all.
 
 ### 13.2 Drafts (`domain/drafts.ts`, `routes/business/drafts.ts`, `routes/business/state.ts`)
 
