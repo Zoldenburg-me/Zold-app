@@ -295,7 +295,7 @@ function phPeriod(ym) {
 }
 
 /* A typed amount ("850,00", "850.5") as the API's decimal string. */
-function phPrice(raw) {
+function phInvPrice(raw) {
   const v = String(raw ?? "").trim().replace(/\s/g, "");
   if (v === "") return null;
   if (!/^\d+([.,]\d{0,2})?$/.test(v)) return NaN;
@@ -331,7 +331,7 @@ function phInvBody(d, prof) {
     },
     supplyKind: d.supplyKind === "goods" ? "goods" : "services",
     lines: d.lines.map((l) => {
-      const p = phPrice(l.price), q = phQty(l.quantity);
+      const p = phInvPrice(l.price), q = phQty(l.quantity);
       return { description: l.description.trim(), quantity: Number.isFinite(q) ? String(q) : String(l.quantity).trim(), unitPriceNet: Number.isFinite(p) && p !== null ? p.toFixed(2) : "" };
     }),
     vat,
@@ -345,7 +345,7 @@ const phCountries = (current) => Z.countries(current);
 const phNum = (html) => html.replace('class="z-input"', 'class="z-input z-input--num"');
 
 function phLineCard(l, i, n) {
-  const p = phPrice(l.price), q = phQty(l.quantity);
+  const p = phInvPrice(l.price), q = phQty(l.quantity);
   const total = Number.isFinite(p) && p !== null && Number.isFinite(q) ? phEur(Math.round(p * q * 100) / 100) : "";
   return `<fieldset class="z-invline" data-line="${i}">
     <legend class="z-sr">Line ${i + 1}</legend>
@@ -582,7 +582,7 @@ PH["invoice/new"] = {
       }, 350);
     };
     const sums = () => d.lines.forEach((l, i) => {
-      const p = phPrice(l.price), q = phQty(l.quantity);
+      const p = phInvPrice(l.price), q = phQty(l.quantity);
       const el = root.querySelector(`#ph-l${i}-sum`);
       if (el) el.textContent = Number.isFinite(p) && p !== null && Number.isFinite(q) ? phEur(Math.round(p * q * 100) / 100) : "";
     });
@@ -682,7 +682,7 @@ PH["invoice/new"] = {
       d.lines.forEach((l, i) => {
         Z.setFieldError(root.querySelector(`#ph-l${i}-d`), l.description.trim() ? "" : "Say what you did or sold.");
         Z.setFieldError(root.querySelector(`#ph-l${i}-q`), Number.isFinite(phQty(l.quantity)) ? "" : "A number above 0.");
-        const p = phPrice(l.price);
+        const p = phInvPrice(l.price);
         Z.setFieldError(root.querySelector(`#ph-l${i}-p`), Number.isFinite(p) && p !== null ? "" : "Euros and cents, like 850 or 850,00.");
       });
       if (Z.focusFirstError(form)) return;
