@@ -91,7 +91,7 @@ check("too short, too long, and bad characters are refused", () => {
   throws(() => normaliseHandle("ab"), /3 and 30/);
   throws(() => normaliseHandle("a".repeat(31)), /3 and 30/);
   throws(() => normaliseHandle("has space"), /lowercase letters/);
-  throws(() => normaliseHandle("emoji🙂"), /lowercase letters/);
+  throws(() => normaliseHandle("emoji🙂"), /latin letters/);
   throws(() => normaliseHandle("under_score"), /lowercase letters/);
 });
 
@@ -107,6 +107,30 @@ check("a handle cannot look like an address", () => {
 check("route names are reserved, so a handle cannot phish one", () => {
   for (const h of ["api", "pay", "settings", "login", "admin", "zold"]) {
     throws(() => normaliseHandle(h), /reserved/);
+  }
+});
+
+check("letters from other alphabets are refused, so a look-alike cannot pass the lists", () => {
+  for (const h of ["zоld", "αlice", "ｚｏｌｄ", "müller"]) {
+    throws(() => normaliseHandle(h), /latin letters/);
+  }
+});
+
+check("zold, support and admin are refused inside a longer handle, digit look-alikes too", () => {
+  for (const h of ["zold-support", "zoldpay", "my-zold", "helpdesk-support", "siteadmin", "z0ld", "adm1n", "5upport", "z-o-l-d"]) {
+    throws(() => normaliseHandle(h), /cannot contain/);
+  }
+});
+
+check("partner and well-known names are refused", () => {
+  for (const h of ["monerium", "monerium-eur", "gnosispay", "vitalik", "vitalik-eth", "v1talik", "satoshi-nakamoto", "elon-musk", "iron", "iron-pay", "lifi", "safe-wallet"]) {
+    throws(() => normaliseHandle(h), /cannot contain/);
+  }
+});
+
+check("short partner names only match as a whole word, so ordinary words still work", () => {
+  for (const h of ["ironing", "amplifier", "basement", "safety-first", "harmony", "muskrat", "alice"]) {
+    assert.equal(normaliseHandle(h), h);
   }
 });
 
