@@ -1,4 +1,4 @@
-import { API_HOST, API_PORT } from "./env.js";
+import { API_HOST, API_PORT, envNumber } from "./env.js";
 
 /**
  * Monerium integration — PRODUCTION by default (api.monerium.app). There is no
@@ -21,6 +21,10 @@ export const MONERIUM = {
   // How often to poll for incoming EURe issue orders (webhooks need a public
   // URL; polling works for local dev).
   pollMs: Number(process.env.MONERIUM_POLL_MS ?? 15_000),
+  // Our own ceiling on calls to Monerium, every caller in this process
+  // together (adapters/monerium-limit.ts). Monerium publishes no limit; 40/s
+  // ran clean on the sandbox (200 calls in 5 s, all 200, 2026-10-04).
+  maxRequestsPerSecond: envNumber("MONERIUM_MAX_RPS", 40, { min: 1 }),
   // User-owned account connect (Authorization Code + PKCE). Redirect URI must
   // exactly match the OAuth app registration.
   authUrl: process.env.MONERIUM_AUTH_URL ?? `${MONERIUM_BASE_URL}/auth`,
