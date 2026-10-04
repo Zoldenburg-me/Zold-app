@@ -483,7 +483,6 @@ gets 404, not 403.
 | CHF | SIC | none identified | GATED |
 | KES | M-Pesa | Yellow Card | GATED |
 | NGN | NIP | Yellow Card | GATED |
-| INR | UPI | dLocal | GATED ("a UPI rail without one would be a mock") |
 
 A gated account can still be *opened*. It rests in `gated` with its reason and
 what it needs, which keeps the demand signal without implying a balance.
@@ -491,7 +490,7 @@ what it needs, which keeps the demand signal without implying a balance.
 ### 7.5 Address book — LIVE
 
 A contact holds wallets and bank accounts, validated per rail: IBAN checksum,
-sort code, routing number, M-Pesa and UPI formats. Each payee destination has
+sort code, routing number and M-Pesa formats. Each payee destination has
 a **fingerprint** made of identifier plus holder name.
 
 ### 7.6 Payments and approvals (drafts) — LIVE, never moved money end to end

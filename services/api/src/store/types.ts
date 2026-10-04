@@ -578,7 +578,7 @@ export interface Transfer {
   auth?: {
     to: `0x${string}`;
     amountWei: string; // bigint as decimal string (JSON store)
-    /** keccak256 commitment to the payout destination (rail + IBAN/VPA/phone),
+    /** keccak256 commitment to the payout destination (rail + IBAN or phone),
      *  signed by the device so the recipient cannot be swapped after signing. */
     destination: `0x${string}`;
     deadline: number; // unix seconds
