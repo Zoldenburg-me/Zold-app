@@ -2545,6 +2545,11 @@ async function handlePayDeepLink() {
   if (!user) return;
   try { target = sessionStorage.getItem("zold-pay"); sessionStorage.removeItem("zold-pay"); } catch {}
   if (!target) return;
+  // A company pays through a payment run in Zold Business, approved like any
+  // other; this app does not move a company's money.
+  if (user.accountType === "company") {
+    return errShow("link", { title: "Pay this from Zold Business", sub: "A company account pays through a payment run, so it is approved like any other payment. Add the payee in Zold Business and create the payment there." });
+  }
   const [handle, code] = target.split("/");
   if (!handle || !code) return;
   try {

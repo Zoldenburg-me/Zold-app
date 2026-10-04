@@ -9,7 +9,7 @@
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, recoveryPending, recoveryUnknown, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 
 export const SPACES = {
@@ -37,6 +37,44 @@ export const SPACES = {
 export const VIEWS = [...SPACES.banking, ...SPACES.books];
 /** Where the Banking and Books switch lands. */
 const SPACE_HOME = { banking: "overview", books: "books-overview" };
+
+/** The phone's tab bar: the first stops of each space; the rest are in Menu. */
+const TABS = { banking: ["overview", "payments", "send", "get-paid"], books: ["books-overview", "books", "export"] };
+
+/* Under 1024px the sidebar is a top bar, and Menu opens the rest of it as a
+   full-screen panel. Opening it is a history entry, so Back closes it, as do
+   Menu again, Escape, the organisation, Search and the screen already shown
+   (all go back). Picking another screen closes it in place (`viaHistory:
+   false`) and returns true while the Menu's entry is still on top, for the
+   new view to take that entry over. The page behind it is inert. */
+export function setMenu(open, { viaHistory = true } = {}) {
+  const shell = document.querySelector(".zb");
+  const btn = $("#menu-btn");
+  if (!shell || !btn) return false;
+  const was = shell.classList.contains("is-menu");
+  if (!open && was && viaHistory && history.state?.zbMenu) { history.back(); return false; }  // popstate closes it
+  shell.classList.toggle("is-menu", open);
+  for (const id of ["#main", "#tabs"]) { const el = $(id); if (el) el.inert = open; }
+  btn.setAttribute("aria-expanded", String(open));
+  btn.setAttribute("aria-label", open ? "Close menu" : "Menu");
+  btn.querySelector(".z-ic").textContent = open ? "close" : "menu";
+  if (open && !was) {
+    history.pushState({ ...(history.state || {}), zbMenu: true }, "");
+    $("#side-menu").querySelector("a, button:not([hidden])")?.focus();
+  }
+  if (!open && was && (!document.activeElement || document.activeElement === document.body || $("#side-menu").contains(document.activeElement))) btn.focus();
+  return !open && was && Boolean(history.state?.zbMenu);
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.querySelector(".zb.is-menu")) setMenu(false);
+});
+// Search opens its own dialog over the page; the panel gets out of its way.
+document.addEventListener("click", (e) => { if (e.target.closest?.("#search-btn")) setMenu(false); });
+// From 1024px the panel is the sidebar again and Menu is hidden: an open Menu
+// would leave the page inert with nothing on screen to close it.
+matchMedia("(min-width: 1024px)").addEventListener("change", (e) => {
+  if (e.matches && document.querySelector(".zb.is-menu")) setMenu(false);
+});
 
 /** Which nav item an older view belongs to. */
 export const PARENT = {
@@ -119,6 +157,12 @@ export function renderNav() {
     badge: v.id === "payments" && waiting ? String(waiting) : "",
   }));
   $("#nav").innerHTML = items.map((it) => link(it, active)).join("");
+  const tabs = TABS[space].map((id) => items.find((it) => it.id === id)).filter(Boolean);
+  $("#tabs").innerHTML = `<nav class="z-bnav zb-tabs" aria-label="Quick" style="grid-template-columns:repeat(${tabs.length + 1},1fr)">${tabs.map((it) =>
+    `<a href="?view=${esc(it.id)}" data-view="${esc(it.id)}"${it.id === active ? ' aria-current="page"' : ""}>${Z.icon(it.icon)}<span>${esc(it.id === "overview" ? "Home" : it.label)}</span>`
+    + `${it.capability && !cap(it.capability).allowed ? `${Z.icon("lock", "zb-tabs__lock")}<span class="z-sr"> (not in your plan)</span>` : ""}`
+    + `${it.badge ? `<span class="z-bnav__badge"><span class="z-sr">, </span>${esc(it.badge)}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`).join("")}
+    <button type="button" data-menu${TABS[space].includes(active) ? "" : ' aria-current="page"'}>${Z.icon("menu")}<span>Menu</span></button></nav>`;
   $("#nav").setAttribute("aria-label", space === "books" ? "Books" : "Main");
   $("#side-space").innerHTML = hasBooks
     ? [["banking", "Banking", "account_balance_wallet"], ["books", "Books", "menu_book"]].map(([id, label, icon]) =>
@@ -142,15 +186,19 @@ export function renderNav() {
 
   // A real link, so a modifier-click or middle-click opens the view in a new
   // tab (boot reads ?view=). A plain click stays in the page.
-  document.querySelectorAll("#side a[data-view]").forEach((a) => {
+  document.querySelectorAll("#side a[data-view], #tabs a[data-view]").forEach((a) => {
     a.onclick = (e) => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
-      setView(a.dataset.view);
+      // The screen already shown: only the Menu closes, and its entry goes.
+      if (a.dataset.view === view && document.querySelector(".zb.is-menu")) { setMenu(false); return; }
+      setView(a.dataset.view, { replace: setMenu(false, { viaHistory: false }) });
       render({ focus: true });
     };
   });
-  $("#org-btn").onclick = () => switchSheet($("#org-btn"));
+  $("#org-btn").onclick = () => { setMenu(false); switchSheet($("#org-btn")); };
+  $("#menu-btn").onclick = () => setMenu(!document.querySelector(".zb.is-menu"));
+  $("#tabs [data-menu]").onclick = () => setMenu(true);
 }
 
 /** Pick an organisation: here, in place. The personal app is one link away,
@@ -190,9 +238,20 @@ function personalBanner() {
     <button class="z-btn z-btn--quiet z-btn--sm" data-act="personal-later">Not now</button></div>`;
 }
 
+/* The app holds the recovery screens; this says one is under way and goes there. */
+function recoveryBanner() {
+  if (recoveryUnknown) {
+    return `<div class="banner warn">${Z.icon("help")}<span><b>We couldn’t check for a recovery on your sign-in.</b> Check it in the app, so a recovery you did not start cannot replace your passkey unseen.</span>
+    <a class="z-btn z-btn--secondary z-btn--sm" href="/app?from=business#recovery-alert">Check now</a></div>`;
+  }
+  if (!recoveryPending) return "";
+  return `<div class="banner warn">${Z.icon("warning")}<span><b>A recovery is under way on your sign-in.</b> If you did not start it, stop it now: it would replace your passkey.</span>
+    <a class="z-btn z-btn--primary z-btn--sm" href="/app?from=business#recovery-alert">Check it</a></div>`;
+}
+
 export function planBanner() {
   if (!org) return "";
-  return personalBanner() + planNotice();
+  return recoveryBanner() + personalBanner() + planNotice();
 }
 
 function planNotice() {

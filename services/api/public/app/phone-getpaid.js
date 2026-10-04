@@ -37,13 +37,12 @@ function phLinkSub(r) {
   return amt;
 }
 
-/* The button says what the plan allows, in the plan's own words. Invoices on
-   the phone are the personal account's; a company's are in the web app. */
+/* The button says what the plan allows, in the plan's own words. Invoices are
+   written in Zold Business, for the personal space or a company. */
 function phInvoiceButton() {
   if (phCache.orgs === null) return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: "Checking your plan…" });
-  if (phCan(phPersonalOrg(), "invoices")) return Z.button({ icon: "receipt_long", label: "Invoice", href: "#invoice/new" });
-  const org = (phCache.orgs || []).find((o) => phCan(o, "invoices"));
-  if (org) return Z.button({ icon: "receipt_long", label: "Invoice", href: "/business" });
+  const org = phCan(phPersonalOrg(), "invoices") ? phPersonalOrg() : (phCache.orgs || []).find((o) => phCan(o, "invoices"));
+  if (org) return Z.button({ icon: "receipt_long", label: "Invoice", href: phWebHref("invoice-new") }).replace("<a ", `<a data-ph-org="${esc(org.id)}" `);
   const reason = phPersonalOrg()?.capabilities?.invoices?.reason || "Invoices are not part of this account.";
   return Z.button({ icon: "receipt_long", label: "Invoice", disabledReason: reason });
 }
