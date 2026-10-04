@@ -318,7 +318,7 @@ function phDetailsBody(u, bic, { loadingBic = false } = {}) {
   const wallet = u.address && u.passkeySafe?.status === "active"
     ? `<details class="z-disclose"><summary>Crypto wallet address${Z.icon("expand_more")}</summary>
         <div class="z-card">${Z.copyRow({ label: "Your wallet address", value: u.address, mono: true })}</div>
-        ${Z.note({ tone: "a", text: "Only USDC on the Base network. Anything else sent here is lost." })}</details>`
+        ${Z.note({ tone: "a", text: `Only ${usdSym()} on the Base network. Anything else sent here is lost.` })}</details>`
     : "";
   return `<p class="z-sub">Share these to get paid by bank transfer.</p>
     <ul class="z-list z-card">

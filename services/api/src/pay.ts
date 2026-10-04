@@ -62,7 +62,7 @@ const BLOCKED_ANYWHERE = [
  *  longer word: `iron` blocks `iron-pay` but not `ironing`, and `lifi` would
  *  otherwise block `amplifier`. */
 const BLOCKED_AS_WORD = new Set([
-  "iron", "lifi", "safe", "base", "circle", "bridge", "mony", "eure", "usdc",
+  "iron", "lifi", "safe", "base", "circle", "bridge", "mony", "eure", "usdc", "zusd",
   "stellar", "elon", "musk", "sbf",
 ]);
 

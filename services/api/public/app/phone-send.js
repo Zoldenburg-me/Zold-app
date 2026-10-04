@@ -60,7 +60,7 @@ PH.send = {
         label: "New payment",
         rows: [
           Z.row({ lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To any IBAN in Europe, no Zold fee", right: Z.tag("Beta"), href: "#send/new" }),
-          Z.soonRow({ lead: Z.iconTile({ icon: "account_balance_wallet" }), title: "Crypto wallet", sub: "Send digital dollars (USDC) to a wallet" }),
+          Z.soonRow({ lead: Z.iconTile({ icon: "account_balance_wallet" }), title: "Crypto wallet", sub: `Send digital dollars (${usdSym()}) to a wallet` }),
         ],
       })}
       ${Z.listGroup({

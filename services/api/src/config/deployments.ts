@@ -5,6 +5,9 @@ import { CHAIN_ID, ROOT } from "./env.js";
 export interface Deployments {
   eure: `0x${string}`;
   usdc: `0x${string}`;
+  /** Test chains only: ZoldUSD, the staging dollar the faucet wallet mints
+   *  (`npm run deploy:zusd`). */
+  zusd?: `0x${string}`;
   /** Local-only: the FxSwapper venue and the AdminTimelock that owns it. A
    *  real chain's entry carries the two token addresses and nothing else. */
   /** Written by the hardhat deploy, never read. */

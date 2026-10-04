@@ -7,6 +7,7 @@
  * when money shows up; they hold no network of their own.
  */
 import { wrap } from "./util.js";
+import { usdToken } from "../usd-token.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
@@ -55,7 +56,7 @@ export function baseUrlFor(req: express.Request): string {
 }
 
 function payToken() {
-  return { symbol: "USDC", address: addrs().usdc, decimals: 6 };
+  return { symbol: usdToken().symbol, address: addrs().usdc, decimals: 6 };
 }
 
 /**
