@@ -29,6 +29,9 @@ export let view = "overview";
 export let me = null;
 /** Test mode: the chain moves no real money (GET /api/health). undefined until read. */
 export let testMode = undefined;
+/** The app's dollar token as it names itself (GET /api/health): "USDC" on
+ *  Base mainnet, "zUSD" on a staging chain. */
+export let usdSymbol = "USDC";
 
 /** The UI v2 components (ui.js, a classic script loaded before this module). */
 export const Z = window.Z;
@@ -247,6 +250,7 @@ export function ensureMe() {
   return mePromise;
 }
 export const setTestMode = (v) => { testMode = v; };
+export const setUsdSymbol = (s) => { if (typeof s === "string" && /^[A-Za-z0-9.]{1,11}$/.test(s)) usdSymbol = s; };
 /** Changing the view is a navigation: it gets a history entry, so Back works
  *  and the URL can be bookmarked or opened in a new tab. `push: false` is for
  *  popstate, where the browser has already moved the URL; `replace: true` takes

@@ -13,7 +13,7 @@
  *   executed, an invoice Paid only when the API says so.
  */
 import {
-  $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ROLE_CAN, ROLE_WORD, toast, when, ymd,
+  $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ROLE_CAN, ROLE_WORD, toast, when, ymd, usdSymbol,
 } from "./core.js";
 import { META, RENDER, invoiceActions, settlementRows } from "./views.js";
 
@@ -45,7 +45,7 @@ const memberInitials = (id) => {
 
 export const draftTitle = (d) => (d.lines.length === 1 ? d.lines[0].destination?.displayName || "1 payment" : `${d.lines.length} payments`);
 export function draftTotal(d) {
-  const parts = Object.entries(d.totals || {}).map(([asset, v]) => (/^(EUR|EURe)$/i.test(asset) ? eur(v) : `${Number(v).toLocaleString("en-GB", { maximumFractionDigits: 6 })} ${asset === "USDC" ? "USDC" : asset}`));
+  const parts = Object.entries(d.totals || {}).map(([asset, v]) => (/^(EUR|EURe)$/i.test(asset) ? eur(v) : `${Number(v).toLocaleString("en-GB", { maximumFractionDigits: 6 })} ${asset === "USDC" ? usdSymbol : asset}`));
   return parts.join(" + ");
 }
 export function draftTag(d) {

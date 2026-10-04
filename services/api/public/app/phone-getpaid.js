@@ -129,7 +129,7 @@ PH["get-paid/page"] = {
     const body = page?.handle
       ? `<div class="z-card z-page">
           <div class="z-page__head">${Z.avatar({ name: page.displayName || ownAccountName(u), tone: "p" })}<span class="z-row__main"><span class="z-row__title">${esc(page.displayName || ownAccountName(u))}</span><span class="z-row__sub z-mono" translate="no">${esc(url)}</span></span></div>
-          <p class="z-hint">Anyone with this link can pay you in digital dollars (USDC). They see your name, never your balance. The page is public.</p>
+          <p class="z-hint">Anyone with this link can pay you in digital dollars (${usdSym()}). They see your name, never your balance. The page is public.</p>
         </div>
         ${phAcceptsList(page)}
         <div class="z-pair">
@@ -189,7 +189,7 @@ PH.link = {
           ${Z.field({ id: "ph-lk-desc", label: "What it’s for", name: "description", autocomplete: "off", maxlength: 140, placeholder: "Concert tickets…" })}
           <fieldset class="z-fieldset"><legend class="z-label">Ways to pay</legend>
             ${check("ph-lk-bank", "bank", "Bank transfer, with the link’s code as reference")}
-            ${check("ph-lk-crypto", "crypto", "Digital dollars (USDC) to your page")}
+            ${check("ph-lk-crypto", "crypto", `Digital dollars (${usdSym()}) to your page`)}
           </fieldset>
           ${needs.length ? Z.note({ text: needs.join(" ") }) : ""}
           <p class="z-err" id="ph-lk-err" role="alert" hidden></p>
@@ -201,7 +201,7 @@ PH.link = {
     const [w, tone] = phLinkWord(r);
     const closable = r.state === "OPEN" && !(r.payments || []).length;
     const pays = (r.payments || []).map((p) => Z.row({
-      title: p.method === "crypto" ? `${Z.formatMoney(p.amountUsdc ?? 0, "USDC")}` : "Bank transfer",
+      title: p.method === "crypto" ? `${Z.formatMoney(p.amountUsdc ?? 0, usdSym())}` : "Bank transfer",
       sub: [p.payerName, p.kind === "partial" ? "part payment" : ""].filter(Boolean).join(" · ") || "Received",
       right: Z.amount({ value: p.amountEur, direction: "in" }),
     }));

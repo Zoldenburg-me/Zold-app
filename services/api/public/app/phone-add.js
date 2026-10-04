@@ -16,7 +16,7 @@ PH.add = {
   html() {
     const rows = [];
     if (HAS("monerium")) rows.push(Z.row({ lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To your IBAN, from any bank in Europe", href: "#account-details" }));
-    if (HAS("onchain_balance")) rows.push(Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: "Digital dollars (USDC) from any wallet or exchange", right: Z.tag("Beta"), href: "#add/wallet" }));
+    if (HAS("onchain_balance")) rows.push(Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: `Digital dollars (${usdSym()}) from any wallet or exchange`, right: Z.tag("Beta"), href: "#add/wallet" }));
     rows.push(Z.soonRow({ lead: Z.iconTile({ icon: "attach_money" }), title: "USD account", sub: "ACH and wire in" }));
     return `${phTop("Add money")}${phMain(`<p class="z-sub">Both land in the same account.</p>${Z.listGroup({ rows })}${phFaucetCard()}`)}`;
   },
@@ -86,25 +86,25 @@ PH["add/wallet"] = {
       ${address ? `<div class="z-qr"><img id="ph-wallet-qr" ${phCache.walletQr?.key === `${u.id}:${address}` ? `src="${phCache.walletQr.url}"` : "hidden"} width="168" height="168" alt="QR code of your wallet address"></div>` : ""}
       ${address ? `<div class="z-card">${Z.copyRow({ label: "Your wallet address", value: address, mono: true })}</div>`
         : Z.note({ tone: "a", text: "Your account is not set up yet, so it has no wallet address." })}
-      ${Z.note({ tone: "a", text: "Only USDC on the Base network. Anything else sent here is lost." })}
+      ${Z.note({ tone: "a", text: `Only ${usdSym()} on the Base network. Anything else sent here is lost.` })}
       ${!address ? "" : caps.paymentPageForwarding
         ? Z.note({ icon: "link", html: page.handle
           ? `Your payment page takes more tokens from other chains. <a href="/pay/${encodeURIComponent(page.handle)}" target="_blank" rel="noopener">See the list</a>`
           : `Set up a payment page to take more tokens from other chains. <a href="#get-paid/page">Set it up</a>` })
         : page.handle ? "" : Z.note({ icon: "link", html: `Set up a payment page: a link and QR anyone can pay. <a href="#get-paid/page">Set it up</a>` })}
       ${Z.note({ icon: "currency_exchange", html: `${asset === "USDC" || !autoConvert
-        ? "Digital dollars that arrive stay as USDC."
+        ? `Digital dollars that arrive stay as ${usdSym()}.`
         : "Your main currency is euro, so we ask before converting dollars."}${change}` })}
       ${deps === null ? Z.skeletonRows(1, "Loading payments…") : Z.listGroup({
         label: "Waiting to convert",
-        rows: waiting.map((d) => `<div class="z-row">${Z.iconTile({ icon: "currency_exchange", tone: "m" })}<span class="z-row__main"><span class="z-row__title z-fig">${esc(Z.formatMoney(d.amountUsdc ?? 0, "USDC"))}</span><span class="z-row__sub">Arrived ${esc(phDay(d.detectedAt))}${d.receipt ? ` · worth ${esc(phEur(d.receipt.amountEur))} then` : ""}</span></span><span class="z-row__right"><a class="z-btn z-btn--primary z-btn--sm" href="${phHref("convert", d.id)}" aria-label="Convert ${esc(Z.formatMoney(d.amountUsdc ?? 0, "USDC"))}">Convert</a></span></div>`),
+        rows: waiting.map((d) => `<div class="z-row">${Z.iconTile({ icon: "currency_exchange", tone: "m" })}<span class="z-row__main"><span class="z-row__title z-fig">${esc(Z.formatMoney(d.amountUsdc ?? 0, usdSym()))}</span><span class="z-row__sub">Arrived ${esc(phDay(d.detectedAt))}${d.receipt ? ` · worth ${esc(phEur(d.receipt.amountEur))} then` : ""}</span></span><span class="z-row__right"><a class="z-btn z-btn--primary z-btn--sm" href="${phHref("convert", d.id)}" aria-label="Convert ${esc(Z.formatMoney(d.amountUsdc ?? 0, usdSym()))}">Convert</a></span></div>`),
         empty: { text: "Nothing waiting. Payments show up here within a minute of arriving." },
       })}
       ${refused.length ? Z.listGroup({
         label: "Not converted",
         rows: refused.map((d) => Z.row({
           lead: Z.iconTile({ icon: "currency_exchange" }),
-          title: Z.formatMoney(d.amountUsdc ?? 0, "USDC"),
+          title: Z.formatMoney(d.amountUsdc ?? 0, usdSym()),
           // The reason is the server's wording (it says EURe); plain words here.
           sub: `Arrived ${phDay(d.detectedAt)}. Not converted: check your balance, or write to support@zoldhq.com.`,
           right: Z.tag("IN REVIEW"),
@@ -171,7 +171,7 @@ async function phLoadDeposits() {
 /* The open conversion: its price, and the outcome of the last approval. */
 const phConv = { id: null, prep: null, error: null, pricing: false, refusal: null, priced: null };
 
-const phUsdc = (n) => Z.formatMoney(n ?? 0, "USDC");
+const phUsdc = (n) => Z.formatMoney(n ?? 0, usdSym());
 const phDeposit = (id) => (phCache.deposits || []).find((d) => d.id === id) || null;
 /* A price the server still holds. Its expiry is the server's, not ours. */
 const phPriceLive = (id) => phConv.id === id && phConv.prep && Date.parse(phConv.prep.expiresAt) > Date.now();
@@ -181,7 +181,7 @@ const phRate = (p) => (p.amountUsdc ? p.expectedEur / p.amountUsdc : 0);
 function phCurrencyWords(page) {
   if (!page?.handle) return "Set up your page first";
   if (page.settlementAsset === "USDC") return "Digital dollars (USDC)";
-  return page.autoConvert ? "Euro, ask before converting dollars" : "Euro, keep dollars as USDC";
+  return page.autoConvert ? "Euro, ask before converting dollars" : `Euro, keep dollars as ${usdSym()}`;
 }
 
 PH["settings/currency"] = {
@@ -192,7 +192,7 @@ PH["settings/currency"] = {
     const back = from === "wallet" ? "add/wallet" : "settings";
     if (!page?.handle) {
       return `${phTop("Main currency", back)}${phMain(`
-        <p class="z-sub">Your main currency decides what happens when someone pays your page in digital dollars (USDC).</p>
+        <p class="z-sub">Your main currency decides what happens when someone pays your page in digital dollars (${usdSym()}).</p>
         ${Z.note({ text: "It applies to your page, so set that up first." })}
         ${Z.button({ variant: "primary", full: true, label: "Set up your page", href: "#get-paid/page" })}`)}`;
     }
@@ -204,7 +204,7 @@ PH["settings/currency"] = {
       `<label class="z-choice"><input type="radio" name="${name}" value="${value}"${checked ? " checked" : ""}><span class="z-choice__main"><span class="z-choice__title">${esc(title)}</span><span class="z-choice__text">${esc(text)}</span></span></label>`;
     const waitingWord = waiting === 1 ? "1 payment is" : `${waiting} payments are`;
     return `${phTop("Main currency", back)}${phMain(`
-      <p class="z-sub">Pick what your account keeps when someone pays you in digital dollars (USDC).</p>
+      <p class="z-sub">Pick what your account keeps when someone pays you in digital dollars (${usdSym()}).</p>
       <fieldset class="z-fieldset" id="ph-cur-main" aria-describedby="ph-cur-err">
         <legend class="z-eyebrow">Keep my money in</legend>
         <div class="z-choices">
@@ -216,11 +216,11 @@ PH["settings/currency"] = {
         <legend class="z-eyebrow">When dollars arrive</legend>
         <div class="z-choices">
           ${choice("ask", "ask", ask, "Ask me to convert", "We spot the payment and show you the price. It converts only after you approve with Face ID or fingerprint.")}
-          ${choice("ask", "keep", !ask, "Keep them as dollars", "They stay as USDC in your account.")}
+          ${choice("ask", "keep", !ask, "Keep them as dollars", `They stay as ${usdSym()} in your account.`)}
         </div>
       </fieldset>`}
       ${pending ? `<div class="z-confirm" role="group" aria-labelledby="ph-cur-warn">
-          ${Z.note({ tone: "a", icon: "warning", html: `<span id="ph-cur-warn">${esc(waitingWord)} waiting to convert. ${waiting === 1 ? "It stays" : "They stay"} as USDC too, and can’t be converted here later.</span>` })}
+          ${Z.note({ tone: "a", icon: "warning", html: `<span id="ph-cur-warn">${esc(waitingWord)} waiting to convert. ${waiting === 1 ? "It stays" : "They stay"} as ${usdSym()} too, and can’t be converted here later.</span>` })}
           <div class="z-pair">${Z.button({ label: "Cancel", id: "ph-cur-cancel" })}${Z.button({ variant: "primary", label: "Keep as dollars", id: "ph-cur-confirm" })}</div>
         </div>` : ""}
       <p class="z-err" id="ph-cur-err" role="alert" hidden></p>
@@ -292,7 +292,7 @@ PH.convert = {
     const d = phDeposit(id);
     if (!d || d.token !== "USDC" || d.state !== "DETECTED") {
       const text = !d ? "We can’t find this payment in your account."
-        : d.state === "CONVERTED" ? (d.settlementAsset === "EURE" ? "This payment is already converted." : "This payment was kept as USDC.")
+        : d.state === "CONVERTED" ? (d.settlementAsset === "EURE" ? "This payment is already converted." : `This payment was kept as ${usdSym()}.`)
           : "This payment isn’t waiting to convert.";
       return `${top}${phMain(`${Z.note({ text })}${Z.button({ variant: "primary", full: true, label: "Back to your wallet", href: "#add/wallet" })}`)}`;
     }
@@ -309,12 +309,12 @@ PH.convert = {
     return `${top}${phMain(`
       ${head}
       <section class="z-card z-conv" aria-label="The price">
-        <div><p class="z-conv__label">You convert</p><p class="z-conv__usdc z-fig">${esc(Z.formatMoney(p.amountUsdc, "USDC").replace(/\s*USDC$/, ""))}<span class="z-conv__unit">USDC</span></p></div>
+        <div><p class="z-conv__label">You convert</p><p class="z-conv__usdc z-fig">${esc(Z.formatMoney(p.amountUsdc, "").trim())}<span class="z-conv__unit">${usdSym()}</span></p></div>
         <div class="z-conv__arrow" aria-hidden="true">${Z.icon("arrow_downward")}<span></span></div>
         <div><p class="z-conv__label">You get about</p>${phBalanceFig(p.expectedEur)}</div>
       </section>
       ${Z.kv([
-        { key: "Rate", value: `1 USDC = €${phRate(p).toFixed(4)}` },
+        { key: "Rate", value: `1 ${usdSym()} = €${phRate(p).toFixed(4)}` },
         { key: "Zold fee", value: phEur(0) },
         { key: "At least", hint: "Or nothing converts", valueHtml: `<strong>${esc(phEur(p.minEur))}</strong>` },
         { key: "Price holds for", valueHtml: `<span id="ph-conv-left">${expired ? "Expired" : esc(phLeft(p.expiresAt))}</span>` },

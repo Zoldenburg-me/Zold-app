@@ -10,6 +10,7 @@
  * record. Settlement and conversion apply their own gates later.
  */
 import express from "express";
+import { usdToken } from "../usd-token.js";
 import { wrap } from "./util.js";
 import { CHAIN_ID } from "../config.js";
 import { addrs } from "../chain.js";
@@ -40,7 +41,7 @@ function normaliseSettlementAsset(raw: unknown): "EURE" | "USDC" {
 export function payChain() {
   return {
     chainId: CHAIN_ID,
-    token: { symbol: "USDC", address: addrs().usdc, decimals: 6 },
+    token: { symbol: usdToken().symbol, address: addrs().usdc, decimals: 6 },
   };
 }
 
@@ -182,7 +183,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
         // failure is "try again", not ours to report as a 500.
         console.error(`payment page: forwarder for ${user.id} failed: ${err?.message ?? err}`);
         return res.status(503).json({
-          error: "The address that receives USDC for your page could not be set up just now. Nothing was saved; try again in a minute.",
+          error: `The address that receives ${usdToken().symbol} for your page could not be set up just now. Nothing was saved; try again in a minute.`,
           code: "FORWARDER_UNAVAILABLE",
         });
       }

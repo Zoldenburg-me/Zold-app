@@ -16,6 +16,7 @@
  * - there is no route that lowers the threshold: at 2 Zold cannot sign it.
  */
 import express from "express";
+import { usdToken } from "../usd-token.js";
 import { randomUUID } from "node:crypto";
 import { parseUnits } from "viem";
 import { HARNESS, SECURITY } from "../config.js";
@@ -84,7 +85,7 @@ function tokens(): { symbol: string; address: `0x${string}`; decimals: number }[
     const d = addrs();
     return [
       { symbol: "EURe", address: d.eure, decimals: 18 },
-      { symbol: "USDC", address: d.usdc, decimals: 6 },
+      { symbol: usdToken().symbol, address: d.usdc, decimals: 6 },
     ];
   } catch {
     return [];
