@@ -164,12 +164,12 @@ PH.security = {
       : Z.row({
         lead: Z.iconTile({ icon: "smartphone" }),
         title: "Payment key",
-        sub: phKey === undefined ? "Checking this phone…" : keyHere ? (phKey.protection === "none" ? "On this phone, without hardware protection" : "On this phone") : "On another device",
-        right: keyHere ? Z.tag(phKey.protection === "none" ? "Unprotected" : "This device", phKey.protection === "none" ? "amber" : "pink") : "",
+        sub: phKey === undefined ? "Checking this phone…" : keyHere ? (phKey.protection === "none" ? "On this phone, not encrypted" : "On this phone, encrypted by your passkey") : "On another device",
+        right: keyHere ? Z.tag(phKey.protection === "none" ? "Not encrypted" : "This device", phKey.protection === "none" ? "amber" : "pink") : "",
         chevron: false,
       });
     return `${phTop("Security", "settings")}${phMain(`
-      ${phKeyUnprotected() ? Z.note({ tone: "a", text: "This phone stores its payment key without hardware protection, so anything that can read this browser’s storage could use it. Your Face ID or fingerprint sign-in here can’t encrypt it." }) : ""}
+      ${phKeyUnprotected() ? Z.note({ tone: "a", text: "Your payment key is stored unencrypted in this browser: the passkey here can’t encrypt it. The key signs what a payment is (amount and payee). On its own it moves nothing: every payment also needs your Face ID or fingerprint, which your account checks on the chain. Someone with a copy could still sign payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust." }) : ""}
       ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: { href: "#recovery-settings", label: r.on ? "Change" : "Set up" }, rows: recoveryRows }) : ""}
       ${Z.listGroup({ label: "Sign-in and keys", rows: [
         Z.row({ lead: Z.iconTile({ icon: "fingerprint" }), title: "Face ID or fingerprint", sub: u.passkey?.createdAt ? `Signs you in and approves payments. Added ${phDay(u.passkey.createdAt)} ${new Date(u.passkey.createdAt).getFullYear()}` : "Not set up", right: Z.tag(u.passkey?.credentialId ? "Active" : "Off", u.passkey?.credentialId ? "mint" : undefined), chevron: false }),

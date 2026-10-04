@@ -19,6 +19,9 @@ export interface User {
   /** The BIC Monerium lists for `iban` (GET /ibans). Keyed by the IBAN it was
    *  read for: after a move it no longer matches and is not published. */
   ibanBic?: { iban: string; bic: string; checkedAt: string };
+  /** When `iban` took its current value (issued onto this Safe or moved to
+   *  it). Stamped by store.updateUser; absent on rows from before. */
+  ibanSince?: string;
   /** When a code sent to `email` was typed back (routes/email-verification.ts).
    *  Cleared nowhere: there is no route that changes the email. */
   emailVerifiedAt?: string;
@@ -411,6 +414,9 @@ export interface CryptoDeposit {
   /** The sending address, as the Transfer log named it. Absent on rows
    *  recorded before it was kept. The zero address is a Monerium mint. */
   from?: `0x${string}`;
+  /** The block's time: when the money arrived, whatever the token. Absent on
+   *  rows recorded before it was kept. */
+  arrivedAt?: string;
   amountEur?: number;
   amountUsdc?: number;
   /**

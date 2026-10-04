@@ -20,6 +20,7 @@ import { IS_REAL_MONEY_CHAIN } from "../config.js";
 import { applyRules } from "../domain/coa.js";
 import type { LedgerEntry } from "../domain/types.js";
 import { store, type MoneriumIssueRecord, type User } from "../store.js";
+import { safeBooksStart } from "../domain/safe-books.js";
 import type { MoneriumOrderLike } from "../documents.js";
 import { mergeStatementLines, projectStatementLines, type StatementInputs } from "./statement.js";
 
@@ -36,11 +37,21 @@ export function swapsHaveExecuted(): boolean {
   );
 }
 
-/** The org and EUR account a user's movements are booked under, if any. */
-export function booksFor(userId: string): { orgId: string; accountId: string } | undefined {
-  const account = store.accounts.find((a) => a.backingUserId === userId && a.currency === "EUR");
-  if (account) return { orgId: account.orgId, accountId: account.id };
-  return undefined;
+/**
+ * The org and EUR account a user's movements are booked under, if any, and
+ * from when.
+ *
+ * A Safe belongs to one organisation's books. Connected to a company's
+ * account, that is the company's, from the day its books start
+ * (`backedSince`, domain/safe-books.ts); otherwise the person's own.
+ */
+export function booksFor(userId: string): { orgId: string; accountId: string; since?: string } | undefined {
+  const backed = store.accounts.filter((a) => a.backingUserId === userId && a.currency === "EUR");
+  const account = backed.find((a) => store.findOrganisation(a.orgId)?.type === "business") ?? backed[0];
+  if (!account) return undefined;
+  const user = store.findUser(userId);
+  const since = account.backedSince ?? (user ? safeBooksStart(user) : undefined);
+  return { orgId: account.orgId, accountId: account.id, ...(since ? { since } : {}) };
 }
 
 const warned = new Set<string>();
@@ -73,7 +84,9 @@ function inputsFor(user: User): StatementInputs | undefined {
 export function writeStatementLinesFor(user: User): { added: number; updated: number } {
   const inp = inputsFor(user);
   if (!inp) return { added: 0, updated: 0 };
-  const projected = projectStatementLines(inp);
+  const since = booksFor(user.id)?.since;
+  // Nothing from before the Safe's books start: an imported Safe's earlier life is not the account's.
+  const projected = projectStatementLines(inp).filter((e) => !since || e.at >= since);
   const existing = store.ledgerOf(inp.orgId);
   const { toAdd, toUpdate } = mergeStatementLines(existing, projected);
   if (toAdd.length) {

@@ -6,6 +6,7 @@
  * second way to decide who is calling.
  */
 
+import { safeBooksStart } from "../domain/safe-books.js";
 import express from "express";
 import { randomBytes, randomUUID } from "node:crypto";
 import { store } from "../store.js";
@@ -93,6 +94,24 @@ function accountView(org: Organisation, a: Account) {
     ...(backer?.name || backer?.email ? { backingMemberName: backer.name || backer.email } : {}),
   };
 }
+
+/**
+ * A Safe belongs to one organisation: the company whose active account it
+ * backs. The person's own (personal) space does not count, since connecting
+ * the Safe to a company is how it moves there. Returns that company, if it is
+ * not `orgId`.
+ */
+export function safeTakenBy(userId: string, orgId: string): { id: string; name: string } | undefined {
+  for (const a of store.accounts) {
+    if (a.backingUserId !== userId || a.orgId === orgId || a.status !== "active") continue;
+    const other = store.findOrganisation(a.orgId);
+    if (other?.type === "business") return { id: other.id, name: other.name };
+  }
+  return undefined;
+}
+
+const safeTakenError = (o: { name: string }) =>
+  `Your account is connected to ${o.name}, and an account belongs to one organisation. It can't be connected here as well.`;
 
 export function createOrgRouter(requireSession: SessionResolver): express.Router {
   const r = express.Router();
@@ -602,6 +621,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     // refuses the whole request: nothing is opened half-adopted.
     let profileRecord: NonNullable<Account["moneriumProfile"]> | undefined;
     let profileWarning: string | undefined;
+    const takenBy = wantsAdoption ? safeTakenBy(callerFunded!.id, ctx.org.id) : undefined;
+    if (takenBy) return res.status(409).json({ error: safeTakenError(takenBy), code: "SAFE_IN_OTHER_ORG" });
     if (wantsAdoption) {
       const checked = await checkBackingProfile(ctx.org, callerFunded!);
       auditProfileCheck("adopt", { orgId: ctx.org.id }, callerFunded!.id, checked, ctx.userId);
@@ -614,6 +635,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       if (store.accountsOf(ctx.org.id).some((a) => a.currency === currency)) {
         return res.status(409).json({ error: `This organisation already has a ${currency} account.` });
       }
+      const lateTaken = safeTakenBy(callerFunded!.id, ctx.org.id);
+      if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
     }
 
     const status = wantsAdoption ? "active" : "gated";
@@ -631,6 +654,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       identifier: wantsAdoption ? { iban: callerFunded!.iban } : {},
       address: wantsAdoption ? callerFunded!.address : undefined,
       backingUserId: wantsAdoption ? callerFunded!.id : undefined,
+      ...(wantsAdoption ? { backedSince: safeBooksStart(callerFunded!) } : {}),
       ...(profileRecord ? { moneriumProfile: profileRecord } : {}),
       gate,
       createdAt: now,
@@ -655,6 +679,8 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
 
   /**
    * Give an existing account a funding identity, from the caller's own account.
+   * Refused while the caller's Safe is connected to another company
+   * (safeTakenBy).
    *
    * A separate endpoint because this is when a person's own balance starts
    * paying an organisation's bills: it gets its own call, permission check and
@@ -694,6 +720,9 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       });
     }
 
+    const takenBy = safeTakenBy(caller.id, ctx.org.id);
+    if (takenBy) return res.status(409).json({ error: safeTakenError(takenBy), code: "SAFE_IN_OTHER_ORG" });
+
     // The account stays gated on any refusal, including Monerium not
     // answering: fail closed, write nothing.
     const checked = await checkBackingProfile(ctx.org, caller);
@@ -705,12 +734,15 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (store.findAccount(account.id)?.backingUserId) {
       return res.status(409).json({ error: "This account was funded by another request while we checked with Monerium." });
     }
+    const lateTaken = safeTakenBy(caller.id, ctx.org.id);
+    if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
 
     const funded = store.updateAccount(account.id, {
       status: "active",
       identifier: { iban: caller.iban },
       address: caller.address,
       backingUserId: caller.id,
+      backedSince: safeBooksStart(caller),
       moneriumProfile: checked.record,
       gate: undefined,
     });

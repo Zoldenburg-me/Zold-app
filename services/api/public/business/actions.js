@@ -27,6 +27,13 @@ async function download(path, filename) {
 
 /* The month an export acts on: Books' month there, the statement's month on
    the statement screen. */
+/** When a Safe's books start; the same rule as domain/safe-books.ts. */
+function safeBooksStart(u) {
+  const safe = u?.passkeySafe;
+  if (safe?.importedAt) return u.ibanSince && u.ibanSince > safe.importedAt ? u.ibanSince : safe.importedAt;
+  return safe?.createdAt ?? u?.createdAt;
+}
+
 function monthChosen() {
   const v = $("#x-month")?.value || (view === "books" ? bk.month : exportMonth);
   setExportMonth(v);
@@ -312,16 +319,29 @@ export const ACTIONS = {
       toast(plain(r.note));
     }, { okLabel: "Import wallet" }),
   async "fund-account"(el) {
-    let r;
-    try {
-      r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
-    } catch (e) {
-      // A refusal can carry Monerium's newer answer (a profile still pending):
-      // draw the row again so it shows it.
-      render();
-      throw e;
-    }
-    toast(plain(r.warning ? `${r.note} ${r.warning}` : r.note));
+    const connect = async () => {
+      let r;
+      try {
+        r = await api(`/api/orgs/${org.id}/accounts/${el.dataset.id}/fund`, { method: "POST" });
+      } catch (e) {
+        // A refusal can carry Monerium's newer answer (a profile still pending):
+        // draw the row again so it shows it.
+        render();
+        throw e;
+      }
+      setTimeout(() => toast(plain(r.warning ? `${r.note} ${r.warning}` : r.note)), 0);
+    };
+    if (org.type !== "business") return connect();
+    // Said before, not after: from here the account is the company's.
+    const from = safeBooksStart(me);
+    const since = from ? new Date(from).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "";
+    dialog(`Connect your account to ${org.name}?`, `<ul class="zb-next" style="margin-top:6px">
+        <li>${Z.icon("domain")}<span>Your account${me?.iban ? `, IBAN ${esc(Z.groupIban(me.iban))},` : ""} then belongs to ${esc(org.name)}, with everything on it.</span></li>
+        <li>${Z.icon("menu_book")}<span>Its transactions${since ? ` since ${esc(since)}` : ""} appear in ${esc(org.name)}’s books and statements. Members who can see the books see them.</span></li>
+        <li>${Z.icon("block")}<span>While it is connected here, it can’t be connected to another organisation.</span></li>
+        <li>${Z.icon("fingerprint")}<span>Only your Face ID or fingerprint can approve its payments.</span></li>
+      </ul>`, connect, { okLabel: "Connect" });
+    return "keep";
   },
   async "invoice-pay-link"(el) {
     // Offer every method the payee's account can take; the server picks the
@@ -329,8 +349,16 @@ export const ACTIONS = {
     const { methods } = await api(`/api/users/${me.id}/payment-requests/methods`);
     const usable = methods.filter((m) => m.available).map((m) => m.method);
     if (!usable.length) throw new Error(plain(methods.map((m) => m.needs).filter(Boolean).join(" ")) || "No way to get paid is set up on this account yet.");
-    const r = await api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { invoiceId: el.dataset.id, methods: usable } });
-    setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.`, r.url), 0);
+    const [r, page] = await Promise.all([
+      api(`/api/orgs/${org.id}/payment-requests`, { method: "POST", body: { invoiceId: el.dataset.id, methods: usable } }),
+      api(`/api/orgs/${org.id}/payment-page`).catch(() => null),
+    ]);
+    // Without a company page the link opens under the member's own page
+    // address; the money still lands in this organisation's account.
+    const personal = page && !page.paymentPage
+      ? ` It opens under your own page address (/pay/${r.handle}/…) because ${org.name} has no payment page yet; set one up under Get paid for links in the company’s name. The money goes to ${org.name}’s account either way.`
+      : "";
+    setTimeout(() => linkDialog("Payment link ready", `Send your customer this link. It asks for ${eur(r.amountEur)} and marks the invoice paid when the money arrives.${personal}`, r.url), 0);
   },
   async "new-pay-link"() {
     // A link opens under the company page when there is one; say which.
@@ -705,17 +733,46 @@ export const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/bookkeeping/lines/${el.dataset.line}/beleg`, { method: "POST" });
     toast(`Beleg ${r.code} ${r.issued ? "issued" : "already existed"}.`);
   },
-  "gmi-push": () => {
-    const month = monthChosen();
-    dialog(`Send ${month}’s Belege to GetMyInvoices?`, `<p class="desc">Each Beleg goes up once; ones already there (same number) are skipped.</p>`, async () => {
-      const r = await api(`/api/orgs/${org.id}/integrations/getmyinvoices/push`, { method: "POST", body: { month } });
-      const n = (k) => r.results.filter((x) => x.outcome === k).length;
-      const late = r.results.filter((x) => x.tagsMayBeMissing).length;
-      let msg = `${n("uploaded")} uploaded, ${n("exists")} already there, ${n("no-beleg")} without a Beleg, ${n("failed")} failed.`;
-      if (late) msg += ` ${late} answered too slowly and arrived, but may be missing their tags (the tx hashes): check ${late === 1 ? "it" : "them"} in GetMyInvoices.`;
-      if (n("unknown")) msg += ` ${n("unknown")} got no answer and can’t be found there yet: send again in a few minutes. A Beleg that did arrive is skipped, never doubled.`;
-      toast(msg, n("failed") > 0 || n("unknown") > 0 || late > 0);
-    }, { okLabel: "Send" });
+  /** One step from Connections or the export page: pick the month, send.
+   *  The server issues any missing Beleg first; the result says what landed. */
+  async "gmi-push"() {
+    const [{ months }, banks, { integrations }] = await Promise.all([
+      api(`/api/orgs/${org.id}/bookkeeping/statement`),
+      api(`/api/orgs/${org.id}/integrations/getmyinvoices/bank-accounts`).then((r) => r.bankAccounts.filter((b) => b.accountType === "CUSTOM")).catch(() => []),
+      api(`/api/orgs/${org.id}/integrations`),
+    ]);
+    if (!months.length) return toast("There are no statement lines yet, so there is nothing to send.");
+    const preset = view === "export" ? monthChosen() : months[0];
+    const picked = integrations.getmyinvoices?.bankAccountUid;
+    const name = (m) => new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(`${m}-15T12:00:00`));
+    const bankField = banks.length
+      ? `<label for="gmi-bank">Bank account in GetMyInvoices</label><select id="gmi-bank" name="bank">${banks.map((b) => `<option value="${esc(String(b.bankAccountUid))}"${b.bankAccountUid === picked ? " selected" : ""}>${esc(b.name || `Account ${b.bankAccountUid}`)}</option>`).join("")}</select>`
+      : `<p class="zb-hint" style="margin-top:12px">GetMyInvoices has no manual bank account yet, so only the Belege go up. Add one there (Bank accounts → add a manual account, e.g. “Zold”) and send again to add the bank lines.</p>`;
+    dialog("Send to GetMyInvoices", `<p class="desc">Each bank line of the month goes to the bank account you pick, with its Beleg attached as the document. Lines without a Beleg get one first. Anything already there is skipped, never doubled.</p>
+      <label for="gmi-month">Month</label><select id="gmi-month" name="month">${months.map((m) => `<option value="${esc(m)}"${m === preset ? " selected" : ""}>${esc(name(m))}</option>`).join("")}</select>
+      ${bankField}`,
+      async () => {
+        const month = $("#gmi-month").value;
+        const bank = $("#gmi-bank")?.value;
+        const r = await api(`/api/orgs/${org.id}/integrations/getmyinvoices/push`, { method: "POST", body: { month, ...(bank ? { bankAccountUid: Number(bank) } : {}) } });
+        const n = (k) => r.results.filter((x) => x.outcome === k).length;
+        const bl = (k) => r.results.filter((x) => x.bankLine?.outcome === k).length;
+        const attached = r.results.filter((x) => x.bankLine?.assigned).length;
+        const late = r.results.filter((x) => x.tagsMayBeMissing).length;
+        const rows = [
+          [bl("added"), "bank lines added"], [bl("exists"), "bank lines already there"], [attached, "with their Beleg attached"],
+          [n("uploaded"), "Belege sent now"], [n("exists"), "Belege already there, skipped"],
+          [n("failed") + bl("failed"), "failed: send again; whatever did arrive is skipped"],
+          [n("unknown") + bl("unknown"), "got no answer and can’t be found there yet: send again in a few minutes"],
+          [n("no-beleg"), "lines that could not get a Beleg, so not sent"],
+          [late, "Belege that arrived slowly and may be missing their tags"],
+        ].filter(([k]) => k > 0);
+        const body = r.results.length
+          ? `<ul class="zb-next" style="margin-top:10px">${rows.map(([k, t]) => `<li><b>${k}</b>&nbsp;${esc(t)}</li>`).join("")}</ul>
+             ${r.bankAccountUid ? "" : `<p class="desc" style="margin-top:12px">No bank lines were added: GetMyInvoices has no manual bank account to add them to. Add one there and send again.</p>`}`
+          : `<p class="desc">${esc(name(month))} has no bank lines.</p>`;
+        setTimeout(() => dialog(`${name(month)} sent to GetMyInvoices`, body, null, { closeOnly: true }), 0);
+      }, { okLabel: "Send" });
   },
   "gmi-disconnect": () => dialog("Remove the GetMyInvoices key?", `<p class="desc">Nothing already uploaded is touched.</p>`,
     async () => { await api(`/api/orgs/${org.id}/integrations/getmyinvoices`, { method: "DELETE" }); toast("Key removed."); }, { okLabel: "Remove key" }),

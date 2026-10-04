@@ -18,6 +18,8 @@ export const SPACES = {
     { id: "payments", label: "Approvals", icon: "inbox", capability: "transfers.drafts" },
     { id: "send", label: "Send", icon: "arrow_outward", capability: "transfers.drafts" },
     { id: "get-paid", label: "Get paid", icon: "south_west" },
+    { id: "transactions", label: "Transactions", icon: "swap_vert", capability: "ledger.transactions" },
+    { id: "documents", label: "Statements", icon: "description" },
     { id: "invoices", label: "Invoices", icon: "receipt_long", capability: "invoices" },
     { id: "contacts", label: "Contacts", icon: "contacts" },
     { id: "members", label: "Members", icon: "group", capability: "members.manage" },
@@ -39,7 +41,7 @@ const SPACE_HOME = { banking: "overview", books: "books-overview" };
 /** Which nav item an older view belongs to. */
 export const PARENT = {
   ledger: "books", assets: "books", gains: "books",
-  shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", plan: "settings", documents: "accounts", accounts: "accounts",
+  shopify: "apps", "invoice-new": "invoices", "invoicing-settings": "settings", organisation: "settings", plan: "settings", accounts: "accounts",
 };
 /** Every view id the router accepts, including those without a nav item. */
 export const KNOWN = new Set([...VIEWS.map((v) => v.id), ...Object.keys(PARENT), "settings", "soon"]);

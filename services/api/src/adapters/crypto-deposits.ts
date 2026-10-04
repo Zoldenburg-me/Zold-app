@@ -32,6 +32,7 @@ import { midRates, referenceRate } from "../rates.js";
 import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
 import { buildCryptoSettlement, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
+import { readLogWindow } from "../log-range.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
  *  the real USDC emits the same signature and this path must not depend on our
@@ -362,6 +363,10 @@ export function recordInvoiceSettlement(deposit: CryptoDeposit): void {
  */
 let scanning = false;
 
+/** Whether the scan is keeping up, for /api/health. No error text: an RPC
+ *  error can carry the RPC URL, and some providers put the key in it. */
+export const cryptoInScan: { lastOkAt?: string; failingSince?: string } = {};
+
 export async function pollCryptoDepositsOnce(): Promise<number> {
   if (!CRYPTO_IN.enabled) return 0;
   /**
@@ -378,15 +383,30 @@ export async function pollCryptoDepositsOnce(): Promise<number> {
   if (scanning) return 0;
   scanning = true;
   try {
-    return await scanCryptoDeposits();
+    // Several windows per tick, so a backlog (an outage, a fresh deploy)
+    // catches up in minutes rather than one window every pollMs.
+    let found = 0;
+    try {
+      for (let w = 0; w < CRYPTO_IN.windowsPerTick; w++) {
+        const r = await scanCryptoDeposits();
+        found += r.found;
+        if (!r.more) break;
+      }
+    } catch (err) {
+      cryptoInScan.failingSince ??= new Date().toISOString();
+      throw err;
+    }
+    cryptoInScan.lastOkAt = new Date().toISOString();
+    delete cryptoInScan.failingSince;
+    return found;
   } finally {
     scanning = false;
   }
 }
 
-async function scanCryptoDeposits(): Promise<number> {
+async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
   const watched = watchedAddresses();
-  if (watched.length === 0) return 0;
+  if (watched.length === 0) return { found: 0, more: false };
   const cursorKey = `${CHAIN_ID}:safe-funding-v1`;
 
   /**
@@ -400,22 +420,33 @@ async function scanCryptoDeposits(): Promise<number> {
    */
   const head = await publicClient.getBlockNumber({ cacheTime: 0 });
   const safeHead = head - BigInt(CRYPTO_IN.confirmations);
-  if (safeHead < 0n) return 0;
+  if (safeHead < 0n) return { found: 0, more: false };
 
   // A fresh install looks back one bounded window so a just-finished deposit
   // can still appear in Activity after the scanner deploys or restarts.
   const cursor = store.cryptoDepositCursor(cursorKey);
   if (cursor === undefined) {
-    const lookback = CRYPTO_IN.maxBlockSpan;
+    // Read later in windows of maxBlockSpan, so it can be longer than one.
+    const lookback = CRYPTO_IN.firstLookbackBlocks;
     store.setCryptoDepositCursor(cursorKey, safeHead > lookback ? safeHead - lookback : 0n);
-    return 0;
+    return { found: 0, more: false };
   }
-  if (safeHead <= cursor) return 0;
+  if (safeHead <= cursor) return { found: 0, more: false };
 
+  // Both tokens over one window, so the cursor moves past blocks read for both.
   const fromBlock = cursor + 1n;
-  const toBlock = safeHead - fromBlock + 1n > CRYPTO_IN.maxBlockSpan
-    ? fromBlock + CRYPTO_IN.maxBlockSpan - 1n
-    : safeHead;
+  const tokens = [
+    { token: "EURE" as const, address: addrs().eure },
+    { token: "USDC" as const, address: addrs().usdc },
+  ];
+  const { toBlock, result: logsByToken } = await readLogWindow(fromBlock, safeHead, CRYPTO_IN.maxBlockSpan, (from, to) =>
+    Promise.all(tokens.map((t) => publicClient.getLogs({
+      address: t.address,
+      event: TRANSFER_EVENT,
+      args: { to: watched.map((x) => x.address) },
+      fromBlock: from,
+      toBlock: to,
+    }))));
 
   const byAddress = new Map<string, WatchedAddress[]>();
   for (const item of watched) {
@@ -423,17 +454,8 @@ async function scanCryptoDeposits(): Promise<number> {
     byAddress.set(key, [...(byAddress.get(key) ?? []), item]);
   }
   const fresh: CryptoDeposit[] = [];
-  for (const token of [
-    { token: "EURE" as const, address: addrs().eure },
-    { token: "USDC" as const, address: addrs().usdc },
-  ]) {
-    const logs = await publicClient.getLogs({
-      address: token.address,
-      event: TRANSFER_EVENT,
-      args: { to: watched.map((x) => x.address) },
-      fromBlock,
-      toBlock,
-    });
+  for (const [i, token] of tokens.entries()) {
+    const logs = logsByToken[i];
 
     // Block times for the window, one call per distinct block. The chain's
     // timestamp is when the money actually arrived; detection is a couple of
@@ -497,6 +519,7 @@ async function scanCryptoDeposits(): Promise<number> {
           logIndex,
           amountUnits: value.toString(),
           ...(/^0x[0-9a-f]{40}$/.test(from) ? { from: from as `0x${string}` } : {}),
+          ...(log.blockNumber != null && blockTimes.has(log.blockNumber) ? { arrivedAt: blockTimes.get(log.blockNumber) } : {}),
           ...(token.token === "EURE" ? { amountEur: eur.fromWei(value), creditedEur: eur.fromWei(value) } : {}),
           ...(token.token === "USDC"
             ? {
@@ -549,7 +572,7 @@ async function scanCryptoDeposits(): Promise<number> {
     }
   }
   if (fresh.length) writeStatementLines();
-  return fresh.length;
+  return { found: fresh.length, more: toBlock < safeHead };
 }
 
 /**

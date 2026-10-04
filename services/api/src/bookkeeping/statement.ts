@@ -246,6 +246,47 @@ function sepaOutLines(inp: StatementInputs): LineDraft[] {
   return out;
 }
 
+// ── EURe in from another wallet ──────────────────────────────────────────────
+
+/**
+ * EURe that reached the Safe as a plain transfer from another wallet. Every
+ * other EURe arrival is already a line of its own and is left out here:
+ * a mint (from the zero address) is a SEPA credit, booked from Monerium's
+ * order; a refund is the reversal of a payout; a swap's output is the
+ * conversion line of the deposit or sweep it belongs to.
+ */
+function eureInLines(inp: StatementInputs): LineDraft[] {
+  const booked = new Set<string>();
+  for (const t of inp.transfers) for (const x of t.txs) booked.add(x.hash.toLowerCase());
+  for (const s of inp.sweeps) {
+    if (s.conversion?.txHash) booked.add(s.conversion.txHash.toLowerCase());
+    for (const x of s.txs) booked.add(x.hash.toLowerCase());
+  }
+  for (const d of inp.deposits) {
+    if (d.conversion?.txHash) booked.add(d.conversion.txHash.toLowerCase());
+    for (const x of d.txs) booked.add(x.hash.toLowerCase());
+  }
+  const out: LineDraft[] = [];
+  for (const d of inp.deposits) {
+    if (d.userId !== inp.userId || d.token !== "EURE" || !((d.amountEur ?? 0) > 0)) continue;
+    if ((d.from ?? ZERO) === ZERO || booked.has(d.txHash.toLowerCase())) continue;
+    const at = d.arrivedAt ?? d.detectedAt;
+    out.push({
+      event: "eure_in",
+      key: `deposit:${d.id}:eure`,
+      bookingAt: at,
+      valueAt: at,
+      amountCents: cents(d.amountEur!),
+      counterparty: { address: d.from },
+      reference: `Deposit ${d.txHash.slice(0, 10)}`,
+      links: { depositId: d.id, txHashes: [d.txHash] },
+      txType: "transfer_in",
+      tags: ["eure"],
+    });
+  }
+  return out;
+}
+
 // ── Crypto in: converted, or held ────────────────────────────────────────────
 
 function cryptoLines(inp: StatementInputs): LineDraft[] {
@@ -338,7 +379,7 @@ function sweepLines(inp: StatementInputs): LineDraft[] {
 
 /** Every line the inputs support, sorted by value date. */
 export function projectStatementLines(inp: StatementInputs, now = new Date().toISOString()): LedgerEntry[] {
-  const drafts = [...sepaInLines(inp), ...sepaOutLines(inp), ...cryptoLines(inp), ...sweepLines(inp)];
+  const drafts = [...sepaInLines(inp), ...sepaOutLines(inp), ...cryptoLines(inp), ...eureInLines(inp), ...sweepLines(inp)];
   const seen = new Set<string>();
   const out: LedgerEntry[] = [];
   for (const d of drafts) {

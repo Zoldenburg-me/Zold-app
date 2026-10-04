@@ -10,7 +10,7 @@
  *   without Books gets no chart, never a row of zeros.
  * - Money out is Sent, never Paid: the bank's confirmation is not on a line.
  */
-import { $, Z, api, cap, esc, eur, maskIban, me, org, roleCan, setMe, view, when, ymd } from "./core.js";
+import { $, Z, api, cap, esc, eur, gateHtml, maskIban, me, org, roleCan, setMe, view, when, ymd } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { side, waitingForMe } from "./nav.js";
 import { invAmount, loadMembers, memberName } from "./screens.js";
@@ -22,7 +22,7 @@ const BAR_MAX_PX = 120;
 const TOP_N = 4;
 const ACTIVITY_ROWS = 8;
 const PERIODS = [["30d", "Last 30 days"], ["month", "This month"], ["3m", "3 months"]];
-const LINE_WORD = { sepa_in: "Received", sepa_out: "Sent", sepa_out_reversal: "Refunded", crypto_converted: "Received", crypto_held: "Received", sweep: "Done" };
+const LINE_WORD = { sepa_in: "Received", sepa_out: "Sent", sepa_out_reversal: "Refunded", crypto_converted: "Received", crypto_held: "Received", eure_in: "Received", sweep: "Done" };
 
 /* What the page remembers between redraws of one section. */
 const hs = { period: "30d", tab: "all", month: null };
@@ -131,10 +131,11 @@ function movement(all, months) {
     <div class="zb-grid2">${side2("in", "Money in", "Top payers")}${side2("out", "Money out", "Top payees")}</div>`;
 }
 
-function activity(all) {
+/** Home shows the latest few; Transactions shows them all. */
+function activity(all, limit = ACTIVITY_ROWS) {
   const tabs = [["all", "All"], ["in", "Money in"], ["out", "Money out"]].map(([id, text]) => `<button type="button" class="zb-h-chip" data-ht="${id}" aria-pressed="${hs.tab === id}">${text}</button>`).join("");
   const rows = [...all].filter((l) => hs.tab === "all" || (hs.tab === "in") === (l.amountCents >= 0))
-    .sort((a, b) => b.valueDate.localeCompare(a.valueDate)).slice(0, ACTIVITY_ROWS).map((l) => {
+    .sort((a, b) => b.valueDate.localeCompare(a.valueDate)).slice(0, limit).map((l) => {
       const inbound = l.amountCents >= 0;
       const who = l.counterparty?.name || (inbound ? "Money in" : "Payment");
       return `<tr><td class="z-dim">${esc(when(ymd(l.valueDate)))}</td>
@@ -143,8 +144,9 @@ function activity(all) {
         <td>${Z.tag(LINE_WORD[l.event] || (inbound ? "Received" : "Sent"))}</td>
         <td class="z-tbl__num">${Z.amount({ value: Math.abs(l.amountCents) / 100, direction: inbound ? "in" : "out" })}</td></tr>`;
     });
-  return `<div class="zb-h-head"><h2 class="zb-h2" id="home-act">Recent activity</h2><div class="zb-h-chips" role="group" aria-label="Show">${tabs}</div>
-      <a class="z-group__action zb-h-end" href="?view=books" data-view-link="books">See all</a></div>
+  const all_ = limit === Infinity;
+  return `<div class="zb-h-head">${all_ ? "" : `<h2 class="zb-h2" id="home-act">Recent activity</h2>`}<div class="zb-h-chips" role="group" aria-label="Show">${tabs}</div>
+      ${all_ ? "" : `<a class="z-group__action zb-h-end" href="?view=transactions" data-view-link="transactions">See all</a>`}</div>
     ${rows.length ? `<div class="z-card z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Date</th><th scope="col">Who</th><th scope="col">Memo</th><th scope="col">Status</th><th scope="col" class="z-tbl__num">Amount</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`
       : `<div class="z-card"><p class="empty">No money has moved on this organisation’s accounts yet.</p></div>`}`;
 }
@@ -280,6 +282,27 @@ RENDER.overview = async () => {
           again = `[data-hm][aria-label="${back}"]:not([disabled])`;
         }
         box.querySelector(again)?.focus();
+      });
+    },
+  };
+};
+
+/* ── Transactions: every statement line, newest first ─────────────────────── */
+
+META.transactions = () => ({ title: "Transactions", sub: "Every euro in and out of this organisation’s accounts.", actions: "" });
+
+RENDER.transactions = async () => {
+  if (!cap("ledger.transactions").allowed) return gateHtml("ledger.transactions");
+  const { lines } = await api(`/api/orgs/${org.id}/bookkeeping/statement`);
+  return {
+    html: `<section id="tx-root" aria-label="Transactions">${activity(lines, Infinity)}</section>`,
+    bind(box) {
+      box.querySelector("#tx-root").addEventListener("click", (ev) => {
+        const b = ev.target.closest("[data-ht]");
+        if (!b) return;
+        hs.tab = b.dataset.ht;
+        box.querySelector("#tx-root").innerHTML = activity(lines, Infinity);
+        box.querySelector(`[data-ht="${hs.tab}"]`)?.focus();
       });
     },
   };
