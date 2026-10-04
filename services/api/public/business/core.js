@@ -218,14 +218,18 @@ export async function createPersonalOrg() {
  *  about to replace theirs. Read once per visit (shell.js); for a company
  *  login that Safe is the company's. */
 export let recoveryPending = false;
+/** True when the check itself failed: shown, never taken as "none". */
+export let recoveryUnknown = false;
 export async function readRecovery() {
   if (!me?.id || me.passkeySafe?.status !== "active") return;
   const [c, z] = await Promise.all([
     api(`/api/users/${me.id}/recovery/candide`).catch(() => null),
     api(`/api/users/${me.id}/recovery/zoldenburg`).catch(() => null),
   ]);
-  const open = ["PASSKEY_PENDING", "KYC_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"];
+  const open = ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"];
   recoveryPending = Boolean(z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || (z?.requests || []).some((r) => open.includes(r.status)));
+  // No answer at all, or a guardian on this account whose chain read failed.
+  recoveryUnknown = !recoveryPending && Boolean((!c && !z) || (z?.active && z.onChainError) || (c?.guardianStatus === "active" && c.onChain?.error));
 }
 
 /** The bindings other modules reassign. Every READ of them stays live. */
