@@ -249,7 +249,7 @@ async function load() {
       $("note-send").textContent = `Send only ${accepts[0].symbol} on ${accepts[0].chainName || chainName(accepts[0].chainId)}.`;
     }
     $("note-settlement").textContent = p.autoConvert
-      ? (p.settlementAsset === "USDC" ? "USDC" : "EUR(e)")
+      ? (p.settlementAsset === "USDC" ? p.token.symbol : "EUR(e)")
       : "manual";
 
     // The visible swap is for the eye; the live region says it to a screen

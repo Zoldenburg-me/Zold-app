@@ -17,6 +17,7 @@
  * "dry-run" literal only for rows written before the rail was closed.)
  */
 import { BRIDGE, FX, railFeeEur } from "./config.js";
+import { usdIsStaging } from "./usd-token.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "./adapters/monerium-connection.js";
 import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError } from "./stellar/anchor.js";
@@ -342,7 +343,8 @@ function bridgeDestination(): { toAddress: string; blockchainMemo?: string } {
 /** Both halves of the cash rail must be live: Bridge moves the USDC to
  *  Stellar, the anchor pays it out. Either missing means the rail is closed,
  *  and a closed rail refuses before anything is debited. */
-export const cashRailOpen = () => BRIDGE.live && anchorModeEnabled();
+/** Bridge only credits Circle's USDC, so the staging dollar (zUSD) keeps the rail shut. */
+export const cashRailOpen = () => BRIDGE.live && anchorModeEnabled() && !usdIsStaging();
 
 function recordBridgePlan(txs: Transfer["txs"], plan: BridgeTransferPlan) {
   txs.push({ step: `bridge.xyz.${plan.mode}.transfer`, hash: plan.transferId ?? plan.idempotencyKey });

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { CHAIN_ID, FORWARDING, IS_PRODUCTION } from "../config.js";
+import { usdIsStaging, usdToken } from "../usd-token.js";
 import { partnerTimeout } from "../http.js";
 
 const addressRe = /^0x[0-9a-fA-F]{40}$/;
@@ -144,13 +145,15 @@ export async function activatePaymentForwarder(params: {
   const salt = forwardingSalt(params.userId, params.handle);
   const now = new Date().toISOString();
 
-  if (!FORWARDING.rpcUrl) {
-    if (IS_PRODUCTION) {
+  // Candide routes only to Circle's USDC, so the staging dollar (zUSD) is
+  // taken straight into the Safe on this chain.
+  if (!FORWARDING.rpcUrl || usdIsStaging()) {
+    if (IS_PRODUCTION && !usdIsStaging()) {
       throw new Error("Candide Forwarding Address API must be configured before activating payment pages");
     }
     return {
       address: recipient,
-      accepts: [{ chainId: CHAIN_ID, symbol: "USDC", address: assertAddress("token", params.token), decimals: 6 }],
+      accepts: [{ chainId: CHAIN_ID, symbol: usdToken().symbol, address: assertAddress("token", params.token), decimals: 6 }],
       forwarder: {
         provider: "local-safe",
         recipient,

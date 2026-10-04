@@ -126,6 +126,13 @@ let caps = { sandbox: true, cashRail: false, moneriumOAuth: false, moneriumApiKe
    every deployment, so it cannot decide the "Test mode" pill. */
 let realMoney = false;
 
+/* The app's dollar token as it names itself: "USDC" on Base mainnet, "zUSD"
+   on a staging chain. Read only after loadCapabilities(), never at load. */
+const usdSym = () => {
+  const s = caps.usdToken?.symbol;
+  return typeof s === "string" && /^[A-Za-z0-9.]{1,11}$/.test(s) ? s : "USDC";
+};
+
 async function loadCapabilities() {
   try {
     const h = await (await fetch("/api/health")).json();
