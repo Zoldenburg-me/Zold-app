@@ -170,9 +170,9 @@ let phRecDone = false;       // this phone just cancelled it
 const PH_REC_SEEN = "zold-recovery-seen";
 const phRecSig = (r) => (r?.chain ? `chain:${r.chain.executeAfter}` : r?.request ? `req:${r.request.id}` : "");
 
-/* Read both guardians, at most once a minute. Home and the company's Home
-   (app/business.js) call this; a recovery found here opens the alert, unless
-   "It was me" hid that same one. */
+/* Read both guardians, at most once a minute. Home calls this, and a company
+   login on its way to /business (app/phone.js phCompanyLeave); a recovery
+   found here opens the alert, unless "It was me" hid that same one. */
 async function phRecoveryCheck({ force = false } = {}) {
   const here = () => phRoute?.name === "recovery-alert";
   // No guardian can run a recovery here: there is nothing to find.

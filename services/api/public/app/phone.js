@@ -111,9 +111,19 @@ function phShowRoot(on) {
    connection, and a receipt it shares from there. */
 const PH_COMPANY_APP = new Set(["security", "signers", "recovery-settings", "recovery-alert", "monerium-settings", "share"]);
 
+/* On its way to /business, a company login is first shown a recovery under
+   way on its Safe, unless "It was me" already hid that one. */
+async function phCompanyLeave() {
+  await phRecoveryCheck({ force: true }).catch(() => {});
+  let seen = "";
+  try { seen = sessionStorage.getItem(PH_REC_SEEN) || ""; } catch { /* no storage: always show */ }
+  if ((phRec?.chain || phRec?.request) && seen !== phRecSig(phRec)) return phGo("recovery-alert", null, { replace: true });
+  location.replace(phWebHref());
+}
+
 function phOpen(route, { focus = false } = {}) {
   if (user?.accountType === "company" && !PH_COMPANY_APP.has(route.name)) {
-    location.replace(phWebHref());
+    phCompanyLeave();
     return;
   }
   phRoute = route;
