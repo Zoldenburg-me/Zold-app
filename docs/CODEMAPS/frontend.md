@@ -11,7 +11,7 @@ all await-then-render.
 ```
 core → dashboard → transactions → profile → recovery → monerium → onboarding
   → send → signers → phone → phone-home/-activity/-send/-add/-getpaid/-more
-  → invoices → business (company mode) → settings → desktop (≥1024px)
+  → settings → desktop (≥1024px)
   → errors → pwa → main
 ```
 Screens: onboarding into #ob-root; phone screens into #ph-root; desktop fills PH_DESK.

@@ -1,14 +1,11 @@
 /**
  * The phone app from design/ui-v2 (build steps 4 and 5): Home, account
- * details, Activity, one payment, Send, Add money, Get paid, Contacts, More,
- * main currency and converting digital dollars to euros. Invoices and
- * accounting connections (step 6) are in app/invoices.js; the company screens
- * and Settings (step 7) are in app/business.js and app/settings.js, loaded
- * after it.
+ * details, Activity, one payment, Send, Add money, Get paid, Contacts,
+ * Profile, main currency and converting digital dollars to euros. Settings
+ * and Security are in app/settings.js, loaded after it.
  *
- * The phone acts for one account at a time: the personal account, or a
- * company the user is a member of (`phCompanyId`, chosen in More). A company
- * gets its own Home and an Approvals tab; its money moves in the web app.
+ * The app is the person's own account. Invoices, books, approvals and every
+ * company live in Zold Business (/business), which works on a phone too.
  *
  * One screen at a time, rendered into #ph-root from the account's real state.
  * The URL hash names the screen (#home, #tx/<id>, #send/amount, …), so back,
@@ -44,21 +41,10 @@
 let phRoute = null;            // { name, arg }
 let phSig = "";                // what the open screen was drawn from, for the poll
 const phCache = { deposits: null, links: null, methods: null, orgs: null, contacts: null, bic: undefined, bicFor: "", currencyPending: null,
-  invoices: null, invProfile: null, invError: null, integrations: null, invIssued: null, invRequest: null,
-  co: null, approvalsWaiting: 0, inviteLinks: {}, plans: {}, signers: undefined, soon: null, walletQr: null };
+  plans: {}, signers: undefined, soon: null, walletQr: null };
 
-/* The company the phone acts for, or null for the personal account. Kept per
-   user on this device, and dropped when the user is no longer a member. */
-let phCompanyId = null;
-const phCompanyKey = () => `zold-phone-company:${user?.id || ""}`;
-const phCompany = () => (phCompanyId ? (phCache.orgs || []).find((o) => o.id === phCompanyId && o.type !== "personal") || null : null);
-function phUseCompany(id) {
-  phCompanyId = id || null;
-  phCache.co = null; phCache.approvalsWaiting = 0; phCache.inviteLinks = {};
-  try { if (phCompanyId) localStorage.setItem(phCompanyKey(), phCompanyId); else localStorage.removeItem(phCompanyKey()); } catch { /* this visit only */ }
-}
-/* A link into the web app for a company: the web app opens the organisation
-   it last had, so the link names it first (see the click listener below). */
+/* A link into Zold Business: it opens the organisation it last had, so a
+   link for one names it first (see the click listener below). */
 const phWebHref = (view) => `/business${view ? `?view=${encodeURIComponent(view)}` : ""}`;
 
 /* Screens drawn here. `tab` lights the bottom nav (tab roots only show it),
@@ -120,11 +106,27 @@ function phShowRoot(on) {
   $("dashboard").style.display = on ? "none" : "grid";
 }
 
+/* A company login's money moves in Zold Business, where drafts and approvals
+   apply. Here it may only see to its sign-in and recovery, its Monerium
+   connection, and a receipt it shares from there. */
+const PH_COMPANY_APP = new Set(["security", "signers", "recovery-settings", "recovery-alert", "monerium-settings", "share"]);
+
+/* On its way to /business, a company login is first shown a recovery under
+   way on its Safe, unless "It was me" already hid that one. A check that
+   could not be made is shown too, never passed over: the alert is the one
+   warning before a recovery replaces the passkey. */
+async function phCompanyLeave() {
+  try { await phRecoveryCheck({ force: true }); } catch { phRec = { failed: true }; }
+  let seen = "";
+  try { seen = sessionStorage.getItem(PH_REC_SEEN) || ""; } catch { /* no storage: always show */ }
+  if (phRec?.failed || ((phRec?.chain || phRec?.request) && seen !== phRecSig(phRec))) return phGo("recovery-alert", null, { replace: true });
+  location.replace(phWebHref());
+}
+
 function phOpen(route, { focus = false } = {}) {
-  // Acting for a company, Home is the company's.
-  if (route.name === "home" && phCompanyId && PH.company) {
-    route = { name: "company", arg: null };
-    history.replaceState({ ph: true }, "", `${location.pathname}${location.search}#company`);
+  if (user?.accountType === "company" && !PH_COMPANY_APP.has(route.name)) {
+    phCompanyLeave();
+    return;
   }
   phRoute = route;
   // Out to one of the app's own tabs: the trip from /business is over.
@@ -153,17 +155,14 @@ function phRender({ focus = false } = {}) {
   // Overlays are moved to <body> when they open; drop the old ones first,
   // closing an open one so the page behind it is no longer inert.
   document.querySelectorAll("body > .z-scrim[data-ph]").forEach((el) => { if (!el.hidden) Z.closeOverlay(el.id); el.remove(); });
-  // A company has no activity list of its own here; its tab is Approvals.
-  const co = !!phCompanyId;
   const nav = s.tab
     ? Z.bottomNav({
       active: s.tab,
       items: [
-        { id: "home", href: co ? "#company" : "#home", icon: "home", label: "Home" },
-        { id: "send", href: co ? "#company/send" : "#send", icon: "arrow_outward", label: "Send" },
-        { id: "get-paid", href: co ? "#company/get-paid" : "#get-paid", icon: "south_west", label: "Get paid" },
-        co ? { id: "approvals", href: "#approvals", icon: "inbox", label: "Approvals", badge: phCache.approvalsWaiting || "" }
-          : { id: "activity", href: "#activity", icon: "swap_vert", label: "Activity" },
+        { id: "home", href: "#home", icon: "home", label: "Home" },
+        { id: "send", href: "#send", icon: "arrow_outward", label: "Send" },
+        { id: "get-paid", href: "#get-paid", icon: "south_west", label: "Get paid" },
+        { id: "activity", href: "#activity", icon: "swap_vert", label: "Activity" },
         { id: "more", href: "#more", icon: "person", label: "Profile" },
       ],
     })
@@ -226,7 +225,6 @@ document.addEventListener("click", (e) => {
 
 /** The app's entry: the screen the URL names, or Home. */
 function phStart() {
-  try { phCompanyId = localStorage.getItem(phCompanyKey()) || null; } catch { phCompanyId = null; }
   phTakeFromBusiness();
   const r = phParse(location.hash);
   const route = r || { name: "home", arg: null };
@@ -243,6 +241,8 @@ function phStart() {
    ========================================================================== */
 
 const phFirst = (name) => String(name || "").trim().split(/\s+/)[0] || "";
+/* Server text in the app's voice: no dashes or arrows, curly apostrophes. */
+const phPlain = (s) => String(s || "").replace(/\s*[—–]\s*/g, ", ").replace(/\s*→\s*/g, ", then ").replace(/(\w)'(\w)/g, "$1’$2");
 const phEur = (n) => Z.formatMoney(n ?? 0, "EUR");
 /* The plan check, as the organisation read reports it. */
 const phCan = (org, cap) => org?.capabilities?.[cap]?.allowed === true;
@@ -253,8 +253,6 @@ async function phLoadOrgs() {
     phCache.orgs = (await api("/api/orgs")).organisations || [];
     const owned = user?.accountType === "company" ? phCache.orgs.filter((o) => o.type === "business") : [];
     ownCompanyOrg = owned.find((o) => o.role === "owner") || owned[0] || null;
-    // No longer a member: back to the personal account.
-    if (phCompanyId && !phCompany()) phUseCompany(null);
   } catch { phCache.orgs = []; }
   return phCache.orgs;
 }
@@ -311,8 +309,9 @@ function phTakeFromBusiness() {
   }
   try { phFromBusiness = sessionStorage.getItem("zold-from-business") === "1"; } catch { phFromBusiness = false; }
 }
-/* Security's top bar: back to /business when that is where the person came from. */
-const phSecurityTop = () => (phFromBusiness
+/* Security's top bar: back to /business when that is where the person came
+   from, and always for a company login, whose dashboard is there. */
+const phSecurityTop = () => (phFromBusiness || user?.accountType === "company"
   ? Z.topbar({ title: "Security", back: { href: "/business?view=settings", label: "Back to Zold Business" } })
   : phTop("Security", "settings"));
 

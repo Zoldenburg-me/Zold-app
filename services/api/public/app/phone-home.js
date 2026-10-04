@@ -170,9 +170,9 @@ let phRecDone = false;       // this phone just cancelled it
 const PH_REC_SEEN = "zold-recovery-seen";
 const phRecSig = (r) => (r?.chain ? `chain:${r.chain.executeAfter}` : r?.request ? `req:${r.request.id}` : "");
 
-/* Read both guardians, at most once a minute. Home and the company's Home
-   (app/business.js) call this; a recovery found here opens the alert, unless
-   "It was me" hid that same one. */
+/* Read both guardians, at most once a minute. Home calls this, and a company
+   login on its way to /business (app/phone.js phCompanyLeave); a recovery
+   found here opens the alert, unless "It was me" hid that same one. */
 async function phRecoveryCheck({ force = false } = {}) {
   const here = () => phRoute?.name === "recovery-alert";
   // No guardian can run a recovery here: there is nothing to find.
@@ -183,16 +183,21 @@ async function phRecoveryCheck({ force = false } = {}) {
   if (!force && Date.now() - phRecReadAt < 60000) return;
   phRecReadAt = Date.now();
   const [c, z] = await Promise.all([
-    caps.emailSmsRecovery ? api(`/api/users/${user.id}/recovery/candide`).catch(() => null) : null,
-    caps.zoldenburgRecovery ? api(`/api/users/${user.id}/recovery/zoldenburg`).catch(() => null) : null,
+    caps.emailSmsRecovery ? api(`/api/users/${user.id}/recovery/candide`).catch(() => null) : undefined,
+    caps.zoldenburgRecovery ? api(`/api/users/${user.id}/recovery/zoldenburg`).catch(() => null) : undefined,
   ]);
-  if (!c && !z) {
-    if (here()) { phRec = { failed: true }; phRender(); }
-    return;
-  }
   const chain = z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || null;
   const reqs = z?.requests || [];
-  const request = chain ? null : reqs.find((r) => ["PASSKEY_PENDING", "KYC_PENDING", "REVIEW_PENDING"].includes(r.status)) || null;
+  const request = chain ? null : reqs.find((r) => ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING"].includes(r.status)) || null;
+  // Nothing found is only "none" when the reads worked: a guardian that is
+  // switched on and did not answer (null; undefined is one not asked), or one
+  // on this account whose chain read failed, is "couldn't check".
+  const unread = c === null || z === null || (z?.active && z.onChainError) || (c?.guardianStatus === "active" && c.onChain?.error);
+  if (!chain && !request && unread) {
+    phRec = { failed: true };
+    if (here()) phRender();
+    return;
+  }
   // Which guardian is moving it, where the reads say so; otherwise left out.
   const kinds = [...new Set((c?.channels || []).map((x) => (x.channel === "sms" ? "phone" : "email")))];
   const codes = kinds.length ? `${kinds.join(" and ").replace(/^./, (x) => x.toUpperCase())} ${kinds.length > 1 ? "codes" : "code"}` : "Email or phone codes";
@@ -204,7 +209,7 @@ async function phRecoveryCheck({ force = false } = {}) {
   let seen = "";
   try { seen = sessionStorage.getItem(PH_REC_SEEN) || ""; } catch { /* no storage: always show */ }
   if (phRoute?.name === "recovery-alert") return phRender();
-  if (["home", "company"].includes(phRoute?.name) && seen !== phRecSig(phRec)) phGo("recovery-alert");
+  if (phRoute?.name === "home" && seen !== phRecSig(phRec)) phGo("recovery-alert");
 }
 
 PH["recovery-alert"] = {
@@ -220,7 +225,7 @@ PH["recovery-alert"] = {
     if (!phRec) return `${Z.topbar({ srTitle: "Recovery under way", back: { href: "#home", label: "Back to Home" } })}${phMain(Z.skeletonRows(2, "Checking for a recovery…"))}`;
     if (phRec.failed) {
       return `${Z.topbar({ srTitle: "Recovery under way", back: { href: "#home", label: "Back to Home" } })}${phMain(`
-        <div class="z-intro"><h2 class="z-title">Couldn’t check for a recovery</h2><p class="z-sub">Zold didn’t answer. Try again, or open Recovery settings.</p></div>`)}${phFoot(`${Z.button({ variant: "primary", full: true, label: "Try again", id: "ph-rec-retry" })}<a class="z-link-btn" href="#recovery-settings">Recovery settings</a>`)}`;
+        <div class="z-intro"><h2 class="z-title">Couldn’t check for a recovery</h2><p class="z-sub">Zold couldn’t read whether someone is moving your account to another phone. Try again, or open Recovery settings.</p></div>`)}${phFoot(`${Z.button({ variant: "primary", full: true, label: "Try again", id: "ph-rec-retry" })}<a class="z-link-btn" href="#recovery-settings">Recovery settings</a>${user?.accountType === "company" ? `<a class="z-link-btn" href="${esc(phWebHref())}">Continue to Zold Business without checking</a>` : ""}`)}`;
     }
     if (phRec.none) {
       return `${Z.topbar({ srTitle: "No recovery under way", back: { href: "#home", label: "Back to Home" } })}${phMain(`

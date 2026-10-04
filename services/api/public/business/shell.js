@@ -6,10 +6,10 @@
  * leak or be lost on the next render.
  */
 import {
-  $, api, esc, invoiceInputListener, org, orgs, setInvoiceInputListener, setMe, setOrg,
+  $, api, esc, invoiceInputListener, org, orgs, readRecovery, setInvoiceInputListener, setMe, setOrg,
   setOrgs, setTestMode, setView, toast, token, view,
 } from "./core.js";
-import { KNOWN, planBanner, refreshSide, renderNav } from "./nav.js";
+import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
 import { META, RENDER, setExportMonth } from "./views.js";
 import { checkCustomerVatId, refreshInvoiceCheck } from "./invoice.js";
 import { ACTIONS } from "./actions.js";
@@ -55,6 +55,8 @@ document.addEventListener("click", (ev) => {
 // Back and Forward move between views: the URL is the source of truth there.
 window.addEventListener("popstate", () => {
   if (!org) return;
+  // Back from the open Menu closes it; the view underneath is unchanged.
+  if (document.querySelector(".zb.is-menu")) { setMenu(false, { viaHistory: false }); return; }
   const wanted = new URLSearchParams(location.search).get("view") || "overview";
   setView(KNOWN.has(wanted) ? wanted : "overview", { push: false });
   render({ focus: true });
@@ -159,6 +161,7 @@ export async function boot() {
     renderNav();
     // The personal-space banner needs to know who this is.
     if (org && $("#plan-banner")) $("#plan-banner").innerHTML = planBanner();
+    readRecovery().then(() => { if (org && $("#plan-banner")) $("#plan-banner").innerHTML = planBanner(); }).catch(() => { /* no banner */ });
     return u;
   }).catch(() => null);
   setOrgs(list.organisations);
