@@ -23,6 +23,7 @@
  *   transfer belongs with a compliance provider.
  */
 import { randomUUID } from "node:crypto";
+import { usdToken } from "../usd-token.js";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import { addrs, eur, usd, publicClient } from "../chain.js";
@@ -175,11 +176,12 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
   const page = user.paymentPage;
   if (!page) return "this account has no payment page";
   if (page.settlementAsset === "USDC") {
-    return "your payment page settles in USDC, so there is nothing to convert";
+    return `your payment page settles in ${usdToken().symbol}, so there is nothing to convert`;
   }
   const amountUsdc = deposit.amountUsdc ?? 0;
   if (amountUsdc < CRYPTO_IN.minUsdc) {
-    return `${amountUsdc} USDC is below the ${CRYPTO_IN.minUsdc} USDC floor — converting it would cost more than it delivers`;
+    const sym = usdToken().symbol;
+    return `${amountUsdc} ${sym} is below the ${CRYPTO_IN.minUsdc} ${sym} floor — converting it would cost more than it delivers`;
   }
   /**
    * No Safe, nothing to sign with. Without this check the deposit would sit at
@@ -190,7 +192,7 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
   const safeBlocker = safeDebitBlocker(user);
   if (safeBlocker) {
     return (
-      `${safeBlocker}. Your ${deposit.amountUsdc ?? 0} USDC is still yours at ${user.address} — ` +
+      `${safeBlocker}. Your ${deposit.amountUsdc ?? 0} ${usdToken().symbol} is still yours at ${user.address} — ` +
       "it simply cannot be converted until the account can sign."
     );
   }

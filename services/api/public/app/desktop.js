@@ -198,13 +198,13 @@ function phDeskTxRow(t) {
   if (t.kind === "funding") {
     const usdc = t.token === "USDC";
     const word = t.state === "REFUSED" ? "IN REVIEW" : "RECEIVED";
-    const who = usdc ? "Digital dollars (USDC)" : "Euros received";
+    const who = usdc ? `Digital dollars (${usdSym()})` : "Euros received";
     return `<tr>
       <td class="z-dim">${esc(phWhen(t.at || t.detectedAt))}</td>
       <td><span class="z-tbl__who">${Z.iconTile({ icon: usdc ? "currency_exchange" : "euro" })}${usdc ? `<a class="z-tbl__link" href="#add/wallet">${esc(who)}</a>` : `<span>${esc(who)}</span>`}</span></td>
       <td>From a crypto wallet</td>
       <td>${Z.tag(word)}</td>
-      <td class="z-tbl__num">${usdc ? `<span class="z-amount z-amount--in">+${esc(Z.formatMoney(t.amountUsdc || 0, "USDC"))}</span>` : Z.amount({ value: t.amountEur || 0, direction: "in" })}</td>
+      <td class="z-tbl__num">${usdc ? `<span class="z-amount z-amount--in">+${esc(Z.formatMoney(t.amountUsdc || 0, usdSym()))}</span>` : Z.amount({ value: t.amountEur || 0, direction: "in" })}</td>
     </tr>`;
   }
   return `<tr>
@@ -343,8 +343,8 @@ function phSearchResults(raw) {
     .map((t) => {
       if (t.kind === "funding") {
         const usdc = t.token === "USDC";
-        const name = usdc ? "Digital dollars (USDC)" : "Euros received";
-        return { group: "Payments", go: usdc ? ["add/wallet", null] : ["activity", null], lead: Z.iconTile({ icon: "south_west" }), title: phMark(name, q), right: `+${esc(usdc ? Z.formatMoney(t.amountUsdc || 0, "USDC") : phEur(t.amountEur))} · ${esc(phDay(t.at || t.detectedAt))}`, label: name };
+        const name = usdc ? `Digital dollars (${usdSym()})` : "Euros received";
+        return { group: "Payments", go: usdc ? ["add/wallet", null] : ["activity", null], lead: Z.iconTile({ icon: "south_west" }), title: phMark(name, q), right: `+${esc(usdc ? Z.formatMoney(t.amountUsdc || 0, usdSym()) : phEur(t.amountEur))} · ${esc(phDay(t.at || t.detectedAt))}`, label: name };
       }
       const name = [t.recipientName || "Payment", t.reference].filter(Boolean).join(" · ");
       return { group: "Payments", go: ["tx", t.id], lead: Z.iconTile({ icon: "arrow_outward" }), title: phMark(name, q), right: `${phOut(t) ? "−" : ""}${esc(phEur(t.sendEur))} · ${esc(phDay(t.createdAt))}`, label: name };

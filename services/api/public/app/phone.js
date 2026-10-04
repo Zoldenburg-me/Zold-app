@@ -337,12 +337,12 @@ function phActivityRow(t) {
     const word = t.state === "REFUSED" ? "IN REVIEW" : "RECEIVED";
     return Z.row({
       lead: Z.iconTile({ icon: usdc ? "currency_exchange" : "euro" }),
-      title: usdc ? "Digital dollars (USDC)" : "Euros received",
+      title: usdc ? `Digital dollars (${usdSym()})` : "Euros received",
       // Activity lists on-chain deposits only; a bank transfer in shows in the
       // balance, not here (GET /activity has no Monerium issue rows).
       sub: `From a crypto wallet · ${phWhen(t.at || t.detectedAt)}`,
       right: `${usdc
-        ? `<span class="z-amount z-amount--in">+${esc(Z.formatMoney(t.amountUsdc || 0, "USDC"))}</span>`
+        ? `<span class="z-amount z-amount--in">+${esc(Z.formatMoney(t.amountUsdc || 0, usdSym()))}</span>`
         : Z.amount({ value: t.amountEur || 0, direction: "in" })}${Z.tag(word)}`,
       href: usdc ? "#add/wallet" : undefined,
       chevron: false,

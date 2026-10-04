@@ -7,7 +7,7 @@
  * only, refunds by hand: every one of those limits is printed here rather
  * than discovered by a customer at checkout.
  */
-import { Z, api, day, esc, eur, org, plain } from "./core.js";
+import { Z, api, day, esc, eur, org, plain, usdSymbol } from "./core.js";
 import { META, RENDER } from "./views.js";
 
 /** A reason from the API, closed with a full stop before the next sentence. */
@@ -30,7 +30,7 @@ function appCard(d, custom) {
         : "A Shopify payments app has to be approved into Shopify’s Payments Apps program first. Nobody has done that yet."}</span></div>`;
   return `<section class="z-card zb-pad zb-app" aria-labelledby="app-shopify">
       <div class="zb-app__head">${Z.iconTile({ icon: "storefront" })}<div><h2 class="zb-h2" id="app-shopify">Shopify ${Z.tag("Beta")}</h2>
-        <p class="desc">Customers pay an order in digital dollars (USDC), and Zold marks it paid in Shopify once the money arrives.</p></div></div>
+        <p class="desc">Customers pay an order in digital dollars (${usdSymbol}), and Zold marks it paid in Shopify once the money arrives.</p></div></div>
       ${connect}</section>`;
 }
 
@@ -51,7 +51,7 @@ function ordersTable(d, custom) {
     : r.state === "PAID" ? `${Z.tag("Not yet", "amber")}${r.resolveError ? `<p class="desc">${esc(plain(r.resolveError))}</p>` : ""}`
       : '<span class="z-dim">Not yet</span>';
   const paid = (r) => r.payments?.length
-    ? r.payments.map((p) => `${esc(String(p.amountUsdc ?? ""))} USDC${p.settledEur !== undefined ? ` → ${esc(eur(p.settledEur))}` : " (kept as USDC)"}`).join("<br>")
+    ? r.payments.map((p) => `${esc(String(p.amountUsdc ?? ""))} ${usdSymbol}${p.settledEur !== undefined ? ` → ${esc(eur(p.settledEur))}` : ` (kept as ${usdSymbol})`}`).join("<br>")
     : r.state === "OPEN" ? "Waiting for payment" : "";
   return heading("app-orders", title) + table(["When", "Order", "#Amount", "Paid", "Status", "Marked paid in Shopify", ""], d.requests.map((r) => `<tr>
       <td class="z-dim">${esc(day(r.createdAt))}${r.test ? ` ${Z.tag("Test", "amber")}` : ""}</td>
