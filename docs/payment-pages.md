@@ -149,6 +149,10 @@ handle called `settings` invites a convincing phish. `0x` is refused because a
 handle that looks like an address is a trap on a page whose job is showing an
 address.
 
+A handle is also an ENS name, `<handle>.zoldhq.com`, once the gateway is
+configured, so `--` as the third and fourth characters is refused (ENSIP-15).
+How names resolve: `docs/ens.md`.
+
 Claiming a handle is passkey-Safe gated, not KYC-gated. A user can activate a
 payment page once their Safe is deployed with passkeys. Conversion and regulated
 settlement can still require KYC, but publishing the page itself does not.

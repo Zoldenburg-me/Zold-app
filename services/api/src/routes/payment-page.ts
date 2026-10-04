@@ -37,7 +37,7 @@ function normaliseSettlementAsset(raw: unknown): "EURE" | "USDC" {
 
 /** The chain and token a payment page asks payers to use. USDC because that is
  *  what the crypto-in converter knows how to turn into spendable euros. */
-function payChain() {
+export function payChain() {
   return {
     chainId: CHAIN_ID,
     token: { symbol: "USDC", address: addrs().usdc, decimals: 6 },
