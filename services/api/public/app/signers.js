@@ -216,7 +216,7 @@ function renderSignersForm(el) {
     el.innerHTML = `
       <div class="m-h1" style="font-size:24px">Allow someone to spend from your account</div>
       <span class="m-tag">ADVANCED</span>
-      <div class="m-lede" style="font-size:13px;margin-top:8px">This person can spend up to the limit you set without your signature, through Safe's Allowance module. They spend it with their own wallet at app.safe.global, under Spending limits. Zold does not move it for them. You can remove the limit here at any time; a recovery does not remove it.</div>
+      <div class="m-lede" style="font-size:13px;margin-top:8px">This person can spend up to the limit you set without your signature, through Safe's Allowance module. They spend it with their own wallet at app.safe.global, under Spending limits. Zold cannot move it for them. You can remove the limit here at any time; a recovery does not remove it.</div>
       <div class="m-field" style="margin-top:16px"><label for="m-sg-lim-delegate">Their wallet address</label>
         <input id="m-sg-lim-delegate" name="delegate-address" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="0x…" translate="no" value="${esc(second?.address || "")}" /></div>
       <div class="m-field" style="margin-top:12px"><label for="m-sg-lim-token">Token</label>
