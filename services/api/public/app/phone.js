@@ -164,7 +164,7 @@ function phRender({ focus = false } = {}) {
         { id: "get-paid", href: co ? "#company/get-paid" : "#get-paid", icon: "south_west", label: "Get paid" },
         co ? { id: "approvals", href: "#approvals", icon: "inbox", label: "Approvals", badge: phCache.approvalsWaiting || "" }
           : { id: "activity", href: "#activity", icon: "swap_vert", label: "Activity" },
-        { id: "more", href: "#more", icon: "more_horiz", label: "More" },
+        { id: "more", href: "#more", icon: "person", label: "Profile" },
       ],
     })
     : "";

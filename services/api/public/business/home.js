@@ -183,7 +183,7 @@ function attention({ waiting, invoices, lines, accounts }) {
 }
 
 function accountsCard(accounts) {
-  if (!accounts.length) return `<section class="z-card zb-side-card" aria-labelledby="home-acc"><div class="zb-side-card__head"><h2 id="home-acc">Accounts</h2></div><p class="zb-hint">No account can pay yet. Connect the company’s Monerium profile on the Accounts screen.</p>${linkBtn("Accounts", "accounts")}</section>`;
+  if (!accounts.length) return `<section class="z-card zb-side-card" aria-labelledby="home-acc"><div class="zb-side-card__head"><h2 id="home-acc">Accounts</h2></div><p class="zb-hint">No account can pay yet. ${org.type === "personal" ? "Connect your Monerium account" : "Connect the company’s Monerium profile"} on the Accounts screen.</p>${linkBtn("Accounts", "accounts")}</section>`;
   const one = (a) => {
     const mine = a.status === "active" && a.backingUserId && me && a.backingUserId === me.id;
     const iban = a.identifier?.iban;

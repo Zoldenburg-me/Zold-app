@@ -433,7 +433,8 @@ RENDER.organisation = async () => {
   const reporting = cap("settings.reportingCurrency").allowed;
   return `<form class="card" id="org-form" onsubmit="return false">
       <div class="grid g2">
-        <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}" /></div>
+        <div><label for="s-name">Name</label><input id="s-name" name="organization" autocomplete="organization" value="${esc(org.name)}"${org.type === "personal"
+          ? ' readonly aria-describedby="s-name-hint" /><p class="zb-hint" id="s-name-hint">Your personal space is named after you. Change your name in the Zold app, under Profile.</p>' : " />"}</div>
         <div><label for="s-legal">Legal name</label><input id="s-legal" name="legal" autocomplete="off" value="${esc(org.legalName || "")}" /></div>
       </div>
       <label for="s-addr1">Registered address</label>
