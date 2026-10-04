@@ -33,6 +33,7 @@ browser ─┬─ /            landing (site.css/site.js)
 - **capabilities.ts** → `/api/health`; the UI renders a control only where the API accepts it.
 
 ## Money flow (send)
+Function-level map of both rails: remittance.md.
 `POST /api/quotes` → `POST /api/transfers` (prepares the userOp = the debit)
 → passkey signs → `POST /transfers/:id/authorize` → orchestrator executes
 (swap if needed, measured balance delta) → Monerium redeem to IBAN (SEPA)
