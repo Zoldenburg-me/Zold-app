@@ -25,6 +25,9 @@ import express from "express";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-org-accounts-")), "db.json");
 process.env.TRANSF_CHAIN_ID = "31337";
+// EUR is open only where a user can connect Monerium. Set it here rather than
+// inherit it from the operator's .env, which CI and a clean checkout lack.
+process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "test-encryption-key-for-org-accounts-32";
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
