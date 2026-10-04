@@ -222,14 +222,17 @@ export let recoveryPending = false;
 export let recoveryUnknown = false;
 export async function readRecovery() {
   if (!me?.id || me.passkeySafe?.status !== "active") return;
-  const [c, z] = await Promise.all([
-    api(`/api/users/${me.id}/recovery/candide`).catch(() => null),
-    api(`/api/users/${me.id}/recovery/zoldenburg`).catch(() => null),
-  ]);
+  // A guardian's route exists only where it is switched on, so ask only those:
+  // a 404 from one that is off is not a failed check.
+  const caps = (await api("/api/health").catch(() => null))?.capabilities;
+  const ask = (on, path) => (on ? api(`/api/users/${me.id}/recovery/${path}`).catch(() => null) : undefined);
+  const [c, z] = await Promise.all([ask(caps?.emailSmsRecovery, "candide"), ask(caps?.zoldenburgRecovery, "zoldenburg")]);
   const open = ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"];
   recoveryPending = Boolean(z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || (z?.requests || []).some((r) => open.includes(r.status)));
-  // No answer at all, or a guardian on this account whose chain read failed.
-  recoveryUnknown = !recoveryPending && Boolean((!c && !z) || (z?.active && z.onChainError) || (c?.guardianStatus === "active" && c.onChain?.error));
+  // Which guardians are on is unknown, a guardian that is on did not answer,
+  // or one on this account could not read the chain: "couldn't check".
+  recoveryUnknown = !recoveryPending && Boolean(!caps || c === null || z === null
+    || (z?.active && z.onChainError) || (c?.guardianStatus === "active" && c.onChain?.error));
 }
 
 /** The bindings other modules reassign. Every READ of them stays live. */
@@ -239,11 +242,12 @@ export const setMe = (v) => { me = v; };
 export const setTestMode = (v) => { testMode = v; };
 /** Changing the view is a navigation: it gets a history entry, so Back works
  *  and the URL can be bookmarked or opened in a new tab. `push: false` is for
- *  popstate, where the browser has already moved the URL. */
-export const setView = (v, { push = true } = {}) => {
+ *  popstate, where the browser has already moved the URL; `replace: true` takes
+ *  over the current entry (the Menu's, when a screen is picked from it). */
+export const setView = (v, { push = true, replace = false } = {}) => {
   view = v;
   if (push && new URLSearchParams(location.search).get("view") !== v) {
-    history.pushState({ view: v }, "", `${location.pathname}?view=${encodeURIComponent(v)}`);
+    history[replace ? "replaceState" : "pushState"]({ view: v }, "", `${location.pathname}?view=${encodeURIComponent(v)}`);
   }
 };
 export const setInvoiceInputListener = (v) => { invoiceInputListener = v; };

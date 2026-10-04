@@ -43,14 +43,16 @@ const TABS = { banking: ["overview", "payments", "send", "get-paid"], books: ["b
 
 /* Under 1024px the sidebar is a top bar, and Menu opens the rest of it as a
    full-screen panel. Opening it is a history entry, so Back closes it, as do
-   Menu again and Escape (both go back); picking a screen or the organisation
-   closes it in place (`viaHistory: false`). The page behind it is inert. */
+   Menu again, Escape, the organisation, Search and the screen already shown
+   (all go back). Picking another screen closes it in place (`viaHistory:
+   false`) and returns true while the Menu's entry is still on top, for the
+   new view to take that entry over. The page behind it is inert. */
 export function setMenu(open, { viaHistory = true } = {}) {
   const shell = document.querySelector(".zb");
   const btn = $("#menu-btn");
-  if (!shell || !btn) return;
+  if (!shell || !btn) return false;
   const was = shell.classList.contains("is-menu");
-  if (!open && was && viaHistory && history.state?.zbMenu) { history.back(); return; }  // popstate closes it
+  if (!open && was && viaHistory && history.state?.zbMenu) { history.back(); return false; }  // popstate closes it
   shell.classList.toggle("is-menu", open);
   for (const id of ["#main", "#tabs"]) { const el = $(id); if (el) el.inert = open; }
   btn.setAttribute("aria-expanded", String(open));
@@ -61,12 +63,18 @@ export function setMenu(open, { viaHistory = true } = {}) {
     $("#side-menu").querySelector("a, button:not([hidden])")?.focus();
   }
   if (!open && was && (!document.activeElement || document.activeElement === document.body || $("#side-menu").contains(document.activeElement))) btn.focus();
+  return !open && was && Boolean(history.state?.zbMenu);
 }
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && document.querySelector(".zb.is-menu")) setMenu(false);
 });
 // Search opens its own dialog over the page; the panel gets out of its way.
-document.addEventListener("click", (e) => { if (e.target.closest?.("#search-btn")) setMenu(false, { viaHistory: false }); });
+document.addEventListener("click", (e) => { if (e.target.closest?.("#search-btn")) setMenu(false); });
+// From 1024px the panel is the sidebar again and Menu is hidden: an open Menu
+// would leave the page inert with nothing on screen to close it.
+matchMedia("(min-width: 1024px)").addEventListener("change", (e) => {
+  if (e.matches && document.querySelector(".zb.is-menu")) setMenu(false);
+});
 
 /** Which nav item an older view belongs to. */
 export const PARENT = {
@@ -182,12 +190,13 @@ export function renderNav() {
     a.onclick = (e) => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
-      setMenu(false, { viaHistory: false });
-      setView(a.dataset.view);
+      // The screen already shown: only the Menu closes, and its entry goes.
+      if (a.dataset.view === view && document.querySelector(".zb.is-menu")) { setMenu(false); return; }
+      setView(a.dataset.view, { replace: setMenu(false, { viaHistory: false }) });
       render({ focus: true });
     };
   });
-  $("#org-btn").onclick = () => { setMenu(false, { viaHistory: false }); switchSheet($("#org-btn")); };
+  $("#org-btn").onclick = () => { setMenu(false); switchSheet($("#org-btn")); };
   $("#menu-btn").onclick = () => setMenu(!document.querySelector(".zb.is-menu"));
   $("#tabs [data-menu]").onclick = () => setMenu(true);
 }
