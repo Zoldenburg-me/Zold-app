@@ -31,8 +31,7 @@ THREE RULES OVERRIDE CONVENIENCE:
 1. **main is PR-merge only. Only `scripts/build-production-branch.sh` writes
    `production`**, from merged main (`docs/running-locally.md`).
 2. **Nothing renders as real that has not moved real money.** This is the UPI
-   lesson (a rail that minted its own reference numbers for money that reached
-   nobody) and it is why gated currencies, SOON labels, `simulated` badges,
+   lesson and it is why gated currencies, SOON labels, `simulated` badges,
    dry-run plans and `heldByUs` all exist. Deleting a fake is cheaper than
    explaining one.
 3. **Fail closed.** No rate, no quote. No venue, no trade — never a silent
@@ -43,7 +42,7 @@ THREE RULES OVERRIDE CONVENIENCE:
 
 - **Chain**: `TRANSF_CHAIN_ID` selects it; default **8453 (Base mainnet)**.
   `deployments.json` is keyed by chain id; on a real chain it holds only EURe
-  and USDC (FxSwapper, AdminTimelock are hardhat-only). **No 8453 entry yet.**
+  and USDC. **No 8453 entry yet.**
   The running deployment is **Base Sepolia (84532)** + Monerium sandbox at
   zoldhq.com on an Akash lease (technical-architecture §18.1): closing the
   lease deletes every tester's account.
@@ -51,7 +50,6 @@ THREE RULES OVERRIDE CONVENIENCE:
   (no skip) → Safe deployed → recovery enrolment → the gate offers OAuth *or*
   your own Monerium API keys → "Activate IBAN with passkey". `POST /api/users`
   always creates `pending` with no IBAN; only an address-matched IBAN approves.
-  There is no KYC provider, no Sumsub, no operator review route.
 - **Rails**: SEPA (Monerium redeem, non-custodial for the principal, fee €0) is
   open. The **cash rail is CLOSED** unless `cashRailOpen()` — quotes answer 503
   RAIL_CLOSED and the app hides the corridor. There is no UPI rail; do not
