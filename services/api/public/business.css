@@ -443,3 +443,40 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-cmdk__org { margin: 0; padding: 14px var(--z-space-5) 0; }
 #zb-search .z-cmdk__bar { height: 56px; }
 .zb-cmdk__ask { margin: var(--z-space-2) var(--z-space-1) 0; border-radius: var(--z-radius-md); border: 1px dashed var(--z-line-strong); }
+
+/* Accounts: one card per account, the full IBAN on its own line. */
+.zb-acards { display: flex; flex-direction: column; gap: var(--z-space-4); }
+.zb-acard { padding: var(--z-space-5); }
+.zb-acard__head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.zb-acard__name { font: 600 17px/1.3 var(--z-font); color: var(--z-heading); }
+.zb-acard__cur { margin-left: 8px; font-size: 13px; color: var(--z-dim); }
+.zb-acard__act { margin-left: auto; }
+.zb-acard__iban { margin: 16px 0 12px; display: flex; flex-direction: column; gap: 6px; }
+.zb-acard__ibanrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.zb-acard__ibanrow .z-mono { font-size: 20px; letter-spacing: .02em; color: var(--z-heading); white-space: nowrap; }
+@media (max-width: 599px) { .zb-acard__ibanrow .z-mono { font-size: 16px; } }
+
+/* Home, laid out like a bank dashboard: greeting, small actions, the balance
+   card with its chart, the accounts beside it. */
+.zb-h-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: -6px 0 var(--z-space-5); }
+.zb-h-actions .z-btn--sm { min-height: 36px; padding: 0 14px; font-size: 13.5px; }
+.zb-h-actions .z-btn .z-ic { font-size: 16px; }
+.zb-h-bal__head { display: flex; flex-direction: column; gap: 6px; }
+.zb-h-bal__label { font-size: 14px; color: var(--z-dim); }
+.zb-h-bal__fig { font: 600 36px/1.1 var(--z-font); letter-spacing: -.035em; font-variant-numeric: tabular-nums; color: var(--z-heading); }
+.zb-h-cents { font-size: .55em; vertical-align: .6em; letter-spacing: 0; }
+.zb-h-flowhead { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 4px 0 8px; }
+.zb-h-io { display: inline-flex; gap: 16px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.zb-h-io > span { display: inline-flex; align-items: center; gap: 4px; }
+.zb-h-io .z-ic { font-size: 16px; }
+.zb-h-io .is-in .z-ic { color: var(--z-mint); }
+.zb-h-io .is-out .z-ic { color: var(--z-pink); }
+.zb-h-accs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.zb-h-accrow { display: flex; align-items: center; gap: 12px; padding: 8px; margin: 0 -8px; border-radius: var(--z-radius-md); color: var(--z-text); text-decoration: none; }
+.zb-h-accrow:hover { background: var(--z-ghost); }
+.zb-h-accrow .z-row__main { flex: 1; min-width: 0; }
+.zb-h-accrow__fig { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Sidebar icons at the size bank dashboards use. */
+.zb .z-side__link { height: 36px; }
+.zb .z-side__link .z-ic, .zb .zb-acct .z-ic { font-size: 17px; }
