@@ -211,9 +211,11 @@ export function setPersonalLater() {
   try { localStorage.setItem(laterKey(), "1"); } catch { /* asked again next visit */ }
 }
 
-/** The personal space takes the account's name and country: nothing to fill in. */
-export async function createPersonalOrg() {
-  const r = await api("/api/orgs", { method: "POST", body: { type: "personal", name: me.name || "Personal", country: me.country } });
+/** The personal space is made from what the person typed in the form
+ *  (actions.js "create-personal"), never from one tap. It is named after the
+ *  person and follows their name; what they typed is the name on invoices. */
+export async function createPersonalOrg({ legalName, country, email }) {
+  const r = await api("/api/orgs", { method: "POST", body: { type: "personal", name: me.name || legalName, legalName, country, ...(email ? { email } : {}) } });
   try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
   location.reload();
 }
