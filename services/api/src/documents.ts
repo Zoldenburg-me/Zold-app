@@ -28,8 +28,8 @@ import { keccak256, toBytes, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { IS_PRODUCTION, CHAIN_ID, KEYS, PUBLIC_URL } from "./config.js";
 import type { Transfer, User } from "./store.js";
-import { normalizeIban, paymentMemo, reportedBic } from "./sepa.js";
-import { moneriumIbanList } from "./domain/monerium-profile.js";
+import { paymentMemo, reportedBic } from "./sepa.js";
+import { moneriumVerifiedName, personKey } from "./users/verified-name.js";
 
 export type DocumentKind = "receipt" | "statement" | "balance" | "ownership" | "beleg";
 
@@ -65,6 +65,10 @@ export const isDocumentCode = (raw: string) => /^[0-9A-HJKMNP-TV-Z]{15}$/.test(n
 export interface HolderBlock {
   /** Who holds the IBAN: the name Monerium reports for it, else the user's. */
   name: string;
+  /** Where `name` came from: Monerium (users/verified-name.ts), or the name
+   *  the user typed, which nobody checked. Absent on documents issued before
+   *  it was recorded; those printed the typed name. */
+  nameSource?: "monerium" | "self-declared";
   /** The Zold user, when Monerium names someone else (a company) as holder. */
   operatedBy?: string;
   addressLines: string[];
@@ -174,10 +178,11 @@ export function holderBlock(user: User): HolderBlock {
   const lines: string[] = [];
   if (user.country) lines.push(user.country.toUpperCase());
   const iban = user.iban || undefined;
-  const reported = iban ? moneriumIbanHolder(user, iban) : undefined;
-  const differs = reported !== undefined && personKey(reported) !== personKey(user.name);
+  const verified = moneriumVerifiedName({ monerium: user.monerium, iban: user.iban });
+  const differs = verified !== undefined && personKey(verified) !== personKey(user.name);
   return {
-    name: differs ? reported : user.name,
+    name: differs ? verified : user.name,
+    nameSource: verified ? "monerium" : "self-declared",
     ...(differs ? { operatedBy: user.name } : {}),
     addressLines: lines,
     ...(iban ? { iban, ...(reportedBic(user) ? { bic: reportedBic(user) } : {}) } : {}),
@@ -187,16 +192,19 @@ export function holderBlock(user: User): HolderBlock {
   };
 }
 
-/** The holder name Monerium reported for this IBAN in the stored snapshot. */
-function moneriumIbanHolder(user: User, iban: string): string | undefined {
-  const entry = moneriumIbanList(user.monerium?.ibans).find((i) => normalizeIban(i.iban) === normalizeIban(iban));
-  const name = typeof entry?.name === "string" ? entry.name.trim() : "";
-  return name || undefined;
+/**
+ * Why Zold will not sign a letter about who holds this account, or undefined
+ * when it will. A balance confirmation and a proof of ownership are read by a
+ * landlord or a bank as Zold vouching for the holder, so they are issued only
+ * once Monerium has approved the account.
+ */
+export function holderLetterRefusal(user: Pick<User, "kycStatus">): { code: "ACCOUNT_NOT_VERIFIED"; error: string } | undefined {
+  if (user.kycStatus === "approved") return undefined;
+  return {
+    code: "ACCOUNT_NOT_VERIFIED",
+    error: "Balance confirmations and proofs of ownership are issued once Monerium has verified you and your IBAN is active.",
+  };
 }
-
-/** "CHRISTIAN  LINDNER" and "Lindner Christian" are the same person. */
-const personKey = (name: string) =>
-  name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).sort().join(" ");
 
 // ---------------------------------------------------------------------------
 // statement lines from the three sources
@@ -452,6 +460,7 @@ export function ownershipStatement(holder: HolderBlock, date: string): string {
       ? `${holder.name} holds the euro account with IBAN ${holder.iban}${holder.bic ? ` (BIC ${holder.bic})` : ""}.`
       : `${holder.name} holds a Zold account. It has no IBAN yet.`,
     ...(holder.operatedBy ? [`${holder.operatedBy} operates it for ${holder.name}.`] : []),
+    ...(holder.nameSource === "monerium" ? [] : [`The name ${holder.name} is as the holder entered it; Monerium has not reported a name for this account.`]),
     `Money sent to ${holder.iban ? "this IBAN" : "it"} lands in a Zold smart account at address ${holder.safeAddress} on ${chain}.`,
     "Only the holder can move money out: every payment needs their passkey, and Zold cannot pay out on its own.",
     `The account was opened on ${holder.accountSince.slice(0, 10)}. Issued ${date}.`,
@@ -460,8 +469,16 @@ export function ownershipStatement(holder: HolderBlock, date: string): string {
 
 export const documentUrl = (code: string) => `${PUBLIC_URL || ""}/v/${normaliseCode(code)}`;
 
-/** Public projection: everything except the ids. The code is the credential. */
+/** Public projection, an allowlist: the frozen snapshot and its signatures,
+ *  never the ids. The code is the credential. */
 export function publicDocument(doc: StoredDocument) {
-  const { id, userId, orgId, ...pub } = doc;
-  return { ...pub, url: documentUrl(doc.code) };
+  return {
+    code: doc.code,
+    kind: doc.kind,
+    createdAt: doc.createdAt,
+    snapshot: doc.snapshot,
+    attestations: doc.attestations,
+    ...(doc.revokedAt ? { revokedAt: doc.revokedAt } : {}),
+    url: documentUrl(doc.code),
+  };
 }

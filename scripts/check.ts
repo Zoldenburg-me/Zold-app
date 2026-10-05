@@ -64,6 +64,7 @@ const scripts = [
   "payment-review:test",
   "deposit-invoice-link:test",
   "security:test",
+  "identity:test",
   "plan:test",
   "admin:test",
   "invoicing:test",

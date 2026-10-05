@@ -419,8 +419,14 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       if (hasZoldenburgGuardian(user)) {
         return res.status(409).json({ error: "Zoldenburg is already a guardian — remove it with your passkey instead", code: "IS_GUARDIAN" });
       }
+      // The choice is recorded on the Safe plan. Without one there is nothing
+      // to decline for, and a plan built from the choice alone would be a Safe
+      // with no address or owner.
+      if (!user.passkeySafe) {
+        return res.status(409).json({ error: "set up your passkey and smart account before choosing recovery", code: "NO_SAFE" });
+      }
       const updated = store.updateUser(user.id, {
-        passkeySafe: { ...user.passkeySafe!, recoveryChoice: { choice: "declined", at: new Date().toISOString() } },
+        passkeySafe: { ...user.passkeySafe, recoveryChoice: { choice: "declined", at: new Date().toISOString() } },
       });
       res.json(await screenState(updated));
     }),
@@ -612,6 +618,9 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             kycStatus: user.kycStatus,
             moneriumMethod: user.monerium?.method ?? (user.monerium ? "oauth" : undefined),
             moneriumProfileId: user.monerium?.profileId,
+            // Every profile the account has recorded, oldest first: a relink
+            // shows here as a second entry, not as a silently new id.
+            moneriumProfileHistory: user.moneriumProfileHistory ?? [],
             iban: user.iban,
           }
         : null,

@@ -306,6 +306,14 @@ export interface User {
    */
   moneriumRefusal?: { code: string; error: string; at: string };
   /**
+   * Every Monerium profile this account has recorded, oldest first, APPEND-ONLY
+   * (domain/monerium-identity.ts nextProfileHistory, written only by
+   * store.updateUser). The Zoldenburg recovery review shows it, so a relink
+   * cannot quietly replace the identity the operator checks against. `at` is
+   * absent only for a profile held before the history was kept.
+   */
+  moneriumProfileHistory?: { profileId: string; at?: string }[];
+  /**
    * IBANs the user moved to this Safe from another address at Monerium
    * (PATCH /ibans/{iban}), newest last, so support can see where an IBAN paid
    * before. `confirmedAt` is set only once Monerium's own list shows the IBAN

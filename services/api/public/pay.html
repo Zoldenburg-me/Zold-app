@@ -167,9 +167,12 @@ function showBank(bank) {
   show("bank-pane");
   const say = (msg) => { $("bank-live").textContent = ""; setTimeout(() => { $("bank-live").textContent = msg; }, 50); };
   const group = (iban) => iban.replace(/(.{4})/g, "$1 ").trim();
-  const rows = [["ACCOUNT HOLDER", bank.holder, bank.holder, false], ["IBAN", group(bank.iban), bank.iban, true]];
+  // A holder name Monerium did not report is the one the company typed: the
+  // payer's bank may not match it, so the label says it is unverified.
+  const holderNote = bank.holderVerified === false ? "As the company entered it, not verified by Monerium" : "";
+  const rows = [["ACCOUNT HOLDER", bank.holder, bank.holder, false, holderNote], ["IBAN", group(bank.iban), bank.iban, true]];
   if (bank.bic) rows.push(["BIC", bank.bic, bank.bic, true]);
-  $("bank").replaceChildren(...rows.map(([label, shown, value, mono]) => {
+  $("bank").replaceChildren(...rows.map(([label, shown, value, mono, note]) => {
     const li = document.createElement("li");
     const f = document.createElement("div");
     f.className = "f";
@@ -180,6 +183,12 @@ function showBank(bank) {
     v.className = mono ? "v mono" : "v";
     v.textContent = shown;
     f.append(k, v);
+    if (note) {
+      const n = document.createElement("span");
+      n.className = "k";
+      n.textContent = note;
+      f.append(n);
+    }
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = "Copy";

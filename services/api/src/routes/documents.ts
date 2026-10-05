@@ -31,6 +31,7 @@ import {
   type StatementSnapshot,
   type StoredDocument,
   holderBlock,
+  holderLetterRefusal,
   isDocumentCode,
   linesFromChainCredits,
   linesFromFaucet,
@@ -292,6 +293,13 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     return false;
   };
 
+  const mayIssueHolderLetter = (user: User, res: express.Response): boolean => {
+    const refusal = holderLetterRefusal(user);
+    if (!refusal) return true;
+    res.status(409).json(refusal);
+    return false;
+  };
+
   /** No smart account, no account of record: a document naming the zero
    *  address would be a letter about an account that does not exist yet. */
   const hasAccountOfRecord = (user: User, res: express.Response): boolean => {
@@ -366,6 +374,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = userFor(req, res);
       if (!user) return;
+      if (!mayIssueHolderLetter(user, res)) return;
       if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
       const snapshot = await buildBalance(user);
       res.status(201).json(publicDocument(await issue(user, snapshot)));
@@ -379,6 +388,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = userFor(req, res);
       if (!user) return;
+      if (!mayIssueHolderLetter(user, res)) return;
       if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
       const holder = holderBlock(user);
       const date = new Date().toISOString().slice(0, 10);

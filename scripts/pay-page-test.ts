@@ -379,12 +379,20 @@ const orgAccount: any = {
   identifier: { iban: "DE89 3704 0044 0532 0133 10", bic: "EAPFESM2XXX" },
 };
 
-check("an organisation's page carries its legal name and the account's bank details", () => {
-  const p = publicOrgPayee(orgFull, orgAccount);
+check("an organisation's page carries the holder Monerium names and the account's bank details", () => {
+  const p = publicOrgPayee(orgFull, orgAccount, "LINDNER HOLZBAU GMBH");
   assert.deepEqual(p, {
     kind: "organisation", handle: "lindnerholzbau", displayName: "Lindner Holzbau GmbH",
-    bank: { holder: "Lindner Holzbau GmbH", iban: "DE89370400440532013310", bic: "EAPFESM2XXX" },
+    bank: { holder: "LINDNER HOLZBAU GMBH", holderVerified: true, iban: "DE89370400440532013310", bic: "EAPFESM2XXX" },
   });
+});
+
+check("without a name from Monerium the holder is the organisation's own, marked unverified", () => {
+  for (const missing of [undefined, "", "  "]) {
+    const p = publicOrgPayee(orgFull, orgAccount, missing);
+    assert.equal(p.bank.holder, "Lindner Holzbau GmbH");
+    assert.equal(p.bank.holderVerified, false);
+  }
 });
 
 check("the organisation projection leaks no member, backing account, tax id or email", () => {

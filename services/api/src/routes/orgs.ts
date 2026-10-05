@@ -440,7 +440,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     if (!required && was) {
       const user = store.findUser(ctx.userId);
       if (!user) return res.status(401).json({ error: "no such user" });
-      if (!(await verifyPasskeyStepUp(user, req.body, res))) return;
+      if (!(await verifyPasskeyStepUp(user, req.body, res, "org.payment-review.off"))) return;
     }
     const org = store.updateOrganisation(ctx.org.id, {
       paymentReview: { required, changedAt: new Date().toISOString(), source: "owner", changedByMemberId: ctx.member.id },

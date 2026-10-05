@@ -80,6 +80,7 @@
     "business:test": "tsx scripts/business-test.ts",
     "business:access:test": "tsx scripts/business-access-test.ts",
     "security:test": "tsx scripts/security-hardening-test.ts",
+    "identity:test": "tsx scripts/identity-audit-test.ts",
     "plan:test": "tsx scripts/plan-grant-test.ts",
     "admin:test": "tsx scripts/admin-dashboard-test.ts",
     "draft:test": "tsx scripts/draft-execution-test.ts",

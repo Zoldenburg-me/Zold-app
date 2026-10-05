@@ -101,8 +101,9 @@ function phOpenContact(key, root) {
    Profile
    ========================================================================== */
 
-/* The name is the person's until Monerium verifies it; a company login is
-   named after its company (server: users/display-name.ts). */
+/* The name is the person's until Monerium approves the account; a company
+   login is named after its company (server: users/display-name.ts). Locked
+   is not verified: only `nameVerified` says Monerium reported this name. */
 const phNameLocked = (u = user) => u?.accountType === "company" || kycApproved(u);
 
 function phNameSheet(trigger) {
@@ -110,7 +111,9 @@ function phNameSheet(trigger) {
   const name = ownAccountName(u);
   const why = u.accountType === "company"
     ? "This account is the company’s, so it carries the company’s name. Change it in Zold Business, under Settings."
-    : "Verified by Monerium. It is the name your IBAN is held under, so it can’t be changed here.";
+    : u.nameVerified
+      ? "Verified by Monerium. It is the name your IBAN is held under, so it can’t be changed here."
+      : "Locked once Monerium approved your account. Monerium has not confirmed this exact name, so documents show it as the name you entered.";
   document.getElementById("ph-name")?.remove();
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "ph-name", title: "Your name",
@@ -118,7 +121,7 @@ function phNameSheet(trigger) {
       ? `<div class="z-sheet__body"><div class="z-card">${Z.copyRow({ label: "Name", value: name })}</div>${Z.note({ text: why })}</div>`
       : `<form class="z-sheet__body z-form" id="ph-name-form" novalidate>
           ${Z.field({ id: "ph-name-input", label: "Name", name: "name", autocomplete: "name", value: u.name || "", maxlength: 80,
-            hint: "Shown on your payment page, receipts and documents. Once Monerium verifies you, it is locked to your verified name." })}
+            hint: "Shown on your payment page, receipts and documents. It is locked once Monerium approves your account." })}
           ${Z.button({ variant: "primary", full: true, label: "Save", type: "submit" })}
         </form>`,
   }));
