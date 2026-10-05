@@ -32,8 +32,10 @@ import {
 } from "../wallet/passkey-safe-plan.js";
 import {
   CANDIDE,
+  SafeOperationUncertainError,
   preparePasskeySafeDeployment,
-  submitPasskeySafeOperation,
+  submitPasskeySafeOperationWithReceipt,
+  type SubmittedOperation,
 } from "../wallet/candide.js";
 import { b64urlToBuf, issueChallenge, verifyAssertion, verifyRegistration } from "../webauthn.js";
 import { publicUser, withSession } from "../users/public-user.js";
@@ -305,11 +307,31 @@ export function createAuthRouter(deps: AuthDeps) {
       pendingPasskeySafeDeployments.delete(req.params.requestId);
       const approved = await checkOpAssertion(user, req.body, pending.challenge, res);
       if (!approved) return;
-      const opHash = await submitPasskeySafeOperation(user.passkeySafe, pending.userOperation, {
-        authenticatorData: b64urlToBuf(authenticatorData),
-        clientDataJSON: b64urlToBuf(clientDataJSON),
-        signature: b64urlToBuf(signature),
-      });
+      let op: SubmittedOperation;
+      try {
+        op = await submitPasskeySafeOperationWithReceipt(user.passkeySafe, pending.userOperation, {
+          authenticatorData: b64urlToBuf(authenticatorData),
+          clientDataJSON: b64urlToBuf(clientDataJSON),
+          signature: b64urlToBuf(signature),
+        });
+      } catch (err) {
+        if (!(err instanceof SafeOperationUncertainError)) throw err;
+        // It may still land. The account stays on its old address until the
+        // deployment is confirmed; preparing again finds a Safe that did land.
+        return res.status(502).json({
+          error: `${err.message} — the Safe is not recorded as deployed until that is confirmed; try again shortly`,
+          code: "SAFE_OP_UNCONFIRMED",
+          deployOpHash: err.userOpHash,
+        });
+      }
+      if (op.success !== true) {
+        return res.status(502).json({
+          error: `the deployment ${op.userOpHash} was included but reverted — the Safe was not activated`,
+          code: "SAFE_OP_REVERTED",
+          deployOpHash: op.userOpHash,
+        });
+      }
+      const opHash = op.userOpHash;
       let updated = store.updateUser(user.id, {
         address: user.passkeySafe.address,
         wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },

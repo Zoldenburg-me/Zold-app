@@ -382,6 +382,12 @@ function cashPayoutState(pickup: NonNullable<Transfer["pickup"]>): TransferState
  */
 async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Promise<Transfer> {
   const message = String(err?.shortMessage ?? err?.message ?? err);
+  // An operator owns a transfer in review: a late failure adds its steps and
+  // leaves the state and the reason for the review alone.
+  if (store.findTransfer(id)?.state === "MANUAL_REVIEW") {
+    console.error(`late failure on ${id}, which is in review: ${message}`);
+    return store.updateTransfer(id, { txs });
+  }
   // The debit was sent and may still land: whether money left the Safe is
   // unknown, so neither "nothing was debited" nor a refund is safe.
   if (err instanceof SafeOperationUncertainError) {
@@ -431,16 +437,61 @@ const FUNDS_AT_BRIDGE_STEPS = new Set([
   "bridge.xyz.destination_tx",
 ]);
 
+/**
+ * Steps written and persisted BEFORE an outbound call that may move money,
+ * each with the steps that settle it. One left unsettled means the process
+ * stopped (or the call failed) after the call may have gone out and before
+ * its outcome was recorded, so the money may have moved: review, never refund.
+ */
+const OUTBOUND_INTENT_STEPS: Record<string, string[]> = {
+  "safe.refundTransfer.pending": ["safe.refundTransfer"],
+  "monerium.redeem.pending": ["monerium.redeem.placed", "monerium.redeem.refused"],
+  "bridge.xyz.deposit.pending": ["bridge.xyz.deposit.transfer"],
+};
+
+function unsettledOutbound(txs: Transfer["txs"]): string | undefined {
+  const steps = new Set(txs.map((x) => x.step));
+  return Object.keys(OUTBOUND_INTENT_STEPS).find(
+    (intent) => steps.has(intent) && !OUTBOUND_INTENT_STEPS[intent].some((s) => steps.has(s)),
+  );
+}
+
+/** Record an outbound intent on the transfer before the call goes out. */
+function recordOutboundIntent(id: string, txs: Transfer["txs"], step: keyof typeof OUTBOUND_INTENT_STEPS) {
+  txs.push({ step, hash: "0x" });
+  store.updateTransfer(id, { txs });
+}
+
 /** Transfers whose execute*() is running right now, so the stranded-transfer
  *  sweep does not refund a transfer whose live call is merely slow. */
 const executing = new Set<string>();
 
+/** Transfers being compensated right now. A refund is a chain write that
+ *  lands before its step is recorded, so a second compensation started in
+ *  that window would refund again. */
+const compensating = new Set<string>();
+
 /** Walk a failed transfer backwards: return recoverable EURe to the sender's
- * Safe. */
+ * Safe. One compensation per transfer at a time: a call that finds one
+ * running returns the transfer as it stands. */
 export async function compensateTransfer(id: string): Promise<Transfer> {
+  if (compensating.has(id)) {
+    const t = store.findTransfer(id);
+    if (!t) throw new Error(`unknown transfer ${id}`);
+    return t;
+  }
+  compensating.add(id);
+  try {
+    return await compensateTransferOnce(id);
+  } finally {
+    compensating.delete(id);
+  }
+}
+
+async function compensateTransferOnce(id: string): Promise<Transfer> {
   const t = store.findTransfer(id);
   if (!t) throw new Error(`unknown transfer ${id}`);
-  if (t.state === "REFUNDED" || t.state === "PAID" || t.refund) return t;
+  if (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW" || t.refund) return t;
   const user = store.findUser(t.userId);
   if (!user) throw new Error(`unknown user for transfer ${id}`);
   const steps = new Set(t.txs.map((x) => x.step));
@@ -457,6 +508,15 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
         deductions: "amount not recorded — the process stopped between the refund transaction and this record; see the safe.refundTransfer hash",
         at: now(),
       },
+    });
+  }
+  const outbound = unsettledOutbound(t.txs);
+  if (outbound) {
+    return store.updateTransfer(id, {
+      state: "MANUAL_REVIEW",
+      error:
+        `${t.error ?? "transfer failed"}; ${outbound} is on record without its outcome — the call may ` +
+        `have moved money, so no automatic refund until it is checked`,
     });
   }
   // USDC that reached Bridge is not ours to reverse, whichever leg put it there.
@@ -556,6 +616,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
             args: [user.address],
           })) as bigint;
         const before = await eureBalance();
+        recordOutboundIntent(id, txs, "safe.refundTransfer.pending");
         const back = await provider.execute(rq, user.address as `0x${string}`);
         txs.push(...back.txs);
         const receivedWei =
@@ -602,7 +663,9 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
       movedEur < t.sendEur
         ? `€${(t.sendEur - movedEur).toFixed(2)} never left the Safe (payout burns from it directly)`
         : deductions;
-    const refundHash = await returnEureToSafe(user.address, safeRefundEur);
+    const refundHash = await returnEureToSafe(user.address, safeRefundEur, () =>
+      recordOutboundIntent(id, txs, "safe.refundTransfer.pending"),
+    );
     txs.push({ step: "safe.refundTransfer", hash: refundHash });
     store.updateTransfer(id, { txs }); // on record before anything else can fail
     console.log(
@@ -642,29 +705,52 @@ async function compensationRate(t: Transfer): Promise<bigint> {
   return (await liquidityProvider().indicativeRate("EURE_TO_USDC")).raw;
 }
 
+const STRANDED_MS = 10 * 60_000;
+
+export type StrandedAction = "compensate" | "fail-and-compensate" | "review-outbound" | "review-unrecorded-debit";
+
+/** What the sweep does with one transfer. `busy` says whether an execution or
+ *  a compensation for it is running in this process; a running one is never
+ *  stranded. MANUAL_REVIEW, like every state not named here, is left alone. */
+export function strandedAction(t: Transfer, now: number, busy: (id: string) => boolean): StrandedAction | null {
+  if (busy(t.id)) return null;
+  if (t.state === "FAILED") return !t.refund && inputFundsMoved(t.txs) ? "compensate" : null;
+  if (["DEBITED", "SWAPPED", "BRIDGED"].includes(t.state)) {
+    if (now - Date.parse(t.updatedAt) <= STRANDED_MS) return null;
+    return unsettledOutbound(t.txs) ? "review-outbound" : "fail-and-compensate";
+  }
+  if (t.state === "CREATED" && t.auth?.authorizedAt && now - Date.parse(t.auth.authorizedAt) > STRANDED_MS) {
+    return "review-unrecorded-debit";
+  }
+  return null;
+}
+
 /** Recovery sweep: compensate FAILED transfers that moved money, and
  *  fail-then-compensate transfers stranded mid-flow (e.g. by a crash). */
 export async function sweepStrandedTransfers(): Promise<number> {
-  const STALE_MS = 10 * 60_000;
+  const busy = (id: string) => executing.has(id) || compensating.has(id);
   let n = 0;
   for (const t of [...store.transfers]) {
     try {
-      if (t.state === "FAILED" && !t.refund && inputFundsMoved(t.txs)) {
+      const action = strandedAction(t, Date.now(), busy);
+      if (action === "compensate") {
         await compensateTransfer(t.id);
         n++;
-      } else if (
-        ["DEBITED", "SWAPPED", "BRIDGED"].includes(t.state) &&
-        !executing.has(t.id) &&
-        Date.now() - Date.parse(t.updatedAt) > STALE_MS
-      ) {
+      } else if (action === "fail-and-compensate") {
         store.updateTransfer(t.id, { state: "FAILED", error: "stranded mid-flow — auto-compensating" });
         await compensateTransfer(t.id);
         n++;
-      } else if (
-        t.state === "CREATED" &&
-        t.auth?.authorizedAt &&
-        Date.now() - Date.parse(t.auth.authorizedAt) > STALE_MS
-      ) {
+      } else if (action === "review-outbound") {
+        // A redeem order or a Bridge deposit went out (or was about to) before
+        // the restart, and its outcome was never recorded.
+        store.updateTransfer(t.id, {
+          state: "MANUAL_REVIEW",
+          error:
+            `stranded mid-flow after ${unsettledOutbound(t.txs)} — the outbound call may have moved money; ` +
+            "reconcile before any refund",
+        });
+        n++;
+      } else if (action === "review-unrecorded-debit") {
         // Crash between submitting the user-signed UserOperation and
         // persisting DEBITED. The claim is consumed (/authorize now 409s) and
         // the operation may or may not have landed. A refund would pay twice
@@ -855,12 +941,16 @@ export async function executeTransfer(
         }
         txs.push({ step: "bridge.xyz.deposit.funded", hash: txs.at(-1)?.hash ?? "0x" });
       } else {
-        const depositHash = await writeAndWait(orchestratorWallet, {
-          address: a.usdc,
-          abi: abis.MockToken,
-          functionName: "transfer",
-          args: [depositAddress as `0x${string}`, expectedOut],
-        });
+        const depositHash = await writeAndWait(
+          orchestratorWallet,
+          {
+            address: a.usdc,
+            abi: abis.MockToken,
+            functionName: "transfer",
+            args: [depositAddress as `0x${string}`, expectedOut],
+          },
+          { beforeSend: () => recordOutboundIntent(transfer.id, txs, "bridge.xyz.deposit.pending") },
+        );
         txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
       }
     }
@@ -959,6 +1049,7 @@ export async function executeSepaTransfer(
 
     {
       try {
+        recordOutboundIntent(transfer.id, txs, "monerium.redeem.pending");
         const order = await redeemToIban(
           user,
           payoutEur,
@@ -968,8 +1059,10 @@ export async function executeSepaTransfer(
             ? { ...transfer.moneriumRedeem, signature: transfer.moneriumRedeem.signature }
             : undefined,
         );
+        txs.push({ step: "monerium.redeem.placed", hash: order.id });
         return store.updateTransfer(transfer.id, {
           state: "PAYOUT_SUBMITTED",
+          txs,
           sepa: {
             mode: "sandbox",
             orderId: order.id,
@@ -988,6 +1081,7 @@ export async function executeSepaTransfer(
             txs,
           });
         }
+        txs.push({ step: "monerium.redeem.refused", hash: "0x" });
         return failAndCompensate(
           transfer.id,
           new Error(`redeem order failed: ${String(err?.message ?? err).slice(0, 200)}`),

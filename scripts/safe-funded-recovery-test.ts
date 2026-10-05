@@ -308,6 +308,109 @@ try {
     );
   }
 
+  console.log("   a refund runs once, and an outbound call of unknown outcome is never refunded…");
+  {
+    // Spare EURe at the orchestrator, so a second refund would have the
+    // inventory to land and the balance check below would see it.
+    await writeAndWait(deployerWallet, {
+      address: addrs().eure,
+      abi: abis.MockToken,
+      functionName: "mint",
+      args: [orchestratorAddress, eur.toWei(100)],
+    });
+    const user = await seedUser("Single Flight", 0);
+    const t = await seedSafeFundedTransfer(user, 30);
+    const before = await eureBalance(user.address);
+    // A sweep tick finds the same FAILED row while the first compensation's
+    // refund is mined but not yet recorded: hold every receipt wait until the
+    // sweep has started.
+    const waitReceipt = publicClient.waitForTransactionReceipt;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    (publicClient as any).waitForTransactionReceipt = async (args: any) => {
+      await gate;
+      return waitReceipt.call(publicClient, args);
+    };
+    try {
+      const first = compensateTransfer(t.id);
+      const deadline = Date.now() + 10_000;
+      while ((await eureBalance(user.address)) === before && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      const sweep = sweepStrandedTransfers();
+      await new Promise((r) => setTimeout(r, 200));
+      release();
+      await Promise.all([first, sweep]);
+    } finally {
+      (publicClient as any).waitForTransactionReceipt = waitReceipt;
+    }
+    const out = store.findTransfer(t.id)!;
+    const after = await eureBalance(user.address);
+    check("the concurrent sweep did not refund a second time", after - before === 30, `${before} -> ${after}`);
+    check(
+      "one refund transaction on record",
+      out.txs.filter((x: any) => x.step === "safe.refundTransfer").length === 1,
+      out.txs.map((x: any) => x.step).join(","),
+    );
+    check("and it settled as REFUNDED", out.state === "REFUNDED", `got ${out.state}`);
+  }
+  {
+    // The process stopped after recording the refund intent and before the
+    // refund transaction was recorded: it may have been sent.
+    const user = await seedUser("Refund Restart", 0);
+    const t = await seedSafeFundedTransfer(user, 20, ["safe.refundTransfer.pending"]);
+    const before = await eureBalance(user.address);
+    const out = await compensateTransfer(t.id);
+    const after = await eureBalance(user.address);
+    check("a refund of unknown outcome goes to review", out.state === "MANUAL_REVIEW", `got ${out.state}`);
+    check("and is not sent again", after === before, `${before} -> ${after}`);
+    check("no refund record was written", !out.refund, JSON.stringify(out.refund));
+    const again = await compensateTransfer(t.id);
+    check("compensation leaves a MANUAL_REVIEW transfer alone", again.state === "MANUAL_REVIEW" && !again.refund);
+    check("still nothing sent", (await eureBalance(user.address)) === before);
+  }
+  {
+    // Stranded mid-flow after the redeem order went out or the Bridge deposit
+    // was sent: the money may have left, so the sweep must not refund.
+    const stale = new Date(Date.now() - 60 * 60_000).toISOString();
+    const user = await seedUser("Stranded Outbound", 0);
+    const sepa = await seedSafeFundedTransfer(user, 15, ["monerium.redeem.pending"]);
+    store.updateTransfer(sepa.id, { state: "DEBITED", error: undefined });
+    store.findTransfer(sepa.id)!.updatedAt = stale;
+    const cash = await seedSafeFundedTransfer(user, 15, ["bridge.xyz.deposit.pending"]);
+    store.updateTransfer(cash.id, { state: "SWAPPED", error: undefined });
+    store.findTransfer(cash.id)!.updatedAt = stale;
+    const before = await eureBalance(user.address);
+    await sweepStrandedTransfers();
+    const after = await eureBalance(user.address);
+    const s = store.findTransfer(sepa.id)!;
+    const c = store.findTransfer(cash.id)!;
+    check("a stranded row with a redeem in flight goes to review", s.state === "MANUAL_REVIEW", `got ${s.state}`);
+    check("a stranded row with a Bridge deposit in flight goes to review", c.state === "MANUAL_REVIEW", `got ${c.state}`);
+    check("neither was refunded", after === before && !s.refund && !c.refund, `${before} -> ${after}`);
+  }
+  {
+    // A stale CREATED row whose execute*() is still running is not stranded.
+    const { strandedAction } = await import("../services/api/src/orchestrator.js");
+    const now = Date.now();
+    const created = {
+      id: "t-created",
+      state: "CREATED",
+      txs: [],
+      updatedAt: new Date(now).toISOString(),
+      auth: { authorizedAt: new Date(now - 60 * 60_000).toISOString() },
+    } as any;
+    check(
+      "a stale claimed authorization goes to review when nothing is running",
+      strandedAction(created, now, () => false) === "review-unrecorded-debit",
+    );
+    check("but not while its execution is in flight", strandedAction(created, now, () => true) === null);
+    check(
+      "a MANUAL_REVIEW transfer is never swept",
+      strandedAction({ ...created, state: "MANUAL_REVIEW", updatedAt: created.auth.authorizedAt }, now, () => false) === null,
+    );
+  }
+
   console.log("   daily cap counts both pots…");
   {
     const user = await seedUser("Cap", 0);

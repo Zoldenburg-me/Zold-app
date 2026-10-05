@@ -201,9 +201,11 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
 - The Safe is deployed as the `initCode` of its first UserOperation. The
   bundler and paymaster default to `https://api.candide.dev/public/v3/<chainId>`
   with an ERC-7677 paymaster, so the user needs no gas. The passkey signs
-  `getUserOperationEip712Hash(op, chainId)`. `submitPasskeySafeOperation`
+  `getUserOperationEip712Hash(op, chainId)`. `submitPasskeySafeOperationWithReceipt`
   attaches the passkey assertion, sends the op, and
-  **blocks the HTTP request until the op is included**.
+  **blocks the HTTP request until the op is included**. Every caller checks the
+  receipt: a reverted op is refused, and an op sent but not confirmed
+  (`SafeOperationUncertainError`) is never recorded as done.
 - EIP-1271 messages (`signMessageAsPasskeySafe`) are used for the Monerium
   link declaration, the Monerium redeem order, the Candide SIWE registration,
   and proof-of-ownership documents.
@@ -351,12 +353,13 @@ stateDiagram-v2
   PAYOUT_FUNDING_PENDING --> PAYOUT_FUNDED: Stellar payment sent
   PAYOUT_FUNDED --> PAID: anchor completed
   DEBITED --> MANUAL_REVIEW: redeem outcome unknown (5xx/timeout)
+  DEBITED --> MANUAL_REVIEW: stranded after an outbound call
   FAILED --> REFUNDED: compensateTransfer
-  FAILED --> MANUAL_REVIEW: duplicate / funds at Bridge / reverse swap failed
+  FAILED --> MANUAL_REVIEW: duplicate / funds at Bridge / reverse swap failed / outbound outcome unknown
 ```
 
-`store.updateTransfer` refuses to move a `PAID` or `REFUNDED` transfer to any
-other state. It drops the `state` field and logs.
+`store.updateTransfer` refuses to move a `PAID`, `REFUNDED` or `MANUAL_REVIEW`
+transfer to any other state. It drops the `state` field and logs.
 
 ### 6.2 Quote → build → authorize → execute
 
@@ -404,7 +407,14 @@ router receives injected and never rebuilds.
 - `failAndCompensate` writes FAILED. It escalates to **MANUAL_REVIEW** on a
   duplicate-debit error or once any `bridge.xyz.deposit.*` step exists.
   Otherwise it compensates.
-- `compensateTransfer`:
+- An outbound call that may move money records an intent step first:
+  `safe.refundTransfer.pending` (refund or reverse swap),
+  `monerium.redeem.pending` (settled by `.placed` or `.refused`) and
+  `bridge.xyz.deposit.pending`. An intent without its settling step means the
+  money may have moved, and the transfer goes to MANUAL_REVIEW, never a refund.
+- `compensateTransfer` runs once per transfer at a time (an in-process set);
+  a second call during a running one returns the transfer as it stands. It
+  leaves a MANUAL_REVIEW transfer alone.
   - If no input moved, it records a zero refund.
   - If the funds are un-swapped, it returns `min(refund, moved)` EURe to the
     Safe. The `safe.refundTransfer` step is recorded *before* REFUNDED is
@@ -415,10 +425,11 @@ router receives injected and never rebuilds.
 - SEPA: a Monerium **4xx** refunds the fee. A **timeout or 5xx** goes to
   MANUAL_REVIEW ("redeem outcome unknown").
 - Sweeps:
-  - `sweepStrandedTransfers` runs at boot and every 5 min. It re-fails
-    DEBITED/SWAPPED/BRIDGED transfers that are stale (more than 10 min) and
-    not executing, and sends to MANUAL_REVIEW a CREATED transfer whose
-    authorisation was claimed more than 10 min ago.
+  - `sweepStrandedTransfers` runs at boot and every 5 min and skips any
+    transfer being executed or compensated. It re-fails DEBITED/SWAPPED/BRIDGED
+    transfers that are stale (more than 10 min), or sends them to MANUAL_REVIEW
+    when an outbound intent is unsettled, and sends to MANUAL_REVIEW a CREATED
+    transfer whose authorisation was claimed more than 10 min ago.
   - `sweepAnchorPayouts` runs every 30 s.
 
 ### 6.4 Invariants encoded here
@@ -530,7 +541,8 @@ flowchart LR
   DET -->|autoConvert on| WAIT[DETECTED: awaiting passkey]
   WAIT -->|convert/prepare → passkey → convert| SWAP[Safe batch: approve + venue call<br/>Safe → Safe, fee 0]
   SWAP -->|measured EURe delta ≥ minOut| CONV3[CONVERTED + realisedGainEur]
-  SWAP -->|shortfall / bundler error| REF[REFUSED]
+  SWAP -->|shortfall / bundler error / reverted| REF[REFUSED]
+  SWAP -->|sent, inclusion unconfirmed| UNC[UNCONFIRMED<br/>not offered again]
 ```
 
 - The watched set is every user's Safe, plus each payment-page deposit

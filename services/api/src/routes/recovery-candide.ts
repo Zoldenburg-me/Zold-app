@@ -44,10 +44,12 @@ import {
   recoveryGuardianSetupTransactions,
   safeMessageHash,
   safeOwners,
+  SafeOperationUncertainError,
   signMessageAsPasskeySafe,
-  submitPasskeySafeOperation,
+  submitPasskeySafeOperationWithReceipt,
   webauthnOwnerFromJwk,
   type PasskeySafeDeploymentPlan,
+  type SubmittedOperation,
 } from "../wallet/candide.js";
 import {
   CandideGuardianError,
@@ -99,7 +101,15 @@ const pendingChannelRegistrations = new Map<
 >();
 const pendingSafeOperations = new Map<
   string,
-  { userId: string; kind: "guardian" | "cancel"; guardianAddress?: `0x${string}`; userOperation: any; expiresAt: number }
+  {
+    userId: string;
+    kind: "guardian" | "cancel";
+    guardianAddress?: `0x${string}`;
+    userOperation: any;
+    /** What the passkey must sign: the prepared operation's hash. */
+    challenge: string;
+    expiresAt: number;
+  }
 >();
 const pendingChannelRemovals = new Map<
   string,
@@ -231,6 +241,40 @@ const toAssertion = (body: any) => ({
   clientDataJSON: b64urlToBuf(body.clientDataJSON),
   signature: b64urlToBuf(body.signature),
 });
+
+/**
+ * Submit an owner-approved Safe operation and answer only for what the chain
+ * confirmed. An operation sent but not confirmed, or included and reverted,
+ * answers 502 here and the caller records nothing as done.
+ */
+async function submitConfirmed(
+  plan: PasskeySafeDeploymentPlan,
+  userOperation: any,
+  body: any,
+  res: express.Response,
+): Promise<SubmittedOperation | undefined> {
+  let op: SubmittedOperation;
+  try {
+    op = await submitPasskeySafeOperationWithReceipt(plan, userOperation, toAssertion(body));
+  } catch (err) {
+    if (!(err instanceof SafeOperationUncertainError)) throw err;
+    res.status(502).json({
+      error: `${err.message} — nothing is recorded until it is confirmed; check the chain before retrying`,
+      code: "SAFE_OP_UNCONFIRMED",
+      opHash: err.userOpHash,
+    });
+    return undefined;
+  }
+  if (op.success !== true) {
+    res.status(502).json({
+      error: `the Safe operation ${op.userOpHash} was included but reverted — nothing changed on chain`,
+      code: "SAFE_OP_REVERTED",
+      opHash: op.userOpHash,
+    });
+    return undefined;
+  }
+  return op;
+}
 
 // ---------------------------------------------------------------------------
 // finalisation — shared by the route and the sweep
@@ -536,6 +580,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         kind: "guardian",
         guardianAddress: c.guardianAddress,
         userOperation: prepared.userOperation,
+        challenge: passkeySafeChallenge(prepared.challenge),
         expiresAt: Date.now() + CEREMONY_TTL_MS,
       });
       res.status(201).json({
@@ -563,12 +608,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const plan = activePlan(user);
       const c = user.passkeySafe!.candideRecovery;
       if (!c) return res.status(409).json({ error: "register an email or phone for recovery first" });
-      const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
-      if (!authenticatorData || !clientDataJSON || !signature) {
-        return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
-      }
-      const opHash = await submitPasskeySafeOperation(plan, pending.userOperation, toAssertion(req.body));
+      // Claimed BEFORE any await: one approval submits the operation once.
       pendingSafeOperations.delete(req.params.requestId);
+      // The passkey must have approved THIS operation's hash.
+      await verifyOwnerAssertion(user, req.body, pending.challenge);
+      const op = await submitConfirmed(plan, pending.userOperation, req.body, res);
+      if (!op) return;
+      const opHash = op.userOpHash;
       const state = await readRecoveryState(plan, [c.guardianAddress]);
       const onChain = state.guardians.some((g) => g.toLowerCase() === c.guardianAddress.toLowerCase());
       if (!onChain) {
@@ -657,7 +703,13 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const prepared = await prepareSafeSetupOperation(plan, [recoveryCancelTransaction(state.moduleAddress)]);
       prune(pendingSafeOperations);
       const requestId = randomUUID();
-      pendingSafeOperations.set(requestId, { userId: user.id, kind: "cancel", userOperation: prepared.userOperation, expiresAt: Date.now() + CEREMONY_TTL_MS });
+      pendingSafeOperations.set(requestId, {
+        userId: user.id,
+        kind: "cancel",
+        userOperation: prepared.userOperation,
+        challenge: passkeySafeChallenge(prepared.challenge),
+        expiresAt: Date.now() + CEREMONY_TTL_MS,
+      });
       res.status(201).json({
         requestId,
         credentialId: user.passkey!.credentialId,
@@ -680,12 +732,15 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         return res.status(404).json({ error: "cancel request not found or expired" });
       }
       const plan = activePlan(user);
-      const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
-      if (!authenticatorData || !clientDataJSON || !signature) {
-        return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
-      }
-      const opHash = await submitPasskeySafeOperation(plan, pending.userOperation, toAssertion(req.body));
+      // Claimed BEFORE any await: one approval submits the operation once.
       pendingSafeOperations.delete(req.params.requestId);
+      // The passkey must have approved THIS operation's hash.
+      await verifyOwnerAssertion(user, req.body, pending.challenge);
+      // A cancel that is not confirmed on chain leaves the recovery running,
+      // so nothing is marked CANCELED unless the chain says it happened.
+      const op = await submitConfirmed(plan, pending.userOperation, req.body, res);
+      if (!op) return;
+      const opHash = op.userOpHash;
       const now = new Date().toISOString();
       for (const r of store.recoveryRequestsForUser(user.id)) {
         // The module holds one recovery per Safe, whoever's guardian started

@@ -143,15 +143,19 @@ export const usd = {
   fromUnits: (units: bigint) => Number(formatUnits(units, 6)),
 };
 
-/** Send a tx as `client` and wait for the receipt; throws on revert. */
+/** Send a tx as `client` and wait for the receipt; throws on revert.
+ *  `beforeSend` runs after the simulation passes and before the transaction
+ *  is sent: a failure before it means nothing went out. */
 export async function writeAndWait(
   client: typeof orchestratorWallet,
   args: { address: `0x${string}`; abi: any[]; functionName: string; args: any[] },
+  opts: { beforeSend?: () => void } = {},
 ) {
   const { request } = await publicClient.simulateContract({
     account: client.account,
     ...args,
   });
+  opts.beforeSend?.();
   const hash = await client.writeContract(request);
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error(`tx reverted: ${args.functionName}`);
@@ -292,6 +296,7 @@ export async function accountBalances(user: `0x${string}`): Promise<{
 export async function returnEureToSafe(
   userSafe: `0x${string}`,
   amountEur: number,
+  beforeSend?: () => void,
 ): Promise<`0x${string}`> {
   const amount = eur.toWei(amountEur);
   const held = (await publicClient.readContract({
@@ -311,5 +316,5 @@ export async function returnEureToSafe(
     abi: abis.MockToken,
     functionName: "transfer",
     args: [userSafe, amount],
-  });
+  }, { beforeSend });
 }
