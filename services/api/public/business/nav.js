@@ -215,7 +215,7 @@ function switchSheet(trigger) {
   document.body.insertAdjacentHTML("beforeend", Z.overlay({
     id: "org-switch", title: "Switch organisation",
     body: `<div class="z-sheet__body"><ul class="z-list z-card">${orgs.map(row).join("")}${needsPersonalOrg()
-      ? `<li><button type="button" class="z-row z-row--btn" data-act="create-personal">${Z.iconTile({ icon: "add" })}<span class="z-row__main"><span class="z-row__title">Create your personal space</span><span class="z-row__sub">Your own invoices and books</span></span></button></li>` : ""}</ul>
+      ? `<li><button type="button" class="z-row z-row--btn" data-act="create-personal">${Z.iconTile({ icon: "add" })}<span class="z-row__main"><span class="z-row__title">Set up your personal space</span><span class="z-row__sub">Your own invoices and books</span></span></button></li>` : ""}</ul>
       ${me?.accountType === "company" ? "" : `<ul class="z-list z-card"><li>${Z.row({ lead: Z.iconTile({ icon: "smartphone" }), title: "Your personal account", sub: "Home, send and get paid, in the app", href: "/app", right: Z.icon("open_in_new", "z-row__chev") })}</li></ul>`}</div>`,
   }));
   const scrim = $("#org-switch");
@@ -235,7 +235,7 @@ function switchSheet(trigger) {
 function personalBanner() {
   if (!needsPersonalOrg() || personalLater()) return "";
   return `<div class="banner info">${Z.icon("person")}<span>Your own invoices and books go in a <b>personal space</b>, next to the companies you work in.</span>
-    <button class="z-btn z-btn--primary z-btn--sm" data-act="create-personal">Create it</button>
+    <button class="z-btn z-btn--primary z-btn--sm" data-act="create-personal">Set it up</button>
     <button class="z-btn z-btn--quiet z-btn--sm" data-act="personal-later">Not now</button></div>`;
 }
 
