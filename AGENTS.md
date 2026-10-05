@@ -18,6 +18,7 @@ Read when the task touches it:
 - `docs/roadmap.md` — agreed priority and parked ideas.
 - `docs/architecture/` — product (what exists) and technical (how).
 - `docs/CODEMAPS/` — routes, modules, data, deps.
+- `docs/security-hardening.md` — secrets, keys, Postgres, mail; its Rules bind.
 
 ## How to write in this repo (comments, docs, this file, notes)
 
@@ -79,8 +80,6 @@ THREE RULES OVERRIDE CONVENIENCE:
   the last holds declarations and wiring only, and NOTHING CALLS FORWARD into a
   later file. The last is `app/main.js`, and anything that awaits and then
   renders goes there (an early fetch can resolve before later code exists).
-  `sw.js` serves page `.js`/`.css` network-first, so a deploy needs no
-  `SHELL_CACHE` bump unless the SHELL list or a vendored file changes.
   `public/business/*.js` are **ES modules**; `core.js` owns shared state.
 - **server.ts owns authentication**: every router is a factory taking
   `requireUserSession`.
@@ -157,6 +156,16 @@ Each of these was a bug once.
 - **Documents are frozen snapshots, re-verified on every visit.** A revoked one
   fails verification rather than vanishing.
 
+**Secrets and storage**
+- **Agents never read `.env*`, `.private/` (bar `pentest/`) or
+  `data/*.json`**, and never print a secret.
+- **No secret in source, commits, PRs, logs, errors or fixtures.**
+- **Stored credentials go through `encryptField`, one `EncryptionPurpose` per
+  kind**, never a plaintext fallback.
+- **No unencrypted copy of the database.** No real money or user data on a
+  host without a processing agreement. Staging is never under the passkey
+  domain.
+
 **Two strings keep the old "zoll" spelling on purpose** — do not finish the
 rename. `PRF_SALT = "zoll/device-key/v1"` is an *input* to key derivation, so a
 new spelling makes every wrapped device key undecryptable; the `zoll-device-key`
@@ -179,15 +188,13 @@ the current authorizer can rotate a device key.
   PRs via the REST API needs a PAT the user mints per session (HTTPS username
   `tonyzil`, not `x-access-token`); tell the user to revoke it after.
 - Node lives in-project: `export PATH="$PWD/.toolchain/node-v22.17.0-darwin-arm64/bin:$PATH"`.
-  It is an **arm64** build: on an Intel Mac ("Bad CPU type", tsx fails too) use
-  a system node. `npm run typecheck` works on either (tsc is pure JS).
+  arm64 only; on Intel see `docs/running-locally.md`.
 - Browser-pane and new-page checks: `docs/running-locally.md`.
 
 ## Naming
 
 - **Zoldenburg** = the company / infra brand (B2B, legal, footer).
-- **Zold** = the consumer app. The old name **Zoll** survives only in the two
-  strings under Invariants ("Two strings keep the old zoll spelling").
+- **Zold** = the consumer app. **Zoll** survives only in the two strings above.
 - **Narwhal** = mascot. No narwhal emoji exists; the UI uses 🦄.
 - Repo dir on disk is still `transF`; do NOT rewrite absolute paths in
   `.claude/launch.json`. GitHub repo rename is pending.
@@ -201,8 +208,7 @@ More than one agent commits here.
   commit you last pushed; after merging, grep the tree — "merged: true" is not
   proof (a PR once dropped a pushed commit).
 - Start every session with `git fetch`; expect main to have moved mid-session.
-- A grep count of zero is not proof: confirm the file is READABLE first (zsh
-  reads `:s/` in `$REF:services/...` as a substitution modifier).
+- A grep count of zero is not proof: confirm the file is readable first.
 
 ## Style
 
