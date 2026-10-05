@@ -74,6 +74,7 @@ const scripts = [
   "input-errors:test",
   "vat:test",
   "org-accounts:test",
+  "bounds:test",
   "custody:test",
   "segments:test",
   "gnosispay:test",

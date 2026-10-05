@@ -67,6 +67,7 @@ export const STEP_UP_ACTIONS = [
   "monerium.disconnect",
   "authorizer.bind",
   "org.payment-review.off",
+  "org.invoice-iban.change",
 ] as const;
 export type StepUpAction = (typeof STEP_UP_ACTIONS)[number];
 const isStepUpAction = (v: unknown): v is StepUpAction => STEP_UP_ACTIONS.includes(v as StepUpAction);

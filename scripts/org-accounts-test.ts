@@ -313,8 +313,9 @@ await check("an empty profile IBAN prints the account's own", async () => {
 });
 await check("an IBAN set in the profile is printed instead, and the account's is still reported", async () => {
   const other = "DE02120300000000202051";
-  const put = await call("PATCH", "/api/orgs/org_co/invoicing/profile", { bank: { iban: other } });
-  assert.ok(put.status < 300, JSON.stringify(put.body));
+  // Set in the store: changing it through the route takes a passkey
+  // approval, which payment-review-test exercises.
+  store.updateOrganisation("org_co", { invoicing: { ...store.findOrganisation("org_co")!.invoicing, bank: { iban: other } } });
   const r = await call("GET", "/api/orgs/org_co/invoicing/profile");
   assert.equal(r.body.invoiceBank.iban, other);
   assert.equal(r.body.accountBank.iban, IBAN);
