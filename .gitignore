@@ -1,0 +1,25 @@
+# machine-local toolchain & deps
+.toolchain/
+node_modules
+.claude/
+.DS_Store
+
+# secrets & local state — never commit
+.env
+data/
+
+# generated
+contracts/artifacts/
+contracts/cache/
+deployments.json
+dist/
+*.db
+.local-backups/
+data/db*.json
+
+# Timestamped .env backups — same secrets as .env, same rule.
+.env.backup-*
+
+# Internal notes kept out of the public repo (decision history, partner docs)
+.private/
+

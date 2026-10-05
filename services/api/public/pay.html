@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pay · Zold</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<meta property="og:site_name" content="Zold" />
+<meta name="twitter:card" content="summary_large_image" />
+<!--zold:abs-->
+<!-- A payment link is shared, so it gets shared out of a chat window and into
+     a preview card. Nothing here is per-account: the handle is in the URL and
+     the page is public, but the OG text must not imply we vouch for anyone. -->
+<meta name="robots" content="noindex" />
+<style>
+  :root {
+    --bg: #0a0a0c; --card: #121216; --row: #17171c; --border: #24242b; --border2: #2e2e37;
+    --text: #f4f4f6; --muted: #a7a7b2; --faint: #6e6e7a; --pink: #ff2d78; --ok: #5ee9a4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); min-height: 100vh;
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+  }
+  .wrap { width: 100%; max-width: 420px; }
+  .brand { display: flex; align-items: center; gap: .5rem; justify-content: center; margin-bottom: 1.25rem; }
+  .brand .mark { color: var(--pink); font-size: 1.1rem; }
+  .brand .name { font-weight: 700; letter-spacing: -.01em; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem; }
+  .who { text-align: center; margin-bottom: 1.25rem; }
+  .avatar {
+    width: 52px; height: 52px; border-radius: 50%; margin: 0 auto .7rem;
+    background: var(--pink); color: #fff; font-weight: 700; font-size: 1.35rem;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .dn { font-size: 1.1rem; font-weight: 650; margin: 0; }
+  .hd { color: var(--faint); font-size: .82rem; font-family: ui-monospace, Menlo, monospace; }
+  .qrbox { background: #fff; border-radius: 12px; padding: .6rem; width: 216px; margin: 0 auto 1.1rem; }
+  .qrbox img { display: block; width: 200px; height: 200px; }
+  .lbl { font-size: .66rem; font-weight: 700; letter-spacing: .07em; color: var(--faint); margin-bottom: .3rem; }
+  .addr {
+    background: var(--row); border: 1px solid var(--border2); border-radius: 10px;
+    padding: .6rem .7rem; font-family: ui-monospace, Menlo, monospace; font-size: .72rem;
+    word-break: break-all; line-height: 1.5; color: var(--muted);
+  }
+  button, .btn {
+    width: 100%; margin-top: .6rem; padding: .7rem; border-radius: 10px; border: 0;
+    background: var(--pink); color: #fff; font-weight: 650; font-size: .9rem; cursor: pointer;
+  }
+  /* A link that navigates is an <a>, styled like the button above it. */
+  .btn { display: block; text-align: center; text-decoration: none; font-family: inherit; line-height: normal; }
+  button:hover, .btn:hover { filter: brightness(1.08); }
+  button.ghost, .btn.ghost { background: var(--row); color: var(--text); border: 1px solid var(--border2); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  #accepts-lbl { margin-top: 1.1rem; }
+  .accepts { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; }
+  .accepts li { display: flex; justify-content: space-between; gap: .75rem; flex-wrap: wrap; padding: .55rem .7rem; background: var(--row); font-size: .8rem; }
+  .accepts li + li { border-top: 1px solid var(--border2); }
+  .accepts strong { font-weight: 600; color: var(--text); }
+  .accepts span { color: var(--faint); font-size: .72rem; }
+  .note { margin-top: 1rem; font-size: .72rem; color: var(--faint); line-height: 1.55; }
+  .note strong { color: var(--muted); font-weight: 600; }
+  .missing { text-align: center; padding: 1rem 0; }
+  .missing h1 { font-size: 1.05rem; margin: 0 0 .4rem; }
+  .missing p { color: var(--faint); font-size: .84rem; margin: 0; }
+  .hidden { display: none; }
+  /* An organisation's page: bank details, one copy button per field. */
+  .bank { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; }
+  .bank li { display: flex; align-items: center; gap: .75rem; padding: .6rem .7rem; background: var(--row); }
+  .bank li + li { border-top: 1px solid var(--border2); }
+  .bank .k { font-size: .66rem; font-weight: 700; letter-spacing: .07em; color: var(--faint); }
+  .bank .v { font-size: .9rem; color: var(--text); word-break: break-all; }
+  .bank .v.mono { font-family: ui-monospace, Menlo, monospace; font-size: .82rem; }
+  .bank .f { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+  .bank button { width: auto; margin: 0; padding: .4rem .7rem; font-size: .78rem; background: var(--card); border: 1px solid var(--border2); color: var(--text); }
+  .foot { text-align: center; margin-top: 1rem; font-size: .7rem; color: var(--faint); }
+  .foot a { color: var(--faint); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><span class="mark" aria-hidden="true">▽</span><span class="name">Zold</span></div>
+
+  <div class="card" id="card" aria-busy="true">
+    <div id="loading" class="missing"><p>Loading…</p></div>
+
+    <div id="notfound" class="missing hidden">
+      <h1>No such payment page</h1>
+      <p>This link does not point at an account. Check the address you were given.</p>
+    </div>
+
+    <div id="payee" class="hidden">
+      <div class="who">
+        <div class="avatar" id="avatar">?</div>
+        <h1 class="dn" id="dn"></h1>
+        <div class="hd" id="hd"></div>
+      </div>
+
+      <div id="bank-pane" class="hidden">
+        <div class="lbl">PAY BY BANK TRANSFER</div>
+        <ul class="bank" id="bank"></ul>
+        <div id="bank-live" class="sr-only" aria-live="polite"></div>
+        <p class="note">Use your own bank’s transfer. The money arrives in euros on this company’s account.
+          Zold shows these details; it does not hold the money or see your bank.</p>
+      </div>
+
+      <div id="crypto-pane">
+      <div class="qrbox"><img id="qr" alt="QR code of the receiving address" /></div>
+
+      <div class="lbl">RECEIVING ADDRESS</div>
+      <div class="addr" id="addr"></div>
+      <button id="copy">Copy address</button>
+      <a id="open" class="btn ghost">Open in wallet</a>
+      <div id="copy-live" class="sr-only" aria-live="polite"></div>
+
+      <div class="lbl" id="accepts-lbl">SEND ONE OF THESE</div>
+      <ul class="accepts" id="accepts"></ul>
+
+      <p class="note">
+        <span id="note-send">Send only a token listed above, on its network.</span>
+        Anything else will not reach this payment page.
+        Settlement target: <strong id="note-settlement">EUR(e)</strong>.
+      </p>
+      <p class="note">
+        <strong>This address is public.</strong> Anyone who knows or guesses this handle can find it
+        and read its full history and balance on a block explorer.
+      </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">Zoldenburg · <a href="/">zold</a></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const show = (id) => $(id).classList.remove("hidden");
+const hide = (id) => $(id).classList.add("hidden");
+/* The payee comes from our own API, but it is rendered into the DOM as text
+   rather than markup regardless — a display name is free text somebody chose. */
+const CHAINS = { 1: "Ethereum", 137: "Polygon", 100: "Gnosis", 8453: "Base", 84532: "Base Sepolia", 80002: "Polygon Amoy", 31337: "local chain" };
+
+function chainName(id) { return CHAINS[id] || `chain ${id}`; }
+
+/* A smallest-unit amount as a decimal, without floating point. */
+function units(raw, decimals) {
+  const v = BigInt(raw), d = 10n ** BigInt(decimals);
+  const frac = (v % d).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return `${v / d}${frac ? `.${frac}` : ""}`;
+}
+
+/* EIP-681, built here so the button reflects whatever the API returned rather
+   than a second copy of the token address baked into the page. */
+function paymentUri(p) {
+  return `ethereum:${p.token.address}@${p.chainId}/transfer?address=${p.address}`;
+}
+
+/* An organisation's page: the company's euro account, bank transfer only.
+   No QR or address, because no wallet address belongs to the company. */
+function showBank(bank) {
+  hide("crypto-pane");
+  show("bank-pane");
+  const say = (msg) => { $("bank-live").textContent = ""; setTimeout(() => { $("bank-live").textContent = msg; }, 50); };
+  const group = (iban) => iban.replace(/(.{4})/g, "$1 ").trim();
+  const rows = [["ACCOUNT HOLDER", bank.holder, bank.holder, false], ["IBAN", group(bank.iban), bank.iban, true]];
+  if (bank.bic) rows.push(["BIC", bank.bic, bank.bic, true]);
+  $("bank").replaceChildren(...rows.map(([label, shown, value, mono]) => {
+    const li = document.createElement("li");
+    const f = document.createElement("div");
+    f.className = "f";
+    const k = document.createElement("span");
+    k.className = "k";
+    k.textContent = label;
+    const v = document.createElement("span");
+    v.className = mono ? "v mono" : "v";
+    v.textContent = shown;
+    f.append(k, v);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "Copy";
+    b.setAttribute("aria-label", `Copy ${label.toLowerCase()}`);
+    let t;
+    b.onclick = async () => {
+      clearTimeout(t);
+      try {
+        await navigator.clipboard.writeText(value);
+        b.textContent = "Copied";
+        say(`${label.toLowerCase()} copied`);
+      } catch {
+        b.textContent = "Select it";
+        say("Could not copy. Select the text and copy it by hand.");
+      }
+      t = setTimeout(() => (b.textContent = "Copy"), 1400);
+    };
+    li.append(f, b);
+    return li;
+  }));
+}
+
+async function load() {
+  const handle = decodeURIComponent(location.pathname.replace(/^\/pay\//, "")).trim();
+  try {
+    const res = await fetch(`/api/pay/${encodeURIComponent(handle)}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw Object.assign(new Error(body.error || "not found"), { status: res.status, body });
+    }
+    const p = await res.json();
+    hide("loading");
+    show("payee");
+    $("card").setAttribute("aria-busy", "false");
+
+    const label = p.displayName || p.handle || "?";
+    $("avatar").textContent = (label.trim()[0] || "?").toUpperCase();
+    $("dn").textContent = label;
+    $("hd").textContent = `@${p.handle}`;
+    document.title = `Pay ${label} · Zold`;
+
+    if (p.kind === "organisation") return showBank(p.bank);
+    $("addr").textContent = p.address;
+    $("qr").src = `/api/pay/${encodeURIComponent(p.handle)}/qr.svg`;
+    // What the forwarder's routes accept, as the API read them. A page from
+    // before the list existed falls back to the one token it always took.
+    const accepts = Array.isArray(p.supportedTokens) && p.supportedTokens.length
+      ? p.supportedTokens
+      : [{ chainId: p.chainId, symbol: p.token.symbol, decimals: p.token.decimals }];
+    $("accepts").replaceChildren(...accepts.map((t) => {
+      const li = document.createElement("li");
+      const name = document.createElement("strong");
+      name.textContent = `${t.symbol} on ${t.chainName || chainName(t.chainId)}`;
+      li.append(name);
+      const bits = [];
+      if (t.minAmount) bits.push(`at least ${units(t.minAmount, t.decimals)} ${t.symbol}`);
+      if (typeof t.feeBps === "number" && t.feeBps > 0) bits.push(`${(t.feeBps / 100).toFixed(2)}% bridge fee`);
+      if (bits.length) {
+        const sub = document.createElement("span");
+        sub.textContent = bits.join(" · ");
+        li.append(sub);
+      }
+      return li;
+    }));
+    if (accepts.length === 1) {
+      $("accepts-lbl").textContent = "SEND ONLY";
+      $("note-send").textContent = `Send only ${accepts[0].symbol} on ${accepts[0].chainName || chainName(accepts[0].chainId)}.`;
+    }
+    $("note-settlement").textContent = p.autoConvert
+      ? (p.settlementAsset === "USDC" ? p.token.symbol : "EUR(e)")
+      : "manual";
+
+    // The visible swap is for the eye; the live region says it to a screen
+    // reader, which would not re-read the button's text on its own.
+    const say = (msg) => { $("copy-live").textContent = ""; setTimeout(() => { $("copy-live").textContent = msg; }, 50); };
+    let copyTimer;
+    $("copy").onclick = async () => {
+      clearTimeout(copyTimer);
+      try {
+        await navigator.clipboard.writeText(p.address);
+        $("copy").textContent = "Copied";
+        say("Address copied");
+        copyTimer = setTimeout(() => ($("copy").textContent = "Copy address"), 1400);
+      } catch {
+        // Clipboard refused; the address is on screen to select by hand.
+        $("copy").textContent = "Could not copy — select the address above";
+        say("Could not copy. Select the address and copy it by hand.");
+        copyTimer = setTimeout(() => ($("copy").textContent = "Copy address"), 3000);
+      }
+    };
+    $("open").href = paymentUri(p);
+  } catch (e) {
+    // Only the server saying so means the link is wrong; a dropped
+    // connection or an outage says nothing about it.
+    hide("loading");
+    if (e?.body?.code === "PAGE_UNAVAILABLE") {
+      $("notfound").querySelector("h1").textContent = "Not taking payments right now";
+      $("notfound").querySelector("p").textContent = e.body.error;
+    } else if (e?.status !== 404) {
+      $("notfound").querySelector("h1").textContent = "Couldn’t load this page";
+      $("notfound").querySelector("p").textContent = "Check your connection, then reload the page.";
+    }
+    show("notfound");
+    $("card").setAttribute("aria-busy", "false");
+  }
+}
+load();
+</script>
+</body>
+</html>

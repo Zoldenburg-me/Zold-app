@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zold Operator</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="stylesheet" href="/vendor/fonts/text.css">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <div class="shell">
+    <nav class="side" aria-label="Operator sections">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">Z</span><span>Zold Operator</span></div>
+      <a href="#/overview" data-nav="overview"><span class="ni" aria-hidden="true">◧</span>Overview</a>
+      <a href="#/users" data-nav="users"><span class="ni" aria-hidden="true">◉</span>Users<span class="nb" id="navUsers"></span></a>
+      <a href="#/monerium" data-nav="monerium"><span class="ni" aria-hidden="true">€</span>Monerium</a>
+      <a href="#/transactions" data-nav="transactions"><span class="ni" aria-hidden="true">⇄</span>Transactions</a>
+      <a href="#/recoveries" data-nav="recoveries"><span class="ni" aria-hidden="true">⟲</span>Recoveries<span class="nb warn" id="navRecoveries"></span></a>
+      <a href="#/errors" data-nav="errors"><span class="ni" aria-hidden="true">!</span>Errors<span class="nb bad" id="navErrors"></span></a>
+      <div class="side-foot" id="sideFoot">—</div>
+    </nav>
+
+    <div class="main">
+      <header class="top">
+        <h1 id="viewTitle">Overview</h1>
+        <div class="top-right">
+          <span class="updated" id="updatedAt" aria-live="polite"></span>
+          <button type="button" class="btn ghost" id="refreshBtn">Refresh</button>
+          <label class="token">
+            <span class="z-sr">Operator token</span>
+            <input type="password" id="operatorToken" placeholder="Operator token" autocomplete="off" spellcheck="false" data-bwignore data-1p-ignore data-lpignore="true" data-form-type="other">
+          </label>
+          <span class="auth" id="authPill" role="status" aria-live="polite"><span class="dot"></span><span id="authText">No token</span></span>
+        </div>
+      </header>
+      <main id="view" tabindex="-1"></main>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-header">
+        <h2 class="modal-title" id="modalTitle" tabindex="-1">Raw data</h2>
+        <button type="button" class="close-btn" id="modalClose" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+      </div>
+      <pre class="json" id="modalJson"></pre>
+    </div>
+  </div>
+
+  <div class="tip" id="chartTip" role="tooltip" hidden></div>
+
+  <script src="/admin/core.js"></script>
+  <script src="/admin/overview.js"></script>
+  <script src="/admin/users.js"></script>
+  <script src="/admin/monerium.js"></script>
+  <script src="/admin/transactions.js"></script>
+  <script src="/admin/recoveries.js"></script>
+  <script src="/admin/errors.js"></script>
+  <script src="/admin/main.js"></script>
+</body>
+</html>

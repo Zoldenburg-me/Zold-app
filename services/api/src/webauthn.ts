@@ -1,0 +1,321 @@
+/**
+ * Server-side WebAuthn verification.
+ *
+ * Dependency-free implementation of the two ceremonies:
+ *  - registration: parse attestationObject (CBOR) -> authData -> COSE public
+ *    key; verify rpIdHash + challenge + origin; store key + sign counter.
+ *  - assertion (login): verify clientData (type/challenge/origin), rpIdHash,
+ *    user-presence flag, monotonic counter, and the signature over
+ *    authenticatorData || sha256(clientDataJSON) with the stored key.
+ *
+ * Supports ES256 (P-256, the passkey default) and RS256.
+ */
+import { createHash, randomBytes, webcrypto } from "node:crypto";
+
+// ---------------------------------------------------------------------------
+// helpers
+
+export const b64urlToBuf = (s: string) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+export const bufToB64url = (b: Buffer | Uint8Array) => Buffer.from(b).toString("base64url");
+const sha256 = (b: Buffer | string) => createHash("sha256").update(b).digest();
+
+// ---------------------------------------------------------------------------
+// minimal CBOR decoder (enough for attestation objects / COSE keys)
+
+const CBOR_MAX_DEPTH = 8;
+
+/**
+ * Every length is checked against the bytes that remain BEFORE it is used:
+ * this decoder runs on attacker-supplied bytes from an unauthenticated login
+ * request, and a header claiming 2^32 elements must fail in one comparison,
+ * not in a loop that allocates until the process dies.
+ */
+function cborDecode(buf: Buffer, offset = 0, depth = 0): { value: any; offset: number } {
+  if (depth > CBOR_MAX_DEPTH) throw new Error("cbor: nesting too deep");
+  if (offset >= buf.length) throw new Error("cbor: truncated");
+  const first = buf[offset];
+  const major = first >> 5;
+  const info = first & 0x1f;
+  let len = 0;
+  let o = offset + 1;
+  const need = (n: number) => { if (o + n > buf.length) throw new Error("cbor: truncated"); };
+  if (info < 24) len = info;
+  else if (info === 24) { need(1); len = buf[o]; o += 1; }
+  else if (info === 25) { need(2); len = buf.readUInt16BE(o); o += 2; }
+  else if (info === 26) { need(4); len = buf.readUInt32BE(o); o += 4; }
+  else if (info === 27) { need(8); len = Number(buf.readBigUInt64BE(o)); o += 8; }
+  else throw new Error(`cbor: unsupported additional info ${info}`);
+
+  switch (major) {
+    case 0: return { value: len, offset: o };
+    case 1: return { value: -1 - len, offset: o };
+    case 2: need(len); return { value: buf.subarray(o, o + len), offset: o + len };
+    case 3: need(len); return { value: buf.subarray(o, o + len).toString("utf8"), offset: o + len };
+    case 4: {
+      // Each element needs at least one byte, so a count past the remaining
+      // bytes is a lie whatever the elements are.
+      need(len);
+      const arr: any[] = [];
+      for (let i = 0; i < len; i++) { const r = cborDecode(buf, o, depth + 1); arr.push(r.value); o = r.offset; }
+      return { value: arr, offset: o };
+    }
+    case 5: {
+      need(len * 2);
+      const map = new Map<any, any>();
+      for (let i = 0; i < len; i++) {
+        const k = cborDecode(buf, o, depth + 1); o = k.offset;
+        const v = cborDecode(buf, o, depth + 1); o = v.offset;
+        map.set(k.value, v.value);
+      }
+      return { value: map, offset: o };
+    }
+    default: throw new Error(`cbor: unsupported major type ${major}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// COSE key -> JWK
+
+export interface StoredKey { jwk: JsonWebKey; alg: "ES256" | "RS256" }
+
+function coseToJwk(cose: Map<number, any>): StoredKey {
+  const kty = cose.get(1);
+  if (kty === 2) {
+    if (cose.get(-1) !== 1) throw new Error("webauthn: unsupported EC curve");
+    return {
+      alg: "ES256",
+      jwk: { kty: "EC", crv: "P-256", x: bufToB64url(cose.get(-2)), y: bufToB64url(cose.get(-3)) },
+    };
+  }
+  if (kty === 3) {
+    return { alg: "RS256", jwk: { kty: "RSA", n: bufToB64url(cose.get(-1)), e: bufToB64url(cose.get(-2)) } };
+  }
+  throw new Error(`webauthn: unsupported key type ${kty}`);
+}
+
+// ---------------------------------------------------------------------------
+// authenticator data
+
+export interface AuthData {
+  rpIdHash: Buffer;
+  flags: number;
+  signCount: number;
+  credentialId?: Buffer;
+  key?: StoredKey;
+}
+
+/** The fixed 37-byte head: rpIdHash, flags, sign counter. */
+function parseAuthDataHeader(data: Buffer): AuthData {
+  if (data.length < 37) throw new Error("webauthn: authenticator data too short");
+  return { rpIdHash: data.subarray(0, 32), flags: data[32], signCount: data.readUInt32BE(33) };
+}
+
+export function parseAuthData(data: Buffer): AuthData {
+  const out = parseAuthDataHeader(data);
+  if (out.flags & 0x40) { // attested credential data present
+    if (data.length < 55) throw new Error("webauthn: attested credential data truncated");
+    const credLen = data.readUInt16BE(53);
+    if (55 + credLen > data.length) throw new Error("webauthn: credential id truncated");
+    out.credentialId = data.subarray(55, 55 + credLen);
+    const cose = cborDecode(data, 55 + credLen);
+    out.key = coseToJwk(cose.value);
+  }
+  return out;
+}
+
+// DER ECDSA signature -> raw r||s (64 bytes) for WebCrypto
+function derToRaw(der: Buffer): Buffer {
+  if (der[0] !== 0x30) throw new Error("webauthn: bad DER signature");
+  let o = 2;
+  if (der[1] & 0x80) o += der[1] & 0x7f;
+  const readInt = () => {
+    if (der[o] !== 0x02) throw new Error("webauthn: bad DER integer");
+    const len = der[o + 1];
+    let v = der.subarray(o + 2, o + 2 + len);
+    o += 2 + len;
+    while (v.length > 32 && v[0] === 0) v = v.subarray(1);
+    return Buffer.concat([Buffer.alloc(32 - v.length), v]);
+  };
+  const r = readInt();
+  const s = readInt();
+  return Buffer.concat([r, s]);
+}
+
+async function importKey(k: StoredKey) {
+  return k.alg === "ES256"
+    ? webcrypto.subtle.importKey("jwk", k.jwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"])
+    : webcrypto.subtle.importKey("jwk", { ...k.jwk, alg: "RS256" }, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+}
+
+// ---------------------------------------------------------------------------
+// challenges (in-memory, single-use, 5 min TTL)
+
+export type ChallengePurpose = "register" | "login" | "step_up";
+
+const challenges = new Map<string, { purpose: ChallengePurpose; binding?: string; exp: number }>();
+const CHALLENGE_TTL_MS = 5 * 60_000;
+/** Login challenges are minted without a session, so the store is bounded:
+ *  past the cap the oldest outstanding challenge is dropped (a Map iterates in
+ *  insertion order), which costs a flooder's victims a retry, not the process
+ *  its memory. */
+const MAX_CHALLENGES = 50_000;
+
+/* Every challenge lives CHALLENGE_TTL_MS, so the Map (insertion order) is
+ * also expiry order: stop at the first live one instead of scanning up to
+ * MAX_CHALLENGES on every unauthenticated issue. */
+function pruneChallenges(now = Date.now()) {
+  for (const [k, v] of challenges) {
+    if (v.exp >= now) break;
+    challenges.delete(k);
+  }
+}
+
+/**
+ * Issue a single-use challenge.
+ *
+ * `binding` names the account (and, where it matters, the action) the ceremony
+ * is for. Without it every step-up challenge was interchangeable: any caller
+ * could mint one, and an assertion collected in one context satisfied any other
+ * step-up-gated action on the account — the ceremony proved possession of the
+ * authenticator but said nothing about what was being approved.
+ *
+ * Login cannot be bound: the caller has no session yet, and the assertion's own
+ * signature is what identifies the account.
+ */
+export function issueChallenge(purpose: ChallengePurpose, binding?: string): string {
+  pruneChallenges();
+  while (challenges.size >= MAX_CHALLENGES) challenges.delete(challenges.keys().next().value!);
+  const c = randomBytes(32).toString("base64url");
+  challenges.set(c, { purpose, binding, exp: Date.now() + CHALLENGE_TTL_MS });
+  return c;
+}
+
+function consumeChallenge(c: string, purpose: ChallengePurpose, binding?: string): boolean {
+  const e = challenges.get(c);
+  challenges.delete(c);
+  pruneChallenges();
+  if (!e || e.purpose !== purpose || e.exp < Date.now()) return false;
+  return (e.binding ?? undefined) === (binding ?? undefined);
+}
+
+// ---------------------------------------------------------------------------
+// ceremonies
+
+function checkClientData(
+  clientDataJSON: Buffer,
+  expectedType: string,
+  origins: string[],
+  purpose: ChallengePurpose,
+  binding?: string,
+) {
+  const cd = JSON.parse(clientDataJSON.toString("utf8"));
+  if (cd.type !== expectedType) throw new Error(`webauthn: unexpected type ${cd.type}`);
+  if (!consumeChallenge(cd.challenge, purpose, binding)) {
+    throw new Error("webauthn: unknown or expired challenge");
+  }
+  if (!origins.includes(cd.origin)) throw new Error(`webauthn: origin ${cd.origin} not allowed`);
+}
+
+function checkClientDataForChallenge(
+  clientDataJSON: Buffer,
+  expectedType: string,
+  origins: string[],
+  expectedChallenge: string,
+) {
+  const cd = JSON.parse(clientDataJSON.toString("utf8"));
+  if (cd.type !== expectedType) throw new Error(`webauthn: unexpected type ${cd.type}`);
+  if (cd.challenge !== expectedChallenge) throw new Error("webauthn: challenge mismatch");
+  if (!origins.includes(cd.origin)) throw new Error(`webauthn: origin ${cd.origin} not allowed`);
+}
+
+export interface RegistrationResult { credentialId: string; key: StoredKey; signCount: number }
+
+export function verifyRegistration(
+  attestationObjectB64: string,
+  clientDataJSONB64: string,
+  rpId: string,
+  origins: string[],
+  binding?: string,
+): RegistrationResult {
+  const clientDataJSON = b64urlToBuf(clientDataJSONB64);
+  checkClientData(clientDataJSON, "webauthn.create", origins, "register", binding);
+  const att = cborDecode(b64urlToBuf(attestationObjectB64)).value as Map<string, any>;
+  const authData = parseAuthData(Buffer.from(att.get("authData")));
+  if (!authData.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");
+  if (!(authData.flags & 0x01)) throw new Error("webauthn: user presence not asserted");
+  if (!authData.credentialId || !authData.key) throw new Error("webauthn: no credential in attestation");
+  return { credentialId: bufToB64url(authData.credentialId), key: authData.key, signCount: authData.signCount };
+}
+
+export async function verifyAssertion(
+  authenticatorDataB64: string,
+  clientDataJSONB64: string,
+  signatureB64: string,
+  storedKey: StoredKey,
+  storedCount: number,
+  rpId: string,
+  origins: string[],
+  purpose: ChallengePurpose = "login",
+  binding?: string,
+): Promise<{ signCount: number }> {
+  const clientDataJSON = b64urlToBuf(clientDataJSONB64);
+  checkClientData(clientDataJSON, "webauthn.get", origins, purpose, binding);
+  return verifyAssertionBytes(authenticatorDataB64, clientDataJSON, signatureB64, storedKey, storedCount, rpId, purpose === "step_up");
+}
+
+export async function verifyAssertionForChallenge(
+  authenticatorDataB64: string,
+  clientDataJSONB64: string,
+  signatureB64: string,
+  storedKey: StoredKey,
+  storedCount: number,
+  rpId: string,
+  origins: string[],
+  expectedChallenge: string,
+  requireUserVerification = true,
+): Promise<{ signCount: number }> {
+  const clientDataJSON = b64urlToBuf(clientDataJSONB64);
+  checkClientDataForChallenge(clientDataJSON, "webauthn.get", origins, expectedChallenge);
+  return verifyAssertionBytes(authenticatorDataB64, clientDataJSON, signatureB64, storedKey, storedCount, rpId, requireUserVerification);
+}
+
+async function verifyAssertionBytes(
+  authenticatorDataB64: string,
+  clientDataJSON: Buffer,
+  signatureB64: string,
+  storedKey: StoredKey,
+  storedCount: number,
+  rpId: string,
+  requireUserVerification: boolean,
+): Promise<{ signCount: number }> {
+  const authData = b64urlToBuf(authenticatorDataB64);
+  // An assertion carries no credential to register, so nothing past the
+  // header is decoded — the CBOR decoder never runs on a login request.
+  const parsed = parseAuthDataHeader(authData);
+  if (!parsed.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");
+  if (!(parsed.flags & 0x01)) throw new Error("webauthn: user presence not asserted");
+  // A step-up gates a money-moving or key-binding action, so presence (someone
+  // touched the key) is not enough — require that the authenticator actually
+  // verified the human (UV flag). Otherwise "Face ID approved this payment" is a
+  // claim the server never checked.
+  if (requireUserVerification && !(parsed.flags & 0x04)) {
+    throw new Error("webauthn: user verification required for this action");
+  }
+  // Once an authenticator has reported a counter it must keep advancing; a
+  // regression to zero is the clone case, not a counter-less device.
+  if (storedCount > 0 && parsed.signCount <= storedCount) {
+    throw new Error("webauthn: sign counter did not advance (possible clone)");
+  }
+  const sigRaw = b64urlToBuf(signatureB64);
+  const sig = storedKey.alg === "ES256" ? derToRaw(sigRaw) : sigRaw;
+  const data = Buffer.concat([authData, sha256(clientDataJSON)]);
+  const key = await importKey(storedKey);
+  const ok = await webcrypto.subtle.verify(
+    storedKey.alg === "ES256" ? { name: "ECDSA", hash: "SHA-256" } : "RSASSA-PKCS1-v1_5",
+    key,
+    sig,
+    data,
+  );
+  if (!ok) throw new Error("webauthn: signature verification failed");
+  return { signCount: parsed.signCount };
+}

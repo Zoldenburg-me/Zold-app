@@ -1,0 +1,445 @@
+import express from "express";
+import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY, WALLET_SYNC } from "./config.js";
+import { initStore, store } from "./store.js";
+import {
+  moneriumApiKeysAvailable,
+  moneriumEnvironment,
+  } from "./adapters/monerium-connection.js";
+import {
+  checkConnection,
+  startDepositPoller,
+} from "./adapters/monerium-sandbox.js";
+import {
+  sweepAnchorPayouts,
+  sweepStrandedTransfers,
+  } from "./orchestrator.js";
+import {
+  cryptoInScan,
+  startCryptoDepositPoller,
+  } from "./adapters/crypto-deposits.js";
+import { buildTransferFromQuote } from "./transfers/build.js";
+import { createAuthRouter } from "./routes/auth.js";
+import { createTransferRouter } from "./routes/transfers.js";
+import { createMoneriumWebhookRouter } from "./routes/monerium-webhook.js";
+import { createMoneriumRouter } from "./routes/monerium.js";
+import { createAdminRouter } from "./routes/admin.js";
+import { createPageRouter, notFound } from "./routes/pages.js";
+import { createUserRouter } from "./routes/users.js";
+import { createCryptoDepositRouter } from "./routes/crypto-deposits.js";
+import { createPaymentPageRouter } from "./routes/payment-page.js";
+import { createEnsRouter } from "./routes/ens.js";
+import { createEmailVerificationRouter } from "./routes/email-verification.js";
+import { createReceiptShareRouter } from "./routes/receipt-shares.js";
+import { createFaucetRouter } from "./routes/faucet.js";
+import { capabilities } from "./capabilities.js";
+import { publicUser } from "./users/public-user.js";
+import { apiRateLimit, originPolicy, securityHeaders } from "./http/policy.js";
+import {
+  requireSession,
+  requireUserSession,
+  } from "./http/sessions.js";
+import { createOrgRouter } from "./routes/orgs.js";
+import { createBusinessRouter, createInvoiceLinkRouter } from "./routes/business.js";
+import { createGnosisPayRouter } from "./routes/gnosis-pay.js";
+import { formatReport, reconcile } from "./reconcile.js";
+import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
+import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./routes/recovery-zoldenburg.js";
+import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
+import { createDocumentsRouter } from "./routes/documents.js";
+import { createSafeSignerRouter } from "./routes/safe-signers.js";
+import { createSafeImportRouter } from "./routes/safe-import.js";
+import { createPaymentRequestRouter, onPaymentRequestPaid, sweepPaymentRequests } from "./routes/payment-requests.js";
+import { createShopifyRouter, resolveShopifyRequest } from "./routes/shopify.js";
+import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
+import { writeStatementLines } from "./bookkeeping/writer.js";
+import { pollWalletSyncOnce } from "./wallet-sync/sync.js";
+import { loadUsdToken } from "./usd-token.js";
+import {
+  addrs,
+  assertChainMatches,
+  warnIfSmartAccountChainDiffers,
+  publicClient,
+  } from "./chain.js";
+import { CANDIDE, SafeGasError, SafeThresholdError } from "./wallet/candide.js";
+import { routeAsyncRejections } from "./http/async-errors.js";
+import { recordServerError } from "./http/error-log.js";
+import { knownError } from "./http/known-errors.js";
+const app = express();
+// Keep the raw body around for webhook signature checks — HMAC has to run
+// over the exact bytes sent, not a re-serialised object.
+app.use(express.json({
+  limit: SECURITY.jsonBodyLimit,
+  verify: (req, _res, buf) => {
+    (req as any).rawBody = buf;
+  },
+}));
+
+// Origin policy + per-IP rate limiting live in http/policy.ts — the
+// outermost thing every request passes through, readable in one place.
+app.use(securityHeaders);
+app.use(originPolicy);
+
+// Where the client address comes from. Default 0 = the socket peer, correct
+// only with nothing in front; behind a proxy that address is the proxy, so every
+// caller shares one bucket and one client can rate-limit the whole service.
+app.set("trust proxy", SECURITY.trustedProxyHops);
+
+app.use("/api", apiRateLimit);
+// Pages and static assets, declared before the API routers so nothing under
+// /api can be shadowed by a file on disk.
+app.use(createPageRouter());
+
+/**
+ * The organisation domain (docs/business-accounts.md).
+ *
+ * Mounted as routers taking `requireSession` rather than importing the app, so
+ * this file stays the single owner of authentication — a route module cannot
+ * quietly acquire a second way to decide who is calling. Both sit under /api,
+ * so they inherit the rate limiting and the auth-window middleware above.
+ *
+ * The invoice-link router is deliberately NOT session-guarded: it is reached by
+ * a supplier who has no account, holding only the one-time token. Its
+ * responses go through an allowlist view for that reason.
+ */
+app.use("/api/orgs", createOrgRouter(requireSession));
+app.use("/api/orgs", createBusinessRouter(requireSession, buildTransferFromQuote));
+app.use("/api/invoice-links", createInvoiceLinkRouter());
+app.use("/api/gnosis-pay", createGnosisPayRouter(requireSession));
+
+const wrap =
+  (fn: express.Handler): express.Handler =>
+  (req, res, next) =>
+    Promise.resolve(fn(req, res, next)).catch(next);
+
+
+/* The latest block, read at most once per HEALTH_BLOCK_MS however often
+ * /api/health is asked: it is unauthenticated, so a caller sets the rate.
+ * Concurrent misses share one read. */
+const HEALTH_BLOCK_MS = 5_000;
+let healthBlock: { at: number; read: Promise<bigint> } | undefined;
+function latestBlock(): Promise<bigint> {
+  if (!healthBlock || Date.now() - healthBlock.at > HEALTH_BLOCK_MS) {
+    const read = publicClient.getBlockNumber();
+    healthBlock = { at: Date.now(), read };
+    // A failed read is not cached: the next caller asks again.
+    read.catch(() => {
+      if (healthBlock?.read === read) healthBlock = undefined;
+    });
+  }
+  return healthBlock.read;
+}
+
+app.get(
+  "/api/health",
+  wrap(async (_req, res) => {
+    const block = await latestBlock();
+    // chainId and realMoney let the landing page name the network it runs on
+    // instead of hardcoding "Live on Base" over a testnet deployment.
+    res.json({
+      ok: true, chainId: CHAIN_ID, realMoney: IS_REAL_MONEY_CHAIN, block: Number(block), contracts: addrs(), capabilities: capabilities(),
+      // Whether incoming crypto is being seen. A scan that fails every tick
+      // books nothing and says so nowhere else.
+      ...(CRYPTO_IN.enabled ? { cryptoIn: { ...cryptoInScan } } : {}),
+    });
+  }),
+);
+
+/**
+ * Public mid rates, so the marketing page can show the same number the product
+ * would quote instead of baking its own constants in — a hardcoded figure
+ * under a "real exchange rate" label goes stale in the shop window. No auth:
+ * this is a public reference rate, not per-user pricing, and it carries no
+ * spread or fee.
+ */
+app.get(
+  "/api/rates",
+  wrap(async (_req, res) => {
+    const { midRates } = await import("./rates.js");
+    try {
+      const r = await midRates();
+      res.json({ eur: r.eur, asOf: r.asOf, provider: r.provider });
+    } catch (e: any) {
+      // Say so rather than serving a number nobody can stand behind.
+      res.status(503).json({ error: e?.message ?? "rates unavailable" });
+    }
+  }),
+);
+
+// --- Users ------------------------------------------------------------------
+
+const sandbox = moneriumSandboxEnabled();
+
+// Email/SMS recovery through Candide's guardian. Mounted at /api so its
+// no-session half sits under /recovery, which the limiter above already
+// treats as an auth route.
+app.use("/api", createCandideRecoveryRouter({ requireUserSession, publicUser }));
+// Advanced security: the holder's own second owner, threshold and spending
+// limits on their Safe. Read from the chain, changed only by passkey-signed ops.
+app.use("/api", createSafeSignerRouter({ requireUserSession }));
+// Bind an account to an existing Safe its owner made the passkey an owner of.
+app.use("/api", createSafeImportRouter({ requireUserSession }));
+// Account documents: receipts, statements, balance and ownership letters, each
+// verifiable at /v/<code>. The page is the record; the PDF is its print.
+app.use("/api", createDocumentsRouter({ requireUserSession }));
+// Payment requests (pay links): an amount asked for at /pay/<handle>/<code>,
+// payable by USDC, by SEPA with the code as reference, or from another Zold
+// account. Shopify rides on the same requests as a payments app.
+app.use("/api", createPaymentRequestRouter(requireUserSession));
+app.use("/api", createShopifyRouter(requireSession));
+onPaymentRequestPaid(resolveShopifyRequest);
+
+
+
+
+
+
+
+
+// Accounts: signup, the account read, KYC state and the privacy bundle.
+app.use("/api", createUserRouter({ requireUserSession }));
+// Confirming the account's email with a code. Off unless EMAIL_VERIFICATION.
+app.use("/api", createEmailVerificationRouter({ requireUserSession }));
+// Crypto in: what arrived at the payment page, and converting it to euros.
+app.use("/api", createCryptoDepositRouter({ requireUserSession }));
+// The payment page: claiming a handle, and the public payee read.
+app.use("/api", createPaymentPageRouter({ requireUserSession }));
+app.use("/api", createEnsRouter({ requireSession }));
+// Shareable receipts. The slug IS the credential, hence the tight bucket.
+app.use("/api", createReceiptShareRouter({ requireUserSession }));
+// Testnet faucet: one EURe grant per account, testnet chains only.
+app.use("/api", createFaucetRouter({ requireUserSession }));
+// Monerium: connect by OAuth or by your own API keys, and activate the IBAN.
+// Connecting is not approval — an address-matched IBAN is.
+app.use("/api", createMoneriumRouter({ requireUserSession }));
+// The operator dashboard's read side, behind the operator bearer token.
+app.use("/api", createAdminRouter());
+// Zoldenburg as guardian: the owner opts in, asks after losing the passkey,
+// and an operator signs from a hardware wallet (admin console or Safe Cover).
+app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession }));
+// Sessions and passkeys: the WebAuthn ceremonies, and the passkey Safe whose
+// owner those credentials are.
+app.use("/api", createAuthRouter({ requireUserSession }));
+// Quotes, transfers and the send-time authorization.
+app.use("/api", createTransferRouter({ requireUserSession }));
+// Monerium's deposit webhook: an order id and nothing else is believed.
+app.use("/api", createMoneriumWebhookRouter());
+// Last: nothing above claimed the path.
+app.use(notFound());
+
+app.use(((err, req, res, next) => {
+  // Every unexpected error gets a reference: logged with its stack, kept for
+  // the operator dashboard, and handed to the caller to quote.
+  const mapped = knownError(err);
+  if (mapped) {
+    if (mapped.log) recordServerError(err, req, mapped.status);
+    if (res.headersSent) return next(err);
+    return res.status(mapped.status).json(mapped.body);
+  }
+  const known = err instanceof SafeGasError || err instanceof SafeThresholdError;
+  const logged = known ? undefined : recordServerError(err, req);
+  if (known) console.error(err);
+  // A handler that already began answering cannot be given a 500 body: setting
+  // headers twice throws inside the error handler itself, which express can
+  // only answer by destroying the socket — the caller sees a truncated
+  // response and no error at all. Hand those to express's default handler,
+  // which closes the connection properly.
+  if (res.headersSent) return next(err);
+  // A Safe that cannot pay its gas is something the user or operator can fix,
+  // and the message names no secret.
+  if (err instanceof SafeGasError) {
+    return res.status(err.status).json({ error: err.message });
+  }
+  if (err instanceof SafeThresholdError) {
+    return res.status(err.status).json({ error: err.message, code: err.code });
+  }
+  const detail = String(err?.shortMessage ?? err?.message ?? err);
+  res.setHeader("x-zold-error-ref", logged!.ref);
+  res.status(500).json({
+    error: SECURITY.exposeInternalErrors
+      ? detail
+      : `Something went wrong on our side. Check whether it went through before trying again; if it happens again, quote ${logged!.ref}.`,
+    code: "INTERNAL",
+    ref: logged!.ref,
+  });
+}) as express.ErrorRequestHandler);
+
+// After the last route: a rejected handler promise is a 500, not a process
+// exit (http/async-errors.ts).
+routeAsyncRejections(app);
+
+initStore();
+// Fail fast on a chain mismatch: signatures built for the wrong chain id are
+// rejected as "bad authorization", which reads like a signing bug.
+assertChainMatches().catch((e) => {
+  console.error(String(e?.message ?? e));
+  process.exit(1);
+});
+// Same class of problem, quieter symptom: the smart-account chain can differ
+// from the app chain without anything throwing.
+warnIfSmartAccountChainDiffers();
+// Compensate anything stranded by a crash or failed payout, then keep
+// sweeping in the background.
+sweepStrandedTransfers()
+  .then((n) => n && console.log(`Compensation sweep: compensated ${n} stranded transfer(s)`))
+  .catch((e) => console.error(`Compensation sweep failed: ${e?.message ?? e}`));
+setInterval(() => sweepStrandedTransfers().catch(() => {}), 5 * 60_000).unref();
+// Zoldenburg recoveries: pick up a signature made in Safe Cover, expire
+// unanswered requests, and finalize once the grace period has run.
+if (zoldenburgRecoveryEnabled()) {
+  const runZoldenburgSweep = () =>
+    sweepZoldenburgRecoveries()
+      .then((n) => n && console.log(`recovery sweep: finalized ${n} Zoldenburg recover${n === 1 ? "y" : "ies"}`))
+      .catch((e) => console.error(`recovery sweep failed: ${e?.message ?? e}`));
+  setTimeout(runZoldenburgSweep, 5_000).unref();
+  setInterval(runZoldenburgSweep, RECOVERY.sweepMs).unref();
+}
+// Candide recoveries finalize themselves once the grace period has run, so a
+// user who lost their phone on a Friday is not waiting for a click on Monday.
+if (candideRecoveryEnabled()) {
+  const runRecoverySweep = () =>
+    sweepCandideRecoveries()
+      .then((n) => n && console.log(`recovery sweep: finalized ${n} recover${n === 1 ? "y" : "ies"}`))
+      .catch((e) => console.error(`recovery sweep failed: ${e?.message ?? e}`));
+  setTimeout(runRecoverySweep, 5_000).unref();
+  setInterval(runRecoverySweep, RECOVERY.sweepMs).unref();
+  console.log(`RECOVERY: email/SMS guardian via ${RECOVERY.serviceUrl} (chain ${CANDIDE.chainId}, module ${CANDIDE.recoveryModuleAddress})`);
+}
+// Pay links: expire what is past its date, book our own SEPA payouts that
+// carry a code, retry telling a merchant about a paid checkout.
+setInterval(
+  () =>
+    sweepPaymentRequests()
+      .then((r) => (r.expired || r.matched) && console.log(`pay-request sweep: ${r.expired} expired, ${r.matched} matched`))
+      .catch((e) => console.error(`pay-request sweep failed: ${e?.message ?? e}`)),
+  PAYMENT_REQUESTS.sweepMs,
+).unref();
+sweepAnchorPayouts()
+  .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
+  .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`));
+setInterval(
+  () =>
+    sweepAnchorPayouts()
+      .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
+      .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`)),
+  30_000,
+).unref();
+
+// The ledger writer: one statement line per economic event, projected from
+// the store. Hooked where money changes state, and swept here so a REFUNDED
+// written by compensation, or an event a crash cut short, still gets its line.
+setTimeout(() => {
+  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${e?.message ?? e}`); }
+}, 3_000).unref();
+setInterval(() => {
+  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${e?.message ?? e}`); }
+}, 60_000).unref();
+
+// Imported wallets: ERC-20 transfers on their own chains, read only.
+setInterval(
+  () =>
+    pollWalletSyncOnce()
+      .then((n) => n && console.log(`wallet sync: booked ${n} transfer(s)`))
+      .catch((e) => console.error(`wallet sync failed: ${e?.message ?? e}`)),
+  WALLET_SYNC.pollMs,
+).unref();
+
+// Reconciler: log-only, never repairs. Drift between Monerium's ledger and
+// local receipt state should be loud rather than discovered later by a user
+// missing money. `npm run reconcile` runs the same check on demand.
+const runReconcile = () =>
+  reconcile()
+    .then((r) => {
+      if (!r.ok) console.warn(`LEDGER DRIFT\n${formatReport(r)}`);
+    })
+    .catch((e) => console.error(`reconcile failed: ${e?.message ?? e}`));
+setTimeout(runReconcile, 10_000).unref();
+setInterval(runReconcile, 15 * 60_000).unref();
+if (sandbox) {
+  checkConnection()
+    .then((ctx) => {
+      console.log(`monerium sandbox connected (${ctx?.email ?? ctx?.userId ?? "ok"})`);
+      startDepositPoller();
+    })
+    .catch((err) => {
+      console.error(`monerium sandbox auth FAILED — check .env credentials: ${err.message}`);
+    });
+} else {
+  console.log("monerium: no app credentials (MONERIUM_CLIENT_SECRET unset) — accounts connect by OAuth or their own API keys");
+  if (moneriumApiKeysAvailable()) {
+    // Users may still connect their OWN Monerium keys; their deposits and
+    // redeem orders are polled on those. The poller does nothing until
+    // someone has.
+    console.log(`monerium: per-user API-key connections enabled (${moneriumEnvironment()}) — polling connected accounts on their own credentials`);
+    startDepositPoller();
+  }
+}
+/**
+ * Inbound crypto is a chain concern, not a Monerium one, so this runs whether
+ * or not the sandbox is configured. It costs nothing until an account opts in:
+ * with no watched users the poller returns before it ever calls getLogs.
+ */
+if (CRYPTO_IN.enabled) startCryptoDepositPoller();
+// The dollar token is labelled by its own symbol(); a test token that cannot be
+// read is refused here rather than drawn as USDC.
+await loadUsdToken();
+app.listen(API_PORT, API_HOST, () => {
+  console.log(`Zold API listening on http://${API_HOST}:${API_PORT}`);
+  /**
+   * Log the custody posture at startup. Whether the orchestrator holds user
+   * funds depends on the liquidity venue and whether Bridge is live, and
+   * neither is visible otherwise.
+   */
+  const safeExecutable = ["dex", "lifi", "rfq", "best"].includes(LIQUIDITY.PROVIDER);
+  if (!safeExecutable) {
+    console.warn(
+      `CUSTODY: LIQUIDITY_PROVIDER=${LIQUIDITY.PROVIDER} cannot be executed by a user's Safe, so ` +
+        "cash-rail transfers debit the full amount to the orchestrator and swap from there. " +
+        "The non-custodial path needs dex, lifi, rfq or best.",
+    );
+  } else if (!BRIDGE.live) {
+    console.warn(
+      "CUSTODY: the Safe-executed swap batch is available, but BRIDGE_LIVE is not set — with no " +
+        "external deposit address the batch delivers its output to the orchestrator. Cash-rail " +
+        "transfers are recorded as custodial until Bridge is live.",
+    );
+  } else {
+    console.log(
+      "CUSTODY: cash-rail transfers run non-custodially — the user's Safe signs one batch that " +
+        "delivers straight to Bridge. The SEPA rail moves only the fee.",
+    );
+  }
+  if (CUSTODY.requireNonCustodial) {
+    console.log("CUSTODY: REQUIRE_NON_CUSTODIAL=1 — a transfer that would use the orchestrator is refused.");
+  }
+  if (process.env.CANDIDE_COSIGNER_KEY) {
+    console.warn("NOTE: CANDIDE_COSIGNER_KEY is set but nothing reads it any more — remove it from the environment.");
+  }
+  console.log(
+    `GAS: Safe UserOperations are ${
+      CANDIDE.gas.mode === "sponsored"
+        ? `sponsored by the paymaster at ${CANDIDE.paymasterUrl}`
+        : CANDIDE.gas.mode === "native"
+          ? "paid by each Safe in ETH (no paymaster)"
+          : `paid by each Safe in token ${CANDIDE.gas.token} through ${CANDIDE.paymasterUrl}`
+    }.`,
+  );
+});
+
+/**
+ * Last-resort diagnostics for unhandled rejections and uncaught exceptions.
+ *
+ * We still exit: pending Safe executions live in memory and a process in an
+ * unknown state must not keep signing. These handlers only log the reason
+ * first and exit non-zero so a supervisor notices. Don't change them to
+ * swallow the error and keep serving.
+ */
+process.on("unhandledRejection", (reason: any) => {
+  console.error(
+    `FATAL unhandled promise rejection — the API is exiting: ${reason?.stack ?? reason?.message ?? reason}`,
+  );
+  process.exit(1);
+});
+process.on("uncaughtException", (err) => {
+  console.error(`FATAL uncaught exception — the API is exiting: ${err?.stack ?? err?.message ?? err}`);
+  process.exit(1);
+});

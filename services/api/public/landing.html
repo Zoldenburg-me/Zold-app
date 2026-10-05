@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en" class="l-js">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zold: the euro account you own</title>
+<meta name="description" content="A euro account with your own IBAN. Get paid by bank transfer or USDC, send to any bank account in Europe with no Zold fee, and keep your euros where only you can move them." />
+<meta property="og:title" content="Zold: the euro account you own" />
+<meta property="og:description" content="Get paid by bank transfer or USDC. Send to any bank account in Europe. Personal and business accounts." />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Zold" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="theme-color" content="#08080b" />
+<!--zold:abs-->
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+<link rel="preload" href="/vendor/fonts/phosphor-landing.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/vendor/fonts/instrumentserif-italic-latin.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="/vendor/fonts/text.css" />
+<link rel="stylesheet" href="/tokens.css" />
+<link rel="stylesheet" href="/site.css" />
+<link rel="stylesheet" href="/landing.css" />
+<!-- html.l-js holds things back until they scroll into view; without JS, show them. -->
+<noscript><style>
+.l-js [data-reveal]:not([data-split]) { opacity: 1; animation: none; }
+.l-js .l-who:not(.in) > div, .l-js .l-lat:not(.in) .l-lat__bars div { transform: none; opacity: 1; }
+</style></noscript>
+<script src="/landing/wave.js" defer></script>
+<script src="/landing/motion.js" defer></script>
+<script src="/landing/graphics.js" defer></script>
+<script src="/landing/narwhal.js" defer></script>
+</head>
+<body class="l-page">
+<!--zold:site-nav-->
+<main id="main">
+
+  <!-- Hero: silk wave (WebGL), status chip, word-reveal headline -->
+  <section id="top" class="l-hero" data-narwhal-say="the euro account you own">
+    <canvas class="l-wave" aria-hidden="true"></canvas>
+    <div class="l-wrap">
+      <p class="l-chip"><b>Private beta</b><span class="l-chip__test" role="status" data-test-mode>Test mode, no real money</span></p>
+      <h1 data-reveal><span class="s-sr">The euro account you own. Dollar, pound and yen accounts are coming soon.</span><span aria-hidden="true">The <span class="s-cur" data-word><span>euro</span><span><span style="position:relative">dollar<span class="s-soon">Soon</span></span></span><span><span style="position:relative">pound<span class="s-soon">Soon</span></span></span><span><span style="position:relative">yen<span class="s-soon">Soon</span></span></span></span><br />account<em>you own.</em></span></h1>
+      <p class="l-hero__sub">Your own IBAN, a card for everyday spending, and payments you approve with a glance.</p>
+      <div class="l-hero__cta l-actions"><a class="l-btn" href="/app#account-type">Open your account</a><a class="l-btn l-btn--glass" href="/app#b-entity">Zold for business →</a></div>
+      <p class="l-small">Free to open · No monthly fee</p>
+    </div>
+    <button class="l-motion" type="button" aria-pressed="false" hidden>Pause motion</button>
+  </section>
+
+  <!-- Get paid: the headline, then three graphic cards (bento) -->
+  <section id="get-paid" class="l-section" data-narwhal-say="one account">
+    <div class="l-wrap">
+      <h2 class="l-paid-lines" data-reveal><span>Every way to get paid.</span> <span>One account.</span></h2>
+      <div class="l-grid">
+        <article class="l-card">
+          <span class="l-illus">Illustration</span>
+          <div class="l-card__copy"><h3>Your salary</h3><p>Give your employer your IBAN. Payday works like it always has.</p></div>
+          <div class="l-panel l-panel--ticker" aria-hidden="true"><ul class="l-ticker" data-l-ticker></ul></div>
+        </article>
+        <article class="l-card">
+          <div class="l-card__copy"><h3>Your clients</h3><p>Send an invoice or a link. They pay by bank transfer, or in USDC (digital dollars) from outside Europe.</p></div>
+          <div class="l-panel l-flow" aria-hidden="true">
+            <svg viewBox="0 0 400 192" preserveAspectRatio="none"><path d="M70 52 C 190 52, 200 96, 300 96"/><path d="M70 140 C 190 140, 200 96, 300 96"/></svg>
+            <span class="l-tag l-tag--neutral" style="--x:6%;--y:20%">Bank transfer</span>
+            <span class="l-tag l-tag--neutral" style="--x:6%;--y:66%">USDC</span>
+            <span class="l-tag l-tag--pink" style="--x:68%;--y:43%">Your IBAN</span>
+          </div>
+        </article>
+        <article class="l-card">
+          <div class="l-card__copy"><h3>Your link</h3><p>zoldhq.com/pay/you. Anyone can pay you, no account needed.</p></div>
+          <div class="l-panel l-link" aria-hidden="true">
+            <div class="l-link__bar"><span class="l-link__lock"></span><span data-l-type="zoldhq.com/pay/you">zoldhq.com/pay/you</span><i></i></div>
+            <div class="l-link__btns"><span>Bank transfer</span><span>USDC</span></div>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- Spend: the card -->
+  <section id="spend" class="l-section" data-narwhal-say="tap and pay">
+    <div class="l-wrap">
+      <div style="max-width:780px"><h2 class="l-h2" data-reveal>A card for everyday life.</h2><p class="l-lede">Pay in shops, online and abroad. Add it to Apple Pay or Google Pay and tap.</p></div>
+      <ul class="l-biz-list l-spend-list">
+        <li><i class="ph ph-credit-card" aria-hidden="true"></i><b>Ready right away</b><span>Your virtual card is there the moment your account opens.</span></li>
+        <li><i class="ph ph-shield-check" aria-hidden="true"></i><b>Freeze it in one tap</b><span>Unfreeze it just as fast.</span></li>
+        <li><i class="ph ph-sparkle" aria-hidden="true"></i><b>Metal, if you like</b><span>A physical card on request.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Send: the three steps beside the approval screen -->
+  <section id="send" class="l-section" data-narwhal-say="anyone in Europe">
+    <div class="l-wrap">
+      <div style="max-width:780px"><h2 class="l-h2" data-reveal>Send to anyone in Europe. <span>Free.</span></h2><p class="l-lede">A name and an IBAN is all you need. It arrives like any bank transfer.</p></div>
+      <div class="l-send">
+        <ol class="l-steps">
+          <li><span class="l-steps__n" aria-hidden="true">1</span><div><h3 data-reveal>Who</h3><p>A saved contact, or a name and IBAN.</p></div></li>
+          <li><span class="l-steps__n" aria-hidden="true">2</span><div><h3 data-reveal>How much</h3><p>See exactly what they’ll receive.</p></div></li>
+          <li><span class="l-steps__n" aria-hidden="true">3</span><div><h3 data-reveal>Approve</h3><p>One look or one touch, and it’s sent.</p></div></li>
+        </ol>
+        <div class="s-phone" aria-hidden="true"><div class="s-phone__screen">
+          <span class="s-phone__notch"></span>
+          <div class="s-phone__head"><span>Approve payment</span><span class="s-illus">Illustration</span></div>
+          <div class="s-phone__fig" style="margin-top:10px">€250.00</div>
+          <div>
+            <div class="s-phone__kv"><span>To</span><span>Anna Schmidt</span></div>
+            <div class="s-phone__kv"><span>IBAN</span><span class="s-num">DE89 3704 … 3000</span></div>
+            <div class="s-phone__kv"><span>Zold fee</span><span class="s-num">€0.00</span></div>
+            <div class="s-phone__total"><span>Anna receives</span><span class="s-num">€250.00</span></div>
+          </div>
+          <div class="s-phone__approve">
+            <span class="s-phone__face"><i class="ph ph-scan-smiley"></i></span>
+            <span>Use Face ID to approve this exact payment</span>
+            <span class="s-phone__cta">Approve &amp; send</span>
+          </div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Yours. Not ours.: three rising columns, then four points -->
+  <section id="security" class="l-section" data-narwhal-say="yours, not ours">
+    <div class="l-wrap">
+      <div class="l-center"><h2 class="l-h2" data-reveal>Yours. Not ours.</h2><p class="l-lede" style="max-width:46ch">Most money apps keep your balance in their name. Zold keeps it in yours.</p></div>
+      <div class="l-who">
+        <div><span>A bank</span><strong>The bank</strong></div>
+        <div><span>Most money apps</span><strong>The app</strong></div>
+        <div><span>Zold</span><strong>Only you<sup class="s-note-ref"><a href="/legal#s3" aria-label="Note 4">4</a></sup></strong></div>
+      </div>
+      <ul class="l-trust">
+        <li><span class="l-trust__ico" aria-hidden="true"><i class="ph ph-user-circle"></i></span><h3>In your name</h3><p>Your euros sit in an account only you control, backed one-for-one.<sup class="s-note-ref"><a href="/legal#s0" aria-label="Note 1">1</a></sup></p></li>
+        <li><span class="l-trust__ico" aria-hidden="true"><i class="ph ph-fingerprint"></i></span><h3>Approved by you</h3><p>Every payment needs your face or fingerprint. No password to phish, no code to read out to a “bank employee” on the phone.</p></li>
+        <li><span class="l-trust__ico" aria-hidden="true"><i class="ph ph-lifebuoy"></i></span><h3>Lose your phone, not your money</h3><p>Turn on recovery and a new phone takes a short wait, not a new account.</p></li>
+        <li><span class="l-trust__ico" aria-hidden="true"><i class="ph ph-hand-coins"></i></span><h3>Yours, even without us</h3><p>Your money doesn’t depend on Zold. Add a second key of your own, and you can always take it out directly through <a href="https://app.safe.global" rel="noopener">Safe</a>.<sup class="s-note-ref"><a href="/legal#s3" aria-label="Note 4">4</a></sup></p></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Business: fanned role cards, who-signs-what bars -->
+  <section id="business" class="l-section" data-narwhal-say="no one gets everything">
+    <div class="l-wrap">
+      <div class="l-center">
+        <h2 class="l-h2" data-reveal>Zold Business. Everyone gets access. No one gets everything.</h2>
+        <p class="l-lede" style="max-width:58ch">The company holds the account. Each person gets exactly what their job needs.<sup class="s-note-ref"><a href="/legal#s4" aria-label="Note 5">5</a></sup></p>
+      </div>
+      <div class="l-roles" role="img" aria-label="Three role cards: Bookkeeper, Payer, and you as Owner.">
+        <div class="l-role"><div class="l-role__top"><span>Role</span><i class="ph ph-notebook" aria-hidden="true"></i></div><div><b>Bookkeeper</b><p>Sorts every transaction. Can’t send a euro.</p></div></div>
+        <div class="l-role"><div class="l-role__top"><span>Role</span><i class="ph ph-paper-plane-tilt" aria-hidden="true"></i></div><div><b>Payer</b><p>Prepares payment runs. Can’t approve their own.</p></div></div>
+        <div class="l-role"><div class="l-role__top"><span>Owner</span><i class="ph ph-crown-simple" aria-hidden="true"></i></div><div><b>You</b><p>Approves, invites the team, sets the rules.</p></div></div>
+      </div>
+      <div class="l-biz">
+        <ul class="l-biz-list">
+          <li><i class="ph ph-seal-check" aria-hidden="true"></i><b>Two-person approval</b><span>On every payment run.</span></li>
+          <li><i class="ph ph-receipt" aria-hidden="true"></i><b>Invoices through a link</b><span>Suppliers send their invoices through a link.</span></li>
+          <li><i class="ph ph-list-checks" aria-hidden="true"></i><b>The books, not the keys</b><span>Your accountant gets the books, not the keys.</span></li>
+        </ul>
+        <div class="l-cover l-lat" aria-hidden="true">
+          <div class="l-dashes"></div>
+          <p class="l-cover__title">Who signs what?</p>
+          <div class="l-lat__bars"><div class="a" style="--d:0s"><label>Payer prepares</label></div><div class="b" style="--w:56%;--d:.15s">Second person approves</div><div class="c" style="--w:88%;--d:.3s">Payment run sent</div></div>
+        </div>
+      </div>
+      <div class="l-center">
+        <div class="l-actions"><a class="l-btn" href="/app#b-entity">Open a business account</a></div>
+        <p class="l-small">Free to start. Try the full plan free for 30 days.<sup class="s-note-ref"><a href="/legal#s4" aria-label="Note 5">5</a></sup></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Questions -->
+  <section id="faq" class="l-section">
+    <div class="l-wrap l-wrap--narrow">
+      <div class="l-center"><h2 class="l-h2" data-reveal>Questions</h2></div>
+      <div class="l-faq">
+        <details open><summary>Is Zold a bank?<i class="ph ph-plus" aria-hidden="true"></i><i class="ph ph-minus" aria-hidden="true"></i></summary><p>No. Zold is an app. Your IBAN and your euros come from Monerium ehf., an electronic money institution licensed in Iceland and supervised by the Central Bank of Iceland. Under the EU E-Money Directive (2009/110/EC), that licence is passported across the European Economic Area, so Monerium can serve you anywhere in the EEA. Zold holds no licence of its own: Monerium looks after the regulated money, and we focus on what we do best, building the software you use it with.</p></details>
+        <details><summary>Do I have to leave my bank?<i class="ph ph-plus" aria-hidden="true"></i><i class="ph ph-minus" aria-hidden="true"></i></summary><p>No. Many people start by having their salary or client payments land in Zold. Send money to your other bank any time.</p></details>
+        <details><summary>What does it cost?<i class="ph ph-plus" aria-hidden="true"></i><i class="ph ph-minus" aria-hidden="true"></i></summary><p>Opening an account is free, with no monthly fee. <span>Sending euros anywhere in Europe is free.</span></p></details>
+        <details><summary>How does the card work?<i class="ph ph-plus" aria-hidden="true"></i><i class="ph ph-minus" aria-hidden="true"></i></summary><p>It spends straight from your euro balance. Use it virtually right away, add it to Apple Pay or Google Pay, or order a physical card.</p></details>
+        <details><summary>Can people abroad pay me?<i class="ph ph-plus" aria-hidden="true"></i><i class="ph ph-minus" aria-hidden="true"></i></summary><p>Yes. By euro bank transfer from anywhere in Europe, or in USDC (digital dollars) from outside Europe, through your link.</p></details>
+        <details><summary>What if I lose my phone?<i class="ph ph-plus" aria-hidden="true"></i><i class="ph ph-minus" aria-hidden="true"></i></summary><p>With recovery on, you sign in on your new phone, confirm it’s you, and your account moves over after a short wait.</p></details>
+        <details><summary>My employer only takes German IBANs.<i class="ph ph-plus" aria-hidden="true"></i><i class="ph ph-minus" aria-hidden="true"></i></summary><p>In the euro area, an employer can’t refuse an IBAN because of the country it’s from. Your Zold IBAN works for salary like any other.</p></details>
+        <details><summary>How is my money protected?<i class="ph ph-plus" aria-hidden="true"></i><i class="ph ph-minus" aria-hidden="true"></i></summary><p>Your euros are e-money, backed one-for-one and held in an account in your name. E-money isn’t covered by deposit guarantee schemes.</p></details>
+        <details><summary>Who can move my money?<i class="ph ph-plus" aria-hidden="true"></i><i class="ph ph-minus" aria-hidden="true"></i></summary><p>Only you. Every payment needs your approval with the passkey on your device. Zold holds no key to your account, so it can’t move your money. Recovery is your choice: if you pick Zoldenburg as your recovery guardian, it can hand your account to your new phone after verifying it’s you, but never move money, and you can cancel the handover from your old phone during the waiting period. Add your own wallet as a second key instead, and Zold has no part in it at all. The one other party is Monerium: as the issuer of your euros, it can freeze them where the law requires it.</p></details>
+        <details><summary>Who is behind Zold?<i class="ph ph-plus" aria-hidden="true"></i><i class="ph ph-minus" aria-hidden="true"></i></summary><p>Zold is made by Zoldenburg. Your IBAN and e-money are provided by Monerium ehf., a licensed e-money institution supervised by the Central Bank of Iceland.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- Final call -->
+  <section id="launch" class="l-launch" data-narwhal-say="a few taps away">
+    <div class="l-wrap">
+      <h2 data-reveal>Your account is a few taps away.</h2>
+      <ol>
+        <li><span>1</span>Set up Face ID or fingerprint sign-in</li>
+        <li><span>2</span>Verify your identity</li>
+        <li><span>3</span>Get your IBAN<span>&nbsp;and your card</span></li>
+      </ol>
+      <div class="l-actions"><a class="l-btn" href="/app#account-type">Open your account</a></div>
+    </div>
+  </section>
+
+</main>
+<div class="l-narwhal" aria-hidden="true" hidden>
+  <p class="l-narwhal__say"><span></span></p>
+  <div class="l-narwhal__body"><div class="l-narwhal__glass"></div><svg viewBox="0 0 244 118">
+    <g class="nw-line">
+      <path d="M44 62C64 44 102 34 140 34C178 34 204 48 206 68C208 88 184 98 148 98C110 98 72 88 50 72C40 76 28 88 12 90C18 82 22 74 24 68C22 62 18 52 12 44C28 46 38 56 44 62Z"/>
+      <path d="M138 95C136 104 128 110 116 114C120 106 124 100 126 97"/>
+      <path d="M195 47L237 12L202 55"/>
+      <path d="M207 40L211 44M218 31L221 34M228 22L230 24"/>
+      <path d="M187 77C191 81 197 81 201 76"/>
+      <path class="nw-eye-happy" d="M172 59C174.5 54 180.5 54 183 59"/>
+    </g>
+    <g class="nw-eye-open"><circle class="nw-pupil" cx="177.5" cy="57" r="4.4"/><circle class="nw-spark" cx="179" cy="55.4" r="1.4"/></g>
+  </svg></div>
+</div>
+<!--zold:site-footer-->
+</body>
+</html>
