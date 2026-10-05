@@ -435,6 +435,7 @@ await check("the org view says custom-app mode, lists the webhook endpoint, each
   assert.equal(r.body.manualGateway, "zold");
   assert.equal(r.body.orderTtlHours, 24);
   assert.equal(r.body.endpoints.webhook, `${API}/api/shopify/webhooks/orders`);
+  assert.equal(r.headers.get("cache-control"), "no-store", "the view with the link key may be cached");
   assert.equal(r.body.endpoints.payLinkTemplate, undefined, "an unsigned org-wide link is still offered");
   assert.match(r.body.connections[0].payLinkTemplate, /^http.*\/api\/shopify\/orders\/\{\{ shop\.permanent_domain \}\}\/\{\{ order\.id \}\}\/pay\?b=\{\{ order\.id \| hmac_sha256: "[0-9a-f]{64}" \}\}$/);
   assert.equal(r.body.endpoints.payment, undefined, "payments-app endpoints shown in custom-app mode");
