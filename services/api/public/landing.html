@@ -89,15 +89,33 @@
     </div>
   </section>
 
-  <!-- Send: three expanding strips -->
+  <!-- Send: the three steps beside the approval screen -->
   <section id="send" class="l-section" data-narwhal-say="anyone in Europe">
     <div class="l-wrap">
       <div style="max-width:780px"><h2 class="l-h2" data-reveal>Send to anyone in Europe. <span>Free.</span></h2><p class="l-lede">A name and an IBAN is all you need. It arrives like any bank transfer.</p></div>
-      <ol class="l-strips">
-        <li class="l-strip"><div class="l-art l-art--ember" aria-hidden="true"></div><button class="l-strip__btn" type="button" aria-expanded="false" aria-controls="send-step-01"><span aria-hidden="true">1</span><span class="s-sr">Step 1: Who</span></button><div class="l-strip__txt" id="send-step-01"><h3>Who</h3><p>A saved contact, or a name and IBAN.</p></div></li>
-        <li class="l-strip"><div class="l-art l-art--rings" aria-hidden="true"></div><button class="l-strip__btn" type="button" aria-expanded="false" aria-controls="send-step-02"><span aria-hidden="true">2</span><span class="s-sr">Step 2: How much</span></button><div class="l-strip__txt" id="send-step-02"><h3>How much</h3><p>See exactly what they’ll receive.</p></div></li>
-        <li class="l-strip is-open"><div class="l-art l-art--glow" aria-hidden="true"><svg class="l-spark" viewBox="0 0 100 100" aria-hidden="true"><path d="M50 2 C54 38 62 46 98 50 C62 54 54 62 50 98 C46 62 38 54 2 50 C38 46 46 38 50 2Z"/></svg></div><button class="l-strip__btn" type="button" aria-expanded="true" aria-controls="send-step-03"><span aria-hidden="true">3</span><span class="s-sr">Step 3: Approve</span></button><div class="l-strip__txt" id="send-step-03"><h3>Approve</h3><p>One look or one touch, and it’s sent.</p></div></li>
-      </ol>
+      <div class="l-send">
+        <ol class="l-steps">
+          <li><span class="l-steps__n" aria-hidden="true">1</span><div><h3 data-reveal>Who</h3><p>A saved contact, or a name and IBAN.</p></div></li>
+          <li><span class="l-steps__n" aria-hidden="true">2</span><div><h3 data-reveal>How much</h3><p>See exactly what they’ll receive.</p></div></li>
+          <li><span class="l-steps__n" aria-hidden="true">3</span><div><h3 data-reveal>Approve</h3><p>One look or one touch, and it’s sent.</p></div></li>
+        </ol>
+        <div class="s-phone" aria-hidden="true"><div class="s-phone__screen">
+          <span class="s-phone__notch"></span>
+          <div class="s-phone__head"><span>Approve payment</span><span class="s-illus">Illustration</span></div>
+          <div class="s-phone__fig" style="margin-top:10px">€250.00</div>
+          <div>
+            <div class="s-phone__kv"><span>To</span><span>Anna Schmidt</span></div>
+            <div class="s-phone__kv"><span>IBAN</span><span class="s-num">DE89 3704 … 3000</span></div>
+            <div class="s-phone__kv"><span>Zold fee</span><span class="s-num">€0.00</span></div>
+            <div class="s-phone__total"><span>Anna receives</span><span class="s-num">€250.00</span></div>
+          </div>
+          <div class="s-phone__approve">
+            <span class="s-phone__face"><i class="ph ph-scan-smiley"></i></span>
+            <span>Use Face ID to approve this exact payment</span>
+            <span class="s-phone__cta">Approve &amp; send</span>
+          </div>
+        </div></div>
+      </div>
     </div>
   </section>
 

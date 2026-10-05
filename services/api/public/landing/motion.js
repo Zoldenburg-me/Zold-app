@@ -1,7 +1,7 @@
 /*
  * Landing motion: word-by-word reveals, things that settle once they scroll
  * into view (the flow dashes, the who-can-move
- * columns, the who-signs bars), the send strips, and the Pause motion button.
+ * columns, the who-signs bars), and the Pause motion button.
  *
  * Every hidden-until-visible state in landing.css is scoped to html.l-js;
  * the <noscript> block in landing.html shows everything when JS is off.
@@ -12,7 +12,6 @@
 (function () {
   var REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
   var VISIBLE_AT = 0.15;
-  var STRIP_STEP_MS = 4200;
   var root = document.documentElement;
 
   /* Wrap each word in span.w with a stagger index. Screen-reader text is left
@@ -76,36 +75,4 @@
       document.dispatchEvent(new CustomEvent("l-motion", { detail: { paused: paused } }));
     });
   }
-
-  /* Send strips: each strip is a button that opens it. The first time the
-     strips come into view they step 01 -> 02 -> 03 once, then stop; any
-     click or hover by the reader ends the walk-through. */
-  var strips = Array.prototype.slice.call(document.querySelectorAll(".l-strip"));
-  if (!strips.length) return;
-  var walk = null;
-  function stopWalk() { clearTimeout(walk); walk = null; }
-  function open(target) {
-    strips.forEach(function (s) {
-      var on = s === target;
-      s.classList.toggle("is-open", on);
-      s.querySelector(".l-strip__btn").setAttribute("aria-expanded", String(on));
-    });
-  }
-  strips.forEach(function (s) {
-    s.querySelector(".l-strip__btn").addEventListener("click", function () { stopWalk(); open(s); });
-    s.addEventListener("mouseenter", function () { stopWalk(); open(s); });
-  });
-  if (REDUCED) return;
-  function step(i) {
-    if (root.classList.contains("l-paused")) { walk = setTimeout(function () { step(i); }, STRIP_STEP_MS); return; }
-    open(strips[i]);
-    if (i + 1 < strips.length) walk = setTimeout(function () { step(i + 1); }, STRIP_STEP_MS);
-    else walk = null;
-  }
-  var seen = new IntersectionObserver(function (entries) {
-    if (!entries[0].isIntersecting) return;
-    seen.disconnect();
-    step(0);
-  }, { threshold: 0.4 });
-  seen.observe(strips[0].parentNode);
 })();
