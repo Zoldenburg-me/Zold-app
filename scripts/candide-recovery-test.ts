@@ -444,6 +444,15 @@ try {
     assert.equal(r.status, 404);
   });
 
+  await t("the guardian operation is not submitted on an approval of a different challenge", async () => {
+    const prep = await call(`/api/users/${userId}/recovery/candide/guardian`, {});
+    assert.equal(prep.status, 201, JSON.stringify(prep.data));
+    const done = await call(prep.data.submitTo, await passkey.assert(b64url(randomBytes(32))));
+    assert.equal(done.status, 401, JSON.stringify(done.data));
+    const me = await call(`/api/users/${userId}/recovery/candide/guardian`, {});
+    assert.equal(me.status, 201, "the guardian is still not on the Safe");
+  });
+
   await t("adding the guardian is a user-signed Safe operation that enables the module", async () => {
     const prep = await call(`/api/users/${userId}/recovery/candide/guardian`, {});
     assert.equal(prep.status, 201, JSON.stringify(prep.data));

@@ -299,7 +299,13 @@ export const store = {
     // REFUNDED and PAID are final. A slow live leg finishing after the sweep
     // refunded the transfer must not move it back and complete a payout the
     // sender was already repaid for; the late write keeps its other fields.
-    if ((t.state === "REFUNDED" || t.state === "PAID") && patch.state && patch.state !== t.state) {
+    // MANUAL_REVIEW belongs to an operator: no automatic path moves it on,
+    // since FAILED is what the sweep refunds.
+    if (
+      (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW") &&
+      patch.state &&
+      patch.state !== t.state
+    ) {
       console.error(`store: refusing to move transfer ${id} from ${t.state} to ${patch.state}`);
       // Omit state. Assigning `state: undefined` copies the key and erases the field.
       const { state: _dropped, ...rest } = patch;

@@ -172,6 +172,9 @@ export async function assertRateSane(rate: bigint): Promise<{ venue: number; mid
  */
 export function depositConversionBlocker(user: User, deposit: CryptoDeposit): string | null {
   if (deposit.state === "CONVERTED") return "this deposit has already been settled";
+  if (deposit.state === "UNCONFIRMED") {
+    return "a conversion of this deposit was sent and may still land — it has to be checked on chain before it can be converted again";
+  }
   if (user.kycStatus !== "approved") return "your account is not approved for settlement yet";
   const page = user.paymentPage;
   if (!page) return "this account has no payment page";

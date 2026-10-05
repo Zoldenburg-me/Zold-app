@@ -592,14 +592,6 @@ export async function prepareTransferBatchExecution(
   return prepareSafeExecutionCore(plan, transferSwapBatchTransactions(args));
 }
 
-export async function submitPasskeySafeOperation(
-  plan: PasskeySafeDeploymentPlan,
-  userOperation: UserOperationV9,
-  assertion: BrowserPasskeyAssertion,
-): Promise<string | null> {
-  return (await submitPasskeySafeOperationWithReceipt(plan, userOperation, assertion)).userOpHash;
-}
-
 /**
  * What the chain recorded for a submitted operation. The userOperationHash
  * is the bundler's identifier; the transaction hash is what an explorer, an

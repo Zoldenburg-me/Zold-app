@@ -459,7 +459,9 @@ export interface CryptoDeposit {
   /** The payment request (pay link) this deposit was matched to by amount.
    *  Set by payment-requests.ts; absent for money nobody asked for. */
   paymentRequestId?: string;
-  state: "DETECTED" | "CONVERTED" | "REFUSED";
+  /** UNCONFIRMED: a conversion was sent and its inclusion never confirmed.
+   *  It may still land, so it is not offered for conversion again. */
+  state: "DETECTED" | "CONVERTED" | "REFUSED" | "UNCONFIRMED";
   /** Why it was refused, in words a support person can act on. */
   reason?: string;
   creditedEur?: number;
