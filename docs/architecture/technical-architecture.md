@@ -611,14 +611,26 @@ flowchart LR
   from the `shopify-shop-domain` header.
 - **Payee**: the backing user of the org's EUR account, or else the
   installer. That user must have a payment page.
-- **Buyer lookup**:
-  - `GET /api/shopify/orders/:shop/:orderId` is CORS `*` and no-store. It is
-    polled by the extension every 4 s.
-  - `…/pay` is a 302 to the pay page, for the confirmation-email Liquid link.
+- **Buyer lookup**: order ids are per-store sequences, so each order route
+  also needs proof that the caller is the buyer. Without it, the answer is the
+  same whether the order exists or not.
+  - `GET /api/shopify/orders/:shop/:orderId?t=<checkout token>` is CORS `*`
+    and no-store. The extension polls it every 4 s. The orders webhook
+    stores the SHA-256 of the order's `checkout_token`, and `t` must hash to
+    it. It returns the pay-page projection and the pay page's URL.
+  - `…/pay?b=<sig>` is a 302 to the pay page, for the confirmation-email
+    link. Each store's template has its domain written in, so the email
+    needs only `{{ id }}`. `b` is `{{ id | hmac_sha256: key }}`, using a per-shop key
+    (`orderLinkSecretEnc`, encryption purpose `shopify-link`) that is created
+    the first time the org view shows that store's `payLinkTemplate`.
+    **Unverified:** whether Shopify's notification Liquid supports
+    `hmac_sha256` (its email-variables reference does not list it). Shopify
+    documents that the extension's `checkoutToken` matches the order's
+    `checkout_token`; no real store has exercised either.
   - `/return/:code` and `/cancel/:code` redirect back to the store.
 - **Extension** (`shopify-app/extensions/zold-pay`): targets
-  `purchase.thank-you.block.render` and
-  `customer-account.order-status.block.render`, with `network_access` and a
+  `purchase.thank-you.block.render` only (the order-status page has no
+  checkout token and cannot tell a Zold order from a card one), with `network_access` and a
   single `api_base` setting. It renders the amount, exact USDC, address, an
   EIP-681 QR, and live status. **It has never been built with the Shopify
   CLI, and `client_id` is a placeholder.**
@@ -1355,7 +1367,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET /shopify/callback` (HMAC + state) | OAuth return. |
 | `POST /shopify/{payment, refund, capture, void}` (HMAC) | Payments-app sessions. |
 | `POST /shopify/webhooks/orders` (HMAC) | Custom-app order webhooks. |
-| `GET /shopify/orders/:shop/:orderId[/pay]` | Buyer lookup. |
+| `GET /shopify/orders/:shop/:orderId[/pay]` | Buyer lookup; needs the checkout token (`t`) or the email signature (`b`). |
 | `GET /shopify/{return, cancel}/:code` | Redirect back to the store. |
 
 **Operator**
