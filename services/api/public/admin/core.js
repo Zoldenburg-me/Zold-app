@@ -98,7 +98,7 @@ function enrolPill(z) {
   }[z] || pill('dim', z || '—');
 }
 
-const ATTENTION_STATES = ['FAILED', 'REFUNDED', 'REFUSED', 'MANUAL_REVIEW'];
+const ATTENTION_STATES = ['FAILED', 'REFUNDED', 'REFUSED', 'UNCONFIRMED', 'MANUAL_REVIEW'];
 const TERMINAL_STATES = ['PAID', 'CONVERTED', ...ATTENTION_STATES];
 const STALE_MS = 30 * 60_000;
 const isInflight = (t) => t.kind !== 'funding' && !TERMINAL_STATES.includes(t.state);

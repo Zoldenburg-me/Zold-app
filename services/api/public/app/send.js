@@ -483,7 +483,8 @@ function histRow(t) {
   if (t.kind === "funding") {
     const token = t.token === "USDC" ? usdSym() : "EURe";
     const amount = t.token === "USDC" ? `${fmt(t.amountUsdc || 0)} ${usdSym()}` : `€${fmt(t.amountEur || 0)}`;
-    const color = t.state === "REFUSED" ? "var(--amber)" : "var(--green)";
+    // UNCONFIRMED: the conversion was sent and not yet seen on chain.
+    const color = t.state === "REFUSED" || t.state === "UNCONFIRMED" ? "var(--amber)" : "var(--green)";
     return `
     <div class="hic">IN</div>
     <div class="hmain">
@@ -492,7 +493,7 @@ function histRow(t) {
     </div>
     <div>
       <div class="hamt">+${esc(amount)}</div>
-      <div class="hst" style="color:${color}">${t.state === "REFUSED" ? "REVIEW" : "RECEIVED"}</div>
+      <div class="hst" style="color:${color}">${t.state === "REFUSED" ? "REVIEW" : t.state === "UNCONFIRMED" ? "CHECKING" : "RECEIVED"}</div>
     </div>`;
   }
   const paid = t.state === "PAID";
