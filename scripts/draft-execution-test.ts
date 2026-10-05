@@ -293,7 +293,7 @@ try {
   });
   check("with approvals bought, an unreviewed draft cannot be sent", () => {
     assert.equal(unreviewed.status, 409);
-    assert.match(unreviewed.data.error, /reviewed by a second person/i);
+    assert.match(unreviewed.data.error, /requires a second person to review/i);
   });
 
   // Four eyes: a second human approves.

@@ -57,13 +57,13 @@ export interface AuthDeps {
 export async function verifyPasskeyStepUp(user: User, body: any, res: express.Response): Promise<boolean> {
   if (!user.passkey?.publicKey) {
     if (HARNESS.enabled) return true;
-    res.status(409).json({ error: "a verified passkey is required before binding a spending key" });
+    res.status(409).json({ error: "a verified passkey is required for this change" });
     return false;
   }
   const stepUp = body?.stepUp ?? {};
   const { credentialId, authenticatorData, clientDataJSON, signature } = stepUp;
   if (!credentialId || !authenticatorData || !clientDataJSON || !signature) {
-    res.status(401).json({ error: "fresh passkey approval required before binding a spending key" });
+    res.status(401).json({ error: "a fresh passkey approval is required for this change" });
     return false;
   }
   if (credentialId !== user.passkey.credentialId) {

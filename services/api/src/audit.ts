@@ -43,7 +43,8 @@ export type AuditKind =
   | "operator.monerium_read"
   /** An imported wallet's ownership proof was checked on its chain: prove or
    *  re-check, and what the chain answered. */
-  | "wallet.ownership_checked";
+  | "wallet.ownership_checked"
+  | "org.payment_review_changed";
 
 export interface AuditEntry {
   id: string;
