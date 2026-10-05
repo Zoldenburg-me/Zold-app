@@ -75,7 +75,7 @@ export const syncInvoicePayment = (invoice: Invoice): Invoice => {
     return invoice;
   }
   const draft = invoice.payment?.draftId ? store.findDraft(invoice.payment.draftId) : undefined;
-  if (!draft || draft.state === "FAILED" || draft.state === "REJECTED") {
+  if (!draft || draft.state === "FAILED" || draft.state === "REJECTED" || draft.state === "CANCELLED") {
     return store.updateInvoice(invoice.id, {
       state: "SUBMITTED",
       payment: { ...invoice.payment, draftId: undefined },

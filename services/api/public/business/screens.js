@@ -13,7 +13,7 @@
  *   executed, an invoice Paid only when the API says so.
  */
 import {
-  $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, roleCan, ROLE_CAN, ROLE_WORD, toast, when, ymd, usdSymbol,
+  $, Z, api, cap, day, esc, eur, gateHtml, maskIban, me, org, plain, reviewOn, roleCan, ROLE_CAN, ROLE_WORD, toast, when, ymd, usdSymbol,
 } from "./core.js";
 import { META, RENDER, invoiceActions, settlementRows } from "./views.js";
 
@@ -52,7 +52,7 @@ export function draftTag(d) {
   return {
     DRAFT: Z.tag("Draft"), PENDING_REVIEW: Z.tag("Waiting for review"), INVALID_DATA: Z.tag("Needs fixing"),
     REJECTED: Z.tag("Sent back", "amber"), REVIEWED: Z.tag("Approved"), EXECUTING: Z.tag("Sending", "pink"),
-    EXECUTED: Z.tag("Sent"), FAILED: Z.tag("Failed"),
+    EXECUTED: Z.tag("Sent"), FAILED: Z.tag("Failed"), CANCELLED: Z.tag("Cancelled"),
   }[d.state] || "";
 }
 /** Four eyes, as the API's canReviewDraft says it. */
@@ -72,12 +72,13 @@ const AP_TABS = [
   ["fixing", "Needs fixing", (d) => ["INVALID_DATA", "REJECTED"].includes(d.state)],
   ["drafts", "Drafts", (d) => d.state === "DRAFT"],
   ["sent", "Sent", (d) => ["EXECUTED", "FAILED"].includes(d.state)],
+  ["cancelled", "Cancelled", (d) => d.state === "CANCELLED"],
 ];
 export const ap = { tab: "waiting", drafts: [] };
 
 META.payments = () => ({
-  title: cap("transfers.approvals").allowed ? "Approvals" : "Payments",
-  sub: cap("transfers.approvals").allowed
+  title: reviewOn() ? "Approvals" : "Payments",
+  sub: reviewOn()
     ? "Whoever drafts a payment can’t approve it. Bank details are checked again before sending."
     : "Draft a payment, then send it with Face ID or fingerprint.",
   actions: roleCan(org.role, "propose") ? linkBtn("New payment", "send", "arrow_outward", "primary") : "",
@@ -92,7 +93,7 @@ function apRow(d) {
   if (d.state === "PENDING_REVIEW" && may.allowed) act = `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-draft" data-id="${esc(d.id)}">Review<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`;
   if (d.state === "REVIEWED" && roleCan(org.role, "send")) act = `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="exec-draft" data-id="${esc(d.id)}">Send<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`;
   if (d.state === "DRAFT" && roleCan(org.role, "propose")) {
-    act = cap("transfers.approvals").allowed
+    act = reviewOn()
       ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="submit-draft" data-id="${esc(d.id)}">Submit<span class="z-sr">: ${esc(draftTitle(d))}</span></button>`
       : roleCan(org.role, "send") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="exec-draft" data-id="${esc(d.id)}">Send<span class="z-sr">: ${esc(draftTitle(d))}</span></button>` : "";
   }
@@ -108,9 +109,9 @@ function apRow(d) {
 RENDER.payments = async () => {
   const [{ drafts }] = await Promise.all([api(`/api/orgs/${org.id}/drafts`), loadMembers()]);
   ap.drafts = drafts;
-  const approvals = cap("transfers.approvals").allowed;
+  const approvals = reviewOn();
   // Drafts only when there are some; without approvals, no review tabs.
-  const tabs = AP_TABS.filter(([k, , f]) => (k === "drafts" ? drafts.some(f) : approvals || k === "sent" || drafts.some(f)));
+  const tabs = AP_TABS.filter(([k, , f]) => (k === "drafts" || k === "cancelled" ? drafts.some(f) : approvals || k === "sent" || drafts.some(f)));
   if (!tabs.some(([k]) => k === ap.tab)) ap.tab = tabs[0][0];
   const [, , inTab] = AP_TABS.find(([k]) => k === ap.tab);
   const list = drafts.filter(inTab).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -125,7 +126,7 @@ RENDER.payments = async () => {
     ...drafts.filter((d) => d.state === "REJECTED").map((d) => note(`${esc(draftTitle(d))}: sent back by ${esc(memberName(d.reviewedByMemberId))}${d.rejectedReason ? `: “${esc(plain(d.rejectedReason))}”` : "."}`, "undo", "a")),
     ...drafts.filter((d) => d.state === "PENDING_REVIEW" && d.createdByMemberId === org.memberId).map((d) => note(`${esc(draftTitle(d))}: you drafted it, so someone else has to approve it.`, "lock")),
   ];
-  return `${approvals ? "" : gateHtml("transfers.approvals")}
+  return `${approvals || cap("transfers.approvals").allowed ? "" : gateHtml("transfers.approvals")}
     <div class="zb-bar">${pills}</div>
     ${list.length
       ? table([["Payment"], ["Reviewer"], ["Status"], ["Total", "z-tbl__num"], [""]], list.map(apRow))

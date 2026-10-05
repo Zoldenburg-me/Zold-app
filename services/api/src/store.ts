@@ -691,14 +691,20 @@ export const store = {
    * parallel submissions of one draft cannot both pass. Returns null when
    * somebody else already claimed it.
    *
-   * `from` is the set of states this caller may claim out of: ["REVIEWED"] for
-   * an org with approvals, ["DRAFT"] for one without. Passed in rather than
-   * hardcoded so the plan decides, but still checked here — inside the same
-   * synchronous window as the write.
+   * `from` is the set of states this caller may claim out of: ["REVIEWED"]
+   * for an org whose review policy is on, ["DRAFT", "REVIEWED"] for one
+   * without. Passed in so the policy decides, but still checked here, inside
+   * the same synchronous window as the write. With `expectedUpdatedAt`, a
+   * draft written at all since the caller read it is not claimed either.
    */
-  claimDraftExecution(id: string, from: DraftPayment["state"][] = ["REVIEWED"]): DraftPayment | null {
+  claimDraftExecution(
+    id: string,
+    from: DraftPayment["state"][] = ["REVIEWED"],
+    expectedUpdatedAt?: string,
+  ): DraftPayment | null {
     const d = db.drafts.find((x) => x.id === id);
     if (!d || !from.includes(d.state)) return null;
+    if (expectedUpdatedAt !== undefined && d.updatedAt !== expectedUpdatedAt) return null;
     d.state = "EXECUTING";
     d.updatedAt = new Date().toISOString();
     persist();

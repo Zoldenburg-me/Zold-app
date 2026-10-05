@@ -9,7 +9,7 @@
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, me, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, testMode, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
@@ -154,7 +154,7 @@ export function renderNav() {
   const waiting = waitingForMe(side.drafts).length;
   const items = SPACES[space].filter(shown).map((v) => ({
     ...v,
-    label: v.id === "payments" && !cap("transfers.approvals").allowed ? "Payments" : v.label,
+    label: v.id === "payments" && !reviewOn() ? "Payments" : v.label,
     badge: v.id === "payments" && waiting ? String(waiting) : "",
   }));
   $("#nav").innerHTML = items.map((it) => link(it, active)).join("");
