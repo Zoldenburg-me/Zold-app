@@ -613,7 +613,7 @@ await check("more receipts than an invoice holds: the first 200 are on the draft
   assert.deepEqual(lineRows(rest), ["many_200", "many_201", "many_202"]);
 });
 
-await check("rows that only look invoiceable are left out and named: a value in another currency, a zero value, no transaction, a type that says internal or unlisted under edited tags", async () => {
+await check("rows that only look invoiceable are left out and named: a value in another currency, a zero value, no transaction, a type that says internal or unlisted under edited tags, a refund tag, a swap leg, a realised gain, no type", async () => {
   store.addLedgerEntries([
     row2({ id: "x_ok", at: "2025-10-01T10:00:00.000Z", fiatValue: "5.00" }),
     row2({ id: "x_usd", at: "2025-10-02T10:00:00.000Z", fiatValue: "7.00", fiatCurrency: "USD" }),
@@ -621,11 +621,16 @@ await check("rows that only look invoiceable are left out and named: a value in 
     row2({ id: "x_nohash", at: "2025-10-04T10:00:00.000Z", txHash: undefined }),
     row2({ id: "x_internal", at: "2025-10-05T10:00:00.000Z", tags: ["wallet"], txType: "internal_transfer" }),
     row2({ id: "x_unlisted", at: "2025-10-06T10:00:00.000Z", tags: ["wallet"], txType: "unlisted_token" }),
+    row2({ id: "x_refund", at: "2025-10-07T10:00:00.000Z", fiatValue: "100.00", tags: ["wallet", "refund"] }),
+    row2({ id: "x_swap", at: "2025-10-08T10:00:00.000Z", txType: "swap" }),
+    row2({ id: "x_gain", at: "2025-10-09T10:00:00.000Z", txType: "realised_gain" }),
+    row2({ id: "x_notype", at: "2025-10-10T10:00:00.000Z", txType: undefined }),
+    row2({ id: "x_paid", at: "2025-10-11T10:00:00.000Z", fiatValue: "6.00", txType: "invoice_payment" }),
   ]);
   await run2("2025-10");
   const [d] = await drafts2("2025-10");
-  assert.deepEqual(lineRows(d), ["x_ok"]);
-  assert.deepEqual(d.fromReceipts.excluded.map((x: any) => x.ledgerEntryId), ["x_usd", "x_zero", "x_nohash", "x_internal", "x_unlisted"]);
+  assert.deepEqual(lineRows(d), ["x_ok", "x_paid"]);
+  assert.deepEqual(d.fromReceipts.excluded.map((x: any) => x.ledgerEntryId), ["x_usd", "x_zero", "x_nohash", "x_internal", "x_unlisted", "x_refund", "x_swap", "x_gain", "x_notype"]);
   assert.ok(d.fromReceipts.excluded.every((x: any) => x.reason.length > 10));
 });
 

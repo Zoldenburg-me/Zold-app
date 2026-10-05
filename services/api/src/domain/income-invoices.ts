@@ -119,6 +119,8 @@ export type ReceiptVerdict =
   | { kind: "excluded"; reason: string }
   | { kind: "eligible"; eurCents: number; txHash: string };
 
+const INVOICEABLE_TX_TYPES: ReadonlySet<string> = new Set(["transfer_in", "invoice_payment"]);
+
 /**
  * Whether a ledger row is a receipt an invoice line can be written for.
  *
@@ -134,6 +136,18 @@ export function classifyReceipt(entry: LedgerEntry): ReceiptVerdict {
   }
   if (tagged("unlisted") || entry.txType === "unlisted_token") {
     return { kind: "excluded", reason: "The token is on no token list, so it has no value to invoice." };
+  }
+  if (tagged("refund")) {
+    return { kind: "excluded", reason: "The receipt is tagged as a refund, which is money returned, not income." };
+  }
+  // An allowlist, not a denylist: a swap leg, a realised gain or a type added
+  // later is not a sale, so only a plain inbound transfer or an invoice
+  // payment can become an invoice line.
+  if (!INVOICEABLE_TX_TYPES.has(entry.txType ?? "")) {
+    return {
+      kind: "excluded",
+      reason: `A ${entry.txType ?? "transaction with no type"} is not a payment received for a sale.`,
+    };
   }
   if (tagged("needs-valuation") || entry.fiatValue === undefined) {
     return { kind: "excluded", reason: "The receipt has no EUR value yet." };

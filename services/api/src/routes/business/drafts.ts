@@ -279,13 +279,13 @@ export function createDraftRoutes(
     if (!draft || draft.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such draft" });
     }
-    const checked = reconcileDrift(draft);
-    if (checked.state === "INVALID_DATA") {
-      return res.status(409).json({
+    let checked = reconcileDrift(draft);
+    const heldForDrift = () =>
+      res.status(409).json({
         error: "Some recipients changed since this draft was approved. It has been held.",
         draft: checked,
       });
-    }
+    if (checked.state === "INVALID_DATA") return heldForDrift();
 
     // An imported wallet is read-only: we build the transactions and its
     // owner signs them. The response says so explicitly.
@@ -354,6 +354,12 @@ export function createDraftRoutes(
     // A half-created batch consumes quotes and leaves transfers nobody asked
     // for, so every line is checked first and the whole draft is refused if any
     // one of them cannot be paid.
+    //
+    // The address book is checked here, with nothing awaited between this
+    // check and the bank details read below, so every IBAN and name planned
+    // is the one that was approved; later awaits use these copies.
+    checked = reconcileDrift(store.findDraft(checked.id) ?? checked);
+    if (checked.state === "INVALID_DATA") return heldForDrift();
     const plans: { lineId: string; iban: string; name: string; sendEur: number; invoiceId?: string }[] = [];
     const problems: { lineId: string; reason: string }[] = [];
 
