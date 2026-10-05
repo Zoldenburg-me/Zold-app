@@ -116,6 +116,8 @@ three Stellar suites (each pins testnet via `scripts/_stellar-testnet.ts` —
 config defaults to pubnet, and a real treasury secret in .env would otherwise
 submit mainnet ops).
 
+Human testing on zoldhq.com follows `docs/test-round.md`.
+
 | area | suites |
 |---|---|
 | money path | `fx:test` `jit:test` `best:test` `dex:test` `lifi:test` `custody:test` `execution:test` `quote-binding:test` `sepa:test` `refund:guard:test` |
