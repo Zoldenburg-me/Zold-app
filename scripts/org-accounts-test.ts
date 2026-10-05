@@ -241,7 +241,7 @@ await check("an owner claims it once the profile is the company's, and a payer s
   assert.equal(r.body.payUrl, "/pay/lindnerholzbau");
   const p = await call("GET", "/api/pay/lindnerholzbau", undefined, "");
   assert.equal(p.status, 200);
-  assert.deepEqual(p.body, { kind: "organisation", handle: "lindnerholzbau", displayName: "Lindner Holzbau GmbH", bank: { holder: "Lindner Holzbau GmbH", iban: IBAN } });
+  assert.deepEqual(p.body, { kind: "organisation", handle: "lindnerholzbau", displayName: "Lindner Holzbau GmbH", bank: { holder: "Lindner Holzbau GmbH", holderVerified: true, iban: IBAN } });
   for (const secret of ["u_co", "acc_co", SAFE, "Sara"]) assert.ok(!JSON.stringify(p.body).includes(secret), `leaked ${secret}`);
 });
 let pageCode = "";

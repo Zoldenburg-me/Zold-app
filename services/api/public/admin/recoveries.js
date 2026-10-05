@@ -109,6 +109,7 @@ function renderRecoveryDetail(root, id, message) {
           ${fact('Country', a.country)}
           ${fact('Monerium KYC', kycPill(a.kycStatus), true)}
           ${fact('Monerium link', a.moneriumMethod ? `${a.moneriumMethod}${a.moneriumProfileId ? ` · profile ${a.moneriumProfileId}` : ''}` : 'not connected')}
+          ${(a.moneriumProfileHistory || []).length > 1 ? fact('Monerium profiles held', a.moneriumProfileHistory.map((h) => `${h.profileId} (${h.at ? fmtWhen(h.at) : 'before history was kept'})`).join(' → ')) : ''}
           ${fact('IBAN', a.iban)}
           ${fact('Account created', fmtWhen(a.createdAt))}
           ${fact('Safe', chip(r.safeAddress), true)}

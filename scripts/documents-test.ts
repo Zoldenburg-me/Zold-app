@@ -144,6 +144,30 @@ await t("the holder is who Monerium names for the IBAN; the Zold user, when diff
   assert.equal(docs.holderBlock({ ...base, monerium: { ibans: [{ ...entry, name: "" }] } }).operatedBy, undefined);
 });
 
+await t("a holder name nobody verified is labelled self-declared, on the snapshot and in the statement", () => {
+  const base: any = { name: "Typed Name", iban: "DE89 3704 0044 0532 0130 00", address: `0x${"aa".repeat(20)}`, createdAt: "2026-10-02T23:00:22.550Z", kycStatus: "approved" };
+  const typed = docs.holderBlock(base);
+  assert.equal(typed.name, "Typed Name");
+  assert.equal(typed.nameSource, "self-declared");
+  assert.match(docs.ownershipStatement(typed, "2026-10-03"), /Typed Name is as the holder entered it; Monerium has not reported a name/);
+  const entry = { iban: base.iban, address: base.address, profile: "p1", name: "Real Holder" };
+  const fromIban = docs.holderBlock({ ...base, monerium: { ibans: [entry] } });
+  assert.equal(fromIban.nameSource, "monerium");
+  assert.doesNotMatch(docs.ownershipStatement(fromIban, "2026-10-03"), /as the holder entered it/);
+  // No IBAN name: an APPROVED connected profile's name is Monerium's too; a
+  // pending one is not.
+  const profile = (state: string) => ({ ...base, iban: "", monerium: { profileId: "p1", profiles: [{ id: "p1", kind: "personal", state, name: "Real Holder" }] } });
+  assert.equal(docs.holderBlock(profile("approved")).name, "Real Holder");
+  assert.equal(docs.holderBlock(profile("approved")).nameSource, "monerium");
+  assert.equal(docs.holderBlock(profile("pending")).nameSource, "self-declared");
+  assert.equal(docs.holderBlock(profile("pending")).name, "Typed Name");
+});
+
+await t("only an approved account gets a balance or ownership letter", () => {
+  assert.equal(docs.holderLetterRefusal({ kycStatus: "pending" } as any)?.code, "ACCOUNT_NOT_VERIFIED");
+  assert.equal(docs.holderLetterRefusal({ kycStatus: "approved" } as any), undefined);
+});
+
 // ---------------------------------------------------------------------------
 // online: a funded account, the routes, the verifier
 

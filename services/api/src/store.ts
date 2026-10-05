@@ -15,6 +15,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { batched, db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
+import { nextProfileHistory } from "./domain/monerium-identity.js";
 import type {
   Account,
   AccountRule,
@@ -76,7 +77,16 @@ export const store = {
     // The one place an IBAN changes, so the one place its date is kept.
     const bare = (v?: string) => (v ?? "").replace(/\s+/g, "").toUpperCase();
     const ibanChanged = typeof patch.iban === "string" && bare(patch.iban) !== "" && bare(patch.iban) !== bare(u.iban);
-    Object.assign(u, patch, ibanChanged && !patch.ibanSince ? { ibanSince: new Date().toISOString() } : {});
+    // The one place a Monerium profile is recorded, so the one place its
+    // history is appended to. A patch cannot write the history itself.
+    const { moneriumProfileHistory: _ignored, ...rest } = patch;
+    const history = nextProfileHistory(u, rest, new Date().toISOString());
+    Object.assign(
+      u,
+      rest,
+      ibanChanged && !patch.ibanSince ? { ibanSince: new Date().toISOString() } : {},
+      history ? { moneriumProfileHistory: history } : {},
+    );
     persist();
     return u;
   },

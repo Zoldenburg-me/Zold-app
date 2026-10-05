@@ -964,7 +964,7 @@ export const ACTIONS = {
         const credentialId = session.passkey?.credentialId;
         let stepUp;
         if (credentialId) {
-          const { challenge } = await api("/api/webauthn/challenge", { method: "POST", body: { purpose: "step_up" } });
+          const { challenge } = await api("/api/webauthn/challenge", { method: "POST", body: { purpose: "step_up", action: "org.payment-review.off" } });
           stepUp = await (await window.__deviceLib).passkeyAssertion({ challenge, credentialId });
         }
         await api(`/api/orgs/${org.id}/payment-review`, { method: "POST", body: { required: false, stepUp } });
