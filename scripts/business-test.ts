@@ -669,6 +669,15 @@ check("CSV export neutralises formula injection", () => {
   assert.doesNotMatch(csv.split("\r\n")[1], /^=/);
 });
 
+check("CSV export neutralises a formula behind leading whitespace or control characters", () => {
+  for (const note of [" =1+1", "\t=1+1", "\r=1+1", "\n+1", "  @SUM(A1)", "\u0001-2", "\u00a0=1", "\uff1d1+1", "\tplain"]) {
+    const csv = toCsv([{ note }]);
+    const cell = csv.split("\r\n").slice(1).join("\r\n");
+    assert.match(cell, /^"?'/, `${JSON.stringify(note)} must be prefixed with '`);
+  }
+  assert.equal(toCsv([{ note: "a = b" }]).split("\r\n")[1], "a = b", "an = later in the text is left alone");
+});
+
 check("CSV quoting survives commas, quotes and newlines", () => {
   const csv = toCsv([{ a: 'x,y', b: 'say "hi"', c: "line1\nline2" }]);
   assert.match(csv, /"x,y"/);

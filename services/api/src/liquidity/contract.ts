@@ -46,6 +46,26 @@ export function assertVenueTarget(
 
 export const MAX_SLIPPAGE_BPS = 30n;
 
+/**
+ * Refuse a venue's floor that sits further below its own expected output than
+ * our slippage tolerance. LI.FI and an RFQ maker send minOut themselves, and
+ * it is the amountOutMinimum the user signs: a floor at 0 would let the swap
+ * settle at any price while the quote shows a good one. One unit of slack
+ * absorbs a venue that rounds the floor down where we round toward it.
+ */
+export function assertMinOutBound(venue: string, expectedOut: bigint, minOut: bigint, maxSlippageBps: bigint): void {
+  if (expectedOut <= 0n) throw new Error(`${venue} quoted no output — refusing`);
+  const floor = (expectedOut * (10_000n - maxSlippageBps)) / 10_000n;
+  if (minOut + 1n < floor) {
+    throw new Error(
+      `${venue} set a minimum output of ${minOut} against an expected ${expectedOut}, below our ${maxSlippageBps} bps slippage floor ${floor} — refusing`,
+    );
+  }
+  if (minOut > expectedOut) {
+    throw new Error(`${venue} set a minimum output of ${minOut} above its expected ${expectedOut} — refusing`);
+  }
+}
+
 /** The pair a third-party venue is asked to trade. */
 export interface VenueTokens {
   eure: `0x${string}`;

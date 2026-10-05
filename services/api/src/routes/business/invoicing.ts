@@ -34,6 +34,9 @@ import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
 import { issueOutgoing } from "./issue-outgoing.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
+import { verifyPasskeyStepUp } from "../auth.js";
+import { wrap } from "../util.js";
+import { auditEntry } from "../../audit.js";
 import {
   accountBankOf, customReasonsOf, draftDueDate, draftFrom, invoiceBankOf, issuerParty, issuerSuggestions,
   jurisdictionOf, str, withConversion, } from "./shared.js";
@@ -95,7 +98,13 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     });
   });
 
-  r.patch("/:orgId/invoicing/profile", (req, res) => {
+  /**
+   * Everything an invoice prints. The payout IBAN is where customers send the
+   * money, so changing it takes an owner or admin and a fresh passkey
+   * approval, and is audited with the old and new last four characters. The
+   * rest of the profile needs only invoices.manage.
+   */
+  r.patch("/:orgId/invoicing/profile", wrap(async (req, res) => {
     const ctx = ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
@@ -103,6 +112,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
 
     const b = req.body ?? {};
     const next = { ...(ctx.org.invoicing ?? {}) } as NonNullable<Organisation["invoicing"]>;
+    let ibanChange: { oldLast4: string | null; newLast4: string | null } | undefined;
 
     if (typeof b.vatId === "string") {
       const v = normaliseVatId(b.vatId);
@@ -147,6 +157,14 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       const iban = typeof b.bank.iban === "string" ? normaliseIban(b.bank.iban) : undefined;
       if (iban && !ibanChecksumValid(iban)) {
         return res.status(400).json({ error: `${iban} is not a valid IBAN.`, field: "bank.iban" });
+      }
+      const was = ctx.org.invoicing?.bank?.iban;
+      if ((iban || undefined) !== was) {
+        if (!requirePermission(ctx, res, "org.update")) return;
+        const user = store.findUser(ctx.userId);
+        if (!user) return res.status(401).json({ error: "no such user" });
+        if (!(await verifyPasskeyStepUp(user, b, res))) return;
+        ibanChange = { oldLast4: was ? was.slice(-4) : null, newLast4: iban ? iban.slice(-4) : null };
       }
       const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
       next.bank = {
@@ -193,8 +211,11 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     }
 
     const org = store.updateOrganisation(ctx.org.id, { invoicing: next });
+    if (ibanChange) {
+      store.audit(auditEntry("org.invoice_iban_changed", { orgId: org.id, memberId: ctx.member.id, ...ibanChange }, ctx.userId));
+    }
     res.json({ profile: org.invoicing, issuer: issuerParty(org) });
-  });
+  }));
 
   /**
    * Dry-run the compliance check without issuing anything.

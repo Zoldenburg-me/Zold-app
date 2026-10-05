@@ -162,10 +162,15 @@ try {
   });
 
   await check("a lookup never fetches a private, loopback or plain-http gateway", async () => {
-    for (const ip of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "64:ff9b::a9fe:a9fe", "64:ff9b:1::a00:1", "2002:a9fe:a9fe::1"]) {
+    for (const ip of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "64:ff9b::a9fe:a9fe", "64:ff9b:1::a00:1", "2002:a9fe:a9fe::1",
+      // IPv4-compatible, site-local, discard-only, documentation, Teredo, and
+      // mapped IPv4 in every spelling.
+      "::", "::127.0.0.1", "::a9fe:a9fe", "fec0::1", "feff::1", "100::1", "2001:db8::1", "2001:0:4136:e378::1",
+      "::ffff:7f00:1", "::ffff:a9fe:a9fe", "0:0:0:0:0:ffff:127.0.0.1", "0:0:0:0:0:ffff:a00:1", "::FFFF:10.0.0.1",
+      "192.0.2.1", "198.51.100.7", "203.0.113.9", "255.255.255.255", "fe80::1%eth0", "not-an-ip"]) {
       assert.equal(isPublicAddress(ip), false, ip);
     }
-    for (const ip of ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"]) assert.equal(isPublicAddress(ip), true, ip);
+    for (const ip of ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", "::ffff:8.8.8.8", "2a00:1450:4001::1"]) assert.equal(isPublicAddress(ip), true, ip);
     // A gateway on our own loopback: refused over http, and over https because
     // localhost resolves to a loopback address.
     let hits = 0;

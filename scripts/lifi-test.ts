@@ -41,7 +41,7 @@ const { eure: EURE, usdc: USDC } = BASE_SEPOLIA_TOKENS;
 const APPROVAL = "0x4444444444444444444444444444444444444444";
 const DIAMOND = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE";
 
-type Mode = "ok" | "500" | "wrongtoken" | "notx" | "noapproval" | "hang" | "skewed" | "noamounts";
+type Mode = "ok" | "500" | "wrongtoken" | "notx" | "noapproval" | "hang" | "skewed" | "noamounts" | "zerofloor" | "lowfloor";
 let mode: Mode = "ok";
 let lastQuery: URLSearchParams | null = null;
 const asked = () => lastQuery as URLSearchParams | null;
@@ -75,6 +75,8 @@ const server: Server = createServer(async (req, res) => {
   if (mode === "notx") delete body.transactionRequest;
   if (mode === "noapproval") delete body.estimate.approvalAddress;
   if (mode === "noamounts") { delete body.estimate.toAmount; delete body.estimate.toAmountMin; }
+  if (mode === "zerofloor") body.estimate.toAmountMin = "0";
+  if (mode === "lowfloor") body.estimate.toAmountMin = ((BigInt(body.estimate.toAmount) * 990n) / 1000n).toString();
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
 });
@@ -153,6 +155,12 @@ try {
 
   mode = "noamounts";
   await refuses("a quote with no amounts", () => p.quote("EURE_TO_USDC", ONE_HUNDRED, "q", soon()), /no amounts/);
+
+  mode = "zerofloor";
+  await refuses("a route whose minimum output is 0", () => p.quote("EURE_TO_USDC", ONE_HUNDRED, "q", soon()), /slippage floor/);
+
+  mode = "lowfloor";
+  await refuses("a route whose minimum output is 1% under its expected, past our 0.5%", () => p.quote("EURE_TO_USDC", ONE_HUNDRED, "q", soon()), /slippage floor/);
 
   mode = "skewed";
   await refuses(
