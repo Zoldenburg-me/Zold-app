@@ -19,7 +19,7 @@ import { emailHeldBy } from "../domain/email.js";
 import { accountBalances } from "../chain.js";
 import { store, type User } from "../store.js";
 import { rateLimit } from "../http/policy.js";
-import { requireSession, tokenHash } from "../http/sessions.js";
+import { requireSession, revokeOtherSessions, tokenHash } from "../http/sessions.js";
 import { requireCapability } from "../http/guards.js";
 import {
   pendingPasskeySafeDeployments,
@@ -45,7 +45,7 @@ import { faucetFundSafe } from "../faucet.js";
  * decides who is calling.
  */
 export interface AuthDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => { id: string } | undefined;
 }
 
 
@@ -143,7 +143,8 @@ export function createAuthRouter(deps: AuthDeps) {
     wrap(async (req, res) => {
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      const session = requireUserSession(req, res, user.id);
+      if (!session) return;
       const { credentialId, attestation, clientDataJSON } = req.body ?? {};
       if (!credentialId || typeof credentialId !== "string" || !attestation || !clientDataJSON) {
         return res.status(400).json({ error: "credentialId, attestation and clientDataJSON required" });
@@ -165,7 +166,8 @@ export function createAuthRouter(deps: AuthDeps) {
       // access, and the real passkey would be silently discarded. The current
       // authenticator has to approve its own replacement. First registration (no
       // verified passkey yet) is unaffected.
-      if (user.passkey?.publicKey && !(await verifyPasskeyStepUp(user, req.body, res))) return;
+      const replacing = Boolean(user.passkey?.publicKey);
+      if (replacing && !(await verifyPasskeyStepUp(user, req.body, res))) return;
       let reg;
       try {
         reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, user.id);
@@ -201,6 +203,9 @@ export function createAuthRouter(deps: AuthDeps) {
         },
         ...(plannedSafe ? { passkeySafe: plannedSafe } : {}),
       });
+      // A bearer copied before the swap would otherwise keep working under the
+      // new passkey until it expires.
+      if (replacing) revokeOtherSessions(user.id, session.id);
       res.status(201).json(publicUser(updated));
     }),
   );

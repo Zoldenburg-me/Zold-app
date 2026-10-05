@@ -486,7 +486,7 @@ async function recoverStart(btn) {
           rp: { name: "Zold", id: location.hostname },
           user: { id: new TextEncoder().encode(r.userHandle), name: rcEmail, displayName: r.displayName || rcEmail },
           pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-          authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
+          authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
           timeout: 60000,
           extensions: { prf: {} },
         },

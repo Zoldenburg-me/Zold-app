@@ -148,6 +148,42 @@ async function api(path, body, method, extraHeaders) {
   }
   return data;
 }
+
+const b64url = (buf) =>
+  btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+
+/* The passkey credential this browser wraps the device key with. */
+const credId = () => user?.passkey?.credentialId || null;
+
+/* A fresh passkey approval for a change a session alone may not make: binding
+   a spending key, or replacing the Monerium connection. The server requires
+   the UV flag, so the authenticator has to verify the human. */
+async function passkeyStepUp() {
+  if (!credId()) return null;
+  const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up" });
+  const cred = await navigator.credentials.get({
+    publicKey: {
+      challenge: b64urlToBytes(challenge),
+      allowCredentials: [{ type: "public-key", id: b64urlToBytes(credId()) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  });
+  return {
+    credentialId: cred.id,
+    authenticatorData: b64url(cred.response.authenticatorData),
+    clientDataJSON: b64url(cred.response.clientDataJSON),
+    signature: b64url(cred.response.signature),
+  };
+}
+
+/* The step-up a Monerium credential change needs: replacing or dropping one
+   the account already has, or the IBAN it carries. A first connection needs
+   none. Mirrors approvesMoneriumChange in routes/monerium.ts. */
+async function moneriumStepUp(u, always = false) {
+  return always || u?.monerium || u?.iban ? { stepUp: await passkeyStepUp() } : {};
+}
 /* role="alert" so a screen reader announces the error: a red line appearing
    under a button is otherwise silent. Static .error slots carry the role in
    the markup; this covers the ones built from template strings. */
