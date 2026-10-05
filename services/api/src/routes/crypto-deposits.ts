@@ -34,7 +34,8 @@ import {
 } from "../wallet/candide.js";
 import { publicClient } from "../chain.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
-import { ownerInvoiceView } from "../domain/invoices.js";
+import { ownerInvoiceView, settlementRef } from "../domain/invoices.js";
+import { roleCan } from "../domain/roles.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface CryptoDepositDeps {
@@ -108,18 +109,34 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       );
       if (!deposit) return res.status(404).json({ error: "deposit not found" });
 
+      // A deposit pays one invoice once. After its payment is on an invoice,
+      // moving or dropping the link would leave that payment where it is and
+      // let the same money settle a second invoice.
+      const ref = `deposit:${deposit.id}`;
+      const settled = store.invoices.find((i) => (i.settlements ?? []).some((s) => settlementRef(s) === ref));
       const invoiceId = req.body?.invoiceId;
+      if (settled && invoiceId !== settled.id) {
+        return res.status(409).json({
+          error: "This payment is already recorded on an invoice. Reconcile that invoice instead of moving the payment.",
+        });
+      }
       if (invoiceId === null) {
         store.updateCryptoDeposit(deposit.id, { invoiceId: undefined });
         return res.json({ deposit: store.cryptoDeposits.find((d) => d.id === deposit.id) });
       }
       const invoice = store.invoices.find((i) => i.id === String(invoiceId ?? ""));
-      // An invoice belongs to an organisation; only an active member of that
-      // organisation may tie a payment to it. The id is not a capability.
+      // An invoice belongs to an organisation. Membership alone is not enough:
+      // marking the org's invoice paid is invoice management, which a viewer
+      // or a payer does not have. The id is not a capability either.
       const member = invoice
-        ? store.membersOf(invoice.orgId).some((m) => m.userId === user.id && m.status === "active")
-        : false;
+        ? store.membersOf(invoice.orgId).find((m) => m.userId === user.id && m.status === "active")
+        : undefined;
       if (!invoice || !member) return res.status(404).json({ error: "invoice not found" });
+      if (!roleCan(member.role, "invoices.manage")) {
+        return res.status(403).json({ error: "Your role cannot record payments on this organisation's invoices." });
+      }
+      // Money that arrived settles an invoice the org issued, never a bill it owes.
+      if (invoice.direction !== "outgoing") return res.status(409).json({ error: "Only an invoice your organisation issued can be paid by a deposit." });
       // A draft made from receipts is settled by its own ledger rows; a
       // deposit tied to it would be a second payment once it is issued.
       if (invoice.state === "DRAFT") return res.status(409).json({ error: "That invoice is a draft and has not been issued." });
