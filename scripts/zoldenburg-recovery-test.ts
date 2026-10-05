@@ -122,7 +122,7 @@ async function makePasskey(label: string) {
     jwk,
     register: (challenge: string) => ({
       credentialId: b64url(credId),
-      attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x41, 0, true)]]))),
+      attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x45, 0, true)]]))),
       clientDataJSON: clientData("webauthn.create", challenge),
     }),
     assert: async (challenge: string) => {

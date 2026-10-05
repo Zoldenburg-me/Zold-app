@@ -165,11 +165,12 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   50k held in memory. Each is bound to a **purpose** (`register` / `login` /
   `step_up`) and optionally to a user or `recovery:<id>`.
 - Registration checks type, challenge, origin allowlist, rpIdHash and the UP
-  flag. **Attestation statements are not verified**, so any authenticator is
-  accepted.
-- Assertion requires UV only for `step_up` and for challenges the server
-  computed itself (Safe op hashes, SafeMessages). Login uses UV "preferred".
-  The sign counter must advance once it is non-zero.
+  and UV flags. **Attestation statements are not verified**, so any
+  authenticator that verifies its user is accepted.
+- Every assertion requires UV: login, `step_up`, and challenges the server
+  computed itself (Safe op hashes, SafeMessages). A security key with no PIN
+  or biometric can neither register nor sign in. The sign counter must
+  advance once it is non-zero.
 - `verifyAssertionForChallenge` compares `clientData.challenge` with a
   server-computed hash: a UserOp EIP-712 hash or a SafeMessage hash. That is
   how "the passkey signed *this* debit" is proven server-side before the
@@ -1168,7 +1169,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /users` (A) | Signup: segment decided, pending account, session. |
 | `GET/DELETE /session` (S) | Read or revoke the session. |
 | `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one. |
-| `POST /users/:id/passkey` (U) | Register a passkey. Needs a step-up if one already exists. |
+| `POST /users/:id/passkey` (U) | Register a passkey. Needs a step-up if one already exists, and then revokes the user's other sessions. |
 | `POST /users/:id/passkey-safe/deployment[/:requestId]` (U) | Prepare, then submit, the Safe deploy. |
 | `POST /users/:id/safe/import/prepare` (U) | Check a Safe for import; owner changes and Transaction Builder files. Stores nothing. |
 | `POST /users/:id/safe/import/confirm` (U) | Bind the account to an existing Safe the passkey's verifier already owns. |
@@ -1213,15 +1214,15 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 
 | | |
 |---|---|
-| `POST /users/:id/monerium/connect/start` (U, segment) | Start OAuth. |
+| `POST /users/:id/monerium/connect/start` (U, segment) | Start OAuth. Needs a step-up when the account already has a Monerium connection or an IBAN. |
 | `GET /monerium/oauth/callback` (state + cookie) | OAuth return. |
 | `GET /users/:id/monerium/accounts` (U) | Refresh and read the snapshot. |
 | `POST /users/:id/monerium/link-signature/start` (U) | Challenge for activation, or for a move with `{purpose: "move-iban", iban}` (bound to that IBAN, single use). |
 | `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. 409 `IBAN_EXISTS_ELSEWHERE` when Monerium answers 304 and the profile's IBANs pay other addresses: `choices: [{iban, address, chain, profileId}]` lists every IBAN on the profile the Safe is linked under, and `existing` is set only when there is exactly one; the user picks, nothing is preselected. 409 `IBAN_EXISTS_UNRESOLVED` when no profile or no IBAN on it can be read. |
 | `POST /users/:id/monerium/move-iban` (U, passkey, typed `MOVE`) | Move the user's existing IBAN to the Safe: own connection only, IBAN must be on the profile the Safe is linked under; links the Safe, `PATCH /ibans/{iban}`, approves only if the re-read shows the IBAN on the Safe, else `iban_pending`. Records `moneriumIbanMoves`. 409 `IBAN_NOT_ON_PROFILE` / `ADDRESS_NOT_ON_PROFILE`. |
-| `DELETE /users/:id/monerium/connect` (U) | Forget the connection. |
-| `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. |
-| `DELETE /users/:id/monerium/api-keys` (U) | Remove own keys. |
+| `DELETE /users/:id/monerium/connect` (U + step-up) | Forget the connection; revokes the user's other sessions. |
+| `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. Replacing a connection or an IBAN needs a step-up and revokes the user's other sessions. |
+| `DELETE /users/:id/monerium/api-keys` (U + step-up) | Remove own keys; revokes the user's other sessions. |
 | `POST /webhooks/monerium` (HMAC) | Webhook. |
 
 **Crypto in**

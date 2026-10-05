@@ -49,6 +49,9 @@ function checkRuntimeFlags(fail: Fail) {
   if (!KYC.operatorToken) fail("KYC_OPERATOR_TOKEN is required in production");
   if (process.env.KYC_AUTO_APPROVE === "1") fail("KYC_AUTO_APPROVE=1 is forbidden in production");
   if (process.env.LOCAL_HARNESS === "1") fail("LOCAL_HARNESS=1 is forbidden in production");
+  // The break-glass that lets an external RPC run on hardhat's public keys:
+  // anyone can sign as those roles.
+  if (process.env.ALLOW_DEV_KEYS_ON_EXTERNAL_RPC === "1") fail("ALLOW_DEV_KEYS_ON_EXTERNAL_RPC=1 is forbidden in production");
   for (const dead of ["ALLOW_SIMULATION", "ALLOW_MOCK_FALLBACK", "KYC_PROVIDER", "SUMSUB_APP_TOKEN"]) {
     if (process.env[dead]) fail(`${dead} no longer exists — the mock, simulation and Sumsub paths were removed; unset it`);
   }
