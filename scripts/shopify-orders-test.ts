@@ -182,7 +182,7 @@ const order = (over: Record<string, unknown> = {}) => {
   };
 };
 const o1 = order();
-await check("orders/create for a pending EUR order on the Zold method opens a crypto-only request sized from the order, with the order's name, status URL and a day-long window", async () => {
+await check("orders/create for a pending EUR order on the Zold method opens a crypto-only request sized from the order, with the order's name and a day-long window, and does not keep the status URL", async () => {
   const r = await webhook("orders/create", o1);
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
@@ -191,8 +191,9 @@ await check("orders/create for a pending EUR order on the Zold method opens a cr
   assert.deepEqual(req.methods, ["crypto"]);
   assert.equal(req.source.orderGid, o1.admin_graphql_api_id);
   assert.equal(req.source.orderName, "#3101");
-  assert.equal(req.source.orderStatusUrl, o1.order_status_url);
-  assert.equal(req.source.returnUrl, o1.order_status_url);
+  // Its key opens the buyer's order, and the code is reachable by order id.
+  assert.equal(req.source.orderStatusUrl, undefined);
+  assert.equal(req.source.returnUrl, undefined);
   assert.equal(req.orgId, org.id);
   const ttl = Date.parse(req.expiresAt) - Date.parse(req.createdAt);
   assert.ok(ttl > 23.9 * 3_600_000 && ttl <= 24 * 3_600_000, `ttl ${ttl}`);
@@ -309,13 +310,21 @@ await check("the buyer's USDC deposit marks the request PAID, the order is marke
   assert.equal(facts.amountEur, 129);
   assert.ok(facts.payments[0].txHash?.startsWith("0x"));
 });
-await check("the lookup now reports PAID and the return link sends the buyer to Shopify's order status page", async () => {
+await check("the lookup now reports PAID and the return link sends the buyer to the paid pay page, never to Shopify's order status page", async () => {
   const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}`);
   assert.equal(r.body.state, "PAID");
   const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
   const back = await call("GET", `/api/shopify/return/${req.code}`);
   assert.equal(back.status, 302);
-  assert.equal(back.location, o1.order_status_url);
+  assert.notEqual(back.location, o1.order_status_url);
+  assert.ok(back.location.includes(`/pay/keycard/`) && !back.location.includes("notice="), back.location);
+});
+await check("an order row stored with the status URL as its return link still never redirects there", async () => {
+  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
+  store.updatePaymentRequest(req.id, { source: { ...req.source, orderStatusUrl: o1.order_status_url, returnUrl: o1.order_status_url } });
+  const back = await call("GET", `/api/shopify/return/${req.code}`);
+  assert.equal(back.status, 302);
+  assert.notEqual(back.location, o1.order_status_url);
 });
 await check("a mark-as-paid the store refused is recorded and retried by the sweep", async () => {
   const o = order();
