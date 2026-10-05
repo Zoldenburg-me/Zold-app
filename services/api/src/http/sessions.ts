@@ -25,6 +25,16 @@ export function issueSession(userId: string) {
   return token;
 }
 
+/**
+ * End every live session of this user except `keepId`. After a credential
+ * changes, a token copied before the change must not outlive it.
+ */
+export function revokeOtherSessions(userId: string, keepId?: string) {
+  for (const s of store.sessions) {
+    if (s.userId === userId && s.id !== keepId && !s.revokedAt) store.revokeSession(s.id);
+  }
+}
+
 export function bearerToken(req: express.Request): string | undefined {
   const h = req.header("authorization") ?? "";
   const m = h.match(/^Bearer\s+(.+)$/i);

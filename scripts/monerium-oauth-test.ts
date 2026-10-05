@@ -169,7 +169,7 @@ async function makePasskey(id = "monerium-oauth-passkey-0001") {
       attestation: b64url(enc(new Map<string, any>([
         ["fmt", "none"],
         ["attStmt", new Map()],
-        ["authData", authData(0x41, 0, true)],
+        ["authData", authData(0x45, 0, true)],
       ]))),
       clientDataJSON: clientData("webauthn.create", challenge),
     }),
@@ -561,9 +561,17 @@ try {
     assert.equal(q.status, 201, `quote failed after activation: ${q.data.error ?? ""}`);
   });
 
-  await t("disconnect clears the connection and closes funding again", async () => {
+  await t("disconnect needs the passkey, not just a session", async () => {
     const r = await call(`/api/users/${userId}/monerium/connect`, undefined, "DELETE");
-    assert.equal(r.status, 200);
+    assert.equal(r.status, 401, JSON.stringify(r.data));
+    assert.equal((await call(`/api/users/${userId}`)).data.monerium?.method, "oauth", "still connected");
+  });
+
+  await t("disconnect clears the connection and closes funding again", async () => {
+    const challenge = await call("/api/webauthn/challenge", { purpose: "step_up" });
+    const stepUp = await passkey.assert(challenge.data.challenge, 3);
+    const r = await call(`/api/users/${userId}/monerium/connect`, { stepUp }, "DELETE");
+    assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.monerium, undefined);
     const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
     assert.ok(!db.includes("accessTokenEnc"), "encrypted tokens should be dropped on disconnect");
