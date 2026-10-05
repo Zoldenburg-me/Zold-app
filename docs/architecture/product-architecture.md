@@ -639,7 +639,9 @@ LINK_CREATED → SUBMITTED → PAYING → PAID → RECONCILED     (+ soft DELETE
   per receipt into a proven imported wallet (date, token, quantity, EUR
   value at receipt, transaction), total the sum of those values. Receipts that cannot
   be invoiced (no value yet, a token on no list, a transfer between own
-  addresses, a wallet not proven to be the organisation's) are listed on the
+  addresses, a row tagged `refund`, any type but a plain inbound transfer or
+  an invoice payment, such as a swap leg or a realised gain, a wallet not
+  proven to be the organisation's) are listed on the
   draft with the reason, and the summary also
   counts receipts from contacts without a rule, from unknown senders, and
   those an issued invoice already bills. Collecting again updates drafts and

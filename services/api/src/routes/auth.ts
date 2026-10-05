@@ -151,6 +151,15 @@ export function createAuthRouter(deps: AuthDeps) {
       if (store.findUserByCredential(credentialId)) {
         return res.status(409).json({ error: "credential already registered" });
       }
+      // A deployed Safe's owner is on chain, so a new passkey is added there:
+      // by recovery, or by an owner change the current passkey signs.
+      if (user.passkeySafe?.status === "active") {
+        return res.status(409).json({
+          code: "SAFE_OWNER_ON_CHAIN",
+          error:
+            "This account's Safe is already deployed with your current passkey as its owner. A new passkey has to be added on the Safe itself — use account recovery if you lost the device.",
+        });
+      }
       // Replacing the account's authenticator is an account-takeover path if a
       // bearer token is enough for it: a stolen 24h session would become permanent
       // access, and the real passkey would be silently discarded. The current
