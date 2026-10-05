@@ -54,6 +54,8 @@ import { cleanName, sameName } from "../users/display-name.js";
 import { adoptionHint, auditProfileCheck, checkBackingProfile, profileWait } from "../adapters/monerium-profile.js";
 import { emailLooksValid } from "../domain/email.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
+import { paymentReviewRequired, reviewHeldOnPlanChange } from "../domain/payment-review.js";
+import { verifyPasskeyStepUp } from "./auth.js";
 
 const INVITE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // Gnosis expired invites at 3 days
 /** An organisation's name and legal name, in characters. */
@@ -397,6 +399,7 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     }
     const org = store.updateOrganisation(ctx.org.id, {
       plan: plan as Organisation["plan"],
+      ...reviewHeldOnPlanChange(ctx.org, plan as PlanId),
       // A real plan change supersedes a running trial rather than stacking.
       ...(trialIsActive(ctx.org)
         ? { trial: { ...ctx.org.trial!, endedAt: new Date().toISOString() } }
@@ -410,6 +413,43 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
           : undefined,
     });
   });
+
+  // ── Payment review policy ─────────────────────────────────────────────────
+
+  /**
+   * Turn payment review on or off for this organisation.
+   *
+   * Off removes a financial control, so it takes an owner and a fresh passkey
+   * approval, on any plan: a downgraded org must be able to make the choice
+   * the plan no longer makes for it. On is the paid feature, so it needs the
+   * plan. Drafts already waiting for review keep waiting either way.
+   */
+  r.post("/:orgId/payment-review", wrap(async (req, res) => {
+    const ctx = ctxOf(req, res);
+    if (!ctx) return;
+    if (!requirePermission(ctx, res, "payments.policy")) return;
+    if (ctx.org.type !== "business") {
+      return res.status(400).json({ error: "Payment review is part of the business product." });
+    }
+    if (typeof req.body?.required !== "boolean") {
+      return res.status(400).json({ error: "Say whether review is required: { required: true | false }." });
+    }
+    const required: boolean = req.body.required;
+    const was = paymentReviewRequired(ctx.org);
+    if (required && !was && !requireCapability(ctx, res, "transfers.approvals")) return;
+    if (!required && was) {
+      const user = store.findUser(ctx.userId);
+      if (!user) return res.status(401).json({ error: "no such user" });
+      if (!(await verifyPasskeyStepUp(user, req.body, res))) return;
+    }
+    const org = store.updateOrganisation(ctx.org.id, {
+      paymentReview: { required, changedAt: new Date().toISOString(), source: "owner", changedByMemberId: ctx.member.id },
+    });
+    if (required !== was) {
+      store.audit(auditEntry("org.payment_review_changed", { orgId: org.id, required, memberId: ctx.member.id }, ctx.userId));
+    }
+    res.json({ organisation: publicOrg(org, ctx.member) });
+  }));
 
   // ── Members ───────────────────────────────────────────────────────────────
 

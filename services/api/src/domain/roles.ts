@@ -13,6 +13,8 @@ export type Permission =
   | "org.update"
   | "org.billing"
   | "org.delete"
+  /** Turning payment review off removes a financial control: owners only. */
+  | "payments.policy"
   | "members.read"
   | "members.invite"
   | "members.update"
@@ -81,7 +83,7 @@ const ADMIN: Permission[] = [
 ];
 
 const OWNER: Permission[] = [
-  ...new Set([...ADMIN, "org.billing", "org.delete"] as Permission[]),
+  ...new Set([...ADMIN, "org.billing", "org.delete", "payments.policy"] as Permission[]),
 ];
 
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {

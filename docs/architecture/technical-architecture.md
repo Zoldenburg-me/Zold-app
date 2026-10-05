@@ -1277,6 +1277,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET/PATCH /:orgId` (M, P(org.update)) | Read or update the org. |
 | `GET /:orgId/plan` (M) | Plan. |
 | `POST /:orgId/plan[/trial]` (M, P(org.billing)) | Downgrade, or start the trial. A paid plan answers 402 `PAID_PLAN_NEEDS_GRANT`. |
+| `POST /:orgId/payment-review` (P(payments.policy): owners) | `{ required }`. Off needs a fresh passkey step-up (`stepUp`) and works on every plan; on needs C(transfers.approvals). Audited as `org.payment_review_changed`. A plan change away from review records the policy as kept (`domain/payment-review.ts`). |
 | `GET /:orgId/members` (M) | Member list. |
 | `POST /:orgId/members` (C(members.manage), P(members.invite)) | Invite. |
 | `PATCH /:orgId/members/:m` (C(members.manage), P(members.update)) | Change role or status. |
@@ -1296,10 +1297,11 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | | |
 |---|---|
 | `GET/POST /:orgId/drafts` (P(drafts.read / create)) | List or create drafts. |
-| `GET/PATCH /:orgId/drafts/:d` (P(drafts.read / create)) | Read or edit a draft. |
-| `POST /:orgId/drafts/:d/submit` (C(transfers.approvals)) | Submit for review. |
-| `POST /:orgId/drafts/:d/review` (C(transfers.approvals), four eyes) | Approve or reject. |
-| `POST /:orgId/drafts/:d/execute` (P(transfers.execute), backing user) | Execute. |
+| `GET/PATCH /:orgId/drafts/:d` (P(drafts.read / create)) | Read or edit a draft. Editing a waiting or approved draft returns it to DRAFT and clears its review. |
+| `POST /:orgId/drafts/:d/submit` (review policy on, or C(transfers.approvals)) | Submit for review. |
+| `POST /:orgId/drafts/:d/review` (PENDING_REVIEW, four eyes) | Approve or reject. No plan check: a waiting draft stays reviewable after a downgrade. |
+| `POST /:orgId/drafts/:d/cancel` (P(drafts.create) or P(drafts.review)) | Cancel before execution starts: kept as CANCELLED, invoices it was paying are released. 409 from EXECUTING on. |
+| `POST /:orgId/drafts/:d/execute` (P(transfers.execute), backing user) | Execute. Sends only REVIEWED while the review policy is on; refused if the draft was written while it was being planned. |
 | `POST /:orgId/drafts/import-csv` (C(transfers.bulkCsv)) | Parse CSV lines. |
 
 **Invoices** (`/orgs`)
