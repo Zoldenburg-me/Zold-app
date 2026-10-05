@@ -619,7 +619,7 @@ flowchart LR
     stores the SHA-256 of the order's `checkout_token`, and `t` must hash to
     it. It returns the pay-page projection and the pay page's URL.
   - `…/pay?b=<sig>` is a 302 to the pay page, for the confirmation-email
-    link. `b` is `{{ order.id | hmac_sha256: key }}`, using a per-shop key
+    link. `b` is `{{ id | hmac_sha256: key }}`, using a per-shop key
     (`orderLinkSecretEnc`, encryption purpose `shopify-link`) that is created
     the first time the org view shows that store's `payLinkTemplate`.
     **Unverified:** whether Shopify's notification Liquid supports

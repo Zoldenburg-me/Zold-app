@@ -134,11 +134,11 @@ function orderLinkSecret(c: ShopifyConnection): string {
   return secret;
 }
 
-/** What Liquid's `{{ order.id | hmac_sha256: key }}` renders: lower-case hex. */
+/** What Liquid's `{{ id | hmac_sha256: key }}` renders: lower-case hex. */
 const orderLinkProof = (secret: string, orderId: string) => createHmac("sha256", secret).update(orderId).digest("hex");
 
 function payLinkTemplate(base: string, c: ShopifyConnection): string {
-  return `${base}/api/shopify/orders/{{ shop.permanent_domain }}/{{ order.id }}/pay?b={{ order.id | hmac_sha256: "${orderLinkSecret(c)}" }}`;
+  return `${base}/api/shopify/orders/{{ shop.permanent_domain }}/{{ id }}/pay?b={{ id | hmac_sha256: "${orderLinkSecret(c)}" }}`;
 }
 
 /** Does `b` sign this order id under the shop's key? A shop that never had
