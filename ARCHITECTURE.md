@@ -118,7 +118,6 @@ anything leaves the Safe.
 | Uniswap v3 | `uniswap.ts` | single pool; Safe-executable |
 | Bebop RFQ | `rfq.ts` | EURe only on Ethereum |
 | CoW | `cow.ts` | quote only |
-| FxSwapper | `fx-swapper.ts` | our own inventory; custodial; local hardhat only |
 
 - Every venue quote is checked against the independent mid (`assertPriceSane`).
 - Venue calldata is allowlisted (`LIFI_CONTRACTS`, `BEBOP_CONTRACTS`), value
@@ -173,7 +172,7 @@ decide who is calling.
 | `services/api/public/app/` | account app: ordered classic scripts sharing one scope. No file calls forward into a later one; `main.js` loads last and holds everything that awaits then renders |
 | `services/api/public/business/` | org dashboard as ES modules; `core.js` owns shared state and exports setters |
 | `services/api/public/sw.js` | service worker; page code network-first, `/vendor/*`, icons and manifest cache-first |
-| `contracts/src/` | `FxSwapper`, `AdminTimelock`, `MockToken` — local hardhat fixtures, not deployed on real chains |
+| `contracts/src/` | `MockToken` (local hardhat only), `ZoldUSD` (test chains), `OffchainResolver` (L1 ENS) |
 
 Four test suites grep source text (custody, passkey-safe-plan, gnosis-pay,
 passkey-safe's mount check). Moving code means moving their greps.

@@ -116,7 +116,7 @@ These are **wallet private keys and secrets we create**. This is the part Baer f
 
 **Where this stands re: Baer's Safe question**
 
-- ✅ **Contract ownership is already protected.** `AdminTimelock` (2-of-3 + delay) owns the deployed contracts. No single key can raise the daily cap, grant a role, or drain the swapper. Emergency pause is instant via a separate guardian; only the timelock can un-pause.
+- ✅ **No Zold contract holds funds or admin powers on a real chain.** On Base, Zold deploys nothing: `deployments.json` records Monerium's EURe and Circle's USDC, and swaps go through LI.FI or Uniswap from the user's own Safe.
 - ❌ **The hot operational keys above are not.** They sit in `.env` as plaintext private keys. This is the real exposure.
 - ✅ **No user Safe owner keys exist server-side for new accounts.** The passkey is the Safe's only owner, and every debit is a UserOperation it signs at send time. Legacy 2-of-2 Safes still need the co-signer key to counter-sign until their user removes it from the app.
 

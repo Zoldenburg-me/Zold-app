@@ -233,12 +233,9 @@ export function receiptRoute(t: Transfer, fields: ReceiptShareFields, sender?: U
   const liq = t.liquidity;
   if (liq) {
     hops.push({
-      rail: liq.provider === "fx-swapper" ? "Zold FX inventory" : `Liquidity · ${liq.provider}`,
+      rail: `Liquidity · ${liq.provider}`,
       badge: liq.tokenIn === "EURe" ? "EURe → USDC" : "USDC → EURe",
-      via:
-        liq.provider === "fx-swapper"
-          ? "Filled from Zold's own inventory at the rate held on the swapper contract"
-          : `Filled just-in-time by ${liq.provider}`,
+      via: `Filled just-in-time by ${liq.provider}`,
       ...(fields.showRate ? { ref: routeRate(liq.rate, liq.tokenIn, liq.tokenOut) } : { withheld: true as const }),
       ...(liq.executedAt ? {} : { simulated: true as const }),
     });

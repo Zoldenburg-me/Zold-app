@@ -222,7 +222,7 @@ async function prepareTransferFromQuote(
         // Cash rail: try the full fee+approve+swap batch first (Change 2,
         // windows 1-3) — one signature, atomic, and the orchestrator never
         // holds the input. Falls back to the plain user-signed debit when the
-        // configured venue cannot serve a Safe executor (FxSwapper, CoW) or
+        // configured venue cannot serve a Safe executor (CoW) or
         // the venue is down; the fallback still never moves without the user.
         if (transfer.rail === "cash") {
           try {

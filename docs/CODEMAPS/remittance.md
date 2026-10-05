@@ -54,7 +54,7 @@ refreshPayout / sweepAnchorPayouts → settlePickup             → PAID
 
 ## Swap venues (liquidity.ts → liquidity/*)
 best.ts (picks over lifi, dex; default `best`) · lifi.ts · uniswap.ts (v3 per chain) ·
-cow.ts · rfq.ts (Bebop) · fx-swapper.ts (31337) · contract.ts (types) ·
+cow.ts · rfq.ts (Bebop) · contract.ts (types) ·
 config/liquidity.ts (venues, allowlists LIFI_CONTRACTS/BEBOP_CONTRACTS).
 Every venue quote → assertPriceSane against rates.ts.
 

@@ -26,15 +26,11 @@ process.env.LOCAL_HARNESS = "1";
 process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:8545";
 
 /**
- * LIQUIDITY_PROVIDER defaults to `best` (over lifi,dex), the venues a user's
- * Safe can execute. Neither exists on local hardhat: LI.FI answers 404 on
- * testnets and there is no EURe/USDC pool until `dex:setup` seeds one. So the
- * local chain opts into FxSwapper here.
- *
- * Keep the opt-in local: production must inherit the non-custodial default.
- * ??= lets a harness that wants a specific venue (dex/lifi/rfq tests) win.
+ * LIQUIDITY_PROVIDER keeps its `best` (over lifi,dex) default here. Neither
+ * venue exists on local hardhat (LI.FI answers 404 on testnets, and there is
+ * no EURe/USDC pool), so a EURe<->USDC swap fails closed locally. A harness
+ * that needs a venue stubs one.
  */
-process.env.LIQUIDITY_PROVIDER ??= "fx-swapper";
 
 /**
  * Hardhat's well-known funded accounts. SET, never deleted: deploy.ts calls

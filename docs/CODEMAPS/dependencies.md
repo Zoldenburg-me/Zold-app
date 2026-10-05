@@ -5,7 +5,7 @@
 express 4 · viem 2 (chain) · abstractionkit (Safe/ERC-4337, Candide) ·
 safe-recovery-service-sdk (Candide guardian recovery) · @stellar/stellar-sdk ·
 nodemailer (mail, flag-gated) · lz-string
-Dev: hardhat, tsx, typescript. contracts/src: FxSwapper, MockToken, AdminTimelock (31337 only) ·
+Dev: hardhat, tsx, typescript. contracts/src: MockToken (31337 only) ·
 ZoldUSD (zUSD, test chains, `deploy:zusd`) · OffchainResolver (L1 ENS, `deploy:ens-resolver`).
 
 ## External services (adapters/, liquidity/, bridge/, stellar/)

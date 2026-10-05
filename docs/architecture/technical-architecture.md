@@ -75,7 +75,7 @@ flowchart TB
 | `services/api/src/domain/` | Pure rules with no HTTP and no chain: `plans`, `roles`, `segments`, `residency`, `accounts` (currency registry), `contacts`, `drafts`, `invoices`, `invoicing`, `jurisdictions`, `ledger`, `coa`, `passwords`, `types`. |
 | `services/api/src/transfers/build.ts` | **The one path that builds a transfer.** It is shared by `POST /api/transfers` and draft execution. |
 | `services/api/src/orchestrator.ts` | Execution, debit, compensation and sweeps. Deliberately not split, so it can be read top to bottom. |
-| `services/api/src/liquidity.ts` + `liquidity/` | The venue seam, and one file per venue (`best`, `lifi`, `uniswap`, `rfq`, `cow`, `fx-swapper`, `contract`). |
+| `services/api/src/liquidity.ts` + `liquidity/` | The venue seam, and one file per venue (`best`, `lifi`, `uniswap`, `rfq`, `cow`, `contract`). |
 | `services/api/src/adapters/` | Monerium (client, connection, tokens, "sandbox" poller), Candide forwarder, crypto deposits, Gnosis Pay, MoneyGram. |
 | `services/api/src/wallet/` | `candide.ts` (Safe accounts, UserOps, EIP-1271 messages, recovery txs), `passkey-safe-plan.ts`. |
 | `services/api/src/recovery*`, `recovery/` | Managed and Candide guardian recovery. |
@@ -85,7 +85,7 @@ flowchart TB
 | `services/api/src/config.ts` | Every setting, and every production refusal, in one file (~970 lines). |
 | `services/api/public/` | `index.html` + `app/*.js` (consumer), `business.html` + `business/*.js`, `admin.*`, public pages, `sw.js`, `device.js`, `vendor/`. |
 | `shopify-app/` | Shopify CLI project: `shopify.app.toml` and the `zold-pay` checkout UI extension. |
-| `contracts/src/` | `FxSwapper.sol`, `AdminTimelock.sol`, `MockToken.sol`. **Hardhat fixtures only.** On a real chain Zold deploys nothing. |
+| `contracts/src/` | `MockToken.sol` (hardhat only), `ZoldUSD.sol` (test chains), `OffchainResolver.sol` (L1 ENS). On Base Zold deploys nothing. |
 | `scripts/` | `dev.ts`, `deploy.ts`, `check.ts`, `reconcile.ts`, about 45 test suites, and setup and probe scripts. |
 
 ---
@@ -430,8 +430,8 @@ router receives injected and never rebuilds.
   before the debit. In the non-batch path it runs after, so a drift there
   refunds.
 - **Amounts out are measured** as balance deltas (`balanceAfterWrite`,
-  12 × 500 ms against RPC replica lag). The exceptions are the hardhat-only
-  fx-swapper and non-batch `usdcOut` (§19).
+  12 × 500 ms against RPC replica lag). The exception is non-batch `usdcOut`
+  (§19).
 - **Races are closed synchronously** by `claimAuthorization`,
   `claimDraftExecution`, `holdDailyCap`/`addTransferUnderHold`,
   `consumeQuote` and the crypto-deposit identity (`txHash`, `logIndex`). There
@@ -459,7 +459,6 @@ router receives injected and never rebuilds.
 | **dex** (Uniswap v3) | deepest pool across fee tiers, QuoterV2 | `exactInputSingle` via SwapRouter02, measure | yes | router is config, pool pinned on quote |
 | **rfq** (Bebop PMM) | `/pmm/<chain>/v3/quote` | maker tx | yes | `BEBOP_CONTRACTS` (empty means execution refused) |
 | **cow** | `/api/v1/quote` | **throws, not wired** | no | quote only |
-| **fx-swapper** | on-chain `FxSwapper` | `swapExactIn` | no | hardhat only |
 | **best** | all venues in parallel, highest `expectedOut` wins, every venue's result recorded | dispatch to the winner | if any is | per venue |
 
 `liquidity/contract.ts` shares the venue guards. `assertVenueTarget` covers
@@ -1064,7 +1063,7 @@ only self-hosted fonts.
 
 | environment | chain | Monerium | db | notes |
 |---|---|---|---|---|
-| `npm run dev` | hardhat 31337 (spawned) | chain `sepolia` names | `data/db.dev.json`, wiped | the fx-swapper venue; no Safe deploy |
+| `npm run dev` | hardhat 31337 (spawned) | chain `sepolia` names | `data/db.dev.json`, wiped | no swap venue (EUR↔USD fails closed); no Safe deploy |
 | tests (`npm run check`) | hardhat on free ports | stubs | tmp | 40 offline suites; `draft`, `crypto`, `convert` and `safe-funded` run separately |
 | **zoldhq.com (current)** | Base Sepolia 84532 | sandbox, `basesepolia` | `TRANSF_DB_PATH` on the Akash lease's persistent volume | one container on an Akash lease: the API plus `cloudflared` (a dashboard-managed Cloudflare Tunnel); the API binds 127.0.0.1; `RP_ID=zoldhq.com`; `NODE_ENV` is deliberately not production, because it would fail the checks above |
 | mainnet | Base 8453 | production | — | never deployed |

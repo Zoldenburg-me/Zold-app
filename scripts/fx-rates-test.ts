@@ -3,7 +3,7 @@
  *
  * Checks that rates come from the feed, that a dead feed refuses instead of
  * serving a stale rate, and that the quote's EUR leg equals the rate the
- * on-chain swapper executes at.
+ * liquidity venue reports.
  *
  * Run: npm run fx:test
  */

@@ -1,8 +1,7 @@
 /**
  * Records this chain's addresses under its id in deployments.json. On local
- * hardhat (31337) it deploys the fixture contracts, wires roles and seeds FX
- * inventory; on a real chain it deploys nothing and records only Monerium's
- * EURe and Circle's USDC.
+ * hardhat (31337) it deploys mock EURe and USDC; on a real chain it deploys
+ * nothing and records only Monerium's EURe and Circle's USDC.
  *
  * Chain comes from TRANSF_CHAIN_ID (default 8453 = Base mainnet). Real keys come
  * from the environment; the hardhat defaults are refused on any non-local RPC
@@ -11,7 +10,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPublicClient, createWalletClient, http, parseUnits } from "viem";
+import { createPublicClient, createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { defineChain } from "viem";
 import { base, baseSepolia, hardhat, polygon, polygonAmoy } from "viem/chains";
@@ -66,11 +65,9 @@ const LOCAL_RPC = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/)/.test(RPC_U
 /** Hardhat's well-known accounts — fine locally, never off it. */
 const DEV_KEYS = {
   deployer: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-  orchestrator: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
-  ramp: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
 } as const;
 
-function key(name: "deployer" | "orchestrator" | "ramp"): `0x${string}` {
+function key(name: "deployer"): `0x${string}` {
   const fromEnv = process.env[`DEPLOY_${name.toUpperCase()}_KEY`];
   if (fromEnv) {
     if (!/^0x[0-9a-fA-F]{64}$/.test(fromEnv)) {
@@ -89,8 +86,6 @@ function key(name: "deployer" | "orchestrator" | "ramp"): `0x${string}` {
 
 const KEYS = {
   deployer: key("deployer"),
-  orchestrator: key("orchestrator"),
-  ramp: key("ramp"),
 } as const;
 
 /**
@@ -120,8 +115,6 @@ const deployer = createWalletClient({
   chain,
   transport: http(RPC_URL),
 });
-const orchestratorAddr = privateKeyToAccount(KEYS.orchestrator).address;
-const rampAddr = privateKeyToAccount(KEYS.ramp).address;
 
 function artifact(name: string) {
   const p = path.join(ROOT, "contracts/artifacts/contracts/src", `${name}.sol`, `${name}.json`);
@@ -137,52 +130,13 @@ async function deploy(name: string, args: any[]): Promise<`0x${string}`> {
   return receipt.contractAddress;
 }
 
-async function call(address: `0x${string}`, name: string, functionName: string, args: any[]) {
-  const { abi } = artifact(name);
-  const { request } = await publicClient.simulateContract({
-    account: deployer.account,
-    address,
-    abi,
-    functionName,
-    args,
-  });
-  const hash = await deployer.writeContract(request);
-  await publicClient.waitForTransactionReceipt({ hash });
-}
-
-// Governance: admin actions run through an M-of-N timelock, so no single key
-// can grant itself a role or drain the swapper. Local dev uses a short delay
-// and the hardhat accounts; a real deployment sets these from env and the
-// owners are hardware/multisig keys held by different people.
-const TIMELOCK_DELAY = BigInt(process.env.TIMELOCK_DELAY_SECONDS ?? 60);
-const TIMELOCK_THRESHOLD = Number(process.env.TIMELOCK_THRESHOLD ?? 2);
-/**
- * Seed the swapper at the live EUR/USD mid rather than a constant.
- *
- * A hardcoded seed is born stale, and because the quote engine reads its EUR
- * leg from this contract, a stale seed prices every corridor.
- * DEPLOY_EURUSD_RATE pins it for a reproducible/offline deploy.
- *
- * Note the swapper's owner becomes the AdminTimelock below, so changing this
- * afterwards is a governed action, not a redeploy.
- */
-async function eurUsdSeed(): Promise<bigint> {
-  const pinned = process.env.DEPLOY_EURUSD_RATE;
-  if (pinned) return BigInt(pinned);
-  const { eurPer } = await import("../services/api/src/rates.js");
-  const rate = await eurPer("USD");
-  return BigInt(Math.round(rate * 1e6));
-}
-const SWAP_INVENTORY_EURE = parseUnits("1000000", 18);
-const SWAP_INVENTORY_USDC = parseUnits("1000000", 6);
-
 function writeDeployments(out: Record<string, `0x${string}`>) {
   const file = path.join(ROOT, "deployments.json");
   let all: Record<string, unknown> = {};
   try {
     const existing = JSON.parse(readFileSync(file, "utf8"));
     // Migrate a legacy flat file into its chain slot rather than dropping it.
-    all = typeof existing.swapper === "string" ? { "31337": existing } : existing;
+    all = typeof existing.eure === "string" ? { "31337": existing } : existing;
   } catch {
     all = {};
   }
@@ -228,11 +182,9 @@ async function main() {
   }
   /**
    * Off hardhat, the deployment is the two real token addresses and nothing
-   * else. The FxSwapper (our own inventory, not Safe-executable) and the
-   * AdminTimelock are local fixtures; production liquidity comes from LI.FI /
-   * Uniswap through the user's own Safe, and the cash leg goes through
-   * Bridge.xyz. Don't deploy mock USDC here: every rail would point at a token
-   * nobody holds.
+   * else. Liquidity comes from LI.FI / Uniswap through the user's own Safe.
+   * Don't deploy mock USDC here: every rail would point at a token nobody
+   * holds.
    */
   if (CHAIN_ID !== hardhat.id) {
     const usdcAddr = (process.env.DEPLOY_USDC_ADDRESS as `0x${string}` | undefined) ?? KNOWN_USDC[CHAIN_ID];
@@ -248,54 +200,7 @@ async function main() {
   }
 
   const usdc = await deploy("MockToken", ["USD Coin (mock)", "USDC", 6]);
-  const eurUsdRate = await eurUsdSeed();
-  console.log(`swapper seeded at EUR/USD ${(Number(eurUsdRate) / 1e6).toFixed(4)}`);
-  const swapper = await deploy("FxSwapper", [eure, usdc, eurUsdRate]);
-
-  // Hardhat accounts #0/#1/#2 stand in for three separate signers.
-  const timelockOwners = [
-    deployer.account.address,
-    privateKeyToAccount(KEYS.orchestrator).address,
-    privateKeyToAccount(KEYS.ramp).address,
-  ];
-  const timelock = await deploy("AdminTimelock", [
-    timelockOwners,
-    TIMELOCK_THRESHOLD,
-    TIMELOCK_DELAY,
-  ]);
-
-  await call(swapper, "FxSwapper", "setTrader", [orchestratorAddr, true]);
-  /**
-   * Seed the swapper's inventory.
-   *
-   * USDC here is our own mock, so it can be minted. EURe cannot be when it is
-   * Monerium's — we are not its owner, and the mint reverts. That only starves
-   * the USDC->EURe direction, which is the refund/compensation path; the
-   * outbound EUR->USDC leg every transfer uses needs USDC inventory, which we
-   * do have. Funding the reverse side means sending real EURe to the swapper.
-   */
-  if (real) {
-    console.log(
-      `EURe inventory   skipped — ${eure} is Monerium's token and cannot be minted.\n` +
-        `                 USDC->EURe swaps (refunds) have no inventory until it is funded.`,
-    );
-  } else {
-    await call(eure, "MockToken", "mint", [swapper, SWAP_INVENTORY_EURE]);
-  }
-  await call(usdc, "MockToken", "mint", [swapper, SWAP_INVENTORY_USDC]);
-
-  // A guardian can halt the system instantly without waiting out the timelock.
-  await call(swapper, "FxSwapper", "setGuardian", [rampAddr]);
-
-  // Roles are wired BEFORE ownership moves — afterwards every admin call has
-  // to be queued, confirmed and waited out, which is the point.
-  await call(swapper, "FxSwapper", "transferOwnership", [timelock]);
-
-  writeDeployments({ eure, usdc, swapper, timelock });
-  console.log(
-    `\nroles wired, swapper seeded with ${real ? "0" : "1,000,000"} EURe and 1,000,000 USDC` +
-      `\nadmin ownership -> AdminTimelock ${timelock} (${TIMELOCK_THRESHOLD}-of-${timelockOwners.length}, ${TIMELOCK_DELAY}s delay)`,
-  );
+  writeDeployments({ eure, usdc });
   console.log(`wrote deployments.json entry for chain ${CHAIN_ID}`);
 }
 

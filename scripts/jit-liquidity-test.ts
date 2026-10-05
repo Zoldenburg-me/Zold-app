@@ -1,15 +1,15 @@
 /**
  * JIT (RFQ) liquidity provider tests.
  *
- * The EURe->USDC leg can be filled from our own inventory ("fx-swapper", an
- * owner-set rate) or just-in-time by a market maker over Bebop's PMM RFQ API,
- * where the price is one a maker has actually committed to.
+ * The EURe->USDC leg can be filled just-in-time by a market maker over
+ * Bebop's PMM RFQ API, where the price is one a maker has actually committed
+ * to.
  *
  * What matters here is that the RFQ path never degrades quietly. A maker that
  * is down, declining, slow, or returning a quote for the wrong token must
- * refuse — falling back to our own inventory at our own rate would price real
- * transfers off a number we chose while reporting that a maker set it, and
- * would look completely healthy doing it.
+ * refuse — falling back to another venue would price real transfers somewhere
+ * nobody chose while reporting that a maker set it, and would look completely
+ * healthy doing it.
  *
  * Runs against a stub Bebop shaped like the documented v3 response
  * (buyTokens[addr].{amount,minimumAmount}, expiry, tx). No chain needed: the
@@ -117,7 +117,7 @@ try {
     makerRate = 1.2;
     const q = await p.quote("EURE_TO_USDC", 100n * 10n ** 18n, "q3", new Date(Date.now() + 600_000).toISOString());
     assert.equal(q.expectedOut, 120_000_000n, `100 EURe at 1.20 should buy 120 USDC, got ${q.expectedOut}`);
-    assert.equal(q.rate, 1_200_000n, "rate uses the swapper's 6dp-per-1e18 convention");
+    assert.equal(q.rate, 1_200_000n, "rate uses the 6dp-per-1e18 convention");
     makerRate = 1.1379;
   });
 
@@ -135,7 +135,7 @@ try {
     mode = "ok";
   });
 
-  await t("a maker that is down REFUSES — no fallback to our own inventory", async () => {
+  await t("a maker that is down REFUSES — no fallback to another venue", async () => {
     mode = "500";
     await assert.rejects(
       () => p.quote("EURE_TO_USDC", 100n * 10n ** 18n, "q6", new Date(Date.now() + 600_000).toISOString()),

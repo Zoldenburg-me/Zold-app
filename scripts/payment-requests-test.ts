@@ -30,7 +30,6 @@ process.env.MONERIUM_CLIENT_SECRET = "";
 process.env.MG_ANCHOR_DOMAIN = "";
 const MID = 1.1379;
 process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: MID, INR: 109.87, KES: 147.53 });
-process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(MID * 1e6));
 
 // A Candide forwarding stub, for the pages whose deposit address is a
 // forwarder. Configured before config.js reads the environment; it answers

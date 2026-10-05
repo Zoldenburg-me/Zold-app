@@ -93,9 +93,8 @@ export async function assertQuoteRateBinding(transfer: Transfer): Promise<void> 
   const quote = store.findQuote(transfer.quoteId);
   if (!quote?.lockedSwapRate) return; // sepa quotes: nothing to bind
   const locked = BigInt(quote.lockedSwapRate);
-  // Ask the provider that will actually fill the swap, not the FxSwapper
-  // contract: a deployment pricing through a market maker must be checked
-  // against a number something is going to trade at.
+  // Ask the provider that will actually fill the swap: the binding must be
+  // checked against a number something is going to trade at.
   const { raw: live } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
   const driftBps = (live > locked ? live - locked : locked - live) * 10_000n / locked;
   if (driftBps > BigInt(FX.QUOTE_BINDING_BPS)) {
@@ -458,12 +457,11 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
 
   const txs = t.txs;
 
-  // Did a swap actually run? Every venue's step reads liquidity.<venue>.eure-usdc
-  // ("swapper.swapExactIn" is the name older transfers in db.json carry). Match
-  // every venue: a dex/rfq/lifi-swapped transfer that read as "still holding
+  // Did a swap actually run? Every venue's step reads liquidity.<venue>.eure-usdc.
+  // Match every venue: a dex/rfq/lifi-swapped transfer that read as "still holding
   // EURe" would be refunded euros the orchestrator no longer holds.
   const swapRan = [...steps].some(
-    (s) => s === "swapper.swapExactIn" || (s.startsWith("liquidity.") && s.endsWith(".eure-usdc")),
+    (s) => s.startsWith("liquidity.") && s.endsWith(".eure-usdc"),
   );
   // A batched live send delivered its output straight to Bridge's deposit
   // address — this side holds nothing to reverse. Never guess at a custodian's
@@ -488,8 +486,8 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
     recoveredFrom = "debited EURe";
   } else {
     // Holding the fee remainder (EURe) + the swapped USDC. Convert using the
-    // venue execution rate persisted with the liquidity plan, so refunds do not
-    // accidentally read the local mock swapper's rate after a DEX/RFQ/LI.FI fill.
+    // venue execution rate persisted with the liquidity plan, not a fresh
+    // indicative rate from whatever venue is configured now.
     const rate = await compensationRate(t);
     const eurBack = (t.usdcOut ?? 0) / (Number(rate) / 1e6);
     refundEur = Math.floor((fee + eurBack) * 100) / 100;

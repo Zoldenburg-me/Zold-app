@@ -47,12 +47,11 @@ swap, atomic, with the output delivered straight to Bridge's deposit address
 failed batch reverts entirely and nothing leaves the Safe. The venue half is a
 `safeSwapPlan` capability on the liquidity seam — Uniswap builds calldata
 offline against the same quoted pool and floor; LI.FI and Bebop are quoted
-WITH the Safe as executor. FxSwapper cannot serve a Safe (onlyTrader — our own
-inventory) and CoW does not execute, so those venues fall back to the plain
+WITH the Safe as executor. CoW does not execute, so it falls back to the plain
 user-signed debit with the orchestrator swapping after.
 
-Custody that remains on the cash rail: the fx-swapper fallback path, and the
-fee itself (revenue, not client money).
+Custody that remains on the cash rail: the CoW fallback path, and the fee
+itself (revenue, not client money).
 
 Scheduled transfers: a recurring allowance only after explicit UX approval
 that shows reset period, cap, recipient, and revocation controls.

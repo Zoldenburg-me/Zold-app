@@ -23,7 +23,6 @@ import { fileURLToPath } from "node:url";
 
 const PIN = { USD: 1.1379, KES: 147.53 };
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify(PIN);
-process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(PIN.USD * 1e6));
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3000);

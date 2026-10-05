@@ -56,7 +56,7 @@ export const defaultTokens = (): VenueTokens => addrs();
 
 export type LiquiditySide = "EURE_TO_USDC" | "USDC_TO_EURE";
 export type LiquidityToken = "EURe" | "USDC";
-export type LiquidityProviderId = "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best";
+export type LiquidityProviderId = "rfq" | "cow" | "dex" | "lifi" | "best";
 
 export interface LiquidityQuote {
   provider: LiquidityProviderId;
@@ -142,10 +142,7 @@ export interface LiquidityProvider {
   /**
    * Build a swap the user's Safe can execute itself — the venue-specific half
    * of Change 2 windows 1-3. OPTIONAL because not every venue can serve an
-   * arbitrary executor: FxSwapper is onlyTrader (our own permissioned
-   * inventory — when we are the counterparty the custody question is a
-   * counterparty question, not a window to close), and CoW does not execute
-   * here at all. A venue without this method makes the transfer fall back to
+   * arbitrary executor: CoW does not execute here at all. A venue without this method makes the transfer fall back to
    * the plain user-signed debit with the orchestrator swapping after.
    */
   safeSwapPlan?(
@@ -179,7 +176,7 @@ export interface LiquidityProvider {
   ): Promise<SafeSwapPlan>;
   /**
    * A cheap, display-only EUR->USD rate for building a receipt, as a float and
-   * in the swapper's 6dp integer form.
+   * as a 6dp integer (USDC per 1e18 EURe).
    *
    * Separate from quote(), which is firm, per-amount and short-lived; with a
    * real market maker it uses rate limit and may be a commitment. Don't

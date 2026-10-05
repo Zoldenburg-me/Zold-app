@@ -138,8 +138,8 @@ async function main() {
    * worse than not seeding: it looks done.
    *
    * Note what this means on Base Sepolia: addrs().usdc is a MockToken we
-   * minted, so a pool against it is as synthetic as the FxSwapper — real pool
-   * contract, both tokens ours. It proves the code path, not a price.
+   * minted, so a pool against it is synthetic — real pool contract, both
+   * tokens ours. It proves the code path, not a price.
    */
   const a = addrs();
   const eure = (process.env.DEX_EURE ?? a.eure) as `0x${string}`;

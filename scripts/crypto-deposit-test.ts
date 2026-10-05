@@ -32,13 +32,12 @@ process.env.TRANSF_RPC_URL = RPC;
 process.env.MONERIUM_CLIENT_ID = "";
 process.env.MONERIUM_CLIENT_SECRET = "";
 process.env.MG_ANCHOR_DOMAIN = "";
-// The swapper is seeded at this rate; pin the mid to match so the sanity check
-// has a stable reference instead of asserting what the euro did overnight.
+// Pin the mid so the sanity check has a stable reference instead of asserting
+// what the euro did overnight.
 const MID = 1.1379;
 const pinMid = (usd: number) =>
   (process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: usd, INR: 109.87, KES: 147.53 }));
 pinMid(MID);
-process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(MID * 1e6));
 
 const bin = (n: string) => path.join(ROOT, "node_modules/.bin", n);
 const children: ChildProcess[] = [];
@@ -269,7 +268,7 @@ try {
     await mintEure(bo.address, 87.88);
     const d = await settleConvertedDeposit(
       parked, store.findUser(bo.id)!,
-      { provider: "fx-swapper", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(80) },
+      { provider: "dex", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(80) },
       before, [...parked.txs, { step: "safe.swap(usdc->eure)", hash: `0x${"22".repeat(32)}` }],
     );
     check("it settles once the swap has landed", d.state === "CONVERTED", `${d.state} (${d.reason ?? ""})`);
@@ -280,7 +279,7 @@ try {
     );
     check(
       "the venue and rate are recorded for the receipt",
-      d.provider === "fx-swapper" && Math.abs(d.rate! - MID) < 0.01,
+      d.provider === "dex" && Math.abs(d.rate! - MID) < 0.01,
       `${d.provider} @ ${d.rate}`,
     );
     check(
@@ -349,7 +348,7 @@ try {
     try {
       await settleConvertedDeposit(
         parked, store.findUser(cass.id)!,
-        { provider: "fx-swapper", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(80) },
+        { provider: "dex", rate: BigInt(Math.round(MID * 1e6)), minOut: eur.toWei(80) },
         before, parked.txs,
       );
     } catch (err: any) {

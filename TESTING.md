@@ -11,7 +11,7 @@ npm run compile
 ## Level 0 — automated checks (5 min, no accounts needed)
 
 ```sh
-npm run test:contracts   # 6 Solidity tests: FX access/slippage, AdminTimelock governance
+npm run test:contracts   # OffchainResolver through the API's CCIP-Read gateway
 npm run audit:deps       # npm advisory scan
 npm run check            # everything offline: contracts, typecheck, ~40 focused harnesses
 npm run check:live       # the same plus the Stellar testnet / test-anchor suites

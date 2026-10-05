@@ -6,9 +6,9 @@
  * quote that priced a transfer, and dispatches execution back to the venue
  * that quoted it. A new venue is a file there plus a case in providerById.
  *
- * An unknown provider id throws. Don't fall back to FxSwapper: a
- * LIQUIDITY_PROVIDER typo would then price real transfers off our own
- * inventory while reporting that a maker set the rate.
+ * An unknown provider id throws, never falls back to another venue: a
+ * LIQUIDITY_PROVIDER typo would then price real transfers somewhere nobody
+ * chose.
  *
  * Types and the two rules every venue shares are in ./liquidity/contract.ts,
  * re-exported here for existing importers.
@@ -17,7 +17,6 @@ import { FX, LIQUIDITY, railFeeEur } from "./config.js";
 import { eur, usd } from "./chain.js";
 import type { Transfer } from "./store.js";
 import { store } from "./store.js";
-import { FxSwapperLiquidityProvider } from "./liquidity/fx-swapper.js";
 import { RfqLiquidityProvider } from "./liquidity/rfq.js";
 import { CowLiquidityProvider } from "./liquidity/cow.js";
 import { DexLiquidityProvider } from "./liquidity/uniswap.js";
@@ -39,15 +38,12 @@ export { BestExecutionProvider };
  *  dispatch to the venue that actually priced a quote. */
 export function providerById(id: LiquidityProviderId): LiquidityProvider {
   switch (id) {
-    case "fx-swapper": return new FxSwapperLiquidityProvider();
     case "rfq": return new RfqLiquidityProvider();
     case "cow": return new CowLiquidityProvider();
     case "dex": return new DexLiquidityProvider();
     case "lifi": return new LifiLiquidityProvider();
     case "best": return new BestExecutionProvider(undefined, providerById);
     default:
-      // No FxSwapper fallback: a LIQUIDITY_PROVIDER typo would then price
-      // real transfers off our own inventory with no error.
       throw new Error(`unknown liquidity provider "${id}" — check LIQUIDITY_PROVIDER/LIQUIDITY_VENUES`);
   }
 }
@@ -69,8 +65,8 @@ export async function executeTransferLiquidity(transfer: Transfer): Promise<Liqu
   // Dispatch by the quote's OWN venue, not the currently-configured one: a
   // persisted quote must execute where it was priced. Routing it through
   // liquidityProvider() meant a deployment whose LIQUIDITY_PROVIDER changed
-  // between prepare and execute could settle a dex/rfq/lifi-priced quote
-  // through the FxSwapper mock, which never checks quote.provider.
+  // between prepare and execute could settle a quote on a venue that never
+  // priced it.
   return providerById(quote.provider).execute(quote);
 }
 
@@ -95,8 +91,7 @@ export async function prepareTransferLiquidity(transfer: Transfer): Promise<NonN
  * calldata rides inside the UserOperation the user signs, so unlike the
  * orchestrator path there is no execute-time quote: the price serialized here
  * is the price the user's signature covers. Returns null when the configured
- * venue cannot serve a Safe executor (FxSwapper's permissioned inventory,
- * CoW) — the transfer then falls back to the plain user-signed debit.
+ * venue cannot serve a Safe executor (CoW) — the transfer then falls back to the plain user-signed debit.
  */
 export async function prepareSafeSwapForTransfer(
   transfer: Transfer,

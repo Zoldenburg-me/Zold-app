@@ -19,7 +19,6 @@ import { newDevice, registerDevice, signTerms } from "./device.js";
 
 const PIN = { USD: 1.1379, INR: 109.87, KES: 147.53 };
 process.env.TRANSF_RATES_FIXED ??= JSON.stringify(PIN);
-process.env.DEPLOY_EURUSD_RATE ??= String(Math.round(PIN.USD * 1e6));
 // SEPA is free by default; pin a fee so the fee-arithmetic refusal is exercised.
 process.env.SEPA_FEE_EUR ??= "0.99";
 // The EUR rail opens only with a Monerium connection path; pin one so the

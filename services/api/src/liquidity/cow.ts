@@ -89,7 +89,7 @@ export class CowLiquidityProvider implements LiquidityProvider {
       amountIn,
       expectedOut,
       minOut,
-      // Same 6dp convention as the swapper, oriented USDC-per-EURe both sides.
+      // 6dp USDC-per-EURe on both sides, as every venue reports it.
       rate: raw,
       expiresAt: validTo && Date.parse(validTo) < Date.parse(expiresAt) ? validTo : expiresAt,
       cow: {

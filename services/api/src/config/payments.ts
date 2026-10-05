@@ -55,9 +55,8 @@ export const CRYPTO_IN = {
   /**
    * How far the venue's rate may sit from the live mid before we refuse.
    *
-   * Same check as the quote binding: the FxSwapper's rate is one we set, so
-   * without an independent mid we could credit e-money at a price no market
-   * would give.
+   * Same check as the quote binding: without an independent mid we could
+   * credit e-money at a price no market would give.
    */
   maxDriftBps: envNumber("CRYPTO_IN_MAX_DRIFT_BPS", 100, { min: 0 }),
   /**

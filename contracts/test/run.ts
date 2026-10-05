@@ -1,6 +1,6 @@
 /**
- * Contract tests for the on-chain contracts (MockToken, FxSwapper, AdminTimelock,
- * OffchainResolver — the last one end to end through the API's gateway code).
+ * Contract tests for OffchainResolver, end to end through the API's gateway
+ * code.
  * Run: npm run test:contracts
  */
 import { createServer } from "node:net";
@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPublicClient, createWalletClient, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, http, keccak256, namehash, parseAbi, parseUnits, toCoinType, toHex, type Hex } from "viem";
+import { createPublicClient, createWalletClient, decodeAbiParameters, encodeAbiParameters, encodeFunctionData, http, namehash, parseAbi, toCoinType, toHex, type Hex } from "viem";
 import { packetToBytes } from "viem/ens";
 import { answerResolveCall, NO_RECORDS, signGatewayResponse } from "../../services/api/src/ens.js";
 import { privateKeyToAccount } from "viem/accounts";
@@ -45,9 +45,6 @@ const wallets = {
 };
 const relayerAddr = wallets.relayer.account.address;
 const guardianAddr = wallets.guardian.account.address;
-
-const E = (v: string) => parseUnits(v, 18);
-const U = (v: string) => parseUnits(v, 6);
 
 function artifact(name: string) {
   const p = path.join(ROOT, "contracts/artifacts/contracts/src", `${name}.sol`, `${name}.json`);
@@ -103,19 +100,6 @@ async function waitForRpc(timeout = 30_000) {
   throw new Error("hardhat node did not start");
 }
 
-async function mineAfter(seconds: number) {
-  await fetch(RPC, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "evm_increaseTime", params: [seconds] }),
-  });
-  await fetch(RPC, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "evm_mine", params: [] }),
-  });
-}
-
 async function main() {
   let pass = 0;
   async function t(name: string, fn: () => Promise<void>) {
@@ -123,103 +107,6 @@ async function main() {
     pass++;
     console.log(`  ok ${name}`);
   }
-
-  const eure = await deploy("MockToken", ["Monerium EUR emoney (mock)", "EURe", 18]);
-  const usdc = await deploy("MockToken", ["USD Coin (mock)", "USDC", 6]);
-  const swapper = await deploy("FxSwapper", [eure.address, usdc.address, 1_080_000n]);
-  const timelock = await deploy("AdminTimelock", [[wallets.deployer.account.address, relayerAddr, guardianAddr], 2, 1n]);
-
-  await write("deployer", swapper, "setTrader", [relayerAddr, true]);
-  await write("deployer", eure, "mint", [relayerAddr, E("1000")]);
-  await write("deployer", usdc, "mint", [swapper.address, U("1000")]);
-  await write("deployer", eure, "mint", [swapper.address, E("1000")]);
-
-  console.log("FxSwapper:");
-  await t("relayer can swap EURe to USDC", async () => {
-    await write("relayer", eure, "approve", [swapper.address, E("10")]);
-    await write("relayer", swapper, "swapExactIn", [E("10"), U("10"), relayerAddr]);
-    assert.equal(await read(usdc, "balanceOf", [relayerAddr]), U("10.8"));
-  });
-
-  await t("relayer can reverse swap USDC to EURe", async () => {
-    await write("relayer", usdc, "approve", [swapper.address, U("10.8")]);
-    await write("relayer", swapper, "swapReverseExactIn", [U("10.8"), E("9.9"), relayerAddr]);
-    const balance = (await read(eure, "balanceOf", [relayerAddr])) as bigint;
-    assert.ok(balance >= E("999.9"));
-  });
-
-  await t("non-trader cannot swap inventory", () =>
-    expectRevert(
-      write("guardian", swapper, "swapExactIn", [E("1"), U("1"), guardianAddr]),
-      "not trader",
-      "public swapper access",
-    ),
-  );
-
-  await t("pause blocks swaps", async () => {
-    await write("deployer", swapper, "setPaused", [true]);
-    await expectRevert(
-      write("relayer", swapper, "swapExactIn", [E("1"), U("1"), relayerAddr]),
-      "paused",
-      "swap while paused",
-    );
-    await write("deployer", swapper, "setPaused", [false]);
-  });
-
-  console.log("AdminTimelock:");
-  await t("timelock can own remaining admin contracts", async () => {
-    await write("deployer", swapper, "transferOwnership", [timelock.address]);
-    assert.equal(String(await read(swapper, "owner")).toLowerCase(), timelock.address.toLowerCase());
-  });
-
-  await t("re-added owner must re-confirm before a stale operation can execute", async () => {
-    const staleSetDelay = encodeFunctionData({
-      abi: timelock.abi,
-      functionName: "setDelay",
-      args: [9n],
-    });
-    const staleSalt = keccak256(toHex("stale-confirmation"));
-    await write("guardian", timelock, "queue", [timelock.address, 0n, staleSetDelay, staleSalt]);
-    await write("relayer", timelock, "confirm", [
-      await read(timelock, "operationId", [timelock.address, 0n, staleSetDelay, staleSalt]),
-    ]);
-
-    const removeGuardian = encodeFunctionData({
-      abi: timelock.abi,
-      functionName: "removeOwner",
-      args: [guardianAddr],
-    });
-    const removeSalt = keccak256(toHex("remove-guardian"));
-    const removeId = await read(timelock, "operationId", [timelock.address, 0n, removeGuardian, removeSalt]);
-    await write("deployer", timelock, "queue", [timelock.address, 0n, removeGuardian, removeSalt]);
-    await write("relayer", timelock, "confirm", [removeId]);
-    await mineAfter(2);
-    await write("deployer", timelock, "execute", [removeId]);
-
-    const addGuardian = encodeFunctionData({
-      abi: timelock.abi,
-      functionName: "addOwner",
-      args: [guardianAddr],
-    });
-    const addSalt = keccak256(toHex("readd-guardian"));
-    const addId = await read(timelock, "operationId", [timelock.address, 0n, addGuardian, addSalt]);
-    await write("deployer", timelock, "queue", [timelock.address, 0n, addGuardian, addSalt]);
-    await write("relayer", timelock, "confirm", [addId]);
-    await mineAfter(2);
-    await write("deployer", timelock, "execute", [addId]);
-
-    const staleId = await read(timelock, "operationId", [timelock.address, 0n, staleSetDelay, staleSalt]);
-    assert.equal(await read(timelock, "liveConfirmations", [staleId]), 1);
-    await expectRevert(
-      write("deployer", timelock, "execute", [staleId]),
-      "not enough confirmations",
-      "stale timelock confirmation",
-    );
-    await write("guardian", timelock, "confirm", [staleId]);
-    assert.equal(await read(timelock, "liveConfirmations", [staleId]), 2);
-    await write("deployer", timelock, "execute", [staleId]);
-    assert.equal(await read(timelock, "delay"), 9n);
-  });
 
   // ---- OffchainResolver + the gateway's signing, through a real CCIP-Read ----
   // viem follows the OffchainLookup revert to this server exactly as a wallet

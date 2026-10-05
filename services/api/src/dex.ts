@@ -1,7 +1,6 @@
 /**
  * Uniswap v3 as an execution venue.
  *
- * The FxSwapper holds inventory we fund, which does not scale past a demo.
  * Bebop lists EURe only on Ethereum with no testnet, and CoW quotes well on
  * Gnosis but needs a decision about who signs the order. Uniswap v3 lists our
  * tokens and runs on a testnet, since the pool is just a contract.
@@ -190,8 +189,7 @@ export async function assertPriceSane(
 /**
  * USDC-per-EURe as the 6dp integer the rest of the system uses for `rate`.
  *
- * Always this orientation regardless of trade direction, matching FxSwapper's
- * single `rate()`; otherwise the reverse leg would report a reciprocal and
+ * Always this orientation regardless of trade direction; otherwise the reverse leg would report a reciprocal and
  * the quote-binding check would compare two different things.
  */
 export function rate6dp(eureWei: bigint, usdcUnits: bigint): bigint {

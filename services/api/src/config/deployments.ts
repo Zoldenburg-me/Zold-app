@@ -8,13 +8,10 @@ export interface Deployments {
   /** Test chains only: ZoldUSD, the staging dollar the faucet wallet mints
    *  (`npm run deploy:zusd`). */
   zusd?: `0x${string}`;
-  /** Local-only: the FxSwapper venue and the AdminTimelock that owns it. A
-   *  real chain's entry carries the two token addresses and nothing else. */
-  /** Written by the hardhat deploy, never read. */
-  timelock?: `0x${string}`;
-  swapper?: `0x${string}`;
   /** Present in older entries, never read. */
   bridge?: `0x${string}`;
+  timelock?: `0x${string}`;
+  swapper?: `0x${string}`;
 }
 
 /**
@@ -26,7 +23,7 @@ export function loadDeployments(chainId: number = CHAIN_ID): Deployments {
   const p = path.join(ROOT, "deployments.json");
   const raw = JSON.parse(readFileSync(p, "utf8"));
   // Flat single-chain shape: addresses at the top level.
-  if (typeof raw.swapper === "string") {
+  if (typeof raw.eure === "string") {
     if (chainId !== 31337) {
       throw new Error(
         `deployments.json is in the old single-chain format and has no entry for chain ${chainId} — ` +

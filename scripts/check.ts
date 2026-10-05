@@ -42,7 +42,6 @@ const scripts = [
   "execution:test",
   "gas:test",
   "faucet:test",
-  "quote-binding:test",
   "fx:test",
   "jit:test",
   "dex:test",

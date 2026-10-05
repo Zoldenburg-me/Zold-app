@@ -206,9 +206,6 @@ $("back-options").onclick = () => showSendStep("options");
 const STEP_LABELS = {
   "safe.transfer(orchestrator)": ["Moving EURe from your Safe", "💶"],
   "safe.transfer(fee)": ["Collecting the transfer fee", "💶"],
-  "swapper.swapExactIn": ["Swapping EURe → USDC", "🔁"],
-  "liquidity.fx-swapper.eure-usdc": ["Routing EURe → USDC liquidity", "🔁"],
-  "liquidity.fx-swapper.usdc-eure": ["Routing USDC → EURe liquidity", "🔁"],
   "bridge.xyz.dry-run.transfer": ["Planning Bridge.xyz transfer", "🌉"],
   "bridge.xyz.deposit.funded": ["Bridge deposit funded by your signed batch", "🌉"],
   "bridge.xyz.live.transfer": ["Creating Bridge.xyz transfer", "🌉"],

@@ -118,7 +118,7 @@ export class BestExecutionProvider implements LiquidityProvider {
 
   /**
    * Best execution over the venues that can serve a Safe executor. Venues
-   * without safeSwapPlan (FxSwapper, CoW) are excluded here and their absence
+   * without safeSwapPlan (CoW) are excluded here and their absence
    * is recorded in routing. If every capable venue fails this refuses, and
    * the transfer falls back to the plain user-signed debit path.
    */

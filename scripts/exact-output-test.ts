@@ -135,8 +135,8 @@ await check("the liquidity seam refuses exact output on a venue without it, nami
   const liq = await import("../services/api/src/liquidity.js");
   const provider = liq.liquidityProvider();
   assert.equal(typeof provider.safeExactOutputPlan, "function", "dex is configured for this run");
-  const fx = liq.providerById("fx-swapper");
-  assert.equal(typeof fx.safeExactOutputPlan, "undefined", "our own inventory cannot deliver exact output for a Safe executor");
+  const cow = liq.providerById("cow");
+  assert.equal(typeof cow.safeExactOutputPlan, "undefined", "CoW cannot deliver exact output for a Safe executor");
 });
 
 console.log("\nPay link");

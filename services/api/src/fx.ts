@@ -18,7 +18,7 @@ import type { PayoutRail } from "./store.js";
  *
  *   midRate  — market mid from the live feed (EUR->KES directly). The
  *              "real exchange rate" line on the receipt; we do not trade at it.
- *   fxRate   — what we can deliver: the on-chain swapper's executable EUR->USD
+ *   fxRate   — what we can deliver: the liquidity venue's executable EUR->USD
  *              rate, times the live USD->fiat leg, minus our spread.
  *
  * marginBps is measured as the gap between them, so if the on-chain rate
@@ -32,10 +32,9 @@ export interface QuoteRequest {
 /** Legs of a corridor quote, resolved from the chain + the live feed. */
 async function corridorRates(fiat: "KES") {
   // Executable EUR->USD, asked of whichever liquidity source will actually
-  // fill the swap — the local swapper or a market maker over RFQ. Reading the
-  // swapper contract directly here would keep quoting the mock's price after a
-  // deployment switched to RFQ, which looks completely healthy while being
-  // wrong. The quote binding re-checks the rate against the same provider at execution.
+  // fill the swap. Reading any one venue directly here would keep quoting its
+  // price after a deployment switched to another, which looks completely
+  // healthy while being wrong. The quote binding re-checks the rate against the same provider at execution.
   const { rate, raw } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
   const usdFiat = await usdPer(fiat); // live: what a partner settles at
   const marketMid = await eurPer(fiat); // live: true EUR->fiat mid, reference only
@@ -67,7 +66,7 @@ export async function createQuote(userId: string, req: QuoteRequest): Promise<Qu
   if (req.rail === "sepa") {
     quote = {
       ...base,
-      // No FX leg, so nothing to bind to the swapper.
+      // No FX leg, so no swap rate to bind.
       sendEur,
       fixedFeeEur: fee,
       midRate: 1,

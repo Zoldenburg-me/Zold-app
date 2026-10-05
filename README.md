@@ -101,7 +101,7 @@ services/api/public/
   landing, pay, pay-request, invoice, receipt, document, admin pages
   sw.js                       service worker (page code network-first)
 
-contracts/src/        FxSwapper, AdminTimelock, MockToken (local hardhat fixtures only)
+contracts/src/        MockToken (hardhat), ZoldUSD (test chains), OffchainResolver (ENS)
 shopify-app/          Shopify app config and checkout extension
 scripts/              deploy, dev chain, operations, and every test suite
 docs/                 design docs, architecture, and the GitBook user guide

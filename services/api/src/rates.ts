@@ -7,8 +7,8 @@
  *   1. No stale fallback. If the feed is unreachable and the cache has aged
  *      out, quoting fails, so a sender is never quoted last month's market.
  *   2. The feed only supplies the fiat legs (USD->KES) that a payout partner
- *      settles. The EUR->USD leg is the on-chain swapper's executable rate,
- *      read from the chain (see fx.ts), since we cannot trade at a feed rate.
+ *      settles. The EUR->USD leg is the liquidity venue's executable rate
+ *      (see fx.ts), since we cannot trade at a feed rate.
  */
 import { RATES } from "./config.js";
 

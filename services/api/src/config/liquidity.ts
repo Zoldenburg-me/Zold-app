@@ -17,9 +17,8 @@ const UNISWAP_V3 = UNISWAP_V3_BY_CHAIN[CHAIN_ID] ?? UNISWAP_V3_BY_CHAIN[8453];
 /**
  * Where the EURe<->USDC leg gets its liquidity.
  *
- * "fx-swapper" is the local mock: our own inventory at an owner-set rate, and
- * the only venue that works on hardhat. "rfq" is just-in-time liquidity from a
- * market maker (Bebop), priced by an executable quote.
+ * "rfq" is just-in-time liquidity from a market maker (Bebop), priced by an
+ * executable quote.
  *
  * BEBOP_API_KEY is effectively required: ethereum and arbitrum answer every
  * unauthenticated request with UnknownError (checked with a USDC->WETH
@@ -33,17 +32,17 @@ export const LIQUIDITY = {
    *
    * Only venues that implement `safeSwapPlan` can be executed by the user's
    * Safe: one batch approves the venue and delivers the output straight to the
-   * payout destination, so the orchestrator never holds the input. FxSwapper
-   * cannot (its inventory is `onlyTrader`) and CoW refuses, so on either the
-   * full amount is debited to the orchestrator, which swaps from there.
+   * payout destination, so the orchestrator never holds the input. CoW
+   * refuses, so on CoW the full amount is debited to the orchestrator, which
+   * swaps from there.
    *
    * `best` over LIQUIDITY_VENUES (default lifi,dex, both Safe-executable) is
    * the default, so the non-custodial path runs unless someone opts out.
    *
-   * Local hardhat has neither LI.FI nor a seeded pool, so `_local-chain.ts`
-   * pins fx-swapper for dev and the harnesses. Keep that opt-in local only.
+   * Local hardhat has neither LI.FI nor a seeded pool, so there a EURe<->USDC
+   * swap finds no venue and the quote fails closed.
    */
-  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "best") as "fx-swapper" | "rfq" | "cow" | "dex" | "lifi" | "best",
+  PROVIDER: (process.env.LIQUIDITY_PROVIDER ?? "best") as "rfq" | "cow" | "dex" | "lifi" | "best",
   // Bebop's chain slug, e.g. "polygon", "base", "ethereum".
   BEBOP_CHAIN: process.env.BEBOP_CHAIN ?? "polygon",
   BEBOP_BASE_URL: process.env.BEBOP_BASE_URL ?? "https://api.bebop.xyz",

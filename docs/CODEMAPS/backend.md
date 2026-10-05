@@ -31,7 +31,7 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 
 ## Core modules
 orchestrator.ts (1079 l) transfer state machine · transfers/build.ts (400) build from quote ·
-liquidity.ts + liquidity/{best,lifi,uniswap,cow,rfq,fx-swapper} venues ·
+liquidity.ts + liquidity/{best,lifi,uniswap,cow,rfq} venues ·
 rates.ts independent mid · fx.ts · chain.ts (viem) · sepa.ts · reconcile.ts ·
 ens.ts (CCIP-Read encoding, signer) · usd-token.ts (the dollar token: USDC, or zUSD on staging) ·
 log-range.ts (eth_getLogs window halves on RPC range refusals) · users/display-name.ts ·

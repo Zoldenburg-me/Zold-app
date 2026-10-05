@@ -109,7 +109,7 @@ export class RfqLiquidityProvider implements LiquidityProvider {
       amountIn,
       expectedOut,
       minOut,
-      // Same 6dp convention as FxSwapper.rate, oriented to USDC-per-EURe on
+      // 6dp USDC-per-EURe (USDC units per 1e18 EURe), oriented that way on
       // BOTH sides (like dex/lifi): on the reverse side amountIn is 6dp and
       // expectedOut 18dp, and the naive ratio produced a ~1e30 number that
       // made every downstream sanity check refuse.
@@ -231,7 +231,7 @@ export class RfqLiquidityProvider implements LiquidityProvider {
       "indicative",
       new Date(now + LIQUIDITY.INDICATIVE_TTL_MS).toISOString(),
     );
-    // rate is tokenOut(6dp) per 1e18 tokenIn — same convention as the swapper.
+    // rate is tokenOut(6dp) per 1e18 tokenIn, as every venue reports it.
     const raw = probe.rate;
     const rate = Number(raw) / 1e6;
     this.indicative = { at: now, rate, raw };

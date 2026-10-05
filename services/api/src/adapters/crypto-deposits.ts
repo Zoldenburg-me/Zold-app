@@ -141,12 +141,10 @@ export async function valueAtReceipt(
 /**
  * Refuse to convert at a rate too far from the live mid.
  *
- * The FxSwapper's rate is set by us, so on a local chain this is the only
- * check against crediting e-money at a mispriced rate. Same idea as the quote
- * binding, applied where the number becomes a balance.
+ * Same idea as the quote binding, applied where the number becomes a balance.
  *
- * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), matching what
- * FxSwapper.rate() posts and what the liquidity providers report.
+ * `rate` is the venue's EUR/USD (USDC units per 1 EURe, 6dp), as the
+ * liquidity providers report it.
  */
 export async function assertRateSane(rate: bigint): Promise<{ venue: number; mid: number }> {
   const venue = Number(rate) / 1e6;
@@ -478,7 +476,6 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
       const value = (log.args.value ?? 0n) as bigint;
       if (value <= 0n) continue;
       const from = String(log.args.from ?? "").toLowerCase();
-      if (token.token === "EURE" && from === (addrs().swapper ?? "").toLowerCase()) continue;
       const txHash = log.transactionHash!;
       const logIndex = Number(log.logIndex);
       if (store.findCryptoDeposit(txHash, logIndex)) continue;

@@ -189,7 +189,7 @@ try {
   console.log("3/5 already-swapped input goes to review, not a silent €0…");
   {
     const user = await seedUser("Safe Swapped", 0);
-    const t = await seedSafeFundedTransfer(user, 60, ["swapper.swapExactIn"]);
+    const t = await seedSafeFundedTransfer(user, 60, ["liquidity.dex.eure-usdc"]);
     store.updateTransfer(t.id, {
       usdcOut: 50,
       liquidity: {
@@ -213,7 +213,7 @@ try {
       out.error ?? "",
     );
     check(
-      "refund estimate uses the persisted execution rate, not the mock swapper",
+      "refund estimate uses the persisted execution rate",
       /€50\.99/.test(out.error ?? ""),
       out.error ?? "",
     );

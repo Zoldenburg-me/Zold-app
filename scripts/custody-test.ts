@@ -2,16 +2,14 @@
  * Custody posture: does the orchestrator ever hold the sender's funds?
  *
  * Non-custody depends on three settings: the configured liquidity venue,
- * whether Bridge is live, and whether a venue call succeeds. A default of
- * LIQUIDITY_PROVIDER=fx-swapper cannot be executed by a user's Safe, so it
- * debits every cash-rail transfer to the orchestrator's address, and the
- * fallback only logs a console.error.
+ * whether Bridge is live, and whether a venue call succeeds. A default venue a
+ * user's Safe cannot execute would debit every cash-rail transfer to the
+ * orchestrator's address, and the fallback only logs a console.error.
  *
  * These check:
  *   1. the default venue is one a Safe can execute,
  *   2. every venue is correctly classified as Safe-executable or not,
- *   3. the local chain opts into the custodial venue explicitly, so production
- *      does not inherit it.
+ *   3. the local chain does not pin a custodial venue.
  *
  * The recording and refusal paths that ride on this are exercised end to end
  * by draft:test, which drives a real API.
@@ -93,7 +91,7 @@ for (const id of ["dex", "lifi", "rfq"]) {
   });
 }
 
-for (const id of ["fx-swapper", "cow"]) {
+for (const id of ["cow"]) {
   check(`${id} does NOT implement safeSwapPlan, so it is correctly custodial`, () => {
     assert.equal(
       typeof (providerById as any)(id).safeSwapPlan,
@@ -103,13 +101,13 @@ for (const id of ["fx-swapper", "cow"]) {
   });
 }
 
-// --- 3. The local chain opts in, production does not -------------------------
-check("_local-chain.ts pins fx-swapper with ??=, so a harness can still override", () => {
+// --- 3. The local chain pins no venue ---------------------------------------
+check("_local-chain.ts does not pin a liquidity venue", () => {
   const src = readFileSync("scripts/_local-chain.ts", "utf8");
-  assert.match(
+  assert.doesNotMatch(
     src,
-    /process\.env\.LIQUIDITY_PROVIDER \?\?= "fx-swapper"/,
-    "local hardhat must opt INTO the custodial venue explicitly — it has neither LI.FI nor a seeded pool",
+    /process\.env\.LIQUIDITY_PROVIDER\s*\?{0,2}=/,
+    "the local chain must inherit the non-custodial default, not pin a venue",
   );
 });
 

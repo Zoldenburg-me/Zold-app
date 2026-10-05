@@ -29,7 +29,6 @@
     "audit:deps": "npm audit",
     "check": "tsx scripts/check.ts",
     "check:live": "CHECK_LIVE=1 tsx scripts/check.ts",
-    "quote-binding:test": "tsx scripts/quote-binding-test.ts",
     "device-key:test": "tsx scripts/device-key-test.ts",
     "passkey-safe:test": "tsx scripts/passkey-safe-plan-test.ts",
     "safe-signers:test": "tsx scripts/safe-signers-test.ts",
