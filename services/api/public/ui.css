@@ -463,6 +463,16 @@ html:has(.z-app__foot) { scroll-padding-bottom: 140px; }
 .z-page { display: flex; flex-direction: column; gap: var(--z-space-3); padding: var(--z-space-4); }
 .z-page__head { display: flex; align-items: center; gap: var(--z-space-3); }
 .z-page .z-avatar { width: 48px; height: 48px; }
+/* The pay card on Profile: the landing page's "Pay Miriam" phone, for real. */
+.z-paycard { position: relative; display: flex; flex-direction: column; gap: var(--z-space-4); padding: var(--z-space-5) var(--z-space-4) var(--z-space-4); background: linear-gradient(180deg, var(--z-sheet), var(--z-card)); }
+.z-paycard > .z-iconbtn { position: absolute; top: var(--z-space-3); right: var(--z-space-3); border-color: transparent; background: none; }
+.z-paycard__who { display: flex; flex-direction: column; align-items: center; gap: var(--z-space-2); text-align: center; }
+.z-paycard .z-avatar { width: 64px; height: 64px; border-radius: 50%; font-size: 20px; border: 2px solid color-mix(in srgb, var(--z-pink) 55%, transparent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--z-pink) 12%, transparent); }
+.z-paycard__name { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.03em; color: var(--z-heading); }
+.z-paycard__link { font-size: 13px; color: var(--z-pink-soft); overflow-wrap: anywhere; }
+.z-paycard .z-seg { margin: 0; min-width: 0; }
+.z-paycard__rows { padding: 0; background: var(--z-card); }
+.z-paycard__rows > .z-copy + .z-copy { border-top: 1px solid var(--z-line); }
 .z-switch { display: flex; align-items: center; gap: var(--z-space-3); padding: 14px; color: var(--z-text); }
 a.z-switch:hover { border-color: var(--z-line-hover); color: var(--z-text); }
 .z-switch .z-row__sub { white-space: normal; }
