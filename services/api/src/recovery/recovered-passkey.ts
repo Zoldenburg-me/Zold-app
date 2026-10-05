@@ -8,6 +8,7 @@ import { createPublicClient, createWalletClient, http } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { CHAIN_ID, HARNESS, KEYS } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
+import { revokeOtherSessions } from "../http/sessions.js";
 import {
   CANDIDE,
   deployWebAuthnVerifierTransaction,
@@ -81,8 +82,6 @@ export function bindRecoveredPasskey(user: User, np: NewPasskey, now: Date): Use
     },
     authorizerAddress: undefined,
   });
-  for (const s of store.sessions) {
-    if (s.userId === user.id && !s.revokedAt) store.revokeSession(s.id);
-  }
+  revokeOtherSessions(user.id);
   return updated;
 }

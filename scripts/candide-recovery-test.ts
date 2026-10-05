@@ -109,7 +109,7 @@ async function makePasskey(label: string) {
     jwk,
     register: (challenge: string) => ({
       credentialId: b64url(credId),
-      attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x41, 0, true)]]))),
+      attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x45, 0, true)]]))),
       clientDataJSON: clientData("webauthn.create", challenge),
     }),
     assert: async (challenge: string) => {
@@ -345,6 +345,32 @@ try {
     const r = await call("/api/users", { name: "Second Rosa", email: EMAIL.toUpperCase(), country: "DE" }, undefined, "");
     assert.equal(r.status, 409, JSON.stringify(r.data));
     assert.equal(r.data.code, "EMAIL_IN_USE");
+  });
+  await t("replacing a passkey before the Safe exists needs the old one, and signs out every other session", async () => {
+    const acct = await call("/api/users", { name: "Swap Sam", email: "swap@example.com", country: "DE" }, undefined, "");
+    assert.equal(acct.status, 201, JSON.stringify(acct.data));
+    const id: string = acct.data.id;
+    const mine: string = acct.data.sessionToken;
+    const first = await makePasskey("swap-first");
+    const reg1 = await call("/api/webauthn/challenge", { purpose: "register" }, undefined, mine);
+    assert.equal((await call(`/api/users/${id}/passkey`, first.register(reg1.data.challenge), undefined, mine)).status, 201);
+    const login = await call("/api/webauthn/challenge", { purpose: "login" }, undefined, "");
+    const other = await call("/api/passkey/login", await first.assert(login.data.challenge), undefined, "");
+    assert.equal(other.status, 200, JSON.stringify(other.data));
+    const second = await makePasskey("swap-second");
+    const reg2 = await call("/api/webauthn/challenge", { purpose: "register" }, undefined, mine);
+    const refused = await call(`/api/users/${id}/passkey`, second.register(reg2.data.challenge), undefined, mine);
+    assert.equal(refused.status, 401, `a session alone must not replace the passkey: ${JSON.stringify(refused.data)}`);
+    const reg3 = await call("/api/webauthn/challenge", { purpose: "register" }, undefined, mine);
+    const step = await call("/api/webauthn/challenge", { purpose: "step_up" }, undefined, mine);
+    const replaced = await call(`/api/users/${id}/passkey`, {
+      ...second.register(reg3.data.challenge),
+      stepUp: await first.assert(step.data.challenge),
+    }, undefined, mine);
+    assert.equal(replaced.status, 201, JSON.stringify(replaced.data));
+    assert.equal(replaced.data.passkey.credentialId, second.credentialId);
+    assert.equal((await call(`/api/users/${id}`, undefined, undefined, other.data.sessionToken)).status, 401, "the other session is revoked");
+    assert.equal((await call(`/api/users/${id}`, undefined, undefined, mine)).status, 200, "the session that approved it stays");
   });
   await t("an abandoned signup with no passkey does not lock its email", async () => {
     const first = await call("/api/users", { name: "Abandoned", email: "abandoned@example.com", country: "DE" }, undefined, "");

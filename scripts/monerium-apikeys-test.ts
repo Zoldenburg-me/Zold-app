@@ -154,7 +154,7 @@ async function makePasskey() {
       attestation: b64url(enc(new Map<string, any>([
         ["fmt", "none"],
         ["attStmt", new Map()],
-        ["authData", authData(0x41, 0, true)],
+        ["authData", authData(0x45, 0, true)],
       ]))),
       clientDataJSON: clientData("webauthn.create", challenge),
     }),
@@ -661,9 +661,51 @@ try {
     assert.equal(seen.unauthorised, 0);
   });
 
+  /** A fresh passkey approval, as the app sends with a credential change. */
+  const stepUp = async () => {
+    const c = await call("/api/webauthn/challenge", { purpose: "step_up" });
+    assert.equal(c.status, 200, `step-up challenge failed: ${c.text}`);
+    return { stepUp: await passkey.assert(c.data.challenge, ++count) };
+  };
+  /** Another signed-in browser on the same account. */
+  const otherSession = async () => {
+    const c = await call("/api/webauthn/challenge", { purpose: "login" });
+    const r = await call("/api/passkey/login", await passkey.assert(c.data.challenge, ++count));
+    assert.equal(r.status, 200, `login failed: ${r.text}`);
+    return r.data.sessionToken as string;
+  };
+  const withToken = async <T>(t: string, fn: () => Promise<T>) => {
+    const mine = token;
+    token = t;
+    try { return await fn(); } finally { token = mine; }
+  };
+
+  await t("a session alone cannot replace or drop the connected Monerium credential", async () => {
+    const replace = await call(`/api/users/${userId}/monerium/api-keys`, { clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
+    assert.equal(replace.status, 401, `replace without passkey: ${replace.text}`);
+    assert.match(replace.data.error, /fresh passkey approval/);
+    const dropKeys = await call(`/api/users/${userId}/monerium/api-keys`, undefined, "DELETE");
+    assert.equal(dropKeys.status, 401, `remove keys without passkey: ${dropKeys.text}`);
+    const dropConnection = await call(`/api/users/${userId}/monerium/connect`, undefined, "DELETE");
+    assert.equal(dropConnection.status, 401, `disconnect without passkey: ${dropConnection.text}`);
+    const me = await call(`/api/users/${userId}`);
+    assert.equal(me.data.monerium?.method, "api_keys", "the keys are still connected");
+    assert.equal(me.data.iban, EXISTING_IBAN, "and the IBAN is still recorded");
+  });
+
+  await t("replacing the keys with the passkey works and signs out every other session", async () => {
+    const other = await otherSession();
+    const r = await call(`/api/users/${userId}/monerium/api-keys`, { ...(await stepUp()), clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
+    assert.equal(r.status, 201, `replace with passkey failed: ${r.text}`);
+    assert.equal((await withToken(other, () => call(`/api/users/${userId}`))).status, 401, "the other session is revoked");
+    assert.equal((await call(`/api/users/${userId}`)).status, 200, "the session that approved it stays");
+  });
+
   await t("removing the keys drops them from the store and closes the connection", async () => {
-    const r = await call(`/api/users/${userId}/monerium/api-keys`, undefined, "DELETE");
+    const other = await otherSession();
+    const r = await call(`/api/users/${userId}/monerium/api-keys`, await stepUp(), "DELETE");
     assert.equal(r.status, 200, `remove failed: ${r.text}`);
+    assert.equal((await withToken(other, () => call(`/api/users/${userId}`))).status, 401, "the other session is revoked");
     assert.equal(r.data.monerium, undefined);
     assert.equal(r.data.iban, EXISTING_IBAN, "the IBAN Monerium attributes to the Safe still exists and stays recorded");
     assert.match(r.data.funding.detail ?? "", /keys removed/);

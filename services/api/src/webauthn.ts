@@ -243,6 +243,9 @@ export function verifyRegistration(
   const authData = parseAuthData(Buffer.from(att.get("authData")));
   if (!authData.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");
   if (!(authData.flags & 0x01)) throw new Error("webauthn: user presence not asserted");
+  // The passkey becomes the account's sign-in and its Safe's owner, so a key
+  // that only proves a touch (no PIN, no biometric) is not enough to enrol.
+  if (!(authData.flags & 0x04)) throw new Error("webauthn: user verification required to register a passkey");
   if (!authData.credentialId || !authData.key) throw new Error("webauthn: no credential in attestation");
   return { credentialId: bufToB64url(authData.credentialId), key: authData.key, signCount: authData.signCount };
 }
@@ -260,7 +263,9 @@ export async function verifyAssertion(
 ): Promise<{ signCount: number }> {
   const clientDataJSON = b64urlToBuf(clientDataJSONB64);
   checkClientData(clientDataJSON, "webauthn.get", origins, purpose, binding);
-  return verifyAssertionBytes(authenticatorDataB64, clientDataJSON, signatureB64, storedKey, storedCount, rpId, purpose === "step_up");
+  // Every purpose requires UV. A login hands out a session that can change
+  // account settings, so a touch on a stolen security key must not be one.
+  return verifyAssertionBytes(authenticatorDataB64, clientDataJSON, signatureB64, storedKey, storedCount, rpId, true);
 }
 
 export async function verifyAssertionForChallenge(
@@ -294,10 +299,9 @@ async function verifyAssertionBytes(
   const parsed = parseAuthDataHeader(authData);
   if (!parsed.rpIdHash.equals(sha256(rpId))) throw new Error("webauthn: rpId mismatch");
   if (!(parsed.flags & 0x01)) throw new Error("webauthn: user presence not asserted");
-  // A step-up gates a money-moving or key-binding action, so presence (someone
-  // touched the key) is not enough — require that the authenticator actually
-  // verified the human (UV flag). Otherwise "Face ID approved this payment" is a
-  // claim the server never checked.
+  // Presence (someone touched the key) is not enough — require that the
+  // authenticator actually verified the human (UV flag). Otherwise "Face ID
+  // approved this" is a claim the server never checked.
   if (requireUserVerification && !(parsed.flags & 0x04)) {
     throw new Error("webauthn: user verification required for this action");
   }
