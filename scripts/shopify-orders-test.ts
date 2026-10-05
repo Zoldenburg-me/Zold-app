@@ -322,6 +322,25 @@ await check("the email link redirects to the order's pay page only with the orde
   assert.ok(!store.findShopifyConnectionByShop(SHOP)!.orderLinkSecretEnc!.includes(key), "the link key is stored in the clear");
   assert.equal(await linkKey(), key, "the key changed between two views");
 });
+/** The pay-link template as Shopify's notification Liquid would render it
+ *  for one order: only `{{ id }}` and `{{ id | hmac_sha256: "k" }}` are
+ *  known, so any other variable is left in and fails the check. */
+const renderPayLink = (template: string, id: number) =>
+  template
+    .replace(/\{\{ id \| hmac_sha256: "([^"]*)" \}\}/g, (_m, key) => sign(key, id))
+    .replace(/\{\{ id \}\}/g, String(id));
+await check("the email template, rendered as Shopify would for an order, is a link that opens that order's pay page (BUG: path and signature, or the shop, could disagree)", async () => {
+  const view = await call("GET", `/api/orgs/${org.id}/shopify`, { user: merchant.id });
+  const rendered = renderPayLink(view.body.connections[0].payLinkTemplate, o1.id);
+  assert.ok(!rendered.includes("{{"), `the template needs Liquid Shopify does not document for notifications: ${rendered}`);
+  const u = new URL(rendered);
+  const r = await call("GET", `${u.pathname}${u.search}`);
+  assert.equal(r.status, 302, `${u.pathname}${u.search} -> ${r.status} ${r.body.text ?? ""}`);
+  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
+  assert.ok(r.location.endsWith(`/pay/keycard/${req.code.slice(0, 5)}-${req.code.slice(5, 10)}-${req.code.slice(10)}`), r.location);
+  const other = renderPayLink(view.body.connections[0].payLinkTemplate, o1.id + 1);
+  assert.equal((await call("GET", new URL(other).pathname + `?b=${new URL(rendered).searchParams.get("b")}`)).status, 403, "one order's signature opened another order");
+});
 await check("without a valid signature the email link is the same 403 whether the order exists or not, and never names the code", async () => {
   const key = await linkKey();
   const other = order();
