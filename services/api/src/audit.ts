@@ -44,7 +44,9 @@ export type AuditKind =
   /** An imported wallet's ownership proof was checked on its chain: prove or
    *  re-check, and what the chain answered. */
   | "wallet.ownership_checked"
-  | "org.payment_review_changed";
+  | "org.payment_review_changed"
+  /** The payout IBAN printed on invoices changed: last four characters only. */
+  | "org.invoice_iban_changed";
 
 export interface AuditEntry {
   id: string;

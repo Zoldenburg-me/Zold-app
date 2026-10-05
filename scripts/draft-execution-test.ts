@@ -515,6 +515,36 @@ try {
     assert.equal(paidFresh.draft.lines[0].amount, "60.00");
   });
 
+  // A supplier link that names a known contact's IBAN under another holder:
+  // the address book is not touched and the draft names the contact's holder.
+  const link4 = await ok("POST", `/api/orgs/${org.id}/invoices`, { token: ownerToken, body: { currency: "EUR" } });
+  const supplierBody = (over: Record<string, unknown>) => ({
+    supplier: { orgName: "Someone Else GmbH", email: "x@else.example", invoiceNumber: "SE-1" },
+    lines: [{ description: "Work", quantity: "1", unitPrice: "10.00" }],
+    payTo: { kind: "bank", bank: { holderName: "Someone Else GmbH", iban: "DE89370400440532013000" } },
+    ...over,
+  });
+  const badDue = await call("POST", `/api/invoice-links/${link4.linkToken}/submit`, { body: supplierBody({ dueDate: "x".repeat(5000) }) });
+  const longHolder = await call("POST", `/api/invoice-links/${link4.linkToken}/submit`, {
+    body: supplierBody({ payTo: { kind: "bank", bank: { holderName: "H".repeat(71), iban: "DE89370400440532013000" } } }),
+  });
+  check("a supplier's due date must be a date and the holder name is bounded", () => {
+    assert.equal(badDue.status, 400, JSON.stringify(badDue.data));
+    assert.match(badDue.data.error, /due date/i);
+    assert.equal(longHolder.status, 400, JSON.stringify(longHolder.data));
+    assert.match(longHolder.data.error, /70 characters/);
+  });
+  const before = JSON.stringify((await ok("GET", `/api/orgs/${org.id}/contacts`, { token: ownerToken })).contacts.find((c: any) => c.id === contact.id));
+  const other = await ok("POST", `/api/invoice-links/${link4.linkToken}/submit`, { body: supplierBody({ dueDate: "2026-12-31" }) });
+  const paidOther = await ok("POST", `/api/orgs/${org.id}/invoices/${other.invoice.id}/pay`, { token: ownerToken, body: {} });
+  const after = JSON.stringify((await ok("GET", `/api/orgs/${org.id}/contacts`, { token: ownerToken })).contacts.find((c: any) => c.id === contact.id));
+  check("a supplier naming a known IBAN changes nothing in the address book, and the draft names the contact's holder", () => {
+    assert.equal(paidOther.contact.id, contact.id);
+    assert.equal(after, before, "the contact's bank details are untouched");
+    assert.equal(paidOther.draft.lines[0].destination.displayName, contact.bankAccounts[0].holderName);
+    assert.equal(paidOther.draft.state, "DRAFT", "paying it is a draft, which goes through review like any other");
+  });
+
   console.log(`\nDRAFT EXECUTION TEST PASSED — ${passed}/${passed} checks.`);
   console.log("Draft execution is the same code path as a direct transfer, refuses as a whole,");
   console.log("and moves nothing without the account holder's device.\n");

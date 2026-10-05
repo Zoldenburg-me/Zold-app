@@ -51,6 +51,7 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
+const { createInvoicingRoutes } = await import("../services/api/src/routes/business/invoicing.js");
 const { encryptToken } = await import("../services/api/src/adapters/monerium-connection.js");
 const { issueChallenge, stepUpBinding, verifyRegistration } = await import("../services/api/src/webauthn.js");
 const { paymentReviewRequired, reviewHeldOnPlanChange } = await import("../services/api/src/domain/payment-review.js");
@@ -99,9 +100,9 @@ async function makePasskey(userId: string) {
   return {
     stored: { credentialId: reg.credentialId, publicKey: reg.key, signCount: 0, rpId: SECURITY.rpId, createdAt: new Date().toISOString() },
     /** A step-up assertion (user verified) over a fresh step_up challenge. */
-    stepUp: async () => {
+    stepUp: async (action = "org.payment-review.off") => {
       count += 1;
-      const cd = clientData("webauthn.get", issueChallenge("step_up", stepUpBinding(userId, "org.payment-review.off")));
+      const cd = clientData("webauthn.get", issueChallenge("step_up", stepUpBinding(userId, action)));
       const ad = authData(0x05, count);
       const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, Buffer.concat([ad, sha256(Buffer.from(cd, "base64url"))])));
       return { credentialId: reg.credentialId, authenticatorData: b64url(ad), clientDataJSON: cd, signature: b64url(derOf(raw)) };
@@ -144,6 +145,7 @@ const noTransfers = (async () => { throw new Error("no transfer is built in this
 /** Runs inside the balance read, the last await before the claim. */
 let duringBalanceRead: (() => void) | undefined;
 const richBalance = async () => { duringBalanceRead?.(); return { safeBalanceEur: 1_000_000 }; };
+app.use("/api/orgs", createInvoicingRoutes({ ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession) }));
 app.use("/api/orgs", createDraftRoutes({ ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession) }, noTransfers, richBalance));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
@@ -415,6 +417,56 @@ await check("cancelled drafts do not count against the open-drafts ceiling", asy
   await call("POST", `/api/orgs/org_c/drafts/${d}/cancel`, "u_payer");
   const after = store.draftsOf("org_c").filter((x) => !["EXECUTED", "FAILED", "REJECTED", "CANCELLED"].includes(x.state)).length;
   assert.equal(after, before);
+});
+
+console.log("\nThe payout IBAN on invoices takes an owner or admin and a passkey");
+
+addOrg("org_iban", "business");
+const PAYOUT = "DE89370400440532013000";
+const OTHER = "EE382200221020145685";
+const ibanOf = () => store.findOrganisation("org_iban")!.invoicing?.bank?.iban;
+await check("an owner with a fresh passkey approval sets the payout IBAN, and the change is audited by last four", async () => {
+  const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_owner", { bank: { iban: PAYOUT }, stepUp: await ownerKey.stepUp("org.invoice-iban.change") });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(ibanOf(), PAYOUT);
+  const audit = store.auditFor(undefined, 10_000).filter((e) => e.kind === "org.invoice_iban_changed");
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0].data.oldLast4, null);
+  assert.equal(audit[0].data.newLast4, "3000");
+  assert.equal(audit[0].userId, "u_owner");
+  assert.ok(!JSON.stringify(audit[0]).includes(PAYOUT), "the full IBAN is not in the audit log");
+});
+await check("a payer, who may manage invoices, cannot change the payout IBAN", async () => {
+  const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_payer", { bank: { iban: OTHER } });
+  assert.equal(r.status, 403, JSON.stringify(r.data));
+  assert.equal(ibanOf(), PAYOUT);
+});
+await check("a payer still saves the rest of the profile when the IBAN is unchanged", async () => {
+  const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_payer", { footerNote: "Danke", bank: { iban: "de89 3704 0044 0532 0130 00" } });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(store.findOrganisation("org_iban")!.invoicing?.footerNote, "Danke");
+  assert.equal(ibanOf(), PAYOUT);
+});
+await check("an owner without a fresh passkey approval cannot change it, and nothing else in the request is saved", async () => {
+  const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_owner", { footerNote: "changed", bank: { iban: OTHER } });
+  assert.equal(r.status, 401, JSON.stringify(r.data));
+  assert.equal(ibanOf(), PAYOUT);
+  assert.equal(store.findOrganisation("org_iban")!.invoicing?.footerNote, "Danke");
+});
+await check("an admin with no passkey cannot change it", async () => {
+  const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_admin", { bank: { iban: OTHER } });
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.equal(ibanOf(), PAYOUT);
+});
+await check("clearing it is a change too, and is audited", async () => {
+  assert.equal((await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_payer", { bank: { iban: "" } })).status, 403);
+  const r = await call("PATCH", "/api/orgs/org_iban/invoicing/profile", "u_owner", { bank: { iban: "" }, stepUp: await ownerKey.stepUp("org.invoice-iban.change") });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(ibanOf(), undefined);
+  const audit = store.auditFor(undefined, 10_000).filter((e) => e.kind === "org.invoice_iban_changed");
+  assert.equal(audit.length, 2);
+  assert.equal(audit[0].data.oldLast4, "3000", "newest first");
+  assert.equal(audit[0].data.newLast4, null);
 });
 
 server.close();
