@@ -39,7 +39,7 @@ type Profile = { id: string; kind: "personal" | "corporate"; state: string; name
 const visible = new Map<string, Profile[]>();
 /** The IBANs each bearer token sees at GET /ibans (none unless set). */
 const ibansOf = new Map<string, any[]>();
-const fake = { down: false, reads: 0, appGrants: 0 };
+const fake = { down: false, reads: 0, appGrants: 0, onProfileRead: undefined as undefined | (() => void) };
 const APP_TOKEN = "tok-app";
 
 const monerium = createServer((req, res) => {
@@ -66,6 +66,7 @@ const monerium = createServer((req, res) => {
   if (m) {
     const p = mine.find((x) => x.id === decodeURIComponent(m[1]));
     if (!p) return send(403, { code: 403, status: "Forbidden" });
+    fake.onProfileRead?.();
     // Like the sandbox: no `name` on the single-profile answer.
     return send(200, { id: p.id, kind: p.kind, state: p.state, details: { state: "approved" }, form: { state: "approved" }, verifications: [] });
   }
@@ -84,6 +85,7 @@ const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { MoneriumAccessError } = await import("../services/api/src/adapters/monerium-client.js");
 const { normaliseLegalName, nameWarning, pickProfileForSignup } = await import("../services/api/src/domain/monerium-profile.js");
 const { HARNESS, MONERIUM } = await import("../services/api/src/config.js");
+const { currentFingerprint } = await import("../services/api/src/domain/drafts.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -390,6 +392,32 @@ await check("execution passes the profile check for a still-corporate profile (a
   assert.ok(!String(r.data.code ?? "").startsWith("MONERIUM_"), JSON.stringify(r.data));
   assert.equal(audits().at(-1)!.data.stage, "execute");
   assert.equal(audits().at(-1)!.data.outcome, "passed");
+});
+
+await check("a contact's IBAN edited while execution waits on Monerium holds the draft: the edited IBAN is never planned", async () => {
+  const bank = { id: "ba_race", currency: "EUR", country: "DE", iban: "DE89370400440532013000", holderName: "Supplier GmbH" };
+  store.addContact({ id: "c_race", orgId: "org_biz", name: "Supplier GmbH", wallets: [], bankAccounts: [bank], createdAt: now, updatedAt: now } as any);
+  const destination: any = { kind: "bank", bankAccountId: bank.id, displayName: bank.holderName };
+  destination.fingerprint = currentFingerprint({ destination }, store.findContact("c_race")!);
+  store.addDraft({
+    id: "dr_race", orgId: "org_biz", source: { kind: "account", accountId: "acc_biz" }, state: "REVIEWED",
+    lines: [{ id: "ln_race", contactId: "c_race", destination, asset: "EUR", amount: "10.00", tags: [] }],
+    createdByMemberId: "m_org_biz_u_corp", activity: [], createdAt: now, updatedAt: now,
+  } as any);
+  // The edit lands after the drift check at the top of the route and before
+  // its bank details are read: inside the Monerium profile call.
+  fake.onProfileRead = () => {
+    store.updateContact("c_race", { bankAccounts: [{ ...bank, iban: "FR7630006000011234567890189", country: "FR" }] } as any);
+  };
+  try {
+    const r = await call("POST", "/api/orgs/org_biz/drafts/dr_race/execute", "u_corp");
+    assert.equal(r.status, 409, JSON.stringify(r.data));
+    assert.match(r.data.error, /recipients changed/);
+    assert.equal(store.findDraft("dr_race")!.state, "INVALID_DATA");
+    assert.deepEqual(store.findDraft("dr_race")!.invalidLineIds, ["ln_race"]);
+  } finally {
+    fake.onProfileRead = undefined;
+  }
 });
 
 await check("execution is refused after the profile's kind changes at Monerium, before any quote", async () => {

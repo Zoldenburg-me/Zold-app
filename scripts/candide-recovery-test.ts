@@ -324,6 +324,16 @@ try {
   }
   const safeAddress: string = (await call(`/api/users/${userId}`)).data.address;
 
+  await t("a deployed Safe's passkey cannot be swapped through registration: refused, Safe plan untouched", async () => {
+    const before = (await call(`/api/users/${userId}`)).data.passkeySafe;
+    const other = await makePasskey("swap-attempt");
+    const challenge = await call("/api/webauthn/challenge", { purpose: "register" });
+    const r = await call(`/api/users/${userId}/passkey`, other.register(challenge.data.challenge));
+    assert.equal(r.status, 409, JSON.stringify(r.data));
+    assert.equal(r.data.code, "SAFE_OWNER_ON_CHAIN");
+    assert.deepEqual((await call(`/api/users/${userId}`)).data.passkeySafe, before);
+  });
+
   // Signup rules that exist for recovery's sake: the email is what a lost
   // device names, so it must exist and must resolve to ONE claimable account.
   await t("signup refuses an account with no email", async () => {
