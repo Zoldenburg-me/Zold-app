@@ -62,6 +62,7 @@ const scripts = [
   "draft:test",
   "draft:failure:test",
   "payment-review:test",
+  "deposit-invoice-link:test",
   "security:test",
   "plan:test",
   "admin:test",

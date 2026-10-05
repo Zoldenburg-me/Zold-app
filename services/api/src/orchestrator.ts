@@ -49,7 +49,8 @@ import {
   writeAndWait,
 } from "./chain.js";
 import {
-  submitPasskeySafeOperation,
+  SafeOperationUncertainError,
+  submitPasskeySafeOperationWithReceipt,
   type BrowserPasskeyAssertion,
   type PasskeySafeDeploymentPlan,
 } from "./wallet/candide.js";
@@ -73,7 +74,7 @@ export interface PaymentAuthorization {
  */
 export interface SafeExecution {
   plan: PasskeySafeDeploymentPlan;
-  userOperation: Parameters<typeof submitPasskeySafeOperation>[1];
+  userOperation: Parameters<typeof submitPasskeySafeOperationWithReceipt>[1];
   assertion: BrowserPasskeyAssertion;
   /**
    * Present when the operation is the full fee+approve+swap batch: the debit
@@ -324,8 +325,16 @@ async function submitSafeExecution(user: User, execution: SafeExecution | undefi
       "this transfer has no passkey-approved Safe execution — create the transfer again and approve it with your passkey",
     );
   }
-  const opHash = await submitPasskeySafeOperation(execution.plan, execution.userOperation, execution.assertion);
-  return opHash ?? "0x";
+  // A timeout after the bundler took the op throws SafeOperationUncertainError,
+  // which failAndCompensate sends to review instead of refunding.
+  const op = await submitPasskeySafeOperationWithReceipt(execution.plan, execution.userOperation, execution.assertion);
+  // Included but reverted: the chain undid the call, so the debit never left
+  // the Safe (gas did, unless sponsored). Throwing before the debit step is
+  // recorded keeps the refund at zero.
+  if (op.success === false) {
+    throw new Error(`the Safe operation ${op.userOpHash} was included but reverted — the debit never left the Safe`);
+  }
+  return op.userOpHash ?? "0x";
 }
 
 function bridgeDestination(): { toAddress: string; blockchainMemo?: string } {
@@ -373,6 +382,15 @@ function cashPayoutState(pickup: NonNullable<Transfer["pickup"]>): TransferState
  */
 async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Promise<Transfer> {
   const message = String(err?.shortMessage ?? err?.message ?? err);
+  // The debit was sent and may still land: whether money left the Safe is
+  // unknown, so neither "nothing was debited" nor a refund is safe.
+  if (err instanceof SafeOperationUncertainError) {
+    return store.updateTransfer(id, {
+      state: "MANUAL_REVIEW",
+      error: `${message}; check the operation on chain before any refund`,
+      txs: [...txs, { step: "safe.debit.unconfirmed", hash: err.userOpHash }],
+    });
+  }
   const failed = store.updateTransfer(id, {
     state: "FAILED",
     error: message,

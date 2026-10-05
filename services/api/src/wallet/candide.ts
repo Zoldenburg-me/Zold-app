@@ -19,6 +19,7 @@ import {
   SocialRecoveryModule,
   SocialRecoveryModuleGracePeriodSelector,
   calculateUserOperationMaxGasCost,
+  createUserOperationHash,
   fromSafeWebauthn,
   getSafeMessageEip712Data,
   webauthnSignatureFromAssertion,
@@ -124,6 +125,30 @@ const paymaster = () =>
  *  asks. The whole HTTP request blocks on this. */
 const INCLUSION_TIMEOUT_S = 180;
 const INCLUSION_POLL_S = 2;
+
+/**
+ * The bundler accepted the operation but we never saw its receipt (a timeout,
+ * a dropped connection). It may still land, so whatever it moves is unknown:
+ * a caller must not read this as "nothing happened".
+ */
+/**
+ * A JSON-RPC error the bundler sent back: it read the op and refused it.
+ * -32603 is excluded because abstractionkit also uses it for a reply it could
+ * not parse, which says nothing about whether the op was taken.
+ */
+function bundlerRefused(err: unknown): boolean {
+  const errno = (err as { errno?: unknown })?.errno;
+  return typeof errno === "number" && errno !== -32603;
+}
+
+export class SafeOperationUncertainError extends Error {
+  constructor(readonly userOpHash: string, cause: unknown) {
+    super(
+      `the Safe operation ${userOpHash} was sent but its inclusion was not confirmed ` +
+        `(${String((cause as any)?.message ?? cause)}); it may still land`,
+    );
+  }
+}
 
 function b64urlToBigInt(value: string): bigint {
   const buf = Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64");
@@ -615,8 +640,28 @@ export async function submitPasskeySafeOperationWithReceipt(
     [passkeySigner],
     CANDIDE.chainId,
   );
-  const response = await account.sendUserOperation(userOperation, bundler());
-  const receipt = await response.included(INCLUSION_TIMEOUT_S, INCLUSION_POLL_S);
+  let response: Awaited<ReturnType<typeof account.sendUserOperation>>;
+  try {
+    response = await account.sendUserOperation(userOperation, bundler());
+  } catch (err) {
+    // Only the bundler's own JSON-RPC refusal proves the op was not taken. A
+    // dropped connection, an abort or an unreadable reply may follow an
+    // accepted op, so that is uncertain, named by the hash it would land under.
+    if (!bundlerRefused(err)) {
+      throw new SafeOperationUncertainError(
+        createUserOperationHash(userOperation, account.entrypointAddress, BigInt(CANDIDE.chainId)),
+        err,
+      );
+    }
+    throw err;
+  }
+  let receipt: Awaited<ReturnType<typeof response.included>>;
+  try {
+    receipt = await response.included(INCLUSION_TIMEOUT_S, INCLUSION_POLL_S);
+  } catch (err) {
+    throw new SafeOperationUncertainError(response.userOperationHash, err);
+  }
+  if (!receipt) throw new SafeOperationUncertainError(response.userOperationHash, "no receipt");
   return {
     userOpHash: response.userOperationHash,
     ...(receipt

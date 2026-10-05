@@ -2,7 +2,7 @@
  * Draft payments: compose, edit, submit, review, execute.
  *
  * Four eyes: the reviewer may not be the drafter, whatever their role.
- * Editing another person's lines makes the editor the drafter.
+ * Any edit, with or without new lines, makes the editor the drafter.
  *
  * All-or-nothing at execution: every line is planned before anything is
  * created (wallet destinations, gated currencies, sub-fee and over-cap amounts
@@ -163,10 +163,12 @@ export function createDraftRoutes(
         // Re-pointing the lines is exactly how INVALID_DATA is resolved.
         state: "DRAFT",
         invalidLineIds: undefined,
-        // Whoever replaces the lines authored what is now in them, so they
-        // become the drafter four-eyes measures against. Without this, B could
-        // rewrite A's €1 draft into €9,000 to B's contact and then review it.
-        ...(replaced ? { createdByMemberId: ctx.member.id } : {}),
+        // Whoever edits authored what is now in it, so they become the drafter
+        // four-eyes measures against. That holds without `lines` too: every
+        // line is re-read from the address book above, so an empty edit is how
+        // a changed IBAN gets stamped into the draft. Without this, B could
+        // point A's payee at B's own IBAN, edit, and then review it.
+        createdByMemberId: ctx.member.id,
         reviewedByMemberId: undefined,
         reviewedAt: undefined,
         rejectedReason: undefined,

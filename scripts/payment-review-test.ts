@@ -355,6 +355,15 @@ await check("an approved draft can be edited: it goes back to DRAFT, its review 
   assert.equal((await call("POST", `/api/orgs/org_c/drafts/${d}/review`, "u_admin", { approve: true })).status, 403);
 });
 
+await check("an edit without lines re-reads the payees and still makes the editor the drafter, so they cannot approve it", async () => {
+  const d = await draftIn("org_c");
+  const r = await call("PATCH", `/api/orgs/org_c/drafts/${d}`, "u_admin", {});
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.draft.createdByMemberId, "m_org_c_u_admin");
+  await call("POST", `/api/orgs/org_c/drafts/${d}/submit`, "u_admin");
+  assert.equal((await call("POST", `/api/orgs/org_c/drafts/${d}/review`, "u_admin", { approve: true })).status, 403);
+});
+
 await check("a waiting draft can be edited too, and goes back to DRAFT", async () => {
   const d = await draftIn("org_c");
   await call("POST", `/api/orgs/org_c/drafts/${d}/submit`, "u_payer");
