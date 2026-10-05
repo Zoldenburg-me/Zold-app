@@ -229,6 +229,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const ctx = resolveOrg(req, res, requireSession);
       if (!ctx) return;
       if (!requirePermission(ctx, res, "org.read")) return;
+      // Carries payment codes and each store's email-link key.
+      res.setHeader("cache-control", "no-store");
       const connections = store.shopifyConnectionsForOrg(ctx.org.id);
       const shops = new Set(connections.map((c) => c.shop));
       const base = baseUrlFor(req);
