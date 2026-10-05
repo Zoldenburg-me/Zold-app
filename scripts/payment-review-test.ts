@@ -52,7 +52,7 @@ const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { encryptToken } = await import("../services/api/src/adapters/monerium-connection.js");
-const { issueChallenge, verifyRegistration } = await import("../services/api/src/webauthn.js");
+const { issueChallenge, stepUpBinding, verifyRegistration } = await import("../services/api/src/webauthn.js");
 const { paymentReviewRequired, reviewHeldOnPlanChange } = await import("../services/api/src/domain/payment-review.js");
 const { assertTransition, isCancellable, isEditable } = await import("../services/api/src/domain/drafts.js");
 const { HARNESS, SECURITY } = await import("../services/api/src/config.js");
@@ -101,7 +101,7 @@ async function makePasskey(userId: string) {
     /** A step-up assertion (user verified) over a fresh step_up challenge. */
     stepUp: async () => {
       count += 1;
-      const cd = clientData("webauthn.get", issueChallenge("step_up", userId));
+      const cd = clientData("webauthn.get", issueChallenge("step_up", stepUpBinding(userId, "org.payment-review.off")));
       const ad = authData(0x05, count);
       const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, Buffer.concat([ad, sha256(Buffer.from(cd, "base64url"))])));
       return { credentialId: reg.credentialId, authenticatorData: b64url(ad), clientDataJSON: cd, signature: b64url(derOf(raw)) };

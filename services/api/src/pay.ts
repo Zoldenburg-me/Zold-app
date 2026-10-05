@@ -211,12 +211,14 @@ export function paymentUri(payee: PublicPayee, amount?: number): string {
  *  the bank details of its euro account. An allowlist, like publicPayee: no
  *  member, no backing account, no balance. The BIC is Monerium's as reported,
  *  left out when unknown rather than guessed. `holder` is the name Monerium has
- *  for the profile, which is what the payer's bank checks the IBAN against. */
+ *  for the profile, which is what the payer's bank checks the IBAN against.
+ *  Without one it is the name the organisation typed, and `holderVerified` is
+ *  false so the page says so. */
 export interface PublicOrgPayee {
   kind: "organisation";
   handle: string;
   displayName: string;
-  bank: { holder: string; iban: string; bic?: string };
+  bank: { holder: string; holderVerified: boolean; iban: string; bic?: string };
 }
 
 export function publicOrgPayee(
@@ -232,7 +234,8 @@ export function publicOrgPayee(
     handle: page.handle,
     displayName: page.displayName || org.legalName || org.name,
     bank: {
-      holder: holder || org.legalName || org.name,
+      holder: holder?.trim() || org.legalName || org.name,
+      holderVerified: Boolean(holder?.trim()),
       iban: iban.replace(/\s+/g, ""),
       ...(account.identifier.bic ? { bic: account.identifier.bic } : {}),
     },

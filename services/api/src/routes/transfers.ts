@@ -219,7 +219,7 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
       if (!requireKycApproved(user, res)) return;
-      if (!(await verifyPasskeyStepUp(user, req.body, res))) return;
+      if (!(await verifyPasskeyStepUp(user, req.body, res, "authorizer.bind"))) return;
       const address = req.body?.address;
       if (typeof address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
         return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });

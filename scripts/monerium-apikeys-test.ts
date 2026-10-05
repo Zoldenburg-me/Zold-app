@@ -662,8 +662,8 @@ try {
   });
 
   /** A fresh passkey approval, as the app sends with a credential change. */
-  const stepUp = async () => {
-    const c = await call("/api/webauthn/challenge", { purpose: "step_up" });
+  const stepUp = async (action: "monerium.connect" | "monerium.disconnect") => {
+    const c = await call("/api/webauthn/challenge", { purpose: "step_up", action });
     assert.equal(c.status, 200, `step-up challenge failed: ${c.text}`);
     return { stepUp: await passkey.assert(c.data.challenge, ++count) };
   };
@@ -695,7 +695,7 @@ try {
 
   await t("replacing the keys with the passkey works and signs out every other session", async () => {
     const other = await otherSession();
-    const r = await call(`/api/users/${userId}/monerium/api-keys`, { ...(await stepUp()), clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
+    const r = await call(`/api/users/${userId}/monerium/api-keys`, { ...(await stepUp("monerium.connect")), clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
     assert.equal(r.status, 201, `replace with passkey failed: ${r.text}`);
     assert.equal((await withToken(other, () => call(`/api/users/${userId}`))).status, 401, "the other session is revoked");
     assert.equal((await call(`/api/users/${userId}`)).status, 200, "the session that approved it stays");
@@ -703,7 +703,7 @@ try {
 
   await t("removing the keys drops them from the store and closes the connection", async () => {
     const other = await otherSession();
-    const r = await call(`/api/users/${userId}/monerium/api-keys`, await stepUp(), "DELETE");
+    const r = await call(`/api/users/${userId}/monerium/api-keys`, await stepUp("monerium.disconnect"), "DELETE");
     assert.equal(r.status, 200, `remove failed: ${r.text}`);
     assert.equal((await withToken(other, () => call(`/api/users/${userId}`))).status, 401, "the other session is revoked");
     assert.equal(r.data.monerium, undefined);
