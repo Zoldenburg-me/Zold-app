@@ -9,7 +9,9 @@
  * WHAT THIS EXISTS TO CATCH: a webhook must be acknowledged even when we
  * ignore the order (Shopify drops a subscription that keeps failing); only
  * OUR pending EUR orders may open a request; a redelivery must open nothing;
- * the lookup must be CORS-open and carry no PII; the mark-as-paid must reach
+ * the lookup must be CORS-open, carry no PII, and answer only the holder of
+ * the order's checkout token; the email link must redirect only with the
+ * store's signature, since order ids are sequential; the mark-as-paid must reach
  * the store exactly once, with a retry when the store refused; and a shop
  * name in the URL must not be able to show another store's order.
  *
@@ -18,7 +20,7 @@
 import "./_test-env.js";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { rmSync } from "node:fs";
@@ -177,6 +179,7 @@ const order = (over: Record<string, unknown> = {}) => {
     id, admin_graphql_api_id: `gid://shopify/Order/${id}`, name: `#${orderNo}`, currency: "EUR", total_price: "129.00",
     financial_status: "pending", payment_gateway_names: ["Zold — pay with crypto"], test: false,
     order_status_url: `https://${SHOP}/12345/orders/${randomUUID().replace(/-/g, "")}/authenticate?key=k`,
+    checkout_token: randomUUID().replace(/-/g, ""),
     customer: { email: "buyer@example.com", first_name: "Bea" }, shipping_address: { address1: "Somewhere 1" },
     ...over,
   };
@@ -236,8 +239,9 @@ await check("a test order carries the test flag", async () => {
 });
 
 console.log("\nThank-you page lookup");
-await check("the order lookup answers CORS-open with the pay-page projection, the order name and the page URL, and nothing about the buyer or the merchant's bank", async () => {
-  const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}`);
+const lookup = (o: { id: number; checkout_token?: string }, shop = SHOP) => call("GET", `/api/shopify/orders/${shop}/${o.id}?t=${o.checkout_token ?? ""}`);
+await check("the order lookup answers the checkout token's holder CORS-open with the pay-page projection, the order name and the pay page, and nothing about the buyer or the merchant's bank", async () => {
+  const r = await lookup(o1);
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.headers.get("access-control-allow-origin"), "*");
   assert.equal(r.body.orderName, "#3101");
@@ -245,12 +249,30 @@ await check("the order lookup answers CORS-open with the pay-page projection, th
   assert.equal(r.body.state, "OPEN");
   assert.ok(r.body.methods.crypto?.address, "no deposit address");
   assert.ok(r.body.methods.crypto?.amountUsdc > 146, "no USDC figure");
-  assert.equal(r.body.pageUrl, `${API}/api/shopify/orders/${SHOP}/${o1.id}/pay`);
-  const text = JSON.stringify(r.body);
   const code = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!.code;
-  const shown = `${code.slice(0, 5)}-${code.slice(5, 10)}-${code.slice(10)}`;
-  assert.equal(r.body.code, undefined, "the lookup handed out the payment code");
-  for (const secret of ["EE123456789012345678", "shop@example.com", merchant.id, "buyer@example.com", TOKEN, code, shown]) assert.ok(!text.includes(secret), `leaked ${secret}`);
+  assert.equal(r.body.pageUrl, `${API}/pay/keycard/${code.slice(0, 5)}-${code.slice(5, 10)}-${code.slice(10)}`);
+  const text = JSON.stringify(r.body);
+  for (const secret of ["EE123456789012345678", "shop@example.com", merchant.id, "buyer@example.com", TOKEN, o1.checkout_token]) assert.ok(!text.includes(secret), `leaked ${secret}`);
+  assert.ok(!JSON.stringify(store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)).includes(o1.checkout_token), "the checkout token was stored in the clear");
+});
+await check("without the order's checkout token the lookup is the same 404 `pending` as for an order that does not exist — counting order ids learns nothing", async () => {
+  const unknown = await call("GET", `/api/shopify/orders/${SHOP}/999?t=${o1.checkout_token}`);
+  assert.equal(unknown.status, 404);
+  for (const r of [
+    await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}`),
+    await lookup({ id: o1.id, checkout_token: "0".repeat(32) }),
+    await lookup({ id: o1.id, checkout_token: order().checkout_token }),
+  ]) {
+    assert.equal(r.status, 404);
+    assert.deepEqual(r.body, unknown.body);
+  }
+});
+await check("a request opened from a webhook without a checkout token cannot be read through the lookup at all", async () => {
+  const o = order({ checkout_token: undefined });
+  await webhook("orders/create", o);
+  assert.ok(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP));
+  assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${o.id}?t=`)).status, 404);
+  assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${o.id}?t=undefined`)).status, 404);
 });
 await check("a lapsed forwarder's address is not handed out by the order lookup either", async () => {
   // A Candide page past its activation, whose renewal cannot give back the
@@ -260,7 +282,7 @@ await check("a lapsed forwarder's address is not handed out by the order lookup 
   store.updateUser(merchant.id, { paymentPage: { ...page, depositAddress: forwarded, routesReadAt: now,
     forwarder: { provider: "candide", recipient: owner, destinationChainId: 31337, sourceChainIds: [31337], custodialWithdrawer: owner, active: true, expiresAt: new Date(Date.now() - 60_000).toISOString(), activatedAt: now } } });
   try {
-    const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}`);
+    const r = await lookup(o1);
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.methods.crypto, undefined, JSON.stringify(r.body.methods));
     assert.ok(!JSON.stringify(r.body).includes(forwarded), "the lapsed address went out");
@@ -269,20 +291,79 @@ await check("a lapsed forwarder's address is not handed out by the order lookup 
   }
 });
 await check("the lookup accepts the gid form too, and an order we do not know is a 404 marked pending", async () => {
-  assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${encodeURIComponent(o1.admin_graphql_api_id)}`)).status, 200);
-  const r = await call("GET", `/api/shopify/orders/${SHOP}/999`);
+  assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${encodeURIComponent(o1.admin_graphql_api_id)}?t=${o1.checkout_token}`)).status, 200);
+  const r = await lookup({ id: 999, checkout_token: o1.checkout_token });
   assert.equal(r.status, 404);
   assert.equal(r.body.pending, true);
 });
 await check("an order id under another shop's name is a 404 — a page cannot be made to show one store's order as another's", async () => {
-  assert.equal((await call("GET", `/api/shopify/orders/other-store.myshopify.com/${o1.id}`)).status, 404);
-  assert.equal((await call("GET", `/api/shopify/orders/not-a-shop/${o1.id}`)).status, 404);
+  assert.equal((await lookup(o1, "other-store.myshopify.com")).status, 404);
+  assert.equal((await lookup(o1, "not-a-shop")).status, 404);
 });
-await check("the email-template pay link redirects to the order's pay page", async () => {
-  const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay`);
+
+console.log("\nConfirmation-email pay link");
+const linkKey = async () => {
+  const r = await call("GET", `/api/orgs/${org.id}/shopify`, { user: merchant.id });
+  const m = /hmac_sha256: "([0-9a-f]{64})"/.exec(r.body.connections[0].payLinkTemplate ?? "");
+  assert.ok(m, `no signed template: ${r.body.connections[0].payLinkTemplate}`);
+  return m![1];
+};
+const sign = (key: string, id: number | string) => createHmac("sha256", key).update(String(id)).digest("hex");
+await check("before the store has a link key, no email link opens anything", async () => {
+  assert.equal(store.findShopifyConnectionByShop(SHOP)!.orderLinkSecretEnc, undefined);
+  assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=${"0".repeat(64)}`)).status, 403);
+});
+await check("the email link redirects to the order's pay page only with the order id signed by the store's key", async () => {
+  const key = await linkKey();
+  const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=${sign(key, o1.id)}`);
   assert.equal(r.status, 302);
   const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
   assert.ok(r.location.endsWith(`/pay/keycard/${req.code.slice(0, 5)}-${req.code.slice(5, 10)}-${req.code.slice(10)}`), r.location);
+  assert.ok(!store.findShopifyConnectionByShop(SHOP)!.orderLinkSecretEnc!.includes(key), "the link key is stored in the clear");
+  assert.equal(await linkKey(), key, "the key changed between two views");
+});
+/** The pay-link template as Shopify's notification Liquid would render it
+ *  for one order: only `{{ id }}` and `{{ id | hmac_sha256: "k" }}` are
+ *  known, so any other variable is left in and fails the check. */
+const renderPayLink = (template: string, id: number) =>
+  template
+    .replace(/\{\{ id \| hmac_sha256: "([^"]*)" \}\}/g, (_m, key) => sign(key, id))
+    .replace(/\{\{ id \}\}/g, String(id));
+await check("the email template, rendered as Shopify would for an order, is a link that opens that order's pay page (BUG: path and signature, or the shop, could disagree)", async () => {
+  const view = await call("GET", `/api/orgs/${org.id}/shopify`, { user: merchant.id });
+  const rendered = renderPayLink(view.body.connections[0].payLinkTemplate, o1.id);
+  assert.ok(!rendered.includes("{{"), `the template needs Liquid Shopify does not document for notifications: ${rendered}`);
+  const u = new URL(rendered);
+  const r = await call("GET", `${u.pathname}${u.search}`);
+  assert.equal(r.status, 302, `${u.pathname}${u.search} -> ${r.status} ${r.body.text ?? ""}`);
+  const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
+  assert.ok(r.location.endsWith(`/pay/keycard/${req.code.slice(0, 5)}-${req.code.slice(5, 10)}-${req.code.slice(10)}`), r.location);
+  const other = renderPayLink(view.body.connections[0].payLinkTemplate, o1.id + 1);
+  assert.equal((await call("GET", new URL(other).pathname + `?b=${new URL(rendered).searchParams.get("b")}`)).status, 403, "one order's signature opened another order");
+});
+await check("without a valid signature the email link is the same 403 whether the order exists or not, and never names the code", async () => {
+  const key = await linkKey();
+  const other = order();
+  const refusals = [
+    await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay`),
+    await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=${sign(key, other.id)}`),
+    await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=${sign("not-the-key", o1.id)}`),
+    await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=zz`),
+    await call("GET", `/api/shopify/orders/${SHOP}/999/pay`),
+    await call("GET", `/api/shopify/orders/other-store.myshopify.com/${o1.id}/pay?b=${sign(key, o1.id)}`),
+  ];
+  const code = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!.code;
+  for (const r of refusals) {
+    assert.equal(r.status, 403);
+    assert.equal(r.body.text, refusals[0].body.text);
+    assert.equal(r.location, "");
+    assert.ok(!r.body.text.includes(code.slice(0, 5)));
+  }
+});
+await check("a correctly signed link for an order whose webhook has not arrived says to try again", async () => {
+  const r = await call("GET", `/api/shopify/orders/${SHOP}/999/pay?b=${sign(await linkKey(), 999)}`);
+  assert.equal(r.status, 404);
+  assert.match(r.body.text, /not ready yet/);
 });
 
 console.log("\nSettlement");
@@ -310,7 +391,7 @@ await check("the buyer's USDC deposit marks the request PAID, the order is marke
   assert.ok(facts.payments[0].txHash?.startsWith("0x"));
 });
 await check("the lookup now reports PAID and the return link sends the buyer to Shopify's order status page", async () => {
-  const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}`);
+  const r = await lookup(o1);
   assert.equal(r.body.state, "PAID");
   const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
   const back = await call("GET", `/api/shopify/return/${req.code}`);
@@ -366,14 +447,16 @@ await check("a second store's orders/cancelled and orders/create for the SAME or
 });
 
 console.log("\nDashboard");
-await check("the org view says custom-app mode, lists the webhook and email-link endpoints, the orders with their names, and never the token", async () => {
+await check("the org view says custom-app mode, lists the webhook endpoint, each store's signed email link, the orders with their names, and never the token", async () => {
   const r = await call("GET", `/api/orgs/${org.id}/shopify`, { user: merchant.id });
   assert.equal(r.status, 200);
   assert.equal(r.body.mode, "custom-app");
   assert.equal(r.body.manualGateway, "zold");
   assert.equal(r.body.orderTtlHours, 24);
   assert.equal(r.body.endpoints.webhook, `${API}/api/shopify/webhooks/orders`);
-  assert.match(r.body.endpoints.payLinkTemplate, /\{\{ shop\.permanent_domain \}\}\/\{\{ order\.id \}\}\/pay$/);
+  assert.equal(r.headers.get("cache-control"), "no-store", "the view with the link key may be cached");
+  assert.equal(r.body.endpoints.payLinkTemplate, undefined, "an unsigned org-wide link is still offered");
+  assert.match(r.body.connections[0].payLinkTemplate, /^http.*\/api\/shopify\/orders\/keycard-demo\.myshopify\.com\/\{\{ id \}\}\/pay\?b=\{\{ id \| hmac_sha256: "[0-9a-f]{64}" \}\}$/);
   assert.equal(r.body.endpoints.payment, undefined, "payments-app endpoints shown in custom-app mode");
   assert.equal(r.body.connections[0].mode, "custom-app");
   assert.equal(r.body.connections[0].ready, true);

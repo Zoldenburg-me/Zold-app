@@ -97,6 +97,9 @@ export interface PaymentRequestSource {
   orderName?: string;
   /** Shopify's order status page — where the buyer lands afterwards. */
   orderStatusUrl?: string;
+  /** custom-app: SHA-256 of the order's `checkout_token`. The thank-you
+   *  page extension holds the token and presents it to read the order. */
+  checkoutTokenHash?: string;
   cancelUrl?: string;
   /** Where the payer goes once the merchant has been told. Set when the
    *  merchant's system answers the settlement call. */
