@@ -21,7 +21,8 @@ Known limitations are documented where they live rather than hidden:
 
 - `data/db.json` is plaintext local storage (names, emails, IBANs, transfer
   records); a real deployment needs an encrypted store, and identity stays
-  with Monerium.
+  with Monerium. `docs/security-hardening.md` is the plan for that, for
+  secrets and keys, and for mail.
 - Several external legs are proven only as far as their sandboxes allow;
   the code and docs say explicitly which halves have never run against
   the real counterparty.

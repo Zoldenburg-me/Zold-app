@@ -42,6 +42,17 @@ sets `KYC_AUTO_APPROVE=1`). Run a second API against the chain dev.ts started â€
 with the operator `*_KEY` vars **blanked** (.env holds real Base Sepolia keys
 that do not own the local deployment).
 
+## Toolchain and shell
+
+- The in-project node (`.toolchain/node-v22.17.0-darwin-arm64`) is an
+  **arm64** build. On an Intel Mac it fails with "Bad CPU type" (tsx too), so
+  use a system node; `npm run typecheck` works on either (tsc is pure JS).
+- `sw.js` serves page `.js`/`.css` network-first, so a deploy needs no
+  `SHELL_CACHE` bump unless the SHELL list or a vendored file changes.
+- zsh reads `:s/` in `$REF:services/...` as a substitution modifier, so a grep
+  over such a path can silently read nothing. Quote it, and confirm the file
+  is readable before trusting a count of zero.
+
 ## Browser pane and new pages
 
 - In the embedded browser pane, click coordinates are in SCREENSHOT space, and
