@@ -137,8 +137,10 @@ function orderLinkSecret(c: ShopifyConnection): string {
 /** What Liquid's `{{ id | hmac_sha256: key }}` renders: lower-case hex. */
 const orderLinkProof = (secret: string, orderId: string) => createHmac("sha256", secret).update(orderId).digest("hex");
 
+/** One template per connected store: the store's domain is written in, so
+ *  the email needs only `{{ id }}` and the `hmac_sha256` filter from Liquid. */
 function payLinkTemplate(base: string, c: ShopifyConnection): string {
-  return `${base}/api/shopify/orders/{{ shop.permanent_domain }}/{{ id }}/pay?b={{ id | hmac_sha256: "${orderLinkSecret(c)}" }}`;
+  return `${base}/api/shopify/orders/${encodeURIComponent(c.shop)}/{{ id }}/pay?b={{ id | hmac_sha256: "${orderLinkSecret(c)}" }}`;
 }
 
 /** Does `b` sign this order id under the shop's key? A shop that never had
