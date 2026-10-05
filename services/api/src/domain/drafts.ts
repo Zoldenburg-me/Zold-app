@@ -21,18 +21,21 @@ export class DraftError extends Error {}
 
 /** Legal moves. Anything not listed is refused by name, not by falling through. */
 const TRANSITIONS: Record<DraftState, DraftState[]> = {
-  // DRAFT -> EXECUTING is legal only for an org WITHOUT the approvals
-  // capability: on Starter there is no review step, so requiring REVIEWED
-  // would make every draft unsendable. The route enforces which of the two
-  // applies; the state machine allows both shapes.
-  DRAFT: ["PENDING_REVIEW", "INVALID_DATA", "EXECUTING"],
-  PENDING_REVIEW: ["REVIEWED", "REJECTED", "DRAFT", "INVALID_DATA"],
-  REVIEWED: ["EXECUTING", "DRAFT", "INVALID_DATA"],
-  REJECTED: ["DRAFT"],
-  INVALID_DATA: ["DRAFT"],
+  // DRAFT -> EXECUTING is legal only for an org whose payment review is off
+  // (domain/payment-review.ts). The route enforces which of the two applies;
+  // the state machine allows both shapes.
+  DRAFT: ["PENDING_REVIEW", "INVALID_DATA", "EXECUTING", "CANCELLED"],
+  // Editing a draft that is waiting or approved sends it back to DRAFT and
+  // clears the review: what was approved is no longer what is in it.
+  PENDING_REVIEW: ["REVIEWED", "REJECTED", "DRAFT", "INVALID_DATA", "CANCELLED"],
+  REVIEWED: ["EXECUTING", "DRAFT", "INVALID_DATA", "CANCELLED"],
+  REJECTED: ["DRAFT", "CANCELLED"],
+  INVALID_DATA: ["DRAFT", "CANCELLED"],
+  // Once execution starts, transfers may exist: nothing cancels it from here.
   EXECUTING: ["EXECUTED", "FAILED"],
   EXECUTED: [],
   FAILED: ["DRAFT"],
+  CANCELLED: [],
 };
 
 export function assertTransition(from: DraftState, to: DraftState) {
@@ -45,9 +48,15 @@ export function assertTransition(from: DraftState, to: DraftState) {
   }
 }
 
-/** States in which the draft's lines may still be edited. */
+/** States in which the draft's lines may still be edited. Nothing has been
+ *  sent from any of them; an edit returns the draft to DRAFT. */
 export function isEditable(state: DraftState): boolean {
-  return state === "DRAFT" || state === "INVALID_DATA" || state === "REJECTED";
+  return ["DRAFT", "INVALID_DATA", "REJECTED", "PENDING_REVIEW", "REVIEWED"].includes(state);
+}
+
+/** States a draft may be cancelled from: every one before execution starts. */
+export function isCancellable(state: DraftState): boolean {
+  return TRANSITIONS[state].includes("CANCELLED");
 }
 
 const AMOUNT_RE = /^\d+(\.\d{1,18})?$/;

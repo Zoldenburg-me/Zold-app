@@ -6,7 +6,7 @@
  * and nowhere else. An action that opens a drawer returns "keep", so the
  * shell does not draw the page again under it.
  */
-import { $, Z, api, cap, countrySelect, createPersonalOrg, day, dialog, esc, eur, maskIban, me, org, plain, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
+import { $, Z, api, cap, countrySelect, createPersonalOrg, day, dialog, esc, eur, maskIban, me, org, plain, reviewOn, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
 import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
 import { sendState } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
@@ -84,8 +84,10 @@ async function draftDrawer(el) {
     ${review ? `<label for="dr-reason">Reason, if you send it back <span class="desc">(optional)</span></label><textarea id="dr-reason" name="reason" autocomplete="off" maxlength="300" placeholder="The amount doesn’t match the invoice…"></textarea>
       <p class="zb-err" id="dr-err" role="alert"></p>
       <div class="zb-actions"><button type="button" class="z-btn z-btn--secondary" id="dr-back">Send back</button><button type="button" class="z-btn z-btn--primary" id="dr-ok">Approve</button></div>`
-      : d.state === "PENDING_REVIEW" ? `<p class="zb-hint">${esc(may.reason)}</p>` : ""}`;
+      : d.state === "PENDING_REVIEW" ? `<p class="zb-hint">${esc(may.reason)}</p>` : ""}
+    ${manageHtml(d)}`;
   const scrim = drawer("draft-drawer", draftTitle(d), body, el);
+  bindManage(scrim, d);
   if (!review) return;
   const url = `/api/orgs/${org.id}/drafts/${d.id}/review`;
   const run = (approve) => async () => {
@@ -105,6 +107,104 @@ async function draftDrawer(el) {
   };
   scrim.querySelector("#dr-ok").onclick = run(true);
   scrim.querySelector("#dr-back").onclick = run(false);
+}
+
+/* A draft is a proposal: until sending starts it can be edited, which sends
+   it back to Draft (what was approved is no longer what is in it), or
+   cancelled, which keeps it under Cancelled. The server decides both again. */
+const EDITABLE = ["DRAFT", "INVALID_DATA", "REJECTED", "PENDING_REVIEW", "REVIEWED"];
+const mayEdit = (d) => EDITABLE.includes(d.state) && roleCan(org.role, "propose");
+const mayCancel = (d) => EDITABLE.includes(d.state) && (roleCan(org.role, "propose") || roleCan(org.role, "approve"));
+
+function manageHtml(d) {
+  if (!mayEdit(d) && !mayCancel(d)) return "";
+  const again = ["PENDING_REVIEW", "REVIEWED"].includes(d.state) && reviewOn()
+    ? " It goes back to Draft and has to be approved again; as its editor, you can’t approve it." : "";
+  const lineInputs = d.lines.map((l, i) => `<fieldset class="zb-fieldset"><legend>${esc(l.destination.displayName)}</legend>
+      <label for="dr-amt-${i}">Amount${/^EUR/i.test(l.asset) ? " in euros" : ` in ${esc(l.asset)}`}</label>
+      <input id="dr-amt-${i}" inputmode="decimal" autocomplete="off" value="${esc(l.amount)}" />
+      <label for="dr-note-${i}">Note <span class="desc">(optional)</span></label>
+      <input id="dr-note-${i}" autocomplete="off" maxlength="500" value="${esc(l.note || "")}" /></fieldset>`).join("");
+  return `<div id="dr-manage">
+      <div class="zb-actions">${mayEdit(d) ? `<button type="button" class="z-btn z-btn--secondary" id="dr-edit">${Z.icon("edit")}<span>Edit</span></button>` : ""}${mayCancel(d) ? `<button type="button" class="z-link-btn" id="dr-cancel">Cancel this payment run</button>` : ""}</div>
+    </div>
+    ${mayEdit(d) ? `<form id="dr-edit-form" class="zb-stack" hidden novalidate>
+      ${lineInputs}
+      <p class="zb-hint">To pay someone else, cancel this run and start a new payment.${again}</p>
+      <p class="zb-err" id="dr-edit-err" role="alert"></p>
+      <div class="zb-actions"><button type="button" class="z-btn z-btn--secondary" id="dr-edit-back">Discard changes</button><button type="submit" class="z-btn z-btn--primary" id="dr-edit-ok">Save</button></div>
+    </form>` : ""}
+    ${mayCancel(d) ? `<div id="dr-cancel-box" class="zb-stack" hidden>
+      <p>Cancel this payment run? Nothing has been sent. It stays under Cancelled${d.lines.some((l) => l.invoiceId) ? ", and the invoice it was paying waits for payment again" : ""}.</p>
+      <label for="dr-cancel-reason">Why <span class="desc">(optional)</span></label>
+      <input id="dr-cancel-reason" autocomplete="off" maxlength="300" />
+      <p class="zb-err" id="dr-cancel-err" role="alert"></p>
+      <div class="zb-actions"><button type="button" class="z-btn z-btn--secondary" id="dr-cancel-no">Keep it</button><button type="button" class="z-btn z-btn--primary zb-danger" id="dr-cancel-yes">Cancel payment run</button></div>
+    </div>` : ""}`;
+}
+
+function bindManage(scrim, d) {
+  const q = (sel) => scrim.querySelector(sel);
+  const manage = q("#dr-manage");
+  if (!manage) return;
+  const show = (box) => { manage.hidden = true; box.hidden = false; box.querySelector("input")?.focus(); };
+  const back = (box) => { box.hidden = true; manage.hidden = false; };
+  const form = q("#dr-edit-form");
+  if (form) {
+    q("#dr-edit").onclick = () => show(form);
+    q("#dr-edit-back").onclick = () => back(form);
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const err = q("#dr-edit-err");
+      err.textContent = "";
+      const lines = [];
+      for (const [i, l] of d.lines.entries()) {
+        const amount = q(`#dr-amt-${i}`).value.trim().replace(",", ".");
+        if (!/^\d+(\.\d+)?$/.test(amount) || Number(amount) <= 0) {
+          err.textContent = `Enter an amount for ${l.destination.displayName}, like 250 or 250.00.`;
+          q(`#dr-amt-${i}`).focus();
+          return;
+        }
+        const { fingerprint, ...destination } = l.destination;
+        lines.push({
+          id: l.id, contactId: l.contactId, invoiceId: l.invoiceId, destination, asset: l.asset, amount,
+          note: q(`#dr-note-${i}`).value.trim() || undefined, accountCode: l.accountCode, tags: l.tags,
+        });
+      }
+      const ok = q("#dr-edit-ok");
+      if (Z.isDisabled(ok)) return;
+      Z.setLoading(ok, true);
+      try {
+        await api(`/api/orgs/${org.id}/drafts/${d.id}`, { method: "PATCH", body: { lines } });
+        Z.closeOverlay("draft-drawer");
+        ap.tab = "drafts";
+        toast(["PENDING_REVIEW", "REVIEWED"].includes(d.state) ? "Saved. It’s a draft again." : "Saved.");
+        render();
+      } catch (e) {
+        err.textContent = plain(e.message);
+        Z.setLoading(ok, false);
+      }
+    };
+  }
+  const box = q("#dr-cancel-box");
+  if (box) {
+    q("#dr-cancel").onclick = () => show(box);
+    q("#dr-cancel-no").onclick = () => back(box);
+    q("#dr-cancel-yes").onclick = async () => {
+      const yes = q("#dr-cancel-yes");
+      if (Z.isDisabled(yes)) return;
+      Z.setLoading(yes, true);
+      try {
+        await api(`/api/orgs/${org.id}/drafts/${d.id}/cancel`, { method: "POST", body: { reason: q("#dr-cancel-reason").value.trim() || undefined } });
+        Z.closeOverlay("draft-drawer");
+        toast("Cancelled. Nothing was sent.");
+        render();
+      } catch (e) {
+        q("#dr-cancel-err").textContent = plain(e.message);
+        Z.setLoading(yes, false);
+      }
+    };
+  }
 }
 
 /* ── Contacts ─────────────────────────────────────────────────────────── */
@@ -844,7 +944,7 @@ export const ACTIONS = {
       },
     });
     sendState.contactId = null;
-    if (cap("transfers.approvals").allowed) {
+    if (reviewOn()) {
       await api(`/api/orgs/${org.id}/drafts/${r.draft?.id || r.id}/submit`, { method: "POST" });
       ap.tab = "waiting";
       toast("Submitted. Someone other than you approves it next.");
@@ -853,6 +953,30 @@ export const ACTIONS = {
       toast("Saved. Send it from the list with Face ID or fingerprint.");
     }
     setView("payments");
+  },
+  /** Turning review off removes a control, so the owner approves it with
+   *  their passkey; the server checks that approval and the owner role. */
+  "review-off"() {
+    dialog("Turn payment review off?",
+      `<p class="desc">Anyone who may send payments could then send one without a second person approving it. Payments already waiting for review keep waiting until someone approves them. You’ll confirm with Face ID or fingerprint.</p>`,
+      async () => {
+        const session = await api("/api/session");
+        const credentialId = session.passkey?.credentialId;
+        let stepUp;
+        if (credentialId) {
+          const { challenge } = await api("/api/webauthn/challenge", { method: "POST", body: { purpose: "step_up" } });
+          stepUp = await (await window.__deviceLib).passkeyAssertion({ challenge, credentialId });
+        }
+        await api(`/api/orgs/${org.id}/payment-review`, { method: "POST", body: { required: false, stepUp } });
+        await loadOrg(org.id);
+        toast("Payment review is off.");
+      },
+      { okLabel: "Turn off" });
+  },
+  async "review-on"() {
+    await api(`/api/orgs/${org.id}/payment-review`, { method: "POST", body: { required: true } });
+    await loadOrg(org.id);
+    toast("Payment review is on. Every payment now needs a second approval.");
   },
   async "submit-draft"(el) {
     await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/submit`, { method: "POST" });

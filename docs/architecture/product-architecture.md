@@ -498,8 +498,8 @@ a **fingerprint** made of identifier plus holder name.
 ```mermaid
 stateDiagram-v2
   [*] --> DRAFT
-  DRAFT --> PENDING_REVIEW: submit (Business plan)
-  DRAFT --> EXECUTING: execute (no approvals plan)
+  DRAFT --> PENDING_REVIEW: submit (review on)
+  DRAFT --> EXECUTING: execute (review off)
   PENDING_REVIEW --> REVIEWED: approve (≠ drafter)
   PENDING_REVIEW --> REJECTED
   REVIEWED --> EXECUTING: execute (backing user only)
@@ -511,7 +511,33 @@ stateDiagram-v2
   EXECUTING --> EXECUTED: all transfers PAID
   EXECUTING --> FAILED
   FAILED --> DRAFT
+  PENDING_REVIEW --> DRAFT: edit
+  REVIEWED --> DRAFT: edit
+  DRAFT --> CANCELLED: cancel
+  PENDING_REVIEW --> CANCELLED
+  REVIEWED --> CANCELLED
+  REJECTED --> CANCELLED
+  INVALID_DATA --> CANCELLED
 ```
+
+- **Review is the organisation's policy** (`domain/payment-review.ts`).
+  Switching it on needs a plan with approvals (Business, or its trial). Once
+  an organisation has had it, a lapsed trial or a downgrade keeps it on: a
+  plan change records `paymentReview` as kept, so nobody can send alone
+  because the plan changed. Only an owner turns it off, under Settings → Who
+  approves payments, with a fresh passkey approval; the change is audited.
+  A draft already waiting for review keeps waiting and stays reviewable after
+  a downgrade or after review is turned off; it is sent once someone reviews
+  it.
+- **A draft can be edited and cancelled until sending starts.** Editing a
+  waiting or approved draft puts it back to DRAFT and clears its review; the
+  editor becomes its drafter. Cancelling keeps the row as CANCELLED with who
+  and why, and returns an invoice it was paying to waiting for payment.
+  Anyone who may propose or review payments may cancel. From EXECUTING on,
+  transfers may exist, so neither is possible.
+- Execution claims the draft only if nobody wrote it since its lines were
+  planned, so an edit or a cancel that lands while a run is being prepared
+  stops that run.
 
 - **INVALID_DATA** comes from payee fingerprints, which are recomputed at
   submit, at review *and* at execution. That closes the gap between approval
@@ -526,7 +552,8 @@ stateDiagram-v2
   - On Starter and Premium the UI offers no way to send a draft.
   - Bulk-CSV lines are always wallet destinations, and those are refused from
     an issued account.
-  - There is no UI to reject a draft or re-point lines.
+  - The draft drawer edits amounts and notes; there is no UI to re-point a
+    line to another payee (cancel the run and start a new payment).
 
 ### 7.7 Imported wallets — BUILT, never run on mainnet
 
@@ -639,7 +666,9 @@ LINK_CREATED → SUBMITTED → PAYING → PAID → RECONCILED     (+ soft DELETE
   per receipt into a proven imported wallet (date, token, quantity, EUR
   value at receipt, transaction), total the sum of those values. Receipts that cannot
   be invoiced (no value yet, a token on no list, a transfer between own
-  addresses, a wallet not proven to be the organisation's) are listed on the
+  addresses, a row tagged `refund`, any type but a plain inbound transfer or
+  an invoice payment, such as a swap leg or a realised gain, a wallet not
+  proven to be the organisation's) are listed on the
   draft with the reason, and the summary also
   counts receipts from contacts without a rule, from unknown senders, and
   those an issued invoice already bills. Collecting again updates drafts and

@@ -76,6 +76,9 @@ export async function api(path, opts = {}) {
 
 /** Can the current org use this capability? Mirrors the server's verdict. */
 export const cap = (id) => org?.capabilities?.[id] ?? { allowed: false, label: id };
+/** Whether a payment needs a second person's approval before it is sent: the
+ *  org's own policy, which outlives a downgrade (domain/payment-review.ts). */
+export const reviewOn = () => Boolean(org?.paymentReview?.required);
 
 /**
  * Render an upgrade / unavailable prompt in place of the feature.

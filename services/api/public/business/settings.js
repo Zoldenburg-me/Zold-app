@@ -3,7 +3,7 @@
  * chosen section on the right. Organisation, Who approves payments, Monerium
  * and Plan open in place; the other entries are their own screens.
  */
-import { Z, api, cap, day, ensureMe, esc, me, org, plain, ROLE_CAN, ROLE_WORD } from "./core.js";
+import { Z, api, cap, day, ensureMe, esc, me, org, plain, reviewOn, ROLE_CAN, ROLE_WORD } from "./core.js";
 import { META, RENDER } from "./views.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
@@ -60,12 +60,26 @@ function roleSentence(role) {
 }
 
 function approvalsSection() {
-  const sub = cap("transfers.approvals").allowed
+  const on = reviewOn();
+  const planHasIt = cap("transfers.approvals").allowed;
+  const pr = org.paymentReview || {};
+  const owner = org.role === "owner";
+  const sub = on
     ? "Every payment needs a second person to approve it. Whoever drafts a payment can’t approve it, whatever their role, and editing someone’s draft makes you its drafter."
-    : "On your plan a payment is saved, then sent with Face ID or fingerprint. A second approval comes with a paid plan.";
+    : planHasIt
+      ? "Review is off: a payment is saved, then sent with Face ID or fingerprint, without a second approval."
+      : "On your plan a payment is saved, then sent with Face ID or fingerprint. A second approval comes with a paid plan.";
+  const notes = [
+    on && !planHasIt ? "Your plan no longer includes review. It stays on until an owner turns it off, so nobody can start sending alone just because the plan changed." : "",
+    pr.source === "owner" && pr.changedAt ? `${on ? "Turned on" : "Turned off"} by an owner on ${day(pr.changedAt)}.` : "",
+    !on && pr.source === "owner" ? "Payments already waiting for review still wait until someone approves them." : "",
+  ].filter(Boolean).map((t) => `<p class="zb-hint">${esc(t)}</p>`).join("");
+  const action = !owner ? ""
+    : on ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-off">Turn review off</button>`
+      : planHasIt ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-on">Turn review on</button>` : "";
   const list = Object.keys(ROLE_WORD).map((r) => `<div><dt>${esc(ROLE_WORD[r])}</dt><dd>${esc(roleSentence(r))}</dd></div>`).join("");
-  return section("Who approves payments", sub, `<dl class="zb-set-rows">${list}</dl>
-    <p><a href="?view=members" data-view-link="members">Change someone’s role in Members</a></p>`);
+  return section("Who approves payments", sub, `${notes}<dl class="zb-set-rows">${list}</dl>
+    <p><a href="?view=members" data-view-link="members">Change someone’s role in Members</a></p>`, action);
 }
 
 function moneriumSection(accounts) {

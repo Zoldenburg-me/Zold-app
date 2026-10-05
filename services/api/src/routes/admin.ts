@@ -9,6 +9,7 @@
  * cannot act as the operator on their own account. It fails closed when no
  * token is configured.
  */
+import { reviewHeldOnPlanChange } from "../domain/payment-review.js";
 import express from "express";
 import { wrap } from "./util.js";
 import { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient } from "../chain.js";
@@ -234,6 +235,7 @@ export function createAdminRouter() {
       }
       const updated = store.updateOrganisation(org.id, {
         plan: plan as PlanId,
+        ...reviewHeldOnPlanChange(org, plan as PlanId),
         ...(trialIsActive(org) ? { trial: { ...org.trial!, endedAt: new Date().toISOString() } } : {}),
       });
       res.json({ id: updated.id, plan: updated.plan, trial: updated.trial });

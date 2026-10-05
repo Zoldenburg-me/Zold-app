@@ -57,13 +57,13 @@ export interface AuthDeps {
 export async function verifyPasskeyStepUp(user: User, body: any, res: express.Response): Promise<boolean> {
   if (!user.passkey?.publicKey) {
     if (HARNESS.enabled) return true;
-    res.status(409).json({ error: "a verified passkey is required before binding a spending key" });
+    res.status(409).json({ error: "a verified passkey is required for this change" });
     return false;
   }
   const stepUp = body?.stepUp ?? {};
   const { credentialId, authenticatorData, clientDataJSON, signature } = stepUp;
   if (!credentialId || !authenticatorData || !clientDataJSON || !signature) {
-    res.status(401).json({ error: "fresh passkey approval required before binding a spending key" });
+    res.status(401).json({ error: "a fresh passkey approval is required for this change" });
     return false;
   }
   if (credentialId !== user.passkey.credentialId) {
@@ -150,6 +150,15 @@ export function createAuthRouter(deps: AuthDeps) {
       }
       if (store.findUserByCredential(credentialId)) {
         return res.status(409).json({ error: "credential already registered" });
+      }
+      // A deployed Safe's owner is on chain, so a new passkey is added there:
+      // by recovery, or by an owner change the current passkey signs.
+      if (user.passkeySafe?.status === "active") {
+        return res.status(409).json({
+          code: "SAFE_OWNER_ON_CHAIN",
+          error:
+            "This account's Safe is already deployed with your current passkey as its owner. A new passkey has to be added on the Safe itself — use account recovery if you lost the device.",
+        });
       }
       // Replacing the account's authenticator is an account-takeover path if a
       // bearer token is enough for it: a stolen 24h session would become permanent

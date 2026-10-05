@@ -7,7 +7,7 @@
  * is drafted here and that member signs it when it is sent, so the card says
  * who sends it.
  */
-import { Z, api, cap, esc, eur, gateHtml, maskIban, me, org, roleCan, usdSymbol } from "./core.js";
+import { Z, api, cap, esc, eur, gateHtml, maskIban, me, org, reviewOn, roleCan, usdSymbol } from "./core.js";
 import { loadMembers } from "./screens.js";
 import { META, RENDER } from "./views.js";
 
@@ -20,10 +20,10 @@ const FIND_FROM = 6;
 
 META.send = () => ({
   title: "New payment",
-  sub: cap("transfers.approvals").allowed
+  sub: reviewOn()
     ? "It goes to Approvals: someone other than you approves it, then it’s sent with Face ID or fingerprint."
     : "Save it, then send it from Payments with Face ID or fingerprint.",
-  actions: cap("transfers.approvals").allowed ? linkBtn("Approvals", "payments", "inbox") : "",
+  actions: reviewOn() ? linkBtn("Approvals", "payments", "inbox") : "",
 });
 
 /** Who signs a payment from this account: null when it is you. */
@@ -55,7 +55,7 @@ function nextSteps(account, approvers) {
   const approve = names.length
     ? `Someone other than you approves it: ${names.length > 2 ? `${names.slice(0, 2).join(", ")} or another approver` : names.join(" or ")}.`
     : "Someone other than you approves it. Nobody else here can approve yet: an owner can invite an admin in Members.";
-  const steps = cap("transfers.approvals").allowed
+  const steps = reviewOn()
     ? [["edit_note", "You submit it. It waits in Approvals."], ["how_to_reg", approve], ["fingerprint", `It’s sent with Face ID or fingerprint ${signer}.`]]
     : [["edit_note", "You save it. It waits in Payments."], ["fingerprint", `It’s sent with Face ID or fingerprint ${signer}.`]];
   steps.push(["account_balance", "It leaves as a bank transfer. Its status turns to Paid when the bank confirms."]);
@@ -98,7 +98,7 @@ RENDER.send = async () => {
   const approvers = (members || []).filter((m) => m.status === "active" && m.id !== org.memberId && roleCan(m.role, "approve"));
   const first = fundable.find((a) => a.backingUserId === me?.id) || fundable[0];
   const chosen = payable.find((c) => c.id === sendState.contactId)?.id;
-  const action = cap("transfers.approvals").allowed ? "Submit for approval" : "Save payment";
+  const action = reviewOn() ? "Submit for approval" : "Save payment";
 
   const html = `<div class="zb-send">
     <form class="z-card zb-pad zb-stack" id="send-form" style="gap:20px" novalidate>

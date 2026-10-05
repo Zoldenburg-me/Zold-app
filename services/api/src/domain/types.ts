@@ -167,6 +167,19 @@ export interface Organisation {
       bankAccountUid?: number;
     };
   };
+  /**
+   * Whether a payment run needs a second person's approval before it is sent.
+   * Absent, it follows the plan (domain/payment-review.ts). Once set it is the
+   * org's own policy: a lapsed trial or a downgrade leaves it as it is, and
+   * only an owner turns it off.
+   */
+  paymentReview?: {
+    required: boolean;
+    changedAt: string;
+    /** "plan_change": recorded when the plan that required review was left. */
+    source: "owner" | "plan_change";
+    changedByMemberId?: string;
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -458,7 +471,9 @@ export type DraftState =
   | "INVALID_DATA"
   | "EXECUTING"
   | "EXECUTED"
-  | "FAILED";
+  | "FAILED"
+  /** Withdrawn before anything was sent. Kept, never deleted. */
+  | "CANCELLED";
 
 export interface DraftLine {
   id: string;
