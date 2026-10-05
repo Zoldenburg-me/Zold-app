@@ -2475,7 +2475,7 @@ async function registerDeviceKey(u) {
   const { address, protection } = dev.keyStatus().present
     ? { address: await dev.deviceAddress(credId()), protection: dev.keyStatus().protection }
     : await dev.createKey(credId());
-  const updated = await api(`/api/users/${u.id}/authorizer`, { address, stepUp: await passkeyStepUp() });
+  const updated = await api(`/api/users/${u.id}/authorizer`, { address, stepUp: await passkeyStepUp("authorizer.bind") });
   if (updated.authorizerAddress) user = { ...user, authorizerAddress: updated.authorizerAddress };
   if (protection !== "prf") {
     console.warn("device key stored unprotected — this authenticator has no PRF support");

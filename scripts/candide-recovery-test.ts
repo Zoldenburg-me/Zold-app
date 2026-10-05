@@ -362,7 +362,7 @@ try {
     const refused = await call(`/api/users/${id}/passkey`, second.register(reg2.data.challenge), undefined, mine);
     assert.equal(refused.status, 401, `a session alone must not replace the passkey: ${JSON.stringify(refused.data)}`);
     const reg3 = await call("/api/webauthn/challenge", { purpose: "register" }, undefined, mine);
-    const step = await call("/api/webauthn/challenge", { purpose: "step_up" }, undefined, mine);
+    const step = await call("/api/webauthn/challenge", { purpose: "step_up", action: "passkey.replace" }, undefined, mine);
     const replaced = await call(`/api/users/${id}/passkey`, {
       ...second.register(reg3.data.challenge),
       stepUp: await first.assert(step.data.challenge),

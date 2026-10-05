@@ -158,10 +158,12 @@ const credId = () => user?.passkey?.credentialId || null;
 
 /* A fresh passkey approval for a change a session alone may not make: binding
    a spending key, or replacing the Monerium connection. The server requires
-   the UV flag, so the authenticator has to verify the human. */
-async function passkeyStepUp() {
+   the UV flag, so the authenticator has to verify the human, and issues the
+   challenge for one named action (STEP_UP_ACTIONS in routes/auth.ts): an
+   approval for one change is refused by every other. */
+async function passkeyStepUp(action) {
   if (!credId()) return null;
-  const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up" });
+  const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up", action });
   const cred = await navigator.credentials.get({
     publicKey: {
       challenge: b64urlToBytes(challenge),
@@ -178,11 +180,14 @@ async function passkeyStepUp() {
   };
 }
 
-/* The step-up a Monerium credential change needs: replacing or dropping one
-   the account already has, or the IBAN it carries. A first connection needs
-   none. Mirrors approvesMoneriumChange in routes/monerium.ts. */
+/* The step-up a Monerium credential change needs: dropping one (always), or
+   connecting on an account that already carries a Monerium identity, which
+   the server reports as moneriumChangeNeedsPasskey. A brand-new account's
+   first connection needs none. Mirrors approvesMoneriumChange in
+   routes/monerium.ts. */
 async function moneriumStepUp(u, always = false) {
-  return always || u?.monerium || u?.iban ? { stepUp: await passkeyStepUp() } : {};
+  if (always) return { stepUp: await passkeyStepUp("monerium.disconnect") };
+  return u?.moneriumChangeNeedsPasskey ? { stepUp: await passkeyStepUp("monerium.connect") } : {};
 }
 /* role="alert" so a screen reader announces the error: a red line appearing
    under a button is otherwise silent. Static .error slots carry the role in

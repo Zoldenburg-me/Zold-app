@@ -190,6 +190,13 @@ export function issueChallenge(purpose: ChallengePurpose, binding?: string): str
   return c;
 }
 
+/**
+ * The binding of a step-up challenge: the account AND the action it approves.
+ * An approval collected for one change (say, a passkey replacement) is then
+ * refused by every other step-up-gated route on the same account.
+ */
+export const stepUpBinding = (userId: string, action: string) => `${userId}:${action}`;
+
 function consumeChallenge(c: string, purpose: ChallengePurpose, binding?: string): boolean {
   const e = challenges.get(c);
   challenges.delete(c);

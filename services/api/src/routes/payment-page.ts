@@ -18,6 +18,7 @@ import { isDeployed } from "../wallet/candide.js";
 import { activatePaymentForwarder } from "../adapters/candide-forwarder.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicOrgPayee, publicPayee } from "../pay.js";
 import { orgPageAccount } from "./business/org-payment-page.js";
+import { accountProfileStanding } from "../domain/monerium-profile.js";
 import { qrSvg } from "../qr.js";
 import { store, type User } from "../store.js";
 import { publicUser } from "../users/public-user.js";
@@ -233,7 +234,10 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
         if (!org) return res.status(404).json({ error: "no such payment page" });
         const page = orgPageAccount(org);
         if ("reason" in page) return res.status(503).json(PAGE_CLOSED);
-        return res.json(publicOrgPayee(org, page.account, page.holder));
+        // Monerium's name for the profile, or nothing: orgPageAccount falls
+        // back to the organisation's own name, which no one verified.
+        const standing = accountProfileStanding(org, page.account);
+        return res.json(publicOrgPayee(org, page.account, standing.status === "verified" ? standing.name : undefined));
       }
       if (!(await livePaymentPage(user))) return res.status(503).json(PAGE_CLOSED);
       res.json(publicPayee(store.findUser(user.id) ?? user, payChain()));

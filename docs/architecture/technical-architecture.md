@@ -163,7 +163,11 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   owner must be P-256.
 - Challenges are 32 random bytes, single-use, with a 5-minute TTL and at most
   50k held in memory. Each is bound to a **purpose** (`register` / `login` /
-  `step_up`) and optionally to a user or `recovery:<id>`.
+  `step_up`) and optionally to a user or `recovery:<id>`. A `step_up` is bound
+  to the user AND one action from `STEP_UP_ACTIONS` (routes/auth.ts:
+  `passkey.replace`, `monerium.connect`, `monerium.disconnect`,
+  `authorizer.bind`, `org.payment-review.off`), and only the route making that
+  change accepts it.
 - Registration checks type, challenge, origin allowlist, rpIdHash and the UP
   and UV flags. **Attestation statements are not verified**, so any
   authenticator that verifies its user is accepted.
@@ -1192,7 +1196,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 |---|---|
 | `POST /users` (A) | Signup: segment decided, pending account, session. |
 | `GET/DELETE /session` (S) | Read or revoke the session. |
-| `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one. |
+| `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one; `step_up` also needs `action` (400 without a known one). |
 | `POST /users/:id/passkey` (U) | Register a passkey. Needs a step-up if one already exists, and then revokes the user's other sessions. |
 | `POST /users/:id/passkey-safe/deployment[/:requestId]` (U) | Prepare, then submit, the Safe deploy. |
 | `POST /users/:id/safe/import/prepare` (U) | Check a Safe for import; owner changes and Transaction Builder files. Stores nothing. |
@@ -1238,14 +1242,14 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 
 | | |
 |---|---|
-| `POST /users/:id/monerium/connect/start` (U, segment) | Start OAuth. Needs a step-up when the account already has a Monerium connection or an IBAN. |
+| `POST /users/:id/monerium/connect/start` (U, segment) | Start OAuth. Needs a step-up when the account carries a Monerium identity (`carriesMoneriumIdentity`: a connection, an IBAN, approval, or any recorded profile), so only a brand-new account's first connection is session-only. |
 | `GET /monerium/oauth/callback` (state + cookie) | OAuth return. |
 | `GET /users/:id/monerium/accounts` (U) | Refresh and read the snapshot. |
 | `POST /users/:id/monerium/link-signature/start` (U) | Challenge for activation, or for a move with `{purpose: "move-iban", iban}` (bound to that IBAN, single use). |
-| `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. 409 `IBAN_EXISTS_ELSEWHERE` when Monerium answers 304 and the profile's IBANs pay other addresses: `choices: [{iban, address, chain, profileId}]` lists every IBAN on the profile the Safe is linked under, and `existing` is set only when there is exactly one; the user picks, nothing is preselected. 409 `IBAN_EXISTS_UNRESOLVED` when no profile or no IBAN on it can be read. |
+| `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. Only with the passkey assertion over a pending link-signature request; a finished signature in the body is refused. The challenge is the Safe hash of Monerium's constant ownership message, so only the sign counter tells a replayed assertion from a fresh one. 409 `IBAN_EXISTS_ELSEWHERE` when Monerium answers 304 and the profile's IBANs pay other addresses: `choices: [{iban, address, chain, profileId}]` lists every IBAN on the profile the Safe is linked under, and `existing` is set only when there is exactly one; the user picks, nothing is preselected. 409 `IBAN_EXISTS_UNRESOLVED` when no profile or no IBAN on it can be read. |
 | `POST /users/:id/monerium/move-iban` (U, passkey, typed `MOVE`) | Move the user's existing IBAN to the Safe: own connection only, IBAN must be on the profile the Safe is linked under; links the Safe, `PATCH /ibans/{iban}`, approves only if the re-read shows the IBAN on the Safe, else `iban_pending`. Records `moneriumIbanMoves`. 409 `IBAN_NOT_ON_PROFILE` / `ADDRESS_NOT_ON_PROFILE`. |
 | `DELETE /users/:id/monerium/connect` (U + step-up) | Forget the connection; revokes the user's other sessions. |
-| `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. Replacing a connection or an IBAN needs a step-up and revokes the user's other sessions. |
+| `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. On an account that carries a Monerium identity it needs a step-up and revokes the user's other sessions. |
 | `DELETE /users/:id/monerium/api-keys` (U + step-up) | Remove own keys; revokes the user's other sessions. |
 | `POST /webhooks/monerium` (HMAC) | Webhook. |
 
@@ -1279,7 +1283,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | | |
 |---|---|
 | `GET /users/:id/documents` (U) | Document list. |
-| `POST /users/:id/documents/{receipt, statement, balance, ownership[/:r]}` (U) | Create a document. |
+| `POST /users/:id/documents/{receipt, statement, balance, ownership[/:r]}` (U) | Create a document. Balance and ownership only for an approved account (409 `ACCOUNT_NOT_VERIFIED`). The holder name is Monerium's (`users/verified-name.ts`) or carries `nameSource: "self-declared"`, which the page and the ownership text state. |
 | `DELETE /users/:id/documents/:code` (U) | Revoke. |
 | `GET /v/:code` (A) | Public document with live verification. |
 | `GET /v/:code/beleg.pdf` (A) | A Beleg as PDF bytes. |
@@ -1390,5 +1394,5 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET /admin/users/:id` (operator token, A) | One account: projection, onboarding stage, transactions, recoveries, issues, audit. |
 | `GET /admin/users/:id/monerium[?live=1]` (operator token, A) | What Zold stored from Monerium; `live=1` also reads Monerium on the account's own connection (refused without one), stores nothing, audits the read. |
 | `GET /admin/monerium[?live=1]` (operator token, A) | Deployment-wide Monerium view; `live=1` checks the app credentials. |
-| `GET /admin/recoveries` (operator token, A) | Zoldenburg requests and guardian enrolments. |
+| `GET /admin/recoveries` (operator token, A) | Zoldenburg requests and guardian enrolments. Each request's account carries `moneriumProfileHistory`, every Monerium profile it recorded (append-only, store.updateUser). |
 | `POST /admin/orgs/:orgId/plan` (operator token, A) | Grant a plan. The only way onto a paid plan while there is no billing. |
