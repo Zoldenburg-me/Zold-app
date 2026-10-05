@@ -122,9 +122,9 @@ const call = async (method: string, p: string, opts: { body?: unknown; raw?: str
   try { body = JSON.parse(text); } catch { body = { text }; }
   return { status: res.status, body, location: res.headers.get("location") ?? "", headers: res.headers };
 };
-const webhook = (topic: string, payload: unknown, shop = SHOP, secret = "shpss_test_secret") => {
+const webhook = (topic: string, payload: unknown, shop = SHOP, secret = "shpss_test_secret", deliveryId: string = randomUUID()) => {
   const raw = JSON.stringify(payload);
-  return call("POST", "/api/shopify/webhooks/orders", { raw, headers: { "shopify-hmac-sha256": signBody(raw, secret), "shopify-shop-domain": shop, "x-shopify-topic": topic, "x-shopify-webhook-id": randomUUID() } });
+  return call("POST", "/api/shopify/webhooks/orders", { raw, headers: { "shopify-hmac-sha256": signBody(raw, secret), "shopify-shop-domain": shop, "x-shopify-topic": topic, "x-shopify-webhook-id": deliveryId } });
 };
 const until = async (fn: () => boolean, ms = 3000) => { const t0 = Date.now(); while (!fn() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 25)); return fn(); };
 
@@ -208,6 +208,28 @@ await check("Shopify's redelivery of the same order opens nothing new", async ()
   const r = await webhook("orders/create", o1);
   assert.equal(r.status, 200);
   assert.equal(store.paymentRequests.length, before);
+});
+await check("concurrent deliveries of one order open one request and answer the same code", async () => {
+  const o = order();
+  const before = store.paymentRequests.length;
+  const answers = await Promise.all([1, 2, 3, 4].map(() => webhook("orders/create", o)));
+  assert.equal(store.paymentRequests.length, before + 1);
+  assert.ok(answers.every((a) => a.status === 200 && a.body.code === answers[0].body.code), JSON.stringify(answers.map((a) => a.body)));
+});
+await check("a delivery id already handled is acknowledged and not processed again", async () => {
+  const o = order();
+  const id = randomUUID();
+  assert.equal((await webhook("orders/create", o, SHOP, undefined, id)).status, 200);
+  const req = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP)!;
+  const again = await webhook("orders/cancelled", o, SHOP, undefined, id);
+  assert.equal(again.status, 200);
+  assert.equal(again.body.duplicate, true);
+  assert.equal(store.findPaymentRequest(req.id)!.state, "OPEN", "a replayed delivery id was processed as a new event");
+});
+await check("a webhook without a delivery id is refused", async () => {
+  const raw = JSON.stringify(order());
+  const r = await call("POST", "/api/shopify/webhooks/orders", { raw, headers: { "shopify-hmac-sha256": signBody(raw, "shpss_test_secret"), "shopify-shop-domain": SHOP, "x-shopify-topic": "orders/create" } });
+  assert.equal(r.status, 400);
 });
 await check("an order paid another way is acknowledged and ignored", async () => {
   const o = order({ payment_gateway_names: ["shopify_payments"], financial_status: "paid" });
@@ -393,6 +415,10 @@ await check("the buyer's USDC deposit marks the request PAID, the order is marke
 await check("the lookup now reports PAID and the return link sends the buyer to Shopify's order status page", async () => {
   const r = await lookup(o1);
   assert.equal(r.body.state, "PAID");
+  assert.equal(r.body.payments.length, 1);
+  assert.equal(r.body.payments[0].txHash, undefined, "the payer's transaction hash is in the public order lookup");
+  const paidTx = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!.payments[0].txHash!;
+  assert.ok(!JSON.stringify(r.body).includes(paidTx));
   const req = store.findPaymentRequestBySource("shopify", o1.admin_graphql_api_id, SHOP)!;
   const back = await call("GET", `/api/shopify/return/${req.code}`);
   assert.equal(back.status, 302);
@@ -444,6 +470,20 @@ await check("a second store's orders/cancelled and orders/create for the SAME or
   assert.notEqual(own.id, victim.id);
   assert.equal(own.source.shop, SHOP_B);
   store.removeShopifyConnection(store.findShopifyConnectionByShop(SHOP_B)!.id);
+});
+await check("a delivery signed for one store and replayed under another store's name is refused", async () => {
+  const first = store.findShopifyConnectionByShop(SHOP)!;
+  store.addShopifyConnection({ ...first, id: randomUUID(), shop: SHOP_B });
+  try {
+    const o = order();
+    const id = randomUUID();
+    assert.equal((await webhook("orders/create", o, SHOP, undefined, id)).status, 200);
+    const replay = await webhook("orders/create", o, SHOP_B, undefined, id);
+    assert.equal(replay.status, 401, JSON.stringify(replay.body));
+    assert.equal(store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, SHOP_B), undefined);
+  } finally {
+    store.removeShopifyConnection(store.findShopifyConnectionByShop(SHOP_B)!.id);
+  }
 });
 
 console.log("\nDashboard");

@@ -1073,6 +1073,8 @@ only self-hosted fonts.
     secrets.
   - WebAuthn: no explicit https `WEBAUTHN_ORIGINS`.
   - Proxy: no `TRUSTED_PROXY_HOPS`.
+  - Links: no https `TRANSF_PUBLIC_URL` (absolute links are never built from
+    the Host header in production).
 
 | environment | chain | Monerium | db | notes |
 |---|---|---|---|---|

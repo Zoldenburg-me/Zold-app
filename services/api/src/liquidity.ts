@@ -10,7 +10,7 @@
  * LIQUIDITY_PROVIDER typo would then price real transfers off our own
  * inventory while reporting that a maker set the rate.
  *
- * Types and the two rules every venue shares are in ./liquidity/contract.ts,
+ * Types and the rules every venue shares are in ./liquidity/contract.ts,
  * re-exported here for existing importers.
  */
 import { FX, LIQUIDITY, railFeeEur } from "./config.js";
