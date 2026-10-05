@@ -1332,7 +1332,7 @@ async function obSignIn(btn) {
   try {
     const { challenge } = await api("/api/webauthn/challenge", { purpose: "login" });
     const cred = await navigator.credentials.get({
-      publicKey: { challenge: b64urlToBytes(challenge), userVerification: "preferred", timeout: 60000 },
+      publicKey: { challenge: b64urlToBytes(challenge), userVerification: "required", timeout: 60000 },
     });
     const u = await api("/api/passkey/login", {
       credentialId: cred.id,
@@ -1690,7 +1690,7 @@ OB["monerium-keys"] = {
       const btn = root.querySelector("#btn-next");
       Z.setLoading(btn, true);
       try {
-        const updated = await api(`/api/users/${user.id}/monerium/api-keys`, { clientId: id.value.trim(), clientSecret: secret.value });
+        const updated = await api(`/api/users/${user.id}/monerium/api-keys`, { ...(await moneriumStepUp(user)), clientId: id.value.trim(), clientSecret: secret.value });
         secret.value = "";
         renderUser(updated);
         obAfterMonerium();
@@ -1867,7 +1867,7 @@ async function obReconnect(btn) {
   Z.setLoading(btn, true);
   try {
     const path = user.monerium?.method === "api_keys" ? "api-keys" : "connect";
-    renderUser(await api(`/api/users/${user.id}/monerium/${path}`, undefined, "DELETE"));
+    renderUser(await api(`/api/users/${user.id}/monerium/${path}`, await moneriumStepUp(user, true), "DELETE"));
     obGo("monerium", { replace: true });
   } catch (e) { obShowErr(e); } finally { Z.setLoading(btn, false); }
 }
@@ -2133,7 +2133,7 @@ async function refreshKycStatus({ continueWhenApproved = false } = {}) {
 async function startMoneriumConnect(errorId = "ob-err") {
   try {
     const redirectUri = `${location.origin}/api/monerium/oauth/callback`;
-    const connect = await api(`/api/users/${user.id}/monerium/connect/start`, { redirectUri });
+    const connect = await api(`/api/users/${user.id}/monerium/connect/start`, { ...(await moneriumStepUp(user)), redirectUri });
     const target = safeUrl(connect.redirectUrl);
     if (!target) throw new Error("Monerium returned an unusable sign-in address");
     location.href = target;
@@ -2346,10 +2346,6 @@ async function finishDashboardSmartWallet() {
 /* ==========================================================================
    Passkey ceremonies
    ========================================================================== */
-const b64url = (buf) =>
-  btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
-
 async function registerPasskey(u) {
   const { challenge } = await api("/api/webauthn/challenge", { purpose: "register" });
   const label = pendingInfo?.email || u.email || pendingInfo?.name || u.name;
@@ -2365,7 +2361,7 @@ async function registerPasskey(u) {
       // ES256 (P-256) only. This passkey becomes the Safe's owner, which
       // verifies P-256 signatures; any other algorithm would fail at deployment.
       pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-      authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
+      authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
       timeout: 60000,
       // Ask for the PRF extension so this passkey can encrypt the
       // device spending key. Authenticators without it still register fine.
@@ -2424,29 +2420,6 @@ async function finishPasskeySafeSetup(timeoutMs = 45000) {
   }
 }
 
-/* The passkey credential this browser wraps the device key with. */
-const credId = () => user?.passkey?.credentialId || null;
-
-async function passkeyStepUp() {
-  if (!credId()) return null;
-  const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up" });
-  const cred = await navigator.credentials.get({
-    publicKey: {
-      challenge: b64urlToBytes(challenge),
-      allowCredentials: [{ type: "public-key", id: b64urlToBytes(credId()) }],
-      // A step-up gates binding a spending key: the server now requires the UV
-      // flag, so ask the authenticator to actually verify the human.
-      userVerification: "required",
-      timeout: 60000,
-    },
-  });
-  return {
-    credentialId: cred.id,
-    authenticatorData: b64url(cred.response.authenticatorData),
-    clientDataJSON: b64url(cred.response.clientDataJSON),
-    signature: b64url(cred.response.signature),
-  };
-}
 
 /* The send-time approval of this transfer's debit. The server prepared the
    Safe operation that moves exactly this transfer's amount out of your Safe;

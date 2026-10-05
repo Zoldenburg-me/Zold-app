@@ -93,7 +93,7 @@ async function makePasskey(userId: string) {
     return Buffer.concat([base, cred, cose]);
   };
   const challenge = issueChallenge("register", userId);
-  const attestation = b64url(cbor(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x41, 0, true)]])));
+  const attestation = b64url(cbor(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x45, 0, true)]])));
   const reg = verifyRegistration(attestation, clientData("webauthn.create", challenge), SECURITY.rpId, SECURITY.origins, userId);
   let count = 0;
   return {

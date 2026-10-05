@@ -182,7 +182,7 @@ async function makePasskey() {
   };
   let count = 0;
   return {
-    register: (challenge: string) => ({ credentialId: b64url(credId), attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x41, 0, true)]]))), clientDataJSON: clientData("webauthn.create", challenge) }),
+    register: (challenge: string) => ({ credentialId: b64url(credId), attestation: b64url(enc(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x45, 0, true)]]))), clientDataJSON: clientData("webauthn.create", challenge) }),
     assert: async (challenge: string) => {
       count += 1;
       const cd = clientData("webauthn.get", challenge);

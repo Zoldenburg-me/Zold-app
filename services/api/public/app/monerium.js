@@ -63,7 +63,7 @@ function renderMoneriumScreen() {
       clearErr("m-mon-err");
       if (!confirm("Remove the Monerium keys from this account? Deposits and payouts on it pause until keys are connected again.")) return;
       try {
-        renderUser(await api(`/api/users/${user.id}/monerium/api-keys`, undefined, "DELETE"));
+        renderUser(await api(`/api/users/${user.id}/monerium/api-keys`, await moneriumStepUp(user, true), "DELETE"));
         mobileNav("monerium");
       } catch (e) { showErr("m-mon-err", e); }
     };
@@ -92,6 +92,7 @@ async function connectMoneriumKeys() {
   btn.textContent = "Checking with Monerium…";
   try {
     const updated = await api(`/api/users/${user.id}/monerium/api-keys`, {
+      ...(await moneriumStepUp(user)),
       clientId: $("m-mon-id").value,
       clientSecret: $("m-mon-secret").value,
       label: $("m-mon-label").value,

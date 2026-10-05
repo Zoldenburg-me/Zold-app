@@ -63,6 +63,10 @@ export function isPublicAddress(ip: string): boolean {
   if (net.isIPv6(ip)) {
     const x = ip.toLowerCase();
     if (x.startsWith("::ffff:")) return isPublicAddress(x.slice(7));
+    // NAT64 (64:ff9b::/96, 64:ff9b:1::/48) and 6to4 (2002::/16) carry an IPv4
+    // address inside; on a host that translates them, 64:ff9b::a9fe:a9fe
+    // dials 169.254.169.254. No real gateway needs them.
+    if (/^(64:ff9b:|2002:)/.test(x)) return false;
     return !(x === "::" || x === "::1" || /^(fc|fd|fe[89ab]|ff)/.test(x));
   }
   return false;
