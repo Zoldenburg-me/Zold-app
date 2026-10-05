@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 
 /**
- * The block itself, shared by both targets. `ui` is the components module of
- * whichever surface mounted it (checkout vs customer-account expose the same
- * component set under different packages).
+ * The thank-you page block. It reads the order with the checkout token
+ * Shopify gives the extension: order ids are sequential, so the API answers
+ * only a caller holding the order's checkout token.
  *
  * It shows what the API returns:
  *  - while the webhook is on its way: "preparing your payment" (404 pending);
@@ -23,14 +23,14 @@ function numericId(gid) {
   return m ? m[1] : undefined;
 }
 
-export function ZoldPay({ ui, orderId, shop, apiBase, surface }) {
+export function ZoldPay({ ui, orderId, checkoutToken, shop, apiBase }) {
   const { BlockStack, InlineStack, Heading, Text, Banner, Link, QRCode, Divider, SkeletonText } = ui;
   const [state, setState] = useState({ phase: "loading" });
   const id = numericId(orderId);
   const base = String(apiBase ?? "").replace(/\/$/, "");
 
   useEffect(() => {
-    if (!id || !shop || !base) {
+    if (!id || !checkoutToken || !shop || !base) {
       setState({ phase: "unconfigured" });
       return;
     }
@@ -38,7 +38,7 @@ export function ZoldPay({ ui, orderId, shop, apiBase, surface }) {
     const startedAt = Date.now();
     const tick = async () => {
       try {
-        const res = await fetch(`${base}/api/shopify/orders/${encodeURIComponent(shop)}/${id}`, { headers: { accept: "application/json" } });
+        const res = await fetch(`${base}/api/shopify/orders/${encodeURIComponent(shop)}/${id}?t=${encodeURIComponent(checkoutToken)}`, { headers: { accept: "application/json" } });
         if (res.status === 404) {
           const body = await res.json().catch(() => ({}));
           if (body.pending && Date.now() - startedAt < PENDING_GIVE_UP_MS) {
@@ -68,7 +68,7 @@ export function ZoldPay({ ui, orderId, shop, apiBase, surface }) {
     return () => {
       stop = true;
     };
-  }, [id, shop, base]);
+  }, [id, checkoutToken, shop, base]);
 
   if (state.phase === "unconfigured") return null;
   if (state.phase === "pending" || state.phase === "loading") {
@@ -103,7 +103,7 @@ export function ZoldPay({ ui, orderId, shop, apiBase, surface }) {
   if (r.state === "PAID") {
     return (
       <Banner status="success" title={`${name} — payment received`}>
-        Your payment of {eur} was seen on chain{surface === "thank-you" ? " and the order is being marked paid" : ""}. Keep this page for your records.
+        Your payment of {eur} was seen on chain and the order is being marked paid. Keep this page for your records.
       </Banner>
     );
   }

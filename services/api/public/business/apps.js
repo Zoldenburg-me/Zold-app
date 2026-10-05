@@ -63,6 +63,12 @@ function ordersTable(d, custom) {
       <td class="num"><a class="z-btn z-btn--secondary z-btn--sm" href="${esc(r.url)}" target="_blank" rel="noopener">Page<span class="z-sr"> (opens in a new tab)</span></a></td></tr>`));
 }
 
+function payLinks(d) {
+  const rows = d.connections.filter((c) => c.payLinkTemplate);
+  if (!rows.length) return "";
+  return `<dl class="zb-set-rows">${rows.map((c) => `<div><dt>Pay link, ${esc(c.shop)}</dt><dd class="z-mono">${esc(c.payLinkTemplate)}</dd></div>`).join("")}</dl>`;
+}
+
 function setUp(d, custom) {
   const ttl = esc(String(d.orderTtlHours || 24));
   const endpoints = `<dl class="zb-set-rows">${Object.entries(d.endpoints).map(([k, v]) => `<div><dt>${esc(k)}</dt><dd class="z-mono">${esc(v)}</dd></div>`).join("")}</dl>`;
@@ -70,12 +76,13 @@ function setUp(d, custom) {
     ? `Limits, plainly: the buyer pays after placing the order, so stock is held while it waits. Unpaid orders stay “payment pending” for ${ttl} hours and are yours to cancel. Refunds are made by you from Zold, and a payment that arrives after ${ttl} hours lands on your payment page without its order, so you mark that order paid yourself.`
     : "Limits, plainly: bank transfer isn’t offered at checkout (too slow for a session), refunds are made by you from Zold, and manual capture isn’t supported.";
   const steps = custom
-    ? `<p class="desc">Three steps in Shopify, in this order. The app asks for: <span class="z-mono">${esc(d.scopes || "")}</span>.</p>
+    ? `<p class="desc">Four steps in Shopify, in this order. The app asks for: <span class="z-mono">${esc(d.scopes || "")}</span>.</p>
       <ol class="zb-steps">
         <li><b>Payment method.</b> Settings, Payments, Manual payment methods, Create custom payment method. Name it so it contains “<b>${esc(d.manualGateway || "zold")}</b>”: that’s how Zold recognises its orders. Keep the store’s checkout currency to euros; other orders are ignored.</li>
         <li><b>Connect the store</b> above. Zold subscribes to the store’s new and cancelled orders itself.</li>
-        <li><b>Thank-you page</b> (recommended). Install the Zold checkout extension from the <span class="z-mono">shopify-app/</span> project and add its block to the Thank you and Order status pages, pointing at this deployment. Without it, put the pay link in the order confirmation email.</li>
-      </ol>${endpoints}`
+        <li><b>Thank-you page</b> (recommended). Install the Zold checkout extension from the <span class="z-mono">shopify-app/</span> project and add its block to the Thank you page, pointing at this deployment.</li>
+        <li><b>Confirmation email.</b> Settings, Notifications, Order confirmation: add the store’s pay link below. It is signed with a key for that store, so only someone who got the email can open the order’s payment; keep the template private. Place a test order and open the link before relying on it: Zold has not yet seen Shopify render this signature in an email.</li>
+      </ol>${endpoints}${payLinks(d)}`
     : `<p class="desc">Paste these into the app’s payments extension. Currency: euros. Payment method type: offsite.</p>${endpoints}`;
   return `<p class="zb-hint" style="margin-top:12px">${limits}</p>
     <details class="z-card zb-pad zb-app__setup"><summary>${custom ? "How to set up the store" : "Partner Dashboard settings"}</summary>${steps}</details>`;
