@@ -95,9 +95,11 @@ export interface PaymentRequestSource {
   orderGid?: string;
   /** The order's display name ("#3107"), for the buyer and the merchant. */
   orderName?: string;
-  /** Shopify's order status page. Only on rows written before it stopped being
-   *  stored; never followed, because its key opens the buyer's order. */
+  /** Shopify's order status page — where the buyer lands afterwards. */
   orderStatusUrl?: string;
+  /** custom-app: SHA-256 of the order's `checkout_token`. The thank-you
+   *  page extension holds the token and presents it to read the order. */
+  checkoutTokenHash?: string;
   cancelUrl?: string;
   /** Where the payer goes once the merchant has been told. Set when the
    *  merchant's system answers the settlement call. */
