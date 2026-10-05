@@ -5,7 +5,7 @@ Single Node/Express app (`services/api`) serving the API, the website and three
 front ends, plus Solidity contracts used only on local hardhat.
 
 ```
-browser ─┬─ /            landing (site.css/site.js)
+browser ─┬─ /            landing (site.css/site.js + landing.css, landing/*.js)
          ├─ /app         the person's own account (public/app/*.js, classic scripts)
          ├─ /business    Zold Business: companies (public/business/*.js, ES modules)
          ├─ /admin       operator view (admin.html)
