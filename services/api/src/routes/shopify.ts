@@ -513,7 +513,10 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           shop: c.shop,
           orderGid,
           ...(orderName ? { orderName } : {}),
-          ...(externalHttpUrl(o.order_status_url) ? { orderStatusUrl: externalHttpUrl(o.order_status_url)!, returnUrl: externalHttpUrl(o.order_status_url)! } : {}),
+          // No order_status_url: its key opens the buyer's order (name,
+          // address), and this request's code is reachable by counting order
+          // ids through the email pay link, so /return/:code must not lead
+          // there. The buyer already has that page from Shopify's own email.
         },
         c.orgId,
       );
@@ -606,7 +609,13 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         }
         fresh = store.findPaymentRequest(r.id)!;
       }
-      res.redirect(externalHttpUrl(fresh.source.returnUrl) ?? `${page}?notice=store-pending`);
+      // An order request's code is reachable by order id, so it never leads
+      // to the order status page (rows written before carry it as returnUrl).
+      // The pay page shows the order paid; only an unresolved store needs the
+      // pending notice.
+      const back = fresh.source.orderGid ? undefined : externalHttpUrl(fresh.source.returnUrl);
+      if (back) return res.redirect(back);
+      res.redirect(fresh.source.resolvedAt ? page : `${page}?notice=store-pending`);
     }),
   );
 
