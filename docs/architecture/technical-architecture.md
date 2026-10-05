@@ -619,12 +619,14 @@ flowchart LR
     stores the SHA-256 of the order's `checkout_token`, and `t` must hash to
     it. It returns the pay-page projection and the pay page's URL.
   - `…/pay?b=<sig>` is a 302 to the pay page, for the confirmation-email
-    link. `b` is `{{ id | hmac_sha256: key }}`, using a per-shop key
+    link. Each store's template has its domain written in, so the email
+    needs only `{{ id }}`. `b` is `{{ id | hmac_sha256: key }}`, using a per-shop key
     (`orderLinkSecretEnc`, encryption purpose `shopify-link`) that is created
     the first time the org view shows that store's `payLinkTemplate`.
     **Unverified:** whether Shopify's notification Liquid supports
-    `hmac_sha256`, and whether the extension's `checkoutToken` equals the
-    webhook's `checkout_token`.
+    `hmac_sha256` (its email-variables reference does not list it). Shopify
+    documents that the extension's `checkoutToken` matches the order's
+    `checkout_token`; no real store has exercised either.
   - `/return/:code` and `/cancel/:code` redirect back to the store.
 - **Extension** (`shopify-app/extensions/zold-pay`): targets
   `purchase.thank-you.block.render` only (the order-status page has no
