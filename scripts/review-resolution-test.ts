@@ -24,10 +24,12 @@ process.env.KYC_OPERATOR_TOKEN = OPERATOR;
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
+const { createTransferRouter } = await import("../services/api/src/routes/transfers.js");
 const { strandedAction, compensateTransfer, DEBIT_STEP } = await import("../services/api/src/orchestrator.js");
 
 initStore();
 const now = new Date().toISOString();
+store.addUser({ id: "u_review", name: "Review User", country: "DE", address: `0x${"22".repeat(20)}`, createdAt: now } as any);
 function row(id: string, state: string) {
   store.addTransfer({
     id, userId: "u_review", quoteId: `q-${id}`, rail: "sepa", recipientName: "Payee", state, sendEur: 10,
@@ -42,6 +44,8 @@ row("t_failed", "FAILED");
 const app = express();
 app.use(express.json());
 app.use("/api", createAdminRouter());
+// The session is not under test here: every request is the owner.
+app.use("/api", createTransferRouter({ requireUserSession: () => true }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -108,6 +112,27 @@ try {
     assert.equal(entry.data.from, "MANUAL_REVIEW");
     assert.equal(entry.data.to, "REFUNDED");
     assert.equal(entry.data.note, NOTE);
+  });
+
+  await check("no user-facing transfer route carries the operator's resolution", async () => {
+    const get = async (p: string) => {
+      const res = await fetch(`${API}/api${p}`);
+      assert.equal(res.status, 200, p);
+      return res.json();
+    };
+    const bodies = [
+      await get("/transfers/t_review"),
+      await get("/users/u_review/transfers"),
+      await get("/users/u_review/activity"),
+    ];
+    for (const b of bodies) {
+      const text = JSON.stringify(b);
+      assert.ok(text.includes("t_review"), "the transfer is listed");
+      assert.ok(!text.includes("reviewResolution"), `reviewResolution leaked: ${text.slice(0, 200)}`);
+      assert.ok(!text.includes(NOTE), "the operator note leaked");
+      assert.ok(!text.includes("operator:"), "the operator label leaked");
+      assert.ok(!text.includes("previousError"), "previousError leaked");
+    }
   });
 
   await check("a resolved transfer is resolved once", async () => {
