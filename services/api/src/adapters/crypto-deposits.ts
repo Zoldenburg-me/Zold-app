@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import { usdToken } from "../usd-token.js";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
+import { describeCause } from "../http/log-cause.js";
 import { addrs, eur, usd, publicClient } from "../chain.js";
 import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
@@ -561,7 +562,7 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
       const linked = store.findCryptoDeposit(deposit.txHash, deposit.logIndex);
       if (linked?.state === "CONVERTED" && linked.invoiceId) recordInvoiceSettlement(linked);
     } catch (err: any) {
-      console.error(`crypto-in: could not attribute deposit ${deposit.id} to a request: ${err?.message ?? err}`);
+      console.error(`crypto-in: could not attribute deposit ${deposit.id} to a request: ${describeCause(err)}`);
     }
   }
 
@@ -573,7 +574,7 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
     } catch (err: any) {
       // convertDeposit records its own refusals; reaching here means the
       // record itself could not be written.
-      console.error(`crypto-in: could not settle deposit ${deposit.id}: ${err?.message ?? err}`);
+      console.error(`crypto-in: could not settle deposit ${deposit.id}: ${describeCause(err)}`);
     }
   }
   if (fresh.length) writeStatementLines();
@@ -609,7 +610,7 @@ export function startCryptoDepositPoller() {
       await sweepPendingCryptoDeposits();
       await pollCryptoDepositsOnce();
     } catch (err: any) {
-      console.error(`crypto-in poll failed: ${err?.message ?? err}`);
+      console.error(`crypto-in poll failed: ${describeCause(err)}`);
     } finally {
       busy = false;
     }

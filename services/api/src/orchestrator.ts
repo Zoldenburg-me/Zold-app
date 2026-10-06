@@ -426,7 +426,7 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
   try {
     return await compensateTransfer(id);
   } catch (e: any) {
-    console.error(`compensation failed for ${id}: ${e?.message ?? e} — will retry on sweep`);
+    console.error(`compensation failed for ${id}: ${describeCause(e)} — will retry on sweep`);
     return failed;
   }
 }
@@ -715,7 +715,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
           state: "MANUAL_REVIEW",
           error:
             `${t.error ?? "transfer failed"}; Safe-funded input was already swapped to USDC and the ` +
-            `reverse swap did not complete (${err?.message ?? err}) — needs review before ` +
+            `reverse swap did not complete (${describeCause(err)}) — needs review before ` +
             `€${refundEur} can be returned to ${user.address}`,
           txs,
         });
@@ -833,7 +833,7 @@ export async function sweepStrandedTransfers(): Promise<number> {
         n++;
       }
     } catch (e: any) {
-      console.error(`sweep: compensation failed for ${t.id}: ${e?.message ?? e}`);
+      console.error(`sweep: compensation failed for ${t.id}: ${describeCause(e)}`);
     }
   }
   return n;
@@ -850,7 +850,7 @@ export async function sweepAnchorPayouts(): Promise<number> {
         if (updated.updatedAt !== before) n++;
       }
     } catch (e: any) {
-      console.error(`sweep: anchor payout refresh failed for ${t.id}: ${e?.message ?? e}`);
+      console.error(`sweep: anchor payout refresh failed for ${t.id}: ${describeCause(e)}`);
     }
   }
   return n;
@@ -1238,7 +1238,7 @@ async function refreshPayoutUnlocked(
       err instanceof TypeError ||
       /fetch failed|ECONN|ETIMEDOUT|timed? ?out|aborted|socket hang up|\b5\d\d\b/i.test(String(err?.message ?? err));
     if (transient && !maybePaid) {
-      console.error(`refreshPayout: transient anchor error for ${transfer.id}, state unchanged: ${err?.message ?? err}`);
+      console.error(`refreshPayout: transient anchor error for ${transfer.id}, state unchanged: ${describeCause(err)}`);
       return transfer;
     }
     if (maybePaid) {

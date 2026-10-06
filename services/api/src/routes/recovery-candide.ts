@@ -233,7 +233,7 @@ async function verifyOwnerAssertion(user: User, body: any, challenge: string): P
     return store.updateUser(user.id, { passkey: { ...passkey, signCount } });
   } catch (err: any) {
     // A wrong approval is the caller's to redo, not a partner failure.
-    throw new CandideGuardianError(`That passkey approval did not check out (${err?.message ?? err}). Start again.`, 401, "BAD_ASSERTION");
+    throw new CandideGuardianError(`That passkey approval did not check out (${describeCause(err)}). Start again.`, 401, "BAD_ASSERTION");
   }
 }
 
@@ -364,7 +364,7 @@ export async function sweepCandideRecoveries(now = new Date()): Promise<number> 
         const out = await finalizeCandideRecovery(r, now);
         if (out.status === "FINALIZED") n++;
       } catch (err: any) {
-        console.error(`recovery sweep: ${r.id}: ${err?.message ?? err}`);
+        console.error(`recovery sweep: ${r.id}: ${describeCause(err)}`);
       }
     } else if (["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && now >= new Date(r.expiresAt)) {
       store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
@@ -958,7 +958,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           const owner = webauthnOwnerFromJwk(c.newPasskey.publicKey.jwk);
           if (owner) verifierDeployTxHash = await deployVerifierForOwner(owner);
         } catch (err: any) {
-          console.error(`recovery ${request.id}: verifier deploy failed (will matter at first use): ${err?.message ?? err}`);
+          console.error(`recovery ${request.id}: verifier deploy failed (will matter at first use): ${describeCause(err)}`);
         }
         patch = {
           status: "GRACE_PERIOD",
