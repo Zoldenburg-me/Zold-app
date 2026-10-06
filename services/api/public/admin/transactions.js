@@ -66,7 +66,7 @@ async function resolveReview(root, id) {
   if (!RESOLVE_STATES.includes(state)) { alert(`State must be one of ${RESOLVE_STATES.join(', ')}.`); return; }
   const body = { state };
   if (state === 'PAID') {
-    const evidence = (prompt('Evidence the payout went out: the Monerium order id, Bridge destination tx hash or anchor payment hash this transfer recorded') || '').trim();
+    const evidence = (prompt('Evidence the payout was carried out: the Monerium order id once Monerium reports it processed, the destination tx hash Bridge reported, or the anchor payment hash this transfer recorded') || '').trim();
     if (!evidence) return;
     body.evidence = evidence;
   }

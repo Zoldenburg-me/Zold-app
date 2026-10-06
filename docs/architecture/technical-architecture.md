@@ -375,9 +375,11 @@ The only way out of MANUAL_REVIEW is `store.resolveTransferReview`, behind
 Transactions view's Resolve button). It moves no money: the operator has
 already acted on chain or at the partner. PAID settles linked pay links,
 invoices and Shopify orders, so it is refused (409) unless `evidence` names a
-payout identifier the transfer recorded: a Monerium order id
-(`monerium.redeem.placed`, `sepa.orderId`), a Bridge destination tx
-(`bridge.xyz.destination_tx`, `pickup.bridgeDestinationTxHash`) or
+payout the transfer recorded as carried out: `sepa.orderId` while the order
+state read back from Monerium (`sepa.state`) is `processed` (a placed order is
+not enough; the redeem poller keeps reading the order of a transfer in
+review), the destination tx Bridge reported (`bridge.xyz.destination_tx` step;
+the plan field `pickup.bridgeDestinationTxHash` is not accepted), or
 `pickup.anchorPaymentHash` (`transfers/review-evidence.ts`). REFUNDED needs
 `amountEur` (0 up to `safeMovedEur`, else 400) and `evidence` (the refund tx
 hash or partner reference); it writes `transfer.refund` (`recoveredFrom:
