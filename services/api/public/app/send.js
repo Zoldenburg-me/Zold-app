@@ -219,6 +219,16 @@ const STEP_LABELS = {
   "safe.refundTransfer": ["Refunding your Safe", "💶"],
 };
 
+/* What the server records but a person should not read as progress: the
+   intent marked before a call goes out (".pending", hash "0x"), an outcome the
+   error or the SEPA line already states (".placed" carries the Monerium order
+   id, ".refused", ".reverted", ".not-sent", ".unconfirmed"). */
+const INTERNAL_STEP = /\.(pending|placed|refused|reverted|not-sent|unconfirmed)$/;
+const txStepShown = (x) => !!x?.step && !INTERNAL_STEP.test(x.step);
+/* Only a chain transaction hash is shown or linked as one; the same field
+   also holds order ids, deposit addresses and the "0x" placeholder. */
+const isTxHash = (h) => /^0x[0-9a-fA-F]{64}$/.test(String(h || ""));
+
 /** Synthetic (off-chain) steps appended after the tx steps per rail. */
 function sepaSteps(t) {
   const s = t.sepa || {};
@@ -238,9 +248,9 @@ function stepEl(title, detail, icon) {
 function playTimeline(t, { onDone } = {}) {
   const tl = $("timeline");
   tl.innerHTML = "";
-  const steps = t.txs.map((x) => {
+  const steps = (t.txs || []).filter(txStepShown).map((x) => {
     const [label, icon] = STEP_LABELS[x.step] || [x.step, "⚙️"];
-    return stepEl(label, `tx ${x.hash}`, icon);
+    return stepEl(label, isTxHash(x.hash) ? `tx ${x.hash}` : "", icon);
   });
   if (t.rail === "sepa") {
     for (const [label, detail, icon] of sepaSteps(t)) steps.push(stepEl(label, detail, icon));
