@@ -101,7 +101,7 @@ function phTxParts(id) {
     ...(!cash ? [{ key: "Reference", value: t.reference || "", hint: "On their bank statement" }] : []),
     ...(t.refund ? [{ key: "Refunded", value: phEur(t.refund.amountEur) }] : []),
   ];
-  const hashes = (t.txs || []).filter((x) => x.hash);
+  const hashes = (t.txs || []).filter((x) => txStepShown(x) && isTxHash(x.hash));
   const tech = [
     { key: "Payment ID", value: t.id, mono: true },
     ...(!cash && t.recipientIban ? [{ key: "Full IBAN", value: Z.groupIban(t.recipientIban), mono: true }] : []),
