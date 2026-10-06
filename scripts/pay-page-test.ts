@@ -317,6 +317,35 @@ check("no <img> in the app points at a signed-in route (an image request carries
   assert.ok(readFileSync(new URL("phone-add.js", dir), "utf8").includes("phLoadWalletQr"), "the wallet QR is loaded with the session");
 });
 
+check("transfer timelines hide intent and outcome steps, and show only real tx hashes", () => {
+  // app/send.js holds the rule both renderers use (send.js, phone-activity.js).
+  const dir = new URL("../services/api/public/app/", import.meta.url);
+  const src = readFileSync(new URL("send.js", dir), "utf8");
+  const lines = src.split("\n").filter((l) => /^const (INTERNAL_STEP|txStepShown|isTxHash) =/.test(l));
+  assert.equal(lines.length, 3, "send.js defines INTERNAL_STEP, txStepShown and isTxHash");
+  const { txStepShown, isTxHash } = new Function(`${lines.join("\n")}; return { txStepShown, isTxHash };`)();
+  for (const step of [
+    "monerium.redeem.pending", "monerium.redeem.placed", "monerium.redeem.refused",
+    "safe.refundTransfer.pending", "bridge.xyz.deposit.pending", "safe.debit.unconfirmed",
+    "safe.swap(usdc->eure).unconfirmed", "safe.swap(usdc->eure).reverted", "monerium.redeem.not-sent",
+  ]) assert.equal(txStepShown({ step, hash: "0x" }), false, `${step} is hidden`);
+  for (const step of ["safe.transfer(orchestrator)", "safe.transfer(fee)", "safe.refundTransfer", "bridge.xyz.deposit.transfer", "liquidity.lifi.eure-usdc"]) {
+    assert.equal(txStepShown({ step, hash: "0x" }), true, `${step} is shown`);
+  }
+  assert.equal(isTxHash(`0x${"ab".repeat(32)}`), true);
+  for (const h of ["0x", "ord_123", "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1", undefined]) assert.equal(isTxHash(h), false, `${h} is not a tx hash`);
+  const activity = readFileSync(new URL("phone-activity.js", dir), "utf8");
+  assert.ok(activity.includes("txStepShown(x) && isTxHash(x.hash)"), "phone details list only shown steps with real hashes");
+});
+
+check("the wallet screen shows an UNCONFIRMED conversion as being checked, never offered again", () => {
+  const src = readFileSync(new URL("../services/api/public/app/phone-add.js", import.meta.url), "utf8");
+  assert.ok(/d\.state === "UNCONFIRMED" && d\.token === "USDC"/.test(src), "UNCONFIRMED deposits are listed");
+  assert.ok(src.includes('Z.tag("CHECKING")'), "they carry the CHECKING tag the activity rows use");
+  assert.ok(/waiting = \(deps \|\| \[\]\)\.filter\(\(d\) => d\.state === "DETECTED"/.test(src), "only DETECTED gets a Convert button");
+  assert.ok(src.includes("SAFE_OP_UNCONFIRMED") && src.includes("SAFE_OP_REVERTED"), "the check screen words the server's codes");
+});
+
 check("a QR of an address round-trips back to the same string", () => {
   const addr = "0xa8af216C328AAa6a384DD422c4eA005cEd7F73f1";
   assert.equal(readBack(qrMatrix(addr)), addr);

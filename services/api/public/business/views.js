@@ -368,15 +368,20 @@ RENDER.documents = async () => {
     return { value: d.toISOString().slice(0, 7), label: d.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }) };
   });
   const chosen = docMonth.value || months[0].value;
+  // The API issues these two letters only for a verified account
+  // (documents.ts holderLetterRefusal, 409 ACCOUNT_NOT_VERIFIED).
+  const letters = me?.kycStatus === "approved";
   const paid = (tx || []).filter((t) => t.rail === "sepa" && t.state === "PAID").slice(0, RECEIPT_ROWS);
   const create = `<section class="card"><div class="h"><div><h2>Create</h2><p class="desc">Each one opens in a new tab, ready to print or save as PDF.</p></div></div>
     <div class="zb-doc-create">
       <div><label for="doc-month">Statement month</label><select id="doc-month">${months.map((m) => `<option value="${m.value}"${m.value === chosen ? " selected" : ""}>${esc(m.label)}</option>`).join("")}</select></div>
       ${primary("Statement", 'data-act="doc-statement"', "description")}
-      ${secondary("Balance confirmation", 'data-act="doc-balance"', "account_balance")}
-      ${secondary("Proof of ownership", 'data-act="doc-ownership"', "verified_user")}
+      ${letters ? `${secondary("Balance confirmation", 'data-act="doc-balance"', "account_balance")}
+      ${secondary("Proof of ownership", 'data-act="doc-ownership"', "verified_user")}` : ""}
     </div>
-    <p class="desc" style="margin-top:12px">The proof of ownership asks for your Face ID or fingerprint: the account itself signs it, which shows you control it.</p></section>`;
+    <p class="desc" style="margin-top:12px">${letters
+      ? "The proof of ownership asks for your Face ID or fingerprint: the account itself signs it, which shows you control it."
+      : "Balance confirmations and proofs of ownership are issued once Monerium has verified you and your IBAN is active."}</p></section>`;
   const issued = docs.length
     ? table([["Document"], ["Details"], ["Issued"], [""]], docs.map((d) => `<tr>
         <td>${Z.icon(DOC_ICON[d.kind] || "description")} ${esc(DOC_LABEL[d.kind] || d.kind)}</td>
