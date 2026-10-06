@@ -26,7 +26,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { CHAIN_ID, HARNESS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import { operatorLabel, requireOperator } from "../http/guards.js";
-import { describeCause } from "../http/log-cause.js";
+import { describeCause, describeError, shortErrorForClient } from "../http/log-cause.js";
 import { publicRecoveryRequest } from "../recovery.js";
 import { recoveryEnrolment } from "../admin/onboarding.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
@@ -105,8 +105,8 @@ function fail(res: express.Response, err: unknown) {
     return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
   // 503, not 502: Cloudflare replaces an origin 502's body with its own page.
-  console.error(`recovery (zoldenburg): ${(err as any)?.stack ?? err}`);
-  return res.status(503).json({ error: String((err as any)?.message ?? err).slice(0, 300) });
+  console.error(`recovery (zoldenburg): ${describeError(err)}`);
+  return res.status(503).json({ error: shortErrorForClient(err) });
 }
 
 function activePlan(user: User): PasskeySafeDeploymentPlan {

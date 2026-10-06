@@ -62,7 +62,7 @@ import {
   } from "./chain.js";
 import { CANDIDE, SafeGasError, SafeThresholdError } from "./wallet/candide.js";
 import { routeAsyncRejections } from "./http/async-errors.js";
-import { describeCause } from "./http/log-cause.js";
+import { describeCause, describeError } from "./http/log-cause.js";
 import { recordServerError } from "./http/error-log.js";
 import { knownError } from "./http/known-errors.js";
 const app = express();
@@ -436,11 +436,11 @@ app.listen(API_PORT, API_HOST, () => {
  */
 process.on("unhandledRejection", (reason: any) => {
   console.error(
-    `FATAL unhandled promise rejection — the API is exiting: ${reason?.stack ?? reason?.message ?? reason}`,
+    `FATAL unhandled promise rejection — the API is exiting: ${describeError(reason)}`,
   );
   process.exit(1);
 });
 process.on("uncaughtException", (err) => {
-  console.error(`FATAL uncaught exception — the API is exiting: ${err?.stack ?? err?.message ?? err}`);
+  console.error(`FATAL uncaught exception — the API is exiting: ${describeError(err)}`);
   process.exit(1);
 });

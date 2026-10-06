@@ -95,4 +95,36 @@ for (const file of ["orchestrator.ts", "faucet.ts", "adapters/crypto-deposits.ts
 }
 console.log("   ok  money-path chain and bundler errors are logged redacted");
 
-console.log("\nsafe-op-uncertain: 5/5 checks passed");
+{
+  const { describeError, shortErrorForClient } = await import("../services/api/src/http/log-cause.js");
+  for (const long of ["a-".repeat(50_000), "a.".repeat(50_000), `${"x-".repeat(40_000)}.example.io`]) {
+    const t0 = Date.now();
+    describeCause(new Error(long));
+    describeError(new Error(long));
+    assert.ok(Date.now() - t0 < 200, `redacting a ${long.length}-char line took ${Date.now() - t0} ms`);
+  }
+  console.log("   ok  a long hyphen or dot run is redacted in bounded time");
+
+  const KEY = "key-in-path-not-real-0001";
+  const viemErr = new HttpRequestError({ url: `https://bundler.example.io/rpc/${KEY}`, body: { method: "eth_sendUserOperation" } });
+  const logged = describeError(viemErr);
+  assert.ok(!logged.includes(KEY) && !logged.includes("bundler.example.io"), logged);
+  assert.ok(!/Request body|URL:/.test(logged), `the message's URL and body lines reached the log: ${logged}`);
+  assert.match(logged, /\n    at /, "the call frames are kept");
+  console.log("   ok  a logged stack keeps its frames and drops the message's URL and body");
+
+  const client = shortErrorForClient(viemErr);
+  assert.ok(!client.includes(KEY), client);
+  assert.equal(shortErrorForClient(new Error("Unexpected origin https://evil.example.io")), "Error: Unexpected origin <url>");
+  assert.equal(shortErrorForClient(new Error("Unexpected RP ID hash for zoldhq.com")), "Error: Unexpected RP ID hash for zoldhq.com");
+  console.log("   ok  the client message drops URLs and keeps a bare origin name");
+}
+
+for (const file of ["http/error-log.ts", "server.ts", "routes/recovery-candide.ts", "routes/recovery-zoldenburg.ts"]) {
+  const src = readFileSync(new URL(`../services/api/src/${file}`, import.meta.url), "utf8");
+  assert.doesNotMatch(src, /console\.error\([^;]*\.stack\b/, `${file} logs a raw stack`);
+  assert.doesNotMatch(src, /json\(\{ error: (String\(\(err as any\)\?\.message|message\.slice)/, `${file} sends a raw error message to the client`);
+}
+console.log("   ok  route error logs and recovery 503s never carry a raw stack or message");
+
+console.log("\nsafe-op-uncertain: 9/9 checks passed");

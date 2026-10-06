@@ -71,7 +71,7 @@ import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertionForChallenge, 
 import { publicRecoveryRequest } from "../recovery.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
-import { describeCause } from "../http/log-cause.js";
+import { describeCause, describeError, shortErrorForClient } from "../http/log-cause.js";
 
 export interface CandideRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -166,9 +166,8 @@ function fail(res: express.Response, err: unknown) {
     return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
   // 503, not 502: Cloudflare replaces an origin 502's body with its own page.
-  console.error(`recovery (candide): ${(err as any)?.stack ?? err}`);
-  const message = String((err as any)?.message ?? err);
-  return res.status(503).json({ error: message.slice(0, 300) });
+  console.error(`recovery (candide): ${describeError(err)}`);
+  return res.status(503).json({ error: shortErrorForClient(err) });
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +232,7 @@ async function verifyOwnerAssertion(user: User, body: any, challenge: string): P
     return store.updateUser(user.id, { passkey: { ...passkey, signCount } });
   } catch (err: any) {
     // A wrong approval is the caller's to redo, not a partner failure.
-    throw new CandideGuardianError(`That passkey approval did not check out (${describeCause(err)}). Start again.`, 401, "BAD_ASSERTION");
+    throw new CandideGuardianError(`That passkey approval did not check out (${shortErrorForClient(err)}). Start again.`, 401, "BAD_ASSERTION");
   }
 }
 
