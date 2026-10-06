@@ -23,11 +23,37 @@ export function redactUrls(text: string): string {
     .replace(IP_PATTERN, "<host>");
 }
 
-export function describeCause(cause: unknown): string {
+/** Only this much of a line is redacted and logged: the host pattern
+ *  backtracks quadratically on long dotted or hyphenated runs, and an RPC or
+ *  bundler can echo a large body into an error message. */
+const MAX_LOGGED = 500;
+
+function firstLine(cause: unknown): string {
   if (cause === undefined || cause === null) return "no cause";
-  if (typeof cause !== "object") return redactUrls(String(cause).split("\n")[0]);
+  if (typeof cause !== "object") return String(cause).split("\n")[0];
   const e = cause as { name?: unknown; shortMessage?: unknown; message?: unknown };
   const name = typeof e.name === "string" && e.name ? e.name : "Error";
   const text = typeof e.shortMessage === "string" ? e.shortMessage : typeof e.message === "string" ? e.message : "";
-  return redactUrls(`${name}: ${text.split("\n")[0]}`);
+  return `${name}: ${text.split("\n")[0]}`;
+}
+
+export function describeCause(cause: unknown): string {
+  return redactUrls(firstLine(cause).slice(0, MAX_LOGGED));
+}
+
+/**
+ * describeCause plus the stack's call frames, for a log line that needs to
+ * say where it failed. A stack starts with the full message (a viem error's
+ * names its URL and request body), so only the "at …" frames are kept.
+ */
+export function describeError(err: unknown): string {
+  const stack = typeof (err as { stack?: unknown })?.stack === "string" ? (err as { stack: string }).stack : "";
+  const frames = stack.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("at ")).slice(0, 8);
+  return [describeCause(err), ...frames.map((f) => `    ${redactUrls(f.slice(0, MAX_LOGGED))}`)].join("\n");
+}
+
+/** One line safe to show the caller: URLs removed, hosts kept (a WebAuthn
+ *  origin mismatch has to name the origin to be fixable). */
+export function shortErrorForClient(err: unknown): string {
+  return firstLine(err).slice(0, 300).replace(URL_PATTERN, "<url>");
 }
