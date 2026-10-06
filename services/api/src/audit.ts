@@ -46,7 +46,10 @@ export type AuditKind =
   | "wallet.ownership_checked"
   | "org.payment_review_changed"
   /** The payout IBAN printed on invoices changed: last four characters only. */
-  | "org.invoice_iban_changed";
+  | "org.invoice_iban_changed"
+  /** An operator took a transfer out of MANUAL_REVIEW: the state chosen, the
+   *  note, and which operator (a hash of the token). */
+  | "operator.transfer_review_resolved";
 
 export interface AuditEntry {
   id: string;

@@ -360,10 +360,23 @@ stateDiagram-v2
   DEBITED --> MANUAL_REVIEW: stranded after an outbound call
   FAILED --> REFUNDED: compensateTransfer
   FAILED --> MANUAL_REVIEW: duplicate / funds at Bridge / reverse swap failed / outbound outcome unknown
+  MANUAL_REVIEW --> REFUNDED: operator resolution
+  MANUAL_REVIEW --> PAID: operator resolution
+  MANUAL_REVIEW --> FAILED: operator resolution
 ```
 
 `store.updateTransfer` refuses to move a `PAID`, `REFUNDED` or `MANUAL_REVIEW`
-transfer to any other state. It drops the `state` field and logs.
+transfer, or one an operator resolved, to any other state. It drops the
+`state` field and logs.
+
+The only way out of MANUAL_REVIEW is `store.resolveTransferReview`, behind
+`POST /api/admin/transfers/:id/resolve-review` (operator bearer token, body
+`{state: REFUNDED|PAID|FAILED, note}`, note 20–2000 characters; the
+Transactions view's Resolve button). It moves no money: the operator has
+already acted on chain or at the partner. It records `transfer.reviewResolution`
+(`state`, `note`, `by` = `operatorLabel`, `at`, `previousError`) and an
+`operator.transfer_review_resolved` audit entry, once per transfer. A
+resolved transfer is never compensated or swept, whatever state it holds.
 
 ### 6.2 Quote → build → authorize → execute
 

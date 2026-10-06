@@ -2,8 +2,9 @@
  * The operator dashboard's read side.
  *
  * Read only and masked: recipient phone numbers and IBANs are masked before
- * they leave, and there is no write route (KYC review and IBAN issue belong to
- * Monerium).
+ * they leave. The writes are an operator's decisions — a plan grant and the
+ * resolution of a transfer in MANUAL_REVIEW — and neither moves money. KYC
+ * review and IBAN issue belong to Monerium.
  *
  * Authentication is the operator bearer token, never a user session, so a user
  * cannot act as the operator on their own account. It fails closed when no
@@ -14,7 +15,15 @@ import express from "express";
 import { wrap } from "./util.js";
 import { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient } from "../chain.js";
 import { publicUser } from "../users/public-user.js";
-import { store, type CryptoDeposit, type Transfer } from "../store.js";
+import {
+  REVIEW_NOTE_MAX,
+  REVIEW_NOTE_MIN,
+  REVIEW_RESOLUTION_STATES,
+  store,
+  type CryptoDeposit,
+  type ReviewResolutionState,
+  type Transfer,
+} from "../store.js";
 import { operatorLabel, requireOperator } from "../http/guards.js";
 import { recentServerErrors } from "../http/error-log.js";
 import { plansFor, trialIsActive } from "../domain/plans.js";
@@ -104,6 +113,7 @@ function adminTransfer(transfer: Transfer) {
     route,
     lastHash: lastHash(transfer.txs),
     refund: transfer.refund,
+    reviewResolution: transfer.reviewResolution,
     error: transfer.error,
     createdAt: transfer.createdAt,
     updatedAt: transfer.updatedAt,
@@ -239,6 +249,39 @@ export function createAdminRouter() {
         ...(trialIsActive(org) ? { trial: { ...org.trial!, endedAt: new Date().toISOString() } } : {}),
       });
       res.json({ id: updated.id, plan: updated.plan, trial: updated.trial });
+    }),
+  );
+
+  /**
+   * Close a transfer in MANUAL_REVIEW with an operator's decision. Moves no
+   * money: the operator has already acted on chain or at the partner, and this
+   * records the outcome, who decided it and why (store.resolveTransferReview).
+   */
+  router.post(
+    "/admin/transfers/:id/resolve-review",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      const state = String(req.body?.state ?? "");
+      if (!(REVIEW_RESOLUTION_STATES as readonly string[]).includes(state)) {
+        return res.status(400).json({ error: `state must be one of ${REVIEW_RESOLUTION_STATES.join(", ")}` });
+      }
+      const note = typeof req.body?.note === "string" ? req.body.note.trim() : "";
+      if (note.length < REVIEW_NOTE_MIN || note.length > REVIEW_NOTE_MAX) {
+        return res.status(400).json({
+          error: `a note of ${REVIEW_NOTE_MIN}-${REVIEW_NOTE_MAX} characters is required: what was checked and what was done`,
+        });
+      }
+      const result = store.resolveTransferReview(String(req.params.id), {
+        state: state as ReviewResolutionState,
+        note,
+        by: operatorLabel(req),
+      });
+      if (!result.ok) {
+        return result.code === "NOT_FOUND"
+          ? res.status(404).json({ error: "transfer not found" })
+          : res.status(409).json({ error: "only a transfer in MANUAL_REVIEW can be resolved, and only once" });
+      }
+      res.json(adminTransfer(result.transfer));
     }),
   );
 
