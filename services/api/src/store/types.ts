@@ -385,6 +385,20 @@ export interface Quote {
   createdAt: string;
 }
 
+/** The states an operator may close a MANUAL_REVIEW transfer into. */
+export const REVIEW_RESOLUTION_STATES = ["REFUNDED", "PAID", "FAILED"] as const;
+export type ReviewResolutionState = (typeof REVIEW_RESOLUTION_STATES)[number];
+
+export interface ReviewResolution {
+  state: ReviewResolutionState;
+  note: string;
+  /** operatorLabel(): a hash of the operator token, never the token. */
+  by: string;
+  at: string;
+  /** The transfer's error when it was resolved: why it was in review. */
+  previousError?: string;
+}
+
 export type TransferState =
   | "CREATED"
   | "DEBITED"
@@ -722,6 +736,11 @@ export interface Transfer {
     deductions: string;
     at: string;
   };
+  /** An operator's decision that took the transfer out of MANUAL_REVIEW
+   *  (store.resolveTransferReview), after they acted on chain or at the
+   *  partner. Set once; no automatic path moves or compensates the transfer
+   *  after it. */
+  reviewResolution?: ReviewResolution;
   createdAt: string;
   updatedAt: string;
 }

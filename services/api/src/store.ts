@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 import { batched, db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
 import { nextProfileHistory } from "./domain/monerium-identity.js";
+import { auditEntry } from "./audit.js";
 import type {
   Account,
   AccountRule,
@@ -28,6 +29,7 @@ import type {
   Member,
   Organisation,
 } from "./domain/types.js";
+import { REVIEW_RESOLUTION_STATES } from "./store/types.js";
 import type {
   ConversionSweep,
   CryptoDeposit,
@@ -36,6 +38,7 @@ import type {
   Quote,
   ReceiptShare,
   RecoveryRequest,
+  ReviewResolutionState,
   Session,
   ShopifyConnection,
   StoredDocument,
@@ -45,6 +48,10 @@ import type {
 
 export * from "./store/types.js";
 export { initStore } from "./store/db.js";
+
+/** Bounds of an operator's review-resolution note. */
+export const REVIEW_NOTE_MIN = 20;
+export const REVIEW_NOTE_MAX = 2000;
 
 /** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
@@ -310,9 +317,10 @@ export const store = {
     // refunded the transfer must not move it back and complete a payout the
     // sender was already repaid for; the late write keeps its other fields.
     // MANUAL_REVIEW belongs to an operator: no automatic path moves it on,
-    // since FAILED is what the sweep refunds.
+    // since FAILED is what the sweep refunds. resolveTransferReview is the one
+    // way out, and the state an operator resolved into is final too.
     if (
-      (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW") &&
+      (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW" || t.reviewResolution) &&
       patch.state &&
       patch.state !== t.state
     ) {
@@ -324,6 +332,40 @@ export const store = {
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
     persist();
     return t;
+  },
+  /**
+   * The only way out of MANUAL_REVIEW: an operator records what they decided
+   * after acting on chain or at the partner. Moves no money. Records the
+   * resolution on the transfer and an audit entry, once per transfer.
+   */
+  resolveTransferReview(
+    id: string,
+    r: { state: ReviewResolutionState; note: string; by: string },
+  ): { ok: true; transfer: Transfer } | { ok: false; code: "NOT_FOUND" | "NOT_IN_REVIEW" } {
+    if (!(REVIEW_RESOLUTION_STATES as readonly string[]).includes(r.state)) {
+      throw new Error(`a review resolves to ${REVIEW_RESOLUTION_STATES.join(", ")}, not ${r.state}`);
+    }
+    const note = r.note.trim();
+    if (note.length < REVIEW_NOTE_MIN || note.length > REVIEW_NOTE_MAX) {
+      throw new Error(`a review resolution needs a note of ${REVIEW_NOTE_MIN}-${REVIEW_NOTE_MAX} characters`);
+    }
+    if (!r.by) throw new Error("a review resolution names its operator");
+    const t = db.transfers.find((x) => x.id === id);
+    if (!t) return { ok: false, code: "NOT_FOUND" };
+    if (t.state !== "MANUAL_REVIEW" || t.reviewResolution) return { ok: false, code: "NOT_IN_REVIEW" };
+    const at = new Date().toISOString();
+    t.reviewResolution = { state: r.state, note, by: r.by, at, ...(t.error ? { previousError: t.error } : {}) };
+    t.state = r.state;
+    t.updatedAt = at;
+    db.audit.push(
+      auditEntry(
+        "operator.transfer_review_resolved",
+        { transferId: t.id, from: "MANUAL_REVIEW", to: r.state, note, operator: r.by },
+        t.userId,
+      ),
+    );
+    persist();
+    return { ok: true, transfer: t };
   },
   /**
    * One share per transfer, deliberately.

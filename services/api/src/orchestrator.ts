@@ -492,7 +492,10 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
 async function compensateTransferOnce(id: string): Promise<Transfer> {
   const t = store.findTransfer(id);
   if (!t) throw new Error(`unknown transfer ${id}`);
-  if (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW" || t.refund) return t;
+  // An operator's resolution is the last word on a transfer that was in review.
+  if (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW" || t.refund || t.reviewResolution) {
+    return t;
+  }
   const user = store.findUser(t.userId);
   if (!user) throw new Error(`unknown user for transfer ${id}`);
   const steps = new Set(t.txs.map((x) => x.step));
@@ -712,9 +715,10 @@ export type StrandedAction = "compensate" | "fail-and-compensate" | "review-outb
 
 /** What the sweep does with one transfer. `busy` says whether an execution or
  *  a compensation for it is running in this process; a running one is never
- *  stranded. MANUAL_REVIEW, like every state not named here, is left alone. */
+ *  stranded. MANUAL_REVIEW, like every state not named here, is left alone,
+ *  and so is a transfer an operator resolved out of review. */
 export function strandedAction(t: Transfer, now: number, busy: (id: string) => boolean): StrandedAction | null {
-  if (busy(t.id)) return null;
+  if (busy(t.id) || t.reviewResolution) return null;
   if (t.state === "FAILED") return !t.refund && inputFundsMoved(t.txs) ? "compensate" : null;
   if (["DEBITED", "SWAPPED", "BRIDGED"].includes(t.state)) {
     if (now - Date.parse(t.updatedAt) <= STRANDED_MS) return null;

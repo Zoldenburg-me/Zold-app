@@ -70,6 +70,7 @@ const scripts = [
   "identity:test",
   "plan:test",
   "admin:test",
+  "review-resolution:test",
   "invoicing:test",
   "async-errors:test",
   "input-errors:test",
