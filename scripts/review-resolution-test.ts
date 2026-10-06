@@ -47,6 +47,26 @@ store.updateTransfer("t_paid", {
   sepa: { mode: "sandbox", orderId: "ord-abc-123", state: "pending" },
 });
 row("t_paid_none", "MANUAL_REVIEW");
+// Hashes already on record somewhere the statement books from.
+const DEPOSIT_TX = `0x${"d1".repeat(32)}`;
+const DEPOSIT_CONVERSION_TX = `0x${"d2".repeat(32)}`;
+const DEPOSIT_STEP_TX = `0x${"d3".repeat(32)}`;
+const SWEEP_TX = `0x${"e1".repeat(32)}`;
+const SWEEP_CONVERSION_TX = `0x${"e2".repeat(32)}`;
+const OTHER_TRANSFER_TX = `0x${"f1".repeat(32)}`;
+const FRESH_TX = `0x${"c0".repeat(32)}`;
+store.addCryptoDeposit({
+  id: "dep_other", userId: "u_someone_else", token: "EURE", txHash: DEPOSIT_TX, logIndex: 0, amountEur: 5,
+  from: `0x${"33".repeat(20)}`, state: "CONVERTED", detectedAt: now,
+  conversion: { txHash: DEPOSIT_CONVERSION_TX }, txs: [{ step: "swap", hash: DEPOSIT_STEP_TX }],
+} as any);
+store.addConversionSweep({
+  id: "sweep_other", userId: "u_someone_else", createdAt: now,
+  conversion: { txHash: SWEEP_CONVERSION_TX }, txs: [{ step: "sweep", hash: SWEEP_TX }],
+} as any);
+row("t_other", "PAID");
+store.updateTransfer("t_other", { txs: [{ step: "safe.refundTransfer", hash: OTHER_TRANSFER_TX }] });
+for (const id of ["t_ref_1", "t_ref_2"]) row(id, "MANUAL_REVIEW");
 const DEST_TX = `0x${"de".repeat(32)}`;
 row("t_bridge_plan", "MANUAL_REVIEW");
 store.updateTransfer("t_bridge_plan", { pickup: { bridgeDestinationTxHash: DEST_TX } as any });
@@ -216,6 +236,41 @@ try {
     const t = store.findTransfer("t_paid")! as any;
     assert.equal(t.state, "PAID");
     assert.equal(t.reviewResolution.evidence, "ord-abc-123");
+  });
+
+  await check("a REFUNDED evidence hash already on record is refused", async () => {
+    const own = store.findTransfer("t_ref_1")!.txs[0].hash;
+    for (const [label, hash] of [
+      ["this transfer's own debit", own],
+      ["another transfer's step", OTHER_TRANSFER_TX],
+      ["another transfer's operator refund", `0x${"ab".repeat(32)}`],
+      ["a deposit's tx", DEPOSIT_TX],
+      ["a deposit's conversion tx", DEPOSIT_CONVERSION_TX],
+      ["a deposit's step", DEPOSIT_STEP_TX],
+      ["a sweep's step", SWEEP_TX],
+      ["a sweep's conversion tx", SWEEP_CONVERSION_TX],
+    ] as const) {
+      const r = await post("t_ref_1", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: hash.toUpperCase().replace("0X", "0x") });
+      assert.equal(r.status, 409, `${label}: ${JSON.stringify(r.body)}`);
+      assert.match(String(r.body.error), /already on record/, label);
+      const t = store.findTransfer("t_ref_1")!;
+      assert.equal(t.state, "MANUAL_REVIEW", label);
+      assert.ok(!t.refund, `${label}: a refund was written`);
+    }
+  });
+
+  await check("a fresh REFUNDED hash is recorded as the operator's refund step; a reference is not", async () => {
+    const fresh = await post("t_ref_1", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: FRESH_TX });
+    assert.equal(fresh.status, 200, JSON.stringify(fresh.body));
+    const t = store.findTransfer("t_ref_1")!;
+    assert.deepEqual(t.txs.filter((x) => x.step === "operator.refund").map((x) => x.hash), [FRESH_TX]);
+    const reused = await post("t_ref_2", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: FRESH_TX });
+    assert.equal(reused.status, 409, "the same hash on a second transfer");
+    const ref = await post("t_ref_2", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: "Monerium ticket 4711" });
+    assert.equal(ref.status, 200, JSON.stringify(ref.body));
+    const t2 = store.findTransfer("t_ref_2")! as any;
+    assert.ok(!t2.txs.some((x: any) => x.step === "operator.refund"), "a reference became a tx step");
+    assert.equal(t2.reviewResolution.evidence, "Monerium ticket 4711");
   });
 
   await check("a resolved transfer is resolved once", async () => {

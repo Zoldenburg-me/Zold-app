@@ -384,8 +384,11 @@ the plan field `pickup.bridgeDestinationTxHash` is not accepted), or
 `amountEur` (0 up to `safeMovedEur`, else 400) and `evidence` (the refund tx
 hash or partner reference); it writes `transfer.refund` (`recoveredFrom:
 "operator-resolved"`, deductions = what was not returned), so the app and the
-statement show the refund, and a tx-hash evidence is recorded as the
-`operator.refund` step the statement links to the reversal line. It records
+statement show the refund. A tx-hash evidence must be one no transfer, crypto
+deposit, sweep or ledger line holds yet (else 409: it would hide a real EURe
+arrival, take a debit line's link, or count for two transfers); it is recorded
+as the `operator.refund` step the statement links to the reversal line. A
+partner reference stays in `reviewResolution.evidence` only. It records
 `transfer.reviewResolution` (`state`, `note`, `by` = `operatorLabel`, `at`,
 `previousError`, `evidence`) and an `operator.transfer_review_resolved` audit
 entry, once per transfer. User-facing transfer routes omit

@@ -313,6 +313,11 @@ export function createAdminRouter() {
               "PAID needs evidence the payout was carried out: the Monerium order id once Monerium reports it processed, the destination tx hash Bridge reported, or the anchor payment hash this transfer recorded. A placed order or a planned destination proves nothing",
           });
         }
+        if (result.code === "EVIDENCE_ON_RECORD") {
+          return res.status(409).json({
+            error: `that tx hash is already on record (${result.recordedOn}), so it cannot be this refund: cite the refund's own tx hash, or the partner's reference`,
+          });
+        }
         return res.status(409).json({ error: NOT_IN_REVIEW });
       }
       res.json(adminTransfer(result.transfer));
