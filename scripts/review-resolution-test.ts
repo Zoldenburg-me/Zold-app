@@ -67,6 +67,14 @@ store.addConversionSweep({
 row("t_other", "PAID");
 store.updateTransfer("t_other", { txs: [{ step: "safe.refundTransfer", hash: OTHER_TRANSFER_TX }] });
 for (const id of ["t_ref_1", "t_ref_2"]) row(id, "MANUAL_REVIEW");
+// The operator's refund, already seen by the deposit scanner as a plain EURe
+// arrival into this user's Safe.
+const ARRIVED_REFUND_TX = `0x${"a7".repeat(32)}`;
+row("t_ref_3", "MANUAL_REVIEW");
+store.addCryptoDeposit({
+  id: "dep_refund", userId: "u_review", token: "EURE", txHash: ARRIVED_REFUND_TX, logIndex: 0, amountEur: 1,
+  from: `0x${"44".repeat(20)}`, state: "CONVERTED", detectedAt: now, txs: [],
+} as any);
 const DEST_TX = `0x${"de".repeat(32)}`;
 row("t_bridge_plan", "MANUAL_REVIEW");
 store.updateTransfer("t_bridge_plan", { pickup: { bridgeDestinationTxHash: DEST_TX } as any });
@@ -271,6 +279,21 @@ try {
     const t2 = store.findTransfer("t_ref_2")! as any;
     assert.ok(!t2.txs.some((x: any) => x.step === "operator.refund"), "a reference became a tx step");
     assert.equal(t2.reviewResolution.evidence, "Monerium ticket 4711");
+  });
+
+  await check("the refund tx the deposit scanner already recorded for this user is accepted and booked once, as the reversal", async () => {
+    const r = await post("t_ref_3", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: ARRIVED_REFUND_TX });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const t = store.findTransfer("t_ref_3")!;
+    assert.deepEqual(t.txs.filter((x) => x.step === "operator.refund").map((x) => x.hash), [ARRIVED_REFUND_TX]);
+    const dep = store.cryptoDeposits.find((d: any) => d.id === "dep_refund");
+    const lines = projectStatementLines({
+      orgId: "o_review", accountId: "a_review", userId: "u_review", safeAddress: `0x${"22".repeat(20)}`,
+      transfers: [t], deposits: [dep!], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [], swapsHaveExecuted: false,
+    });
+    const citing = lines.filter((l: any) => JSON.stringify(l).includes(ARRIVED_REFUND_TX));
+    assert.equal(citing.length, 1, `booked ${citing.length} times: ${JSON.stringify(citing).slice(0, 300)}`);
+    assert.ok(JSON.stringify(citing[0]).includes("transfer:t_ref_3:refund"), "booked as the reversal, not as a deposit");
   });
 
   await check("a resolved transfer is resolved once", async () => {

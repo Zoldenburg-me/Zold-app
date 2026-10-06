@@ -65,13 +65,23 @@ const capHolds = new Map<string, { userId: string; eur: number; day: string }>()
  * crypto deposit's tx, conversion and steps, every sweep's conversion and
  * steps, and the ledger's own lines. Undefined when none does.
  */
-function hashOnRecord(hash: string): string | undefined {
+function hashOnRecord(hash: string, userId: string): string | undefined {
   const h = hash.toLowerCase();
   const is = (x: string | undefined) => typeof x === "string" && x.toLowerCase() === h;
   const t = db.transfers.find((x) => x.txs.some((s) => is(s.hash)));
   if (t) return `transfer ${t.id}`;
+  // The refund itself, sent to this user's Safe, is recorded by the deposit
+  // scanner as a plain EURe arrival, usually before the operator resolves.
+  // That one is the refund: citing it books it as the reversal instead of a
+  // deposit. A deposit that is anyone else's, was converted, or pays an
+  // invoice or a pay link is a different payment.
+  const refundArrival = (x: (typeof db.cryptoDeposits)[number]) =>
+    x.userId === userId && x.token === "EURE" && is(x.txHash) && !x.conversion && !x.invoiceId && !x.paymentRequestId &&
+    !(x.txs ?? []).some((s) => is(s.hash));
   const d = db.cryptoDeposits.find(
-    (x) => is(x.txHash) || is(x.conversion?.txHash) || is(x.conversion?.userOpHash) || (x.txs ?? []).some((s) => is(s.hash)),
+    (x) =>
+      !refundArrival(x) &&
+      (is(x.txHash) || is(x.conversion?.txHash) || is(x.conversion?.userOpHash) || (x.txs ?? []).some((s) => is(s.hash))),
   );
   if (d) return `deposit ${d.id}`;
   const sw = db.conversionSweeps.find(
@@ -400,7 +410,7 @@ export const store = {
     // a real arrival, take a debit line's link, or count for two transfers.
     const refundTx = r.state === "REFUNDED" && evidence && /^0x[0-9a-fA-F]{64}$/.test(evidence) ? evidence : undefined;
     if (refundTx) {
-      const recordedOn = hashOnRecord(refundTx);
+      const recordedOn = hashOnRecord(refundTx, t.userId);
       if (recordedOn) return { ok: false, code: "EVIDENCE_ON_RECORD", recordedOn };
     }
     const at = new Date().toISOString();
