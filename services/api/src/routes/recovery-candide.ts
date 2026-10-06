@@ -258,6 +258,7 @@ async function submitConfirmed(
     op = await submitPasskeySafeOperationWithReceipt(plan, userOperation, toAssertion(body));
   } catch (err) {
     if (!(err instanceof SafeOperationUncertainError)) throw err;
+    console.error(`recovery: Safe operation ${err.userOpHash} unconfirmed:`, err.cause);
     res.status(502).json({
       error: `${err.message} — nothing is recorded until it is confirmed; check the chain before retrying`,
       code: "SAFE_OP_UNCONFIRMED",

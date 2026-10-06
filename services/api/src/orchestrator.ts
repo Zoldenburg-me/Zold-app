@@ -391,6 +391,7 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
   // The debit was sent and may still land: whether money left the Safe is
   // unknown, so neither "nothing was debited" nor a refund is safe.
   if (err instanceof SafeOperationUncertainError) {
+    console.error(`transfer ${id}: Safe operation ${err.userOpHash} unconfirmed:`, err.cause);
     return store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error: `${message}; check the operation on chain before any refund`,

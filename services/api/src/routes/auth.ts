@@ -345,6 +345,7 @@ export function createAuthRouter(deps: AuthDeps) {
         });
       } catch (err) {
         if (!(err instanceof SafeOperationUncertainError)) throw err;
+        console.error(`safe deploy: operation ${err.userOpHash} unconfirmed:`, err.cause);
         // It may still land. The account stays on its old address until the
         // deployment is confirmed; preparing again finds a Safe that did land.
         return res.status(502).json({

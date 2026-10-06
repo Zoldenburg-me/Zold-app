@@ -305,6 +305,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         // would offer the same USDC for a second conversion, so the row waits
         // for someone to check the operation on chain.
         if (err instanceof SafeOperationUncertainError) {
+          console.error(`convert: Safe operation ${err.userOpHash} unconfirmed:`, err.cause);
           store.updateCryptoDeposit(deposit.id, {
             state: "UNCONFIRMED",
             reason: `${reason} — check the operation before converting again`,
