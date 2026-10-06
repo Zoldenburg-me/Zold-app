@@ -26,6 +26,7 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
 const { createTransferRouter } = await import("../services/api/src/routes/transfers.js");
 const { strandedAction, compensateTransfer, DEBIT_STEP } = await import("../services/api/src/orchestrator.js");
+const { projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
 
 initStore();
 const now = new Date().toISOString();
@@ -33,7 +34,7 @@ store.addUser({ id: "u_review", name: "Review User", country: "DE", address: `0x
 function row(id: string, state: string) {
   store.addTransfer({
     id, userId: "u_review", quoteId: `q-${id}`, rail: "sepa", recipientName: "Payee", state, sendEur: 10,
-    receiveEur: 10, fundingSource: "safe", txs: [{ step: DEBIT_STEP.safeFee, hash: `0x${"11".repeat(32)}` }],
+    receiveEur: 9, fundingSource: "safe", txs: [{ step: DEBIT_STEP.safeFee, hash: `0x${"11".repeat(32)}` }],
     error: "redeem order outcome unknown: socket hang up", createdAt: now, updatedAt: now,
   } as any);
 }
@@ -101,8 +102,24 @@ try {
     assert.equal((await post("t_nope", { state: "REFUNDED", note: NOTE })).status, 404);
   });
 
+  const REFUND_TX = `0x${"ab".repeat(32)}`;
+  await check("REFUNDED needs the refunded amount and evidence", async () => {
+    for (const body of [
+      { state: "REFUNDED", note: NOTE, evidence: REFUND_TX },
+      { state: "REFUNDED", note: NOTE, evidence: REFUND_TX, amountEur: "1" },
+      { state: "REFUNDED", note: NOTE, evidence: REFUND_TX, amountEur: -1 },
+      { state: "REFUNDED", note: NOTE, evidence: REFUND_TX, amountEur: Number.NaN },
+      { state: "REFUNDED", note: NOTE, evidence: REFUND_TX, amountEur: 1.01 },
+      { state: "REFUNDED", note: NOTE, amountEur: 1 },
+    ]) {
+      const r = await post("t_review", body);
+      assert.equal(r.status, 400, `${JSON.stringify(body)} -> ${r.status} ${JSON.stringify(r.body)}`);
+    }
+    assert.equal(store.findTransfer("t_review")!.state, "MANUAL_REVIEW");
+  });
+
   await check("MANUAL_REVIEW moves to the chosen state with the resolution and an audit entry", async () => {
-    const r = await post("t_review", { state: "REFUNDED", note: NOTE });
+    const r = await post("t_review", { state: "REFUNDED", note: NOTE, amountEur: 1, evidence: REFUND_TX });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const t = store.findTransfer("t_review")! as any;
     assert.equal(t.state, "REFUNDED");
@@ -139,6 +156,23 @@ try {
       assert.ok(!text.includes("operator:"), "the operator label leaked");
       assert.ok(!text.includes("previousError"), "previousError leaked");
     }
+  });
+
+  await check("an operator's REFUNDED records the refund and the statement books it", () => {
+    const t = store.findTransfer("t_review")!;
+    assert.deepEqual(
+      { amountEur: t.refund?.amountEur, recoveredFrom: t.refund?.recoveredFrom, deductions: t.refund?.deductions },
+      { amountEur: 1, recoveredFrom: "operator-resolved", deductions: "none" },
+    );
+    assert.ok(Date.parse(t.refund!.at));
+    assert.equal((t as any).reviewResolution.evidence, REFUND_TX);
+    const lines = projectStatementLines({
+      orgId: "o_review", accountId: "a_review", userId: "u_review", safeAddress: `0x${"22".repeat(20)}`,
+      transfers: [t], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [], swapsHaveExecuted: false,
+    });
+    const refund = lines.find((l: any) => l.statementKey === "transfer:t_review:refund" || l.key === "transfer:t_review:refund" || JSON.stringify(l).includes("transfer:t_review:refund"));
+    assert.ok(refund, `no refund line: ${JSON.stringify(lines).slice(0, 300)}`);
+    assert.ok(JSON.stringify(refund).includes(REFUND_TX), "the refund line links the operator's refund tx");
   });
 
   await check("PAID needs the evidence the payout went out", async () => {

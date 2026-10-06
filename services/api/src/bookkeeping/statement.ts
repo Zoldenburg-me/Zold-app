@@ -24,6 +24,7 @@ import type {
   MoneriumIssueRecord,
   Transfer,
 } from "../store/types.js";
+import { OPERATOR_REFUND_STEP } from "../store/types.js";
 import type { PaymentRequest } from "../payment-requests.js";
 import { textCarriesCode } from "../payment-requests.js";
 import { paymentMemo } from "../sepa.js";
@@ -166,6 +167,8 @@ function sepaInLines(inp: StatementInputs): LineDraft[] {
 // ── SEPA out, and its reversal ───────────────────────────────────────────────
 
 const SEPA_LEFT = new Set(["PAYOUT_SUBMITTED", "PAID"]);
+/** Steps whose hash is the refund: ours, or one an operator recorded. */
+const REFUND_STEPS = new Set<string>(["safe.refundTransfer", OPERATOR_REFUND_STEP]);
 
 function sepaOutLines(inp: StatementInputs): LineDraft[] {
   const out: LineDraft[] = [];
@@ -223,7 +226,7 @@ function sepaOutLines(inp: StatementInputs): LineDraft[] {
         amountCents: -cents(t.sendEur),
         counterparty: { name: t.recipientName, iban: t.recipientIban },
         reference: referenceFor([t.reference], paymentMemo(t.id, t.reference)),
-        links: { transferId: t.id, txHashes: hashes.filter((h) => !t.txs.find((x) => x.hash === h && x.step === "safe.refundTransfer")) },
+        links: { transferId: t.id, txHashes: hashes.filter((h) => !t.txs.find((x) => x.hash === h && REFUND_STEPS.has(x.step))) },
         txType: "payout",
         tags: ["sepa", "failed"],
         note: t.error ? `Failed: ${t.error.slice(0, 160)}` : "Failed before payout.",
@@ -236,7 +239,7 @@ function sepaOutLines(inp: StatementInputs): LineDraft[] {
         amountCents: cents(t.refund.amountEur),
         counterparty: { name: t.recipientName, iban: t.recipientIban },
         reference: `Reversal ${t.id.replace(/-/g, "").slice(0, 8)}`,
-        links: { transferId: t.id, txHashes: t.txs.filter((x) => x.step === "safe.refundTransfer").map((x) => x.hash) },
+        links: { transferId: t.id, txHashes: t.txs.filter((x) => REFUND_STEPS.has(x.step)).map((x) => x.hash) },
         txType: "transfer_in",
         tags: ["reversal"],
         note: `Refund of a failed payout (${t.refund.recoveredFrom}). ${t.refund.deductions}`.slice(0, 240),

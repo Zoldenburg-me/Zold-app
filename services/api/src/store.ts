@@ -29,7 +29,7 @@ import type {
   Member,
   Organisation,
 } from "./domain/types.js";
-import { REVIEW_RESOLUTION_STATES } from "./store/types.js";
+import { OPERATOR_REFUND_STEP, REVIEW_RESOLUTION_STATES } from "./store/types.js";
 import { matchesPayoutEvidence } from "./transfers/review-evidence.js";
 import type {
   ConversionSweep,
@@ -343,7 +343,7 @@ export const store = {
    */
   resolveTransferReview(
     id: string,
-    r: { state: ReviewResolutionState; note: string; by: string; evidence?: string },
+    r: { state: ReviewResolutionState; note: string; by: string; evidence?: string; refund?: { amountEur: number; movedEur: number } },
   ): { ok: true; transfer: Transfer } | { ok: false; code: "NOT_FOUND" | "NOT_IN_REVIEW" | "NO_PAYOUT_EVIDENCE" } {
     if (!(REVIEW_RESOLUTION_STATES as readonly string[]).includes(r.state)) {
       throw new Error(`a review resolves to ${REVIEW_RESOLUTION_STATES.join(", ")}, not ${r.state}`);
@@ -353,6 +353,12 @@ export const store = {
       throw new Error(`a review resolution needs a note of ${REVIEW_NOTE_MIN}-${REVIEW_NOTE_MAX} characters`);
     }
     if (!r.by) throw new Error("a review resolution names its operator");
+    if (r.state === "REFUNDED") {
+      const a = r.refund?.amountEur;
+      if (typeof a !== "number" || !Number.isFinite(a) || a < 0 || a > (r.refund?.movedEur ?? 0) || !r.evidence?.trim()) {
+        throw new Error("a review resolved as REFUNDED names the amount returned (0 up to what left the Safe) and its evidence");
+      }
+    }
     const t = db.transfers.find((x) => x.id === id);
     if (!t) return { ok: false, code: "NOT_FOUND" };
     if (t.state !== "MANUAL_REVIEW" || t.reviewResolution) return { ok: false, code: "NOT_IN_REVIEW" };
@@ -371,12 +377,31 @@ export const store = {
       ...(t.error ? { previousError: t.error } : {}),
       ...(evidence ? { evidence } : {}),
     };
+    if (r.state === "REFUNDED" && r.refund) {
+      const short = Math.round((r.refund.movedEur - r.refund.amountEur) * 100) / 100;
+      t.refund = {
+        amountEur: r.refund.amountEur,
+        recoveredFrom: "operator-resolved",
+        deductions: short > 0 ? `€${short.toFixed(2)} not returned` : "none",
+        at,
+      };
+      // A refund tx on record is booked as the reversal, not as a stray EURe arrival.
+      if (evidence && /^0x[0-9a-fA-F]{64}$/.test(evidence)) t.txs.push({ step: OPERATOR_REFUND_STEP, hash: evidence });
+    }
     t.state = r.state;
     t.updatedAt = at;
     db.audit.push(
       auditEntry(
         "operator.transfer_review_resolved",
-        { transferId: t.id, from: "MANUAL_REVIEW", to: r.state, note, operator: r.by, ...(evidence ? { evidence } : {}) },
+        {
+          transferId: t.id,
+          from: "MANUAL_REVIEW",
+          to: r.state,
+          note,
+          operator: r.by,
+          ...(evidence ? { evidence } : {}),
+          ...(t.refund && r.state === "REFUNDED" ? { refundedEur: t.refund.amountEur } : {}),
+        },
         t.userId,
       ),
     );
