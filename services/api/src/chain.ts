@@ -90,11 +90,15 @@ export function warnIfSmartAccountChainDiffers(): void {
 
 export const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
 
+/** A client that SENDS transactions. Its transport never retries: viem throws
+ *  only the last attempt's error, so a first attempt the node accepted could
+ *  surface as a refusal on the retry (insufficient funds, spent by attempt
+ *  one), and writeDefinitelyRefused would call it not-sent. */
 function wallet(key: `0x${string}`) {
   return createWalletClient({
     account: privateKeyToAccount(key),
     chain,
-    transport: http(RPC_URL),
+    transport: http(RPC_URL, { retryCount: 0 }),
   });
 }
 
@@ -162,9 +166,11 @@ export interface WriteHooks {
 /**
  * viem error classes that prove the transaction never entered the mempool: the
  * node refused it on validation, or it failed locally before any request
- * (account, chain, signing, serialisation). Nothing else proves it — viem's
- * http transport retries eth_sendRawTransaction on -32603, -1 and
- * LimitExceeded, so a bare RPC error may follow an attempt the node took.
+ * (account, chain, signing, serialisation). Nothing else proves it: a bare
+ * RPC error (-32603, -1, LimitExceeded) may come after the node took the
+ * transaction. The list holds only because the write clients send with
+ * `retryCount: 0` (wallet()): with retries, viem throws the last attempt's
+ * error, and a refusal on a retry can follow a first attempt that was accepted.
  */
 const REFUSED_BEFORE_ACCEPTANCE = new Set([
   "InsufficientFundsError",
@@ -203,7 +209,9 @@ const MAYBE_DELIVERED_NAMES = new Set([
 const MAYBE_DELIVERED = /already known|known transaction|already imported|nonce too low|replacement transaction|timed? ?out|socket|network|ECONNRESET/i;
 
 /** Whether a write that threw without a hash was definitely refused before the
- *  node accepted it. Unknown or ambiguous errors answer false. */
+ *  node accepted it. Unknown or ambiguous errors answer false. It relies on
+ *  the write clients' `retryCount: 0` (wallet() above): the error it reads is
+ *  then the only attempt's, never a retry's. */
 export function writeDefinitelyRefused(err: unknown): boolean {
   let refused = false;
   for (let e: any = err, depth = 0; e && depth < 10; e = e.cause, depth++) {

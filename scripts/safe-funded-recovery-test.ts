@@ -643,6 +643,13 @@ try {
       restore();
     }
     check("insufficient funds is a definite refusal", calls.join(",") === "before,not-sent", calls.join(","));
+    // The refusal classifier reads only the error viem throws, which after a
+    // retry is the LAST attempt's: an accepted first attempt would hide behind
+    // a refusal on the retry. Write clients therefore never retry.
+    for (const [label, w] of [["orchestrator", orchestratorWallet], ["deployer", deployerWallet]] as const) {
+      const retries = (w.transport as any).retryCount;
+      check(`the ${label} wallet sends each transaction once (retryCount 0)`, retries === 0, `retryCount ${retries}`);
+    }
   }
 
   console.log("   daily cap counts both pots…");
