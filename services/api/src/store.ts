@@ -362,8 +362,8 @@ export const store = {
     const t = db.transfers.find((x) => x.id === id);
     if (!t) return { ok: false, code: "NOT_FOUND" };
     if (t.state !== "MANUAL_REVIEW" || t.reviewResolution) return { ok: false, code: "NOT_IN_REVIEW" };
-    // PAID settles linked pay links, invoices and shop orders: it needs a
-    // payout identifier the transfer itself recorded, cited by the operator.
+    // PAID settles linked pay links, invoices and shop orders: the operator
+    // cites a payout the transfer recorded as carried out (review-evidence.ts).
     const evidence = r.evidence?.trim() || undefined;
     if (r.state === "PAID" && !(evidence && matchesPayoutEvidence(t, evidence))) {
       return { ok: false, code: "NO_PAYOUT_EVIDENCE" };

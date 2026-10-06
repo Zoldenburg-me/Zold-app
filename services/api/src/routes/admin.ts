@@ -310,7 +310,7 @@ export function createAdminRouter() {
         if (result.code === "NO_PAYOUT_EVIDENCE") {
           return res.status(409).json({
             error:
-              "PAID needs evidence the payout went out: pass the Monerium order id, Bridge destination tx hash or anchor payment hash this transfer recorded",
+              "PAID needs evidence the payout was carried out: the Monerium order id once Monerium reports it processed, the destination tx hash Bridge reported, or the anchor payment hash this transfer recorded. A placed order or a planned destination proves nothing",
           });
         }
         return res.status(409).json({ error: NOT_IN_REVIEW });

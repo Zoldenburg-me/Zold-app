@@ -47,6 +47,13 @@ store.updateTransfer("t_paid", {
   sepa: { mode: "sandbox", orderId: "ord-abc-123", state: "pending" },
 });
 row("t_paid_none", "MANUAL_REVIEW");
+const DEST_TX = `0x${"de".repeat(32)}`;
+row("t_bridge_plan", "MANUAL_REVIEW");
+store.updateTransfer("t_bridge_plan", { pickup: { bridgeDestinationTxHash: DEST_TX } as any });
+row("t_bridge_done", "MANUAL_REVIEW");
+store.updateTransfer("t_bridge_done", {
+  txs: [...store.findTransfer("t_bridge_done")!.txs, { step: "bridge.xyz.destination_tx", hash: DEST_TX }],
+});
 
 const app = express();
 app.use(express.json());
@@ -187,7 +194,23 @@ try {
     assert.equal(store.findTransfer("t_paid_none")!.state, "MANUAL_REVIEW");
   });
 
-  await check("PAID with the recorded order id resolves and keeps the evidence", async () => {
+  await check("a placed Monerium order that is not processed is no evidence of payout", async () => {
+    const r = await post("t_paid", { state: "PAID", note: NOTE, evidence: "ord-abc-123" });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.match(String(r.body.error), /processed/);
+    assert.equal(store.findTransfer("t_paid")!.state, "MANUAL_REVIEW");
+  });
+
+  await check("a Bridge plan's destination hash is no evidence; the executed destination tx is", async () => {
+    const plan = await post("t_bridge_plan", { state: "PAID", note: NOTE, evidence: DEST_TX });
+    assert.equal(plan.status, 409, JSON.stringify(plan.body));
+    assert.equal(store.findTransfer("t_bridge_plan")!.state, "MANUAL_REVIEW");
+    const done = await post("t_bridge_done", { state: "PAID", note: NOTE, evidence: DEST_TX });
+    assert.equal(done.status, 200, JSON.stringify(done.body));
+  });
+
+  await check("PAID with the recorded order id resolves once Monerium processed it", async () => {
+    store.updateTransfer("t_paid", { sepa: { mode: "sandbox", orderId: "ord-abc-123", state: "processed" } });
     const r = await post("t_paid", { state: "PAID", note: NOTE, evidence: " ord-abc-123 " });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const t = store.findTransfer("t_paid")! as any;

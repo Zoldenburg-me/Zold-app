@@ -26,6 +26,7 @@ import { keccak256, toHex } from "viem";
 import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
 import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../routes/payment-requests.js";
 import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
+import { moneriumOrderProcessed } from "../domain/monerium-order.js";
 
 /**
  * The bank facts of a processed issue order on our chain, for the statement
@@ -244,8 +245,7 @@ function orderList(res: Awaited<ReturnType<MoneriumClient["orders"]>>): Monerium
 }
 
 function isProcessed(o: MoneriumOrder): boolean {
-  const state = o.meta?.state ?? o.state;
-  return state === "processed";
+  return moneriumOrderProcessed(o.meta?.state ?? o.state);
 }
 
 /**
@@ -445,16 +445,25 @@ function ownProfilesOf(u: User): (string | undefined)[] {
   return named ? [undefined, named] : [undefined];
 }
 
-/** Advance transfers whose SEPA redeem order is still in flight. */
+/**
+ * Advance transfers whose SEPA redeem order is still in flight. A transfer in
+ * unresolved review keeps its order state current and nothing else: that
+ * state is what lets an operator cite the order as paid (review-evidence.ts).
+ */
 export async function pollRedeemOrdersOnce(): Promise<void> {
   const waiting = store.transfers.filter(
-    (t) => t.state === "PAYOUT_SUBMITTED" && t.sepa?.mode === "sandbox" && t.sepa.orderId,
+    (t) =>
+      (t.state === "PAYOUT_SUBMITTED" || (t.state === "MANUAL_REVIEW" && !t.reviewResolution)) &&
+      t.sepa?.mode === "sandbox" &&
+      t.sepa.orderId,
   );
   for (const t of waiting) {
     try {
       // The order was placed on this user's client, so it is read on it too.
       const state = await getOrderState(t.sepa!.orderId!, store.findUser(t.userId));
-      if (state === "processed") {
+      if (t.state === "MANUAL_REVIEW") {
+        if (state !== t.sepa!.state) store.updateTransfer(t.id, { sepa: { ...t.sepa!, state } });
+      } else if (moneriumOrderProcessed(state)) {
         store.updateTransfer(t.id, { state: "PAID", sepa: { ...t.sepa!, state } });
         console.log(`monerium: redeem order ${t.sepa!.orderId} processed (transfer ${t.id})`);
         writeStatementLines();
