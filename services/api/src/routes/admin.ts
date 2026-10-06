@@ -14,6 +14,7 @@ import { reviewHeldOnPlanChange } from "../domain/payment-review.js";
 import express from "express";
 import { wrap } from "./util.js";
 import { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient } from "../chain.js";
+import { safeMovedEur } from "../orchestrator.js";
 import { publicUser } from "../users/public-user.js";
 import {
   REVIEW_EVIDENCE_MAX,
@@ -120,6 +121,8 @@ function adminTransfer(transfer: Transfer) {
     updatedAt: transfer.updatedAt,
   };
 }
+
+const NOT_IN_REVIEW = "only a transfer in MANUAL_REVIEW can be resolved, and only once";
 
 function adminFunding(deposit: CryptoDeposit) {
   return {
@@ -276,11 +279,31 @@ export function createAdminRouter() {
       if (evidence.length > REVIEW_EVIDENCE_MAX) {
         return res.status(400).json({ error: `evidence must be ${REVIEW_EVIDENCE_MAX} characters or fewer` });
       }
+      const transfer = store.findTransfer(String(req.params.id));
+      if (!transfer) return res.status(404).json({ error: "transfer not found" });
+      if (transfer.state !== "MANUAL_REVIEW" || transfer.reviewResolution) {
+        return res.status(409).json({ error: NOT_IN_REVIEW });
+      }
+      let refund: { amountEur: number; movedEur: number } | undefined;
+      if (state === "REFUNDED") {
+        const movedEur = safeMovedEur(transfer);
+        const amountEur = req.body?.amountEur;
+        if (typeof amountEur !== "number" || !Number.isFinite(amountEur) || amountEur < 0 || amountEur > movedEur) {
+          return res.status(400).json({
+            error: `REFUNDED needs amountEur: the euros returned, from 0 up to the €${movedEur.toFixed(2)} that left the Safe`,
+          });
+        }
+        if (!evidence) {
+          return res.status(400).json({ error: "REFUNDED needs evidence: the refund tx hash or the partner's reference" });
+        }
+        refund = { amountEur: Math.round(amountEur * 100) / 100, movedEur };
+      }
       const result = store.resolveTransferReview(String(req.params.id), {
         state: state as ReviewResolutionState,
         note,
         by: operatorLabel(req),
         ...(evidence ? { evidence } : {}),
+        ...(refund ? { refund } : {}),
       });
       if (!result.ok) {
         if (result.code === "NOT_FOUND") return res.status(404).json({ error: "transfer not found" });
@@ -290,7 +313,7 @@ export function createAdminRouter() {
               "PAID needs evidence the payout went out: pass the Monerium order id, Bridge destination tx hash or anchor payment hash this transfer recorded",
           });
         }
-        return res.status(409).json({ error: "only a transfer in MANUAL_REVIEW can be resolved, and only once" });
+        return res.status(409).json({ error: NOT_IN_REVIEW });
       }
       res.json(adminTransfer(result.transfer));
     }),

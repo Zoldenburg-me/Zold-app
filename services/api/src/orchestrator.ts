@@ -146,7 +146,7 @@ function inputFundsMoved(txs: Transfer["txs"]): boolean {
  * would hand back money that never moved — and would fail anyway, because the
  * orchestrator is only holding the fee.
  */
-function safeMovedEur(t: Transfer): number {
+export function safeMovedEur(t: Transfer): number {
   const steps = new Set(t.txs.map((x) => x.step));
   if (steps.has(DEBIT_STEP.safe)) return t.sendEur;
   if (steps.has(DEBIT_STEP.safeFee)) {

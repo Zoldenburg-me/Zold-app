@@ -57,7 +57,8 @@ function renderTxs(root) {
 /* Close a MANUAL_REVIEW transfer with what the operator decided. This moves
    no money: it records an outcome the operator already brought about on chain
    or at the partner, so it asks for the state, a note and a confirmation.
-   PAID also asks for the payout identifier the transfer recorded. */
+   PAID also asks for the payout identifier the transfer recorded; REFUNDED
+   for the euros returned and the refund tx hash or partner reference. */
 const RESOLVE_STATES = ['REFUNDED', 'PAID', 'FAILED'];
 async function resolveReview(root, id) {
   const state = (prompt(`Resolve ${id} as which state? ${RESOLVE_STATES.join(', ')}`) || '').trim().toUpperCase();
@@ -69,13 +70,25 @@ async function resolveReview(root, id) {
     if (!evidence) return;
     body.evidence = evidence;
   }
+  if (state === 'REFUNDED') {
+    const amount = (prompt('Euros returned to the user (0 up to what left their Safe)') || '').trim().replace(',', '.');
+    if (!amount) return;
+    const amountEur = Number(amount);
+    if (!Number.isFinite(amountEur) || amountEur < 0) { alert('The amount must be a number of euros, 0 or more.'); return; }
+    const evidence = (prompt('Evidence of the refund: the refund tx hash or the partner\'s reference') || '').trim();
+    if (!evidence) return;
+    body.amountEur = amountEur;
+    body.evidence = evidence;
+  }
   const note = (prompt('What did you check, and what did you do? (at least 20 characters)') || '').trim();
   if (!note) return;
   body.note = note;
-  const paidWarning = state === 'PAID'
+  const stateWarning = state === 'PAID'
     ? '\n\nPAID also settles any pay link, invoice or Shopify order linked to this transfer.'
-    : '';
-  if (!confirm(`Record ${id} as ${state}?\n\nThis moves no money and cannot be undone.${paidWarning}\n\n${note}`)) return;
+    : state === 'REFUNDED'
+      ? `\n\nThe user's statement and app will show €${body.amountEur.toFixed(2)} refunded.`
+      : '';
+  if (!confirm(`Record ${id} as ${state}?\n\nThis moves no money and cannot be undone.${stateWarning}\n\n${note}`)) return;
   try {
     await api(`/api/admin/transfers/${encodeURIComponent(id)}/resolve-review`, { method: 'POST', body: JSON.stringify(body) });
     await loadTxs();

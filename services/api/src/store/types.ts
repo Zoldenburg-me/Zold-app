@@ -388,6 +388,9 @@ export interface Quote {
 /** The states an operator may close a MANUAL_REVIEW transfer into. */
 export const REVIEW_RESOLUTION_STATES = ["REFUNDED", "PAID", "FAILED"] as const;
 export type ReviewResolutionState = (typeof REVIEW_RESOLUTION_STATES)[number];
+/** The step an operator's refund tx is recorded under when a review is
+ *  resolved as REFUNDED. */
+export const OPERATOR_REFUND_STEP = "operator.refund";
 
 export interface ReviewResolution {
   state: ReviewResolutionState;
