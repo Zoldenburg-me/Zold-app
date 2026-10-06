@@ -23,6 +23,7 @@
     "safe-funded:test": "tsx scripts/safe-funded-recovery-test.ts",
     "crypto:test": "tsx scripts/crypto-deposit-test.ts",
     "convert:test": "tsx scripts/convert-deposit-test.ts",
+    "safe-op-uncertain:test": "tsx scripts/safe-op-uncertain-test.ts",
     "pay:test": "tsx scripts/pay-page-test.ts",
     "ens:test": "tsx scripts/ens-test.ts",
     "country:policy:test": "tsx scripts/country-policy-test.ts",
