@@ -451,6 +451,36 @@ try {
       check("exactly once", (await eureBalance(user.address)) - before === 12);
     }
 
+    // (a2) A refund the node refuses every time (the orchestrator has no gas)
+    // stops being retried after a bounded number of attempts.
+    {
+      const user = await seedUser("Refund Never Sent", 0);
+      const t = await seedSafeFundedTransfer(user, 11);
+      (orchestratorWallet as any).writeContract = async () => {
+        throw new TransactionExecutionError(new InsufficientFundsError(), { account: orchestratorWallet.account } as any);
+      };
+      let out: any;
+      try {
+        for (let i = 0; i < 8; i++) {
+          try {
+            out = await compensateTransfer(t.id);
+          } catch {
+            out = store.findTransfer(t.id);
+          }
+        }
+      } finally {
+        restore();
+      }
+      const notSent = steps(t.id).filter((s) => s === "safe.refundTransfer.not-sent").length;
+      const pending = steps(t.id).filter((s) => s === "safe.refundTransfer.pending").length;
+      check("a refund refused every time is attempted a bounded number of times", notSent === 5 && pending === 5, steps(t.id).join(","));
+      check(
+        "and then goes to review with the reason",
+        out.state === "MANUAL_REVIEW" && /5 refund attempts/.test(out.error ?? "") && !out.refund,
+        `got ${out.state} (${out.error ?? ""})`,
+      );
+    }
+
     // (b) The receipt is a definite revert: nothing moved.
     {
       const user = await seedUser("Refund Reverted", 0);

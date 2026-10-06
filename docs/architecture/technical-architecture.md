@@ -448,7 +448,9 @@ router receives injected and never rebuilds.
   moved, so compensation may retry. A bare RPC error (-32603, -1,
   LimitExceeded: viem's transport retries the send on these), a transport
   error, a timeout, a nonce-too-low/"already known" reply, an unknown error,
-  or any error after a hash exists settles nothing.
+  or any error after a hash exists settles nothing. After five refunds that
+  were not-sent or reverted, compensation stops retrying and moves the
+  transfer to MANUAL_REVIEW with that reason (`MAX_REFUND_ATTEMPTS`).
   A reverted Bridge deposit is not a `FUNDS_AT_BRIDGE_STEPS` step.
 - `compensateTransfer` runs once per transfer at a time (an in-process set);
   a second call during a running one returns the transfer as it stands. It
