@@ -422,13 +422,22 @@ router receives injected and never rebuilds.
 ### 6.3 Compensation (`orchestrator.ts:382-622`)
 
 - `failAndCompensate` writes FAILED. It escalates to **MANUAL_REVIEW** on a
-  duplicate-debit error or once any `bridge.xyz.deposit.*` step exists.
+  duplicate-debit error or once the USDC reached Bridge
+  (`bridge.xyz.deposit.transfer`, `.funded` or `destination_tx`).
   Otherwise it compensates.
 - An outbound call that may move money records an intent step first:
   `safe.refundTransfer.pending` (refund or reverse swap),
   `monerium.redeem.pending` (settled by `.placed` or `.refused`) and
-  `bridge.xyz.deposit.pending`. An intent without its settling step means the
-  money may have moved, and the transfer goes to MANUAL_REVIEW, never a refund.
+  `bridge.xyz.deposit.pending`. An intent without a settling step after its
+  last occurrence means the money may have moved, and the transfer goes to
+  MANUAL_REVIEW, never a refund.
+- The two chain writes (refund, Bridge deposit) also settle on a definite
+  failure, through `writeAndWait`'s hooks: `<step>.not-sent` when the write
+  threw before any hash and the error is not a transport error, timeout or
+  nonce/"already known" reply (`writeMayHaveBeenSent`), and `<step>.reverted`
+  with the hash when the receipt reverted. Nothing moved, so compensation may
+  retry. A receipt timeout or any error after a hash exists settles nothing.
+  A reverted Bridge deposit is not a `FUNDS_AT_BRIDGE_STEPS` step.
 - `compensateTransfer` runs once per transfer at a time (an in-process set);
   a second call during a running one returns the transfer as it stands. It
   leaves a MANUAL_REVIEW transfer alone.

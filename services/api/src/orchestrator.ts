@@ -47,6 +47,7 @@ import {
   returnEureToSafe,
   transferIdHash,
   writeAndWait,
+  type WriteHooks,
 } from "./chain.js";
 import {
   SafeOperationUncertainError,
@@ -443,24 +444,64 @@ const FUNDS_AT_BRIDGE_STEPS = new Set([
  * each with the steps that settle it. One left unsettled means the process
  * stopped (or the call failed) after the call may have gone out and before
  * its outcome was recorded, so the money may have moved: review, never refund.
+ *
+ * A chain write also settles on a definite failure: `.not-sent` (it threw
+ * before any hash existed and nothing says the node took it) and `.reverted`
+ * (mined and reverted, with its hash). Nothing moved either way, so
+ * compensation may retry. A reverted Bridge deposit is not in
+ * FUNDS_AT_BRIDGE_STEPS: the USDC never left.
  */
-const OUTBOUND_INTENT_STEPS: Record<string, string[]> = {
-  "safe.refundTransfer.pending": ["safe.refundTransfer"],
+const OUTBOUND_INTENT_STEPS = {
+  "safe.refundTransfer.pending": [
+    "safe.refundTransfer",
+    "safe.refundTransfer.not-sent",
+    "safe.refundTransfer.reverted",
+  ],
   "monerium.redeem.pending": ["monerium.redeem.placed", "monerium.redeem.refused"],
-  "bridge.xyz.deposit.pending": ["bridge.xyz.deposit.transfer"],
-};
+  "bridge.xyz.deposit.pending": [
+    "bridge.xyz.deposit.transfer",
+    "bridge.xyz.deposit.not-sent",
+    "bridge.xyz.deposit.reverted",
+  ],
+} satisfies Record<string, string[]>;
+type OutboundIntent = keyof typeof OUTBOUND_INTENT_STEPS;
 
+/** The first intent whose LAST occurrence has no settling step after it. A
+ *  retry records a new intent, which an earlier attempt's outcome does not
+ *  settle. */
 function unsettledOutbound(txs: Transfer["txs"]): string | undefined {
-  const steps = new Set(txs.map((x) => x.step));
-  return Object.keys(OUTBOUND_INTENT_STEPS).find(
-    (intent) => steps.has(intent) && !OUTBOUND_INTENT_STEPS[intent].some((s) => steps.has(s)),
-  );
+  const steps = txs.map((x) => x.step);
+  return (Object.keys(OUTBOUND_INTENT_STEPS) as OutboundIntent[]).find((intent) => {
+    const at = steps.lastIndexOf(intent);
+    if (at < 0) return false;
+    const settling: string[] = OUTBOUND_INTENT_STEPS[intent];
+    return !steps.slice(at + 1).some((s) => settling.includes(s));
+  });
 }
 
 /** Record an outbound intent on the transfer before the call goes out. */
-function recordOutboundIntent(id: string, txs: Transfer["txs"], step: keyof typeof OUTBOUND_INTENT_STEPS) {
+function recordOutboundIntent(id: string, txs: Transfer["txs"], step: OutboundIntent) {
   txs.push({ step, hash: "0x" });
   store.updateTransfer(id, { txs });
+}
+
+/** writeAndWait hooks for a chain write under an intent: record the intent
+ *  before it is sent, and settle it on a definite not-sent or revert. */
+function outboundWrite(
+  id: string,
+  txs: Transfer["txs"],
+  intent: "safe.refundTransfer.pending" | "bridge.xyz.deposit.pending",
+): WriteHooks {
+  const base = intent.slice(0, -".pending".length);
+  const settle = (step: string, hash: string) => {
+    txs.push({ step, hash });
+    store.updateTransfer(id, { txs });
+  };
+  return {
+    beforeSend: () => recordOutboundIntent(id, txs, intent),
+    onNotSent: () => settle(`${base}.not-sent`, "0x"),
+    onReverted: (hash) => settle(`${base}.reverted`, hash),
+  };
 }
 
 /** Transfers whose execute*() is running right now, so the stranded-transfer
@@ -667,8 +708,10 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
       movedEur < t.sendEur
         ? `€${(t.sendEur - movedEur).toFixed(2)} never left the Safe (payout burns from it directly)`
         : deductions;
-    const refundHash = await returnEureToSafe(user.address, safeRefundEur, () =>
-      recordOutboundIntent(id, txs, "safe.refundTransfer.pending"),
+    const refundHash = await returnEureToSafe(
+      user.address,
+      safeRefundEur,
+      outboundWrite(id, txs, "safe.refundTransfer.pending"),
     );
     txs.push({ step: "safe.refundTransfer", hash: refundHash });
     store.updateTransfer(id, { txs }); // on record before anything else can fail
@@ -954,7 +997,7 @@ export async function executeTransfer(
             functionName: "transfer",
             args: [depositAddress as `0x${string}`, expectedOut],
           },
-          { beforeSend: () => recordOutboundIntent(transfer.id, txs, "bridge.xyz.deposit.pending") },
+          outboundWrite(transfer.id, txs, "bridge.xyz.deposit.pending"),
         );
         txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
       }
