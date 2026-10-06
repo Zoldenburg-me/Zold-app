@@ -71,6 +71,7 @@ import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertionForChallenge, 
 import { publicRecoveryRequest } from "../recovery.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
+import { describeCause } from "../http/log-cause.js";
 
 export interface CandideRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -258,7 +259,7 @@ async function submitConfirmed(
     op = await submitPasskeySafeOperationWithReceipt(plan, userOperation, toAssertion(body));
   } catch (err) {
     if (!(err instanceof SafeOperationUncertainError)) throw err;
-    console.error(`recovery: Safe operation ${err.userOpHash} unconfirmed:`, err.cause);
+    console.error(`recovery: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
     res.status(502).json({
       error: `${err.message} — nothing is recorded until it is confirmed; check the chain before retrying`,
       code: "SAFE_OP_UNCONFIRMED",

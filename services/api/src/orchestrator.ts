@@ -57,6 +57,7 @@ import {
 } from "./wallet/candide.js";
 import { createCashPickupViaAnchor, fundAndRefreshAnchorPickup } from "./adapters/moneygram.js";
 import { anchorModeEnabled, HARNESS } from "./config.js";
+import { describeCause } from "./http/log-cause.js";
 
 /**
  * The user's device signature over this payment's exact terms. The
@@ -392,7 +393,7 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
   // The debit was sent and may still land: whether money left the Safe is
   // unknown, so neither "nothing was debited" nor a refund is safe.
   if (err instanceof SafeOperationUncertainError) {
-    console.error(`transfer ${id}: Safe operation ${err.userOpHash} unconfirmed:`, err.cause);
+    console.error(`transfer ${id}: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
     return store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error: `${message}; check the operation on chain before any refund`,

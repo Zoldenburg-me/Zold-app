@@ -32,11 +32,26 @@ const text = new SafeOperationUncertainError(hash, "no receipt");
 assert.ok(!text.message.includes("no receipt"));
 console.log("   ok  a string cause is not shown either");
 
-// Every route that answers with this error logs the cause on the server.
-for (const file of ["auth.ts", "recovery-candide.ts", "crypto-deposits.ts"]) {
-  const src = readFileSync(new URL(`../services/api/src/routes/${file}`, import.meta.url), "utf8");
-  assert.match(src, /console\.error\([^;]*err\.cause\)/, `${file} does not log the cause server-side`);
+// The server log gets the cause's name and short message, never a URL.
+const { describeCause } = await import("../services/api/src/http/log-cause.js");
+const { HttpRequestError, InternalRpcError } = await import("viem");
+const viemHttp = new HttpRequestError({ url: KEY_URL, body: { method: "eth_sendUserOperation" }, status: 500 });
+for (const c of [viemHttp, cause, new InternalRpcError(viemHttp), `failed at ${KEY_URL}`, { name: "X", shortMessage: `at ${KEY_URL}` }]) {
+  const line = describeCause(c);
+  assert.ok(!line.includes("SECRET123"), `the log line carries the key: ${line}`);
+  assert.ok(!line.includes("bundler.example"), `the log line names the bundler URL: ${line}`);
+  assert.ok(!/https?:\/\//.test(line), `the log line carries a URL: ${line}`);
 }
-console.log("   ok  auth, recovery-candide and crypto-deposits log the cause server-side");
+assert.match(describeCause(viemHttp), /^HttpRequestError: HTTP request failed\./);
+assert.equal(describeCause(undefined), "no cause");
+console.log("   ok  describeCause logs name and short message with every URL redacted");
+
+// Every path that logs this error's cause logs it through describeCause.
+for (const file of ["routes/auth.ts", "routes/recovery-candide.ts", "routes/crypto-deposits.ts", "orchestrator.ts"]) {
+  const src = readFileSync(new URL(`../services/api/src/${file}`, import.meta.url), "utf8");
+  assert.match(src, /console\.error\([^;]*describeCause\(err\.cause\)\)/, `${file} does not log the cause server-side`);
+  assert.doesNotMatch(src, /console\.error\([^;]*,\s*err\.cause\)/, `${file} logs the raw cause`);
+}
+console.log("   ok  auth, recovery-candide, crypto-deposits and the orchestrator log the cause redacted");
 
 console.log("\nsafe-op-uncertain: 3/3 checks passed");
