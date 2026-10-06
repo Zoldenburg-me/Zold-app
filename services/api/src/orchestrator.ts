@@ -532,6 +532,10 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
   }
 }
 
+/** Refund attempts that definitely failed (not-sent or reverted) before the
+ *  refund is left for an operator instead of retried by the sweep. */
+const MAX_REFUND_ATTEMPTS = 5;
+
 async function compensateTransferOnce(id: string): Promise<Transfer> {
   const t = store.findTransfer(id);
   if (!t) throw new Error(`unknown transfer ${id}`);
@@ -564,6 +568,20 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
       error:
         `${t.error ?? "transfer failed"}; ${outbound} is on record without its outcome — the call may ` +
         `have moved money, so no automatic refund until it is checked`,
+    });
+  }
+  // A refund that definitely failed may be retried, but not forever: one the
+  // node refuses every time (an orchestrator with no gas, say) would add an
+  // intent and its outcome on every sweep.
+  const failedRefunds = t.txs.filter(
+    (x) => x.step === "safe.refundTransfer.not-sent" || x.step === "safe.refundTransfer.reverted",
+  ).length;
+  if (failedRefunds >= MAX_REFUND_ATTEMPTS) {
+    return store.updateTransfer(id, {
+      state: "MANUAL_REVIEW",
+      error:
+        `${t.error ?? "transfer failed"}; ${failedRefunds} refund attempts were refused or reverted ` +
+        `(nothing was sent), so the refund is left for an operator`,
     });
   }
   // USDC that reached Bridge is not ours to reverse, whichever leg put it there.
