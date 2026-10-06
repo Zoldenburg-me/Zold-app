@@ -24,6 +24,13 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  InsufficientFundsError,
+  InternalRpcError,
+  LimitExceededRpcError,
+  TransactionExecutionError,
+  UnknownRpcError,
+} from "viem";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RPC = "http://127.0.0.1:8549";
@@ -420,13 +427,13 @@ try {
       (publicClient as any).waitForTransactionReceipt = realWait;
     };
 
-    // (a) The write throws before any hash exists: nothing was sent.
+    // (a) The node refused the write before accepting it: nothing was sent.
     {
       const user = await seedUser("Refund Not Sent", 0);
       const t = await seedSafeFundedTransfer(user, 12);
       const before = await eureBalance(user.address);
       (orchestratorWallet as any).writeContract = async () => {
-        throw new Error("signer refused the request");
+        throw new TransactionExecutionError(new InsufficientFundsError(), { account: orchestratorWallet.account } as any);
       };
       try {
         await assert.rejects(compensateTransfer(t.id));
@@ -505,6 +512,31 @@ try {
       check("a transport error on the write is uncertain and goes to review", out.state === "MANUAL_REVIEW", `got ${out.state}`);
     }
 
+    // (e) A bare RPC error from the send proves nothing: viem's transport
+    // retries eth_sendRawTransaction on these, and the first attempt may have
+    // reached the mempool.
+    for (const [label, make] of [
+      ["an InternalRpcError (-32603)", () => new InternalRpcError(new Error("internal error"))],
+      ["an UnknownRpcError (-1)", () => new UnknownRpcError(new Error("unknown"))],
+      ["a plain Error", () => new Error("boom")],
+    ] as const) {
+      const user = await seedUser(`Refund Uncertain ${label}`, 0);
+      const t = await seedSafeFundedTransfer(user, 16);
+      const before = await eureBalance(user.address);
+      (orchestratorWallet as any).writeContract = async () => {
+        throw make();
+      };
+      try {
+        await assert.rejects(compensateTransfer(t.id));
+      } finally {
+        restore();
+      }
+      check(`${label} on the write settles nothing`, steps(t.id).at(-1) === "safe.refundTransfer.pending", steps(t.id).join(","));
+      const out = await compensateTransfer(t.id);
+      check(`${label} goes to review without a second refund`, out.state === "MANUAL_REVIEW" && !out.refund, `got ${out.state}`);
+      check(`${label}: nothing was paid twice`, (await eureBalance(user.address)) === before);
+    }
+
     // The Bridge deposit settles the same way, by order: a later intent is
     // not settled by an earlier attempt's outcome.
     const now = Date.now();
@@ -553,6 +585,34 @@ try {
       restore();
     }
     check("a nonce error (this tx may be the one mined) is not read as not-sent", calls.join(",") === "before", calls.join(","));
+    for (const [label, err] of [
+      ["an InternalRpcError", new InternalRpcError(new Error("internal error"))],
+      ["a LimitExceededRpcError", new LimitExceededRpcError(new Error("limit"))],
+      ["an already-known reply", new Error("already known")],
+    ] as const) {
+      calls.length = 0;
+      (orchestratorWallet as any).writeContract = async () => {
+        throw err;
+      };
+      try {
+        await assert.rejects(writeAndWait(orchestratorWallet, args, hooks));
+      } finally {
+        restore();
+      }
+      check(`${label} is not read as not-sent`, calls.join(",") === "before", calls.join(","));
+    }
+    calls.length = 0;
+    (orchestratorWallet as any).writeContract = async () => {
+      throw new TransactionExecutionError(new InsufficientFundsError({ cause: new InternalRpcError(new Error("insufficient funds")) }), {
+        account: orchestratorWallet.account,
+      } as any);
+    };
+    try {
+      await assert.rejects(writeAndWait(orchestratorWallet, args, hooks));
+    } finally {
+      restore();
+    }
+    check("insufficient funds is a definite refusal", calls.join(",") === "before,not-sent", calls.join(","));
   }
 
   console.log("   daily cap counts both pots…");

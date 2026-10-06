@@ -432,11 +432,16 @@ router receives injected and never rebuilds.
   last occurrence means the money may have moved, and the transfer goes to
   MANUAL_REVIEW, never a refund.
 - The two chain writes (refund, Bridge deposit) also settle on a definite
-  failure, through `writeAndWait`'s hooks: `<step>.not-sent` when the write
-  threw before any hash and the error is not a transport error, timeout or
-  nonce/"already known" reply (`writeMayHaveBeenSent`), and `<step>.reverted`
-  with the hash when the receipt reverted. Nothing moved, so compensation may
-  retry. A receipt timeout or any error after a hash exists settles nothing.
+  failure, through `writeAndWait`'s hooks: `<step>.not-sent` only when the
+  write threw before any hash with an error that proves the node refused it
+  before acceptance (`writeDefinitelyRefused`: viem's InsufficientFunds,
+  ExecutionReverted, IntrinsicGas*, FeeCap*, TipAboveFeeCap, NonceTooHigh,
+  TransactionTypeNotSupported, or a local account/chain/serialisation error),
+  and `<step>.reverted` with the hash when the receipt reverted. Nothing
+  moved, so compensation may retry. A bare RPC error (-32603, -1,
+  LimitExceeded: viem's transport retries the send on these), a transport
+  error, a timeout, a nonce-too-low/"already known" reply, an unknown error,
+  or any error after a hash exists settles nothing.
   A reverted Bridge deposit is not a `FUNDS_AT_BRIDGE_STEPS` step.
 - `compensateTransfer` runs once per transfer at a time (an in-process set);
   a second call during a running one returns the transfer as it stands. It

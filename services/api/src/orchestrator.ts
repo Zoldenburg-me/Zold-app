@@ -446,7 +446,8 @@ const FUNDS_AT_BRIDGE_STEPS = new Set([
  * its outcome was recorded, so the money may have moved: review, never refund.
  *
  * A chain write also settles on a definite failure: `.not-sent` (it threw
- * before any hash existed and nothing says the node took it) and `.reverted`
+ * before any hash existed with an error proving the node refused it, see
+ * writeDefinitelyRefused) and `.reverted`
  * (mined and reverted, with its hash). Nothing moved either way, so
  * compensation may retry. A reverted Bridge deposit is not in
  * FUNDS_AT_BRIDGE_STEPS: the USDC never left.

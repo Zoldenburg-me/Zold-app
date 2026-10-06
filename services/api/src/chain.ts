@@ -147,30 +147,72 @@ export const usd = {
  * Hooks around one chain write, for a caller that records an outbound intent.
  * `beforeSend` runs after the simulation passes and before the transaction is
  * sent: a failure before it means nothing went out. `onNotSent` and
- * `onReverted` fire only on a DEFINITE outcome; a timeout, a transport error
- * or anything after a hash exists fires neither, because the transaction may
- * still land.
+ * `onReverted` fire only on a DEFINITE outcome; an RPC error, a timeout, a
+ * transport error, an unknown error or anything after a hash exists fires
+ * neither, because the transaction may still land.
  */
 export interface WriteHooks {
   beforeSend?: () => void;
-  /** The write threw before any hash existed, and nothing says the node took it. */
+  /** The write threw before any hash existed with an error that proves the node refused it. */
   onNotSent?: () => void;
   /** The transaction was mined and reverted: nothing it carried moved. */
   onReverted?: (hash: `0x${string}`) => void;
 }
 
-/** Errors from a send that may still have reached the node: the request was
- *  cut off, or a retry met the transaction it had already delivered. */
-const TRANSPORT_ERRORS = new Set(["TimeoutError", "HttpRequestError", "WebSocketRequestError", "SocketClosedError", "AbortError"]);
+/**
+ * viem error classes that prove the transaction never entered the mempool: the
+ * node refused it on validation, or it failed locally before any request
+ * (account, chain, signing, serialisation). Nothing else proves it — viem's
+ * http transport retries eth_sendRawTransaction on -32603, -1 and
+ * LimitExceeded, so a bare RPC error may follow an attempt the node took.
+ */
+const REFUSED_BEFORE_ACCEPTANCE = new Set([
+  "InsufficientFundsError",
+  "ExecutionRevertedError",
+  "IntrinsicGasTooLowError",
+  "IntrinsicGasTooHighError",
+  "FeeCapTooLowError",
+  "FeeCapTooHighError",
+  "TipAboveFeeCapError",
+  "NonceTooHighError",
+  "NonceMaxValueError",
+  "TransactionTypeNotSupportedError",
+  "FeeConflictError",
+  "AccountNotFoundError",
+  "AccountTypeNotSupportedError",
+  "ChainMismatchError",
+  "ChainNotFoundError",
+  "ClientChainNotConfiguredError",
+  "InvalidChainIdError",
+  "InvalidAddressError",
+  "InvalidSerializableTransactionError",
+  "InvalidLegacyVError",
+  "InvalidYParityError",
+  "InvalidStorageKeySizeError",
+]);
+/** Anywhere in the chain, these mean this transaction (or its twin) may be on
+ *  the node, whatever else the error says. */
+const MAYBE_DELIVERED_NAMES = new Set([
+  "NonceTooLowError",
+  "TimeoutError",
+  "HttpRequestError",
+  "WebSocketRequestError",
+  "SocketClosedError",
+  "AbortError",
+]);
 const MAYBE_DELIVERED = /already known|known transaction|already imported|nonce too low|replacement transaction|timed? ?out|socket|network|ECONNRESET/i;
 
-/** Whether a write that threw without a hash may have been broadcast anyway. */
-export function writeMayHaveBeenSent(err: unknown): boolean {
+/** Whether a write that threw without a hash was definitely refused before the
+ *  node accepted it. Unknown or ambiguous errors answer false. */
+export function writeDefinitelyRefused(err: unknown): boolean {
+  let refused = false;
   for (let e: any = err, depth = 0; e && depth < 10; e = e.cause, depth++) {
-    if (TRANSPORT_ERRORS.has(String(e.name))) return true;
-    if (MAYBE_DELIVERED.test(String(e.shortMessage ?? "")) || MAYBE_DELIVERED.test(String(e.message ?? ""))) return true;
+    const name = String(e.name);
+    if (MAYBE_DELIVERED_NAMES.has(name)) return false;
+    if (MAYBE_DELIVERED.test(String(e.shortMessage ?? e.message ?? "")) || MAYBE_DELIVERED.test(String(e.details ?? ""))) return false;
+    if (REFUSED_BEFORE_ACCEPTANCE.has(name)) refused = true;
   }
-  return false;
+  return refused;
 }
 
 /** Send a tx as `client` and wait for the receipt; throws on revert. */
@@ -188,7 +230,7 @@ export async function writeAndWait(
   try {
     hash = await client.writeContract(request);
   } catch (err) {
-    if (!writeMayHaveBeenSent(err)) opts.onNotSent?.();
+    if (writeDefinitelyRefused(err)) opts.onNotSent?.();
     throw err;
   }
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
