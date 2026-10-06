@@ -17,6 +17,7 @@
  * "dry-run" literal only for rows written before the rail was closed.)
  */
 import { BRIDGE, FX, railFeeEur } from "./config.js";
+import { DEBIT_STEP, safeMovedEur } from "./transfers/safe-moved.js";
 import { usdIsStaging } from "./usd-token.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "./adapters/monerium-connection.js";
 import { verifyTypedData } from "viem";
@@ -47,6 +48,7 @@ import {
   returnEureToSafe,
   transferIdHash,
   writeAndWait,
+  type WriteHooks,
 } from "./chain.js";
 import {
   SafeOperationUncertainError,
@@ -56,6 +58,7 @@ import {
 } from "./wallet/candide.js";
 import { createCashPickupViaAnchor, fundAndRefreshAnchorPickup } from "./adapters/moneygram.js";
 import { anchorModeEnabled, HARNESS } from "./config.js";
+import { describeCause } from "./http/log-cause.js";
 
 /**
  * The user's device signature over this payment's exact terms. The
@@ -107,24 +110,7 @@ export async function assertQuoteRateBinding(transfer: Transfer): Promise<void> 
 }
 
 
-/**
- * The step names for the input-funds leg, in one place.
- *
- * Recovery decides whether any money actually moved by matching these names,
- * so the producer and every consumer have to agree. A consumer looking for a
- * step the producer never writes records a €0 refund reading "nothing was
- * debited" while the EURe has already left the user's Safe — and the sweep
- * then skips it forever, because setting `refund` is what marks a transfer as
- * settled.
- *
- * Anything that adds a third funding source must add its step here.
- */
-export const DEBIT_STEP = {
-  safe: "safe.transfer(orchestrator)",
-  /** SEPA, Safe-funded: only the fee moves, because the redeem burns the payout
-   *  straight from the Safe. Recovery owes back the fee, not the whole send. */
-  safeFee: "safe.transfer(fee)",
-} as const;
+export { DEBIT_STEP, safeMovedEur };
 
 /** Did the input leg move the sender's money? True once any funding source has
  *  committed its debit, which is what makes a failure owe a refund. */
@@ -136,23 +122,6 @@ function inputFundsMoved(txs: Transfer["txs"]): boolean {
   );
 }
 
-/**
- * How much actually left the user's Safe, which is what a refund owes back.
- *
- * Not always `sendEur`: the Safe-funded SEPA rail moves only the fee and lets
- * Monerium burn the payout from the Safe directly, so refunding `sendEur` there
- * would hand back money that never moved — and would fail anyway, because the
- * orchestrator is only holding the fee.
- */
-function safeMovedEur(t: Transfer): number {
-  const steps = new Set(t.txs.map((x) => x.step));
-  if (steps.has(DEBIT_STEP.safe)) return t.sendEur;
-  if (steps.has(DEBIT_STEP.safeFee)) {
-    const payoutEur = t.receiveEur ?? t.sendEur - railFeeEur("sepa");
-    return Math.max(0, Math.round((t.sendEur - payoutEur) * 100) / 100);
-  }
-  return 0;
-}
 
 /** EUR this user has committed to Safe-funded transfers today. FAILED/REFUNDED
  * transfers released their reservation. */
@@ -382,9 +351,16 @@ function cashPayoutState(pickup: NonNullable<Transfer["pickup"]>): TransferState
  */
 async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Promise<Transfer> {
   const message = String(err?.shortMessage ?? err?.message ?? err);
+  // An operator owns a transfer in review: a late failure adds its steps and
+  // leaves the state and the reason for the review alone.
+  if (store.findTransfer(id)?.state === "MANUAL_REVIEW") {
+    console.error(`late failure on ${id}, which is in review: ${message}`);
+    return store.updateTransfer(id, { txs });
+  }
   // The debit was sent and may still land: whether money left the Safe is
   // unknown, so neither "nothing was debited" nor a refund is safe.
   if (err instanceof SafeOperationUncertainError) {
+    console.error(`transfer ${id}: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
     return store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error: `${message}; check the operation on chain before any refund`,
@@ -417,7 +393,7 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
   try {
     return await compensateTransfer(id);
   } catch (e: any) {
-    console.error(`compensation failed for ${id}: ${e?.message ?? e} — will retry on sweep`);
+    console.error(`compensation failed for ${id}: ${describeCause(e)} — will retry on sweep`);
     return failed;
   }
 }
@@ -431,16 +407,109 @@ const FUNDS_AT_BRIDGE_STEPS = new Set([
   "bridge.xyz.destination_tx",
 ]);
 
+/**
+ * Steps written and persisted BEFORE an outbound call that may move money,
+ * each with the steps that settle it. One left unsettled means the process
+ * stopped (or the call failed) after the call may have gone out and before
+ * its outcome was recorded, so the money may have moved: review, never refund.
+ *
+ * A chain write also settles on a definite failure: `.not-sent` (it threw
+ * before any hash existed with an error proving the node refused it, see
+ * writeDefinitelyRefused) and `.reverted`
+ * (mined and reverted, with its hash). Nothing moved either way, so
+ * compensation may retry. A reverted Bridge deposit is not in
+ * FUNDS_AT_BRIDGE_STEPS: the USDC never left.
+ */
+const OUTBOUND_INTENT_STEPS = {
+  "safe.refundTransfer.pending": [
+    "safe.refundTransfer",
+    "safe.refundTransfer.not-sent",
+    "safe.refundTransfer.reverted",
+  ],
+  "monerium.redeem.pending": ["monerium.redeem.placed", "monerium.redeem.refused"],
+  "bridge.xyz.deposit.pending": [
+    "bridge.xyz.deposit.transfer",
+    "bridge.xyz.deposit.not-sent",
+    "bridge.xyz.deposit.reverted",
+  ],
+} satisfies Record<string, string[]>;
+type OutboundIntent = keyof typeof OUTBOUND_INTENT_STEPS;
+
+/** The first intent whose LAST occurrence has no settling step after it. A
+ *  retry records a new intent, which an earlier attempt's outcome does not
+ *  settle. */
+function unsettledOutbound(txs: Transfer["txs"]): string | undefined {
+  const steps = txs.map((x) => x.step);
+  return (Object.keys(OUTBOUND_INTENT_STEPS) as OutboundIntent[]).find((intent) => {
+    const at = steps.lastIndexOf(intent);
+    if (at < 0) return false;
+    const settling: string[] = OUTBOUND_INTENT_STEPS[intent];
+    return !steps.slice(at + 1).some((s) => settling.includes(s));
+  });
+}
+
+/** Record an outbound intent on the transfer before the call goes out. */
+function recordOutboundIntent(id: string, txs: Transfer["txs"], step: OutboundIntent) {
+  txs.push({ step, hash: "0x" });
+  store.updateTransfer(id, { txs });
+}
+
+/** writeAndWait hooks for a chain write under an intent: record the intent
+ *  before it is sent, and settle it on a definite not-sent or revert. */
+function outboundWrite(
+  id: string,
+  txs: Transfer["txs"],
+  intent: "safe.refundTransfer.pending" | "bridge.xyz.deposit.pending",
+): WriteHooks {
+  const base = intent.slice(0, -".pending".length);
+  const settle = (step: string, hash: string) => {
+    txs.push({ step, hash });
+    store.updateTransfer(id, { txs });
+  };
+  return {
+    beforeSend: () => recordOutboundIntent(id, txs, intent),
+    onNotSent: () => settle(`${base}.not-sent`, "0x"),
+    onReverted: (hash) => settle(`${base}.reverted`, hash),
+  };
+}
+
 /** Transfers whose execute*() is running right now, so the stranded-transfer
  *  sweep does not refund a transfer whose live call is merely slow. */
 const executing = new Set<string>();
 
+/** Transfers being compensated right now. A refund is a chain write that
+ *  lands before its step is recorded, so a second compensation started in
+ *  that window would refund again. */
+const compensating = new Set<string>();
+
 /** Walk a failed transfer backwards: return recoverable EURe to the sender's
- * Safe. */
+ * Safe. One compensation per transfer at a time: a call that finds one
+ * running returns the transfer as it stands. */
 export async function compensateTransfer(id: string): Promise<Transfer> {
+  if (compensating.has(id)) {
+    const t = store.findTransfer(id);
+    if (!t) throw new Error(`unknown transfer ${id}`);
+    return t;
+  }
+  compensating.add(id);
+  try {
+    return await compensateTransferOnce(id);
+  } finally {
+    compensating.delete(id);
+  }
+}
+
+/** Refund attempts that definitely failed (not-sent or reverted) before the
+ *  refund is left for an operator instead of retried by the sweep. */
+const MAX_REFUND_ATTEMPTS = 5;
+
+async function compensateTransferOnce(id: string): Promise<Transfer> {
   const t = store.findTransfer(id);
   if (!t) throw new Error(`unknown transfer ${id}`);
-  if (t.state === "REFUNDED" || t.state === "PAID" || t.refund) return t;
+  // An operator's resolution is the last word on a transfer that was in review.
+  if (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW" || t.refund || t.reviewResolution) {
+    return t;
+  }
   const user = store.findUser(t.userId);
   if (!user) throw new Error(`unknown user for transfer ${id}`);
   const steps = new Set(t.txs.map((x) => x.step));
@@ -457,6 +526,29 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
         deductions: "amount not recorded — the process stopped between the refund transaction and this record; see the safe.refundTransfer hash",
         at: now(),
       },
+    });
+  }
+  const outbound = unsettledOutbound(t.txs);
+  if (outbound) {
+    return store.updateTransfer(id, {
+      state: "MANUAL_REVIEW",
+      error:
+        `${t.error ?? "transfer failed"}; ${outbound} is on record without its outcome — the call may ` +
+        `have moved money, so no automatic refund until it is checked`,
+    });
+  }
+  // A refund that definitely failed may be retried, but not forever: one the
+  // node refuses every time (an orchestrator with no gas, say) would add an
+  // intent and its outcome on every sweep.
+  const failedRefunds = t.txs.filter(
+    (x) => x.step === "safe.refundTransfer.not-sent" || x.step === "safe.refundTransfer.reverted",
+  ).length;
+  if (failedRefunds >= MAX_REFUND_ATTEMPTS) {
+    return store.updateTransfer(id, {
+      state: "MANUAL_REVIEW",
+      error:
+        `${t.error ?? "transfer failed"}; ${failedRefunds} refund attempts were refused or reverted ` +
+        `(nothing was sent), so the refund is left for an operator`,
     });
   }
   // USDC that reached Bridge is not ours to reverse, whichever leg put it there.
@@ -556,6 +648,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
             args: [user.address],
           })) as bigint;
         const before = await eureBalance();
+        recordOutboundIntent(id, txs, "safe.refundTransfer.pending");
         const back = await provider.execute(rq, user.address as `0x${string}`);
         txs.push(...back.txs);
         const receivedWei =
@@ -589,7 +682,7 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
           state: "MANUAL_REVIEW",
           error:
             `${t.error ?? "transfer failed"}; Safe-funded input was already swapped to USDC and the ` +
-            `reverse swap did not complete (${err?.message ?? err}) — needs review before ` +
+            `reverse swap did not complete (${describeCause(err)}) — needs review before ` +
             `€${refundEur} can be returned to ${user.address}`,
           txs,
         });
@@ -602,7 +695,11 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
       movedEur < t.sendEur
         ? `€${(t.sendEur - movedEur).toFixed(2)} never left the Safe (payout burns from it directly)`
         : deductions;
-    const refundHash = await returnEureToSafe(user.address, safeRefundEur);
+    const refundHash = await returnEureToSafe(
+      user.address,
+      safeRefundEur,
+      outboundWrite(id, txs, "safe.refundTransfer.pending"),
+    );
     txs.push({ step: "safe.refundTransfer", hash: refundHash });
     store.updateTransfer(id, { txs }); // on record before anything else can fail
     console.log(
@@ -642,29 +739,53 @@ async function compensationRate(t: Transfer): Promise<bigint> {
   return (await liquidityProvider().indicativeRate("EURE_TO_USDC")).raw;
 }
 
+const STRANDED_MS = 10 * 60_000;
+
+export type StrandedAction = "compensate" | "fail-and-compensate" | "review-outbound" | "review-unrecorded-debit";
+
+/** What the sweep does with one transfer. `busy` says whether an execution or
+ *  a compensation for it is running in this process; a running one is never
+ *  stranded. MANUAL_REVIEW, like every state not named here, is left alone,
+ *  and so is a transfer an operator resolved out of review. */
+export function strandedAction(t: Transfer, now: number, busy: (id: string) => boolean): StrandedAction | null {
+  if (busy(t.id) || t.reviewResolution) return null;
+  if (t.state === "FAILED") return !t.refund && inputFundsMoved(t.txs) ? "compensate" : null;
+  if (["DEBITED", "SWAPPED", "BRIDGED"].includes(t.state)) {
+    if (now - Date.parse(t.updatedAt) <= STRANDED_MS) return null;
+    return unsettledOutbound(t.txs) ? "review-outbound" : "fail-and-compensate";
+  }
+  if (t.state === "CREATED" && t.auth?.authorizedAt && now - Date.parse(t.auth.authorizedAt) > STRANDED_MS) {
+    return "review-unrecorded-debit";
+  }
+  return null;
+}
+
 /** Recovery sweep: compensate FAILED transfers that moved money, and
  *  fail-then-compensate transfers stranded mid-flow (e.g. by a crash). */
 export async function sweepStrandedTransfers(): Promise<number> {
-  const STALE_MS = 10 * 60_000;
+  const busy = (id: string) => executing.has(id) || compensating.has(id);
   let n = 0;
   for (const t of [...store.transfers]) {
     try {
-      if (t.state === "FAILED" && !t.refund && inputFundsMoved(t.txs)) {
+      const action = strandedAction(t, Date.now(), busy);
+      if (action === "compensate") {
         await compensateTransfer(t.id);
         n++;
-      } else if (
-        ["DEBITED", "SWAPPED", "BRIDGED"].includes(t.state) &&
-        !executing.has(t.id) &&
-        Date.now() - Date.parse(t.updatedAt) > STALE_MS
-      ) {
+      } else if (action === "fail-and-compensate") {
         store.updateTransfer(t.id, { state: "FAILED", error: "stranded mid-flow — auto-compensating" });
         await compensateTransfer(t.id);
         n++;
-      } else if (
-        t.state === "CREATED" &&
-        t.auth?.authorizedAt &&
-        Date.now() - Date.parse(t.auth.authorizedAt) > STALE_MS
-      ) {
+      } else if (action === "review-outbound") {
+        // A redeem order or a Bridge deposit went out (or was about to) before
+        // the restart, and its outcome was never recorded.
+        store.updateTransfer(t.id, {
+          state: "MANUAL_REVIEW",
+          error:
+            `stranded mid-flow after ${unsettledOutbound(t.txs)} — the outbound call may have moved money; ` +
+            "reconcile before any refund",
+        });
+        n++;
+      } else if (action === "review-unrecorded-debit") {
         // Crash between submitting the user-signed UserOperation and
         // persisting DEBITED. The claim is consumed (/authorize now 409s) and
         // the operation may or may not have landed. A refund would pay twice
@@ -679,7 +800,7 @@ export async function sweepStrandedTransfers(): Promise<number> {
         n++;
       }
     } catch (e: any) {
-      console.error(`sweep: compensation failed for ${t.id}: ${e?.message ?? e}`);
+      console.error(`sweep: compensation failed for ${t.id}: ${describeCause(e)}`);
     }
   }
   return n;
@@ -696,7 +817,7 @@ export async function sweepAnchorPayouts(): Promise<number> {
         if (updated.updatedAt !== before) n++;
       }
     } catch (e: any) {
-      console.error(`sweep: anchor payout refresh failed for ${t.id}: ${e?.message ?? e}`);
+      console.error(`sweep: anchor payout refresh failed for ${t.id}: ${describeCause(e)}`);
     }
   }
   return n;
@@ -855,12 +976,16 @@ export async function executeTransfer(
         }
         txs.push({ step: "bridge.xyz.deposit.funded", hash: txs.at(-1)?.hash ?? "0x" });
       } else {
-        const depositHash = await writeAndWait(orchestratorWallet, {
-          address: a.usdc,
-          abi: abis.MockToken,
-          functionName: "transfer",
-          args: [depositAddress as `0x${string}`, expectedOut],
-        });
+        const depositHash = await writeAndWait(
+          orchestratorWallet,
+          {
+            address: a.usdc,
+            abi: abis.MockToken,
+            functionName: "transfer",
+            args: [depositAddress as `0x${string}`, expectedOut],
+          },
+          outboundWrite(transfer.id, txs, "bridge.xyz.deposit.pending"),
+        );
         txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
       }
     }
@@ -959,6 +1084,7 @@ export async function executeSepaTransfer(
 
     {
       try {
+        recordOutboundIntent(transfer.id, txs, "monerium.redeem.pending");
         const order = await redeemToIban(
           user,
           payoutEur,
@@ -968,8 +1094,10 @@ export async function executeSepaTransfer(
             ? { ...transfer.moneriumRedeem, signature: transfer.moneriumRedeem.signature }
             : undefined,
         );
+        txs.push({ step: "monerium.redeem.placed", hash: order.id });
         return store.updateTransfer(transfer.id, {
           state: "PAYOUT_SUBMITTED",
+          txs,
           sepa: {
             mode: "sandbox",
             orderId: order.id,
@@ -988,6 +1116,7 @@ export async function executeSepaTransfer(
             txs,
           });
         }
+        txs.push({ step: "monerium.redeem.refused", hash: "0x" });
         return failAndCompensate(
           transfer.id,
           new Error(`redeem order failed: ${String(err?.message ?? err).slice(0, 200)}`),
@@ -1076,7 +1205,7 @@ async function refreshPayoutUnlocked(
       err instanceof TypeError ||
       /fetch failed|ECONN|ETIMEDOUT|timed? ?out|aborted|socket hang up|\b5\d\d\b/i.test(String(err?.message ?? err));
     if (transient && !maybePaid) {
-      console.error(`refreshPayout: transient anchor error for ${transfer.id}, state unchanged: ${err?.message ?? err}`);
+      console.error(`refreshPayout: transient anchor error for ${transfer.id}, state unchanged: ${describeCause(err)}`);
       return transfer;
     }
     if (maybePaid) {

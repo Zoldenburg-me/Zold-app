@@ -24,6 +24,7 @@ import {
   SafeSwapContext,
   SafeSwapPlan,
   applySurplus,
+  assertMinOutBound,
   assertVenueTarget,
   balanceAfterWrite,
   defaultTokens,
@@ -93,6 +94,7 @@ export class LifiLiquidityProvider implements LiquidityProvider {
     const { estimate, tx, tool, toToken } = await this.fetchQuote(side, amountIn, ctx);
     const expectedOut = BigInt(estimate.toAmount);
     const minOut = BigInt(estimate.toAmountMin);
+    assertMinOutBound("LI.FI", expectedOut, minOut, BigInt(Math.round(LIQUIDITY.LIFI_SLIPPAGE * 10_000)));
 
     const eureWei = side === "EURE_TO_USDC" ? amountIn : expectedOut;
     const usdcUnits = side === "EURE_TO_USDC" ? expectedOut : amountIn;

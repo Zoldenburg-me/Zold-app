@@ -90,11 +90,15 @@ export function warnIfSmartAccountChainDiffers(): void {
 
 export const publicClient = createPublicClient({ chain, transport: http(RPC_URL) });
 
+/** A client that SENDS transactions. Its transport never retries: viem throws
+ *  only the last attempt's error, so a first attempt the node accepted could
+ *  surface as a refusal on the retry (insufficient funds, spent by attempt
+ *  one), and writeDefinitelyRefused would call it not-sent. */
 function wallet(key: `0x${string}`) {
   return createWalletClient({
     account: privateKeyToAccount(key),
     chain,
-    transport: http(RPC_URL),
+    transport: http(RPC_URL, { retryCount: 0 }),
   });
 }
 
@@ -143,18 +147,105 @@ export const usd = {
   fromUnits: (units: bigint) => Number(formatUnits(units, 6)),
 };
 
+/**
+ * Hooks around one chain write, for a caller that records an outbound intent.
+ * `beforeSend` runs after the simulation passes and before the transaction is
+ * sent: a failure before it means nothing went out. `onNotSent` and
+ * `onReverted` fire only on a DEFINITE outcome; an RPC error, a timeout, a
+ * transport error, an unknown error or anything after a hash exists fires
+ * neither, because the transaction may still land.
+ */
+export interface WriteHooks {
+  beforeSend?: () => void;
+  /** The write threw before any hash existed with an error that proves the node refused it. */
+  onNotSent?: () => void;
+  /** The transaction was mined and reverted: nothing it carried moved. */
+  onReverted?: (hash: `0x${string}`) => void;
+}
+
+/**
+ * viem error classes that prove the transaction never entered the mempool: the
+ * node refused it on validation, or it failed locally before any request
+ * (account, chain, signing, serialisation). Nothing else proves it: a bare
+ * RPC error (-32603, -1, LimitExceeded) may come after the node took the
+ * transaction. The list holds only because the write clients send with
+ * `retryCount: 0` (wallet()): with retries, viem throws the last attempt's
+ * error, and a refusal on a retry can follow a first attempt that was accepted.
+ */
+const REFUSED_BEFORE_ACCEPTANCE = new Set([
+  "InsufficientFundsError",
+  "ExecutionRevertedError",
+  "IntrinsicGasTooLowError",
+  "IntrinsicGasTooHighError",
+  "FeeCapTooLowError",
+  "FeeCapTooHighError",
+  "TipAboveFeeCapError",
+  "NonceTooHighError",
+  "NonceMaxValueError",
+  "TransactionTypeNotSupportedError",
+  "FeeConflictError",
+  "AccountNotFoundError",
+  "AccountTypeNotSupportedError",
+  "ChainMismatchError",
+  "ChainNotFoundError",
+  "ClientChainNotConfiguredError",
+  "InvalidChainIdError",
+  "InvalidAddressError",
+  "InvalidSerializableTransactionError",
+  "InvalidLegacyVError",
+  "InvalidYParityError",
+  "InvalidStorageKeySizeError",
+]);
+/** Anywhere in the chain, these mean this transaction (or its twin) may be on
+ *  the node, whatever else the error says. */
+const MAYBE_DELIVERED_NAMES = new Set([
+  "NonceTooLowError",
+  "TimeoutError",
+  "HttpRequestError",
+  "WebSocketRequestError",
+  "SocketClosedError",
+  "AbortError",
+]);
+const MAYBE_DELIVERED = /already known|known transaction|already imported|nonce too low|replacement transaction|timed? ?out|socket|network|ECONNRESET/i;
+
+/** Whether a write that threw without a hash was definitely refused before the
+ *  node accepted it. Unknown or ambiguous errors answer false. It relies on
+ *  the write clients' `retryCount: 0` (wallet() above): the error it reads is
+ *  then the only attempt's, never a retry's. */
+export function writeDefinitelyRefused(err: unknown): boolean {
+  let refused = false;
+  for (let e: any = err, depth = 0; e && depth < 10; e = e.cause, depth++) {
+    const name = String(e.name);
+    if (MAYBE_DELIVERED_NAMES.has(name)) return false;
+    if (MAYBE_DELIVERED.test(String(e.shortMessage ?? e.message ?? "")) || MAYBE_DELIVERED.test(String(e.details ?? ""))) return false;
+    if (REFUSED_BEFORE_ACCEPTANCE.has(name)) refused = true;
+  }
+  return refused;
+}
+
 /** Send a tx as `client` and wait for the receipt; throws on revert. */
 export async function writeAndWait(
   client: typeof orchestratorWallet,
   args: { address: `0x${string}`; abi: any[]; functionName: string; args: any[] },
+  opts: WriteHooks = {},
 ) {
   const { request } = await publicClient.simulateContract({
     account: client.account,
     ...args,
   });
-  const hash = await client.writeContract(request);
+  opts.beforeSend?.();
+  let hash: `0x${string}`;
+  try {
+    hash = await client.writeContract(request);
+  } catch (err) {
+    if (writeDefinitelyRefused(err)) opts.onNotSent?.();
+    throw err;
+  }
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  if (receipt.status !== "success") throw new Error(`tx reverted: ${args.functionName}`);
+  if (receipt.status !== "success") {
+    opts.onReverted?.(hash);
+    throw new Error(`tx reverted: ${args.functionName}`);
+  }
   return hash;
 }
 
@@ -292,6 +383,7 @@ export async function accountBalances(user: `0x${string}`): Promise<{
 export async function returnEureToSafe(
   userSafe: `0x${string}`,
   amountEur: number,
+  hooks: WriteHooks = {},
 ): Promise<`0x${string}`> {
   const amount = eur.toWei(amountEur);
   const held = (await publicClient.readContract({
@@ -311,5 +403,5 @@ export async function returnEureToSafe(
     abi: abis.MockToken,
     functionName: "transfer",
     args: [userSafe, amount],
-  });
+  }, hooks);
 }

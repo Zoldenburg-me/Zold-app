@@ -371,8 +371,9 @@ PH["send/error"] = {
     const review = t.state === "MANUAL_REVIEW";
     const refunded = t.state === "REFUNDED";
     // FAILED after money left the Safe is on its way back (the server
-    // compensates it); FAILED before that moved nothing.
-    const returning = t.state === "FAILED" && (t.txs || []).some((x) => x.hash);
+    // compensates it); FAILED before that moved nothing. The debit steps are
+    // the server's DEBIT_STEP: an intent step ("0x") is not money that left.
+    const returning = t.state === "FAILED" && (t.txs || []).some((x) => x.step === "safe.transfer(orchestrator)" || x.step === "safe.transfer(fee)");
     const title = review ? "We’re checking this payment" : returning ? "This payment failed" : "Nothing was sent";
     const lede = review
       ? "We can’t tell yet whether it reached the bank, so nothing is refunded automatically. Write to support@zoldhq.com and we’ll look into it."
