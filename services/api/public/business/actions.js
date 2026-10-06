@@ -718,13 +718,14 @@ export const ACTIONS = {
     if (!issuer.address.country) throw new Error("Choose your country: it decides which invoicing rules apply.");
     const changed = issuer.legalName !== (org.legalName || "") ||
       ["line1", "line2", "postalCode", "city", "country"].some((k) => issuer.address[k] !== (a[k] || ""));
-    if (changed) await api(`/api/orgs/${org.id}`, { method: "PATCH", body: issuer });
     const display = {};
     document.querySelectorAll("[data-display]").forEach((el) => { display[el.dataset.display] = el.checked; });
-    // A new payout IBAN takes an owner or admin and a passkey approval.
+    // A new payout IBAN takes an owner or admin and a passkey approval. It is
+    // asked for before anything is sent, so a cancelled passkey saves nothing.
     const current = await api(`/api/orgs/${org.id}/invoicing/profile`);
     const typedIban = val("i-bank-iban").replace(/\s+/g, "").toUpperCase();
     const stepUp = typedIban !== (current.profile.bank?.iban || "") ? await passkeyStepUp("org.invoice-iban.change") : undefined;
+    if (changed) await api(`/api/orgs/${org.id}`, { method: "PATCH", body: issuer });
     await api(`/api/orgs/${org.id}/invoicing/profile`, {
       method: "PATCH",
       body: {
