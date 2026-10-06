@@ -143,22 +143,59 @@ export const usd = {
   fromUnits: (units: bigint) => Number(formatUnits(units, 6)),
 };
 
-/** Send a tx as `client` and wait for the receipt; throws on revert.
- *  `beforeSend` runs after the simulation passes and before the transaction
- *  is sent: a failure before it means nothing went out. */
+/**
+ * Hooks around one chain write, for a caller that records an outbound intent.
+ * `beforeSend` runs after the simulation passes and before the transaction is
+ * sent: a failure before it means nothing went out. `onNotSent` and
+ * `onReverted` fire only on a DEFINITE outcome; a timeout, a transport error
+ * or anything after a hash exists fires neither, because the transaction may
+ * still land.
+ */
+export interface WriteHooks {
+  beforeSend?: () => void;
+  /** The write threw before any hash existed, and nothing says the node took it. */
+  onNotSent?: () => void;
+  /** The transaction was mined and reverted: nothing it carried moved. */
+  onReverted?: (hash: `0x${string}`) => void;
+}
+
+/** Errors from a send that may still have reached the node: the request was
+ *  cut off, or a retry met the transaction it had already delivered. */
+const TRANSPORT_ERRORS = new Set(["TimeoutError", "HttpRequestError", "WebSocketRequestError", "SocketClosedError", "AbortError"]);
+const MAYBE_DELIVERED = /already known|known transaction|already imported|nonce too low|replacement transaction|timed? ?out|socket|network|ECONNRESET/i;
+
+/** Whether a write that threw without a hash may have been broadcast anyway. */
+export function writeMayHaveBeenSent(err: unknown): boolean {
+  for (let e: any = err, depth = 0; e && depth < 10; e = e.cause, depth++) {
+    if (TRANSPORT_ERRORS.has(String(e.name))) return true;
+    if (MAYBE_DELIVERED.test(String(e.shortMessage ?? "")) || MAYBE_DELIVERED.test(String(e.message ?? ""))) return true;
+  }
+  return false;
+}
+
+/** Send a tx as `client` and wait for the receipt; throws on revert. */
 export async function writeAndWait(
   client: typeof orchestratorWallet,
   args: { address: `0x${string}`; abi: any[]; functionName: string; args: any[] },
-  opts: { beforeSend?: () => void } = {},
+  opts: WriteHooks = {},
 ) {
   const { request } = await publicClient.simulateContract({
     account: client.account,
     ...args,
   });
   opts.beforeSend?.();
-  const hash = await client.writeContract(request);
+  let hash: `0x${string}`;
+  try {
+    hash = await client.writeContract(request);
+  } catch (err) {
+    if (!writeMayHaveBeenSent(err)) opts.onNotSent?.();
+    throw err;
+  }
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  if (receipt.status !== "success") throw new Error(`tx reverted: ${args.functionName}`);
+  if (receipt.status !== "success") {
+    opts.onReverted?.(hash);
+    throw new Error(`tx reverted: ${args.functionName}`);
+  }
   return hash;
 }
 
@@ -296,7 +333,7 @@ export async function accountBalances(user: `0x${string}`): Promise<{
 export async function returnEureToSafe(
   userSafe: `0x${string}`,
   amountEur: number,
-  beforeSend?: () => void,
+  hooks: WriteHooks = {},
 ): Promise<`0x${string}`> {
   const amount = eur.toWei(amountEur);
   const held = (await publicClient.readContract({
@@ -316,5 +353,5 @@ export async function returnEureToSafe(
     abi: abis.MockToken,
     functionName: "transfer",
     args: [userSafe, amount],
-  }, { beforeSend });
+  }, hooks);
 }
