@@ -59,6 +59,30 @@ export const REVIEW_EVIDENCE_MAX = 200;
 /** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
 
+/**
+ * Which record already holds `hash`, among everything the bank statement
+ * books hashes from (bookkeeping/statement.ts): every transfer's steps, every
+ * crypto deposit's tx, conversion and steps, every sweep's conversion and
+ * steps, and the ledger's own lines. Undefined when none does.
+ */
+function hashOnRecord(hash: string): string | undefined {
+  const h = hash.toLowerCase();
+  const is = (x: string | undefined) => typeof x === "string" && x.toLowerCase() === h;
+  const t = db.transfers.find((x) => x.txs.some((s) => is(s.hash)));
+  if (t) return `transfer ${t.id}`;
+  const d = db.cryptoDeposits.find(
+    (x) => is(x.txHash) || is(x.conversion?.txHash) || is(x.conversion?.userOpHash) || (x.txs ?? []).some((s) => is(s.hash)),
+  );
+  if (d) return `deposit ${d.id}`;
+  const sw = db.conversionSweeps.find(
+    (x) => is(x.conversion?.txHash) || is(x.conversion?.userOpHash) || x.txs.some((s) => is(s.hash)),
+  );
+  if (sw) return `sweep ${sw.id}`;
+  const l = db.ledger.find((x) => is(x.txHash));
+  if (l) return `ledger line ${l.id}`;
+  return undefined;
+}
+
 export const store = {
   /** Several writes, one file write (store/db.ts). */
   batched,
@@ -344,7 +368,10 @@ export const store = {
   resolveTransferReview(
     id: string,
     r: { state: ReviewResolutionState; note: string; by: string; evidence?: string; refund?: { amountEur: number; movedEur: number } },
-  ): { ok: true; transfer: Transfer } | { ok: false; code: "NOT_FOUND" | "NOT_IN_REVIEW" | "NO_PAYOUT_EVIDENCE" } {
+  ):
+    | { ok: true; transfer: Transfer }
+    | { ok: false; code: "NOT_FOUND" | "NOT_IN_REVIEW" | "NO_PAYOUT_EVIDENCE" }
+    | { ok: false; code: "EVIDENCE_ON_RECORD"; recordedOn: string } {
     if (!(REVIEW_RESOLUTION_STATES as readonly string[]).includes(r.state)) {
       throw new Error(`a review resolves to ${REVIEW_RESOLUTION_STATES.join(", ")}, not ${r.state}`);
     }
@@ -368,6 +395,14 @@ export const store = {
     if (r.state === "PAID" && !(evidence && matchesPayoutEvidence(t, evidence))) {
       return { ok: false, code: "NO_PAYOUT_EVIDENCE" };
     }
+    // A refund tx hash is booked as the reversal and kept out of the EURe
+    // arrivals, so it must be one no record holds yet: otherwise it would hide
+    // a real arrival, take a debit line's link, or count for two transfers.
+    const refundTx = r.state === "REFUNDED" && evidence && /^0x[0-9a-fA-F]{64}$/.test(evidence) ? evidence : undefined;
+    if (refundTx) {
+      const recordedOn = hashOnRecord(refundTx);
+      if (recordedOn) return { ok: false, code: "EVIDENCE_ON_RECORD", recordedOn };
+    }
     const at = new Date().toISOString();
     t.reviewResolution = {
       state: r.state,
@@ -385,8 +420,9 @@ export const store = {
         deductions: short > 0 ? `€${short.toFixed(2)} not returned` : "none",
         at,
       };
-      // A refund tx on record is booked as the reversal, not as a stray EURe arrival.
-      if (evidence && /^0x[0-9a-fA-F]{64}$/.test(evidence)) t.txs.push({ step: OPERATOR_REFUND_STEP, hash: evidence });
+      // A fresh refund tx is booked as the reversal, not as a stray EURe
+      // arrival. A partner reference stays in reviewResolution.evidence only.
+      if (refundTx) t.txs.push({ step: OPERATOR_REFUND_STEP, hash: refundTx });
     }
     t.state = r.state;
     t.updatedAt = at;

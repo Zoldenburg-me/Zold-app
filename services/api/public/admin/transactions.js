@@ -75,7 +75,7 @@ async function resolveReview(root, id) {
     if (!amount) return;
     const amountEur = Number(amount);
     if (!Number.isFinite(amountEur) || amountEur < 0) { alert('The amount must be a number of euros, 0 or more.'); return; }
-    const evidence = (prompt('Evidence of the refund: the refund tx hash or the partner\'s reference') || '').trim();
+    const evidence = (prompt('Evidence of the refund: the refund\'s own tx hash (one not already on record) or the partner\'s reference') || '').trim();
     if (!evidence) return;
     body.amountEur = amountEur;
     body.evidence = evidence;
