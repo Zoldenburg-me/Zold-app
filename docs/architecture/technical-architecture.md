@@ -371,12 +371,19 @@ transfer, or one an operator resolved, to any other state. It drops the
 
 The only way out of MANUAL_REVIEW is `store.resolveTransferReview`, behind
 `POST /api/admin/transfers/:id/resolve-review` (operator bearer token, body
-`{state: REFUNDED|PAID|FAILED, note}`, note 20–2000 characters; the
+`{state: REFUNDED|PAID|FAILED, note, evidence?}`, note 20–2000 characters; the
 Transactions view's Resolve button). It moves no money: the operator has
-already acted on chain or at the partner. It records `transfer.reviewResolution`
-(`state`, `note`, `by` = `operatorLabel`, `at`, `previousError`) and an
-`operator.transfer_review_resolved` audit entry, once per transfer. A
-resolved transfer is never compensated or swept, whatever state it holds.
+already acted on chain or at the partner. PAID settles linked pay links,
+invoices and Shopify orders, so it is refused (409) unless `evidence` names a
+payout identifier the transfer recorded: a Monerium order id
+(`monerium.redeem.placed`, `sepa.orderId`), a Bridge destination tx
+(`bridge.xyz.destination_tx`, `pickup.bridgeDestinationTxHash`) or
+`pickup.anchorPaymentHash` (`transfers/review-evidence.ts`). It records
+`transfer.reviewResolution` (`state`, `note`, `by` = `operatorLabel`, `at`,
+`previousError`, `evidence`) and an `operator.transfer_review_resolved` audit
+entry, once per transfer. User-facing transfer routes omit
+`reviewResolution` (`transfers/user-transfer.ts`). A resolved transfer is
+never compensated or swept, whatever state it holds.
 
 ### 6.2 Quote → build → authorize → execute
 

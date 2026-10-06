@@ -16,6 +16,7 @@ import { wrap } from "./util.js";
 import { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient } from "../chain.js";
 import { publicUser } from "../users/public-user.js";
 import {
+  REVIEW_EVIDENCE_MAX,
   REVIEW_NOTE_MAX,
   REVIEW_NOTE_MIN,
   REVIEW_RESOLUTION_STATES,
@@ -271,15 +272,25 @@ export function createAdminRouter() {
           error: `a note of ${REVIEW_NOTE_MIN}-${REVIEW_NOTE_MAX} characters is required: what was checked and what was done`,
         });
       }
+      const evidence = typeof req.body?.evidence === "string" ? req.body.evidence.trim() : "";
+      if (evidence.length > REVIEW_EVIDENCE_MAX) {
+        return res.status(400).json({ error: `evidence must be ${REVIEW_EVIDENCE_MAX} characters or fewer` });
+      }
       const result = store.resolveTransferReview(String(req.params.id), {
         state: state as ReviewResolutionState,
         note,
         by: operatorLabel(req),
+        ...(evidence ? { evidence } : {}),
       });
       if (!result.ok) {
-        return result.code === "NOT_FOUND"
-          ? res.status(404).json({ error: "transfer not found" })
-          : res.status(409).json({ error: "only a transfer in MANUAL_REVIEW can be resolved, and only once" });
+        if (result.code === "NOT_FOUND") return res.status(404).json({ error: "transfer not found" });
+        if (result.code === "NO_PAYOUT_EVIDENCE") {
+          return res.status(409).json({
+            error:
+              "PAID needs evidence the payout went out: pass the Monerium order id, Bridge destination tx hash or anchor payment hash this transfer recorded",
+          });
+        }
+        return res.status(409).json({ error: "only a transfer in MANUAL_REVIEW can be resolved, and only once" });
       }
       res.json(adminTransfer(result.transfer));
     }),
