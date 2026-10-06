@@ -22,6 +22,7 @@ import { accountProfileStanding } from "../domain/monerium-profile.js";
 import { qrSvg } from "../qr.js";
 import { store, type User } from "../store.js";
 import { publicUser } from "../users/public-user.js";
+import { describeCause } from "../http/log-cause.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface PaymentPageDeps {
@@ -118,7 +119,7 @@ export async function livePaymentPage(user: User): Promise<boolean> {
         });
         return true;
       } catch (err: any) {
-        console.error(`payment page: renewing forwarder for ${user.id} failed: ${err?.message ?? err}`);
+        console.error(`payment page: renewing forwarder for ${user.id} failed: ${describeCause(err)}`);
         renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, addressMoved: false });
         return listed && expires > Date.now();
       } finally {
@@ -182,7 +183,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
       } catch (err: any) {
         // The forwarding address is set up at a partner and on chain: its
         // failure is "try again", not ours to report as a 500.
-        console.error(`payment page: forwarder for ${user.id} failed: ${err?.message ?? err}`);
+        console.error(`payment page: forwarder for ${user.id} failed: ${describeCause(err)}`);
         return res.status(503).json({
           error: `The address that receives ${usdToken().symbol} for your page could not be set up just now. Nothing was saved; try again in a minute.`,
           code: "FORWARDER_UNAVAILABLE",

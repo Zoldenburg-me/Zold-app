@@ -54,4 +54,45 @@ for (const file of ["routes/auth.ts", "routes/recovery-candide.ts", "routes/cryp
 }
 console.log("   ok  auth, recovery-candide, crypto-deposits and the orchestrator log the cause redacted");
 
-console.log("\nsafe-op-uncertain: 3/3 checks passed");
+// A host without a scheme carries the key just as well: Node's DNS and socket
+// errors name the target bare, and some providers put the key in a subdomain.
+for (const [raw, secret] of [
+  ["getaddrinfo ENOTFOUND KEYSECRET.rpc.provider.io", "KEYSECRET"],
+  ["getaddrinfo ENOTFOUND rpc.provider.io", "provider.io"],
+  ["connect ECONNREFUSED 1.2.3.4:443", "1.2.3.4"],
+  ["connect ECONNREFUSED 127.0.0.1:8545", "127.0.0.1"],
+  ["request to host.tld/path/KEYSECRET failed", "KEYSECRET"],
+  ["fetch failed at base-sepolia.g.alchemy.com/v2/KEYSECRET", "KEYSECRET"],
+  ["socket hang up talking to node.example.com:8545", "node.example.com"],
+] as const) {
+  const line = describeCause(new Error(raw));
+  assert.ok(!line.includes(secret), `the log line keeps ${secret}: ${line}`);
+}
+for (const plain of [
+  "Error: The contract function \"transfer\" reverted. Details: insufficient balance.",
+  "TransactionExecutionError: insufficient funds for gas * price + value.",
+  "Error: refund failed, e.g. the Safe was empty. Retry later.",
+  "Error: amount 12.50 EUR exceeds the cap of 1000.00 EUR",
+]) {
+  assert.equal(describeCause(plain), plain, "an ordinary sentence is logged as written");
+}
+console.log("   ok  describeCause redacts bare hosts, DNS and socket targets, and leaves sentences alone");
+
+// Money-path logs of chain, bundler and RPC errors go through describeCause.
+for (const [file, pattern] of [
+  ["orchestrator.ts", /compensation failed for \$\{id\}: \$\{describeCause\(e\)\}/],
+  ["orchestrator.ts", /sweep: compensation failed for \$\{t\.id\}: \$\{describeCause\(e\)\}/],
+  ["server.ts", /Compensation sweep failed: \$\{describeCause\(e\)\}/],
+  ["faucet.ts", /drip to \$\{to\} failed: \$\{describeCause\(err\)\}/],
+  ["adapters/crypto-deposits.ts", /crypto-in poll failed: \$\{describeCause\(err\)\}/],
+] as const) {
+  const src = readFileSync(new URL(`../services/api/src/${file}`, import.meta.url), "utf8");
+  assert.match(src, pattern, `${file} logs a raw error message`);
+}
+for (const file of ["orchestrator.ts", "faucet.ts", "adapters/crypto-deposits.ts", "routes/payment-page.ts", "routes/recovery-candide.ts", "routes/recovery-zoldenburg.ts"]) {
+  const src = readFileSync(new URL(`../services/api/src/${file}`, import.meta.url), "utf8");
+  assert.doesNotMatch(src, /console\.(error|warn)\([^;]*\$\{(e|err)\?\.message \?\? (e|err)\}/, `${file} still logs a raw error message`);
+}
+console.log("   ok  money-path chain and bundler errors are logged redacted");
+
+console.log("\nsafe-op-uncertain: 5/5 checks passed");

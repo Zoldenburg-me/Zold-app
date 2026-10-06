@@ -30,6 +30,7 @@
  */
 import { formatUnits, parseUnits } from "viem";
 import { usdToken } from "./usd-token.js";
+import { describeCause } from "./http/log-cause.js";
 import { CHAIN_ID, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, TESTNET_FAUCET } from "./config.js";
 import { addrs, eur, faucetWallet, publicClient } from "./chain.js";
 import { store } from "./store.js";
@@ -83,7 +84,7 @@ async function sendToken(token: `0x${string}`, to: `0x${string}`, units: bigint,
     const receipt = await publicClient.waitForTransactionReceipt({ hash: out.txHash });
     if (receipt.status !== "success") return { ...out, reverted: true };
   } catch (err: any) {
-    console.warn(`faucet: ${label} ${out.txHash} sent but unconfirmed (${err?.message ?? err}); claim kept`);
+    console.warn(`faucet: ${label} ${out.txHash} sent but unconfirmed (${describeCause(err)}); claim kept`);
   }
   return out;
 }
@@ -111,7 +112,7 @@ export async function faucetFundSafe(userId: string): Promise<FaucetResult> {
     sent = await sendToken(addrs().eure, to, eur.toWei(grantEur), `grant to ${user.id}`);
   } catch (err: any) {
     release();
-    console.error(`faucet: funding ${user.id} failed: ${err?.message ?? err}`);
+    console.error(`faucet: funding ${user.id} failed: ${describeCause(err)}`);
     return { ok: false, code: "FAUCET_FAILED", error: UNAVAILABLE };
   }
   if (sent.kind === "dry") {
@@ -205,7 +206,7 @@ export async function drip(address: string, symbol: string, ip: string): Promise
     sent = await sendToken(token.address, to as `0x${string}`, parseUnits(String(token.amount), decimals), `${token.symbol} drip to ${to}`);
   } catch (err: any) {
     release();
-    console.error(`faucet: ${token.symbol} drip to ${to} failed: ${err?.message ?? err}`);
+    console.error(`faucet: ${token.symbol} drip to ${to} failed: ${describeCause(err)}`);
     return { ok: false, code: "FAUCET_FAILED", error: UNAVAILABLE };
   }
   if (sent.kind === "dry") {

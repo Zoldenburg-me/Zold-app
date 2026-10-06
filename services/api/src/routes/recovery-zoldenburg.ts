@@ -26,6 +26,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { CHAIN_ID, HARNESS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import { operatorLabel, requireOperator } from "../http/guards.js";
+import { describeCause } from "../http/log-cause.js";
 import { publicRecoveryRequest } from "../recovery.js";
 import { recoveryEnrolment } from "../admin/onboarding.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
@@ -252,7 +253,7 @@ export async function sweepZoldenburgRecoveries(now = new Date()): Promise<numbe
       }
       if (cur.status === "FINALIZED" && r.status !== "FINALIZED") n++;
     } catch (err: any) {
-      console.error(`recovery sweep: ${r.id}: ${err?.message ?? err}`);
+      console.error(`recovery sweep: ${r.id}: ${describeCause(err)}`);
     }
   }
   return n;
@@ -780,7 +781,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         const owner = webauthnOwnerFromJwk(r.zoldenburg!.newPasskey!.publicKey.jwk);
         if (owner) verifierDeployTxHash = await deployVerifierForOwner(owner);
       } catch (err: any) {
-        console.error(`recovery ${r.id}: verifier deploy failed (will matter at first use): ${err?.message ?? err}`);
+        console.error(`recovery ${r.id}: verifier deploy failed (will matter at first use): ${describeCause(err)}`);
       }
       const updated = store.updateRecoveryRequest(r.id, {
         status: "GRACE_PERIOD",
