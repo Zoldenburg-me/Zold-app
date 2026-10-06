@@ -40,6 +40,12 @@ function row(id: string, state: string) {
 row("t_review", "MANUAL_REVIEW");
 row("t_review2", "MANUAL_REVIEW");
 row("t_failed", "FAILED");
+row("t_paid", "MANUAL_REVIEW");
+store.updateTransfer("t_paid", {
+  txs: [...store.findTransfer("t_paid")!.txs, { step: "monerium.redeem.pending", hash: "0x" }, { step: "monerium.redeem.placed", hash: "ord-abc-123" }],
+  sepa: { mode: "sandbox", orderId: "ord-abc-123", state: "pending" },
+});
+row("t_paid_none", "MANUAL_REVIEW");
 
 const app = express();
 app.use(express.json());
@@ -133,6 +139,26 @@ try {
       assert.ok(!text.includes("operator:"), "the operator label leaked");
       assert.ok(!text.includes("previousError"), "previousError leaked");
     }
+  });
+
+  await check("PAID needs the evidence the payout went out", async () => {
+    const none = await post("t_paid", { state: "PAID", note: NOTE });
+    assert.equal(none.status, 409, JSON.stringify(none.body));
+    assert.match(String(none.body.error), /evidence/i);
+    const wrong = await post("t_paid", { state: "PAID", note: NOTE, evidence: "ord-not-ours" });
+    assert.equal(wrong.status, 409, JSON.stringify(wrong.body));
+    assert.equal(store.findTransfer("t_paid")!.state, "MANUAL_REVIEW");
+    const unrecorded = await post("t_paid_none", { state: "PAID", note: NOTE, evidence: "ord-abc-123" });
+    assert.equal(unrecorded.status, 409, "a transfer with no recorded payout cannot be marked PAID");
+    assert.equal(store.findTransfer("t_paid_none")!.state, "MANUAL_REVIEW");
+  });
+
+  await check("PAID with the recorded order id resolves and keeps the evidence", async () => {
+    const r = await post("t_paid", { state: "PAID", note: NOTE, evidence: " ord-abc-123 " });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const t = store.findTransfer("t_paid")! as any;
+    assert.equal(t.state, "PAID");
+    assert.equal(t.reviewResolution.evidence, "ord-abc-123");
   });
 
   await check("a resolved transfer is resolved once", async () => {

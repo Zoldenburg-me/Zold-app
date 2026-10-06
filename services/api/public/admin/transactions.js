@@ -56,17 +56,28 @@ function renderTxs(root) {
 
 /* Close a MANUAL_REVIEW transfer with what the operator decided. This moves
    no money: it records an outcome the operator already brought about on chain
-   or at the partner, so it asks for the state, a note and a confirmation. */
+   or at the partner, so it asks for the state, a note and a confirmation.
+   PAID also asks for the payout identifier the transfer recorded. */
 const RESOLVE_STATES = ['REFUNDED', 'PAID', 'FAILED'];
 async function resolveReview(root, id) {
   const state = (prompt(`Resolve ${id} as which state? ${RESOLVE_STATES.join(', ')}`) || '').trim().toUpperCase();
   if (!state) return;
   if (!RESOLVE_STATES.includes(state)) { alert(`State must be one of ${RESOLVE_STATES.join(', ')}.`); return; }
+  const body = { state };
+  if (state === 'PAID') {
+    const evidence = (prompt('Evidence the payout went out: the Monerium order id, Bridge destination tx hash or anchor payment hash this transfer recorded') || '').trim();
+    if (!evidence) return;
+    body.evidence = evidence;
+  }
   const note = (prompt('What did you check, and what did you do? (at least 20 characters)') || '').trim();
   if (!note) return;
-  if (!confirm(`Record ${id} as ${state}?\n\nThis moves no money and cannot be undone.\n\n${note}`)) return;
+  body.note = note;
+  const paidWarning = state === 'PAID'
+    ? '\n\nPAID also settles any pay link, invoice or Shopify order linked to this transfer.'
+    : '';
+  if (!confirm(`Record ${id} as ${state}?\n\nThis moves no money and cannot be undone.${paidWarning}\n\n${note}`)) return;
   try {
-    await api(`/api/admin/transfers/${encodeURIComponent(id)}/resolve-review`, { method: 'POST', body: JSON.stringify({ state, note }) });
+    await api(`/api/admin/transfers/${encodeURIComponent(id)}/resolve-review`, { method: 'POST', body: JSON.stringify(body) });
     await loadTxs();
     renderTxs(root);
   } catch (err) {

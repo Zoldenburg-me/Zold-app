@@ -397,6 +397,9 @@ export interface ReviewResolution {
   at: string;
   /** The transfer's error when it was resolved: why it was in review. */
   previousError?: string;
+  /** What the operator cited: for PAID, a payout identifier the transfer
+   *  recorded (transfers/review-evidence.ts). */
+  evidence?: string;
 }
 
 export type TransferState =

@@ -30,6 +30,7 @@ import type {
   Organisation,
 } from "./domain/types.js";
 import { REVIEW_RESOLUTION_STATES } from "./store/types.js";
+import { matchesPayoutEvidence } from "./transfers/review-evidence.js";
 import type {
   ConversionSweep,
   CryptoDeposit,
@@ -52,6 +53,8 @@ export { initStore } from "./store/db.js";
 /** Bounds of an operator's review-resolution note. */
 export const REVIEW_NOTE_MIN = 20;
 export const REVIEW_NOTE_MAX = 2000;
+/** Bound of the order id, tx hash or reference an operator cites. */
+export const REVIEW_EVIDENCE_MAX = 200;
 
 /** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
@@ -340,8 +343,8 @@ export const store = {
    */
   resolveTransferReview(
     id: string,
-    r: { state: ReviewResolutionState; note: string; by: string },
-  ): { ok: true; transfer: Transfer } | { ok: false; code: "NOT_FOUND" | "NOT_IN_REVIEW" } {
+    r: { state: ReviewResolutionState; note: string; by: string; evidence?: string },
+  ): { ok: true; transfer: Transfer } | { ok: false; code: "NOT_FOUND" | "NOT_IN_REVIEW" | "NO_PAYOUT_EVIDENCE" } {
     if (!(REVIEW_RESOLUTION_STATES as readonly string[]).includes(r.state)) {
       throw new Error(`a review resolves to ${REVIEW_RESOLUTION_STATES.join(", ")}, not ${r.state}`);
     }
@@ -353,14 +356,27 @@ export const store = {
     const t = db.transfers.find((x) => x.id === id);
     if (!t) return { ok: false, code: "NOT_FOUND" };
     if (t.state !== "MANUAL_REVIEW" || t.reviewResolution) return { ok: false, code: "NOT_IN_REVIEW" };
+    // PAID settles linked pay links, invoices and shop orders: it needs a
+    // payout identifier the transfer itself recorded, cited by the operator.
+    const evidence = r.evidence?.trim() || undefined;
+    if (r.state === "PAID" && !(evidence && matchesPayoutEvidence(t, evidence))) {
+      return { ok: false, code: "NO_PAYOUT_EVIDENCE" };
+    }
     const at = new Date().toISOString();
-    t.reviewResolution = { state: r.state, note, by: r.by, at, ...(t.error ? { previousError: t.error } : {}) };
+    t.reviewResolution = {
+      state: r.state,
+      note,
+      by: r.by,
+      at,
+      ...(t.error ? { previousError: t.error } : {}),
+      ...(evidence ? { evidence } : {}),
+    };
     t.state = r.state;
     t.updatedAt = at;
     db.audit.push(
       auditEntry(
         "operator.transfer_review_resolved",
-        { transferId: t.id, from: "MANUAL_REVIEW", to: r.state, note, operator: r.by },
+        { transferId: t.id, from: "MANUAL_REVIEW", to: r.state, note, operator: r.by, ...(evidence ? { evidence } : {}) },
         t.userId,
       ),
     );
