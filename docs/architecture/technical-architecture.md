@@ -166,8 +166,8 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   `step_up`) and optionally to a user or `recovery:<id>`. A `step_up` is bound
   to the user AND one action from `STEP_UP_ACTIONS` (routes/auth.ts:
   `passkey.replace`, `monerium.connect`, `monerium.disconnect`,
-  `authorizer.bind`, `org.payment-review.off`), and only the route making that
-  change accepts it.
+  `authorizer.bind`, `org.payment-review.off`, `org.invoice-iban.change`), and
+  only the route making that change accepts it.
 - Registration checks type, challenge, origin allowlist, rpIdHash and the UP
   and UV flags. **Attestation statements are not verified**, so any
   authenticator that verifies its user is accepted.
