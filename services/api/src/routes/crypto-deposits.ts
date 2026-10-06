@@ -28,6 +28,7 @@ import { AUTH_WINDOW_SEC } from "../transfers/build.js";
 import { publicUser } from "../users/public-user.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
+  SafeOperationUncertainError,
   prepareTransferBatchExecution,
   submitPasskeySafeOperationWithReceipt,
   type SubmittedOperation,
@@ -36,6 +37,7 @@ import { publicClient } from "../chain.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { ownerInvoiceView, settlementRef } from "../domain/invoices.js";
 import { roleCan } from "../domain/roles.js";
+import { describeCause } from "../http/log-cause.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface CryptoDepositDeps {
@@ -300,7 +302,30 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         });
       } catch (err: any) {
         const reason = String(err?.shortMessage ?? err?.message ?? err);
+        // The bundler may have taken the swap and it may still land. REFUSED
+        // would offer the same USDC for a second conversion, so the row waits
+        // for someone to check the operation on chain.
+        if (err instanceof SafeOperationUncertainError) {
+          console.error(`convert: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
+          store.updateCryptoDeposit(deposit.id, {
+            state: "UNCONFIRMED",
+            reason: `${reason} — check the operation before converting again`,
+            txs: [...deposit.txs, { step: "safe.swap(usdc->eure).unconfirmed", hash: err.userOpHash }],
+          });
+          return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: err.userOpHash });
+        }
         store.updateCryptoDeposit(deposit.id, { state: "REFUSED", reason });
+        return res.status(502).json({ error: reason });
+      }
+      // Included but reverted: the chain undid the swap, so nothing moved and
+      // nothing is settled.
+      if (submitted.success !== true) {
+        const reason = `the swap ${submitted.userOpHash ?? ""} was included but reverted — nothing was converted`;
+        store.updateCryptoDeposit(deposit.id, {
+          state: "REFUSED",
+          reason,
+          txs: [...deposit.txs, { step: "safe.swap(usdc->eure).reverted", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" }],
+        });
         return res.status(502).json({ error: reason });
       }
 

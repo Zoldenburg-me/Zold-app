@@ -28,6 +28,7 @@ import type { Invoice } from "../../domain/types.js";
 /** Wrong passwords one link absorbs, from any number of addresses, per window. */
 const PASSWORD_FAILURES_MAX = 10;
 const PASSWORD_FAILURE_WINDOW_MS = 15 * 60_000;
+const DUE_DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 export function createInvoiceLinkRouter(): express.Router {
   const r = express.Router();
@@ -122,6 +123,10 @@ export function createInvoiceLinkRouter(): express.Router {
           return res.status(400).json({ error: `Your ${field} is limited to ${max} characters.` });
         }
       }
+      const dueDate = req.body?.dueDate;
+      if (dueDate !== undefined && dueDate !== null && dueDate !== "" && !(typeof dueDate === "string" && DUE_DATE.test(dueDate))) {
+        return res.status(400).json({ error: "The due date must be a date, YYYY-MM-DD." });
+      }
       assertInvoiceTransition(invoice.state, "SUBMITTED");
       const updated = store.updateInvoice(invoice.id, {
         state: "SUBMITTED",
@@ -135,7 +140,7 @@ export function createInvoiceLinkRouter(): express.Router {
         lines,
         total,
         payTo: parsePayTo(req.body?.payTo, invoice.currency),
-        dueDate: typeof req.body?.dueDate === "string" ? req.body.dueDate : invoice.dueDate,
+        dueDate: typeof dueDate === "string" && dueDate ? dueDate : invoice.dueDate,
         submittedAt: new Date().toISOString(),
       });
       res.json({ invoice: supplierView(updated, payorName(updated), issuerExtras(updated)) });

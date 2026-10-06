@@ -14,6 +14,7 @@
 
 import { formatUnits } from "viem";
 import { monthOf } from "./income-invoices.js";
+import { formulaSafe } from "./csv-safe.js";
 import type { LedgerEntry } from "./types.js";
 
 export interface TaxLot {
@@ -599,9 +600,8 @@ export function monthlyBalances(
 
 function csvCell(v: unknown): string {
   const s = v === undefined || v === null ? "" : String(v);
-  // A leading =, +, - or @ makes a spreadsheet treat the cell as a formula.
-  // Prefixing with ' keeps an exported memo from executing in someone's Excel.
-  const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+  // Keeps an exported memo from executing in someone's spreadsheet (csv-safe.ts).
+  const safe = formulaSafe(s);
   return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 

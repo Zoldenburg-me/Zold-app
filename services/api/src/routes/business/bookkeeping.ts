@@ -56,6 +56,9 @@ function basisOf(ctx: OrgContext) {
   return computeCostBasis(store.ledgerOf(ctx.org.id), { ownWallets, ownAccounts });
 }
 
+/** A report month: four-digit year, two-digit month. */
+const REPORT_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+
 export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
@@ -315,12 +318,26 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     const earliest = new Date();
     earliest.setMonth(earliest.getMonth() - months);
     const floor = earliest.toISOString().slice(0, 7);
-    const from = req.query.from ? String(req.query.from) : undefined;
+    const current = new Date().toISOString().slice(0, 7);
+    // The report walks every month from `from` to `to`, so both are checked
+    // here: a month, no later than the current one, in order. With `from`
+    // floored at the plan window, that bounds the walk by the plan.
+    const from = req.query.from === undefined ? undefined : String(req.query.from);
+    const to = req.query.to === undefined ? undefined : String(req.query.to);
+    for (const [name, v] of [["from", from], ["to", to]] as const) {
+      if (v !== undefined && !REPORT_MONTH.test(v)) {
+        return res.status(400).json({ error: `${name} must be a month, YYYY-MM.`, field: name });
+      }
+    }
+    if (to !== undefined && to > current) {
+      return res.status(400).json({ error: `to may not be later than the current month (${current}).`, field: "to" });
+    }
+    const start = from && from > floor ? from : floor;
+    if (to !== undefined && to < start) {
+      return res.status(400).json({ error: `to must not be before ${start}, the first month of the report.`, field: "to" });
+    }
 
-    const rows = monthlyBalances(store.ledgerOf(ctx.org.id), {
-      from: from && from > floor ? from : floor,
-      to: req.query.to ? String(req.query.to) : undefined,
-    });
+    const rows = monthlyBalances(store.ledgerOf(ctx.org.id), { from: start, to });
     if (String(req.query.format) === "csv") {
       res.type("text/csv").attachment("monthly-balance.csv").send(toCsv(rows as never));
       return;

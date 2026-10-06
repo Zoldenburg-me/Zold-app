@@ -26,6 +26,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { CHAIN_ID, HARNESS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import { operatorLabel, requireOperator } from "../http/guards.js";
+import { describeCause, describeError, shortErrorForClient } from "../http/log-cause.js";
 import { publicRecoveryRequest } from "../recovery.js";
 import { recoveryEnrolment } from "../admin/onboarding.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
@@ -104,8 +105,8 @@ function fail(res: express.Response, err: unknown) {
     return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
   // 503, not 502: Cloudflare replaces an origin 502's body with its own page.
-  console.error(`recovery (zoldenburg): ${(err as any)?.stack ?? err}`);
-  return res.status(503).json({ error: String((err as any)?.message ?? err).slice(0, 300) });
+  console.error(`recovery (zoldenburg): ${describeError(err)}`);
+  return res.status(503).json({ error: shortErrorForClient(err) });
 }
 
 function activePlan(user: User): PasskeySafeDeploymentPlan {
@@ -252,7 +253,7 @@ export async function sweepZoldenburgRecoveries(now = new Date()): Promise<numbe
       }
       if (cur.status === "FINALIZED" && r.status !== "FINALIZED") n++;
     } catch (err: any) {
-      console.error(`recovery sweep: ${r.id}: ${err?.message ?? err}`);
+      console.error(`recovery sweep: ${r.id}: ${describeCause(err)}`);
     }
   }
   return n;
@@ -419,8 +420,14 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       if (hasZoldenburgGuardian(user)) {
         return res.status(409).json({ error: "Zoldenburg is already a guardian — remove it with your passkey instead", code: "IS_GUARDIAN" });
       }
+      // The choice is recorded on the Safe plan. Without one there is nothing
+      // to decline for, and a plan built from the choice alone would be a Safe
+      // with no address or owner.
+      if (!user.passkeySafe) {
+        return res.status(409).json({ error: "set up your passkey and smart account before choosing recovery", code: "NO_SAFE" });
+      }
       const updated = store.updateUser(user.id, {
-        passkeySafe: { ...user.passkeySafe!, recoveryChoice: { choice: "declined", at: new Date().toISOString() } },
+        passkeySafe: { ...user.passkeySafe, recoveryChoice: { choice: "declined", at: new Date().toISOString() } },
       });
       res.json(await screenState(updated));
     }),
@@ -612,6 +619,9 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             kycStatus: user.kycStatus,
             moneriumMethod: user.monerium?.method ?? (user.monerium ? "oauth" : undefined),
             moneriumProfileId: user.monerium?.profileId,
+            // Every profile the account has recorded, oldest first: a relink
+            // shows here as a second entry, not as a silently new id.
+            moneriumProfileHistory: user.moneriumProfileHistory ?? [],
             iban: user.iban,
           }
         : null,
@@ -771,7 +781,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         const owner = webauthnOwnerFromJwk(r.zoldenburg!.newPasskey!.publicKey.jwk);
         if (owner) verifierDeployTxHash = await deployVerifierForOwner(owner);
       } catch (err: any) {
-        console.error(`recovery ${r.id}: verifier deploy failed (will matter at first use): ${err?.message ?? err}`);
+        console.error(`recovery ${r.id}: verifier deploy failed (will matter at first use): ${describeCause(err)}`);
       }
       const updated = store.updateRecoveryRequest(r.id, {
         status: "GRACE_PERIOD",

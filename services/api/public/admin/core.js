@@ -4,9 +4,11 @@
  * them; every file but main.js only declares and registers, and nothing calls
  * forward into a later file.
  *
- * Read only, with ONE exception: Recoveries, where an operator reviews a
+ * Read only, with TWO exceptions. Recoveries, where an operator reviews a
  * person who lost their passkey and signs as Zoldenburg's guardian from the
- * Keycard Shell. KYC review and IBAN issue belong to Monerium.
+ * Keycard Shell; and Transactions, where an operator records how a transfer in
+ * MANUAL_REVIEW was resolved (no money moves). KYC review and IBAN issue
+ * belong to Monerium.
  *
  * Two security details. The operator token lives in sessionStorage so it does
  * not outlive the tab. Every value from the API is escaped, and rows carry ids
@@ -98,7 +100,7 @@ function enrolPill(z) {
   }[z] || pill('dim', z || '—');
 }
 
-const ATTENTION_STATES = ['FAILED', 'REFUNDED', 'REFUSED', 'MANUAL_REVIEW'];
+const ATTENTION_STATES = ['FAILED', 'REFUNDED', 'REFUSED', 'UNCONFIRMED', 'MANUAL_REVIEW'];
 const TERMINAL_STATES = ['PAID', 'CONVERTED', ...ATTENTION_STATES];
 const STALE_MS = 30 * 60_000;
 const isInflight = (t) => t.kind !== 'funding' && !TERMINAL_STATES.includes(t.state);

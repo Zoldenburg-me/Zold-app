@@ -362,7 +362,7 @@ try {
     const refused = await call(`/api/users/${id}/passkey`, second.register(reg2.data.challenge), undefined, mine);
     assert.equal(refused.status, 401, `a session alone must not replace the passkey: ${JSON.stringify(refused.data)}`);
     const reg3 = await call("/api/webauthn/challenge", { purpose: "register" }, undefined, mine);
-    const step = await call("/api/webauthn/challenge", { purpose: "step_up" }, undefined, mine);
+    const step = await call("/api/webauthn/challenge", { purpose: "step_up", action: "passkey.replace" }, undefined, mine);
     const replaced = await call(`/api/users/${id}/passkey`, {
       ...second.register(reg3.data.challenge),
       stepUp: await first.assert(step.data.challenge),
@@ -442,6 +442,15 @@ try {
   await t("a lost-device recovery cannot start while the guardian is not on the Safe", async () => {
     const r = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
     assert.equal(r.status, 404);
+  });
+
+  await t("the guardian operation is not submitted on an approval of a different challenge", async () => {
+    const prep = await call(`/api/users/${userId}/recovery/candide/guardian`, {});
+    assert.equal(prep.status, 201, JSON.stringify(prep.data));
+    const done = await call(prep.data.submitTo, await passkey.assert(b64url(randomBytes(32))));
+    assert.equal(done.status, 401, JSON.stringify(done.data));
+    const me = await call(`/api/users/${userId}/recovery/candide/guardian`, {});
+    assert.equal(me.status, 201, "the guardian is still not on the Safe");
   });
 
   await t("adding the guardian is a user-signed Safe operation that enables the module", async () => {

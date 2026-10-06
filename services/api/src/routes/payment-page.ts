@@ -18,9 +18,11 @@ import { isDeployed } from "../wallet/candide.js";
 import { activatePaymentForwarder } from "../adapters/candide-forwarder.js";
 import { HandleError, normaliseDisplayName, normaliseHandle, publicOrgPayee, publicPayee } from "../pay.js";
 import { orgPageAccount } from "./business/org-payment-page.js";
+import { accountProfileStanding } from "../domain/monerium-profile.js";
 import { qrSvg } from "../qr.js";
 import { store, type User } from "../store.js";
 import { publicUser } from "../users/public-user.js";
+import { describeCause } from "../http/log-cause.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface PaymentPageDeps {
@@ -117,7 +119,7 @@ export async function livePaymentPage(user: User): Promise<boolean> {
         });
         return true;
       } catch (err: any) {
-        console.error(`payment page: renewing forwarder for ${user.id} failed: ${err?.message ?? err}`);
+        console.error(`payment page: renewing forwarder for ${user.id} failed: ${describeCause(err)}`);
         renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, addressMoved: false });
         return listed && expires > Date.now();
       } finally {
@@ -181,7 +183,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
       } catch (err: any) {
         // The forwarding address is set up at a partner and on chain: its
         // failure is "try again", not ours to report as a 500.
-        console.error(`payment page: forwarder for ${user.id} failed: ${err?.message ?? err}`);
+        console.error(`payment page: forwarder for ${user.id} failed: ${describeCause(err)}`);
         return res.status(503).json({
           error: `The address that receives ${usdToken().symbol} for your page could not be set up just now. Nothing was saved; try again in a minute.`,
           code: "FORWARDER_UNAVAILABLE",
@@ -233,7 +235,10 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
         if (!org) return res.status(404).json({ error: "no such payment page" });
         const page = orgPageAccount(org);
         if ("reason" in page) return res.status(503).json(PAGE_CLOSED);
-        return res.json(publicOrgPayee(org, page.account, page.holder));
+        // Monerium's name for the profile, or nothing: orgPageAccount falls
+        // back to the organisation's own name, which no one verified.
+        const standing = accountProfileStanding(org, page.account);
+        return res.json(publicOrgPayee(org, page.account, standing.status === "verified" ? standing.name : undefined));
       }
       if (!(await livePaymentPage(user))) return res.status(503).json(PAGE_CLOSED);
       res.json(publicPayee(store.findUser(user.id) ?? user, payChain()));

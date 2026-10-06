@@ -141,11 +141,15 @@ function bundlerRefused(err: unknown): boolean {
   return typeof errno === "number" && errno !== -32603;
 }
 
+/** The message is a fixed sentence plus the hash, because routes return it to
+ *  the browser and a deposit stores it as its reason. The cause stays on
+ *  `cause` for the server log only: a viem HTTP error names the bundler URL,
+ *  which can carry an API key. */
 export class SafeOperationUncertainError extends Error {
   constructor(readonly userOpHash: string, cause: unknown) {
     super(
-      `the Safe operation ${userOpHash} was sent but its inclusion was not confirmed ` +
-        `(${String((cause as any)?.message ?? cause)}); it may still land`,
+      `the Safe operation ${userOpHash} was sent but its inclusion was not confirmed; it may still land`,
+      { cause },
     );
   }
 }
@@ -590,14 +594,6 @@ export async function prepareTransferBatchExecution(
   },
 ): Promise<{ safeAddress: `0x${string}`; challenge: `0x${string}`; userOperation: UserOperationV9 }> {
   return prepareSafeExecutionCore(plan, transferSwapBatchTransactions(args));
-}
-
-export async function submitPasskeySafeOperation(
-  plan: PasskeySafeDeploymentPlan,
-  userOperation: UserOperationV9,
-  assertion: BrowserPasskeyAssertion,
-): Promise<string | null> {
-  return (await submitPasskeySafeOperationWithReceipt(plan, userOperation, assertion)).userOpHash;
 }
 
 /**

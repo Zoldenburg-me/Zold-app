@@ -197,7 +197,7 @@ function phDeskGetPaid(u) {
 function phDeskTxRow(t) {
   if (t.kind === "funding") {
     const usdc = t.token === "USDC";
-    const word = t.state === "REFUSED" ? "IN REVIEW" : "RECEIVED";
+    const word = t.state === "REFUSED" ? "IN REVIEW" : t.state === "UNCONFIRMED" ? "CHECKING" : "RECEIVED";
     const who = usdc ? `Digital dollars (${usdSym()})` : "Euros received";
     return `<tr>
       <td class="z-dim">${esc(phWhen(t.at || t.detectedAt))}</td>

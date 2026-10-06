@@ -121,7 +121,7 @@ function holder(h, extra = []) {
     ...extra,
   ];
   return `<div class="holder">
-    <div class="addr"><div class="who">${esc(h.name)}</div>${h.operatedBy ? `<div>Operated by ${esc(h.operatedBy)}</div>` : ""}${h.addressLines.map((l) => `<div>${esc(l)}</div>`).join("")}</div>
+    <div class="addr"><div class="who">${esc(h.name)}</div>${h.nameSource === "self-declared" ? `<div class="sub">Name as the holder entered it, not verified by Monerium</div>` : ""}${h.operatedBy ? `<div>Operated by ${esc(h.operatedBy)}</div>` : ""}${h.addressLines.map((l) => `<div>${esc(l)}</div>`).join("")}</div>
     <div class="meta">${rows.map(([k, v]) => `<div><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
   </div>`;
 }

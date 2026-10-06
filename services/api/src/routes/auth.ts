@@ -32,13 +32,16 @@ import {
 } from "../wallet/passkey-safe-plan.js";
 import {
   CANDIDE,
+  SafeOperationUncertainError,
   preparePasskeySafeDeployment,
-  submitPasskeySafeOperation,
+  submitPasskeySafeOperationWithReceipt,
+  type SubmittedOperation,
 } from "../wallet/candide.js";
-import { b64urlToBuf, issueChallenge, verifyAssertion, verifyRegistration } from "../webauthn.js";
+import { b64urlToBuf, issueChallenge, stepUpBinding, verifyAssertion, verifyRegistration } from "../webauthn.js";
 import { publicUser, withSession } from "../users/public-user.js";
 import { checkOpAssertion } from "../http/passkey-assertion.js";
 import { faucetFundSafe } from "../faucet.js";
+import { describeCause } from "../http/log-cause.js";
 
 /**
  * requireUserSession is injected so that server.ts stays the only place that
@@ -54,7 +57,28 @@ export interface AuthDeps {
 // rpIdHash) and stores the COSE public key + sign counter. Login verifies the
 // assertion signature server-side before a session is issued.
 
-export async function verifyPasskeyStepUp(user: User, body: any, res: express.Response): Promise<boolean> {
+/**
+ * The changes a step-up can approve. A challenge is issued for one of them and
+ * verified only by the route that makes that change (webauthn.ts
+ * stepUpBinding).
+ */
+export const STEP_UP_ACTIONS = [
+  "passkey.replace",
+  "monerium.connect",
+  "monerium.disconnect",
+  "authorizer.bind",
+  "org.payment-review.off",
+  "org.invoice-iban.change",
+] as const;
+export type StepUpAction = (typeof STEP_UP_ACTIONS)[number];
+const isStepUpAction = (v: unknown): v is StepUpAction => STEP_UP_ACTIONS.includes(v as StepUpAction);
+
+export async function verifyPasskeyStepUp(
+  user: User,
+  body: any,
+  res: express.Response,
+  action: StepUpAction,
+): Promise<boolean> {
   if (!user.passkey?.publicKey) {
     if (HARNESS.enabled) return true;
     res.status(409).json({ error: "a verified passkey is required for this change" });
@@ -80,7 +104,7 @@ export async function verifyPasskeyStepUp(user: User, body: any, res: express.Re
       user.passkey.rpId ?? SECURITY.rpId,
       SECURITY.origins,
       "step_up",
-      user.id,
+      stepUpBinding(user.id, action),
     );
     store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
     return true;
@@ -126,13 +150,21 @@ export function createAuthRouter(deps: AuthDeps) {
             ? "step_up"
             : "login";
       // register and step_up act on a known account, so the challenge is bound to
-      // it: an assertion collected for one account can no longer be spent on
-      // another's step-up. Login is unbound by necessity — there is no session yet.
+      // it, and a step_up also to the one change it approves: an assertion
+      // collected for one account, or one action, cannot be spent on another.
+      // Login is unbound by necessity — there is no session yet.
       let binding: string | undefined;
       if (purpose !== "login") {
         const session = requireSession(req, res);
         if (!session) return;
         binding = session.userId;
+        if (purpose === "step_up") {
+          const action = req.body?.action;
+          if (!isStepUpAction(action)) {
+            return res.status(400).json({ error: `name the change this approval is for: action is one of ${STEP_UP_ACTIONS.join(", ")}` });
+          }
+          binding = stepUpBinding(session.userId, action);
+        }
       }
       res.json({ challenge: issueChallenge(purpose, binding), rpId: SECURITY.rpId });
     }),
@@ -167,7 +199,7 @@ export function createAuthRouter(deps: AuthDeps) {
       // authenticator has to approve its own replacement. First registration (no
       // verified passkey yet) is unaffected.
       const replacing = Boolean(user.passkey?.publicKey);
-      if (replacing && !(await verifyPasskeyStepUp(user, req.body, res))) return;
+      if (replacing && !(await verifyPasskeyStepUp(user, req.body, res, "passkey.replace"))) return;
       let reg;
       try {
         reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, user.id);
@@ -305,11 +337,32 @@ export function createAuthRouter(deps: AuthDeps) {
       pendingPasskeySafeDeployments.delete(req.params.requestId);
       const approved = await checkOpAssertion(user, req.body, pending.challenge, res);
       if (!approved) return;
-      const opHash = await submitPasskeySafeOperation(user.passkeySafe, pending.userOperation, {
-        authenticatorData: b64urlToBuf(authenticatorData),
-        clientDataJSON: b64urlToBuf(clientDataJSON),
-        signature: b64urlToBuf(signature),
-      });
+      let op: SubmittedOperation;
+      try {
+        op = await submitPasskeySafeOperationWithReceipt(user.passkeySafe, pending.userOperation, {
+          authenticatorData: b64urlToBuf(authenticatorData),
+          clientDataJSON: b64urlToBuf(clientDataJSON),
+          signature: b64urlToBuf(signature),
+        });
+      } catch (err) {
+        if (!(err instanceof SafeOperationUncertainError)) throw err;
+        console.error(`safe deploy: operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
+        // It may still land. The account stays on its old address until the
+        // deployment is confirmed; preparing again finds a Safe that did land.
+        return res.status(502).json({
+          error: `${err.message} — the Safe is not recorded as deployed until that is confirmed; try again shortly`,
+          code: "SAFE_OP_UNCONFIRMED",
+          deployOpHash: err.userOpHash,
+        });
+      }
+      if (op.success !== true) {
+        return res.status(502).json({
+          error: `the deployment ${op.userOpHash} was included but reverted — the Safe was not activated`,
+          code: "SAFE_OP_REVERTED",
+          deployOpHash: op.userOpHash,
+        });
+      }
+      const opHash = op.userOpHash;
       let updated = store.updateUser(user.id, {
         address: user.passkeySafe.address,
         wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },

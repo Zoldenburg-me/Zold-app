@@ -34,6 +34,18 @@ function safeBooksStart(u) {
   return safe?.createdAt ?? u?.createdAt;
 }
 
+/** A fresh passkey approval for a change the server gates on one
+ *  (verifyPasskeyStepUp). Undefined when the account has no passkey, and the
+ *  server then says why it refuses. */
+/** A passkey approval for one named action; the server refuses it for any other. */
+async function passkeyStepUp(action) {
+  const session = await api("/api/session");
+  const credentialId = session.passkey?.credentialId;
+  if (!credentialId) return undefined;
+  const { challenge } = await api("/api/webauthn/challenge", { method: "POST", body: { purpose: "step_up", action } });
+  return (await window.__deviceLib).passkeyAssertion({ challenge, credentialId });
+}
+
 function monthChosen() {
   const v = $("#x-month")?.value || (view === "books" ? bk.month : exportMonth);
   setExportMonth(v);
@@ -706,9 +718,14 @@ export const ACTIONS = {
     if (!issuer.address.country) throw new Error("Choose your country: it decides which invoicing rules apply.");
     const changed = issuer.legalName !== (org.legalName || "") ||
       ["line1", "line2", "postalCode", "city", "country"].some((k) => issuer.address[k] !== (a[k] || ""));
-    if (changed) await api(`/api/orgs/${org.id}`, { method: "PATCH", body: issuer });
     const display = {};
     document.querySelectorAll("[data-display]").forEach((el) => { display[el.dataset.display] = el.checked; });
+    // A new payout IBAN takes an owner or admin and a passkey approval. It is
+    // asked for before anything is sent, so a cancelled passkey saves nothing.
+    const current = await api(`/api/orgs/${org.id}/invoicing/profile`);
+    const typedIban = val("i-bank-iban").replace(/\s+/g, "").toUpperCase();
+    const stepUp = typedIban !== (current.profile.bank?.iban || "") ? await passkeyStepUp("org.invoice-iban.change") : undefined;
+    if (changed) await api(`/api/orgs/${org.id}`, { method: "PATCH", body: issuer });
     await api(`/api/orgs/${org.id}/invoicing/profile`, {
       method: "PATCH",
       body: {
@@ -722,6 +739,7 @@ export const ACTIONS = {
         bank: { holder: val("i-bank-holder"), iban: val("i-bank-iban"), bic: val("i-bank-bic") },
         numberSeries: { prefix: val("i-prefix"), next: Number(val("i-next") || 1), padding: 4 },
         display,
+        stepUp,
       },
     });
     toast("Invoicing profile saved.");
@@ -960,13 +978,7 @@ export const ACTIONS = {
     dialog("Turn payment review off?",
       `<p class="desc">Anyone who may send payments could then send one without a second person approving it. Payments already waiting for review keep waiting until someone approves them. You’ll confirm with Face ID or fingerprint.</p>`,
       async () => {
-        const session = await api("/api/session");
-        const credentialId = session.passkey?.credentialId;
-        let stepUp;
-        if (credentialId) {
-          const { challenge } = await api("/api/webauthn/challenge", { method: "POST", body: { purpose: "step_up" } });
-          stepUp = await (await window.__deviceLib).passkeyAssertion({ challenge, credentialId });
-        }
+        const stepUp = await passkeyStepUp("org.payment-review.off");
         await api(`/api/orgs/${org.id}/payment-review`, { method: "POST", body: { required: false, stepUp } });
         await loadOrg(org.id);
         toast("Payment review is off.");

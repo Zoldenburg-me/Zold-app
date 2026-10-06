@@ -15,6 +15,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { batched, db, persist, pruneSessions, seedChartOfAccounts } from "./store/db.js";
+import { nextProfileHistory } from "./domain/monerium-identity.js";
+import { auditEntry } from "./audit.js";
 import type {
   Account,
   AccountRule,
@@ -27,6 +29,8 @@ import type {
   Member,
   Organisation,
 } from "./domain/types.js";
+import { OPERATOR_REFUND_STEP, REVIEW_RESOLUTION_STATES } from "./store/types.js";
+import { matchesPayoutEvidence } from "./transfers/review-evidence.js";
 import type {
   ConversionSweep,
   CryptoDeposit,
@@ -35,6 +39,7 @@ import type {
   Quote,
   ReceiptShare,
   RecoveryRequest,
+  ReviewResolutionState,
   Session,
   ShopifyConnection,
   StoredDocument,
@@ -45,8 +50,48 @@ import type {
 export * from "./store/types.js";
 export { initStore } from "./store/db.js";
 
+/** Bounds of an operator's review-resolution note. */
+export const REVIEW_NOTE_MIN = 20;
+export const REVIEW_NOTE_MAX = 2000;
+/** Bound of the order id, tx hash or reference an operator cites. */
+export const REVIEW_EVIDENCE_MAX = 200;
+
 /** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
+
+/**
+ * Which record already holds `hash`, among everything the bank statement
+ * books hashes from (bookkeeping/statement.ts): every transfer's steps, every
+ * crypto deposit's tx, conversion and steps, every sweep's conversion and
+ * steps, and the ledger's own lines. Undefined when none does.
+ */
+function hashOnRecord(hash: string, userId: string): string | undefined {
+  const h = hash.toLowerCase();
+  const is = (x: string | undefined) => typeof x === "string" && x.toLowerCase() === h;
+  const t = db.transfers.find((x) => x.txs.some((s) => is(s.hash)));
+  if (t) return `transfer ${t.id}`;
+  // The refund itself, sent to this user's Safe, is recorded by the deposit
+  // scanner as a plain EURe arrival, usually before the operator resolves.
+  // That one is the refund: citing it books it as the reversal instead of a
+  // deposit. A deposit that is anyone else's, was converted, or pays an
+  // invoice or a pay link is a different payment.
+  const refundArrival = (x: (typeof db.cryptoDeposits)[number]) =>
+    x.userId === userId && x.token === "EURE" && is(x.txHash) && !x.conversion && !x.invoiceId && !x.paymentRequestId &&
+    !(x.txs ?? []).some((s) => is(s.hash));
+  const d = db.cryptoDeposits.find(
+    (x) =>
+      !refundArrival(x) &&
+      (is(x.txHash) || is(x.conversion?.txHash) || is(x.conversion?.userOpHash) || (x.txs ?? []).some((s) => is(s.hash))),
+  );
+  if (d) return `deposit ${d.id}`;
+  const sw = db.conversionSweeps.find(
+    (x) => is(x.conversion?.txHash) || is(x.conversion?.userOpHash) || x.txs.some((s) => is(s.hash)),
+  );
+  if (sw) return `sweep ${sw.id}`;
+  const l = db.ledger.find((x) => is(x.txHash));
+  if (l) return `ledger line ${l.id}`;
+  return undefined;
+}
 
 export const store = {
   /** Several writes, one file write (store/db.ts). */
@@ -76,7 +121,16 @@ export const store = {
     // The one place an IBAN changes, so the one place its date is kept.
     const bare = (v?: string) => (v ?? "").replace(/\s+/g, "").toUpperCase();
     const ibanChanged = typeof patch.iban === "string" && bare(patch.iban) !== "" && bare(patch.iban) !== bare(u.iban);
-    Object.assign(u, patch, ibanChanged && !patch.ibanSince ? { ibanSince: new Date().toISOString() } : {});
+    // The one place a Monerium profile is recorded, so the one place its
+    // history is appended to. A patch cannot write the history itself.
+    const { moneriumProfileHistory: _ignored, ...rest } = patch;
+    const history = nextProfileHistory(u, rest, new Date().toISOString());
+    Object.assign(
+      u,
+      rest,
+      ibanChanged && !patch.ibanSince ? { ibanSince: new Date().toISOString() } : {},
+      history ? { moneriumProfileHistory: history } : {},
+    );
     persist();
     return u;
   },
@@ -299,7 +353,14 @@ export const store = {
     // REFUNDED and PAID are final. A slow live leg finishing after the sweep
     // refunded the transfer must not move it back and complete a payout the
     // sender was already repaid for; the late write keeps its other fields.
-    if ((t.state === "REFUNDED" || t.state === "PAID") && patch.state && patch.state !== t.state) {
+    // MANUAL_REVIEW belongs to an operator: no automatic path moves it on,
+    // since FAILED is what the sweep refunds. resolveTransferReview is the one
+    // way out, and the state an operator resolved into is final too.
+    if (
+      (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW" || t.reviewResolution) &&
+      patch.state &&
+      patch.state !== t.state
+    ) {
       console.error(`store: refusing to move transfer ${id} from ${t.state} to ${patch.state}`);
       // Omit state. Assigning `state: undefined` copies the key and erases the field.
       const { state: _dropped, ...rest } = patch;
@@ -308,6 +369,90 @@ export const store = {
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
     persist();
     return t;
+  },
+  /**
+   * The only way out of MANUAL_REVIEW: an operator records what they decided
+   * after acting on chain or at the partner. Moves no money. Records the
+   * resolution on the transfer and an audit entry, once per transfer.
+   */
+  resolveTransferReview(
+    id: string,
+    r: { state: ReviewResolutionState; note: string; by: string; evidence?: string; refund?: { amountEur: number; movedEur: number } },
+  ):
+    | { ok: true; transfer: Transfer }
+    | { ok: false; code: "NOT_FOUND" | "NOT_IN_REVIEW" | "NO_PAYOUT_EVIDENCE" }
+    | { ok: false; code: "EVIDENCE_ON_RECORD"; recordedOn: string } {
+    if (!(REVIEW_RESOLUTION_STATES as readonly string[]).includes(r.state)) {
+      throw new Error(`a review resolves to ${REVIEW_RESOLUTION_STATES.join(", ")}, not ${r.state}`);
+    }
+    const note = r.note.trim();
+    if (note.length < REVIEW_NOTE_MIN || note.length > REVIEW_NOTE_MAX) {
+      throw new Error(`a review resolution needs a note of ${REVIEW_NOTE_MIN}-${REVIEW_NOTE_MAX} characters`);
+    }
+    if (!r.by) throw new Error("a review resolution names its operator");
+    if (r.state === "REFUNDED") {
+      const a = r.refund?.amountEur;
+      if (typeof a !== "number" || !Number.isFinite(a) || a < 0 || a > (r.refund?.movedEur ?? 0) || !r.evidence?.trim()) {
+        throw new Error("a review resolved as REFUNDED names the amount returned (0 up to what left the Safe) and its evidence");
+      }
+    }
+    const t = db.transfers.find((x) => x.id === id);
+    if (!t) return { ok: false, code: "NOT_FOUND" };
+    if (t.state !== "MANUAL_REVIEW" || t.reviewResolution) return { ok: false, code: "NOT_IN_REVIEW" };
+    // PAID settles linked pay links, invoices and shop orders: the operator
+    // cites a payout the transfer recorded as carried out (review-evidence.ts).
+    const evidence = r.evidence?.trim() || undefined;
+    if (r.state === "PAID" && !(evidence && matchesPayoutEvidence(t, evidence))) {
+      return { ok: false, code: "NO_PAYOUT_EVIDENCE" };
+    }
+    // A refund tx hash is booked as the reversal and kept out of the EURe
+    // arrivals, so it must be one no record holds yet: otherwise it would hide
+    // a real arrival, take a debit line's link, or count for two transfers.
+    const refundTx = r.state === "REFUNDED" && evidence && /^0x[0-9a-fA-F]{64}$/.test(evidence) ? evidence : undefined;
+    if (refundTx) {
+      const recordedOn = hashOnRecord(refundTx, t.userId);
+      if (recordedOn) return { ok: false, code: "EVIDENCE_ON_RECORD", recordedOn };
+    }
+    const at = new Date().toISOString();
+    t.reviewResolution = {
+      state: r.state,
+      note,
+      by: r.by,
+      at,
+      ...(t.error ? { previousError: t.error } : {}),
+      ...(evidence ? { evidence } : {}),
+    };
+    if (r.state === "REFUNDED" && r.refund) {
+      const short = Math.round((r.refund.movedEur - r.refund.amountEur) * 100) / 100;
+      t.refund = {
+        amountEur: r.refund.amountEur,
+        recoveredFrom: "operator-resolved",
+        deductions: short > 0 ? `€${short.toFixed(2)} not returned` : "none",
+        at,
+      };
+      // A fresh refund tx is booked as the reversal, not as a stray EURe
+      // arrival. A partner reference stays in reviewResolution.evidence only.
+      if (refundTx) t.txs.push({ step: OPERATOR_REFUND_STEP, hash: refundTx });
+    }
+    t.state = r.state;
+    t.updatedAt = at;
+    db.audit.push(
+      auditEntry(
+        "operator.transfer_review_resolved",
+        {
+          transferId: t.id,
+          from: "MANUAL_REVIEW",
+          to: r.state,
+          note,
+          operator: r.by,
+          ...(evidence ? { evidence } : {}),
+          ...(t.refund && r.state === "REFUNDED" ? { refundedEur: t.refund.amountEur } : {}),
+        },
+        t.userId,
+      ),
+    );
+    persist();
+    return { ok: true, transfer: t };
   },
   /**
    * One share per transfer, deliberately.

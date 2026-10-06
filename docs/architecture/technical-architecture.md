@@ -163,7 +163,11 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   owner must be P-256.
 - Challenges are 32 random bytes, single-use, with a 5-minute TTL and at most
   50k held in memory. Each is bound to a **purpose** (`register` / `login` /
-  `step_up`) and optionally to a user or `recovery:<id>`.
+  `step_up`) and optionally to a user or `recovery:<id>`. A `step_up` is bound
+  to the user AND one action from `STEP_UP_ACTIONS` (routes/auth.ts:
+  `passkey.replace`, `monerium.connect`, `monerium.disconnect`,
+  `authorizer.bind`, `org.payment-review.off`, `org.invoice-iban.change`), and
+  only the route making that change accepts it.
 - Registration checks type, challenge, origin allowlist, rpIdHash and the UP
   and UV flags. **Attestation statements are not verified**, so any
   authenticator that verifies its user is accepted.
@@ -201,9 +205,11 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
 - The Safe is deployed as the `initCode` of its first UserOperation. The
   bundler and paymaster default to `https://api.candide.dev/public/v3/<chainId>`
   with an ERC-7677 paymaster, so the user needs no gas. The passkey signs
-  `getUserOperationEip712Hash(op, chainId)`. `submitPasskeySafeOperation`
+  `getUserOperationEip712Hash(op, chainId)`. `submitPasskeySafeOperationWithReceipt`
   attaches the passkey assertion, sends the op, and
-  **blocks the HTTP request until the op is included**.
+  **blocks the HTTP request until the op is included**. Every caller checks the
+  receipt: a reverted op is refused, and an op sent but not confirmed
+  (`SafeOperationUncertainError`) is never recorded as done.
 - EIP-1271 messages (`signMessageAsPasskeySafe`) are used for the Monerium
   link declaration, the Monerium redeem order, the Candide SIWE registration,
   and proof-of-ownership documents.
@@ -351,12 +357,43 @@ stateDiagram-v2
   PAYOUT_FUNDING_PENDING --> PAYOUT_FUNDED: Stellar payment sent
   PAYOUT_FUNDED --> PAID: anchor completed
   DEBITED --> MANUAL_REVIEW: redeem outcome unknown (5xx/timeout)
+  DEBITED --> MANUAL_REVIEW: stranded after an outbound call
   FAILED --> REFUNDED: compensateTransfer
-  FAILED --> MANUAL_REVIEW: duplicate / funds at Bridge / reverse swap failed
+  FAILED --> MANUAL_REVIEW: duplicate / funds at Bridge / reverse swap failed / outbound outcome unknown
+  MANUAL_REVIEW --> REFUNDED: operator resolution
+  MANUAL_REVIEW --> PAID: operator resolution
+  MANUAL_REVIEW --> FAILED: operator resolution
 ```
 
-`store.updateTransfer` refuses to move a `PAID` or `REFUNDED` transfer to any
-other state. It drops the `state` field and logs.
+`store.updateTransfer` refuses to move a `PAID`, `REFUNDED` or `MANUAL_REVIEW`
+transfer, or one an operator resolved, to any other state. It drops the
+`state` field and logs.
+
+The only way out of MANUAL_REVIEW is `store.resolveTransferReview`, behind
+`POST /api/admin/transfers/:id/resolve-review` (operator bearer token, body
+`{state: REFUNDED|PAID|FAILED, note, evidence?, amountEur?}`, note 20–2000 characters; the
+Transactions view's Resolve button). It moves no money: the operator has
+already acted on chain or at the partner. PAID settles linked pay links,
+invoices and Shopify orders, so it is refused (409) unless `evidence` names a
+payout the transfer recorded as carried out: `sepa.orderId` while the order
+state read back from Monerium (`sepa.state`) is `processed` (a placed order is
+not enough; the redeem poller keeps reading the order of a transfer in
+review), the destination tx Bridge reported (`bridge.xyz.destination_tx` step;
+the plan field `pickup.bridgeDestinationTxHash` is not accepted), or
+`pickup.anchorPaymentHash` (`transfers/review-evidence.ts`). REFUNDED needs
+`amountEur` (0 up to `safeMovedEur`, else 400) and `evidence` (the refund tx
+hash or partner reference); it writes `transfer.refund` (`recoveredFrom:
+"operator-resolved"`, deductions = what was not returned), so the app and the
+statement show the refund. A tx-hash evidence must be one no transfer, crypto
+deposit, sweep or ledger line holds yet (else 409: it would hide a real EURe
+arrival, take a debit line's link, or count for two transfers); it is recorded
+as the `operator.refund` step the statement links to the reversal line. A
+partner reference stays in `reviewResolution.evidence` only. It records
+`transfer.reviewResolution` (`state`, `note`, `by` = `operatorLabel`, `at`,
+`previousError`, `evidence`) and an `operator.transfer_review_resolved` audit
+entry, once per transfer. User-facing transfer routes omit
+`reviewResolution` (`transfers/user-transfer.ts`). A resolved transfer is
+never compensated or swept, whatever state it holds.
 
 ### 6.2 Quote → build → authorize → execute
 
@@ -402,9 +439,32 @@ router receives injected and never rebuilds.
 ### 6.3 Compensation (`orchestrator.ts:382-622`)
 
 - `failAndCompensate` writes FAILED. It escalates to **MANUAL_REVIEW** on a
-  duplicate-debit error or once any `bridge.xyz.deposit.*` step exists.
+  duplicate-debit error or once the USDC reached Bridge
+  (`bridge.xyz.deposit.transfer`, `.funded` or `destination_tx`).
   Otherwise it compensates.
-- `compensateTransfer`:
+- An outbound call that may move money records an intent step first:
+  `safe.refundTransfer.pending` (refund or reverse swap),
+  `monerium.redeem.pending` (settled by `.placed` or `.refused`) and
+  `bridge.xyz.deposit.pending`. An intent without a settling step after its
+  last occurrence means the money may have moved, and the transfer goes to
+  MANUAL_REVIEW, never a refund.
+- The two chain writes (refund, Bridge deposit) also settle on a definite
+  failure, through `writeAndWait`'s hooks: `<step>.not-sent` only when the
+  write threw before any hash with an error that proves the node refused it
+  before acceptance (`writeDefinitelyRefused`: viem's InsufficientFunds,
+  ExecutionReverted, IntrinsicGas*, FeeCap*, TipAboveFeeCap, NonceTooHigh,
+  TransactionTypeNotSupported, or a local account/chain/serialisation error),
+  and `<step>.reverted` with the hash when the receipt reverted. Nothing
+  moved, so compensation may retry. A bare RPC error (-32603, -1,
+  LimitExceeded: viem's transport retries the send on these), a transport
+  error, a timeout, a nonce-too-low/"already known" reply, an unknown error,
+  or any error after a hash exists settles nothing. After five refunds that
+  were not-sent or reverted, compensation stops retrying and moves the
+  transfer to MANUAL_REVIEW with that reason (`MAX_REFUND_ATTEMPTS`).
+  A reverted Bridge deposit is not a `FUNDS_AT_BRIDGE_STEPS` step.
+- `compensateTransfer` runs once per transfer at a time (an in-process set);
+  a second call during a running one returns the transfer as it stands. It
+  leaves a MANUAL_REVIEW transfer alone.
   - If no input moved, it records a zero refund.
   - If the funds are un-swapped, it returns `min(refund, moved)` EURe to the
     Safe. The `safe.refundTransfer` step is recorded *before* REFUNDED is
@@ -415,10 +475,11 @@ router receives injected and never rebuilds.
 - SEPA: a Monerium **4xx** refunds the fee. A **timeout or 5xx** goes to
   MANUAL_REVIEW ("redeem outcome unknown").
 - Sweeps:
-  - `sweepStrandedTransfers` runs at boot and every 5 min. It re-fails
-    DEBITED/SWAPPED/BRIDGED transfers that are stale (more than 10 min) and
-    not executing, and sends to MANUAL_REVIEW a CREATED transfer whose
-    authorisation was claimed more than 10 min ago.
+  - `sweepStrandedTransfers` runs at boot and every 5 min and skips any
+    transfer being executed or compensated. It re-fails DEBITED/SWAPPED/BRIDGED
+    transfers that are stale (more than 10 min), or sends them to MANUAL_REVIEW
+    when an outbound intent is unsettled, and sends to MANUAL_REVIEW a CREATED
+    transfer whose authorisation was claimed more than 10 min ago.
   - `sweepAnchorPayouts` runs every 30 s.
 
 ### 6.4 Invariants encoded here
@@ -530,7 +591,8 @@ flowchart LR
   DET -->|autoConvert on| WAIT[DETECTED: awaiting passkey]
   WAIT -->|convert/prepare → passkey → convert| SWAP[Safe batch: approve + venue call<br/>Safe → Safe, fee 0]
   SWAP -->|measured EURe delta ≥ minOut| CONV3[CONVERTED + realisedGainEur]
-  SWAP -->|shortfall / bundler error| REF[REFUSED]
+  SWAP -->|shortfall / bundler error / reverted| REF[REFUSED]
+  SWAP -->|sent, inclusion unconfirmed| UNC[UNCONFIRMED<br/>not offered again]
 ```
 
 - The watched set is every user's Safe, plus each payment-page deposit
@@ -1073,6 +1135,8 @@ only self-hosted fonts.
     secrets.
   - WebAuthn: no explicit https `WEBAUTHN_ORIGINS`.
   - Proxy: no `TRUSTED_PROXY_HOPS`.
+  - Links: no https `TRANSF_PUBLIC_URL` (absolute links are never built from
+    the Host header in production).
 
 | environment | chain | Monerium | db | notes |
 |---|---|---|---|---|
@@ -1180,7 +1244,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 |---|---|
 | `POST /users` (A) | Signup: segment decided, pending account, session. |
 | `GET/DELETE /session` (S) | Read or revoke the session. |
-| `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one. |
+| `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one; `step_up` also needs `action` (400 without a known one). |
 | `POST /users/:id/passkey` (U) | Register a passkey. Needs a step-up if one already exists, and then revokes the user's other sessions. |
 | `POST /users/:id/passkey-safe/deployment[/:requestId]` (U) | Prepare, then submit, the Safe deploy. |
 | `POST /users/:id/safe/import/prepare` (U) | Check a Safe for import; owner changes and Transaction Builder files. Stores nothing. |
@@ -1226,14 +1290,14 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 
 | | |
 |---|---|
-| `POST /users/:id/monerium/connect/start` (U, segment) | Start OAuth. Needs a step-up when the account already has a Monerium connection or an IBAN. |
+| `POST /users/:id/monerium/connect/start` (U, segment) | Start OAuth. Needs a step-up when the account carries a Monerium identity (`carriesMoneriumIdentity`: a connection, an IBAN, approval, or any recorded profile), so only a brand-new account's first connection is session-only. |
 | `GET /monerium/oauth/callback` (state + cookie) | OAuth return. |
 | `GET /users/:id/monerium/accounts` (U) | Refresh and read the snapshot. |
 | `POST /users/:id/monerium/link-signature/start` (U) | Challenge for activation, or for a move with `{purpose: "move-iban", iban}` (bound to that IBAN, single use). |
-| `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. 409 `IBAN_EXISTS_ELSEWHERE` when Monerium answers 304 and the profile's IBANs pay other addresses: `choices: [{iban, address, chain, profileId}]` lists every IBAN on the profile the Safe is linked under, and `existing` is set only when there is exactly one; the user picks, nothing is preselected. 409 `IBAN_EXISTS_UNRESOLVED` when no profile or no IBAN on it can be read. |
+| `POST /users/:id/monerium/activate` (U) | Link address and request IBAN. Only with the passkey assertion over a pending link-signature request; a finished signature in the body is refused. The challenge is the Safe hash of Monerium's constant ownership message, so only the sign counter tells a replayed assertion from a fresh one. 409 `IBAN_EXISTS_ELSEWHERE` when Monerium answers 304 and the profile's IBANs pay other addresses: `choices: [{iban, address, chain, profileId}]` lists every IBAN on the profile the Safe is linked under, and `existing` is set only when there is exactly one; the user picks, nothing is preselected. 409 `IBAN_EXISTS_UNRESOLVED` when no profile or no IBAN on it can be read. |
 | `POST /users/:id/monerium/move-iban` (U, passkey, typed `MOVE`) | Move the user's existing IBAN to the Safe: own connection only, IBAN must be on the profile the Safe is linked under; links the Safe, `PATCH /ibans/{iban}`, approves only if the re-read shows the IBAN on the Safe, else `iban_pending`. Records `moneriumIbanMoves`. 409 `IBAN_NOT_ON_PROFILE` / `ADDRESS_NOT_ON_PROFILE`. |
 | `DELETE /users/:id/monerium/connect` (U + step-up) | Forget the connection; revokes the user's other sessions. |
-| `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. Replacing a connection or an IBAN needs a step-up and revokes the user's other sessions. |
+| `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. On an account that carries a Monerium identity it needs a step-up and revokes the user's other sessions. |
 | `DELETE /users/:id/monerium/api-keys` (U + step-up) | Remove own keys; revokes the user's other sessions. |
 | `POST /webhooks/monerium` (HMAC) | Webhook. |
 
@@ -1267,7 +1331,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | | |
 |---|---|
 | `GET /users/:id/documents` (U) | Document list. |
-| `POST /users/:id/documents/{receipt, statement, balance, ownership[/:r]}` (U) | Create a document. |
+| `POST /users/:id/documents/{receipt, statement, balance, ownership[/:r]}` (U) | Create a document. Balance and ownership only for an approved account (409 `ACCOUNT_NOT_VERIFIED`). The holder name is Monerium's (`users/verified-name.ts`) or carries `nameSource: "self-declared"`, which the page and the ownership text state. |
 | `DELETE /users/:id/documents/:code` (U) | Revoke. |
 | `GET /v/:code` (A) | Public document with live verification. |
 | `GET /v/:code/beleg.pdf` (A) | A Beleg as PDF bytes. |
@@ -1378,5 +1442,5 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET /admin/users/:id` (operator token, A) | One account: projection, onboarding stage, transactions, recoveries, issues, audit. |
 | `GET /admin/users/:id/monerium[?live=1]` (operator token, A) | What Zold stored from Monerium; `live=1` also reads Monerium on the account's own connection (refused without one), stores nothing, audits the read. |
 | `GET /admin/monerium[?live=1]` (operator token, A) | Deployment-wide Monerium view; `live=1` checks the app credentials. |
-| `GET /admin/recoveries` (operator token, A) | Zoldenburg requests and guardian enrolments. |
+| `GET /admin/recoveries` (operator token, A) | Zoldenburg requests and guardian enrolments. Each request's account carries `moneriumProfileHistory`, every Monerium profile it recorded (append-only, store.updateUser). |
 | `POST /admin/orgs/:orgId/plan` (operator token, A) | Grant a plan. The only way onto a paid plan while there is no billing. |

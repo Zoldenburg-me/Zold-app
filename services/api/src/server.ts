@@ -62,6 +62,7 @@ import {
   } from "./chain.js";
 import { CANDIDE, SafeGasError, SafeThresholdError } from "./wallet/candide.js";
 import { routeAsyncRejections } from "./http/async-errors.js";
+import { describeCause, describeError } from "./http/log-cause.js";
 import { recordServerError } from "./http/error-log.js";
 import { knownError } from "./http/known-errors.js";
 const app = express();
@@ -281,7 +282,7 @@ warnIfSmartAccountChainDiffers();
 // sweeping in the background.
 sweepStrandedTransfers()
   .then((n) => n && console.log(`Compensation sweep: compensated ${n} stranded transfer(s)`))
-  .catch((e) => console.error(`Compensation sweep failed: ${e?.message ?? e}`));
+  .catch((e) => console.error(`Compensation sweep failed: ${describeCause(e)}`));
 setInterval(() => sweepStrandedTransfers().catch(() => {}), 5 * 60_000).unref();
 // Zoldenburg recoveries: pick up a signature made in Safe Cover, expire
 // unanswered requests, and finalize once the grace period has run.
@@ -289,7 +290,7 @@ if (zoldenburgRecoveryEnabled()) {
   const runZoldenburgSweep = () =>
     sweepZoldenburgRecoveries()
       .then((n) => n && console.log(`recovery sweep: finalized ${n} Zoldenburg recover${n === 1 ? "y" : "ies"}`))
-      .catch((e) => console.error(`recovery sweep failed: ${e?.message ?? e}`));
+      .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
   setTimeout(runZoldenburgSweep, 5_000).unref();
   setInterval(runZoldenburgSweep, RECOVERY.sweepMs).unref();
 }
@@ -299,7 +300,7 @@ if (candideRecoveryEnabled()) {
   const runRecoverySweep = () =>
     sweepCandideRecoveries()
       .then((n) => n && console.log(`recovery sweep: finalized ${n} recover${n === 1 ? "y" : "ies"}`))
-      .catch((e) => console.error(`recovery sweep failed: ${e?.message ?? e}`));
+      .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
   setTimeout(runRecoverySweep, 5_000).unref();
   setInterval(runRecoverySweep, RECOVERY.sweepMs).unref();
   console.log(`RECOVERY: email/SMS guardian via ${RECOVERY.serviceUrl} (chain ${CANDIDE.chainId}, module ${CANDIDE.recoveryModuleAddress})`);
@@ -310,17 +311,17 @@ setInterval(
   () =>
     sweepPaymentRequests()
       .then((r) => (r.expired || r.matched) && console.log(`pay-request sweep: ${r.expired} expired, ${r.matched} matched`))
-      .catch((e) => console.error(`pay-request sweep failed: ${e?.message ?? e}`)),
+      .catch((e) => console.error(`pay-request sweep failed: ${describeCause(e)}`)),
   PAYMENT_REQUESTS.sweepMs,
 ).unref();
 sweepAnchorPayouts()
   .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
-  .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`));
+  .catch((e) => console.error(`anchor sweep failed: ${describeCause(e)}`));
 setInterval(
   () =>
     sweepAnchorPayouts()
       .then((n) => n && console.log(`anchor sweep: refreshed ${n} payout(s)`))
-      .catch((e) => console.error(`anchor sweep failed: ${e?.message ?? e}`)),
+      .catch((e) => console.error(`anchor sweep failed: ${describeCause(e)}`)),
   30_000,
 ).unref();
 
@@ -339,7 +340,7 @@ setInterval(
   () =>
     pollWalletSyncOnce()
       .then((n) => n && console.log(`wallet sync: booked ${n} transfer(s)`))
-      .catch((e) => console.error(`wallet sync failed: ${e?.message ?? e}`)),
+      .catch((e) => console.error(`wallet sync failed: ${describeCause(e)}`)),
   WALLET_SYNC.pollMs,
 ).unref();
 
@@ -351,7 +352,7 @@ const runReconcile = () =>
     .then((r) => {
       if (!r.ok) console.warn(`LEDGER DRIFT\n${formatReport(r)}`);
     })
-    .catch((e) => console.error(`reconcile failed: ${e?.message ?? e}`));
+    .catch((e) => console.error(`reconcile failed: ${describeCause(e)}`));
 setTimeout(runReconcile, 10_000).unref();
 setInterval(runReconcile, 15 * 60_000).unref();
 if (sandbox) {
@@ -435,11 +436,11 @@ app.listen(API_PORT, API_HOST, () => {
  */
 process.on("unhandledRejection", (reason: any) => {
   console.error(
-    `FATAL unhandled promise rejection — the API is exiting: ${reason?.stack ?? reason?.message ?? reason}`,
+    `FATAL unhandled promise rejection — the API is exiting: ${describeError(reason)}`,
   );
   process.exit(1);
 });
 process.on("uncaughtException", (err) => {
-  console.error(`FATAL uncaught exception — the API is exiting: ${err?.stack ?? err?.message ?? err}`);
+  console.error(`FATAL uncaught exception — the API is exiting: ${describeError(err)}`);
   process.exit(1);
 });

@@ -527,6 +527,13 @@ try {
     assert.match(r.data.error, /passkey Safe signature required/);
   });
 
+  await t("activate refuses a finished signature in place of the passkey ceremony", async () => {
+    const r = await call(`/api/users/${userId}/monerium/activate`, { profileId: PROFILE_ID, signature: `0x${"ab".repeat(65)}` });
+    assert.equal(r.status, 409, JSON.stringify(r.data));
+    assert.match(r.data.error, /passkey Safe signature required/);
+    assert.equal(seen.linkedAddress, "", "nothing was linked at Monerium");
+  });
+
   await t("activate links the app Safe with a passkey Safe signature and requests a NEW app IBAN", async () => {
     const start = await call(`/api/users/${userId}/monerium/link-signature/start`, { profileId: PROFILE_ID });
     assert.equal(start.status, 201, `link-signature start failed: ${start.data.error ?? ""}`);
@@ -568,7 +575,7 @@ try {
   });
 
   await t("disconnect clears the connection and closes funding again", async () => {
-    const challenge = await call("/api/webauthn/challenge", { purpose: "step_up" });
+    const challenge = await call("/api/webauthn/challenge", { purpose: "step_up", action: "monerium.disconnect" });
     const stepUp = await passkey.assert(challenge.data.challenge, 3);
     const r = await call(`/api/users/${userId}/monerium/connect`, { stepUp }, "DELETE");
     assert.equal(r.status, 200, JSON.stringify(r.data));

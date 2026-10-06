@@ -14,6 +14,7 @@
 import { randomBytes } from "node:crypto";
 import type express from "express";
 import { ROUTE_PATTERN } from "./async-errors.js";
+import { describeCause, describeError } from "./log-cause.js";
 
 export interface ServerErrorEntry {
   ref: string;
@@ -56,12 +57,12 @@ export function recordServerError(err: unknown, req: express.Request, status = 5
     route: routePattern(req),
     status,
     name: typeof e?.name === "string" ? e.name : typeof err,
-    message: String(e?.shortMessage ?? e?.message ?? err).slice(0, 500),
+    message: describeCause(err),
     stack: typeof e?.stack === "string" ? e.stack.split("\n").slice(1, 9).map((l) => l.trim()) : [],
   };
   entries.unshift(entry);
   if (entries.length > MAX) entries.length = MAX;
-  console.error(`[${entry.ref}] ${entry.method} ${entry.route} -> ${status}: ${e?.stack ?? entry.message}`);
+  console.error(`[${entry.ref}] ${entry.method} ${entry.route} -> ${status}: ${describeError(err)}`);
   return entry;
 }
 
