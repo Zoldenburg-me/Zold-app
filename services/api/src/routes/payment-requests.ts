@@ -10,7 +10,7 @@ import { wrap } from "./util.js";
 import { usdToken } from "../usd-token.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
-import { CHAIN_ID, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
+import { CHAIN_ID, IS_PRODUCTION, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import {
   buildBankSettlement,
@@ -51,8 +51,20 @@ import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 type SessionCheck = (req: express.Request, res: express.Response, userId: string) => unknown;
 
 
+/**
+ * The origin absolute links are built on. In production only TRANSF_PUBLIC_URL
+ * says what it is (startup refuses to run without it): the Host header is
+ * written by the caller, and a link built from it can point a payer anywhere.
+ * Locally the Host header stands in, so a dev server needs no setting.
+ */
+export function baseUrlFrom(publicUrl: string, production: boolean, req: express.Request): string {
+  if (publicUrl) return publicUrl;
+  if (production) throw new Error("TRANSF_PUBLIC_URL is not set; absolute links are not built from the Host header in production");
+  return `${req.protocol}://${req.get("host")}`;
+}
+
 export function baseUrlFor(req: express.Request): string {
-  return PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+  return baseUrlFrom(PUBLIC_URL, IS_PRODUCTION, req);
 }
 
 function payToken() {

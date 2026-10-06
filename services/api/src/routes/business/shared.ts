@@ -324,6 +324,9 @@ export type TransferFactory = (
   | { ok: false; status: number; body: any }
 >;
 
+/** A supplier's account holder name: the SEPA creditor name field's length. */
+const PAY_TO_HOLDER_MAX = 70;
+
 /**
  * Where the supplier wants the money. A bank account is validated like an
  * address-book entry (IBAN checksum included) so that "Pay" later never
@@ -337,6 +340,10 @@ export function parsePayTo(raw: unknown, currency: string): Invoice["payTo"] {
     const b = p.bank ?? p;
     const iban = typeof b.iban === "string" ? normaliseIban(b.iban) : "";
     if (!iban) throw new InvoiceError("Bank details need an IBAN.");
+    const holder = b.holderName ?? b.holder;
+    if (typeof holder === "string" && holder.trim().length > PAY_TO_HOLDER_MAX) {
+      throw new InvoiceError(`The account holder's name is limited to ${PAY_TO_HOLDER_MAX} characters.`);
+    }
     return {
       kind: "bank",
       bank: validateBankAccount({

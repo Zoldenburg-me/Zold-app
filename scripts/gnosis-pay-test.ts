@@ -31,6 +31,8 @@ const GP_SAFE = "0x2222222222222222222222222222222222222222";
 let sawCookieOnChallenge: string | undefined;
 let nonceCalls = 0;
 let unauthorizedNext = false;
+/** The profile read answers 200 with a body the route cannot use. */
+let nullProfileNext = false;
 
 const stub: Server = createServer((req, res) => {
   const url = req.url ?? "";
@@ -60,6 +62,7 @@ const stub: Server = createServer((req, res) => {
   const auth = req.headers.authorization;
   if (auth !== `Bearer ${TOKEN}` || unauthorizedNext) return send(401, { message: "unauthorized" });
   if (url.startsWith("/api/v1/user")) {
+    if (nullProfileNext) return send(200, null);
     return send(200, {
       id: "gp-user-1", email: "u@example.com", kycStatus: "approved", status: "active",
       isPhoneValidated: true, isSourceOfFundsAnswered: true,
@@ -187,6 +190,39 @@ await check("permissionless provenance is attached, never implied away", async (
   const src = readFileSync("services/api/src/routes/gnosis-pay.ts", "utf8");
   assert.match(src, /no webhooks/i, "responses must state that figures are snapshots");
   assert.match(src, /Gnosis Pay issues and operates this card/i, "must not imply Zold issues the card");
+});
+
+await check("an internal failure answers 500 with a reference, never the raw error text", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-gnosis-pay-")), "db.json");
+  const express = (await import("express")).default;
+  const { initStore, store } = await import("../services/api/src/store.js");
+  const { createGnosisPayRouter } = await import("../services/api/src/routes/gnosis-pay.js");
+  initStore();
+  store.addUser({ id: "u_gp", name: "u", country: "DE", kycStatus: "approved", createdAt: new Date().toISOString() } as any);
+  const app = express();
+  app.use("/api/gnosis-pay", createGnosisPayRouter(() => ({ userId: "u_gp" }) as any));
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((r) => server.once("listening", () => r()));
+  const quiet = console.error;
+  console.error = () => {};
+  nullProfileNext = true;
+  try {
+    const res = await fetch(`http://127.0.0.1:${(server.address() as any).port}/api/gnosis-pay/account`, {
+      headers: { "x-gnosis-pay-token": TOKEN },
+    });
+    const body = (await res.json()) as any;
+    assert.equal(res.status, 500);
+    assert.equal(body.code, "INTERNAL");
+    assert.match(body.ref, /\S/);
+    assert.doesNotMatch(body.error, /null|Cannot read|TypeError|properties/i, body.error);
+  } finally {
+    nullProfileNext = false;
+    console.error = quiet;
+    server.close();
+  }
 });
 
 assert.ok(nonceCalls >= 3, "expected the nonce endpoint to be exercised");

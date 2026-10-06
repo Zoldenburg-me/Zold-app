@@ -19,6 +19,9 @@ async function renderDocumentsScreen() {
   try { docs = (await api(`/api/users/${user.id}/documents`)).documents || []; }
   catch (e) { el.innerHTML = `<div class="m-err" role="alert">${esc(e.message)}</div>`; return; }
   const months = monthOptions();
+  // The API issues these two letters only for a verified account
+  // (documents.ts holderLetterRefusal, 409 ACCOUNT_NOT_VERIFIED).
+  const letters = kycApproved(user);
   el.innerHTML = `
     <div class="m-seclabel">Create</div>
     <div class="m-field"><label>Statement month</label>
@@ -26,8 +29,9 @@ async function renderDocumentsScreen() {
         ${months.map((m) => `<option value="${m.value}">${esc(m.label)}</option>`).join("")}
       </select></div>
     <button class="m-cta" id="m-doc-statement" style="margin-top:12px">Create statement</button>
-    <button class="m-cta quiet" id="m-doc-balance" style="margin-top:8px">Balance confirmation (now)</button>
-    <button class="m-cta quiet" id="m-doc-ownership" style="margin-top:8px">Proof of ownership (sign with passkey)</button>
+    ${letters ? `<button class="m-cta quiet" id="m-doc-balance" style="margin-top:8px">Balance confirmation (now)</button>
+    <button class="m-cta quiet" id="m-doc-ownership" style="margin-top:8px">Proof of ownership (sign with passkey)</button>`
+    : `<div class="m-lede" style="font-size:13px;margin-top:12px">Balance confirmations and proofs of ownership are issued once Monerium has verified you and your IBAN is active.</div>`}
     <div class="m-err hidden" role="alert" id="m-doc-err" style="margin-top:12px"></div>
     <div class="m-seclabel" style="margin-top:24px">Issued</div>
     <div class="m-rows" id="m-doc-list">${docs.length ? docs.map((d) => `
@@ -38,7 +42,7 @@ async function renderDocumentsScreen() {
       </button>`).join("") : `<div class="m-lede" style="font-size:13px">Nothing issued yet.</div>`}</div>
     `;
   el.querySelectorAll("[data-doc-url]").forEach((b) => { b.onclick = () => window.open(b.dataset.docUrl, "_blank", "noopener"); });
-  const busy = (on) => ["m-doc-statement", "m-doc-balance", "m-doc-ownership"].forEach((id) => { $(id).disabled = on; });
+  const busy = (on) => ["m-doc-statement", "m-doc-balance", "m-doc-ownership"].forEach((id) => { if ($(id)) $(id).disabled = on; });
   const open = (d) => { window.open(d.url, "_blank", "noopener"); renderDocumentsScreen(); };
   $("m-doc-statement").onclick = async () => {
     clearErr("m-doc-err"); busy(true);
@@ -49,6 +53,7 @@ async function renderDocumentsScreen() {
       open(await api(`/api/users/${user.id}/documents/statement`, { from, to }));
     } catch (e) { showErr("m-doc-err", e); } finally { busy(false); }
   };
+  if (!letters) return;
   $("m-doc-balance").onclick = async () => {
     clearErr("m-doc-err"); busy(true);
     try { open(await api(`/api/users/${user.id}/documents/balance`, {})); }

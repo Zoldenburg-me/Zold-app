@@ -129,6 +129,23 @@ await check("an already-converted deposit cannot be converted twice", () => {
   assert.match(depositConversionBlocker(u, mkDeposit(u.id, { state: "CONVERTED" }))!, /already been settled/i);
 });
 
+await check("a conversion whose outcome is unconfirmed cannot be prepared again", () => {
+  const u = mkUser();
+  const d = mkDeposit(u.id, { state: "UNCONFIRMED", txs: [{ step: "safe.swap(usdc->eure).unconfirmed", hash: "0xop" }] });
+  assert.match(depositConversionBlocker(u, d)!, /may still land/i);
+});
+
+await check("the convert route parks an uncertain submit as UNCONFIRMED and refuses a reverted one", () => {
+  const src = readFileSync("services/api/src/routes/crypto-deposits.ts", "utf8");
+  const route = src.slice(src.indexOf('"/users/:id/crypto-deposits/:depositId/convert"'));
+  const body = route.slice(0, route.indexOf("settleConvertedDeposit("));
+  assert.match(body, /instanceof SafeOperationUncertainError[\s\S]*state: "UNCONFIRMED"/,
+    "an op the bundler may have taken must not read as refused and convertible again");
+  assert.match(body, /err\.userOpHash/, "the unconfirmed row carries the userOpHash to check");
+  assert.match(body, /submitted\.success !== true[\s\S]*state: "REFUSED"/,
+    "an included-but-reverted swap moved nothing and is refused before settlement");
+});
+
 await check("a ready deposit has NO blocker", () => {
   const u = mkUser();
   assert.equal(depositConversionBlocker(u, mkDeposit(u.id)), null);

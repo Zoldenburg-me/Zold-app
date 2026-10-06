@@ -22,6 +22,7 @@ import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "../adapters/monerium-co
 import { requireCapability, requireKycApproved } from "../http/guards.js";
 import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
 import { buildTransferFromQuote } from "../transfers/build.js";
+import { userTransfer } from "../transfers/user-transfer.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import { safeMessageHash, signMessageAsPasskeySafe } from "../wallet/candide.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
@@ -143,7 +144,7 @@ export function createTransferRouter(deps: TransferDeps) {
         reference,
       });
       if (!built.ok) return res.status(built.status).json(built.body);
-      res.status(201).json({ ...built.transfer, authorization: built.authorization });
+      res.status(201).json({ ...userTransfer(built.transfer), authorization: built.authorization });
     }),
   );
 
@@ -155,7 +156,8 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!requireUserSession(req, res, user.id)) return;
       const transfers = store.transfers
         .filter((t) => t.userId === user.id)
-        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+        .map(userTransfer);
       res.json({ transfers });
     }),
   );
@@ -168,7 +170,7 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!requireUserSession(req, res, user.id)) return;
       const transfers = store.transfers
         .filter((t) => t.userId === user.id)
-        .map((t) => ({ kind: "transfer" as const, at: t.createdAt, ...t }));
+        .map((t) => ({ kind: "transfer" as const, at: t.createdAt, ...userTransfer(t) }));
       const funding = store.cryptoDeposits
         .filter((d) => d.userId === user.id)
         .map((d) => ({
@@ -198,7 +200,7 @@ export function createTransferRouter(deps: TransferDeps) {
       const t = store.findTransfer(req.params.id);
       if (!t) return res.status(404).json({ error: "transfer not found" });
       if (!requireUserSession(req, res, t.userId)) return;
-      res.json(t);
+      res.json(userTransfer(t));
     }),
   );
 
@@ -208,7 +210,7 @@ export function createTransferRouter(deps: TransferDeps) {
       const t = store.findTransfer(req.params.id);
       if (!t) return res.status(404).json({ error: "transfer not found" });
       if (!requireUserSession(req, res, t.userId)) return;
-      res.json(await refreshPayout(t, { timeoutMs: 0 }));
+      res.json(userTransfer(await refreshPayout(t, { timeoutMs: 0 })));
     }),
   );
 
@@ -219,7 +221,7 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
       if (!requireKycApproved(user, res)) return;
-      if (!(await verifyPasskeyStepUp(user, req.body, res))) return;
+      if (!(await verifyPasskeyStepUp(user, req.body, res, "authorizer.bind"))) return;
       const address = req.body?.address;
       if (typeof address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
         return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
@@ -413,7 +415,7 @@ export function createTransferRouter(deps: TransferDeps) {
         executableTransfer.rail === "sepa"
           ? await executeSepaTransfer(executableTransfer, user, auth, execution)
           : await executeTransfer(executableTransfer, user, auth, execution);
-      res.status(result.state === "FAILED" ? 502 : 200).json(result);
+      res.status(result.state === "FAILED" ? 502 : 200).json(userTransfer(result));
     }),
   );
 

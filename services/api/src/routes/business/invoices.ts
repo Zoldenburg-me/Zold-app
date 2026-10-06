@@ -195,7 +195,9 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
           {
             contactId: contact.id,
             invoiceId: invoice.id,
-            destination: { kind: "bank", bankAccountId, displayName: bank.holderName },
+            // The holder the address book has for this account: on a matched
+            // contact the supplier's own spelling is only their claim.
+            destination: { kind: "bank", bankAccountId, displayName: contact.bankAccounts.find((b) => b.id === bankAccountId)?.holderName ?? bank.holderName },
             asset: invoice.currency,
             amount: invoice.total,
             note: `Invoice ${invoice.supplier?.invoiceNumber ?? ""} · ${supplierName}`.trim(),

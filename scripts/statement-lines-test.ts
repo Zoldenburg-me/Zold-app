@@ -105,6 +105,8 @@ await check("a CREATED or DEBITED transfer produces no line — money that has n
 await check("a REFUNDED transfer is a debit and a reversal, with the deduction visible between them", () => {
   const inp = base();
   inp.transfers = [{ id: "t-r", userId: "u_1", quoteId: "q", rail: "sepa", state: "REFUNDED", sendEur: 40, recipientName: "Someone", recipientIban: "DE02120300000000202051", txs: [{ step: "safe.debit", hash: H(3) }, { step: "safe.refundTransfer", hash: H(4) }], error: "venue refused", refund: { amountEur: 39.5, recoveredFrom: "Safe-funded EURe", deductions: "€0.50 gas", at: "2026-09-07T12:00:00.000Z" }, auth: { authorizedAt: "2026-09-07T11:00:00.000Z" }, createdAt: "2026-09-07T10:00:00.000Z", updatedAt: "2026-09-07T12:00:00.000Z" } as any];
+  // The whole send left the Safe: the step recovery reads as a full debit.
+  inp.transfers[0].txs[0].step = "safe.transfer(orchestrator)";
   const lines = projectStatementLines(inp);
   assert.equal(lines.length, 2);
   const debit = lines.find((l) => l.statement!.key === "transfer:t-r:debit")!.statement!;
@@ -116,6 +118,32 @@ await check("a REFUNDED transfer is a debit and a reversal, with the deduction v
   assert.equal(refund.amountCents, 3950);
   assert.deepEqual(refund.links.txHashes, [H(4)]);
   assert.equal(debit.amountCents + refund.amountCents, -50, "the deduction is the net of the two lines");
+});
+
+const refunded = (id: string, amountEur: number, txs: { step: string; hash: string }[]) =>
+  ({ id, userId: "u_1", quoteId: "q", rail: "sepa", state: "REFUNDED", sendEur: 10, receiveEur: 9.01, recipientName: "Someone", txs, error: "redeem refused", refund: { amountEur, recoveredFrom: "operator-resolved", deductions: amountEur ? "none" : "€0.99 not returned", at: "2026-09-08T12:00:00.000Z" }, createdAt: "2026-09-08T10:00:00.000Z", updatedAt: "2026-09-08T12:00:00.000Z" }) as any;
+
+await check("a REFUNDED transfer that returned nothing still books what left the Safe, with no reversal", () => {
+  const inp = base();
+  inp.transfers = [refunded("t-z", 0, [{ step: "safe.transfer(fee)", hash: H(8) }])];
+  const lines = projectStatementLines(inp);
+  assert.equal(lines.length, 1, JSON.stringify(lines.map((l) => l.statement!.key)));
+  const debit = lines[0].statement!;
+  assert.equal(debit.key, "transfer:t-z:debit");
+  assert.equal(debit.amountCents, -99, "the debit is what left the Safe: the fee, not the whole send");
+});
+
+await check("a REFUNDED transfer where nothing left the Safe books nothing", () => {
+  const inp = base();
+  inp.transfers = [refunded("t-n", 0, [])];
+  assert.equal(projectStatementLines(inp).length, 0);
+});
+
+await check("a fee-only refund nets to zero: the fee out and the fee back", () => {
+  const inp = base();
+  inp.transfers = [refunded("t-f", 0.99, [{ step: "safe.transfer(fee)", hash: H(8) }, { step: "safe.refundTransfer", hash: H(9) }])];
+  const lines = projectStatementLines(inp).map((l) => l.statement!);
+  assert.deepEqual(lines.map((l) => [l.key, l.amountCents]), [["transfer:t-f:debit", -99], ["transfer:t-f:refund", 99]]);
 });
 
 const usdcDeposit = (over: any = {}) => ({

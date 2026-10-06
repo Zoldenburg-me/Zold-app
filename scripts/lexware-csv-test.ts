@@ -75,6 +75,10 @@ check("a memo that starts like a formula is neutralised; semicolons and quotes a
   assert.equal(lexwareCell('say "hi"'), '"say ""hi"""');
   assert.equal(lexwareCell("line\nbreak"), "line break");
   assert.equal(lexwareCell("-50,00", { numeric: true }), "-50,00");
+  assert.equal(lexwareCell(" =1+1"), "'=1+1", "leading spaces are trimmed, then the formula is caught");
+  assert.equal(lexwareCell("\t=1+1"), "'=1+1");
+  assert.equal(lexwareCell("\u0001=1+1"), "'\u0001=1+1", "a control character the trim keeps does not hide a formula");
+  assert.equal(lexwareCell("\u00a0+1"), "'+1");
   const csv = lexwareCsv([lexwareRow(entry({ reference: "=HYPERLINK(\"x\")" }), "Z")]);
   assert.match(csv.split("\r\n")[1], /;"'=HYPERLINK\(""x""\)";/);
 });

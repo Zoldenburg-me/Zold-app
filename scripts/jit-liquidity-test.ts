@@ -42,7 +42,7 @@ process.env.TRANSF_RATES_FIXED ??= JSON.stringify({ USD: 1.1379, INR: 109.87, KE
 const { eure: EURE, usdc: USDC } = BASE_SEPOLIA_TOKENS;
 const SETTLEMENT = "0x3333333333333333333333333333333333333333";
 
-let mode: "ok" | "500" | "decline" | "wrongtoken" | "notx" | "hang" | "shortexpiry" = "ok";
+let mode: "ok" | "500" | "decline" | "wrongtoken" | "notx" | "hang" | "shortexpiry" | "zerofloor" = "ok";
 let lastQuery: URLSearchParams | null = null;
 let hits = 0;
 /** USDC (6dp) out per 1 EURe (18dp) in — the maker's price for this test. */
@@ -74,7 +74,7 @@ const stub: Server = createServer((req, res) => {
     buyTokens: {
       [buyKey]: {
         amount: out.toString(),
-        minimumAmount: ((out * 9970n) / 10000n).toString(),
+        minimumAmount: mode === "zerofloor" ? "0" : ((out * 9970n) / 10000n).toString(),
         decimals: 6,
         symbol: "USDC",
       },
@@ -133,6 +133,18 @@ try {
     const q = await p.quote("EURE_TO_USDC", 100n * 10n ** 18n, "q5", ours);
     assert.ok(Date.parse(q.expiresAt) < Date.parse(ours), "should adopt the maker's earlier expiry");
     mode = "ok";
+  });
+
+  await t("a maker whose minimumAmount is 0 is refused, not taken as the floor", async () => {
+    mode = "zerofloor";
+    try {
+      await assert.rejects(
+        () => p.quote("EURE_TO_USDC", 100n * 10n ** 18n, "q-floor", new Date(Date.now() + 600_000).toISOString()),
+        /slippage floor/,
+      );
+    } finally {
+      mode = "ok";
+    }
   });
 
   await t("a maker that is down REFUSES — no fallback to our own inventory", async () => {
