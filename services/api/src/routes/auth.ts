@@ -41,6 +41,7 @@ import { b64urlToBuf, issueChallenge, stepUpBinding, verifyAssertion, verifyRegi
 import { publicUser, withSession } from "../users/public-user.js";
 import { checkOpAssertion } from "../http/passkey-assertion.js";
 import { faucetFundSafe } from "../faucet.js";
+import { describeCause } from "../http/log-cause.js";
 
 /**
  * requireUserSession is injected so that server.ts stays the only place that
@@ -345,7 +346,7 @@ export function createAuthRouter(deps: AuthDeps) {
         });
       } catch (err) {
         if (!(err instanceof SafeOperationUncertainError)) throw err;
-        console.error(`safe deploy: operation ${err.userOpHash} unconfirmed:`, err.cause);
+        console.error(`safe deploy: operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
         // It may still land. The account stays on its old address until the
         // deployment is confirmed; preparing again finds a Safe that did land.
         return res.status(502).json({

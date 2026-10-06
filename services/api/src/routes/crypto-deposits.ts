@@ -37,6 +37,7 @@ import { publicClient } from "../chain.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { ownerInvoiceView, settlementRef } from "../domain/invoices.js";
 import { roleCan } from "../domain/roles.js";
+import { describeCause } from "../http/log-cause.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface CryptoDepositDeps {
@@ -305,7 +306,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         // would offer the same USDC for a second conversion, so the row waits
         // for someone to check the operation on chain.
         if (err instanceof SafeOperationUncertainError) {
-          console.error(`convert: Safe operation ${err.userOpHash} unconfirmed:`, err.cause);
+          console.error(`convert: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
           store.updateCryptoDeposit(deposit.id, {
             state: "UNCONFIRMED",
             reason: `${reason} — check the operation before converting again`,
