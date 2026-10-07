@@ -40,7 +40,7 @@
  */
 import { wrap } from "./util.js";
 import express from "express";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { MONERIUM, PAYMENT_REQUESTS, SHOPIFY } from "../config.js";
 import { store, type User } from "../store.js";
 import { decryptField, encryptField, EncryptionUnavailableError } from "../crypto-at-rest.js";
@@ -94,6 +94,39 @@ export function externalHttpUrl(raw: unknown): string | undefined {
   return u.protocol === "https:" ? u.toString() : undefined;
 }
 
+// ── Webhook deliveries ────────────────────────────────────────────────────
+//
+// Every store's webhooks are signed with the one app secret, and the shop
+// header that picks the connection is not covered by the signature. A signed
+// body is therefore bound to the first shop it arrived under, by Shopify's
+// delivery id: the same id under another shop is refused, and a redelivery of
+// one already handled is acknowledged without being processed again. Shopify
+// retries for 48 hours, so ids are kept 72; in memory, so after a restart the
+// order-level idempotency (shop + order id) is what holds.
+
+const DELIVERY_TTL_MS = 72 * 3_600_000;
+const DELIVERIES_MAX = 50_000;
+const deliveries = new Map<string, { shop: string; at: number; handled: boolean }>();
+
+function pruneDeliveries(now: number) {
+  for (const [id, d] of deliveries) {
+    if (deliveries.size <= DELIVERIES_MAX && now - d.at < DELIVERY_TTL_MS) break;
+    deliveries.delete(id);
+  }
+}
+
+/** Requests being opened right now, by shop and Shopify id: a concurrent
+ *  delivery of the same order or session waits for the first one's request
+ *  instead of opening a second. */
+const opening = new Map<string, Promise<PaymentRequest>>();
+function openOnce(key: string, open: () => Promise<PaymentRequest>): Promise<PaymentRequest> {
+  const running = opening.get(key);
+  if (running) return running;
+  const p = open().finally(() => opening.delete(key));
+  opening.set(key, p);
+  return p;
+}
+
 /** Pending installs: our nonce → who started it. In memory on purpose; an
  *  install that outlives a restart simply starts again. */
 const pendingInstalls = new Map<string, { orgId: string; shop: string; payeeUserId: string; installerId: string; expiresAt: number }>();
@@ -106,6 +139,48 @@ export function shopifyAvailable(): { available: boolean; reason?: string } {
 
 function tokenOf(c: ShopifyConnection): string {
   return decryptField("shopify", MONERIUM.tokenEncryptionKey, c.accessTokenEnc);
+}
+
+// ── Proof of the buyer, for the order routes ─────────────────────────────
+//
+// Order ids are per-store sequences, so (shop, order id) names an order to
+// anyone who can count. Each order route therefore also takes something only
+// the buyer holds:
+//  - the confirmation email's link carries `b`, the order id signed with a
+//    per-shop key that lives in the store's email template (Liquid
+//    `hmac_sha256`);
+//  - the thank-you page extension sends `t`, the checkout token Shopify gives
+//    it, which the orders webhook delivered to us as `checkout_token`.
+
+const sha256Hex = (s: string) => createHash("sha256").update(s).digest("hex");
+
+function sameHex(a: string, b: string): boolean {
+  return a.length === b.length && /^[0-9a-f]+$/.test(a) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+/** The shop's email-link key, created on first use. Throws when no
+ *  encryption key is configured (shopifyAvailable() says so first). */
+function orderLinkSecret(c: ShopifyConnection): string {
+  if (c.orderLinkSecretEnc) return decryptField("shopify-link", MONERIUM.tokenEncryptionKey, c.orderLinkSecretEnc);
+  const secret = randomBytes(32).toString("hex");
+  store.updateShopifyConnection(c.id, { orderLinkSecretEnc: encryptField("shopify-link", MONERIUM.tokenEncryptionKey, secret) });
+  return secret;
+}
+
+/** What Liquid's `{{ id | hmac_sha256: key }}` renders: lower-case hex. */
+const orderLinkProof = (secret: string, orderId: string) => createHmac("sha256", secret).update(orderId).digest("hex");
+
+/** One template per connected store: the store's domain is written in, so
+ *  the email needs only `{{ id }}` and the `hmac_sha256` filter from Liquid. */
+function payLinkTemplate(base: string, c: ShopifyConnection): string {
+  return `${base}/api/shopify/orders/${encodeURIComponent(c.shop)}/{{ id }}/pay?b={{ id | hmac_sha256: "${orderLinkSecret(c)}" }}`;
+}
+
+/** Does `b` sign this order id under the shop's key? A shop that never had
+ *  a key made has no valid link. */
+function emailLinkValid(c: ShopifyConnection | undefined, orderId: string, b: unknown): boolean {
+  if (!c?.orderLinkSecretEnc || typeof b !== "string") return false;
+  return sameHex(b.toLowerCase(), orderLinkProof(orderLinkSecret(c), orderId));
 }
 
 export function publicConnection(c: ShopifyConnection) {
@@ -189,6 +264,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const ctx = resolveOrg(req, res, requireSession);
       if (!ctx) return;
       if (!requirePermission(ctx, res, "org.read")) return;
+      // Carries payment codes and each store's email-link key.
+      res.setHeader("cache-control", "no-store");
       const connections = store.shopifyConnectionsForOrg(ctx.org.id);
       const shops = new Set(connections.map((c) => c.shop));
       const base = baseUrlFor(req);
@@ -230,12 +307,13 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           : {
               redirect: `${base}/api/shopify/callback`,
               webhook: `${base}/api/shopify/webhooks/orders`,
-              // Liquid for the order-confirmation email template: a link that
-              // reaches the order's pay page with no code to type.
-              payLinkTemplate: `${base}/api/shopify/orders/{{ shop.permanent_domain }}/{{ order.id }}/pay`,
-              orderLookup: `${base}/api/shopify/orders/<shop>/<order id>`,
             },
-        connections: connections.map(publicConnection),
+        // custom-app: each store's Liquid for its order-confirmation email,
+        // a link to the order's pay page signed with that store's key.
+        connections: connections.map((c) => ({
+          ...publicConnection(c),
+          ...(c.mode === "custom-app" ? { payLinkTemplate: payLinkTemplate(base, c) } : {}),
+        })),
         requests,
       });
     }),
@@ -394,6 +472,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // Shopify retries; the same session must get the same page.
       const existing = store.findPaymentRequestBySource("shopify", sessionId, c.shop);
       if (existing) return res.status(201).json({ redirect_url: pageUrl(existing) });
+      const inFlight = opening.get(`${c.shop}|${sessionId}`);
+      if (inFlight) return res.status(201).json({ redirect_url: pageUrl(await inFlight) });
       if (String(b.currency ?? "").toUpperCase() !== "EUR") {
         return res.status(422).json({ error: `Zold settles in EUR; this store presented ${b.currency}. Restrict the payment method to EUR in the store's payment settings.` });
       }
@@ -408,7 +488,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       }
       const payee = store.findUser(c.payeeUserId);
       if (!payee?.paymentPage?.handle) return res.status(409).json({ error: "the receiving account has no payment page" });
-      const r = await createPaymentRequest(
+      const r = await openOnce(`${c.shop}|${sessionId}`, () => createPaymentRequest(
         payee,
         {
           amountEur: Math.round(amount * 100) / 100,
@@ -426,7 +506,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           ...(externalHttpUrl(b.payment_method?.data?.cancel_url) ? { cancelUrl: externalHttpUrl(b.payment_method?.data?.cancel_url)! } : {}),
         },
         c.orgId,
-      );
+      ));
       store.updateShopifyConnection(c.id, { lastSessionAt: new Date().toISOString() });
       res.status(201).json({ redirect_url: pageUrl(r) });
     }),
@@ -469,6 +549,22 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
     wrap(async (req, res) => {
       const c = fromShopify(req, res);
       if (!c) return;
+      const deliveryId = String(req.header("x-shopify-webhook-id") ?? "").trim();
+      if (!deliveryId || deliveryId.length > 200) return res.status(400).json({ error: "X-Shopify-Webhook-Id is required" });
+      const now = Date.now();
+      pruneDeliveries(now);
+      const seen = deliveries.get(deliveryId);
+      if (seen && seen.shop !== c.shop) {
+        return res.status(401).json({ error: "this delivery was signed for another store" });
+      }
+      if (seen?.handled) return res.status(200).json({ ok: true, duplicate: true });
+      if (!seen) deliveries.set(deliveryId, { shop: c.shop, at: now, handled: false });
+      // Handled once it has been answered without a server error; a failed one
+      // is processed again on Shopify's retry.
+      res.once("finish", () => {
+        const d = deliveries.get(deliveryId);
+        if (d && res.statusCode < 500) d.handled = true;
+      });
       const topic = String(req.header("x-shopify-topic") ?? "");
       const o = req.body ?? {};
       const orderGid = String(o.admin_graphql_api_id ?? (o.id ? `gid://shopify/Order/${o.id}` : ""));
@@ -482,6 +578,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       }
       if (topic !== "orders/create") return res.status(200).json({ ok: true, ignored: topic });
       if (existing) return res.status(200).json({ ok: true, code: displayCode(existing.code) });
+      const inFlight = opening.get(`${c.shop}|${orderGid}`);
+      if (inFlight) return res.status(200).json({ ok: true, code: displayCode((await inFlight).code) });
       const gateways: string[] = Array.isArray(o.payment_gateway_names) ? o.payment_gateway_names.map((g: unknown) => String(g).toLowerCase()) : [];
       const ours = gateways.some((g) => g.includes(SHOPIFY.manualGateway));
       if (!ours) return res.status(200).json({ ok: true, ignored: "not a Zold order" });
@@ -498,7 +596,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         return res.status(200).json({ ok: true, ignored: "no payment page" });
       }
       const orderName = typeof o.name === "string" ? o.name : undefined;
-      const r = await createPaymentRequest(
+      const r = await openOnce(`${c.shop}|${orderGid}`, () => createPaymentRequest(
         payee,
         {
           amountEur: Math.round(amount * 100) / 100,
@@ -513,10 +611,11 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           shop: c.shop,
           orderGid,
           ...(orderName ? { orderName } : {}),
+          ...(typeof o.checkout_token === "string" && o.checkout_token ? { checkoutTokenHash: sha256Hex(o.checkout_token) } : {}),
           ...(externalHttpUrl(o.order_status_url) ? { orderStatusUrl: externalHttpUrl(o.order_status_url)!, returnUrl: externalHttpUrl(o.order_status_url)! } : {}),
         },
         c.orgId,
-      );
+      ));
       store.updateShopifyConnection(c.id, { lastSessionAt: new Date().toISOString() });
       res.status(200).json({ ok: true, code: displayCode(r.code) });
     }),
@@ -531,21 +630,26 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
     return undefined;
   };
 
-  const requestForOrder = (shopRaw: string, orderRaw: string): PaymentRequest | undefined => {
+  /** The order's request, its shop and its numeric id, or nothing. */
+  const orderRef = (shopRaw: string, orderRaw: string) => {
     const shop = normaliseShop(shopRaw);
     const gid = orderGidOf(orderRaw);
     if (!isValidShopDomain(shop) || !gid) return undefined;
     // The shop in the URL is part of the key: order ids are per-store
     // sequences, so the same number names a different order at every store.
-    return store.findPaymentRequestBySource("shopify", gid, shop);
+    return { shop, orderId: gid.split("/").pop()!, request: store.findPaymentRequestBySource("shopify", gid, shop) };
   };
 
   /**
-   * What the thank-you page extension polls. It runs in Shopify's checkout
-   * sandbox, so the answer is CORS-open; it is the same allowlisted public
-   * projection the pay page renders (no IBAN, no name, no email on a crypto-
-   * only request). A 404 carries `pending: true` while the webhook is still
-   * on its way, which is the normal case for the first seconds.
+   * What the thank-you page extension polls, with `?t=<checkout token>`. It
+   * runs in Shopify's checkout sandbox, so the answer is CORS-open; it is the
+   * allowlisted public projection the pay page renders (no IBAN, no name, no
+   * email on a crypto-only request, no transaction hash) plus the pay page's
+   * URL.
+   *
+   * Without the order's checkout token the answer is the same 404 `pending`
+   * whether the order exists or not, so counting order ids learns nothing.
+   * With it, a 404 `pending` is the normal first seconds before the webhook.
    */
   router.get(
     "/shopify/orders/:shop/:orderId",
@@ -553,31 +657,41 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       res.setHeader("access-control-allow-origin", "*");
       res.setHeader("cache-control", "no-store");
       res.setHeader("x-robots-tag", "noindex, nofollow");
-      const r = requestForOrder(String(req.params.shop), String(req.params.orderId));
+      const r = orderRef(String(req.params.shop), String(req.params.orderId))?.request;
       const user = r ? store.findUser(r.userId) : undefined;
-      if (!r || !user) return res.status(404).json({ error: "no payment request for this order yet", pending: true });
+      const t = typeof req.query.t === "string" ? req.query.t : "";
+      const proven = Boolean(r?.source.checkoutTokenHash && t && sameHex(sha256Hex(t), r.source.checkoutTokenHash));
+      if (!r || !user || !proven) return res.status(404).json({ error: "no payment request for this order yet", pending: true });
       const { request, quote } = await ensureQuote(r, r.amountEur);
-      const base = baseUrlFor(req);
-      // Order ids are sequential, so this answer goes to anyone who can count.
-      // It carries no payment code: not `code`, and not the return/cancel/page
-      // URLs built from it. The page link is the order's own /pay route.
-      const { code: _code, returnUrl: _ret, cancelUrl: _cancel, ...payer } =
+      const { code: _code, returnUrl: _ret, cancelUrl: _cancel, payments, ...payer } =
         publicPaymentRequest(request, user, await payerContext(req, request, user, quote));
       res.json({
         ...payer,
-        pageUrl: `${base}/api/shopify/orders/${encodeURIComponent(r.source.shop!)}/${r.source.orderGid!.split("/").pop()}/pay`,
+        // The extension shows the state, not the payer's transaction: a tx
+        // hash ties the buyer's wallet to this order for anyone polling it.
+        payments: payments.map(({ txHash: _tx, ...p }) => p),
+        pageUrl: `${baseUrlFor(req)}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`,
         ...(r.source.orderName ? { orderName: r.source.orderName } : {}),
       });
     }),
   );
 
-  /** A link the order-confirmation email can carry without knowing the code. */
+  /**
+   * The order-confirmation email's link, `?b=` signed by the store's
+   * template. Without a valid signature the page is the same whether the
+   * order exists or not, and names nothing about it.
+   */
   router.get(
     "/shopify/orders/:shop/:orderId/pay",
     wrap(async (req, res) => {
-      const r = requestForOrder(String(req.params.shop), String(req.params.orderId));
-      if (!r) return res.status(404).send("no payment request for this order yet — try again in a minute");
-      res.redirect(`${baseUrlFor(req)}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`);
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("x-robots-tag", "noindex, nofollow");
+      const ref = orderRef(String(req.params.shop), String(req.params.orderId));
+      if (!ref || !emailLinkValid(store.findShopifyConnectionByShop(ref.shop), ref.orderId, req.query.b)) {
+        return res.status(403).type("text/plain").send("This link does not open a payment. Use the link in your order confirmation email, or the payment block on the store's thank-you page.");
+      }
+      if (!ref.request) return res.status(404).type("text/plain").send("The payment for this order is not ready yet. Try again in a minute.");
+      res.redirect(`${baseUrlFor(req)}/pay/${encodeURIComponent(ref.request.handle)}/${displayCode(ref.request.code)}`);
     }),
   );
 

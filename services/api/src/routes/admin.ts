@@ -2,18 +2,30 @@
  * The operator dashboard's read side.
  *
  * Read only and masked: recipient phone numbers and IBANs are masked before
- * they leave, and there is no write route (KYC review and IBAN issue belong to
- * Monerium).
+ * they leave. The writes are an operator's decisions — a plan grant and the
+ * resolution of a transfer in MANUAL_REVIEW — and neither moves money. KYC
+ * review and IBAN issue belong to Monerium.
  *
  * Authentication is the operator bearer token, never a user session, so a user
  * cannot act as the operator on their own account. It fails closed when no
  * token is configured.
  */
+import { reviewHeldOnPlanChange } from "../domain/payment-review.js";
 import express from "express";
 import { wrap } from "./util.js";
 import { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient } from "../chain.js";
+import { safeMovedEur } from "../orchestrator.js";
 import { publicUser } from "../users/public-user.js";
-import { store, type CryptoDeposit, type Transfer } from "../store.js";
+import {
+  REVIEW_EVIDENCE_MAX,
+  REVIEW_NOTE_MAX,
+  REVIEW_NOTE_MIN,
+  REVIEW_RESOLUTION_STATES,
+  store,
+  type CryptoDeposit,
+  type ReviewResolutionState,
+  type Transfer,
+} from "../store.js";
 import { operatorLabel, requireOperator } from "../http/guards.js";
 import { recentServerErrors } from "../http/error-log.js";
 import { plansFor, trialIsActive } from "../domain/plans.js";
@@ -103,11 +115,14 @@ function adminTransfer(transfer: Transfer) {
     route,
     lastHash: lastHash(transfer.txs),
     refund: transfer.refund,
+    reviewResolution: transfer.reviewResolution,
     error: transfer.error,
     createdAt: transfer.createdAt,
     updatedAt: transfer.updatedAt,
   };
 }
+
+const NOT_IN_REVIEW = "only a transfer in MANUAL_REVIEW can be resolved, and only once";
 
 function adminFunding(deposit: CryptoDeposit) {
   return {
@@ -234,9 +249,78 @@ export function createAdminRouter() {
       }
       const updated = store.updateOrganisation(org.id, {
         plan: plan as PlanId,
+        ...reviewHeldOnPlanChange(org, plan as PlanId),
         ...(trialIsActive(org) ? { trial: { ...org.trial!, endedAt: new Date().toISOString() } } : {}),
       });
       res.json({ id: updated.id, plan: updated.plan, trial: updated.trial });
+    }),
+  );
+
+  /**
+   * Close a transfer in MANUAL_REVIEW with an operator's decision. Moves no
+   * money: the operator has already acted on chain or at the partner, and this
+   * records the outcome, who decided it and why (store.resolveTransferReview).
+   */
+  router.post(
+    "/admin/transfers/:id/resolve-review",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      const state = String(req.body?.state ?? "");
+      if (!(REVIEW_RESOLUTION_STATES as readonly string[]).includes(state)) {
+        return res.status(400).json({ error: `state must be one of ${REVIEW_RESOLUTION_STATES.join(", ")}` });
+      }
+      const note = typeof req.body?.note === "string" ? req.body.note.trim() : "";
+      if (note.length < REVIEW_NOTE_MIN || note.length > REVIEW_NOTE_MAX) {
+        return res.status(400).json({
+          error: `a note of ${REVIEW_NOTE_MIN}-${REVIEW_NOTE_MAX} characters is required: what was checked and what was done`,
+        });
+      }
+      const evidence = typeof req.body?.evidence === "string" ? req.body.evidence.trim() : "";
+      if (evidence.length > REVIEW_EVIDENCE_MAX) {
+        return res.status(400).json({ error: `evidence must be ${REVIEW_EVIDENCE_MAX} characters or fewer` });
+      }
+      const transfer = store.findTransfer(String(req.params.id));
+      if (!transfer) return res.status(404).json({ error: "transfer not found" });
+      if (transfer.state !== "MANUAL_REVIEW" || transfer.reviewResolution) {
+        return res.status(409).json({ error: NOT_IN_REVIEW });
+      }
+      let refund: { amountEur: number; movedEur: number } | undefined;
+      if (state === "REFUNDED") {
+        const movedEur = safeMovedEur(transfer);
+        const amountEur = req.body?.amountEur;
+        if (typeof amountEur !== "number" || !Number.isFinite(amountEur) || amountEur < 0 || amountEur > movedEur) {
+          return res.status(400).json({
+            error: `REFUNDED needs amountEur: the euros returned, from 0 up to the €${movedEur.toFixed(2)} that left the Safe`,
+          });
+        }
+        if (!evidence) {
+          return res.status(400).json({ error: "REFUNDED needs evidence: the refund tx hash or the partner's reference" });
+        }
+        refund = { amountEur: Math.round(amountEur * 100) / 100, movedEur };
+      }
+      const result = store.resolveTransferReview(String(req.params.id), {
+        state: state as ReviewResolutionState,
+        note,
+        by: operatorLabel(req),
+        ...(evidence ? { evidence } : {}),
+        ...(refund ? { refund } : {}),
+      });
+      if (!result.ok) {
+        if (result.code === "NOT_FOUND") return res.status(404).json({ error: "transfer not found" });
+        if (result.code === "NO_PAYOUT_EVIDENCE") {
+          return res.status(409).json({
+            error:
+              "PAID needs evidence the payout was carried out: the Monerium order id once Monerium reports it processed, the destination tx hash Bridge reported, or the anchor payment hash this transfer recorded. A placed order or a planned destination proves nothing",
+          });
+        }
+        if (result.code === "EVIDENCE_ON_RECORD") {
+          return res.status(409).json({
+            error: `that tx hash is already on record (${result.recordedOn}), so it cannot be this refund: cite the refund's own tx hash, or the partner's reference`,
+          });
+        }
+        return res.status(409).json({ error: NOT_IN_REVIEW });
+      }
+      res.json(adminTransfer(result.transfer));
     }),
   );
 

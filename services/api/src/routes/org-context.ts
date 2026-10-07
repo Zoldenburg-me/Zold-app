@@ -15,6 +15,7 @@ import type express from "express";
 import { store } from "../store.js";
 import { can, capabilityMatrix, effectivePlan, limitsFor, type CapabilityId } from "../domain/plans.js";
 import { roleCan, type Permission } from "../domain/roles.js";
+import { paymentReviewRequired } from "../domain/payment-review.js";
 import type { Member, Organisation } from "../domain/types.js";
 
 export interface OrgContext {
@@ -127,6 +128,7 @@ export function publicOrg(org: Organisation, member?: Member) {
     notificationEmail: org.notificationEmail,
     createdAt: org.createdAt,
     ...(member ? { role: member.role, memberId: member.id } : {}),
+    paymentReview: { ...org.paymentReview, required: paymentReviewRequired(org) },
     capabilities: capabilityMatrix(org),
     limits: limitsFor(org),
   };

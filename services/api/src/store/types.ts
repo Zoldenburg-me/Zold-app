@@ -306,6 +306,14 @@ export interface User {
    */
   moneriumRefusal?: { code: string; error: string; at: string };
   /**
+   * Every Monerium profile this account has recorded, oldest first, APPEND-ONLY
+   * (domain/monerium-identity.ts nextProfileHistory, written only by
+   * store.updateUser). The Zoldenburg recovery review shows it, so a relink
+   * cannot quietly replace the identity the operator checks against. `at` is
+   * absent only for a profile held before the history was kept.
+   */
+  moneriumProfileHistory?: { profileId: string; at?: string }[];
+  /**
    * IBANs the user moved to this Safe from another address at Monerium
    * (PATCH /ibans/{iban}), newest last, so support can see where an IBAN paid
    * before. `confirmedAt` is set only once Monerium's own list shows the IBAN
@@ -375,6 +383,26 @@ export interface Quote {
   lockedSwapRate?: string;
   expiresAt: string;
   createdAt: string;
+}
+
+/** The states an operator may close a MANUAL_REVIEW transfer into. */
+export const REVIEW_RESOLUTION_STATES = ["REFUNDED", "PAID", "FAILED"] as const;
+export type ReviewResolutionState = (typeof REVIEW_RESOLUTION_STATES)[number];
+/** The step an operator's refund tx is recorded under when a review is
+ *  resolved as REFUNDED. */
+export const OPERATOR_REFUND_STEP = "operator.refund";
+
+export interface ReviewResolution {
+  state: ReviewResolutionState;
+  note: string;
+  /** operatorLabel(): a hash of the operator token, never the token. */
+  by: string;
+  at: string;
+  /** The transfer's error when it was resolved: why it was in review. */
+  previousError?: string;
+  /** What the operator cited: for PAID, a payout the transfer recorded as
+   *  carried out (transfers/review-evidence.ts). */
+  evidence?: string;
 }
 
 export type TransferState =
@@ -459,7 +487,9 @@ export interface CryptoDeposit {
   /** The payment request (pay link) this deposit was matched to by amount.
    *  Set by payment-requests.ts; absent for money nobody asked for. */
   paymentRequestId?: string;
-  state: "DETECTED" | "CONVERTED" | "REFUSED";
+  /** UNCONFIRMED: a conversion was sent and its inclusion never confirmed.
+   *  It may still land, so it is not offered for conversion again. */
+  state: "DETECTED" | "CONVERTED" | "REFUSED" | "UNCONFIRMED";
   /** Why it was refused, in words a support person can act on. */
   reason?: string;
   creditedEur?: number;
@@ -712,6 +742,11 @@ export interface Transfer {
     deductions: string;
     at: string;
   };
+  /** An operator's decision that took the transfer out of MANUAL_REVIEW
+   *  (store.resolveTransferReview), after they acted on chain or at the
+   *  partner. Set once; no automatic path moves or compensates the transfer
+   *  after it. */
+  reviewResolution?: ReviewResolution;
   createdAt: string;
   updatedAt: string;
 }

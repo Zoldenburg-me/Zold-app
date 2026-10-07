@@ -46,26 +46,42 @@ const CCIP_MAX_BYTES = 64 * 1024;
 const CCIP_MAX_URLS = 2;
 const ENS_RPC_TIMEOUT_MS = 10_000;
 
+/**
+ * Ranges that are not the public internet (IANA special-purpose registries).
+ * A BlockList compares numerically, so every spelling of an address matches:
+ * "::ffff:7f00:1", "0:0:0:0:0:ffff:127.0.0.1" and "::ffff:127.0.0.1" are all
+ * checked as 127.0.0.1 against the IPv4 rules.
+ */
+const NON_PUBLIC = new net.BlockList();
+for (const [prefix, bits] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16],
+  ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24], ["192.88.99.0", 24], ["192.168.0.0", 16],
+  ["198.18.0.0", 15], ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
+] as const) NON_PUBLIC.addSubnet(prefix, bits, "ipv4");
+for (const [prefix, bits] of [
+  // Unspecified, loopback and the IPv4-compatible ::a.b.c.d.
+  ["::", 96],
+  // NAT64 (64:ff9b::/96, 64:ff9b:1::/48) and 6to4 (2002::/16) carry an IPv4
+  // address inside; on a host that translates them, 64:ff9b::a9fe:a9fe
+  // dials 169.254.169.254. No real gateway needs them. Teredo (2001::/32)
+  // sits in the IETF protocol block 2001::/23.
+  ["64:ff9b::", 96], ["64:ff9b:1::", 48], ["2002::", 16], ["2001::", 23],
+  // Discard-only, documentation, unique-local, link-local, the deprecated
+  // site-local, and multicast.
+  ["100::", 64], ["2001:db8::", 32], ["3fff::", 20], ["fc00::", 7], ["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
+] as const) NON_PUBLIC.addSubnet(prefix, bits, "ipv6");
+
 /** Is `ip` reachable on the public internet? Loopback, private, link-local,
- *  CGNAT, multicast and documentation ranges are not. */
+ *  CGNAT, multicast, documentation and IPv4-embedding ranges are not, and
+ *  neither is anything that does not parse as an address. */
 export function isPublicAddress(ip: string): boolean {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split(".").map(Number);
-    return !(
-      a === 0 || a === 10 || a === 127 || a >= 224 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && (b === 0 || b === 168)) ||
-      (a === 198 && (b === 18 || b === 19))
-    );
+  const family = net.isIPv4(ip) ? "ipv4" : net.isIPv6(ip) ? "ipv6" : undefined;
+  if (!family) return false;
+  try {
+    return !NON_PUBLIC.check(ip, family);
+  } catch {
+    return false;
   }
-  if (net.isIPv6(ip)) {
-    const x = ip.toLowerCase();
-    if (x.startsWith("::ffff:")) return isPublicAddress(x.slice(7));
-    return !(x === "::" || x === "::1" || /^(fc|fd|fe[89ab]|ff)/.test(x));
-  }
-  return false;
 }
 
 /** DNS lookup that refuses a host with any non-public address. It runs when

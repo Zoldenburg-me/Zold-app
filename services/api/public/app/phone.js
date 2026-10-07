@@ -334,7 +334,7 @@ const phOut = (t) => !["FAILED", "REFUNDED"].includes(t.state) && t.state !== "C
 function phActivityRow(t) {
   if (t.kind === "funding") {
     const usdc = t.token === "USDC";
-    const word = t.state === "REFUSED" ? "IN REVIEW" : "RECEIVED";
+    const word = t.state === "REFUSED" ? "IN REVIEW" : t.state === "UNCONFIRMED" ? "CHECKING" : "RECEIVED";
     return Z.row({
       lead: Z.iconTile({ icon: usdc ? "currency_exchange" : "euro" }),
       title: usdc ? `Digital dollars (${usdSym()})` : "Euros received",

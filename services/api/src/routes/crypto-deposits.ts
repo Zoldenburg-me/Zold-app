@@ -28,13 +28,16 @@ import { AUTH_WINDOW_SEC } from "../transfers/build.js";
 import { publicUser } from "../users/public-user.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
+  SafeOperationUncertainError,
   prepareTransferBatchExecution,
   submitPasskeySafeOperationWithReceipt,
   type SubmittedOperation,
 } from "../wallet/candide.js";
 import { publicClient } from "../chain.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
-import { ownerInvoiceView } from "../domain/invoices.js";
+import { ownerInvoiceView, settlementRef } from "../domain/invoices.js";
+import { roleCan } from "../domain/roles.js";
+import { describeCause } from "../http/log-cause.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface CryptoDepositDeps {
@@ -108,18 +111,34 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       );
       if (!deposit) return res.status(404).json({ error: "deposit not found" });
 
+      // A deposit pays one invoice once. After its payment is on an invoice,
+      // moving or dropping the link would leave that payment where it is and
+      // let the same money settle a second invoice.
+      const ref = `deposit:${deposit.id}`;
+      const settled = store.invoices.find((i) => (i.settlements ?? []).some((s) => settlementRef(s) === ref));
       const invoiceId = req.body?.invoiceId;
+      if (settled && invoiceId !== settled.id) {
+        return res.status(409).json({
+          error: "This payment is already recorded on an invoice. Reconcile that invoice instead of moving the payment.",
+        });
+      }
       if (invoiceId === null) {
         store.updateCryptoDeposit(deposit.id, { invoiceId: undefined });
         return res.json({ deposit: store.cryptoDeposits.find((d) => d.id === deposit.id) });
       }
       const invoice = store.invoices.find((i) => i.id === String(invoiceId ?? ""));
-      // An invoice belongs to an organisation; only an active member of that
-      // organisation may tie a payment to it. The id is not a capability.
+      // An invoice belongs to an organisation. Membership alone is not enough:
+      // marking the org's invoice paid is invoice management, which a viewer
+      // or a payer does not have. The id is not a capability either.
       const member = invoice
-        ? store.membersOf(invoice.orgId).some((m) => m.userId === user.id && m.status === "active")
-        : false;
+        ? store.membersOf(invoice.orgId).find((m) => m.userId === user.id && m.status === "active")
+        : undefined;
       if (!invoice || !member) return res.status(404).json({ error: "invoice not found" });
+      if (!roleCan(member.role, "invoices.manage")) {
+        return res.status(403).json({ error: "Your role cannot record payments on this organisation's invoices." });
+      }
+      // Money that arrived settles an invoice the org issued, never a bill it owes.
+      if (invoice.direction !== "outgoing") return res.status(409).json({ error: "Only an invoice your organisation issued can be paid by a deposit." });
       // A draft made from receipts is settled by its own ledger rows; a
       // deposit tied to it would be a second payment once it is issued.
       if (invoice.state === "DRAFT") return res.status(409).json({ error: "That invoice is a draft and has not been issued." });
@@ -283,7 +302,30 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         });
       } catch (err: any) {
         const reason = String(err?.shortMessage ?? err?.message ?? err);
+        // The bundler may have taken the swap and it may still land. REFUSED
+        // would offer the same USDC for a second conversion, so the row waits
+        // for someone to check the operation on chain.
+        if (err instanceof SafeOperationUncertainError) {
+          console.error(`convert: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
+          store.updateCryptoDeposit(deposit.id, {
+            state: "UNCONFIRMED",
+            reason: `${reason} — check the operation before converting again`,
+            txs: [...deposit.txs, { step: "safe.swap(usdc->eure).unconfirmed", hash: err.userOpHash }],
+          });
+          return res.status(502).json({ error: reason, code: "SAFE_OP_UNCONFIRMED", userOpHash: err.userOpHash });
+        }
         store.updateCryptoDeposit(deposit.id, { state: "REFUSED", reason });
+        return res.status(502).json({ error: reason });
+      }
+      // Included but reverted: the chain undid the swap, so nothing moved and
+      // nothing is settled.
+      if (submitted.success !== true) {
+        const reason = `the swap ${submitted.userOpHash ?? ""} was included but reverted — nothing was converted`;
+        store.updateCryptoDeposit(deposit.id, {
+          state: "REFUSED",
+          reason,
+          txs: [...deposit.txs, { step: "safe.swap(usdc->eure).reverted", hash: submitted.txHash ?? submitted.userOpHash ?? "0x" }],
+        });
         return res.status(502).json({ error: reason });
       }
 

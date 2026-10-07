@@ -76,6 +76,9 @@ export async function api(path, opts = {}) {
 
 /** Can the current org use this capability? Mirrors the server's verdict. */
 export const cap = (id) => org?.capabilities?.[id] ?? { allowed: false, label: id };
+/** Whether a payment needs a second person's approval before it is sent: the
+ *  org's own policy, which outlives a downgrade (domain/payment-review.ts). */
+export const reviewOn = () => Boolean(org?.paymentReview?.required);
 
 /**
  * Render an upgrade / unavailable prompt in place of the feature.
@@ -211,9 +214,11 @@ export function setPersonalLater() {
   try { localStorage.setItem(laterKey(), "1"); } catch { /* asked again next visit */ }
 }
 
-/** The personal space takes the account's name and country: nothing to fill in. */
-export async function createPersonalOrg() {
-  const r = await api("/api/orgs", { method: "POST", body: { type: "personal", name: me.name || "Personal", country: me.country } });
+/** The personal space is made from what the person typed in the form
+ *  (actions.js "create-personal"), never from one tap. It is named after the
+ *  person and follows their name; what they typed is the name on invoices. */
+export async function createPersonalOrg({ legalName, country, email }) {
+  const r = await api("/api/orgs", { method: "POST", body: { type: "personal", name: me.name || legalName, legalName, country, ...(email ? { email } : {}) } });
   try { localStorage.setItem("zold-org", r.organisation.id); } catch { /* opens the first org */ }
   location.reload();
 }

@@ -49,6 +49,9 @@ function checkRuntimeFlags(fail: Fail) {
   if (!KYC.operatorToken) fail("KYC_OPERATOR_TOKEN is required in production");
   if (process.env.KYC_AUTO_APPROVE === "1") fail("KYC_AUTO_APPROVE=1 is forbidden in production");
   if (process.env.LOCAL_HARNESS === "1") fail("LOCAL_HARNESS=1 is forbidden in production");
+  // The break-glass that lets an external RPC run on hardhat's public keys:
+  // anyone can sign as those roles.
+  if (process.env.ALLOW_DEV_KEYS_ON_EXTERNAL_RPC === "1") fail("ALLOW_DEV_KEYS_ON_EXTERNAL_RPC=1 is forbidden in production");
   for (const dead of ["ALLOW_SIMULATION", "ALLOW_MOCK_FALLBACK", "KYC_PROVIDER", "SUMSUB_APP_TOKEN"]) {
     if (process.env[dead]) fail(`${dead} no longer exists — the mock, simulation and Sumsub paths were removed; unset it`);
   }
@@ -147,6 +150,16 @@ function checkAnchor(fail: Fail) {
   if (!STELLAR.treasurySecret) fail("STELLAR_TREASURY_SECRET is required for production MoneyGram anchor mode");
 }
 
+/** Payment links, Shopify redirects and receipt links are absolute; in
+ *  production only this says their origin, never the Host header. */
+function checkPublicUrl(fail: Fail) {
+  if (!PUBLIC_URL) {
+    fail("TRANSF_PUBLIC_URL is required in production: absolute links are never built from the Host header");
+    return;
+  }
+  try { requireExplicitHttpsUrl("TRANSF_PUBLIC_URL", PUBLIC_URL); } catch (e: any) { fail(e.message); }
+}
+
 function checkHosted(fail: Fail) {
   if (!LOOKS_HOSTED) return;
   if (LOOKS_LOCAL) fail("hosted production must not look like the local hardhat stack");
@@ -172,7 +185,7 @@ function assertProductionConfig() {
   if (!IS_PRODUCTION) return;
   const problems: string[] = [];
   const fail: Fail = (message) => problems.push(message);
-  for (const check of [checkRuntimeFlags, checkMainnet, checkMoneriumSecrets, checkBridge, checkSmartAccount, checkAnchor, checkHosted]) {
+  for (const check of [checkRuntimeFlags, checkMainnet, checkMoneriumSecrets, checkBridge, checkSmartAccount, checkAnchor, checkHosted, checkPublicUrl]) {
     check(fail);
   }
   if (problems.length) {

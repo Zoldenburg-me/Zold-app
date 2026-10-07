@@ -18,6 +18,7 @@
  * question (see the docs); the column set is a data question, not a code
  * one, and lives here in one place.
  */
+import { formulaSafe } from "../domain/csv-safe.js";
 import type { LedgerEntry } from "../domain/types.js";
 
 export const LEXWARE_HEADER =
@@ -37,14 +38,14 @@ export const germanAmount = (cents: number) => {
 };
 
 /**
- * One cell. Same injection guard as the ledger CSV (a leading =, +, - or @ is
- * a formula to a spreadsheet), applied to text cells only — the amount column
- * legitimately starts with a minus and is numeric by contract. Semicolons,
+ * One cell. Same injection guard as the ledger CSV (domain/csv-safe.ts),
+ * applied to text cells only — the amount column legitimately starts with a
+ * minus and is numeric by contract. Semicolons,
  * quotes and line breaks are quoted the CSV way.
  */
 export function lexwareCell(v: unknown, opts: { numeric?: boolean } = {}): string {
   const s = v === undefined || v === null ? "" : String(v).replace(/[\r\n]+/g, " ").trim();
-  const safe = !opts.numeric && /^[=+\-@\t]/.test(s) ? `'${s}` : s;
+  const safe = opts.numeric ? s : formulaSafe(s);
   return /[";]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 

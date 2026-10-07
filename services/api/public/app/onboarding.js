@@ -281,12 +281,23 @@ function obShowErr(e, id = "ob-err") {
 }
 const obClearErr = (id = "ob-err") => $(id)?.classList.add("hidden");
 
+/* A phone's prompt is Face ID or a fingerprint. A computer's may be Touch ID,
+   Windows Hello, its password, a phone by QR code or a security key, so there
+   it is named for what it makes: a passkey. */
+const obOnPhone = () => !!window.matchMedia?.("(pointer: coarse)").matches;
+
 /* A cancelled Face ID prompt is the user's choice, not a fault: say so plainly. */
 function obMessage(e) {
   // A touch screen is a phone or tablet, where the prompt is Face ID or a
   // fingerprint; on a computer it may be Touch ID, Windows Hello, a phone by
   // QR code or a security key, so it is named for what it is: a passkey.
-  const phone = window.matchMedia?.("(pointer: coarse)").matches;
+  const phone = obOnPhone();
+  // Before the names: Chromium refuses a second open prompt as InvalidStateError.
+  if (/request is (already )?pending/i.test(String(e?.message || ""))) {
+    return phone
+      ? "A Face ID prompt is still open. Finish or close it, then try again."
+      : "A passkey prompt is still open, maybe in another window or tab. Finish or close it, then try again.";
+  }
   if (e?.name === "NotAllowedError") {
     return phone
       ? "Face ID or fingerprint was cancelled, or it timed out. Try again when you’re ready."
@@ -642,11 +653,13 @@ OB["p-passkey"] = {
   html: () => `${obProgress(6, 6, "Sign-in", user?.id ? null : "p-review")}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
-      ${obIntro("Set up Face ID or fingerprint", "It creates a sign-in key that never leaves this phone.")}
+      ${obOnPhone()
+        ? obIntro("Set up Face ID or fingerprint", "It creates a sign-in key that never leaves this phone.")
+        : obIntro("Create a passkey", "Approve it with Touch ID, your computer’s password, your phone or a security key. No face or fingerprint needed.")}
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>It’s the only key to your account. Zold never sees it.</span></li>
-        <li>${Z.icon("password")}<span>No password to remember or leak.</span></li>
-        <li>${Z.icon("restore")}<span>Set up recovery next, in case you lose this phone.</span></li>
+        <li>${Z.icon("password")}<span>No Zold password to remember or leak.</span></li>
+        <li>${Z.icon("restore")}<span>Set up recovery next, in case you lose this ${obOnPhone() ? "phone" : "device"}.</span></li>
       </ul>
       ${obSetupSteps()}
       ${obAlert()}
@@ -791,11 +804,13 @@ OB["b-passkey"] = {
   html: () => `${obProgress(7, 7, "Sign-in", user?.id ? null : "b-review")}
     <main id="main" class="z-screen__main">
       <span class="z-mark z-mark--icon" aria-hidden="true">${Z.icon("passkey")}</span>
-      ${obIntro("Set up the company’s first approver", `This phone becomes the first approver for ${esc(obCompany())}.`)}
+      ${obIntro("Set up the company’s first approver", obOnPhone()
+        ? `This phone becomes the first approver for ${esc(obCompany())}.`
+        : `Your passkey makes you the first approver for ${esc(obCompany())}. Approve it with Touch ID, your computer’s password, your phone or a security key.`)}
       <ul class="z-points">
         <li>${Z.icon("lock")}<span>Company payments you draft need a teammate’s approval. Zold can’t approve any.</span></li>
         <li>${Z.icon("group_add")}<span>Invite teammates and give each a role after the account opens.</span></li>
-        <li>${Z.icon("restore")}<span>Set up recovery next, in case you lose this phone.</span></li>
+        <li>${Z.icon("restore")}<span>Set up recovery next, in case you lose this ${obOnPhone() ? "phone" : "device"}.</span></li>
       </ul>
       ${obSetupSteps()}
       ${obAlert()}
@@ -1173,9 +1188,12 @@ function obSetupSteps() {
     const word = done ? "done" : st === "is-fail" ? "did not finish" : st === "is-now" ? "in progress" : "next";
     return `<li class="${st}">${Z.icon(ic)}<span>${label}<span class="z-sr">, ${word}</span></span></li>`;
   };
-  return `<ul class="z-steps" aria-live="polite">${row(0, "Face ID sign-in on this phone", keyDone)}${row(1, "Your account, approved with Face ID", !!user?.passkey && !needsPasskeySafeSetup(user) && !!user?.passkeySafe)}</ul>`;
+  const phone = obOnPhone();
+  return `<ul class="z-steps" aria-live="polite">${row(0, phone ? "Face ID sign-in on this phone" : "A passkey on this device", keyDone)}${row(1, phone ? "Your account, approved with Face ID" : "Your account, approved with your passkey", !!user?.passkey && !needsPasskeySafeSetup(user) && !!user?.passkeySafe)}</ul>`;
 }
-const obPasskeyLabel = () => (user?.passkey ? "Finish with Face ID" : "Set up Face ID");
+const obPasskeyLabel = () => obOnPhone()
+  ? (user?.passkey ? "Finish with Face ID" : "Set up Face ID")
+  : (user?.passkey ? "Finish with your passkey" : "Create passkey");
 
 function obSignupBody() {
   const company = obDraft.type === "company";
@@ -1235,12 +1253,8 @@ async function obCreateAccount(btn) {
 
     if (!user.passkey) {
       obSetup = { step: 0, state: "now" }; obRerenderSteps();
-      // Some environments leave the ceremony pending forever instead of
-      // rejecting: never strand the user on it.
-      await Promise.race([
-        registerPasskey(user),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("No answer from this phone. Is a screen lock set up?")), 30000)),
-      ]);
+      // The prompt has its own deadline; this bounds the requests around it.
+      await withinPasskeyStep(registerPasskey(user), 30000, "Zold could not be reached. Try again.");
     }
     // A company may bring in the Safe it already has: stop before deploying
     // one. The choice screen deploys only if they pick a new account.
@@ -1268,7 +1282,7 @@ function obRerenderSteps() {
    the account's next step. Throws; the caller says what failed. */
 async function obOpenOwnSafe(btn) {
   obSetup = { step: 1, state: "now" }; obRerenderSteps();
-  btn.querySelector("span:last-child").textContent = "Approve with Face ID again";
+  btn.querySelector("span:last-child").textContent = obOnPhone() ? "Approve with Face ID again" : "Approve with your passkey again";
   await finishPasskeySafeSetup();
   obSetup = null;
   // Only the hardhat harness auto-approves; a real account goes on to
@@ -1285,7 +1299,7 @@ function obSetupFailed(e) {
   if (obSetup) obSetup.state = "fail";
   obRerenderSteps();
   obShowErr(obSetup?.step === 1
-    ? new Error(`Your Face ID sign-in is saved, but setting up the account didn’t finish (${obMessage(e).replace(/\.$/, "")}). Try again; nothing needs setting up twice.`)
+    ? new Error(`Your ${obOnPhone() ? "Face ID sign-in" : "passkey"} is saved, but setting up the account didn’t finish (${obMessage(e).replace(/\.$/, "")}). Try again; nothing needs setting up twice.`)
     : e);
 }
 
@@ -1331,9 +1345,7 @@ async function obSignIn(btn) {
   Z.setLoading(btn, true);
   try {
     const { challenge } = await api("/api/webauthn/challenge", { purpose: "login" });
-    const cred = await navigator.credentials.get({
-      publicKey: { challenge: b64urlToBytes(challenge), userVerification: "preferred", timeout: 60000 },
-    });
+    const cred = await passkeyPrompt("get", { challenge: b64urlToBytes(challenge), userVerification: "required" });
     const u = await api("/api/passkey/login", {
       credentialId: cred.id,
       authenticatorData: b64url(cred.response.authenticatorData),
@@ -1690,7 +1702,7 @@ OB["monerium-keys"] = {
       const btn = root.querySelector("#btn-next");
       Z.setLoading(btn, true);
       try {
-        const updated = await api(`/api/users/${user.id}/monerium/api-keys`, { clientId: id.value.trim(), clientSecret: secret.value });
+        const updated = await api(`/api/users/${user.id}/monerium/api-keys`, { ...(await moneriumStepUp(user)), clientId: id.value.trim(), clientSecret: secret.value });
         secret.value = "";
         renderUser(updated);
         obAfterMonerium();
@@ -1867,7 +1879,7 @@ async function obReconnect(btn) {
   Z.setLoading(btn, true);
   try {
     const path = user.monerium?.method === "api_keys" ? "api-keys" : "connect";
-    renderUser(await api(`/api/users/${user.id}/monerium/${path}`, undefined, "DELETE"));
+    renderUser(await api(`/api/users/${user.id}/monerium/${path}`, await moneriumStepUp(user, true), "DELETE"));
     obGo("monerium", { replace: true });
   } catch (e) { obShowErr(e); } finally { Z.setLoading(btn, false); }
 }
@@ -2133,7 +2145,7 @@ async function refreshKycStatus({ continueWhenApproved = false } = {}) {
 async function startMoneriumConnect(errorId = "ob-err") {
   try {
     const redirectUri = `${location.origin}/api/monerium/oauth/callback`;
-    const connect = await api(`/api/users/${user.id}/monerium/connect/start`, { redirectUri });
+    const connect = await api(`/api/users/${user.id}/monerium/connect/start`, { ...(await moneriumStepUp(user)), redirectUri });
     const target = safeUrl(connect.redirectUrl);
     if (!target) throw new Error("Monerium returned an unusable sign-in address");
     location.href = target;
@@ -2176,13 +2188,10 @@ async function issueAppIban() {
   }
   const profileId = user.monerium?.profileId;
   const start = await api(`/api/users/${user.id}/monerium/link-signature/start`, { profileId });
-  const cred = await navigator.credentials.get({
-    publicKey: {
-      challenge: b64urlToBytes(start.challenge),
-      allowCredentials: [{ type: "public-key", id: b64urlToBytes(start.credentialId) }],
-      userVerification: "required",
-      timeout: 60000,
-    },
+  const cred = await passkeyPrompt("get", {
+    challenge: b64urlToBytes(start.challenge),
+    allowCredentials: [{ type: "public-key", id: b64urlToBytes(start.credentialId) }],
+    userVerification: "required",
   });
   let activated;
   try {
@@ -2281,13 +2290,10 @@ function offerIbanMove(choices, profileId) {
       dlg.querySelectorAll('input[name="m-mv-iban"]').forEach((r) => { r.disabled = true; });
       try {
         const start = await api(`/api/users/${user.id}/monerium/link-signature/start`, { profileId, purpose: "move-iban", iban });
-        const cred = await navigator.credentials.get({
-          publicKey: {
-            challenge: b64urlToBytes(start.challenge),
-            allowCredentials: [{ type: "public-key", id: b64urlToBytes(start.credentialId) }],
-            userVerification: "required",
-            timeout: 60000,
-          },
+        const cred = await passkeyPrompt("get", {
+          challenge: b64urlToBytes(start.challenge),
+          allowCredentials: [{ type: "public-key", id: b64urlToBytes(start.credentialId) }],
+          userVerification: "required",
         });
         status.textContent = "Asking Monerium to move the IBAN…";
         status.classList.remove("hidden");
@@ -2346,31 +2352,24 @@ async function finishDashboardSmartWallet() {
 /* ==========================================================================
    Passkey ceremonies
    ========================================================================== */
-const b64url = (buf) =>
-  btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
-
 async function registerPasskey(u) {
   const { challenge } = await api("/api/webauthn/challenge", { purpose: "register" });
   const label = pendingInfo?.email || u.email || pendingInfo?.name || u.name;
-  const cred = await navigator.credentials.create({
-    publicKey: {
-      challenge: b64urlToBytes(challenge),
-      rp: { name: "Zold", id: location.hostname },
-      user: {
-        id: new TextEncoder().encode(u.id),
-        name: label,
-        displayName: pendingInfo?.name || u.name,
-      },
-      // ES256 (P-256) only. This passkey becomes the Safe's owner, which
-      // verifies P-256 signatures; any other algorithm would fail at deployment.
-      pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-      authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
-      timeout: 60000,
-      // Ask for the PRF extension so this passkey can encrypt the
-      // device spending key. Authenticators without it still register fine.
-      extensions: { prf: {} },
+  const cred = await passkeyPrompt("create", {
+    challenge: b64urlToBytes(challenge),
+    rp: { name: "Zold", id: location.hostname },
+    user: {
+      id: new TextEncoder().encode(u.id),
+      name: label,
+      displayName: pendingInfo?.name || u.name,
     },
+    // ES256 (P-256) only. This passkey becomes the Safe's owner, which
+    // verifies P-256 signatures; any other algorithm would fail at deployment.
+    pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+    authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
+    // Ask for the PRF extension so this passkey can encrypt the
+    // device spending key. Authenticators without it still register fine.
+    extensions: { prf: {} },
   });
   const updated = await api(`/api/users/${u.id}/passkey`, {
     credentialId: cred.id,
@@ -2392,13 +2391,10 @@ async function activatePasskeySafe() {
     user = { ...user, ...prepared };
     return;
   }
-  const cred = await navigator.credentials.get({
-    publicKey: {
-      challenge: b64urlToBytes(prepared.challenge),
-      allowCredentials: [{ type: "public-key", id: b64urlToBytes(prepared.credentialId) }],
-      userVerification: "required",
-      timeout: 60000,
-    },
+  const cred = await passkeyPrompt("get", {
+    challenge: b64urlToBytes(prepared.challenge),
+    allowCredentials: [{ type: "public-key", id: b64urlToBytes(prepared.credentialId) }],
+    userVerification: "required",
   });
   const activated = await api(prepared.submitTo, {
     authenticatorData: b64url(cred.response.authenticatorData),
@@ -2408,45 +2404,17 @@ async function activatePasskeySafe() {
   user = { ...user, ...activated };
 }
 
-async function finishPasskeySafeSetup(timeoutMs = 45000) {
+async function finishPasskeySafeSetup(extraMs = 45000) {
   if (!user?.passkeySafe || user.passkeySafe.status === "active") return;
   // Deploying now would end the import started on this device for good.
   // "Use a new account instead" clears the flag first.
   if (safeImportFlag()) throw new Error("you started bringing in your company’s existing Safe. Finish that, or choose a new account instead");
-  await Promise.race([
-    activatePasskeySafe(),
-    new Promise((_, rej) =>
-      setTimeout(() => rej(new Error("setting up your account took too long")), timeoutMs),
-    ),
-  ]);
+  await withinPasskeyStep(activatePasskeySafe(), extraMs, "setting up your account took too long");
   if (needsPasskeySafeSetup(user)) {
     throw new Error("your account was not set up");
   }
 }
 
-/* The passkey credential this browser wraps the device key with. */
-const credId = () => user?.passkey?.credentialId || null;
-
-async function passkeyStepUp() {
-  if (!credId()) return null;
-  const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up" });
-  const cred = await navigator.credentials.get({
-    publicKey: {
-      challenge: b64urlToBytes(challenge),
-      allowCredentials: [{ type: "public-key", id: b64urlToBytes(credId()) }],
-      // A step-up gates binding a spending key: the server now requires the UV
-      // flag, so ask the authenticator to actually verify the human.
-      userVerification: "required",
-      timeout: 60000,
-    },
-  });
-  return {
-    credentialId: cred.id,
-    authenticatorData: b64url(cred.response.authenticatorData),
-    clientDataJSON: b64url(cred.response.clientDataJSON),
-    signature: b64url(cred.response.signature),
-  };
-}
 
 /* The send-time approval of this transfer's debit. The server prepared the
    Safe operation that moves exactly this transfer's amount out of your Safe;
@@ -2457,13 +2425,10 @@ async function safeExecutionAssertion(authorization) {
   const exec = authorization?.safeExecution;
   if (!exec) return undefined;
   if (!exec.challenge || !exec.credentialId) return undefined;
-  const cred = await navigator.credentials.get({
-    publicKey: {
-      challenge: b64urlToBytes(exec.challenge),
-      allowCredentials: [{ type: "public-key", id: b64urlToBytes(exec.credentialId) }],
-      userVerification: "required",
-      timeout: 60000,
-    },
+  const cred = await passkeyPrompt("get", {
+    challenge: b64urlToBytes(exec.challenge),
+    allowCredentials: [{ type: "public-key", id: b64urlToBytes(exec.credentialId) }],
+    userVerification: "required",
   });
   return {
     credentialId: exec.credentialId,
@@ -2477,13 +2442,10 @@ async function moneriumRedeemAssertion(authorization) {
   const redeem = authorization?.moneriumRedeem;
   if (!redeem) return undefined;
   if (!redeem.challenge || !redeem.credentialId) return undefined;
-  const cred = await navigator.credentials.get({
-    publicKey: {
-      challenge: b64urlToBytes(redeem.challenge),
-      allowCredentials: [{ type: "public-key", id: b64urlToBytes(redeem.credentialId) }],
-      userVerification: "required",
-      timeout: 60000,
-    },
+  const cred = await passkeyPrompt("get", {
+    challenge: b64urlToBytes(redeem.challenge),
+    allowCredentials: [{ type: "public-key", id: b64urlToBytes(redeem.credentialId) }],
+    userVerification: "required",
   });
   return {
     credentialId: redeem.credentialId,
@@ -2502,7 +2464,7 @@ async function registerDeviceKey(u) {
   const { address, protection } = dev.keyStatus().present
     ? { address: await dev.deviceAddress(credId()), protection: dev.keyStatus().protection }
     : await dev.createKey(credId());
-  const updated = await api(`/api/users/${u.id}/authorizer`, { address, stepUp: await passkeyStepUp() });
+  const updated = await api(`/api/users/${u.id}/authorizer`, { address, stepUp: await passkeyStepUp("authorizer.bind") });
   if (updated.authorizerAddress) user = { ...user, authorizerAddress: updated.authorizerAddress };
   if (protection !== "prf") {
     console.warn("device key stored unprotected — this authenticator has no PRF support");

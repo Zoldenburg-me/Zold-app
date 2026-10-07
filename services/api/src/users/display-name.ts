@@ -1,8 +1,9 @@
 /**
  * The person's name, as Zold shows it.
  *
- * Editable until Monerium has verified the person; from then on it is the
- * name their IBAN is held under, so it is locked. A company login has no
+ * Editable until Monerium has approved the account; from then on it is
+ * locked. Locked is not verified: whether Monerium reported this same name is
+ * users/verified-name.ts, and only then does the app say so. A company login has no
  * personal name to change: its account is named after the company
  * (app/core.js ownAccountName).
  */
@@ -61,7 +62,7 @@ export function nameChange(
     return { status: 409, code: "NAME_COMPANY", error: "A company account is named after the company. Change the company's name in Zold Business, under Settings." };
   }
   if (user.kycStatus === "approved") {
-    return { status: 409, code: "NAME_VERIFIED", error: "Your name is verified by Monerium and is the name your IBAN is held under, so it can't be changed here." };
+    return { status: 409, code: "NAME_VERIFIED", error: "Your name is locked once Monerium has approved your account, so it can't be changed here." };
   }
   const name = cleanName(raw);
   if (name === null) {

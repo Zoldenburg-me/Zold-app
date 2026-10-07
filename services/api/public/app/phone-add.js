@@ -75,10 +75,11 @@ PH["add/wallet"] = {
     const address = u.passkeySafe?.status === "active" ? u.address : "";
     const deps = phCache.deposits;
     const waiting = (deps || []).filter((d) => d.state === "DETECTED" && d.token === "USDC");
-    // Refused by the poller, or submitted without a confirmed result. The
-    // API does not say which, so these are shown with their reason and no
-    // Convert button: a second try could spend other USDC in the account.
+    // Refused, or sent with no confirmed result (UNCONFIRMED: the swap may
+    // still land). Neither gets a Convert button: a second try could spend
+    // other USDC in the account.
     const refused = (deps || []).filter((d) => d.state === "REFUSED" && d.token === "USDC");
+    const checking = (deps || []).filter((d) => d.state === "UNCONFIRMED" && d.token === "USDC");
     const asset = phCache.settlementAsset || page.settlementAsset;
     const autoConvert = phCache.autoConvert ?? page.autoConvert;
     const change = page.handle ? ` <a href="#settings/currency/wallet">Change</a>` : "";
@@ -108,6 +109,15 @@ PH["add/wallet"] = {
           // The reason is the server's wording (it says EURe); plain words here.
           sub: `Arrived ${phDay(d.detectedAt)}. Not converted: check your balance, or write to support@zoldhq.com.`,
           right: Z.tag("IN REVIEW"),
+        })),
+      }) : ""}
+      ${checking.length ? Z.listGroup({
+        label: "Being checked",
+        rows: checking.map((d) => Z.row({
+          lead: Z.iconTile({ icon: "hourglass_top" }),
+          title: Z.formatMoney(d.amountUsdc ?? 0, usdSym()),
+          sub: `Arrived ${phDay(d.detectedAt)}. The conversion was sent and its result isn’t confirmed yet. Nothing to do: we’re checking it.`,
+          right: Z.tag("CHECKING"),
         })),
       }) : ""}
     `)}`;
@@ -164,12 +174,13 @@ async function phLoadDeposits() {
      (creditedEur) and is the only euro figure called "arrived".
    - "Your dollars didn't move" is said only for a refusal the server gave
      before it submitted anything. A 502, a 503 (also what the service worker
-     answers offline), a lost connection or a REFUSED deposit after submitting
-     can each hide a swap that landed, so those say "not confirmed".
+     answers offline), a lost connection or an UNCONFIRMED deposit (sent, the
+     API answered SAFE_OP_UNCONFIRMED) can each hide a swap that landed, so
+     those say "not confirmed" and never offer the payment again.
    ========================================================================== */
 
 /* The open conversion: its price, and the outcome of the last approval. */
-const phConv = { id: null, prep: null, error: null, pricing: false, refusal: null, priced: null };
+const phConv = { id: null, prep: null, error: null, pricing: false, refusal: null, priced: null, outcome: null };
 
 const phUsdc = (n) => Z.formatMoney(n ?? 0, usdSym());
 const phDeposit = (id) => (phCache.deposits || []).find((d) => d.id === id) || null;
@@ -293,7 +304,8 @@ PH.convert = {
     if (!d || d.token !== "USDC" || d.state !== "DETECTED") {
       const text = !d ? "We can’t find this payment in your account."
         : d.state === "CONVERTED" ? (d.settlementAsset === "EURE" ? "This payment is already converted." : `This payment was kept as ${usdSym()}.`)
-          : "This payment isn’t waiting to convert.";
+          : d.state === "UNCONFIRMED" ? "A conversion of this payment was sent and its result isn’t confirmed yet. We’re checking it, so it can’t be converted again. Nothing to do for now."
+            : "This payment isn’t waiting to convert.";
       return `${top}${phMain(`${Z.note({ text })}${Z.button({ variant: "primary", full: true, label: "Back to your wallet", href: "#add/wallet" })}`)}`;
     }
     const from = `Arrived ${phDay(d.detectedAt)}, in digital dollars`;
@@ -392,13 +404,11 @@ async function phConvert(id, btn, errEl) {
   Z.setLoading(btn, true);
   let assertion;
   try {
-    assertion = await navigator.credentials.get({
-      publicKey: {
-        challenge: b64urlToBytes(p.challenge),
-        rpId: location.hostname,
-        allowCredentials: p.credentialId ? [{ type: "public-key", id: b64urlToBytes(p.credentialId) }] : [],
-        userVerification: "required",
-      },
+    assertion = await passkeyPrompt("get", {
+      challenge: b64urlToBytes(p.challenge),
+      rpId: location.hostname,
+      allowCredentials: p.credentialId ? [{ type: "public-key", id: b64urlToBytes(p.credentialId) }] : [],
+      userVerification: "required",
     });
     if (!assertion) throw new Error("No response from Face ID or fingerprint.");
   } catch (e) {
@@ -429,6 +439,10 @@ async function phConvert(id, btn, errEl) {
     phGo(d?.state === "CONVERTED" && d.settlementAsset === "EURE" ? "convert/done" : "convert/check", id, { replace: true });
   } catch (e) {
     phConv.prep = null;
+    // SAFE_OP_UNCONFIRMED: sent, may still land. SAFE_OP_REVERTED: included
+    // and undone by the chain. The check screen words each from this code
+    // until the reloaded deposit says more.
+    phConv.outcome = { id, code: e.code || null };
     // 400, 401, 403 and 409 are answered before the operation is submitted,
     // and the service worker never makes them up: nothing moved.
     if ([400, 401, 403, 409].includes(e.status)) {
@@ -509,10 +523,18 @@ PH["convert/check"] = {
   live: (id) => `${phCache.deposits === null}|${phDeposit(id)?.state}`,
   html(id) {
     const d = phDeposit(id);
+    const code = phConv.outcome?.id === id ? phConv.outcome.code : null;
+    const checking = d?.state === "UNCONFIRMED" || (!d && code === "SAFE_OP_UNCONFIRMED");
+    const reverted = !checking && code === "SAFE_OP_REVERTED";
+    const lede = checking
+      ? "Your approval was sent, and its result isn’t confirmed yet. We’re checking it, so this payment isn’t offered for conversion again. Nothing to do: your balance shows the outcome once it’s clear. If it stays unclear, write to support@zoldhq.com."
+      : reverted
+        ? "Your approval was sent, and the network undid the conversion, so nothing was converted. Check your balance, or write to support@zoldhq.com."
+        : "Your approval was sent, but no clear result came back, so we can’t say yet whether it converted. Check your balance in a few minutes. If it still isn’t clear, write to support@zoldhq.com.";
     return `${Z.topbar({ srTitle: "Conversion not confirmed", back: { href: "#home", label: "Back to Home" } })}${phMain(`
       <span class="z-tile z-tile--a z-tile--lg" aria-hidden="true">${Z.icon("hourglass_top")}</span>
-      <div class="z-intro"><h2 class="z-title">We couldn’t confirm this conversion</h2><p class="z-sub">Your approval was sent, but no clear result came back, so we can’t say yet whether it converted. Check your balance in a few minutes. If it still isn’t clear, write to support@zoldhq.com.</p></div>
-      ${d ? `<div class="z-card">${Z.row({ lead: Z.iconTile({ icon: "currency_exchange" }), title: phUsdc(d.amountUsdc), sub: `Arrived ${phDay(d.detectedAt)}`, right: Z.tag("IN REVIEW") })}</div>` : ""}
+      <div class="z-intro"><h2 class="z-title">${reverted ? "Nothing was converted" : checking ? "We’re checking this conversion" : "We couldn’t confirm this conversion"}</h2><p class="z-sub">${esc(lede)}</p></div>
+      ${d ? `<div class="z-card">${Z.row({ lead: Z.iconTile({ icon: "currency_exchange" }), title: phUsdc(d.amountUsdc), sub: `Arrived ${phDay(d.detectedAt)}`, right: Z.tag(checking ? "CHECKING" : "IN REVIEW") })}</div>` : ""}
       <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([{ key: "Payment ID", value: id, mono: true }])}</details>
     `)}${phFoot(Z.button({ variant: "primary", full: true, label: "Back to Home", href: "#home" }))}`;
   },

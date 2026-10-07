@@ -30,7 +30,9 @@ import {
 import { accountBalances } from "../chain.js";
 import { auditEntry } from "../audit.js";
 import { store, type User } from "../store.js";
-import { cookieValue } from "../http/sessions.js";
+import { cookieValue, revokeOtherSessions } from "../http/sessions.js";
+import { verifyPasskeyStepUp } from "./auth.js";
+import { carriesMoneriumIdentity } from "../domain/monerium-identity.js";
 import { custodyBlockerBeforeFunding, requireCapability } from "../http/guards.js";
 import { pendingMoneriumLinkSignatures, prunePendingMoneriumLinkSignatures } from "../http/pending.js";
 import { publicUser } from "../users/public-user.js";
@@ -68,7 +70,7 @@ const sha256Hex = (v: string) => createHash("sha256").update(v).digest("hex");
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface MoneriumDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => { id: string } | undefined;
 }
 
 /** The configured Monerium redirect URI, or the callback on a trusted origin. */
@@ -295,6 +297,20 @@ const maskIban = (iban: string) => `•••• ${normalizeIban(iban).slice(-4)
  * redeemed until keys are connected again, and the funding detail says so.
  */
 
+/**
+ * Replacing or dropping the Monerium identity this account carries needs the
+ * passkey. A session alone is a bearer token in localStorage; with it, anyone
+ * could swap in their own Monerium login or clear the account's IBAN. That
+ * holds with no connection and no IBAN left too: an account that was ever
+ * approved, or ever recorded a profile, still has an identity the recovery
+ * review relies on (carriesMoneriumIdentity). Only a brand-new account's first
+ * connection replaces nothing and needs no extra approval.
+ */
+async function approvesMoneriumChange(user: User, body: unknown, res: express.Response, always = false) {
+  if (!always && !carriesMoneriumIdentity(user)) return true;
+  return verifyPasskeyStepUp(user, body, res, always ? "monerium.disconnect" : "monerium.connect");
+}
+
 export function createMoneriumRouter(deps: MoneriumDeps) {
   const { requireUserSession } = deps;
   const router = express.Router();
@@ -312,6 +328,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (!MONERIUM.tokenEncryptionKey) {
         return res.status(503).json({ error: "Monerium token encryption key is not configured" });
       }
+      if (!(await approvesMoneriumChange(user, req.body, res))) return;
       const state = randomBytes(24).toString("base64url");
       const codeVerifier = randomBytes(48).toString("base64url");
       // The redirect target is ours or nothing: the configured URI, or the
@@ -591,48 +608,48 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       let profileId: string | undefined;
       let signature: `0x${string}`;
 
-      const rawSignature = req.body?.signature;
-      if (typeof rawSignature === "string" && /^0x[0-9a-fA-F]+$/.test(rawSignature)) {
-        signature = rawSignature as `0x${string}`;
-        const otherProfile = otherProfileRefused(user, req.body?.profileId);
-        if (otherProfile) return res.status(409).json(otherProfile);
-        profileId = connectedProfileId(user);
-      } else {
-        const requestId =
-          typeof req.body?.requestId === "string"
-            ? req.body.requestId
-            : typeof req.body?.linkSignatureRequestId === "string"
-            ? req.body.linkSignatureRequestId
-            : "";
-        const pending = requestId ? pendingMoneriumLinkSignatures.get(requestId) : undefined;
-        if (!pending || pending.userId !== user.id || pending.purpose === "move-iban") {
-          return res.status(409).json({
-            error: "fresh passkey Safe signature required for Monerium address linking",
-            start: `/api/users/${user.id}/monerium/link-signature/start`,
-          });
-        }
-        pendingMoneriumLinkSignatures.delete(requestId);
-        const { authenticatorData, clientDataJSON, signature: assertionSignature } = req.body ?? {};
-        if (!authenticatorData || !clientDataJSON || !assertionSignature) {
-          return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
-        }
-        profileId = connectedProfileId(user) ?? pending.profileId;
-        /**
-         * No whitelabel path: the app never creates Monerium profiles for a
-         * user. The address is linked under the profile the USER's own
-         * connection (OAuth or API keys) exposes, so without one there is
-         * nothing to link to and the route refuses above.
-         */
-        if (viaApp) {
-          return res.status(409).json({
-            error: "connect a Monerium account first — sign in with Monerium or add your Monerium API keys — before activating an IBAN",
-          });
-        }
-        try {
-          ({ user, signature } = await passkeySafeLinkSignature(safeUser, pending.challenge, req.body));
-        } catch (err: any) {
-          return res.status(401).json({ error: String(err?.message ?? err) });
-        }
+      // The only signature accepted is the one the passkey makes in this
+      // request, over the pending request link-signature/start issued for this
+      // account and for activation, spent on use. A finished Safe signature in
+      // the body proves no ceremony at all: Monerium's ownership message is a
+      // constant, so a signature seen once would link the Safe for any session.
+      // The limit that remains: the passkey challenge is that constant
+      // message's Safe hash, so only the authenticator's sign counter tells a
+      // replayed assertion from a fresh one.
+      const requestId =
+        typeof req.body?.requestId === "string"
+          ? req.body.requestId
+          : typeof req.body?.linkSignatureRequestId === "string"
+          ? req.body.linkSignatureRequestId
+          : "";
+      const pending = requestId ? pendingMoneriumLinkSignatures.get(requestId) : undefined;
+      if (!pending || pending.userId !== user.id || pending.purpose === "move-iban") {
+        return res.status(409).json({
+          error: "fresh passkey Safe signature required for Monerium address linking",
+          start: `/api/users/${user.id}/monerium/link-signature/start`,
+        });
+      }
+      pendingMoneriumLinkSignatures.delete(requestId);
+      const { authenticatorData, clientDataJSON, signature: assertionSignature } = req.body ?? {};
+      if (!authenticatorData || !clientDataJSON || !assertionSignature) {
+        return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
+      }
+      profileId = connectedProfileId(user) ?? pending.profileId;
+      /**
+       * No whitelabel path: the app never creates Monerium profiles for a
+       * user. The address is linked under the profile the USER's own
+       * connection (OAuth or API keys) exposes, so without one there is
+       * nothing to link to and the route refuses above.
+       */
+      if (viaApp) {
+        return res.status(409).json({
+          error: "connect a Monerium account first — sign in with Monerium or add your Monerium API keys — before activating an IBAN",
+        });
+      }
+      try {
+        ({ user, signature } = await passkeySafeLinkSignature(safeUser, pending.challenge, req.body));
+      } catch (err: any) {
+        return res.status(401).json({ error: String(err?.message ?? err) });
       }
       // The address is linked under the ONE profile this login was connected
       // with (pickProfileForSignup: corporate for a company signup). Without a
@@ -1018,13 +1035,16 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
     wrap(async (req, res) => {
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      const session = requireUserSession(req, res, user.id);
+      if (!session) return;
+      if (!(await approvesMoneriumChange(user, req.body, res, true))) return;
       forgetUserClient(user.id);
       const updated = store.updateUser(user.id, {
         moneriumConnect: undefined,
         monerium: undefined,
         funding: { ...(user.funding ?? { mode: "sandbox", status: "kyc_pending" as const }), status: "kyc_pending" as const },
       });
+      revokeOtherSessions(user.id, session.id);
       res.json(publicUser(updated));
     }),
   );
@@ -1034,7 +1054,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
     wrap(async (req, res) => {
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      const session = requireUserSession(req, res, user.id);
+      if (!session) return;
       if (!requireCapability(user, "monerium", res)) return;
       if (!moneriumApiKeysAvailable()) {
         return res.status(503).json({
@@ -1047,6 +1068,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       } catch (err: any) {
         return res.status(400).json({ error: err?.message ?? "invalid credentials" });
       }
+      const replacing = carriesMoneriumIdentity(user);
+      if (!(await approvesMoneriumChange(user, req.body, res))) return;
       let verified: Awaited<ReturnType<typeof verifyApiKeys>>;
       try {
         verified = await verifyApiKeys(input.clientId, input.clientSecret);
@@ -1140,6 +1163,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         { partner: "monerium", method: "api_keys", clientId: input.clientId, environment: moneriumEnvironment(), profileId, ibanAttributed: Boolean(ownIban) },
         user.id,
       ));
+      if (replacing) revokeOtherSessions(user.id, session.id);
       const balances = await accountBalances(updated.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
       res.status(201).json({ ...publicUser(updated), ...balances });
     }),
@@ -1150,10 +1174,12 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
     wrap(async (req, res) => {
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      const session = requireUserSession(req, res, user.id);
+      if (!session) return;
       if (user.monerium?.method !== "api_keys") {
         return res.status(409).json({ error: "no Monerium API keys are connected to this account" });
       }
+      if (!(await approvesMoneriumChange(user, req.body, res, true))) return;
       forgetUserClient(user.id);
       const updated = store.updateUser(user.id, {
         monerium: undefined,
@@ -1167,6 +1193,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           : user.funding,
       });
       store.audit(auditEntry("partner.credentials_removed", { partner: "monerium", method: "api_keys" }, user.id));
+      revokeOtherSessions(user.id, session.id);
       res.json(publicUser(updated));
     }),
   );
