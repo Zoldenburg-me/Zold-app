@@ -23,6 +23,7 @@ import { requireCapability, requireKycApproved } from "../http/guards.js";
 import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
 import { buildTransferFromQuote } from "../transfers/build.js";
 import { userTransfer } from "../transfers/user-transfer.js";
+import { buildActivity } from "../transfers/activity.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import { safeMessageHash, signMessageAsPasskeySafe } from "../wallet/candide.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
@@ -168,28 +169,13 @@ export function createTransferRouter(deps: TransferDeps) {
       const user = store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
-      const transfers = store.transfers
-        .filter((t) => t.userId === user.id)
-        .map((t) => ({ kind: "transfer" as const, at: t.createdAt, ...userTransfer(t) }));
-      const funding = store.cryptoDeposits
-        .filter((d) => d.userId === user.id)
-        .map((d) => ({
-          kind: "funding" as const,
-          id: d.id,
-          at: d.detectedAt,
-          chainId: d.chainId,
-          token: d.token,
-          txHash: d.txHash,
-          amountEur: d.amountEur ?? d.creditedEur,
-          amountUsdc: d.amountUsdc ?? d.creditedUsdc,
-          state: d.state,
-          reason: d.reason,
-          settlementAsset: d.settlementAsset,
-          detectedAt: d.detectedAt,
-          updatedAt: d.updatedAt,
-        }));
+      const mine = <T extends { userId: string }>(rows: T[]) => rows.filter((r) => r.userId === user.id);
       res.json({
-        activity: [...transfers, ...funding].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
+        activity: buildActivity({
+          transfers: mine(store.transfers),
+          deposits: mine(store.cryptoDeposits),
+          issues: mine(store.moneriumIssueOrders),
+        }),
       });
     }),
   );
