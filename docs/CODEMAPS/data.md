@@ -1,10 +1,10 @@
-<!-- Generated: 2026-10-04 | Files scanned: 3 (store/db.ts, store/types.ts, domain/types.ts) | Token estimate: ~650 -->
+<!-- Generated: 2026-10-07 | Files scanned: 3 (store/db.ts, store/types.ts, domain/types.ts) | Token estimate: ~650 -->
 # Data
 
 One JSON file (`TRANSF_DB_PATH`, default data/db.json), read/written whole by
 store/db.ts; every write persists synchronously (`batched` groups a loop).
 No SQL, no migrations tool: db.ts runs idempotent migrations at load
-(e.g. migrateUsersToOrganisations).
+(e.g. migrateUsersToOrganisations, stripSenderProfiles, session expiry backfill). 26 collections.
 `npm run dev` wipes data/db.dev.json on start.
 
 ## Collections
@@ -12,7 +12,7 @@ Personal side
 - users (passkey, passkeySafe, iban/ibanBic + ibanSince, monerium, paymentPage) · sessions
 - quotes → transfers (orchestrator states, custody, marginBps)
 - paymentRequests (source: app | shopify) · receiptShares · documents
-- cryptoDeposits (arrivedAt = block time) · conversionSweeps · moneriumIssueOrders
+- cryptoDeposits (arrivedAt = block time) · cryptoDepositCursor (per chain) · conversionSweeps · moneriumIssueOrders
 - processedMoneriumOrders / processedMoneriumWebhooks (idempotency)
 - recoveryRequests · shopifyConnections · audit
 

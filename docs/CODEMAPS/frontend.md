@@ -1,4 +1,4 @@
-<!-- Generated: 2026-10-04 | Files scanned: 41 | Token estimate: ~900 -->
+<!-- Generated: 2026-10-07 | Files scanned: 41 | Token estimate: ~900 -->
 # Frontend (services/api/public)
 
 Shared: tokens.css (`--z-*`), ui.css + ui.js (`window.Z` components), sw.js
@@ -17,6 +17,8 @@ core → dashboard → transactions → profile → recovery → monerium → on
   → errors → pwa → main
 ```
 Screens: onboarding into #ob-root; phone screens into #ph-root; desktop fills PH_DESK.
+
+sw.js: shell cache `zold-shell-v15` lists /app and /app/*.js only; /api network-only; .js/.css network-first; receipt/document/pay paths never cached; business and landing are not in the shell list.
 
 ## /business — Zold Business (business/*.js, ES modules; works at phone width)
 ```

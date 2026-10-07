@@ -1,4 +1,4 @@
-<!-- Generated: 2026-10-04 | Files scanned: package.json, adapters/, config/ | Token estimate: ~600 -->
+<!-- Generated: 2026-10-07 | Files scanned: package.json, adapters/, config/ | Token estimate: ~600 -->
 # Dependencies
 
 ## npm (runtime)
@@ -25,5 +25,6 @@ ZoldUSD (zUSD, test chains, `deploy:zusd`) · OffchainResolver (L1 ENS, `deploy:
 | SMTP | email codes (off unless EMAIL_VERIFICATION=1) | adapters/mailer.ts |
 | Rates source | independent mid for price sanity | rates.ts |
 
+Cash rail (Bridge.xyz, Stellar, MoneyGram) is still in the tree, gated: `cashRailOpen = BRIDGE.live && anchorModeEnabled() && !usdIsStaging()` (orchestrator.ts), env in config/cash-rail.ts.
 Config lives in config/* (env, keys, deployments by chain id, partners,
 liquidity, payments, wallet-sync, ens, security, production checks).

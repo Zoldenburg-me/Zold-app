@@ -1,4 +1,4 @@
-<!-- Generated: 2026-10-04 | Files scanned: 192 (151 .ts, 41 .js) | Token estimate: ~750 -->
+<!-- Generated: 2026-10-07 | Files scanned: 232 (176 .ts, 56 .js) | Token estimate: ~750 -->
 # Architecture
 
 Single Node/Express app (`services/api`) serving the API, the website and three
