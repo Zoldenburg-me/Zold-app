@@ -156,6 +156,56 @@ const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/
 /* The passkey credential this browser wraps the device key with. */
 const credId = () => user?.passkey?.credentialId || null;
 
+/* Every passkey prompt goes through here. A browser refuses a new prompt while
+   an earlier one is still open ("A request is already pending"), and some never
+   close one on their own, so a wait that merely gave up left the prompt open
+   and the retry failed. Here a new prompt closes the one before it, and the
+   deadline closes the prompt itself, not only our wait for it. The browser's
+   timeout is long enough for a Mac password, a security key or a phone by QR
+   code. */
+const PASSKEY_TIMEOUT_MS = 120000;
+const PASSKEY_DEADLINE_MS = PASSKEY_TIMEOUT_MS + 10000;
+let passkeyOpen = null;
+const passkeyCancel = () => { passkeyOpen?.abort(); passkeyOpen = null; };
+
+function passkeyNoAnswer() {
+  const phone = window.matchMedia?.("(pointer: coarse)").matches;
+  const e = new Error(phone
+    ? "No answer from Face ID or fingerprint. Is a screen lock set up on this phone?"
+    : "The passkey prompt got no answer, so it was closed. Try again when you’re ready.");
+  e.code = "PASSKEY_NO_ANSWER";
+  return e;
+}
+
+async function passkeyPrompt(kind, publicKey, deadlineMs = PASSKEY_DEADLINE_MS) {
+  passkeyCancel();
+  const ctl = new AbortController();
+  passkeyOpen = ctl;
+  const prompt = navigator.credentials[kind]({ publicKey: { ...publicKey, timeout: PASSKEY_TIMEOUT_MS }, signal: ctl.signal });
+  prompt.catch(() => {}); // the deadline may answer first
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => { reject(passkeyNoAnswer()); ctl.abort(); }, deadlineMs); // reject first: the abort rejects the prompt too
+  });
+  try {
+    return await Promise.race([prompt, deadline]);
+  } finally {
+    clearTimeout(timer);
+    if (passkeyOpen === ctl) passkeyOpen = null;
+  }
+}
+
+/* A step with a prompt in it (fetch the challenge, ask, submit) gets the
+   prompt's deadline plus extraMs for its requests, and running out closes the
+   open prompt too. */
+async function withinPasskeyStep(work, extraMs, message) {
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => { reject(new Error(message)); passkeyCancel(); }, PASSKEY_DEADLINE_MS + extraMs);
+  });
+  try { return await Promise.race([work, limit]); } finally { clearTimeout(timer); }
+}
+
 /* A fresh passkey approval for a change a session alone may not make: binding
    a spending key, or replacing the Monerium connection. The server requires
    the UV flag, so the authenticator has to verify the human, and issues the
@@ -164,13 +214,10 @@ const credId = () => user?.passkey?.credentialId || null;
 async function passkeyStepUp(action) {
   if (!credId()) return null;
   const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up", action });
-  const cred = await navigator.credentials.get({
-    publicKey: {
-      challenge: b64urlToBytes(challenge),
-      allowCredentials: [{ type: "public-key", id: b64urlToBytes(credId()) }],
-      userVerification: "required",
-      timeout: 60000,
-    },
+  const cred = await passkeyPrompt("get", {
+    challenge: b64urlToBytes(challenge),
+    allowCredentials: [{ type: "public-key", id: b64urlToBytes(credId()) }],
+    userVerification: "required",
   });
   return {
     credentialId: cred.id,
