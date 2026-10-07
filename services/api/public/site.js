@@ -13,7 +13,7 @@
  * content lives now.
  */
 (function () {
-  var MOVED = { "#notes": "/legal", "#cookies": "/privacy#cookies", "#rails": "#get-paid", "#account": "#get-paid", "#approval": "#security" };
+  var MOVED = { "#notes": "/legal", "#cookies": "/privacy#cookies", "#rails": "#get-paid", "#account": "#get-paid", "#approval": "#security", "#trust": "#security" };
   var onLanding = location.pathname === "/" || location.pathname === "/landing.html";
   if (onLanding && MOVED[location.hash]) {
     var to = MOVED[location.hash];
