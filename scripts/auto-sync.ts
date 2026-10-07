@@ -18,7 +18,7 @@ function autoSync() {
     console.log(`[Auto-Sync] On ${branch || "an unknown branch"}, not main. Skipping.`);
     return;
   }
-  const fetchRes = run("git fetch origin main");
+  run("git fetch origin main");
   const localHead = run("git rev-parse HEAD");
   const remoteHead = run("git rev-parse origin/main");
 
@@ -29,7 +29,7 @@ function autoSync() {
       return;
     }
     console.log(`[Auto-Sync] New commits detected on origin/main! Fast-forwarding local main...`);
-    const mergeOutput = run("git merge --ff-only origin/main");
+    run("git merge --ff-only origin/main");
     const commitLog = run("git log -n 1 --oneline");
     console.log(`[Auto-Sync] ✅ Successfully synced! Current HEAD: ${commitLog}`);
   }

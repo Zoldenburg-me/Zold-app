@@ -39,7 +39,7 @@ import { wrap } from "../util.js";
 import { auditEntry } from "../../audit.js";
 import {
   accountBankOf, customReasonsOf, draftDueDate, draftFrom, invoiceBankOf, issuerParty, issuerSuggestions,
-  jurisdictionOf, str, withConversion, } from "./shared.js";
+  jurisdictionOf, withConversion, } from "./shared.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */

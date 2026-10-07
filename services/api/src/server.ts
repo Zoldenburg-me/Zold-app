@@ -1,6 +1,6 @@
 import express from "express";
 import { API_HOST, API_PORT, BRIDGE, CHAIN_ID, CRYPTO_IN, CUSTODY, IS_REAL_MONEY_CHAIN, LIQUIDITY, PAYMENT_REQUESTS, RECOVERY, moneriumSandboxEnabled, SECURITY, WALLET_SYNC } from "./config.js";
-import { initStore, store } from "./store.js";
+import { initStore } from "./store.js";
 import {
   moneriumApiKeysAvailable,
   moneriumEnvironment,
