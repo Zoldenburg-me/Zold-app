@@ -165,34 +165,110 @@ const credId = () => user?.passkey?.credentialId || null;
    code. */
 const PASSKEY_TIMEOUT_MS = 120000;
 const PASSKEY_DEADLINE_MS = PASSKEY_TIMEOUT_MS + 10000;
-let passkeyOpen = null;
-const passkeyCancel = () => { passkeyOpen?.abort(); passkeyOpen = null; };
+/* The waiting overlay comes up only if the prompt is still open after this:
+   a quick Face ID never flashes it. */
+const PASSKEY_OVERLAY_AFTER_MS = 400;
+const PASSKEY_HINT_AFTER_MS = 8000;
+let passkeyOpen = null; // { ctl, stop }
+const passkeyCancel = () => { const o = passkeyOpen; passkeyOpen = null; o?.ctl.abort(); };
+/* Cancel on the waiting overlay: close the browser's prompt, and tell the
+   caller it was the person's choice. */
+const passkeyUserCancel = () => { passkeyOpen?.stop(passkeyError("PASSKEY_CANCELLED", "You cancelled the passkey prompt. Try again when you’re ready.")); };
 
-function passkeyNoAnswer() {
-  const phone = window.matchMedia?.("(pointer: coarse)").matches;
-  const e = new Error(phone
-    ? "No answer from Face ID or fingerprint. Is a screen lock set up on this phone?"
-    : "The passkey prompt got no answer, so it was closed. Try again when you’re ready.");
-  e.code = "PASSKEY_NO_ANSWER";
+const passkeyOnPhone = () => !!window.matchMedia?.("(pointer: coarse)").matches;
+function passkeyError(code, message) {
+  const e = new Error(message);
+  e.code = code;
   return e;
 }
+const passkeyNoAnswer = () => passkeyError("PASSKEY_NO_ANSWER", passkeyOnPhone()
+  ? "No answer from Face ID or fingerprint. Is a screen lock set up on this phone?"
+  : "The passkey prompt got no answer, so it was closed. Try again when you’re ready.");
 
-async function passkeyPrompt(kind, publicKey, deadlineMs = PASSKEY_DEADLINE_MS) {
+async function passkeyPrompt(kind, publicKey, deadlineMs = PASSKEY_DEADLINE_MS, overlayAfterMs = PASSKEY_OVERLAY_AFTER_MS) {
   passkeyCancel();
   const ctl = new AbortController();
-  passkeyOpen = ctl;
+  let stop;
+  // Rejected by the deadline or by Cancel; rejecting first, because the abort
+  // rejects the prompt too and the first to settle wins.
+  const ended = new Promise((_, reject) => { stop = (err) => { reject(err); ctl.abort(); }; });
+  const self = { ctl, stop };
+  passkeyOpen = self;
   const prompt = navigator.credentials[kind]({ publicKey: { ...publicKey, timeout: PASSKEY_TIMEOUT_MS }, signal: ctl.signal });
   prompt.catch(() => {}); // the deadline may answer first
-  let timer;
-  const deadline = new Promise((_, reject) => {
-    timer = setTimeout(() => { reject(passkeyNoAnswer()); ctl.abort(); }, deadlineMs); // reject first: the abort rejects the prompt too
-  });
+  const endsAt = Date.now() + deadlineMs;
+  const timer = setTimeout(() => stop(passkeyNoAnswer()), deadlineMs);
+  const shown = setTimeout(() => passkeyOverlayShow(self, endsAt), overlayAfterMs);
   try {
-    return await Promise.race([prompt, deadline]);
+    return await Promise.race([prompt, ended]);
   } finally {
     clearTimeout(timer);
-    if (passkeyOpen === ctl) passkeyOpen = null;
+    clearTimeout(shown);
+    passkeyOverlayHide(self);
+    if (passkeyOpen === self) passkeyOpen = null;
   }
+}
+
+/* What the page shows while the browser's prompt is open. The browser reports
+   nothing until the prompt answers, so this shows only what is known: that we
+   are waiting, what can approve it here, and when the prompt closes. Drawing it
+   may never stop the prompt, so any failure here is dropped. */
+let passkeyOverlay = null; // { scrim, owner, tick }
+function passkeyOverlayShow(owner, endsAt) {
+  try {
+    // A modal <dialog> sits in the top layer, above any overlay; it shows its own status.
+    if (passkeyOverlay || document.querySelector("dialog[open]")) return;
+    const phone = passkeyOnPhone();
+    const box = document.createElement("div");
+    box.innerHTML = Z.overlay({
+      id: "passkey-wait",
+      kind: "dialog",
+      title: phone ? "Waiting for Face ID" : "Waiting for your passkey",
+      body: `<div class="pk-wait">
+        <span class="z-live__spin pk-wait__spin" aria-hidden="true"></span>
+        <p class="pk-wait__lede">${phone
+          ? "Approve with Face ID or your fingerprint."
+          : "Your browser opened a passkey window. Approve it with Touch ID, your computer’s password, your phone or a security key."}</p>
+        <p class="pk-wait__hint" hidden>${phone
+          ? "Don’t see it? Cancel and try again."
+          : "Don’t see it? It may be behind this window or in another tab. Or cancel and try again."}</p>
+        <p class="pk-wait__left"></p>
+        ${Z.button({ variant: "secondary", full: true, label: "Cancel", className: "pk-wait__cancel" })}
+      </div>`,
+    });
+    const scrim = box.firstElementChild;
+    const left = scrim.querySelector(".pk-wait__left");
+    const hint = scrim.querySelector(".pk-wait__hint");
+    const hintAt = Date.now() + PASSKEY_HINT_AFTER_MS;
+    const draw = () => {
+      const s = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+      left.textContent = `Closes in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      if (Date.now() >= hintAt) hint.hidden = false;
+    };
+    draw();
+    // Close, Cancel, a click on the scrim and Escape all cancel the prompt.
+    scrim.addEventListener("click", (e) => {
+      if (e.target === scrim || e.target.closest(".z-overlay__close, .pk-wait__cancel")) passkeyUserCancel();
+    });
+    scrim.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation(); // ui.js would close the overlay beneath this one too
+      passkeyUserCancel();
+    });
+    passkeyOverlay = { scrim, owner, tick: setInterval(draw, 1000) };
+    document.body.appendChild(scrim);
+    Z.openOverlay(scrim);
+  } catch { /* the prompt matters; the overlay is a nicety */ }
+}
+function passkeyOverlayHide(owner) {
+  const o = passkeyOverlay;
+  if (!o || o.owner !== owner) return;
+  passkeyOverlay = null;
+  clearInterval(o.tick);
+  try {
+    Z.closeOverlay(o.scrim.id);
+    setTimeout(() => o.scrim.remove(), 250);
+  } catch { /* already gone */ }
 }
 
 /* A step with a prompt in it (fetch the challenge, ask, submit) gets the

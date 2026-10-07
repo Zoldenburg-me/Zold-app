@@ -114,6 +114,31 @@ const ask = (kind: string, deadline = "") => run(`passkeyPrompt("${kind}", { cha
   assert.equal(prompts[0].options.signal.aborted, false, "no late abort after an answer");
 }
 
+// Cancel on the waiting overlay closes the browser prompt and says so plainly,
+// not as the browser's AbortError.
+{
+  prompts.length = 0;
+  const p = ask("get").catch((x: any) => x);
+  await tick();
+  run("passkeyUserCancel()");
+  const e = await p;
+  assert.equal(prompts[0].options.signal.aborted, true, "Cancel closes the browser prompt");
+  assert.equal(e.code, "PASSKEY_CANCELLED");
+  assert.match(e.message, /cancelled/i);
+  assert.equal(run("passkeyUserCancel()"), undefined, "Cancel with nothing open does nothing");
+}
+
+// The overlay is a nicety: drawn at once against a stub DOM, the prompt still
+// opens and answers.
+{
+  prompts.length = 0;
+  const p = run(`passkeyPrompt("get", { challenge: new Uint8Array(1) }, PASSKEY_DEADLINE_MS, 0)`);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(prompts.length, 1);
+  prompts[0].resolve({ id: "drawn-or-not" });
+  assert.deepEqual(await p, { id: "drawn-or-not" });
+}
+
 // A step around a prompt that runs out of time closes the open prompt too.
 {
   prompts.length = 0;
