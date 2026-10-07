@@ -195,6 +195,16 @@ function phDeskGetPaid(u) {
 
 /* A payment as a table row. The name is the link; the row takes its click. */
 function phDeskTxRow(t) {
+  if (t.kind === "bank_in") {
+    const who = t.counterpartyName || "Bank transfer";
+    return `<tr>
+      <td class="z-dim">${esc(phWhen(t.at))}</td>
+      <td><span class="z-tbl__who">${Z.avatar({ name: who })}<span>${esc(who)}</span></span></td>
+      <td>${t.memo ? esc(t.memo) : '<span class="z-dim">Bank transfer</span>'}</td>
+      <td>${Z.tag("RECEIVED")}</td>
+      <td class="z-tbl__num">${Z.amount({ value: t.amountEur || 0, direction: "in" })}</td>
+    </tr>`;
+  }
   if (t.kind === "funding") {
     const usdc = t.token === "USDC";
     const word = t.state === "REFUSED" ? "IN REVIEW" : t.state === "UNCONFIRMED" ? "CHECKING" : "RECEIVED";
@@ -338,9 +348,13 @@ function phSearchResults(raw) {
     .slice(0, 4)
     .map((c) => ({ group: "Contacts", go: ["contacts", c.key], lead: Z.avatar({ name: c.name }), title: phMark(c.name, q), right: esc(phMaskIban(c.iban)), label: c.name }));
   const payments = hist
-    .filter((t) => (t.kind === "funding" ? hit("digital dollars usdc", "euros received") : hit(t.recipientName, t.reference)))
+    .filter((t) => (t.kind === "bank_in" ? hit(t.counterpartyName, t.memo, "bank transfer received") : t.kind === "funding" ? hit("digital dollars usdc", "euros received") : hit(t.recipientName, t.reference)))
     .slice(0, 5)
     .map((t) => {
+      if (t.kind === "bank_in") {
+        const name = [t.counterpartyName || "Bank transfer", t.memo].filter(Boolean).join(" · ");
+        return { group: "Payments", go: ["activity", null], lead: Z.iconTile({ icon: "south_west" }), title: phMark(name, q), right: `+${esc(phEur(t.amountEur))} · ${esc(phDay(t.at))}`, label: name };
+      }
       if (t.kind === "funding") {
         const usdc = t.token === "USDC";
         const name = usdc ? `Digital dollars (${usdSym()})` : "Euros received";

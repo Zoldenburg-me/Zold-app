@@ -471,6 +471,8 @@ $("btn-again").onclick = () => {
 
 /* ---------- history ---------- */
 const hist = [];
+/* Money in: a crypto deposit, or a bank transfer in (a Monerium issue order). */
+const histIsIn = (t) => t.kind === "funding" || t.kind === "bank_in";
 /* Set when the last activity load failed. An empty `hist` then means "we could
    not ask", not "nothing happened": an outage must not read as an empty
    account. Rows already loaded stay on screen; only the empty state changes. */
@@ -490,6 +492,18 @@ function bindHistRetry(el) {
   el.querySelectorAll("[data-hist-retry]").forEach((b) => { b.onclick = () => loadTransfers(); });
 }
 function histRow(t) {
+  if (t.kind === "bank_in") {
+    return `
+    <div class="hic">IN</div>
+    <div class="hmain">
+      <div class="hn">${esc(t.counterpartyName || "Bank transfer")}</div>
+      <div class="hs">${esc(t.memo || "Bank transfer")}</div>
+    </div>
+    <div>
+      <div class="hamt">+€${esc(fmt(t.amountEur || 0))}</div>
+      <div class="hst" style="color:var(--green)">RECEIVED</div>
+    </div>`;
+  }
   if (t.kind === "funding") {
     const token = t.token === "USDC" ? usdSym() : "EURe";
     const amount = t.token === "USDC" ? `${fmt(t.amountUsdc || 0)} ${usdSym()}` : `€${fmt(t.amountEur || 0)}`;
