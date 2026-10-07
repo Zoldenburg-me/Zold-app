@@ -21,7 +21,7 @@
  */
 import { createPublicClient, createWalletClient, http, parseAbi, formatUnits, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { IS_REAL_MONEY_CHAIN, LIQUIDITY } from "../services/api/src/config.js";
+import { IS_REAL_MONEY_CHAIN } from "../services/api/src/config.js";
 import { addrs, chain } from "../services/api/src/chain.js";
 import { eurPer } from "../services/api/src/rates.js";
 import { bestPool } from "../services/api/src/dex.js";

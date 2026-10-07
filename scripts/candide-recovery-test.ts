@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 

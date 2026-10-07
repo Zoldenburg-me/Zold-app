@@ -84,7 +84,7 @@ try {
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
   const { initStore, store } = await import("../services/api/src/store.js");
-  const { abis, addrs, eur, usd, orchestratorAddress, publicClient, writeAndWait, deployerWallet } =
+  const { abis, addrs, eur, usd, publicClient, writeAndWait, deployerWallet } =
     await import("../services/api/src/chain.js");
   const { convertDeposit, pollCryptoDepositsOnce, settleConvertedDeposit } = await import(
     "../services/api/src/adapters/crypto-deposits.js"

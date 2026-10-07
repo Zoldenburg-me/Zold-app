@@ -33,10 +33,3 @@ export function signTerms(device: Device, typedData: any): Promise<`0x${string}`
 export function registerDevice(api: ApiFn, userId: string, device: Device) {
   return api(`/api/users/${userId}/authorizer`, { address: device.address });
 }
-
-/** Create a transfer, sign its terms on the device, submit the signature. */
-export async function sendTransfer(api: ApiFn, device: Device, body: any) {
-  const created = await api("/api/transfers", body);
-  const signature = await signTerms(device, created.authorization.typedData);
-  return api(`/api/transfers/${created.id}/authorize`, { signature });
-}
