@@ -32,6 +32,7 @@ const scripts = [
   "monerium:profile:test",
   "monerium:ratelimit:test",
   "display-name:test",
+  "activity:test",
   "sepa:test",
   "receipt:test",
   "convert:test",
