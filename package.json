@@ -65,6 +65,7 @@
     "deposit-invoice-link:test": "tsx scripts/deposit-invoice-link-test.ts",
     "monerium:ratelimit:test": "tsx scripts/monerium-rate-limit-test.ts",
     "display-name:test": "tsx scripts/display-name-test.ts",
+    "activity:test": "tsx scripts/activity-test.ts",
     "travelrule:test": "STELLAR_HORIZON=https://horizon-testnet.stellar.org STELLAR_PASSPHRASE='Test SDF Network ; September 2015' STELLAR_FRIENDBOT=https://friendbot.stellar.org MG_ANCHOR_DOMAIN=testanchor.stellar.org tsx scripts/travel-rule-test.ts",
     "stellar:setup": "tsx scripts/stellar-setup.ts",
     "stellar:payout:live": "tsx scripts/stellar-payout-live.ts",

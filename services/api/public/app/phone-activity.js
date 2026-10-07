@@ -16,11 +16,11 @@ let phQuery = "";
 function phFiltered(filter, q) {
   const needle = q.trim().toLowerCase();
   return hist.filter((t) => {
-    if (filter === "in" && t.kind !== "funding") return false;
-    if (filter === "out" && t.kind === "funding") return false;
+    if (filter === "in" && !histIsIn(t)) return false;
+    if (filter === "out" && histIsIn(t)) return false;
     if (filter === "flight" && !phInFlight(t)) return false;
     if (!needle) return true;
-    const hay = [t.recipientName, t.reference, t.recipientIban, t.token === "USDC" ? "digital dollars usdc" : t.kind === "funding" ? "euros received" : ""]
+    const hay = [t.recipientName, t.reference, t.recipientIban, t.counterpartyName, t.memo, t.kind === "bank_in" ? "bank transfer received" : t.token === "USDC" ? "digital dollars usdc" : t.kind === "funding" ? "euros received" : ""]
       .filter(Boolean).join(" ").toLowerCase();
     return hay.includes(needle);
   });
@@ -85,7 +85,7 @@ PH.activity = {
 /* One payment: its body and its actions, drawn as a screen on the phone and
    as a drawer over Activity on a desktop (app/desktop.js). */
 function phTxParts(id) {
-  const t = hist.find((x) => x.id === id && x.kind !== "funding");
+  const t = hist.find((x) => x.id === id && !histIsIn(x));
   if (!t) {
     return { t: null, foot: "", body: histLoaded || histLoadFailed
       ? Z.note({ text: "This payment is not on your account." })
