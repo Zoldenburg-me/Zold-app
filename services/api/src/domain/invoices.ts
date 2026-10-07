@@ -384,6 +384,11 @@ export function assertDeletable(invoice: Invoice) {
   // A draft made from receipts carries their settlements from the start, and
   // nobody has been sent it: discarding it frees its rows for the next run.
   if (invoice.state === "DRAFT") return;
+  // An invoice you issued is numbered and sent: deleting it would leave a gap
+  // in the series, open or paid. It stays in the records.
+  if (invoice.direction === "outgoing") {
+    throw new InvoiceError("An invoice you issued stays in your records and cannot be deleted.");
+  }
   if (invoice.payment?.transferId || invoice.payment?.paidAt || invoice.settlements?.length) {
     throw new InvoiceError(
       "This invoice has a payment against it and cannot be deleted. Reconcile it instead.",
