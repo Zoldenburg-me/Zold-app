@@ -9,13 +9,10 @@
    recovery-side signature is one of these: the SIWE statement the Safe signs,
    the operation that adds the guardian, the cancel. */
 async function passkeySignPrepared(prepared) {
-  const cred = await navigator.credentials.get({
-    publicKey: {
-      challenge: b64urlToBytes(prepared.challenge),
-      allowCredentials: [{ type: "public-key", id: b64urlToBytes(prepared.credentialId) }],
-      userVerification: "required",
-      timeout: 60000,
-    },
+  const cred = await passkeyPrompt("get", {
+    challenge: b64urlToBytes(prepared.challenge),
+    allowCredentials: [{ type: "public-key", id: b64urlToBytes(prepared.credentialId) }],
+    userVerification: "required",
   });
   return {
     authenticatorData: b64url(cred.response.authenticatorData),
@@ -480,16 +477,13 @@ async function recoverStart(btn) {
     if (r.status === "PASSKEY_PENDING") {
       // The new owner: a passkey made on THIS device. P-256 only — it has to
       // be able to own a Safe.
-      const cred = await navigator.credentials.create({
-        publicKey: {
-          challenge: b64urlToBytes(r.registerChallenge),
-          rp: { name: "Zold", id: location.hostname },
-          user: { id: new TextEncoder().encode(r.userHandle), name: rcEmail, displayName: r.displayName || rcEmail },
-          pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-          authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
-          timeout: 60000,
-          extensions: { prf: {} },
-        },
+      const cred = await passkeyPrompt("create", {
+        challenge: b64urlToBytes(r.registerChallenge),
+        rp: { name: "Zold", id: location.hostname },
+        user: { id: new TextEncoder().encode(r.userHandle), name: rcEmail, displayName: r.displayName || rcEmail },
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+        authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
+        extensions: { prf: {} },
       });
       r = await rcApi(r.submitTo, {
         credentialId: cred.id,
