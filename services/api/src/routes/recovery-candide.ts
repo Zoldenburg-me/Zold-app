@@ -78,8 +78,6 @@ export interface CandideRecoveryDeps {
   publicUser: (user: User) => Record<string, unknown>;
 }
 
-type Assertion = { authenticatorData: string; clientDataJSON: string; signature: string };
-
 const CEREMONY_TTL_MS = 5 * 60_000;
 const OTP_MAX_ATTEMPTS = 5;
 

@@ -30,8 +30,6 @@ export function proofStateOf(wallet: ImportedWallet | undefined): ProofState {
   return wallet.ownership.status === "proven" ? "proven" : "lapsed";
 }
 
-export const isProven = (wallet: ImportedWallet | undefined): boolean => proofStateOf(wallet) === "proven";
-
 const oneLine = (s: string) => s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/g, " ").trim().slice(0, 200);
 
 /** The text to sign. Everything a replay would need to change is in it. */

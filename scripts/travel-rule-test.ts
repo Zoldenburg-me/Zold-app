@@ -21,7 +21,6 @@ import {
   missingRequiredFields,
   sep10Auth,
   sep12CustomerFields,
-  sep12PutCustomer,
 } from "../services/api/src/stellar/anchor.js";
 import {
   senderDetailsToSep9,

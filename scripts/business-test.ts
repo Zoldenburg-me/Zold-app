@@ -29,7 +29,6 @@ import {
 import { MONERIUM } from "../services/api/src/config.js";
 import {
   ContactError,
-  destinationFingerprint,
   ibanChecksumValid,
   validateBankAccount,
 } from "../services/api/src/domain/contacts.js";

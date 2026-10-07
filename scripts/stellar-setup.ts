@@ -12,7 +12,6 @@
  *   npm run stellar:setup          # report only
  *   npm run stellar:setup -- --fix # create a missing trustline
  */
-import { Asset } from "@stellar/stellar-sdk";
 import { STELLAR, anchorModeEnabled } from "../services/api/src/config.js";
 import {
   accountReserves,
