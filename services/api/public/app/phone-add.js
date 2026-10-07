@@ -404,13 +404,11 @@ async function phConvert(id, btn, errEl) {
   Z.setLoading(btn, true);
   let assertion;
   try {
-    assertion = await navigator.credentials.get({
-      publicKey: {
-        challenge: b64urlToBytes(p.challenge),
-        rpId: location.hostname,
-        allowCredentials: p.credentialId ? [{ type: "public-key", id: b64urlToBytes(p.credentialId) }] : [],
-        userVerification: "required",
-      },
+    assertion = await passkeyPrompt("get", {
+      challenge: b64urlToBytes(p.challenge),
+      rpId: location.hostname,
+      allowCredentials: p.credentialId ? [{ type: "public-key", id: b64urlToBytes(p.credentialId) }] : [],
+      userVerification: "required",
     });
     if (!assertion) throw new Error("No response from Face ID or fingerprint.");
   } catch (e) {

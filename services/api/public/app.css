@@ -981,3 +981,11 @@
 
   @keyframes mPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,45,139,.45); } 50% { box-shadow: 0 0 0 9px rgba(255,45,139,0); } }
   @keyframes mRise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+
+/* Waiting for a passkey prompt (passkeyOverlayShow in app/core.js). */
+.pk-wait { display: flex; flex-direction: column; align-items: center; gap: var(--z-space-3); text-align: center; }
+.pk-wait__spin { width: 28px; height: 28px; border-width: 3px; }
+.pk-wait__lede { margin: 0; line-height: 1.5; color: var(--z-text); }
+.pk-wait__hint { margin: 0; font-size: 14px; line-height: 1.5; color: var(--z-dim); }
+.pk-wait__left { margin: 0; font-size: 13px; color: var(--z-dim); font-variant-numeric: tabular-nums; }
+.pk-wait .z-btn { margin-top: var(--z-space-2); }
