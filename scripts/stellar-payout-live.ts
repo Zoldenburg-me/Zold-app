@@ -18,7 +18,7 @@
 // Testnet pinned. Not _test-env: that helper switches production posture off,
 // which a script that submits a real payment must not inherit.
 import "./_stellar-testnet.js";
-import { Asset, BASE_FEE, Horizon, Keypair, Memo, Networks, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Asset, BASE_FEE, Horizon, Keypair, Memo, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { STELLAR } from "../services/api/src/config.js";
 import { getTreasury, sep10Auth } from "../services/api/src/stellar/anchor.js";
 

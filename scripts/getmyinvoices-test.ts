@@ -90,7 +90,6 @@ process.env.GETMYINVOICES_BASE_URL = FAKE;
 const { GetMyInvoicesClient, GmiApiError, gmiUserAgent } = await import("../services/api/src/adapters/getmyinvoices.js");
 const { initStore, store } = await import("../services/api/src/store.js");
 const { writeStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
-const { issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
 const { belegUpload, createIntegrationRoutes } = await import("../services/api/src/routes/business/integrations.js");
 const { createBookkeepingExportRoutes } = await import("../services/api/src/routes/business/bookkeeping-export.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
