@@ -326,20 +326,27 @@ function phTxWord(t) {
   return "IN FLIGHT";
 }
 /* Signed, and past the point where the user could still walk away. */
-const phInFlight = (t) => t.kind !== "funding" && PH_LIVE.includes(t.state) && t.state !== "CREATED";
+const phInFlight = (t) => !histIsIn(t) && PH_LIVE.includes(t.state) && t.state !== "CREATED";
 /* Money that never left (or came back) carries no minus. */
 const phOut = (t) => !["FAILED", "REFUNDED"].includes(t.state) && t.state !== "CREATED";
 
 /** One activity row: a transfer out, or money in. */
 function phActivityRow(t) {
+  if (t.kind === "bank_in") {
+    return Z.row({
+      lead: Z.avatar({ name: t.counterpartyName || "Bank transfer" }),
+      title: t.counterpartyName || "Bank transfer",
+      sub: [t.counterpartyName ? t.memo || "Bank transfer" : t.memo, phWhen(t.at)].filter(Boolean).join(" · "),
+      right: `${Z.amount({ value: t.amountEur || 0, direction: "in" })}${Z.tag("RECEIVED")}`,
+      chevron: false,
+    });
+  }
   if (t.kind === "funding") {
     const usdc = t.token === "USDC";
     const word = t.state === "REFUSED" ? "IN REVIEW" : t.state === "UNCONFIRMED" ? "CHECKING" : "RECEIVED";
     return Z.row({
       lead: Z.iconTile({ icon: usdc ? "currency_exchange" : "euro" }),
       title: usdc ? `Digital dollars (${usdSym()})` : "Euros received",
-      // Activity lists on-chain deposits only; a bank transfer in shows in the
-      // balance, not here (GET /activity has no Monerium issue rows).
       sub: `From a crypto wallet · ${phWhen(t.at || t.detectedAt)}`,
       right: `${usdc
         ? `<span class="z-amount z-amount--in">+${esc(Z.formatMoney(t.amountUsdc || 0, usdSym()))}</span>`
