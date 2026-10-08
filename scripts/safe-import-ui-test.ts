@@ -247,6 +247,20 @@ await check("confirm: check, then approve with the passkey after the other owner
   assert.equal(screen(), "monerium", "an imported Safe skips the recovery step");
   assert.ok(!deployed());
 });
+await check("confirm: an owner already, but a Safe Zold can't bind, says why and offers no approval", async () => {
+  setUser(company());
+  run(`setSafeImportFlag("${SAFE}"); obImport = { address: "${SAFE}", prepared: null }; obScreen = 'b-import-confirm'`);
+  const btn: any = { querySelector: () => ({ textContent: "" }), getAttribute: () => null, setAttribute() {}, removeAttribute() {} };
+  // bind() itself asks prepare again when nothing is prepared yet.
+  answer = () => prepared({ owners: [VERIFIER, EOA], otherOwners: [EOA], alreadyOwner: true, ownerChange: null, threshold: 2, approval: null });
+  const handlers: Record<string, any> = {};
+  run("OB['b-import-confirm'].bind")({ querySelector: (sel: string) => (sel === "#btn-import-confirm" ? (handlers.confirm ??= {}) : null) });
+  run("obShowErr = (e) => { __lastErr = e; }; var __lastErr = null");
+  await handlers.confirm.onclick({ currentTarget: btn });
+  assert.equal(run("__lastErr.message"), run('obImportSentence({ code: "THRESHOLD_NOT_ONE" })'));
+  assert.equal(run("obImport.notYet"), true);
+  assert.doesNotMatch(obRoot.innerHTML, /Approve with Face ID/);
+});
 await check("confirm: a refused approval is dropped, and the next click checks again", async () => {
   setUser(company());
   ctx.__p = prepared({ owners: [VERIFIER], otherOwners: [], alreadyOwner: true, ownerChange: null, approval: { challenge: "c2", rpId: "localhost" } });

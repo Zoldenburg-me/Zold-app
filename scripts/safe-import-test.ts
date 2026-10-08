@@ -265,11 +265,11 @@ async function makePasskey(userId: string) {
   const attestation = b64url(cbor(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x45, 0, true)]])));
   const reg = verifyRegistration(attestation, clientData("webauthn.create", issueChallenge("register", userId)), SECURITY.rpId, SECURITY.origins, userId);
   let count = 0;
-  /** A user-verified assertion over `challenge`. */
-  const sign = async (challenge: string) => {
+  /** An assertion over `challenge`; flags 0x05 is user present and verified. */
+  const sign = async (challenge: string, flags = 0x05) => {
     count += 1;
     const cd = clientData("webauthn.get", challenge);
-    const ad = authData(0x05, count);
+    const ad = authData(flags, count);
     const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, Buffer.concat([ad, sha256(Buffer.from(cd, "base64url"))])));
     return { credentialId: reg.credentialId, authenticatorData: b64url(ad), clientDataJSON: cd, signature: b64url(derOf(raw)) };
   };
@@ -471,6 +471,15 @@ await check("a deployed own Safe is never replaced", async () => {
   chain.code[planAddress.toLowerCase()] = "0x6080";
   assert.equal((await post("/users/u1/safe/import/confirm", { address: SAFE })).body.code, "SAFE_DEPLOYED");
 });
+await check("prepare withholds the approval from a Safe confirm would refuse", async () => {
+  for (const c of [{ ...goodChain(), threshold: 2n }, { ...goodChain(), owners: [VERIFIER, EOA, OTHER] }]) {
+    chain = c;
+    const r = await post("/users/u1/safe/import/prepare", { address: SAFE });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.alreadyOwner, true);
+    assert.equal(r.body.approval, null);
+  }
+});
 await check("prepare names the Safe's other owner with the approval", async () => {
   chain = goodChain();
   const r = await post("/users/u1/safe/import/prepare", { address: SAFE });
@@ -491,6 +500,20 @@ await check("an approval for another action is refused", async () => {
     const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp: await keys.get("u1")!.stepUp(action) });
     assert.deepEqual([r.status, r.body.code], [401, "STEP_UP_INVALID"], action);
   }
+  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+});
+await check("another account's approval, another credential, or no user verification is refused", async () => {
+  await makeUser("u3");
+  chain = goodChain();
+  const theirs = await post("/users/u3/safe/import/prepare", { address: SAFE });
+  const wrongUser = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp: await keys.get("u1")!.sign(theirs.body.approval.challenge) });
+  assert.deepEqual([wrongUser.status, wrongUser.body.code], [401, "STEP_UP_INVALID"], "u3's challenge signed by u1's passkey");
+  const otherCred = { ...(await approveImport("u1")), credentialId: "someone-elses" };
+  const cred = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp: otherCred });
+  assert.deepEqual([cred.status, cred.body.code], [403, "STEP_UP_CREDENTIAL"]);
+  const p = await post("/users/u1/safe/import/prepare", { address: SAFE });
+  const noUv = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp: await keys.get("u1")!.sign(p.body.approval.challenge, 0x01) });
+  assert.deepEqual([noUv.status, noUv.body.code], [401, "STEP_UP_INVALID"], "a touch without user verification");
   assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
 });
 await check("an approval for Safe A cannot bind Safe B", async () => {
@@ -524,6 +547,12 @@ await check("owners changed after the approval is checked: refused", async () =>
 await check("confirm binds a good Safe as imported, never as recovered", async () => {
   chain = goodChain();
   const stepUp = await approveImport("u1");
+  // A refusal that needs no signature comes first and leaves the approval unspent.
+  chain = { ...goodChain(), owners: [VERIFIER, EOA, OTHER] };
+  deployed = [];
+  assert.equal((await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp })).body.code, "TOO_MANY_OWNERS");
+  assert.equal(deployed.length, 0);
+  chain = goodChain();
   const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const u = store.findUser("u1")!;

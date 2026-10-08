@@ -45,6 +45,7 @@ import {
   readSafeForImport,
   verifierDeploymentTransaction,
   type ChainReader,
+  type SafeImportState,
 } from "../wallet/safe-import.js";
 import { ownerChangeTxBuilderJson, txBuilderFileName } from "../wallet/safe-tx-builder.js";
 
@@ -234,7 +235,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
         assertImportableOwners(seen, verifier);
         const approved = importApprovalTarget(seen);
         if (!(await verifyPasskeyStepUp(user, req.body, res, "safe.import", approved))) return;
-        let state: Awaited<ReturnType<typeof checkSafeForImport>>;
+        let state: SafeImportState;
         try {
           state = await checkSafeForImport(r, address, verifier);
         } catch (err) {
