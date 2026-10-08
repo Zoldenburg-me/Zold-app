@@ -290,6 +290,12 @@ async function withinPasskeyStep(work, extraMs, message) {
 async function passkeyStepUp(action) {
   if (!credId()) return null;
   const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up", action });
+  return passkeyAssertion(challenge);
+}
+
+/* A user-verified assertion over a challenge the server already issued for
+   one change, such as the Safe import approval from /safe/import/prepare. */
+async function passkeyAssertion(challenge) {
   const cred = await passkeyPrompt("get", {
     challenge: b64urlToBytes(challenge),
     allowCredentials: [{ type: "public-key", id: b64urlToBytes(credId()) }],

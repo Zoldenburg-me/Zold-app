@@ -209,6 +209,17 @@ export function assertImportableOwners(s: SafeImportState, verifier: Hex): void 
 }
 
 /**
+ * What a Safe-import approval covers: the Safe and who controls it as the
+ * chain showed them. The passkey's step-up for safe.import is bound to this
+ * string, so the approval spends on that Safe with exactly those owners and
+ * that threshold, and on nothing else.
+ */
+export function importApprovalTarget(s: Pick<SafeImportState, "address" | "owners" | "threshold">): string {
+  const owners = s.owners.map((o) => o.toLowerCase()).sort().join(",");
+  return `${s.address.toLowerCase()}:${s.threshold}:${owners}`;
+}
+
+/**
  * Every check the confirm step runs, in order. Returns the chain state when
  * the Safe may be bound to this passkey; throws a SafeImportRefusal naming
  * the first failed check, or the reader's own error.
