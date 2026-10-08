@@ -69,29 +69,38 @@ export const STEP_UP_ACTIONS = [
   "authorizer.bind",
   "org.payment-review.off",
   "org.invoice-iban.change",
+  "safe.import",
 ] as const;
 export type StepUpAction = (typeof STEP_UP_ACTIONS)[number];
 const isStepUpAction = (v: unknown): v is StepUpAction => STEP_UP_ACTIONS.includes(v as StepUpAction);
+/**
+ * Actions approved for one object, not just for the account. Their challenge
+ * comes from the route that read the object (safe.import: /safe/import/prepare,
+ * bound to the Safe's address, owners and threshold), never from
+ * /webauthn/challenge.
+ */
+const TARGETED_STEP_UP_ACTIONS: readonly StepUpAction[] = ["safe.import"];
 
 export async function verifyPasskeyStepUp(
   user: User,
   body: any,
   res: express.Response,
   action: StepUpAction,
+  target?: string,
 ): Promise<boolean> {
   if (!user.passkey?.publicKey) {
     if (HARNESS.enabled) return true;
-    res.status(409).json({ error: "a verified passkey is required for this change" });
+    res.status(409).json({ error: "a verified passkey is required for this change", code: "NO_PASSKEY" });
     return false;
   }
   const stepUp = body?.stepUp ?? {};
   const { credentialId, authenticatorData, clientDataJSON, signature } = stepUp;
   if (!credentialId || !authenticatorData || !clientDataJSON || !signature) {
-    res.status(401).json({ error: "a fresh passkey approval is required for this change" });
+    res.status(401).json({ error: "a fresh passkey approval is required for this change", code: "STEP_UP_REQUIRED" });
     return false;
   }
   if (credentialId !== user.passkey.credentialId) {
-    res.status(403).json({ error: "passkey credential does not match this account" });
+    res.status(403).json({ error: "passkey credential does not match this account", code: "STEP_UP_CREDENTIAL" });
     return false;
   }
   try {
@@ -104,12 +113,12 @@ export async function verifyPasskeyStepUp(
       user.passkey.rpId ?? SECURITY.rpId,
       SECURITY.origins,
       "step_up",
-      stepUpBinding(user.id, action),
+      stepUpBinding(user.id, action, target),
     );
     store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
     return true;
   } catch (err: any) {
-    res.status(401).json({ error: String(err?.message ?? err) });
+    res.status(401).json({ error: String(err?.message ?? err), code: "STEP_UP_INVALID" });
     return false;
   }
 }
@@ -162,6 +171,9 @@ export function createAuthRouter(deps: AuthDeps) {
           const action = req.body?.action;
           if (!isStepUpAction(action)) {
             return res.status(400).json({ error: `name the change this approval is for: action is one of ${STEP_UP_ACTIONS.join(", ")}` });
+          }
+          if (TARGETED_STEP_UP_ACTIONS.includes(action)) {
+            return res.status(400).json({ error: `${action} is approved for one object; its challenge comes from the route that read it` });
           }
           binding = stepUpBinding(session.userId, action);
         }

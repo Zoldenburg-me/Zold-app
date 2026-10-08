@@ -156,6 +156,7 @@ await check("a step-up challenge names the action it approves", async () => {
   const a = await account();
   assert.equal((await call("POST", "/api/webauthn/challenge", a.token, { purpose: "step_up" })).status, 400, "no action");
   assert.equal((await call("POST", "/api/webauthn/challenge", a.token, { purpose: "step_up", action: "anything" })).status, 400, "unknown action");
+  assert.equal((await call("POST", "/api/webauthn/challenge", a.token, { purpose: "step_up", action: "safe.import" })).status, 400, "safe.import is approved per Safe: its challenge comes from /safe/import/prepare");
 });
 await check("an approval collected for one action is refused by another", async () => {
   const a = await account({ kycStatus: "approved", kyc: { provider: "monerium", checkedAt: now } });
