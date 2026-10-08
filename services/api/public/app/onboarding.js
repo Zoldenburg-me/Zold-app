@@ -855,6 +855,11 @@ function obImportSentence(e) {
     TOO_MANY_OWNERS: "This Safe has more owners than Zold allows: this phone plus at most one of your own wallets. Remove the others in Safe{Wallet} first.",
     VERIFIER_NOT_OWNER: "The owner change isn’t on the network yet. Wait a minute after sending it, then try again.",
     VERIFIER_NO_CODE: "Zold couldn’t set up this phone’s signer on the network yet. Try again in a minute.",
+    VERIFIER_PENDING: "This phone’s signer is still being set up on the network. Try again in a minute.",
+    STEP_UP_REQUIRED: "Approve with Face ID to bring in this Safe.",
+    STEP_UP_CREDENTIAL: "That approval came from another passkey. Approve with the one this login uses.",
+    STEP_UP_INVALID: "That approval didn’t match the Safe as the network shows it now, or it expired. Check the Safe again and approve.",
+    SAFE_CHANGED: "The Safe’s owners changed after you approved. Check the Safe again and approve it as it is now.",
   }[e?.code];
   if (s) return s;
   if (e?.offline) return "You appear to be offline. Zold could not be reached.";
@@ -1054,25 +1059,49 @@ OB["b-import-sign"] = {
   },
 };
 
-/* Confirm is one request, retried by hand. The chain needs a block or two
-   after the owner sends the change; no endless polling. */
+/* Confirm is two steps, each retried by hand. Check asks `prepare` again: once
+   the owner change is on the network it names the owners and issues the
+   passkey challenge bound to them. Approve shows who else owns the Safe, then
+   spends that challenge on `confirm`. The chain needs a block or two after
+   the owner sends the change; no endless polling. */
 let obImportChecking = false;
+
+/* Why `prepare` issued no approval: the owners are not yet ones Zold binds. */
+function obImportNotReadyCode(p) {
+  if (!p.alreadyOwner) return "VERIFIER_NOT_OWNER";
+  return p.threshold !== 1 ? "THRESHOLD_NOT_ONE" : "TOO_MANY_OWNERS";
+}
+
+/* An owner the user does not hold can move the Safe's money alone (threshold
+   1), and anyone can be added as an owner: say who it is before approving. */
+function obImportOwnersNote(p) {
+  const others = p.otherOwners || [];
+  if (!others.length) return Z.note({ icon: "check_circle", text: "This phone will be the Safe’s only owner." });
+  return Z.note({
+    tone: "a",
+    icon: "warning",
+    html: `This Safe has another owner: <span class="z-mono" translate="no" style="word-break:break-all">${esc(others.join(", "))}</span>. It can move the money on its own, without this phone. Approve only if that wallet is yours or your company’s.`,
+  });
+}
 OB["b-import-confirm"] = {
   kind: "import",
   title: "Business: finish bringing in your Safe",
   html: () => {
     const p = obImport?.prepared;
     const retry = obImport?.notYet;
+    const ready = !!p?.approval;
     return `${obBackHead(p && !p.alreadyOwner ? "b-import-sign" : "b-import-address")}
     <main id="main" class="z-screen__main z-screen__main--tight">
-      ${obIntro("Finish bringing in your Safe", "Once the owner change is on the network, Zold checks the Safe and makes it this company’s account.")}
+      ${obIntro(ready ? "Approve bringing in your Safe" : "Finish bringing in your Safe", ready
+        ? "Check the owners, then approve with Face ID. Zold makes the Safe this company’s account only with that approval."
+        : "Once the owner change is on the network, Zold checks the Safe and asks for your approval.")}
       ${p ? obSafeSummary(p) : Z.skeletonRows(2, "Checking your Safe…")}
-      ${p?.alreadyOwner ? Z.note({ icon: "check_circle", text: "This phone is an owner of the Safe." }) : ""}
+      ${ready ? obImportOwnersNote(p) : ""}
       <p class="z-sub hidden" id="import-wait" role="status">Checking the network. This can take up to two minutes.</p>
       ${obAlert()}
     </main>
     <div class="z-screen__foot">
-      ${Z.button({ variant: "primary", full: true, label: retry ? "Check again" : "I’ve sent it", id: "btn-import-confirm" })}
+      ${Z.button({ variant: "primary", full: true, label: ready ? "Approve with Face ID" : retry ? "Check again" : "I’ve sent it", id: "btn-import-confirm" })}
       ${obNewAccountLink()}
     </div>`;
   },
@@ -1097,16 +1126,36 @@ OB["b-import-confirm"] = {
       obClearErr();
       const address = obImport?.address || flag?.address;
       if (!address) return obGo("b-import-address");
+      const approval = obImport?.prepared?.approval;
       Z.setLoading(btn, true);
       $("import-wait")?.classList.remove("hidden");
+      if (!approval) {
+        try {
+          const p = await obPrepareImport(address);
+          if (!p.approval) {
+            obImport = { ...obImport, notYet: true };
+            obRender();
+            return obImportErr({ code: obImportNotReadyCode(p) });
+          }
+          obImport = { ...obImport, notYet: false };
+          return obRender({ focus: true });
+        } catch (e) {
+          if (e?.code === "SAFE_ACTIVE") return obImportDone(await api(`/api/users/${user.id}`));
+          return obImportErr(e);
+        } finally {
+          Z.setLoading(btn, false);
+          $("import-wait")?.classList.add("hidden");
+        }
+      }
       let bound;
       try {
-        bound = await api(`/api/users/${user.id}/safe/import/confirm`, { address });
+        const stepUp = await passkeyAssertion(approval.challenge);
+        bound = await api(`/api/users/${user.id}/safe/import/confirm`, { address, stepUp });
       } catch (e) {
-        if (e?.code === "VERIFIER_NOT_OWNER") {
-          obImport = { ...(obImport || {}), address, notYet: true };
-          btn.querySelector("span:last-child").textContent = "Check again";
-        }
+        // The challenge is single-use: whatever failed, the next try checks
+        // the Safe again and asks for a fresh approval.
+        obImport = { ...obImport, prepared: { ...obImport.prepared, approval: null }, notYet: true };
+        obRender();
         return obImportErr(e);
       } finally {
         Z.setLoading(btn, false);

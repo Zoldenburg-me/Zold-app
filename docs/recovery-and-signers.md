@@ -38,9 +38,15 @@ Identity and authority. Each of these was a bug once.
 - **A recovery id is not a capability.** Candide recovery's by-id routes need
   the per-request secret handed to the starting browser, and `/finalize` issues
   no session — the new passkey signs in through the ordinary login.
-- **An imported Safe is bound only on what the chain shows**
-  (`routes/safe-import.ts`, checks in `wallet/safe-import.ts`). `confirm`
-  refuses unless the address has code, its singleton (slot 0) is Safe L2
+- **An imported Safe is bound only on what the chain shows, and only with the
+  passkey's approval of that Safe** (`routes/safe-import.ts`, checks in
+  `wallet/safe-import.ts`). Anyone can add an owner to a Safe, so a Safe
+  owned by the verifier plus another key proves nothing about who imports
+  it: `confirm` needs a `safe.import` step-up whose challenge `prepare`
+  issued bound to the Safe's address, owners and threshold
+  (`importApprovalTarget`), and refuses `SAFE_CHANGED` if they differ by the
+  final read. The screen names the other owner before the user approves.
+  `confirm` refuses unless the address has code, its singleton (slot 0) is Safe L2
   v1.4.1 `0x29fc…C762`, the passkey's WebAuthn verifier is an owner with at
   most one other owner, the threshold is 1, the 4337 module `0x2293…AEAd` is
   the only enabled module AND the fallback handler, no guard is set, and the
