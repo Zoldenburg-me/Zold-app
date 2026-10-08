@@ -5,31 +5,40 @@
  * - `prepare` checks the account may still change Safes and that the target
  *   has the shape Zold can sign for, then hands back the passkey's verifier
  *   address and the owner change the Safe's current owner must send
- *   (scripts/safe-import-owner-tx.ts builds the same thing offline). Nothing
- *   is stored.
- * - `confirm` reads the Safe again and binds it only when the verifier is an
- *   owner and every check in wallet/safe-import.ts passes. An RPC failure
- *   binds nothing.
+ *   (scripts/safe-import-owner-tx.ts builds the same thing offline). Once the
+ *   verifier is an owner it also issues the passkey challenge for the import,
+ *   bound to the Safe's address, owners and threshold as read (the client
+ *   shows the other owner before the user approves). Nothing is stored.
+ * - `confirm` binds the Safe only with that passkey approval, for the Safe as
+ *   the chain still shows it, and only when the verifier is an owner and every
+ *   check in wallet/safe-import.ts passes. A session alone binds nothing: an
+ *   owner can be added to a Safe without its consent, so a Safe owned by the
+ *   verifier and someone else's key proves nothing about who imports it. An
+ *   RPC failure binds nothing.
  *
  * Never replaces a live Safe: once the account's own passkey Safe is active,
  * deployed, or holds anything, both routes refuse.
  */
 import express from "express";
 import { decodeFunctionResult, encodeFunctionData, getAddress, parseAbi } from "viem";
-import { HARNESS } from "../config.js";
+import { HARNESS, SECURITY } from "../config.js";
 import { addrs } from "../chain.js";
 import { store, type User } from "../store.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
 import { partnerTimeout } from "../http.js";
 import { requireCapability } from "../http/guards.js";
+import { issueChallenge, stepUpBinding } from "../webauthn.js";
+import { verifyPasskeyStepUp } from "./auth.js";
 import { publicUser } from "../users/public-user.js";
 import { wrap } from "./util.js";
 import { CANDIDE, webauthnOwnerFromStore } from "../wallet/candide.js";
 import { deployVerifierForOwner, relayReader } from "../recovery/recovered-passkey.js";
 import {
   SafeImportRefusal,
+  assertImportableOwners,
   assertImportableShape,
   checkSafeForImport,
+  importApprovalTarget,
   jsonRpcReader,
   ownerChangeTransaction,
   passkeyVerifierAddress,
@@ -152,6 +161,19 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
         const verifierCode = await r.getCode(verifier);
         const verifierDeployed = Boolean(verifierCode && verifierCode !== "0x");
         const alreadyOwner = state.owners.some((o) => o.toLowerCase() === verifier.toLowerCase());
+        const otherOwners = state.owners.filter((o) => o.toLowerCase() !== verifier.toLowerCase());
+        // Only once the owners are final: before the owner change, the set the
+        // user would approve is not the one confirm reads.
+        let approval: { challenge: string; rpId: string } | null = null;
+        try {
+          assertImportableOwners(state, verifier);
+          approval = {
+            challenge: issueChallenge("step_up", stepUpBinding(user.id, "safe.import", importApprovalTarget(state))),
+            rpId: user.passkey?.rpId ?? SECURITY.rpId,
+          };
+        } catch (err) {
+          if (!(err instanceof SafeImportRefusal)) throw err;
+        }
         const deploy = verifierDeployed ? null : verifierDeploymentTransaction(owner.x, owner.y);
         const createdAt = now();
         const changes: Record<string, unknown> = {};
@@ -179,6 +201,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
           safeAddress: address,
           chainId: Number(CANDIDE.chainId),
           owners: state.owners,
+          otherOwners,
           threshold: state.threshold,
           verifier,
           verifierDeployed,
@@ -186,6 +209,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
           // Any key may send this; confirm also sends it from the deployer if needed.
           deployVerifier: deploy ? tx(deploy) : null,
           ownerChange: alreadyOwner ? null : changes,
+          approval,
           script: `npm run safe:import-tx -- --chain ${CANDIDE.chainId} --safe ${address} --verifier ${verifier}`,
         });
       } catch (err) {
@@ -203,8 +227,16 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
       try {
         const r = reader();
         const { plan, address, owner, verifier } = await eligible(user, r, String(req.body?.address ?? "").trim());
+        // Refusals that need no signature first, then the passkey, before
+        // anything is relayed or written.
+        const seen = await readSafeForImport(r, address);
+        assertImportableShape(seen);
+        assertImportableOwners(seen, verifier);
+        const approved = importApprovalTarget(seen);
+        if (!(await verifyPasskeyStepUp(user, req.body, res, "safe.import", approved))) return;
+        let state: Awaited<ReturnType<typeof checkSafeForImport>>;
         try {
-          await checkSafeForImport(r, address, verifier);
+          state = await checkSafeForImport(r, address, verifier);
         } catch (err) {
           if (!(err instanceof SafeImportRefusal) || err.code !== "VERIFIER_NO_CODE") throw err;
           // Every other check passed. The verifier is a permissionless
@@ -229,7 +261,10 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
             if (code && code !== "0x") break;
             await new Promise((ok) => setTimeout(ok, VERIFIER_CODE_POLL_MS));
           }
-          await checkSafeForImport(r, address, verifier);
+          state = await checkSafeForImport(r, address, verifier);
+        }
+        if (importApprovalTarget(state) !== approved) {
+          throw new Refusal(409, "the Safe's owners or threshold changed after you approved; check it again and approve the Safe as it is now", "SAFE_CHANGED");
         }
         const now = new Date().toISOString();
         const alreadyBound = store.findUserByAddress(address) ??

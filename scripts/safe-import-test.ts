@@ -9,6 +9,7 @@
  */
 import "./_local-chain.js";
 import assert from "node:assert/strict";
+import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -49,6 +50,7 @@ const { accountForPlan, passkeyAccountAddress } = await import("../services/api/
 
 type Hex = `0x${string}`;
 const SAFE = getAddress("0x5afe00000000000000000000000000000000beef") as Hex;
+const SAFE_B = getAddress("0x5afe00000000000000000000000000000000b0b0") as Hex;
 const EOA = getAddress("0xe0a0000000000000000000000000000000000001") as Hex;
 const OTHER = getAddress("0x0ade000000000000000000000000000000000002") as Hex;
 const EURE = getAddress("0xe00e000000000000000000000000000000000005") as Hex;
@@ -76,6 +78,8 @@ interface Chain {
   fallback: Hex;
   guard: Hex;
   owners: Hex[];
+  /** The owners every read after a request's first one sees: a change landing mid-request. */
+  ownersLater?: Hex[];
   threshold: bigint;
   modules: Hex[];
   next: Hex;
@@ -99,6 +103,7 @@ function goodChain(): Chain {
   };
 }
 function readerFor(c: Chain) {
+  let ownerReads = 0;
   const fail = (m: string) => {
     if (c.failOn === m) throw new Error(`${m} failed (503): upstream`);
   };
@@ -122,7 +127,10 @@ function readerFor(c: Chain) {
       fail("eth_call");
       const d = decodeFunctionData({ abi: safeAbi, data });
       switch (d.functionName) {
-        case "getOwners": return encodeFunctionResult({ abi: safeAbi, functionName: "getOwners", result: c.owners });
+        case "getOwners": {
+          const owners = ownerReads++ > 0 && c.ownersLater ? c.ownersLater : c.owners;
+          return encodeFunctionResult({ abi: safeAbi, functionName: "getOwners", result: owners });
+        }
         case "getThreshold": return encodeFunctionResult({ abi: safeAbi, functionName: "getThreshold", result: c.threshold });
         case "getModulesPaginated": return encodeFunctionResult({ abi: safeAbi, functionName: "getModulesPaginated", result: [c.modules, c.next] });
         case "balanceOf": return encodeFunctionResult({ abi: safeAbi, functionName: "balanceOf", result: c.tokens[`${to}:${(d.args[0] as string)}`.toLowerCase()] ?? 0n });
@@ -222,9 +230,62 @@ const express = (await import("express")).default;
 const { store } = await import("../services/api/src/store.js");
 const { createSafeImportRouter } = await import("../services/api/src/routes/safe-import.js");
 const { webauthnOwnerToStore, smartAccountForPasskey } = await import("../services/api/src/wallet/candide.js");
+const { issueChallenge, stepUpBinding, verifyRegistration } = await import("../services/api/src/webauthn.js");
+const { SECURITY } = await import("../services/api/src/config.js");
+
+// A P-256 passkey, registered and asserted the way a browser would.
+const b64url = (b: Buffer) => b.toString("base64url");
+const sha256 = (b: Buffer | string) => createHash("sha256").update(b).digest();
+function cbor(v: any): Buffer {
+  const head = (major: number, n: number) => (n < 24 ? Buffer.from([(major << 5) | n]) : n < 256 ? Buffer.from([(major << 5) | 24, n]) : Buffer.from([(major << 5) | 25, n >> 8, n & 255]));
+  if (typeof v === "number") return v >= 0 ? head(0, v) : head(1, -1 - v);
+  if (typeof v === "string") { const b = Buffer.from(v, "utf8"); return Buffer.concat([head(3, b.length), b]); }
+  if (Buffer.isBuffer(v)) return Buffer.concat([head(2, v.length), v]);
+  if (v instanceof Map) return Buffer.concat([head(5, v.size), ...[...v].flatMap(([k, x]) => [cbor(k), cbor(x)])]);
+  throw new Error("cbor: unsupported");
+}
+function derOf(raw: Buffer) {
+  const int = (b: Buffer) => { let i = 0; while (i < b.length - 1 && b[i] === 0) i++; b = b.subarray(i); return b[0] & 0x80 ? Buffer.concat([Buffer.from([0x02, b.length + 1, 0]), b]) : Buffer.concat([Buffer.from([0x02, b.length]), b]); };
+  const r = int(raw.subarray(0, 32)); const s = int(raw.subarray(32));
+  return Buffer.concat([Buffer.from([0x30, r.length + s.length]), r, s]);
+}
+const ORIGIN = SECURITY.origins.find((o: string) => o.startsWith("http://localhost"))!;
+const clientData = (type: string, challenge: string) => b64url(Buffer.from(JSON.stringify({ type, challenge, origin: ORIGIN }), "utf8"));
+async function makePasskey(userId: string) {
+  const pair = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const jwk = await webcrypto.subtle.exportKey("jwk", pair.publicKey);
+  const cose = cbor(new Map<number, any>([[1, 2], [3, -7], [-1, 1], [-2, Buffer.from(jwk.x!, "base64url")], [-3, Buffer.from(jwk.y!, "base64url")]]));
+  const credId = randomBytes(16);
+  const authData = (flags: number, count: number, att = false) => {
+    const base = Buffer.alloc(37); sha256(SECURITY.rpId).copy(base, 0); base[32] = flags; base.writeUInt32BE(count, 33);
+    if (!att) return base;
+    const cred = Buffer.alloc(18 + credId.length); cred.writeUInt16BE(credId.length, 16); credId.copy(cred, 18);
+    return Buffer.concat([base, cred, cose]);
+  };
+  const attestation = b64url(cbor(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData(0x45, 0, true)]])));
+  const reg = verifyRegistration(attestation, clientData("webauthn.create", issueChallenge("register", userId)), SECURITY.rpId, SECURITY.origins, userId);
+  let count = 0;
+  /** A user-verified assertion over `challenge`. */
+  const sign = async (challenge: string) => {
+    count += 1;
+    const cd = clientData("webauthn.get", challenge);
+    const ad = authData(0x05, count);
+    const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, Buffer.concat([ad, sha256(Buffer.from(cd, "base64url"))])));
+    return { credentialId: reg.credentialId, authenticatorData: b64url(ad), clientDataJSON: cd, signature: b64url(derOf(raw)) };
+  };
+  return {
+    stored: { credentialId: reg.credentialId, publicKey: reg.key, signCount: 0, rpId: SECURITY.rpId, createdAt: new Date().toISOString() },
+    sign,
+    /** The generic step-up for `action`, as /api/webauthn/challenge issues it. */
+    stepUp: (action: string) => sign(issueChallenge("step_up", stepUpBinding(userId, action))),
+  };
+}
+const keys = new Map<string, Awaited<ReturnType<typeof makePasskey>>>();
 
 const planAddress = smartAccountForPasskey(PK).accountAddress as Hex;
-const makeUser = (id: string, over: any = {}) => {
+const makeUser = async (id: string, over: any = {}) => {
+  const key = await makePasskey(id);
+  keys.set(id, key);
   store.addUser({
     id,
     name: id,
@@ -233,7 +294,7 @@ const makeUser = (id: string, over: any = {}) => {
     kycStatus: "pending",
     iban: "",
     address: planAddress,
-    passkey: { credentialId: `cred-${id}`, publicKey: { alg: "ES256", jwk: {} }, signCount: 0, createdAt: new Date().toISOString() },
+    passkey: key.stored,
     passkeySafe: { address: planAddress, status: "planned", threshold: 1, passkeyPublicKey: webauthnOwnerToStore(PK), createdAt: new Date().toISOString() },
     createdAt: new Date().toISOString(),
     ...over,
@@ -263,9 +324,16 @@ const post = async (p: string, body: unknown) => {
   const res = await fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return { status: res.status, body: await res.json() as any };
 };
+/** Prepare, then approve the import with the passkey over the challenge prepare names. */
+const approveImport = async (id: string, address: Hex = SAFE) => {
+  const p = await post(`/users/${id}/safe/import/prepare`, { address });
+  assert.equal(p.status, 200, JSON.stringify(p.body));
+  assert.ok(p.body.approval?.challenge, "prepare names the approval once the verifier is an owner");
+  return keys.get(id)!.sign(p.body.approval.challenge);
+};
 
 await check("prepare returns the verifier and both owner changes, and stores nothing", async () => {
-  makeUser("u1");
+  await makeUser("u1");
   chain = { ...goodChain(), owners: [EOA] };
   const before = JSON.stringify(store.findUser("u1"));
   const r = await post("/users/u1/safe/import/prepare", { address: SAFE });
@@ -273,6 +341,7 @@ await check("prepare returns the verifier and both owner changes, and stores not
   assert.equal(r.body.verifier, VERIFIER);
   assert.equal(r.body.verifierDeployed, true);
   assert.equal(r.body.deployVerifier, null);
+  assert.equal(r.body.approval, null, "no approval before the verifier is an owner: the owners will still change");
   const add = decodeFunctionData({ abi: safeAbi, data: r.body.ownerChange.add.data });
   assert.deepEqual(add.args, [VERIFIER, 1n]);
   assert.equal(decodeFunctionData({ abi: safeAbi, data: r.body.ownerChange.swap.data }).functionName, "swapOwner");
@@ -368,9 +437,18 @@ await check("confirm on an RPC failure binds nothing", async () => {
 await check("confirm tries the verifier deployment, and refuses when it cannot send it", async () => {
   chain = { ...goodChain(), code: { [SAFE.toLowerCase()]: "0x6080" } };
   deployed = [];
-  const r = await post("/users/u1/safe/import/confirm", { address: SAFE });
+  const unapproved = await post("/users/u1/safe/import/confirm", { address: SAFE });
+  assert.deepEqual([unapproved.status, unapproved.body.code], [401, "STEP_UP_REQUIRED"]);
+  assert.equal(deployed.length, 0, "nothing is relayed before the passkey approves");
+  const stepUp = await approveImport("u1");
+  const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp });
   assert.deepEqual([r.status, r.body.code], [409, "VERIFIER_NO_CODE"]);
   assert.equal(deployed.length, 1);
+  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+  // The approval was spent on that attempt: sending it again is refused.
+  chain = goodChain();
+  const replay = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp });
+  assert.deepEqual([replay.status, replay.body.code], [401, "STEP_UP_INVALID"]);
   assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
 });
 await check("funds at the planned address refuse the import", async () => {
@@ -393,9 +471,60 @@ await check("a deployed own Safe is never replaced", async () => {
   chain.code[planAddress.toLowerCase()] = "0x6080";
   assert.equal((await post("/users/u1/safe/import/confirm", { address: SAFE })).body.code, "SAFE_DEPLOYED");
 });
-await check("confirm binds a good Safe as imported, never as recovered", async () => {
+await check("prepare names the Safe's other owner with the approval", async () => {
+  chain = goodChain();
+  const r = await post("/users/u1/safe/import/prepare", { address: SAFE });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.otherOwners, [EOA]);
+  assert.match(r.body.approval.challenge, /^[A-Za-z0-9_-]{43}$/);
+});
+await check("confirm with no passkey approval binds nothing", async () => {
   chain = goodChain();
   const r = await post("/users/u1/safe/import/confirm", { address: SAFE });
+  assert.deepEqual([r.status, r.body.code], [401, "STEP_UP_REQUIRED"]);
+  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+  assert.equal(store.findUser("u1")!.address, planAddress);
+});
+await check("an approval for another action is refused", async () => {
+  chain = goodChain();
+  for (const action of ["authorizer.bind", "safe.import"]) {
+    const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp: await keys.get("u1")!.stepUp(action) });
+    assert.deepEqual([r.status, r.body.code], [401, "STEP_UP_INVALID"], action);
+  }
+  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+});
+await check("an approval for Safe A cannot bind Safe B", async () => {
+  chain = goodChain();
+  chain.code[SAFE_B.toLowerCase()] = "0x6080";
+  const stepUp = await approveImport("u1", SAFE);
+  const r = await post("/users/u1/safe/import/confirm", { address: SAFE_B, stepUp });
+  assert.deepEqual([r.status, r.body.code], [401, "STEP_UP_INVALID"]);
+  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+});
+await check("owners changed between prepare and confirm: refused", async () => {
+  chain = goodChain();
+  const stepUp = await approveImport("u1");
+  chain = { ...goodChain(), owners: [VERIFIER, OTHER] };
+  const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp });
+  assert.deepEqual([r.status, r.body.code], [401, "STEP_UP_INVALID"]);
+  chain = goodChain();
+  const t = await approveImport("u1");
+  chain = { ...goodChain(), threshold: 1n, owners: [VERIFIER] };
+  assert.equal((await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp: t })).body.code, "STEP_UP_INVALID", "a removed owner is a change too");
+  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+});
+await check("owners changed after the approval is checked: refused", async () => {
+  chain = goodChain();
+  const stepUp = await approveImport("u1");
+  chain = { ...goodChain(), ownersLater: [VERIFIER, OTHER] };
+  const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp });
+  assert.deepEqual([r.status, r.body.code], [409, "SAFE_CHANGED"]);
+  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+});
+await check("confirm binds a good Safe as imported, never as recovered", async () => {
+  chain = goodChain();
+  const stepUp = await approveImport("u1");
+  const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const u = store.findUser("u1")!;
   assert.equal(u.address, SAFE);
@@ -412,7 +541,7 @@ await check("an active account can never import again", async () => {
   assert.equal((await post("/users/u1/safe/import/prepare", { address: SAFE })).body.code, "SAFE_ACTIVE");
 });
 await check("a Safe bound to one account cannot be bound to another", async () => {
-  makeUser("u2");
+  await makeUser("u2");
   chain = goodChain();
   assert.equal((await post("/users/u2/safe/import/confirm", { address: SAFE })).body.code, "ADDRESS_IN_USE");
 });

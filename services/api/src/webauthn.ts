@@ -191,11 +191,14 @@ export function issueChallenge(purpose: ChallengePurpose, binding?: string): str
 }
 
 /**
- * The binding of a step-up challenge: the account AND the action it approves.
- * An approval collected for one change (say, a passkey replacement) is then
- * refused by every other step-up-gated route on the same account.
+ * The binding of a step-up challenge: the account AND the action it approves,
+ * and for an action on one object (a Safe import) that object too. An approval
+ * collected for one change (say, a passkey replacement) is then refused by
+ * every other step-up-gated route on the same account, and an approval for one
+ * Safe by an import of any other.
  */
-export const stepUpBinding = (userId: string, action: string) => `${userId}:${action}`;
+export const stepUpBinding = (userId: string, action: string, target?: string) =>
+  target === undefined ? `${userId}:${action}` : `${userId}:${action}:${target}`;
 
 function consumeChallenge(c: string, purpose: ChallengePurpose, binding?: string): boolean {
   const e = challenges.get(c);
