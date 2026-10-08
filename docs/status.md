@@ -96,9 +96,9 @@ Say this plainly rather than letting the surface imply otherwise:
   IBAN — it labelled the Safe personal, showed the account active in /app
   and not open in /business, and named the user rather than the company on
   documents; the fixes are not deployed, so an IBAN on an imported Safe has
-  not yet worked end to end. Never run: the passkey approval confirm
-  requires (`safe.import` step-up, bound to the Safe and its owners) outside
-  the offline suites, a hardware wallet sending
+  not yet worked end to end. The runs above did not include confirm's
+  passkey approval (`safe.import` step-up, bound to the Safe and its owners);
+  it has run only in the offline suites. Never run: a hardware wallet sending
   the owner change, and anything on Base mainnet — Zoldenburg's Safe has
   not been touched. Recovery
   has never run on an imported Safe, so the screens do not offer it there;
