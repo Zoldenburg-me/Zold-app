@@ -5,7 +5,8 @@
  * progress on this device, and that an imported Safe skips the recovery step.
  *
  * Runs the real classic scripts in a vm with a stub DOM and a recorded `api`.
- * What this cannot show: the screens in a browser, a passkey ceremony, or a
+ * What this cannot show: the screens in a browser, a real passkey ceremony
+ * (passkeyAssertion is stubbed), or a
  * Safe{Wallet} transaction. Offline.
  */
 import assert from "node:assert/strict";
@@ -182,7 +183,7 @@ await check("the address screen calls prepare and sets the flag only on an answe
   assert.match(obRoot.innerHTML, /1 of 1/);
 });
 await check("refusals read as sentences, never as the server's text alone", () => {
-  for (const code of ["NO_CODE", "WRONG_SINGLETON", "EXTRA_MODULES", "THRESHOLD_NOT_ONE", "TOO_MANY_OWNERS", "SAFE_DEPLOYED", "PLAN_HAS_FUNDS", "ADDRESS_IN_USE", "RPC_FAILED", "VERIFIER_NOT_OWNER"]) {
+  for (const code of ["NO_CODE", "WRONG_SINGLETON", "EXTRA_MODULES", "THRESHOLD_NOT_ONE", "TOO_MANY_OWNERS", "SAFE_DEPLOYED", "PLAN_HAS_FUNDS", "ADDRESS_IN_USE", "RPC_FAILED", "VERIFIER_NOT_OWNER", "STEP_UP_REQUIRED", "STEP_UP_INVALID", "SAFE_CHANGED"]) {
     ctx.__e = { code, message: "raw server text" };
     const s = run("obImportSentence(__e)");
     assert.ok(!s.includes("raw server text"), code);
@@ -208,7 +209,7 @@ await check("sign: Add is the default; Swap only when not refused, with a warnin
   run("obImport = null");
   assert.equal(run('obGuard("b-import-sign")'), "b-import-address", "no prepare answer, no sign screen");
 });
-await check("confirm: not yet on chain offers a retry; 201 binds, clears the flag and never deploys", async () => {
+await check("confirm: check, then approve with the passkey after the other owner is shown; 201 binds, clears the flag and never deploys", async () => {
   setCaps({ safeImport: true, zoldenburgRecovery: true, emailSmsRecovery: true });
   setUser(company());
   ctx.__p = prepared();
@@ -219,12 +220,25 @@ await check("confirm: not yet on chain offers a retry; 201 binds, clears the fla
   const handlers: Record<string, any> = {};
   const root = { querySelector: (sel: string) => (sel === "#btn-import-confirm" ? (handlers.confirm ??= {}) : null) };
   run("OB['b-import-confirm'].bind")(root);
-  answer = () => { throw Object.assign(new Error("not an owner"), { code: "VERIFIER_NOT_OWNER", status: 409 }); };
+  // The owner change is not on chain yet: prepare names no approval.
+  answer = () => prepared();
   await handlers.confirm.onclick({ currentTarget: btn });
+  assert.deepEqual(calls.map((c) => c.path), ["/api/users/u-co/safe/import/prepare"]);
   assert.equal(run("obImport.notYet"), true);
   assert.equal(screen(), "b-import-confirm");
-  answer = (p) => {
+  assert.doesNotMatch(obRoot.innerHTML, /Approve with Face ID/);
+  // On chain now: the check shows the other owner before anything is approved.
+  const ready = prepared({ owners: [VERIFIER, EOA], otherOwners: [EOA], alreadyOwner: true, ownerChange: null, approval: { challenge: "Y2hhbGxlbmdl", rpId: "localhost" } });
+  answer = () => ready;
+  await handlers.confirm.onclick({ currentTarget: btn });
+  assert.ok(!calls.some((c) => c.path.endsWith("/confirm")), "checking never confirms");
+  assert.match(obRoot.innerHTML, /Approve with Face ID/);
+  assert.match(obRoot.innerHTML, new RegExp(`This Safe has another owner: <span[^>]*>${EOA}</span>`));
+  run("passkeyAssertion = async (challenge) => ({ credentialId: 'cred', challenge })");
+  answer = (p, body) => {
     assert.equal(p, "/api/users/u-co/safe/import/confirm");
+    // JSON: the body was built in the vm's realm.
+    assert.deepEqual(JSON.parse(JSON.stringify(body)), { address: SAFE, stepUp: { credentialId: "cred", challenge: "Y2hhbGxlbmdl" } }, "the approval prepare issued, spent on confirm");
     return company({ address: SAFE, passkeySafe: { address: SAFE, status: "active", threshold: 1, importedAt: "2026-10-01T00:00:00Z", previousAddress: PLAN } });
   };
   await handlers.confirm.onclick({ currentTarget: btn });
@@ -232,6 +246,38 @@ await check("confirm: not yet on chain offers a retry; 201 binds, clears the fla
   assert.equal(run("safeImportFlag()"), null);
   assert.equal(screen(), "monerium", "an imported Safe skips the recovery step");
   assert.ok(!deployed());
+});
+await check("confirm: an owner already, but a Safe Zold can't bind, says why and offers no approval", async () => {
+  setUser(company());
+  run(`setSafeImportFlag("${SAFE}"); obImport = { address: "${SAFE}", prepared: null }; obScreen = 'b-import-confirm'`);
+  const btn: any = { querySelector: () => ({ textContent: "" }), getAttribute: () => null, setAttribute() {}, removeAttribute() {} };
+  // bind() itself asks prepare again when nothing is prepared yet.
+  answer = () => prepared({ owners: [VERIFIER, EOA], otherOwners: [EOA], alreadyOwner: true, ownerChange: null, threshold: 2, approval: null });
+  const handlers: Record<string, any> = {};
+  run("OB['b-import-confirm'].bind")({ querySelector: (sel: string) => (sel === "#btn-import-confirm" ? (handlers.confirm ??= {}) : null) });
+  run("obShowErr = (e) => { __lastErr = e; }; var __lastErr = null");
+  await handlers.confirm.onclick({ currentTarget: btn });
+  assert.equal(run("__lastErr.message"), run('obImportSentence({ code: "THRESHOLD_NOT_ONE" })'));
+  assert.equal(run("obImport.notYet"), true);
+  assert.doesNotMatch(obRoot.innerHTML, /Approve with Face ID/);
+});
+await check("confirm: a refused approval is dropped, and the next click checks again", async () => {
+  setUser(company());
+  ctx.__p = prepared({ owners: [VERIFIER], otherOwners: [], alreadyOwner: true, ownerChange: null, approval: { challenge: "c2", rpId: "localhost" } });
+  run(`setSafeImportFlag("${SAFE}"); obImport = { address: "${SAFE}", prepared: __p }; obGo('b-import-confirm')`);
+  assert.match(obRoot.innerHTML, /only owner/);
+  const btn: any = { querySelector: () => ({ textContent: "" }), getAttribute: () => null, setAttribute() {}, removeAttribute() {} };
+  const handlers: Record<string, any> = {};
+  run("OB['b-import-confirm'].bind")({ querySelector: (sel: string) => (sel === "#btn-import-confirm" ? (handlers.confirm ??= {}) : null) });
+  run("passkeyAssertion = async (challenge) => ({ credentialId: 'cred', challenge })");
+  answer = () => { throw Object.assign(new Error("changed"), { code: "SAFE_CHANGED", status: 409 }); };
+  await handlers.confirm.onclick({ currentTarget: btn });
+  assert.equal(run("obImport.prepared.approval"), null);
+  assert.doesNotMatch(obRoot.innerHTML, /Approve with Face ID/);
+  answer = () => prepared();
+  calls.length = 0;
+  await handlers.confirm.onclick({ currentTarget: btn });
+  assert.deepEqual(calls.map((c) => c.path), ["/api/users/u-co/safe/import/prepare"]);
 });
 await check("Use a new account instead clears the flag and returns to the choice", () => {
   setCaps({ safeImport: true });

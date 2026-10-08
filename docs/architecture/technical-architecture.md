@@ -166,8 +166,11 @@ sets are cumulative (`domain/roles.ts:39-86`). `transfers.read` and
   `step_up`) and optionally to a user or `recovery:<id>`. A `step_up` is bound
   to the user AND one action from `STEP_UP_ACTIONS` (routes/auth.ts:
   `passkey.replace`, `monerium.connect`, `monerium.disconnect`,
-  `authorizer.bind`, `org.payment-review.off`, `org.invoice-iban.change`), and
-  only the route making that change accepts it.
+  `authorizer.bind`, `org.payment-review.off`, `org.invoice-iban.change`,
+  `safe.import`), and only the route making that change accepts it.
+  `safe.import` is also bound to its target (`stepUpBinding(user, action,
+  target)`): `/safe/import/prepare` issues it for one Safe's address, owners
+  and threshold, and `/webauthn/challenge` refuses to issue it.
 - Registration checks type, challenge, origin allowlist, rpIdHash and the UP
   and UV flags. **Attestation statements are not verified**, so any
   authenticator that verifies its user is accepted.
@@ -291,10 +294,18 @@ Safe (`importedAt`) as for a recovered one (`recoveredAt`).
   still switch (a passkey; its own planned Safe not active, not deployed and
   empty) and the Safe's shape, and returns owners, threshold, the passkey's
   verifier, and each owner change (`add`, `swap`) with its Safe{Wallet}
-  Transaction Builder file (`txBuilder: {fileName, json}`). It stores nothing.
-- `POST /users/:id/safe/import/confirm {address}` reads the chain again,
-  deploys the verifier from the deployer if it has no code, and binds the
-  account (`passkeySafe.status` `active`, `importedAt`). 201 with the user.
+  Transaction Builder file (`txBuilder: {fileName, json}`). Once the verifier
+  is an owner (threshold 1, at most one other owner) it also returns
+  `otherOwners` and `approval: {challenge, rpId}`, a `safe.import` step-up
+  challenge bound to the address, owners and threshold it read; before that,
+  `approval` is null. It stores nothing.
+- `POST /users/:id/safe/import/confirm {address, stepUp}` reads the chain
+  again, runs the shape and owner checks, then verifies the step-up against
+  the Safe as read (401 `STEP_UP_REQUIRED` / `STEP_UP_INVALID`, 403
+  `STEP_UP_CREDENTIAL`) before relaying or writing anything. It deploys the
+  verifier from the deployer if it has no code, reads again, refuses 409
+  `SAFE_CHANGED` if the owners or threshold moved, and binds the account
+  (`passkeySafe.status` `active`, `importedAt`). 201 with the user.
 - The Transaction Builder file is built once, in `wallet/safe-tx-builder.ts`;
   `npm run safe:import-tx` writes the same bytes for the same input
   (`safe-import:test` compares them). The browser only downloads it.
@@ -305,7 +316,9 @@ Safe (`importedAt`) as for a recovered one (`recoveredAt`).
   `b-safe-choice` instead of deploying. "Open a new account" deploys as
   before; "Use our company's existing Safe" runs `b-import-address` (prepare)
   → `b-import-sign` (download, or to/value/data) → `b-import-confirm`
-  (confirm, retried by hand). Zold never collects or relays the owner's
+  (check: `prepare` again until it names an approval; then the screen shows
+  the other owner and "Approve with Face ID" spends the challenge on confirm;
+  any failure drops the approval and the next click checks again). Zold never collects or relays the owner's
   signature; no wallet connection is built.
 - `localStorage["zold-safe-import"]` `{userId, address}` marks an import
   started on this device. While it is set, `finishPasskeySafeSetup` refuses
@@ -1244,11 +1257,11 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 |---|---|
 | `POST /users` (A) | Signup: segment decided, pending account, session. |
 | `GET/DELETE /session` (S) | Read or revoke the session. |
-| `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one; `step_up` also needs `action` (400 without a known one). |
+| `POST /webauthn/challenge` (A) | `login` needs no session. `register` and `step_up` need one; `step_up` also needs `action` (400 without a known one, and for `safe.import`, which `prepare` issues). |
 | `POST /users/:id/passkey` (U) | Register a passkey. Needs a step-up if one already exists, and then revokes the user's other sessions. |
 | `POST /users/:id/passkey-safe/deployment[/:requestId]` (U) | Prepare, then submit, the Safe deploy. |
 | `POST /users/:id/safe/import/prepare` (U) | Check a Safe for import; owner changes and Transaction Builder files. Stores nothing. |
-| `POST /users/:id/safe/import/confirm` (U) | Bind the account to an existing Safe the passkey's verifier already owns. |
+| `POST /users/:id/safe/import/confirm` (U + step-up) | Bind the account to an existing Safe the passkey's verifier already owns. The step-up is the one `prepare` issued for that Safe's address, owners and threshold. |
 | `POST /passkey/login` (A) | Passkey sign-in. |
 | `GET /users/:id` (U) | Account read. |
 | `GET /users/:id/kyc` (U) | Account read. |
