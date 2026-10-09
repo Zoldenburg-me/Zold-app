@@ -240,6 +240,9 @@ function migrateUsersToOrganisations() {
   let migrated = 0;
   for (const user of db.users) {
     if (db.members.some((m) => m.userId === user.id)) continue;
+    // A company login has no personal space (POST /api/orgs refuses one): its
+    // Safe and IBAN are the company's, and its owner opens the business org.
+    if (user.accountType === "company") continue;
 
     const now = user.createdAt ?? new Date().toISOString();
     const org: Organisation = {
