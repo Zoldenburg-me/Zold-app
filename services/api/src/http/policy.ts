@@ -58,12 +58,14 @@ export const CONTENT_SECURITY_POLICY = [
 ].join("; ");
 
 /**
- * HTTPS only, for two years, on every subdomain. Production only: a laptop
- * on http://localhost must not pin itself to HTTPS. includeSubDomains means
- * every subdomain of the production host must serve HTTPS; preload waits
- * until that is confirmed for all of them.
+ * HTTPS only, on every subdomain. Production only: a laptop on
+ * http://localhost must not pin itself to HTTPS.
+ *
+ * Five minutes while every subdomain of the production host is confirmed to
+ * serve HTTPS: a browser remembers this header for max-age, and a rollback
+ * cannot take it back. Then two years (63072000), then preload.
  */
-export const STRICT_TRANSPORT_SECURITY = "max-age=63072000; includeSubDomains";
+export const STRICT_TRANSPORT_SECURITY = "max-age=300; includeSubDomains";
 
 export function securityHeadersFor(production: boolean): express.RequestHandler {
   return (_req, res, next) => {

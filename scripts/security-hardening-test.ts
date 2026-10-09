@@ -138,7 +138,7 @@ await check("every response carries a same-origin CSP and refuses to be framed",
   }
   assert.equal(r.headers.get("x-frame-options"), "DENY");
 });
-await check("production pins HTTPS for two years on every subdomain; local dev does not", async () => {
+await check("production pins HTTPS on every subdomain (five minutes while subdomains are confirmed); local dev does not", async () => {
   const headersFrom = async (production: boolean) => {
     const one = express();
     one.use(securityHeadersFor(production));
@@ -150,7 +150,7 @@ await check("production pins HTTPS for two years on every subdomain; local dev d
       s.close();
     }
   };
-  assert.equal((await headersFrom(true)).get("strict-transport-security"), "max-age=63072000; includeSubDomains");
+  assert.equal((await headersFrom(true)).get("strict-transport-security"), "max-age=300; includeSubDomains");
   assert.equal((await headersFrom(false)).get("strict-transport-security"), null);
 });
 

@@ -66,8 +66,8 @@ In the repo (`docs/running-locally.md`, "Secrets"):
   reads of them. Bash rules match command prefixes only, so they are a
   guard against slips, not a boundary; the boundary is the encryption. The
   deny on `.private/**` also covers `.private/pentest/`.
-- `Strict-Transport-Security: max-age=63072000; includeSubDomains` in
-  production (`http/policy.ts`). Preload once every subdomain serves HTTPS.
+- `Strict-Transport-Security: max-age=300; includeSubDomains` in production
+  (`http/policy.ts`).
 
 Still open:
 - The switch itself: on each laptop, `secrets.sh init`, encrypt `.env`, seal
@@ -78,6 +78,9 @@ Still open:
   `.private/`.
 - Every binary and image fetched at build or boot is pinned and verified
   (version plus SHA-256, or image digest). The same tooling.
+- Confirm every zoldhq.com subdomain serves HTTPS, then raise HSTS to
+  `max-age=63072000`, then preload. A browser keeps the header for its
+  max-age, so a rollback does not undo a long one.
 - Hardware-key 2FA on the registrar, the registrant's email account (it can
   reset the registrar), Cloudflare and GitHub; registrar lock and WHOIS
   privacy; the registrant is the company. Whoever controls the domain's DNS
