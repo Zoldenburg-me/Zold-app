@@ -652,6 +652,43 @@ try {
     }
   }
 
+  console.log("   an orchestrator-run swap whose outcome was not recorded is never refunded…");
+  {
+    // The swap may have landed: the venue threw after broadcasting it (a
+    // receipt timeout, a stale balance read), or the process stopped.
+    const user = await seedUser("Swap Unrecorded", 0);
+    const t = await seedSafeFundedTransfer(user, 50, ["liquidity.swap.pending"]);
+    const orchestratorBefore = await eureBalance(orchestratorAddress);
+    const out = await compensateTransfer(t.id);
+    check("a swap intent without its outcome goes to review", out.state === "MANUAL_REVIEW" && !out.refund, `got ${out.state}`);
+    check("and no EURe left the orchestrator", (await eureBalance(orchestratorAddress)) === orchestratorBefore);
+
+    const now = Date.now();
+    const stale = new Date(now - 60 * 60_000).toISOString();
+    const debited = (s: string[]) =>
+      ({ id: "t-swap", state: "DEBITED", updatedAt: stale, txs: s.map((step) => ({ step, hash: "0x" })) }) as any;
+    check(
+      "the sweep reviews a stale DEBITED transfer whose swap has no outcome",
+      strandedAction(debited([DEBIT_STEP.safe, "liquidity.swap.pending"]), now, () => false) === "review-outbound",
+    );
+    for (const venue of ["fx-swapper", "rfq", "lifi", "dex"]) {
+      check(
+        `a recorded ${venue} swap settles the intent`,
+        strandedAction(debited([DEBIT_STEP.safe, "liquidity.swap.pending", `liquidity.${venue}.eure-usdc`]), now, () => false) ===
+          "fail-and-compensate",
+      );
+    }
+
+    // executeTransfer's orchestrator-custody branch needs a passkey-signed
+    // debit, which hardhat cannot give, so the order is read from source: the
+    // intent is persisted before the venue is called.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(path.join(ROOT, "services/api/src/orchestrator.ts"), "utf8");
+    const intentAt = src.indexOf('recordOutboundIntent(transfer.id, txs, "liquidity.swap.pending")');
+    const swapAt = src.indexOf("await executeTransferLiquidity(");
+    check("the swap intent is recorded before the orchestrator runs the swap", intentAt > 0 && intentAt < swapAt, `${intentAt} vs ${swapAt}`);
+  }
+
   console.log("   daily cap counts both pots…");
   {
     const user = await seedUser("Cap", 0);
