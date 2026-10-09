@@ -39,6 +39,10 @@ const SHOP = "keycard-demo.myshopify.com";
 const TOKEN = "shpat_test_offline_token";
 const calls: { op: string; vars: any; shop: string; endpoint: string }[] = [];
 let failNextMarkPaid = false;
+let releaseExchange = () => {};
+let heldExchange = Promise.resolve();
+/** Shops whose OAuth code was exchanged for a token, in order. */
+const exchanges: string[] = [];
 
 const stub: Server = createServer((req, res) => {
   const [, shop, ...rest] = (req.url ?? "").split("?")[0].split("/");
@@ -49,7 +53,10 @@ const stub: Server = createServer((req, res) => {
     const p = rest.join("/");
     if (p === "admin/oauth/access_token") {
       const b = JSON.parse(body || "{}");
-      if (b.client_id !== "zold-app-key" || b.client_secret !== "shpss_test_secret" || b.code !== "good-code") return send(400, { error: "invalid_request" });
+      if (b.client_id !== "zold-app-key" || b.client_secret !== "shpss_test_secret" || !["good-code", "held-code"].includes(b.code)) return send(400, { error: "invalid_request" });
+      exchanges.push(shop);
+      // `held-code` answers only once the test releases it, to interleave callbacks.
+      if (b.code === "held-code") return void heldExchange.then(() => send(200, { access_token: TOKEN, scope: "read_orders,write_orders" }));
       return send(200, { access_token: TOKEN, scope: "read_orders,write_orders" });
     }
     if (p.startsWith("admin/api/") && p.endsWith("graphql.json")) {
@@ -511,6 +518,134 @@ await check("disconnecting removes the webhook subscription and the connection, 
   assert.ok(calls.some((x) => x.op === "webhookSubscriptionDelete" && x.vars.id === "gid://shopify/WebhookSubscription/ORDERS_CREATE"));
   assert.equal(store.findShopifyConnectionByShop(SHOP), undefined);
   assert.equal((await webhook("orders/create", order())).status, 404);
+});
+
+console.log("\nOne store, two organisations");
+const CONTESTED = "contested-store.myshopify.com";
+/** An organisation whose owner has a claimed payment page. */
+const orgWithPayee = (label: string) => {
+  const addr = `0x${randomUUID().replace(/-/g, "").padEnd(40, "0").slice(0, 40)}` as `0x${string}`;
+  const user: any = {
+    ...merchant, id: randomUUID(), name: `${label} owner`, email: `${label}@example.com`, address: addr,
+    paymentPage: { ...merchant.paymentPage, handle: label, displayName: label, depositAddress: addr, recipientAddress: addr },
+  };
+  store.addUser(user);
+  const o: any = { ...org, id: randomUUID(), name: `${label} GmbH` };
+  store.addOrganisation(o, false);
+  const member: any = { id: randomUUID(), orgId: o.id, userId: user.id, email: user.email, role: "owner", status: "active", invitedAt: now, acceptedAt: now };
+  store.addMember(member);
+  return { user, org: o, member };
+};
+const startInstall = async (who: { user: any; org: any }, shop = CONTESTED) => {
+  const r = await call("POST", `/api/orgs/${who.org.id}/shopify/install`, { body: { shop }, user: who.user.id });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return new URL(r.body.authorizeUrl).searchParams.get("state")!;
+};
+const A = orgWithPayee("alpha");
+const B = orgWithPayee("bravo");
+await check("a callback holding org A's install state cannot rewrite the payee or installer of a store org B has since connected (BUG: B's buyers paid A)", async () => {
+  const stateA = await startInstall(A);
+  const stateB = await startInstall(B);
+  assert.equal((await call("GET", `/api/shopify/callback?${oauthQuery(stateB, "good-code", CONTESTED)}`)).status, 302);
+  const before = { ...store.findShopifyConnectionByShop(CONTESTED)! };
+  assert.equal(before.orgId, B.org.id);
+  assert.equal(before.payeeUserId, B.user.id);
+  const exchangesBefore = exchanges.length;
+
+  const r = await call("GET", `/api/shopify/callback?${oauthQuery(stateA, "good-code", CONTESTED)}`);
+  assert.equal(r.status, 302);
+  const view = await call("GET", `/api/orgs/${B.org.id}/shopify`, { user: B.user.id });
+  const after = store.findShopifyConnectionByShop(CONTESTED)!;
+  const o = order();
+  await webhook("orders/create", o, CONTESTED);
+  const opened = store.findPaymentRequestBySource("shopify", o.admin_graphql_api_id, CONTESTED);
+  assert.deepEqual(
+    {
+      redirectCode: new URL(r.location).searchParams.get("code"),
+      redirectError: new URL(r.location).searchParams.get("error"),
+      orgId: after.orgId,
+      payeeShownToB: view.body.connections[0]?.payeeUserId,
+      installer: after.installedByUserId,
+      installedAt: after.installedAt,
+      token: after.accessTokenEnc,
+      tokenFetched: exchanges.length > exchangesBefore,
+      orderPaysHandle: opened?.handle,
+    },
+    {
+      redirectCode: "SHOP_CONNECTED_ELSEWHERE",
+      redirectError: "this store is connected to a different organisation",
+      orgId: B.org.id,
+      payeeShownToB: B.user.id,
+      installer: B.user.id,
+      installedAt: before.installedAt,
+      token: before.accessTokenEnc,
+      tokenFetched: false,
+      orderPaysHandle: "bravo",
+    },
+  );
+});
+await check("a reinstall from the org that owns the store still rewrites its payee, within that org", async () => {
+  const st = await startInstall(B);
+  const treasurer = orgWithPayee("bravo-treasury");
+  store.addMember({ ...treasurer.member, id: randomUUID(), orgId: B.org.id });
+  const st2 = await startInstall({ user: treasurer.user, org: B.org });
+  assert.equal((await call("GET", `/api/shopify/callback?${oauthQuery(st, "good-code", CONTESTED)}`)).status, 302);
+  const r = await call("GET", `/api/shopify/callback?${oauthQuery(st2, "good-code", CONTESTED)}`);
+  assert.equal(new URL(r.location).searchParams.get("error"), null, r.location);
+  const c = store.findShopifyConnectionByShop(CONTESTED)!;
+  assert.deepEqual({ orgId: c.orgId, payee: c.payeeUserId, installer: c.installedByUserId }, { orgId: B.org.id, payee: treasurer.user.id, installer: treasurer.user.id });
+  assert.equal(store.shopifyConnectionsForOrg(B.org.id).filter((x) => x.shop === CONTESTED).length, 1, "a reinstall added a second connection");
+});
+await check("an installer deactivated between starting the install and Shopify's callback cannot complete it", async () => {
+  const SHOP_C = "fresh-store.myshopify.com";
+  const C = orgWithPayee("charlie");
+  const st = await startInstall(C, SHOP_C);
+  store.updateMember(C.member.id, { status: "deactivated" });
+  const exchangesBefore = exchanges.length;
+  const r = await call("GET", `/api/shopify/callback?${oauthQuery(st, "good-code", SHOP_C)}`);
+  assert.equal(new URL(r.location).searchParams.get("code"), "INSTALLER_NOT_ALLOWED", r.location);
+  assert.equal(store.findShopifyConnectionByShop(SHOP_C), undefined, "the deactivated member connected the store");
+  assert.equal(exchanges.length, exchangesBefore, "a token was fetched for a refused install");
+});
+await check("an installer whose role no longer allows org.update cannot complete the install", async () => {
+  const SHOP_V = "demoted-store.myshopify.com";
+  const V = orgWithPayee("victor");
+  const co = orgWithPayee("victor-co");
+  store.addMember({ ...co.member, id: randomUUID(), orgId: V.org.id });
+  const st = await startInstall(V, SHOP_V);
+  store.updateMember(V.member.id, { role: "viewer" });
+  const exchangesBefore = exchanges.length;
+  const r = await call("GET", `/api/shopify/callback?${oauthQuery(st, "good-code", SHOP_V)}`);
+  assert.equal(new URL(r.location).searchParams.get("code"), "INSTALLER_NOT_ALLOWED", r.location);
+  assert.equal(store.findShopifyConnectionByShop(SHOP_V), undefined, "a viewer connected the store");
+  assert.equal(exchanges.length, exchangesBefore, "a token was fetched for a refused install");
+});
+await check("two orgs' callbacks for one unconnected store, interleaved around the code exchange: the first to connect keeps it", async () => {
+  const SHOP_D = "raced-store.myshopify.com";
+  const D = orgWithPayee("delta");
+  const E = orgWithPayee("echo");
+  const stD = await startInstall(D, SHOP_D);
+  const stE = await startInstall(E, SHOP_D);
+  heldExchange = new Promise<void>((r) => (releaseExchange = r));
+  // D passes the first check while the shop is free, then waits on Shopify.
+  const slow = call("GET", `/api/shopify/callback?${oauthQuery(stD, "held-code", SHOP_D)}`);
+  let won: any;
+  try {
+    assert.ok(await until(() => exchanges.filter((s) => s === SHOP_D).length === 1), "D's exchange never started");
+    const fast = await call("GET", `/api/shopify/callback?${oauthQuery(stE, "good-code", SHOP_D)}`);
+    assert.equal(new URL(fast.location).searchParams.get("error"), null, fast.location);
+    won = { ...store.findShopifyConnectionByShop(SHOP_D)! };
+  } finally {
+    releaseExchange();
+  }
+  const late = await slow;
+  assert.equal(new URL(late.location).searchParams.get("code"), "SHOP_CONNECTED_ELSEWHERE", late.location);
+  const c = store.findShopifyConnectionByShop(SHOP_D)!;
+  assert.deepEqual(
+    { orgId: c.orgId, payee: c.payeeUserId, installer: c.installedByUserId, token: c.accessTokenEnc, installedAt: c.installedAt },
+    { orgId: E.org.id, payee: E.user.id, installer: E.user.id, token: won.accessTokenEnc, installedAt: won.installedAt },
+  );
+  assert.equal(store.shopifyConnectionsForOrg(D.org.id).length, 0);
 });
 
 server.close();
