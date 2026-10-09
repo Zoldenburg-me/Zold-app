@@ -48,6 +48,7 @@ import { MAX_REQUEST_EUR, displayCode, effectiveState, normaliseCode, type Payme
 import { baseUrlFor, createPaymentRequest, ensureQuote, payerContext } from "./payment-requests.js";
 import { publicPaymentRequest } from "../payment-requests.js";
 import { requirePermission, resolveOrg, type SessionResolver } from "./org-context.js";
+import { roleCan } from "../domain/roles.js";
 import { isValidShopDomain, normaliseShop, verifyBodyHmac, verifyQueryHmac } from "../shopify/hmac.js";
 import {
   authorizeUrl,
@@ -129,7 +130,26 @@ function openOnce(key: string, open: () => Promise<PaymentRequest>): Promise<Pay
 
 /** Pending installs: our nonce → who started it. In memory on purpose; an
  *  install that outlives a restart simply starts again. */
-const pendingInstalls = new Map<string, { orgId: string; shop: string; payeeUserId: string; installerId: string; expiresAt: number }>();
+type PendingInstall = { orgId: string; shop: string; payeeUserId: string; installerId: string; expiresAt: number };
+const pendingInstalls = new Map<string, PendingInstall>();
+
+const CONNECTED_ELSEWHERE = "this store is connected to a different organisation";
+
+type InstallRefusal = { code: "SHOP_CONNECTED_ELSEWHERE" | "INSTALLER_NOT_ALLOWED"; error: string };
+
+/** The reason this install may not write the shop's connection, or
+ *  undefined when it may. A connection belongs to one org; only that org's
+ *  flows rewrite it. The shop is the lookup key, as everywhere a
+ *  merchant-side id is. A missing org refuses like a missing member. */
+function installRefusal(p: PendingInstall): InstallRefusal | undefined {
+  const existing = store.findShopifyConnectionByShop(p.shop);
+  if (existing && existing.orgId !== p.orgId) return { code: "SHOP_CONNECTED_ELSEWHERE", error: CONNECTED_ELSEWHERE };
+  const member = store.findOrganisation(p.orgId) ? store.memberFor(p.orgId, p.installerId) : undefined;
+  if (!member || member.status !== "active" || !roleCan(member.role, "org.update")) {
+    return { code: "INSTALLER_NOT_ALLOWED", error: "whoever started this install can no longer connect stores for the organisation — start again from the dashboard" };
+  }
+  return undefined;
+}
 
 export function shopifyAvailable(): { available: boolean; reason?: string } {
   if (!SHOPIFY.enabled) return { available: false, reason: "SHOPIFY_API_KEY / SHOPIFY_API_SECRET are not set — no Shopify app is registered for this deployment" };
@@ -333,7 +353,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       }
       const existing = store.findShopifyConnectionByShop(shop);
       if (existing && existing.orgId !== ctx.org.id) {
-        return res.status(409).json({ error: "this store is connected to a different organisation" });
+        return res.status(409).json({ error: CONNECTED_ELSEWHERE, code: "SHOP_CONNECTED_ELSEWHERE" });
       }
       const payee = payeeFor(ctx.org.id, ctx.userId);
       if (!payee.user) return res.status(409).json({ error: payee.reason });
@@ -359,6 +379,16 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         return back({ error: "this install was not started from Zold, or it has expired — start again from the dashboard" });
       }
       pendingInstalls.delete(String(q.state));
+      const refuse = (r: InstallRefusal) => {
+        console.error(`shopify: install callback for ${shop} refused (${r.code}): org ${pending.orgId}, installer ${pending.installerId}`);
+        return back({ error: r.error, code: r.code });
+      };
+      // The install route's checks held when the install started, up to 15
+      // minutes ago. Ask again before fetching a token, and once more after
+      // the exchange (another callback may have connected the shop meanwhile)
+      // with no await between that check and the write.
+      const refusedEarly = installRefusal(pending);
+      if (refusedEarly) return refuse(refusedEarly);
       let token: { accessToken: string; scope: string };
       try {
         token = await exchangeCode(shop, String(q.code ?? ""));
@@ -372,6 +402,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         if (err instanceof EncryptionUnavailableError) return back({ error: err.message });
         throw err;
       }
+      const refusedLate = installRefusal(pending);
+      if (refusedLate) return refuse(refusedLate);
       const now = new Date().toISOString();
       const existing = store.findShopifyConnectionByShop(shop);
       const connection = existing
