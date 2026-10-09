@@ -234,7 +234,10 @@ export function createDraftRoutes(
     if (!draft || draft.orgId !== ctx.org.id) {
       return res.status(404).json({ error: "no such draft" });
     }
-    const verdict = canReviewDraft(ctx.member.role, ctx.member.id, draft.createdByMemberId);
+    // Compared as people, not member rows: someone deactivated and re-invited
+    // holds a new row. A drafter that resolves to no user counts as the reviewer.
+    const drafterUserId = store.findMember(draft.createdByMemberId)?.userId ?? ctx.userId;
+    const verdict = canReviewDraft(ctx.member.role, ctx.userId, drafterUserId);
     if (!verdict.allowed) return res.status(403).json({ error: verdict.reason });
 
     const approve = req.body?.approve !== false;
