@@ -55,6 +55,7 @@ const scripts = [
   "email:test",
   "best:test",
   "webhook:test",
+  "checkout-service:test",
   "reconcile:test",
   "anchor:config:test",
   "anchor:safety",

@@ -885,6 +885,20 @@ export interface RecoveryRequest {
   };
 }
 
+/**
+ * A bearer credential for one of our own services (today only the checkout
+ * service). Only the SHA-256 of the token is kept: the token is 256 random
+ * bits, so a plain hash is enough and the db file never holds a usable one.
+ * `expiresAt` is set when a rotation supersedes it; unset means current.
+ */
+export interface ServiceCredential {
+  id: string;
+  service: "checkout";
+  tokenHash: string;
+  createdAt: string;
+  expiresAt?: string;
+}
+
 export interface Session {
   id: string;
   userId: string;

@@ -43,6 +43,7 @@
     "faucet:test": "tsx scripts/faucet-test.ts",
     "preflight": "tsx scripts/mainnet-preflight.ts",
     "webhook:test": "tsx scripts/webhook-test.ts",
+    "checkout-service:test": "tsx scripts/checkout-service-test.ts",
     "reconcile": "tsx scripts/reconcile.ts",
     "reconcile:test": "tsx scripts/reconcile-test.ts",
     "anchor:test": "STELLAR_HORIZON=https://horizon-testnet.stellar.org STELLAR_PASSPHRASE='Test SDF Network ; September 2015' STELLAR_FRIENDBOT=https://friendbot.stellar.org MG_ANCHOR_DOMAIN=testanchor.stellar.org MG_ANCHOR_ASSET=native tsx scripts/anchor-test.ts",

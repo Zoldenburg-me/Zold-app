@@ -35,6 +35,7 @@ import type {
   Quote,
   ReceiptShare,
   RecoveryRequest,
+  ServiceCredential,
   Session,
   ShopifyConnection,
   StoredDocument,
@@ -47,6 +48,8 @@ export interface Db {
   quotes: Quote[];
   transfers: Transfer[];
   sessions: Session[];
+  /** Hashed bearer credentials of our own services (checkout-service.ts). */
+  serviceCredentials: ServiceCredential[];
   /** Public shareable receipts, keyed by an unguessable slug. */
   receiptShares: ReceiptShare[];
   /** Account documents (receipts, statements, balance and ownership letters):
@@ -117,6 +120,7 @@ export let db: Db = {
   quotes: [],
   transfers: [],
   sessions: [],
+  serviceCredentials: [],
   receiptShares: [],
   documents: [],
   paymentRequests: [],
@@ -147,6 +151,7 @@ export function initStore() {
   if (existsSync(DB_PATH)) {
     db = JSON.parse(readFileSync(DB_PATH, "utf8"));
     db.sessions ??= [];
+    db.serviceCredentials ??= [];
     db.receiptShares ??= [];
     db.documents ??= [];
     db.paymentRequests ??= [];
