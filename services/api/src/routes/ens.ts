@@ -41,6 +41,16 @@ export interface EnsDeps {
  *  stranger can ask for. Hex characters, prefix included. */
 const MAX_CALL_DATA_HEX = 4_096;
 
+/** How long the gateway waits for a page's forwarder renewal before it
+ *  answers "no records". A wallet gives up on a slow gateway; the renewal
+ *  carries on and the next lookup sees its result. */
+const PAGE_CHECK_TIMEOUT_MS = 2_000;
+
+/** Signed answers kept per request. An answer is reused while more than half
+ *  of its validity is left, so repeat lookups cost no signature and no store
+ *  scan, and a page change still shows within half the TTL. */
+const SIGNED_CACHE_MAX = 2_000;
+
 const CCIP_TIMEOUT_MS = 3_000;
 const CCIP_MAX_BYTES = 64 * 1024;
 const CCIP_MAX_URLS = 2;
@@ -162,14 +172,51 @@ export async function ccipFetch({ data, sender, urls }: { data: Hex; sender: Add
 async function handleRecords(handle: string | undefined): Promise<EnsRecords> {
   if (!handle) return NO_RECORDS;
   const user = store.findUserByHandle(handle);
-  if (!user?.paymentPage?.handle) return NO_RECORDS;
-  if (!(await livePaymentPage(user))) return NO_RECORDS;
+  if (!user?.paymentPage?.handle || user.paymentPage.handle !== handle) return NO_RECORDS;
+  if (!(await liveWithin(user, PAGE_CHECK_TIMEOUT_MS))) return NO_RECORDS;
   const payee = publicPayee(store.findUser(user.id) ?? user, payChain());
   const chainIds = new Set([payee.chainId, ...(payee.supportedTokens ?? []).map((t) => t.chainId)]);
+  const base = PUBLIC_URL.replace(/\/+$/, "");
   return {
-    addresses: new Map([...chainIds].map((id) => [toCoinType(id), payee.address])),
-    texts: PUBLIC_URL ? { url: `${PUBLIC_URL}/pay/${payee.handle}` } : {},
+    addresses: new Map([...chainIds].flatMap((id) => coinTypeOf(id)).map((coin) => [coin, payee.address])),
+    texts: base ? { url: `${base}/pay/${payee.handle}` } : {},
   };
+}
+
+/** livePaymentPage, but "not live" once `ms` pass. */
+function liveWithin(user: Parameters<typeof livePaymentPage>[0], ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  return Promise.race([livePaymentPage(user), late]).finally(() => clearTimeout(timer));
+}
+
+/** ENSIP-11 coin type for a chain id, or none for an id it cannot express
+ *  (one bad token entry must not fail the page's other records). */
+function coinTypeOf(chainId: number): bigint[] {
+  try {
+    return [toCoinType(chainId)];
+  } catch {
+    return [];
+  }
+}
+
+/** Signed answers by request, oldest first (Map keeps insertion order). */
+const signedAnswers = new Map<string, { data: Hex; expires: bigint }>();
+
+function cachedAnswer(callData: string): Hex | undefined {
+  const hit = signedAnswers.get(callData);
+  if (!hit) return undefined;
+  const left = Number(hit.expires) - Date.now() / 1000;
+  if (left > ENS_GATEWAY.ttlSeconds / 2) return hit.data;
+  signedAnswers.delete(callData);
+  return undefined;
+}
+
+function rememberAnswer(callData: string, data: Hex, expires: bigint) {
+  if (signedAnswers.size >= SIGNED_CACHE_MAX) signedAnswers.delete(signedAnswers.keys().next().value!);
+  signedAnswers.set(callData, { data, expires });
 }
 
 export function createEnsRouter({ requireSession }: EnsDeps) {
@@ -187,15 +234,24 @@ export function createEnsRouter({ requireSession }: EnsDeps) {
       if (!ENS_GATEWAY.enabled || !ENS_GATEWAY.key) return res.status(404).json({ message: "no ENS gateway on this deployment" });
       const callData = req.params.file.replace(/\.json$/, "");
       if (!isHex(callData) || callData.length > MAX_CALL_DATA_HEX) return res.status(400).json({ message: "callData must be hex" });
+      // The signature binds the exact request bytes, so the cache key is the
+      // request as given: a differently-cased copy is a different request.
+      const cached = cachedAnswer(callData);
+      if (cached) {
+        res.setHeader("cache-control", "public, max-age=60");
+        return res.json({ data: cached });
+      }
       try {
         const { result } = await answerResolveCall(callData as Hex, ENS_GATEWAY.parent, handleRecords);
+        const expires = BigInt(Math.floor(Date.now() / 1000) + ENS_GATEWAY.ttlSeconds);
         const data = await signGatewayResponse({
           resolver: ENS_GATEWAY.resolver,
           request: callData as Hex,
           result,
-          expires: BigInt(Math.floor(Date.now() / 1000) + ENS_GATEWAY.ttlSeconds),
+          expires,
           key: ENS_GATEWAY.key,
         });
+        rememberAnswer(callData, data, expires);
         res.setHeader("cache-control", "public, max-age=60");
         return res.json({ data });
       } catch (e) {
