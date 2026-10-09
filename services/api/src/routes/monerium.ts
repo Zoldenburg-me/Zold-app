@@ -214,7 +214,8 @@ async function passkeySafeLinkSignature(
     challenge,
     true,
   );
-  const updated = store.updateUser(user.id, { passkey: { ...passkey, signCount } });
+  const updated = store.recordPasskeyUse(user.id, passkey.credentialId, signCount);
+  if (!updated) throw new Error("this passkey is no longer the account's passkey");
   const signature = await signMessageAsPasskeySafe(user.passkeySafe, user.address, LINK_MESSAGE, {
     authenticatorData: b64urlToBuf(authenticatorData),
     clientDataJSON: b64urlToBuf(clientDataJSON),
