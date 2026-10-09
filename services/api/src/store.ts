@@ -135,6 +135,17 @@ export const store = {
     return u;
   },
   /**
+   * Record a verified assertion's signCount, only while `credentialId` is
+   * still the account's passkey: a recovery can replace the passkey while an
+   * assertion is being verified. Undefined when it was replaced; the caller
+   * refuses the assertion.
+   */
+  recordPasskeyUse(id: string, credentialId: string, signCount: number) {
+    const u = db.users.find((x) => x.id === id);
+    if (!u?.passkey || u.passkey.credentialId !== credentialId) return undefined;
+    return store.updateUser(id, { passkey: { ...u.passkey, signCount } });
+  },
+  /**
    * Append one audit entry. There is deliberately no update and no delete —
    * a log a process can edit proves nothing.
    */

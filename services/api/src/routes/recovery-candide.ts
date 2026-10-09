@@ -227,7 +227,9 @@ async function verifyOwnerAssertion(user: User, body: any, challenge: string): P
       challenge,
       true,
     );
-    return store.updateUser(user.id, { passkey: { ...passkey, signCount } });
+    const updated = store.recordPasskeyUse(user.id, passkey.credentialId, signCount);
+    if (!updated) throw new Error("this passkey is no longer the account's passkey");
+    return updated;
   } catch (err: any) {
     // A wrong approval is the caller's to redo, not a partner failure.
     throw new CandideGuardianError(`That passkey approval did not check out (${shortErrorForClient(err)}). Start again.`, 401, "BAD_ASSERTION");
