@@ -379,6 +379,17 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
 
   // ── Payer side, no session ──────────────────────────────────────────────
 
+  /**
+   * Whether a handle now belongs to someone other than this link's payee. A
+   * company's address opens only that company's links, and only while their
+   * payee still backs it; an old handle another user has claimed is theirs.
+   */
+  const heldByOther = (handle: string, r: PaymentRequest) => {
+    const holder = store.findUserByHandle(handle);
+    return (!!holder && holder.id !== r.userId)
+      || (!!store.findOrgByHandle(handle) && companyPageHandle(r.userId, r.orgId) !== handle);
+  };
+
   const resolvePublic = (req: express.Request, res: express.Response) => {
     const code = normaliseCode(String(req.params.code ?? ""));
     res.setHeader("cache-control", "no-store");
@@ -394,15 +405,13 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     // company page their Safe backs, but a code under anyone else's handle is
     // a 404, so a page cannot impersonate another payee.
     const handles = r && user ? [r.handle, user.paymentPage?.handle, companyPageHandle(r.userId, r.orgId)] : [];
-    // A company's address opens only that company's links, and only while
-    // their payee still backs it; the payee's own address still opens them.
-    const companyAddress = !!store.findOrgByHandle(req.params.handle);
-    if (!r || !user || !handles.includes(req.params.handle)
-      || (companyAddress && companyPageHandle(r.userId, r.orgId) !== req.params.handle)) {
+    if (!r || !user || !handles.includes(req.params.handle) || heldByOther(req.params.handle, r)) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
-    return { r, user };
+    // Opened under the payee's current address, a link minted under a handle
+    // someone else has since claimed shows the address it was opened under.
+    return { r, user, handle: heldByOther(r.handle, r) ? req.params.handle : undefined };
   };
 
   router.get(
@@ -416,7 +425,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       const { request, quote } = await ensureQuote(hit.r, hit.r.amountEur);
       const ctx = await payerContext(req, request, hit.user, quote);
       const user = store.findUser(hit.user.id) ?? hit.user;
-      res.json(publicPaymentRequest(request, user, ctx));
+      res.json(publicPaymentRequest(request, user, { ...ctx, handle: hit.handle }));
     }),
   );
 
@@ -466,7 +475,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       try {
         const { request, quote } = await ensureQuote(hit.r, n);
         if (!quote) return res.status(503).json({ error: "no live EUR/USD rate right now — try bank transfer, or try again shortly" });
-        res.json(publicPaymentRequest(request, hit.user, await payerContext(req, request, hit.user, quote)));
+        res.json(publicPaymentRequest(request, hit.user, { ...(await payerContext(req, request, hit.user, quote)), handle: hit.handle }));
       } catch (err) {
         fail(res, err);
       }

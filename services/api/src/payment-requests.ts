@@ -615,9 +615,13 @@ export function publicPaymentRequest(
      *  Required, and only true shows it: a caller that did not ask gets no
      *  address, rather than a lapsed forwarder's. */
     cryptoLive: boolean;
+    /** The handle the payer opened it under, when the one it was minted
+     *  under now belongs to someone else: that one is never shown. */
+    handle?: string;
   },
 ): PublicPaymentRequest {
   const now = ctx.now ?? new Date();
+  const handle = ctx.handle ?? r.handle;
   const state = effectiveState(r, now);
   const paid = paidEur(r);
   const page = user.paymentPage;
@@ -633,9 +637,9 @@ export function publicPaymentRequest(
       // Under the payee's own page, the page's QR, which needs no code (the
       // Shopify order lookup must never hand the code out). A company link
       // gets its own, so it does not name the member's personal page.
-      qrUrl: r.handle === page.handle
+      qrUrl: handle === page.handle
         ? `${ctx.baseUrl}/api/pay/${encodeURIComponent(page.handle)}/qr.svg`
-        : `${ctx.baseUrl}/api/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}/qr.svg`,
+        : `${ctx.baseUrl}/api/pay/${encodeURIComponent(handle)}/${displayCode(r.code)}/qr.svg`,
     };
   }
   if (r.methods.includes("bank") && user.iban) {
@@ -644,12 +648,12 @@ export function publicPaymentRequest(
       ...(reportedBic(user) ? { bic: reportedBic(user) } : {}),
       holder: ctx.payeeName ?? user.name,
       reference: displayCode(r.code),
-      appUrl: `${ctx.baseUrl}/app?pay=${encodeURIComponent(r.handle)}/${displayCode(r.code)}`,
+      appUrl: `${ctx.baseUrl}/app?pay=${encodeURIComponent(handle)}/${displayCode(r.code)}`,
     };
   }
   return {
     code: displayCode(r.code),
-    handle: r.handle,
+    handle,
     ...(ctx.payeeName ? { displayName: ctx.payeeName } : page?.displayName ? { displayName: page.displayName } : {}),
     state,
     ...(r.amountEur !== undefined ? { amountEur: r.amountEur, outstandingEur: Math.max(0, Math.round((r.amountEur - paid) * 100) / 100) } : {}),
