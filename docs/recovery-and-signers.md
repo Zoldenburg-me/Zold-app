@@ -2,6 +2,8 @@
 
 The full rules behind the one-line versions in `AGENTS.md` → Invariants →
 Identity and authority. Each of these was a bug once.
+Planned guardian kinds (Didit + 1 € check, Turnkey, trusted people):
+`recovery-guardians-plan.md`.
 
 - **The user may add their OWN second owner** (Settings → Who approves
   payments; `routes/safe-signers.ts`). Read from the chain on
