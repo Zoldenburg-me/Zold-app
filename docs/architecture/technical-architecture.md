@@ -954,9 +954,12 @@ flowchart LR
   `computeCostBasis` opens no lot for it. USDC/USDT by address and any token
   on a curated list (`WALLET_SYNC.tokenLists`: Uniswap's and CoinGecko's per
   chain, refreshed daily, a stale copy kept through an outage) is a listed
-  virtual asset. Anything else is `unlisted_token`: a quantity row with no
-  value, no price call and no default rule. A list that has never loaded
-  holds the window; nothing is called unlisted because a host was down.
+  virtual asset. Anything else is unlisted and books nothing (anyone can
+  deploy a token and send it to any wallet); `unlisted_token` rows exist only
+  from before that rule. A list that has never loaded holds the window;
+  nothing is called unlisted because a host was down. A wallet whose
+  organisation's books reach `CEILINGS.ledgerRowsPerOrg` pauses with its
+  cursor kept.
 - **Valuation** (`wallet-sync/valuation.ts`): a USD stablecoin recognised by
   contract address (`USD_STABLECOINS`) is 1 USD; anything else is DefiLlama's
   USD price by chain and address at the block time, refused below

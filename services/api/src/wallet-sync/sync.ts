@@ -40,6 +40,7 @@ import {
 import { CHAIN_ID, WALLET_SYNC } from "../config.js";
 import { loadDeployments } from "../config/deployments.js";
 import { applyRules } from "../domain/coa.js";
+import { CEILINGS } from "../domain/ceilings.js";
 import type { ImportedWallet, LedgerEntry } from "../domain/types.js";
 import {
   cleanSymbol,
@@ -76,6 +77,8 @@ export interface SyncOptions {
   value?: (q: ValuationQuery) => Promise<ValuationResult>;
   lists?: () => Promise<TokenListsResult>;
   now?: () => string;
+  /** Rows one organisation's books may hold before sync pauses. */
+  ledgerCeiling?: number;
 }
 
 /** The app chain's own EURe deployment counts as e-money too. */
@@ -128,6 +131,13 @@ export function publicSyncError(e: unknown): string {
 /** An error this module raised with text written for the wallet row. */
 export class SyncRefusal extends Error {}
 
+/** At the ceiling a wallet's sync pauses with its cursor kept. Written once,
+ *  not on every tick: each write rewrites the whole database file. */
+function pauseAtCeiling(walletId: string, ceiling: number): void {
+  const error = `The books hold the most rows one organisation may keep (${ceiling.toLocaleString("en")}), so syncing this wallet is paused. Ask support@zoldhq.com to raise the limit.`;
+  if (store.findImportedWallet(walletId)?.sync.error !== error) patchSync(walletId, { status: "error", error });
+}
+
 function patchSync(walletId: string, sync: Partial<ImportedWallet["sync"]>): boolean {
   const current = store.findImportedWallet(walletId);
   if (!current) return false;
@@ -178,9 +188,15 @@ export async function syncWallet(
   const loadLists = opts.lists ?? (() => loadTokenLists());
   let listsOnce: Promise<TokenListsResult> | undefined;
   const extraEmoney = appChainEmoney();
+  const ledgerCeiling = opts.ledgerCeiling ?? CEILINGS.ledgerRowsPerOrg;
   let added = 0;
   let skipped = 0;
   try {
+    // Already full: pause before asking the chain anything.
+    if (store.ledgerOf(wallet.orgId).length >= ledgerCeiling) {
+      pauseAtCeiling(wallet.id, ledgerCeiling);
+      return { added, skipped };
+    }
     const own = ownAddressesOf(wallet);
     if (wallet.chainId === CHAIN_ID && store.accounts.some((a) => a.orgId === wallet.orgId && a.address?.toLowerCase() === wallet.address.toLowerCase())) {
       patchSync(wallet.id, { status: "error", error: "This is the organisation's own Zold account, which is already in the books." });
@@ -232,9 +248,12 @@ export async function syncWallet(
           if (!lists.ok) throw new HoldWindow(`Waiting for the token lists: ${lists.reason}.`);
           tokenClass = classifyToken(wallet.chainId, t.token, lists.lists.has, extraEmoney);
         }
+        // A token on no list books nothing: anyone can deploy one and send it
+        // to any wallet, and every row lives in the one shared file.
+        if (tokenClass === "unlisted") continue;
         const amount = countable ? Number(formatUnits(t.valueUnits, token.decimals as number)) : 0;
         const valuation: ValuationResult | undefined =
-          !countable || tokenClass === "unlisted"
+          !countable
             ? undefined
             : tokenClass === "emoney"
               ? { ok: true, valuation: { eurPerUnit: 1, eurValue: Math.round(amount * 100) / 100, source: "EURe e-money at par", asOf: blockTime.slice(0, 10), symbol: "EURe" } }
@@ -266,6 +285,13 @@ export async function syncWallet(
 
       // Removed while we read the chain: book nothing for it.
       if (!store.findImportedWallet(wallet.id)) return { added, skipped };
+      // At the ceiling the wallet pauses here: nothing in this window is
+      // booked or skipped and the cursor stays, so a raised ceiling picks up
+      // where it stopped.
+      if (known.size > ledgerCeiling) {
+        pauseAtCeiling(wallet.id, ledgerCeiling);
+        return { added, skipped };
+      }
       store.batched(() => {
         if (fresh.length) store.addLedgerEntries(applyRules(store.rulesOf(wallet.orgId), fresh).entries);
         const prior = store.findImportedWallet(wallet.id)?.sync.skipped ?? 0;

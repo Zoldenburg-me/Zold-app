@@ -6,10 +6,10 @@
  *   issuer's contract address on each chain, never by symbol.
  * - `listed`: a virtual asset on a curated token list (USDC and USDT by
  *   address count as listed). Priced at receipt, FIFO lots, the income rule.
- * - `unlisted`: on no list. Anyone can deploy a token and send it to a Safe;
- *   such a transfer is booked as a quantity with no value and no income
- *   rule, so an airdrop never inflates revenue and a thinly traded token is
- *   never priced.
+ * - `unlisted`: on no list. Anyone can deploy a token and send it to a Safe,
+ *   so sync books nothing for it: an airdrop never inflates revenue or the
+ *   database, and a thinly traded token is never priced. Rows booked before
+ *   that rule are `unlisted_token` quantities with no value.
  */
 import type { TokenClass } from "../domain/wallet-transfers.js";
 import { USD_STABLECOINS } from "./valuation.js";
