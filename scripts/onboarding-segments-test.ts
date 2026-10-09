@@ -188,6 +188,37 @@ try {
     assert.ok(row, "user row written");
     assert.equal(row.citizenships, undefined);
   });
+
+  // The list comes from an anonymous body and is kept on the row (and in the
+  // audit row on a refusal), and every write rewrites the whole database file.
+  const dbNow = () => JSON.parse(readFileSync(process.env.TRANSF_DB_PATH!, "utf8"));
+  const padded = await signup({
+    name: "P", email: "padded@example.com", country: "DE", citizenships: Array(2000).fill("DE"), accountType: "individual", usAnswers: NO_US,
+  });
+  check("a padded citizenships list keeps one entry per country", () => {
+    assert.equal(padded.status, 201, JSON.stringify(padded.data));
+    assert.deepEqual(dbNow().users.find((u: any) => u.id === padded.data.id)?.citizenships, ["DE"]);
+  });
+  const paddedBlocked = await signup({
+    name: "Q", email: "padded-ru@example.com", country: "DE", citizenships: [...Array(2000).fill("DE"), "RU"], accountType: "individual", usAnswers: NO_US,
+  });
+  check("padding does not hide a sanctioned citizenship, and the refusal's audit row is not padded", () => {
+    assert.equal(paddedBlocked.status, 403);
+    assert.equal(paddedBlocked.data.code, "BLOCKED_SANCTIONED");
+    const last = dbNow().audit.filter((a: any) => a.kind === "segment.decided").at(-1);
+    assert.deepEqual(last?.data?.citizenships, ["DE", "RU"]);
+  });
+  const auditBefore = dbNow().audit.length;
+  const tooMany = await signup({
+    name: "M", email: "many@example.com", country: "DE", accountType: "individual", usAnswers: NO_US,
+    citizenships: ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "GR", "HU", "IE", "IT", "LV"],
+  });
+  check("more distinct citizenships than anyone holds is refused, and nothing is kept", () => {
+    assert.equal(tooMany.status, 400, JSON.stringify(tooMany.data));
+    const db = dbNow();
+    assert.ok(!db.users.some((u: any) => u.email === "many@example.com"));
+    assert.equal(db.audit.length, auditBefore);
+  });
   const sanctionedResidence = await signup({
     name: "R", email: "r@example.com", country: "RU", accountType: "individual", usAnswers: NO_US,
   });
