@@ -8,7 +8,7 @@
 # the source commit; the message names that commit. Main is never merged into
 # production, so there are no modify/delete conflicts. It does not push.
 #
-#   scripts/build-production-branch.sh [source-ref]   # default origin/main
+#   scripts/build-production-branch.sh [source-ref]   # default origin/main; must be on it
 #   git push origin production
 set -euo pipefail
 
@@ -24,6 +24,23 @@ fi
 git fetch -q origin
 src_sha="$(git rev-parse "$SRC^{commit}")"
 short="${src_sha:0:7}"
+
+# Production carries merged main only, and never moves back: the source must be
+# on origin/main and descend from the source of the production commit it goes
+# on top of. A dispatch on another branch, or a re-run of an older run, stops
+# here.
+parent="$(git -C "$ROOT" rev-parse -q --verify "refs/heads/$BRANCH" || git -C "$ROOT" rev-parse -q --verify "refs/remotes/origin/$BRANCH" || true)"
+if ! git merge-base --is-ancestor "$src_sha" origin/main; then
+  echo "refusing: $short is not on origin/main" >&2
+  exit 1
+fi
+if [ -n "$parent" ]; then
+  prev_src="$(git log -1 --format=%B "$parent" | sed -n 's/^Source: //p')"
+  if [ -z "$prev_src" ] || ! git merge-base --is-ancestor "$prev_src" "$src_sha"; then
+    echo "refusing: $short does not descend from ${prev_src:-an unrecorded source}, the source of $BRANCH" >&2
+    exit 1
+  fi
+fi
 
 work="$(mktemp -d)"
 trap 'git -C "$ROOT" worktree remove --force "$work" >/dev/null 2>&1 || rm -rf "$work"' EXIT
@@ -99,7 +116,6 @@ EOF
 
 git add -A
 tree="$(git write-tree)"
-parent="$(git -C "$ROOT" rev-parse -q --verify "refs/heads/$BRANCH" || git -C "$ROOT" rev-parse -q --verify "refs/remotes/origin/$BRANCH" || true)"
 
 if [ -n "$parent" ] && [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then
   echo "$BRANCH already matches main@$short; nothing to do."
