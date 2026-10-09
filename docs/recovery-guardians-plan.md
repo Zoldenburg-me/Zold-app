@@ -276,7 +276,8 @@ then on.
 
 Steps for recovery:
 1. The recovery page gives the user one approval link per trusted
-   person to send themselves (Zold sends no message to third parties). The
+   person to send themselves (Zold deleted the friend's email when they
+   accepted, and a call from the user is the better check anyway). The
    approval page shows the label, the new-passkey fingerprint and the time
    the request started, and says to approve only after speaking to the person.
    The person logs in and signs.
