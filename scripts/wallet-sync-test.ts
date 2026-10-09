@@ -466,7 +466,7 @@ await check("a valuation that fails still books the row, tagged needs-valuation"
   assert.equal(row.fiatValue, undefined);
 });
 
-await check("an unlisted token in a window is booked as a quantity with no price call; EURe is booked at par", async () => {
+await check("an unlisted token in a window books nothing and asks no price (anyone can mint one and send it); EURe is booked at par", async () => {
   const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
   const eure = Object.keys(EMONEY_TOKENS[1])[0] as `0x${string}`;
   const priced: string[] = [];
@@ -479,9 +479,7 @@ await check("an unlisted token in a window is booked as a quantity with no price
   const lists = async () => ({ ok: true as const, lists: { has: (c: number, a: string) => a === USDC_MAINNET.toLowerCase(), size: 1 } });
   await syncWallet(w, reader, { value: async (q) => { priced.push(q.token); return fixedValue(q); }, lists, now: () => NOW });
   const rows = store.ledgerOf(w.orgId).filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id);
-  const fake = rows.find((e) => e.txHash === H(60))!;
-  assert.equal(fake.txType, "unlisted_token");
-  assert.equal(fake.fiatValue, undefined);
+  assert.equal(rows.find((e) => e.txHash === H(60)), undefined, "no row for an unlisted token");
   assert.ok(!priced.some((t) => t.toLowerCase() === FAKE_USDC.toLowerCase()), "no price asked for an unlisted token");
   const em = rows.find((e) => e.txHash === H(61))!;
   assert.equal(em.asset, "EURe");
@@ -489,6 +487,28 @@ await check("an unlisted token in a window is booked as a quantity with no price
   assert.equal(em.txType, "transfer_in");
   assert.ok(!priced.some((t) => t.toLowerCase() === eure), "e-money is at par, not priced");
   assert.equal(rows.find((e) => e.txHash === H(62))!.txType, "transfer_in");
+});
+
+await check("at the books' row ceiling a wallet's sync pauses: nothing is booked or skipped, the cursor stays, the reason is shown", async () => {
+  const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
+  const logs = [10n, 11n, 12n].map((b, i) => transfer({ blockNumber: b, txHash: H(80 + i), logIndex: 0 }));
+  const reader = fakeReader({ head: 100n, logs });
+  const ledgerCeiling = store.ledgerOf(w.orgId).length + 1;
+  const paused = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW, ledgerCeiling });
+  assert.equal(paused.added, 0);
+  assert.equal(store.ledgerOf(w.orgId).filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id).length, 0);
+  const after = store.findImportedWallet(w.id)!;
+  assert.equal(after.sync.cursor, "0", "the cursor does not move past what was not booked");
+  assert.equal(after.sync.status, "error");
+  assert.match(after.sync.error ?? "", /paused/);
+  // Already at the ceiling: paused before any chain read.
+  const idle = fakeReader({ head: 100n, logs });
+  const still = await syncWallet(store.findImportedWallet(w.id)!, idle, { value: fixedValue, lists: listedAll, now: () => NOW, ledgerCeiling: store.ledgerOf(w.orgId).length });
+  assert.equal(still.added, 0);
+  assert.deepEqual(idle.calls, [], "no log read for a wallet that cannot book");
+  // Raised (by support): the same blocks are read again and booked.
+  const resumed = await syncWallet(w, reader, { value: fixedValue, lists: listedAll, now: () => NOW });
+  assert.equal(resumed.added, 3);
 });
 
 await check("token lists that never loaded hold the window: nothing is called unlisted by accident", async () => {
