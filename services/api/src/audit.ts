@@ -49,7 +49,13 @@ export type AuditKind =
   | "org.invoice_iban_changed"
   /** An operator took a transfer out of MANUAL_REVIEW: the state chosen, the
    *  note, and which operator (a hash of the token). */
-  | "operator.transfer_review_resolved";
+  | "operator.transfer_review_resolved"
+  /** An operator issued a new service credential; the previous one keeps
+   *  working until `previousValidUntil`. Ids only, never a token. */
+  | "service.credential_rotated"
+  /** The checkout service read a transfer: which credential, which id, and
+   *  whether it was served or answered 404. */
+  | "service.checkout_transfer_read";
 
 export interface AuditEntry {
   id: string;
