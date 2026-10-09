@@ -163,6 +163,34 @@ await t("a holder name nobody verified is labelled self-declared, on the snapsho
   assert.equal(docs.holderBlock(profile("pending")).name, "Typed Name");
 });
 
+await t("words Monerium did not report, in any script or as symbols, make the typed name a different name", async () => {
+  const { publicUser } = await import("../services/api/src/users/public-user.js");
+  const base: any = { iban: "EE382200221020145685", address: `0x${"aa".repeat(20)}`, createdAt: "2026-10-02T23:00:22.550Z", kycStatus: "approved",
+    monerium: { ibans: [{ iban: "EE382200221020145685", name: "Christian Lindner" }] } };
+  for (const typed of ["Christian Lindner АСМЕ ТАХ", "Christian Lindner ✓ ★", "Christian Lindner 公司"]) {
+    const holder = docs.holderBlock({ ...base, name: typed });
+    assert.equal(holder.name, "Christian Lindner", typed);
+    assert.equal(holder.operatedBy, typed);
+    assert.equal(publicUser({ ...base, name: typed }).nameVerified, false, typed);
+  }
+  // Case, spacing, order, accents and punctuation still read as the same person.
+  for (const typed of ["CHRISTIAN  LINDNER", "Lindner, Christian", "Christián Lindner"]) {
+    assert.equal(docs.holderBlock({ ...base, name: typed }).operatedBy, undefined, typed);
+    assert.equal(publicUser({ ...base, name: typed }).nameVerified, true, typed);
+  }
+  // Apostrophes and hyphens are punctuation; a name in another script is compared word by word.
+  const pairs: [reported: string, typed: string, same: boolean][] = [
+    ["O'Brien Anne-Marie", "O’Brien Anne Marie", true],
+    ["Иван Петров", "Петров Иван", true],
+    ["Иван Петров", "Пётр Иванов", false],
+  ];
+  for (const [reported, typed, same] of pairs) {
+    const user = { ...base, name: typed, monerium: { ibans: [{ iban: base.iban, name: reported }] } };
+    assert.equal(docs.holderBlock(user).operatedBy, same ? undefined : typed, `${reported} / ${typed}`);
+    assert.equal(publicUser(user).nameVerified, same, `${reported} / ${typed}`);
+  }
+});
+
 await t("only an approved account gets a balance or ownership letter", () => {
   assert.equal(docs.holderLetterRefusal({ kycStatus: "pending" } as any)?.code, "ACCOUNT_NOT_VERIFIED");
   assert.equal(docs.holderLetterRefusal({ kycStatus: "approved" } as any), undefined);
