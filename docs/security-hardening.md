@@ -62,10 +62,10 @@ In the repo (`docs/running-locally.md`, "Secrets"):
   `age`-encrypted. The store writes its file mode 600 and creates `data/`
   mode 700.
 - `.claude/settings.json` is committed and denies agents Read on `.env`,
-  `.private/**` and `data/*.json`, Edit on the same, and the common shell
-  reads of them. Bash rules match command prefixes only, so they are a
-  guard against slips, not a boundary; the boundary is the encryption. The
-  deny on `.private/**` also covers `.private/pentest/`.
+  `.private/**` (bar `.private/pentest/`) and `data/*.json`. Read rules also
+  cover `cat`, `head`, `tail`, `sed` and redirections in Bash, but not a
+  script that opens the file itself, so they are a guard against slips, not
+  a boundary; the boundary is the encryption.
 - `Strict-Transport-Security: max-age=300; includeSubDomains` in production
   (`http/policy.ts`).
 
