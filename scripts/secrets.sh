@@ -24,9 +24,8 @@ case "$cmd" in
       exit 1
     fi
     secret="$("$AGE_KEYGEN" 2>/dev/null | grep '^AGE-SECRET-KEY-')"
-    # -w takes the value as an argument, so it is in this process's argv for
-    # the moment `security` runs. Acceptable on a single-user laptop.
-    security add-generic-password -s "$AGE_KEYCHAIN_SERVICE" -a "$USER" -w "$secret"
+    # Through `security -i` on stdin, so the key is never in a process's argv.
+    printf 'add-generic-password -s %s -a %s -w %s\n' "$AGE_KEYCHAIN_SERVICE" "$USER" "$secret" | security -i
     "$AGE_KEYGEN" -y <<<"$secret" >>"$AGE_RECIPIENTS"
     unset secret
     echo "identity stored in the Keychain; public key appended to $AGE_RECIPIENTS"
