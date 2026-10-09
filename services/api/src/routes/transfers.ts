@@ -302,7 +302,9 @@ export function createTransferRouter(deps: TransferDeps) {
             pendingExecution.challenge,
             true,
           );
-          user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+          const updated = store.recordPasskeyUse(user.id, credentialId, signCount);
+          if (!updated) throw new Error("this passkey is no longer the account's passkey");
+          user = updated;
         } catch (err: any) {
           return res.status(401).json({ error: String(err?.message ?? err) });
         }
@@ -337,7 +339,9 @@ export function createTransferRouter(deps: TransferDeps) {
             expectedChallenge,
             true,
           );
-          user = store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+          const updated = store.recordPasskeyUse(user.id, credentialId, signCount);
+          if (!updated) throw new Error("this passkey is no longer the account's passkey");
+          user = updated;
           effectiveRedeemSignature = await signMessageAsPasskeySafe(
             passkeySafe,
             user.address,
