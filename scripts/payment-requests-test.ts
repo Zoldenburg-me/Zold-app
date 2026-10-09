@@ -356,6 +356,27 @@ try {
   check("the link's own QR route serves the deposit address as an SVG", qr.status === 200 && (qr.headers.get("content-type") || "").includes("svg") && (await qr.text()).includes("<svg"));
   check("the QR under someone else's handle is a 404", (await fetch(`${API}/api/pay/someone/${code}/qr.svg`)).status === 404);
   check("a malformed code is a 404, not an error", (await call("GET", `/api/pay/miriam/not-a-code`)).status === 404);
+  {
+    // A handle released and claimed again. POST /users/:id/handle frees the
+    // old handle by writing the new one to paymentPage.handle; so do these.
+    const pageFor = (handle: string, address: `0x${string}`) => ({ ...miriam.paymentPage, handle, depositAddress: address, recipientAddress: address });
+    const aAddr = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
+    const bAddr = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
+    const amira: any = { ...miriam, id: randomUUID(), name: "Amira A", email: "amira@example.com", address: aAddr, passkeySafe: { status: "active", address: aAddr }, paymentPage: pageFor("acme-test", aAddr) };
+    store.addUser(amira);
+    const minted = await call("POST", `/api/users/${amira.id}/payment-requests`, { amountEur: 40 }, amira.id);
+    store.updateUser(amira.id, { paymentPage: pageFor("a-other", aAddr) });
+    check("a link minted under a handle its payee gave up still opens while nobody holds it", (await call("GET", `/api/pay/acme-test/${minted.body.code}`)).status === 200);
+    const bruno: any = { ...miriam, id: randomUUID(), name: "Bruno B", email: "bruno@example.com", address: bAddr, passkeySafe: { status: "active", address: bAddr }, paymentPage: pageFor("acme-test", bAddr) };
+    store.addUser(bruno);
+    const squatted = await call("GET", `/api/pay/acme-test/${minted.body.code}`);
+    check("once another user claims that handle, the old payee's link under it is a 404", squatted.status === 404, `${squatted.status} ${JSON.stringify(squatted.body).slice(0, 200)}`);
+    check("and its QR under that handle too", (await fetch(`${API}/api/pay/acme-test/${minted.body.code}/qr.svg`)).status === 404);
+    check("the payee's current handle still opens it", (await call("GET", `/api/pay/a-other/${minted.body.code}`)).status === 200);
+    const current = await call("GET", `/api/pay/a-other/${minted.body.code}`);
+    check("and that page names the payee's handle, not the one another user now holds", current.body.handle === "a-other" && !JSON.stringify(current.body).includes("acme-test"), JSON.stringify(current.body).slice(0, 300));
+    check("and its QR is the payee's own page's", current.body.methods.crypto.qrUrl.endsWith("/api/pay/a-other/qr.svg"), current.body.methods.crypto.qrUrl);
+  }
 
   console.log("3/4 a USDC deposit of the quoted amount pays it…");
   const mintUsdc = (to: `0x${string}`, amountUsdc: number) =>
