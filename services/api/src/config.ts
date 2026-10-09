@@ -24,3 +24,4 @@ export * from "./config/faucet.js";
 export * from "./config/payments.js";
 export * from "./config/wallet-sync.js";
 export * from "./config/ens.js";
+export * from "./config/checkout-service.js";

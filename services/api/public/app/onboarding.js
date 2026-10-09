@@ -2510,9 +2510,13 @@ async function moneriumRedeemAssertion(authorization) {
    re-binding by anyone but the device, so this establishes, never steals. */
 async function registerDeviceKey(u) {
   const dev = await deviceLib;
-  const { address, protection } = dev.keyStatus().present
+  // A record that cannot be read is not this account's key if none is bound
+  // yet, so it is replaced; with a key bound it may be that key, and device.js
+  // refuses to write over it.
+  const replaceDamaged = !!dev.keyStatus().damaged && !u.authorizerAddress;
+  const { address, protection } = dev.keyStatus().present && !replaceDamaged
     ? { address: await dev.deviceAddress(credId()), protection: dev.keyStatus().protection }
-    : await dev.createKey(credId());
+    : await dev.createKey(credId(), { replaceDamaged });
   const updated = await api(`/api/users/${u.id}/authorizer`, { address, stepUp: await passkeyStepUp("authorizer.bind") });
   if (updated.authorizerAddress) user = { ...user, authorizerAddress: updated.authorizerAddress };
   if (protection !== "prf") {
