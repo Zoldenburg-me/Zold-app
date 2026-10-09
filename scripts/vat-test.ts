@@ -20,7 +20,9 @@ const vies = createServer((req, res) => {
     lastBody = JSON.parse(raw || "{}");
     const n = `${lastBody.countryCode}${lastBody.vatNumber}`;
     const send = (code: number, body: unknown) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
-    if (n === "ATU12345678") return send(200, { valid: true, name: "ACME GMBH", address: "RINGSTRASSE 1\n1010 WIEN", requestDate: "2026-10-02T10:00:00Z", requestIdentifier: lastBody.requesterNumber ? "WAPIAAAAZ1" : "", userError: "VALID" });
+    // The consultation number names the requester: each one gets its own.
+    const consultation = !lastBody.requesterNumber ? "" : lastBody.requesterNumber === "123456789" ? "WAPIAAAAZ1" : `REQ-${lastBody.requesterNumber}`;
+    if (["ATU12345678", "ATU87654321", "ATU11223344"].includes(n)) return send(200, { valid: true, name: "ACME GMBH", address: "RINGSTRASSE 1\n1010 WIEN", requestDate: "2026-10-02T10:00:00Z", requestIdentifier: consultation, userError: "VALID" });
     if (n === "DE999999999") return send(200, { valid: true, name: "---", address: "---", requestDate: "2026-10-02T10:00:00Z", userError: "VALID" });
     if (n === "FR00123456789") return send(200, { valid: false, userError: "INVALID" });
     if (n === "IT12345678901") return send(200, { valid: false, userError: "MS_UNAVAILABLE" });
@@ -76,6 +78,27 @@ await check("the answer is kept: a second check does not ask VIES again", async 
   assert.equal((await checkVatId("ATU 1234 5678")).status, "valid");
   assert.equal(viesCalls, before);
   assert.equal(cachedVatCheck("ATU12345678")?.status, "valid");
+});
+await check("a consultation number belongs to the org that asked: another requester gets its own, a caller without one gets none", async () => {
+  const before = viesCalls;
+  const frRef = `REQ-${"12345678901"}`;
+  const fr = await checkVatId("ATU12345678", "FR12345678901");
+  assert.equal(fr.requestIdentifier, frRef);
+  assert.equal(viesCalls, before + 1);
+  assert.equal(lastBody.requesterNumber, "12345678901");
+  assert.equal((await checkVatId("ATU12345678", "DE123456789")).requestIdentifier, "WAPIAAAAZ1");
+  assert.equal((await checkVatId("ATU12345678", "FR12345678901")).requestIdentifier, frRef);
+  assert.equal(viesCalls, before + 1, "each requester's number stays kept: asking in turn does not ask VIES again");
+  assert.equal((await checkVatId("ATU12345678")).requestIdentifier, undefined);
+  assert.equal(cachedVatCheck("ATU12345678")?.requestIdentifier, undefined);
+  // An answer kept from a call without a requester is no requester's proof.
+  assert.equal((await checkVatId("ATU87654321")).requestIdentifier, undefined);
+  assert.equal((await checkVatId("ATU87654321", "DE123456789")).requestIdentifier, "WAPIAAAAZ1");
+  // Two orgs asking at once each get their own.
+  const atOnce = viesCalls;
+  const [de, fr2] = await Promise.all([checkVatId("ATU11223344", "DE123456789"), checkVatId("ATU11223344", "FR12345678901")]);
+  assert.deepEqual([de.requestIdentifier, fr2.requestIdentifier], ["WAPIAAAAZ1", frRef]);
+  assert.equal(viesCalls, atOnce + 2);
 });
 await check("a withheld name (Germany's ---) is left out, not printed", async () => {
   const c = await checkVatId("DE999999999");
