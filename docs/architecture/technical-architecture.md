@@ -110,7 +110,9 @@ Order in `server.ts`:
    (300/min) covers everything else. `/admin*` with a valid operator token
    has its own **operator** bucket (`OPERATOR_RATE_LIMIT_PER_MIN`, 300/min):
    the dashboard's refresh loop alone sends about 16 a minute; a wrong token
-   stays on auth. Matching uses the mount-relative path.
+   stays on auth. `/service/*` with a valid checkout-service credential has
+   its own **service** bucket (`SERVICE_RATE_LIMIT_PER_MIN`, 120/min); a
+   wrong one stays on auth. Matching uses the mount-relative path.
 6. The page router serves the HTML routes, then `express.static(public)`. It
    is mounted before any `/api` router.
 7. Routers are mounted at `/api`. Mount order matters: the payment-request
@@ -1313,6 +1315,25 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `POST /users/:id/monerium/api-keys` (U, A) | Connect own keys. On an account that carries a Monerium identity it needs a step-up and revokes the user's other sessions. |
 | `DELETE /users/:id/monerium/api-keys` (U + step-up) | Remove own keys; revokes the user's other sessions. |
 | `POST /webhooks/monerium` (HMAC) | Webhook. |
+
+**Checkout service** (`routes/service-checkout.ts`, `checkout-service.ts`)
+
+| | |
+|---|---|
+| `GET /service/checkout/transfers/:id` (checkout credential) | The pay-with-zold checkout service reads one transfer. Served only for a SEPA transfer whose reference carries `ZP` + 12 hex standing alone; any other id, existing or not, is the same 404. The body is the allowlist `{id, state, rail, receiveEur, recipientIban, reference, updatedAt}`, `no-store`. Every authenticated read writes a `service.checkout_transfer_read` audit row (credential id, transfer id, served or not_found). 503 until a credential is issued, 401 for a wrong one. A valid credential has its own rate bucket (`SERVICE_RATE_LIMIT_PER_MIN`, 120); a wrong one counts on the auth bucket. |
+| `POST /admin/service-credentials/checkout/rotate` (operator token, A) | Issue a `zsc_` token, returned once; the store keeps its SHA-256 only. Every earlier checkout credential stops `CHECKOUT_SERVICE_ROTATION_OVERLAP_SEC` (24 h) later, never later than a past rotation set; `{"revokePrevious": true}` (JSON only; a form body is 415, a non-boolean 400) ends them at once, for a leaked one. Audited as `service.credential_rotated` with `revokedPrevious`. |
+| Webhook out (optional) | With `CHECKOUT_WEBHOOK_URL` and `CHECKOUT_WEBHOOK_SECRET` (`whsec_`, ≥24 bytes; https outside localhost), a state change on a checkout transfer POSTs `{transferId}` signed with Standard Webhooks. One `webhook-id` per delivery across retries (the receiver dedupes on it), a fresh unix-seconds timestamp per attempt (the receiver applies its replay window), backoff ×4 from `CHECKOUT_WEBHOOK_RETRY_BASE_MS` up to `CHECKOUT_WEBHOOK_MAX_ATTEMPTS`. Retries live in memory; the service re-reads through the GET and must not depend on the webhook. |
+
+Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses startup):
+
+| Variable | Default | |
+|---|---|---|
+| `SERVICE_RATE_LIMIT_PER_MIN` | 120 | Requests per minute per IP with a valid credential. |
+| `CHECKOUT_SERVICE_ROTATION_OVERLAP_SEC` | 86400 | How long earlier credentials keep working after a rotation. |
+| `CHECKOUT_WEBHOOK_URL` | unset (no webhook) | https, no userinfo; plain http only to localhost outside production. |
+| `CHECKOUT_WEBHOOK_SECRET` | — | Required with the URL: `whsec_<base64>`, at least 24 bytes. |
+| `CHECKOUT_WEBHOOK_RETRY_BASE_MS` | 5000 | First retry delay; each later one ×4. |
+| `CHECKOUT_WEBHOOK_MAX_ATTEMPTS` | 6 | Attempts per delivery, the first included. |
 
 **Crypto in**
 

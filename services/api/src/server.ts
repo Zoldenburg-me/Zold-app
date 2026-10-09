@@ -21,6 +21,8 @@ import { buildTransferFromQuote } from "./transfers/build.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createTransferRouter } from "./routes/transfers.js";
 import { createMoneriumWebhookRouter } from "./routes/monerium-webhook.js";
+import { createCheckoutServiceRouter } from "./routes/service-checkout.js";
+import { startCheckoutWebhook } from "./checkout-webhook.js";
 import { createMoneriumRouter } from "./routes/monerium.js";
 import { createAdminRouter } from "./routes/admin.js";
 import { createPageRouter, notFound } from "./routes/pages.js";
@@ -224,6 +226,9 @@ app.use("/api", createAuthRouter({ requireUserSession }));
 app.use("/api", createTransferRouter({ requireUserSession }));
 // Monerium's deposit webhook: an order id and nothing else is believed.
 app.use("/api", createMoneriumWebhookRouter());
+// The pay-with-zold checkout service: reads its own SEPA transfers with a
+// credential the operator rotates. Its own auth, never a user session.
+app.use("/api", createCheckoutServiceRouter());
 // Last: nothing above claimed the path.
 app.use(notFound());
 
@@ -284,6 +289,8 @@ sweepStrandedTransfers()
   .then((n) => n && console.log(`Compensation sweep: compensated ${n} stranded transfer(s)`))
   .catch((e) => console.error(`Compensation sweep failed: ${describeCause(e)}`));
 setInterval(() => sweepStrandedTransfers().catch(() => {}), 5 * 60_000).unref();
+// Tell the checkout service when one of its transfers moves (CHECKOUT_WEBHOOK_URL).
+if (startCheckoutWebhook()) console.log("checkout webhook: on");
 // Zoldenburg recoveries: pick up a signature made in Safe Cover, expire
 // unanswered requests, and finalize once the grace period has run.
 if (zoldenburgRecoveryEnabled()) {
