@@ -40,6 +40,7 @@ const MODULE = "0x949d01d424bE050D09C16025dd007CB59b3A8c66"; // Candide's 3-minu
 const GUARDIAN = "0x00000000000000000000000000000000C0FFEE01";
 const OTP = "246810";
 const EMAIL = "recover.me@example.com";
+const OPERATOR = `op-${randomBytes(16).toString("hex")}`;
 const PHONE_RAW = "+49 151 1234567";
 const PHONE = "+491511234567";
 
@@ -295,6 +296,7 @@ try {
     RECOVERY_SWEEP_MS: "3600000",
     LOCAL_HARNESS: "1",
     KYC_AUTO_APPROVE: "1",
+    KYC_OPERATOR_TOKEN: OPERATOR,
   };
   let api = bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], apiEnv);
   const waitForApi = async () => {
@@ -631,6 +633,10 @@ try {
     const bySafe = await call("/api/recovery/candide", { safeAddress }, undefined, "");
     assert.equal(bySafe.status, 409, JSON.stringify(bySafe.data));
     assert.ok(!bySafe.text.includes(recovery.id));
+    // Executed on chain: an operator cannot clear it either; only the owner's passkey cancels.
+    const operator = await call(`/api/admin/recoveries/candide/${recovery.id}/reject`, { reason: "executed already" }, "POST", OPERATOR);
+    assert.equal(operator.status, 409, JSON.stringify(operator.data));
+    assert.equal((await rc(`/api/recovery/candide/${recovery.id}`)).data.status, "GRACE_PERIOD");
   });
 
   await t("finalizing inside the grace period is refused", async () => {
@@ -757,6 +763,30 @@ try {
     } finally {
       wrongCodeAs = "error";
     }
+  });
+
+  await t("a stranger's request held at OTP_PENDING blocks the owner until an operator rejects it with a reason", async () => {
+    await guesserRecovery("stranger-holding-the-account");
+    const blocked = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
+    assert.equal(blocked.status, 409, JSON.stringify(blocked.data));
+    assert.equal(blocked.data.code, "RECOVERY_IN_PROGRESS");
+    // Only the operator token sees or rejects Candide requests; a user session is not enough.
+    assert.equal((await call("/api/admin/recoveries/candide", undefined, "GET")).status, 401);
+    const list = await call("/api/admin/recoveries/candide", undefined, "GET", OPERATOR);
+    assert.equal(list.status, 200, JSON.stringify(list.data));
+    const held = list.data.requests.find((r: any) => r.userId === userId && r.status === "OTP_PENDING");
+    assert.ok(held, JSON.stringify(list.data));
+    assert.ok(!list.text.includes("recoverySecret") && !list.text.includes("otpTicket") && !list.text.includes("Hash"), "no secrets in the operator view");
+    assert.equal((await call(`/api/admin/recoveries/candide/${held.id}/reject`, { reason: "not the owner" })).status, 401);
+    assert.equal((await call(`/api/admin/recoveries/candide/${held.id}/reject`, {}, "POST", OPERATOR)).status, 400, "a reason is required");
+    const rejected = await call(`/api/admin/recoveries/candide/${held.id}/reject`, { reason: "not requested by the account owner" }, "POST", OPERATOR);
+    assert.equal(rejected.status, 200, JSON.stringify(rejected.data));
+    assert.equal(rejected.data.status, "CANCELED");
+    const fresh = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
+    assert.equal(fresh.status, 201, JSON.stringify(fresh.data));
+    // A request past the owner's codes is on chain: only the owner's passkey can cancel it.
+    const late = await call(`/api/admin/recoveries/candide/${recovery.id}/reject`, { reason: "too late" }, "POST", OPERATOR);
+    assert.equal(late.status, 409, JSON.stringify(late.data));
   });
 
   console.log(`\nCANDIDE RECOVERY TEST PASSED — ${pass}/${pass}`);

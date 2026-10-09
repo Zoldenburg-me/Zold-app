@@ -32,6 +32,7 @@ import express from "express";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { HARNESS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
+import { operatorLabel, requireOperator } from "../http/guards.js";
 import {
   CANDIDE,
   assertRecoveryModuleDeployed,
@@ -1017,6 +1018,54 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const request = requestFor(req, res);
       if (!request) return;
       res.json(publicRequest(request));
+    }),
+  );
+
+  // An open request refuses every other starter (above), so a stranger who
+  // names the account can hold one until it expires; the owner has lost the
+  // passkey that could cancel it. An operator clears one that has not reached
+  // the chain, as for a Zoldenburg request; once executed only the owner's
+  // passkey can cancel.
+  router.get(
+    "/admin/recoveries/candide",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      const requests = store.recoveryRequests
+        .filter((r) => r.mode === "candide" && ["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status) && Date.now() < Date.parse(r.expiresAt))
+        .sort((a, b) => Date.parse(b.requestedAt) - Date.parse(a.requestedAt))
+        .slice(0, 200)
+        .map((r) => ({
+          id: r.id,
+          userId: r.userId,
+          email: store.findUser(r.userId)?.email ?? null,
+          safeAddress: r.safeAddress,
+          status: r.status,
+          requestedAt: r.requestedAt,
+          expiresAt: r.expiresAt,
+        }));
+      res.json({ requests });
+    }),
+  );
+
+  router.post(
+    "/admin/recoveries/candide/:id/reject",
+    wrap(async (req, res) => {
+      if (!requireOperator(req, res)) return;
+      const r = store.findRecoveryRequest(req.params.id);
+      if (!r || r.mode !== "candide") return res.status(404).json({ error: "recovery not found" });
+      if (!["PASSKEY_PENDING", "OTP_PENDING"].includes(r.status)) {
+        return res.status(409).json({ error: `recovery is ${r.status} — once executed only the owner's passkey can cancel it` });
+      }
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 500) : "";
+      if (!reason) return res.status(400).json({ error: "give a reason — the person sees it" });
+      const updated = store.updateRecoveryRequest(r.id, {
+        status: "CANCELED",
+        canceledAt: new Date().toISOString(),
+        cancelReason: reason,
+        reviewedBy: operatorLabel(req),
+      });
+      console.log(`RECOVERY: ${r.id} rejected by ${operatorLabel(req)}`);
+      res.json({ id: updated.id, status: updated.status, cancelReason: updated.cancelReason });
     }),
   );
 
