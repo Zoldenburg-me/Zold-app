@@ -926,19 +926,24 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       if (auth.verified) return res.status(409).json({ error: "that channel is already verified" });
       // Bounded like enrolment: past the limit the request is canceled, so a
       // guesser must start over (and the owner sees a canceled attempt), while
-      // Candide's own throttle stays the outer bound.
-      if ((c.otpAttempts ?? 0) >= OTP_MAX_ATTEMPTS) {
+      // Candide's own throttle stays the outer bound. Every guess is counted
+      // before the await, as enrolment does: parallel guesses each see the one
+      // before, and a wrong code the SDK throws on still counts.
+      const attempts = (c.otpAttempts ?? 0) + 1;
+      if (attempts > OTP_MAX_ATTEMPTS) {
         store.updateRecoveryRequest(request.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "too many wrong codes" });
         return res.status(429).json({ error: "too many wrong codes — this recovery is canceled; start again" });
       }
+      store.updateRecoveryRequest(request.id, { candide: { ...c, otpAttempts: attempts } });
 
       const result = await submitSignatureChallenge(c.serviceRequestId, challengeId, req.body?.otp);
       if (!result.success) {
-        store.updateRecoveryRequest(request.id, { candide: { ...c, otpAttempts: (c.otpAttempts ?? 0) + 1 } });
         return res.status(400).json({ error: "the code was not accepted" });
       }
       const auths = c.auths.map((a) => (a.challengeId === challengeId ? { ...a, verified: true } : a));
-      let patch: Partial<RecoveryRequest> = { candide: { ...c, auths } };
+      // request.candide is the stored row, so its count includes guesses made
+      // during the await; `c` is the snapshot from before it.
+      let patch: Partial<RecoveryRequest> = { candide: { ...c, ...request.candide, auths } };
 
       if (result.guardianSignature && result.guardianAddress) {
         // Every channel is verified: Candide has signed. Execute now — the
@@ -964,6 +969,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
           factors: { ...request.factors, otp: "passed" },
           candide: {
             ...c,
+            ...request.candide,
             auths,
             otpTicketHash: undefined,
             guardianAddress: result.guardianAddress,

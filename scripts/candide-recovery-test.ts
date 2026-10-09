@@ -143,6 +143,9 @@ const registered: { id: string; channel: string; target: string; challengeId: st
 const pendingReg = new Map<string, { channel: string; target: string }>();
 const sigRequests = new Map<string, { auths: { challengeId: string; channel: string; target: string; verified: boolean }[] }>();
 let recoveryCounter = 0;
+/** How the stub reports a wrong recovery code: an error body (the SDK throws),
+ *  or `{ success: false }` after a short delay, so parallel guesses overlap. */
+let wrongCodeAs: "error" | "delayed-failure" = "error";
 
 const stub = createServer((req, res) => {
   const send = (code: number, body: any) => {
@@ -200,6 +203,10 @@ const stub = createServer((req, res) => {
       const r = sigRequests.get(body.requestId);
       const auth = r?.auths.find((a) => a.challengeId === body.challengeId);
       if (!r || !auth) return send(200, { code: 404, message: "unknown challenge" });
+      if (body.challenge !== OTP && wrongCodeAs === "delayed-failure") {
+        setTimeout(() => send(200, { success: false }), 50);
+        return;
+      }
       if (body.challenge !== OTP) return send(200, { code: 400, message: "invalid code" });
       auth.verified = true;
       if (r.auths.every((a) => a.verified)) {
@@ -707,6 +714,49 @@ try {
   await t("there is no co-signer removal route", async () => {
     const r = await call(`/api/users/${userId}/passkey-safe/cosigner-removal`, {});
     assert.equal(r.status, 404, JSON.stringify(r.data));
+  });
+
+  /** A fresh recovery of the same account, through to OTP_PENDING, by someone guessing codes. */
+  const guesserRecovery = async (label: string) => {
+    const pk = await makePasskey(label);
+    const start = await call("/api/recovery/candide", { email: EMAIL }, undefined, "");
+    assert.equal(start.status, 201, JSON.stringify(start.data));
+    const s = start.data.recoverySecret;
+    const reg = await rc(start.data.submitTo, pk.register(start.data.registerChallenge), undefined, s, "");
+    assert.equal(reg.status, 200, JSON.stringify(reg.data));
+    assert.equal(reg.data.status, "OTP_PENDING");
+    const tk = reg.data.otpTicket;
+    const challengeId = reg.data.candide.auths[0].challengeId;
+    return {
+      challengeId,
+      guess: (otp: string) => rc(`/api/recovery/candide/${reg.data.id}/otp`, { challengeId, otp }, undefined, s, tk),
+      state: () => rc(`/api/recovery/candide/${reg.data.id}`, undefined, undefined, s, tk),
+    };
+  };
+
+  await t("five wrong codes, sent one after another, cancel the recovery", async () => {
+    const r = await guesserRecovery("guesser-one-by-one");
+    for (let i = 1; i <= 5; i++) {
+      const g = await r.guess("000000");
+      assert.equal(g.status, 400, `guess ${i}: ${JSON.stringify(g.data)}`);
+    }
+    const sixth = await r.guess("000000");
+    assert.equal(sixth.status, 429, JSON.stringify(sixth.data));
+    assert.equal((await r.state()).data.status, "CANCELED");
+  });
+
+  await t("wrong codes sent all at once still stop at five", async () => {
+    wrongCodeAs = "delayed-failure";
+    try {
+      const r = await guesserRecovery("guesser-parallel");
+      const reached = () => seen.signatureSubmits.filter((b) => b.challengeId === r.challengeId).length;
+      const all = await Promise.all(Array.from({ length: 20 }, () => r.guess("000000")));
+      assert.ok(reached() <= 5, `${reached()} guesses reached Candide`);
+      assert.ok(all.filter((g) => g.status === 400).length <= 5, all.map((g) => g.status).join(","));
+      assert.equal((await r.state()).data.status, "CANCELED");
+    } finally {
+      wrongCodeAs = "error";
+    }
   });
 
   console.log(`\nCANDIDE RECOVERY TEST PASSED — ${pass}/${pass}`);
