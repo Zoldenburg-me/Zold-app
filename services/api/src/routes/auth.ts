@@ -115,7 +115,9 @@ export async function verifyPasskeyStepUp(
       "step_up",
       stepUpBinding(user.id, action, target),
     );
-    store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+    if (!store.recordPasskeyUse(user.id, credentialId, signCount)) {
+      throw new Error("this passkey is no longer the account's passkey");
+    }
     return true;
   } catch (err: any) {
     res.status(401).json({ error: String(err?.message ?? err), code: "STEP_UP_INVALID" });
@@ -429,12 +431,17 @@ export function createAuthRouter(deps: AuthDeps) {
           user.passkey.rpId ?? SECURITY.rpId,
           SECURITY.origins,
         );
-        store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+        if (!store.recordPasskeyUse(user.id, credentialId, signCount)) {
+          throw new Error("this passkey is no longer the account's passkey");
+        }
       } catch (err: any) {
         return res.status(401).json({ error: String(err?.message ?? err) });
       }
+      // Minted before the next await, so a recovery that lands during it
+      // revokes this session too.
+      const session = withSession(user);
       const balances = await accountBalances(user.address).catch(() => ({ balanceEur: 0, safeBalanceEur: 0 }));
-      res.json({ ...withSession(user), ...balances });
+      res.json({ ...session, ...balances });
     }),
   );
 

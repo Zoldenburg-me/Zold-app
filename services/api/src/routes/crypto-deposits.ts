@@ -275,7 +275,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           user.passkey.publicKey, user.passkey.signCount ?? 0,
           user.passkey.rpId ?? SECURITY.rpId, SECURITY.origins, pending.challenge,
         );
-        store.updateUser(user.id, { passkey: { ...user.passkey, signCount } });
+        if (!store.recordPasskeyUse(user.id, a.credentialId, signCount)) throw new Error("this passkey is no longer the account's passkey");
       } catch (err: any) {
         return res.status(401).json({ error: String(err?.message ?? err) });
       }

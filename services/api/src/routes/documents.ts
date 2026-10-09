@@ -461,7 +461,9 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
       } catch (err: any) {
         return res.status(401).json({ error: String(err?.message ?? err) });
       }
-      store.updateUser(user.id, { passkey: { ...passkey, signCount } });
+      if (!store.recordPasskeyUse(user.id, passkey.credentialId, signCount)) {
+        return res.status(401).json({ error: "this passkey is no longer the account's passkey" });
+      }
       const plan = user.passkeySafe as PasskeySafeDeploymentPlan;
       const safeSig = await signMessageAsPasskeySafe(plan, plan.address, pending.message, {
         authenticatorData: b64urlToBuf(authenticatorData),
