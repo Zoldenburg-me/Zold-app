@@ -2,7 +2,16 @@
 
 A payment page with the handle `alice` can also be reached as the ENS name
 `alice.zoldhq.com`. A wallet that resolves the name gets the page's deposit
-address. Status: built and tested on local hardhat only (`docs/status.md`).
+address. Status: tested end to end on local hardhat only; the Sepolia
+resolver is deployed but no name resolves yet (`docs/status.md`).
+
+| Network | Resolver | Gateway URL |
+|---|---|---|
+| Sepolia (11155111) | `0x86be72493f3e08f84dc7caf47acbe9ebbb764305` | `https://zoldhq.com/api/ens/gateway/{sender}/{data}.json` |
+| Mainnet | not deployed | |
+
+The Sepolia resolver's owner is a hot key, which is acceptable on a test
+network only.
 
 ## How it resolves
 
@@ -33,8 +42,22 @@ These are the same facts `GET /pay/:handle` already publishes:
   on Ethereum. Most wallets ask for this record by default. A Base-only page
   therefore resolves only in wallets that ask for Base's coin type.
 - `text(node, "url")`: the page URL.
+- `contenthash`, `name`, `pubkey` and `ABI`: always empty. Wallets ask for
+  these alongside the address, and refusing them would fail the whole lookup.
+  Any other record type is refused (400).
 - Nothing for a closed page, an org page (it has no address), an unknown
-  handle, or a deeper name like `x.alice.zoldhq.com`.
+  handle, a deeper name like `x.alice.zoldhq.com`, or a label not already in
+  normalised form (`ALICE`, or a look-alike letter that lowercases to a
+  handle). ENS clients normalise before they hash, so only a caller that
+  skipped that sends one.
+- Nothing while a page's forwarder renewal takes longer than 2 s. That answer
+  is not cached (`no-store`); the renewal carries on and the next lookup sees
+  it.
+
+A signed answer is reused for the same request (whatever its hex case): one
+with an address for half its validity (150 s by default), one without for
+30 s, so a handle claimed after a lookup shows soon. HTTP `max-age` is 60 s,
+never past the signature's expiry.
 
 Handles are already a subset of what ENS accepts. The one extra rule is that
 `--` cannot be the third and fourth characters (ENSIP-15), and `normaliseHandle`
