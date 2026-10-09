@@ -69,6 +69,7 @@ const scripts = [
   "payment-review:test",
   "deposit-invoice-link:test",
   "security:test",
+  "org-migration:test",
   "production-branch:test",
   "identity:test",
   "plan:test",
