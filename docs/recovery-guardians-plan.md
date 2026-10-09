@@ -65,6 +65,9 @@ not count).
 
 - `m = 1` → `n = 1`.
 - `m ≥ 2` → `n ≥ 2`: no single guardian can take over.
+  With two guardians this means 2 of 2, on purpose: at 1 of 2, Zoldenburg
+  alone could recover the account without the user. The screen suggests a
+  third guardian, since losing either of two blocks recovery.
 - Default `n` = a majority, ⌊m/2⌋ + 1 (2 of 2, 2 of 3, 3 of 4, 3 of 5).
   The user may pick anything from 2 to `m`.
 - `n = m` gets a warning: losing any one guardian (a friend who changes
