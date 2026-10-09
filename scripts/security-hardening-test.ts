@@ -229,6 +229,128 @@ await check("a quote nobody took is dropped a day after it expired; a consumed o
   assert.ok(store.findQuote("q_old_used") && store.findQuote("q_recent") && store.findQuote("q_new"));
 });
 
+console.log("a passkey replaced by recovery while an approval is being verified");
+{
+  const { createHash, randomBytes, webcrypto } = await import("node:crypto");
+  const { checkOpAssertion } = await import("../services/api/src/http/passkey-assertion.js");
+  const { createAuthRouter, verifyPasskeyStepUp } = await import("../services/api/src/routes/auth.js");
+  const { bindRecoveredPasskey } = await import("../services/api/src/recovery/recovered-passkey.js");
+  const { issueChallenge, stepUpBinding } = await import("../services/api/src/webauthn.js");
+  const sha256 = (b: Buffer) => createHash("sha256").update(b).digest();
+  const b64url = (b: Buffer) => b.toString("base64url");
+  const rawToDer = (raw: Buffer) => {
+    const int = (b: Buffer) => {
+      let v = b; while (v.length > 1 && v[0] === 0) v = v.subarray(1);
+      if (v[0] & 0x80) v = Buffer.concat([Buffer.from([0]), v]);
+      return Buffer.concat([Buffer.from([0x02, v.length]), v]);
+    };
+    const r = int(raw.subarray(0, 32)), s = int(raw.subarray(32));
+    return Buffer.concat([Buffer.from([0x30, r.length + s.length]), r, s]);
+  };
+  // A software P-256 authenticator, user-verified (flags UP|UV).
+  const softPasskey = async (label: string) => {
+    const pair = await webcrypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const jwk = await webcrypto.subtle.exportKey("jwk", pair.publicKey);
+    const credentialId = b64url(Buffer.from(`${label}-${randomBytes(4).toString("hex")}`));
+    let count = 0;
+    return {
+      credentialId,
+      stored: () => ({ credentialId, publicKey: { alg: "ES256", jwk }, signCount: 0, rpId: "localhost", createdAt: now }),
+      assert: async (challenge: string) => {
+        const authData = Buffer.alloc(37);
+        sha256(Buffer.from("localhost")).copy(authData, 0);
+        authData[32] = 0x05;
+        authData.writeUInt32BE(++count, 33);
+        const clientData = Buffer.from(JSON.stringify({ type: "webauthn.get", challenge, origin: "http://localhost:3000" }));
+        const raw = Buffer.from(await webcrypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, pair.privateKey, Buffer.concat([authData, sha256(clientData)])));
+        return { credentialId, authenticatorData: b64url(authData), clientDataJSON: b64url(clientData), signature: b64url(rawToDer(raw)) };
+      },
+    };
+  };
+  const oldKey = await softPasskey("old-device");
+  const newKey = await softPasskey("recovered");
+  const uid = "u_race";
+  store.addUser({
+    id: uid, name: "Race", country: "DE", kycStatus: "approved", address: "0x5afe00000000000000000000000000000000ace1", createdAt: now,
+    passkey: oldKey.stored(),
+    passkeySafe: { address: "0x5afe00000000000000000000000000000000ace1", status: "active", threshold: 1 },
+  } as any);
+  const reset = () => store.updateUser(uid, { passkey: oldKey.stored() as any });
+
+  // Hold WebCrypto's verify open until the test lets it go: the window in
+  // which a recovery can finish.
+  const subtle = webcrypto.subtle as any;
+  const realVerify = subtle.verify.bind(subtle);
+  let hold: { reached: () => void; release: Promise<void> } | undefined;
+  subtle.verify = async (...args: any[]) => { if (hold) { hold.reached(); await hold.release; } return realVerify(...args); };
+  /** Run `call`, and while its passkey verification is in flight, recover the account onto newKey. */
+  const recoverDuring = async <T>(call: () => Promise<T>): Promise<T> => {
+    let release!: () => void;
+    let reached!: () => void;
+    const verifying = new Promise<void>((r) => (reached = r));
+    hold = { reached, release: new Promise<void>((r) => (release = r)) };
+    const result = call();
+    await verifying;
+    bindRecoveredPasskey(store.findUser(uid)!, { ...newKey.stored(), attestation: "none" } as any, new Date());
+    release();
+    try { return await result; } finally { hold = undefined; }
+  };
+  const fakeRes = () => {
+    const r: any = { statusCode: 200, body: undefined };
+    r.status = (c: number) => ((r.statusCode = c), r);
+    r.json = (b: unknown) => ((r.body = b), r);
+    return r;
+  };
+
+  await check("a Safe-op approval by the old passkey does not put it back after recovery", async () => {
+    reset();
+    const challenge = b64url(randomBytes(32));
+    const res = fakeRes();
+    const ok = await recoverDuring(async () => checkOpAssertion(store.findUser(uid)!, await oldKey.assert(challenge), challenge, res));
+    assert.equal(store.findUser(uid)!.passkey!.credentialId, newKey.credentialId);
+    assert.equal(store.findUserByCredential(oldKey.credentialId), undefined);
+    assert.equal(ok, undefined);
+    assert.ok(res.statusCode >= 400);
+  });
+
+  await check("a step-up by the old passkey that finishes after recovery is refused", async () => {
+    reset();
+    const step = await oldKey.assert(issueChallenge("step_up", stepUpBinding(uid, "passkey.replace")));
+    const res = fakeRes();
+    const ok = await recoverDuring(() => verifyPasskeyStepUp(store.findUser(uid)!, { stepUp: step }, res, "passkey.replace"));
+    assert.equal(ok, false);
+    assert.equal(store.findUser(uid)!.passkey!.credentialId, newKey.credentialId);
+  });
+
+  await check("a login by the old passkey that finishes after recovery gets no session", async () => {
+    reset();
+    const app = express().use(express.json()).use("/api", createAuthRouter({ requireUserSession: () => undefined }));
+    const server = app.listen(0);
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/passkey/login`;
+      const body = await oldKey.assert(issueChallenge("login"));
+      const r = await recoverDuring(() => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+      const json = (await r.json()) as any;
+      assert.equal(json.sessionToken, undefined);
+      assert.equal(r.status, 401);
+      assert.equal(store.sessions.filter((s) => s.userId === uid && !s.revokedAt).length, 0);
+      assert.equal(store.findUser(uid)!.passkey!.credentialId, newKey.credentialId);
+    } finally {
+      server.close();
+    }
+  });
+  subtle.verify = realVerify;
+
+  await check("every passkey signCount write goes through store.recordPasskeyUse", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const src = new URL("../services/api/src/", import.meta.url);
+    const offenders = (readdirSync(src, { recursive: true }) as string[])
+      .filter((f) => f.endsWith(".ts") && f !== "store.ts")
+      .filter((f) => /passkey:\s*\{\s*\.\.\.[\w.]+,\s*signCount\s*\}/.test(readFileSync(new URL(f, src), "utf8")));
+    assert.deepEqual(offenders, []);
+  });
+}
+
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
 console.log("\nsecurity hardening: all checks passed");
