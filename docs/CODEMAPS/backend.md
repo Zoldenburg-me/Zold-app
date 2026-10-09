@@ -12,6 +12,7 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | /api | routes/transfers.ts | POST /quotes, POST /transfers, activity, authorize, refresh-payout |
 | /api | routes/monerium.ts (1175 l) | OAuth connect/callback, API keys, link-signature, activate, move-iban |
 | /api | routes/monerium-webhook.ts | POST /webhooks/monerium |
+| /api | routes/service-checkout.ts | GET /service/checkout/transfers/:id (checkout-service credential), POST /admin/service-credentials/checkout/rotate |
 | /api | routes/payment-page.ts | handle, /pay/:handle, QR svg |
 | /api | routes/ens.ts | GET /ens/gateway/:sender/:callData.json (CCIP-Read, signed for the L1 OffchainResolver), GET /ens/lookup?name= |
 | /api | routes/payment-requests.ts | user payment requests, /pay/:handle/:code (+quote) |
@@ -36,6 +37,8 @@ rates.ts independent mid · fx.ts · chain.ts (viem) · sepa.ts · reconcile.ts 
 ens.ts (CCIP-Read encoding, signer) · usd-token.ts (the dollar token: USDC, or zUSD on staging) ·
 log-range.ts (eth_getLogs window halves on RPC range refusals) · users/display-name.ts ·
 payment-requests.ts (707) · pay.ts · documents.ts · receipt.ts · audit.ts ·
+checkout-service.ts (checkout scope, allowlist, hashed credential) · checkout-webhook.ts (signed state-change hint) ·
+http/standard-webhooks.ts (sign and verify, both directions) ·
 wallet/signature-check.ts (the one signed-message verifier: EIP-1271, ECDSA, ERC-6492) ·
 wallet-sync/{sync,valuation,token-class,token-lists,ownership (proof checked on the wallet's chain),revalue (price retry)}
 
