@@ -432,6 +432,15 @@ const OUTBOUND_INTENT_STEPS = {
     "bridge.xyz.deposit.not-sent",
     "bridge.xyz.deposit.reverted",
   ],
+  // The orchestrator-run EURe -> USDC swap. A venue records its step only once
+  // delivery is measured, so a swap that landed and then threw (a receipt
+  // timeout, a stale balance read) leaves this unsettled.
+  "liquidity.swap.pending": [
+    "liquidity.fx-swapper.eure-usdc",
+    "liquidity.rfq.eure-usdc",
+    "liquidity.lifi.eure-usdc",
+    "liquidity.dex.eure-usdc",
+  ],
 } satisfies Record<string, string[]>;
 type OutboundIntent = keyof typeof OUTBOUND_INTENT_STEPS;
 
@@ -914,6 +923,7 @@ export async function executeTransfer(
       await assertQuoteRateBinding(transfer);
       const liquidityPlan = await prepareTransferLiquidity(transfer);
       store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
+      recordOutboundIntent(transfer.id, txs, "liquidity.swap.pending");
       const liquidity = await executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan });
       txs.push(...liquidity.txs);
       expectedOut = liquidity.amountOut;
