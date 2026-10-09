@@ -10,7 +10,7 @@ import { wrap } from "./util.js";
 import { usdToken } from "../usd-token.js";
 import express from "express";
 import { randomUUID } from "node:crypto";
-import { CHAIN_ID, IS_PRODUCTION, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
+import { CHAIN_ID, IS_PRODUCTION, MONERIUM, PAYMENT_REQUESTS, PUBLIC_URL } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import {
   buildBankSettlement,
@@ -615,6 +615,10 @@ function recordBankSettlement(
  */
 export function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike): void {
   if ((order.kind ?? "issue") !== "issue") return;
+  // A GBPe issue, or EURe minted on another chain, is not a euro paid into
+  // this account. Absent fields (pure fixtures) pass; a real order carries both.
+  if (order.chain && order.chain !== MONERIUM.chain) return;
+  if (order.currency && order.currency.toLowerCase() !== "eur") return;
   if ((order.meta?.state ?? order.state) !== "processed") return;
   const address = String(order.address ?? "").toLowerCase();
   if (!address) return;
