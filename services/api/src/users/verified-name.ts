@@ -33,6 +33,8 @@ export function moneriumVerifiedName(user: Pick<User, "monerium" | "iban">): str
   return (user.iban ? ibanHolderName(user, user.iban) : undefined) ?? approvedProfileName(user);
 }
 
-/** "CHRISTIAN  LINDNER" and "Lindner Christian" are the same person. */
+/** "CHRISTIAN  LINDNER" and "Lindner, Christian" are the same person. Only
+ *  case, accents, spacing, punctuation and word order are ignored: a word in
+ *  any other script, or a symbol, Monerium did not report makes it another name. */
 export const personKey = (name: string) =>
-  name.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).sort().join(" ");
+  name.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[\s\p{P}]+/u).filter(Boolean).sort().join(" ");
