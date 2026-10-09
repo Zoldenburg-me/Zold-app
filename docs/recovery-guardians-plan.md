@@ -17,7 +17,8 @@ hosted guardian service. The rules that bind today are in
 - **Turnkey** provides embedded wallets for social guardians: the user's own
   Google/Apple/email login, and people the user trusts. Nobody is asked for a
   wallet address.
-- **Social guardians raise the threshold** (rule below).
+- **Four choices** (no recovery, Zoldenburg, Google, friends); with two or
+  more guardians, **at least 2 must approve** (rule below).
 - **Candide's hosted guardian service is dropped.** The Candide module stays.
 
 ## What Monerium gives us (checked 2026-10-09)
@@ -48,14 +49,31 @@ visit):
 | `self-social` | Turnkey sub-org, root = the user | log in with Google/Apple/email on the recovery page |
 | `trusted-person` | Turnkey sub-org, root = that person | log in from the approval link the user sends them |
 
-**Threshold rule** (enforced by the API before it builds the passkey op):
+**The four choices** on the Recovery screen (onboarding step 3 and Security):
 
-- With no `trusted-person`: threshold ≥ 1 (so `zoldenburg` alone, or
-  `zoldenburg` + `self-social` at 1-of-2, is allowed).
-- With any `trusted-person`: threshold ≥ max(2, ⌈n/2⌉). Example: Zoldenburg +
-  two friends → 2 of 3.
-- Threshold ≤ n, always. The UI says in one sentence who can recover the
-  account alone, or that nobody can.
+1. **No recovery.** Allowed; the user ticks the existing warning that only
+   EURe is reclaimable from Monerium. `recoveryChoice` records it.
+2. **Zoldenburg as guardian** (`zoldenburg`).
+3. **Your Google account** (`self-social`; Apple and email offered on the
+   same button for people without Google).
+4. **A friend as guardian** (`trusted-person`), one or more.
+
+The user may combine 2–4. `m` = guardians active on chain (pending invites do
+not count).
+
+**Threshold `n` of `m`** (enforced by the API before it builds the passkey op):
+
+- `m = 1` → `n = 1`.
+- `m ≥ 2` → `n ≥ 2`: no single guardian can take over.
+- Default `n` = a majority, ⌊m/2⌋ + 1 (2 of 2, 2 of 3, 3 of 4, 3 of 5).
+  The user may pick anything from 2 to `m`.
+- `n = m` gets a warning: losing any one guardian (a friend who changes
+  phones and forgets their login, a deleted Google account) makes recovery
+  impossible. The default for `m ≥ 3` therefore leaves one spare.
+- Removing a guardian lowers `n` when it would exceed the new `m`, in the
+  same passkey op.
+- The screen states the result in one sentence, e.g. "Any 2 of Zoldenburg,
+  your Google account and Anna can recover this account."
 
 Guardian changes are passkey-signed ops on the Safe:
 `addGuardianWithThreshold`, `revokeGuardianWithThreshold`, `changeThreshold`.
@@ -79,6 +97,7 @@ is the only defence. Before any new guardian kind ships:
   - **email** to the account address through `adapters/mailer.ts`. Mail is off
     today (`status.md`); switching it on needs a real SMTP provider with a
     processing agreement (`security-hardening.md`).
+- The same mail transport sends friend invites and reminders (Phase 3).
 - Email alone is not enough: whoever controls the inbox may be the attacker
   and delete it. The banner on the device the owner still holds matters most.
   Web push is not built and is out of scope.
@@ -219,23 +238,49 @@ sample documents only.
 
 ## Phase 3 — trusted people (`trusted-person`)
 
-1. The user adds a person by a label they choose ("Mum") and gets an invite
-   link. The invite token is a credential (auth rate bucket, single use,
-   expires in 7 days, 404 under the wrong handle).
-2. The person opens the link and sees who invited them (the user's display
-   name) and what they are agreeing to. They log in with Google, Apple or
-   email. A sub-org is created with them as the only root. They need no Zold
-   account.
-3. The user approves adding that address with their passkey, with the
-   threshold the rule allows (the UI proposes the minimum).
-4. We store `{ kind: "trusted-person", address, label, turnkeySubOrgId,
-   addedAt }`. We do not store the person's email; Turnkey holds their login.
-5. Recovery: the recovery page gives the user one approval link per trusted
+An invite only works if the friend actually acts on it, so Zold sends it and
+follows up. This needs the mail transport from Phase 0.
+
+**Invite screen** (Security → Recovery → Add a friend):
+- One row per friend: name (label the user chooses) and email; "Add another".
+- A short preview of the email the friend will get, then "Send invites".
+- A status list below: *Invited* (sent date, reminders sent) → *Accepted*
+  (waiting for your approval) → *Guardian* (on chain), plus *Expired*, with
+  Resend and Remove on each row.
+
+**Invite mail and reminders:**
+- Sent from Zold, naming the user (their display name) as the sender, saying
+  what a guardian does in two sentences, with one button.
+- Reminders at day 3 and day 10 if not accepted; the invite expires at day
+  14. The user sees each reminder on the status list and can resend, which
+  issues a fresh link.
+- The link token is a credential: auth rate bucket, single use, 404 under the
+  wrong handle, never cached by the service worker.
+
+**Friend's side:**
+1. The link opens a page that says who invited them and what they agree to,
+   with "Become Anna's guardian".
+2. They sign up with Google, Apple or email (a Turnkey login; a sub-org is
+   created with them as the only root). No Zold account, no wallet address,
+   no seed phrase. The page ends with "Keep this login; Anna may ask you to
+   approve a recovery one day."
+3. The invite turns *Accepted*. The user sees a banner in the app ("Anna
+   accepted. Approve with your passkey") and approves `addGuardianWithThreshold`
+   with the threshold the rule gives. Until then the friend is not a guardian.
+
+**Stored:** `{ kind: "trusted-person", address, label, turnkeySubOrgId,
+addedAt }`. The friend's email is stored only while the invite is open (to
+send reminders), encrypted with its own `EncryptionPurpose`, and deleted when
+the invite is accepted, expires or is removed. Turnkey holds their login from
+then on.
+
+Steps for recovery:
+1. The recovery page gives the user one approval link per trusted
    person to send themselves (Zold sends no message to third parties). The
    approval page shows the label, the new-passkey fingerprint and the time
    the request started, and says to approve only after speaking to the person.
    The person logs in and signs.
-6. When `threshold` signatures are collected, the API relays
+2. When `threshold` signatures are collected, the API relays
    `multiConfirmRecovery` with execute; the grace period starts; Phase 0
    alerts fire.
 
@@ -259,6 +304,7 @@ New personal data, all to go into the Art. 30 map:
 | Didit session id, outcome, name-match flag | RecoveryRequest | with the request |
 | ID document, face, DOB | Didit only (processor) | deleted by our API call after the decision; 1-month retention backstop |
 | guardian address, label, Turnkey sub-org id | user record | until the guardian is removed |
+| a friend's email (invite open only) | invite record, `encryptField` | deleted on accept, expiry or removal |
 | a trusted person's login | Turnkey only (processor) | their sub-org |
 
 Processors to add: Didit (DPA in their Business Terms), Turnkey (DPA and data
@@ -272,7 +318,7 @@ residency not yet confirmed). Biometric processing rests on explicit consent
 - We store no ID data, no biometrics and no full IBAN for recovery.
 - Every Turnkey sub-org has exactly one root user, the person, and no key of
   ours; no delegated access.
-- With any trusted person, the threshold is at least 2.
+- With two or more guardians, the threshold is at least 2.
 - Every collected signature is checked against the digest recomputed from the
   module and against the guardian list on chain.
 
@@ -310,7 +356,7 @@ residency not yet confirmed). Biometric processing rests on explicit consent
 2. Phase 1 enrolment 1 € check, then the recovery-time Didit + 1 € checks and
    the operator gate.
 3. Phase 2 Turnkey integration + own social guardian.
-4. Phase 3 trusted people + threshold rule and UI.
+4. Phase 3 friend invites (screen, mail, reminders) + the n-of-m rule and UI.
 5. Phase 4 removal of the Candide hosted guardian (can run in parallel with 2).
 
 Each user-visible PR gets its `zold-docs` PR in the same task and stays behind
