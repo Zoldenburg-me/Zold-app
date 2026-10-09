@@ -531,6 +531,20 @@ try {
   routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-4", memo: "RE-2026-0901 und RE-2026-0902" } as any);
   check("a credit naming two invoices is booked on neither — it cannot be split by guessing",
     (store.findInvoice(twoA)!.settlements ?? []).length === 0 && (store.findInvoice(twoB)!.settlements ?? []).length === 0);
+  // Monerium issues several currencies and links one address on several chains:
+  // only an EURe issue on our chain is a euro paid into this account.
+  const { MONERIUM } = await import("../services/api/src/config.js");
+  for (const [n, chain, currency] of [["0951", "ethereum", "eur"], ["0952", MONERIUM.chain, "gbp"], ["0953", "ethereum", "gbp"]]) {
+    const inv = mkInvoice({}, issuedSnapshot(2500, { number: `RE-2026-${n}` }));
+    routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: `ord-elsewhere-${n}`, chain, currency, memo: `RE-2026-${n}` } as any);
+    const after = store.findInvoice(inv)!;
+    check(`a ${currency.toUpperCase()} issue on ${chain} quoting the invoice number books nothing and leaves it SUBMITTED`,
+      after.state === "SUBMITTED" && (after.settlements ?? []).length === 0, JSON.stringify({ state: after.state, settlements: after.settlements }));
+  }
+  const onOurChain = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0954" }));
+  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-ours-0954", chain: MONERIUM.chain, currency: "eur", memo: "RE-2026-0954" } as any);
+  check("while an EURe issue on our chain, with both fields set, still pays it",
+    store.findInvoice(onOurChain)!.state === "PAID", JSON.stringify(store.findInvoice(onOurChain)!.settlements));
 
   // A business org Miriam is only a MEMBER of: its account is someone else's Safe.
   const bizOrg = randomUUID();
