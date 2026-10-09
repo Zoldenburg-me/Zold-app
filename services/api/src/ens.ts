@@ -36,12 +36,45 @@ export class EnsGatewayError extends Error {}
 /** `resolve(bytes name, bytes data)`: what the resolver forwards to us. */
 const RESOLVER_SERVICE_ABI = parseAbi(["function resolve(bytes name, bytes data) view returns (bytes)"]);
 
-/** The resolver profiles we answer. Anything else is refused, not guessed. */
+/**
+ * The resolver profiles we answer. addr and text carry records; contenthash,
+ * name, pubkey and ABI always answer empty, because wallets and the ENS app
+ * ask for them alongside the address and a refusal (4xx) stops the client's
+ * whole lookup. Any other selector is refused, not guessed.
+ */
 const PROFILE_ABI = parseAbi([
   "function addr(bytes32 node) view returns (address)",
   "function addr(bytes32 node, uint256 coinType) view returns (bytes)",
   "function text(bytes32 node, string key) view returns (string)",
+  "function contenthash(bytes32 node) view returns (bytes)",
+  "function name(bytes32 node) view returns (string)",
+  "function pubkey(bytes32 node) view returns (bytes32 x, bytes32 y)",
+  "function ABI(bytes32 node, uint256 contentTypes) view returns (uint256, bytes)",
 ]);
+
+const ZERO_BYTES32 = `0x${"0".repeat(64)}` as const;
+
+/** The empty answer for a profile we never hold records for. */
+function emptyAnswer(functionName: string): Hex | undefined {
+  switch (functionName) {
+    case "contenthash":
+      return encodeAbiParameters([{ type: "bytes" }], ["0x"]);
+    case "name":
+      return encodeAbiParameters([{ type: "string" }], [""]);
+    case "pubkey":
+      return encodeAbiParameters([{ type: "bytes32" }, { type: "bytes32" }], [ZERO_BYTES32, ZERO_BYTES32]);
+    case "ABI":
+      return encodeAbiParameters([{ type: "uint256" }, { type: "bytes" }], [0n, "0x"]);
+    default:
+      return undefined;
+  }
+}
+
+/** A label that could be a stored handle: lowercase ASCII letters, digits
+ *  and hyphens. ENS clients normalise before they hash, so `ALICE` or a
+ *  look-alike letter (the Kelvin sign lowercases to `k`) reaches us only from
+ *  a caller that skipped normalisation, and it must not answer for `alice`. */
+const HANDLE_LABEL = /^[a-z0-9-]{1,63}$/;
 
 /** ENSIP-9: coin type 60 is Ethereum, the coin type of legacy `addr(node)`. */
 const ETH_COIN_TYPE = 60n;
@@ -78,13 +111,14 @@ export function decodeDnsName(wire: Hex): string {
   throw new EnsGatewayError("name has no terminator");
 }
 
-/** The handle in `<handle>.<parent>`, or undefined for the parent itself or a
- *  deeper name (`a.b.zoldhq.com` is no handle). */
+/** The handle in `<handle>.<parent>`, or undefined for the parent itself, a
+ *  deeper name (`a.b.zoldhq.com` is no handle), or a label that is not
+ *  already in normalised form. */
 export function handleFromName(name: string, parent: string): string | undefined {
   const suffix = `.${parent}`;
   if (!name.endsWith(suffix)) return undefined;
   const label = name.slice(0, -suffix.length);
-  return label && !label.includes(".") ? label : undefined;
+  return HANDLE_LABEL.test(label) ? label : undefined;
 }
 
 /** Is `name` under `parent` at all (the parent included)? A gateway signs for
@@ -124,8 +158,11 @@ export async function answerResolveCall(
   }
   if (call.args[0] !== namehash(name)) throw new EnsGatewayError("node does not match the name");
 
+  const empty = emptyAnswer(call.functionName);
+  if (empty) return { name, result: empty };
+
   const records = name === parent ? await lookup(undefined) : await lookupHandle(name, parent, lookup);
-  if (call.args.length === 1) {
+  if (call.functionName === "addr" && call.args.length === 1) {
     const address = records.addresses.get(ETH_COIN_TYPE) ?? ZERO_ADDRESS;
     return { name, result: encodeAbiParameters([{ type: "address" }], [address]) };
   }

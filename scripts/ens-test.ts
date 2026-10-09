@@ -6,7 +6,11 @@
  *   - a live page answers its deposit address for the pay chain's coin type,
  *     signed by the gateway key for the configured resolver, whoever relays it;
  *   - no Ethereum (coin type 60) address unless the page takes payments there;
- *   - org pages, unknown handles and deeper names answer nothing;
+ *   - contenthash, name, pubkey and ABI answer empty rather than refuse;
+ *   - org pages, unknown handles, deeper names and labels not in normalised
+ *     form answer nothing;
+ *   - a chain id ENSIP-11 cannot express is skipped, not a failure;
+ *   - a repeated request reuses its signed answer;
  *   - malformed calls, names under another parent, a node that does not match
  *     its name are refused;
  *   - the lookup needs a session, says when it is not configured, and never
@@ -42,7 +46,8 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-ens
 process.env.ENS_PARENT_NAME = "zoldhq.com";
 process.env.ENS_RESOLVER_ADDRESS = RESOLVER;
 process.env.ENS_GATEWAY_KEY = GATEWAY_KEY;
-process.env.TRANSF_PUBLIC_URL = "https://zoldhq.com";
+// With a trailing slash on purpose: the url record must not read `//pay/`.
+process.env.TRANSF_PUBLIC_URL = "https://zoldhq.com/";
 delete process.env.ENS_RPC_URL;
 
 const { store, initStore } = await import("../services/api/src/store.js");
@@ -58,6 +63,17 @@ store.addUser({
   address: "0x1111111111111111111111111111111111111111",
   createdAt: new Date().toISOString(),
   paymentPage: { handle: "alice", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" },
+} as any);
+// A token list with a chain id ENSIP-11 cannot express (>= 2^31).
+store.addUser({
+  id: "u-bob", name: "Bob", country: "DE", kycStatus: "approved",
+  address: "0x3333333333333333333333333333333333333333",
+  createdAt: new Date().toISOString(),
+  paymentPage: {
+    handle: "bob", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE",
+    routesReadAt: new Date().toISOString(),
+    supportedTokens: [{ chainId: 2 ** 31, symbol: "USDC", address: PAGE, decimals: 6 }],
+  },
 } as any);
 store.addOrganisation({ id: "o-acme", name: "Acme", createdAt: new Date().toISOString(), paymentPage: { handle: "acme" } } as any, false);
 
@@ -121,6 +137,46 @@ try {
       answer(callFor("alice.zoldhq.com", encodeFunctionData({ abi: profile, functionName: "text", args: [namehash("alice.zoldhq.com"), key] })));
     assert.equal(decodeAbiParameters([{ type: "string" }], await text("url"))[0], "https://zoldhq.com/pay/alice");
     assert.equal(decodeAbiParameters([{ type: "string" }], await text("email"))[0], "");
+  });
+
+  await check("contenthash, name, pubkey and ABI answer empty instead of failing the lookup", async () => {
+    const node = namehash("alice.zoldhq.com");
+    const extra = parseAbi([
+      "function contenthash(bytes32 node) view returns (bytes)",
+      "function name(bytes32 node) view returns (string)",
+      "function pubkey(bytes32 node) view returns (bytes32 x, bytes32 y)",
+      "function ABI(bytes32 node, uint256 contentTypes) view returns (uint256, bytes)",
+    ]);
+    const ask = (data: Hex) => answer(callFor("alice.zoldhq.com", data));
+    assert.equal(decodeAbiParameters([{ type: "bytes" }], await ask(encodeFunctionData({ abi: extra, functionName: "contenthash", args: [node] })))[0], "0x");
+    assert.equal(decodeAbiParameters([{ type: "string" }], await ask(encodeFunctionData({ abi: extra, functionName: "name", args: [node] })))[0], "");
+    const [x, y] = decodeAbiParameters([{ type: "bytes32" }, { type: "bytes32" }], await ask(encodeFunctionData({ abi: extra, functionName: "pubkey", args: [node] })));
+    assert.equal(BigInt(x) + BigInt(y), 0n);
+    const [types, abiData] = decodeAbiParameters([{ type: "uint256" }, { type: "bytes" }], await ask(encodeFunctionData({ abi: extra, functionName: "ABI", args: [node, 1n] })));
+    assert.equal(types, 0n);
+    assert.equal(abiData, "0x");
+  });
+
+  await check("a label not in normalised form answers nothing, even if it lowercases to a handle", async () => {
+    // "K" is the Kelvin sign; it lowercases to "k".
+    for (const name of ["ALICE.zoldhq.com", "Alice.zoldhq.com", "Kate.zoldhq.com", " alice.zoldhq.com"]) {
+      const [address] = decodeAbiParameters([{ type: "bytes" }], await answer(addrCall(name)));
+      assert.equal(address, "0x", name);
+    }
+  });
+
+  await check("a token on a chain ENSIP-11 cannot express does not break the page's other records", async () => {
+    const [address] = decodeAbiParameters([{ type: "bytes" }], await answer(addrCall("bob.zoldhq.com")));
+    assert.equal(address, PAGE);
+    const url = await answer(callFor("bob.zoldhq.com", encodeFunctionData({ abi: profile, functionName: "text", args: [namehash("bob.zoldhq.com"), "url"] })));
+    assert.equal(decodeAbiParameters([{ type: "string" }], url)[0], "https://zoldhq.com/pay/bob");
+  });
+
+  await check("a repeated request reuses the signed answer", async () => {
+    const call = addrCall("alice.zoldhq.com");
+    const first = (await (await gateway(call)).json()).data;
+    const second = (await (await gateway(call)).json()).data;
+    assert.equal(second, first, "same signature, not a fresh one");
   });
 
   await check("unknown handles, org pages, deeper names and the parent answer nothing", async () => {
