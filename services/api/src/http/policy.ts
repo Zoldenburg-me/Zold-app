@@ -6,8 +6,10 @@
  * stranger can reach. Applied by server.ts before any route is mounted.
  */
 import type express from "express";
-import { SECURITY } from "../config.js";
+import { CHECKOUT_SERVICE, SECURITY } from "../config.js";
+import { checkoutCredentialFor } from "../checkout-service.js";
 import { isOperator } from "./guards.js";
+import { bearerToken } from "./sessions.js";
 
 /**
  * State-changing requests from foreign origins are refused outright; allowed
@@ -203,6 +205,13 @@ function partnerBucket(req: express.Request): "p" | "d" | undefined {
 function primaryBucket(req: express.Request, path: string): [string, number] {
   if (path.startsWith("/shopify/")) return ["s", SECURITY.shopifyRateLimitPerMin];
   if (path.startsWith("/admin") && isOperator(req)) return ["o", SECURITY.operatorRateLimitPerMin];
+  // A valid checkout-service credential polls at its own rate; a wrong one is
+  // a guess and stays on the auth bucket.
+  if (path.startsWith("/service/")) {
+    return checkoutCredentialFor(bearerToken(req))
+      ? ["c", CHECKOUT_SERVICE.rateLimitPerMin]
+      : ["a", SECURITY.authRateLimitPerMin];
+  }
   if (isAuthRoute(req)) return ["a", SECURITY.authRateLimitPerMin];
   return ["g", SECURITY.rateLimitPerMin];
 }

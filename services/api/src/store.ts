@@ -40,6 +40,7 @@ import type {
   ReceiptShare,
   RecoveryRequest,
   ReviewResolutionState,
+  ServiceCredential,
   Session,
   ShopifyConnection,
   StoredDocument,
@@ -58,6 +59,23 @@ export const REVIEW_EVIDENCE_MAX = 200;
 
 /** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
+
+/** Called after a transfer's state changed and was persisted. */
+type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void;
+const transferStateListeners: TransferStateListener[] = [];
+
+/** A listener's failure is logged, never thrown into the write that moved the
+ *  state: the change is already on disk. */
+function announceStateChange(t: Transfer, from: Transfer["state"]) {
+  if (t.state === from) return;
+  for (const listener of transferStateListeners) {
+    try {
+      listener(t, from);
+    } catch (err) {
+      console.error(`store: transfer state listener failed for ${t.id}: ${(err as Error).message}`);
+    }
+  }
+}
 
 /**
  * Which record already holds `hash`, among everything the bank statement
@@ -144,6 +162,34 @@ export const store = {
     const u = db.users.find((x) => x.id === id);
     if (!u?.passkey || u.passkey.credentialId !== credentialId) return undefined;
     return store.updateUser(id, { passkey: { ...u.passkey, signCount } });
+  },
+  serviceCredentials(service: ServiceCredential["service"]): readonly ServiceCredential[] {
+    return db.serviceCredentials.filter((c) => c.service === service);
+  },
+  /**
+   * Make `next` the service's current credential. Every other one of that
+   * service stops working `overlapMs` from now, or earlier if a past rotation
+   * already set that. One write, with its audit row. Returns when the
+   * previous credential stops working.
+   */
+  rotateServiceCredential(next: ServiceCredential, overlapMs: number, by: string, revoked = false): string {
+    const until = new Date(Date.now() + overlapMs).toISOString();
+    for (const c of db.serviceCredentials) {
+      if (c.service !== next.service) continue;
+      if (!c.expiresAt || c.expiresAt > until) c.expiresAt = until;
+    }
+    db.serviceCredentials.push(next);
+    db.audit.push(
+      auditEntry("service.credential_rotated", {
+        service: next.service,
+        credentialId: next.id,
+        previousValidUntil: until,
+        revokedPrevious: revoked,
+        operator: by,
+      }),
+    );
+    persist();
+    return until;
   },
   /**
    * Append one audit entry. There is deliberately no update and no delete —
@@ -377,9 +423,15 @@ export const store = {
       const { state: _dropped, ...rest } = patch;
       patch = rest;
     }
+    const from = t.state;
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
     persist();
+    announceStateChange(t, from);
     return t;
+  },
+  /** Subscribe to transfer state changes (checkout-webhook.ts). */
+  onTransferStateChange(listener: TransferStateListener) {
+    transferStateListeners.push(listener);
   },
   /**
    * The only way out of MANUAL_REVIEW: an operator records what they decided
@@ -463,6 +515,7 @@ export const store = {
       ),
     );
     persist();
+    announceStateChange(t, "MANUAL_REVIEW");
     return { ok: true, transfer: t };
   },
   /**
