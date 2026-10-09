@@ -469,6 +469,86 @@ await check("clearing it is a change too, and is audited", async () => {
   assert.equal(audit[0].data.newLast4, null);
 });
 
+console.log("\nFour eyes is the person, not the member row");
+
+/** A user whose email is proven, the way invite acceptance requires. */
+function addProvenUser(id: string) {
+  const email = `${id}@example.test`;
+  store.addUser({
+    id, name: id, country: "DE", kycStatus: "approved", createdAt: now, email,
+    passkeySafe: { candideRecovery: { channels: [{ channel: "email", target: email, verifiedAt: now }] } },
+  } as any);
+  return email;
+}
+function addReviewOrg(id: string, members: [string, string][]) {
+  store.addOrganisation({ id, type: "business", name: "Rejoin GmbH", legalName: "Rejoin GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any);
+  for (const [userId, role] of members) {
+    store.addMember({ id: `m_${id}_${userId}`, orgId: id, userId, email: "", role: role as any, status: "active", invitedAt: now, acceptedAt: now });
+  }
+  store.addAccount({ id: `acc_${id}`, orgId: id, currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, gate: { reason: "no funding identity", needs: "a member's account" }, createdAt: now, updatedAt: now });
+  const supplier = store.findContact("c_org_a")!;
+  store.addContact({ ...supplier, id: `c_${id}`, orgId: id, bankAccounts: [{ ...supplier.bankAccounts[0], id: `ba_${id}` }] } as any);
+}
+/** Deactivate `who`'s row as `by`, re-invite their email, and accept as them. */
+async function rejoin(orgId: string, who: string, email: string, role: string, by: string) {
+  const invite = await call("POST", `/api/orgs/${orgId}/members`, by, { email, role });
+  assert.equal(invite.status, 201, JSON.stringify(invite.data));
+  const off = await call("PATCH", `/api/orgs/${orgId}/members/m_${orgId}_${who}`, by, { status: "deactivated" });
+  assert.equal(off.status, 200, JSON.stringify(off.data));
+  const accept = await call("POST", "/api/orgs/invites/accept", who, { token: invite.data.inviteToken });
+  assert.equal(accept.status, 200, JSON.stringify(accept.data));
+  assert.notEqual(store.memberFor(orgId, who)!.id, `m_${orgId}_${who}`, "a new member row");
+}
+const REVIEW_SELF = /someone other than the person who drafted it/;
+
+addProvenUser("u_rj_owner");
+const rjAdminEmail = addProvenUser("u_rj_admin");
+addReviewOrg("org_rj", [["u_rj_owner", "owner"], ["u_rj_admin", "admin"]]);
+await check("an admin removed and re-invited cannot approve the draft they submitted under their old row", async () => {
+  const draft = await draftIn("org_rj", "u_rj_admin");
+  assert.equal((await call("POST", `/api/orgs/org_rj/drafts/${draft}/submit`, "u_rj_admin")).status, 200);
+  await rejoin("org_rj", "u_rj_admin", rjAdminEmail, "admin", "u_rj_owner");
+  const r = await call("POST", `/api/orgs/org_rj/drafts/${draft}/review`, "u_rj_admin", { approve: true });
+  assert.equal(r.status, 403, JSON.stringify(r.data));
+  assert.match(String(r.data.error), REVIEW_SELF);
+  assert.equal(stateOf(draft), "PENDING_REVIEW");
+  const reject = await call("POST", `/api/orgs/org_rj/drafts/${draft}/review`, "u_rj_admin", { approve: false });
+  assert.equal(reject.status, 403, "rejecting is reviewing too");
+  const other = await call("POST", `/api/orgs/org_rj/drafts/${draft}/review`, "u_rj_owner", { approve: true });
+  assert.equal(other.status, 200, JSON.stringify(other.data));
+  assert.equal(stateOf(draft), "REVIEWED");
+});
+
+const soloEmail = addProvenUser("u_solo");
+addProvenUser("u_solo_co");
+addReviewOrg("org_solo", [["u_solo", "owner"], ["u_solo_co", "owner"]]);
+await check("an owner cannot re-invite themselves under a new row to approve their own draft", async () => {
+  const draft = await draftIn("org_solo", "u_solo");
+  assert.equal((await call("POST", `/api/orgs/org_solo/drafts/${draft}/submit`, "u_solo")).status, 200);
+  await rejoin("org_solo", "u_solo", soloEmail, "owner", "u_solo");
+  const r = await call("POST", `/api/orgs/org_solo/drafts/${draft}/review`, "u_solo", { approve: true });
+  assert.equal(r.status, 403, JSON.stringify(r.data));
+  assert.match(String(r.data.error), REVIEW_SELF);
+  assert.equal(stateOf(draft), "PENDING_REVIEW");
+});
+
+await check("a rejoined member still reviews a draft someone else submitted", async () => {
+  const draft = await draftIn("org_solo", "u_solo_co");
+  assert.equal((await call("POST", `/api/orgs/org_solo/drafts/${draft}/submit`, "u_solo_co")).status, 200);
+  const r = await call("POST", `/api/orgs/org_solo/drafts/${draft}/review`, "u_solo", { approve: true });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(stateOf(draft), "REVIEWED");
+});
+
+await check("a draft whose drafter resolves to no person is refused, not approved", async () => {
+  const draft = await draftIn("org_solo", "u_solo_co");
+  assert.equal((await call("POST", `/api/orgs/org_solo/drafts/${draft}/submit`, "u_solo_co")).status, 200);
+  store.updateDraft(draft, { createdByMemberId: "m_missing" });
+  const r = await call("POST", `/api/orgs/org_solo/drafts/${draft}/review`, "u_solo", { approve: true });
+  assert.equal(r.status, 403, JSON.stringify(r.data));
+  assert.equal(stateOf(draft), "PENDING_REVIEW");
+});
+
 server.close();
 monerium.close();
 console.log(`\n${passed} passed${process.exitCode ? ", with failures" : ""}`);
