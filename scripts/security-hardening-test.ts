@@ -24,7 +24,7 @@ const express = (await import("express")).default;
 const { initStore, store } = await import("../services/api/src/store.js");
 const { passwordProblem, hashPassword, passwordMatches } = await import("../services/api/src/domain/passwords.js");
 const { hashToken, ownerInvoiceView } = await import("../services/api/src/domain/invoices.js");
-const { apiRateLimit, clientKey, securityHeaders } = await import("../services/api/src/http/policy.js");
+const { apiRateLimit, clientKey, securityHeaders, securityHeadersFor } = await import("../services/api/src/http/policy.js");
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 
@@ -137,6 +137,21 @@ await check("every response carries a same-origin CSP and refuses to be framed",
     assert.ok(csp.includes(d), `CSP lacks ${d}: ${csp}`);
   }
   assert.equal(r.headers.get("x-frame-options"), "DENY");
+});
+await check("production pins HTTPS for two years on every subdomain; local dev does not", async () => {
+  const headersFrom = async (production: boolean) => {
+    const one = express();
+    one.use(securityHeadersFor(production));
+    one.get("/", (_req, res) => res.end());
+    const s = one.listen(0);
+    try {
+      return (await fetch(`http://127.0.0.1:${(s.address() as AddressInfo).port}/`)).headers;
+    } finally {
+      s.close();
+    }
+  };
+  assert.equal((await headersFrom(true)).get("strict-transport-security"), "max-age=63072000; includeSubDomains");
+  assert.equal((await headersFrom(false)).get("strict-transport-security"), null);
 });
 
 console.log("invoice-link password");
@@ -350,6 +365,15 @@ console.log("a passkey replaced by recovery while an approval is being verified"
     assert.deepEqual(offenders, []);
   });
 }
+
+console.log("database file");
+await check("the database file is readable by its owner only", async () => {
+  const { statSync } = await import("node:fs");
+  const { persist } = await import("../services/api/src/store/db.js");
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
+  persist();
+  assert.equal(statSync(process.env.TRANSF_DB_PATH!).mode & 0o777, 0o600);
+});
 
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }

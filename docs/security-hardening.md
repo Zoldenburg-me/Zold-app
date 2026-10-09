@@ -50,22 +50,34 @@ So nobody rebuilds it:
 ## Phase 0: local secrets and accounts (days, no new infrastructure)
 
 The open items, with paths, are in `.private/security-gaps.md`, which is
-kept out of the public repo. The targets:
+kept out of the public repo.
 
-- `.env` and `.private/` are encrypted at rest with `age` (binary vendored
-  under `.toolchain/`, the same way node is), with the identity in the macOS
-  Keychain or on a YubiKey (`age-plugin-yubikey`). `scripts/with-secrets.sh`
-  decrypts into a child process's environment only, never to a file.
-- Deploy manifests are generated and piped to the deploy command; nothing
-  holding secrets is written to disk.
-- Database backups and copies exist only `age`-encrypted, made by one
-  `scripts/backup-db.sh`; files under `data/` are mode 600.
-- Every binary and image fetched at build or boot is pinned and verified
-  (version plus SHA-256, or image digest).
-- Local `.claude/settings.json` denies Read/Bash on `.env*`, `.private/**`
-  and `data/*.json`, and the rule below says the same for every agent.
+In the repo (`docs/running-locally.md`, "Secrets"):
+- `.env` and `.private/` can be kept `age`-encrypted. `age` is vendored under
+  `.toolchain/` at a pinned version and SHA-256 (`scripts/_age.sh`); the
+  identity is in the macOS Keychain or on a YubiKey (`AGE_IDENTITY_FILE`).
+  `scripts/secrets.sh run` decrypts `.env.age` into a child process's
+  environment only, never to a file.
+- `scripts/backup-db.sh` is the one way to copy the database, and its output is
+  `age`-encrypted. The store writes its file mode 600 and creates `data/`
+  mode 700.
+- `.claude/settings.json` is committed and denies agents Read on `.env`,
+  `.private/**` and `data/*.json`, Edit on the same, and the common shell
+  reads of them. Bash rules match command prefixes only, so they are a
+  guard against slips, not a boundary; the boundary is the encryption. The
+  deny on `.private/**` also covers `.private/pentest/`.
 - `Strict-Transport-Security: max-age=63072000; includeSubDomains` in
-  production; preload once every subdomain serves HTTPS.
+  production (`http/policy.ts`). Preload once every subdomain serves HTTPS.
+
+Still open:
+- The switch itself: on each laptop, `secrets.sh init`, encrypt `.env`, seal
+  `.private/`, encrypt or delete the `.env.backup-*` copies, then delete the
+  plaintext.
+- Deploy manifests generated and piped to the deploy command, so nothing
+  holding secrets is written to disk. The deploy tooling is under
+  `.private/`.
+- Every binary and image fetched at build or boot is pinned and verified
+  (version plus SHA-256, or image digest). The same tooling.
 - Hardware-key 2FA on the registrar, the registrant's email account (it can
   reset the registrar), Cloudflare and GitHub; registrar lock and WHOIS
   privacy; the registrant is the company. Whoever controls the domain's DNS
@@ -215,9 +227,9 @@ agreement with.
 - **Row-level security** on every org-scoped table, keyed on a per-request
   `app.org_id` setting: a second check under the member+role check, so a
   missing `where org_id =` returns nothing instead of another org's rows.
-- **Queries**: parameterised only. A lint rule refuses string-built SQL. A
-  query layer (Kysely or plain `pg` with tagged templates) keeps types next
-  to SQL.
+- **Queries**: parameterised only, through Prisma ORM. A lint rule refuses
+  `$queryRawUnsafe` and `$executeRawUnsafe`. Prisma's RLS policies only bind
+  a connection that is not a superuser, so the app connects as `zold_app`.
 - **Field encryption**: Phase 1.2 columns stay ciphertext inside Postgres.
   Disk encryption by the host is assumed and is not counted as protection.
 - **Money**: a transfer state change and its ledger rows commit in one
@@ -237,6 +249,28 @@ agreement with.
   transaction, then checks row counts per table and ledger sums per account,
   and refuses to cut over on any mismatch. The idempotent migrations in
   `db.ts` become numbered SQL migrations.
+
+### Hosts checked
+
+**Prisma Postgres** (a temporary `eu-central-1` database from `create-db`,
+probed 2026-10-09) does not meet this phase as written:
+- The one connection role is a "restricted superuser" that **cannot create
+  roles**, so there is no `zold_app` without DELETE and no `zold_readonly`.
+- As a superuser it **bypasses row-level security**, `FORCE` included: with
+  `app.org_id` set to one org it still read another org's rows.
+- No `pgaudit` (only `pgcrypto` and `pg_stat_statements` of the four
+  checked). No point-in-time recovery: daily snapshots, 7 or 30 days.
+- TLS from the client verifies (`verify-full` passes against a public CA),
+  but it ends at a proxy: the session reports no TLS to Postgres itself.
+  The public endpoint `db.prisma.io` resolves to Vultr addresses, so Vultr
+  would be a subprocessor alongside whatever runs the database.
+- What works: triggers (an append-only trigger refused a DELETE),
+  `pgcrypto`, Postgres 17.2, 50 connections.
+
+The probe ran on an unclaimed database; a paid plan may differ, and that is
+worth one question to Prisma (custom roles, PITR, `pgaudit`, the processing
+agreement's contracting entity and subprocessors) before ruling it out.
+Prisma ORM itself does not depend on the host.
 
 ### "A third party gets into the database"
 
