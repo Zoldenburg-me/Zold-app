@@ -70,8 +70,9 @@ function emptyAnswer(functionName: string): Hex | undefined {
   }
 }
 
-/** A label that could be a stored handle: lowercase ASCII letters, digits
- *  and hyphens. ENS clients normalise before they hash, so `ALICE` or a
+/** A label already in normalised ASCII form: lowercase letters, digits and
+ *  hyphens (a handle is a subset of this). ENS clients normalise before they
+ *  hash, so `ALICE` or a
  *  look-alike letter (the Kelvin sign lowercases to `k`) reaches us only from
  *  a caller that skipped normalisation, and it must not answer for `alice`. */
 const HANDLE_LABEL = /^[a-z0-9-]{1,63}$/;

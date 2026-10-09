@@ -50,12 +50,14 @@ These are the same facts `GET /pay/:handle` already publishes:
   normalised form (`ALICE`, or a look-alike letter that lowercases to a
   handle). ENS clients normalise before they hash, so only a caller that
   skipped that sends one.
-- Nothing while a page's forwarder renewal takes longer than 2 s; the renewal
-  carries on and the next lookup sees it.
+- Nothing while a page's forwarder renewal takes longer than 2 s. That answer
+  is not cached (`no-store`); the renewal carries on and the next lookup sees
+  it.
 
-A signed answer is reused for the same request while more than half its
-validity is left, so a page change shows in the gateway within half the TTL
-(150 s by default), plus 60 s of HTTP caching.
+A signed answer is reused for the same request (whatever its hex case): one
+with an address for half its validity (150 s by default), one without for
+30 s, so a handle claimed after a lookup shows soon. HTTP `max-age` is 60 s,
+never past the signature's expiry.
 
 Handles are already a subset of what ENS accepts. The one extra rule is that
 `--` cannot be the third and fourth characters (ENSIP-15), and `normaliseHandle`

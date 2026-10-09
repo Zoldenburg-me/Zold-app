@@ -10,7 +10,9 @@
  *   - org pages, unknown handles, deeper names and labels not in normalised
  *     form answer nothing;
  *   - a chain id ENSIP-11 cannot express is skipped, not a failure;
- *   - a repeated request reuses its signed answer;
+ *   - a repeated request reuses its signed answer for half its validity (30 s
+ *     when it has no address), never one given because the page check took
+ *     longer than 2 s;
  *   - malformed calls, names under another parent, a node that does not match
  *     its name are refused;
  *   - the lookup needs a session, says when it is not configured, and never
@@ -55,6 +57,7 @@ const { CHAIN_ID } = await import("../services/api/src/config.js");
 const { createEnsRouter, ccipFetch, fetchPublic, isPublicAddress } = await import("../services/api/src/routes/ens.js");
 const { gatewaySignatureHash } = await import("../services/api/src/ens.js");
 const { HandleError, normaliseHandle } = await import("../services/api/src/pay.js");
+const { livePaymentPage } = await import("../services/api/src/routes/payment-page.js");
 initStore();
 
 const PAGE = "0x2222222222222222222222222222222222222222";
@@ -76,13 +79,34 @@ store.addUser({
   },
 } as any);
 store.addOrganisation({ id: "o-acme", name: "Acme", createdAt: new Date().toISOString(), paymentPage: { handle: "acme" } } as any, false);
+// Carol's page check hangs while `carolSlow` is set: a forwarder renewal
+// slower than the gateway waits.
+store.addUser({
+  id: "u-carol", name: "Carol", country: "DE", kycStatus: "approved",
+  address: "0x4444444444444444444444444444444444444444",
+  createdAt: new Date().toISOString(),
+  paymentPage: { handle: "carol", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" },
+} as any);
+let carolSlow = true;
 
 const app = express().use(
   "/api",
   createEnsRouter({
     requireSession: (req, res) => (req.header("x-session") ? true : (res.status(401).json({ error: "authorization required" }), false)),
+    livePage: (user) => (user.id === "u-carol" && carolSlow ? new Promise<boolean>(() => {}) : livePaymentPage(user)),
   }),
 );
+
+/** Run `fn` with the clock moved `ms` ahead. */
+async function later<T>(ms: number, fn: () => Promise<T>): Promise<T> {
+  const real = Date.now;
+  Date.now = () => real() + ms;
+  try {
+    return await fn();
+  } finally {
+    Date.now = real;
+  }
+}
 const server = app.listen(0);
 const base = `http://127.0.0.1:${(server.address() as any).port}/api`;
 
@@ -172,11 +196,51 @@ try {
     assert.equal(decodeAbiParameters([{ type: "string" }], url)[0], "https://zoldhq.com/pay/bob");
   });
 
-  await check("a repeated request reuses the signed answer", async () => {
-    const call = addrCall("alice.zoldhq.com");
-    const first = (await (await gateway(call)).json()).data;
-    const second = (await (await gateway(call)).json()).data;
-    assert.equal(second, first, "same signature, not a fresh one");
+  await check("a repeated request reuses the signed answer for half its validity, whatever its hex case", async () => {
+    // Signing is deterministic and `expires` is in whole seconds, so only a
+    // later clock tells a reused answer from a fresh one.
+    const call = callFor("alice.zoldhq.com", encodeFunctionData({ abi: profile, functionName: "text", args: [namehash("alice.zoldhq.com"), "url"] }));
+    const first = await gateway(call);
+    const data = (await first.json()).data;
+    assert.match(first.headers.get("cache-control") ?? "", /max-age=60$/);
+    const reused = await later(5_000, async () => (await (await gateway(call)).json()).data);
+    assert.equal(reused, data, "reused, not re-signed");
+    const upper = await later(5_000, async () => (await (await gateway(`0x${call.slice(2).toUpperCase()}` as Hex)).json()).data);
+    assert.equal(upper, data, "the same request in upper-case hex is the same entry");
+    const fresh = await later(151_000, async () => (await (await gateway(call)).json()).data);
+    assert.notEqual(fresh, data, "re-signed once half the 300 s validity has passed");
+  });
+
+  await check("a handle with no page is cached for 30 s only, so a page claimed now shows soon", async () => {
+    const call = addrCall("dave.zoldhq.com");
+    assert.equal(decodeAbiParameters([{ type: "bytes" }], await answer(call))[0], "0x");
+    store.addUser({
+      id: "u-dave", name: "Dave", country: "DE", kycStatus: "approved",
+      address: "0x5555555555555555555555555555555555555555",
+      createdAt: new Date().toISOString(),
+      paymentPage: { handle: "dave", depositAddress: PAGE, autoConvert: true, settlementAsset: "EURE" },
+    } as any);
+    const soon = await later(10_000, async () => (await (await gateway(call)).json()).data);
+    const [stillEmpty] = decodeAbiParameters([{ type: "bytes" }], decodeAbiParameters([{ type: "bytes" }, { type: "uint64" }, { type: "bytes" }], soon)[0]);
+    assert.equal(stillEmpty, "0x", "within 30 s the cached empty answer stands");
+    const after = await later(31_000, async () => (await (await gateway(call)).json()).data);
+    const [found] = decodeAbiParameters([{ type: "bytes" }], decodeAbiParameters([{ type: "bytes" }, { type: "uint64" }, { type: "bytes" }], after)[0]);
+    assert.equal(found, PAGE);
+  });
+
+  await check("a page check slower than 2 s answers nothing, uncached, and the next lookup sees the page", async () => {
+    const call = addrCall("carol.zoldhq.com");
+    const t0 = Date.now();
+    const r = await gateway(call);
+    const waited = Date.now() - t0;
+    assert.ok(waited >= 1_900 && waited < 4_000, `answered after ${waited} ms`);
+    assert.equal(r.headers.get("cache-control"), "no-store");
+    const { data } = await r.json();
+    const [result] = decodeAbiParameters([{ type: "bytes" }, { type: "uint64" }, { type: "bytes" }], data);
+    assert.equal(decodeAbiParameters([{ type: "bytes" }], result)[0], "0x");
+    carolSlow = false;
+    const [address] = decodeAbiParameters([{ type: "bytes" }], await answer(call));
+    assert.equal(address, PAGE, "the timed-out answer was not reused");
   });
 
   await check("unknown handles, org pages, deeper names and the parent answer nothing", async () => {
