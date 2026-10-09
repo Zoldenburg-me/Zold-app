@@ -29,6 +29,8 @@ import { emailHeldBy, emailLooksValid } from "../domain/email.js";
 
 /** Consents a signup body may carry; the client sends one or two. */
 const MAX_SIGNUP_CONSENTS = 4;
+/** Distinct citizenships a signup may declare; more is refused, never cut. */
+const MAX_DECLARED_CITIZENSHIPS = 10;
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
@@ -151,9 +153,15 @@ export function createUserRouter(deps: UserDeps) {
       };
       // Store only citizenships the caller declared. Without any, screening
       // uses residence, but residence is never saved as a citizenship.
+      // The list is anonymous and kept whole (on the row, or in the audit row
+      // on a refusal), so it is de-duplicated and refused when too long. It is
+      // never cut: a cut could drop the entry screening has to see.
       const declaredCitizenships: string[] | null = Array.isArray(citizenships) && citizenships.length
-        ? citizenships.map((c: any) => normaliseCountryCode(String(c)))
+        ? [...new Set(citizenships.map((c: any) => normaliseCountryCode(String(c))))]
         : null;
+      if (declaredCitizenships && declaredCitizenships.length > MAX_DECLARED_CITIZENSHIPS) {
+        return res.status(400).json({ error: `declare at most ${MAX_DECLARED_CITIZENSHIPS} citizenships` });
+      }
       let decision;
       try {
         decision = resolveSegment({
