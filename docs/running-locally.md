@@ -86,7 +86,10 @@ git push origin production
 ```
 
 Each run adds one commit whose tree is main's tree through that allowlist and
-whose message names the main commit. On the host: `npm ci --omit=dev`, write
+whose message names the main commit. It refuses a source that is not on
+origin/main or does not descend from the source of the current `production`
+commit, so a dispatch on another branch or a re-run of an older workflow run
+fails instead of publishing or rolling back. On the host: `npm ci --omit=dev`, write
 `deployments.json`, `npm start`; there is no `hardhat compile` step.
 
 Rules, because whatever is on `production` is what zoldhq.com runs:
