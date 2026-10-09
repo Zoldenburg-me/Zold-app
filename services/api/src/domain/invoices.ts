@@ -301,6 +301,8 @@ export interface MoneriumOrderLike {
   kind?: string;
   amount: string;
   address?: string;
+  chain?: string;
+  currency?: string;
   memo?: string;
   meta?: { state?: string; processedAt?: string };
   state?: string;
