@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/.env.production)",
+      "Read(**/.env.backup-*)",
+      "Read(/.private/**)",
+      "Read(/data/*.json)",
+      "Edit(**/.env)",
+      "Edit(/.private/**)",
+      "Edit(/data/*.json)",
+      "Bash(cat .env*)",
+      "Bash(head .env*)",
+      "Bash(tail .env*)",
+      "Bash(less .env*)",
+      "Bash(grep * .env*)",
+      "Bash(cat .private/*)",
+      "Bash(cat data/*.json)",
+      "Bash(printenv*)"
+    ]
+  }
+}
