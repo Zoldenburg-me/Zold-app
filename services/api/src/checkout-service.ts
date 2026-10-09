@@ -21,6 +21,13 @@ export function isCheckoutTransfer(t: Transfer): boolean {
   return t.rail === "sepa" && typeof t.reference === "string" && CHECKOUT_REFERENCE.test(t.reference);
 }
 
+/** The IBAN's last four characters: enough for the service to match a
+ *  transfer it started, without handing it the payee's full account. */
+function lastFour(iban?: string): string | undefined {
+  if (!iban) return undefined;
+  return `…${iban.replace(/\s+/g, "").slice(-4)}`;
+}
+
 /** The allowlist the service receives. Built field by field, so a field added
  *  to Transfer never reaches it by accident. */
 export function checkoutTransferView(t: Transfer) {
@@ -29,7 +36,7 @@ export function checkoutTransferView(t: Transfer) {
     state: t.state,
     rail: t.rail,
     receiveEur: t.receiveEur,
-    recipientIban: t.recipientIban,
+    recipientIban: lastFour(t.recipientIban),
     reference: t.reference,
     updatedAt: t.updatedAt,
   };

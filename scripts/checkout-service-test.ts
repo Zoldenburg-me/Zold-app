@@ -8,7 +8,8 @@
  *   2. only the operator can rotate; the token is returned once and only its
  *      hash is stored
  *   3. only a SEPA transfer whose reference carries ZP + 12 hex is served, as
- *      exactly the allowlisted fields; everything else is the same 404
+ *      exactly the allowlisted fields with the IBAN masked to its last four;
+ *      everything else is the same 404
  *   4. rotation keeps the previous credential valid for the overlap, not after
  *   5. every authenticated read is audited, without the token
  *   6. the service bucket rate-limits a valid credential
@@ -124,7 +125,7 @@ function transfer(id: string, over: Record<string, unknown>) {
 }
 
 transfer("t-ok", { reference: "Order 4711 ZP0123456789ab" });
-transfer("t-ok-upper", { reference: "ZPABCDEF012345" });
+transfer("t-ok-upper", { reference: "ZPABCDEF012345", recipientIban: "DE89 3704 0044 0532 0130 00" });
 transfer("t-cash", { rail: "cash", recipientIban: undefined, recipientPhone: "+254700000000", reference: "ZP0123456789ab" });
 transfer("t-noref", {});
 transfer("t-plain", { reference: "invoice 2026-17" });
@@ -171,12 +172,15 @@ await check("a SEPA transfer with a ZP checkout reference is served as the allow
   assert.equal(r.body.rail, "sepa");
   assert.equal(r.body.state, "CREATED");
   assert.equal(r.body.receiveEur, 25);
-  assert.equal(r.body.recipientIban, "DE89370400440532013000");
+  assert.equal(r.body.recipientIban, "…3000", "the IBAN is masked to its last four characters");
+  assert.ok(!JSON.stringify(r.body).includes("DE89370400440532013000"));
   assert.equal(r.body.reference, "Order 4711 ZP0123456789ab");
   assert.equal(r.body.updatedAt, now);
 });
-await check("upper-case hex is a checkout reference too", async () => {
-  assert.equal((await get("t-ok-upper", token1)).status, 200);
+await check("upper-case hex is a checkout reference too, and a spaced IBAN masks the same", async () => {
+  const r = await get("t-ok-upper", token1);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.recipientIban, "…3000");
 });
 const notFound = await get("does-not-exist", token1);
 for (const id of ["t-cash", "t-noref", "t-plain", "t-short", "t-long", "t-glued", "t-nonhex", "does-not-exist"]) {
