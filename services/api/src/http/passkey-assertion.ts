@@ -40,7 +40,9 @@ export async function checkOpAssertion(
       challenge,
       true,
     );
-    return store.updateUser(user.id, { passkey: { ...passkey, signCount } });
+    const updated = store.recordPasskeyUse(user.id, passkey.credentialId, signCount);
+    if (!updated) throw new Error("this passkey is no longer the account's passkey");
+    return updated;
   } catch (err: any) {
     res.status(401).json({ error: `That passkey approval did not check out (${err?.message ?? err}). Start again.`, code: "BAD_ASSERTION" });
     return undefined;
