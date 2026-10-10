@@ -97,6 +97,7 @@
     "plan:test": "tsx scripts/plan-grant-test.ts",
     "admin:test": "tsx scripts/admin-dashboard-test.ts",
     "operator:test": "tsx scripts/operator-auth-test.ts",
+    "admin:ui:test": "tsx scripts/admin-ui-test.ts",
     "operator:enrol": "tsx scripts/operator-enrol.ts",
     "review-resolution:test": "tsx scripts/review-resolution-test.ts",
     "draft:test": "tsx scripts/draft-execution-test.ts",

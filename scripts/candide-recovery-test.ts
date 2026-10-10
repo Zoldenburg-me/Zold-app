@@ -235,7 +235,8 @@ let opKit: OperatorKit | undefined;
 async function call(pathname: string, body?: any, method?: string, bearer = token, extra: Record<string, string> = {}) {
   // A change made with the operator token goes through an operator passkey
   // session and a fresh approval; the token itself opens reads only.
-  if (bearer === OPERATOR && opKit && (method ?? (body ? "POST" : "GET")) !== "GET") {
+  if (bearer === OPERATOR && (method ?? (body ? "POST" : "GET")) !== "GET") {
+    if (!opKit) throw new Error(`an operator change (${pathname}) before the operator kit is enrolled`);
     const r = await opKit.call(method ?? "POST", pathname, body ?? {});
     return { status: r.status, data: r.body, text: JSON.stringify(r.body) };
   }

@@ -62,7 +62,8 @@ function readAuditDue(key: string, now: number): boolean {
  *  handler made is audited even if the client went away before the answer. */
 function auditOnFinish(req: express.Request, res: express.Response, who: OperatorPrincipal) {
   const asSent = req.path.replace(/\/+$/, "") || "/";
-  const read = READS.has(req.method);
+  // A live read asks a partner: it is audited every time.
+  const read = READS.has(req.method) && req.query.live === undefined;
   const key = `${who.id} ${asSent.toLowerCase()}`;
   if (read && !readAuditDue(key, Date.now())) return;
   const userId = /^\/users\/([^/]+)/i.exec(asSent)?.[1];
