@@ -23,6 +23,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { IS_PRODUCTION, ROOT, STELLAR, STELLAR_TESTNET_PASSPHRASE } from "../config.js";
 import { partnerTimeout } from "../http.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 // ---------------------------------------------------------------------------
 // Treasury account (auto-provisioned on testnet via friendbot)
@@ -743,9 +744,7 @@ export async function sendSep24WithdrawalPayment(
     submitted = await server.submitTransaction(tx);
   } catch (err: any) {
     throw new AnchorPaymentUncertainError(
-      `Stellar payment to ${status.withdrawAnchorAccount} may or may not have landed: ${
-        err?.message ?? err
-      }`,
+      `Stellar payment to ${status.withdrawAnchorAccount} may or may not have landed: ${redactedMessage(err)}`,
       err,
     );
   }

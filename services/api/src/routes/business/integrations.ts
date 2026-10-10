@@ -24,6 +24,7 @@ import { statementLinesOf } from "../../bookkeeping/writer.js";
 import { issueBelegForLine } from "../../bookkeeping/issue.js";
 import { auditEntry } from "../../audit.js";
 import type { Organisation } from "../../domain/types.js";
+import { redactedMessage } from "../../http/log-cause.js";
 
 export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
@@ -147,7 +148,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
           store.audit(auditEntry("partner.call_refused", { partner: "getmyinvoices", status: err.status, orgId: ctx.org.id }, ctx.userId));
           return res.status(400).json({ error: "GetMyInvoices did not accept that key" });
         }
-        return res.status(503).json({ error: `GetMyInvoices could not be reached to verify the key: ${String(err?.message ?? err).slice(0, 160)}` });
+        return res.status(503).json({ error: `GetMyInvoices could not be reached to verify the key: ${redactedMessage(err).slice(0, 160)}` });
       }
       let apiKeyEnc: string;
       try {
@@ -237,7 +238,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       try {
         manual = (await client.bankAccounts()).filter((b) => b.accountType === "CUSTOM");
       } catch (err: any) {
-        bankAccountsError = String(err?.message ?? err).slice(0, 200);
+        bankAccountsError = redactedMessage(err).slice(0, 200);
       }
       // Lines go to a manual account only: a connected bank's feed is that
       // bank's own, and writing into it would double what it imports.
@@ -258,7 +259,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         try {
           doc = (await issueBelegForLine(line)).doc;
         } catch (err: any) {
-          results.push({ lineId: line.id, outcome: "no-beleg", error: String(err?.message ?? err).slice(0, 200) });
+          results.push({ lineId: line.id, outcome: "no-beleg", error: redactedMessage(err).slice(0, 200) });
           continue;
         }
         if (doc.snapshot.kind !== "beleg" || doc.revokedAt) {
@@ -270,13 +271,13 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
           const r = await client.pushDocument(belegUpload(doc.snapshot, doc.code, doc.createdAt, ctx.org.integrations?.getmyinvoices?.companyId));
           pushed = { lineId: line.id, code: doc.code, ...r };
         } catch (err: any) {
-          pushed = { lineId: line.id, code: doc.code, outcome: "failed", error: String(err?.message ?? err).slice(0, 200) };
+          pushed = { lineId: line.id, code: doc.code, outcome: "failed", error: redactedMessage(err).slice(0, 200) };
         }
         if (bankAccountUid !== undefined) {
           try {
             pushed.bankLine = await client.pushBankLine(bankAccountUid, bankLineFor(doc.snapshot, doc.code), doc.code, pushed.documentUid);
           } catch (err: any) {
-            pushed.bankLine = { outcome: "failed", error: String(err?.message ?? err).slice(0, 200) };
+            pushed.bankLine = { outcome: "failed", error: redactedMessage(err).slice(0, 200) };
           }
         }
         results.push(pushed);

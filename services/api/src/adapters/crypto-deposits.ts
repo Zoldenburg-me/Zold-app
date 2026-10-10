@@ -26,7 +26,7 @@ import { randomUUID } from "node:crypto";
 import { usdToken } from "../usd-token.js";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
-import { describeCause } from "../http/log-cause.js";
+import { describeCause, redactedMessage } from "../http/log-cause.js";
 import { addrs, eur, usd, publicClient } from "../chain.js";
 import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
@@ -260,7 +260,7 @@ export async function convertDeposit(deposit: CryptoDeposit): Promise<CryptoDepo
       txs,
     });
   } catch (err: any) {
-    const reason = String(err?.shortMessage ?? err?.message ?? err);
+    const reason = redactedMessage(err);
     console.warn(`crypto-in: refusing deposit ${deposit.txHash}#${deposit.logIndex}: ${reason}`);
     return store.updateCryptoDeposit(deposit.id, { state: "REFUSED", reason, txs });
   }

@@ -37,7 +37,7 @@ import { publicClient } from "../chain.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { ownerInvoiceView, settlementRef } from "../domain/invoices.js";
 import { roleCan } from "../domain/roles.js";
-import { describeCause } from "../http/log-cause.js";
+import { describeCause, redactedMessage } from "../http/log-cause.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface CryptoDepositDeps {
@@ -226,7 +226,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           expiresAt: new Date(expiresAt).toISOString(),
         });
       } catch (err: any) {
-        res.status(502).json({ error: String(err?.shortMessage ?? err?.message ?? err) });
+        res.status(502).json({ error: redactedMessage(err) });
       }
     }),
   );
@@ -277,7 +277,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         );
         if (!store.recordPasskeyUse(user.id, a.credentialId, signCount)) throw new Error("this passkey is no longer the account's passkey");
       } catch (err: any) {
-        return res.status(401).json({ error: String(err?.message ?? err) });
+        return res.status(401).json({ error: redactedMessage(err) });
       }
 
       // Measure BEFORE submitting: the credited amount is the balance delta, not
@@ -289,7 +289,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       try {
         await assertRateSane(BigInt(pending.quote.rate));
       } catch (err: any) {
-        return res.status(503).json({ error: String(err?.message ?? err) });
+        return res.status(503).json({ error: redactedMessage(err) });
       }
       let submitted: SubmittedOperation;
       try {
@@ -301,7 +301,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
           signature: b64urlToBuf(a.signature),
         });
       } catch (err: any) {
-        const reason = String(err?.shortMessage ?? err?.message ?? err);
+        const reason = redactedMessage(err);
         // The bundler may have taken the swap and it may still land. REFUSED
         // would offer the same USDC for a second conversion, so the row waits
         // for someone to check the operation on chain.

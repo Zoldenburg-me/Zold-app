@@ -48,6 +48,7 @@ import {
   type SafeImportState,
 } from "../wallet/safe-import.js";
 import { ownerChangeTxBuilderJson, txBuilderFileName } from "../wallet/safe-tx-builder.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export interface SafeImportDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -134,7 +135,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
       return res.status(err.status).json({ error: err.message, code: err.code });
     }
     // A failed read is not an answer: nothing was bound.
-    return res.status(502).json({ error: `chain read failed, nothing was changed: ${(err as any)?.message ?? err}`, code: "RPC_FAILED" });
+    return res.status(502).json({ error: `chain read failed, nothing was changed: ${redactedMessage(err)}`, code: "RPC_FAILED" });
   };
 
   const userFor = (req: express.Request, res: express.Response): User | undefined => {
@@ -194,7 +195,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
                 },
               };
             } catch (err: any) {
-              changes[mode] = { refused: err?.message ?? String(err) };
+              changes[mode] = { refused: redactedMessage(err) };
             }
           }
         }

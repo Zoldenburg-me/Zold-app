@@ -26,6 +26,7 @@ import { MoneriumApiError } from "../adapters/monerium-client.js";
 import { checkConnection } from "../adapters/monerium-sandbox.js";
 import { moneriumProfileState } from "./onboarding.js";
 import { maskIdentifier } from "./mask.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 const asList = (v: any, key: string): any[] => (Array.isArray(v) ? v : Array.isArray(v?.[key]) ? v[key] : []);
 
@@ -138,7 +139,7 @@ async function part(p: () => Promise<unknown>): Promise<Part> {
     return {
       ok: false,
       status: err instanceof MoneriumApiError ? err.status : undefined,
-      error: String((err as Error)?.message ?? err).slice(0, 400),
+      error: redactedMessage(err).slice(0, 400),
     };
   }
 }

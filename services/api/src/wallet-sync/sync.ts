@@ -56,6 +56,7 @@ import { store } from "../store.js";
 import { classifyToken, emoneySymbol } from "./token-class.js";
 import { loadTokenLists, type TokenListsResult } from "./token-lists.js";
 import { valueTransfer, type ValuationQuery, type ValuationResult } from "./valuation.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 /** What the sync needs from a chain. A seam, so the loop is tested offline. */
 export interface ChainReader {
@@ -120,12 +121,7 @@ export function publicSyncError(e: unknown): string {
   if (!(e instanceof BaseError) && !(e instanceof HoldWindow) && !(e instanceof SyncRefusal)) {
     return "the network did not answer";
   }
-  const raw = String((e as any)?.shortMessage ?? (e as any)?.message ?? e);
-  const firstLine = raw.split("\n").find((l) => l.trim()) ?? "sync failed";
-  return firstLine
-    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[address removed]")
-    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g, "[address removed]")
-    .slice(0, 200);
+  return redactedMessage(e).slice(0, 200);
 }
 
 /** An error this module raised with text written for the wallet row. */
