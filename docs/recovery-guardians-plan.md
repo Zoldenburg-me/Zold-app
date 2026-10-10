@@ -456,8 +456,9 @@ processing rests on explicit consent (Art. 9(2)(a)), collected each time.
 
 1. Phase 0 alerts: the banner is built; the mail transport behind its flag
    is next.
-2. Phase 1 enrolment 1 € check, then the recovery-time Didit + 1 € checks and
-   the operator gate.
+2. Phase 1: the enrolment 1 € check and the operator's refusal to sign for an
+   unenrolled account are built (`recovery/zoldenburg-enrolment.ts`). Next:
+   the recovery-time Didit + 1 € checks, gating the sign button on both.
 3. Phase 2 Turnkey integration + own social guardian.
 4. Phase 3 friend invites (screen, mail, reminders) + the n-of-m rule and UI.
 5. Phase 4 removal of the Candide hosted guardian (can run in parallel with 2).
