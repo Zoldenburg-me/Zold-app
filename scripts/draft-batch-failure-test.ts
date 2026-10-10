@@ -70,7 +70,7 @@ const { createDraftRoutes } = await import("../services/api/src/routes/business/
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { currentFingerprint } = await import("../services/api/src/domain/drafts.js");
 const { hashToken } = await import("../services/api/src/domain/invoices.js");
-const { encryptToken } = await import("../services/api/src/adapters/monerium-connection.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 type TransferFactory = import("../services/api/src/routes/business/shared.js").TransferFactory;
 
 let passed = 0;
@@ -101,7 +101,7 @@ store.addUser({
     profileId: PROFILE_ID,
     apiKeys: {
       clientId: CLIENT_ID,
-      clientSecretEnc: encryptToken(CLIENT_SECRET),
+      clientSecretEnc: SECRETS.moneriumApiSecret.seal("u_owner", CLIENT_SECRET),
       baseUrl: process.env.MONERIUM_BASE_URL,
       verifiedAt: now,
     },

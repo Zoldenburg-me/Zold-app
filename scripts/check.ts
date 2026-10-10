@@ -70,6 +70,7 @@ const scripts = [
   "payment-review:test",
   "deposit-invoice-link:test",
   "security:test",
+  "crypto:test",
   "org-migration:test",
   "production-branch:test",
   "identity:test",

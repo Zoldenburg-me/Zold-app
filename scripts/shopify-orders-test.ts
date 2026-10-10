@@ -342,6 +342,20 @@ await check("before the store has a link key, no email link opens anything", asy
   assert.equal(store.findShopifyConnectionByShop(SHOP)!.orderLinkSecretEnc, undefined);
   assert.equal((await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=${"0".repeat(64)}`)).status, 403);
 });
+await check("with no data encryption key the store's settings still load, without a link to sign and with the reason", async () => {
+  const ring = process.env.DATA_ENCRYPTION_KEYS;
+  process.env.DATA_ENCRYPTION_KEYS = "";
+  try {
+    const r = await call("GET", `/api/orgs/${org.id}/shopify`, { user: merchant.id });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.connections[0].payLinkTemplate, undefined);
+    assert.equal(r.body.available, false);
+    assert.match(r.body.reason, /DATA_ENCRYPTION_KEYS/);
+    assert.equal(store.findShopifyConnectionByShop(SHOP)!.orderLinkSecretEnc, undefined, "no key was made");
+  } finally {
+    process.env.DATA_ENCRYPTION_KEYS = ring;
+  }
+});
 await check("the email link redirects to the order's pay page only with the order id signed by the store's key", async () => {
   const key = await linkKey();
   const r = await call("GET", `/api/shopify/orders/${SHOP}/${o1.id}/pay?b=${sign(key, o1.id)}`);

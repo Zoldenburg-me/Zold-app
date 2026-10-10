@@ -93,7 +93,8 @@ const { writeStatementLines } = await import("../services/api/src/bookkeeping/wr
 const { belegUpload, createIntegrationRoutes } = await import("../services/api/src/routes/business/integrations.js");
 const { createBookkeepingExportRoutes } = await import("../services/api/src/routes/business/bookkeeping-export.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
-const { decryptField } = await import("../services/api/src/crypto-at-rest.js");
+const { fieldKeyId } = await import("../services/api/src/crypto-at-rest.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -256,7 +257,9 @@ await check("connecting verifies the key against /account, stores it encrypted a
   assert.ok(!JSON.stringify(ok.body).includes(GOOD_KEY), "the key is not in the response");
   const stored = store.findOrganisation("org_1")!.integrations!.getmyinvoices!;
   assert.notEqual(stored.apiKeyEnc, GOOD_KEY);
-  assert.equal(decryptField("getmyinvoices", process.env.MONERIUM_TOKEN_ENCRYPTION_KEY!, stored.apiKeyEnc), GOOD_KEY);
+  assert.equal(fieldKeyId(stored.apiKeyEnc), "t1", "written as v2 under the active key");
+  assert.equal(SECRETS.gmiApiKey.open("org_1", stored.apiKeyEnc), GOOD_KEY);
+  assert.throws(() => SECRETS.gmiApiKey.open("org_2", stored.apiKeyEnc), "bound to its org");
   assert.equal(stored.accountId, "4711");
   const list = await call("GET", "/api/orgs/org_1/integrations");
   assert.ok(!JSON.stringify(list.body).includes(GOOD_KEY) && !JSON.stringify(list.body).includes(stored.apiKeyEnc));
