@@ -96,7 +96,9 @@ async function renderZoldenburgSection(el) {
   const grace = graceText(z.gracePeriodSeconds);
   const pending = z.onChain?.pendingRecovery;
   const asked = (z.requests || []).filter((r) => r.status === "PASSKEY_PENDING" || r.status === "REVIEW_PENDING");
-  const status = z.active ? (z.enrolment?.armed || !z.enrolment?.available ? "Active" : "Added — confirm your bank account") : z.choice?.choice === "declined" ? `Not set up — declined ${new Date(z.choice.at).toLocaleDateString()}` : "Not set up";
+  // "Active" only when Zoldenburg may sign for this account; on a server
+  // where the bank check is not open, it may sign for nobody.
+  const status = z.active ? (z.enrolment?.armed ? "Active" : z.enrolment?.available ? "Added — confirm your bank account" : "Added — not usable on this server yet") : z.choice?.choice === "declined" ? `Not set up — declined ${new Date(z.choice.at).toLocaleDateString()}` : "Not set up";
   el.innerHTML = `
     ${pending ? `<div class="rec-warn" role="alert">
         <div class="rec-warn-title"><span aria-hidden="true">⚠</span> A recovery of this account is under way</div>
@@ -231,7 +233,7 @@ async function zoldenburgRun(path, body, btn) {
       const signed = await passkeySignPrepared(prep);
       // The passkey is done; the chain is not. Say so, or the button looks
       // dead for the half minute the operation takes and invites a second try.
-      btn.textContent = /remove/i.test(path) ? "Removing Zoldenburg from your wallet… up to a minute" : "Adding Zoldenburg to your wallet… up to a minute";
+      btn.textContent = path.endsWith("/remove") ? "Removing Zoldenburg from your wallet… up to a minute" : "Adding Zoldenburg to your wallet… up to a minute";
       btn.setAttribute("aria-busy", "true");
       Z.announce?.(btn.textContent);
       await api(prep.submitTo, signed);
