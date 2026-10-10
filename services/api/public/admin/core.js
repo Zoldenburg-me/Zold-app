@@ -212,14 +212,17 @@ async function api(path, options = {}) {
     // An ended passkey session falls back to the token, if one is entered. An
     // Access refusal leaves the session alone: signing in to Access again is
     // enough. main.js redraws the sign-in controls on the event.
-    if (operatorSession && token === operatorSession && data.code === 'OPERATOR_SIGN_IN') {
+    const ended = operatorSession && token === operatorSession && data.code === 'OPERATOR_SIGN_IN';
+    if (ended) {
       setOperatorSession('');
       operatorName = '';
-      window.dispatchEvent(new Event('operator-session-ended'));
     }
-    rejectedToken = token;
+    // After an Access refusal the background refresh keeps trying: signing in
+    // to Access again in another tab is enough.
+    if (data.code !== 'ACCESS_REQUIRED') rejectedToken = token;
     setAuth('bad');
     clearData();
+    if (ended) window.dispatchEvent(new Event('operator-session-ended'));
   } else if (res.status === 403 && method === 'GET') {
     rejectedToken = token;
     setAuth('bad');

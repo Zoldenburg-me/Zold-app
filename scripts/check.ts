@@ -80,6 +80,7 @@ const scripts = [
   "plan:test",
   "admin:test",
   "operator:test",
+  "admin:ui:test",
   "review-resolution:test",
   "invoicing:test",
   "async-errors:test",

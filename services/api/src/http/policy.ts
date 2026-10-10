@@ -31,9 +31,12 @@ export const originPolicy: express.RequestHandler = (req, res, next) => {
   next();
 };
 
-/** What the admin host serves: the dashboard page, its scripts and styles,
- *  the fonts and icons it loads, and the admin API. */
-const ADMIN_HOST_PATHS = /^\/(admin(\/|\.css$|$)|api\/admin(\/|$)|tokens\.css$|vendor\/fonts\/|favicon\.|icons\/)/i;
+/** What the admin host serves: the dashboard page and its views, its scripts
+ *  and styles, the fonts and icons it loads, and the admin API. */
+const ADMIN_HOST_PATHS =
+  /^\/(admin\/?|admin\/[a-z]+(\.js)?|admin\.css|tokens\.css|favicon\.(svg|ico)|vendor\/fonts\/[\w.-]+|icons\/[\w.-]+|api\/admin(\/.*)?)$/i;
+
+const hostname = (host: string | undefined) => (host ?? "").toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
 
 /**
  * With ADMIN_ORIGIN set, its host serves the dashboard and nothing else. A
@@ -42,8 +45,11 @@ const ADMIN_HOST_PATHS = /^\/(admin(\/|\.css$|$)|api\/admin(\/|$)|tokens\.css$|v
  * operator's passkey.
  */
 export const adminHostPolicy: express.RequestHandler = (req, res, next) => {
-  if (!OPERATOR.adminOriginExplicit || req.get("host") !== new URL(OPERATOR.adminOrigin).host) return next();
-  if (ADMIN_HOST_PATHS.test(req.path)) return next();
+  if (!OPERATOR.adminOriginExplicit || hostname(req.get("host")) !== new URL(OPERATOR.adminOrigin).hostname) return next();
+  // The static handler decodes and resolves a path after this check, so a
+  // path that could change under decoding (an escape, a dot segment, a
+  // backslash, an empty segment) is refused, not matched.
+  if (!/[%\\]|\.\.|\/\//.test(req.path) && ADMIN_HOST_PATHS.test(req.path)) return next();
   res.status(404).type("text/plain").send("not found");
 };
 

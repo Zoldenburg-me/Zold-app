@@ -34,7 +34,11 @@ const RSA = { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: ne
 const pair = await webcrypto.subtle.generateKey(RSA, true, ["sign", "verify"]);
 const jwk = await webcrypto.subtle.exportKey("jwk", pair.publicKey);
 const KID = "kid-1";
+let certFetches = 0;
+let certsDown = false;
 const certs = createServer((_req, res) => {
+  certFetches++;
+  if (certsDown) { res.statusCode = 500; res.end("down"); return; }
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify({ keys: [{ kid: KID, kty: "RSA", alg: "RS256", use: "sig", n: jwk.n, e: jwk.e }] }));
 });
@@ -62,6 +66,16 @@ const { operatorLabel, requireOperator } = await import("../services/api/src/htt
 const { issueSession, requireUserSession } = await import("../services/api/src/http/sessions.js");
 const { ENROLMENT_FILE } = await import("../services/api/src/operators/enrolment.js");
 const { SoftPasskey, operatorKit, writeEnrolment } = await import("./_operator.js");
+const { OPERATOR } = await import("../services/api/src/config.js");
+const { forgetAccessKeysForTests } = await import("../services/api/src/operators/access.js");
+const { tokenHash } = await import("../services/api/src/http/sessions.js");
+/** OPERATOR is read at call time; a check changes one setting and puts it back. */
+async function withSetting<T>(changes: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
+  const o = OPERATOR as Record<string, unknown>;
+  const before = Object.fromEntries(Object.keys(changes).map((k) => [k, o[k]]));
+  Object.assign(o, changes);
+  try { return await fn(); } finally { Object.assign(o, before); }
+}
 
 initStore();
 const app = express();
@@ -125,7 +139,57 @@ await check("a token for another application, another team, expired, unsigned or
   for (const jwt of bad) {
     const r = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": jwt, authorization: `Bearer ${TOKEN}` });
     assert.equal(r.status, 401, jwt.slice(0, 40));
+    assert.equal(r.body.code, "ACCESS_REQUIRED", jwt.slice(0, 40));
   }
+});
+
+await check("a not-before in the future is refused, beyond a minute of clock skew", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const future = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": await accessJwt({ nbf: now + 3600 }), authorization: `Bearer ${TOKEN}` });
+  assert.equal(future.status, 401);
+  const skew = await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": await accessJwt({ nbf: now + 30 }), authorization: `Bearer ${TOKEN}` });
+  assert.equal(skew.status, 200);
+});
+await check("unknown key ids fetch the keys at most once a minute, and a key outage refuses with 503", async () => {
+  const before = certFetches;
+  for (let i = 0; i < 10; i++) await req("GET", "/api/admin/users", undefined, { "cf-access-jwt-assertion": await accessJwt({}, { kid: `forged-${i}` }), authorization: `Bearer ${TOKEN}` });
+  assert.ok(certFetches - before <= 1, `${certFetches - before} fetches for ten forged key ids`);
+  certsDown = true;
+  forgetAccessKeysForTests();
+  try {
+    const r = await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${TOKEN}` });
+    assert.equal(r.status, 503);
+    assert.equal(r.body.code, "ACCESS_REQUIRED");
+  } finally {
+    certsDown = false;
+    forgetAccessKeysForTests();
+  }
+  assert.equal((await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${TOKEN}` })).status, 200, "back once the keys are");
+});
+await check("a hosted deployment refuses the dashboard until it has an https admin origin of its own and Access", async () => {
+  const { SECURITY } = await import("../services/api/src/config.js");
+  const read = () => req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${TOKEN}` });
+  const HTTPS_ADMIN = "https://admin.zold.example";
+  const cases: [string, Record<string, unknown>][] = [
+    ["no explicit admin origin", { hardened: true, adminOrigin: HTTPS_ADMIN, adminOriginExplicit: false }],
+    ["an http admin origin", { hardened: true }],
+    ["the user app's origin", { hardened: true, adminOrigin: "https://zold.example" }],
+    ["no Access", { hardened: true, adminOrigin: HTTPS_ADMIN, accessTeamHost: "" }],
+  ];
+  SECURITY.origins.push("https://zold.example");
+  try {
+    for (const [why, changes] of cases) {
+      const r = await withSetting(changes, read);
+      assert.equal(r.status, 503, why);
+      assert.equal(r.body.code, "ADMIN_NOT_READY", why);
+    }
+  } finally {
+    SECURITY.origins.splice(SECURITY.origins.indexOf("https://zold.example"), 1);
+  }
+  assert.equal((await withSetting({ hardened: true, adminOrigin: HTTPS_ADMIN }, read)).status, 200, "ready");
+  const noJwt = await withSetting({ hardened: true, adminOrigin: HTTPS_ADMIN }, () =>
+    req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${TOKEN}`, "cf-access-jwt-assertion": "" }));
+  assert.equal(noJwt.status, 401, "hardened: Access is required");
 });
 
 console.log("the shared operator token");
@@ -266,6 +330,39 @@ await check("a refused approval is audited; ten end that session and no other", 
   assert.ok(rows.every((e) => !JSON.stringify(e).includes("x-operator-step-up")), "no header in the row");
 });
 
+await check("an approval is asked only for a change, on an admin path, with no query, and only by a passkey session", async () => {
+  const ask = (body: unknown, h = kit.headers()) => req("POST", "/api/admin/auth/step-up/challenge", body, h);
+  assert.equal((await ask({ method: "GET", path: "/api/admin/users" })).status, 400);
+  assert.equal((await ask({ method: "POST", path: "/api/users/u1/email/code" })).status, 400);
+  assert.equal((await ask({ method: "POST", path: "/api/admin/test/echo?x=1" })).status, 400);
+  assert.equal((await ask({ method: "POST", path: "/api/admin/test/echo" }, { authorization: `Bearer ${TOKEN}` })).status, 403, "the read-only token asks for none");
+  assert.equal((await req("POST", "/api/admin/auth/passkeys/challenge", {}, { authorization: `Bearer ${TOKEN}` })).status, 403);
+});
+await check("a passkey is never registered twice, and an operator holds at most the limit", async () => {
+  const twice = await SoftPasskey.create();
+  const add = async (pk: Awaited<ReturnType<typeof SoftPasskey.create>>, label: string) => {
+    const o = await req("POST", "/api/admin/auth/passkeys/challenge", {}, kit.headers());
+    const body = { label, ...pk.attest(o.body.challenge, ADMIN, "localhost") };
+    return req("POST", "/api/admin/auth/passkeys", body, kit.headers(await kit.stepUp("POST", "/api/admin/auth/passkeys", body)));
+  };
+  assert.equal((await add(twice, "Third")).status, 200);
+  const again = await add(twice, "Third again");
+  assert.equal(again.status, 409);
+  assert.equal(again.body.code, "PASSKEY_EXISTS");
+  const full = await withSetting({ maxPasskeys: 3 }, async () => add(await SoftPasskey.create(), "Fourth"));
+  assert.equal(full.status, 409);
+  assert.equal(full.body.code, "PASSKEY_LIMIT");
+});
+await check("every live partner read is audited, other reads once per path in ten minutes", async () => {
+  const rows = (p: string) => store.auditFor(undefined, 1000).filter((e) => e.kind === "operator.request" && e.data.path === p && e.data.operator === `operator:${kit.operator.id}`).length;
+  for (let i = 0; i < 3; i++) await req("GET", "/api/admin/errors", undefined, kit.headers());
+  assert.equal(rows("/api/admin/errors"), 1, "a refreshed read is one row");
+  const before = store.auditFor(undefined, 1000).filter((e) => e.kind === "operator.request" && e.data.live === true).length;
+  for (let i = 0; i < 2; i++) await req("GET", "/api/admin/monerium?live=1", undefined, kit.headers());
+  const after = store.auditFor(undefined, 1000).filter((e) => e.kind === "operator.request" && e.data.live === true).length;
+  assert.equal(after - before, 2, "each live read is its own row");
+});
+
 console.log("the admin host");
 await check("serves the dashboard and nothing of the user app", async () => {
   const { adminHostPolicy, originPolicy } = await import("../services/api/src/http/policy.js");
@@ -275,7 +372,13 @@ await check("serves the dashboard and nothing of the user app", async () => {
   });
   const onAdmin = (p: string) => run(adminHostPolicy, { path: p, headers: { host: "admin.test" } });
   for (const p of ["/admin", "/admin/users", "/admin/core.js", "/admin.css", "/api/admin/users", "/tokens.css", "/vendor/fonts/text.css"]) assert.equal(await onAdmin(p), 0, p);
-  for (const p of ["/app", "/business", "/pay/x/y", "/app/main.js", "/api/users/u1", "/"]) assert.equal(await onAdmin(p), 404, p);
+  for (const p of ["/app", "/business", "/pay/x/y", "/app/main.js", "/api/users/u1", "/", "/admin/..%2fbusiness.html", "/admin/../index.html",
+    "/admin/%2e%2e/index.html", "/icons/../business.html", "/admin/x/../../business.html", "/admin//x", "/admin\\..\\index.html", "/admin.cssx"]) {
+    assert.equal(await onAdmin(p), 404, p);
+  }
+  for (const host of ["ADMIN.test", "admin.test.", "admin.test:8443"]) {
+    assert.equal(await run(adminHostPolicy, { path: "/app", headers: { host } }), 404, `host spelled ${host}`);
+  }
   assert.equal(await run(adminHostPolicy, { path: "/app", headers: { host: "localhost:3000" } }), 0, "the user host is untouched");
   const fromAdmin = (method: string, p: string) => run(originPolicy, { method, path: p, headers: { origin: ADMIN } });
   assert.equal(await fromAdmin("POST", "/api/users/u1/email/code"), 403, "the admin origin is foreign to the user API");
@@ -285,7 +388,7 @@ await check("serves the dashboard and nothing of the user app", async () => {
 console.log("sign-in");
 await check("the passkey signs in on the admin origin and nowhere else; a stranger's passkey never does", async () => {
   const c1 = await req("POST", "/api/admin/auth/login/challenge", {});
-  assert.equal(c1.body.allowCredentials.length, 2, "the signed-in person's two passkeys are offered");
+  assert.equal(c1.body.allowCredentials.length, store.findOperator(kit.operator.id)!.credentials.length, "the signed-in person's passkeys are offered, and only theirs");
   const wrongOrigin = await kit.passkey.assert(c1.body.challenge, "http://localhost:3000", "localhost");
   assert.equal((await req("POST", "/api/admin/auth/login", wrongOrigin)).status, 401);
   const stranger = await SoftPasskey.create();
@@ -310,6 +413,53 @@ await check("a disabled operator's session and passkey stop working", async () =
   assert.equal((await req("GET", "/api/admin/users", undefined, other.headers())).status, 401);
   const c = await req("POST", "/api/admin/auth/login/challenge", {}, access);
   assert.equal((await req("POST", "/api/admin/auth/login", await other.passkey.assert(c.body.challenge, ADMIN, "localhost"), access)).status, 401);
+});
+
+await check("a session ends when idle for thirty minutes, after eight hours, or when revoked", async () => {
+  const signIn = async () => {
+    const c = await req("POST", "/api/admin/auth/login/challenge", {});
+    return (await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c.body.challenge, ADMIN, "localhost"))).body.sessionToken as string;
+  };
+  for (const [why, change] of [
+    ["idle", (x: any) => { x.lastUsedAt = new Date(Date.now() - 31 * 60_000).toISOString(); }],
+    ["past eight hours", (x: any) => { x.expiresAt = new Date(Date.now() - 1000).toISOString(); }],
+    ["revoked", (x: any) => { x.revokedAt = new Date().toISOString(); }],
+  ] as const) {
+    const token = await signIn();
+    assert.equal((await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${token}` })).status, 200, why);
+    change(store.findOperatorSessionByTokenHash(tokenHash(token)));
+    assert.equal((await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${token}` })).status, 401, why);
+  }
+});
+await check("a new enrolment for an operator's email adds a passkey to that operator; a disabled operator enrols nothing", async () => {
+  const before = store.findOperator(kit.operator.id)!.credentials.length;
+  const again = await operatorKit({ base: BASE, origin: ADMIN, rpId: "localhost", dataDir, name: "Owner", email: OWNER, accessJwt: () => goodJwt });
+  assert.equal(again.operator.id, kit.operator.id);
+  assert.equal(store.findOperator(kit.operator.id)!.credentials.length, before + 1);
+  const token = writeEnrolment(dataDir, "Second", "second@example.com");
+  const access = { "cf-access-jwt-assertion": secondJwt };
+  const o = await req("POST", "/api/admin/auth/enrol/challenge", { token }, access);
+  const r = await req("POST", "/api/admin/auth/enrol", { token, ...(await SoftPasskey.create()).attest(o.body.challenge, ADMIN, "localhost") }, access);
+  assert.equal(r.status, 403);
+  assert.equal(r.body.code, "OPERATOR_DISABLED");
+});
+// Last: it locks this address out of sign-in for the rest of the run.
+await check("ten failed sign-ins lock the address, a right passkey included", async () => {
+  // Failed sign-ins earlier in the run count toward the same ten.
+  const stranger = await SoftPasskey.create();
+  let refused = 0;
+  for (let i = 0; i < 10; i++) {
+    const c = await req("POST", "/api/admin/auth/login/challenge", {});
+    const r = await req("POST", "/api/admin/auth/login", await stranger.assert(c.body.challenge, ADMIN, "localhost"));
+    if (r.status === 429) break;
+    assert.equal(r.status, 401);
+    refused++;
+  }
+  assert.ok(refused <= 10);
+  const c = await req("POST", "/api/admin/auth/login/challenge", {});
+  const r = await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c.body.challenge, ADMIN, "localhost"));
+  assert.equal(r.status, 429);
+  assert.equal(r.body.code, "LOGIN_LOCKED");
 });
 
 console.log("where the gate sits");

@@ -294,7 +294,8 @@ ahead of them all.
   when every passkey is lost. Adding a second passkey needs a fresh approval
   from the first.
 - **Its own origin.** With `ADMIN_ORIGIN` set, `/admin` is served there only,
-  that host serves nothing of the user app (`adminHostPolicy`), the origin
+  that host serves nothing of the user app (`adminHostPolicy`, which also
+  refuses any path that could change under decoding), the origin
   is allowed only on `/api/admin`, and every operator ceremony verifies
   against it alone, so a script on the user app can neither reach the
   operator's session nor ask for the operator's passkey. Operator
@@ -313,15 +314,17 @@ ahead of them all.
   hardware-wallet signature. Each refused approval writes
   `operator.step_up_refused`; the tenth in 15 minutes ends that session, not
   the operator's others.
-- **An audit row per action**: every change, and each read of a path once
-  per operator in ten minutes (the dashboard refreshes itself), as
+- **An audit row per action**: every change and every live partner read
+  (`?live=1`), and each other read of a path once per operator in ten
+  minutes (the dashboard refreshes itself), as
   `operator.request` with the operator's id and name; reads of an account
   are filed under that account. Stored `reviewedBy` and `resolution.by`
   hold `operator:<id>`; rows written before hold the old token hash.
 - **Cloudflare Access as a second gate**, checked by the server on every
   admin request from `Cf-Access-Jwt-Assertion`: RS256, issuer = the team
   domain, audience = the application tag (`CF_ACCESS_TEAM_DOMAIN`,
-  `CF_ACCESS_AUD`), expiry, and an email equal to the operator's. A service
+  `CF_ACCESS_AUD`), expiry, and an email, which for a passkey session must
+  equal the operator's. A service
   token without an email is refused, the email header alone is never
   trusted, and unknown key ids refetch the keys at most once a minute.
   Every deployment but the local hardhat stack (zoldhq.com included) answers
@@ -330,7 +333,7 @@ ahead of them all.
 - **Rate limits** per operator; failed sign-ins lock an address for 15
   minutes after ten.
 - `KYC_OPERATOR_TOKEN` opens reads only, behind Access, never a live partner
-  read (`?live=1`), and each read is audited as `operator:legacy-token`.
+  read (`?live=1`), and its reads are audited as `operator:legacy-token`.
 
 `npm run operator:test` covers each refusal with a software passkey and a
 local Access key server; nothing here has run against Cloudflare Access.
