@@ -117,9 +117,7 @@ const PH_COMPANY_APP = new Set(["security", "signers", "recovery-settings", "rec
    warning before a recovery replaces the passkey. */
 async function phCompanyLeave() {
   try { await phRecoveryCheck({ force: true }); } catch { phRec = { failed: true }; }
-  let seen = "";
-  try { seen = sessionStorage.getItem(PH_REC_SEEN) || ""; } catch { /* no storage: always show */ }
-  if (phRec?.failed || ((phRec?.chain || phRec?.request) && seen !== phRecSig(phRec))) return phGo("recovery-alert", null, { replace: true });
+  if (phRec?.failed || ((phRec?.chain || phRec?.request) && !phRecSeen(phRec))) return phGo("recovery-alert", null, { replace: true });
   location.replace(phWebHref());
 }
 
@@ -169,7 +167,9 @@ function phRender({ focus = false } = {}) {
     : "";
   const v = phView(s);
   const side = PH_DESK.side ? PH_DESK.side(r) : "";
-  root.innerHTML = `${Z.skipLink("main")}${side}<div class="z-app${v.wide ? " z-app--desk" : ""}" data-screen="${esc(r.name)}">${Z.testModePill(!realMoney)}${v.html(r.arg)}</div>${nav}`;
+  // The recovery strip (app/phone-home.js) sits on every screen; a check
+  // later redraws only it.
+  root.innerHTML = `${Z.skipLink("main")}${side}<div class="z-app${v.wide ? " z-app--desk" : ""}" data-screen="${esc(r.name)}">${Z.testModePill(!realMoney)}<div id="ph-recbar" class="z-recbar">${phRecBar()}</div>${v.html(r.arg)}</div>${nav}`;
   document.title = `${typeof s.title === "function" ? s.title(r.arg) : s.title} · Zold`;
   phSig = v.live ? v.live(r.arg) : "";
   v.bind?.(root, r.arg);
