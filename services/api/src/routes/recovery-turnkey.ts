@@ -30,6 +30,7 @@ import { SECURITY } from "../config.js";
 import { store } from "../store.js";
 import type { User } from "../store/types.js";
 import { checkOpAssertion } from "../http/passkey-assertion.js";
+import { zoldenburgGuardianRemoveTransaction } from "../recovery/zoldenburg-guardian.js";
 import {
   assertRecoveryModuleDeployed,
   prepareSafeSetupOperation,
@@ -70,6 +71,8 @@ export interface TurnkeyGuardianSafeOps {
   /** The module's guardians, threshold and pending recovery, read from the chain. */
   readState(plan: PasskeySafeDeploymentPlan): Promise<RecoveryModuleState>;
   prepare(plan: PasskeySafeDeploymentPlan, txs: MetaTransaction[]): Promise<{ userOperation: any; challenge: `0x${string}` }>;
+  /** The op that takes `address` off the module, lowering the threshold to what remains. */
+  revokeTx(plan: PasskeySafeDeploymentPlan, state: RecoveryModuleState, address: `0x${string}`): Promise<MetaTransaction>;
   /** Writes the refusal itself and answers undefined when the approval is not good. */
   checkAssertion(user: User, body: unknown, challenge: string, res: express.Response): Promise<User | undefined>;
   submit(plan: PasskeySafeDeploymentPlan, userOperation: any, body: any): Promise<{ success?: boolean; txHash?: string; userOpHash?: string | null }>;
@@ -82,6 +85,7 @@ const chainSafeOps: TurnkeyGuardianSafeOps = {
     return state;
   },
   prepare: (plan, txs) => prepareSafeSetupOperation(plan, txs),
+  revokeTx: (plan, state, address) => zoldenburgGuardianRemoveTransaction(plan.address, state.moduleAddress, address, state.guardians),
   checkAssertion: checkOpAssertion,
   submit: (plan, userOperation, body) =>
     submitPasskeySafeOperationWithReceipt(plan, userOperation, {
@@ -136,6 +140,13 @@ const view = (g: SocialGuardian) => ({
   activeAt: g.activeAt,
 });
 
+/** The user's row for this sub-org taken off the account (the Turnkey wallet
+ *  itself stays the person's; adding the same login again finds it). */
+function dropGuardian(userId: string, subOrgId: string) {
+  const safe = store.findUser(userId)!.passkeySafe!;
+  store.updateUser(userId, { passkeySafe: { ...safe, socialGuardians: (safe.socialGuardians ?? []).filter((g) => g.turnkeySubOrgId !== subOrgId) } });
+}
+
 /** The user's row for this sub-org changed to `patch`, written back. */
 function updateGuardian(userId: string, subOrgId: string, patch: Partial<SocialGuardian>): SocialGuardian {
   const safe = store.findUser(userId)!.passkeySafe!;
@@ -152,7 +163,22 @@ export function createTurnkeyGuardianRouter({
   safeOps = chainSafeOps,
 }: TurnkeyGuardianDeps) {
   const router = express.Router();
-  const pendingOps = new Map<string, { userId: string; subOrgId: string; address: `0x${string}`; userOperation: any; challenge: string; expiresAt: number }>();
+  const pendingOps = new Map<string, { userId: string; kind: "add" | "remove"; subOrgId: string; address: `0x${string}`; userOperation: any; challenge: string; expiresAt: number }>();
+  /** Keep a prepared op for the passkey; one per user (a second replaces it). */
+  const holdOp = (user: User, op: { kind: "add" | "remove"; subOrgId: string; address: `0x${string}` }, prepared: { userOperation: any; challenge: `0x${string}` }) => {
+    prune();
+    for (const [id, o] of pendingOps) if (o.userId === user.id) pendingOps.delete(id);
+    const requestId = randomUUID();
+    const challenge = passkeySafeChallenge(prepared.challenge);
+    pendingOps.set(requestId, { userId: user.id, ...op, userOperation: prepared.userOperation, challenge, expiresAt: Date.now() + CEREMONY_TTL_MS });
+    return {
+      requestId,
+      credentialId: user.passkey!.credentialId,
+      rpId: user.passkey!.rpId ?? SECURITY.rpId,
+      challenge,
+      submitTo: `/api/recovery/turnkey/users/${user.id}/ops/${requestId}`,
+    };
+  };
   const prune = () => {
     const now = Date.now();
     for (const [id, op] of pendingOps) if (op.expiresAt <= now) pendingOps.delete(id);
@@ -239,23 +265,33 @@ export function createTurnkeyGuardianRouter({
         }
         const txs = recoveryGuardianSetupTransactions(plan.address, state.moduleAddress, guardian.address, 1, state.moduleEnabled);
         const prepared = await safeOps.prepare(plan, txs);
-        prune();
         // One op in flight per user: two prepared adds could each pass the
         // check above and together leave two guardians at threshold 1.
-        for (const [id, op] of pendingOps) if (op.userId === user.id) pendingOps.delete(id);
-        const requestId = randomUUID();
-        const challenge = passkeySafeChallenge(prepared.challenge);
-        pendingOps.set(requestId, {
-          userId: user.id, subOrgId: guardian.turnkeySubOrgId, address: guardian.address,
-          userOperation: prepared.userOperation, challenge, expiresAt: Date.now() + CEREMONY_TTL_MS,
-        });
-        res.status(201).json({
-          requestId,
-          credentialId: user.passkey!.credentialId,
-          rpId: user.passkey!.rpId ?? SECURITY.rpId,
-          challenge,
-          submitTo: `/api/recovery/turnkey/users/${user.id}/ops/${requestId}`,
-        });
+        res.status(201).json(holdOp(user, { kind: "add", subOrgId: guardian.turnkeySubOrgId, address: guardian.address }, prepared));
+      } catch (e) {
+        sendError(res, e);
+      }
+    }),
+  );
+
+  router.post(
+    "/recovery/turnkey/users/:id/guardians/:subOrgId/remove",
+    wrap(async (req, res) => {
+      const user = store.findUser(req.params.id);
+      if (!user) return res.status(404).json({ error: "user not found" });
+      if (!requireUserSession(req, res, user.id)) return;
+      try {
+        const plan = activePlan(user);
+        const guardian = (user.passkeySafe!.socialGuardians ?? []).find((g) => g.turnkeySubOrgId === req.params.subOrgId);
+        if (!guardian) throw new TurnkeyGuardianError("no such guardian on this account", 404, "NO_GUARDIAN");
+        const state = await safeOps.readState(plan);
+        if (state.pending) throw new TurnkeyGuardianError("a recovery is pending on this account — cancel it first", 409, "RECOVERY_PENDING");
+        if (!state.guardians.some((g) => sameAddress(g, guardian.address))) {
+          dropGuardian(user.id, guardian.turnkeySubOrgId);
+          return res.json({ removed: true });
+        }
+        const prepared = await safeOps.prepare(plan, [await safeOps.revokeTx(plan, state, guardian.address)]);
+        res.status(201).json(holdOp(user, { kind: "remove", subOrgId: guardian.turnkeySubOrgId, address: guardian.address }, prepared));
       } catch (e) {
         sendError(res, e);
       }
@@ -275,6 +311,17 @@ export function createTurnkeyGuardianRouter({
         const plan = activePlan(user);
         if (!(await safeOps.checkAssertion(user, req.body, pending.challenge, res))) return;
         pendingOps.delete(req.params.requestId);
+        if (pending.kind === "remove") {
+          const op = await safeOps.submit(plan, pending.userOperation, req.body);
+          if (op.success === false) return res.status(502).json({ error: "the operation was included but reverted — nothing changed", code: "REVERTED", txHash: op.txHash });
+          const after = await safeOps.readState(plan);
+          if (after.guardians.some((g) => sameAddress(g, pending.address))) {
+            return res.status(502).json({ error: "the operation was submitted but the module still lists the guardian — check again shortly", code: "STILL_LISTED" });
+          }
+          dropGuardian(user.id, pending.subOrgId);
+          console.log(`RECOVERY: ${user.id} removed a Turnkey guardian (${op.userOpHash ?? op.txHash})`);
+          return res.json({ removed: true, txHash: op.txHash, userOpHash: op.userOpHash });
+        }
         if (assertCanAdd(await safeOps.readState(plan), pending.address) === "listed") {
           const active = updateGuardian(user.id, pending.subOrgId, { status: "active", activeAt: new Date().toISOString() });
           return res.json({ guardian: view(active) });

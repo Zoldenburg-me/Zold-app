@@ -373,19 +373,6 @@ await t("the strip's container is on the page, outside the redesigned and the ol
   assert.ok(at < html.indexOf('<section id="phone"') && at < html.indexOf('<section id="dashboard"'));
 });
 
-await t("lost device, Turnkey guardian: the approve screen, the request's paths and its waiting period", async () => {
-  run(`rcMode = "turnkey"`);
-  assert.equal(run(`rcRouteFor({ status: "REVIEW_PENDING" })`), "recover/turnkey");
-  assert.equal(run(`rcRouteFor({ status: "GRACE_PERIOD" })`), "recover/wait");
-  assert.equal(run(`rcPath("rq1")`), "/api/recovery/turnkey/requests/rq1");
-  assert.equal(run(`rcPath("rq1", "/finalize")`), "/api/recovery/turnkey/requests/rq1/finalize");
-  assert.equal(run(`rcFinalizeAfter({ turnkey: { finalizeAfter: "2026-10-13T09:00:00Z" } })?.toISOString()`), "2026-10-13T09:00:00.000Z");
-  run(`rcMode = "zoldenburg"`);
-  assert.equal(run(`rcPath("rq1", "/finalize")`), "/api/recovery/zoldenburg/rq1/finalize", "the other modes keep their paths");
-  assert.equal(run(`rcRouteFor({ status: "REVIEW_PENDING" })`), "recover/zoldenburg");
-  run(`rcMode = "candide"`);
-});
-
 // ------------------------------------------------------------ /business ----
 
 const g: any = globalThis;

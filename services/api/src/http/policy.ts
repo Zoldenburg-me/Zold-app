@@ -69,11 +69,11 @@ export const CONTENT_SECURITY_POLICY = [
  * Phase 0).
  */
 /**
- * /guardian: the app's policy without inline script. The page drives a
- * guardian login, a passkey approval and a Turnkey signature, so only its own
- * module files may run there, and it alone may reach Turnkey's API (the
- * origin, when the switch is on). /app keeps 'unsafe-inline' for its classic
- * scripts and connect-src 'self'.
+ * /guardian and /recovery: the app's policy without inline script. They drive
+ * a passkey approval, a Google/Apple login and a Turnkey signature, so only
+ * their own module files may run there, and they alone may reach Turnkey's
+ * API (the origin, when the switch is on). /app keeps 'unsafe-inline' for its
+ * classic scripts and connect-src 'self'.
  */
 export function guardianPageCsp(turnkeyOrigin?: string): string {
   return CONTENT_SECURITY_POLICY

@@ -39,6 +39,8 @@ const { createPageRouter } = await import("../services/api/src/routes/pages.js")
 const { securityHeadersFor, CONTENT_SECURITY_POLICY, guardianPageCsp } = await import("../services/api/src/http/policy.js");
 const signer = await import(pathToFileURL(path.join(PUB, "guardian/turnkey-sign.js")).href);
 const oauth = await import(pathToFileURL(path.join(PUB, "guardian/oauth.js")).href);
+const approve = await import(pathToFileURL(path.join(PUB, "recovery/approve.js")).href);
+const flow = await import(pathToFileURL(path.join(PUB, "recovery/flow.js")).href);
 const page = await import(pathToFileURL(path.join(PUB, "guardian/main.js")).href);
 
 let failed = 0;
@@ -109,29 +111,50 @@ try {
     assert.equal(r.headers.get("location"), "/guardian");
   });
 
+  await check("/recovery is served like /guardian: no inline script, never cached, its own module", async () => {
+    for (const p of ["/recovery", "/recovery/"]) {
+      const r = await fetch(`${base}${p}`);
+      assert.equal(r.status, 200, p);
+      const csp = r.headers.get("content-security-policy") ?? "";
+      assert.match(csp, /script-src 'self'(;|$)/, p);
+      assert.doesNotMatch(csp, /script-src[^;]*unsafe-inline/, p);
+      assert.equal(r.headers.get("cache-control"), "no-store", p);
+      assert.match(await r.text(), /<script type="module" src="\/recovery\/main\.js"><\/script>/, p);
+    }
+    const old = await fetch(`${base}/recovery.html`, { redirect: "manual" });
+    assert.equal(old.status, 301);
+    assert.equal(old.headers.get("location"), "/recovery");
+  });
+
   await check("/app keeps the app's CSP", async () => {
     const r = await fetch(`${base}/app`);
     assert.equal(r.headers.get("content-security-policy"), CONTENT_SECURITY_POLICY);
   });
 
   await check("robots.txt keeps crawlers off /guardian", async () => {
-    assert.match(await (await fetch(`${base}/robots.txt`)).text(), /^Disallow: \/guardian$/m);
+    const robots = await (await fetch(`${base}/robots.txt`)).text();
+    assert.match(robots, /^Disallow: \/guardian$/m);
+    assert.match(robots, /^Disallow: \/recovery$/m);
   });
 } finally {
   server.close();
 }
 
-await check("the page strips a returned token before it awaits anything", () => {
-  const src = readFileSync(path.join(PUB, "guardian/main.js"), "utf8");
-  const boot = src.slice(src.indexOf("async function boot()"));
-  assert.ok(boot.indexOf("history.replaceState") > -1 && boot.indexOf("history.replaceState") < boot.indexOf("await "), "replaceState runs before the first await in boot()");
+await check("both pages strip a returned token before they await anything", () => {
+  for (const f of ["guardian/main.js", "recovery/main.js"]) {
+    const src = readFileSync(path.join(PUB, f), "utf8");
+    const boot = src.slice(src.indexOf("async function boot()"));
+    assert.ok(boot.indexOf("history.replaceState") > -1 && boot.indexOf("history.replaceState") < boot.indexOf("await "), `${f}: replaceState runs before the first await in boot()`);
+  }
 });
 
-await check("guardian.html has no inline script and says noindex", () => {
-  const html = readFileSync(path.join(PUB, "guardian.html"), "utf8");
-  for (const tag of html.match(/<script\b[^>]*>/g) ?? []) assert.match(tag, /\bsrc="/, tag);
-  assert.doesNotMatch(html, /\son[a-z]+="/i, "no inline event handlers");
-  assert.match(html, /<meta name="robots" content="noindex"/);
+await check("guardian.html and recovery.html have no inline script and say noindex", () => {
+  for (const f of ["guardian.html", "recovery.html"]) {
+    const html = readFileSync(path.join(PUB, f), "utf8");
+    for (const tag of html.match(/<script\b[^>]*>/g) ?? []) assert.match(tag, /\bsrc="/, `${f}: ${tag}`);
+    assert.doesNotMatch(html, /\son[a-z]+="/i, `${f}: no inline event handlers`);
+    assert.match(html, /<meta name="robots" content="noindex"/, f);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -223,7 +246,7 @@ await check("start: a fresh key, its nonce and a one-time state go to the provid
   const storage = memoryStorage();
   const stamper = fakeStamper();
   let went = "";
-  await page.startLogin("google", { stamper, storage, origin: ORIGIN, logins: { google: "g.apps.googleusercontent.com", apple: null }, go: (u: string) => (went = u), now: () => T0 });
+  await oauth.startLogin("google", { stamper, storage, origin: ORIGIN, logins: { google: "g.apps.googleusercontent.com", apple: null }, go: (u: string) => (went = u), now: () => T0 });
   assert.deepEqual(stamper.calls, ["init", "reset"]);
   const u = new URL(went);
   assert.equal(u.searchParams.get("nonce"), NONCE);
@@ -235,7 +258,7 @@ await check("start: a fresh key, its nonce and a one-time state go to the provid
 });
 
 await check("start: a provider without a client id is refused", async () => {
-  await assert.rejects(page.startLogin("apple", { stamper: fakeStamper(), storage: memoryStorage(), origin: ORIGIN, logins: { google: "g", apple: null }, go: () => {}, now: () => T0 }));
+  await assert.rejects(oauth.startLogin("apple", { stamper: fakeStamper(), storage: memoryStorage(), origin: ORIGIN, logins: { google: "g", apple: null }, go: () => {}, now: () => T0 }));
 });
 
 const returnEnv = (over: Record<string, any> = {}) => {
@@ -383,18 +406,6 @@ await check("sign_raw_payload: failed, rejected, refused, endless or malformed a
   await assert.rejects(run([], "0x1234"), /32 bytes/);
 });
 
-await check("the recovery context is read only when it names a request and its secret", () => {
-  const s = memoryStorage();
-  assert.equal(page.recoveryContext(s), null);
-  s.setItem(page.RECOVERY_KEY, JSON.stringify({ email: "a@b.c" }));
-  assert.equal(page.recoveryContext(s), null, "the email left after approving is not a request");
-  s.setItem(page.RECOVERY_KEY, "{bad");
-  assert.equal(page.recoveryContext(s), null);
-  s.setItem(page.RECOVERY_KEY, JSON.stringify({ requestId: "rq1", secret: "sec", at: T0 }));
-  assert.deepEqual(page.recoveryContext(s, T0 + 1000), { requestId: "rq1", secret: "sec", at: T0 });
-  assert.equal(page.recoveryContext(s, T0 + 24 * 3600_000 + 1), null, "a day-old hand-off is not a request any more");
-});
-
 const approveEnv = (over: Record<string, any> = {}) => {
   const storage = memoryStorage();
   storage.setItem(oauth.OAUTH_STATE_KEY, stored());
@@ -429,7 +440,7 @@ const approveEnv = (over: Record<string, any> = {}) => {
 
 await check("approve: strip, Turnkey session with the bound key, digest, sign with that sub-org, relay, drop the key", async () => {
   const t = approveEnv();
-  const r = await page.finishApprove(t.env);
+  const r = await approve.finishApprove(t.env);
   assert.equal(r.step, "approved", JSON.stringify(r));
   assert.equal(r.request.status, "GRACE_PERIOD");
   assert.deepEqual(t.log, [
@@ -450,16 +461,16 @@ await check("approve: a login that is not the request's guardian signs nothing",
   const t = approveEnv();
   const api = t.env.api;
   t.env.api = async (p: string, b: any, h: any) => (p.endsWith("/login") ? { session: "jwt", subOrgId: "sub-OTHER" } : api(p, b, h));
-  const r = await page.finishApprove(t.env);
+  const r = await approve.finishApprove(t.env);
   assert.equal(r.step, "error");
-  assert.match(r.reason, /not this account’s guardian/);
+  assert.match(r.reason, /different Google or Apple account/);
   assert.ok(!t.log.some((l) => l.startsWith("sign")));
   assert.ok(t.stamper.calls.includes("clear"));
 });
 
 await check("approve: a refused state or a refused signature ends in an error, key dropped", async () => {
   const forged = approveEnv({ hash: "#id_token=tok.en.x&state=forged" });
-  assert.equal((await page.finishApprove(forged.env)).step, "error");
+  assert.equal((await approve.finishApprove(forged.env)).step, "error");
   assert.equal(forged.calls.length, 0);
   assert.ok(forged.stamper.calls.includes("clear"));
   const refused = approveEnv();
@@ -468,10 +479,95 @@ await check("approve: a refused state or a refused signature ends in an error, k
     if (p.endsWith("/signature")) throw new Error("this signature is not from the guardian on the account");
     return api(p, b, h);
   };
-  const r = await page.finishApprove(refused.env);
+  const r = await approve.finishApprove(refused.env);
   assert.equal(r.step, "error");
   assert.match(r.reason, /not from the guardian/);
   assert.ok(refused.stamper.calls.includes("clear"));
+});
+
+// ---------------------------------------------------------------------------
+console.log("/recovery flow");
+
+await check("a login started on /recovery comes back to /recovery", async () => {
+  let went = "";
+  await oauth.startLogin("google", { stamper: fakeStamper(), storage: memoryStorage(), origin: ORIGIN, logins: { google: "g.apps.googleusercontent.com" }, returnPath: "/recovery", go: (u: string) => (went = u), now: () => T0 });
+  assert.equal(new URL(went).searchParams.get("redirect_uri"), `${ORIGIN}/recovery`);
+});
+
+await check("guardians are tried in order — codes, Zoldenburg, Google/Apple — only those the deployment offers", () => {
+  assert.deepEqual(flow.routesFor({ emailSmsRecovery: true, zoldenburgRecovery: true, turnkeyGuardians: true }).map((r: any) => r.mode), ["candide", "zoldenburg", "turnkey"]);
+  assert.deepEqual(flow.routesFor({ turnkeyGuardians: true }).map((r: any) => r.path), ["/api/recovery/turnkey/requests"]);
+  assert.deepEqual(flow.routesFor({}), []);
+});
+
+await check("start falls through on 404 to the next guardian, and stops on any other refusal", async () => {
+  const tried: string[] = [];
+  const api = async (p: string, body: any) => {
+    tried.push(p);
+    if (!p.includes("turnkey")) throw Object.assign(new Error("recovery not found"), { status: 404 });
+    return { id: "rq1", status: "PASSKEY_PENDING", body };
+  };
+  const r = await flow.startRecovery("a@b.c", { api, caps: { emailSmsRecovery: true, zoldenburgRecovery: true, turnkeyGuardians: true }, secret: "sec" });
+  assert.equal(r.mode, "turnkey");
+  assert.deepEqual(tried, ["/api/recovery/candide", "/api/recovery/zoldenburg", "/api/recovery/turnkey/requests"]);
+  assert.deepEqual(r.request.body, { email: "a@b.c", recoverySecret: "sec" });
+  const busy = async () => { throw Object.assign(new Error("in progress"), { status: 409, code: "RECOVERY_IN_PROGRESS" }); };
+  await assert.rejects(flow.startRecovery("a@b.c", { api: busy, caps: { emailSmsRecovery: true, zoldenburgRecovery: true } }), /in progress/);
+  await assert.rejects(flow.startRecovery("a@b.c", { api, caps: {} }), /isn’t available/);
+});
+
+await check("each state opens its screen; an ended request goes back to the email step", () => {
+  const cases: [string, string, string][] = [
+    ["candide", "PASSKEY_PENDING", "passkey"], ["candide", "OTP_PENDING", "codes"], ["zoldenburg", "REVIEW_PENDING", "zoldenburg"],
+    ["turnkey", "REVIEW_PENDING", "approve"], ["turnkey", "GRACE_PERIOD", "wait"], ["zoldenburg", "FINALIZED", "done"],
+    ["turnkey", "CANCELED", "email"], ["candide", "EXPIRED", "email"],
+  ];
+  for (const [mode, status, screen] of cases) assert.equal(flow.screenFor(mode, { status }), screen, `${mode} ${status}`);
+  assert.equal(flow.screenFor("turnkey", null), "email");
+  assert.match(flow.endedText({ status: "CANCELED" }), /stopped/);
+});
+
+await check("request paths and the waiting period, per guardian", () => {
+  assert.equal(flow.requestPath("turnkey", "rq1", "/finalize"), "/api/recovery/turnkey/requests/rq1/finalize");
+  assert.equal(flow.requestPath("zoldenburg", "rq1"), "/api/recovery/zoldenburg/rq1");
+  assert.equal(flow.finalizeAfter({ turnkey: { finalizeAfter: "2026-10-13T09:00:00Z" } })?.toISOString(), "2026-10-13T09:00:00.000Z");
+  assert.equal(flow.finalizeAfter({}), null);
+  assert.equal(flow.currentAuth({ candide: { auths: [{ verified: true }, { verified: false }] } }), 1);
+});
+
+await check("the secret is kept per email, in the same place /app kept it", () => {
+  const st = memoryStorage();
+  assert.equal(flow.SECRET_KEY, "zold-recovery-secret");
+  flow.saveFor(st, flow.SECRET_KEY, "A@B.c", "sec");
+  assert.equal(flow.savedFor(st, flow.SECRET_KEY, "a@b.C"), "sec");
+  flow.saveFor(st, flow.SECRET_KEY, "a@b.c", "");
+  assert.equal(flow.savedFor(st, flow.SECRET_KEY, "a@b.c"), "");
+});
+
+// ---------------------------------------------------------------------------
+console.log("/guardian changes");
+
+await check("a guardian change: prepare, passkey, submit; an answer without a challenge needed no op", async () => {
+  const calls: string[] = [];
+  const api = async (p: string, body: any) => {
+    calls.push(`${p} ${JSON.stringify(body)}`);
+    return p.endsWith("/ops/r1") ? { ok: true } : { challenge: "ch", credentialId: "c", rpId: "localhost", submitTo: "/api/x/ops/r1" };
+  };
+  const r = await page.runPasskeyOp("/api/users/u1/recovery/zoldenburg", { acknowledged: true }, { api, passkeyGet: async () => ({ signature: "s" }) });
+  assert.deepEqual(r, { ok: true, result: { ok: true } });
+  assert.deepEqual(calls, ['/api/users/u1/recovery/zoldenburg {"acknowledged":true}', '/api/x/ops/r1 {"signature":"s"}']);
+  const none = await page.runPasskeyOp("/api/x/remove", {}, { api: async () => ({ removed: true }), passkeyGet: async () => { throw new Error("not asked"); } });
+  assert.deepEqual(none, { ok: true, result: { removed: true } });
+});
+
+await check("a guardian change: a dismissed passkey or a refusal changes nothing and says so", async () => {
+  const api = async () => ({ challenge: "ch", submitTo: "/x" });
+  const dismissed = await page.runPasskeyOp("/p", {}, { api, passkeyGet: async () => { throw new Error("NotAllowedError"); } });
+  assert.equal(dismissed.ok, false);
+  assert.match(dismissed.reason, /cancelled/);
+  const refused = await page.runPasskeyOp("/p", {}, { api: async () => { throw new Error("remove your backup login first — one guardian at a time"); }, passkeyGet: async () => ({}) });
+  assert.equal(refused.ok, false);
+  assert.match(refused.reason, /one guardian at a time/);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
