@@ -53,7 +53,7 @@ export function publicIntegrations(org: Organisation) {
           companyId: g.companyId,
           bankAccountUid: g.bankAccountUid,
         }
-      : { connected: false, needs: gmiAvailable() ? "an API key from your GetMyInvoices account" : "the server's data encryption key (DATA_ENCRYPTION_KEYS)" },
+      : { connected: false, needs: gmiAvailable() ? "an API key from your GetMyInvoices account" : `the server's data encryption key: ${dataEncryptionProblem()}` },
   };
 }
 
@@ -132,7 +132,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       if (!requireCapability(ctx, res, "integrations.accounting")) return;
       if (!requirePermission(ctx, res, "org.update")) return;
       if (!gmiAvailable()) {
-        return res.status(503).json({ error: "the server has no encryption key configured, so an API key cannot be stored — set DATA_ENCRYPTION_KEYS" });
+        return res.status(503).json({ error: `${dataEncryptionProblem()}, so an API key cannot be stored` });
       }
       const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
       if (apiKey.length < 16 || /\s/.test(apiKey)) return res.status(400).json({ error: "apiKey must be the key as shown in GetMyInvoices (Settings → API)" });

@@ -112,8 +112,8 @@ Version 2 (`sealField`/`openField` in `crypto-at-rest.ts`):
   reader (v1 too) refuses any IV that is not 12 bytes or tag that is not 16.
 - `DATA_ENCRYPTION_KEYS` is a key ring, `<keyId>:<32 random bytes, base64>`,
   newest first (`config/data-keys.ts`). The first key encrypts; the others
-  only decrypt. A passphrase, a short key, a repeated id or a repeated key is
-  refused, and production refuses to start on a malformed ring. Errors name
+  only decrypt. A passphrase, a short key, a repeated id or key, or an id of
+  the form `v<n>` (reserved for format versions) is refused, and production refuses to start on a malformed ring. Errors name
   the problem, never the value.
 - Per-purpose data keys are HKDF-SHA256 over the root. The roots stay in
   process memory.
@@ -125,8 +125,10 @@ Version 2 (`sealField`/`openField` in `crypto-at-rest.ts`):
   Shopify access tokens, Shopify order-link keys and GetMyInvoices keys write
   v2, and refuse to write without a ring.
 - `openField` reads v1 too, until every row is v2.
-- `npm run reencrypt` reports, per site, how many rows are v1 and how many
-  sit under each key id, and which old keys no row uses. With `--apply` it
+- `npm run reencrypt` opens every stored value under its own row binding and
+  reports, per site, how many rows are v1 and how many sit under each key
+  id, which old keys no row uses, and every row that does not open (exit 1).
+  The report reads the store without writing it. With `--apply` it
   moves v1 rows and rows under old keys to the active key, checks each value
   reads back, and leaves a row that does not decrypt as it was (exit 1).
   Rotation: prepend a new key id, run the job, then drop a key once the
@@ -139,7 +141,10 @@ Still open:
 - Monerium OAuth tokens and API secrets are v1 (1.3).
 - Setting `DATA_ENCRYPTION_KEYS` and `BLIND_INDEX_KEY` on each deployment,
   then running the job there. Until the ring is set, Shopify and
-  GetMyInvoices refuse new connections; existing ones still read under v1.
+  GetMyInvoices refuse new connections and report themselves unavailable,
+  and a custom-app store without an order-link key gets no pay-link
+  template; existing v1 values still read.
+- Production does not yet require the ring; it refuses only a malformed one.
 - The v1 reader, and with it `MONERIUM_TOKEN_ENCRYPTION_KEY`, goes once the
   job reports no v1 row on any deployment. Until then a database writer can
   copy a v1 value of the same purpose into another row and it opens there:

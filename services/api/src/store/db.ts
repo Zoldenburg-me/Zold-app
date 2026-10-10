@@ -194,6 +194,13 @@ export function initStore() {
   }
 }
 
+/** Load the store only to read it, for a report: no migration, no write, and
+ *  no directory or file created. Throws when there is no store at DB_PATH. */
+export function loadStoreReadOnly() {
+  if (!existsSync(DB_PATH)) throw new Error(`no store at ${DB_PATH}`);
+  db = { ...db, ...JSON.parse(readFileSync(DB_PATH, "utf8")) };
+}
+
 /**
  * Drop sessions that can no longer authenticate anything. Kept forever, every
  * request would pay for them twice: a linear scan to find the live one, and a
