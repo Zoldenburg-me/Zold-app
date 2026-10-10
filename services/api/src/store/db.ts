@@ -9,7 +9,7 @@
  * The migrations run at load and are idempotent, each keyed on the row it
  * would create, because this holds a money ledger.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { IS_PRODUCTION, ROOT } from "../config.js";
@@ -146,7 +146,8 @@ export let db: Db = {
 };
 
 export function initStore() {
-  mkdirSync(DATA_DIR, { recursive: true });
+  // 700 only when we create it: TRANSF_DB_PATH may sit in a shared dir such as the OS temp dir.
+  mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   if (existsSync(DB_PATH)) {
     db = JSON.parse(readFileSync(DB_PATH, "utf8"));
     db.sessions ??= [];
@@ -375,7 +376,10 @@ export function persist() {
     return;
   }
   const tmp = DB_PATH + ".tmp";
-  writeFileSync(tmp, JSON.stringify(db));
+  // Owner-only. The chmod covers a .tmp left by a crash, whose old mode
+  // writeFileSync's `mode` would keep.
+  writeFileSync(tmp, JSON.stringify(db), { mode: 0o600 });
+  chmodSync(tmp, 0o600);
   renameSync(tmp, DB_PATH);
 }
 
