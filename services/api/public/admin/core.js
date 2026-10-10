@@ -10,11 +10,13 @@
  * MANUAL_REVIEW was resolved (no money moves). KYC review and IBAN issue
  * belong to Monerium.
  *
- * Two security details. The operator token lives in sessionStorage so it does
- * not outlive the tab. Every value from the API is escaped, and rows carry ids
- * for delegated listeners — never an inline handler built from row data, since
- * a signup name containing a quote can close a JS string (stored XSS next to
- * that token).
+ * Three security details. The operator signs in with a passkey; the session
+ * token lives in sessionStorage so it does not outlive the tab, and every
+ * change asks the passkey again, bound to that exact request. The shared
+ * operator token still opens the dashboard read-only. Every value from the
+ * API is escaped, and rows carry ids for delegated listeners — never an inline
+ * handler built from row data, since a signup name containing a quote can
+ * close a JS string (stored XSS next to that session).
  */
 
 /* ---------- state ---------- */
@@ -152,9 +154,23 @@ const authText = document.getElementById('authText');
  *  every 15 seconds. */
 let rejectedToken = null;
 
+/** The operator's passkey session, for this tab only. */
+const SESSION_KEY = 'zold_operator_session';
+let operatorSession = sessionStorage.getItem(SESSION_KEY) || '';
+/** Who the session is, once /api/admin/auth/me has answered. */
+let operatorName = '';
+
+function setOperatorSession(token) {
+  operatorSession = token || '';
+  if (operatorSession) sessionStorage.setItem(SESSION_KEY, operatorSession);
+  else sessionStorage.removeItem(SESSION_KEY);
+}
+
 function setAuth(state) {
   authPill.className = `auth ${state === 'ok' ? 'ok' : state === 'bad' ? 'bad' : ''}`;
-  authText.textContent = state === 'ok' ? 'Connected' : state === 'bad' ? 'Unauthorized' : 'No token';
+  authText.textContent = state === 'bad' ? 'Unauthorized'
+    : state !== 'ok' ? 'Signed out'
+    : operatorSession ? (operatorName || 'Signed in') : 'Read-only token';
 }
 
 /** Stale rows under a dead token read as live ops data: drop them. */
@@ -167,14 +183,44 @@ class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
+/** A fresh passkey approval for one change: the server binds the challenge
+ *  to this method, path and body, and the request carries the answer. */
+async function approveChange(path, method, bodyText) {
+  const o = await api('/api/admin/auth/step-up/challenge', {
+    method: 'POST',
+    body: JSON.stringify({ method, path: path.split('?')[0], body: bodyText ? JSON.parse(bodyText) : undefined }),
+  });
+  const a = await assertOperatorPasskey(o);
+  return bytesToB64url(new TextEncoder().encode(JSON.stringify(a)));
+}
+
 async function api(path, options = {}) {
-  const token = tokenInput.value.trim();
-  if (!token) { setAuth('none'); throw new ApiError(401, 'Enter the operator token.'); }
+  const token = operatorSession || tokenInput.value.trim();
+  if (!token) { setAuth('none'); throw new ApiError(401, 'Sign in with your operator passkey.'); }
+  const method = (options.method || 'GET').toUpperCase();
+  const approval = {};
+  if (method !== 'GET' && !path.startsWith('/api/admin/auth/')) {
+    if (!operatorSession) throw new ApiError(403, 'Sign in with your operator passkey to make a change: the operator token only reads.');
+    approval['X-Operator-Step-Up'] = await approveChange(path, method, options.body);
+  }
   const res = await fetch(path, {
     ...options,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(options.headers || {}) },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...approval, ...(options.headers || {}) },
   });
-  if (res.status === 401 || res.status === 403) {
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    // An ended passkey session falls back to the token, if one is entered. An
+    // Access refusal leaves the session alone: signing in to Access again is
+    // enough. main.js redraws the sign-in controls on the event.
+    if (operatorSession && token === operatorSession && data.code === 'OPERATOR_SIGN_IN') {
+      setOperatorSession('');
+      operatorName = '';
+      window.dispatchEvent(new Event('operator-session-ended'));
+    }
+    rejectedToken = token;
+    setAuth('bad');
+    clearData();
+  } else if (res.status === 403 && method === 'GET') {
     rejectedToken = token;
     setAuth('bad');
     clearData();
@@ -182,7 +228,6 @@ async function api(path, options = {}) {
     rejectedToken = null;
     setAuth('ok');
   }
-  const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`);
   return data;
 }
