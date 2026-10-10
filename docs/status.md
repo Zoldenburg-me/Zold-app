@@ -128,7 +128,9 @@ Say this plainly rather than letting the surface imply otherwise:
   confidence ≥ 0.9 is booked at that price, and a token later dropped from
   the lists books nothing from then on, unflagged. An organisation's books stop at
   `CEILINGS.ledgerRowsPerOrg` (100,000): sync pauses with the reason on the
-  wallet and resumes from the same block once the ceiling is raised.
+  wallet and resumes from the same block once the ceiling is raised. One
+  person owns at most 20 business orgs; a second account, or handing an
+  org's ownership to one, still gets around that.
 - **Invoices made from wallet receipts have run only against local hardhat**
   (2026-10-03: a payer rule saved, one EURe receipt of €300.00 collected into
   a draft, two unlisted-token receipts listed as not included, and the draft

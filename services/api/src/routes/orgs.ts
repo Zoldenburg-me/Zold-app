@@ -188,6 +188,15 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       }
     }
 
+    if (orgType === "business") {
+      const owned = store
+        .organisationsForUser(session.userId)
+        .filter(({ org: o, member: m }) => o.type === "business" && m.role === "owner").length;
+      if (owned >= CEILINGS.businessOrgsPerUser) {
+        return res.status(409).json(ceilingRefusal("business organisations you own", CEILINGS.businessOrgsPerUser));
+      }
+    }
+
     const now = new Date().toISOString();
     const org: Organisation = {
       id: `org_${randomUUID()}`,
