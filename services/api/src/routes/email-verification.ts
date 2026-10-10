@@ -17,7 +17,6 @@ import { EMAIL_VERIFICATION } from "../config.js";
 import { store, type User } from "../store.js";
 import { sendVerificationCode } from "../adapters/mailer.js";
 import { publicUser } from "../users/public-user.js";
-import { describeCause } from "../http/log-cause.js";
 
 export interface EmailVerificationDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -78,7 +77,9 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       try {
         await sendVerificationCode(user.email, code);
       } catch (err: any) {
-        console.error(`email verification: sending to ${user.id} failed: ${describeCause(err)}`);
+        // The server's reply, which nodemailer appends to err.message, often
+        // quotes the address: log only the error and SMTP codes.
+        console.error(`email verification: sending to ${user.id} failed: ${err?.code ?? "error"}${err?.responseCode ? ` (SMTP ${err.responseCode})` : ""}`);
         // Nothing is stored: the previous code, if any, still stands.
         return res.status(502).json({ error: "The email could not be sent just now. Try again in a minute.", code: "MAIL_UNAVAILABLE" });
       }

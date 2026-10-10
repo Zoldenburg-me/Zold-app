@@ -6,7 +6,7 @@
  * leak or be lost on the next render.
  */
 import {
-  $, api, esc, invoiceInputListener, org, orgs, readRecovery, setInvoiceInputListener, ensureMe, setOrg,
+  $, api, esc, invoiceInputListener, org, orgs, readRecovery, recoveryPending, recoveryUnknown, setInvoiceInputListener, ensureMe, setOrg,
   setOrgs, setTestMode, setUsdSymbol, setView, toast, token, view,
 } from "./core.js";
 import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
@@ -152,6 +152,7 @@ const RECOVERY_READ_MS = 60000;
 let recoveryReadAt = 0;
 /* The banner row, redrawn only when its text changes, so a minute's read
    never resets a button someone is about to press. */
+let recoveryAnnounced = "";
 function paintBanner() {
   const el = $("#plan-banner");
   if (!org || !el) return;
@@ -159,12 +160,25 @@ function paintBanner() {
   if (el.dataset.sig === html) return;
   el.dataset.sig = html;
   el.innerHTML = html;
+  // A recovery warning that newly appears is read out once.
+  const urgent = recoveryPending ? "pending" : recoveryUnknown ? "unknown" : "";
+  if (urgent && urgent !== recoveryAnnounced) window.Z.announce(el.querySelector(".banner.warn")?.textContent || "");
+  recoveryAnnounced = urgent;
 }
+/* One read at a time, so an older answer never lands after a newer one. */
+let recoveryRun = null;
 function readRecoveryNow() {
+  if (recoveryRun) return recoveryRun;
   recoveryReadAt = Date.now();
-  return readRecovery().then(paintBanner).catch(() => { /* the next read tries again */ });
+  recoveryRun = readRecovery().then(paintBanner).catch(() => { /* readRecovery itself fails closed */ })
+    .finally(() => { recoveryRun = null; });
+  return recoveryRun;
 }
-function watchRecovery() {
+let watching = false;
+/** Exported for scripts/recovery-alert-ui-test.ts; boot() starts it. */
+export function watchRecovery() {
+  if (watching) return;
+  watching = true;
   readRecoveryNow();
   setInterval(() => { if (!document.hidden) readRecoveryNow(); }, RECOVERY_READ_MS);
   document.addEventListener("visibilitychange", () => {
