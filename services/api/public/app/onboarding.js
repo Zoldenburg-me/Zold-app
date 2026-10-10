@@ -169,7 +169,8 @@ function obNextAfterAccount(u = user) {
   if (!u.passkey || needsPasskeySafeSetup(u)) return obSetupScreen(u);
   if (emailConfirmPending(u)) return "email";
   if (zoldenburgChoicePending(u)) return "recovery";
-  if (u.kycStatus === "rejected") return "monerium";
+  // A wallet account has no bank step to take: the app opens.
+  if (!bankOffered(u)) return null;
   if (kycApproved(u)) return null;
   if (hasConnectedMonerium(u)) return "activate";
   return "monerium";
@@ -425,11 +426,14 @@ const B_STEPS = ["account-type", "b-entity", "b-registration", "b-you", "b-owner
 /* The steps after the account exists, numbered from what this deployment
    offers: no recovery service, no recovery step. */
 function obAfterSteps() {
-  return [...(caps.emailVerification && !user?.emailVerifiedAt ? ["email"] : []), ...((caps.emailSmsRecovery || caps.zoldenburgRecovery) && !user?.passkeySafe?.importedAt ? ["recovery"] : []), "monerium", "activate"];
+  return [...(caps.emailVerification && !user?.emailVerifiedAt ? ["email"] : []), ...((caps.emailSmsRecovery || caps.zoldenburgRecovery) && !user?.passkeySafe?.importedAt ? ["recovery"] : []), ...(bankOffered() ? ["monerium", "activate"] : [])];
 }
 function obAfterProgress(name, label) {
   const steps = obAfterSteps();
-  const i = Math.max(0, steps.indexOf(name === "recovery-email" ? "recovery" : name === "monerium-keys" ? "monerium" : name));
+  const i = steps.indexOf(name === "recovery-email" ? "recovery" : name === "monerium-keys" ? "monerium" : name);
+  // A screen outside the numbered steps (a wallet account's bank screen) has
+  // no "step n of m" to show.
+  if (i < 0) return obBackHead(null);
   return obProgress(i + 1, steps.length, label, null);
 }
 
@@ -1681,11 +1685,12 @@ OB.monerium = {
     if (rejected) {
       return `${obAfterProgress("monerium", "Your IBAN")}
       <main id="main" class="z-screen__main">
-        ${obIntro("Monerium couldn’t verify you", "Adding money and sending stay closed on this account. You can connect a different Monerium account, or write to support.")}
+        ${obIntro("We can’t open a bank account for you right now", "Our banking partner, Monerium, can’t onboard you at the moment, so this account has no IBAN and no bank transfers. You can keep using Zold as a wallet: receive and hold digital dollars and euros, convert dollars to euros, get paid through your payment page, and send invoices.")}
         ${Z.note({ tone: "a", text: "Monerium decides who it verifies. Zold can’t change its answer." })}
         ${obAlert()}
       </main>
       <div class="z-screen__foot">
+        ${Z.button({ variant: "primary", full: true, label: "Use Zold as a wallet", id: "btn-kyc-dashboard" })}
         ${Z.button({ variant: "secondary", full: true, label: "Use a different Monerium account", id: "btn-kyc-reconnect" })}
         ${Z.button({ variant: "quiet", full: true, label: "Email support", href: "mailto:support@zoldhq.com" })}
       </div>`;
@@ -1698,7 +1703,7 @@ OB.monerium = {
         <span class="z-partner__name"><img src="/assets/logo-monerium.png" alt="" width="33" height="40" style="object-fit:contain">Monerium ehf.</span>
         <ul>
           <li>Takes a few minutes with your ID at hand.</li>
-          <li>You can use Zold while the check runs.</li>
+          <li>You can use Zold as a wallet while the check runs, or without it.</li>
           <li>Your IBAN switches on with one Face ID approval.</li>
         </ul>
       </div>

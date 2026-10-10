@@ -44,7 +44,8 @@ function phChecklist(u) {
       ? [{ title: "Confirm your email", sub: u.emailVerifiedAt ? "Confirmed." : "A 6-digit code to your email.",
           done: !!u.emailVerifiedAt, action: { id: "ph-ck-email", label: "Confirm" } }]
       : []),
-
+    // A wallet account has no bank step: the checklist ends at the account.
+    ...(bankOffered(u) ? [
     { title: "Verify with Monerium", sub: approved || connected ? "Connected." : "ID check, a few minutes.",
       done: approved || connected, action: { id: "ph-ck-verify", label: "Start" } },
     { title: "IBAN active",
@@ -55,6 +56,7 @@ function phChecklist(u) {
       // While Monerium works there is nothing to press: the row shows Waiting.
       // A support case keeps a button to the screen that explains it.
       action: connected && !approved && (!wait || wait.support) ? { id: "ph-ck-verify2", label: wait ? "Details" : "Activate" } : null },
+    ] : []),
   ];
   const open = items.some((i) => !i.done);
   // Recovery is optional, so it is not a set-up step: a skipped choice is an
@@ -107,7 +109,9 @@ PH.home = {
     const inflight = hist.find(phInFlight);
     const ibanRight = u.iban && kycApproved(u)
       ? `<span class="z-mono z-dim" translate="no">•••• ${esc(String(u.iban).replace(/\s+/g, "").slice(-4))}</span>`
-      : `<span class="z-dim">IBAN after verification</span>`;
+      : `<span class="z-dim">${bankOffered(u) ? "IBAN after verification" : "Wallet"}</span>`;
+    // A partner refused the bank account; the wallet stays. Said once, plainly.
+    const refused = u.kycStatus === "rejected" ? Z.note({ tone: "a", text: kycCopy("rejected", u)[2] }) : "";
     return `<h1 class="z-sr">Home</h1><header class="z-apphead">
         ${Z.avatar({ name, tone: "p" })}
         <span class="z-apphead__name">${esc(phFirst(name) || name)}</span>
@@ -115,6 +119,7 @@ PH.home = {
       </header>
       ${phMain(`
         ${gate ? Z.note({ tone: "a", html: `<strong>${esc(gate.reason)}</strong> ${esc(gate.needs)} <a href="mailto:support@zoldhq.com">Ask us about it</a>` }) : ""}
+        ${refused}
         ${phBalance(u.balanceEur ?? u.safeBalanceEur ?? 0, "Balance")}
         <a class="z-card z-acctrow" href="#account-details">${Z.icon("account_balance", "z-acctrow__ic")}<span class="z-acctrow__label">Account details</span>${ibanRight}${Z.icon("chevron_right", "z-row__chev")}</a>
         <div class="z-actions">
@@ -308,17 +313,27 @@ function phDetailsText(u, bic) {
 
 /* The account details body, used by the sheet and by Get paid. */
 function phDetailsBody(u, bic, { loadingBic = false } = {}) {
+  const hasWallet = u.address && u.passkeySafe?.status === "active";
+  const walletWarn = Z.note({ tone: "a", text: `Only ${usdSym()} on the Base network. Anything else sent here is lost.` });
   if (!u.iban || !kycApproved(u)) {
-    return `<p class="z-sub">Your IBAN appears here once Monerium has verified you and issued it.</p>
-      ${Z.button({ variant: "primary", full: true, label: "Verify with Monerium", id: "ph-det-verify" })}`;
+    // Without an IBAN the wallet address is the account's details, shown open.
+    const walletOpen = hasWallet
+      ? `<p class="z-sub">Share your wallet address to get paid in ${usdSym()}.</p>
+        <div class="z-card">${Z.copyRow({ label: "Your wallet address", value: u.address, mono: true })}</div>${walletWarn}`
+      : "";
+    return `${walletOpen}
+      ${bankOffered(u)
+        ? `<p class="z-sub">Your IBAN appears here once Monerium has verified you and issued it.</p>
+          ${Z.button({ variant: hasWallet ? "secondary" : "primary", full: true, label: "Verify with Monerium", id: "ph-det-verify" })}`
+        : ""}`;
   }
   const bicRow = loadingBic
     ? `<li><div class="z-copy" aria-hidden="true"><span class="z-copy__main"><span class="z-copy__label">BIC</span><span class="z-skel z-skel--line" style="width:40%;margin-top:6px"></span></span></div></li>`
     : bic ? `<li>${Z.copyRow({ label: "BIC", value: bic, mono: true })}</li>` : "";
-  const wallet = u.address && u.passkeySafe?.status === "active"
+  const wallet = hasWallet
     ? `<details class="z-disclose"><summary>Crypto wallet address${Z.icon("expand_more")}</summary>
         <div class="z-card">${Z.copyRow({ label: "Your wallet address", value: u.address, mono: true })}</div>
-        ${Z.note({ tone: "a", text: `Only ${usdSym()} on the Base network. Anything else sent here is lost.` })}</details>`
+        ${walletWarn}</details>`
     : "";
   return `<p class="z-sub">Share these to get paid by bank transfer.</p>
     <ul class="z-list z-card">

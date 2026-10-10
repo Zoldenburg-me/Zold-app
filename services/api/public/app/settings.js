@@ -273,7 +273,10 @@ PH.soon = {
     const later = (phCache.soon || []).filter((c) => !c.available && c.code !== "EUR").map((c) => c.code);
     const personal = phPersonalOrg();
     const rows = [
-      ...(!(u.iban && kycApproved(u))
+      ...(!(u.iban && kycApproved(u)) && !bankOffered(u)
+        ? [Z.row({ lead: soonTile, title: "IBAN", sub: u.kycStatus === "rejected" ? "Our banking partner can’t onboard you at the moment" : "Not available where you live yet", soon: true })]
+        : []),
+      ...(!(u.iban && kycApproved(u)) && bankOffered(u)
         ? [`<div class="z-row">${soonTile}<span class="z-row__main"><span class="z-row__title">IBAN</span><span class="z-row__sub">Waiting for Monerium to verify you</span></span><span class="z-row__right">${Z.button({ label: "Check", className: "z-btn--sm", id: "ph-soon-iban" })}</span></div>`]
         : []),
       ...(!caps.cashRail ? [Z.row({ lead: soonTile, title: "Cash pickup", sub: "Opens with a payout partner", soon: true })] : []),

@@ -117,11 +117,18 @@ await check("a pending account converts: the swap is user-signed from its own Sa
   assert.equal(depositConversionBlocker(u, mkDeposit(u.id)), null);
 });
 
-await check("a rejected or manual-review account is refused, in words it can act on", () => {
+await check("a rejected or manual-review account still converts: the partner refused a bank account, not the wallet", () => {
   for (const kycStatus of ["rejected", "manual_review"]) {
     const u = mkUser({ kycStatus });
-    assert.match(depositConversionBlocker(u, mkDeposit(u.id))!, /verification/i, kycStatus);
+    assert.equal(depositConversionBlocker(u, mkDeposit(u.id)), null, kycStatus);
   }
+});
+
+await check("a WALLET_ONLY account converts; a segment without an on-chain balance is refused", () => {
+  const w = mkUser({ kycStatus: "pending", segment: { value: "WALLET_ONLY" } });
+  assert.equal(depositConversionBlocker(w, mkDeposit(w.id)), null);
+  const b = mkUser({ segment: { value: "BLOCKED_SANCTIONED" } });
+  assert.match(depositConversionBlocker(b, mkDeposit(b.id))!, /not part of your account/i);
 });
 
 await check("dust below the floor is refused with the floor in it", () => {
@@ -247,11 +254,11 @@ const dep = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8")
 // The deposit routes left server.ts in the modularity pass.
 const srv = readFileSync("services/api/src/routes/crypto-deposits.ts", "utf8");
 
-await check("conversion is gated by walletBlocker, never by KYC approval", () => {
+await check("conversion is gated by the segment, never by KYC approval", () => {
   const route = srv.slice(srv.indexOf('"/users/:id/auto-convert"'));
   const body = route.slice(0, route.indexOf("router.", 1));
   assert.ok(!/requireKycApproved/.test(body), "auto-convert must not require Monerium approval");
-  assert.match(body, /walletBlocker\(user\)/, "auto-convert must refuse a rejected account");
+  assert.match(body, /requireCapability\(user, "onchain_balance", res\)/, "auto-convert must check the segment");
   const watched = dep.slice(dep.indexOf("function watchedAddresses"));
   assert.ok(!/kycStatus === "approved"/.test(watched.slice(0, watched.indexOf("return out;"))),
     "a pending account's page address must be watched when auto-convert is on");
