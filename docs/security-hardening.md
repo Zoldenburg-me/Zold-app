@@ -364,9 +364,10 @@ user without breaking WebAuthn.
 
 ## Phase 3: mail
 
-Today, nodemailer sends verification codes through Brevo's SMTP relay with
-an SMTP key from `.env.age`, from `no-reply@zoldhq.com` (the apex, not a
-subdomain), with Brevo's IP allowlist on. The code is in the body only, and a
+Today, nodemailer sends verification codes and recovery alerts through
+Brevo's SMTP relay with an SMTP key from `.env.age`, from
+`no-reply@zoldhq.com` (the apex, not a subdomain), with Brevo's IP allowlist
+on. The code is in the body only, and a
 failed send logs the error and SMTP codes, never the server's reply (it can
 quote the address).
 
