@@ -55,7 +55,7 @@ process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = "0x88888888888888888888888888888
 
 const tk = await import("../services/api/src/wallet/turnkey.js");
 const { createTurnkeyGuardianRouter } = await import("../services/api/src/routes/recovery-turnkey.js");
-const { createZoldenburgRecoveryRouter } = await import("../services/api/src/routes/recovery-zoldenburg.js");
+const { createZoldenburgRecoveryRouter, otherGuardianListed } = await import("../services/api/src/routes/recovery-zoldenburg.js");
 const { store } = await import("../services/api/src/store.js");
 const { capabilities } = await import("../services/api/src/capabilities.js");
 
@@ -724,6 +724,31 @@ try {
     assert.equal(r.body.removed, true);
     assert.ok(!safeCalls.some((c) => c.op === "prepare"));
     assert.equal(store.findUser("u_ok")!.passkeySafe!.socialGuardians!.length, 0);
+  });
+
+  await check("remove: dropping a row the chain never listed also drops its prepared add", async () => {
+    store.updateUser("u_ok", { passkeySafe: { ...store.findUser("u_ok")!.passkeySafe!, socialGuardians: [{ kind: "self-social", address: addr("1"), turnkeySubOrgId: "sub-1", status: "created", createdAt: now }] } });
+    chain.guardians = [];
+    chain.moduleEnabled = true;
+    const prep = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_ok");
+    assert.equal(prep.status, 201, JSON.stringify(prep.body));
+    const gone = await call("POST", "/users/u_ok/guardians/sub-1/remove", {}, "u_ok");
+    assert.equal(gone.body.removed, true);
+    safeCalls.length = 0;
+    const r = await call("POST", `/users/u_ok/ops/${prep.body.requestId}`, { signature: "good" }, "u_ok");
+    assert.equal(r.status, 404, JSON.stringify(r.body));
+    assert.ok(!safeCalls.some((c) => c.op === "submit"), "the stale add never reaches the chain");
+    assert.deepEqual(chain.guardians, []);
+  });
+
+  await check("Zoldenburg's chain check: any guardian but Zoldenburg and the account's own email/SMS one is another guardian", () => {
+    const z = addr("a");
+    const candide = addr("c");
+    assert.equal(otherGuardianListed([], z, candide), false);
+    assert.equal(otherGuardianListed([z.toUpperCase().replace("0X", "0x") as `0x${string}`], z, candide), false);
+    assert.equal(otherGuardianListed([z, candide], z, candide), false);
+    assert.equal(otherGuardianListed([z, addr("1")], z, candide), true);
+    assert.equal(otherGuardianListed([addr("1")], z, undefined), true);
   });
 
   await check("login: a bad token is refused before Turnkey is called", async () => {

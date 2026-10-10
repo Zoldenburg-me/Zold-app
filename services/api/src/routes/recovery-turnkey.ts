@@ -287,6 +287,9 @@ export function createTurnkeyGuardianRouter({
         const state = await safeOps.readState(plan);
         if (state.pending) throw new TurnkeyGuardianError("a recovery is pending on this account — cancel it first", 409, "RECOVERY_PENDING");
         if (!state.guardians.some((g) => sameAddress(g, guardian.address))) {
+          // A prepared add for this row would otherwise land on chain later
+          // with no row left to show it.
+          for (const [id, o] of pendingOps) if (o.userId === user.id && o.subOrgId === guardian.turnkeySubOrgId) pendingOps.delete(id);
           dropGuardian(user.id, guardian.turnkeySubOrgId);
           return res.json({ removed: true });
         }
@@ -311,6 +314,9 @@ export function createTurnkeyGuardianRouter({
         const plan = activePlan(user);
         if (!(await safeOps.checkAssertion(user, req.body, pending.challenge, res))) return;
         pendingOps.delete(req.params.requestId);
+        if (!(user.passkeySafe!.socialGuardians ?? []).some((g) => g.turnkeySubOrgId === pending.subOrgId)) {
+          throw new TurnkeyGuardianError("no such guardian on this account", 404, "NO_GUARDIAN");
+        }
         if (pending.kind === "remove") {
           const op = await safeOps.submit(plan, pending.userOperation, req.body);
           if (op.success === false) return res.status(502).json({ error: "the operation was included but reverted — nothing changed", code: "REVERTED", txHash: op.txHash });
