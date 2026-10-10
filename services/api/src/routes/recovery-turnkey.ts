@@ -18,7 +18,8 @@
  *   two signatures yet, so Zoldenburg alone could no longer recover it.
  * - POST /recovery/turnkey/login {oidcToken, publicKey}: no Zold session (the
  *   device may be the lost one's replacement); a Turnkey session for the
- *   login's own sub-org, bound to the browser key, so it can sign a recovery.
+ *   login's own sub-org, bound to the browser key, and that sub-org's
+ *   address to sign a recovery with. Only the login's holder learns them.
  *
  * Under /recovery, so every call sits on the tight auth bucket
  * (http/policy.ts). The ID token is never stored or logged.
@@ -312,8 +313,13 @@ export function createTurnkeyGuardianRouter({
       if (!pending || pending.userId !== user.id) return res.status(404).json({ error: "request not found or expired — start again" });
       try {
         const plan = activePlan(user);
-        if (!(await safeOps.checkAssertion(user, req.body, pending.challenge, res))) return;
+        // Claimed BEFORE any await: one approval submits the operation once.
+        // A refused approval gives it back for another try.
         pendingOps.delete(req.params.requestId);
+        if (!(await safeOps.checkAssertion(user, req.body, pending.challenge, res))) {
+          pendingOps.set(req.params.requestId, pending);
+          return;
+        }
         if (!(user.passkeySafe!.socialGuardians ?? []).some((g) => g.turnkeySubOrgId === pending.subOrgId)) {
           throw new TurnkeyGuardianError("no such guardian on this account", 404, "NO_GUARDIAN");
         }
@@ -361,7 +367,7 @@ export function createTurnkeyGuardianRouter({
         if (ids.length === 0) throw new TurnkeyGuardianError("this login is not a guardian", 404, "NO_GUARDIAN");
         if (ids.length > 1) throw new TurnkeyGuardianError("this login has more than one guardian sub-org", 409, "AMBIGUOUS");
         const session = await turnkey.oauthLogin(ids[0], oidcToken, publicKey);
-        res.json({ session, subOrgId: ids[0] });
+        res.json({ session, subOrgId: ids[0], address: await turnkey.walletAddress(ids[0]) });
       } catch (e) {
         sendError(res, e);
       }

@@ -55,7 +55,8 @@ process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = "0x88888888888888888888888888888
 
 const tk = await import("../services/api/src/wallet/turnkey.js");
 const { createTurnkeyGuardianRouter } = await import("../services/api/src/routes/recovery-turnkey.js");
-const { createZoldenburgRecoveryRouter, otherGuardianListed } = await import("../services/api/src/routes/recovery-zoldenburg.js");
+const { createZoldenburgRecoveryRouter } = await import("../services/api/src/routes/recovery-zoldenburg.js");
+const { otherGuardianListed, hostedGuardianBlocked } = await import("../services/api/src/recovery/one-guardian.js");
 const { store } = await import("../services/api/src/store.js");
 const { capabilities } = await import("../services/api/src/capabilities.js");
 
@@ -283,6 +284,7 @@ await check("capabilities() publishes the switch and the two login client ids", 
 console.log("routes");
 
 const now = new Date().toISOString();
+let slowAssert = false;
 const addr = (c: string) => `0x${c.repeat(40)}` as `0x${string}`;
 const pk = { x: "0x01", y: "0x02" };
 const baseUser = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -344,6 +346,7 @@ const safeOps: SafeOps = {
   },
   async checkAssertion(user, body, _challenge, res) {
     safeCalls.push({ op: "assert", arg: body });
+    if (slowAssert) await new Promise((r) => setTimeout(r, 50));
     if ((body as any)?.signature !== "good") {
       res.status(401).json({ error: "passkey approval refused" });
       return undefined;
@@ -473,7 +476,8 @@ try {
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.session, "session-for-sub-1");
     assert.equal(r.body.subOrgId, "sub-1");
-    assert.deepEqual(calls.at(-1), { op: "login", arg: { subOrgId: "sub-1", publicKey: BROWSER_KEY } });
+    assert.equal(r.body.address, addr("1"), "the address to sign a recovery with, for the login's holder only");
+    assert.deepEqual(calls.find((c) => c.op === "login"), { op: "login", arg: { subOrgId: "sub-1", publicKey: BROWSER_KEY } });
   });
 
   await check("login: an unknown login is a 404 and creates nothing", async () => {
@@ -617,6 +621,19 @@ try {
     assert.ok(!safeCalls.some((c) => c.op === "submit"));
   });
 
+  await check("add on chain: two approvals of one op at once submit it once", async () => {
+    safeCalls.length = 0;
+    slowAssert = true;
+    try {
+      const [a, b] = await Promise.all([1, 2].map(() => call("POST", `/users/u_ok/ops/${requestId}`, { signature: "bad" }, "u_ok")));
+      assert.deepEqual([a.status, b.status].sort(), [401, 404], "the second finds the op claimed");
+    } finally {
+      slowAssert = false;
+    }
+    assert.ok(!safeCalls.some((c) => c.op === "submit"));
+    assert.equal(safeCalls.filter((c) => c.op === "assert").length, 1, "one approval checked; the refused one gives the op back");
+  });
+
   await check("add on chain: another user cannot submit the op", async () => {
     const r = await call("POST", `/users/u_twin/ops/${requestId}`, { signature: "good" }, "u_twin");
     assert.equal(r.status, 404);
@@ -749,6 +766,22 @@ try {
     assert.equal(otherGuardianListed([z, candide], z, candide), false);
     assert.equal(otherGuardianListed([z, addr("1")], z, candide), true);
     assert.equal(otherGuardianListed([addr("1")], z, undefined), true);
+  });
+
+  await check("email/SMS and Zoldenburg guardians are refused beside an active Google/Apple one or any unknown guardian", () => {
+    const zold = "0x8888888888888888888888888888888888888888";
+    const candide = addr("c");
+    const user = (social: any[]) => ({ passkeySafe: { candideRecovery: { guardianAddress: candide }, socialGuardians: social } }) as any;
+    assert.equal(hostedGuardianBlocked(user([]), []), false);
+    assert.equal(hostedGuardianBlocked(user([]), [zold, candide]), false, "Zoldenburg and the account's email/SMS guardian may share");
+    assert.equal(hostedGuardianBlocked(user([{ status: "active" }]), []), true, "an active Google/Apple guardian blocks");
+    assert.equal(hostedGuardianBlocked(user([{ status: "created" }]), []), false, "a login not yet on chain does not");
+    assert.equal(hostedGuardianBlocked(user([]), [addr("1")]), true, "an unknown guardian on chain blocks");
+  });
+
+  await check("the email/SMS guardian routes check one guardian at a time when preparing AND before submitting", () => {
+    const src = readFileSync(path.join(ROOT, "services/api/src/routes/recovery-candide.ts"), "utf8");
+    assert.equal(src.match(/hostedGuardianBlocked\(/g)?.length, 2);
   });
 
   await check("login: a bad token is refused before Turnkey is called", async () => {

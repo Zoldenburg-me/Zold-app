@@ -46,6 +46,7 @@ import {
   zoldenburgGuardianSetupTransactions,
   zoldenburgRecoveryEnabled,
 } from "../recovery/zoldenburg-guardian.js";
+import { hostedGuardianBlocked, ONE_GUARDIAN_MESSAGE } from "../recovery/one-guardian.js";
 import {
   CANDIDE,
   assertRecoveryModuleDeployed,
@@ -121,22 +122,9 @@ function activePlan(user: User): PasskeySafeDeploymentPlan {
 const moduleFor = (user: User) =>
   (user.passkeySafe?.recovery?.moduleAddress ?? user.passkeySafe?.candideRecovery?.moduleAddress ?? CANDIDE.recoveryModuleAddress) as `0x${string}`;
 
-/**
- * Does the module list a guardian other than Zoldenburg and the account's own
- * email/SMS one? At threshold 1 that guardian could recover the account
- * alone, so Zoldenburg is not added beside it.
- */
-export function otherGuardianListed(guardians: readonly string[], zoldenburg: string, candide?: string): boolean {
-  const ours = [zoldenburg, candide].filter(Boolean).map((a) => a!.toLowerCase());
-  return guardians.some((g) => !ours.includes(g.toLowerCase()));
-}
-
-/** One guardian at a time: refused while a Google/Apple login is active or another guardian is on chain. */
-function assertNoOtherGuardian(user: User, guardians: readonly string[], zoldenburg: string) {
-  const social = user.passkeySafe?.socialGuardians ?? [];
-  if (social.some((g) => g.status === "active") || otherGuardianListed(guardians, zoldenburg, user.passkeySafe?.candideRecovery?.guardianAddress)) {
-    throw new ZoldenburgRecoveryError("remove your backup login first — one guardian at a time", 409, "OTHER_GUARDIAN");
-  }
+/** One guardian at a time (recovery/one-guardian.ts). */
+function assertNoOtherGuardian(user: User, guardians: readonly string[]) {
+  if (hostedGuardianBlocked(user, guardians)) throw new ZoldenburgRecoveryError(ONE_GUARDIAN_MESSAGE, 409, "OTHER_GUARDIAN");
 }
 
 /** Is Zoldenburg's CURRENT guardian the one recorded as active on this Safe? */
@@ -322,14 +310,14 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       // login could each recover the account alone, and nothing collects two
       // signatures yet. Checked on the store first, then on the chain below,
       // and again right before the op is submitted.
-      assertNoOtherGuardian(user, [], guardian);
+      assertNoOtherGuardian(user, []);
       const moduleAddress = moduleFor(user);
       await assertRecoveryModuleDeployed(moduleAddress);
       // Read THIS module, whatever the stored plan says about Zoldenburg.
       const state = await readRecoveryState(
         { ...plan, recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "planned" } } as PasskeySafeDeploymentPlan,
       );
-      assertNoOtherGuardian(user, state.guardians, guardian);
+      assertNoOtherGuardian(user, state.guardians);
       const now = new Date().toISOString();
       if (!HARNESS.enabled && state.guardians.some((g) => g.toLowerCase() === guardian.toLowerCase())) {
         const updated = store.updateUser(user.id, {
@@ -407,7 +395,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
           { ...plan, recovery: { moduleAddress: moduleFor(user), guardianAddress: zold, threshold: 1, status: "planned" } } as PasskeySafeDeploymentPlan,
         );
         try {
-          assertNoOtherGuardian(user, onChain.guardians, zold);
+          assertNoOtherGuardian(user, onChain.guardians);
         } catch (err) {
           pendingOps.delete(req.params.requestId);
           throw err;

@@ -70,6 +70,7 @@ import {
 } from "../recovery/candide-guardian.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertionForChallenge, verifyRegistration } from "../webauthn.js";
 import { publicRecoveryRequest } from "../recovery.js";
+import { hostedGuardianBlocked, ONE_GUARDIAN_MESSAGE } from "../recovery/one-guardian.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
 import { describeCause, describeError, shortErrorForClient, redactedMessage } from "../http/log-cause.js";
@@ -569,6 +570,9 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         });
         return res.json({ ...deps.publicUser(updated), recovery: publicCandideRecovery(updated), status: "active" });
       }
+      if (hostedGuardianBlocked(user, state.guardians)) {
+        return res.status(409).json({ error: ONE_GUARDIAN_MESSAGE, code: "OTHER_GUARDIAN" });
+      }
       await assertRecoveryModuleDeployed(c.moduleAddress);
       // Threshold 1: Candide alone may recover. A second guardian raising it
       // to 2 needs a signer nobody runs today; recorded as a decision, not an
@@ -614,6 +618,10 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       pendingSafeOperations.delete(req.params.requestId);
       // The passkey must have approved THIS operation's hash.
       await verifyOwnerAssertion(user, req.body, pending.challenge);
+      // Again right before submitting: another guardian may have landed since.
+      if (hostedGuardianBlocked(user, (await readRecoveryState(plan)).guardians)) {
+        return res.status(409).json({ error: ONE_GUARDIAN_MESSAGE, code: "OTHER_GUARDIAN" });
+      }
       const op = await submitConfirmed(plan, pending.userOperation, req.body, res);
       if (!op) return;
       const opHash = op.userOpHash;

@@ -168,8 +168,14 @@ try {
     assert.equal(r.status, 201, JSON.stringify(r.body));
     assert.equal(r.body.mode, "turnkey");
     assert.equal(r.body.status, "PASSKEY_PENDING");
-    assert.equal(r.body.guardianAddress, guardian.address);
-    assert.equal(r.body.recoveryModuleAddress.toLowerCase(), MODULE.toLowerCase());
+    for (const k of ["userId", "safeAddress", "guardianAddress", "recoveryModuleAddress"]) {
+      assert.equal(r.body[k], undefined, `${k} is not shown to whoever knows the email`);
+    }
+    assert.equal(r.body.turnkey?.guardianSubOrgId, undefined);
+    const row = store.findRecoveryRequest(r.body.id)!;
+    assert.equal(row.guardianAddress, guardian.address);
+    assert.equal(row.recoveryModuleAddress.toLowerCase(), MODULE.toLowerCase());
+    assert.ok(Date.parse(row.expiresAt) - Date.now() <= 3600_000, "an unapproved Google/Apple recovery times out within the hour");
     assert.match(r.body.recoverySecret, /^[A-Za-z0-9_-]{40,}$/);
     assert.equal(r.body.submitTo, `/api/recovery/turnkey/requests/${r.body.id}/passkey`);
     assert.equal(r.body.turnkey?.accessHash, undefined, "the secret's hash never leaves");
@@ -221,8 +227,7 @@ try {
     const rq = store.findRecoveryRequest(id)!;
     const expected = recoveryDigest(recoveryTypedData({ moduleAddress: MODULE, safeAddress: SAFE, newOwners: rq.turnkey!.newOwners!, newThreshold: 1, nonce: 0n }));
     assert.equal(r.body.digest, expected);
-    assert.equal(r.body.guardianAddress, guardian.address);
-    assert.equal(r.body.subOrgId, "sub-1");
+    assert.deepEqual(Object.keys(r.body), ["digest"], "the sub-org and address come from the guardian's own login");
     digest = r.body.digest;
   });
 
@@ -313,7 +318,7 @@ try {
     assert.equal(relayed[0].signer, guardian.address);
     assert.ok(["1b", "1c"].includes(relayed[0].signature.slice(130)), relayed[0].signature);
     assert.equal(r.body.turnkey.finalizeAfter, new Date(GRACE_END * 1000).toISOString());
-    assert.equal(r.body.turnkey.recoveryHash, digest);
+    assert.equal(store.findRecoveryRequest(id)!.turnkey!.recoveryHash, digest);
     assert.equal(verifiers.length, 1, "the new passkey's verifier is deployed ahead of its first use");
   });
 
@@ -355,10 +360,20 @@ try {
 
   await check("after the grace period, finalise binds the new passkey once the owners match", async () => {
     store.updateRecoveryRequest(id, { turnkey: { ...store.findRecoveryRequest(id)!.turnkey!, finalizeAfter: new Date(Date.now() - 1000).toISOString() } });
-    const r = await call("POST", `/recovery/turnkey/requests/${id}/finalize`, {}, auth());
-    assert.equal(r.status, 200, JSON.stringify(r.body));
+    // Two at once (a double tap, or the sweep): one relays, the other waits.
+    const realFinalize = chain.relayFinalize;
+    chain.relayFinalize = async (m, safe) => { await new Promise((ok) => setTimeout(ok, 50)); return realFinalize(m, safe); };
+    let both: any[];
+    try {
+      both = await Promise.all([1, 2].map(() => call("POST", `/recovery/turnkey/requests/${id}/finalize`, {}, auth())));
+    } finally {
+      chain.relayFinalize = realFinalize;
+    }
+    const r = both.find((x) => x.status === 200)!;
+    assert.ok(r, JSON.stringify(both.map((x) => x.body)));
+    assert.equal(both.find((x) => x !== r).body.code, "BUSY");
     assert.equal(r.body.status, "FINALIZED");
-    assert.deepEqual(finalized, [SAFE]);
+    assert.deepEqual(finalized, [SAFE], "finalizeRecovery relayed once");
     assert.equal(store.findUser("u_rec")!.passkey!.credentialId, newKey.credentialId, "the account now signs in with the new passkey");
   });
 
@@ -398,12 +413,37 @@ try {
     assert.equal(store.findRecoveryRequest(start.body.id)!.status, "CANCELED");
   });
 
-  await check("at most five requests stay open per account; the oldest expires", async () => {
+  const waitingFor = (userId: string) =>
+    store.recoveryRequestsForUser(userId).filter((r) => r.mode === "turnkey" && ["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status));
+
+  await check("at most five requests wait per account; a new start expires the oldest one without a passkey", async () => {
+    for (const r of waitingFor("u_none")) store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
     const ids: string[] = [];
     for (let i = 0; i < 6; i++) ids.push((await call("POST", "/recovery/turnkey/requests", { email: "u_none@example.com" })).body.id);
-    const open = store.recoveryRequestsForUser("u_none").filter((r) => r.mode === "turnkey" && ["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status));
-    assert.equal(open.length, 5);
+    assert.equal(waitingFor("u_none").length, 5);
     assert.equal(store.findRecoveryRequest(ids[0])!.status, "EXPIRED");
+  });
+
+  await check("a stranger's starts never expire the owner's request once its passkey is in; with every slot holding one, starts are refused", async () => {
+    for (const r of waitingFor("u_none")) store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
+    const register = async (start: any, label: string) => {
+      const key = await makeSoftwarePasskey(label, ORIGIN);
+      const r = await call("POST", `/recovery/turnkey/requests/${start.id}/passkey`, key.register(start.registerChallenge), { "x-recovery-secret": start.recoverySecret });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+    };
+    const owner = (await call("POST", "/recovery/turnkey/requests", { email: "u_none@example.com" })).body;
+    await register(owner, "turnkey-recovery-owner");
+    // Ten at once: the cap is counted after the chain read, so a race cannot pass it.
+    const strangers = (await Promise.all(Array.from({ length: 10 }, () => call("POST", "/recovery/turnkey/requests", { email: "u_none@example.com" })))).map((r) => r.body);
+    assert.equal(store.findRecoveryRequest(owner.id)!.status, "REVIEW_PENDING", "the owner's request survives");
+    assert.equal(waitingFor("u_none").length, 5);
+    const live = strangers.filter((b) => store.findRecoveryRequest(b.id)!.status === "PASSKEY_PENDING");
+    for (const [i, b] of live.entries()) await register(b, `turnkey-recovery-stranger-${i}`);
+    const refused = await call("POST", "/recovery/turnkey/requests", { email: "u_none@example.com" });
+    assert.equal(refused.status, 429, JSON.stringify(refused.body));
+    assert.equal(refused.body.code, "TOO_MANY_RECOVERIES");
+    assert.equal(store.findRecoveryRequest(owner.id)!.status, "REVIEW_PENDING");
+    for (const r of waitingFor("u_none")) store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
   });
 
   await check("a signature racing the owner's cancel is refused before the relay", async () => {
@@ -427,6 +467,46 @@ try {
       assert.equal(relayed.length, before, "nothing relayed");
     } finally {
       chain.nonce = realNonce;
+    }
+  });
+
+  await check("the owner's cancel waits while a signature is being relayed, so the relay cannot overwrite it", async () => {
+    const start = await call("POST", "/recovery/turnkey/requests", { email: "u_created@example.com" });
+    const h = { "x-recovery-secret": start.body.recoverySecret };
+    const key = await makeSoftwarePasskey("turnkey-recovery-cancel-race", ORIGIN);
+    await call("POST", `/recovery/turnkey/requests/${start.body.id}/passkey`, key.register(start.body.registerChallenge), h);
+    markAlerted(start.body.id);
+    const d = await call("GET", `/recovery/turnkey/requests/${start.body.id}/digest`, undefined, h);
+    const realRelay = chain.relayRecovery;
+    const pendingBefore = chainState.pending;
+    let cancel: any;
+    chain.relayRecovery = async (td, signer, sig) => {
+      cancel = await call("POST", `/users/u_created/recovery/turnkey/requests/${start.body.id}/cancel`, {}, { "x-test-user": "u_created" });
+      return realRelay(td, signer, sig);
+    };
+    try {
+      const r = await call("POST", `/recovery/turnkey/requests/${start.body.id}/signature`, await turnkeySign(guardian, d.body.digest), h);
+      assert.equal(cancel.status, 409, JSON.stringify(cancel.body));
+      assert.equal(cancel.body.code, "BEING_SIGNED");
+      assert.equal(r.body.status, "GRACE_PERIOD", "on chain, and the row says so");
+    } finally {
+      chain.relayRecovery = realRelay;
+      chainState.pending = pendingBefore;
+      store.updateRecoveryRequest(start.body.id, { status: "CANCELED" });
+    }
+  });
+
+  await check("a failure below us answers a fixed message and a log reference, never its cause", async () => {
+    const realRead = chain.readState;
+    chain.readState = async () => { throw new Error("bundler said: nonce too low at https://rpc.example/v1/SECRETKEY"); };
+    try {
+      const r = await call("POST", "/recovery/turnkey/requests", { email: "u_created@example.com" });
+      assert.equal(r.status, 503);
+      assert.equal(r.body.code, "UNAVAILABLE");
+      assert.match(r.body.ref, /^[0-9a-f]{8}$/);
+      assert.doesNotMatch(JSON.stringify(r.body), /nonce|bundler|SECRETKEY|rpc\.example/);
+    } finally {
+      chain.readState = realRead;
     }
   });
 

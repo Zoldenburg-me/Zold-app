@@ -88,6 +88,12 @@ export const ownerWasAlerted = (r: RecoveryRequest): boolean => mailAvailable() 
 
 /** One signature in flight per request: two would both pass the reads. */
 const signing = new Set<string>();
+/** Is a signature for this request being relayed now? The owner's cancel
+ *  waits for it rather than be overwritten by the relay's result. */
+export const isBeingSigned = (id: string): boolean => signing.has(id);
+/** One finalise in flight per request: the route, the status read and the
+ *  sweep would each relay finalizeRecovery and bind the passkey. */
+const finishing = new Set<string>();
 
 const sameSet = (a: string[], b: string[]) =>
   a.length === b.length && a.every((x) => b.some((y) => y.toLowerCase() === x.toLowerCase()));
@@ -217,7 +223,7 @@ async function relayApproved(request: RecoveryRequest, sig: { r: string; s: stri
 export async function syncTurnkeyFromChain(request: RecoveryRequest, chain: TurnkeyRecoveryChain, now = new Date()): Promise<RecoveryRequest> {
   const t = request.turnkey;
   if (!t?.newOwners?.length || !["REVIEW_PENDING", "GRACE_PERIOD"].includes(request.status)) return request;
-  const { user, plan } = planOf(request);
+  const { plan } = planOf(request);
   if (request.status === "REVIEW_PENDING") {
     const state = await chain.readState(plan);
     if (state.pending && sameSet(state.pending.newOwners, t.newOwners)) {
@@ -227,12 +233,17 @@ export async function syncTurnkeyFromChain(request: RecoveryRequest, chain: Turn
       });
     }
   }
-  if (sameSet(await chain.safeOwners(request.safeAddress), t.newOwners)) return bindAndFinish(request, user, now, undefined);
+  if (sameSet(await chain.safeOwners(request.safeAddress), t.newOwners)) return bindAndFinish(request, now, undefined);
   return request;
 }
 
-function bindAndFinish(request: RecoveryRequest, user: User, now: Date, txHash: `0x${string}` | undefined): RecoveryRequest {
-  const t = request.turnkey!;
+function bindAndFinish(request: RecoveryRequest, now: Date, txHash: `0x${string}` | undefined): RecoveryRequest {
+  // Read both again: an await sat between the caller's read and here.
+  const current = store.findRecoveryRequest(request.id) ?? request;
+  if (current.status === "FINALIZED") return current;
+  const user = store.findUser(request.userId);
+  if (!user?.passkeySafe) throw new TurnkeyGuardianError("the account behind this recovery no longer exists", 410, "GONE");
+  const t = current.turnkey!;
   bindRecoveredPasskey(user, t.newPasskey!, now);
   console.log(`RECOVERY: ${request.id} finalized — ${user.id}'s Safe ${request.safeAddress} now owned by the new passkey`);
   return store.updateRecoveryRequest(request.id, {
@@ -250,7 +261,16 @@ export async function finalizeTurnkeyRecovery(request: RecoveryRequest, chain: T
   if (t.finalizeAfter && now < new Date(t.finalizeAfter)) {
     throw new TurnkeyGuardianError(`the waiting period runs until ${t.finalizeAfter}`, 425, "GRACE_PERIOD");
   }
-  const { user } = planOf(request);
+  if (finishing.has(request.id)) throw new TurnkeyGuardianError("this recovery is being finished — check again in a minute", 409, "BUSY");
+  finishing.add(request.id);
+  try {
+    return await relayFinalize(request, t, chain, now);
+  } finally {
+    finishing.delete(request.id);
+  }
+}
+
+async function relayFinalize(request: RecoveryRequest, t: NonNullable<RecoveryRequest["turnkey"]>, chain: TurnkeyRecoveryChain, now: Date): Promise<RecoveryRequest> {
   let finalizeError: string | undefined;
   let txHash: `0x${string}` | undefined;
   try {
@@ -265,12 +285,12 @@ export async function finalizeTurnkeyRecovery(request: RecoveryRequest, chain: T
   } catch (err) {
     finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
   }
-  if (!sameSet(owners, t.newOwners)) {
+  if (!sameSet(owners, t.newOwners ?? [])) {
     return store.updateRecoveryRequest(request.id, {
       turnkey: { ...t, finalizeAttempts: (t.finalizeAttempts ?? 0) + 1, finalizeError: finalizeError ?? "the Safe's owners do not show the recovered set yet" },
     });
   }
-  return bindAndFinish(request, user, now, txHash);
+  return bindAndFinish(request, now, txHash);
 }
 
 /** Expire unanswered requests, pick up executions, finalise after the wait. */
@@ -281,11 +301,14 @@ export async function sweepTurnkeyRecoveries(now = new Date(), chain: TurnkeyRec
     // The store updates rows in place, so read the status before any write.
     const before = r.status;
     try {
-      if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status) && now >= new Date(r.expiresAt)) {
+      if (finishing.has(r.id) || signing.has(r.id)) continue;
+      // Ask the chain before expiring: a relay that landed but was never
+      // recorded must still reach its grace period.
+      let cur = r.status === "REVIEW_PENDING" ? await syncTurnkeyFromChain(r, chain, now) : r;
+      if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(cur.status) && now >= new Date(cur.expiresAt)) {
         store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
         continue;
       }
-      let cur = r.status === "REVIEW_PENDING" ? await syncTurnkeyFromChain(r, chain, now) : r;
       if (cur.status === "GRACE_PERIOD" && cur.turnkey?.finalizeAfter && now >= new Date(cur.turnkey.finalizeAfter)) {
         cur = await finalizeTurnkeyRecovery(cur, chain, now);
       }
