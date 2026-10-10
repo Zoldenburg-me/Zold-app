@@ -94,6 +94,7 @@ const scripts = [
   "income-invoices:test",
   "wallet-proof:test",
   "holdings:test",
+  "org-ceiling:test",
   "beleg:test",
   "lexware:csv:test",
   "exact-output:test",
