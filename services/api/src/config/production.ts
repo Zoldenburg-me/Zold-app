@@ -7,6 +7,7 @@
  */
 import { CHAIN_ID, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, LOOKS_LOCAL, PUBLIC_URL, REAL_MONEY_CHAINS } from "./env.js";
 import { MONERIUM, moneriumOAuthEnabled, moneriumSandboxEnabled } from "./monerium.js";
+import { dataKeyProblems } from "./data-keys.js";
 import { KYC, RECOVERY, RECOVERY_MODULE_3_MINUTES, SECURITY } from "./security.js";
 import { anchorModeEnabled, BRIDGE, isMoneyGramAnchorDomain, STELLAR, STELLAR_TESTNET_PASSPHRASE } from "./cash-rail.js";
 
@@ -72,9 +73,6 @@ function checkMainnet(fail: Fail) {
   if (!/^(ethereum|gnosis|polygon|base|arbitrum|linea)$/.test(MONERIUM.chain)) {
     fail(`MONERIUM_CHAIN=${MONERIUM.chain} is not a Monerium production chain name`);
   }
-  if (!moneriumOAuthEnabled() && !MONERIUM.tokenEncryptionKey) {
-    fail("no way for a user to connect Monerium: set MONERIUM_OAUTH_CLIENT_ID (sign in with Monerium) and/or MONERIUM_TOKEN_ENCRYPTION_KEY (own API keys)");
-  }
   if (Number(process.env.LIFI_CHAIN_ID ?? CHAIN_ID) !== CHAIN_ID) fail("LIFI_CHAIN_ID must equal TRANSF_CHAIN_ID");
   if (process.env.ALLOW_PLAINTEXT_STORE !== "1") {
     fail("ALLOW_PLAINTEXT_STORE=1 is required to acknowledge the JSON file store is not production storage");
@@ -89,9 +87,6 @@ function checkMoneriumSecrets(fail: Fail) {
   if (moneriumSandboxEnabled() && !SECURITY.moneriumWebhookSecret) {
     fail("MONERIUM_WEBHOOK_SECRET is required in production when Monerium credentials are configured");
   }
-  if (moneriumOAuthEnabled() && !MONERIUM.tokenEncryptionKey) {
-    fail("MONERIUM_TOKEN_ENCRYPTION_KEY is required in production when Monerium OAuth is configured");
-  }
   if (moneriumSandboxEnabled() || moneriumOAuthEnabled() || PUBLIC_URL) {
     if (!process.env.MONERIUM_REDIRECT_URI && LOOKS_HOSTED) {
       fail("MONERIUM_REDIRECT_URI must be explicit for hosted production");
@@ -101,7 +96,18 @@ function checkMoneriumSecrets(fail: Fail) {
     }
   }
   if (MONERIUM.tokenEncryptionKey && MONERIUM.tokenEncryptionKey.length < 32) {
-    fail("MONERIUM_TOKEN_ENCRYPTION_KEY must be at least 32 characters");
+    fail("MONERIUM_TOKEN_ENCRYPTION_KEY (the v1 reader) must be at least 32 characters");
+  }
+}
+
+/** The v2 key ring is set, and it and the blind index key parse and differ.
+ *  Every stored credential (Monerium, Shopify, GetMyInvoices) is sealed under
+ *  the ring, so without it no user can connect Monerium at all. */
+function checkDataKeys(fail: Fail) {
+  const problems = dataKeyProblems();
+  for (const problem of problems) fail(problem);
+  if (!problems.length && !(process.env.DATA_ENCRYPTION_KEYS ?? "").trim()) {
+    fail("DATA_ENCRYPTION_KEYS is required in production: Monerium, Shopify and GetMyInvoices credentials are stored under it");
   }
 }
 
@@ -185,7 +191,7 @@ function assertProductionConfig() {
   if (!IS_PRODUCTION) return;
   const problems: string[] = [];
   const fail: Fail = (message) => problems.push(message);
-  for (const check of [checkRuntimeFlags, checkMainnet, checkMoneriumSecrets, checkBridge, checkSmartAccount, checkAnchor, checkHosted, checkPublicUrl]) {
+  for (const check of [checkRuntimeFlags, checkMainnet, checkMoneriumSecrets, checkDataKeys, checkBridge, checkSmartAccount, checkAnchor, checkHosted, checkPublicUrl]) {
     check(fail);
   }
   if (problems.length) {

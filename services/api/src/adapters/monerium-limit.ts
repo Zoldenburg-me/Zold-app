@@ -21,6 +21,7 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { MONERIUM } from "../config/monerium.js";
+import { moneriumRefusals } from "./monerium-refusals.js";
 
 /** Evenly spaced slots at `perSecond`: how long a call made at `now` waits. */
 export function slotScheduler(perSecond: number): (now: number) => number {
@@ -35,10 +36,15 @@ export function slotScheduler(perSecond: number): (now: number) => number {
 
 const waitFor = slotScheduler(MONERIUM.maxRequestsPerSecond);
 
-/** fetch: a GET once a slot under the limit is free, anything else at once. */
+/** fetch: a GET once a slot under the limit is free, anything else at once.
+ *  Every answer is also counted for the 401/403 burst warning. */
 export async function moneriumFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  if ((init.method ?? "GET").toUpperCase() !== "GET") return fetch(url, init);
-  const delay = waitFor(Date.now());
-  if (delay > 0) await sleep(delay, undefined, init.signal ? { signal: init.signal } : undefined);
-  return fetch(url, init);
+  const method = (init.method ?? "GET").toUpperCase();
+  if (method === "GET") {
+    const delay = waitFor(Date.now());
+    if (delay > 0) await sleep(delay, undefined, init.signal ? { signal: init.signal } : undefined);
+  }
+  const res = await fetch(url, init);
+  moneriumRefusals.record(res.status, method, url);
+  return res;
 }
