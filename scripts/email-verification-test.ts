@@ -6,6 +6,9 @@
  * do not exist and the old rule (any account with a passkey holds the email)
  * stands.
  *
+ * The code stays out of the subject (subjects show on lock screens and sit
+ * in provider logs), and a failed send logs no email address.
+ *
  * No chain. Run: npm run email:test
  */
 import "./_test-env.js";
@@ -19,6 +22,8 @@ import express from "express";
 // ---- a fake SMTP server: accepts everything, keeps each message ----------
 const inbox: string[] = [];
 let smtpDown = false;
+// Refuse the recipient the way real servers do, quoting the address back.
+let smtpRejectRcpt = false;
 const smtp = net.createServer((sock) => {
   if (smtpDown) return sock.end("421 down\r\n");
   let data = false;
@@ -43,6 +48,7 @@ const smtp = net.createServer((sock) => {
       const cmd = line.slice(0, 4).toUpperCase();
       if (cmd === "EHLO") sock.write("250-fake\r\n250 AUTH PLAIN LOGIN\r\n");
       else if (cmd === "AUTH") sock.write("235 ok\r\n");
+      else if (cmd === "RCPT" && smtpRejectRcpt) sock.write(`550 5.1.1 ${line.slice(line.indexOf("<"))}: Recipient address rejected\r\n`);
       else if (cmd === "DATA") { data = true; sock.write("354 go\r\n"); }
       else if (cmd === "QUIT") { sock.end("221 bye\r\n"); return; }
       else sock.write("250 ok\r\n");
@@ -111,6 +117,9 @@ await t("a code goes out by SMTP to the account's email, and only its hash is st
   assert.match(inbox[0], /To: Anna@Example.com/i);
   code = codeIn(inbox[0])!;
   assert.match(code, /^\d{6}$/);
+  const subject = /^Subject: (.*)$/im.exec(inbox[0])?.[1] ?? "";
+  assert.ok(subject, "the message has a subject");
+  assert.ok(!subject.includes(code), `the code is not in the subject: ${subject}`);
   const stored = JSON.stringify(store.findUser("anna"));
   assert.ok(!stored.includes(`"${code}"`), "the code itself is never stored");
   assert.ok(!JSON.stringify(publicUser(store.findUser("anna")!)).includes("emailCode"), "the hash is in no projection");
@@ -157,6 +166,24 @@ await t("a failed send stores nothing and says so", async () => {
   assert.equal(r.status, 502);
   assert.equal(r.body.code, "MAIL_UNAVAILABLE");
   assert.equal(store.findUser("anna")!.emailCode!.hash, before);
+});
+
+await t("a refused recipient is logged by error code, never by address", async () => {
+  back("anna", 61_000);
+  const logged: string[] = [];
+  const err = console.error;
+  console.error = (...a: unknown[]) => { logged.push(a.map(String).join(" ")); };
+  smtpRejectRcpt = true;
+  let r;
+  try { r = await post("/users/anna/email/code", "anna"); }
+  finally { smtpRejectRcpt = false; console.error = err; }
+  assert.equal(r.status, 502);
+  assert.equal(r.body.code, "MAIL_UNAVAILABLE");
+  const line = logged.join("\n");
+  assert.match(line, /email verification/, "the failure is logged");
+  assert.match(line, /550/, "with the server's code");
+  assert.ok(!/example\.com/i.test(line), `no address in the log: ${line}`);
+  assert.ok(!JSON.stringify(r.body).toLowerCase().includes("example.com"), "nor in the answer");
 });
 
 await t("the right code confirms the email, once", async () => {
