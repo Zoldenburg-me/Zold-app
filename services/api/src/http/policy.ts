@@ -193,7 +193,9 @@ function isAuthRoute(req: express.Request): boolean {
     (path.endsWith("/monerium/api-keys") && req.method === "POST") ||
     (path === "/users" && req.method === "POST") ||
     // A 6-digit code is a guessable credential; sending one spends mail.
-    /^\/users\/[^/]+\/email\/(code|verify)$/.test(path)
+    /^\/users\/[^/]+\/email\/(code|verify)$/.test(path) ||
+    // The 1 € enrolment code is a credential, and a check spends a Monerium call.
+    /^\/users\/[^/]+\/recovery\/zoldenburg\/enrolment(\/|$)/.test(path)
   );
 }
 

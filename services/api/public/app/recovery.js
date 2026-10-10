@@ -96,7 +96,7 @@ async function renderZoldenburgSection(el) {
   const grace = graceText(z.gracePeriodSeconds);
   const pending = z.onChain?.pendingRecovery;
   const asked = (z.requests || []).filter((r) => r.status === "PASSKEY_PENDING" || r.status === "REVIEW_PENDING");
-  const status = z.active ? "Active" : z.choice?.choice === "declined" ? `Not set up — declined ${new Date(z.choice.at).toLocaleDateString()}` : "Not set up";
+  const status = z.active ? (z.enrolment?.armed ? "Active" : "Added — not finished") : z.choice?.choice === "declined" ? `Not set up — declined ${new Date(z.choice.at).toLocaleDateString()}` : "Not set up";
   el.innerHTML = `
     ${pending ? `<div class="rec-warn" role="alert">
         <div class="rec-warn-title"><span aria-hidden="true">⚠</span> A recovery of this account is under way</div>
@@ -115,6 +115,7 @@ async function renderZoldenburgSection(el) {
       ${z.active && z.guardianAddress ? row("Guardian", `Zoldenburg · ${z.guardianAddress.slice(0, 10)}…`) : ""}
     </div>
     ${z.active ? `
+      ${zoldEnrolHtml(z.enrolment)}
       <div class="m-lede" style="font-size:13px;margin-top:12px">If you lose your passkey, choose "Recover your account" on the sign-in page, create a new passkey there and contact Zoldenburg support with the reference it shows. We check you against the identity Monerium verified before signing. The recovery then waits ${esc(grace)}, and this passkey can cancel it until then.</div>
       <button class="m-link" id="m-rz-remove" style="margin-top:12px">Remove Zoldenburg as guardian</button>`
     : `
@@ -130,6 +131,7 @@ async function renderZoldenburgSection(el) {
   };
   const cancel = $("m-rc-cancel");
   if (cancel) cancel.onclick = recoveryCancelOnChain;
+  zoldEnrolBind();
   el.querySelectorAll("[data-rz-cancel]").forEach((b) => {
     b.onclick = async () => {
       clearErr("m-rc-err");
@@ -138,6 +140,80 @@ async function renderZoldenburgSection(el) {
       catch (e) { showErr("m-rc-err", e); b.disabled = false; }
     };
   });
+}
+
+/* ---------- Finishing Zoldenburg recovery: 1 € from the user's bank ----------
+   Until a payment with the code arrives from an account in the user's name,
+   Zoldenburg may not sign a recovery for them (the guardian is on chain but
+   not armed). The code is shown once, when issued, and kept only in this
+   variable: the API stores its hash. */
+let zoldEnrolIssued = null; // { userId, code, memo, payTo, codeIssuedAt } from the last POST
+
+function zoldEnrolHtml(e) {
+  if (!e) return "";
+  const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
+  const date = (iso) => new Date(iso).toLocaleDateString();
+  if (!e.available) {
+    return `<div class="m-lede" style="font-size:13px;margin-top:12px">Zoldenburg cannot sign a recovery for this account yet: the last step, 1 € from your own bank, is not open on this server.</div>`;
+  }
+  const check = e.lastCheck ? `<div class="m-lede" style="font-size:13px;margin-top:8px" role="status">${esc(e.lastCheck.reason)}</div>` : "";
+  // Only the code this account holds open now: a code issued since on
+  // another device, or one for another sign-in in this tab, is dead.
+  const issued = zoldEnrolIssued && zoldEnrolIssued.userId === user.id && zoldEnrolIssued.codeIssuedAt === e.codeIssuedAt ? zoldEnrolIssued : null;
+  const waiting = e.codeIssuedAt ? `
+    ${issued ? `<div class="m-rows" style="margin-top:12px">
+        ${row("To", issued.payTo.iban || "")}
+        ${row("Name", issued.payTo.name || "")}
+        ${row("Amount", `at least ${e.minimumEur} €`)}
+        <div class="m-row"><span class="k">Reference</span><span class="v" translate="no"><b>${esc(issued.memo)}</b></span></div>
+      </div>
+      <button class="m-link" id="m-rz-en-copy" style="margin-top:8px">Copy reference</button>`
+    : `<div class="m-lede" style="font-size:13px;margin-top:8px">Code issued ${esc(date(e.codeIssuedAt))}, valid until ${esc(date(e.codeExpiresAt))}. If you have sent it, we pick it up on our own. Lost the code? Get a new one.</div>`}
+    ${check}
+    <button class="m-cta" id="m-rz-en-check" style="margin-top:12px">I sent it — check now</button>
+    <button class="m-link" id="m-rz-en-new" style="margin-top:8px">Get a new code</button>` : "";
+  if (e.armed) {
+    return `<div class="m-rows" style="margin-top:12px">${row("Your bank account", `ending ${e.bankAccountLast4} · ${date(e.enrolledAt)}`)}</div>
+      <div class="m-lede" style="font-size:13px;margin-top:8px">A recovery needs 1 € again from this same account.</div>
+      ${waiting || `<button class="m-link" id="m-rz-en-new" style="margin-top:8px">Changed banks? Use another account</button>`}`;
+  }
+  return `<div class="rec-warn" style="margin-top:16px">
+      <div class="rec-warn-title"><span aria-hidden="true">⚠</span> Finish Zoldenburg recovery: send 1 € from your bank</div>
+      <p>Until then Zoldenburg cannot sign a recovery for you. Send at least ${esc(e.minimumEur)} € from a bank account in your own name to your Zold IBAN, with your code as the reference. The money stays in your account.</p>
+      <p>If you ever need a recovery, you send 1 € again, from this same bank account. We keep a fingerprint of the account and its last 4 characters, not the IBAN.</p>
+    </div>
+    ${waiting || `<button class="m-cta" id="m-rz-en-new" style="margin-top:12px">Get my code</button>`}`;
+}
+
+function zoldEnrolBind() {
+  const fresh = $("m-rz-en-new");
+  if (fresh) fresh.onclick = async () => {
+    clearErr("m-rc-err");
+    fresh.disabled = true;
+    try {
+      const stepUp = await passkeyStepUp("recovery.enrolment");
+      zoldEnrolIssued = { ...(await api(`/api/users/${user.id}/recovery/zoldenburg/enrolment`, { stepUp })), userId: user.id };
+      mobileNav("recovery");
+    } catch (e) { showErr("m-rc-err", e); fresh.disabled = false; }
+  };
+  const copy = $("m-rz-en-copy");
+  if (copy) copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(zoldEnrolIssued.memo); copy.textContent = "Copied"; }
+    catch { copy.textContent = "Copy failed: select it above"; }
+  };
+  const check = $("m-rz-en-check");
+  if (check) check.onclick = async () => {
+    clearErr("m-rc-err");
+    check.disabled = true;
+    try {
+      const v = await api(`/api/users/${user.id}/recovery/zoldenburg/enrolment/check`, {});
+      if (v.armed && !v.codeIssuedAt) {
+        zoldEnrolIssued = null;
+        renderUser(await api(`/api/users/${user.id}`));
+      }
+      mobileNav("recovery");
+    } catch (e) { showErr("m-rc-err", e); check.disabled = false; }
+  };
 }
 
 /* One passkey-signed guardian change: prepare, sign, submit, re-render. */

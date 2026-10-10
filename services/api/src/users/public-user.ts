@@ -7,6 +7,7 @@
 import { capabilitiesFor } from "../domain/segments.js";
 import { connectionMethod, publicApiKeys } from "../adapters/monerium-connection.js";
 import { maskTarget } from "../recovery/candide-guardian.js";
+import { zoldenburgArmed } from "../recovery/enrolment-key.js";
 import { issueSession } from "../http/sessions.js";
 import { reportedBic } from "../sepa.js";
 import type { User } from "../store.js";
@@ -102,6 +103,9 @@ export const publicUser = (u: User) => ({
   // Whether Monerium reported this same name for the account. The name is
   // locked at approval either way; only this says it was checked.
   nameVerified: nameVerifiedByMonerium(u),
+  // Whether the 1 € enrolment armed Zoldenburg as guardian. The enrolled
+  // account itself (HMAC, last 4) is only on the recovery screen.
+  zoldenburgArmed: zoldenburgArmed(u),
   // The BIC Monerium listed for this IBAN, and only for this IBAN: one read
   // before a move belongs to the old IBAN and is not sent.
   ...(reportedBic(u) ? { bic: reportedBic(u) } : {}),

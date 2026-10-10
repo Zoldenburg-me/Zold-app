@@ -55,7 +55,18 @@ export const RECOVERY = {
   siweUri: process.env.RECOVERY_SIWE_URI ?? "",
   /** How often finalizable recoveries are swept. */
   sweepMs: Math.max(10_000, Number(process.env.RECOVERY_SWEEP_MS ?? 60_000)),
+  /**
+   * Keys the HMAC of the bank account a user enrolled for Zoldenburg recovery
+   * (recovery/zoldenburg-enrolment.ts), so the stored value names no IBAN.
+   * Unset: nobody can enrol, so the operator can sign for nobody. Changing it
+   * disarms every enrolment until the user sends 1 € again.
+   */
+  ibanHmacKey: process.env.RECOVERY_IBAN_HMAC_KEY ?? "",
 };
+
+if (RECOVERY.ibanHmacKey && RECOVERY.ibanHmacKey.length < 32) {
+  throw new Error("RECOVERY_IBAN_HMAC_KEY is too short (need >= 32 chars) — generate one with `openssl rand -hex 32`");
+}
 
 /**
  * The 3-minute SocialRecoveryModule is a test fixture, so a recovery can run
