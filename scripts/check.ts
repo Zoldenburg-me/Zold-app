@@ -12,6 +12,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
+import { urlForLog } from "../services/api/src/http/log-safe.js";
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const scripts = [
@@ -54,6 +55,7 @@ const scripts = [
   "lifi:test",
   "forwarder:test",
   "email:test",
+  "recovery-alerts:test",
   "best:test",
   "webhook:test",
   "checkout-service:test",
@@ -135,7 +137,7 @@ const env = {
   TRANSF_RATES_STUB_PORT: ratesStubPort,
 };
 
-console.log(`check ports: api=${env.TRANSF_API_PORT} rpc=${env.TRANSF_RPC_URL} stub=${env.TRANSF_STUB_PORT} rates=${env.TRANSF_RATES_STUB_PORT}`);
+console.log(`check ports: api=${env.TRANSF_API_PORT} rpc=${urlForLog(env.TRANSF_RPC_URL)} stub=${env.TRANSF_STUB_PORT} rates=${env.TRANSF_RATES_STUB_PORT}`);
 
 for (const script of scripts) {
   const r = spawnSync(npm, ["run", script], { stdio: "inherit", env });

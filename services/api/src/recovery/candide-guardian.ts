@@ -30,6 +30,7 @@ import { RECOVERY } from "../config.js";
 import { CANDIDE, recoveryGracePeriodSeconds } from "../wallet/candide.js";
 import { PARTNER_TIMEOUT_MS, partnerTimeout } from "../http.js";
 import { emailLooksValid } from "../domain/email.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export type RecoveryChannel = "email" | "sms";
 
@@ -93,9 +94,9 @@ function translate(err: unknown, fallback: string): never {
               : code === "HTTP_TOO_MANY_REQUESTS"
                 ? 429
                 : 503;
-    throw new CandideGuardianError(`${fallback}: ${err.message}`.slice(0, 300), status, code);
+    throw new CandideGuardianError(`${fallback}: ${redactedMessage(err)}`.slice(0, 300), status, code);
   }
-  const message = String((err as any)?.message ?? err);
+  const message = redactedMessage(err);
   throw new CandideGuardianError(`${fallback}: ${message}`.slice(0, 300), 503, "UNKNOWN_ERROR");
 }
 

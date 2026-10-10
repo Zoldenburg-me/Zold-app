@@ -36,6 +36,7 @@ import {
   MoneriumClient,
   refreshAuthorizationToken,
 } from "./monerium-client.js";
+import { errorText } from "../http/log-cause.js";
 
 export type MoneriumConnectionMethod = "oauth" | "api_keys";
 
@@ -136,7 +137,7 @@ export async function verifyApiKeys(clientId: string, clientSecret: string): Pro
   try {
     await client.bearerToken();
   } catch (err: any) {
-    const msg = String(err?.message ?? err);
+    const msg = errorText(err);
     const m = msg.match(/Monerium auth failed \((\d{3})\)/);
     const status = m ? Number(m[1]) : 0;
     if (status === 400 || status === 401 || status === 403) {

@@ -11,6 +11,7 @@
  *      read from the chain (see fx.ts), since we cannot trade at a feed rate.
  */
 import { RATES } from "./config.js";
+import { redactedMessage } from "./http/log-cause.js";
 
 export interface MidRates {
   /** Units of the quote currency per 1 EUR. */
@@ -132,7 +133,7 @@ export async function midRates(): Promise<MidRates> {
     return await inFlight;
   } catch (e: any) {
     // Deliberately no stale fallback — see the note at the top of this file.
-    throw new RateUnavailableError(e?.message ?? String(e));
+    throw new RateUnavailableError(redactedMessage(e));
   }
 }
 
@@ -215,7 +216,7 @@ export async function referenceRate(code: string, day?: string): Promise<Referen
     if (!res.ok) throw new Error(`${url.host} responded ${res.status}`);
     body = await res.json();
   } catch (e: any) {
-    throw new RateUnavailableError(`ECB reference rate: ${e?.message ?? e}`);
+    throw new RateUnavailableError(`ECB reference rate: ${redactedMessage(e)}`);
   }
   const v = body?.rates?.[upper];
   if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) {

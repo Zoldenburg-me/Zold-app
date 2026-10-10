@@ -64,6 +64,7 @@ import {
   MoneriumApiError,
   moneriumBearerRequest,
 } from "../adapters/monerium-client.js";
+import { describeCause, redactedMessage, errorText } from "../http/log-cause.js";
 
 const sandbox = moneriumSandboxEnabled();
 const CONNECT_COOKIE = "zold_monerium_connect";
@@ -246,12 +247,12 @@ async function linkSafeAddress(
     return undefined;
   } catch (err: any) {
     if (alreadyDone(err)) return undefined;
-    console.error(`monerium: address linking refused for ${user.id}: ${err?.message ?? err}`);
+    console.error(`monerium: address linking refused for ${user.id}: ${describeCause(err)}`);
     // "Cannot link ... contact support" is Monerium's permanent verdict on
     // a burned (once-unlinked) address. A Safe's address cannot change, so
     // record it: the client stops offering an activation that can only
     // fail, and the account page says why instead of erroring forever.
-    if (/cannot link/i.test(String(err?.message ?? ""))) {
+    if (/cannot link/i.test(errorText(err))) {
       store.updateUser(user.id, {
         funding: {
           ...(user.funding ?? { mode: "sandbox" as const }),
@@ -262,7 +263,7 @@ async function linkSafeAddress(
         } as User["funding"],
       });
     }
-    return `Monerium refused the address linking: ${err?.message ?? err}`;
+    return `Monerium refused the address linking: ${redactedMessage(err)}`;
   }
 }
 
@@ -439,7 +440,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         );
         snapshot = await readMoneriumAccountSnapshot(user, token.access_token);
       } catch (err: any) {
-        console.error(`monerium oauth: callback for ${user.id} failed: ${err?.message ?? err}`);
+        console.error(`monerium oauth: callback for ${user.id} failed: ${describeCause(err)}`);
         store.updateUser(user.id, {
           moneriumConnect: undefined,
           moneriumRefusal: {
@@ -651,7 +652,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       try {
         ({ user, signature } = await passkeySafeLinkSignature(safeUser, pending.challenge, req.body));
       } catch (err: any) {
-        return res.status(401).json({ error: String(err?.message ?? err) });
+        return res.status(401).json({ error: redactedMessage(err) });
       }
       // The address is linked under the ONE profile this login was connected
       // with (pickProfileForSignup: corporate for a company signup). Without a
@@ -710,8 +711,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         if (profileAlreadyHasIban(err)) {
           profileHasIban = true;
         } else if (!alreadyDone(err)) {
-          console.error(`monerium activate: IBAN request refused for ${user.id}: ${err?.message ?? err}`);
-          return res.status(400).json({ error: `Monerium refused the IBAN request: ${err?.message ?? err}` });
+          console.error(`monerium activate: IBAN request refused for ${user.id}: ${describeCause(err)}`);
+          return res.status(400).json({ error: `Monerium refused the IBAN request: ${redactedMessage(err)}` });
         }
       }
       const snapshot = await readMoneriumAccountSnapshot(user, accessToken);
@@ -901,7 +902,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       try {
         ({ user, signature } = await passkeySafeLinkSignature(safeUser, pending.challenge, req.body));
       } catch (err: any) {
-        return res.status(401).json({ error: String(err?.message ?? err) });
+        return res.status(401).json({ error: redactedMessage(err) });
       }
 
       // Where the IBAN is and which profile holds it, read on the user's own
@@ -969,8 +970,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
             chain: MONERIUM.chain,
           });
         } catch (err: any) {
-          console.error(`monerium move-iban: PATCH refused for ${user.id}: ${err?.message ?? err}`);
-          return res.status(400).json({ error: `Monerium refused to move the IBAN: ${err?.message ?? err}` });
+          console.error(`monerium move-iban: PATCH refused for ${user.id}: ${describeCause(err)}`);
+          return res.status(400).json({ error: `Monerium refused to move the IBAN: ${redactedMessage(err)}` });
         }
       }
 
@@ -1068,7 +1069,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       try {
         input = validateApiKeyInput(req.body);
       } catch (err: any) {
-        return res.status(400).json({ error: err?.message ?? "invalid credentials" });
+        return res.status(400).json({ error: err ? redactedMessage(err) : "invalid credentials" });
       }
       const replacing = carriesMoneriumIdentity(user);
       if (!(await approvesMoneriumChange(user, req.body, res))) return;
@@ -1080,7 +1081,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           store.audit(auditEntry("partner.call_refused", { partner: "monerium", capability: "api_keys", status: err.status }, user.id));
           return res.status(400).json({ error: err.message });
         }
-        return res.status(503).json({ error: `Monerium could not be reached to verify the keys: ${String(err?.message ?? err).slice(0, 200)}` });
+        return res.status(503).json({ error: `Monerium could not be reached to verify the keys: ${redactedMessage(err).slice(0, 200)}` });
       }
 
       // The same rule as the OAuth callback: the profile of this login's

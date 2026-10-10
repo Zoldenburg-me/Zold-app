@@ -1,3 +1,5 @@
+import { errorText } from "./http/log-cause.js";
+
 /**
  * RPCs cap eth_getLogs, each in its own words: by block span (sepolia.base.org
  * answers "eth_getLogs is limited to a 1,000 range") or by result count. A
@@ -7,7 +9,7 @@
 const LIMIT_RE = /more than \d+ results|query returned more|limit exceeded|limited to (a )?[\d,]+ (block )?range|block range|range (is )?too (large|wide)|too many (results|logs)|exceed/i;
 
 export function isLogRangeRefusal(e: unknown): boolean {
-  return LIMIT_RE.test(String((e as any)?.details ?? (e as any)?.message ?? e));
+  return LIMIT_RE.test(errorText(e));
 }
 
 /** A refusal that names a result COUNT, as opposed to a range, or a rate
@@ -16,7 +18,7 @@ export function isLogRangeRefusal(e: unknown): boolean {
 const RESULT_CAP_RE = /more than \d+ results|query returned more|too many (results|logs)/i;
 
 export function isLogResultCapRefusal(e: unknown): boolean {
-  return RESULT_CAP_RE.test(String((e as any)?.details ?? (e as any)?.message ?? e));
+  return RESULT_CAP_RE.test(errorText(e));
 }
 
 /** Read the largest window from `fromBlock` (up to `maxSpan` blocks, never

@@ -30,6 +30,7 @@ import {
   defaultTokens,
   type VenueTokens,
   } from "./contract.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export class LifiLiquidityProvider implements LiquidityProvider {
   private indicative: { at: number; rate: number; raw: bigint } | null = null;
@@ -61,7 +62,7 @@ export class LifiLiquidityProvider implements LiquidityProvider {
     try {
       res = await fetch(url, { headers, signal: AbortSignal.timeout(LIQUIDITY.LIFI_TIMEOUT_MS) });
     } catch (e: any) {
-      throw new Error(`LI.FI unreachable (${e?.message ?? e}) — refusing to quote rather than pricing off our own book`);
+      throw new Error(`LI.FI unreachable (${redactedMessage(e)}) — refusing to quote rather than pricing off our own book`);
     }
     const body: any = await res.json().catch(() => ({}));
     if (!res.ok) {
