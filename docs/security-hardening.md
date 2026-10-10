@@ -91,15 +91,34 @@ Still open:
 
 ### 1.1 Inventory
 
-Every secret gets a row in `.private/secrets-inventory.md` (encrypted, names
-and metadata only, never values): owner, tier, where it lives, who can read
-it, how to rotate it, and when it was last rotated.
+`.private/secrets-inventory.md` has a row for every secret name the code
+reads (`process.env`, including the names `config/keys.ts` and
+`config/wallet-sync.ts` build), plus the GitHub token and the Akash Console
+key. Each row gives the tier, what reads it, whether it is still read, how to
+rotate it, owner, where it lives and when it was last rotated. It holds names
+and metadata only, never values.
 
 | Tier | What | Examples | Target home |
 |------|------|----------|-------------|
-| 1. Moves money on-chain | private keys | `DEPLOY_*_KEY` / `ORCHESTRATOR_KEY` / `RAMP_KEY`, `FAUCET_KEY`, `CANDIDE_COSIGNER_KEY`, `STELLAR_TREASURY_SECRET`, `CIRCLE_ENTITY_SECRET` | Stored in the self-hosted Bitwarden (1.4). Keys that only an operator uses, such as deployer and contract admin, live on a hardware wallet and are never online. Keys the server signs with automatically (orchestrator, ramp, faucet) still have to be in process memory to sign, so on mainnet they hold small balances and narrow contract roles. A signer that never releases the key (an HSM) is the later step. |
-| 2. Opens a partner or our identity | API secrets, signing secrets | `MONERIUM_CLIENT_SECRET`, `MONERIUM_WEBHOOK_SECRET`, `CHECKOUT_WEBHOOK_SECRET`, `SHOPIFY_API_SECRET`, `DOCUMENT_SIGNING_KEY`, `MG_CLIENT_DOMAIN_SIGNING_SECRET`, `KYC_OPERATOR_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `SMTP_PASS`, `BRIDGE/LIFI/BEBOP/CANDIDE/CIRCLE/GETMYINVOICES` keys | Bitwarden, fetched at start and never written to the host's disk. Rotate every 90 days and on any staff or host change. |
+| 1. Moves money on-chain | private keys | `DEPLOY_*_KEY` / `ORCHESTRATOR_KEY` / `RAMP_KEY`, `FAUCET_KEY`, `STELLAR_TREASURY_SECRET`, `ENS_GATEWAY_KEY` (its signatures say which address a name resolves to), `ENS_DEPLOYER_KEY` | Stored in the self-hosted Bitwarden (1.4). Keys that only an operator uses, such as deployer and contract admin, live on a hardware wallet and are never online. Keys the server signs with automatically (orchestrator, ramp, faucet) still have to be in process memory to sign, so on mainnet they hold small balances and narrow contract roles. A signer that never releases the key (an HSM) is the later step. |
+| 2. Opens a partner or our identity | API secrets, signing secrets | `MONERIUM_CLIENT_SECRET`, `MONERIUM_WEBHOOK_SECRET`, `CHECKOUT_WEBHOOK_SECRET`, `SHOPIFY_API_SECRET`, `DOCUMENT_SIGNING_KEY`, `MG_CLIENT_DOMAIN_SIGNING_SECRET`, `KYC_OPERATOR_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `SMTP_PASS`, `BRIDGE/LIFI/BEBOP/CANDIDE/GETMYINVOICES` keys, RPC and bundler URLs that carry a key in the path | Bitwarden, fetched at start and never written to the host's disk. Rotate every 90 days and on any staff or host change. |
 | 3. Decrypts stored data | data-encryption roots, blind index key | `DATA_ENCRYPTION_KEYS`, `BLIND_INDEX_KEY`, `MONERIUM_TOKEN_ENCRYPTION_KEY` (v1) | Bitwarden; the roots derive the per-purpose data keys (1.2). |
+
+Still open:
+- `CANDIDE_COSIGNER_KEY` and `CIRCLE_ENTITY_SECRET` are read by nothing (the
+  server only warns that the first is set); unset them wherever they are set.
+  `GETMYINVOICES_API_KEY` is read only by `scripts/getmyinvoices-smoke.ts`.
+- `DEPLOYER_KEY` is both the contracts' deployer and admin, and the server's
+  hot gas key: it pays for recovery relays (`recovery/recovered-passkey.ts`)
+  and the sandbox Monerium mirror. Before mainnet it splits into a gas-only
+  relay key and an admin key on a hardware wallet.
+- Two boot errors print the full `TRANSF_RPC_URL` (`chain.ts`,
+  `config/keys.ts`), and `failAndCompensate` (`orchestrator.ts`) and the
+  crypto-in refusal (`adapters/crypto-deposits.ts`) log and store a raw error
+  message. A keyed RPC or bundler URL can reach the log through any of them;
+  `urlForLog` and `describeCause` exist for this.
+- Most rows have no last-rotated date.
+- Whether the leases hold names the code does not read is unchecked.
 
 ### 1.2 Encryption at rest, version 2
 
