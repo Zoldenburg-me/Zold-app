@@ -250,8 +250,9 @@ function isProcessed(o: MoneriumOrder): boolean {
 
 /**
  * What happened to a delivery. The distinction that matters is `unavailable`:
- * it means we could not reach Monerium, not that the order is bad, so the
- * caller must leave the delivery un-consumed and let the sender retry.
+ * we could not reach Monerium, or another caller is recording the order right
+ * now — either way the order is not settled, so the caller must leave the
+ * delivery un-consumed and let the sender retry.
  */
 export type MirrorOutcome = "recorded" | "duplicate" | "ignored" | "unavailable";
 
@@ -261,6 +262,11 @@ export type MirrorOutcome = "recorded" | "duplicate" | "ignored" | "unavailable"
  * poller and a webhook — or two webhook deliveries for one order — could both
  * pass the check and both record it. The claim is taken in the same
  * synchronous step as the check, before the first await.
+ *
+ * A claimed order is not yet recorded, so a second caller gets `unavailable`,
+ * not `duplicate`: the claim holder can still fail, and a webhook delivery
+ * answered `duplicate` would be spent. The claim lives in this process, which
+ * is enough while the store is one process's file.
  */
 const recording = new Set<string>();
 
@@ -270,16 +276,17 @@ const recording = new Set<string>();
  *
  * The caller must have fetched `order` from Monerium — never pass in an
  * object built from a request body. Amount and address are taken from the
- * order; the processed check plus the `recording` claim make a repeat, or a
- * concurrent second caller, a no-op.
+ * order. A repeat is `duplicate`; a concurrent second caller is
+ * `unavailable` and records nothing.
  */
-async function mirrorOrder(order: MoneriumOrder): Promise<Exclude<MirrorOutcome, "unavailable">> {
+async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
   if (order.kind !== "issue" || !isProcessed(order)) return "ignored";
   // Monerium issues several currencies and links one address on six chains;
   // only an EURe issue on OUR chain is a euro deposit to this account.
   if (order.chain !== MONERIUM.chain) return "ignored";
   if (String(order.currency ?? "eur").toLowerCase() !== "eur") return "ignored";
-  if (store.isOrderProcessed(order.id) || recording.has(order.id)) return "duplicate";
+  if (store.isOrderProcessed(order.id)) return "duplicate";
+  if (recording.has(order.id)) return "unavailable";
   const user = store.findUserByAddress(order.address);
   if (!user) return "ignored";
   const amount = Number(order.amount);
@@ -288,9 +295,17 @@ async function mirrorOrder(order: MoneriumOrder): Promise<Exclude<MirrorOutcome,
   try {
     // Monerium minted the EURe into the user's Safe on the app chain; there is
     // nothing to move and nothing to mint — the Safe balance IS the account.
-    const { moneriumEure } = await import("./monerium-tokens.js");
+    const { moneriumEureOrUnavailable, MoneriumTokensUnavailable } = await import("./monerium-tokens.js");
     const { CHAIN_ID } = await import("../config.js");
-    if (!(await moneriumEure(MONERIUM.baseUrl, CHAIN_ID))) {
+    let eure;
+    try {
+      eure = await moneriumEureOrUnavailable(MONERIUM.baseUrl, CHAIN_ID);
+    } catch (err: any) {
+      if (!(err instanceof MoneriumTokensUnavailable)) throw err;
+      console.warn(`monerium: could not read Monerium's tokens for order ${order.id}, will retry: ${err.message}`);
+      return "unavailable";
+    }
+    if (!eure) {
       if (HARNESS.enabled) {
         // Test fixture, hardhat only: the harnesses' stub Monerium reports an
         // order and the local MockToken stands in for the mint. Unreachable on
@@ -331,6 +346,7 @@ async function mintLocalTestEure(to: `0x${string}`, amountEur: number, ref: stri
  */
 export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
   if (store.isOrderProcessed(orderId)) return "duplicate";
+  if (recording.has(orderId)) return "unavailable";
   let order: MoneriumOrder;
   try {
     order = await getClient().getOrder(orderId);

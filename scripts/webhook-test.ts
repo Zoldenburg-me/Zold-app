@@ -14,7 +14,9 @@
  *   4. replaying it credits nothing further
  *   5. with MONERIUM_WEBHOOK_SECRET set, Monerium's documented
  *      webhook-id/timestamp/signature scheme is enforced
- *   6. two deliveries for one order that arrive together credit it once
+ *   6. an order another caller is recording, or a token lookup Monerium
+ *      cannot answer, asks to be retried rather than spending the delivery
+ *   7. the poller and a delivery for the same order credit it once
  *
  * Run: npm run webhook:test
  */
@@ -47,13 +49,29 @@ const orders = new Map<string, any>();
 /** Order ids the stub answers with 503 — Monerium briefly unreachable, as
  *  distinct from a 404 that says the order genuinely does not exist. */
 const unavailable = new Set<string>();
+/** While true, /tokens answers 503: Monerium unreachable for the token list. */
+let tokensDown = false;
+/** Order ids the poller's list shows. Empty except where a test arms it. */
+const listed = new Set<string>();
+let listServed = false;
 /**
- * While set, /tokens answers only once GET /orders/<orderId> has been read
- * twice. mirrorOrder asks /tokens between its processed check and its mark,
- * so this holds the first caller inside that window until a second caller has
- * read the same order: the interleaving that once credited an order twice.
+ * While set, /tokens is answered only on `release()`. mirrorOrder asks /tokens
+ * between its processed check and its mark, so this parks the first caller
+ * inside that window while a test sends the second: the interleaving that
+ * would credit an order twice without the claim.
  */
-let hold: { orderId: string; reads: number; release: () => void; released: Promise<void> } | null = null;
+type Hold = { tokensHits: number; release: () => void; released: Promise<void> };
+let hold: Hold | null = null;
+function armHold(): Hold {
+  let release = () => {};
+  const released = new Promise<void>((r) => (release = r));
+  hold = { tokensHits: 0, release, released };
+  return hold;
+}
+function disarmHold() {
+  hold?.release();
+  hold = null;
+}
 const stub = createServer((req, res) => {
   const send = (code: number, body: any) => {
     res.writeHead(code, { "content-type": "application/json" });
@@ -68,21 +86,25 @@ const stub = createServer((req, res) => {
   const one = url.match(/^\/orders\/([^?]+)/);
   if (one) {
     const wanted = decodeURIComponent(one[1]);
-    if (hold && wanted === hold.orderId && ++hold.reads >= 2) hold.release();
     if (unavailable.has(wanted)) return send(503, { error: "service unavailable" });
     const o = orders.get(wanted);
     return o ? send(200, o) : send(404, { error: "no such order" });
   }
   if (url.startsWith("/tokens")) {
-    const answer = () => send(404, { error: "no EURe on this chain" });
-    return void (hold ? hold.released.then(answer) : answer());
+    const answer = () =>
+      tokensDown ? send(503, { error: "service unavailable" }) : send(404, { error: "no EURe on this chain" });
+    if (!hold) return answer();
+    hold.tokensHits++;
+    return void hold.released.then(answer);
   }
-  // The list is the poller's view, and it is kept empty. The poller ticks
-  // once at startup whatever MONERIUM_POLL_MS says, so a listed order could
-  // be recorded by that tick instead of by the delivery under test, and the
-  // delivery would then rightly answer `duplicate`. Every order here reaches
-  // the API by webhook only.
-  if (url.startsWith("/orders")) return send(200, { orders: [] });
+  // The list is the poller's view. The poller ticks once at startup whatever
+  // MONERIUM_POLL_MS says, so an order listed by default could be recorded by
+  // that tick instead of by the delivery under test, which would then rightly
+  // answer `duplicate`. Only the poller test lists an order.
+  if (url.startsWith("/orders")) {
+    listServed = true;
+    return send(200, { orders: [...listed].map((id) => orders.get(id)).filter(Boolean) });
+  }
   send(404, { error: "unhandled" });
 });
 
@@ -130,6 +152,71 @@ function bg(cmd: string, args: string[], env: Record<string, string>) {
   return c;
 }
 
+/** Settle `p`, or fail naming what never answered instead of hanging the suite. */
+async function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not answer within ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([p, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function until(ok: () => boolean | Promise<boolean>, ms: number, what: string) {
+  for (const s = Date.now(); Date.now() - s < ms; ) {
+    if (await ok()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+async function startApi(env: Record<string, string>) {
+  bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], env);
+  for (const s = Date.now(); Date.now() - s < 30_000; ) {
+    try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
+
+/**
+ * Wait for the old server to actually exit and release the port before
+ * rebinding it. A fixed 1.2s sleep was a guess, and under a full suite run
+ * — where dozens of chains and servers are starting and stopping — it was
+ * routinely too short: the replacement failed to bind, the health poll timed
+ * out 30s later, and the failure looked like a broken product rather than a
+ * race in the test.
+ */
+async function restartApi(env: Record<string, string>) {
+  const dying = children.at(-1)!;
+  await new Promise<void>((resolve) => {
+    if (dying.exitCode !== null || dying.signalCode !== null) return resolve();
+    dying.once("exit", () => resolve());
+    dying.kill();
+    setTimeout(() => resolve(), 10_000).unref(); // never hang the suite
+  });
+  // The process is gone; now wait for the socket to be free.
+  for (const s = Date.now(); Date.now() - s < 15_000; ) {
+    const stillUp = await fetch(`${API}/api/health`, { signal: AbortSignal.timeout(500) })
+      .then(() => true)
+      .catch(() => false);
+    if (!stillUp) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  await startApi(env);
+}
+
+const SIGNED_ENV = {
+  MONERIUM_CLIENT_ID: "stub",
+  MONERIUM_CLIENT_SECRET: "stub",
+  MONERIUM_BASE_URL: `http://127.0.0.1:${STUB_PORT}`,
+  MONERIUM_POLL_MS: "3600000",
+  MONERIUM_WEBHOOK_SECRET: SECRET,
+  MG_ANCHOR_DOMAIN: "",
+};
+
 let pass = 0;
 const t = async (label: string, fn: () => Promise<void>) => {
   await fn();
@@ -176,7 +263,7 @@ try {
 
   console.log("2/3 API in sandbox mode against the stub…");
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
-  bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
+  await startApi({
     MONERIUM_CLIENT_ID: "stub",
     MONERIUM_CLIENT_SECRET: "stub",
     MONERIUM_BASE_URL: `http://127.0.0.1:${STUB_PORT}`,
@@ -185,10 +272,6 @@ try {
     MONERIUM_WEBHOOK_SECRET: "",
     MG_ANCHOR_DOMAIN: "",
   });
-  for (const s = Date.now(); Date.now() - s < 30_000; ) {
-    try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}
-    await new Promise((r) => setTimeout(r, 300));
-  }
 
   const user = await api("/api/users", { name: "Webhook Target", email: "webhook@example.com", country: "DE" });
   token = user.sessionToken;
@@ -245,41 +328,7 @@ try {
   });
 
   console.log("      restarting API with a webhook secret…");
-  /**
-   * Wait for the old server to actually exit and release the port before
-   * rebinding it. A fixed 1.2s sleep was a guess, and under a full suite run
-   * — where dozens of chains and servers are starting and stopping — it was
-   * routinely too short: the replacement failed to bind, the health poll timed
-   * out 30s later, and the failure looked like a broken product rather than a
-   * race in the test.
-   */
-  const dying = children.at(-1)!;
-  await new Promise<void>((resolve) => {
-    if (dying.exitCode !== null || dying.signalCode !== null) return resolve();
-    dying.once("exit", () => resolve());
-    dying.kill();
-    setTimeout(() => resolve(), 10_000).unref(); // never hang the suite
-  });
-  // The process is gone; now wait for the socket to be free.
-  for (const s = Date.now(); Date.now() - s < 15_000; ) {
-    const stillUp = await fetch(`${API}/api/health`, { signal: AbortSignal.timeout(500) })
-      .then(() => true)
-      .catch(() => false);
-    if (!stillUp) break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
-    MONERIUM_CLIENT_ID: "stub",
-    MONERIUM_CLIENT_SECRET: "stub",
-    MONERIUM_BASE_URL: `http://127.0.0.1:${STUB_PORT}`,
-    MONERIUM_POLL_MS: "3600000",
-    MONERIUM_WEBHOOK_SECRET: SECRET,
-    MG_ANCHOR_DOMAIN: "",
-  });
-  for (const s = Date.now(); Date.now() - s < 30_000; ) {
-    try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}
-    await new Promise((r) => setTimeout(r, 300));
-  }
+  await restartApi(SIGNED_ENV);
 
   orders.set("real-2", {
     id: "real-2",
@@ -355,31 +404,60 @@ try {
     assert.equal(await balance(), 83, "€33 should have been credited on the retry");
   });
 
-  await t("two concurrent deliveries for one order credit it once", async () => {
+  await t("a delivery for an order another delivery is recording asks to be retried", async () => {
     // Monerium sends one delivery per order event, each with its own id, so
     // the delivery-id dedupe cannot catch this; only the order-id claim can.
     orders.set("real-race", {
       id: "real-race", kind: "issue", state: "processed", meta: { state: "processed" },
       address: user.address, amount: "7", currency: "eur", chain: "sepolia",
     });
-    let release = () => {};
-    const released = new Promise<void>((r) => (release = r));
-    hold = { orderId: "real-race", reads: 0, release, released };
-    const fallback = setTimeout(release, 5_000); // never hang the suite
     const body = { data: { id: "real-race" } };
+    const h = armHold();
     try {
-      const [a, b] = await Promise.all([
-        post("/api/webhooks/monerium", body, signedHeaders("evt-race-a", body)),
+      const first = post("/api/webhooks/monerium", body, signedHeaders("evt-race-a", body));
+      await until(() => h.tokensHits >= 1, 10_000, "the first delivery to reach /tokens");
+      // The first delivery is parked between its check and its mark.
+      const second = await within(
         post("/api/webhooks/monerium", body, signedHeaders("evt-race-b", body)),
-      ]);
-      assert.equal(hold.reads, 2, "both deliveries must have read the order inside the window");
-      assert.deepEqual([a.status, b.status], [200, 200]);
-      assert.deepEqual([a.data.outcome, b.data.outcome].sort(), ["duplicate", "recorded"]);
+        10_000,
+        "a second delivery while the first held the order",
+      );
+      assert.equal(second.status, 503, "an order still being recorded is not settled");
+      assert.equal(second.data.outcome, "unavailable");
+      assert.equal(h.tokensHits, 1, "the second delivery must not reach the window");
+      h.release();
+      const a = await within(first, 10_000, "the first delivery");
+      assert.equal(a.status, 200);
+      assert.equal(a.data.outcome, "recorded");
     } finally {
-      clearTimeout(fallback);
-      hold = null;
+      disarmHold();
     }
+    // Monerium retries the 503'd delivery under the same id; now it is settled.
+    const retry = await post("/api/webhooks/monerium", body, signedHeaders("evt-race-b", body));
+    assert.equal(retry.status, 200);
+    assert.equal(retry.data.outcome, "duplicate");
     assert.equal(await balance(), 90, "€7 must be credited once, not twice");
+  });
+
+  await t("a token lookup Monerium cannot answer does not consume the delivery id", async () => {
+    orders.set("real-tok", {
+      id: "real-tok", kind: "issue", state: "processed", meta: { state: "processed" },
+      address: user.address, amount: "4", currency: "eur", chain: "sepolia",
+    });
+    const body = { data: { id: "real-tok" } };
+    tokensDown = true;
+    try {
+      const first = await post("/api/webhooks/monerium", body, signedHeaders("evt-tok", body));
+      assert.equal(first.status, 503, "an outage is not \"no EURe on this chain\"");
+      assert.equal(first.data.outcome, "unavailable");
+      assert.equal(await balance(), 90);
+    } finally {
+      tokensDown = false;
+    }
+    const retry = await post("/api/webhooks/monerium", body, signedHeaders("evt-tok", body));
+    assert.equal(retry.status, 200);
+    assert.equal(retry.data.outcome, "recorded");
+    assert.equal(await balance(), 94);
   });
 
   await t("a definitively unknown order still consumes its delivery id", async () => {
@@ -400,6 +478,39 @@ try {
       "webhook-signature": moneriumSignature("evt-stale", old, body),
     });
     assert.equal(r.status, 401, "an hour-old delivery is outside the replay window");
+  });
+
+  console.log("      restarting API with an order listed for the poller…");
+  await t("the poller and a delivery for the same order credit it once", async () => {
+    orders.set("real-poll", {
+      id: "real-poll", kind: "issue", state: "processed", meta: { state: "processed" },
+      address: user.address, amount: "5", currency: "eur", chain: "sepolia",
+    });
+    listed.add("real-poll");
+    listServed = false;
+    const h = armHold();
+    const body = { data: { id: "real-poll" } };
+    try {
+      // The startup tick lists the order, claims it and parks at /tokens.
+      await restartApi(SIGNED_ENV);
+      await until(() => listServed && h.tokensHits >= 1, 20_000, "the poller to reach /tokens");
+      const r = await within(
+        post("/api/webhooks/monerium", body, signedHeaders("evt-poll", body)),
+        10_000,
+        "a delivery while the poller held the order",
+      );
+      assert.equal(r.status, 503, "the poller is still recording this order");
+      assert.equal(r.data.outcome, "unavailable");
+      h.release();
+      await until(async () => (await balance()) === 99, 15_000, "the poller to credit €5");
+    } finally {
+      disarmHold();
+      listed.delete("real-poll");
+    }
+    const retry = await post("/api/webhooks/monerium", body, signedHeaders("evt-poll", body));
+    assert.equal(retry.status, 200);
+    assert.equal(retry.data.outcome, "duplicate");
+    assert.equal(await balance(), 99, "€5 must be credited once, not twice");
   });
 
   console.log(`\nWEBHOOK TEST PASSED — ${pass}/${pass}: body is untrusted, secret gate enforced`);
