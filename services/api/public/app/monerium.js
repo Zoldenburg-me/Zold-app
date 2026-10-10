@@ -159,8 +159,18 @@ function renderFundCard() {
     : "Your IBAN appears here once your Monerium account is connected and the IBAN is activated.";
 }
 
+/* What the account's segment includes. A pre-segmentation account keeps
+   everything, as on the server (requireCapability's fallback). */
+function segmentHas(u, cap) {
+  const list = u?.segment?.capabilities;
+  return !Array.isArray(list) || list.includes(cap);
+}
+
+/* A segment without "safe" (India's collections path) gets no Safe: the
+   server refuses the deployment with CAPABILITY_UNAVAILABLE, so asking for it
+   only strands the person on a step that cannot finish. */
 function needsPasskeySafeSetup(u = user) {
-  return !!(u?.passkeySafe && u.passkeySafe.status !== "active");
+  return !!(u?.passkeySafe && u.passkeySafe.status !== "active" && segmentHas(u, "safe"));
 }
 
 /* Bringing in a company's existing Safe (onboarding's b-safe-choice). Offered
