@@ -77,12 +77,12 @@ async function renderRecoveryScreen() {
 }
 
 /** Google or Apple login as a guardian: set up on its own page (/guardian),
- *  which says plainly that none of it has run on a live deployment. */
+ *  where adding it and approving a recovery with it both happen. */
 function renderTurnkeySection(el) {
   el.innerHTML = `
-    <div class="m-seclabel" style="margin-top:24px">Your Google or Apple login <span class="m-tag soon">Not yet run</span></div>
-    <div class="m-lede" style="font-size:13px">Make your own Google or Apple login a guardian of this account. Built, not yet run on a live deployment. If you lose your passkey, choose “Recover your account” on the new phone and approve with that login.</div>
-    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">Set up on the guardian page</a>`;
+    <div class="m-seclabel" style="margin-top:24px">Your Google or Apple login</div>
+    <div class="m-lede" style="font-size:13px">Make your own Google or Apple login a guardian of this account. If you lose your passkey, choose “Recover your account” on the new phone and approve with that login.</div>
+    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">Set up your guardian</a>`;
 }
 
 let zoldScreen = null; // last GET /recovery/zoldenburg

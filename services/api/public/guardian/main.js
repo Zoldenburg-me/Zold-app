@@ -181,7 +181,7 @@ function apiWith(token) {
 }
 
 const NOTES = `
-  <p class="g-note"><b>Built, not yet run on a live deployment.</b> No Google or Apple login has been added as a guardian, and no recovery has been approved with one, on a live deployment yet. If you lose your passkey: on the new phone choose “Recover your account”, then approve here with this login.</p>
+  <p class="g-note">If you lose your passkey: on the new phone choose “Recover your account”, then approve here with this login.</p>
   <p class="g-note">Use a login whose email is not your Zold account's email: whoever controls that inbox could otherwise start a recovery and delete the alert mail. In your Google or Apple account, add a second way to sign in, so losing one does not lose the guardian.</p>
   <p class="g-note">While you are logged in to a guardian on this page, the page's own code holds that login. The waiting period and the alerts on your account are the protection if that code were ever changed.</p>`;
 
@@ -306,7 +306,6 @@ async function bootApprove(el, { caps, recovery, returnedHash }) {
     ${result?.step === "error" ? `<p class="g-err" role="alert">${esc(result.reason)}</p>` : ""}
     <p>Log in with the Google or Apple account you added as this account’s guardian. That login approves moving the account to the new passkey on this phone. A waiting period follows, and your old phone can cancel it.</p>
     ${buttons ? `<div class="g-actions">${buttons}</div>` : "<p>No login provider is set up on this deployment.</p>"}
-    <p class="g-note"><b>Built, not yet run on a live deployment.</b> No recovery has been approved this way yet.</p>
     ${back}`;
   el.querySelectorAll("[data-start]").forEach((b) => {
     b.addEventListener("click", async () => {
