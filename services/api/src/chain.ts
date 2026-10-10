@@ -20,6 +20,8 @@ import {
   type Deployments,
 } from "./config.js";
 import type { PayoutRail } from "./store.js";
+import { urlForLog } from "./http/log-safe.js";
+import { errorText } from "./http/log-cause.js";
 
 /**
  * The viem chain we talk to, resolved from TRANSF_CHAIN_ID.
@@ -56,7 +58,7 @@ export async function assertChainMatches(): Promise<void> {
   const actual = await publicClient.getChainId();
   if (actual !== CHAIN_ID) {
     throw new Error(
-      `RPC at ${RPC_URL} reports chain ${actual}, but TRANSF_CHAIN_ID is ${CHAIN_ID}. ` +
+      `RPC at ${urlForLog(RPC_URL)} reports chain ${actual}, but TRANSF_CHAIN_ID is ${CHAIN_ID}. ` +
         `Signatures would be built for the wrong chain and every debit would revert.`,
     );
   }
@@ -217,7 +219,7 @@ export function writeDefinitelyRefused(err: unknown): boolean {
   for (let e: any = err, depth = 0; e && depth < 10; e = e.cause, depth++) {
     const name = String(e.name);
     if (MAYBE_DELIVERED_NAMES.has(name)) return false;
-    if (MAYBE_DELIVERED.test(String(e.shortMessage ?? e.message ?? "")) || MAYBE_DELIVERED.test(String(e.details ?? ""))) return false;
+    if (MAYBE_DELIVERED.test(errorText(e)) || MAYBE_DELIVERED.test(String(e.details ?? ""))) return false;
     if (REFUSED_BEFORE_ACCEPTANCE.has(name)) refused = true;
   }
   return refused;

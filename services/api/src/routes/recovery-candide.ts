@@ -72,7 +72,7 @@ import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertionForChallenge, 
 import { publicRecoveryRequest } from "../recovery.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
-import { describeCause, describeError, shortErrorForClient } from "../http/log-cause.js";
+import { describeCause, describeError, shortErrorForClient, redactedMessage } from "../http/log-cause.js";
 
 export interface CandideRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -261,7 +261,7 @@ async function submitConfirmed(
     if (!(err instanceof SafeOperationUncertainError)) throw err;
     console.error(`recovery: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
     res.status(502).json({
-      error: `${err.message} — nothing is recorded until it is confirmed; check the chain before retrying`,
+      error: `${redactedMessage(err)} — nothing is recorded until it is confirmed; check the chain before retrying`,
       code: "SAFE_OP_UNCONFIRMED",
       opHash: err.userOpHash,
     });
@@ -316,7 +316,7 @@ export async function finalizeCandideRecovery(
     // The service may have finalized on its own sweep, in which case the
     // chain already shows the new owners and the error is moot; anything else
     // is recorded and retried by the next sweep.
-    finalizeError = String(err?.message ?? err).slice(0, 200);
+    finalizeError = redactedMessage(err).slice(0, 200);
   }
 
   let owners: string[];
@@ -327,7 +327,7 @@ export async function finalizeCandideRecovery(
       owners = (await safeOwners(request.safeAddress)).map((a) => a.toLowerCase());
     } catch (err: any) {
       owners = [];
-      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${String(err?.message ?? err).slice(0, 120)}`;
+      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
     }
   }
   const recovered = newOwners.length > 0 && newOwners.every((o) => owners.includes(o));
@@ -413,7 +413,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
             pendingRecovery: state.pending,
           };
         } catch (err: any) {
-          out.onChain = { error: String(err?.message ?? err).slice(0, 160) };
+          out.onChain = { error: redactedMessage(err).slice(0, 160) };
         }
       }
       out.requests = store
@@ -867,7 +867,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       try {
         reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, `recovery:${request.id}`);
       } catch (err: any) {
-        return res.status(400).json({ error: String(err?.message ?? err) });
+        return res.status(400).json({ error: redactedMessage(err) });
       }
       if (reg.credentialId !== credentialId) return res.status(400).json({ error: "credentialId does not match attestation" });
       if (reg.key.alg !== "ES256") return res.status(400).json({ error: "the new passkey must be a P-256 (ES256) credential to own a Safe" });

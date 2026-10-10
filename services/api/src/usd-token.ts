@@ -10,6 +10,7 @@
 import { parseAbi } from "viem";
 import { CHAIN_ID } from "./config.js";
 import { addrs, publicClient } from "./chain.js";
+import { redactedMessage } from "./http/log-cause.js";
 
 const SYMBOL = /^[A-Za-z0-9.]{1,11}$/;
 const abi = parseAbi(["function symbol() view returns (string)", "function name() view returns (string)"]);
@@ -51,7 +52,7 @@ export async function loadUsdToken(): Promise<void> {
     if (!SYMBOL.test(symbol)) throw new Error(`symbol() returned ${JSON.stringify(symbol)}`);
     read = { symbol, name: String(name).slice(0, 64) };
   } catch (e) {
-    const why = e instanceof Error ? e.message.split("\n")[0] : String(e);
+    const why = redactedMessage(e);
     if (usdIsStaging()) {
       throw new Error(`cannot read the staging dollar ${address} on chain ${CHAIN_ID} (${why}); refusing to label it`);
     }

@@ -47,6 +47,7 @@ import {
   type PaymentRequestSource,
 } from "../payment-requests.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
+import { describeCause } from "../http/log-cause.js";
 
 type SessionCheck = (req: express.Request, res: express.Response, userId: string) => unknown;
 
@@ -517,7 +518,7 @@ function record(r: PaymentRequest, payment: Parameters<typeof applyPayment>[1]):
     for (const hook of paidHooks) {
       Promise.resolve()
         .then(() => hook(saved))
-        .catch((e) => console.error(`pay-request: paid hook failed for ${displayCode(saved.code)}: ${e?.message ?? e}`));
+        .catch((e) => console.error(`pay-request: paid hook failed for ${displayCode(saved.code)}: ${describeCause(e)}`));
     }
   }
   return saved;
@@ -698,7 +699,7 @@ export async function sweepPaymentRequests(now = new Date()): Promise<{ expired:
         try {
           await hook(r);
         } catch (e: any) {
-          console.error(`pay-request: paid hook retry failed for ${displayCode(r.code)}: ${e?.message ?? e}`);
+          console.error(`pay-request: paid hook retry failed for ${displayCode(r.code)}: ${describeCause(e)}`);
         }
       }
     }

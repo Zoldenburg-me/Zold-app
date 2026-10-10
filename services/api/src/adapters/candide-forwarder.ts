@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { CHAIN_ID, FORWARDING, IS_PRODUCTION } from "../config.js";
 import { usdIsStaging, usdToken } from "../usd-token.js";
 import { partnerTimeout } from "../http.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 const addressRe = /^0x[0-9a-fA-F]{40}$/;
 
@@ -66,7 +67,7 @@ async function forwardingRpc<T>(
   });
   const body: any = await res.json().catch(() => null);
   if (!res.ok || body?.error) {
-    const msg = body?.error?.message ?? body?.error ?? `${res.status} ${res.statusText}`;
+    const msg = redactedMessage(body?.error?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
     throw new Error(`Candide forwarding ${method} failed: ${String(msg).slice(0, 240)}`);
   }
   return body.result as T;
