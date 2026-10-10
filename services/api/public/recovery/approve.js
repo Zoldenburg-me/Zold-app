@@ -15,9 +15,14 @@ import { signRawPayload } from "../guardian/turnkey-sign.js";
  */
 export async function finishApprove(env) {
   const { hash, storage, stripHash, stamper, api, recovery, turnkeyApi, sign = signRawPayload, now = Date.now } = env;
-  const storedState = storage.getItem(OAUTH_STATE_KEY);
-  storage.removeItem(OAUTH_STATE_KEY);
   stripHash();
+  let storedState = null;
+  try {
+    storedState = storage.getItem(OAUTH_STATE_KEY);
+    storage.removeItem(OAUTH_STATE_KEY);
+  } catch {
+    // Storage blocked: no state to match, so readReturn refuses the login.
+  }
   const back = readReturn(hash, storedState, now());
   if (!back) return null;
   const withSecret = { "x-recovery-secret": recovery.secret };
@@ -28,14 +33,12 @@ export async function finishApprove(env) {
     const publicKey = stamper.getPublicKey();
     if (!publicKey) return { step: "error", reason: "That login timed out in this browser. Try again." };
     const login = await api("/api/recovery/turnkey/login", { oidcToken: back.idToken, publicKey });
-    const toSign = await api(path("/digest"), undefined, withSecret);
-    if (login.subOrgId !== toSign.subOrgId) {
-      return { step: "error", reason: "That’s a different Google or Apple account. Log in with your backup login." };
-    }
-    const signature = await sign({ stamper, baseUrl: turnkeyApi, organizationId: login.subOrgId, signWith: toSign.guardianAddress, payload: toSign.digest });
+    const { digest } = await api(path("/digest"), undefined, withSecret);
+    const signature = await sign({ stamper, baseUrl: turnkeyApi, organizationId: login.subOrgId, signWith: login.address, payload: digest });
     const request = await api(path("/signature"), signature, withSecret);
     return { step: "approved", request };
   } catch (e) {
+    if (e?.code === "WRONG_SIGNER") return { step: "error", reason: "That’s a different Google or Apple account. Log in with your backup login." };
     return { step: "error", reason: e.message };
   } finally {
     await stamper.clear().catch(() => {});

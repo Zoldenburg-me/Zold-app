@@ -7,10 +7,12 @@
  * (`x-recovery-secret`), as for Zoldenburg recovery:
  * - POST /recovery/turnkey/requests {email}: start (or resume, with the
  *   secret); the account must have exactly one active Google/Apple guardian.
+ *   Answers name no account, Safe or guardian (heldView): anyone who knows
+ *   the email can start one.
  * - POST /recovery/turnkey/requests/:id/passkey: the new passkey, held on the
  *   request until the chain shows it as owner.
  * - GET  /recovery/turnkey/requests/:id[/digest]: status; the digest the
- *   guardian signs, recomputed from the module.
+ *   guardian signs, recomputed from the module (the digest alone).
  * - POST /recovery/turnkey/requests/:id/signature {r,s,v}: Turnkey's answer;
  *   checked and relayed (multiConfirmRecovery, execute). The wait starts.
  * - POST /recovery/turnkey/requests/:id/finalize: after the wait.
@@ -22,14 +24,15 @@
  */
 import express from "express";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { RECOVERY, SECURITY } from "../config.js";
+import { SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
-import { describeError, redactedMessage, shortErrorForClient } from "../http/log-cause.js";
+import { describeError, redactedMessage } from "../http/log-cause.js";
 import { publicRecoveryRequest } from "../recovery.js";
 import {
   acceptTurnkeySignature,
   ownerWasAlerted,
   finalizeTurnkeyRecovery,
+  isBeingSigned,
   syncTurnkeyFromChain,
   turnkeyGuardianFor,
   turnkeyRecoveryChain,
@@ -50,10 +53,18 @@ export interface TurnkeyRecoveryDeps {
   ownerAlerted?: (r: RecoveryRequest) => boolean;
 }
 
-/** Open requests one account may have before the oldest expires. Several may
- *  be open at once: only the guardian's login can sign one, so a stranger who
- *  knows the email cannot lock the owner out by starting first. */
+/**
+ * Requests waiting for a guardian per account. Anyone who knows the email can
+ * start one, so a new start past the cap expires the oldest request that has
+ * no new passkey yet, and never one that has: a stranger's starts cannot
+ * expire the owner's request once its passkey is in. With every slot holding
+ * a passkey the start is refused until one times out (TURNKEY_REQUEST_TTL_MS).
+ */
 const MAX_OPEN = 5;
+/** How long a Google/Apple recovery waits for its guardian's login. The
+ *  login is the next step on the same page, so an hour is generous, and it
+ *  frees a slot a stranger filled. The waiting period starts after. */
+export const TURNKEY_REQUEST_TTL_MS = 3600_000;
 
 const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"];
 const hashSecret = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -69,13 +80,50 @@ function secretMatches(r: RecoveryRequest, secret: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Our refusals keep their status and code; anything else is a 503 that says
- *  little (503, not 502: Cloudflare replaces a 502's body). */
+/**
+ * A request as its secret's holder sees it. Whoever knows the email can start
+ * a request and hold its secret, so this names no account, Safe, module or
+ * guardian (publicRecoveryRequest, for the owner's session, does).
+ */
+function heldView(r: RecoveryRequest) {
+  const t = r.turnkey;
+  return {
+    id: r.id,
+    mode: r.mode,
+    status: r.status,
+    requestedAt: r.requestedAt,
+    expiresAt: r.expiresAt,
+    recoveryDelayHours: r.recoveryDelayHours,
+    ...(r.canceledAt ? { canceledAt: r.canceledAt } : {}),
+    ...(r.finalizedAt ? { finalizedAt: r.finalizedAt } : {}),
+    turnkey: {
+      newPasskeyRegistered: Boolean(t?.newPasskey),
+      ...(t?.executeTxHash ? { executeTxHash: t.executeTxHash } : {}),
+      ...(t?.finalizeAfter ? { finalizeAfter: t.finalizeAfter } : {}),
+      ...(t?.finalizeTxHash ? { finalizeTxHash: t.finalizeTxHash } : {}),
+      ...(t?.finalizeError ? { finalizeError: FINALIZE_PENDING } : {}),
+    },
+  };
+}
+
+/** Our refusals keep their status and code; anything else is a 503 with a
+ *  fixed message and a reference to the log line, never the cause (an RPC,
+ *  bundler or Turnkey reply). 503, not 502: Cloudflare replaces a 502's body. */
 function fail(res: express.Response, err: unknown) {
   if (err instanceof TurnkeyGuardianError) return res.status(err.status).json({ error: err.message, code: err.code });
-  console.error(`recovery (turnkey): ${describeError(err)}`);
-  return res.status(503).json({ error: shortErrorForClient(err) });
+  const ref = randomUUID().slice(0, 8);
+  console.error(`recovery (turnkey) [${ref}]: ${describeError(err)}`);
+  return res.status(503).json({ error: `this didn’t go through — try again in a minute (ref ${ref})`, code: "UNAVAILABLE", ref });
 }
+
+/** What a failed finalise tells the browser: it is retried, nothing more. */
+const FINALIZE_PENDING = "finishing didn’t go through yet — it is tried again automatically";
+
+/** The account's Turnkey requests still open: in their waiting period, or not yet timed out. */
+const liveTurnkeyRequests = (userId: string) =>
+  store
+    .recoveryRequestsForUser(userId)
+    .filter((r) => r.mode === "turnkey" && OPEN.includes(r.status) && (r.status === "GRACE_PERIOD" || Date.now() < Date.parse(r.expiresAt)));
 
 export function createTurnkeyRecoveryRouter({
   requireUserSession,
@@ -100,7 +148,7 @@ export function createTurnkeyRecoveryRouter({
       return undefined;
     }
     if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status) && Date.now() >= Date.parse(r.expiresAt)) {
-      res.status(410).json({ ...publicRecoveryRequest(store.updateRecoveryRequest(r.id, { status: "EXPIRED" })), error: "this recovery expired — start again" });
+      res.status(410).json({ ...heldView(store.updateRecoveryRequest(r.id, { status: "EXPIRED" })), error: "this recovery expired — start again" });
       return undefined;
     }
     return r;
@@ -113,9 +161,7 @@ export function createTurnkeyRecoveryRouter({
       const user = email ? store.findUserByEmail(email) : undefined;
       const guardian = turnkeyGuardianFor(user);
       if (!user || !guardian) return res.status(404).json({ error: "recovery not found" });
-      const mine = store
-        .recoveryRequestsForUser(user.id)
-        .filter((r) => r.mode === "turnkey" && OPEN.includes(r.status) && (r.status === "GRACE_PERIOD" || Date.now() < Date.parse(r.expiresAt)));
+      const mine = liveTurnkeyRequests(user.id);
       // The starting browser resumes its own request by the secret.
       const open = mine.find((r) => secretMatches(r, presentedSecret(req)));
       if (!open && mine.some((r) => r.status === "GRACE_PERIOD")) {
@@ -135,6 +181,17 @@ export function createTurnkeyRecoveryRouter({
       const secret = open ? undefined : randomBytes(32).toString("base64url");
       let request = open;
       if (!request) {
+        // Read again after the await: a start racing this one is counted.
+        const waiting = liveTurnkeyRequests(user.id)
+          .filter((r) => r.status !== "GRACE_PERIOD")
+          .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
+        if (waiting.length >= MAX_OPEN) {
+          const spare = waiting.find((r) => r.status === "PASSKEY_PENDING");
+          if (!spare) {
+            return res.status(429).json({ error: "too many recoveries of this account are waiting — try again in an hour", code: "TOO_MANY_RECOVERIES" });
+          }
+          store.updateRecoveryRequest(spare.id, { status: "EXPIRED" });
+        }
         const now = new Date();
         request = {
           id: randomUUID(),
@@ -143,7 +200,7 @@ export function createTurnkeyRecoveryRouter({
           mode: "turnkey",
           status: "PASSKEY_PENDING",
           requestedAt: now.toISOString(),
-          expiresAt: new Date(now.getTime() + RECOVERY.requestTtlHours * 3600_000).toISOString(),
+          expiresAt: new Date(now.getTime() + TURNKEY_REQUEST_TTL_MS).toISOString(),
           recoveryDelayHours: Math.max(1, Math.round((recoveryGracePeriodSeconds(moduleAddress) ?? 0) / 3600)),
           guardianAddress: guardian.address,
           recoveryModuleAddress: moduleAddress,
@@ -152,11 +209,9 @@ export function createTurnkeyRecoveryRouter({
         };
         store.addRecoveryRequest(request);
         console.log(`RECOVERY: ${request.id} started for ${user.id} with its Turnkey guardian`);
-        const waiting = [...mine, request].filter((r) => r.status !== "GRACE_PERIOD").sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
-        for (const old of waiting.slice(0, Math.max(0, waiting.length - MAX_OPEN))) store.updateRecoveryRequest(old.id, { status: "EXPIRED" });
       }
       const out: Record<string, unknown> = {
-        ...publicRecoveryRequest(request),
+        ...heldView(request),
         ...(secret ? { recoverySecret: secret } : {}),
         gracePeriodSeconds: recoveryGracePeriodSeconds(moduleAddress),
       };
@@ -175,7 +230,7 @@ export function createTurnkeyRecoveryRouter({
     wrap(async (req, res) => {
       const request = requestFor(req, res);
       if (!request) return;
-      if (request.status !== "PASSKEY_PENDING") return res.status(409).json({ ...publicRecoveryRequest(request), error: `recovery is ${request.status}` });
+      if (request.status !== "PASSKEY_PENDING") return res.status(409).json({ ...heldView(request), error: `recovery is ${request.status}` });
       if (!store.findUser(request.userId)?.passkeySafe) return res.status(410).json({ error: "the account behind this recovery no longer exists" });
       const { credentialId, attestation, clientDataJSON } = req.body ?? {};
       if (!credentialId || typeof credentialId !== "string" || !attestation || !clientDataJSON) {
@@ -202,7 +257,7 @@ export function createTurnkeyRecoveryRouter({
           newThreshold: 1,
         },
       });
-      res.json(publicRecoveryRequest(updated));
+      res.json(heldView(updated));
     }),
   );
 
@@ -212,7 +267,7 @@ export function createTurnkeyRecoveryRouter({
       let request = requestFor(req, res);
       if (!request) return;
       request = await syncTurnkeyFromChain(request, chain).catch(() => request!);
-      res.json({ ...publicRecoveryRequest(request), gracePeriodSeconds: recoveryGracePeriodSeconds(request.recoveryModuleAddress) });
+      res.json({ ...heldView(request), gracePeriodSeconds: recoveryGracePeriodSeconds(request.recoveryModuleAddress) });
     }),
   );
 
@@ -224,7 +279,9 @@ export function createTurnkeyRecoveryRouter({
       try {
         if (request.status !== "REVIEW_PENDING") throw new TurnkeyGuardianError(`recovery is ${request.status}`, 409, "NOT_WAITING");
         const { digest } = await turnkeyRecoveryDigest(request, chain);
-        res.json({ digest, guardianAddress: request.guardianAddress, subOrgId: request.turnkey?.guardianSubOrgId });
+        // The sub-org and the address to sign with come from the guardian's
+        // own login (/recovery/turnkey/login), not from here.
+        res.json({ digest });
       } catch (err) {
         fail(res, err);
       }
@@ -238,7 +295,7 @@ export function createTurnkeyRecoveryRouter({
       if (!request) return;
       try {
         const { r, s, v } = req.body ?? {};
-        res.json(publicRecoveryRequest(await acceptTurnkeySignature(request, { r, s, v }, chain, { ownerAlerted })));
+        res.json(heldView(await acceptTurnkeySignature(request, { r, s, v }, chain, { ownerAlerted })));
       } catch (err) {
         fail(res, err);
       }
@@ -250,15 +307,15 @@ export function createTurnkeyRecoveryRouter({
     wrap(async (req, res) => {
       const request = requestFor(req, res);
       if (!request) return;
-      if (request.status === "FINALIZED") return res.json(publicRecoveryRequest(request));
-      if (request.status !== "GRACE_PERIOD") return res.status(409).json({ ...publicRecoveryRequest(request), error: `recovery is ${request.status}` });
+      if (request.status === "FINALIZED") return res.json(heldView(request));
+      if (request.status !== "GRACE_PERIOD") return res.status(409).json({ ...heldView(request), error: `recovery is ${request.status}` });
       try {
         const updated = await finalizeTurnkeyRecovery(request, chain);
         if (updated.status !== "FINALIZED") {
-          return res.status(503).json({ ...publicRecoveryRequest(updated), error: updated.turnkey?.finalizeError ?? "not finalized yet" });
+          return res.status(503).json({ ...heldView(updated), error: FINALIZE_PENDING });
         }
         // No session: the new passkey signs in through the ordinary login.
-        res.json(publicRecoveryRequest(updated));
+        res.json(heldView(updated));
       } catch (err) {
         fail(res, err);
       }
@@ -291,7 +348,8 @@ export function createTurnkeyRecoveryRouter({
           const state = await chain.readState(user.passkeySafe as PasskeySafeDeploymentPlan);
           out.onChain = { pendingRecovery: state.pending, guardians: state.guardians };
         } catch (err) {
-          out.onChainError = redactedMessage(err).slice(0, 160);
+          console.error(`recovery (turnkey): owner's module read failed: ${describeError(err)}`);
+          out.onChainError = "couldn’t read the recovery module just now";
         }
       }
       res.json(out);
@@ -307,6 +365,11 @@ export function createTurnkeyRecoveryRouter({
       if (!r || r.userId !== user.id || r.mode !== "turnkey") return res.status(404).json({ error: "recovery not found" });
       if (!["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) {
         return res.status(409).json({ error: `recovery is ${r.status} — a recovery on chain is cancelled with your passkey`, code: "NOT_CANCELABLE" });
+      }
+      // Its signature is being relayed now: the result would overwrite the
+      // cancel. Once on chain, the passkey cancels it.
+      if (isBeingSigned(r.id)) {
+        return res.status(409).json({ error: "this recovery is being approved right now — cancel it with your passkey in a moment", code: "BEING_SIGNED" });
       }
       const updated = store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
       console.log(`RECOVERY: ${r.id} cancelled by its owner before the guardian signed`);

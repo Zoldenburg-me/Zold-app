@@ -25,9 +25,14 @@ import { providerButtons } from "./providers.js";
  */
 export async function finishLogin(env) {
   const { hash, storage, stripHash, stamper, api, userId, now = Date.now } = env;
-  const storedState = storage.getItem(OAUTH_STATE_KEY);
-  storage.removeItem(OAUTH_STATE_KEY);
   stripHash();
+  let storedState = null;
+  try {
+    storedState = storage.getItem(OAUTH_STATE_KEY);
+    storage.removeItem(OAUTH_STATE_KEY);
+  } catch {
+    // Storage blocked: no state to match, so readReturn refuses the login.
+  }
   const back = readReturn(hash, storedState, now());
   if (!back) return null;
   let guardian;
@@ -37,6 +42,7 @@ export async function finishLogin(env) {
     const publicKey = stamper.getPublicKey();
     if (!publicKey) return { step: "error", reason: "That login timed out in this browser. Try again." };
     ({ guardian } = await api(`/api/recovery/turnkey/users/${userId}/guardians`, { oidcToken: back.idToken, publicKey }));
+    if (!guardian) return { step: "error", reason: "That login didn’t come back as a guardian. Try again." };
   } catch (e) {
     return { step: "error", reason: e.message };
   } finally {
@@ -48,6 +54,7 @@ export async function finishLogin(env) {
 
 /** Put a created Google/Apple guardian on chain: prepare, passkey, submit. */
 export async function finishAdd(guardian, { api, userId, passkeyGet, beforePasskey = () => {} }) {
+  if (!guardian) return { step: "error", reason: "That backup login is no longer on your account. Reload the page." };
   if (guardian.status === "active") return { step: "done", guardian };
   let prep;
   try {
@@ -210,10 +217,15 @@ async function boot() {
   };
   let message = null;
   if (returnedHash) {
-    const r = await finishLogin(env);
-    if (r) message = r.step === "done" ? { ok: true, text: "Done. Your backup login now protects your account." } : { ok: false, text: r.reason ?? "Something went wrong." };
+    try {
+      const r = await finishLogin(env);
+      if (r) message = r.step === "done" ? { ok: true, text: "Done. Your backup login now protects your account." } : { ok: false, text: r.reason ?? "Something went wrong." };
+    } catch (e) {
+      message = { ok: false, text: e?.message || "Something went wrong. Try again." };
+    }
   }
 
+  const showError = (e) => show(`<h1>Something went wrong</h1><p>${esc(e?.message || "Try again.")}</p><p><a href="/app">Back to Zold</a></p>`);
   const draw = async () => {
     const [zold, social] = await Promise.all([
       caps.zoldenburgRecovery ? api(`/api/users/${me.id}/recovery/zoldenburg`) : null,
@@ -224,8 +236,18 @@ async function boot() {
     const busyThen = (b, fn) => async () => {
       b.setAttribute("aria-busy", "true");
       b.disabled = true;
-      message = await fn();
-      await draw();
+      try {
+        message = await fn();
+      } catch (e) {
+        message = { ok: false, text: e?.message || "Something went wrong. Try again." };
+      }
+      try {
+        await draw();
+      } catch (e) {
+        b.removeAttribute("aria-busy");
+        b.disabled = false;
+        showError(e);
+      }
     };
     el.querySelectorAll("[data-start]").forEach((b) => {
       b.addEventListener("click", busyThen(b, async () => {
@@ -257,7 +279,7 @@ async function boot() {
       }));
     });
   };
-  await draw().catch((e) => show(`<h1>Something went wrong</h1><p>${esc(e.message)}</p><p><a href="/app">Back to Zold</a></p>`));
+  await draw().catch(showError);
 }
 
 if (typeof document !== "undefined") boot();

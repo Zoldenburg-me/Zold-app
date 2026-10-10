@@ -52,7 +52,8 @@ async function boot() {
   const health = await fetch("/api/health").then((r) => r.json()).catch(() => null);
   const caps = health?.capabilities ?? {};
 
-  const s = { email: "", mode: "", request: null, notice: "", error: "", timer: null };
+  // `gen` counts renders: a poll that started before the latest one drops its answer.
+  const s = { email: "", mode: "", request: null, notice: "", error: "", timer: null, gen: 0 };
   try { s.email = sessionStorage.getItem(EMAIL_KEY) || ""; } catch { /* storage blocked */ }
   const secret = () => savedFor(localStorage, SECRET_KEY, s.email);
   const ticket = () => savedFor(localStorage, TICKET_KEY, s.email);
@@ -60,6 +61,7 @@ async function boot() {
 
   const show = () => {
     clearTimeout(s.timer);
+    s.gen++;
     const screen = screenFor(s.mode, s.request);
     if (screen === "email" && s.request) {
       s.notice = endedText(s.request);
@@ -85,16 +87,24 @@ async function boot() {
   /* Re-read the request while it waits: every minute, or just after the waiting period. */
   const follow = () => {
     const r = s.request;
+    const gen = s.gen;
     const until = finalizeAfter(r);
     const wait = until ? Math.min(60000, Math.max(2000, until.getTime() - Date.now() + 1000)) : 60000;
     s.timer = setTimeout(async () => {
+      let next;
       try {
-        const next = await api(requestPath(s.mode, r.id), undefined, auth());
+        next = await api(requestPath(s.mode, r.id), undefined, auth());
+      } catch (e) {
+        if (gen !== s.gen) return;
+        if (e?.status === 410 && e.body?.status) { s.request = e.body; return show(); }
+        // Gone, or no longer this browser's: stop asking.
+        if (e?.status === 404) { s.request = { status: "GONE", error: "This recovery can’t continue from this browser. Start again." }; return show(); }
+      }
+      if (gen !== s.gen) return;
+      if (next) {
         const changed = next.status !== r.status;
         s.request = next;
         if (changed) return show();
-      } catch (e) {
-        if (e?.status === 410 && e.body?.status) { s.request = e.body; return show(); }
       }
       tick();
       follow();
@@ -270,6 +280,9 @@ async function boot() {
   if (s.email && secret()) {
     try {
       const { mode, request } = await startRecovery(s.email, { api, caps, secret: secret() });
+      // The saved request may have ended and a new one started: keep ITS secret.
+      if (request.recoverySecret) saveFor(localStorage, SECRET_KEY, s.email, request.recoverySecret);
+      if (request.otpTicket) saveFor(localStorage, TICKET_KEY, s.email, request.otpTicket);
       s.mode = mode;
       s.request = request;
       if (returnedHash && mode === "turnkey" && request.status === "REVIEW_PENDING") {

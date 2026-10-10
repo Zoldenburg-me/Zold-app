@@ -406,6 +406,18 @@ await check("sign_raw_payload: failed, rejected, refused, endless or malformed a
   await assert.rejects(run([], "0x1234"), /32 bytes/);
 });
 
+await check("return: blocked storage, or an answer without a guardian, ends in an error, not a throw", async () => {
+  const blocked = returnEnv();
+  blocked.env.storage = { getItem() { throw new Error("blocked"); }, removeItem() { throw new Error("blocked"); }, setItem() {} };
+  const r = await page.finishLogin(blocked.env);
+  assert.equal(r?.step, "error");
+  const empty = returnEnv();
+  const api = empty.env.api;
+  empty.env.api = async (p: string, b: any) => (p.endsWith("/guardians") ? {} : api(p, b));
+  assert.equal((await page.finishLogin(empty.env)).step, "error");
+  assert.equal((await page.finishAdd(undefined, empty.env)).step, "error", "Finish on a row that has gone");
+});
+
 const approveEnv = (over: Record<string, any> = {}) => {
   const storage = memoryStorage();
   storage.setItem(oauth.OAUTH_STATE_KEY, stored());
@@ -414,8 +426,8 @@ const approveEnv = (over: Record<string, any> = {}) => {
   const log: string[] = [];
   const calls: { path: string; body: any; headers: any }[] = [];
   const answers: Record<string, any> = {
-    "/api/recovery/turnkey/login": { session: "jwt", subOrgId: "sub-1" },
-    "/api/recovery/turnkey/requests/rq1/digest": { digest: DIGEST, guardianAddress: "0xG", subOrgId: "sub-1" },
+    "/api/recovery/turnkey/login": { session: "jwt", subOrgId: "sub-1", address: "0xG" },
+    "/api/recovery/turnkey/requests/rq1/digest": { digest: DIGEST },
     "/api/recovery/turnkey/requests/rq1/signature": { id: "rq1", status: "GRACE_PERIOD" },
   };
   return {
@@ -457,15 +469,27 @@ await check("approve: strip, Turnkey session with the bound key, digest, sign wi
   assert.ok(t.stamper.calls.includes("clear"));
 });
 
-await check("approve: a login that is not the request's guardian signs nothing", async () => {
+await check("approve: a login that is not the request's guardian is refused by the API and named in plain words", async () => {
   const t = approveEnv();
   const api = t.env.api;
-  t.env.api = async (p: string, b: any, h: any) => (p.endsWith("/login") ? { session: "jwt", subOrgId: "sub-OTHER" } : api(p, b, h));
+  t.env.api = async (p: string, b: any, h: any) => {
+    if (p.endsWith("/login")) return { session: "jwt", subOrgId: "sub-OTHER", address: "0xO" };
+    if (p.endsWith("/signature")) throw Object.assign(new Error("this signature is not from the guardian on the account"), { code: "WRONG_SIGNER" });
+    return api(p, b, h);
+  };
   const r = await approve.finishApprove(t.env);
   assert.equal(r.step, "error");
   assert.match(r.reason, /different Google or Apple account/);
-  assert.ok(!t.log.some((l) => l.startsWith("sign")));
+  assert.ok(t.log.includes(`sign sub-OTHER 0xO ${DIGEST}`), "it signs with the login's own key, which the API refuses");
   assert.ok(t.stamper.calls.includes("clear"));
+});
+
+await check("approve: blocked storage ends in an error, not a throw", async () => {
+  const t = approveEnv();
+  t.env.storage = { getItem() { throw new Error("blocked"); }, removeItem() { throw new Error("blocked"); }, setItem() {} };
+  const r = await approve.finishApprove(t.env);
+  assert.equal(r?.step, "error");
+  assert.equal(t.calls.length, 0);
 });
 
 await check("approve: a refused state or a refused signature ends in an error, key dropped", async () => {

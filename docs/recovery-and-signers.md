@@ -45,16 +45,21 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   own `getRecoveryHash` agrees), while the module still lists that guardian
   at threshold 1 and holds no other recovery, and only once the owner was
   emailed that someone asked: no operator reviews this path, so the alert
-  and the waiting period are the owner's defence (no mail, no relay). An
-  account may have up to five such requests open at once (only the
-  guardian's login can sign one, so starting first locks nobody out); once
-  one is on chain the others close. While any other guardian is on
-  the Safe a Turnkey guardian is not added, since nothing collects two
-  signatures yet. Its login token is accepted only from Google or Apple,
+  and the waiting period are the owner's defence (no mail, no relay).
+  Anyone who knows the email can start one, so its answers name no account,
+  Safe, module or guardian; the sub-org and address to sign with come from
+  the guardian's own login. A request waits an hour for that login. Up to
+  five wait per account: a new start expires the oldest without a new
+  passkey, never one with, and with all five holding a passkey it is refused
+  until one times out. Once one is on chain the others close. While any
+  other guardian is on the Safe a Turnkey guardian is not added, since
+  nothing collects two signatures yet. Its login token is accepted only from Google or Apple,
   signed by their published keys, for our client id, bound to the browser's
   key; /guardian and /recovery are the only pages that load Turnkey code or
-  may reach Turnkey's API. Zoldenburg and a Google/Apple login are never
-  guardians together: each add route refuses while the other is on the Safe.
+  may reach Turnkey's API. A Google/Apple login is never a guardian beside
+  another: the Zoldenburg and email/SMS add routes refuse while one is active
+  or the module lists a guardian they do not know, when the op is prepared
+  and again right before it is submitted (`recovery/one-guardian.ts`).
 - **A recovery's new credential lives on the RecoveryRequest** until the chain
   confirms the new owner, so whoever holds the OTP channels cannot sign in or
   spend during the grace period.
