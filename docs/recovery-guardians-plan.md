@@ -308,7 +308,7 @@ New personal data, all to go into the Art. 30 map:
 | Didit session id, outcome, name-match flag | RecoveryRequest | with the request |
 | ID document, face, DOB | Didit only (processor) | deleted by our API call after the decision; 1-month retention backstop |
 | guardian address, label, Turnkey sub-org id | user record | until the guardian is removed |
-| a friend's email (invite open only) | invite record, `encryptField` | deleted on accept, expiry or removal |
+| a friend's email (invite open only) | invite record, a `stored-secrets.ts` site | deleted on accept, expiry or removal |
 | a trusted person's login | Turnkey only (processor) | their sub-org |
 
 Processors to add: Didit (DPA in their Business Terms), Turnkey (DPA and data
