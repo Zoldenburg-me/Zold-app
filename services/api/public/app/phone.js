@@ -127,6 +127,9 @@ function phOpen(route, { focus = false } = {}) {
     return;
   }
   phRoute = route;
+  // The recovery strip (#ph-recbar, app/phone-home.js) sits above every
+  // screen, new and older; it hides on the alert screen itself.
+  phRecBarSync();
   // Out to one of the app's own tabs: the trip from /business is over.
   if (PH[route.name]?.tab) phSetFromBusiness(false);
   if (PH_LEGACY[route.name]) {
@@ -167,9 +170,7 @@ function phRender({ focus = false } = {}) {
     : "";
   const v = phView(s);
   const side = PH_DESK.side ? PH_DESK.side(r) : "";
-  // The recovery strip (app/phone-home.js) sits on every screen; a check
-  // later redraws only it.
-  root.innerHTML = `${Z.skipLink("main")}${side}<div class="z-app${v.wide ? " z-app--desk" : ""}" data-screen="${esc(r.name)}">${Z.testModePill(!realMoney)}<div id="ph-recbar" class="z-recbar">${phRecBar()}</div>${v.html(r.arg)}</div>${nav}`;
+  root.innerHTML = `${Z.skipLink("main")}${side}<div class="z-app${v.wide ? " z-app--desk" : ""}" data-screen="${esc(r.name)}">${Z.testModePill(!realMoney)}${v.html(r.arg)}</div>${nav}`;
   document.title = `${typeof s.title === "function" ? s.title(r.arg) : s.title} · Zold`;
   phSig = v.live ? v.live(r.arg) : "";
   v.bind?.(root, r.arg);
