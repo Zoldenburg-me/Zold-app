@@ -1,7 +1,9 @@
 # machine-local toolchain & deps
 .toolchain/
 node_modules
-.claude/
+.claude/*
+# The agent deny rules are shared; everything else under .claude/ is local.
+!.claude/settings.json
 .DS_Store
 
 # secrets & local state — never commit
@@ -19,6 +21,11 @@ data/db*.json
 
 # Timestamped .env backups — same secrets as .env, same rule.
 .env.backup-*
+
+# age ciphertext of the secrets and per-developer public keys (scripts/secrets.sh).
+# Encrypted, but still not for a public repo.
+*.age
+.age-recipients
 
 # Internal notes kept out of the public repo (decision history, partner docs)
 .private/
