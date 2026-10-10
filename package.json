@@ -79,6 +79,7 @@
     "lifi:test": "tsx scripts/lifi-test.ts",
     "forwarder:test": "tsx scripts/candide-forwarder-test.ts",
     "email:test": "tsx scripts/email-verification-test.ts",
+    "recovery-alerts:test": "tsx scripts/recovery-owner-alerts-test.ts",
     "best:test": "tsx scripts/best-execution-test.ts",
     "dex:setup": "tsx scripts/dex-setup.ts",
     "business:test": "tsx scripts/business-test.ts",

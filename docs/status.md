@@ -111,16 +111,17 @@ Say this plainly rather than letting the surface imply otherwise:
   has never run on an imported Safe, so the screens do not offer it there;
   the API does not refuse it.
 - **One mail transport exists, on zoldhq.com only.** `adapters/mailer.ts`
-  sends only email verification codes over SMTP, with `EMAIL_VERIFICATION=1`
-  (docs/email-verification.md). zoldhq.com sends through Brevo's relay
+  sends email verification codes and the owner's recovery alerts
+  (`recovery/owner-alerts.ts`) over SMTP, with `EMAIL_VERIFICATION=1`
+  (docs/email-verification.md). No recovery alert has been sent for real. zoldhq.com sends through Brevo's relay
   (`smtp-relay.brevo.com:587`) as `no-reply@zoldhq.com`, with Brevo's DKIM on
   zoldhq.com and Brevo's IP allowlist on. One real code has been delivered and
   confirmed (2026-10-10, a new test account, to a duck.com forwarding
   address); the request that first sent it came back as a gateway 502 with no
   body, and the cause was not found. No processing agreement with Brevo is
-  recorded here yet, and Brevo is not in the privacy notice. Invitations,
-  invoice links and recovery emails are still never sent by Zold; routes
-  return the token to the caller and say so. Do not add a "we emailed them"
+  recorded here yet, and Brevo is not in the privacy notice. Invitations
+  and invoice links are never sent by Zold; routes return the token to the
+  caller and say so. Do not add a "we emailed them"
   string for those without routing them through the mailer.
 - **Imported-wallet sync has run only against local hardhat** (2026-10-03:
   mints in and a send out were booked, unpriced). It has never read mainnet,

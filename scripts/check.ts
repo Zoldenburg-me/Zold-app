@@ -53,6 +53,7 @@ const scripts = [
   "lifi:test",
   "forwarder:test",
   "email:test",
+  "recovery-alerts:test",
   "best:test",
   "webhook:test",
   "checkout-service:test",
