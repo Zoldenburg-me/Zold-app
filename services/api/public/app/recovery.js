@@ -80,9 +80,9 @@ async function renderRecoveryScreen() {
  *  where adding it and approving a recovery with it both happen. */
 function renderTurnkeySection(el) {
   el.innerHTML = `
-    <div class="m-seclabel" style="margin-top:24px">Your Google or Apple login</div>
-    <div class="m-lede" style="font-size:13px">Make your own Google or Apple login a guardian of this account. If you lose your passkey, choose “Recover your account” on the new phone and approve with that login.</div>
-    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">Set up your guardian</a>`;
+    <div class="m-seclabel" style="margin-top:24px">Backup login</div>
+    <div class="m-lede" style="font-size:13px">Lose your phone, keep your account: your Google or Apple login can move Zold to a new phone in a few taps.</div>
+    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">Set up backup login</a>`;
 }
 
 let zoldScreen = null; // last GET /recovery/zoldenburg
