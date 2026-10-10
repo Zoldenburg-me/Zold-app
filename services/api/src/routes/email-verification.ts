@@ -63,13 +63,17 @@ export function createEmailVerificationRouter(deps: EmailVerificationDeps) {
       if (confirmedElsewhere(user)) return res.status(409).json(IN_USE);
 
       const now = Date.now();
-      const recent = (user.emailCode?.sentAt ?? []).filter((t) => now - Date.parse(t) < 3600_000);
-      const last = recent.length ? Math.max(...recent.map((t) => Date.parse(t))) : 0;
+      const sentLastHour = (u: User) => (u.emailCode?.sentAt ?? []).filter((t) => now - Date.parse(t) < 3600_000);
+      const recent = sentLastHour(user);
+      // The wait and the hourly cap are per address: every account that signed
+      // up with it counts, so more accounts mean neither more mail nor more guesses.
+      const toAddress = store.usersByEmail(user.email).flatMap(sentLastHour);
+      const last = toAddress.length ? Math.max(...toAddress.map((t) => Date.parse(t))) : 0;
       if (now - last < EMAIL_VERIFICATION.resendAfterMs) {
         const wait = Math.ceil((EMAIL_VERIFICATION.resendAfterMs - (now - last)) / 1000);
         return res.status(429).json({ error: `Wait ${wait} seconds before asking for another code.`, code: "EMAIL_CODE_WAIT", retryAfterSeconds: wait });
       }
-      if (recent.length >= EMAIL_VERIFICATION.maxSendsPerHour) {
+      if (toAddress.length >= EMAIL_VERIFICATION.maxSendsPerHour) {
         return res.status(429).json({ error: "Too many codes in the last hour. Try again later.", code: "EMAIL_CODE_LIMIT" });
       }
 
