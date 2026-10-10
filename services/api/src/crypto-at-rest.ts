@@ -99,6 +99,7 @@ export interface Keyring {
 }
 
 const KEY_ID = /^[a-z0-9]{1,16}$/;
+const RESERVED_KEY_ID = /^v\d+$/;
 const ROOT_BYTES = 32;
 const HKDF_SALT = Buffer.from("zold/at-rest/v2");
 
@@ -131,6 +132,9 @@ export function parseKeyring(spec: string): Keyring {
     if (!KEY_ID.test(id)) {
       throw new EncryptionUnavailableError(`DATA_ENCRYPTION_KEYS entry ${i + 1} must be <keyId>:<key>, keyId 1-16 of [a-z0-9]`);
     }
+    // `v1` names the format of unversioned values, so a key called that would
+    // seal values the reader sends down the v1 path.
+    if (RESERVED_KEY_ID.test(id)) throw new EncryptionUnavailableError(`DATA_ENCRYPTION_KEYS key id ${id} is reserved for a format version; pick another, e.g. k${id.slice(1)}`);
     if (roots.has(id)) throw new EncryptionUnavailableError(`DATA_ENCRYPTION_KEYS names key ${id} twice`);
     const root = decodeKey(`DATA_ENCRYPTION_KEYS key ${id}`, entry.slice(colon + 1));
     const fingerprint = root.toString("hex");

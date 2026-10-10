@@ -12,7 +12,7 @@ import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -136,6 +136,8 @@ await check("a malformed ring is refused, and the error never echoes a root", ()
     `k1:${K1},k1:${K2}`,
     `K-1!:${K1}`,
     `k1:${K1},k2:${K1}`,
+    `v1:${K1}`,
+    `v3:${K1}`,
   ];
   for (const spec of bad) {
     let msg = "";
@@ -237,6 +239,7 @@ const onDisk = () => JSON.parse(readFileSync(DB_PATH, "utf8"));
 
 await check("a dry run (the default) reports v1 rows and old keys, and writes nothing", () => {
   const before = readFileSync(DB_PATH, "utf8");
+  const mtime = statSync(DB_PATH).mtimeMs;
   const r = job([], `k2:${K2},k1:${K1}`);
   assert.equal(r.status, 0, r.out);
   assert.match(r.out, /dry run/i);
@@ -245,6 +248,14 @@ await check("a dry run (the default) reports v1 rows and old keys, and writes no
   assert.match(r.out, /organisations\.integrations\.getmyinvoices\.apiKey\s+v1=1/);
   assert.match(r.out, /4 to move/);
   assert.equal(readFileSync(DB_PATH, "utf8"), before);
+  assert.equal(statSync(DB_PATH).mtimeMs, mtime, "the dry run rewrote the file");
+});
+await check("a dry run against a missing store refuses and creates nothing", () => {
+  const missing = path.join(os.tmpdir(), `zold-crypto-missing-${process.pid}`, "db.json");
+  const r = spawnSync(process.execPath, [TSX, JOB], { encoding: "utf8", env: { ...process.env, TRANSF_DB_PATH: missing } });
+  assert.notEqual(r.status, 0);
+  assert.match(`${r.stdout}${r.stderr}`, /no store at/);
+  assert.equal(existsSync(path.dirname(missing)), false);
 });
 await check("--apply refuses without a key ring", () => {
   const r = job(["--apply"], "");
@@ -271,6 +282,17 @@ await check("after the move the report says k1 can retire", () => {
   assert.match(r.out, /0 to move/);
   assert.match(r.out, /k1: no row uses it; it can be removed from DATA_ENCRYPTION_KEYS/);
   assert.match(r.out, /no v1 row in these sites/);
+});
+await check("a row already under the active key that does not decrypt fails the dry run", () => {
+  const db = onDisk();
+  const c1 = db.shopifyConnections.find((c: any) => c.id === "conn-1");
+  initStore();
+  const saved = store.shopifyConnections.find((c) => c.id === "conn-2")!.accessTokenEnc;
+  store.updateShopifyConnection("conn-2", { accessTokenEnc: c1.accessTokenEnc });
+  const r = job([], `k2:${K2},k1:${K1}`);
+  store.updateShopifyConnection("conn-2", { accessTokenEnc: saved });
+  assert.notEqual(r.status, 0);
+  assert.match(r.out, /shopifyConnections\.accessToken conn-2: does not decrypt/);
 });
 await check("a row that does not decrypt is reported and left as it was, and the job fails", () => {
   const db = onDisk();

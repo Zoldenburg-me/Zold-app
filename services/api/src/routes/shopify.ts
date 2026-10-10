@@ -182,13 +182,16 @@ function sameHex(a: string, b: string): boolean {
 }
 
 /** The shop's email-link key, created on first use. Throws when no
- *  encryption key is configured (shopifyAvailable() says so first). */
+ *  encryption key is configured; `canSignPayLinks` says so first. */
 function orderLinkSecret(c: ShopifyConnection): string {
   if (c.orderLinkSecretEnc) return SECRETS.shopifyOrderLinkSecret.open(c.id, c.orderLinkSecretEnc);
   const secret = randomBytes(32).toString("hex");
   store.updateShopifyConnection(c.id, { orderLinkSecretEnc: SECRETS.shopifyOrderLinkSecret.seal(c.id, secret) });
   return secret;
 }
+
+/** A shop can be given a signed pay link when its key exists or can be made. */
+const canSignPayLinks = (c: ShopifyConnection) => Boolean(c.orderLinkSecretEnc) || dataEncryptionProblem() === null;
 
 /** What Liquid's `{{ id | hmac_sha256: key }}` renders: lower-case hex. */
 const orderLinkProof = (secret: string, orderId: string) => createHmac("sha256", secret).update(orderId).digest("hex");
@@ -335,7 +338,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         // a link to the order's pay page signed with that store's key.
         connections: connections.map((c) => ({
           ...publicConnection(c),
-          ...(c.mode === "custom-app" ? { payLinkTemplate: payLinkTemplate(base, c) } : {}),
+          ...(c.mode === "custom-app" && canSignPayLinks(c) ? { payLinkTemplate: payLinkTemplate(base, c) } : {}),
         })),
         requests,
       });
@@ -467,8 +470,10 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         } else if (c.webhookSubscriptionId) {
           await webhookSubscriptionDelete(c.shop, tokenOf(c), c.webhookSubscriptionId);
         }
-      } catch {
-        /* the token may already be revoked; disconnecting is still right */
+      } catch (err) {
+        // The token may already be revoked; disconnecting is still right. A
+        // token we could not decrypt is logged, since Shopify was not told.
+        console.warn(`shopify: disconnect of ${c.shop} could not reach the store: ${String((err as Error)?.message ?? err).slice(0, 160)}`);
       }
       store.removeShopifyConnection(c.id);
       res.json({ ok: true });

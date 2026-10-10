@@ -8,8 +8,10 @@
  * - `MONERIUM_TOKEN_ENCRYPTION_KEY`: the v1 secret, read only to open v1
  *   values until scripts/reencrypt-fields.ts has moved every row.
  *
- * Read on each call, not at import, so a test or the re-encrypt job sets them
- * before use. Parsed values stay in this process's memory only.
+ * The ring and the blind index key are read on each call, not at import, so a
+ * test or the re-encrypt job can set them before use; the v1 secret is
+ * config/monerium.ts's, read when that loads. Parsed values stay in this
+ * process's memory only.
  */
 import {
   blindIndex,
