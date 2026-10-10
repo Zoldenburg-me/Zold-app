@@ -9,7 +9,11 @@
 .z-ic { font-family: 'Material Symbols Rounded'; font-weight: normal; font-style: normal; font-size: 20px; line-height: 1; letter-spacing: normal; text-transform: none; display: inline-block; white-space: nowrap; font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased; flex: none; }
 
 .z-skip { position: absolute; left: var(--z-space-4); top: -60px; z-index: 300; padding: 10px 14px; border-radius: var(--z-radius-sm); background: var(--z-pink); color: var(--z-bg); font-weight: 600; font-size: 14px; }
-.z-skip:focus { top: var(--z-space-3); color: var(--z-bg); }
+/* Keyboard focus only: focus handed back after a dialog or a re-render must
+   not leave a pink button over the page. */
+.z-skip:focus-visible { top: var(--z-space-3); color: var(--z-bg); }
+/* Where the skip link lands: focus moves there, no ring around the page. */
+main#main:focus:not(:focus-visible) { outline: none; }
 
 /* ---- Button --------------------------------------------------------- */
 .z-btn {
@@ -637,6 +641,13 @@ button.z-switch:hover { border-color: var(--z-line-hover); }
    screen keeps its phone column, centred in the space.
    ========================================================================== */
 .z-side { display: none; }
+/* The pay card's controls fill a phone; in the desktop column they would be
+   a 600px pill and a 600px button. Sized to their content there. */
+@media (min-width: 1024px) {
+  .z-paycard .z-seg { align-self: center; width: 100%; max-width: 320px; }
+  .z-paycard .z-seg label { min-height: 36px; }
+  .z-paycard .z-btn--full { align-self: center; width: auto; min-width: 240px; padding-inline: var(--z-space-5); }
+}
 @media (min-width: 1024px) {
   #ph-root { display: grid; grid-template-columns: 256px minmax(0, 1fr); align-items: start; max-width: none; margin: 0; }
   #ph-root::before { left: 256px; }
