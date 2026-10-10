@@ -63,9 +63,9 @@ function phChecklist(u) {
   const declined = u.passkeySafe?.recoveryChoice?.choice === "declined";
   // Zoldenburg added but not armed: the operator may not sign for it until
   // 1 € arrives from the user's bank (recovery.js zoldEnrolHtml).
-  const zoldUnarmed = safe.recovery?.status === "active" && caps.zoldenburgEnrolment && !u.zoldenburgArmed;
+  const zoldUnarmed = safe.recovery?.status === "active" && caps.zoldenburgEnrolment && !u.zoldenburgArmed && approved && u.iban;
   if (zoldUnarmed && !open && !phBannerHidden(phEnrolBannerKey(u))) {
-    return `<div class="z-banner" role="note">${Z.icon("shield")}<span>Finish Zoldenburg recovery: send 1 € from your bank. Until then Zoldenburg cannot recover this account. <a href="#recovery-settings">Finish</a></span>
+    return `<div class="z-banner" role="note">${Z.icon("shield")}<span>One step left for recovery: confirm your bank account by moving 1 € to yourself. Nothing is charged. <a href="#recovery-settings">Confirm</a></span>
       <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-rec-x" data-hide-key="${esc(phEnrolBannerKey(u))}" aria-label="Hide this">${Z.icon("close")}</button></div>`;
   }
   if (!recoveryOn && (recoveryOffered || declined) && !open && !phRecoveryBannerHidden(u)) {

@@ -323,6 +323,19 @@
   }
 
   document.addEventListener("click", async (e) => {
+    // The skip link moves focus to the content. Following its href would
+    // change the hash, which the apps read as a route.
+    const skip = e.target.closest(".z-skip");
+    if (skip) {
+      e.preventDefault();
+      const target = document.getElementById(skip.getAttribute("href").slice(1));
+      if (target) {
+        if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+        target.focus();
+      }
+      skip.blur();
+      return;
+    }
     const close = e.target.closest(".z-overlay__close");
     if (close) { closeOverlay(close.closest(".z-scrim").id); return; }
     const top = open[open.length - 1];
