@@ -15,8 +15,8 @@
  */
 import { IndexedDbStamper } from "../vendor/turnkey.js";
 import { OAUTH_STATE_KEY, readReturn, startLogin } from "./oauth.js";
+import { providerButtons } from "./providers.js";
 
-const PROVIDER_NAMES = { google: "Google", apple: "Apple" };
 
 /**
  * Back from the Google/Apple login. Returns {step: "done" | "created" |
@@ -153,8 +153,7 @@ function render(el, { caps, zold, guardians, message }) {
           : `<div class="g-actions"><button type="button" class="z-btn z-btn--primary" data-zold="add">Choose Zoldenburg</button></div>`}
     </section>` : "";
 
-  const buttons = ["google", "apple"].filter((p) => caps.turnkeyLogins?.[p])
-    .map((p) => `<button type="button" class="z-btn z-btn--primary" data-start="${p}">Add with ${PROVIDER_NAMES[p]}</button>`).join("");
+  const buttons = providerButtons(caps, "Add");
   const rows = guardians.map((g) => `<li><span translate="no">${esc(shortAddr(g.address))}</span>
       ${g.status === "active"
         ? `<span class="g-ok">Your guardian</span><button type="button" class="z-btn" data-remove="${esc(g.turnkeySubOrgId)}">Remove</button>`
@@ -166,7 +165,7 @@ function render(el, { caps, zold, guardians, message }) {
       ${rows ? `<ul class="g-list">${rows}</ul>` : ""}
       ${social.length ? ""
         : zoldOn ? `<p class="g-note">One guardian at a time: remove Zoldenburg to use your Google or Apple login.</p>`
-          : buttons ? `<div class="g-actions">${buttons}</div>` : ""}
+          : buttons ? `<div class="z-providers">${buttons}</div>` : ""}
       <p class="g-note">Tip: pick a login with a different email from your Zold account, and turn on two-step sign-in for it.</p>
     </section>` : "";
 

@@ -13,12 +13,12 @@
  */
 import { IndexedDbStamper } from "../vendor/turnkey.js";
 import { startLogin } from "../guardian/oauth.js";
+import { providerButtons } from "../guardian/providers.js";
 import { finishApprove } from "./approve.js";
 import {
   EMAIL_KEY, SECRET_KEY, TICKET_KEY, currentAuth, endedText, finalizeAfter, requestPath, saveFor, savedFor, screenFor, startRecovery,
 } from "./flow.js";
 
-const PROVIDER_NAMES = { google: "Google", apple: "Apple" };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const b64urlToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
 const bytesToB64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -202,13 +202,11 @@ async function boot() {
       <p class="r-note">Write from the email on your account and keep this page open.</p>`;
     },
     approve: () => {
-      const buttons = ["google", "apple"].filter((p) => caps.turnkeyLogins?.[p])
-        .map((p) => `<button type="button" class="z-btn z-btn--primary" data-start="${p}">Continue with ${PROVIDER_NAMES[p]}</button>`).join("");
       return `
-      <h1 tabindex="-1">Confirm with your backup login</h1>
-      <p>Log in with the Google or Apple account you chose as your backup login, and we’ll move your Zold account to this phone.</p>
+      <h1 tabindex="-1">Log in to confirm it’s you</h1>
+      <p>Use the Google or Apple account you set as your backup login. Your Zold account then moves to this phone.</p>
       <p class="r-err" id="r-err" role="alert"${s.error ? "" : " hidden"}>${esc(s.error)}</p>
-      <div class="r-actions">${buttons}</div>`;
+      <div class="z-providers">${providerButtons(caps, "Continue")}</div>`;
     },
     wait: () => {
       const until = finalizeAfter(s.request);
