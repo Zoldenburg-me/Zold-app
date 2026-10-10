@@ -182,7 +182,7 @@ sequenceDiagram
 
 1. **Account.** Email is required, because it is the recovery handle. A
    *segment* is decided at signup and is immutable from the client: EU_FULL,
-   ONCHAIN_NO_CARD, IN_COLLECTIONS or BLOCKED_*. It drives which partners may
+   ONCHAIN_NO_CARD, IN_COLLECTIONS, WALLET_ONLY or BLOCKED_*. It drives which partners may
    be called for this user (§4.3). US persons and sanctioned residences are
    refused before any row is created.
 2. **Passkey.** There is no skip and no password path.
@@ -247,8 +247,9 @@ is wrapped with it, and the profile shows how this browser holds it.
 |---|---|---|
 | EU_FULL | EU/EEA, GB and CH residents | monerium, gnosis_pay, safe, card, onchain_balance |
 | ONCHAIN_NO_CARD | Monerium will serve, card partner will not | monerium, safe, onchain_balance |
-| IN_COLLECTIONS | India | xflow_collections (GATED: needs an Indian entity) |
-| BLOCKED_US / BLOCKED_SANCTIONED / BLOCKED_UNSUPPORTED | refused at signup | none |
+| IN_COLLECTIONS | India | safe, onchain_balance, xflow_collections (GATED: needs an Indian entity) |
+| WALLET_ONLY | a known residence no fiat partner serves, minus `WALLET_DENIED` | safe, onchain_balance |
+| BLOCKED_US / BLOCKED_SANCTIONED / BLOCKED_UNSUPPORTED | refused at signup (UNSUPPORTED: an unknown code or `WALLET_DENIED`) | none |
 
 These are *per-user partner* capabilities. They are separate from the
 *per-org plan* capabilities in §7.2.

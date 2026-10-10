@@ -23,7 +23,6 @@ import {
 } from "../adapters/crypto-deposits.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import { custodyBlockerBeforeFunding, requireCapability } from "../http/guards.js";
-import { walletBlocker } from "../domain/wallet-tier.js";
 import type { PendingPasskeySafeDeployment } from "../http/pending.js";
 import { AUTH_WINDOW_SEC } from "../transfers/build.js";
 import { publicUser } from "../users/public-user.js";
@@ -358,11 +357,10 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       if (typeof enabled !== "boolean") {
         return res.status(400).json({ error: "enabled must be true or false" });
       }
-      // Conversion is a swap the user signs from their own Safe, so it needs no
-      // Monerium approval. A refused or reviewed account is told now rather
-      // than having the setting accepted and every deposit refused later.
-      const identity = enabled ? walletBlocker(user) : null;
-      if (identity) return res.status(409).json({ error: identity, kycStatus: user.kycStatus });
+      // Conversion is a swap the user signs from their own Safe: it needs an
+      // on-chain balance in the segment, not Monerium approval
+      // (docs/wallet-tier.md).
+      if (enabled && !requireCapability(user, "onchain_balance", res)) return;
       const custodyBlocked = enabled ? custodyBlockerBeforeFunding(user) : null;
       if (custodyBlocked) return res.status(409).json({ error: custodyBlocked });
       const page = user.paymentPage;

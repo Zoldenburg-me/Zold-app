@@ -8,8 +8,8 @@
  *   - the refusal copy never names the rule that fired;
  *   - the client gets capabilities but not the reasonCode;
  *   - the client cannot set or change the segment;
- *   - an IN_COLLECTIONS account is refused a partner call by the API, so a
- *     crafted request fails too.
+ *   - IN_COLLECTIONS and WALLET_ONLY accounts are refused a fiat partner call
+ *     by the API, so a crafted request fails too.
  *
  * Starts and stops its own chain and API.
  * Run: npm run onboarding:test
@@ -127,16 +127,16 @@ try {
     assert.equal(sanctioned.data.code, "BLOCKED_SANCTIONED");
   });
 
-  const nigerian = await signup({
-    name: "N", email: "n@example.com", country: "NG", citizenships: ["NG"], accountType: "individual", usAnswers: NO_US,
+  const denied = await signup({
+    name: "D", email: "d@example.com", country: "MM", citizenships: ["MM"], accountType: "individual", usAnswers: NO_US,
   });
-  check("a Nigerian resident is UNSUPPORTED and is never called sanctioned", () => {
-    assert.equal(nigerian.status, 403);
-    assert.equal(nigerian.data.code, "BLOCKED_UNSUPPORTED");
-    assert.ok(!/sanction/i.test(JSON.stringify(nigerian.data)), "must not imply a sanction");
+  check("a residence on the wallet deny list is UNSUPPORTED and is never called sanctioned", () => {
+    assert.equal(denied.status, 403);
+    assert.equal(denied.data.code, "BLOCKED_UNSUPPORTED");
+    assert.ok(!/sanction/i.test(JSON.stringify(denied.data)), "must not imply a sanction");
     // Monerium's country-policy message would name a partner to someone who
     // was never going to use it.
-    assert.ok(!/monerium/i.test(JSON.stringify(nigerian.data)), "must not name a partner");
+    assert.ok(!/monerium/i.test(JSON.stringify(denied.data)), "must not name a partner");
   });
 
   console.log("\nAllowed paths");
@@ -163,8 +163,17 @@ try {
   check("an Indian resident is IN_COLLECTIONS and is told the path is gated", () => {
     assert.equal(inUser.status, 201);
     assert.equal(inUser.data.segment.value, "IN_COLLECTIONS");
-    assert.deepEqual(inUser.data.segment.capabilities, ["xflow_collections"]);
+    assert.deepEqual([...inUser.data.segment.capabilities].sort(), ["onchain_balance", "safe", "xflow_collections"]);
     assert.match(inUser.data.segment.gate.needs, /incorporated in India/i);
+  });
+
+  const nigerian = await signup({
+    name: "N", email: "n@example.com", country: "NG", citizenships: ["NG"], accountType: "individual", usAnswers: NO_US,
+  });
+  check("a Nigerian resident gets a wallet-only account", () => {
+    assert.equal(nigerian.status, 201, JSON.stringify(nigerian.data));
+    assert.equal(nigerian.data.segment.value, "WALLET_ONLY");
+    assert.deepEqual([...nigerian.data.segment.capabilities].sort(), ["onchain_balance", "safe"]);
   });
 
   const br = await signup({
@@ -245,16 +254,30 @@ try {
   const quote = await call("POST", "/api/quotes", {
     token: inToken, body: { userId: inId, sendEur: 50, rail: "sepa" },
   });
-  check("an IN_COLLECTIONS account cannot get a quote — refused 403 in the route", () => {
+  check("an IN_COLLECTIONS account cannot get a SEPA quote — refused 403 in the route", () => {
     assert.equal(quote.status, 403);
     assert.equal(quote.data.code, "CAPABILITY_UNAVAILABLE");
-    assert.equal(quote.data.capability, "onchain_balance");
+    assert.equal(quote.data.capability, "monerium");
+  });
+
+  const ngQuote = await call("POST", "/api/quotes", {
+    token: nigerian.data.sessionToken, body: { userId: nigerian.data.id, sendEur: 50, rail: "sepa" },
+  });
+  check("a WALLET_ONLY account cannot get a SEPA quote", () => {
+    assert.equal(ngQuote.status, 403);
+    assert.equal(ngQuote.data.capability, "monerium");
   });
 
   const safe = await call("POST", `/api/users/${inId}/passkey-safe/deployment`, { token: inToken });
-  check("an IN_COLLECTIONS account cannot deploy a Safe", () => {
-    assert.equal(safe.status, 403);
-    assert.equal(safe.data.capability, "safe");
+  check("an IN_COLLECTIONS account is not refused a Safe by the capability guard", () => {
+    // It may still fail for passkey reasons; the guard is what changed.
+    assert.notEqual(safe.data.code, "CAPABILITY_UNAVAILABLE");
+  });
+
+  const ngMon = await call("POST", `/api/users/${nigerian.data.id}/monerium/connect/start`, { token: nigerian.data.sessionToken });
+  check("a WALLET_ONLY account cannot reach Monerium", () => {
+    assert.equal(ngMon.status, 403);
+    assert.equal(ngMon.data.capability, "monerium");
   });
 
   const mon = await call("POST", `/api/users/${inId}/monerium/connect/start`, { token: inToken });

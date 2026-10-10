@@ -68,6 +68,9 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!requireUserSession(req, res, user.id)) return;
       if (!requireCapability(user, "onchain_balance", res)) return;
+      // SEPA is Monerium's rail. A wallet-tier segment has an on-chain balance
+      // but no fiat partner, so the partner capability is checked by name.
+      if (rail === "sepa" && !requireCapability(user, "monerium", res)) return;
       if (!requireKycApproved(user, res)) return;
       if (!["cash", "sepa"].includes(rail)) {
         return res.status(400).json({ error: "rail must be cash or sepa" });

@@ -59,8 +59,8 @@ export function custodyBlockerBeforeFunding(user: User): string | null {
 /**
  * The gate in front of every partner call.
  *
- * Enforced here, not in the UI. An IN_COLLECTIONS account cannot reach
- * Monerium, a Safe, a card or an on-chain balance whatever it POSTs, because
+ * Enforced here, not in the UI. An IN_COLLECTIONS or WALLET_ONLY account
+ * cannot reach Monerium, a SEPA quote or a card whatever it POSTs, because
  * each of those routes checks here first.
  *
  * A user with no segment predates segmentation and is treated as EU_FULL: the

@@ -31,6 +31,8 @@ function phPayees() {
 /* Why sending is closed, and the one thing that opens it. null: open. */
 function phSendBlocked(u = user) {
   if (!HAS("onchain_balance")) return { text: "Sending is not part of this account.", action: null };
+  // Send is a bank transfer today; sending to a crypto wallet is not built.
+  if (!bankOffered(u) && !kycApproved(u)) return { text: "Sending here is a bank transfer, and this account has no bank account. Sending to a crypto wallet isn’t built yet.", action: null };
   if (!kycApproved(u) || !u?.iban) return { text: "Sending opens once Monerium has verified you and your IBAN is active.", action: { id: "ph-send-verify", label: "Verify with Monerium" } };
   return null;
 }

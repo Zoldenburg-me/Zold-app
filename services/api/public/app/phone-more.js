@@ -220,6 +220,7 @@ function phPayBody(u) {
       ${Z.button({ variant: "primary", full: true, icon: "ios_share", label: "Share link", id: "ph-pay-share" })}`;
   }
   if (!u.iban || !kycApproved(u)) {
+    if (!bankOffered(u)) return `<p class="z-hint">${esc(kycCopy(u.kycStatus, u)[2])} Use the ${esc(usdSym())} tab to get paid.</p>`;
     return `<p class="z-hint">Your IBAN appears here once Monerium has verified you and issued it.</p>
       ${Z.button({ variant: "primary", full: true, label: "Verify with Monerium", id: "ph-det-verify" })}`;
   }

@@ -15,10 +15,11 @@ PH.add = {
   tab: "home",
   html() {
     const rows = [];
-    if (HAS("monerium")) rows.push(Z.row({ lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To your IBAN, from any bank in Europe", href: "#account-details" }));
+    const bank = HAS("monerium") && bankOffered();
+    if (bank) rows.push(Z.row({ lead: Z.iconTile({ icon: "account_balance", tone: "p" }), title: "Bank transfer", sub: "To your IBAN, from any bank in Europe", href: "#account-details" }));
     if (HAS("onchain_balance")) rows.push(Z.row({ lead: Z.iconTile({ icon: "account_balance_wallet", tone: "p" }), title: "Crypto wallet", sub: `Digital dollars (${usdSym()}) from any wallet or exchange`, right: Z.tag("Beta"), href: "#add/wallet" }));
     rows.push(Z.soonRow({ lead: Z.iconTile({ icon: "attach_money" }), title: "USD account", sub: "ACH and wire in" }));
-    return `${phTop("Add money")}${phMain(`<p class="z-sub">Both land in the same account.</p>${Z.listGroup({ rows })}${phFaucetCard()}`)}`;
+    return `${phTop("Add money")}${phMain(`${bank ? `<p class="z-sub">Both land in the same account.</p>` : ""}${Z.listGroup({ rows })}${phFaucetCard()}`)}`;
   },
   bind(root) {
     const b = root.querySelector("#ph-faucet");

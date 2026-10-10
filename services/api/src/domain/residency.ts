@@ -98,6 +98,14 @@ export const US_TERRITORIES: readonly string[] = [
  */
 export const COLLECTIONS_ONLY: readonly string[] = ["IN"];
 
+/**
+ * Residences refused even the wallet tier. Not sanctioned (that is SANCTIONED
+ * above), but a FATF call-for-action jurisdiction (MM) or a regime under broad
+ * EU restrictive measures. Owner decision 2026-10-10, to be confirmed with
+ * counsel. Every other residence no fiat partner serves gets WALLET_ONLY.
+ */
+export const WALLET_DENIED: readonly string[] = ["MM", "AF", "LY", "YE", "VE", "IQ", "LB"];
+
 /** Does a partner exist that will open an on-chain account for this residence?
  *  Asks Monerium's own policy rather than holding a second opinion. */
 export function moneriumWillServe(residence: string): boolean {
@@ -107,5 +115,6 @@ export function moneriumWillServe(residence: string): boolean {
 export const isSanctioned = (code: string) => SANCTIONED.includes(normaliseCountryCode(code));
 export const isUsTerritory = (code: string) => US_TERRITORIES.includes(normaliseCountryCode(code));
 export const isEuFullResidence = (code: string) => EU_FULL_RESIDENCE.includes(normaliseCountryCode(code));
+export const isWalletDenied = (code: string) => WALLET_DENIED.includes(normaliseCountryCode(code));
 export const isCollectionsOnly = (code: string) => COLLECTIONS_ONLY.includes(normaliseCountryCode(code));
 export const cardIsProhibited = (code: string) => GNOSIS_PAY_PROHIBITED.includes(normaliseCountryCode(code));

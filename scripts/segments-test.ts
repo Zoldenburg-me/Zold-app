@@ -154,7 +154,7 @@ console.log("\nIndia — an override of the issuer's own view");
 check("an Indian resident is IN_COLLECTIONS although Monerium rates IN servable", () => {
   const d = resolveSegment(person("IN", ["IN"]));
   assert.equal(d.segment, "IN_COLLECTIONS");
-  assert.deepEqual(d.capabilities, ["xflow_collections"]);
+  assert.deepEqual(d.capabilities.sort(), ["onchain_balance", "safe", "xflow_collections"]);
 });
 
 check("IN_COLLECTIONS is GATED, and the gate names the missing piece", () => {
@@ -164,9 +164,10 @@ check("IN_COLLECTIONS is GATED, and the gate names the missing piece", () => {
   assert.match(d.gate!.needs, /Zoldenburg UG/);
 });
 
-check("an Indian resident gets NO on-chain capability of any kind", () => {
+check("an Indian resident gets the wallet but no fiat partner and no card", () => {
   const d = resolveSegment(person("IN", ["IN"]));
-  for (const c of ["monerium", "gnosis_pay", "safe", "card", "onchain_balance"] as const) {
+  for (const c of ["safe", "onchain_balance"] as const) assert.ok(can(d.segment, c), `IN_COLLECTIONS must have ${c}`);
+  for (const c of ["monerium", "gnosis_pay", "card"] as const) {
     assert.equal(can(d.segment, c), false, `IN_COLLECTIONS must not have ${c}`);
   }
 });
@@ -184,13 +185,25 @@ check("a Mexican resident is ONCHAIN_NO_CARD", () => {
   assert.equal(seg(person("MX", ["MX"])), "ONCHAIN_NO_CARD");
 });
 
-check("a NIGERIAN resident is UNSUPPORTED, not sanctioned and not promised an account", () => {
+check("a NIGERIAN resident is WALLET_ONLY: the Safe, no fiat partner, not sanctioned", () => {
   // NG is not ONCHAIN_NO_CARD: Monerium prohibits NG outright, so that path
-  // would promise an account no partner will open.
+  // would promise an IBAN no partner will open.
   const d = resolveSegment(person("NG", ["NG"]));
-  assert.equal(d.segment, "BLOCKED_UNSUPPORTED");
+  assert.equal(d.segment, "WALLET_ONLY");
   assert.equal(d.reasonCode, "no_partner_for_residence");
-  assert.notEqual(d.segment, "BLOCKED_SANCTIONED", "Nigeria is not sanctioned");
+  assert.deepEqual(d.capabilities.sort(), ["onchain_balance", "safe"]);
+});
+
+check("a residence on the wallet deny list is UNSUPPORTED, never WALLET_ONLY", () => {
+  for (const code of ["MM", "AF", "LY", "YE", "VE", "IQ", "LB"]) {
+    const d = resolveSegment(person(code, [code]));
+    assert.equal(d.segment, "BLOCKED_UNSUPPORTED", code);
+    assert.equal(d.reasonCode, "wallet_denied_residence", code);
+  }
+});
+
+check("a sanctioned citizenship still blocks a WALLET_ONLY residence", () => {
+  assert.equal(seg(person("NG", ["NG", "IR"])), "BLOCKED_SANCTIONED");
 });
 
 check("an unknown country code is UNSUPPORTED rather than quietly allowed", () => {
@@ -259,7 +272,7 @@ check("every blocked segment has zero capabilities", () => {
 
 check("only EU_FULL may reach a card, and only IN may reach Xflow", () => {
   const all = ["BLOCKED_US", "BLOCKED_SANCTIONED", "BLOCKED_UNSUPPORTED",
-    "EU_FULL", "IN_COLLECTIONS", "ONCHAIN_NO_CARD"] as const;
+    "EU_FULL", "IN_COLLECTIONS", "ONCHAIN_NO_CARD", "WALLET_ONLY"] as const;
   assert.deepEqual(all.filter((s) => can(s, "card")), ["EU_FULL"]);
   assert.deepEqual(all.filter((s) => can(s, "gnosis_pay")), ["EU_FULL"]);
   assert.deepEqual(all.filter((s) => can(s, "xflow_collections")), ["IN_COLLECTIONS"]);
