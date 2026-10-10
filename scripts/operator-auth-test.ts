@@ -219,6 +219,7 @@ await check("no open enrolment, a wrong token or an expired one opens nothing", 
   assert.equal((await req("POST", "/api/admin/auth/enrol/challenge", { token: "not-the-open-one" })).status, 403);
   const expired = writeEnrolment(dataDir, "Owner", OWNER, -1000);
   assert.equal((await req("POST", "/api/admin/auth/enrol/challenge", { token: expired })).status, 403);
+  assert.ok(!existsSync(ENROLMENT_FILE), "an expired enrolment, which names a person, is deleted when found");
 });
 await check("the Access identity must be the person being enrolled", async () => {
   const token = writeEnrolment(dataDir, "Owner", OWNER);
@@ -372,6 +373,11 @@ await check("serves the dashboard and nothing of the user app", async () => {
   });
   const onAdmin = (p: string) => run(adminHostPolicy, { path: p, headers: { host: "admin.test" } });
   for (const p of ["/admin", "/admin/users", "/admin/core.js", "/admin.css", "/api/admin/users", "/tokens.css", "/vendor/fonts/text.css"]) assert.equal(await onAdmin(p), 0, p);
+  const { ADMIN_CONTENT_SECURITY_POLICY } = await import("../services/api/src/http/policy.js");
+  assert.match(ADMIN_CONTENT_SECURITY_POLICY, /script-src 'self';/, "the admin host allows no inline script");
+  const headers: Record<string, string> = {};
+  await new Promise<void>((resolve) => adminHostPolicy({ path: "/admin", get: () => "admin.test" } as any, { setHeader: (k: string, v: string) => { headers[k] = v; } } as any, () => resolve()));
+  assert.equal(headers["content-security-policy"], ADMIN_CONTENT_SECURITY_POLICY);
   for (const p of ["/app", "/business", "/pay/x/y", "/app/main.js", "/api/users/u1", "/", "/admin/..%2fbusiness.html", "/admin/../index.html",
     "/admin/%2e%2e/index.html", "/icons/../business.html", "/admin/x/../../business.html", "/admin//x", "/admin\\..\\index.html", "/admin.cssx"]) {
     assert.equal(await onAdmin(p), 404, p);

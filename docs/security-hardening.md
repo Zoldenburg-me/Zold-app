@@ -295,7 +295,8 @@ ahead of them all.
   from the first.
 - **Its own origin.** With `ADMIN_ORIGIN` set, `/admin` is served there only,
   that host serves nothing of the user app (`adminHostPolicy`, which also
-  refuses any path that could change under decoding), the origin
+  refuses any path that could change under decoding, and sends a CSP with no
+  inline script), the origin
   is allowed only on `/api/admin`, and every operator ceremony verifies
   against it alone, so a script on the user app can neither reach the
   operator's session nor ask for the operator's passkey. Operator
@@ -347,7 +348,11 @@ Still open:
 - PR B: production refuses to start with `KYC_OPERATOR_TOKEN` set, and the
   token code goes.
 - The audit log is the plain JSON store: append-only by code, not tamper
-  evident (Phase 2).
+  evident (Phase 2), with no retention period. `operator.request` rows name
+  the user an operator read; how long they are kept is a question for
+  counsel, and the GDPR data map has no entry yet for operator access
+  control (the operator's name, email and passkeys, Cloudflare Access and
+  its identity provider).
 
 ## Phase 2: a real database
 
