@@ -426,6 +426,34 @@ await check("a command that does not exist is a plain error, not a crash", () =>
   assert.match(r.stderr, /could not start zold-no-such-command/);
 });
 
+console.log("log lines");
+await check("a URL in a log line keeps scheme and host only: keys in the path or query never print", async () => {
+  const { urlForLog } = await import("../services/api/src/http/log-safe.js");
+  const key = "fake-key-" + "x".repeat(23);
+  assert.equal(urlForLog(`https://api.candide.dev/api/v3/84532/${key}`), "https://api.candide.dev");
+  assert.equal(urlForLog(`https://rpc.example/v1?apikey=${key}`), "https://rpc.example");
+  assert.equal(urlForLog(`https://user:${key}@host.example/x`), "https://host.example");
+  assert.equal(urlForLog(undefined), "(unset)");
+  assert.ok(!urlForLog(`not a url ${key}`).includes(key));
+});
+await check("no startup or request log interpolates a raw URL or an email", async () => {
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const src = new URL("../services/api/src/", import.meta.url);
+  const offenders: string[] = [];
+  for (const f of readdirSync(src, { recursive: true }) as string[]) {
+    if (!f.endsWith(".ts")) continue;
+    const text = readFileSync(new URL(f, src), "utf8");
+    // Whole calls, so a template literal spread over several lines is read too.
+    for (const call of text.matchAll(/console\.(?:log|warn|error|info)\(([\s\S]*?)\);/g)) {
+      const body = call[1];
+      if (/\$\{(?![^}]*urlForLog)[^}]*(Url|URL|\.url)\b[^}]*\}/.test(body) || /\$\{[^}]*\bemail\b[^}]*\}/.test(body)) {
+        offenders.push(`${f}:${text.slice(0, call.index).split("\n").length}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, []);
+});
+
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
 console.log("\nsecurity hardening: all checks passed");
