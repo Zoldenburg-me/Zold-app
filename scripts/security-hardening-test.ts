@@ -8,7 +8,10 @@
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { chmodSync, closeSync, openSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import type { AddressInfo } from "node:net";
 
 process.env.AUTH_RATE_LIMIT_PER_MIN = "20";
@@ -27,6 +30,7 @@ const { hashToken, ownerInvoiceView } = await import("../services/api/src/domain
 const { apiRateLimit, clientKey, securityHeaders, securityHeadersFor } = await import("../services/api/src/http/policy.js");
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
+const { persist } = await import("../services/api/src/store/db.js");
 
 initStore();
 let failed = 0;
@@ -367,12 +371,59 @@ console.log("a passkey replaced by recovery while an approval is being verified"
 }
 
 console.log("database file");
-await check("the database file is readable by its owner only", async () => {
-  const { statSync } = await import("node:fs");
-  const { persist } = await import("../services/api/src/store/db.js");
-  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
+await check("the database file is readable by its owner only, even over a stale world-readable .tmp", () => {
+  const dbPath = process.env.TRANSF_DB_PATH!;
+  rmSync(dbPath, { force: true });
+  writeFileSync(dbPath + ".tmp", "{}", { mode: 0o644 });
+  chmodSync(dbPath + ".tmp", 0o644);
   persist();
-  assert.equal(statSync(process.env.TRANSF_DB_PATH!).mode & 0o777, 0o600);
+  assert.equal(statSync(dbPath).mode & 0o777, 0o600);
+});
+
+console.log("secrets runner (scripts/with-env-fd.mjs)");
+const RUNNER = new URL("./with-env-fd.mjs", import.meta.url).pathname;
+const runWithSecrets = (dotenv: string | null, command: string[], env: NodeJS.ProcessEnv = {}) => {
+  const file = path.join(os.tmpdir(), `zold-runner-test-${process.pid}.env`);
+  writeFileSync(file, dotenv ?? "");
+  const fd = openSync(file, "r");
+  try {
+    const stdio: ("ignore" | "pipe" | number)[] = ["ignore", "pipe", "pipe"];
+    if (dotenv !== null) stdio.push(fd);
+    return spawnSync(process.execPath, [RUNNER, ...command], { stdio, env: { PATH: process.env.PATH, ...env }, encoding: "utf8" });
+  } finally {
+    closeSync(fd);
+    rmSync(file, { force: true });
+  }
+};
+const node = (code: string) => [process.execPath, "-e", code];
+await check("refuses to start the command when nothing was decrypted", () => {
+  for (const empty of ["", "# only a comment\n\n"]) {
+    const r = runWithSecrets(empty, node("process.stdout.write('started')"));
+    assert.equal(r.status, 1);
+    assert.equal(r.stdout, "");
+    assert.match(r.stderr, /no secrets decrypted/);
+  }
+});
+await check("refuses when there is no fd 3 at all", () => {
+  const r = runWithSecrets(null, node("process.stdout.write('started')"));
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /could not read secrets on fd 3/);
+});
+await check("decrypted values reach the command; a variable already set wins", () => {
+  const r = runWithSecrets("A=from_fd\nB=from_fd\n", node("process.stdout.write(process.env.A + ',' + process.env.B)"), { B: "from_env" });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, "from_fd,from_env");
+});
+await check("the command's exit code and killing signal come back out", () => {
+  assert.equal(runWithSecrets("A=1\n", node("process.exit(7)")).status, 7);
+  const killed = runWithSecrets("A=1\n", node("process.kill(process.pid, 'SIGTERM')"));
+  assert.equal(killed.signal ?? (killed.status === 143 ? "SIGTERM" : killed.status), "SIGTERM");
+});
+await check("a command that does not exist is a plain error, not a crash", () => {
+  const r = runWithSecrets("A=1\n", ["zold-no-such-command"]);
+  assert.equal(r.status, 127);
+  assert.match(r.stderr, /could not start zold-no-such-command/);
 });
 
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });

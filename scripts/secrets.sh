@@ -23,10 +23,12 @@ case "$cmd" in
       echo "an identity is already in the Keychain under $AGE_KEYCHAIN_SERVICE; not replacing it" >&2
       exit 1
     fi
-    secret="$("$AGE_KEYGEN" 2>/dev/null | grep '^AGE-SECRET-KEY-')"
-    # Through `security -i` on stdin, so the key is never in a process's argv.
+    secret="$("$AGE_KEYGEN" 2>/dev/null | grep '^AGE-SECRET-KEY-')" || { echo "age-keygen failed" >&2; exit 1; }
+    # The key goes only through pipes from the printf builtin: never in a
+    # process's argv, and never through a here-string, which bash 3.2 (the
+    # macOS bash) writes to a temp file.
     printf 'add-generic-password -s %s -a %s -w %s\n' "$AGE_KEYCHAIN_SERVICE" "$USER" "$secret" | security -i
-    "$AGE_KEYGEN" -y <<<"$secret" >>"$AGE_RECIPIENTS"
+    printf '%s\n' "$secret" | "$AGE_KEYGEN" -y >>"$AGE_RECIPIENTS"
     unset secret
     echo "identity stored in the Keychain; public key appended to $AGE_RECIPIENTS"
     ;;
@@ -48,7 +50,11 @@ case "$cmd" in
     if [[ -f "$ROOT/.env" ]]; then
       echo "warning: plaintext $ROOT/.env still exists; delete it once .env.age works" >&2
     fi
-    exec node "$ROOT/scripts/with-env-fd.mjs" "$@" 3< <("$AGE" -d -i <(age_identity) "$enc")
+    # Decrypt in full first: age streams 64 KiB chunks, so a damaged file can
+    # print its first chunks before failing. Only a clean exit is handed on,
+    # through a pipe (a here-string would be a temp file in bash 3.2).
+    plaintext="$("$AGE" -d -i <(age_identity) "$enc")" || { echo "could not decrypt $enc; not starting the command" >&2; exit 1; }
+    exec node "$ROOT/scripts/with-env-fd.mjs" "$@" 3< <(printf '%s\n' "$plaintext")
     ;;
 
   seal)
@@ -57,7 +63,7 @@ case "$cmd" in
     dir="${dir%/}"
     tar -C "$(dirname "$dir")" -czf - "$(basename "$dir")" | "$AGE" -R "$AGE_RECIPIENTS" -o "$dir.tar.age.tmp"
     mv "$dir.tar.age.tmp" "$dir.tar.age"
-    echo "wrote $dir.tar.age. Check it with 'secrets.sh unseal $dir.tar.age /tmp/check', then delete $dir."
+    echo "wrote $dir.tar.age. Check it with 'secrets.sh unseal $dir.tar.age \"\$(mktemp -d)/check\"', then delete that and $dir."
     ;;
 
   unseal)
@@ -65,8 +71,13 @@ case "$cmd" in
     src="${1:?usage: secrets.sh unseal FILE.tar.age DEST}"
     dest="${2:?usage: secrets.sh unseal FILE.tar.age DEST}"
     [[ -e "$dest" ]] && { echo "refusing: $dest exists" >&2; exit 1; }
-    mkdir -p "$dest"
-    "$AGE" -d -i <(age_identity) "$src" | tar -C "$dest" -xzf -
+    # Unpack beside the destination and move it into place only on success,
+    # so a failed decrypt leaves nothing that blocks the retry.
+    mkdir -p "$(dirname "$dest")"
+    staging="$(mktemp -d "$(dirname "$dest")/.unseal.XXXXXX")"
+    trap 'rm -rf "$staging"' EXIT
+    "$AGE" -d -i <(age_identity) "$src" | tar -C "$staging" -xzf -
+    mv "$staging" "$dest"
     echo "unsealed into $dest"
     ;;
 
