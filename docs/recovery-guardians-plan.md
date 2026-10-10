@@ -95,8 +95,16 @@ is the only defence. Before any new guardian kind ships:
 
 - When a recovery request reaches `executed` (grace period running), and when
   a request is created, alert the owner:
-  - an **in-app banner on every signed-in session** with a Cancel button
-    (passkey-signed `cancelRecovery`, `wallet/candide.ts`);
+  - **in-app banner — built.** /app draws a strip on top of every screen
+    (`phRecBar`, `app/phone-home.js`) while a recovery is on chain, a
+    Zoldenburg request is open, or the check failed; the account poll reads
+    both guardians once a minute and on tab focus, and redraws only the strip.
+    "Review" opens the alert screen, whose Cancel is the passkey-signed
+    `cancelRecovery` (`wallet/candide.ts`). "It was me" hides that one
+    recovery in that tab; a failed check is never hidden. /business re-reads
+    every minute and on focus (`business/shell.js`) and links to the same
+    screen. Covered offline by `recovery-alert:ui:test`; never seen against a
+    real recovery, since none has run on chain (`status.md`).
   - **email** to the account address through `adapters/mailer.ts`. Mail is off
     today (`status.md`); switching it on needs a real SMTP provider with a
     processing agreement (`security-hardening.md`).
@@ -356,7 +364,8 @@ residency not yet confirmed). Biometric processing rests on explicit consent
 
 ## Order of PRs
 
-1. Phase 0 alerts (banner + mail transport behind its flag).
+1. Phase 0 alerts: the banner is built; the mail transport behind its flag
+   is next.
 2. Phase 1 enrolment 1 € check, then the recovery-time Didit + 1 € checks and
    the operator gate.
 3. Phase 2 Turnkey integration + own social guardian.

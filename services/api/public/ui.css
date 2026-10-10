@@ -524,6 +524,12 @@ a.z-switch:hover { border-color: var(--z-line-hover); color: var(--z-text); }
 .z-banner:hover { color: var(--z-text); border-color: var(--z-amber); }
 .z-banner > .z-ic:first-child { font-size: 20px; color: var(--z-amber); }
 .z-banner > span:not(.z-ic) { flex: 1; }
+/* A recovery under way: on top of every app screen (app/phone-home.js). */
+.z-recbar { padding: var(--z-space-2) var(--z-space-4) 0; }
+.z-recbar:empty { display: none; }
+.z-banner--alert { border-color: var(--z-pink-border); background: var(--z-pink-tint); }
+.z-banner--alert > .z-ic:first-child { color: var(--z-pink-soft); }
+.z-banner > .z-btn { flex: none; }
 .z-cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--z-space-2); }
 .z-cols > .z-field { min-width: 0; }
 .z-input--num { text-align: right; font-variant-numeric: tabular-nums; }

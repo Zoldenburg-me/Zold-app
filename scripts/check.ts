@@ -65,6 +65,7 @@ const scripts = [
   "final-state:test",
   "business:test",
   "business:access:test",
+  "recovery-alert:ui:test",
   "draft:test",
   "draft:failure:test",
   "payment-review:test",
