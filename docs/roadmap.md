@@ -2,6 +2,10 @@
 
 Linked from `AGENTS.md`.
 
+- **Wallet tier**: the Safe and every crypto feature without KYC, for
+  residences Monerium does not serve too; fiat rails keep their partner's KYC.
+  Scope, owner decisions and PR order: `docs/wallet-tier.md`.
+
 0. **Payout partners**: dLocal (stablecoin-funded payouts, 60+ markets) and
    Yellow Card (Africa, settles natively in USDC). Not engaged. Pin down
    settlement currency, prefunding, fees/FX, recipient KYC ownership, caps.
