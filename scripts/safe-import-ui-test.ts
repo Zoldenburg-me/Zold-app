@@ -300,4 +300,21 @@ await check("recovery: offered to a Safe Zold deployed, held back from an import
   assert.notEqual(run('obGuard("recovery-email")'), "recovery-email");
 });
 
+await check("a segment without a Safe (India collections) never asks to deploy one", async () => {
+  setCaps({ safeImport: true, zoldenburgRecovery: true, emailVerification: false });
+  const india = { segment: { value: "IN_COLLECTIONS", capabilities: ["xflow_collections"] } };
+  setUser(company({ accountType: "individual", ...india }));
+  assert.equal(run("needsPasskeySafeSetup()"), false);
+  assert.equal(run("obNextAfterAccount()"), null, "no Monerium either: straight to the app, whose Home names the gate");
+  assert.notEqual(run('obGuard("p-passkey")'), "p-passkey");
+  await run("finishPasskeySafeSetup()");
+  assert.ok(!deployed(), "the server refuses this deployment with 403 CAPABILITY_UNAVAILABLE");
+  // An account with the capability still deploys, and one that predates
+  // segmentation is read as having everything.
+  setUser(company({ accountType: "individual", segment: { value: "EU_FULL", capabilities: ["monerium", "safe"] } }));
+  assert.equal(run("needsPasskeySafeSetup()"), true);
+  setUser(company({ accountType: "individual" }));
+  assert.equal(run("needsPasskeySafeSetup()"), true);
+});
+
 console.log(`safe-import-ui: ${pass} ok`);
