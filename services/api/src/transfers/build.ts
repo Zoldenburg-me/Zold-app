@@ -22,6 +22,7 @@ import {
   prepareTransferExecution,
   safeMessageHash,
 } from "../wallet/candide.js";
+import { describeCause, redactedMessage } from "../http/log-cause.js";
 
 /** How long a device signature stays submittable. */
 export const AUTH_WINDOW_SEC = 15 * 60;
@@ -305,11 +306,11 @@ async function prepareTransferFromQuote(
           } catch (err: any) {
             custody = {
               mode: "orchestrator",
-              reason: `Safe-executed batch unavailable: ${err?.message ?? err}`,
+              reason: `Safe-executed batch unavailable: ${redactedMessage(err)}`,
               feeToOrchestrator: true,
             };
             console.error(
-              `Safe swap batch unavailable for ${transfer.id} (falling back to plain debit): ${err?.message ?? err}`,
+              `Safe swap batch unavailable for ${transfer.id} (falling back to plain debit): ${describeCause(err)}`,
             );
           }
         }
@@ -340,7 +341,7 @@ async function prepareTransferFromQuote(
         // refuse with a precise reason, which beats failing creation for a
         // bundler hiccup. Say why here so the refusal is diagnosable.
         console.error(
-          `Safe execution preparation failed for ${transfer.id}: ${err?.message ?? err}`,
+          `Safe execution preparation failed for ${transfer.id}: ${describeCause(err)}`,
         );
       }
     }

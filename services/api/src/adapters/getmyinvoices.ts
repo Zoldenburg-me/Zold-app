@@ -25,6 +25,7 @@
  * missing) or "unknown".
  */
 import { GETMYINVOICES } from "../config.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export interface GmiConfig {
   apiKey: string;
@@ -165,7 +166,7 @@ export class GetMyInvoicesClient {
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (e: any) {
-      throw new GmiApiError(0, `GetMyInvoices unreachable: ${String(e?.message ?? e).slice(0, 160)}`);
+      throw new GmiApiError(0, `GetMyInvoices unreachable: ${redactedMessage(e).slice(0, 160)}`);
     }
     const text = await res.text();
     let data: any = {};
@@ -303,7 +304,7 @@ export class GetMyInvoicesClient {
           transactionUid = (await this.findBankTransactions(bankAccountUid, marker, tx.bookingDate).catch(() => []))[0]?.transactionUid;
           if (transactionUid) break;
         }
-        if (!transactionUid) return { outcome: "unknown", error: (err as Error).message };
+        if (!transactionUid) return { outcome: "unknown", error: redactedMessage(err) };
       }
     }
     if (!documentUid) return { outcome, transactionUid, assigned: false };

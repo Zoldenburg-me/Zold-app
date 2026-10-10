@@ -47,6 +47,7 @@ import type {
   Transfer,
   User,
 } from "./store/types.js";
+import { describeCause } from "./http/log-cause.js";
 
 export * from "./store/types.js";
 export { initStore } from "./store/db.js";
@@ -72,7 +73,7 @@ function announceStateChange(t: Transfer, from: Transfer["state"]) {
     try {
       listener(t, from);
     } catch (err) {
-      console.error(`store: transfer state listener failed for ${t.id}: ${(err as Error).message}`);
+      console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`);
     }
   }
 }

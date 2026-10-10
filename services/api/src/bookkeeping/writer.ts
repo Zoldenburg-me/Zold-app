@@ -31,6 +31,7 @@ import {
 import { safeBooksStart } from "../domain/safe-books.js";
 import type { MoneriumOrderLike } from "../documents.js";
 import { mergeStatementLines, projectStatementLines, type StatementInputs } from "./statement.js";
+import { describeCause } from "../http/log-cause.js";
 
 /**
  * Rule 2. No dex, LI.FI, RFQ or CoW swap has executed with real money, so a
@@ -200,7 +201,7 @@ export function writeStatementLines(): { added: number; updated: number } {
           added += r.added;
           updated += r.updated;
         } catch (err: any) {
-          console.error(`bookkeeping: could not write statement lines for ${u.id}: ${err?.message ?? err}`);
+          console.error(`bookkeeping: could not write statement lines for ${u.id}: ${describeCause(err)}`);
         }
       }
     });

@@ -9,6 +9,7 @@ import type express from "express";
 import { SECURITY } from "../config.js";
 import { store, type User } from "../store.js";
 import { verifyAssertionForChallenge } from "../webauthn.js";
+import { redactedMessage } from "./log-cause.js";
 
 export async function checkOpAssertion(
   user: User,
@@ -44,7 +45,7 @@ export async function checkOpAssertion(
     if (!updated) throw new Error("this passkey is no longer the account's passkey");
     return updated;
   } catch (err: any) {
-    res.status(401).json({ error: `That passkey approval did not check out (${err?.message ?? err}). Start again.`, code: "BAD_ASSERTION" });
+    res.status(401).json({ error: `That passkey approval did not check out (${redactedMessage(err, { keepHosts: true })}). Start again.`, code: "BAD_ASSERTION" });
     return undefined;
   }
 }
