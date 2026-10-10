@@ -12,6 +12,8 @@
  * login. It never becomes a user inside a sub-org (wallet/turnkey.ts).
  */
 const enabled = process.env.TURNKEY_GUARDIANS === "1";
+/** Google web client ids end in this; the other id in the list is Apple's services id. */
+const GOOGLE_CLIENT_SUFFIX = ".apps.googleusercontent.com";
 
 export const TURNKEY = (() => {
   const cfg = {
@@ -41,5 +43,10 @@ export const TURNKEY = (() => {
     }
     if (!/^https:\/\//.test(cfg.baseUrl)) throw new Error("TURNKEY_API_BASE_URL must be https");
   }
-  return cfg;
+  const google = cfg.oauthClientIds.find((id) => id.endsWith(GOOGLE_CLIENT_SUFFIX)) ?? null;
+  const apple = cfg.oauthClientIds.find((id) => !id.endsWith(GOOGLE_CLIENT_SUFFIX)) ?? null;
+  if (enabled && cfg.oauthClientIds.length > (google ? 1 : 0) + (apple ? 1 : 0)) {
+    throw new Error("TURNKEY_OAUTH_CLIENT_IDS takes at most one Google client id and one Apple services id");
+  }
+  return { ...cfg, googleClientId: google, appleClientId: apple };
 })();
