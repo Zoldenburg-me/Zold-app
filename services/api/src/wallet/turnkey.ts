@@ -143,7 +143,8 @@ export function checkGuardianOidcToken(oidcToken: unknown, publicKey: unknown) {
   const providerName = typeof claims.iss === "string" ? OIDC_ISSUERS[claims.iss] : undefined;
   if (!providerName) bad("only Google and Apple logins can be guardians");
   const aud = Array.isArray(claims.aud) && claims.aud.length === 1 ? claims.aud[0] : claims.aud;
-  if (typeof aud !== "string" || !TURNKEY.oauthClientIds.includes(aud)) bad("issued for another app");
+  const ours = providerName === "Google" ? TURNKEY.googleClientId : TURNKEY.appleClientId;
+  if (typeof aud !== "string" || !ours || aud !== ours) bad("issued for another app");
   if (claims.nonce !== oidcNonceFor(publicKey as string)) bad("not bound to this browser's key");
   if (typeof claims.exp !== "number" || claims.exp * 1000 <= Date.now()) bad("expired");
   if (typeof claims.sub !== "string" || !claims.sub) bad("no subject");
