@@ -79,6 +79,7 @@ const scripts = [
   "identity:test",
   "plan:test",
   "admin:test",
+  "operator:test",
   "review-resolution:test",
   "invoicing:test",
   "async-errors:test",

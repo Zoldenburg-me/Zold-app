@@ -36,7 +36,7 @@ import { createFaucetRouter } from "./routes/faucet.js";
 import { capabilities } from "./capabilities.js";
 import { publicUser } from "./users/public-user.js";
 import { urlForLog } from "./http/log-safe.js";
-import { apiRateLimit, originPolicy, securityHeaders } from "./http/policy.js";
+import { apiRateLimit, adminHostPolicy, originPolicy, securityHeaders } from "./http/policy.js";
 import {
   requireSession,
   requireUserSession,
@@ -70,6 +70,8 @@ import { routeAsyncRejections } from "./http/async-errors.js";
 import { describeCause, describeError, redactedMessage } from "./http/log-cause.js";
 import { recordServerError } from "./http/error-log.js";
 import { knownError } from "./http/known-errors.js";
+import { createOperatorGate } from "./operators/gate.js";
+import { createOperatorAuthRouter } from "./routes/operator-auth.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -84,6 +86,7 @@ app.use(express.json({
 // outermost thing every request passes through, readable in one place.
 app.use(securityHeaders);
 app.use(originPolicy);
+app.use(adminHostPolicy);
 
 // Where the client address comes from. Default 0 = the socket peer, correct
 // only with nothing in front; behind a proxy that address is the proxy, so every
@@ -94,6 +97,11 @@ app.use("/api", apiRateLimit);
 // Pages and static assets, declared before the API routers so nothing under
 // /api can be shadowed by a file on disk.
 app.use(createPageRouter());
+// Every /api/admin route, in whichever router below declares it, passes the
+// operator gate first: Cloudflare Access, an operator passkey session (or the
+// read-only operator token), and a fresh approval for each change.
+app.use("/api/admin", createOperatorGate());
+app.use("/api", createOperatorAuthRouter());
 
 /**
  * The organisation domain (docs/business-accounts.md).

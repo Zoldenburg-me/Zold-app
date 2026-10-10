@@ -107,10 +107,10 @@ Order in `server.ts`:
    two buckets. **auth** (20/min) covers `/passkey*`, `/webauthn/challenge`,
    `/recovery*`, `/r/`, `/v/`, `/pay/<h>/<code>`, `/shopify/`, `/admin*`,
    `/invoice-links/`, `POST …/monerium/api-keys` and `POST /users`. **general**
-   (300/min) covers everything else. `/admin*` with a valid operator token
-   has its own **operator** bucket (`OPERATOR_RATE_LIMIT_PER_MIN`, 300/min):
-   the dashboard's refresh loop alone sends about 16 a minute; a wrong token
-   stays on auth. `/service/*` with a valid checkout-service credential has
+   (300/min) covers everything else. `/admin*` with a live operator passkey
+   session, or the read-only operator token, has its own **operator** bucket
+   per operator (`OPERATOR_RATE_LIMIT_PER_MIN`, 300/min): the dashboard's
+   refresh loop alone sends about 16 a minute; a wrong bearer stays on auth. `/service/*` with a valid checkout-service credential has
    its own **service** bucket (`SERVICE_RATE_LIMIT_PER_MIN`, 120/min); a
    wrong one stays on auth. Matching uses the mount-relative path.
 6. The page router serves the HTML routes, then `express.static(public)`. It
@@ -140,9 +140,14 @@ With in-memory pending executions, an unknown state must not keep signing.
 - `requireUserSession(req, res, userId)` adds a check that the session user is
   the path user. Org routes use `resolveOrg`, which checks session plus
   **active** membership and returns 404 otherwise.
-- The operator uses `KYC_OPERATOR_TOKEN` (at least 24 characters) as a bearer,
-  compared in constant time. If it is unset the console answers 503 (fails
-  closed). It is never a user session.
+- The operator is a named record (`operators/`). Every `/api/admin` route
+  passes one gate (`operators/gate.ts`) mounted ahead of every admin router:
+  Cloudflare Access (always off the local stack, checked by the server from
+  `Cf-Access-Jwt-Assertion`), then an operator passkey session (`zop_`, 8 h,
+  30 min idle) whose email equals the Access identity, then a fresh passkey
+  approval for every non-GET, bound to its method, path and body. Operator
+  passkeys verify against `ADMIN_ORIGIN` only. `KYC_OPERATOR_TOKEN` opens
+  reads only. Neither is ever a user session.
 
 ### 4.2 The three independent checks
 
@@ -1329,7 +1334,7 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | | |
 |---|---|
 | `GET /service/checkout/transfers/:id` (checkout credential) | The pay-with-zold checkout service reads one transfer. Served only for a SEPA transfer whose reference carries `ZP` + 12 hex standing alone; any other id, existing or not, is the same 404. The body is the allowlist `{id, state, rail, receiveEur, recipientIban, reference, updatedAt}`, `no-store`; `recipientIban` is only its last four characters (`…3000`). Every authenticated read writes a `service.checkout_transfer_read` audit row (credential id, transfer id, served or not_found). 503 until a credential is issued, 401 for a wrong one. A valid credential has its own rate bucket (`SERVICE_RATE_LIMIT_PER_MIN`, 120); a wrong one counts on the auth bucket. |
-| `POST /admin/service-credentials/checkout/rotate` (operator token, A) | Issue a `zsc_` token, returned once; the store keeps its SHA-256 only. Every earlier checkout credential stops `CHECKOUT_SERVICE_ROTATION_OVERLAP_SEC` (24 h) later, never later than a past rotation set; `{"revokePrevious": true}` (JSON only; a form body is 415, a non-boolean 400) ends them at once, for a leaked one. Audited as `service.credential_rotated` with `revokedPrevious`. |
+| `POST /admin/service-credentials/checkout/rotate` (operator, A) | Issue a `zsc_` token, returned once; the store keeps its SHA-256 only. Every earlier checkout credential stops `CHECKOUT_SERVICE_ROTATION_OVERLAP_SEC` (24 h) later, never later than a past rotation set; `{"revokePrevious": true}` (JSON only; a form body is 415, a non-boolean 400) ends them at once, for a leaked one. Audited as `service.credential_rotated` with `revokedPrevious`. |
 | Webhook out (optional) | With `CHECKOUT_WEBHOOK_URL` and `CHECKOUT_WEBHOOK_SECRET` (`whsec_`, ≥24 bytes; https outside localhost), a state change on a checkout transfer POSTs `{transferId}` signed with Standard Webhooks. One `webhook-id` per delivery across retries (the receiver dedupes on it), a fresh unix-seconds timestamp per attempt (the receiver applies its replay window), backoff ×4 from `CHECKOUT_WEBHOOK_RETRY_BASE_MS` up to `CHECKOUT_WEBHOOK_MAX_ATTEMPTS`. Retries live in memory; the service re-reads through the GET and must not depend on the webhook. |
 
 Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses startup):
@@ -1480,9 +1485,9 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 
 | | |
 |---|---|
-| `GET /admin/{stats, overview, issues, users, transactions, errors}` (operator token, A) | Dashboard reads; derived views in `src/admin/`. |
-| `GET /admin/users/:id` (operator token, A) | One account: projection, onboarding stage, transactions, recoveries, issues, audit. |
-| `GET /admin/users/:id/monerium[?live=1]` (operator token, A) | What Zold stored from Monerium; `live=1` also reads Monerium on the account's own connection (refused without one), stores nothing, audits the read. |
-| `GET /admin/monerium[?live=1]` (operator token, A) | Deployment-wide Monerium view; `live=1` checks the app credentials. |
-| `GET /admin/recoveries` (operator token, A) | Zoldenburg requests and guardian enrolments. Each request's account carries `moneriumProfileHistory`, every Monerium profile it recorded (append-only, store.updateUser). |
-| `POST /admin/orgs/:orgId/plan` (operator token, A) | Grant a plan. The only way onto a paid plan while there is no billing. |
+| `GET /admin/{stats, overview, issues, users, transactions, errors}` (operator, A) | Dashboard reads; derived views in `src/admin/`. |
+| `GET /admin/users/:id` (operator, A) | One account: projection, onboarding stage, transactions, recoveries, issues, audit. |
+| `GET /admin/users/:id/monerium[?live=1]` (operator, A) | What Zold stored from Monerium; `live=1` also reads Monerium on the account's own connection (refused without one), stores nothing, audits the read. |
+| `GET /admin/monerium[?live=1]` (operator, A) | Deployment-wide Monerium view; `live=1` checks the app credentials. |
+| `GET /admin/recoveries` (operator, A) | Zoldenburg requests and guardian enrolments. Each request's account carries `moneriumProfileHistory`, every Monerium profile it recorded (append-only, store.updateUser). |
+| `POST /admin/orgs/:orgId/plan` (operator, A) | Grant a plan. The only way onto a paid plan while there is no billing. |

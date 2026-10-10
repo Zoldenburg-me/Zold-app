@@ -32,6 +32,7 @@ import { fileURLToPath } from "node:url";
 import lzString from "lz-string";
 import { decodeFunctionData, getAddress, hashTypedData, parseAbi } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { operatorKit, type OperatorKit } from "./_operator.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.TRANSF_API_PORT ?? 3043);
@@ -274,7 +275,14 @@ for (const [name, url] of [[`api :${API_PORT}`, `${API}/api/health`], [`chain :$
   }
 }
 
+let opKit: OperatorKit | undefined;
 async function call(pathname: string, body?: any, method?: string, bearer = token, extra: Record<string, string> = {}) {
+  // A change made with the operator token goes through an operator passkey
+  // session and a fresh approval; the token itself opens reads only.
+  if (bearer === OPERATOR && opKit && (method ?? (body ? "POST" : "GET")) !== "GET") {
+    const r = await opKit.call(method ?? "POST", pathname, body ?? {});
+    return { status: r.status, data: r.body, text: JSON.stringify(r.body) };
+  }
   const headers: Record<string, string> = { ...extra };
   if (body) headers["content-type"] = "application/json";
   if (bearer) headers.authorization = `Bearer ${bearer}`;
@@ -334,6 +342,7 @@ try {
     await new Promise((r) => setTimeout(r, 300));
   }
 
+  opKit = await operatorKit({ base: API, origin: API, rpId: "localhost", dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
   const health = await call("/api/health");
   await t("the capability is published when a guardian address is configured", () => {
     assert.equal(health.data.capabilities?.zoldenburgRecovery, true);
