@@ -26,7 +26,7 @@ import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import lzString from "lz-string";
@@ -46,6 +46,9 @@ const guardian = privateKeyToAccount(guardianKey);
 const impostor = privateKeyToAccount(generatePrivateKey());
 const OPERATOR = `op-${randomBytes(16).toString("hex")}`;
 const EMAIL = "zold.recover@example.com";
+const IBAN_KEY = `iban-${randomBytes(24).toString("hex")}`;
+// The same key in this process, so the key id written below is the API's own.
+process.env.RECOVERY_IBAN_HMAC_KEY = IBAN_KEY;
 
 process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = guardian.address;
 process.env.CANDIDE_RECOVERY_MODULE_ADDRESS = MODULE;
@@ -142,6 +145,7 @@ async function makePasskey(label: string) {
 
 const G = await import("../services/api/src/recovery/zoldenburg-guardian.js");
 const { publicRecoveryRequest } = await import("../services/api/src/recovery.js");
+const { ibanKeyId } = await import("../services/api/src/recovery/enrolment-key.js");
 const { SocialRecoveryModule } = await import("abstractionkit");
 
 console.log("1/2 typed data, signatures, calldata");
@@ -297,18 +301,11 @@ const fromWallet = (w: any) => {
   return { ...w, types, message: { ...w.message, newThreshold: BigInt(w.message.newThreshold), nonce: BigInt(w.message.nonce) } };
 };
 
-try {
-  bg(process.execPath, [bin("hardhat"), "node", "--port", RPC_PORT]);
-  for (const s = Date.now(); Date.now() - s < 30_000; ) {
-    try {
-      const r = await fetch(RPC_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }) });
-      if (r.ok) break;
-    } catch {}
-    await new Promise((r) => setTimeout(r, 300));
-  }
-  assert.equal(spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit", env: { ...process.env, TRANSF_RPC_URL: RPC_URL } }).status, 0, "deploy failed");
-  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
-  bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
+/** The API under test. Stopped and started again to arm an account the way
+ *  a 1 € enrolment would: the harness has no Monerium to send the 1 €. */
+let api: ChildProcess | undefined;
+async function startApi() {
+  api = bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
     TRANSF_API_PORT: String(API_PORT),
     TRANSF_RPC_URL: RPC_URL,
     PORT: String(API_PORT),
@@ -327,12 +324,50 @@ try {
     KYC_OPERATOR_TOKEN: OPERATOR,
     LOCAL_HARNESS: "1",
     KYC_AUTO_APPROVE: "1",
+    RECOVERY_IBAN_HMAC_KEY: IBAN_KEY,
   });
   for (const s = Date.now(); ; ) {
     try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}
     if (Date.now() - s > 30_000) throw new Error("API did not come up");
     await new Promise((r) => setTimeout(r, 300));
   }
+}
+/** Write an enrolment the way recovery/zoldenburg-enrolment.ts records one,
+ *  with the API stopped: the harness has no Monerium to deliver the 1 €.
+ *  zoldenburg-enrolment-test.ts covers how a real one gets there. */
+async function armInDb(userId: string) {
+  await stopApi();
+  const dbPath = process.env.TRANSF_DB_PATH!;
+  const db = JSON.parse(readFileSync(dbPath, "utf8"));
+  db.users.find((x: any) => x.id === userId).zoldenburgEnrolment = {
+    bankAccountHmac: createHash("sha256").update("harness-bank-account").digest("hex"),
+    keyId: ibanKeyId(),
+    bankAccountLast4: "3000",
+    orderId: "harness-order",
+    enrolledAt: new Date().toISOString(),
+  };
+  writeFileSync(dbPath, JSON.stringify(db), { mode: 0o600 });
+  await startApi();
+}
+async function stopApi() {
+  if (!api || api.exitCode !== null) return;
+  const exited = new Promise((r) => api!.once("exit", r));
+  api.kill("SIGTERM");
+  await exited;
+}
+
+try {
+  bg(process.execPath, [bin("hardhat"), "node", "--port", RPC_PORT]);
+  for (const s = Date.now(); Date.now() - s < 30_000; ) {
+    try {
+      const r = await fetch(RPC_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }) });
+      if (r.ok) break;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  assert.equal(spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit", env: { ...process.env, TRANSF_RPC_URL: RPC_URL } }).status, 0, "deploy failed");
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
+  await startApi();
 
   const health = await call("/api/health");
   await t("the capability is published when a guardian address is configured", () => {
@@ -460,6 +495,35 @@ try {
     assert.equal(stale.data.code, "STALE");
   });
 
+  await t("until the 1 € from their bank arrives, the guardian is on chain but not armed", async () => {
+    const screen = await call(`/api/users/${userId}/recovery/zoldenburg`);
+    assert.equal(screen.data.active, true);
+    assert.equal(screen.data.enrolment.available, true);
+    assert.equal(screen.data.enrolment.armed, false);
+  });
+
+  await t("the operator cannot sign for an account that never sent its 1 €", async () => {
+    const sr = await op(`/api/admin/recoveries/${recoveryId}/sign-request`);
+    assert.equal(sr.status, 409, JSON.stringify(sr.data));
+    assert.equal(sr.data.code, "NOT_ARMED");
+    const ex = await op(`/api/admin/recoveries/${recoveryId}/execute`, { signature: "0x00", reviewNote: "Video call, matched Monerium profile" });
+    assert.equal(ex.data.code, "NOT_ARMED");
+    const sync = await op(`/api/admin/recoveries/${recoveryId}/sync`, { reviewNote: "Video call, matched Monerium profile" });
+    assert.equal(sync.status, 409, JSON.stringify(sync.data));
+    assert.equal(sync.data.code, "NOT_ARMED");
+    const row = (await opGet("/api/admin/recoveries")).data.requests.find((x: any) => x.id === recoveryId);
+    assert.equal(row.enrolment.armed, false);
+  });
+
+  await armInDb(userId);
+
+  await t("enrolled: the operator sees the account armed, with the last 4 of the bank account", async () => {
+    const row = (await opGet("/api/admin/recoveries")).data.requests.find((x: any) => x.id === recoveryId);
+    assert.equal(row.enrolment.armed, true);
+    assert.equal(row.enrolment.bankAccountLast4, "3000");
+    assert.ok(!JSON.stringify(row).includes("bankAccountHmac"));
+  });
+
   await t("/admin/recoveries needs the operator token; a user session is not enough", async () => {
     assert.equal((await call("/api/admin/recoveries")).status, 401);
     assert.equal((await call(`/api/admin/recoveries/${recoveryId}/execute`, { signature: "0x" })).status, 401);
@@ -562,6 +626,19 @@ try {
     assert.equal(done.data.active, false);
     assert.equal(done.data.choice.choice, "declined");
     assert.equal((await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "")).status, 404);
+    assert.equal((await call(`/api/users/${userId}/recovery/zoldenburg`)).data.enrolment.enrolledAt, undefined, "removal drops the enrolment");
+  });
+
+  await t("adding Zoldenburg again needs a new 1 €: an enrolment from before does not arm it", async () => {
+    await armInDb(userId);
+    assert.equal((await call(`/api/users/${userId}/recovery/zoldenburg`)).data.enrolment.armed, false, "no guardian, not armed");
+    const prep = await call(`/api/users/${userId}/recovery/zoldenburg`, { acknowledged: true });
+    assert.equal(prep.status, 201, JSON.stringify(prep.data));
+    const done = await call(prep.data.submitTo, await newPasskey.assert(prep.data.challenge));
+    assert.equal(done.status, 200, JSON.stringify(done.data));
+    assert.equal(done.data.active, true);
+    assert.equal(done.data.enrolment.armed, false);
+    assert.equal(done.data.enrolment.enrolledAt, undefined);
   });
 
   console.log(`\nZOLDENBURG RECOVERY TEST PASSED — ${pass}/${pass}`);
