@@ -18,6 +18,7 @@ import { lexwareCsvBytes, lexwareRow } from "../../bookkeeping/lexware.js";
 import { zipStored } from "../../bookkeeping/zip.js";
 import { documentUrl } from "../../documents.js";
 import type { LedgerEntry } from "../../domain/types.js";
+import { redactedMessage } from "../../http/log-cause.js";
 
 export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
@@ -117,7 +118,7 @@ export function createBookkeepingExportRoutes(deps: OrgRoutes): express.Router {
           const { doc, issued: fresh } = await issueBelegForLine(line);
           if (fresh) issued.push(doc.code);
         } catch (err: any) {
-          failed.push({ lineId: line.id, error: String(err?.message ?? err).slice(0, 160) });
+          failed.push({ lineId: line.id, error: redactedMessage(err).slice(0, 160) });
         }
       }
       res.json({

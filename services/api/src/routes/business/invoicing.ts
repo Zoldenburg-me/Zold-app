@@ -40,6 +40,7 @@ import { auditEntry } from "../../audit.js";
 import {
   accountBankOf, customReasonsOf, draftDueDate, draftFrom, invoiceBankOf, issuerParty, issuerSuggestions,
   jurisdictionOf, withConversion, } from "./shared.js";
+import { redactedMessage } from "../../http/log-cause.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -197,7 +198,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       try {
         next.customReasons = b.customReasons.slice(0, 20).map(validateCustomReason);
       } catch (err) {
-        return res.status(400).json({ error: (err as Error).message, field: "customReasons" });
+        return res.status(400).json({ error: redactedMessage(err), field: "customReasons" });
       }
     }
     if (Array.isArray(b.customFields)) {

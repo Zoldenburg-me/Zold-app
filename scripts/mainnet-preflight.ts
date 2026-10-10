@@ -17,6 +17,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
+import { urlForLog } from "../services/api/src/http/log-safe.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -86,9 +87,9 @@ const hexChain = `0x${CANDIDE.chainId.toString(16)}`;
 const errMsg = (e: any) => String(e?.cause?.message ? `${e.message} (${e.cause.message})` : e?.message ?? e).slice(0, 300);
 
 console.log(`Candide preflight — chain ${CANDIDE.chainId}, gas ${CANDIDE.gas.mode}${CANDIDE.gas.mode === "token" ? ` (${CANDIDE.gas.token})` : ""}`);
-console.log(`  rpc       ${CANDIDE.rpcUrl}`);
-console.log(`  bundler   ${CANDIDE.bundlerUrl}`);
-console.log(`  paymaster ${CANDIDE.paymasterUrl}${CANDIDE.gas.mode === "native" ? " (not used: native gas)" : ""}\n`);
+console.log(`  rpc       ${urlForLog(CANDIDE.rpcUrl)}`);
+console.log(`  bundler   ${urlForLog(CANDIDE.bundlerUrl)}`);
+console.log(`  paymaster ${urlForLog(CANDIDE.paymasterUrl)}${CANDIDE.gas.mode === "native" ? " (not used: native gas)" : ""}\n`);
 
 console.log("chain");
 try {

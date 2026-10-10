@@ -21,6 +21,7 @@ import {
   sep24WithdrawLimits,
 } from "../stellar/anchor.js";
 import { moneygramSep9, toAlpha3 } from "../stellar/sep9.js";
+import { errorText } from "../http/log-cause.js";
 
 export interface CashPickup {
   referenceCode: string;
@@ -351,7 +352,7 @@ export async function fundAndRefreshAnchorPickup(
       pickup.anchorPaymentHash = sent.hash;
       onPaymentSubmitted?.(pickup);
     } catch (err: any) {
-      if (String(err?.message ?? err).includes("has not provided a withdrawal account yet")) {
+      if (errorText(err).includes("has not provided a withdrawal account yet")) {
         return pickup;
       }
       throw err;

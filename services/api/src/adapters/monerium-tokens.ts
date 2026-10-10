@@ -12,6 +12,7 @@
  * the deposit never arrived.
  */
 import { moneriumFetch } from "./monerium-limit.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 const CACHE_MS = 10 * 60 * 1000;
 
@@ -72,7 +73,7 @@ async function readTokens(baseUrl: string): Promise<MoneriumToken[]> {
   try {
     res = await moneriumFetch(`${baseUrl}/tokens`, { signal: AbortSignal.timeout(10_000) });
   } catch (err: any) {
-    throw new MoneriumTokensUnavailable(`${where}: ${err?.message ?? err}`);
+    throw new MoneriumTokensUnavailable(`${where}: ${redactedMessage(err)}`);
   }
   if (SETTLED_STATUSES.has(res.status)) throw new Error(`${where} -> ${res.status}`);
   if (!res.ok) throw new MoneriumTokensUnavailable(`${where} -> ${res.status}`);
@@ -80,7 +81,7 @@ async function readTokens(baseUrl: string): Promise<MoneriumToken[]> {
   try {
     raw = await res.json();
   } catch (err: any) {
-    throw new MoneriumTokensUnavailable(`${where}: unreadable body: ${err?.message ?? err}`);
+    throw new MoneriumTokensUnavailable(`${where}: unreadable body: ${redactedMessage(err)}`);
   }
   if (!Array.isArray(raw)) throw new MoneriumTokensUnavailable(`${where}: body is not a token list`);
   return raw
