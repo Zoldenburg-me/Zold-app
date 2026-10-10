@@ -11,7 +11,7 @@ budget: replace or move something, do not append.
 
 Read when the task touches it:
 - `docs/status.md` — **what has never run** (no mainnet, no real swap, no cash
-  rail, no on-chain recovery, no mail). Read before saying anything works.
+  rail, no on-chain recovery). Read before saying anything works.
 - `docs/running-locally.md` — dev vs api, preflight, local funding and KYC
   gate, tests, the production branch.
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
