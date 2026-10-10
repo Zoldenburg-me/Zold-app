@@ -66,7 +66,18 @@ file named by `AGE_IDENTITY_FILE` (an `age-plugin-yubikey` stub).
 - `npm run secrets -- encrypt .env` writes `.env.age`. `npm run secrets -- run
   -- npm run api` decrypts it into that command's environment only; nothing
   decrypted touches the disk. Delete `.env` once that works. A variable set in
-  the shell wins over `.env.age`, as with `.env`.
+  the shell wins over `.env.age`, as with `.env`. To read one value yourself:
+  `npm run -s secrets -- run -- printenv NAME`.
+- `npm run secrets -- set NAME` adds one variable to `.env.age`, reading the
+  value at a hidden prompt (or from a pipe). `--random` makes 32 random bytes
+  as base64 instead, after an optional `--prefix` (for example
+  `set DATA_ENCRYPTION_KEYS --random --prefix k1:`). A name that is already
+  set is refused without `--replace`. The new file replaces `.env.age` only
+  once it decrypts and holds NAME; the previous one stays as `.env.prev.age`,
+  which still holds a replaced value: delete it after replacing a leaked one.
+  It is encrypted to the keys in `.age-recipients`, so a recipient missing
+  there loses access. Run these from the main checkout: a worktree has no
+  `.toolchain/` or `.env.age`.
 - `npm run secrets -- seal .private` writes `.private.tar.age`; `unseal` puts it
   back into a directory you name, refusing one that exists. A failed unseal
   leaves nothing behind.

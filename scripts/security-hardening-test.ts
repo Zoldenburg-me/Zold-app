@@ -8,7 +8,7 @@
 // Must be first: pins chain, keys and a throwaway database.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
-import { chmodSync, closeSync, openSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -425,6 +425,114 @@ await check("a command that does not exist is a plain error, not a crash", () =>
   assert.equal(r.status, 127);
   assert.match(r.stderr, /could not start zold-no-such-command/);
 });
+
+console.log("secrets set (scripts/env-set.mjs, scripts/secrets.sh set)");
+const SETTER = new URL("./env-set.mjs", import.meta.url).pathname;
+const SECRETS_SH = new URL("./secrets.sh", import.meta.url).pathname;
+const { parseEnv } = await import("node:util");
+/** Runs env-set.mjs with `dotenv` on fd 3 and `value` (if any) on fd 4. */
+const setVar = (dotenv: string, args: string[], value: string | null = null) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "zold-env-set-"));
+  const f3 = path.join(dir, "current");
+  const f4 = path.join(dir, "value");
+  writeFileSync(f3, dotenv);
+  writeFileSync(f4, value ?? "");
+  const fd3 = openSync(f3, "r");
+  const fd4 = openSync(f4, "r");
+  try {
+    return spawnSync(process.execPath, [SETTER, ...args], {
+      stdio: ["ignore", "pipe", "pipe", fd3, ...(value === null ? [] : [fd4])],
+      env: { PATH: process.env.PATH },
+      encoding: "utf8",
+    });
+  } finally {
+    closeSync(fd3);
+    closeSync(fd4);
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+const CURRENT = "# operator settings\nA=one\n\nB='two words'\nC=three # trailing note\n";
+await check("set adds a new name and keeps every other line, comments included", () => {
+  const r = setVar(CURRENT, ["NEW_NAME"], "fake-value-1");
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.stdout.startsWith(CURRENT), "the existing text is kept as it was");
+  assert.deepEqual(parseEnv(r.stdout), { ...parseEnv(CURRENT), NEW_NAME: "fake-value-1" });
+});
+await check("set refuses a name that is already set, unless --replace, and never echoes a value", () => {
+  const r = setVar(CURRENT, ["A"], "fake-value-2");
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /A is already set.*--replace/);
+  assert.ok(!r.stderr.includes("fake-value-2") && !r.stderr.includes("one"));
+});
+await check("set --replace changes that one value and nothing else", () => {
+  const r = setVar(CURRENT, ["A", "--replace"], "fake-value-3");
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(parseEnv(r.stdout), { ...parseEnv(CURRENT), A: "fake-value-3" });
+  assert.ok(r.stdout.includes("# operator settings"));
+  assert.equal(r.stdout.match(/^A=/gm)?.length, 1, "the old A line is gone");
+});
+await check("values with spaces, # or quotes round-trip through the same parser as `run`, or are refused", () => {
+  for (const v of ["has space", "has#hash", "a=b+c/d", "it's", 'say "hi"']) {
+    const r = setVar(CURRENT, ["V"], v);
+    if (r.status === 0) assert.equal(parseEnv(r.stdout).V, v, `round trip of ${JSON.stringify(v)}`);
+    else assert.match(r.stderr, /cannot be written/);
+  }
+});
+await check("set refuses an empty value, a value over two lines, and a bad name", () => {
+  assert.match(setVar(CURRENT, ["V"], "").stderr, /empty/);
+  assert.match(setVar(CURRENT, ["V"], "line1\nline2").stderr, /one line/);
+  for (const bad of ["lower", "1ST", "A-B", ""]) {
+    const r = setVar(CURRENT, [bad], "x");
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /not a variable name|usage/);
+    if (bad) assert.ok(!r.stderr.includes(bad), "a rejected name is not echoed");
+  }
+});
+await check("set --random makes 32 random bytes as base64, with an optional prefix, and prints none of it", () => {
+  const a = setVar(CURRENT, ["DATA_ENCRYPTION_KEYS", "--random", "--prefix", "k1:"]);
+  const b = setVar(CURRENT, ["DATA_ENCRYPTION_KEYS", "--random", "--prefix", "k1:"]);
+  assert.equal(a.status, 0, a.stderr);
+  const va = parseEnv(a.stdout).DATA_ENCRYPTION_KEYS!;
+  assert.match(va, /^k1:[A-Za-z0-9+/]{43}=$/);
+  assert.equal(Buffer.from(va.slice(3), "base64").length, 32);
+  assert.notEqual(va, parseEnv(b.stdout).DATA_ENCRYPTION_KEYS);
+  assert.ok(!a.stderr.includes(va.slice(3)));
+});
+
+const AGE_DIR = path.join(path.dirname(SECRETS_SH), "..", ".toolchain", "age-v1.3.2", "age");
+if (!existsSync(path.join(AGE_DIR, "age"))) {
+  console.log("  NOT RUN secrets.sh set end to end: age is not installed here (scripts/fetch-age.sh)");
+} else {
+  await check("secrets.sh set re-encrypts the file with the new name, keeps the old one encrypted, and run sees it", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "zold-secrets-set-"));
+    try {
+      const identity = path.join(dir, "identity");
+      const recipients = path.join(dir, "recipients");
+      spawnSync(path.join(AGE_DIR, "age-keygen"), ["-o", identity], { encoding: "utf8" });
+      writeFileSync(recipients, spawnSync(path.join(AGE_DIR, "age-keygen"), ["-y", identity], { encoding: "utf8" }).stdout);
+      const plain = path.join(dir, "dotenv");
+      writeFileSync(plain, "A=one\n");
+      const env = { PATH: process.env.PATH, AGE_IDENTITY_FILE: identity, AGE_RECIPIENTS_FILE: recipients, SECRETS_ENV_FILE: `${plain}.age` };
+      const sh = (args: string[], input?: string) => spawnSync("bash", [SECRETS_SH, ...args], { env, input, encoding: "utf8" });
+      assert.equal(sh(["encrypt", plain]).status, 0);
+      rmSync(plain);
+      const set = sh(["set", "NEW_NAME"], "fake-value-4\n");
+      assert.equal(set.status, 0, set.stderr);
+      assert.ok(!`${set.stdout}${set.stderr}`.includes("fake-value-4"), "set printed the value");
+      assert.ok(existsSync(path.join(dir, "dotenv.prev.age")), "the previous file is kept, encrypted");
+      const read = sh(["run", "--", "sh", "-c", 'printf "%s,%s" "$A" "$NEW_NAME"']);
+      assert.equal(read.stdout, "one,fake-value-4", read.stderr);
+      assert.equal(sh(["set", "A"], "other\n").status, 1);
+      assert.equal(sh(["run", "--", "printenv", "A"]).stdout.trim(), "one", "a refused set leaves the file as it was");
+      const rnd = sh(["set", "DATA_ENCRYPTION_KEYS", "--random", "--prefix", "k1:"]);
+      assert.equal(rnd.status, 0, rnd.stderr);
+      assert.match(sh(["run", "--", "printenv", "DATA_ENCRYPTION_KEYS"]).stdout.trim(), /^k1:[A-Za-z0-9+/]{43}=$/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 console.log("log lines");
 await check("a URL in a log line keeps scheme and host only: keys in the path or query never print", async () => {
