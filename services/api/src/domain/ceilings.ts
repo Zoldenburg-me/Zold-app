@@ -12,6 +12,8 @@ export const CEILINGS = {
   openInvoiceLinksPerOrg: 500,
   openPaymentRequestsPerUser: 500,
   documentsPerUserPerDay: 100,
+  /** Wallet sync pauses here rather than book past it. */
+  ledgerRowsPerOrg: 100_000,
 } as const;
 
 export function ceilingRefusal(noun: string, max: number) {

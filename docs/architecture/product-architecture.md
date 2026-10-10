@@ -565,8 +565,8 @@ when exactly one contact lists the address on that chain. A DAO's multisig,
 distributor and stream contract all go on the one contact, so a claimed
 stream matches like a push. EURe is e-money at par (no tax lot); USDC and
 tokens on Uniswap's or CoinGecko's lists are virtual assets with FIFO lots;
-a token on no list is booked as a quantity with no value and no income
-rule, so an airdrop never reads as revenue. A listed token without a price
+a token on no list books nothing, so an airdrop never reads as revenue or
+grows the books. A listed token without a price
 is still booked, tagged `needs-valuation` and under its contract address,
 never at €0; a member can ask the price feed again for its block time, and
 nothing else gives it a value. Without an RPC

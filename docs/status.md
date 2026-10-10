@@ -124,9 +124,11 @@ Say this plainly rather than letting the surface imply otherwise:
   so every imported wallet shows "Not syncing". Native ETH, NFTs and rebasing
   balances are not booked. The Uniswap and CoinGecko token lists have never
   been fetched by the server (shape checked by hand 2026-10-03). A token on
-  no list is booked as a quantity with no value and no income rule; a listed
-  but thinly traded token the feed prices at confidence ≥ 0.9 is booked at
-  that price. Nothing caps rows per wallet.
+  no list books nothing; a listed but thinly traded token the feed prices at
+  confidence ≥ 0.9 is booked at that price, and a token later dropped from
+  the lists books nothing from then on, unflagged. An organisation's books stop at
+  `CEILINGS.ledgerRowsPerOrg` (100,000): sync pauses with the reason on the
+  wallet and resumes from the same block once the ceiling is raised.
 - **Invoices made from wallet receipts have run only against local hardhat**
   (2026-10-03: a payer rule saved, one EURe receipt of €300.00 collected into
   a draft, two unlisted-token receipts listed as not included, and the draft
