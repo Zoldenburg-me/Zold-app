@@ -185,7 +185,31 @@ const passkeyNoAnswer = () => passkeyError("PASSKEY_NO_ANSWER", passkeyOnPhone()
   ? "No answer from Face ID or fingerprint. Is a screen lock set up on this phone?"
   : "The passkey prompt got no answer, so it was closed. Try again when you’re ready.");
 
-async function passkeyPrompt(kind, publicKey, deadlineMs = PASSKEY_DEADLINE_MS, overlayAfterMs = PASSKEY_OVERLAY_AFTER_MS) {
+/* A password manager that replaces navigator.credentials (LastPass) keeps its
+   last request open for a moment after answering it, and ignores our abort, so
+   it refuses the next one as "already pending" with nothing of ours open: the
+   Safe deployment right after creating the passkey failed every time. That
+   refusal opened no prompt, so it is safe to ask again after a pause. */
+let PASSKEY_PENDING_RETRY_MS = 1500;
+const PASSKEY_PENDING_RETRIES = 3;
+const passkeyPending = (e) => /request is (already )?pending/i.test(String(e?.message || ""));
+const passkeyPause = (ms, signal) => new Promise((resolve) => {
+  const t = setTimeout(resolve, ms);
+  signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
+});
+async function passkeyAsk(kind, publicKey, signal) {
+  for (let tries = 0; ; tries++) {
+    try {
+      return await navigator.credentials[kind]({ publicKey: { ...publicKey, timeout: PASSKEY_TIMEOUT_MS }, signal });
+    } catch (e) {
+      if (!passkeyPending(e) || tries >= PASSKEY_PENDING_RETRIES || signal.aborted) throw e;
+      await passkeyPause(PASSKEY_PENDING_RETRY_MS, signal);
+      if (signal.aborted) throw e;
+    }
+  }
+}
+
+async function passkeyPrompt(kind,publicKey, deadlineMs = PASSKEY_DEADLINE_MS, overlayAfterMs = PASSKEY_OVERLAY_AFTER_MS) {
   passkeyCancel();
   const ctl = new AbortController();
   let stop;
@@ -194,7 +218,7 @@ async function passkeyPrompt(kind, publicKey, deadlineMs = PASSKEY_DEADLINE_MS, 
   const ended = new Promise((_, reject) => { stop = (err) => { reject(err); ctl.abort(); }; });
   const self = { ctl, stop };
   passkeyOpen = self;
-  const prompt = navigator.credentials[kind]({ publicKey: { ...publicKey, timeout: PASSKEY_TIMEOUT_MS }, signal: ctl.signal });
+  const prompt = passkeyAsk(kind, publicKey, ctl.signal);
   prompt.catch(() => {}); // the deadline may answer first
   const endsAt = Date.now() + deadlineMs;
   const timer = setTimeout(() => stop(passkeyNoAnswer()), deadlineMs);
