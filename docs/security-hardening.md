@@ -113,8 +113,9 @@ Version 2 (`sealField`/`openField` in `crypto-at-rest.ts`):
 - `DATA_ENCRYPTION_KEYS` is a key ring, `<keyId>:<32 random bytes, base64>`,
   newest first (`config/data-keys.ts`). The first key encrypts; the others
   only decrypt. A passphrase, a short key, a repeated id or key, or an id of
-  the form `v<n>` (reserved for format versions) is refused, and production refuses to start on a malformed ring. Errors name
-  the problem, never the value.
+  the form `v<n>` (reserved for format versions) is refused. Production
+  refuses to start without a ring or on a malformed one. Errors name the
+  problem, never the value.
 - Per-purpose data keys are HKDF-SHA256 over the root. The roots stay in
   process memory.
 - **AAD = `purpose|table|rowId|field`**, so a ciphertext only decrypts in the
@@ -122,8 +123,9 @@ Version 2 (`sealField`/`openField` in `crypto-at-rest.ts`):
   across rows, fields, tables and purposes and checks each one fails).
 - `stored-secrets.ts` names each stored credential once (purpose, table,
   field); routes seal and open through it, and the re-encrypt job walks it.
-  Shopify access tokens, Shopify order-link keys and GetMyInvoices keys write
-  v2, and refuse to write without a ring.
+  Users' Monerium OAuth tokens and API secrets, Shopify access tokens,
+  Shopify order-link keys and GetMyInvoices keys write v2, and refuse to
+  write without a ring.
 - `openField` reads v1 too, until every row is v2.
 - `npm run reencrypt` opens every stored value under its own row binding and
   reports, per site, how many rows are v1 and how many sit under each key
@@ -138,13 +140,11 @@ Version 2 (`sealField`/`openField` in `crypto-at-rest.ts`):
   ring rotation never changes an index. It normalises email, phone and IBAN.
 
 Still open:
-- Monerium OAuth tokens and API secrets are v1 (1.3).
 - Setting `DATA_ENCRYPTION_KEYS` and `BLIND_INDEX_KEY` on each deployment,
-  then running the job there. Until the ring is set, Shopify and
-  GetMyInvoices refuse new connections and report themselves unavailable,
-  and a custom-app store without an order-link key gets no pay-link
-  template; existing v1 values still read.
-- Production does not yet require the ring; it refuses only a malformed one.
+  then running the job there. Without the ring a production deployment does
+  not start; elsewhere Monerium, Shopify and GetMyInvoices refuse new
+  connections and report themselves unavailable, and existing v1 values
+  still read.
 - The v1 reader, and with it `MONERIUM_TOKEN_ENCRYPTION_KEY`, goes once the
   job reports no v1 row on any deployment. Until then a database writer can
   copy a v1 value of the same purpose into another row and it opens there:
@@ -160,16 +160,31 @@ Still open:
 - Our app credentials (`MONERIUM_CLIENT_ID/SECRET`, webhook secret) are tier 2.
   Keep the sandbox and production apps in separate secret-manager paths, so
   a sandbox `.env` can never hold a production secret.
-- Users' tokens and their own API secrets: v2 encryption with AAD bound to
-  the user row. Request the narrowest scope that works. On disconnect, clear
-  the ciphertext. That is a credential, not a ledger row, so the
-  "nothing deletes" invariant does not cover it.
+- Users' OAuth access and refresh tokens and their own API secrets are v2
+  sites in `stored-secrets.ts`, bound to the user row; the API secret has a
+  purpose (data key) of its own. A token refresh writes v2. Disconnecting
+  either method drops the whole `monerium` record, ciphertext included: a
+  credential, not a ledger row, so the "nothing deletes" invariant does not
+  cover it.
 - An API secret a user pastes in is never echoed back, logged, or returned
-  by any route. Only its label and client id are shown.
-- PKCE on the OAuth flow, and the state parameter bound to the session
-  (verify against the real server: `docs/status.md`).
-- Alert on Monerium 401/403 bursts. A revoked or rotated credential shows up
-  there first.
+  by any route; only its label and client id are shown.
+  `monerium:apikeys:test` records every response, header and API log line of
+  its run and checks the secret is in none of them.
+- The OAuth flow uses PKCE (S256, a 48-byte verifier) and a single-use
+  24-byte `state` that expires after 10 minutes. The callback also requires
+  the HttpOnly nonce cookie set by `/connect/start`, which needs the user's
+  session, so the browser that finishes a connect is the one that started it
+  signed in (sessions are bearer tokens, which a redirect cannot carry).
+  `monerium:oauth:test` checks each against a fake Monerium; the flow has run
+  against Monerium's sandbox (`docs/status.md`), never production.
+- Five 401/403 answers from Monerium within a minute log one warning
+  (`adapters/monerium-refusals.ts`), naming the method and the route with
+  ids and IBANs removed. It is a log line, not yet an alert anyone receives
+  (Phase 6).
+
+Still open:
+- The connect asks Monerium for no particular scope; whether a narrower one
+  works is untested.
 
 ### 1.4 Self-hosted Bitwarden
 

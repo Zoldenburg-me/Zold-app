@@ -204,6 +204,61 @@ await check("each stored-secret site seals under DATA_ENCRYPTION_KEYS and opens 
   assert.equal(SECRETS.gmiApiKey.open("org_1", enc), "gmi_fake_key");
   assert.throws(() => SECRETS.gmiApiKey.open("org_2", enc));
 });
+await check("Monerium credentials are bound to the user row, and the API secret has its own data key", () => {
+  const tok = SECRETS.moneriumAccessToken.seal("user-a", "fake-access");
+  assert.equal(SECRETS.moneriumAccessToken.open("user-a", tok), "fake-access");
+  assert.throws(() => SECRETS.moneriumAccessToken.open("user-b", tok), "another user's row");
+  assert.throws(() => SECRETS.moneriumRefreshToken.open("user-a", tok), "another field");
+  const sec = SECRETS.moneriumApiSecret.seal("user-a", "fake-secret");
+  assert.equal(SECRETS.moneriumApiSecret.purpose, "monerium-api-secret");
+  assert.throws(() => openField("monerium", { table: "users", rowId: "user-a", field: "monerium.apiKeys.clientSecret" }, sec, { keyring: dataKeyring(), v1Secret: "" }), "the API secret's data key is not the token key");
+});
+await check("v1 Monerium values, all written under purpose `monerium`, still open through their sites", () => {
+  assert.equal(SECRETS.moneriumAccessToken.open("any-user", encryptField("monerium", V1_SECRET, "old-access")), "old-access");
+  assert.equal(SECRETS.moneriumApiSecret.open("any-user", encryptField("monerium", V1_SECRET, "old-secret")), "old-secret");
+});
+await check("without a key ring a Monerium token refresh refuses before it spends the refresh token", async () => {
+  const { moneriumAccessToken } = await import("../services/api/src/adapters/monerium-connection.js");
+  const user = { id: "user-refresh", monerium: {
+    connectedAt: new Date().toISOString(), method: "oauth",
+    accessTokenEnc: encryptField("monerium", V1_SECRET, "old-access"),
+    refreshTokenEnc: encryptField("monerium", V1_SECRET, "old-refresh"),
+    expiresAt: new Date(Date.now() - 60_000).toISOString(),
+  } } as any;
+  const ring = process.env.DATA_ENCRYPTION_KEYS;
+  const realFetch = globalThis.fetch;
+  let called = 0;
+  globalThis.fetch = (async () => { called++; return new Response("{}", { status: 500 }); }) as typeof fetch;
+  process.env.DATA_ENCRYPTION_KEYS = "";
+  try {
+    await assert.rejects(() => moneriumAccessToken(user), EncryptionUnavailableError);
+    assert.equal(called, 0, "Monerium was asked to refresh with nowhere to store the result");
+  } finally {
+    process.env.DATA_ENCRYPTION_KEYS = ring;
+    globalThis.fetch = realFetch;
+  }
+});
+await check("a refresh that finishes after the user disconnected does not bring the connection back", async () => {
+  const { moneriumAccessToken } = await import("../services/api/src/adapters/monerium-connection.js");
+  initStore();
+  store.addUser({ id: "user-race", monerium: {
+    connectedAt: new Date().toISOString(), method: "oauth",
+    accessTokenEnc: SECRETS.moneriumAccessToken.seal("user-race", "old-access"),
+    refreshTokenEnc: SECRETS.moneriumRefreshToken.seal("user-race", "old-refresh"),
+    expiresAt: new Date(Date.now() - 60_000).toISOString(),
+  } } as any);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    store.updateUser("user-race", { monerium: undefined }); // disconnected while Monerium answered
+    return new Response(JSON.stringify({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    await assert.rejects(() => moneriumAccessToken(store.findUser("user-race")!));
+    assert.equal(store.findUser("user-race")!.monerium, undefined, "the stale connection was written back");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
 await check("every registered site names a distinct (table, field)", () => {
   const seen = new Set(STORED_SECRETS.map((s) => `${s.site.table}|${s.site.field}`));
   assert.equal(seen.size, STORED_SECRETS.length);
@@ -220,11 +275,17 @@ const shopRow = (id: string, shop: string) => ({
 });
 store.addShopifyConnection({ ...shopRow("conn-1", "one.myshopify.com"), accessTokenEnc: encryptField("shopify", V1_SECRET, "shpat_one"), orderLinkSecretEnc: encryptField("shopify-link", V1_SECRET, "link_one") });
 store.addShopifyConnection({ ...shopRow("conn-2", "two.myshopify.com"), accessTokenEnc: sealField("shopify", { table: "shopifyConnections", rowId: "conn-2", field: "accessToken" }, "shpat_two", ring1) });
+store.addUser({ id: "user-1", monerium: {
+  connectedAt: now,
+  accessTokenEnc: encryptField("monerium", V1_SECRET, "mon_access"),
+  refreshTokenEnc: encryptField("monerium", V1_SECRET, "mon_refresh"),
+  apiKeys: { clientId: "client-id-1", clientSecretEnc: encryptField("monerium", V1_SECRET, "mon_secret"), baseUrl: "https://api.monerium.dev", verifiedAt: now },
+} } as any);
 store.addOrganisation({ id: "org_1", name: "Test GmbH", createdAt: now, updatedAt: now, integrations: { getmyinvoices: { apiKeyEnc: encryptField("getmyinvoices", V1_SECRET, "gmi_one"), connectedAt: now, connectedByMemberId: "m1" } } } as any, false);
 
 const JOB = path.join(path.dirname(fileURLToPath(import.meta.url)), "reencrypt-fields.ts");
 const TSX = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "tsx", "dist", "cli.mjs");
-const PLAINTEXTS = ["shpat_one", "link_one", "shpat_two", "gmi_one"];
+const PLAINTEXTS = ["shpat_one", "link_one", "shpat_two", "gmi_one", "mon_access", "mon_refresh", "mon_secret"];
 function job(args: string[], keys: string) {
   const r = spawnSync(process.execPath, [TSX, JOB, ...args], {
     encoding: "utf8",
@@ -246,7 +307,9 @@ await check("a dry run (the default) reports v1 rows and old keys, and writes no
   assert.match(r.out, /shopifyConnections\.accessToken\s+v1=1\s+k1=1\s+k2=0/);
   assert.match(r.out, /shopifyConnections\.orderLinkSecret\s+v1=1/);
   assert.match(r.out, /organisations\.integrations\.getmyinvoices\.apiKey\s+v1=1/);
-  assert.match(r.out, /4 to move/);
+  assert.match(r.out, /users\.monerium\.accessToken\s+v1=1/);
+  assert.match(r.out, /users\.monerium\.apiKeys\.clientSecret\s+v1=1/);
+  assert.match(r.out, /7 to move/);
   assert.equal(readFileSync(DB_PATH, "utf8"), before);
   assert.equal(statSync(DB_PATH).mtimeMs, mtime, "the dry run rewrote the file");
 });
@@ -275,6 +338,12 @@ await check("--apply moves every row to the active key, bound to its row, and th
   assert.equal(openField("shopify-link", { table: "shopifyConnections", rowId: "conn-1", field: "orderLinkSecret" }, c1.orderLinkSecretEnc, keys), "link_one");
   assert.equal(openField("shopify", { table: "shopifyConnections", rowId: "conn-2", field: "accessToken" }, c2.accessTokenEnc, keys), "shpat_two");
   assert.equal(openField("getmyinvoices", { table: "organisations", rowId: "org_1", field: "integrations.getmyinvoices.apiKey" }, g.apiKeyEnc, keys), "gmi_one");
+  const m = db.users.find((u: any) => u.id === "user-1").monerium;
+  const userRow = (field: string) => ({ table: "users", rowId: "user-1", field });
+  assert.equal(openField("monerium", userRow("monerium.accessToken"), m.accessTokenEnc, keys), "mon_access");
+  assert.equal(openField("monerium", userRow("monerium.refreshToken"), m.refreshTokenEnc, keys), "mon_refresh");
+  assert.equal(openField("monerium-api-secret", userRow("monerium.apiKeys.clientSecret"), m.apiKeys.clientSecretEnc, keys), "mon_secret");
+  assert.equal(m.apiKeys.clientId, "client-id-1", "the rest of the connection is kept");
 });
 await check("after the move the report says k1 can retire", () => {
   const r = job([], `k2:${K2},k1:${K1}`);

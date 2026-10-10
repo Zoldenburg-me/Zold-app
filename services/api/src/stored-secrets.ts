@@ -7,12 +7,13 @@
  * job re-encrypts it with cannot drift apart. A new stored credential gets a
  * site and a registry entry here, with its own purpose.
  *
- * Monerium tokens and API secrets are still v1 (adapters/monerium-connection.ts)
- * and are not listed yet.
+ * Users' Monerium credentials are bound to the user row. The API secret a
+ * user pastes has a purpose of its own; its v1 values, like the tokens',
+ * were written under `monerium`.
  */
 import { openField, sealField, type EncryptionPurpose } from "./crypto-at-rest.js";
 import { dataKeyring, v1Secret } from "./config/data-keys.js";
-import { store } from "./store.js";
+import { store, type User } from "./store.js";
 
 export interface SecretSite {
   purpose: EncryptionPurpose;
@@ -22,13 +23,13 @@ export interface SecretSite {
   open(rowId: string, stored: string): string;
 }
 
-function site(purpose: EncryptionPurpose, table: string, field: string): SecretSite {
+function site(purpose: EncryptionPurpose, table: string, field: string, v1Purpose: EncryptionPurpose = purpose): SecretSite {
   return {
     purpose,
     table,
     field,
     seal: (rowId, value) => sealField(purpose, { table, rowId, field }, value, dataKeyring()),
-    open: (rowId, stored) => openField(purpose, { table, rowId, field }, stored, { keyring: dataKeyring(), v1Secret: v1Secret() }),
+    open: (rowId, stored) => openField(purpose, { table, rowId, field }, stored, { keyring: dataKeyring(), v1Secret: v1Secret(), v1Purpose }),
   };
 }
 
@@ -36,6 +37,9 @@ export const SECRETS = {
   shopifyAccessToken: site("shopify", "shopifyConnections", "accessToken"),
   shopifyOrderLinkSecret: site("shopify-link", "shopifyConnections", "orderLinkSecret"),
   gmiApiKey: site("getmyinvoices", "organisations", "integrations.getmyinvoices.apiKey"),
+  moneriumAccessToken: site("monerium", "users", "monerium.accessToken"),
+  moneriumRefreshToken: site("monerium", "users", "monerium.refreshToken"),
+  moneriumApiSecret: site("monerium-api-secret", "users", "monerium.apiKeys.clientSecret", "monerium"),
 } as const;
 
 export interface StoredSecret {
@@ -46,7 +50,32 @@ export interface StoredSecret {
   write(rowId: string, stored: string): void;
 }
 
+/** Rewrite one field of a user's Monerium connection, keeping the rest. */
+function writeMonerium(userId: string, patch: (m: NonNullable<User["monerium"]>) => Partial<NonNullable<User["monerium"]>>) {
+  const m = store.findUser(userId)?.monerium;
+  if (!m) throw new Error(`user ${userId} has no Monerium connection`);
+  store.updateUser(userId, { monerium: { ...m, ...patch(m) } });
+}
+
 export const STORED_SECRETS: StoredSecret[] = [
+  {
+    site: SECRETS.moneriumAccessToken,
+    rows: () => store.users.flatMap((u) => (u.monerium?.accessTokenEnc ? [{ rowId: u.id, stored: u.monerium.accessTokenEnc }] : [])),
+    write: (id, stored) => writeMonerium(id, () => ({ accessTokenEnc: stored })),
+  },
+  {
+    site: SECRETS.moneriumRefreshToken,
+    rows: () => store.users.flatMap((u) => (u.monerium?.refreshTokenEnc ? [{ rowId: u.id, stored: u.monerium.refreshTokenEnc }] : [])),
+    write: (id, stored) => writeMonerium(id, () => ({ refreshTokenEnc: stored })),
+  },
+  {
+    site: SECRETS.moneriumApiSecret,
+    rows: () => store.users.flatMap((u) => (u.monerium?.apiKeys?.clientSecretEnc ? [{ rowId: u.id, stored: u.monerium.apiKeys.clientSecretEnc }] : [])),
+    write: (id, stored) => writeMonerium(id, (m) => {
+      if (!m.apiKeys) throw new Error(`user ${id} has no Monerium API keys`);
+      return { apiKeys: { ...m.apiKeys, clientSecretEnc: stored } };
+    }),
+  },
   {
     site: SECRETS.shopifyAccessToken,
     rows: () => store.shopifyConnections.filter((c) => c.accessTokenEnc).map((c) => ({ rowId: c.id, stored: c.accessTokenEnc })),

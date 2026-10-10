@@ -98,5 +98,55 @@ await check("every call to Monerium goes through the limiter", () => {
   }
 });
 
+const { refusalAlarm, routeForLog } = await import("../services/api/src/adapters/monerium-refusals.js");
+
+await check("a burst of 401/403 from Monerium warns once, at the threshold, and again only after a quiet window", () => {
+  const warned: string[] = [];
+  const alarm = refusalAlarm({ threshold: 5, windowMs: 60_000, warn: (m) => warned.push(m) });
+  for (let i = 0; i < 4; i++) alarm.record(401, "GET", "https://api.monerium.dev/profiles", 1_000 + i);
+  assert.equal(warned.length, 0, "four refusals are not a burst");
+  alarm.record(403, "GET", "https://api.monerium.dev/orders", 1_010);
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /5 refusals \(401\/403\) from Monerium in 60 s/);
+  for (let i = 0; i < 10; i++) alarm.record(401, "GET", "https://api.monerium.dev/profiles", 2_000 + i);
+  assert.equal(warned.length, 1, "one warning per burst");
+  for (let i = 0; i < 5; i++) alarm.record(401, "POST", "https://api.monerium.dev/auth/token", 200_000 + i);
+  assert.equal(warned.length, 2, "a later burst warns again");
+});
+
+await check("only 401 and 403 count; refusals spread out over time never add up to a burst", () => {
+  const warned: string[] = [];
+  const alarm = refusalAlarm({ threshold: 3, windowMs: 1_000, warn: (m) => warned.push(m) });
+  for (const s of [200, 400, 404, 429, 500, 503]) alarm.record(s, "GET", "https://api.monerium.dev/x", 10);
+  for (let i = 0; i < 10; i++) alarm.record(401, "GET", "https://api.monerium.dev/x", i * 2_000);
+  assert.equal(warned.length, 0);
+});
+
+await check("the warning names the route with ids, IBANs and the query removed, never a credential", () => {
+  assert.equal(routeForLog("https://api.monerium.dev/ibans/DE89370400440532013000?token=abc"), "/ibans/:id");
+  assert.equal(routeForLog("https://api.monerium.dev/profiles/3f2c1a9e-0b1d-4c55-9a0e-1d2c3b4a5f60/addresses"), "/profiles/:id/addresses");
+  assert.equal(routeForLog("not a url"), "(unparsed)");
+  const warned: string[] = [];
+  const alarm = refusalAlarm({ threshold: 1, windowMs: 1_000, warn: (m) => warned.push(m) });
+  alarm.record(401, "PATCH", "https://api.monerium.dev/ibans/DE89370400440532013000?client_secret=fake", 0);
+  assert.match(warned[0], /PATCH \/ibans\/:id \(401\)/);
+  assert.ok(!warned[0].includes("DE89") && !warned[0].includes("fake"));
+});
+
+await check("every Monerium response passes through the alarm", async () => {
+  const realFetch = globalThis.fetch;
+  const realWarn = console.warn;
+  const warned: string[] = [];
+  globalThis.fetch = (async () => new Response("unauthorized", { status: 401 })) as typeof fetch;
+  console.warn = (m: string) => warned.push(m);
+  try {
+    for (let i = 0; i < 5; i++) await moneriumFetch("https://api.monerium.dev/auth/token", { method: "POST" });
+  } finally {
+    globalThis.fetch = realFetch;
+    console.warn = realWarn;
+  }
+  assert.equal(warned.filter((m) => m.includes("401/403")).length, 1);
+});
+
 console.log(`\nMONERIUM RATE LIMIT TEST PASSED — ${passed} checks`);
 console.log("NOT PROVEN HERE: Monerium's real limit. 40/s held for one 5 s burst on the sandbox (2026-10-04); production is untested.");

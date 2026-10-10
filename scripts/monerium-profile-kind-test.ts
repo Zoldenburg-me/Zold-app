@@ -79,7 +79,8 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
-const { encryptToken, hasOwnMoneriumCredentials, connectionMethod, moneriumClientFor, moneriumLinkAccessToken } = await import("../services/api/src/adapters/monerium-connection.js");
+const { hasOwnMoneriumCredentials, connectionMethod, moneriumClientFor, moneriumLinkAccessToken } = await import("../services/api/src/adapters/monerium-connection.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { readMoneriumProfile } = await import("../services/api/src/adapters/monerium-profile.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { MoneriumAccessError } = await import("../services/api/src/adapters/monerium-client.js");
@@ -108,7 +109,7 @@ function addUser(id: string, profile: Profile, n: number) {
     address: `0x${String(n).repeat(40).slice(0, 40)}`,
     iban: `DE8937040044053201300${n}`,
     funding: { mode: "sandbox", status: "active", moneriumProfileId: profile.id },
-    monerium: { connectedAt: now, method: "oauth", profileId: profile.id, accessTokenEnc: encryptToken(token), profiles: [{ id: profile.id, kind: profile.kind, state: profile.state }] },
+    monerium: { connectedAt: now, method: "oauth", profileId: profile.id, accessTokenEnc: SECRETS.moneriumAccessToken.seal(id, token), profiles: [{ id: profile.id, kind: profile.kind, state: profile.state }] },
   } as any);
   return token;
 }
@@ -640,7 +641,7 @@ await check("a row that names a method but stores no secret is not a connection,
     const empty = [
       { id: "u_empty_oauth", monerium: { connectedAt: now, method: "oauth", profileId: CORP.id } },
       { id: "u_empty_keys", monerium: { connectedAt: now, method: "api_keys", profileId: CORP.id } },
-      { id: "u_keys_claim_oauth_token", monerium: { connectedAt: now, method: "api_keys", profileId: CORP.id, accessTokenEnc: encryptToken(corpToken) } },
+      { id: "u_keys_claim_oauth_token", monerium: { connectedAt: now, method: "api_keys", profileId: CORP.id, accessTokenEnc: SECRETS.moneriumAccessToken.seal("u_keys_claim_oauth_token", corpToken) } },
     ];
     for (const row of empty) {
       store.addUser({ id: row.id, name: row.id, country: "DE", kycStatus: "approved", createdAt: now, address: "0x" + "e".repeat(40), monerium: row.monerium } as any);

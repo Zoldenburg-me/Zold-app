@@ -52,7 +52,7 @@ const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { createInvoicingRoutes } = await import("../services/api/src/routes/business/invoicing.js");
-const { encryptToken } = await import("../services/api/src/adapters/monerium-connection.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { issueChallenge, stepUpBinding, verifyRegistration } = await import("../services/api/src/webauthn.js");
 const { paymentReviewRequired, reviewHeldOnPlanChange } = await import("../services/api/src/domain/payment-review.js");
 const { assertTransition, isCancellable, isEditable } = await import("../services/api/src/domain/drafts.js");
@@ -118,7 +118,7 @@ store.addUser({
   id: "u_owner", name: "Olga Owner", country: "DE", kycStatus: "approved", createdAt: now,
   address: `0x${"1".repeat(40)}`, iban: "DE89370400440532013000",
   funding: { mode: "sandbox", status: "active", moneriumProfileId: CORP.id },
-  monerium: { connectedAt: now, method: "oauth", profileId: CORP.id, accessTokenEnc: encryptToken("tok-owner"), profiles: [{ id: CORP.id, kind: CORP.kind, state: CORP.state }] },
+  monerium: { connectedAt: now, method: "oauth", profileId: CORP.id, accessTokenEnc: SECRETS.moneriumAccessToken.seal("u_owner", "tok-owner"), profiles: [{ id: CORP.id, kind: CORP.kind, state: CORP.state }] },
   passkey: ownerKey.stored,
 } as any);
 for (const id of ["u_admin", "u_payer", "u_viewer"]) store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: now } as any);

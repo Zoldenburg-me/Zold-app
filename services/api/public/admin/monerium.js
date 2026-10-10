@@ -34,7 +34,7 @@ function renderMonerium(root) {
           ${fact('App credentials', pill(d.appCredentials ? 'good' : 'bad', d.appCredentials ? 'set' : 'missing'), true)}
           ${fact('OAuth', pill(d.oauth ? 'good' : 'dim', d.oauth ? 'enabled' : 'off'), true)}
           ${fact('Webhook signature', pill(d.webhookSecret ? 'good' : 'warn', d.webhookSecret ? 'verified' : 'no secret'), true)}
-          ${fact('Token encryption', pill(d.tokenEncryption ? 'good' : 'warn', d.tokenEncryption ? 'key set' : 'no key — API keys off'), true)}
+          ${fact('Credential encryption', pill(d.tokenEncryption ? 'good' : 'warn', d.tokenEncryption ? 'key ring set' : 'no key ring — connections off'), true)}
           ${fact('Deposit poll', `${Math.round(d.pollMs / 1000)}s`)}
           ${fact('OAuth redirect', d.redirectUri)}
         </div>
