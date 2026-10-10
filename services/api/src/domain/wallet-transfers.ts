@@ -20,9 +20,10 @@
  *   at zero would understate the income.
  * - A transfer to or from another address the org holds on that chain is
  *   `internal_transfer`, which no default rule books as income or expense.
- * - A token on no curated list (`tokenClass: "unlisted"`) is booked as a
- *   quantity only: no value, no price asked, `unlisted_token` so no default
- *   rule books it as income. Anyone can airdrop a token to a Safe.
+ * - A token on no curated list (`tokenClass: "unlisted"`) makes a quantity-only
+ *   `unlisted_token` entry: no value, no price asked, no default income rule.
+ *   Sync books none (anyone can airdrop a token to a Safe); the shape is for
+ *   rows already in the books.
  * - The row id is the org, the wallet ADDRESS and the log, not the wallet
  *   row: removing a wallet keeps its rows (nothing in the ledger is deleted),
  *   so importing the same address again must not book them twice.
