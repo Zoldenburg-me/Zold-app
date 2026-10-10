@@ -27,6 +27,7 @@ import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../s
 import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../routes/payment-requests.js";
 import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
 import { moneriumOrderProcessed } from "../domain/monerium-order.js";
+import { describeCause } from "../http/log-cause.js";
 
 /**
  * The bank facts of a processed issue order on our chain, for the statement
@@ -302,7 +303,7 @@ async function mirrorOrder(order: MoneriumOrder): Promise<MirrorOutcome> {
       eure = await moneriumEureOrUnavailable(MONERIUM.baseUrl, CHAIN_ID);
     } catch (err: any) {
       if (!(err instanceof MoneriumTokensUnavailable)) throw err;
-      console.warn(`monerium: could not read Monerium's tokens for order ${order.id}, will retry: ${err.message}`);
+      console.warn(`monerium: could not read Monerium's tokens for order ${order.id}, will retry: ${describeCause(err)}`);
       return "unavailable";
     }
     if (!eure) {
@@ -357,10 +358,10 @@ export async function mirrorOrderById(orderId: string): Promise<MirrorOutcome> {
     // delivery as spent.
     const status = err instanceof MoneriumApiError ? err.status : 0;
     if (status >= 400 && status < 500) {
-      console.warn(`monerium: refusing unknown order ${orderId}: ${err?.message ?? err}`);
+      console.warn(`monerium: refusing unknown order ${orderId}: ${describeCause(err)}`);
       return "ignored";
     }
-    console.warn(`monerium: could not read order ${orderId}, will retry: ${err?.message ?? err}`);
+    console.warn(`monerium: could not read order ${orderId}, will retry: ${describeCause(err)}`);
     return "unavailable";
   }
   if (order.id !== orderId) return "ignored";
@@ -454,7 +455,7 @@ export async function pollDepositsOnce(): Promise<number> {
       try {
         list = orderList(await moneriumClientFor(u).orders(profile));
       } catch (err: any) {
-        console.warn(`monerium: could not read orders for ${u.id} on their own credentials: ${err?.message ?? err}`);
+        console.warn(`monerium: could not read orders for ${u.id} on their own credentials: ${describeCause(err)}`);
         continue;
       }
       for (const order of list) {
@@ -527,7 +528,7 @@ export function startDepositPoller() {
         if (u.funding?.status === "iban_pending") await refreshPendingIban(u);
       }
     } catch (err: any) {
-      console.error(`monerium poll failed: ${err?.message ?? err}`);
+      console.error(`monerium poll failed: ${describeCause(err)}`);
     } finally {
       busy = false;
     }

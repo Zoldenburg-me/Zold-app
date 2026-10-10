@@ -26,7 +26,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { CHAIN_ID, HARNESS, RECOVERY, SECURITY } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import { operatorLabel, requireOperator } from "../http/guards.js";
-import { describeCause, describeError, shortErrorForClient } from "../http/log-cause.js";
+import { describeCause, describeError, shortErrorForClient, redactedMessage } from "../http/log-cause.js";
 import { publicRecoveryRequest } from "../recovery.js";
 import { recoveryEnrolment } from "../admin/onboarding.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
@@ -155,7 +155,7 @@ async function screenState(user: User) {
         pendingRecovery: state.pending,
       };
     } catch (err: any) {
-      out.onChainError = String(err?.message ?? err).slice(0, 200);
+      out.onChainError = redactedMessage(err).slice(0, 200);
     }
   }
   return out;
@@ -220,13 +220,13 @@ export async function finalizeZoldenburgRecovery(request: RecoveryRequest, now =
     txHash = (await zoldenburgChain.relayFinalize(request.recoveryModuleAddress, request.safeAddress)).txHash;
   } catch (err: any) {
     // Safe Cover (or anyone) may have finalised already; the owner read decides.
-    finalizeError = String(err?.message ?? err).slice(0, 200);
+    finalizeError = redactedMessage(err).slice(0, 200);
   }
   let owners: string[] = [];
   if (HARNESS.enabled) owners = finalizeError ? [] : z.newOwners;
   else {
     try { owners = await safeOwners(request.safeAddress); } catch (err: any) {
-      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${String(err?.message ?? err).slice(0, 120)}`;
+      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
     }
   }
   if (!sameSet(owners, z.newOwners)) {
@@ -543,7 +543,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       try {
         reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, `recovery:${request.id}`);
       } catch (err: any) {
-        return res.status(400).json({ error: String(err?.message ?? err) });
+        return res.status(400).json({ error: redactedMessage(err) });
       }
       if (reg.credentialId !== credentialId) return res.status(400).json({ error: "credentialId does not match attestation" });
       if (reg.key.alg !== "ES256") return res.status(400).json({ error: "the new passkey must be a P-256 (ES256) credential to own a Safe" });

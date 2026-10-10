@@ -65,7 +65,7 @@ import {
   } from "./chain.js";
 import { CANDIDE, SafeGasError, SafeThresholdError } from "./wallet/candide.js";
 import { routeAsyncRejections } from "./http/async-errors.js";
-import { describeCause, describeError } from "./http/log-cause.js";
+import { describeCause, describeError, redactedMessage } from "./http/log-cause.js";
 import { recordServerError } from "./http/error-log.js";
 import { knownError } from "./http/known-errors.js";
 const app = express();
@@ -164,7 +164,7 @@ app.get(
       res.json({ eur: r.eur, asOf: r.asOf, provider: r.provider });
     } catch (e: any) {
       // Say so rather than serving a number nobody can stand behind.
-      res.status(503).json({ error: e?.message ?? "rates unavailable" });
+      res.status(503).json({ error: e ? redactedMessage(e) : "rates unavailable" });
     }
   }),
 );
@@ -244,7 +244,7 @@ app.use(((err, req, res, next) => {
   }
   const known = err instanceof SafeGasError || err instanceof SafeThresholdError;
   const logged = known ? undefined : recordServerError(err, req);
-  if (known) console.error(err);
+  if (known) console.error(describeError(err));
   // A handler that already began answering cannot be given a 500 body: setting
   // headers twice throws inside the error handler itself, which express can
   // only answer by destroying the socket — the caller sees a truncated
@@ -259,7 +259,7 @@ app.use(((err, req, res, next) => {
   if (err instanceof SafeThresholdError) {
     return res.status(err.status).json({ error: err.message, code: err.code });
   }
-  const detail = String(err?.shortMessage ?? err?.message ?? err);
+  const detail = redactedMessage(err);
   res.setHeader("x-zold-error-ref", logged!.ref);
   res.status(500).json({
     error: SECURITY.exposeInternalErrors
@@ -278,7 +278,7 @@ initStore();
 // Fail fast on a chain mismatch: signatures built for the wrong chain id are
 // rejected as "bad authorization", which reads like a signing bug.
 assertChainMatches().catch((e) => {
-  console.error(String(e?.message ?? e));
+  console.error(describeCause(e));
   process.exit(1);
 });
 // Same class of problem, quieter symptom: the smart-account chain can differ
@@ -337,10 +337,10 @@ setInterval(
 // the store. Hooked where money changes state, and swept here so a REFUNDED
 // written by compensation, or an event a crash cut short, still gets its line.
 setTimeout(() => {
-  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${e?.message ?? e}`); }
+  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
 }, 3_000).unref();
 setInterval(() => {
-  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${e?.message ?? e}`); }
+  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
 }, 60_000).unref();
 
 // Imported wallets: ERC-20 transfers on their own chains, read only.
@@ -370,7 +370,7 @@ if (sandbox) {
       startDepositPoller();
     })
     .catch((err) => {
-      console.error(`monerium sandbox auth FAILED — check .env credentials: ${err.message}`);
+      console.error(`monerium sandbox auth FAILED — check .env credentials: ${describeCause(err)}`);
     });
 } else {
   console.log("monerium: no app credentials (MONERIUM_CLIENT_SECRET unset) — accounts connect by OAuth or their own API keys");

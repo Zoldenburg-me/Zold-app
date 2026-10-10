@@ -18,6 +18,7 @@ import { InvoiceError } from "../domain/invoices.js";
 import { InvoiceComplianceError } from "../domain/invoicing.js";
 import { SegmentInputError } from "../domain/segments.js";
 import { HandleError } from "../pay.js";
+import { redactedMessage } from "./log-cause.js";
 
 export interface KnownError {
   status: number;
@@ -42,7 +43,7 @@ export function knownError(err: unknown): KnownError | undefined {
     err instanceof InvoiceError || err instanceof InvoiceComplianceError || err instanceof DraftError ||
     err instanceof ContactError || err instanceof CoaError || err instanceof SegmentInputError || err instanceof HandleError
   ) {
-    return { status: 400, body: { error: (err as Error).message, code: "INVALID_INPUT" }, log: false };
+    return { status: 400, body: { error: redactedMessage(err), code: "INVALID_INPUT" }, log: false };
   }
   if (err instanceof PaymentRequestError) {
     return { status: err.status, body: { error: err.message, code: "PAYMENT_REQUEST" }, log: err.status >= 500 };
@@ -63,7 +64,7 @@ export function knownError(err: unknown): KnownError | undefined {
   }
   if (err instanceof MoneriumApiError) {
     return err.status < 500
-      ? { status: 409, body: { error: `Monerium refused this: ${err.message}`, code: "MONERIUM_REFUSED" }, log: true }
+      ? { status: 409, body: { error: `Monerium refused this: ${redactedMessage(err)}`, code: "MONERIUM_REFUSED" }, log: true }
       : { status: 503, body: { error: "Monerium did not answer. Try again in a moment.", code: "MONERIUM_UNREACHABLE" }, log: true };
   }
   if (err instanceof EncryptionUnavailableError) {

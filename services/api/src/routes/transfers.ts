@@ -29,6 +29,7 @@ import { safeMessageHash, signMessageAsPasskeySafe } from "../wallet/candide.js"
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { verifyPasskeyStepUp } from "./auth.js";
 import { publicUser } from "../users/public-user.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface TransferDeps {
@@ -306,7 +307,7 @@ export function createTransferRouter(deps: TransferDeps) {
           if (!updated) throw new Error("this passkey is no longer the account's passkey");
           user = updated;
         } catch (err: any) {
-          return res.status(401).json({ error: String(err?.message ?? err) });
+          return res.status(401).json({ error: redactedMessage(err) });
         }
       }
       let effectiveRedeemSignature = typeof redeemSignature === "string" ? redeemSignature as `0x${string}` : undefined;
@@ -353,7 +354,7 @@ export function createTransferRouter(deps: TransferDeps) {
             },
           );
         } catch (err: any) {
-          return res.status(401).json({ error: String(err?.message ?? err) });
+          return res.status(401).json({ error: redactedMessage(err) });
         }
       }
       if (

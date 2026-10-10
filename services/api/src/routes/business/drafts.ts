@@ -46,6 +46,7 @@ import {
 } from "./state.js";
 import { CEILINGS, ceilingRefusal } from "../../domain/ceilings.js";
 import { knownError } from "../../http/known-errors.js";
+import { redactedMessage } from "../../http/log-cause.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
@@ -488,7 +489,7 @@ export function createDraftRoutes(
       }
     } catch (err) {
       return res.status(502).json({
-        error: `Could not read the account balance, so the batch was not started: ${(err as Error).message}`,
+        error: `Could not read the account balance, so the batch was not started: ${redactedMessage(err)}`,
       });
     }
 
@@ -564,7 +565,7 @@ export function createDraftRoutes(
         const known = knownError(err);
         built = known
           ? { ok: false as const, status: known.status, body: known.body }
-          : { ok: false as const, status: 503, body: { error: `Line ${plan.name}: the payment could not be prepared (${(err as Error).message}).` } };
+          : { ok: false as const, status: 503, body: { error: `Line ${plan.name}: the payment could not be prepared (${redactedMessage(err)}).` } };
       }
 
       if (!built.ok) {

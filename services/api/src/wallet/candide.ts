@@ -39,6 +39,7 @@ import { decodeFunctionResult, encodeFunctionData, hashTypedData } from "viem";
  */
 import { HARNESS } from "../config.js";
 import { partnerTimeout } from "../http.js";
+import { redactedMessage, errorText } from "../http/log-cause.js";
 const allowSimulation = () => HARNESS.enabled;
 
 /** The smart-account chain follows the app chain unless told otherwise, and
@@ -445,7 +446,7 @@ async function payGas(account: SafeAccount, userOperation: UserOperationV9): Pro
  * the paymaster's own error.
  */
 function paymasterRefusal(err: unknown, safeAddress: string): SafeGasError | null {
-  const text = `${(err as any)?.message ?? ""} ${(err as any)?.cause?.message ?? ""}`;
+  const text = `${errorText(err)} ${errorText((err as any)?.cause)}`;
   if (/does not qualify for any publicly available gas policy/i.test(text)) {
     return new SafeGasError(
       `the paymaster will not sponsor this operation on chain ${CANDIDE.chainId} ` +
@@ -774,7 +775,7 @@ export async function ethCall(to: string, data: `0x${string}`): Promise<`0x${str
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to, data }, "latest"] }),
   });
   const { result, error } = await res.json();
-  if (error) throw new Error(`eth_call ${to} failed: ${error?.message ?? JSON.stringify(error)}`);
+  if (error) throw new Error(`eth_call ${to} failed: ${redactedMessage(error?.message ?? JSON.stringify(error))}`);
   return result as `0x${string}`;
 }
 

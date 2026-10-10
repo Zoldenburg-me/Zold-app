@@ -16,6 +16,7 @@ import type {
   DraftPayment,
   DraftState,
 } from "./types.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export class DraftError extends Error {}
 
@@ -342,7 +343,7 @@ export function importCsv(
         }),
       );
     } catch (err) {
-      rejected.push({ row: rowNo, reason: (err as Error).message });
+      rejected.push({ row: rowNo, reason: redactedMessage(err) });
     }
   });
 

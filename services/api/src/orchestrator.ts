@@ -58,7 +58,7 @@ import {
 } from "./wallet/candide.js";
 import { createCashPickupViaAnchor, fundAndRefreshAnchorPickup } from "./adapters/moneygram.js";
 import { anchorModeEnabled, HARNESS } from "./config.js";
-import { describeCause } from "./http/log-cause.js";
+import { describeCause, redactedMessage, errorText } from "./http/log-cause.js";
 
 /**
  * The user's device signature over this payment's exact terms. The
@@ -350,7 +350,7 @@ function cashPayoutState(pickup: NonNullable<Transfer["pickup"]>): TransferState
  * (conversion round-trips at the prevailing rate) are itemized on the refund.
  */
 async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Promise<Transfer> {
-  const message = String(err?.shortMessage ?? err?.message ?? err);
+  const message = redactedMessage(err);
   // An operator owns a transfer in review: a late failure adds its steps and
   // leaves the state and the reason for the review alone.
   if (store.findTransfer(id)?.state === "MANUAL_REVIEW") {
@@ -1020,7 +1020,7 @@ export async function executeTransfer(
       // Fail closed: a failed real payout must not masquerade as success.
       return failAndCompensate(
         transfer.id,
-        new Error(`anchor payout failed: ${String(err?.message ?? err).slice(0, 200)}`),
+        new Error(`anchor payout failed: ${redactedMessage(err).slice(0, 200)}`),
         txs,
       );
     }
@@ -1122,14 +1122,14 @@ export async function executeSepaTransfer(
         if (!refused) {
           return store.updateTransfer(transfer.id, {
             state: "MANUAL_REVIEW",
-            error: `redeem order outcome unknown: ${String(err?.message ?? err).slice(0, 200)}; Monerium may have accepted it, so no automatic refund`,
+            error: `redeem order outcome unknown: ${redactedMessage(err).slice(0, 200)}; Monerium may have accepted it, so no automatic refund`,
             txs,
           });
         }
         txs.push({ step: "monerium.redeem.refused", hash: "0x" });
         return failAndCompensate(
           transfer.id,
-          new Error(`redeem order failed: ${String(err?.message ?? err).slice(0, 200)}`),
+          new Error(`redeem order failed: ${redactedMessage(err).slice(0, 200)}`),
           txs,
         );
       }
@@ -1213,7 +1213,7 @@ async function refreshPayoutUnlocked(
     // asks again. Only the anchor's own verdict may fail the transfer.
     const transient =
       err instanceof TypeError ||
-      /fetch failed|ECONN|ETIMEDOUT|timed? ?out|aborted|socket hang up|\b5\d\d\b/i.test(String(err?.message ?? err));
+      /fetch failed|ECONN|ETIMEDOUT|timed? ?out|aborted|socket hang up|\b5\d\d\b/i.test(errorText(err));
     if (transient && !maybePaid) {
       console.error(`refreshPayout: transient anchor error for ${transfer.id}, state unchanged: ${describeCause(err)}`);
       return transfer;
@@ -1222,13 +1222,13 @@ async function refreshPayoutUnlocked(
       return store.updateTransfer(transfer.id, {
         state: "MANUAL_REVIEW",
         error:
-          `anchor settlement unresolved: ${String(err?.message ?? err).slice(0, 200)}; ` +
+          `anchor settlement unresolved: ${redactedMessage(err).slice(0, 200)}; ` +
           `a Stellar payment may already have been sent, so no automatic refund`,
       });
     }
     return failAndCompensate(
       transfer.id,
-      new Error(`anchor settlement failed: ${String(err?.message ?? err).slice(0, 200)}`),
+      new Error(`anchor settlement failed: ${redactedMessage(err).slice(0, 200)}`),
       transfer.txs,
     );
   }

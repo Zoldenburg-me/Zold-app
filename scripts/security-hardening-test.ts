@@ -562,6 +562,95 @@ await check("no startup or request log interpolates a raw URL or an email", asyn
   assert.deepEqual(offenders, []);
 });
 
+// The API's source, or the operator scripts' (not their suites or the shared
+// harness modules, which only ever talk to local stubs).
+async function sourceFiles(dir: "api" | "scripts"): Promise<{ file: string; text: string }[]> {
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const root = new URL(dir === "api" ? "../services/api/src/" : "./", import.meta.url);
+  return (readdirSync(root, { recursive: true }) as string[])
+    .filter((f) => f.endsWith(".ts"))
+    .filter((f) => dir === "api" || (!f.endsWith("-test.ts") && !f.split("/").pop()!.startsWith("_")))
+    .map((file) => ({ file, text: readFileSync(new URL(file, root), "utf8") }));
+}
+const lineOf = (text: string, index: number) => text.slice(0, index).split("\n").length;
+const RAW_URL = /\$\{(?![^}]*urlForLog)[^}]*(Url|URL|\.url)\b[^}]*\}/;
+// A whole console call or Error construction: up to the `);` that ends its
+// line, so an arrow body or a nested call inside it does not cut it short.
+const CONSOLE_CALL = /console\.(?:log|warn|error|info|debug)\(([\s\S]*?)\);\s*$/gm;
+const ERROR_TEMPLATE = /new \w*Error\(\s*`([^`]*)`/g;
+// Names an error goes by in a catch or callback.
+const ERR = String.raw`(?:e|err|error|cause|e2|err2|error2|ex)`;
+// Reading an error's text without a log-cause helper: a `?.message ??`
+// fallback (the shape of an untyped catch), a cast's `.message`, the error
+// interpolated whole, or the error object handed to console as an argument.
+const RAW_ERROR_TEXT = [
+  new RegExp(String.raw`\b${ERR}\b\)?\??\.message\s*\?\?`, "g"),
+  new RegExp(String.raw`\(\s*${ERR}\s+as\s+\w+\s*\)\??\.message\b`, "g"),
+  new RegExp(String.raw`\$\{\s*${ERR}\s*\}`, "g"),
+  new RegExp(String.raw`String\(\s*${ERR}\s*\)`, "g"),
+];
+const HELPER_BEFORE = /\b(?:redactedMessage|describeCause|describeError|errorText)\([^)]*$/;
+
+await check("an error's message is redacted before it is logged, stored or returned: a keyed RPC or bundler URL in it never survives", async () => {
+  const { redactedMessage } = await import("../services/api/src/http/log-cause.js");
+  const key = "fake-key-" + "x".repeat(23);
+  const viemLike = Object.assign(new Error(`HTTP request failed.\n\nURL: https://base-sepolia.example/v2/${key}\nRequest body: {}`), {
+    shortMessage: `HTTP request failed at https://base-sepolia.example/v2/${key}`,
+  });
+  const fetchLike = new Error(`request to https://api.candide.dev/paymaster/v3/84532/${key} failed, reason: getaddrinfo ENOTFOUND api.candide.dev`);
+  for (const err of [viemLike, fetchLike, new Error("connect ECONNREFUSED 10.0.0.7:8545")]) {
+    const out = redactedMessage(err);
+    assert.ok(!out.includes(key), out);
+    assert.ok(!/https?:\/\/|10\.0\.0\.7|candide\.dev/.test(out), out);
+  }
+  assert.equal(redactedMessage(viemLike), "HTTP request failed at <url>", "shortMessage first, one line, no error name");
+  assert.equal(redactedMessage(new Error("amount exceeds balance")), "amount exceeds balance", "a plain message keeps its words");
+  assert.equal(redactedMessage("refused"), "refused");
+  assert.equal(redactedMessage(new Error("counterpart.identifier.iban is invalid")), "counterpart.identifier.iban is invalid", "a field path is not a host");
+  assert.equal(
+    redactedMessage(new Error("webauthn: origin https://evil.example not allowed"), { keepHosts: true }),
+    "webauthn: origin https://evil.example not allowed",
+    "keepHosts names the origin",
+  );
+  assert.equal(redactedMessage(viemLike, { keepHosts: true }), "HTTP request failed at https://base-sepolia.example", "keepHosts still drops the keyed path");
+  assert.equal(redactedMessage(undefined), "unknown error");
+});
+await check("an error's text reaches a log line, a row or a response only through a log-cause helper", async () => {
+  const offenders: string[] = [];
+  for (const { file, text } of await sourceFiles("api")) {
+    if (file.endsWith("log-cause.ts")) continue;
+    for (const re of RAW_ERROR_TEXT) {
+      for (const m of text.matchAll(re)) {
+        const lineStart = text.lastIndexOf("\n", m.index!) + 1;
+        if (HELPER_BEFORE.test(text.slice(lineStart, m.index!))) continue;
+        offenders.push(`${file}:${lineOf(text, m.index!)}`);
+      }
+    }
+    for (const call of text.matchAll(CONSOLE_CALL)) {
+      if (new RegExp(String.raw`(^|,)\s*${ERR}\s*,?\s*$`).test(call[1])) offenders.push(`${file}:${lineOf(text, call.index!)}`);
+    }
+  }
+  assert.deepEqual([...new Set(offenders)], []);
+});
+await check("no thrown error names a raw URL: a boot error is printed, so a keyed RPC URL in it reaches the log", async () => {
+  const offenders: string[] = [];
+  for (const { file, text } of await sourceFiles("api")) {
+    for (const call of text.matchAll(ERROR_TEMPLATE)) {
+      if (RAW_URL.test(call[1])) offenders.push(`${file}:${lineOf(text, call.index!)}`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+});
+await check("operator scripts print a configured URL by its origin only", async () => {
+  const offenders: string[] = [];
+  for (const { file, text } of await sourceFiles("scripts")) {
+    for (const call of text.matchAll(CONSOLE_CALL)) {
+      if (RAW_URL.test(call[1])) offenders.push(`${file}:${lineOf(text, call.index!)}`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+});
+
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
 console.log("\nsecurity hardening: all checks passed");
