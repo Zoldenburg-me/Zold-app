@@ -278,13 +278,14 @@ async function phRecRead() {
   // there is none: ask again, and say it could not check if that fails too.
   if (!capsLoaded) await loadCapabilities();
   if (!capsLoaded) return phRecFailed();
-  if (!user?.id || user.passkeySafe?.status !== "active" || (!caps.emailSmsRecovery && !caps.zoldenburgRecovery)) return phRecNone();
-  const [c, z] = await Promise.all([
+  if (!user?.id || user.passkeySafe?.status !== "active" || (!caps.emailSmsRecovery && !caps.zoldenburgRecovery && !caps.turnkeyGuardians)) return phRecNone();
+  const [c, z, t] = await Promise.all([
     caps.emailSmsRecovery ? api(`/api/users/${user.id}/recovery/candide`).catch(() => null) : undefined,
     caps.zoldenburgRecovery ? api(`/api/users/${user.id}/recovery/zoldenburg`).catch(() => null) : undefined,
+    caps.turnkeyGuardians ? api(`/api/users/${user.id}/recovery/turnkey/requests`).catch(() => null) : undefined,
   ]);
-  const chain = z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || null;
-  const reqs = Array.isArray(z?.requests) ? z.requests : [];
+  const chain = z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || t?.onChain?.pendingRecovery || null;
+  const reqs = [...(Array.isArray(z?.requests) ? z.requests : []), ...(Array.isArray(t?.requests) ? t.requests : [])];
   const request = chain ? null : reqs.find((r) => PH_REC_OPEN.includes(r?.status)) || null;
   // Nothing found is only "none" when every read worked, by the same rule
   // as /business (access-model.js recoveryStatus): a guardian switched on
@@ -292,15 +293,17 @@ async function phRecRead() {
   // that failed, or an answer without its chain reading is "couldn't check".
   // The Zoldenburg route reads the module for any active Safe, so its chain
   // error counts whether or not Zoldenburg is the guardian.
-  const unread = c === null || z === null
+  const unread = c === null || z === null || t === null
     || Boolean(z && (z.onChainError || !z.onChain))
+    || Boolean(t && (t.onChainError || !t.onChain))
     || Boolean(c && (c.onChain?.error || (c.guardianStatus === "active" && !c.onChain)));
   if (!chain && !request && unread) return phRecFailed();
   // Which guardian is moving it, where the reads say so; otherwise left out.
   const kinds = [...new Set((Array.isArray(c?.channels) ? c.channels : []).map((x) => (x.channel === "sms" ? "phone" : "email")))];
   const codes = kinds.length ? `${kinds.join(" and ").replace(/^./, (x) => x.toUpperCase())} ${kinds.length > 1 ? "codes" : "code"}` : "Email or phone codes";
-  const method = !chain ? "Zoldenburg ID check"
-    : reqs.some((r) => r?.status === "GRACE_PERIOD") ? "Zoldenburg ID check"
+  const byLogin = (r) => r?.mode === "turnkey";
+  const method = !chain ? (byLogin(request) ? "Your Google or Apple guardian" : "Zoldenburg ID check")
+    : reqs.some((r) => r?.status === "GRACE_PERIOD") ? (reqs.some((r) => r?.status === "GRACE_PERIOD" && byLogin(r)) ? "Your Google or Apple guardian" : "Zoldenburg ID check")
       : c?.guardianStatus === "active" && !z?.active ? codes : null;
   phRec = chain || request ? { chain, request, method } : { none: true };
   phRecBarSync();
@@ -374,7 +377,7 @@ PH["recovery-alert"] = {
       Z.setLoading(cancel, true);
       try {
         if (phRec.chain) await recoveryCancelRun();
-        else await api(`/api/users/${user.id}/recovery/zoldenburg/requests/${phRec.request.id}/cancel`, {});
+        else await api(`/api/users/${user.id}/recovery/${phRec.request.mode === "turnkey" ? "turnkey" : "zoldenburg"}/requests/${phRec.request.id}/cancel`, {});
         phRec = null;
         phRecBarSync();
         phRecDone = true;

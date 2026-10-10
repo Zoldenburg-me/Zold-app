@@ -2,8 +2,8 @@
 
 The full rules behind the one-line versions in `AGENTS.md` → Invariants →
 Identity and authority. Each of these was a bug once.
-Planned guardian kinds (Didit + 1 € check, Turnkey, trusted people):
-`recovery-guardians-plan.md`.
+Planned guardian kinds (Didit + 1 € check, trusted people), and the Turnkey
+guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
 
 - **The user may add their OWN second owner** (Settings → Who approves
   payments; `routes/safe-signers.ts`). Read from the chain on
@@ -34,6 +34,26 @@ Planned guardian kinds (Didit + 1 € check, Turnkey, trusted people):
   A signature's v of 0/1 is normalised to 27/28 before relaying (the module's
   ECDSA check would revert on 0/1). Admin → Recoveries → "Test guardian
   wallet" proves the Shell → wallet → API path without touching a Safe.
+- **A Google or Apple login is a guardian only through Turnkey, and Zold holds
+  no part of it** (`wallet/turnkey.ts`, `recovery/turnkey-recovery.ts`).
+  Every sub-org we create has exactly one root user, the person, at root
+  quorum 1, with no API key, no authenticator of ours and no delegated
+  access; one builder asserts it and a source grep fails on anything else. A
+  sub-org found by login is checked for the same shape. A signature is
+  relayed only from the guardian recorded on the request when it started,
+  over the digest recomputed from the module (refused unless the module's
+  own `getRecoveryHash` agrees), while the module still lists that guardian
+  at threshold 1 and holds no other recovery, and only once the owner was
+  emailed that someone asked: no operator reviews this path, so the alert
+  and the waiting period are the owner's defence (no mail, no relay). An
+  account may have up to five such requests open at once (only the
+  guardian's login can sign one, so starting first locks nobody out); once
+  one is on chain the others close. While any other guardian is on
+  the Safe a Turnkey guardian is not added, since nothing collects two
+  signatures yet. Its login token is accepted only from Google or Apple,
+  signed by their published keys, for our client id, bound to the browser's
+  key; /guardian is the only page that loads Turnkey code or may reach
+  Turnkey's API.
 - **A recovery's new credential lives on the RecoveryRequest** until the chain
   confirms the new owner, so whoever holds the OTP channels cannot sign in or
   spend during the grace period.

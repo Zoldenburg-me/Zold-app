@@ -48,6 +48,9 @@ import { formatReport, reconcile } from "./reconcile.js";
 import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
 import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./routes/recovery-zoldenburg.js";
 import { createTurnkeyGuardianRouter } from "./routes/recovery-turnkey.js";
+import { createTurnkeyRecoveryRouter } from "./routes/recovery-turnkey-requests.js";
+import { sweepTurnkeyRecoveries } from "./recovery/turnkey-recovery.js";
+import { turnkeyGuardiansEnabled } from "./wallet/turnkey.js";
 import { sweepOwnerAlerts } from "./recovery/owner-alerts.js";
 import { mailAvailable } from "./adapters/mailer.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
@@ -226,6 +229,9 @@ app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession }));
 // Turnkey guardians: the user's own Google or Apple login as a guardian
 // wallet. 404 on every route until TURNKEY_GUARDIANS=1.
 app.use("/api", createTurnkeyGuardianRouter({ requireUserSession }));
+// Recovering with that guardian: the lost device starts a request, the
+// guardian signs on /guardian, the API relays; same 404 while the switch is off.
+app.use("/api", createTurnkeyRecoveryRouter({ requireUserSession }));
 // Sessions and passkeys: the WebAuthn ceremonies, and the passkey Safe whose
 // owner those credentials are.
 app.use("/api", createAuthRouter({ requireUserSession }));
@@ -307,6 +313,15 @@ if (zoldenburgRecoveryEnabled()) {
       .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
   setTimeout(runZoldenburgSweep, 5_000).unref();
   setInterval(runZoldenburgSweep, RECOVERY.sweepMs).unref();
+}
+// Turnkey-guardian recoveries: expire, pick up executions, finalize after the wait.
+if (turnkeyGuardiansEnabled()) {
+  const runTurnkeySweep = () =>
+    sweepTurnkeyRecoveries()
+      .then((n) => n && console.log(`recovery sweep: finalized ${n} Turnkey-guardian recover${n === 1 ? "y" : "ies"}`))
+      .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
+  setTimeout(runTurnkeySweep, 5_000).unref();
+  setInterval(runTurnkeySweep, RECOVERY.sweepMs).unref();
 }
 // Candide recoveries finalize themselves once the grace period has run, so a
 // user who lost their phone on a Friday is not waiting for a click on Monday.

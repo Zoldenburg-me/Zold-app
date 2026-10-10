@@ -77,11 +77,11 @@ async function renderRecoveryScreen() {
 }
 
 /** Google or Apple login as a guardian: set up on its own page (/guardian),
- *  which says plainly that recovering with it is not built yet. */
+ *  which says plainly that none of it has run on a live deployment. */
 function renderTurnkeySection(el) {
   el.innerHTML = `
     <div class="m-seclabel" style="margin-top:24px">Your Google or Apple login <span class="m-tag soon">Not yet run</span></div>
-    <div class="m-lede" style="font-size:13px">Make your own Google or Apple login a guardian of this account. Built, not yet run on a live deployment. Recovering with it is not built yet, so it cannot recover this account until then.</div>
+    <div class="m-lede" style="font-size:13px">Make your own Google or Apple login a guardian of this account. Built, not yet run on a live deployment. If you lose your passkey, choose “Recover your account” on the new phone and approve with that login.</div>
     <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">Set up on the guardian page</a>`;
 }
 
@@ -301,9 +301,20 @@ async function recoveryCancelOnChain() {
 /* ---------- lost device: recover from the onboarding page ---------- */
 let rcState = null;
 let rcEmail = "";
-/* Which guardian this recovery goes through: "candide" (email/SMS codes) or
-   "zoldenburg" (support checks the person, an operator signs). */
+/* Which guardian this recovery goes through: "candide" (email/SMS codes),
+   "zoldenburg" (support checks the person, an operator signs) or "turnkey"
+   (the owner's own Google or Apple login signs on /guardian). */
 let rcMode = "candide";
+/** A request's API path; Turnkey requests live under /requests. */
+const rcPath = (id, suffix = "") =>
+  rcMode === "turnkey" ? `/api/recovery/turnkey/requests/${id}${suffix}` : `/api/recovery/${rcMode}/${id}${suffix}`;
+/* Handed to /guardian (same tab, so sessionStorage carries it through the
+   Google or Apple login): which request to approve, and its secret. */
+const RC_GUARDIAN_KEY = "zold-guardian-recovery";
+/** Back from /guardian, the email step starts filled in. */
+function rcReturnedEmail() {
+  try { return JSON.parse(sessionStorage.getItem(RC_GUARDIAN_KEY) || "{}").email || ""; } catch { return ""; }
+}
 /* The per-request secret the API hands out once when a recovery starts. It is
    what lets THIS browser drive the request (the id alone is not enough), so it
    is kept per email to survive a reload mid-recovery. */
@@ -360,6 +371,7 @@ function rcRouteFor(r) {
   if (r.status === "GRACE_PERIOD") return "recover/wait";
   if (r.status === "FINALIZED") return "recover/done";
   if (rcMode === "zoldenburg" && [...RC_ZOLD_REVIEW, ...RC_ZOLD_SIGNING].includes(r.status)) return "recover/zoldenburg";
+  if (rcMode === "turnkey" && r.status === "REVIEW_PENDING") return "recover/turnkey";
   return "recover";
 }
 
@@ -373,7 +385,7 @@ function rcEndedText(r) {
 
 /** When the waiting period ends, from whichever guardian ran it. */
 function rcFinalizeAfter(r) {
-  const iso = r?.candide?.finalizeAfter || r?.zoldenburg?.finalizeAfter;
+  const iso = r?.candide?.finalizeAfter || r?.zoldenburg?.finalizeAfter || r?.turnkey?.finalizeAfter;
   const d = iso ? new Date(iso) : null;
   return d && !Number.isNaN(d.getTime()) ? d : null;
 }
@@ -410,7 +422,7 @@ function rcShow() {
   // Moving between the later steps replaces history: back from the waiting
   // period is the email step, not a code form that no longer applies.
   obGo(name, { replace: obScreen !== "recover" || name === "recover" });
-  if (name === "recover/wait" || name === "recover/zoldenburg") rcFollow();
+  if (name === "recover/wait" || name === "recover/zoldenburg" || name === "recover/turnkey") rcFollow();
 }
 
 /* Re-read the request while it waits: every minute, or just after the
@@ -424,7 +436,7 @@ function rcFollow() {
   rcTimer = setTimeout(async () => {
     if (!obScreen?.startsWith("recover/") || rcState?.id !== r.id) return;
     try {
-      const next = await rcApi(`/api/recovery/${rcMode}/${r.id}`);
+      const next = await rcApi(rcPath(r.id));
       if (rcState?.id !== r.id) return;
       rcState = next;
       if (rcRouteFor(next) !== obScreen || (next.status !== r.status)) return rcShow();
@@ -474,15 +486,21 @@ async function recoverStart(btn) {
     if (!window.PublicKeyCredential) throw new Error("This browser can’t use Face ID or fingerprint sign-in. Open Zold in Safari or Chrome.");
     rcSecret = rcSaved(rcEmail);
     rcOtpTicket = rcTicketSaved(rcEmail);
-    // Email/SMS first where the deployment has it; an account without it
-    // (404) falls through to Zoldenburg when that guardian is offered.
+    // Each guardian the deployment offers, in turn: an account without one
+    // (404) falls through to the next — email/SMS, Zoldenburg, then the
+    // owner's own Google or Apple login.
     const body = { email: rcEmail, ...(rcSecret ? { recoverySecret: rcSecret } : {}) };
+    const routes = [
+      ["candide", "/api/recovery/candide", caps.emailSmsRecovery],
+      ["zoldenburg", "/api/recovery/zoldenburg", caps.zoldenburgRecovery],
+      ["turnkey", "/api/recovery/turnkey/requests", caps.turnkeyGuardians],
+    ].filter(([, , on]) => on);
+    if (!routes.length) throw new Error("Recovery isn’t available on this deployment.");
     let r = null;
-    if (caps.emailSmsRecovery) {
-      try { r = await api("/api/recovery/candide", body); rcMode = "candide"; }
-      catch (e) { if (!(e?.status === 404 && caps.zoldenburgRecovery)) throw e; }
+    for (const [i, [mode, path]] of routes.entries()) {
+      try { r = await api(path, body); rcMode = mode; break; }
+      catch (e) { if (!(e?.status === 404 && i < routes.length - 1)) throw e; }
     }
-    if (!r) { r = await api("/api/recovery/zoldenburg", body); rcMode = "zoldenburg"; }
     if (r.recoverySecret) { rcSecret = r.recoverySecret; rcSave(rcEmail, rcSecret); }
     if (r.status === "PASSKEY_PENDING") {
       // The new owner: a passkey made on THIS device. P-256 only — it has to
@@ -554,6 +572,17 @@ async function recoverConfirmCode(btn) {
   } finally { if (btn.isConnected) Z.setLoading(btn, false); }
 }
 
+/** Turnkey step: approve on /guardian with the Google or Apple login that is
+ *  this account's guardian. The same tab carries the request there. */
+function recoverApproveWithLogin() {
+  try {
+    sessionStorage.setItem(RC_GUARDIAN_KEY, JSON.stringify({ requestId: rcState.id, secret: rcSecret, email: rcEmail, at: Date.now() }));
+  } catch {
+    return obShowErr(new Error("This browser blocks the storage the approval needs. Allow site data for Zold and try again."), "rc-err");
+  }
+  location.assign("/guardian");
+}
+
 /** Waiting step, once the period is over: finish now rather than wait for Zold's sweep. */
 async function recoverFinalize(btn) {
   if (Z.isDisabled(btn)) return;
@@ -562,7 +591,7 @@ async function recoverFinalize(btn) {
   try {
     // No session comes back: once finalized, the new passkey signs in
     // through the ordinary login, which the done screen offers.
-    rcState = await rcApi(`/api/recovery/${rcMode}/${rcState.id}/finalize`, {});
+    rcState = await rcApi(rcPath(rcState.id, "/finalize"), {});
     rcShow();
   } catch (e) { obShowErr(e, "rc-err"); }
   finally { if (btn.isConnected) Z.setLoading(btn, false); }

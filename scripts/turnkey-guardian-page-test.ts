@@ -14,7 +14,12 @@
  *  - the flow, with the browser stubbed: start stores the state and leaves
  *    for the provider; the return strips the token from the address bar
  *    before anything else, sends it with the key it is bound to, drops that
- *    key, and finishes with the passkey-approved op.
+ *    key, and finishes with the passkey-approved op;
+ *  - approving a recovery: Turnkey's sign_raw_payload is stamped by the
+ *    browser key, sends the digest with its 0x unhashed, and is polled until
+ *    complete; the page refuses a login that is not the request's guardian
+ *    before anything is signed, and drops the key whatever happens;
+ *  - only /guardian's CSP may reach Turnkey's API.
  *
  * What it cannot prove: a real Google or Apple login, IndexedDB, or a
  * passkey. No browser runs here.
@@ -31,7 +36,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PUB = path.join(ROOT, "services/api/public");
 const { buildTurnkeyBundle, TURNKEY_BUNDLE } = await import("./build-turnkey-bundle.js");
 const { createPageRouter } = await import("../services/api/src/routes/pages.js");
-const { securityHeadersFor, CONTENT_SECURITY_POLICY } = await import("../services/api/src/http/policy.js");
+const { securityHeadersFor, CONTENT_SECURITY_POLICY, guardianPageCsp } = await import("../services/api/src/http/policy.js");
+const signer = await import(pathToFileURL(path.join(PUB, "guardian/turnkey-sign.js")).href);
 const oauth = await import(pathToFileURL(path.join(PUB, "guardian/oauth.js")).href);
 const page = await import(pathToFileURL(path.join(PUB, "guardian/main.js")).href);
 
@@ -318,6 +324,156 @@ await check("return: a login the chain already lists needs no passkey", async ()
   const r = await page.finishLogin(t.env);
   assert.equal(r.step, "done");
   assert.ok(!t.log.some((l) => l.startsWith("passkey")));
+});
+
+// ---------------------------------------------------------------------------
+console.log("approving a recovery");
+
+await check("only /guardian's CSP adds Turnkey's API, and only when given", () => {
+  assert.match(guardianPageCsp("https://api.turnkey.com"), /connect-src 'self' https:\/\/api\.turnkey\.com(;|$)/);
+  assert.match(guardianPageCsp(), /connect-src 'self'(;|$)/);
+  assert.match(CONTENT_SECURITY_POLICY, /connect-src 'self'(;|$)/);
+});
+
+const DIGEST = `0x${"ab".repeat(32)}`;
+const stampingStamper = () => {
+  const stamped: string[] = [];
+  return { stamped, stamp: async (body: string) => { stamped.push(body); return { stampHeaderName: "X-Stamp", stampHeaderValue: `stamp-of-${stamped.length}` }; } };
+};
+const turnkeyFetch = (answers: any[]) => {
+  const calls: { url: string; headers: any; body: any }[] = [];
+  const fn = async (url: string, init: any) => {
+    calls.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+    const a = answers.shift();
+    return { ok: a.ok ?? true, status: a.status ?? 200, json: async () => a.body };
+  };
+  return { calls, fn };
+};
+const completed = { activity: { id: "act-1", status: "ACTIVITY_STATUS_COMPLETED", result: { signRawPayloadResult: { r: "11".repeat(32), s: "22".repeat(32), v: "01" } } } };
+
+await check("sign_raw_payload: the digest with its 0x, hex encoding, no extra hash, stamped by the browser key", async () => {
+  const st = stampingStamper();
+  const tf = turnkeyFetch([{ body: completed }]);
+  const sig = await signer.signRawPayload({ stamper: st, baseUrl: "https://api.turnkey.com", organizationId: "sub-1", signWith: "0xG", payload: DIGEST, fetchImpl: tf.fn, now: () => 1234 });
+  assert.deepEqual(sig, { r: "11".repeat(32), s: "22".repeat(32), v: "01" });
+  assert.equal(tf.calls[0].url, "https://api.turnkey.com/public/v1/submit/sign_raw_payload");
+  assert.deepEqual(tf.calls[0].body, {
+    type: "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2", timestampMs: "1234", organizationId: "sub-1",
+    parameters: { signWith: "0xG", payload: DIGEST, encoding: "PAYLOAD_ENCODING_HEXADECIMAL", hashFunction: "HASH_FUNCTION_NO_OP" },
+  });
+  assert.equal(tf.calls[0].headers["X-Stamp"], "stamp-of-1");
+  assert.equal(st.stamped[0], JSON.stringify(tf.calls[0].body), "the stamp covers exactly the body sent");
+});
+
+await check("sign_raw_payload: a pending activity is polled through get_activity until complete", async () => {
+  const tf = turnkeyFetch([{ body: { activity: { id: "act-2", status: "ACTIVITY_STATUS_PENDING" } } }, { body: completed }]);
+  const sig = await signer.signRawPayload({ stamper: stampingStamper(), baseUrl: "https://t", organizationId: "sub-1", signWith: "0xG", payload: DIGEST, fetchImpl: tf.fn, sleep: async () => {} });
+  assert.equal(sig.v, "01");
+  assert.equal(tf.calls[1].url, "https://t/public/v1/query/get_activity");
+  assert.deepEqual(tf.calls[1].body, { organizationId: "sub-1", activityId: "act-2" });
+});
+
+await check("sign_raw_payload: failed, rejected, refused, endless or malformed answers throw", async () => {
+  const run = (answers: any[], payload = DIGEST) =>
+    signer.signRawPayload({ stamper: stampingStamper(), baseUrl: "https://t", organizationId: "o", signWith: "0xG", payload, fetchImpl: turnkeyFetch(answers).fn, sleep: async () => {}, poll: { tries: 2, delayMs: 0 } });
+  await assert.rejects(run([{ body: { activity: { id: "a", status: "ACTIVITY_STATUS_FAILED" } } }]), /did not sign/);
+  await assert.rejects(run([{ body: { activity: { id: "a", status: "ACTIVITY_STATUS_REJECTED" } } }]), /did not sign/);
+  await assert.rejects(run([{ ok: false, status: 401, body: { message: "unauthorized" } }]), /refused/);
+  const pending = { body: { activity: { id: "a", status: "ACTIVITY_STATUS_PENDING" } } };
+  await assert.rejects(run([pending, pending, pending, pending]), /too long/);
+  await assert.rejects(run([{ body: { activity: { id: "a", status: "ACTIVITY_STATUS_COMPLETED", result: {} } } }]), /without a signature/);
+  await assert.rejects(run([], "0x1234"), /32 bytes/);
+});
+
+await check("the recovery context is read only when it names a request and its secret", () => {
+  const s = memoryStorage();
+  assert.equal(page.recoveryContext(s), null);
+  s.setItem(page.RECOVERY_KEY, JSON.stringify({ email: "a@b.c" }));
+  assert.equal(page.recoveryContext(s), null, "the email left after approving is not a request");
+  s.setItem(page.RECOVERY_KEY, "{bad");
+  assert.equal(page.recoveryContext(s), null);
+  s.setItem(page.RECOVERY_KEY, JSON.stringify({ requestId: "rq1", secret: "sec", at: T0 }));
+  assert.deepEqual(page.recoveryContext(s, T0 + 1000), { requestId: "rq1", secret: "sec", at: T0 });
+  assert.equal(page.recoveryContext(s, T0 + 24 * 3600_000 + 1), null, "a day-old hand-off is not a request any more");
+});
+
+const approveEnv = (over: Record<string, any> = {}) => {
+  const storage = memoryStorage();
+  storage.setItem(oauth.OAUTH_STATE_KEY, stored());
+  const stamper = fakeStamper();
+  stamper.key = KEY;
+  const log: string[] = [];
+  const calls: { path: string; body: any; headers: any }[] = [];
+  const answers: Record<string, any> = {
+    "/api/recovery/turnkey/login": { session: "jwt", subOrgId: "sub-1" },
+    "/api/recovery/turnkey/requests/rq1/digest": { digest: DIGEST, guardianAddress: "0xG", subOrgId: "sub-1" },
+    "/api/recovery/turnkey/requests/rq1/signature": { id: "rq1", status: "GRACE_PERIOD" },
+  };
+  return {
+    log, calls, stamper,
+    env: {
+      hash: "#id_token=tok.en.x&state=s1", storage, stamper, now: () => T0 + 1000,
+      recovery: { requestId: "rq1", secret: "sec" }, turnkeyApi: "https://api.turnkey.com",
+      stripHash: () => log.push("strip"),
+      api: async (p: string, body: any, headers: any = {}) => {
+        log.push(`api ${p}`);
+        calls.push({ path: p, body, headers });
+        return answers[p];
+      },
+      sign: async (args: any) => {
+        log.push(`sign ${args.organizationId} ${args.signWith} ${args.payload}`);
+        return { r: "11", s: "22", v: "01" };
+      },
+      ...over,
+    },
+  };
+};
+
+await check("approve: strip, Turnkey session with the bound key, digest, sign with that sub-org, relay, drop the key", async () => {
+  const t = approveEnv();
+  const r = await page.finishApprove(t.env);
+  assert.equal(r.step, "approved", JSON.stringify(r));
+  assert.equal(r.request.status, "GRACE_PERIOD");
+  assert.deepEqual(t.log, [
+    "strip",
+    "api /api/recovery/turnkey/login",
+    "api /api/recovery/turnkey/requests/rq1/digest",
+    `sign sub-1 0xG ${DIGEST}`,
+    "api /api/recovery/turnkey/requests/rq1/signature",
+  ]);
+  assert.deepEqual(t.calls[0].body, { oidcToken: "tok.en.x", publicKey: KEY });
+  assert.equal(t.calls[1].headers["x-recovery-secret"], "sec");
+  assert.deepEqual(t.calls[2].body, { r: "11", s: "22", v: "01" });
+  assert.equal(t.calls[2].headers["x-recovery-secret"], "sec");
+  assert.ok(t.stamper.calls.includes("clear"));
+});
+
+await check("approve: a login that is not the request's guardian signs nothing", async () => {
+  const t = approveEnv();
+  const api = t.env.api;
+  t.env.api = async (p: string, b: any, h: any) => (p.endsWith("/login") ? { session: "jwt", subOrgId: "sub-OTHER" } : api(p, b, h));
+  const r = await page.finishApprove(t.env);
+  assert.equal(r.step, "error");
+  assert.match(r.reason, /not this account’s guardian/);
+  assert.ok(!t.log.some((l) => l.startsWith("sign")));
+  assert.ok(t.stamper.calls.includes("clear"));
+});
+
+await check("approve: a refused state or a refused signature ends in an error, key dropped", async () => {
+  const forged = approveEnv({ hash: "#id_token=tok.en.x&state=forged" });
+  assert.equal((await page.finishApprove(forged.env)).step, "error");
+  assert.equal(forged.calls.length, 0);
+  assert.ok(forged.stamper.calls.includes("clear"));
+  const refused = approveEnv();
+  const api = refused.env.api;
+  refused.env.api = async (p: string, b: any, h: any) => {
+    if (p.endsWith("/signature")) throw new Error("this signature is not from the guardian on the account");
+    return api(p, b, h);
+  };
+  const r = await page.finishApprove(refused.env);
+  assert.equal(r.step, "error");
+  assert.match(r.reason, /not from the guardian/);
+  assert.ok(refused.stamper.calls.includes("clear"));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

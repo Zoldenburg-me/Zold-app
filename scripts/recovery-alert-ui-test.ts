@@ -99,7 +99,7 @@ run(`api = (p) => __api(p); phRender = () => __render(); phGo = (n) => __go(n); 
   user = { id: "u1", passkeySafe: { status: "active" } };`);
 
 const route = (name: string) => run(`phRoute = { name: ${JSON.stringify(name)}, arg: null }`);
-const setCaps = (z: boolean, c: boolean) => run(`caps = { ...caps, zoldenburgRecovery: ${z}, emailSmsRecovery: ${c} }`);
+const setCaps = (z: boolean, c: boolean, tk = false) => run(`caps = { ...caps, zoldenburgRecovery: ${z}, emailSmsRecovery: ${c}, turnkeyGuardians: ${tk} }`);
 const reset = () => {
   run(`phRec = null; phRecReadAt = 0; phRecAnnounced = ""; phRecOpened = ""; sessionStorage.clear()`);
   bar.innerHTML = ""; bar.dataset = {}; bar.hidden = true;
@@ -163,9 +163,33 @@ await t("a deployment with only email/SMS recovery reads the Candide route alone
   assert.match(bar.innerHTML, /Someone is moving your account/);
 });
 
+const tkRequest = (status = "REVIEW_PENDING", id = "tk1") => ({ id, mode: "turnkey", status, requestedAt: "2026-10-10T08:00:00Z", turnkey: {} });
+const tOk = (over: any = {}) => ({ requests: [], onChain: { pendingRecovery: null, guardians: [] }, ...over });
+
+await t("a deployment with only Google/Apple guardians reads the Turnkey route alone, and shows an open request", async () => {
+  route("send");
+  setCaps(false, false, true);
+  answers = { "/recovery/turnkey/requests": tOk({ requests: [tkRequest()] }) };
+  await check();
+  assert.deepEqual(calls, ["/api/users/u1/recovery/turnkey/requests"]);
+  assert.equal(state().request?.id, "tk1");
+  assert.match(state().method, /Google or Apple guardian/);
+  assert.match(bar.innerHTML, /Nothing has been signed yet/);
+});
+
+await t("a recovery on chain found through the Turnkey route shows the strip", async () => {
+  route("send");
+  setCaps(true, false, true);
+  answers = { "/recovery/zoldenburg": zOk(), "/recovery/turnkey/requests": tOk({ requests: [tkRequest("GRACE_PERIOD")], onChain: { pendingRecovery: chain, guardians: [] } }) };
+  await check();
+  assert.ok(state().chain);
+  assert.match(state().method, /Google or Apple guardian/);
+  assert.match(bar.innerHTML, /Someone is moving your account/);
+});
+
 await t("couldn't check, never none: every way a read can fail", async () => {
   route("send");
-  const cases: [string, boolean, boolean, Record<string, any>][] = [
+  const cases = [
     ["Zoldenburg route down", true, false, { "/recovery/zoldenburg": new Error("503") }],
     ["Zoldenburg chain read failed (guardian or not)", true, false, { "/recovery/zoldenburg": { active: false, requests: [], onChainError: "rpc down" } }],
     ["Zoldenburg answer without its chain reading", true, false, { "/recovery/zoldenburg": { active: true, requests: [] } }],
@@ -173,10 +197,13 @@ await t("couldn't check, never none: every way a read can fail", async () => {
     ["Candide chain read failed", false, true, { "/recovery/candide": cOk({ onChain: { error: "rpc down" } }) }],
     ["Candide active without its chain reading", false, true, { "/recovery/candide": cOk({ onChain: undefined }) }],
     ["one route fine, the other down", true, true, { "/recovery/zoldenburg": zOk(), "/recovery/candide": new Error("503") }],
-  ];
-  for (const [name, z, c, a] of cases) {
+    ["Turnkey route down", false, false, { "/recovery/turnkey/requests": new Error("503") }, true],
+    ["Turnkey chain read failed", false, false, { "/recovery/turnkey/requests": { requests: [], onChainError: "rpc down" } }, true],
+    ["Turnkey answer without its chain reading", false, false, { "/recovery/turnkey/requests": { requests: [] } }, true],
+  ] as [string, boolean, boolean, Record<string, any>, boolean?][];
+  for (const [name, z, c, a, tk] of cases) {
     run(`phRec = null`); bar.dataset = {};
-    setCaps(z, c);
+    setCaps(z, c, Boolean(tk));
     answers = a;
     await check();
     assert.equal(state().failed, true, name);
@@ -344,6 +371,19 @@ await t("the strip's container is on the page, outside the redesigned and the ol
   const at = html.indexOf('id="ph-recbar"');
   assert.ok(at > 0);
   assert.ok(at < html.indexOf('<section id="phone"') && at < html.indexOf('<section id="dashboard"'));
+});
+
+await t("lost device, Turnkey guardian: the approve screen, the request's paths and its waiting period", async () => {
+  run(`rcMode = "turnkey"`);
+  assert.equal(run(`rcRouteFor({ status: "REVIEW_PENDING" })`), "recover/turnkey");
+  assert.equal(run(`rcRouteFor({ status: "GRACE_PERIOD" })`), "recover/wait");
+  assert.equal(run(`rcPath("rq1")`), "/api/recovery/turnkey/requests/rq1");
+  assert.equal(run(`rcPath("rq1", "/finalize")`), "/api/recovery/turnkey/requests/rq1/finalize");
+  assert.equal(run(`rcFinalizeAfter({ turnkey: { finalizeAfter: "2026-10-13T09:00:00Z" } })?.toISOString()`), "2026-10-13T09:00:00.000Z");
+  run(`rcMode = "zoldenburg"`);
+  assert.equal(run(`rcPath("rq1", "/finalize")`), "/api/recovery/zoldenburg/rq1/finalize", "the other modes keep their paths");
+  assert.equal(run(`rcRouteFor({ status: "REVIEW_PENDING" })`), "recover/zoldenburg");
+  run(`rcMode = "candide"`);
 });
 
 // ------------------------------------------------------------ /business ----

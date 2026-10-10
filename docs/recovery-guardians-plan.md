@@ -228,18 +228,30 @@ sample documents only.
 - **Built (offline-tested, never called Turnkey, Google or Apple):**
   `config/turnkey.ts`, `wallet/turnkey.ts`, `routes/recovery-turnkey.ts`,
   the `/guardian` page (`public/guardian.html`, `public/guardian/*.js`) and
-  `vendor/turnkey.js`; `turnkey:test` and `turnkey-page:test`.
+  `vendor/turnkey.js`; recovery with it in `recovery/turnkey-recovery.ts`
+  and `routes/recovery-turnkey-requests.ts`; `turnkey:test`,
+  `turnkey-page:test` and `turnkey-recovery:test`.
   `TURNKEY_GUARDIANS=1` switches it on and then needs both secrets plus
   `TURNKEY_OAUTH_CLIENT_IDS`: our Google web client id (ends in
   `.apps.googleusercontent.com`) and Apple services id, not secret, both
   with `https://<host>/guardian` registered as the redirect URI.
-  `capabilities()` publishes `turnkeyGuardians` and `turnkeyLogins`.
+  `capabilities()` publishes `turnkeyGuardians`, `turnkeyLogins` and
+  `turnkeyApi`.
   Adding works end to end in code: login, sub-org, then the passkey op
   `addGuardianWithThreshold(address, 1)`; the row turns `active` only when
   the module lists the address. While any other guardian is on the Safe the
   add is refused (`OTHER_GUARDIAN`), because threshold 2 with no route that
   collects two signatures would leave Zoldenburg unable to recover alone.
-  Not built: email OTP, the approval page, signature collection and relay.
+  Recovering works end to end in code: on the new device "Recover your
+  account" falls through to a `turnkey` request (new passkey held on it),
+  /guardian logs in, gets a Turnkey session bound to a fresh key, signs the
+  digest the API recomputed from the module, and the API checks the signer
+  is the guardian recorded on the request, the module still lists it at
+  threshold 1 with no other recovery pending and the owner's alert mail
+  sent (no mail, no relay), then relays
+  `multiConfirmRecovery` (execute). Grace period, finalise, sweep, the alert
+  email, the banner and the owner's cancel cover the mode. Not built: email
+  OTP, signature collection from several guardians (Phase 3).
 - **Every sub-org is created with exactly one root user, the person, at root
   quorum threshold 1, and no API key of ours.** One builder function makes
   the payload (`ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8`: `rootUsers[]` with
@@ -298,7 +310,8 @@ sample documents only.
   (636 KB) for one POST, so the page sends its stamped `sign_raw_payload`
   itself. The key is an unextractable P-256 key in IndexedDB
   (`crypto.subtle.generateKey`). Only `/guardian` loads it: an ES-module page
-  with its own CSP (no inline script, `GUARDIAN_PAGE_CSP`), so the classic
+  with its own CSP (no inline script, connect-src adds only Turnkey's API:
+  `guardianPageCsp`), so the classic
   `app/*.js` scripts never do. Logins are full-page redirects that return
   the ID token in the URL fragment (Google `id_token`, Apple `code id_token`
   with no scope), with a one-time state in sessionStorage.
@@ -421,11 +434,7 @@ processing rests on explicit consent (Art. 9(2)(a)), collected each time.
 - The operator cannot sign for the Zoldenburg guardian unless the Didit check
   and the 1 € check both passed for this request. Fail closed on any read error.
 - We store no ID data, no biometrics and no full IBAN for recovery.
-- Every Turnkey sub-org has exactly one root user, the person, and no key of
-  ours; no delegated access.
 - With two or more guardians, the threshold is at least 2.
-- Every collected signature is checked against the digest recomputed from the
-  module and against the guardian list on chain.
 
 ## Tests
 

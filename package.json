@@ -58,6 +58,7 @@
     "recovery:candide:test": "tsx scripts/candide-recovery-test.ts",
     "turnkey:test": "tsx scripts/turnkey-guardian-test.ts",
     "turnkey-page:test": "tsx scripts/turnkey-guardian-page-test.ts",
+    "turnkey-recovery:test": "tsx scripts/turnkey-recovery-test.ts",
     "vendor:turnkey": "tsx scripts/build-turnkey-bundle.ts",
     "documents:test": "tsx scripts/documents-test.ts",
     "paylinks:test": "tsx scripts/payment-requests-test.ts",

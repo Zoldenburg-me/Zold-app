@@ -22,6 +22,7 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | /api | routes/recovery-candide.ts | email/SMS guardian channels, recovery flow |
 | /api | routes/recovery-zoldenburg.ts | Zoldenburg guardian + /admin/recoveries |
 | /api | routes/recovery-turnkey.ts | Turnkey guardian sub-orgs: /recovery/turnkey/users/:id/guardians (+ /:subOrgId/add, /ops/:requestId: the passkey op that adds it on chain), /recovery/turnkey/login (404 until `TURNKEY_GUARDIANS=1`) |
+| /api | routes/recovery-turnkey-requests.ts | recovery with that guardian: /recovery/turnkey/requests (+/:id/passkey, /digest, /signature, /finalize; per-request secret), /users/:id/recovery/turnkey/requests (+/:rid/cancel) |
 | /api | routes/safe-signers.ts, safe-import.ts | owners, threshold, spending limits, import |
 | /api | routes/shopify.ts | install/callback, payments app hooks, order pay pages |
 | /api | routes/email-verification.ts, faucet.ts, admin.ts | codes, testnet faucet, operator stats |

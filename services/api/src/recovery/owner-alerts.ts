@@ -33,7 +33,7 @@ export const OWNER_ALERTS = {
 const ASKED = ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING"];
 
 function completesAt(r: RecoveryRequest): Date | undefined {
-  const iso = r.zoldenburg?.finalizeAfter ?? r.candide?.finalizeAfter;
+  const iso = r.zoldenburg?.finalizeAfter ?? r.candide?.finalizeAfter ?? r.turnkey?.finalizeAfter;
   const d = iso ? new Date(iso) : undefined;
   return d && Number.isFinite(d.getTime()) ? d : undefined;
 }
@@ -50,7 +50,7 @@ function lastAsked(userId: string): number {
 
 /** One request's due mail, or null when nothing is due. */
 function due(r: RecoveryRequest, now: Date): "requested" | "executed" | null {
-  if (r.mode !== "zoldenburg" && r.mode !== "candide") return null;
+  if (r.mode !== "zoldenburg" && r.mode !== "candide" && r.mode !== "turnkey") return null;
   const a = r.ownerAlerts ?? {};
   if ((a.failures ?? 0) >= OWNER_ALERTS.maxAttempts) return null;
   if (r.status === "GRACE_PERIOD") return a.executed ? null : "executed";
