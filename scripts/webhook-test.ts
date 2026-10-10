@@ -15,7 +15,8 @@
  *   5. with MONERIUM_WEBHOOK_SECRET set, Monerium's documented
  *      webhook-id/timestamp/signature scheme is enforced
  *   6. an order another caller is recording, or a token lookup Monerium
- *      cannot answer, asks to be retried rather than spending the delivery
+ *      cannot answer (5xx, 429, a body that is not a token list), asks to be
+ *      retried rather than spending the delivery
  *   7. the poller and a delivery for the same order credit it once
  *
  * Run: npm run webhook:test
@@ -49,8 +50,10 @@ const orders = new Map<string, any>();
 /** Order ids the stub answers with 503 — Monerium briefly unreachable, as
  *  distinct from a 404 that says the order genuinely does not exist. */
 const unavailable = new Set<string>();
-/** While true, /tokens answers 503: Monerium unreachable for the token list. */
-let tokensDown = false;
+/** While set, /tokens answers this instead of its usual 404 ("no EURe on this
+ *  chain"): an outage or a body that is not a token list. */
+let tokensOutage: { code: number; body: unknown } | null = null;
+let tokensRequests = 0;
 /** Order ids the poller's list shows. Empty except where a test arms it. */
 const listed = new Set<string>();
 let listServed = false;
@@ -91,8 +94,9 @@ const stub = createServer((req, res) => {
     return o ? send(200, o) : send(404, { error: "no such order" });
   }
   if (url.startsWith("/tokens")) {
+    tokensRequests++;
     const answer = () =>
-      tokensDown ? send(503, { error: "service unavailable" }) : send(404, { error: "no EURe on this chain" });
+      tokensOutage ? send(tokensOutage.code, tokensOutage.body) : send(404, { error: "no EURe on this chain" });
     if (!hold) return answer();
     hold.tokensHits++;
     return void hold.released.then(answer);
@@ -165,20 +169,27 @@ async function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   }
 }
 
+/** Poll `ok` until it holds. A throw counts as "not yet": the API may be mid-restart. */
 async function until(ok: () => boolean | Promise<boolean>, ms: number, what: string) {
+  let last: unknown;
   for (const s = Date.now(); Date.now() - s < ms; ) {
-    if (await ok()) return;
+    try {
+      if (await ok()) return;
+    } catch (err) {
+      last = err;
+    }
     await new Promise((r) => setTimeout(r, 50));
   }
-  throw new Error(`timed out waiting for ${what}`);
+  throw new Error(`timed out waiting for ${what}${last ? ` (last error: ${(last as Error).message ?? last})` : ""}`);
 }
 
 async function startApi(env: Record<string, string>) {
   bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], env);
   for (const s = Date.now(); Date.now() - s < 30_000; ) {
-    try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}
+    try { if ((await fetch(`${API}/api/health`)).ok) return; } catch {}
     await new Promise((r) => setTimeout(r, 300));
   }
+  throw new Error(`the API did not answer /api/health on :${API_PORT} within 30s`);
 }
 
 /**
@@ -415,6 +426,9 @@ try {
     const h = armHold();
     try {
       const first = post("/api/webhooks/monerium", body, signedHeaders("evt-race-a", body));
+      // Awaited below; this only keeps an early failure from also surfacing
+      // as an unhandled rejection.
+      first.catch(() => {});
       await until(() => h.tokensHits >= 1, 10_000, "the first delivery to reach /tokens");
       // The first delivery is parked between its check and its mark.
       const second = await within(
@@ -439,26 +453,46 @@ try {
     assert.equal(await balance(), 90, "€7 must be credited once, not twice");
   });
 
-  await t("a token lookup Monerium cannot answer does not consume the delivery id", async () => {
-    orders.set("real-tok", {
-      id: "real-tok", kind: "issue", state: "processed", meta: { state: "processed" },
-      address: user.address, amount: "4", currency: "eur", chain: "sepolia",
+  const outages = [
+    { label: "a 503", order: "real-tok-503", amount: 4, code: 503, body: { error: "service unavailable" } },
+    { label: "a 429", order: "real-tok-429", amount: 2, code: 429, body: { error: "too many requests" } },
+    { label: "a 200 that is not a token list", order: "real-tok-obj", amount: 1, code: 200, body: { error: "maintenance" } },
+  ];
+  let expected = 90;
+  for (const o of outages) {
+    await t(`a token lookup answered with ${o.label} does not consume the delivery id`, async () => {
+      orders.set(o.order, {
+        id: o.order, kind: "issue", state: "processed", meta: { state: "processed" },
+        address: user.address, amount: String(o.amount), currency: "eur", chain: "sepolia",
+      });
+      const body = { data: { id: o.order } };
+      const headers = () => signedHeaders(`evt-${o.order}`, body);
+      tokensOutage = { code: o.code, body: o.body };
+      try {
+        const first = await post("/api/webhooks/monerium", body, headers());
+        assert.equal(first.status, 503, `${o.label} is not "no EURe on this chain"`);
+        assert.equal(first.data.outcome, "unavailable");
+        // Inside the cooldown the API does not ask Monerium again.
+        const asked = tokensRequests;
+        const again = await post("/api/webhooks/monerium", body, headers());
+        assert.equal(again.status, 503);
+        assert.equal(tokensRequests, asked, "a retry inside the outage cooldown must not re-ask /tokens");
+        assert.equal(await balance(), expected);
+      } finally {
+        tokensOutage = null;
+      }
+      // Monerium retries the same delivery id until the cooldown has passed.
+      let retry: Awaited<ReturnType<typeof post>> | undefined;
+      await until(async () => {
+        retry = await post("/api/webhooks/monerium", body, headers());
+        return retry.status !== 503;
+      }, 10_000, `the ${o.label} retry to settle`);
+      assert.equal(retry!.status, 200);
+      assert.equal(retry!.data.outcome, "recorded");
+      expected += o.amount;
+      assert.equal(await balance(), expected);
     });
-    const body = { data: { id: "real-tok" } };
-    tokensDown = true;
-    try {
-      const first = await post("/api/webhooks/monerium", body, signedHeaders("evt-tok", body));
-      assert.equal(first.status, 503, "an outage is not \"no EURe on this chain\"");
-      assert.equal(first.data.outcome, "unavailable");
-      assert.equal(await balance(), 90);
-    } finally {
-      tokensDown = false;
-    }
-    const retry = await post("/api/webhooks/monerium", body, signedHeaders("evt-tok", body));
-    assert.equal(retry.status, 200);
-    assert.equal(retry.data.outcome, "recorded");
-    assert.equal(await balance(), 94);
-  });
+  }
 
   await t("a definitively unknown order still consumes its delivery id", async () => {
     // A 404 from Monerium is a settled answer, not an outage — retrying it
@@ -502,7 +536,7 @@ try {
       assert.equal(r.status, 503, "the poller is still recording this order");
       assert.equal(r.data.outcome, "unavailable");
       h.release();
-      await until(async () => (await balance()) === 99, 15_000, "the poller to credit €5");
+      await until(async () => (await balance()) === 102, 15_000, "the poller to credit €5");
     } finally {
       disarmHold();
       listed.delete("real-poll");
@@ -510,7 +544,7 @@ try {
     const retry = await post("/api/webhooks/monerium", body, signedHeaders("evt-poll", body));
     assert.equal(retry.status, 200);
     assert.equal(retry.data.outcome, "duplicate");
-    assert.equal(await balance(), 99, "€5 must be credited once, not twice");
+    assert.equal(await balance(), 102, "€5 must be credited once, not twice");
   });
 
   console.log(`\nWEBHOOK TEST PASSED — ${pass}/${pass}: body is untrusted, secret gate enforced`);
