@@ -70,10 +70,16 @@ export const CONTENT_SECURITY_POLICY = [
  */
 /**
  * /guardian: the app's policy without inline script. The page drives a
- * guardian login and a passkey approval, so only its own module files may
- * run there; /app keeps 'unsafe-inline' for its classic scripts.
+ * guardian login, a passkey approval and a Turnkey signature, so only its own
+ * module files may run there, and it alone may reach Turnkey's API (the
+ * origin, when the switch is on). /app keeps 'unsafe-inline' for its classic
+ * scripts and connect-src 'self'.
  */
-export const GUARDIAN_PAGE_CSP = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", "script-src 'self'");
+export function guardianPageCsp(turnkeyOrigin?: string): string {
+  return CONTENT_SECURITY_POLICY
+    .replace("script-src 'self' 'unsafe-inline'", "script-src 'self'")
+    .replace("connect-src 'self'", turnkeyOrigin ? `connect-src 'self' ${turnkeyOrigin}` : "connect-src 'self'");
+}
 
 export const STRICT_TRANSPORT_SECURITY = "max-age=300; includeSubDomains";
 

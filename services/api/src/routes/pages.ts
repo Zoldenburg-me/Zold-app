@@ -27,7 +27,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PUBLIC_URL } from "../config.js";
-import { GUARDIAN_PAGE_CSP } from "../http/policy.js";
+import { guardianPageCsp } from "../http/policy.js";
+import { TURNKEY } from "../config/turnkey.js";
 import { displayCode, isRequestCode, normaliseCode } from "../payment-requests.js";
 
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../public");
@@ -155,7 +156,7 @@ export function createPageRouter() {
    *  a stricter CSP, never cached (a login comes back to it). */
   router.get("/guardian.html", (_req, res) => res.redirect(301, "/guardian"));
   router.get("/guardian", (_req, res) => {
-    res.setHeader("content-security-policy", GUARDIAN_PAGE_CSP);
+    res.setHeader("content-security-policy", guardianPageCsp(TURNKEY.enabled ? new URL(TURNKEY.baseUrl).origin : undefined));
     res.setHeader("cache-control", "no-store");
     res.sendFile(path.join(pub, "guardian.html"));
   });

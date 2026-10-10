@@ -746,8 +746,8 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const now = new Date().toISOString();
       for (const r of store.recoveryRequestsForUser(user.id)) {
         // The module holds one recovery per Safe, whoever's guardian started
-        // it, so the owner's cancel ends a Zoldenburg one too.
-        if ((r.mode === "candide" || r.mode === "zoldenburg") && ["OTP_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) {
+        // it, so the owner's cancel ends a Zoldenburg or Turnkey one too.
+        if ((r.mode === "candide" || r.mode === "zoldenburg" || r.mode === "turnkey") && ["OTP_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) {
           store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now, cancelReason: "cancelled on chain by the account owner" });
         }
       }

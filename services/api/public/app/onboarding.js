@@ -117,7 +117,7 @@ function obGuard(name) {
   if (kind === "blocked") return obBlockedCode ? name : "auth";
   if (kind === "state") return errState && name === `state-${errState.kind}` ? name : "auth";
   if (kind === "recover") {
-    if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery) return "auth";
+    if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery && !caps.turnkeyGuardians) return "auth";
     // A later recovery step is shown only while the request's state names it.
     return name === "recover" ? name : rcRouteFor(rcState);
   }
@@ -2018,7 +2018,7 @@ OB.recover = {
       ${obIntro("Recover your account", "Enter the email on your account. You’ll set up Face ID or fingerprint sign-in on this phone, then confirm a code or contact support.")}
       ${rcNotice ? Z.note({ tone: "a", text: rcNotice, role: "status" }) : ""}
       <form class="z-form" id="rc-start" novalidate>
-        ${Z.field({ id: "rc-email", name: "email", type: "email", label: "Email", autocomplete: "email", inputmode: "email", placeholder: "you@example.com…", value: rcEmail || undefined })}
+        ${Z.field({ id: "rc-email", name: "email", type: "email", label: "Email", autocomplete: "email", inputmode: "email", placeholder: "you@example.com…", value: rcEmail || rcReturnedEmail() || undefined })}
       </form>
       ${obAlert("rc-err")}
     </main>
@@ -2096,7 +2096,9 @@ OB["recover/wait"] = {
         </section>
         ${rcTimeline([
           { t: "Face ID or fingerprint set up", d: "On this phone", done: true },
-          zold ? { t: "ID check by Zoldenburg", d: "Done", done: true } : { t: "Codes confirmed", d: esc(rcChannelWords(r)), done: true },
+          zold ? { t: "ID check by Zoldenburg", d: "Done", done: true }
+            : rcMode === "turnkey" ? { t: "Approved with your Google or Apple login", d: "Done", done: true }
+              : { t: "Codes confirmed", d: esc(rcChannelWords(r)), done: true },
           { t: "Waiting period", d: `${esc(rcGrace(r))}, so you can cancel if it wasn’t you`, done: false },
           { t: "Your account is on this phone", d: "Sign in and pay as usual", done: false },
         ])}
@@ -2137,6 +2139,33 @@ OB["recover/zoldenburg"] = {
         ${checked ? "" : Z.button({ variant: "primary", full: true, icon: "mail", label: "Email support", href: mail })}
         <p class="z-screen__fine z-screen__fine--flush">Write from the email on your account. Keep this browser: only it can follow the request.</p>
       </div>`;
+  },
+};
+
+OB["recover/turnkey"] = {
+  kind: "recover",
+  title: "Approve with your guardian login",
+  html: () => {
+    const r = rcState;
+    return `${obBackHead("recover", rcBeta())}
+      <main id="main" class="z-screen__main z-screen__main--tight">
+        ${obIntro("Approve with your guardian login", "Log in with the Google or Apple account you added as this account’s guardian. That login approves moving the account to this phone.")}
+        ${rcTimeline([
+          { t: "Face ID or fingerprint set up", d: "On this phone", done: true },
+          { t: "Approve with your Google or Apple login", d: "On the next page", done: false },
+          { t: "Waiting period", d: `${esc(rcGrace(r))}. Your old phone can cancel it`, done: false },
+          { t: "Your account is on this phone", d: "Sign in and pay as usual", done: false },
+        ])}
+        ${Z.note({ icon: "shield", text: "Your guardian login can only start a move. It can’t send your money, and the waiting period always applies." })}
+        ${obAlert("rc-err")}
+      </main>
+      <div class="z-screen__foot z-screen__foot--quiet">
+        ${Z.button({ variant: "primary", full: true, label: "Continue to approve", id: "btn-rc-approve" })}
+        <p class="z-screen__fine z-screen__fine--flush">Keep this browser: only it can follow the request.</p>
+      </div>`;
+  },
+  bind: (root) => {
+    root.querySelector("#btn-rc-approve")?.addEventListener("click", () => recoverApproveWithLogin());
   },
 };
 

@@ -15,7 +15,12 @@
   a { color: var(--z-pink-link); }
   .g-list { list-style: none; padding: 0; margin: 16px 0; }
   .g-list li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--z-line); }
+  .g-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
   .g-note { font-size: 13px; color: var(--z-dim); }
+  @media (max-width: 480px) {
+    .g-actions { flex-direction: column; }
+    .g-actions .z-btn { width: 100%; justify-content: center; }
+  }
   .g-ok { color: var(--z-mint, inherit); }
   .g-err { color: var(--z-red, #c0392b); }
 </style>

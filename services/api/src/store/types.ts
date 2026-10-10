@@ -789,8 +789,10 @@ export interface RecoveryRequest {
   userId: string;
   safeAddress: `0x${string}`;
   /** `zoldenburg`: the owner asks Zoldenburg, an operator reviews and signs
-   *  as guardian. `candide`: email/SMS OTPs. `managed` only on legacy rows. */
-  mode?: "managed" | "candide" | "zoldenburg";
+   *  as guardian. `candide`: email/SMS OTPs. `turnkey`: the owner's own
+   *  Google or Apple login signs as guardian on /guardian (REVIEW_PENDING
+   *  there means waiting for that signature). `managed` only on legacy rows. */
+  mode?: "managed" | "candide" | "zoldenburg" | "turnkey";
   status: RecoveryRequestStatus;
   requestedAt: string;
   expiresAt: string;
@@ -894,6 +896,28 @@ export interface RecoveryRequest {
     newOwners?: `0x${string}`[];
     newThreshold?: number;
     /** The EIP-712 digest the guardian signed, as the module computed it. */
+    recoveryHash?: `0x${string}`;
+    executeTxHash?: `0x${string}`;
+    executedAt?: string;
+    gracePeriodSeconds?: number;
+    finalizeAfter?: string;
+    finalizeTxHash?: `0x${string}`;
+    verifierDeployTxHash?: string;
+    finalizeAttempts?: number;
+    finalizeError?: string;
+  };
+  /**
+   * Turnkey-guardian recovery (recovery/turnkey-recovery.ts). Same custody
+   * rule: the new credential waits here until the chain shows it as owner.
+   * `guardianSubOrgId` names the sub-org whose login must sign.
+   */
+  turnkey?: {
+    accessHash?: string;
+    guardianSubOrgId?: string;
+    newPasskey?: NonNullable<RecoveryRequest["zoldenburg"]>["newPasskey"];
+    newOwners?: `0x${string}`[];
+    newThreshold?: number;
+    /** The digest the guardian signed, as the module computed it. */
     recoveryHash?: `0x${string}`;
     executeTxHash?: `0x${string}`;
     executedAt?: string;
