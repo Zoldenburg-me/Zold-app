@@ -26,7 +26,7 @@ import "./_local-chain.js";
 import assert from "node:assert/strict";
 import { createHash, randomBytes, webcrypto } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import lzString from "lz-string";
@@ -46,6 +46,7 @@ const guardian = privateKeyToAccount(guardianKey);
 const impostor = privateKeyToAccount(generatePrivateKey());
 const OPERATOR = `op-${randomBytes(16).toString("hex")}`;
 const EMAIL = "zold.recover@example.com";
+const IBAN_KEY = `iban-${randomBytes(24).toString("hex")}`;
 
 process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = guardian.address;
 process.env.CANDIDE_RECOVERY_MODULE_ADDRESS = MODULE;
@@ -297,18 +298,11 @@ const fromWallet = (w: any) => {
   return { ...w, types, message: { ...w.message, newThreshold: BigInt(w.message.newThreshold), nonce: BigInt(w.message.nonce) } };
 };
 
-try {
-  bg(process.execPath, [bin("hardhat"), "node", "--port", RPC_PORT]);
-  for (const s = Date.now(); Date.now() - s < 30_000; ) {
-    try {
-      const r = await fetch(RPC_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }) });
-      if (r.ok) break;
-    } catch {}
-    await new Promise((r) => setTimeout(r, 300));
-  }
-  assert.equal(spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit", env: { ...process.env, TRANSF_RPC_URL: RPC_URL } }).status, 0, "deploy failed");
-  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
-  bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
+/** The API under test. Stopped and started again to arm an account the way
+ *  a 1 € enrolment would: the harness has no Monerium to send the 1 €. */
+let api: ChildProcess | undefined;
+async function startApi() {
+  api = bg(process.execPath, [bin("tsx"), "services/api/src/server.ts"], {
     TRANSF_API_PORT: String(API_PORT),
     TRANSF_RPC_URL: RPC_URL,
     PORT: String(API_PORT),
@@ -327,12 +321,33 @@ try {
     KYC_OPERATOR_TOKEN: OPERATOR,
     LOCAL_HARNESS: "1",
     KYC_AUTO_APPROVE: "1",
+    RECOVERY_IBAN_HMAC_KEY: IBAN_KEY,
   });
   for (const s = Date.now(); ; ) {
     try { if ((await fetch(`${API}/api/health`)).ok) break; } catch {}
     if (Date.now() - s > 30_000) throw new Error("API did not come up");
     await new Promise((r) => setTimeout(r, 300));
   }
+}
+async function stopApi() {
+  if (!api || api.exitCode !== null) return;
+  const exited = new Promise((r) => api!.once("exit", r));
+  api.kill("SIGTERM");
+  await exited;
+}
+
+try {
+  bg(process.execPath, [bin("hardhat"), "node", "--port", RPC_PORT]);
+  for (const s = Date.now(); Date.now() - s < 30_000; ) {
+    try {
+      const r = await fetch(RPC_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }) });
+      if (r.ok) break;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  assert.equal(spawnSync(process.execPath, [bin("tsx"), "scripts/deploy.ts"], { cwd: ROOT, stdio: "inherit", env: { ...process.env, TRANSF_RPC_URL: RPC_URL } }).status, 0, "deploy failed");
+  rmSync(process.env.TRANSF_DB_PATH!, { force: true });
+  await startApi();
 
   const health = await call("/api/health");
   await t("the capability is published when a guardian address is configured", () => {
@@ -458,6 +473,49 @@ try {
       signature: await guardian.signTypedData({ ...msg, message: { ...msg.message, issuedAt: staleAt } }),
     });
     assert.equal(stale.data.code, "STALE");
+  });
+
+  await t("until the 1 € from their bank arrives, the guardian is on chain but not armed", async () => {
+    const screen = await call(`/api/users/${userId}/recovery/zoldenburg`);
+    assert.equal(screen.data.active, true);
+    assert.equal(screen.data.enrolment.available, true);
+    assert.equal(screen.data.enrolment.armed, false);
+  });
+
+  await t("the operator cannot sign for an account that never sent its 1 €", async () => {
+    const sr = await op(`/api/admin/recoveries/${recoveryId}/sign-request`);
+    assert.equal(sr.status, 409, JSON.stringify(sr.data));
+    assert.equal(sr.data.code, "NOT_ARMED");
+    const ex = await op(`/api/admin/recoveries/${recoveryId}/execute`, { signature: "0x00", reviewNote: "Video call, matched Monerium profile" });
+    assert.equal(ex.data.code, "NOT_ARMED");
+    const row = (await opGet("/api/admin/recoveries")).data.requests.find((x: any) => x.id === recoveryId);
+    assert.equal(row.enrolment.armed, false);
+  });
+
+  // The harness has no Monerium to deliver the 1 €, so the enrolment is
+  // written the way recovery/zoldenburg-enrolment.ts records one, with the
+  // API stopped. zoldenburg-enrolment-test.ts covers how it gets there.
+  await stopApi();
+  {
+    const dbPath = process.env.TRANSF_DB_PATH!;
+    const db = JSON.parse(readFileSync(dbPath, "utf8"));
+    const u = db.users.find((x: any) => x.id === userId);
+    u.zoldenburgEnrolment = {
+      bankAccountHmac: createHash("sha256").update("harness-bank-account").digest("hex"),
+      keyId: createHash("sha256").update(`zold/recovery-iban-key-id:${IBAN_KEY}`).digest("hex").slice(0, 12),
+      bankAccountLast4: "3000",
+      orderId: "harness-order",
+      enrolledAt: new Date().toISOString(),
+    };
+    writeFileSync(dbPath, JSON.stringify(db), { mode: 0o600 });
+  }
+  await startApi();
+
+  await t("enrolled: the operator sees the account armed, with the last 4 of the bank account", async () => {
+    const row = (await opGet("/api/admin/recoveries")).data.requests.find((x: any) => x.id === recoveryId);
+    assert.equal(row.enrolment.armed, true);
+    assert.equal(row.enrolment.bankAccountLast4, "3000");
+    assert.ok(!JSON.stringify(row).includes("bankAccountHmac"));
   });
 
   await t("/admin/recoveries needs the operator token; a user session is not enough", async () => {

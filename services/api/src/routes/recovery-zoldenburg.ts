@@ -61,6 +61,7 @@ import {
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyRegistration } from "../webauthn.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
 import { checkOpAssertion } from "../http/passkey-assertion.js";
+import { enrolmentView, zoldenburgArmed } from "../recovery/zoldenburg-enrolment.js";
 
 export interface ZoldenburgRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -122,7 +123,7 @@ const moduleFor = (user: User) =>
   (user.passkeySafe?.recovery?.moduleAddress ?? user.passkeySafe?.candideRecovery?.moduleAddress ?? CANDIDE.recoveryModuleAddress) as `0x${string}`;
 
 /** Is Zoldenburg's CURRENT guardian the one recorded as active on this Safe? */
-function hasZoldenburgGuardian(user: User): boolean {
+export function hasZoldenburgGuardian(user: User): boolean {
   const g = zoldenburgGuardianAddress();
   const r = user.passkeySafe?.recovery;
   return Boolean(g && r?.status === "active" && r.guardianAddress.toLowerCase() === g.toLowerCase());
@@ -140,6 +141,7 @@ async function screenState(user: User) {
     gracePeriodSeconds: recoveryGracePeriodSeconds(moduleAddress),
     choice: user.passkeySafe?.recoveryChoice ?? null,
     active: hasZoldenburgGuardian(user),
+    enrolment: enrolmentView(user),
     requests: store
       .recoveryRequestsForUser(user.id)
       .filter((r) => r.mode === "zoldenburg" && (OPEN as readonly string[]).includes(r.status))
@@ -314,6 +316,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "active", enabledAt: user.passkeySafe?.recovery?.enabledAt ?? now },
             recoveryChoice: { choice: "zoldenburg", at: now },
           },
+          // Added again: a new 1 € arms it, not one from an earlier time.
+          zoldenburgEnrolment: undefined,
         });
         return res.json(await screenState(updated));
       }
@@ -390,6 +394,8 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "active", enabledAt: now, opHash: op.userOpHash ?? undefined },
             recoveryChoice: { choice: "zoldenburg", at: now },
           },
+          // Added again: a new 1 € arms it, not one from an earlier time.
+          zoldenburgEnrolment: undefined,
         });
         // Confirm on the chain, not on the op's say-so.
         if (!HARNESS.enabled) {
@@ -403,7 +409,12 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         return res.json({ ...(await screenState(updated)), txHash: op.txHash, userOpHash: op.userOpHash });
       }
       const { recovery: _gone, ...rest } = user.passkeySafe!;
-      const updated = store.updateUser(user.id, { passkeySafe: { ...rest, recoveryChoice: { choice: "declined", at: now } } as User["passkeySafe"] });
+      // The enrolled bank account goes with the guardian (recovery-guardians-plan,
+      // Data and GDPR): adding Zoldenburg again means sending 1 € again.
+      const updated = store.updateUser(user.id, {
+        passkeySafe: { ...rest, recoveryChoice: { choice: "declined", at: now } } as User["passkeySafe"],
+        zoldenburgEnrolment: undefined,
+      });
       console.log(`RECOVERY: ${user.id} removed Zoldenburg as guardian (${op.userOpHash})`);
       res.json({ ...(await screenState(updated)), txHash: op.txHash, userOpHash: op.userOpHash });
     }),
@@ -625,11 +636,30 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             iban: user.iban,
           }
         : null,
+      // The 1 € check (recovery/zoldenburg-enrolment.ts). Not armed: no
+      // signing here and no Safe Cover link.
+      enrolment: user
+        ? {
+            armed: zoldenburgArmed(user),
+            bankAccountLast4: user.zoldenburgEnrolment?.bankAccountLast4,
+            enrolledAt: user.zoldenburgEnrolment?.enrolledAt,
+          }
+        : { armed: false },
       safeCoverLink:
-        z?.newOwners?.length && r.status === "REVIEW_PENDING"
+        user && zoldenburgArmed(user) && z?.newOwners?.length && r.status === "REVIEW_PENDING"
           ? safeCoverRecoveryLink({ safeAddress: r.safeAddress, newOwners: z.newOwners, newThreshold: z.newThreshold ?? 1 })
           : null,
     };
+  };
+
+  /** The 1 € enrolment must be complete before the operator may sign. */
+  const armedFor = (r: RecoveryRequest) => {
+    const user = store.findUser(r.userId);
+    return Boolean(user && zoldenburgArmed(user));
+  };
+  const NOT_ARMED = {
+    error: "this account never finished Zoldenburg enrolment (the 1 € from their bank), so Zoldenburg may not sign for it",
+    code: "NOT_ARMED",
   };
 
   const adminRequest = (req: express.Request, res: express.Response): RecoveryRequest | undefined => {
@@ -661,6 +691,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
           email: u.email,
           safeAddress: u.passkeySafe!.address,
           ...recoveryEnrolment(u),
+          armed: zoldenburgArmed(u),
         }));
       res.json({
         enabled: zoldenburgRecoveryEnabled(),
@@ -731,6 +762,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const r = adminRequest(req, res);
       if (!r) return;
       if (r.status !== "REVIEW_PENDING") return res.status(409).json({ error: `recovery is ${r.status}` });
+      if (!armedFor(r)) return res.status(409).json(NOT_ARMED);
       const guardian = assertZoldenburgRecoveryEnabled();
       if (r.guardianAddress.toLowerCase() !== guardian.toLowerCase()) {
         return res.status(409).json({ error: `this Safe's guardian is ${r.guardianAddress}, not the configured ${guardian}`, code: "GUARDIAN_CHANGED" });
@@ -747,6 +779,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       if (!r) return;
       if (r.status !== "REVIEW_PENDING") return res.status(409).json({ error: `recovery is ${r.status}` });
       if (Date.now() >= Date.parse(r.expiresAt)) return res.status(410).json({ error: "this request expired — the person must start again" });
+      if (!armedFor(r)) return res.status(409).json(NOT_ARMED);
       const note = typeof req.body?.reviewNote === "string" ? req.body.reviewNote.trim().slice(0, 500) : "";
       if (note.length < 10) {
         return res.status(400).json({ error: "record how the person was verified (at least a sentence) before signing", code: "NO_REVIEW_NOTE" });
@@ -809,6 +842,10 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     wrap(async (req, res) => {
       const r = adminRequest(req, res);
       if (!r) return;
+      // A signature made outside /admin (Safe Cover, or by hand) is not
+      // recorded as a review for an account that never paid its 1 €. The
+      // sweep still follows the chain, so the owner's warning stays true.
+      if (r.status === "REVIEW_PENDING" && !armedFor(r)) return res.status(409).json(NOT_ARMED);
       let updated = await syncZoldenburgFromChain(r);
       if (updated.status === "GRACE_PERIOD" && r.status === "REVIEW_PENDING") {
         const note = typeof req.body?.reviewNote === "string" ? req.body.reviewNote.trim().slice(0, 500) : "";
