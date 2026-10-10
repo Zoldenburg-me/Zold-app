@@ -71,7 +71,7 @@ export async function render({ focus = false } = {}) {
   const mine = ++seq;
   renderNav();
   refreshSide().catch(() => { /* the sidebar keeps what it had */ });
-  $("#plan-banner").innerHTML = planBanner();
+  paintBanner();
   const meta = (META[view] ?? META.overview)();
   $("#view-title").textContent = meta.title;
   $("#view-sub").textContent = meta.sub || "";
@@ -145,6 +145,33 @@ function only(sel) {
   }
 }
 
+/* A recovery started while this page is open must show without a reload:
+   read again every minute and whenever the tab comes back, and redraw the
+   banner only when what it says changed. */
+const RECOVERY_READ_MS = 60000;
+let recoveryReadAt = 0;
+/* The banner row, redrawn only when its text changes, so a minute's read
+   never resets a button someone is about to press. */
+function paintBanner() {
+  const el = $("#plan-banner");
+  if (!org || !el) return;
+  const html = planBanner();
+  if (el.dataset.sig === html) return;
+  el.dataset.sig = html;
+  el.innerHTML = html;
+}
+function readRecoveryNow() {
+  recoveryReadAt = Date.now();
+  return readRecovery().then(paintBanner).catch(() => { /* the next read tries again */ });
+}
+function watchRecovery() {
+  readRecoveryNow();
+  setInterval(() => { if (!document.hidden) readRecoveryNow(); }, RECOVERY_READ_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && Date.now() - recoveryReadAt > 15000) readRecoveryNow();
+  });
+}
+
 export async function boot() {
   // Test mode follows the chain (GET /api/health realMoney), as in the app.
   api("/api/health").then((h) => { setTestMode(!h.realMoney); setUsdSymbol(h.capabilities?.usdToken?.symbol); renderNav(); }).catch(() => { /* no pill */ });
@@ -159,8 +186,8 @@ export async function boot() {
   const session = ensureMe().then((u) => {
     renderNav();
     // The personal-space banner needs to know who this is.
-    if (org && $("#plan-banner")) $("#plan-banner").innerHTML = planBanner();
-    readRecovery().then(() => { if (org && $("#plan-banner")) $("#plan-banner").innerHTML = planBanner(); }).catch(() => { /* no banner */ });
+    paintBanner();
+    watchRecovery();
     return u;
   }).catch(() => null);
   setOrgs(list.organisations);
