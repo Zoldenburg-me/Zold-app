@@ -147,6 +147,47 @@ const ask = (kind: string, deadline = "") => run(`passkeyPrompt("${kind}", { cha
   assert.equal(prompts[0].options.signal.aborted, true);
 }
 
+// A password manager that replaces navigator.credentials (LastPass) holds its
+// previous request open for a moment after answering it, and refuses the next
+// as "already pending" with nothing of ours open. That refusal opened nothing,
+// so it is asked again after a pause instead of failing the step (create the
+// passkey, then deploy the Safe at once; a tester, 2026-10-10).
+{
+  prompts.length = 0;
+  run("PASSKEY_PENDING_RETRY_MS = 5");
+  const p = ask("get");
+  await tick();
+  prompts[0].reject(Object.assign(new Error("A request is already pending."), { name: "InvalidStateError" }));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(prompts.length, 2, "the refused request is asked again");
+  prompts[1].resolve({ id: "after-pending" });
+  assert.deepEqual(await p, { id: "after-pending" });
+}
+
+// It gives up after a few refusals and says so, rather than asking forever.
+{
+  prompts.length = 0;
+  const p = ask("get").catch((x: any) => x);
+  for (let i = 0; i <= run("PASSKEY_PENDING_RETRIES"); i++) {
+    await new Promise((r) => setTimeout(r, 20));
+    prompts[i].reject(Object.assign(new Error("A request is already pending."), { name: "InvalidStateError" }));
+  }
+  const e = await p;
+  assert.match(e.message, /already pending/);
+  assert.equal(prompts.length, run("PASSKEY_PENDING_RETRIES") + 1);
+}
+
+// Any other refusal is not retried: a cancel stays a cancel.
+{
+  prompts.length = 0;
+  const p = ask("get").catch((x: any) => x);
+  await tick();
+  prompts[0].reject(Object.assign(new Error("The operation either timed out or was not allowed."), { name: "NotAllowedError" }));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal((await p).name, "NotAllowedError");
+  assert.equal(prompts.length, 1);
+}
+
 // The browser's "already pending" refusal is told plainly, not as a raw message
 // or as "already has a sign-in" (Chromium names it InvalidStateError).
 {
