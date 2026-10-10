@@ -16,6 +16,10 @@
  *    session, refuse an account without its own Safe or with an imported
  *    one, never create a second sub-org for the same login (even from two
  *    users at once), and store only the address and the sub-org id;
+ *  - adding the guardian on chain is a passkey-approved op the API prepares
+ *    and submits: refused while a recovery is pending or while any other
+ *    guardian is on the Safe (multi-guardian recovery is not built), and
+ *    the row turns `active` only when the chain lists the address;
  *  - source greps: no delegated access, no API key in a sub-org payload,
  *    only the Turnkey calls and activity types we chose, @turnkey/* imported
  *    by wallet/turnkey.ts alone, and no other network call there.
@@ -172,6 +176,7 @@ await badToken(jwt(googleClaims({ iss: "https://zold.eu.auth0.com/" })), "an iss
 await badToken(jwt(googleClaims({ iss: "accounts.google.com" })), "Google's bare issuer spelling (one identity, one spelling)");
 await badToken(jwt(googleClaims({ iss: "https://api.turnkey.com" })), "a Turnkey-issued token");
 await badToken(jwt(googleClaims({ aud: "someone-elses-client" })), "another app's client id");
+await badToken(jwt(googleClaims({ aud: "com.zoldhq.signin" })), "a Google token carrying our Apple services id");
 await badToken(jwt(googleClaims({ aud: ["someone-elses-client", "google-client.apps.googleusercontent.com"] })), "a token for several audiences");
 await badToken(jwt(googleClaims({ nonce: "00".repeat(32) })), "a nonce for another key");
 await badToken(jwt(googleClaims({ nonce: undefined })), "no nonce");
@@ -262,8 +267,9 @@ await check("the API public key is derived from the private key as compressed P-
   assert.match(tk.turnkeyApiPublicKey(), /^0[23][0-9a-f]{64}$/);
 });
 
-await check("capabilities() publishes the switch", () => {
+await check("capabilities() publishes the switch and the two login client ids", () => {
   assert.equal(capabilities().turnkeyGuardians, true);
+  assert.deepEqual(capabilities().turnkeyLogins, { google: "google-client.apps.googleusercontent.com", apple: "com.zoldhq.signin" });
 });
 
 // ---------------------------------------------------------------------------
@@ -277,7 +283,7 @@ const baseUser = (id: string, extra: Record<string, unknown> = {}) => ({
 });
 store.addUser(baseUser("u_ok", { passkeySafe: { address: addr("a"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 store.addUser(baseUser("u_nosafe") as any);
-store.addUser(baseUser("u_twin", { passkeySafe: { address: addr("c"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
+store.addUser(baseUser("u_twin", { address: addr("c"), passkeySafe: { address: addr("c"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
 store.addUser(baseUser("u_imported", { passkeySafe: { address: addr("b"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now, importedAt: now } }) as any);
 
 const calls: { op: string; arg?: unknown }[] = [];
@@ -309,6 +315,41 @@ const stub: import("../services/api/src/wallet/turnkey.js").TurnkeyGuardianClien
   },
 };
 
+// The Safe side: the module's state as the chain would report it, and the
+// bundler. Recorded so a test can see what was prepared and submitted.
+type SafeOps = import("../services/api/src/routes/recovery-turnkey.js").TurnkeyGuardianSafeOps;
+const chain = { guardians: [] as `0x${string}`[], moduleEnabled: false, pending: false, listAfterSubmit: true, revert: false };
+const safeCalls: { op: string; arg?: any }[] = [];
+const MODULE = addr("9");
+const safeOps: SafeOps = {
+  async readState() {
+    safeCalls.push({ op: "read" });
+    return { moduleAddress: MODULE, moduleEnabled: chain.moduleEnabled, guardians: [...chain.guardians], threshold: chain.guardians.length ? 1 : 0,
+      pending: chain.pending ? { newOwners: [addr("e")], newThreshold: 1, executeAfter: 1 } : null };
+  },
+  async prepare(_plan, txs) {
+    safeCalls.push({ op: "prepare", arg: txs });
+    return { userOperation: { txs }, challenge: `0x${"ab".repeat(32)}` };
+  },
+  async checkAssertion(user, body, _challenge, res) {
+    safeCalls.push({ op: "assert", arg: body });
+    if ((body as any)?.signature !== "good") {
+      res.status(401).json({ error: "passkey approval refused" });
+      return undefined;
+    }
+    return user;
+  },
+  async submit(_plan, userOperation) {
+    safeCalls.push({ op: "submit", arg: userOperation });
+    if (chain.revert) return { success: false, txHash: "0xdead" };
+    for (const tx of userOperation.txs) {
+      const hit = /^0x[0-9a-f]+$/i.test(tx.data) && [addr("1"), addr("2")].find((a) => tx.data.toLowerCase().includes(a.slice(2).toLowerCase()));
+      if (hit && chain.listAfterSubmit) chain.guardians.push(hit);
+    }
+    return { success: true, txHash: "0xfeed", userOpHash: "0xbeef" };
+  },
+};
+
 let switchOn = true;
 // The session stub stands in for server.ts: the header names the signed-in user.
 const requireUserSession = (req: express.Request, res: express.Response, userId: string) => {
@@ -318,7 +359,7 @@ const requireUserSession = (req: express.Request, res: express.Response, userId:
 };
 const app = express();
 app.use(express.json());
-app.use("/api", createTurnkeyGuardianRouter({ requireUserSession, client: () => stub, enabled: () => switchOn, jwks }));
+app.use("/api", createTurnkeyGuardianRouter({ requireUserSession, client: () => stub, enabled: () => switchOn, jwks, safeOps }));
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   res.status(500).json({ error: String(err?.message ?? err) });
 });
@@ -464,6 +505,161 @@ try {
     const again = await call("POST", "/users/u_twin/guardians", addBody(claims), "u_twin");
     assert.equal(again.status, 201, "after the first finishes, the second finds the same sub-org");
     assert.equal(calls.filter((c) => c.op === "create").length, 1);
+  });
+
+  // ---- adding the guardian on chain ----------------------------------------
+  store.updateUser("u_ok", { passkey: { credentialId: "cred-ok", rpId: "localhost", publicKey: { kty: "EC" }, createdAt: now } as any });
+  const sub1 = () => store.findUser("u_ok")!.passkeySafe!.socialGuardians!.find((g) => g.turnkeySubOrgId === "sub-1")!;
+
+  await check("add on chain: another user's session is refused", async () => {
+    const r = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_twin");
+    assert.equal(r.status, 401);
+  });
+
+  await check("add on chain: an unknown sub-org is a 404", async () => {
+    const r = await call("POST", "/users/u_ok/guardians/sub-404/add", {}, "u_ok");
+    assert.equal(r.status, 404);
+    assert.equal(r.body.code, "NO_GUARDIAN");
+  });
+
+  await check("add on chain: refused while a recovery is pending", async () => {
+    chain.pending = true;
+    try {
+      const r = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_ok");
+      assert.equal(r.status, 409);
+      assert.equal(r.body.code, "RECOVERY_PENDING");
+    } finally {
+      chain.pending = false;
+    }
+  });
+
+  await check("add on chain: refused while any other guardian is on the Safe (Zoldenburg alone could then not recover it)", async () => {
+    chain.guardians = [addr("8")];
+    chain.moduleEnabled = true;
+    safeCalls.length = 0;
+    try {
+      const r = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_ok");
+      assert.equal(r.status, 409);
+      assert.equal(r.body.code, "OTHER_GUARDIAN");
+      assert.ok(!safeCalls.some((c) => c.op === "prepare"), "nothing prepared");
+    } finally {
+      chain.guardians = [];
+      chain.moduleEnabled = false;
+    }
+  });
+
+  let requestId = "";
+  await check("add on chain: prepares enable-module + addGuardianWithThreshold(address, 1) for the passkey to approve", async () => {
+    safeCalls.length = 0;
+    const r = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_ok");
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    const txs = safeCalls.find((c) => c.op === "prepare")!.arg as { to: string; data: string }[];
+    assert.equal(txs.length, 2, "the module is enabled first on a Safe that never had one");
+    const add = txs[1].data.toLowerCase();
+    assert.ok(add.includes(addr("1").slice(2)), "the guardian is the sub-org's address");
+    assert.ok(add.endsWith("1".padStart(64, "0")), "threshold 1");
+    assert.equal(r.body.credentialId, "cred-ok");
+    assert.equal(r.body.rpId, "localhost");
+    assert.match(r.body.challenge, /^[A-Za-z0-9_-]+$/);
+    assert.equal(r.body.submitTo, `/api/recovery/turnkey/users/u_ok/ops/${r.body.requestId}`);
+    requestId = r.body.requestId;
+    assert.equal(sub1().status, "created", "nothing is active before the chain says so");
+  });
+
+  await check("add on chain: preparing again replaces the earlier op (one pending op per user)", async () => {
+    const again = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_ok");
+    assert.equal(again.status, 201);
+    const old = await call("POST", `/users/u_ok/ops/${requestId}`, { signature: "good" }, "u_ok");
+    assert.equal(old.status, 404, "the first op is gone");
+    requestId = again.body.requestId;
+  });
+
+  await check("add on chain: a guardian or recovery that appeared after preparing refuses the submit", async () => {
+    for (const [label, set, code] of [
+      ["another guardian", () => { chain.guardians = [addr("8")]; chain.moduleEnabled = true; }, "OTHER_GUARDIAN"],
+      ["a pending recovery", () => { chain.pending = true; }, "RECOVERY_PENDING"],
+    ] as const) {
+      const prep = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_ok");
+      assert.equal(prep.status, 201, label);
+      set();
+      safeCalls.length = 0;
+      const r = await call("POST", `/users/u_ok/ops/${prep.body.requestId}`, { signature: "good" }, "u_ok");
+      chain.guardians = []; chain.moduleEnabled = false; chain.pending = false;
+      assert.equal(r.status, 409, label);
+      assert.equal(r.body.code, code, label);
+      assert.ok(!safeCalls.some((c) => c.op === "submit"), `${label}: nothing submitted`);
+    }
+    const fresh = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_ok");
+    requestId = fresh.body.requestId;
+  });
+
+  await check("add on chain: a refused passkey approval submits nothing", async () => {
+    safeCalls.length = 0;
+    const r = await call("POST", `/users/u_ok/ops/${requestId}`, { signature: "bad" }, "u_ok");
+    assert.equal(r.status, 401);
+    assert.ok(!safeCalls.some((c) => c.op === "submit"));
+  });
+
+  await check("add on chain: another user cannot submit the op", async () => {
+    const r = await call("POST", `/users/u_twin/ops/${requestId}`, { signature: "good" }, "u_twin");
+    assert.equal(r.status, 404);
+  });
+
+  await check("add on chain: approved and listed by the chain, the guardian turns active", async () => {
+    safeCalls.length = 0;
+    const r = await call("POST", `/users/u_ok/ops/${requestId}`, { signature: "good" }, "u_ok");
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.guardian.status, "active");
+    assert.equal(sub1().status, "active");
+    assert.ok(sub1().activeAt);
+    assert.deepEqual(safeCalls.map((c) => c.op), ["assert", "read", "submit", "read"], "the chain is re-checked before submitting and read after, not trusted");
+  });
+
+  await check("add on chain: a used request id is gone", async () => {
+    const r = await call("POST", `/users/u_ok/ops/${requestId}`, { signature: "good" }, "u_ok");
+    assert.equal(r.status, 404);
+  });
+
+  await check("add on chain: a guardian the chain already lists turns active without an op", async () => {
+    store.updateUser("u_ok", { passkeySafe: { ...store.findUser("u_ok")!.passkeySafe!, socialGuardians: [{ ...sub1(), status: "created", activeAt: undefined }] } });
+    safeCalls.length = 0;
+    const r = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_ok");
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.guardian.status, "active");
+    assert.ok(!safeCalls.some((c) => c.op === "prepare"));
+  });
+
+  await check("add on chain: a reverted op, or one the chain does not show, leaves the guardian `created`", async () => {
+    // u_twin owns sub-org "sub-2" (subject 777) from the parallel-add check.
+    store.updateUser("u_twin", { passkey: { credentialId: "cred-twin", rpId: "localhost", publicKey: { kty: "EC" }, createdAt: now } as any });
+    chain.guardians = [];
+    chain.moduleEnabled = true;
+    const twin = () => store.findUser("u_twin")!.passkeySafe!.socialGuardians![0];
+    for (const [label, set] of [["reverted", () => (chain.revert = true)], ["not listed", () => (chain.listAfterSubmit = false)]] as const) {
+      const prep = await call("POST", `/users/u_twin/guardians/${twin().turnkeySubOrgId}/add`, {}, "u_twin");
+      assert.equal(prep.status, 201, `${label}: ${JSON.stringify(prep.body)}`);
+      set();
+      const r = await call("POST", `/users/u_twin/ops/${prep.body.requestId}`, { signature: "good" }, "u_twin");
+      chain.revert = false;
+      chain.listAfterSubmit = true;
+      assert.equal(r.status, 502, label);
+      assert.equal(twin().status, "created", label);
+    }
+    chain.guardians = [];
+    chain.moduleEnabled = false;
+  });
+
+  await check("add on chain: switch off answers 404 on both routes", async () => {
+    switchOn = false;
+    try {
+      for (const p of ["/users/u_ok/guardians/sub-1/add", "/users/u_ok/ops/x"]) {
+        const r = await call("POST", p, {}, "u_ok");
+        assert.equal(r.status, 404, p);
+        assert.equal(r.body.code, "TURNKEY_OFF");
+      }
+    } finally {
+      switchOn = true;
+    }
   });
 
   await check("login: a bad token is refused before Turnkey is called", async () => {
