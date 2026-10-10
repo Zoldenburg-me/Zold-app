@@ -23,6 +23,7 @@ const scripts = [
   "country:policy:test",
   "recovery:test",
   "recovery:candide:test",
+  "turnkey:test",
   "documents:test",
   "paylinks:test",
   "shopify:test",

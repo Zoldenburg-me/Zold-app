@@ -4,7 +4,8 @@
 ## npm (runtime)
 express 4 · viem 2 (chain) · abstractionkit (Safe/ERC-4337, Candide) ·
 safe-recovery-service-sdk (Candide guardian recovery) · @stellar/stellar-sdk ·
-nodemailer (mail, flag-gated) · lz-string
+nodemailer (mail, flag-gated) · lz-string · @turnkey/http + @turnkey/api-key-stamper
+(guardian sub-orgs, `TURNKEY_GUARDIANS`, off)
 Dev: hardhat, tsx, typescript. contracts/src: FxSwapper, MockToken, AdminTimelock (31337 only) ·
 ZoldUSD (zUSD, test chains, `deploy:zusd`) · OffchainResolver (L1 ENS, `deploy:ens-resolver`).
 
@@ -24,6 +25,7 @@ ZoldUSD (zUSD, test chains, `deploy:zusd`) · OffchainResolver (L1 ENS, `deploy:
 | VIES | EU VAT ID check | adapters/vies.ts |
 | SMTP | email codes (off unless EMAIL_VERIFICATION=1) | adapters/mailer.ts |
 | Rates source | independent mid for price sanity | rates.ts |
+| Turnkey | guardian sub-orgs and logins (off unless TURNKEY_GUARDIANS=1) | wallet/turnkey.ts |
 
 Config lives in config/* (env, keys, deployments by chain id, partners,
 liquidity, payments, wallet-sync, ens, security, production checks).
