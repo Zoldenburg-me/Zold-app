@@ -6,7 +6,7 @@
  * stranger can reach. Applied by server.ts before any route is mounted.
  */
 import type express from "express";
-import { CHECKOUT_SERVICE, SECURITY } from "../config.js";
+import { CHECKOUT_SERVICE, IS_PRODUCTION, SECURITY } from "../config.js";
 import { checkoutCredentialFor } from "../checkout-service.js";
 import { isOperator } from "./guards.js";
 import { bearerToken } from "./sessions.js";
@@ -59,15 +59,31 @@ export const CONTENT_SECURITY_POLICY = [
   "frame-ancestors 'none'",
 ].join("; ");
 
-export const securityHeaders: express.RequestHandler = (_req, res, next) => {
-  res.setHeader("referrer-policy", "no-referrer");
-  res.setHeader("x-content-type-options", "nosniff");
-  res.setHeader("content-security-policy", CONTENT_SECURITY_POLICY);
-  res.setHeader("x-frame-options", "DENY");
-  res.setHeader("cross-origin-opener-policy", "same-origin");
-  res.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=()");
-  next();
-};
+/**
+ * HTTPS only, on every subdomain. Production only: a laptop on
+ * http://localhost must not pin itself to HTTPS.
+ *
+ * Five minutes on purpose: a browser keeps this header for max-age and a
+ * rollback cannot take it back, so it stays short until every subdomain of
+ * the production host is confirmed to serve HTTPS (docs/security-hardening.md,
+ * Phase 0).
+ */
+export const STRICT_TRANSPORT_SECURITY = "max-age=300; includeSubDomains";
+
+export function securityHeadersFor(production: boolean): express.RequestHandler {
+  return (_req, res, next) => {
+    res.setHeader("referrer-policy", "no-referrer");
+    res.setHeader("x-content-type-options", "nosniff");
+    res.setHeader("content-security-policy", CONTENT_SECURITY_POLICY);
+    res.setHeader("x-frame-options", "DENY");
+    res.setHeader("cross-origin-opener-policy", "same-origin");
+    res.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=()");
+    if (production) res.setHeader("strict-transport-security", STRICT_TRANSPORT_SECURITY);
+    next();
+  };
+}
+
+export const securityHeaders = securityHeadersFor(IS_PRODUCTION);
 
 /**
  * The rate-limit key for a client address.

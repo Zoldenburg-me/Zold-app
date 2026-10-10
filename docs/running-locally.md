@@ -53,6 +53,26 @@ that do not own the local deployment).
   over such a path can silently read nothing. Quote it, and confirm the file
   is readable before trusting a count of zero.
 
+## Secrets
+
+`.env` and `.private/` can be kept `age`-encrypted (`docs/security-hardening.md`,
+Phase 0). The identity is in the macOS Keychain (`zold-age-identity`), or in a
+file named by `AGE_IDENTITY_FILE` (an `age-plugin-yubikey` stub).
+
+- `npm run age:fetch` installs the pinned `age` into `.toolchain/`, refusing a
+  download whose SHA-256 differs from the one in `scripts/_age.sh`.
+- `npm run secrets -- init` makes the identity and writes its public key to
+  `.age-recipients`.
+- `npm run secrets -- encrypt .env` writes `.env.age`. `npm run secrets -- run
+  -- npm run api` decrypts it into that command's environment only; nothing
+  decrypted touches the disk. Delete `.env` once that works. A variable set in
+  the shell wins over `.env.age`, as with `.env`.
+- `npm run secrets -- seal .private` writes `.private.tar.age`; `unseal` puts it
+  back into a directory you name, refusing one that exists. A failed unseal
+  leaves nothing behind.
+- `npm run backup:db` is the only way to copy the database: an `age`-encrypted
+  file in `.local-backups/`. The store writes `data/db*.json` mode 600.
+
 ## Browser pane and new pages
 
 - In the embedded browser pane, click coordinates are in SCREENSHOT space, and
