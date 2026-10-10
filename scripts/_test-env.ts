@@ -22,6 +22,8 @@
  * Must be the first import in any harness that uses it, or config.js is
  * evaluated with the operator's values.
  */
+import { randomBytes } from "node:crypto";
+
 /**
  * The ports harnesses serve on. `npm run check` allocates a random free port
  * for the run and passes it as TRANSF_API_PORT, so RUN_PORT is added too.
@@ -76,4 +78,11 @@ process.env.DOCUMENT_RATE_LIMIT_PER_MIN = "1000";
  */
 process.env.KYC_AUTO_APPROVE = "1";
 
-export {};
+/**
+ * The data keys are the operator's (tier 3), so a harness never inherits them
+ * from .env: each run gets fresh random ones, made here so no key-shaped
+ * literal sits in source. A harness that tests their absence sets "".
+ */
+const randomKey = () => randomBytes(32).toString("base64url");
+process.env.DATA_ENCRYPTION_KEYS = `t1:${randomKey()}`;
+process.env.BLIND_INDEX_KEY = randomKey();

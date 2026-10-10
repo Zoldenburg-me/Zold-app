@@ -14,6 +14,7 @@
  */
 import { CHAIN_ID, MONERIUM, SECURITY, moneriumOAuthEnabled, moneriumSandboxEnabled } from "../config.js";
 import { store, type User } from "../store.js";
+import { dataEncryptionProblem } from "../config/data-keys.js";
 import { auditEntry } from "../audit.js";
 import {
   connectionMethod,
@@ -40,7 +41,7 @@ export function moneriumDeployment() {
     redirectUri: MONERIUM.redirectUri,
     webhookSecret: Boolean(SECURITY.moneriumWebhookSecret),
     pollMs: MONERIUM.pollMs,
-    tokenEncryption: Boolean(MONERIUM.tokenEncryptionKey),
+    tokenEncryption: dataEncryptionProblem() === null,
   };
 }
 

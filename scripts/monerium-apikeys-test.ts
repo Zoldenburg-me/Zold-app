@@ -308,13 +308,27 @@ async function call(pathname: string, body?: any, method?: string) {
     redirect: "manual",
   });
   const text = await res.text();
+  const headerLines: string[] = [];
+  res.headers.forEach((v, k) => headerLines.push(`${k}: ${v}`));
+  responses.push(`${headerLines.join("\n")}\n\n${text}`);
   let data: any = {};
   try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
   return { status: res.status, data, text };
 }
 
+/** Every response body and header this suite received, and everything the
+ *  API printed: the pasted secret must appear in none of them. */
+const responses: string[] = [];
+let serverLog = "";
+
 function bg(cmd: string, args: string[], env: Record<string, string> = {}) {
-  const c = spawn(cmd, args, { cwd: ROOT, stdio: "inherit", env: { ...process.env, ...env } });
+  const c = spawn(cmd, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
+  for (const [from, to] of [[c.stdout, process.stdout], [c.stderr, process.stderr]] as const) {
+    from!.on("data", (chunk: Buffer) => {
+      serverLog += chunk.toString("utf8");
+      to.write(chunk);
+    });
+  }
   children.push(c);
   return c;
 }
@@ -465,7 +479,8 @@ try {
   await t("the secret is encrypted at rest — plaintext never touches db.json", async () => {
     const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
     assert.ok(!db.includes(USER_SECRET), "client secret found in plaintext in db.json");
-    assert.ok(db.includes("clientSecretEnc"), "expected an encrypted secret field");
+    const stored = JSON.parse(db).users.find((u: any) => u.id === userId).monerium.apiKeys.clientSecretEnc;
+    assert.match(stored, /^v2\.t1\./, "the secret is written as v2 under the active key, bound to the user row");
   });
 
   await t("no endpoint returns the secret or even its ciphertext", async () => {
@@ -748,6 +763,18 @@ try {
     assert.equal(r.status, 201, `connect failed: ${r.text}`);
     assert.equal(r.data.monerium.profileId, BUSINESS_PROFILE_ID);
     assert.equal(r.data.funding.moneriumProfileId, BUSINESS_PROFILE_ID);
+  });
+
+  await t("no response, header or API log line in this whole run carried a pasted secret", async () => {
+    assert.ok(responses.length > 20, `expected many responses, saw ${responses.length}`);
+    assert.match(serverLog, /Zold API listening/, "the API's output was not captured, so the log check would prove nothing");
+    for (const secret of [USER_SECRET, "usr_secret_definitely_wrong"]) {
+      const inResponse = responses.findIndex((r) => r.includes(secret));
+      assert.equal(inResponse, -1, `response ${inResponse} carried a pasted secret`);
+      assert.ok(!serverLog.includes(secret), "the API printed a pasted secret");
+    }
+    const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
+    assert.ok(!db.includes(USER_SECRET) && !db.includes("usr_secret_definitely_wrong"), "a pasted secret is in the store or its audit log");
   });
 
   if (failed.length) {

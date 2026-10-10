@@ -9,6 +9,7 @@
  */
 
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import {
   CAPABILITIES,
   can,
@@ -26,7 +27,6 @@ import {
   initialStatusFor,
   suggestedCurrency,
 } from "../services/api/src/domain/accounts.js";
-import { MONERIUM } from "../services/api/src/config.js";
 import {
   ContactError,
   ibanChecksumValid,
@@ -209,16 +209,16 @@ check("an invitation seat needs a PROVEN email, not the one typed at signup", ()
 console.log("\nLocal accounts");
 
 check("only EUR can be live, and every gated currency names what it needs", () => {
-  // EUR's rail opens on the operator's Monerium config, so pin both states
-  // rather than inherit whatever .env this checkout has.
-  const saved = { oauthClientId: MONERIUM.oauthClientId, tokenEncryptionKey: MONERIUM.tokenEncryptionKey };
+  // EUR's rail opens when Monerium credentials can be stored, i.e. with a
+  // data key ring, so pin both states rather than inherit this checkout's.
+  const before = process.env.DATA_ENCRYPTION_KEYS;
   const eurWith = (open: boolean) => {
-    MONERIUM.oauthClientId = "";
-    MONERIUM.tokenEncryptionKey = open ? "k".repeat(32) : "";
+    process.env.DATA_ENCRYPTION_KEYS = open ? `t1:${randomBytes(32).toString("base64url")}` : "";
     try {
       return currencyAvailability();
     } finally {
-      Object.assign(MONERIUM, saved);
+      if (before === undefined) delete process.env.DATA_ENCRYPTION_KEYS;
+      else process.env.DATA_ENCRYPTION_KEYS = before;
     }
   };
   const closed = eurWith(false).find((c) => c.code === "EUR")!;

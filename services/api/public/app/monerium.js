@@ -18,7 +18,7 @@ function renderMoneriumScreen() {
   if (!caps.moneriumApiKeys) {
     el.innerHTML = `
       <div class="m-rows">${row("Status", "Unavailable")}</div>
-      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no MONERIUM_TOKEN_ENCRYPTION_KEY, so it cannot store a client secret. It refuses rather than keep one in plaintext.</div>`;
+      <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no data encryption key (DATA_ENCRYPTION_KEYS), so it cannot store a client secret. It refuses rather than keep one in plaintext.</div>`;
     return;
   }
 

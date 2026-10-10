@@ -84,6 +84,8 @@
     "business:test": "tsx scripts/business-test.ts",
     "business:access:test": "tsx scripts/business-access-test.ts",
     "security:test": "tsx scripts/security-hardening-test.ts",
+    "crypto:test": "tsx scripts/crypto-at-rest-test.ts",
+    "reencrypt": "tsx scripts/reencrypt-fields.ts",
     "age:fetch": "bash scripts/fetch-age.sh",
     "secrets": "bash scripts/secrets.sh",
     "backup:db": "bash scripts/backup-db.sh",

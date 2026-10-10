@@ -110,7 +110,7 @@ export interface Db {
  * Sepolia and stranded the account (only the current authorizer may rotate),
  * so tests must not be able to reach the working database.
  */
-const DB_PATH = process.env.TRANSF_DB_PATH
+export const DB_PATH = process.env.TRANSF_DB_PATH
   ? path.resolve(process.env.TRANSF_DB_PATH)
   : path.join(ROOT, "data", "db.json");
 const DATA_DIR = path.dirname(DB_PATH);
@@ -192,6 +192,13 @@ export function initStore() {
   } else {
     persist();
   }
+}
+
+/** Load the store only to read it, for a report: no migration, no write, and
+ *  no directory or file created. Throws when there is no store at DB_PATH. */
+export function loadStoreReadOnly() {
+  if (!existsSync(DB_PATH)) throw new Error(`no store at ${DB_PATH}`);
+  db = { ...db, ...JSON.parse(readFileSync(DB_PATH, "utf8")) };
 }
 
 /**

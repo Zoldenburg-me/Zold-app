@@ -99,41 +99,92 @@ it, how to rotate it, and when it was last rotated.
 |------|------|----------|-------------|
 | 1. Moves money on-chain | private keys | `DEPLOY_*_KEY` / `ORCHESTRATOR_KEY` / `RAMP_KEY`, `FAUCET_KEY`, `CANDIDE_COSIGNER_KEY`, `STELLAR_TREASURY_SECRET`, `CIRCLE_ENTITY_SECRET` | Stored in the self-hosted Bitwarden (1.4). Keys that only an operator uses, such as deployer and contract admin, live on a hardware wallet and are never online. Keys the server signs with automatically (orchestrator, ramp, faucet) still have to be in process memory to sign, so on mainnet they hold small balances and narrow contract roles. A signer that never releases the key (an HSM) is the later step. |
 | 2. Opens a partner or our identity | API secrets, signing secrets | `MONERIUM_CLIENT_SECRET`, `MONERIUM_WEBHOOK_SECRET`, `CHECKOUT_WEBHOOK_SECRET`, `SHOPIFY_API_SECRET`, `DOCUMENT_SIGNING_KEY`, `MG_CLIENT_DOMAIN_SIGNING_SECRET`, `KYC_OPERATOR_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `SMTP_PASS`, `BRIDGE/LIFI/BEBOP/CANDIDE/CIRCLE/GETMYINVOICES` keys | Bitwarden, fetched at start and never written to the host's disk. Rotate every 90 days and on any staff or host change. |
-| 3. Decrypts stored data | data-encryption root | `MONERIUM_TOKEN_ENCRYPTION_KEY` | Bitwarden; it wraps the per-purpose data keys (1.2). |
+| 3. Decrypts stored data | data-encryption roots, blind index key | `DATA_ENCRYPTION_KEYS`, `BLIND_INDEX_KEY`, `MONERIUM_TOKEN_ENCRYPTION_KEY` (v1) | Bitwarden; the roots derive the per-purpose data keys (1.2). |
 
 ### 1.2 Encryption at rest, version 2
 
-Version 1 (`crypto-at-rest.ts`) has one secret, no key id and no
-associated data; its specific weaknesses are in `.private/security-gaps.md`.
-Version 2:
-- Format `v2.<keyId>.<iv>.<tag>.<ct>`. The v1 reader stays until a
-  re-encrypt job has moved every row.
-- Per-purpose data keys from HKDF-SHA256 over a root fetched from Bitwarden
-  at start (envelope encryption). The root is held in memory only and never
-  logged.
+Version 1 (`encryptField`/`decryptField`, `iv.tag.ct`) has one secret
+(`MONERIUM_TOKEN_ENCRYPTION_KEY`) for every purpose, a single SHA-256 as key
+derivation, no key id and no associated data.
+
+Version 2 (`sealField`/`openField` in `crypto-at-rest.ts`):
+- Format `v2.<keyId>.<iv>.<tag>.<ct>`, AES-256-GCM, random 96-bit IV. The
+  reader (v1 too) refuses any IV that is not 12 bytes or tag that is not 16.
+- `DATA_ENCRYPTION_KEYS` is a key ring, `<keyId>:<32 random bytes, base64>`,
+  newest first (`config/data-keys.ts`). The first key encrypts; the others
+  only decrypt. A passphrase, a short key, a repeated id or key, or an id of
+  the form `v<n>` (reserved for format versions) is refused. Production
+  refuses to start without a ring or on a malformed one. Errors name the
+  problem, never the value.
+- Per-purpose data keys are HKDF-SHA256 over the root. The roots stay in
+  process memory.
 - **AAD = `purpose|table|rowId|field`**, so a ciphertext only decrypts in the
-  row it was written for.
-- Rotation: a new key id for new writes and a background re-encrypt of old
-  ones. The old key is retired only when no row still uses it.
-- New PII columns use the same scheme: IBAN, legal name, email, phone,
-  address. A lookup by email uses a blind index (HMAC-SHA256 under its own
-  key), never the plaintext.
+  row and field it was written for (`npm run crypto:test` copies values
+  across rows, fields, tables and purposes and checks each one fails).
+- `stored-secrets.ts` names each stored credential once (purpose, table,
+  field); routes seal and open through it, and the re-encrypt job walks it.
+  Users' Monerium OAuth tokens and API secrets, Shopify access tokens,
+  Shopify order-link keys and GetMyInvoices keys write v2, and refuse to
+  write without a ring.
+- `openField` reads v1 too, until every row is v2.
+- `npm run reencrypt` opens every stored value under its own row binding and
+  reports, per site, how many rows are v1 and how many sit under each key
+  id, which old keys no row uses, and every row that does not open (exit 1).
+  The report reads the store without writing it. With `--apply` it
+  moves v1 rows and rows under old keys to the active key, checks each value
+  reads back, and leaves a row that does not decrypt as it was (exit 1).
+  Rotation: prepend a new key id, run the job, then drop a key once the
+  report says no row uses it. The API must be stopped while it runs; the job
+  refuses to write if the store changed under it.
+- `blindIndex` is an HMAC-SHA256 under `BLIND_INDEX_KEY`, its own key, so a
+  ring rotation never changes an index. It normalises email, phone and IBAN.
+
+Still open:
+- Setting `DATA_ENCRYPTION_KEYS` and `BLIND_INDEX_KEY` on each deployment,
+  then running the job there. Without the ring a production deployment does
+  not start; elsewhere Monerium, Shopify and GetMyInvoices refuse new
+  connections and report themselves unavailable, and existing v1 values
+  still read.
+- The v1 reader, and with it `MONERIUM_TOKEN_ENCRYPTION_KEY`, goes once the
+  job reports no v1 row on any deployment. Until then a database writer can
+  copy a v1 value of the same purpose into another row and it opens there:
+  v1 carries no binding.
+- The AAD carries no version, so a database writer can put an older v2 value
+  back into its own row (a stale token, not another row's).
+- Nothing is indexed yet: users' email is plaintext. New PII columns (IBAN,
+  legal name, email, phone, address) use v2 with a blind index for lookups.
+- The roots come from the environment, not yet from Bitwarden (1.4).
 
 ### 1.3 Monerium specifically
 
 - Our app credentials (`MONERIUM_CLIENT_ID/SECRET`, webhook secret) are tier 2.
   Keep the sandbox and production apps in separate secret-manager paths, so
   a sandbox `.env` can never hold a production secret.
-- Users' tokens and their own API secrets: v2 encryption with AAD bound to
-  the user row. Request the narrowest scope that works. On disconnect, clear
-  the ciphertext. That is a credential, not a ledger row, so the
-  "nothing deletes" invariant does not cover it.
+- Users' OAuth access and refresh tokens and their own API secrets are v2
+  sites in `stored-secrets.ts`, bound to the user row; the API secret has a
+  purpose (data key) of its own. A token refresh writes v2. Disconnecting
+  either method drops the whole `monerium` record, ciphertext included: a
+  credential, not a ledger row, so the "nothing deletes" invariant does not
+  cover it.
 - An API secret a user pastes in is never echoed back, logged, or returned
-  by any route. Only its label and client id are shown.
-- PKCE on the OAuth flow, and the state parameter bound to the session
-  (verify against the real server: `docs/status.md`).
-- Alert on Monerium 401/403 bursts. A revoked or rotated credential shows up
-  there first.
+  by any route; only its label and client id are shown.
+  `monerium:apikeys:test` records every response, header and API log line of
+  its run and checks the secret is in none of them.
+- The OAuth flow uses PKCE (S256, a 48-byte verifier) and a single-use
+  24-byte `state` that expires after 10 minutes. The callback also requires
+  the HttpOnly nonce cookie set by `/connect/start`, which needs the user's
+  session, so the browser that finishes a connect is the one that started it
+  signed in (sessions are bearer tokens, which a redirect cannot carry).
+  `monerium:oauth:test` checks each against a fake Monerium; the flow has run
+  against Monerium's sandbox (`docs/status.md`), never production.
+- Five 401/403 answers from Monerium within a minute log one warning
+  (`adapters/monerium-refusals.ts`), naming the method and the route with
+  ids and IBANs removed. It is a log line, not yet an alert anyone receives
+  (Phase 6).
+
+Still open:
+- The connect asks Monerium for no particular scope; whether a narrower one
+  works is untested.
 
 ### 1.4 Self-hosted Bitwarden
 
@@ -414,8 +465,9 @@ These are the agent-facing rules. AGENTS.md carries the short form.
   logs, error messages, test fixtures (other than hardhat's public dev
   keys), or any file outside `.private/`. A new secret gets an inventory row
   and a tier.
-- **Stored credentials are encrypted, one purpose per key.** Use
-  `encryptField` with a new `EncryptionPurpose`; never reuse a purpose for a
+- **Stored credentials are encrypted, one purpose per key.** Add a site to
+  `stored-secrets.ts` with a new `EncryptionPurpose`, and a registry entry so
+  the re-encrypt job sees it; never reuse a purpose for a
   different kind of secret, and never add a plaintext fallback. Writing
   refuses when the key is missing.
 - **No unencrypted copy of the database.** Backups, previews, exports and

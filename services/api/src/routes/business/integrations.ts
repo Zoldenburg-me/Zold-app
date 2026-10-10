@@ -12,8 +12,9 @@
  * run twice uploads nothing twice.
  */
 import express from "express";
-import { MONERIUM } from "../../config.js";
-import { decryptField, encryptField, EncryptionUnavailableError } from "../../crypto-at-rest.js";
+import { EncryptionUnavailableError } from "../../crypto-at-rest.js";
+import { dataEncryptionProblem } from "../../config/data-keys.js";
+import { SECRETS } from "../../stored-secrets.js";
 import { store } from "../../store.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { GetMyInvoicesClient, GmiApiError, gmiUserAgent, type GmiBankAccount, type GmiBankLineResult, type GmiBankTransaction, type GmiDocumentUpload } from "../../adapters/getmyinvoices.js";
@@ -28,13 +29,13 @@ export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
 }
 
-export const gmiAvailable = () => Boolean(MONERIUM.tokenEncryptionKey);
+export const gmiAvailable = () => dataEncryptionProblem() === null;
 
 export function gmiClientFor(org: Organisation): GetMyInvoicesClient | null {
   const g = org.integrations?.getmyinvoices;
   if (!g) return null;
   return new GetMyInvoicesClient({
-    apiKey: decryptField("getmyinvoices", MONERIUM.tokenEncryptionKey, g.apiKeyEnc),
+    apiKey: SECRETS.gmiApiKey.open(org.id, g.apiKeyEnc),
     userAgent: gmiUserAgent(g.accountId),
   });
 }
@@ -52,7 +53,7 @@ export function publicIntegrations(org: Organisation) {
           companyId: g.companyId,
           bankAccountUid: g.bankAccountUid,
         }
-      : { connected: false, needs: gmiAvailable() ? "an API key from your GetMyInvoices account" : "the server's encryption key (MONERIUM_TOKEN_ENCRYPTION_KEY)" },
+      : { connected: false, needs: gmiAvailable() ? "an API key from your GetMyInvoices account" : `the server's data encryption key: ${dataEncryptionProblem()}` },
   };
 }
 
@@ -131,7 +132,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       if (!requireCapability(ctx, res, "integrations.accounting")) return;
       if (!requirePermission(ctx, res, "org.update")) return;
       if (!gmiAvailable()) {
-        return res.status(503).json({ error: "the server has no encryption key configured, so an API key cannot be stored — set MONERIUM_TOKEN_ENCRYPTION_KEY" });
+        return res.status(503).json({ error: `${dataEncryptionProblem()}, so an API key cannot be stored` });
       }
       const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
       if (apiKey.length < 16 || /\s/.test(apiKey)) return res.status(400).json({ error: "apiKey must be the key as shown in GetMyInvoices (Settings → API)" });
@@ -150,7 +151,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       }
       let apiKeyEnc: string;
       try {
-        apiKeyEnc = encryptField("getmyinvoices", MONERIUM.tokenEncryptionKey, apiKey);
+        apiKeyEnc = SECRETS.gmiApiKey.seal(ctx.org.id, apiKey);
       } catch (err) {
         if (err instanceof EncryptionUnavailableError) return res.status(503).json({ error: err.message });
         throw err;
