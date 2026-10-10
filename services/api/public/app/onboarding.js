@@ -293,10 +293,10 @@ function obMessage(e) {
   // QR code or a security key, so it is named for what it is: a passkey.
   const phone = obOnPhone();
   // Before the names: Chromium refuses a second open prompt as InvalidStateError.
-  if (/request is (already )?pending/i.test(String(e?.message || ""))) {
+  if (passkeyPending(e)) {
     return phone
       ? "A Face ID prompt is still open. Finish or close it, then try again."
-      : "A passkey prompt is still open, maybe in another window or tab. Finish or close it, then try again.";
+      : "A passkey prompt is still open, maybe in another window, a tab or your password manager. Close it, reload this page, then try again.";
   }
   if (e?.name === "NotAllowedError") {
     return phone

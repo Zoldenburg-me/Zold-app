@@ -2,7 +2,9 @@
  * Passkey prompts (public/app/core.js passkeyPrompt): one open at a time, and
  * a deadline closes the prompt in the browser, not only our wait for it. A
  * retry after a deadline that left the old prompt open got "A request is
- * already pending" from the browser (a tester on a Mac, 2026-10-07).
+ * already pending" from the browser (a tester on a Mac, 2026-10-07). A
+ * password manager's own "already pending" refusal is asked again after a
+ * pause, and only that refusal.
  *
  * Runs the real classic scripts in a vm with a fake navigator.credentials.
  * What this cannot show: a real browser's prompt. Offline.
@@ -145,6 +147,127 @@ const ask = (kind: string, deadline = "") => run(`passkeyPrompt("${kind}", { cha
   const e = await run(`withinPasskeyStep(passkeyPrompt("get", { challenge: new Uint8Array(1) }), 15 - PASSKEY_DEADLINE_MS, "took too long")`).catch((x: any) => x);
   assert.equal(e.message, "took too long");
   assert.equal(prompts[0].options.signal.aborted, true);
+}
+
+// A password manager that replaces navigator.credentials (LastPass) holds its
+// previous request open for a moment after answering it, and refuses the next
+// as "already pending" with nothing of ours open. That refusal opened nothing,
+// so it is asked again after a pause instead of failing the step (create the
+// passkey, then deploy the Safe at once; a tester, 2026-10-10).
+const pending = (msg = "A request is already pending.") => Object.assign(new Error(msg), { name: "InvalidStateError" });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(cond: () => boolean, what: string, ms = 2000) {
+  const until = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > until) throw new Error(`timed out waiting for ${what}`);
+    await sleep(2);
+  }
+}
+assert.equal(run("PASSKEY_PENDING_RETRY_MS"), 1500, "the production pause");
+assert.equal(run("PASSKEY_PENDING_RETRIES"), 3, "the production cap");
+try {
+  run("PASSKEY_PENDING_RETRY_MS = 5");
+
+  // Refused as pending, asked again with the same options and signal, answered.
+  // Both spellings Chromium has used are retried, and so is create.
+  for (const [kind, msg] of [["get", undefined], ["create", "A request is pending."]] as const) {
+    prompts.length = 0;
+    const p = ask(kind);
+    await tick();
+    prompts[0].reject(pending(msg));
+    await waitFor(() => prompts.length === 2, "the retry");
+    assert.equal(prompts[1].kind, kind);
+    assert.equal(prompts[1].options.signal, prompts[0].options.signal, "the retry keeps the signal Cancel and the deadline reach");
+    assert.equal(prompts[1].options.signal.aborted, false);
+    assert.equal(prompts[1].options.publicKey.challenge, prompts[0].options.publicKey.challenge);
+    assert.equal(prompts[1].options.publicKey.timeout, run("PASSKEY_TIMEOUT_MS"));
+    prompts[1].resolve({ id: `after-pending-${kind}` });
+    assert.deepEqual(await p, { id: `after-pending-${kind}` });
+  }
+
+  // Three retries, then the browser's own refusal, unwrapped.
+  {
+    prompts.length = 0;
+    const p = ask("get").catch((x: any) => x);
+    for (let i = 0; i < 4; i++) {
+      await waitFor(() => prompts.length === i + 1, `attempt ${i + 1}`);
+      prompts[i].reject(pending());
+    }
+    // Bounded: a loop with no cap would open a fifth prompt and wait on it.
+    const e = await Promise.race([p, sleep(500).then(() => ({ name: "still asking after the cap" }))]);
+    assert.equal(e.name, "InvalidStateError");
+    assert.match(e.message, /already pending/);
+    await sleep(30);
+    assert.equal(prompts.length, 4, "no fifth attempt");
+  }
+
+  // Any other refusal is final: a cancel stays a cancel, and Chromium's other
+  // InvalidStateError (a passkey already on this device) is not "pending".
+  for (const err of [
+    Object.assign(new Error("The operation either timed out or was not allowed."), { name: "NotAllowedError" }),
+    Object.assign(new Error("The user attempted to register an authenticator that contains one of the credentials already registered with the relying party."), { name: "InvalidStateError" }),
+  ]) {
+    prompts.length = 0;
+    const p = ask("create").catch((x: any) => x);
+    await tick();
+    prompts[0].reject(err);
+    assert.equal((await p).name, err.name);
+    await sleep(30);
+    assert.equal(prompts.length, 1, `${err.name} is not retried`);
+  }
+
+  // The pause is real: nothing is asked again before it ends.
+  {
+    run("PASSKEY_PENDING_RETRY_MS = 80");
+    prompts.length = 0;
+    const p = ask("get");
+    await tick();
+    prompts[0].reject(pending());
+    await sleep(20);
+    assert.equal(prompts.length, 1, "no retry before the pause ends");
+    await waitFor(() => prompts.length === 2, "the retry after the pause");
+    prompts[1].resolve({ id: "paused" });
+    await p;
+  }
+
+  // Cancel, the deadline or a newer prompt during the pause: no prompt is
+  // opened afterwards, and the caller hears why it ended.
+  run("PASSKEY_PENDING_RETRY_MS = 150");
+  {
+    prompts.length = 0;
+    const p = ask("get").catch((x: any) => x);
+    await tick();
+    prompts[0].reject(pending());
+    await sleep(10);
+    run("passkeyUserCancel()");
+    assert.equal((await p).code, "PASSKEY_CANCELLED");
+    await sleep(200);
+    assert.equal(prompts.length, 1, "Cancel during the pause opens nothing after it");
+  }
+  {
+    prompts.length = 0;
+    const p = ask("get", "40").catch((x: any) => x);
+    await tick();
+    prompts[0].reject(pending());
+    assert.equal((await p).code, "PASSKEY_NO_ANSWER");
+    await sleep(200);
+    assert.equal(prompts.length, 1, "the deadline during the pause opens nothing after it");
+  }
+  {
+    prompts.length = 0;
+    const old = ask("get").catch((x: any) => x);
+    await tick();
+    prompts[0].reject(pending());
+    await sleep(10);
+    const fresh = ask("create");
+    assert.equal((await old).name, "AbortError", "the superseded prompt says aborted, not pending");
+    await sleep(200);
+    assert.equal(prompts.length, 2, "the old loop opens no prompt beside the new one");
+    prompts[1].resolve({ id: "fresh" });
+    assert.deepEqual(await fresh, { id: "fresh" });
+  }
+} finally {
+  run("PASSKEY_PENDING_RETRY_MS = 1500");
 }
 
 // The browser's "already pending" refusal is told plainly, not as a raw message
