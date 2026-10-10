@@ -14,6 +14,7 @@ import { dripTokens, faucetEnabled } from "./faucet.js";
 import { shopifyAvailable } from "./routes/shopify.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
+import { turnkeyGuardiansEnabled } from "./wallet/turnkey.js";
 
 /**
  * What this deployment can do, so the browser only offers actions the server
@@ -54,6 +55,10 @@ export function capabilities() {
     /** May a user add Zoldenburg as their recovery guardian, and may a lost
      *  device ask Zoldenburg to recover it? Needs the guardian address. */
     zoldenburgRecovery: zoldenburgRecoveryEnabled(),
+    /** May a user make their own Google or Apple login a recovery guardian
+     *  (a Turnkey wallet)? Off until TURNKEY_GUARDIANS=1, which waits for
+     *  the recovery alerts; no screen offers it yet. */
+    turnkeyGuardians: turnkeyGuardiansEnabled(),
     /** May a new company login bring in an existing Safe instead of
      *  deploying one (routes/safe-import.ts)? Needs a real chain: under the
      *  local harness both import routes answer NO_CHAIN. Whether one account
