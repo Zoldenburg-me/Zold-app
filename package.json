@@ -107,6 +107,7 @@
     "wallet-sync:test": "tsx scripts/wallet-sync-test.ts",
     "income-invoices:test": "tsx scripts/income-invoices-test.ts",
     "wallet-proof:test": "tsx scripts/wallet-proof-test.ts",
+    "org-ceiling:test": "tsx scripts/org-ceiling-test.ts",
     "holdings:test": "tsx scripts/holdings-test.ts",
     "beleg:test": "tsx scripts/beleg-test.ts",
     "lexware:csv:test": "tsx scripts/lexware-csv-test.ts",
