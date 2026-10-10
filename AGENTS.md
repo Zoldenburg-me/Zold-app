@@ -160,8 +160,8 @@ Each of these was a bug once.
 - **Agents never read `.env*`, `.private/` (bar `pentest/`) or
   `data/*.json`**, and never print a secret.
 - **No secret in source, commits, PRs, logs, errors or fixtures.**
-- **Stored credentials go through `encryptField`, one `EncryptionPurpose` per
-  kind**, never a plaintext fallback.
+- **Stored credentials go through `stored-secrets.ts`** (v2, a purpose per
+  kind, row-bound), never a plaintext fallback.
 - **No unencrypted copy of the database.** No real money or user data on a
   host without a processing agreement. Staging is never under the passkey
   domain.

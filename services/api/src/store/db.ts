@@ -110,7 +110,7 @@ export interface Db {
  * Sepolia and stranded the account (only the current authorizer may rotate),
  * so tests must not be able to reach the working database.
  */
-const DB_PATH = process.env.TRANSF_DB_PATH
+export const DB_PATH = process.env.TRANSF_DB_PATH
   ? path.resolve(process.env.TRANSF_DB_PATH)
   : path.join(ROOT, "data", "db.json");
 const DATA_DIR = path.dirname(DB_PATH);

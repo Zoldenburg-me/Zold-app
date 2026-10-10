@@ -41,9 +41,11 @@
 import { wrap } from "./util.js";
 import express from "express";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { MONERIUM, PAYMENT_REQUESTS, SHOPIFY } from "../config.js";
+import { PAYMENT_REQUESTS, SHOPIFY } from "../config.js";
 import { store, type User } from "../store.js";
-import { decryptField, encryptField, EncryptionUnavailableError } from "../crypto-at-rest.js";
+import { EncryptionUnavailableError } from "../crypto-at-rest.js";
+import { dataEncryptionProblem } from "../config/data-keys.js";
+import { SECRETS } from "../stored-secrets.js";
 import { MAX_REQUEST_EUR, displayCode, effectiveState, normaliseCode, type PaymentRequest } from "../payment-requests.js";
 import { baseUrlFor, createPaymentRequest, ensureQuote, payerContext } from "./payment-requests.js";
 import { publicPaymentRequest } from "../payment-requests.js";
@@ -153,12 +155,13 @@ function installRefusal(p: PendingInstall): InstallRefusal | undefined {
 
 export function shopifyAvailable(): { available: boolean; reason?: string } {
   if (!SHOPIFY.enabled) return { available: false, reason: "SHOPIFY_API_KEY / SHOPIFY_API_SECRET are not set — no Shopify app is registered for this deployment" };
-  if (!MONERIUM.tokenEncryptionKey) return { available: false, reason: "no encryption key (MONERIUM_TOKEN_ENCRYPTION_KEY) to store a store's access token" };
+  const keyProblem = dataEncryptionProblem();
+  if (keyProblem) return { available: false, reason: `${keyProblem}, so a store's access token cannot be stored` };
   return { available: true };
 }
 
 function tokenOf(c: ShopifyConnection): string {
-  return decryptField("shopify", MONERIUM.tokenEncryptionKey, c.accessTokenEnc);
+  return SECRETS.shopifyAccessToken.open(c.id, c.accessTokenEnc);
 }
 
 // ── Proof of the buyer, for the order routes ─────────────────────────────
@@ -181,9 +184,9 @@ function sameHex(a: string, b: string): boolean {
 /** The shop's email-link key, created on first use. Throws when no
  *  encryption key is configured (shopifyAvailable() says so first). */
 function orderLinkSecret(c: ShopifyConnection): string {
-  if (c.orderLinkSecretEnc) return decryptField("shopify-link", MONERIUM.tokenEncryptionKey, c.orderLinkSecretEnc);
+  if (c.orderLinkSecretEnc) return SECRETS.shopifyOrderLinkSecret.open(c.id, c.orderLinkSecretEnc);
   const secret = randomBytes(32).toString("hex");
-  store.updateShopifyConnection(c.id, { orderLinkSecretEnc: encryptField("shopify-link", MONERIUM.tokenEncryptionKey, secret) });
+  store.updateShopifyConnection(c.id, { orderLinkSecretEnc: SECRETS.shopifyOrderLinkSecret.seal(c.id, secret) });
   return secret;
 }
 
@@ -395,9 +398,13 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       } catch (err: any) {
         return back({ error: `Shopify refused the install: ${String(err?.message ?? err).slice(0, 160)}` });
       }
+      // The row id is part of the AAD, so it is fixed before sealing. Nothing
+      // awaits between here and the write below.
+      const existing = store.findShopifyConnectionByShop(shop);
+      const connectionId = existing?.id ?? randomUUID();
       let enc: string;
       try {
-        enc = encryptField("shopify", MONERIUM.tokenEncryptionKey, token.accessToken);
+        enc = SECRETS.shopifyAccessToken.seal(connectionId, token.accessToken);
       } catch (err) {
         if (err instanceof EncryptionUnavailableError) return back({ error: err.message });
         throw err;
@@ -405,11 +412,10 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const refusedLate = installRefusal(pending);
       if (refusedLate) return refuse(refusedLate);
       const now = new Date().toISOString();
-      const existing = store.findShopifyConnectionByShop(shop);
       const connection = existing
         ? store.updateShopifyConnection(existing.id, { accessTokenEnc: enc, scope: token.scope, mode: SHOPIFY.mode, payeeUserId: pending.payeeUserId, installedByUserId: pending.installerId, installedAt: now, configuredAt: undefined, configureError: undefined })
         : store.addShopifyConnection({
-            id: randomUUID(),
+            id: connectionId,
             orgId: pending.orgId,
             shop,
             payeeUserId: pending.payeeUserId,

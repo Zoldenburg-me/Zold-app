@@ -7,6 +7,7 @@
  */
 import { CHAIN_ID, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, LOOKS_LOCAL, PUBLIC_URL, REAL_MONEY_CHAINS } from "./env.js";
 import { MONERIUM, moneriumOAuthEnabled, moneriumSandboxEnabled } from "./monerium.js";
+import { dataKeyProblems } from "./data-keys.js";
 import { KYC, RECOVERY, RECOVERY_MODULE_3_MINUTES, SECURITY } from "./security.js";
 import { anchorModeEnabled, BRIDGE, isMoneyGramAnchorDomain, STELLAR, STELLAR_TESTNET_PASSPHRASE } from "./cash-rail.js";
 
@@ -105,6 +106,11 @@ function checkMoneriumSecrets(fail: Fail) {
   }
 }
 
+/** The v2 key ring and the blind index key, when set, parse and differ. */
+function checkDataKeys(fail: Fail) {
+  for (const problem of dataKeyProblems()) fail(problem);
+}
+
 function checkBridge(fail: Fail) {
   if (!BRIDGE.live) return;
   if (!BRIDGE.apiKey) fail("BRIDGE_API_KEY is required when BRIDGE_LIVE=1");
@@ -185,7 +191,7 @@ function assertProductionConfig() {
   if (!IS_PRODUCTION) return;
   const problems: string[] = [];
   const fail: Fail = (message) => problems.push(message);
-  for (const check of [checkRuntimeFlags, checkMainnet, checkMoneriumSecrets, checkBridge, checkSmartAccount, checkAnchor, checkHosted, checkPublicUrl]) {
+  for (const check of [checkRuntimeFlags, checkMainnet, checkMoneriumSecrets, checkDataKeys, checkBridge, checkSmartAccount, checkAnchor, checkHosted, checkPublicUrl]) {
     check(fail);
   }
   if (problems.length) {
