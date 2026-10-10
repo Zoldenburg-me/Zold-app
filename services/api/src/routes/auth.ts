@@ -41,7 +41,7 @@ import { b64urlToBuf, issueChallenge, stepUpBinding, verifyAssertion, verifyRegi
 import { publicUser, withSession } from "../users/public-user.js";
 import { checkOpAssertion } from "../http/passkey-assertion.js";
 import { faucetFundSafe } from "../faucet.js";
-import { describeCause } from "../http/log-cause.js";
+import { describeCause, redactedMessage } from "../http/log-cause.js";
 
 /**
  * requireUserSession is injected so that server.ts stays the only place that
@@ -120,7 +120,7 @@ export async function verifyPasskeyStepUp(
     }
     return true;
   } catch (err: any) {
-    res.status(401).json({ error: String(err?.message ?? err), code: "STEP_UP_INVALID" });
+    res.status(401).json({ error: redactedMessage(err), code: "STEP_UP_INVALID" });
     return false;
   }
 }
@@ -218,7 +218,7 @@ export function createAuthRouter(deps: AuthDeps) {
       try {
         reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, user.id);
       } catch (err: any) {
-        return res.status(400).json({ error: String(err?.message ?? err) });
+        return res.status(400).json({ error: redactedMessage(err) });
       }
       if (reg.credentialId !== credentialId) {
         return res.status(400).json({ error: "credentialId does not match attestation" });
@@ -292,8 +292,8 @@ export function createAuthRouter(deps: AuthDeps) {
             ? `passkey Safe deployment needs an ERC-4337 bundler. This API is on chain ${CHAIN_ID} ` +
               `while Candide is configured for chain ${CANDIDE.chainId}, and a local hardhat node has ` +
               `no bundler or paymaster. Run against chain ${CANDIDE.chainId} (npm run api) rather than ` +
-              `npm run dev. Underlying error: ${err?.message ?? err}`
-            : `passkey Safe deployment failed: ${err?.message ?? err}`,
+              `npm run dev. Underlying error: ${redactedMessage(err)}`
+            : `passkey Safe deployment failed: ${redactedMessage(err)}`,
         });
       }
       if (deployment.challenge === "0x") {
@@ -364,7 +364,7 @@ export function createAuthRouter(deps: AuthDeps) {
         // It may still land. The account stays on its old address until the
         // deployment is confirmed; preparing again finds a Safe that did land.
         return res.status(502).json({
-          error: `${err.message} — the Safe is not recorded as deployed until that is confirmed; try again shortly`,
+          error: `${redactedMessage(err)} — the Safe is not recorded as deployed until that is confirmed; try again shortly`,
           code: "SAFE_OP_UNCONFIRMED",
           deployOpHash: err.userOpHash,
         });
@@ -435,7 +435,7 @@ export function createAuthRouter(deps: AuthDeps) {
           throw new Error("this passkey is no longer the account's passkey");
         }
       } catch (err: any) {
-        return res.status(401).json({ error: String(err?.message ?? err) });
+        return res.status(401).json({ error: redactedMessage(err) });
       }
       // Minted before the next await, so a recovery that lands during it
       // revokes this session too.

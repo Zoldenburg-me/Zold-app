@@ -5,6 +5,7 @@
  */
 import { MONERIUM, moneriumSandboxEnabled } from "../services/api/src/config.js";
 import { MoneriumClient } from "../services/api/src/adapters/monerium-client.js";
+import { urlForLog } from "../services/api/src/http/log-safe.js";
 
 if (!moneriumSandboxEnabled()) {
   console.error(
@@ -20,7 +21,7 @@ const api = new MoneriumClient({
   clientSecret: MONERIUM.clientSecret,
 });
 
-console.log(`checking ${MONERIUM.baseUrl} (chain: ${MONERIUM.chain})…\n`);
+console.log(`checking ${urlForLog(MONERIUM.baseUrl)} (chain: ${MONERIUM.chain})…\n`);
 
 try {
   const ctx = await api.authContext();

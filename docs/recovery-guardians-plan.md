@@ -113,9 +113,18 @@ is the only defence. Before any new guardian kind ships:
     is not open: that is what the email is for. Covered offline by
     `recovery-alert:ui:test`; never seen against a real recovery, since none
     has run on chain (`status.md`).
-  - **email** to the account address through `adapters/mailer.ts`. Mail is off
-    today (`status.md`); switching it on needs a real SMTP provider with a
-    processing agreement (`security-hardening.md`).
+  - **email — built.** `recovery/owner-alerts.ts` sweeps once a minute where
+    the mail transport is configured (`EMAIL_VERIFICATION=1`; Brevo on
+    zoldhq.com, `status.md`) and emails the account's address: once when a
+    request is open ("someone asked to move your account"), at most once per
+    account per 6 hours since a stranger can restart one, and once when it
+    reaches GRACE_PERIOD, with the date it completes. The mail names no
+    account detail and has no link (the address may be unconfirmed; a link
+    is something to imitate); it sends the owner to the app's warning.
+    Sends are recorded on the request (`ownerAlerts`), retried up to five
+    times, logged by request id only. Covered offline by
+    `recovery-alerts:test`; never sent for a real recovery, since none has
+    run on chain.
 - The same mail transport sends friend invites and reminders (Phase 3).
 - Email alone is not enough: whoever controls the inbox may be the attacker
   and delete it. The banner on the device the owner still holds matters most.

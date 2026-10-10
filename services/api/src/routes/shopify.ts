@@ -68,6 +68,7 @@ import {
   webhookSubscriptionDelete,
 } from "../shopify/admin.js";
 import type { ShopifyConnection } from "../shopify/types.js";
+import { describeCause, redactedMessage } from "../http/log-cause.js";
 
 /**
  * A merchant-supplied URL we will put in an href or a 302, or nothing.
@@ -264,7 +265,7 @@ export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
         paidAt: r.paidAt,
       };
       orderSetPaymentMetafield(connection.shop, tokenOf(connection), r.source.orderGid, facts).catch((err) =>
-        console.error(`shopify: order marked paid but the zold.payment metafield was refused at ${connection.shop}: ${err?.message ?? err}`),
+        console.error(`shopify: order marked paid but the zold.payment metafield was refused at ${connection.shop}: ${describeCause(err)}`),
       );
       return;
     }
@@ -274,7 +275,7 @@ export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
     });
     console.log(`shopify: resolved session for ${displayCode(r.code)} at ${connection.shop}`);
   } catch (err: any) {
-    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError: String(err?.message ?? err).slice(0, 300) } });
+    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError: redactedMessage(err).slice(0, 300) } });
     throw err;
   }
 }
@@ -399,7 +400,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       try {
         token = await exchangeCode(shop, String(q.code ?? ""));
       } catch (err: any) {
-        return back({ error: `Shopify refused the install: ${String(err?.message ?? err).slice(0, 160)}` });
+        return back({ error: `Shopify refused the install: ${redactedMessage(err).slice(0, 160)}` });
       }
       // The row id is part of the AAD, so it is fixed before sealing. Nothing
       // awaits between here and the write below.
@@ -441,14 +442,14 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           // gid is the idempotency key).
           const created = await webhookSubscriptionCreate(shop, token.accessToken, "ORDERS_CREATE", `${base}/api/shopify/webhooks/orders`);
           await webhookSubscriptionCreate(shop, token.accessToken, "ORDERS_CANCELLED", `${base}/api/shopify/webhooks/orders`).catch((err) =>
-            console.error(`shopify: orders/cancelled subscription refused at ${shop}: ${err?.message ?? err}`),
+            console.error(`shopify: orders/cancelled subscription refused at ${shop}: ${describeCause(err)}`),
           );
           // "already been taken" returns no id; the one we stored last time
           // is still the live subscription, so keep it.
           store.updateShopifyConnection(connection.id, { configuredAt: new Date().toISOString(), configureError: undefined, webhookSubscriptionId: created.id ?? existing?.webhookSubscriptionId });
         }
       } catch (err: any) {
-        store.updateShopifyConnection(connection.id, { configureError: String(err?.message ?? err).slice(0, 300) });
+        store.updateShopifyConnection(connection.id, { configureError: redactedMessage(err).slice(0, 300) });
       }
       back({ shop });
     }),
@@ -473,7 +474,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       } catch (err) {
         // The token may already be revoked; disconnecting is still right. A
         // token we could not decrypt is logged, since Shopify was not told.
-        console.warn(`shopify: disconnect of ${c.shop} could not reach the store: ${String((err as Error)?.message ?? err).slice(0, 160)}`);
+        console.warn(`shopify: disconnect of ${c.shop} could not reach the store: ${describeCause(err)}`);
       }
       store.removeShopifyConnection(c.id);
       res.json({ ok: true });
@@ -567,7 +568,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // Shopify wants a 201 first and the verdict by mutation afterwards.
       res.status(201).json({});
       reject(c.shop, tokenOf(c), gid, message).catch((err) =>
-        console.error(`shopify: could not reject session ${gid} at ${c.shop}: ${err?.message ?? err}`),
+        console.error(`shopify: could not reject session ${gid} at ${c.shop}: ${describeCause(err)}`),
       );
     });
 

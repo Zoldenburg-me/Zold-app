@@ -21,6 +21,7 @@ import {
   type Keyring,
 } from "../crypto-at-rest.js";
 import { MONERIUM } from "./monerium.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 let ring: { spec: string; keyring: Keyring } | undefined;
 let blind: { spec: string; key: Buffer } | undefined;
@@ -59,9 +60,9 @@ export function dataEncryptionProblem(): string | null {
 export function dataKeyProblems(): string[] {
   const problems: string[] = [];
   let keyring: Keyring | null = null;
-  try { keyring = dataKeyring(); } catch (err) { problems.push((err as Error).message); }
+  try { keyring = dataKeyring(); } catch (err) { problems.push(redactedMessage(err)); }
   let key: Buffer | null = null;
-  try { key = blindIndexKey(); } catch (err) { problems.push((err as Error).message); }
+  try { key = blindIndexKey(); } catch (err) { problems.push(redactedMessage(err)); }
   if (keyring && key && [...keyring.roots.values()].some((r) => r.equals(key!))) {
     problems.push("BLIND_INDEX_KEY must not equal a DATA_ENCRYPTION_KEYS key");
   }

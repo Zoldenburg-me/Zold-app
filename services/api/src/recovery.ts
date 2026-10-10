@@ -7,7 +7,7 @@ import type { RecoveryRequest } from "./store.js";
  * someone's phone number.
  */
 export function publicRecoveryRequest(request: RecoveryRequest) {
-  const { contact: _contact, reviewedBy: _reviewedBy, reviewReason: _reviewReason, candide, zoldenburg, ...pub } = request;
+  const { contact: _contact, reviewedBy: _reviewedBy, reviewReason: _reviewReason, ownerAlerts: _ownerAlerts, candide, zoldenburg, ...pub } = request;
   const out: Record<string, unknown> = { ...pub };
   if (candide) {
     const { newPasskey, auths, accessHash: _accessHash, otpTicketHash: _otpTicketHash, ...rest } = candide;

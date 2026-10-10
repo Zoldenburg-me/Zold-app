@@ -104,6 +104,14 @@ and metadata only, never values.
 | 2. Opens a partner or our identity | API secrets, signing secrets | `MONERIUM_CLIENT_SECRET`, `MONERIUM_WEBHOOK_SECRET`, `CHECKOUT_WEBHOOK_SECRET`, `SHOPIFY_API_SECRET`, `DOCUMENT_SIGNING_KEY`, `MG_CLIENT_DOMAIN_SIGNING_SECRET`, `KYC_OPERATOR_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `SMTP_PASS`, `BRIDGE/LIFI/BEBOP/CANDIDE/GETMYINVOICES` keys, RPC and bundler URLs that carry a key in the path | Bitwarden, fetched at start and never written to the host's disk. Rotate every 90 days and on any staff or host change. |
 | 3. Decrypts stored data | data-encryption roots, blind index key | `DATA_ENCRYPTION_KEYS`, `BLIND_INDEX_KEY`, `MONERIUM_TOKEN_ENCRYPTION_KEY` (v1) | Bitwarden; the roots derive the per-purpose data keys (1.2). |
 
+A configured URL is printed through `urlForLog` (origin only). An error's
+text leaves the process only through `http/log-cause.ts`: `describeCause`
+for a log line, `redactedMessage` for a stored row or a response (URLs,
+network targets and IPs replaced), and `errorText` for matching a pattern,
+never for output. `npm run security:test` reads the source and fails on any
+other read of an error's text, a thrown error naming a raw URL, or a script
+printing one.
+
 Still open:
 - `CANDIDE_COSIGNER_KEY` and `CIRCLE_ENTITY_SECRET` are read by nothing (the
   server only warns that the first is set); unset them wherever they are set.
@@ -113,11 +121,10 @@ Still open:
   recovery relays, finalisations and verifier deployments with it. Before
   mainnet it splits into a gas-only relay key and an admin key on a hardware
   wallet.
-- `chain.ts` (a chain-id mismatch) and `config/keys.ts` (no operator key on
-  a non-local RPC) print the full `TRANSF_RPC_URL` in a boot error, and `failAndCompensate` (`orchestrator.ts`) and the
-  crypto-in refusal (`adapters/crypto-deposits.ts`) log and store a raw error
-  message. A keyed RPC or bundler URL can reach the log through any of them;
-  `urlForLog` and `describeCause` exist for this.
+- A typed error (`MoneriumApiError`, `GmiApiError` and the like) passes its
+  own message on unchecked; it is safe only because each is built from
+  redacted text, and the guard does not see a new one built from raw text.
+- Rows written before the redaction keep their raw error text.
 - Most rows have no last-rotated date.
 - Whether the leases hold names the code does not read is unchecked.
 
@@ -364,9 +371,10 @@ user without breaking WebAuthn.
 
 ## Phase 3: mail
 
-Today, nodemailer sends verification codes through Brevo's SMTP relay with
-an SMTP key from `.env.age`, from `no-reply@zoldhq.com` (the apex, not a
-subdomain), with Brevo's IP allowlist on. The code is in the body only, and a
+Today, nodemailer sends verification codes and recovery alerts through
+Brevo's SMTP relay with an SMTP key from `.env.age`, from
+`no-reply@zoldhq.com` (the apex, not a subdomain), with Brevo's IP allowlist
+on. The code is in the body only, and a
 failed send logs the error and SMTP codes, never the server's reply (it can
 quote the address).
 

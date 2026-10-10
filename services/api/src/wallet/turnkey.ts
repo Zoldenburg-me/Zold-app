@@ -23,6 +23,7 @@ import { ApiKeyStamper } from "@turnkey/api-key-stamper";
 import { TurnkeyClient, createActivityPoller, type TurnkeyApiTypes } from "@turnkey/http";
 import { getAddress, isAddress, recoverAddress, type Hex } from "viem";
 import { TURNKEY } from "../config.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export type GuardianSubOrgParams = TurnkeyApiTypes["v1CreateSubOrganizationIntentV8"];
 
@@ -172,7 +173,7 @@ export const fetchJwks: JwksSource = async (provider, fresh = false) => {
     jwksCache.set(provider, { keys, at: Date.now() });
     return keys;
   } catch (e) {
-    throw new TurnkeyGuardianError(`cannot read ${provider}'s signing keys (${(e as Error).message}); try again`, 503, "JWKS_UNAVAILABLE");
+    throw new TurnkeyGuardianError(`cannot read ${provider}'s signing keys (${redactedMessage(e)}); try again`, 503, "JWKS_UNAVAILABLE");
   }
 };
 
