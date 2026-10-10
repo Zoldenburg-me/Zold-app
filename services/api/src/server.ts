@@ -35,6 +35,7 @@ import { createReceiptShareRouter } from "./routes/receipt-shares.js";
 import { createFaucetRouter } from "./routes/faucet.js";
 import { capabilities } from "./capabilities.js";
 import { publicUser } from "./users/public-user.js";
+import { urlForLog } from "./http/log-safe.js";
 import { apiRateLimit, originPolicy, securityHeaders } from "./http/policy.js";
 import {
   requireSession,
@@ -310,7 +311,7 @@ if (candideRecoveryEnabled()) {
       .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
   setTimeout(runRecoverySweep, 5_000).unref();
   setInterval(runRecoverySweep, RECOVERY.sweepMs).unref();
-  console.log(`RECOVERY: email/SMS guardian via ${RECOVERY.serviceUrl} (chain ${CANDIDE.chainId}, module ${CANDIDE.recoveryModuleAddress})`);
+  console.log(`RECOVERY: email/SMS guardian via ${urlForLog(RECOVERY.serviceUrl)} (chain ${CANDIDE.chainId}, module ${CANDIDE.recoveryModuleAddress})`);
 }
 // Pay links: expire what is past its date, book our own SEPA payouts that
 // carry a code, retry telling a merchant about a paid checkout.
@@ -364,8 +365,8 @@ setTimeout(runReconcile, 10_000).unref();
 setInterval(runReconcile, 15 * 60_000).unref();
 if (sandbox) {
   checkConnection()
-    .then((ctx) => {
-      console.log(`monerium sandbox connected (${ctx?.email ?? ctx?.userId ?? "ok"})`);
+    .then(() => {
+      console.log("monerium sandbox connected");
       startDepositPoller();
     })
     .catch((err) => {
@@ -425,10 +426,10 @@ app.listen(API_PORT, API_HOST, () => {
   console.log(
     `GAS: Safe UserOperations are ${
       CANDIDE.gas.mode === "sponsored"
-        ? `sponsored by the paymaster at ${CANDIDE.paymasterUrl}`
+        ? `sponsored by the paymaster at ${urlForLog(CANDIDE.paymasterUrl)} (chain ${CANDIDE.chainId})`
         : CANDIDE.gas.mode === "native"
           ? "paid by each Safe in ETH (no paymaster)"
-          : `paid by each Safe in token ${CANDIDE.gas.token} through ${CANDIDE.paymasterUrl}`
+          : `paid by each Safe in token ${CANDIDE.gas.token} through ${urlForLog(CANDIDE.paymasterUrl)}`
     }.`,
   );
 });
