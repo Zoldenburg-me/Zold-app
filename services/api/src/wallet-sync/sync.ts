@@ -28,7 +28,7 @@
  * traces), NFTs (dropped by the strict event decode), and rebasing tokens,
  * whose balance moves without a transfer.
  */
-import { readLogWindow } from "../log-range.js";
+import { isLogResultCapRefusal, readLogWindow } from "../log-range.js";
 import {
   BaseError,
   ContractFunctionRevertedError,
@@ -172,10 +172,19 @@ async function windowTransfers(reader: ChainReader, wallet: ImportedWallet, from
   );
 }
 
-/** The largest window from `fromBlock` the RPC will answer. */
+/** The largest window from `fromBlock` the RPC will answer. A single block
+ *  that still holds more of the wallet's logs than the RPC returns has no
+ *  smaller window to ask for: it is a counted gap, so one stuffed block
+ *  cannot hold the cursor for good. Only a result-count refusal does this; a
+ *  rate limit or any other error holds the window. */
 async function readWindow(reader: ChainReader, wallet: ImportedWallet, fromBlock: bigint, safeHead: bigint) {
-  const { toBlock, result } = await readLogWindow(fromBlock, safeHead, WALLET_SYNC.maxBlockSpan, (from, to) => windowTransfers(reader, wallet, from, to));
-  return { toBlock, transfers: result };
+  try {
+    const { toBlock, result } = await readLogWindow(fromBlock, safeHead, WALLET_SYNC.maxBlockSpan, (from, to) => windowTransfers(reader, wallet, from, to));
+    return { toBlock, transfers: result };
+  } catch (e) {
+    if (!isLogResultCapRefusal(e)) throw e;
+    return { toBlock: fromBlock, transfers: [], gap: `block ${fromBlock}: more logs for this wallet than the RPC returns` };
+  }
 }
 
 export async function syncWallet(
@@ -225,12 +234,12 @@ export async function syncWallet(
     const tokens = new Map<string, TokenInfo>();
     for (let w = 0; w < WALLET_SYNC.windowsPerTick && cursor < safeHead; w++) {
       const fromBlock = cursor + 1n;
-      const { toBlock, transfers } = await readWindow(reader, wallet, fromBlock, safeHead);
+      const { toBlock, transfers, gap } = await readWindow(reader, wallet, fromBlock, safeHead);
 
       const contacts = store.contactsOf(wallet.orgId);
       const fresh: LedgerEntry[] = [];
-      let windowSkipped = 0;
-      let lastSkipReason: string | undefined;
+      let windowSkipped = gap ? 1 : 0;
+      let lastSkipReason: string | undefined = gap;
       for (const t of transfers) {
         if (known.has(walletEntryId(wallet.orgId, wallet.address, wallet.chainId, t.txHash, t.logIndex))) continue;
         const blockTime = t.blockTime ?? blockTimes.get(t.blockNumber) ?? (await reader.getBlockTime(t.blockNumber));

@@ -937,7 +937,10 @@ flowchart LR
   not the wallet row, so removing and re-importing an address books nothing
   twice). Per wallet a cursor walks windows of at most
   `WALLET_SYNC.maxBlockSpan` (halved while the RPC refuses a range as too
-  large), `windowsPerTick` per poll, `confirmations` behind the head, and is
+  large; a single block still refused for its result count is counted in
+  `sync.skipped`, named in `lastSkipReason` and passed, so one stuffed block
+  cannot hold the cursor, while a rate limit holds the window),
+  `windowsPerTick` per poll, `confirmations` behind the head, and is
   written with its window's rows. An RPC error, a token read that fails in
   transport, or a price feed / ECB outage HOLDS the window: nothing is
   written, the cursor stays, and the wallet shows the reason with every URL
