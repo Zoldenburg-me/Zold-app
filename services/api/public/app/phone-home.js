@@ -163,54 +163,161 @@ PH.home = {
 
 /* What the guardians report: { chain: pendingRecovery|null, request: a
    Zoldenburg request nobody has signed yet|null, method: words|null }.
-   null until the first read; `none` when nothing is under way. */
+   null until the first read; `none` when nothing is under way; `failed`
+   when a read did not work. */
 let phRec = null;
 let phRecReadAt = 0;
 let phRecDone = false;       // this phone just cancelled it
+let phRecRun = null;         // the read in flight; a second caller shares it
+let phRecAnnounced = "";     // the warning a screen reader was last told
+let phRecOpened = "";        // the recovery the alert screen opened for
 const PH_REC_SEEN = "zold-recovery-seen";
+const PH_REC_OPEN = ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING"];
 const phRecSig = (r) => (r?.chain ? `chain:${r.chain.executeAfter}` : r?.request ? `req:${r.request.id}` : "");
 
-/* Read both guardians, at most once a minute. Home calls this, and a company
-   login on its way to /business (app/phone.js phCompanyLeave); a recovery
-   found here opens the alert, unless "It was me" hid that same one. */
-async function phRecoveryCheck({ force = false } = {}) {
-  const here = () => phRoute?.name === "recovery-alert";
-  // No guardian can run a recovery here: there is nothing to find.
-  if (!user?.id || user.passkeySafe?.status !== "active" || (!caps.emailSmsRecovery && !caps.zoldenburgRecovery)) {
-    if (here()) { phRec = { none: true }; phRender(); }
-    return;
+/* Has "It was me" hidden this very recovery in this tab? */
+function phRecSeen(r) {
+  let seen = "";
+  try { seen = sessionStorage.getItem(PH_REC_SEEN) || ""; } catch { /* no storage: always show */ }
+  return Boolean(phRecSig(r)) && seen === phRecSig(r);
+}
+
+/* When the module lets a recovery finish, or null when the chain's number
+   is not a usable time: the warning still shows, without a date. */
+function phRecUntil(chain) {
+  const t = Number(chain?.executeAfter);
+  return Number.isFinite(t) && t > 0 ? new Date(t * 1000) : null;
+}
+
+/* Which warning the strip shows: "" for none, "failed", or the recovery's
+   signature. Not on the alert screen itself, and not for a recovery "It was
+   me" hid; a failed check is never hidden. */
+function phRecBarKey() {
+  if (!phRec || phRoute?.name === "recovery-alert") return "";
+  if (phRec.failed && !(phRec.chain || phRec.request)) return "failed";
+  if (!(phRec.chain || phRec.request) || phRecSeen(phRec)) return "";
+  return phRecSig(phRec);
+}
+
+/* The strip above every app screen, the redesigned ones and the older ones
+   alike (#ph-recbar in index.html sits outside both), while a recovery is
+   under way or the check failed: the grace period plus the owner's cancel
+   is the only defence, so the warning does not wait for Home. */
+function phRecBar() {
+  const key = phRecBarKey();
+  if (!key) return "";
+  const go = (label, variant) => `<a class="z-btn z-btn--${variant} z-btn--sm" href="#recovery-alert">${esc(label)}</a>`;
+  if (key === "failed") {
+    return `<div class="z-banner" role="note">${Z.icon("help")}<span><b>We couldn’t check for a recovery.</b> If someone started one, it would replace your passkey.</span>${go("Check now", "secondary")}</div>`;
   }
-  if (!force && Date.now() - phRecReadAt < 60000) return;
+  const until = phRec.chain ? phRecUntil(phRec.chain) : null;
+  const text = phRec.chain
+    ? `<b>Someone is moving your account to a new phone.</b> ${until ? `It completes on ${esc(rcWhenText(until))} unless you cancel.` : "It completes after the waiting period unless you cancel."}`
+    : "<b>Someone asked to move your account to a new phone.</b> Nothing has been signed yet.";
+  return `<div class="z-banner z-banner--alert" role="note">${Z.icon("gpp_maybe")}<span>${text}</span>${go("Review", "primary")}</div>`;
+}
+
+/* Redraw only the strip, so a check never closes a sheet or eats typing.
+   Each warning is announced once per page, however often the strip is
+   redrawn or the person changes screen. */
+function phRecBarSync() {
+  const el = $("ph-recbar");
+  if (!el) return;
+  const key = phRecBarKey();
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.innerHTML = phRecBar();
+  el.hidden = !key;
+  if (key && key !== phRecAnnounced) {
+    phRecAnnounced = key;
+    Z.announce(el.textContent);
+  }
+}
+
+/* No guardian can run a recovery here, or the account has no Safe: nothing
+   to find, and nothing from an earlier read stays up. */
+function phRecNone() {
+  phRec = { none: true };
+  phRecBarSync();
+  if (phRoute?.name === "recovery-alert") phRender();
+}
+
+/* A read that did not work. A recovery an earlier read found stays up, so a
+   flaky (or provoked) error cannot turn "someone is moving your account"
+   into the vaguer "couldn't check"; with nothing known it says it could not
+   check, never that nothing is under way. */
+function phRecFailed() {
+  phRec = phRec?.chain || phRec?.request ? { ...phRec, failed: true } : { failed: true };
+  phRecBarSync();
+  if (phRoute?.name === "recovery-alert") phRender();
+}
+
+/* Read both guardians, at most once a minute. The account poll calls this
+   (app/monerium.js refresh), as do Home, a tab coming back into view, and a
+   company login on its way to /business (app/phone.js phCompanyLeave). Only
+   one read runs at a time, so an older answer can never land after a newer
+   one. A recovery found here shows the strip, and the first time it is
+   found while Home is open (no sheet over it) it opens the alert. */
+function phRecoveryCheck({ force = false } = {}) {
+  if (phRecRun) return phRecRun;
+  if (!force && Date.now() - phRecReadAt < 60000) return Promise.resolve();
   phRecReadAt = Date.now();
+  phRecRun = phRecRead()
+    .catch(() => {
+      // A bug here must not read as "nothing under way", and is asked
+      // again at the next poll rather than in a minute.
+      phRecReadAt = 0;
+      try { phRecFailed(); } catch { /* phRec already says failed; the next render draws it */ }
+    })
+    .finally(() => { phRecRun = null; });
+  return phRecRun;
+}
+
+async function phRecRead() {
+  // Which guardians exist here comes from /api/health. Unread, nothing says
+  // there is none: ask again, and say it could not check if that fails too.
+  if (!capsLoaded) await loadCapabilities();
+  if (!capsLoaded) return phRecFailed();
+  if (!user?.id || user.passkeySafe?.status !== "active" || (!caps.emailSmsRecovery && !caps.zoldenburgRecovery)) return phRecNone();
   const [c, z] = await Promise.all([
     caps.emailSmsRecovery ? api(`/api/users/${user.id}/recovery/candide`).catch(() => null) : undefined,
     caps.zoldenburgRecovery ? api(`/api/users/${user.id}/recovery/zoldenburg`).catch(() => null) : undefined,
   ]);
   const chain = z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || null;
-  const reqs = z?.requests || [];
-  const request = chain ? null : reqs.find((r) => ["PASSKEY_PENDING", "OTP_PENDING", "KYC_PENDING", "REVIEW_PENDING"].includes(r.status)) || null;
-  // Nothing found is only "none" when the reads worked: a guardian that is
-  // switched on and did not answer (null; undefined is one not asked), or one
-  // on this account whose chain read failed, is "couldn't check".
-  const unread = c === null || z === null || (z?.active && z.onChainError) || (c?.guardianStatus === "active" && c.onChain?.error);
-  if (!chain && !request && unread) {
-    phRec = { failed: true };
-    if (here()) phRender();
-    return;
-  }
+  const reqs = Array.isArray(z?.requests) ? z.requests : [];
+  const request = chain ? null : reqs.find((r) => PH_REC_OPEN.includes(r?.status)) || null;
+  // Nothing found is only "none" when every read worked, by the same rule
+  // as /business (access-model.js recoveryStatus): a guardian switched on
+  // that did not answer (null; undefined is one not asked), a chain read
+  // that failed, or an answer without its chain reading is "couldn't check".
+  // The Zoldenburg route reads the module for any active Safe, so its chain
+  // error counts whether or not Zoldenburg is the guardian.
+  const unread = c === null || z === null
+    || Boolean(z && (z.onChainError || !z.onChain))
+    || Boolean(c && (c.onChain?.error || (c.guardianStatus === "active" && !c.onChain)));
+  if (!chain && !request && unread) return phRecFailed();
   // Which guardian is moving it, where the reads say so; otherwise left out.
-  const kinds = [...new Set((c?.channels || []).map((x) => (x.channel === "sms" ? "phone" : "email")))];
+  const kinds = [...new Set((Array.isArray(c?.channels) ? c.channels : []).map((x) => (x.channel === "sms" ? "phone" : "email")))];
   const codes = kinds.length ? `${kinds.join(" and ").replace(/^./, (x) => x.toUpperCase())} ${kinds.length > 1 ? "codes" : "code"}` : "Email or phone codes";
   const method = !chain ? "Zoldenburg ID check"
-    : reqs.some((r) => r.status === "GRACE_PERIOD") ? "Zoldenburg ID check"
+    : reqs.some((r) => r?.status === "GRACE_PERIOD") ? "Zoldenburg ID check"
       : c?.guardianStatus === "active" && !z?.active ? codes : null;
   phRec = chain || request ? { chain, request, method } : { none: true };
-  if (phRec.none) return phRoute?.name === "recovery-alert" && phRender();
-  let seen = "";
-  try { seen = sessionStorage.getItem(PH_REC_SEEN) || ""; } catch { /* no storage: always show */ }
+  phRecBarSync();
   if (phRoute?.name === "recovery-alert") return phRender();
-  if (phRoute?.name === "home" && seen !== phRecSig(phRec)) phGo("recovery-alert");
+  if (phRec.none) return;
+  const sig = phRecSig(phRec);
+  const sheetOpen = Boolean(document.querySelector("body > .z-scrim[data-ph]:not([hidden])"));
+  if (phRoute?.name === "home" && !phRecSeen(phRec) && sig !== phRecOpened && !sheetOpen) {
+    phRecOpened = sig;
+    phGo("recovery-alert");
+  }
 }
+
+/* Back on the tab after a while away: ask now, not at the next minute. */
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && phRoute) phRecoveryCheck({ force: Date.now() - phRecReadAt > 15000 });
+});
 
 PH["recovery-alert"] = {
   title: "Recovery under way",
@@ -223,7 +330,7 @@ PH["recovery-alert"] = {
         + phFoot(`${Z.button({ variant: "primary", full: true, label: "Back to Home", href: "#home" })}<a class="z-link-btn" href="#recovery-settings">Recovery settings</a>`);
     }
     if (!phRec) return `${Z.topbar({ srTitle: "Recovery under way", back: { href: "#home", label: "Back to Home" } })}${phMain(Z.skeletonRows(2, "Checking for a recovery…"))}`;
-    if (phRec.failed) {
+    if (phRec.failed && !(phRec.chain || phRec.request)) {
       return `${Z.topbar({ srTitle: "Recovery under way", back: { href: "#home", label: "Back to Home" } })}${phMain(`
         <div class="z-intro"><h2 class="z-title">Couldn’t check for a recovery</h2><p class="z-sub">Zold couldn’t read whether someone is moving your account to another phone. Try again, or open Recovery settings.</p></div>`)}${phFoot(`${Z.button({ variant: "primary", full: true, label: "Try again", id: "ph-rec-retry" })}<a class="z-link-btn" href="#recovery-settings">Recovery settings</a>${user?.accountType === "company" ? `<a class="z-link-btn" href="${esc(phWebHref())}">Continue to Zold Business without checking</a>` : ""}`)}`;
     }
@@ -232,15 +339,17 @@ PH["recovery-alert"] = {
         <div class="z-intro"><h2 class="z-title">No recovery under way</h2><p class="z-sub">Nobody is moving your account to another phone.</p></div>`)}${phFoot(Z.button({ variant: "primary", full: true, label: "Back to Home", href: "#home" }))}`;
     }
     const { chain, request, method } = phRec;
-    const until = chain ? new Date(Number(chain.executeAfter) * 1000) : null;
+    const until = chain ? phRecUntil(chain) : null;
     const left = until ? until.getTime() - Date.now() : 0;
     const title = chain ? "Someone is moving your account to a new phone" : "Someone asked to move your account to a new phone";
+    const asked = request?.requestedAt ? new Date(request.requestedAt) : null;
     const lede = chain
-      ? `It completes on ${rcWhenText(until)} unless you cancel.`
-      : `They asked Zoldenburg support${request.requestedAt ? ` on ${rcWhenText(new Date(request.requestedAt))}` : ""}. Nothing has been signed yet.`;
+      ? (until ? `It completes on ${rcWhenText(until)} unless you cancel.` : "It completes after the waiting period unless you cancel.")
+      : `They asked Zoldenburg support${asked && Number.isFinite(asked.getTime()) ? ` on ${rcWhenText(asked)}` : ""}. Nothing has been signed yet.`;
     const rows = [
       ...(method ? [{ key: "Recovery method", value: method }] : []),
-      ...(chain ? [{ key: "Time left to cancel", valueHtml: `<span class="z-warn-fig">${esc(left > 0 ? rcLeftText(left) : "Finishing…")}</span>` }] : []),
+      ...(chain && until ? [{ key: "Time left to cancel", valueHtml: `<span class="z-warn-fig">${esc(left > 0 ? rcLeftText(left) : "Finishing…")}</span>` }] : []),
+      ...(phRec.failed ? [{ key: "Last check", value: "Failed. This is what the previous check found." }] : []),
       ...(request?.zoldenburg?.reference ? [{ key: "Their reference", value: request.zoldenburg.reference, mono: true }] : []),
     ];
     return phMain(`
@@ -267,6 +376,7 @@ PH["recovery-alert"] = {
         if (phRec.chain) await recoveryCancelRun();
         else await api(`/api/users/${user.id}/recovery/zoldenburg/requests/${phRec.request.id}/cancel`, {});
         phRec = null;
+        phRecBarSync();
         phRecDone = true;
         phRender({ focus: true });
         phRecDone = false;
@@ -276,7 +386,9 @@ PH["recovery-alert"] = {
     };
     const mine = root.querySelector("#ph-rec-mine");
     if (mine) mine.onclick = () => {
+      // Hides the alert and the strip for this recovery, in this tab only.
       try { sessionStorage.setItem(PH_REC_SEEN, phRecSig(phRec)); } catch { /* shows again next time */ }
+      phRecOpened = phRecSig(phRec);
       phGo("home", null, { replace: true });
     };
   },

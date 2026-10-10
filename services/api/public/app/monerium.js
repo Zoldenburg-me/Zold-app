@@ -134,10 +134,14 @@ const usdSym = () => {
   return typeof s === "string" && /^[A-Za-z0-9.]{1,11}$/.test(s) ? s : "USDC";
 };
 
+/* Whether /api/health has answered with capabilities. Until it has, the
+   defaults above say a feature is off when it may be on, so a check that
+   depends on one (the recovery strip) says it could not check. */
+let capsLoaded = false;
 async function loadCapabilities() {
   try {
     const h = await (await fetch("/api/health")).json();
-    if (h?.capabilities) caps = { ...caps, ...h.capabilities };
+    if (h?.capabilities) { caps = { ...caps, ...h.capabilities }; capsLoaded = true; }
     realMoney = h?.realMoney === true;
   } catch {
     /* keep the safe defaults */
@@ -400,6 +404,9 @@ async function refresh() {
   // payments are re-read rather than updated optimistically.
   await phLoadDeposits();
   phRefresh();
+  // At most once a minute, one read at a time; it never rejects (a failure
+  // shows as "couldn't check"). A recovery under way shows on every screen.
+  phRecoveryCheck();
 }
 
 function switchView(view) {
