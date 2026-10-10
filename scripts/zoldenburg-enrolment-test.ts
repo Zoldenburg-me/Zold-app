@@ -57,6 +57,12 @@ await t("names: the same person in a bank's spelling matches", () => {
     ["Jürgen Groß", "Juergen Gross"],
     ["José Álvarez", "Jose Alvarez"],
     ["Søren Kierkegaard", "Soren Kierkegaard"],
+    ["Dr. Anna Schmidt", "ANNA SCHMIDT"],
+    ["Hans Müller Jr.", "Hans Mueller"],
+    ["Maria Garcia", "MARIA E. GARCIA"],
+    ["Ana Sá", "ANA SA"],
+    ["Or Cohen", "Or Cohen"],
+    ["Anna-Maria Schmidt-Meier", "ANNA MARIA SCHMIDT MEIER"],
   ] as const) assert.ok(namesMatch(monerium, other), `${monerium} ~ ${other}`);
 });
 
@@ -65,6 +71,8 @@ await t("names: split first/last, every last-name token and the first first name
   assert.ok(namesMatch("Anna Maria Meyer Schmidt", { firstName: "Anna", lastName: "Meyer Schmidt" }));
   assert.ok(!namesMatch("Anna Schmidt", { firstName: "Anna", lastName: "Meyer-Schmidt" }), "a married name the profile lacks");
   assert.ok(!namesMatch("Anna Schmidt", { firstName: "Maria", lastName: "Schmidt" }));
+  assert.ok(!namesMatch("Anna Schmidt", { firstName: "Anna und Peter", lastName: "Schmidt" }), "a joint account split the bank's way");
+  assert.ok(!namesMatch("Anna Schmidt", { firstName: "Anna", lastName: "Schmidt GmbH" }));
 });
 
 await t("names: anything else is a mismatch", () => {
@@ -78,6 +86,14 @@ await t("names: anything else is a mismatch", () => {
     ["Hans Mueller", "Hans Mueller Bau GmbH"],
     ["Hans Mueller", "MUELLER HANS OR SCHMIDT ANNA"],
     ["Cher", "Cher Smith"],
+    ["Dr. Anna Schmidt", "Dr Hans Schmidt"],
+    ["Hans Müller Jr", "Hans Meier Jr"],
+    ["Anna S.", "Anna S Mueller"],
+    ["Anna-Maria Schmidt-Meier", "Anna Meier"],
+    ["Anna Schmidt", "Anna Schmidt e.K."],
+    ["Anna Schmidt", "Anna Schmidt Consulting"],
+    ["Anna Schmidt", "Anna Schmidt + Peter Meyer"],
+    ["Ana Lopez", "Ana Lopez y Juan Garcia"],
     ["Anna Schmidt", ""],
     ["", "Anna Schmidt"],
   ] as const) assert.ok(!namesMatch(monerium, other), `${monerium} !~ ${other}`);
@@ -243,6 +259,57 @@ await t("armed only while the guardian is active on the Safe", () => {
   assert.ok(E.zoldenburgArmed(user()));
 });
 
+await t("armed only for Zoldenburg's current guardian, not another address on the Safe", () => {
+  const safe = structuredClone(user().passkeySafe!);
+  store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, guardianAddress: `0x${"8".repeat(40)}` } } });
+  assert.equal(E.zoldenburgArmed(user()), false);
+  store.updateUser("u1", { passkeySafe: safe });
+  assert.ok(E.zoldenburgArmed(user()));
+});
+
+await t("one account that throws does not stop the sweep for the next", async () => {
+  store.addUser({ ...structuredClone(user()), id: "u2", email: "b@example.com", zoldenburgEnrolment: undefined } as any);
+  open = E.issueEnrolmentCode(user(), at(70));
+  const second = E.issueEnrolmentCode(store.findUser("u2")!, at(70));
+  const seen: string[] = [];
+  const reads: Reads = {
+    orders: async (u) => {
+      seen.push(u.id);
+      // A name Monerium sent as a number makes the name check throw.
+      if (u.id === "u1") return [order({ ...paidAt(71), counterpart: { details: { name: 42 }, identifier: { iban: BANK } } })];
+      return [order({ ...paidAt(71), memo: second.memo })];
+    },
+    profileName: async () => "Anna Müller",
+  };
+  assert.equal(await E.sweepEnrolments(reads, at(72)), 1);
+  assert.deepEqual(seen, ["u1", "u2"]);
+  assert.ok(E.zoldenburgArmed(store.findUser("u2")!));
+});
+
+await t("a Monerium read that never answers counts as unreadable, and frees the account", async () => {
+  open = E.issueEnrolmentCode(user(), at(80));
+  const before = E.ENROLMENT.readTimeoutMs;
+  E.ENROLMENT.readTimeoutMs = 50;
+  try {
+    const hung: Reads = { orders: () => new Promise(() => {}), profileName: async () => "Anna Müller" };
+    assert.equal(await E.checkEnrolment("u1", hung, at(81)), "unreadable");
+    assert.equal(await E.checkEnrolment("u1", reads([]), at(82)), "waiting", "not stuck in flight");
+  } finally { E.ENROLMENT.readTimeoutMs = before; }
+});
+
+await t("the Monerium reads: both list shapes, the profile id fallback, and an unknown shape fails", async () => {
+  const asked: (string | undefined)[] = [];
+  const client = (res: unknown) => () => ({ orders: async (p?: string) => { asked.push(p); return res; } });
+  const profile = async (_u: any, id: string) => ({ name: `name of ${id}` });
+  const u = { ...structuredClone(user()), monerium: undefined, funding: { moneriumProfileId: "pf" } } as any;
+  assert.deepEqual(await E.moneriumReadsWith(client([{ id: "a" }]), profile).orders(u), [{ id: "a" }]);
+  assert.deepEqual(await E.moneriumReadsWith(client({ orders: [{ id: "b" }] }), profile).orders(u), [{ id: "b" }]);
+  await assert.rejects(E.moneriumReadsWith(client({ data: [] }), profile).orders(u), /unknown shape/);
+  assert.deepEqual(asked, ["pf", "pf", "pf"]);
+  assert.equal(await E.moneriumReadsWith(client([]), profile).profileName(u), "name of pf");
+  assert.equal(await E.moneriumReadsWith(client([]), profile).profileName({ ...u, funding: undefined }), undefined);
+});
+
 await t("the owner's view names the account by its last 4 only; the public user carries none of it", () => {
   const v: any = E.enrolmentView(user(), at(63));
   assert.equal(v.armed, true);
@@ -293,6 +360,33 @@ await t("routes: no guardian, no active IBAN, or no key on the server: refused b
     assert.equal(off.status, 503);
     assert.equal(off.data.code, "ENROLMENT_UNAVAILABLE");
   });
+});
+
+await t("routes: with the passkey approved, a code once, that the payment can carry; the account stays armed", async () => {
+  const ok = express();
+  ok.use(express.json());
+  let approved = 0;
+  ok.use("/api", createZoldenburgEnrolmentRouter({
+    requireUserSession: (_req: any, _res: any, userId: string) => ({ userId }),
+    verifyStepUp: async () => { approved++; return true; },
+  }));
+  const srv = ok.listen(0, "127.0.0.1");
+  await new Promise((r) => srv.once("listening", r));
+  try {
+    const hmac = user().zoldenburgEnrolment!.bankAccountHmac;
+    const res = await fetch(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/users/u1/recovery/zoldenburg/enrolment`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stepUp: {} }),
+    });
+    const body: any = await res.json();
+    assert.equal(res.status, 201);
+    assert.equal(approved, 1);
+    assert.match(body.memo, /^ZOLD [0-9A-Z]{4}-[0-9A-Z]{4}$/);
+    assert.ok(E.memoCarriesCode(body.memo, user().zoldenburgEnrolment!.code!.hash));
+    assert.equal(body.payTo.iban, user().iban);
+    assert.equal(body.codeIssuedAt, user().zoldenburgEnrolment!.code!.issuedAt);
+    assert.equal(body.armed, true);
+    assert.equal(user().zoldenburgEnrolment!.bankAccountHmac, hmac, "a new code leaves the enrolled account in place");
+  } finally { srv.close(); }
 });
 
 await t("routes: GET and check return the view, and never the code or the HMAC", async () => {

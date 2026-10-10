@@ -40,6 +40,8 @@ export const ENROLMENT = {
   pollMs: 5 * 60_000,
   /** A user's "check now" reaches Monerium at most this often. */
   checkEveryMs: 30_000,
+  /** A Monerium read that has not answered by then counts as unreadable. */
+  readTimeoutMs: 20_000,
 };
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -132,17 +134,38 @@ export interface EnrolmentReads {
 
 const profileIdOf = (u: User) => u.monerium?.profileId ?? u.funding?.moneriumProfileId;
 
-export const moneriumReads: EnrolmentReads = {
-  async orders(user) {
-    const res: any = await moneriumClientFor(user).orders(profileIdOf(user));
-    return Array.isArray(res) ? res : (res?.orders ?? []);
-  },
-  async profileName(user) {
-    const id = profileIdOf(user);
-    if (!id) return undefined;
-    return (await readMoneriumProfile(user, id)).name;
-  },
-};
+/** The reads, given how to reach Monerium; tests hand in fakes. A response
+ *  in neither known shape throws rather than reading as "no orders yet". */
+export function moneriumReadsWith(
+  clientFor: (user: User) => { orders(profile?: string): Promise<unknown> },
+  readProfile: (user: User, profileId: string) => Promise<{ name?: string }>,
+): EnrolmentReads {
+  return {
+    async orders(user) {
+      const res: any = await clientFor(user).orders(profileIdOf(user));
+      if (Array.isArray(res)) return res;
+      if (Array.isArray(res?.orders)) return res.orders;
+      throw new Error("Monerium answered the order list in an unknown shape");
+    },
+    async profileName(user) {
+      const id = profileIdOf(user);
+      if (!id) return undefined;
+      return (await readProfile(user, id)).name;
+    },
+  };
+}
+
+export const moneriumReads: EnrolmentReads = moneriumReadsWith(moneriumClientFor as any, readMoneriumProfile);
+
+/** A read that does not answer in time fails, so one stuck call cannot hold
+ *  an account's checks, or the sweep, forever. */
+function inTime<T>(p: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer from Monerium in ${ENROLMENT.readTimeoutMs / 1000}s`)), ENROLMENT.readTimeoutMs);
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
 
 export type EnrolmentOutcome = "enrolled" | "waiting" | "mismatch" | "unreadable" | "no_code";
 
@@ -169,7 +192,7 @@ export async function checkEnrolment(userId: string, reads: EnrolmentReads = mon
   try {
     let orders: MoneriumOrderLike[];
     try {
-      orders = await reads.orders(user);
+      orders = await inTime(reads.orders(user));
     } catch (err) {
       console.warn(`enrolment: could not read orders for ${user.id}: ${describeCause(err)}`);
       return record("unreadable", "We could not read your payments at Monerium. If this stays, connect Monerium again.");
@@ -178,7 +201,7 @@ export async function checkEnrolment(userId: string, reads: EnrolmentReads = mon
     if (!found.length) return record("waiting", "No payment with your code has arrived yet. A bank transfer can take a working day.");
     let name: string | undefined;
     try {
-      name = await reads.profileName(user);
+      name = await inTime(reads.profileName(user));
     } catch (err) {
       console.warn(`enrolment: could not read the Monerium profile for ${user.id}: ${describeCause(err)}`);
     }
@@ -211,13 +234,21 @@ export async function checkEnrolment(userId: string, reads: EnrolmentReads = mon
 }
 
 /** Check every open code. Returns how many accounts were armed. */
-export async function sweepEnrolments(reads: EnrolmentReads = moneriumReads, now = new Date()): Promise<number> {
+export async function sweepEnrolments(reads: EnrolmentReads = moneriumReads, sweepNow?: Date): Promise<number> {
   if (!enrolmentAvailable()) return 0;
   let armed = 0;
   for (const u of [...store.users]) {
     const code = u.zoldenburgEnrolment?.code;
+    // Each account's own time: a slow sweep must not judge a later account
+    // by the clock at its start.
+    const now = sweepNow ?? new Date();
     if (!code || now.getTime() >= Date.parse(code.expiresAt)) continue;
-    if ((await checkEnrolment(u.id, reads, now)) === "enrolled") armed++;
+    // One account's failure is logged and the sweep goes on to the next.
+    try {
+      if ((await checkEnrolment(u.id, reads, now)) === "enrolled") armed++;
+    } catch (err) {
+      console.error(`enrolment: check failed for ${u.id}: ${describeCause(err)}`);
+    }
   }
   return armed;
 }

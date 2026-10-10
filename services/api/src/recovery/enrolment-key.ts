@@ -8,6 +8,7 @@ import { createHash, createHmac } from "node:crypto";
 import { RECOVERY } from "../config.js";
 import { normalizeIban } from "../sepa.js";
 import type { User } from "../store/types.js";
+import { zoldenburgGuardianAddress } from "./zoldenburg-guardian.js";
 
 export const enrolmentAvailable = () => Boolean(RECOVERY.ibanHmacKey);
 
@@ -21,12 +22,15 @@ export function bankAccountHmac(iban: string): string {
   return createHmac("sha256", RECOVERY.ibanHmacKey).update(`zold/recovery-iban/v1:${normalizeIban(iban)}`).digest("hex");
 }
 
-/** Armed: the guardian is active on this Safe, and enrolled under the key in
- *  use now. */
+/** Armed: Zoldenburg's current guardian is active on this Safe, and the
+ *  account enrolled under the key in use now. */
 export function zoldenburgArmed(user: User): boolean {
   const e = user.zoldenburgEnrolment;
+  const r = user.passkeySafe?.recovery;
+  const guardian = zoldenburgGuardianAddress();
   return Boolean(
-    enrolmentAvailable() && user.passkeySafe?.recovery?.status === "active" &&
+    enrolmentAvailable() && guardian && r?.status === "active" &&
+    r.guardianAddress.toLowerCase() === guardian.toLowerCase() &&
     e?.enrolledAt && e.bankAccountHmac && e.keyId === ibanKeyId(),
   );
 }

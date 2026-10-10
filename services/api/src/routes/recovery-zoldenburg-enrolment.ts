@@ -24,10 +24,13 @@ import {
 
 export interface ZoldenburgEnrolmentDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  /** The passkey step-up; server.ts leaves the default. */
+  verifyStepUp?: (user: User, body: unknown, res: express.Response) => Promise<boolean>;
 }
 
 export function createZoldenburgEnrolmentRouter(deps: ZoldenburgEnrolmentDeps) {
   const router = express.Router();
+  const verifyStepUp = deps.verifyStepUp ?? ((user: User, body: unknown, res: express.Response) => verifyPasskeyStepUp(user, body, res, "recovery.enrolment"));
   const wrap =
     (fn: (req: express.Request, res: express.Response) => Promise<unknown>) =>
     (req: express.Request, res: express.Response, next: express.NextFunction) =>
@@ -67,7 +70,7 @@ export function createZoldenburgEnrolmentRouter(deps: ZoldenburgEnrolmentDeps) {
       if (!user) return;
       const no = refusal(user);
       if (no) return res.status(no[0]).json({ error: no[2], code: no[1] });
-      if (!(await verifyPasskeyStepUp(user, req.body, res, "recovery.enrolment"))) return;
+      if (!(await verifyStepUp(user, req.body, res))) return;
       const { code, memo } = issueEnrolmentCode(user);
       const fresh = store.findUser(user.id)!;
       res.status(201).json({ ...enrolmentView(fresh), code, memo, payTo: { iban: fresh.iban, name: fresh.name } });
