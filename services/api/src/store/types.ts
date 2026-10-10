@@ -94,6 +94,19 @@ export interface User {
       guardianOpHash?: string;
       activatedAt?: string;
     };
+    /**
+     * Turnkey guardians (routes/recovery-turnkey.ts): an account in a Turnkey
+     * sub-org whose only root user is the person. `created` means the Turnkey
+     * wallet exists and nothing more; `active` only once the module's
+     * guardian list on chain includes `address`. No ID token, no email.
+     */
+    socialGuardians?: {
+      kind: "self-social";
+      address: `0x${string}`;
+      turnkeySubOrgId: string;
+      status: "created" | "active";
+      createdAt: string;
+    }[];
     createdAt: string;
     previousAddress?: `0x${string}`;
     /** Set once a recovery replaced the owner: the Safe keeps its address but

@@ -216,6 +216,14 @@ sample documents only.
   only to create sub-orgs and to start logins (`oauth_login`, `init_otp`,
   `verify_otp`, `otp_login`). We do not use Turnkey's Auth Proxy, so the
   invariant below sits in our code where a test can see it.
+- **Built (backend only, offline-tested, never called Turnkey):**
+  `config/turnkey.ts`, `wallet/turnkey.ts`, `routes/recovery-turnkey.ts`,
+  `turnkey:test`. `TURNKEY_GUARDIANS=1` switches it on and then needs both
+  secrets plus `TURNKEY_OAUTH_CLIENT_IDS` (our Google client id and Apple
+  services id, not secret); `capabilities().turnkeyGuardians` publishes it.
+  Google and Apple logins only; email OTP, the guardian pages, the browser
+  bundle, the passkey op that adds the guardian on chain and the recovery
+  signature route are not built.
 - **Every sub-org is created with exactly one root user, the person, at root
   quorum threshold 1, and no API key of ours.** One builder function makes
   the payload (`ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8`: `rootUsers[]` with

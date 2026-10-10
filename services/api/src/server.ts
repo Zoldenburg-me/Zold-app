@@ -47,6 +47,7 @@ import { createGnosisPayRouter } from "./routes/gnosis-pay.js";
 import { formatReport, reconcile } from "./reconcile.js";
 import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
 import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./routes/recovery-zoldenburg.js";
+import { createTurnkeyGuardianRouter } from "./routes/recovery-turnkey.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
 import { createDocumentsRouter } from "./routes/documents.js";
 import { createSafeSignerRouter } from "./routes/safe-signers.js";
@@ -220,6 +221,9 @@ app.use("/api", createAdminRouter());
 // Zoldenburg as guardian: the owner opts in, asks after losing the passkey,
 // and an operator signs from a hardware wallet (admin console or Safe Cover).
 app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession }));
+// Turnkey guardians: the user's own Google or Apple login as a guardian
+// wallet. 404 on every route until TURNKEY_GUARDIANS=1.
+app.use("/api", createTurnkeyGuardianRouter({ requireUserSession }));
 // Sessions and passkeys: the WebAuthn ceremonies, and the passkey Safe whose
 // owner those credentials are.
 app.use("/api", createAuthRouter({ requireUserSession }));
