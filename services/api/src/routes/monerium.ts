@@ -47,7 +47,6 @@ import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
 import { normalizeIban } from "../sepa.js";
 import { confirmedMoves, mayApproveOnIban, releaseIbanFromOtherUsers } from "../adapters/monerium-sandbox.js";
 import {
-  encryptToken,
   forgetUserClient,
   hasOwnMoneriumCredentials,
   moneriumAccessToken,
@@ -57,6 +56,8 @@ import {
   validateApiKeyInput,
   verifyApiKeys,
 } from "../adapters/monerium-connection.js";
+import { dataEncryptionProblem } from "../config/data-keys.js";
+import { SECRETS } from "../stored-secrets.js";
 import {
   exchangeAuthorizationCode,
   LINK_MESSAGE,
@@ -94,12 +95,11 @@ function pkceChallenge(verifier: string) {
 }
 
 /*
- * Monerium token handling — encryption at rest, OAuth refresh, the app client
- * and the "whose credentials act for this user" decision — lives in
+ * Monerium token handling (OAuth refresh, the app client and the "whose
+ * credentials act for this user" decision) lives in
  * adapters/monerium-connection.ts, because the sandbox adapter's redeem and
- * deposit polling need the same answer as the routes below. Same AES-256-GCM
- * scheme as before (crypto-at-rest.ts, purpose `monerium`), so tokens written
- * by the previous in-file copy still decrypt.
+ * deposit polling need the same answer as the routes below. Tokens and API
+ * secrets are sealed through stored-secrets.ts, bound to the user row.
  */
 
 async function readMoneriumAccountSnapshot(user: User, accessToken?: string) {
@@ -326,8 +326,9 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (!moneriumOAuthEnabled()) {
         return res.status(503).json({ error: "Monerium OAuth client is not configured" });
       }
-      if (!MONERIUM.tokenEncryptionKey) {
-        return res.status(503).json({ error: "Monerium token encryption key is not configured" });
+      const keyProblem = dataEncryptionProblem();
+      if (keyProblem) {
+        return res.status(503).json({ error: `${keyProblem}, so Monerium tokens cannot be stored` });
       }
       if (!(await approvesMoneriumChange(user, req.body, res))) return;
       const state = randomBytes(24).toString("base64url");
@@ -490,8 +491,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           connectedAt: new Date().toISOString(),
           profileId,
           accountEmail: snapshot.accountEmail,
-          accessTokenEnc: encryptToken(token.access_token),
-          refreshTokenEnc: token.refresh_token ? encryptToken(token.refresh_token) : undefined,
+          accessTokenEnc: SECRETS.moneriumAccessToken.seal(user.id, token.access_token),
+          refreshTokenEnc: token.refresh_token ? SECRETS.moneriumRefreshToken.seal(user.id, token.refresh_token) : undefined,
           expiresAt: token.expires_in
             ? new Date(Date.now() + token.expires_in * 1000).toISOString()
             : undefined,
@@ -1060,7 +1061,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (!requireCapability(user, "monerium", res)) return;
       if (!moneriumApiKeysAvailable()) {
         return res.status(503).json({
-          error: "Monerium token encryption key is not configured — set MONERIUM_TOKEN_ENCRYPTION_KEY; API keys are never stored in plaintext",
+          error: `${dataEncryptionProblem()}; API keys are never stored in plaintext`,
         });
       }
       let input: ReturnType<typeof validateApiKeyInput>;
@@ -1147,7 +1148,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           profileId,
           apiKeys: {
             clientId: input.clientId,
-            clientSecretEnc: encryptToken(input.clientSecret),
+            clientSecretEnc: SECRETS.moneriumApiSecret.seal(user.id, input.clientSecret),
             baseUrl: MONERIUM.baseUrl,
             label: input.label,
             verifiedAt: now,

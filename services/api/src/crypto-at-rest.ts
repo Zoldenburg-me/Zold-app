@@ -24,7 +24,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 
 /** Named so a key is never accidentally shared across two kinds of secret. */
-export type EncryptionPurpose = "monerium" | "shopify" | "shopify-link" | "getmyinvoices";
+export type EncryptionPurpose = "monerium" | "monerium-api-secret" | "shopify" | "shopify-link" | "getmyinvoices";
 
 export class EncryptionUnavailableError extends Error {}
 
@@ -183,15 +183,17 @@ export function fieldKeyId(value: string): string {
 /**
  * Decrypt a stored value for one row and field: v2 under the key ring, v1
  * under the v1 secret. A v2 value moved from another row or field fails here.
+ * `v1Purpose` names the purpose a v1 value was written under, when the site
+ * has since moved to a purpose of its own.
  */
 export function openField(
   purpose: EncryptionPurpose,
   binding: FieldBinding,
   value: string,
-  keys: { keyring: Keyring | null; v1Secret: string },
+  keys: { keyring: Keyring | null; v1Secret: string; v1Purpose?: EncryptionPurpose },
 ): string {
   const keyId = fieldKeyId(value);
-  if (keyId === "v1") return decryptField(purpose, keys.v1Secret, value);
+  if (keyId === "v1") return decryptField(keys.v1Purpose ?? purpose, keys.v1Secret, value);
   if (!keys.keyring) {
     throw new EncryptionUnavailableError(`no data encryption key is configured (DATA_ENCRYPTION_KEYS), so ${purpose} data cannot be read`);
   }

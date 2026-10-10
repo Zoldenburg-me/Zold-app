@@ -484,7 +484,9 @@ try {
     const db = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
     assert.ok(!db.includes(ACCESS_TOKEN), "access token found in plaintext in db.json");
     assert.ok(!db.includes(REFRESH_TOKEN), "refresh token found in plaintext in db.json");
-    assert.ok(db.includes("accessTokenEnc"), "expected an encrypted access token field");
+    const m = JSON.parse(db).users.find((u: any) => u.id === userId).monerium;
+    assert.match(m.accessTokenEnc, /^v2\.t1\./, "the access token is v2 under the active key, bound to the user row");
+    assert.match(m.refreshTokenEnc, /^v2\.t1\./, "the refresh token is v2 too");
   });
 
   await t("the API never returns Monerium tokens to the client", async () => {

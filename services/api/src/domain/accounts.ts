@@ -16,7 +16,7 @@
  * boolean.
  */
 
-import { MONERIUM, moneriumOAuthEnabled } from "../config.js";
+import { dataEncryptionProblem } from "../config/data-keys.js";
 import type {
   Account,
   AccountIdentifier,
@@ -85,10 +85,11 @@ const CURRENCIES: CurrencyDefinition[] = [
     ],
     provider: "monerium",
     tokenised: true,
-    // Open when a user can bring a Monerium account: by OAuth (an OAuth client
-    // id) or with their own API keys (needs the encryption key that stores the
-    // secret). App-level credentials alone open nothing for a user any more.
-    mode: () => (moneriumOAuthEnabled() || Boolean(MONERIUM.tokenEncryptionKey) ? "live" : false),
+    // Open when a user can bring a Monerium account. Either way (OAuth tokens
+    // or their own API keys) the credential is stored under the data key
+    // ring, so without it there is no way in; app-level credentials alone
+    // open nothing for a user.
+    mode: () => (dataEncryptionProblem() === null ? "live" : false),
     token: {
       symbol: "EURe",
       issuer: "Monerium EMI ehf — an e-money institution licensed by the Central Bank of Iceland",
@@ -106,7 +107,7 @@ const CURRENCIES: CurrencyDefinition[] = [
         "e-money token under MiCA, not a collateral-backed peg. That difference is the reason this " +
         "column exists: it is what separates EURe from ZCHF, and neither label tells you on its own.",
     },
-    needs: "a Monerium connection path (MONERIUM_OAUTH_CLIENT_ID and/or MONERIUM_TOKEN_ENCRYPTION_KEY)",
+    needs: "a data encryption key (DATA_ENCRYPTION_KEYS) to store Monerium credentials",
   },
   {
     code: "USD",

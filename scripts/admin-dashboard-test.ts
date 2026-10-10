@@ -30,7 +30,7 @@ process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "admin-test-encryption-key-012345678
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
-const { encryptToken } = await import("../services/api/src/adapters/monerium-connection.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { MONERIUM } = await import("../services/api/src/config.js");
 
 initStore();
@@ -45,8 +45,8 @@ store.addUser({
   address: safe("a"), createdAt: now, passkey: { credentialId: "c1", rpId: "localhost", createdAt: now } as any,
   passkeySafe: { address: safe("a"), status: "active", threshold: 1, passkeyPublicKey: pk,
     recoveryChoice: { choice: "zoldenburg", at: now }, recovery: { moduleAddress: safe("9"), guardianAddress: safe("8"), threshold: 1, status: "active" } },
-  monerium: { connectedAt: now, method: "oauth", profileId: "prof-live", accessTokenEnc: encryptToken("user-oauth-token"),
-    refreshTokenEnc: encryptToken("user-refresh-token"), profiles: [{ id: "prof-live", kind: "personal", state: "approved" }] },
+  monerium: { connectedAt: now, method: "oauth", profileId: "prof-live", accessTokenEnc: SECRETS.moneriumAccessToken.seal("u_live", "user-oauth-token"),
+    refreshTokenEnc: SECRETS.moneriumRefreshToken.seal("u_live", "user-refresh-token"), profiles: [{ id: "prof-live", kind: "personal", state: "approved" }] },
 } as any);
 // Names a method but holds no token: a live read must refuse, not fall back.
 store.addUser({
