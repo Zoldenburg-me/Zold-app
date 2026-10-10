@@ -38,6 +38,10 @@
   <div id="offline-bar" class="hidden" role="status" aria-live="polite">You’re offline. Balances and quotes can’t be refreshed.</div>
   <!-- Screen-reader announcements (announce() in app/core.js). -->
   <div id="sr-announce" class="sr-only" role="status" aria-live="polite"></div>
+  <!-- A recovery under way on this account, or a check that failed: above
+       every app screen, the redesigned and the older ones (app/phone-home.js
+       phRecBarSync). Empty and hidden otherwise. -->
+  <div id="ph-recbar" class="z-recbar" hidden></div>
 
   <!-- ============ sign-in and onboarding ============
        One screen at a time, rendered by app/onboarding.js from the account's
