@@ -58,7 +58,11 @@ export function enrolmentFor(token: unknown): Enrolment | { refused: string } {
   const a = Buffer.from(hash(token), "hex");
   const b = Buffer.from(String(e.tokenHash ?? ""), "hex");
   if (a.length !== b.length || !timingSafeEqual(a, b)) return { refused: "that enrolment link is not the open one" };
-  if (!(Date.parse(e.expiresAt) > Date.now())) return { refused: "that enrolment link has expired: start a new one on the host" };
+  if (!(Date.parse(e.expiresAt) > Date.now())) {
+    // It names a person: an expired enrolment is not kept.
+    endEnrolment();
+    return { refused: "that enrolment link has expired: start a new one on the host" };
+  }
   return e;
 }
 

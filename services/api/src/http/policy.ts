@@ -49,7 +49,12 @@ export const adminHostPolicy: express.RequestHandler = (req, res, next) => {
   // The static handler decodes and resolves a path after this check, so a
   // path that could change under decoding (an escape, a dot segment, a
   // backslash, an empty segment) is refused, not matched.
-  if (!/[%\\]|\.\.|\/\//.test(req.path) && ADMIN_HOST_PATHS.test(req.path)) return next();
+  if (!/[%\\]|\.\.|\/\//.test(req.path) && ADMIN_HOST_PATHS.test(req.path)) {
+    // The dashboard has no inline script, so its host allows none: an
+    // injected <script> cannot run where the operator's session lives.
+    res.setHeader("content-security-policy", ADMIN_CONTENT_SECURITY_POLICY);
+    return next();
+  }
   res.status(404).type("text/plain").send("not found");
 };
 
@@ -83,6 +88,10 @@ export const CONTENT_SECURITY_POLICY = [
   "form-action 'self'",
   "frame-ancestors 'none'",
 ].join("; ");
+
+/** The admin host's policy: the site's, with inline scripts refused. The
+ *  dashboard loads every script from a file. */
+export const ADMIN_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace("script-src 'self' 'unsafe-inline'", "script-src 'self'");
 
 /**
  * HTTPS only, on every subdomain. Production only: a laptop on
