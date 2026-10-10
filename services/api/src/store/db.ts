@@ -9,7 +9,7 @@
  * The migrations run at load and are idempotent, each keyed on the row it
  * would create, because this holds a money ledger.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { IS_PRODUCTION, ROOT } from "../config.js";
@@ -376,8 +376,10 @@ export function persist() {
     return;
   }
   const tmp = DB_PATH + ".tmp";
-  // A fresh file every write, so the mode always applies: owner-only.
+  // Owner-only. The chmod covers a .tmp left by a crash, whose old mode
+  // writeFileSync's `mode` would keep.
   writeFileSync(tmp, JSON.stringify(db), { mode: 0o600 });
+  chmodSync(tmp, 0o600);
   renameSync(tmp, DB_PATH);
 }
 

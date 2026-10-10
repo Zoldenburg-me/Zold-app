@@ -11,7 +11,8 @@ if [[ -x "$AGE" ]]; then
   exit 0
 fi
 
-read -r asset sha <<<"$(age_asset)"
+pinned="$(age_asset)" || exit 1
+read -r asset sha <<<"$pinned"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 

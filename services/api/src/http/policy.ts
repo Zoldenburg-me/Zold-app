@@ -63,9 +63,10 @@ export const CONTENT_SECURITY_POLICY = [
  * HTTPS only, on every subdomain. Production only: a laptop on
  * http://localhost must not pin itself to HTTPS.
  *
- * Five minutes while every subdomain of the production host is confirmed to
- * serve HTTPS: a browser remembers this header for max-age, and a rollback
- * cannot take it back. Then two years (63072000), then preload.
+ * Five minutes on purpose: a browser keeps this header for max-age and a
+ * rollback cannot take it back, so it stays short until every subdomain of
+ * the production host is confirmed to serve HTTPS (docs/security-hardening.md,
+ * Phase 0).
  */
 export const STRICT_TRANSPORT_SECURITY = "max-age=300; includeSubDomains";
 
