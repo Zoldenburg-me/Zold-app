@@ -234,9 +234,19 @@ export let recoveryUnknown = false;
  *  own company only (nav.js). A recorded "declined" is said on Access only. */
 export let recoveryNone = false;
 export async function readRecovery() {
-  if (!me?.id || me.passkeySafe?.status !== "active") return;
-  const [c, z] = await readGuardians(me.id, api);
-  const r = recoveryStatus(c, z);
+  if (!me?.id || me.passkeySafe?.status !== "active") {
+    // No Safe to recover: nothing from an earlier read stays up.
+    recoveryPending = recoveryUnknown = recoveryNone = false;
+    return;
+  }
+  let r;
+  try {
+    const [c, z] = await readGuardians(me.id, api);
+    r = recoveryStatus(c, z);
+  } catch {
+    // An answer of an unexpected shape is a check that failed, never none.
+    r = { status: "unknown" };
+  }
   recoveryPending = r.status === "pending";
   recoveryUnknown = r.status === "unknown";
   recoveryNone = r.status === "none" && r.offered && !r.declined && isCompanyLogin(me);
