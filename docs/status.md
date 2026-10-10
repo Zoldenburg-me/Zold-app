@@ -110,10 +110,15 @@ Say this plainly rather than letting the surface imply otherwise:
   not been touched. Recovery
   has never run on an imported Safe, so the screens do not offer it there;
   the API does not refuse it.
-- **One mail transport exists, and it is off.** `adapters/mailer.ts` sends
-  only email verification codes over SMTP, and only with
-  `EMAIL_VERIFICATION=1` (docs/email-verification.md). It has run only against
-  a fake SMTP server in `email:test`; no real mail has been sent. Invitations,
+- **One mail transport exists, on zoldhq.com only.** `adapters/mailer.ts`
+  sends only email verification codes over SMTP, with `EMAIL_VERIFICATION=1`
+  (docs/email-verification.md). zoldhq.com sends through Brevo's relay
+  (`smtp-relay.brevo.com:587`) as `no-reply@zoldhq.com`, with Brevo's DKIM on
+  zoldhq.com and Brevo's IP allowlist on. One real code has been delivered and
+  confirmed (2026-10-10, a new test account, to a duck.com forwarding
+  address); the request that first sent it came back as a gateway 502 with no
+  body, and the cause was not found. No processing agreement with Brevo is
+  recorded here yet, and Brevo is not in the privacy notice. Invitations,
   invoice links and recovery emails are still never sent by Zold; routes
   return the token to the caller and say so. Do not add a "we emailed them"
   string for those without routing them through the mailer.
