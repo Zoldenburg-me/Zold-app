@@ -61,6 +61,13 @@ function phChecklist(u) {
   // answer, and an unset recovery is one line the user may close. Security
   // keeps saying it is off.
   const declined = u.passkeySafe?.recoveryChoice?.choice === "declined";
+  // Zoldenburg added but not armed: the operator may not sign for it until
+  // 1 € arrives from the user's bank (recovery.js zoldEnrolHtml).
+  const zoldUnarmed = safe.recovery?.status === "active" && caps.zoldenburgEnrolment && !u.zoldenburgArmed;
+  if (zoldUnarmed && !open && !phBannerHidden(phEnrolBannerKey(u))) {
+    return `<div class="z-banner" role="note">${Z.icon("shield")}<span>Finish Zoldenburg recovery: send 1 € from your bank. Until then Zoldenburg cannot recover this account. <a href="#recovery-settings">Finish</a></span>
+      <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-rec-x" data-hide-key="${esc(phEnrolBannerKey(u))}" aria-label="Hide this">${Z.icon("close")}</button></div>`;
+  }
   if (!recoveryOn && (recoveryOffered || declined) && !open && !phRecoveryBannerHidden(u)) {
     return `<div class="z-banner" role="note">${Z.icon("shield")}<span>Recovery isn’t set up. If you lose this phone, no one can get you back in. <a href="#recovery-settings">Set up</a></span>
       <button type="button" class="z-iconbtn z-iconbtn--bare" id="ph-rec-x" aria-label="Hide this">${Z.icon("close")}</button></div>`;
@@ -69,9 +76,13 @@ function phChecklist(u) {
 }
 
 const phRecoveryBannerKey = (u) => `zold-hide-recovery-banner:${u.id}`;
-function phRecoveryBannerHidden(u) {
-  try { return localStorage.getItem(phRecoveryBannerKey(u)) === "1"; } catch { return false; }
+/* Per time the guardian was added: hiding the banner once does not hide it
+   for a later re-add, which needs a new 1 €. */
+const phEnrolBannerKey = (u) => `zold-hide-enrol-banner:${u.id}:${u.passkeySafe?.recovery?.enabledAt || ""}`;
+function phBannerHidden(key) {
+  try { return localStorage.getItem(key) === "1"; } catch { return false; }
 }
+const phRecoveryBannerHidden = (u) => phBannerHidden(phRecoveryBannerKey(u));
 
 /* A set-up card: a row per open item; the finished ones are a count in the
    head, never rows. An item with an `action` ({ id } for a button, { href }
@@ -98,7 +109,7 @@ PH.home = {
   title: "Home",
   tab: "home",
   live: () => JSON.stringify([user?.balanceEur, user?.iban, user?.kycStatus, user?.monerium?.connectedAt, user?.passkeySafe?.status,
-    user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig()]),
+    user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig()]),
   html() {
     const u = user || {};
     const name = ownAccountName(u) || "Account";
@@ -149,7 +160,7 @@ PH.home = {
     if (emailBtn) emailBtn.onclick = () => enterEmailConfirm();
     const recX = root.querySelector("#ph-rec-x");
     if (recX) recX.onclick = () => {
-      try { localStorage.setItem(phRecoveryBannerKey(user), "1"); } catch { /* shown again next visit */ }
+      try { localStorage.setItem(recX.dataset.hideKey || phRecoveryBannerKey(user), "1"); } catch { /* shown again next visit */ }
       recX.closest(".z-banner")?.remove();
     };
     phBindRetry(root);
