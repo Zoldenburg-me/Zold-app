@@ -27,6 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PUBLIC_URL } from "../config.js";
+import { GUARDIAN_PAGE_CSP } from "../http/policy.js";
 import { displayCode, isRequestCode, normaliseCode } from "../payment-requests.js";
 
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../public");
@@ -115,6 +116,7 @@ export function createPageRouter() {
       "Disallow: /r/",
       "Disallow: /v/",
       "Disallow: /invoice/",
+      "Disallow: /guardian",
     ];
     if (base) lines.push("", `Sitemap: ${base}/sitemap.xml`);
     res.type("text/plain").send(lines.join("\n") + "\n");
@@ -149,6 +151,14 @@ export function createPageRouter() {
   /** A payment page, and a payment request against it. */
   // The testnet faucet page; it draws "no faucet" itself where there is none.
   router.get("/faucet", page("faucet.html"));
+  /** Google or Apple login as a recovery guardian: its own ES-module page and
+   *  a stricter CSP, never cached (a login comes back to it). */
+  router.get("/guardian.html", (_req, res) => res.redirect(301, "/guardian"));
+  router.get("/guardian", (_req, res) => {
+    res.setHeader("content-security-policy", GUARDIAN_PAGE_CSP);
+    res.setHeader("cache-control", "no-store");
+    res.sendFile(path.join(pub, "guardian.html"));
+  });
   router.get("/pay/:handle", page("pay.html"));
   router.get("/pay/:handle/:code", tidyRequestCode, page("pay-request.html"));
   /** A shared receipt. */

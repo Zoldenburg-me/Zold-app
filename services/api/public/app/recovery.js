@@ -53,7 +53,7 @@ function zoldWarnHtml() {
 async function renderRecoveryScreen() {
   const el = $("m-rc-body");
   const row = (k, v) => `<div class="m-row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
-  if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery) {
+  if (!caps.emailSmsRecovery && !caps.zoldenburgRecovery && !caps.turnkeyGuardians) {
     el.innerHTML = `<div class="m-rows">${row("Status", "Unavailable")}</div>
       <div class="m-lede" style="font-size:13px;margin-top:16px">This deployment has no recovery guardian configured, so nothing here can be promised. Nothing is set up on your account.</div>
       <div style="margin-top:16px">${zoldWarnHtml()}</div>`;
@@ -70,9 +70,19 @@ async function renderRecoveryScreen() {
       <div style="margin-top:16px">${zoldWarnHtml()}</div>`;
     return;
   }
-  el.innerHTML = `<div id="m-rz"></div><div id="m-rc-candide"></div><div class="m-err hidden" role="alert" id="m-rc-err" style="margin-top:12px"></div>`;
+  el.innerHTML = `<div id="m-rz"></div><div id="m-rc-candide"></div><div id="m-rc-turnkey"></div><div class="m-err hidden" role="alert" id="m-rc-err" style="margin-top:12px"></div>`;
   if (caps.zoldenburgRecovery) await renderZoldenburgSection($("m-rz"));
+  if (caps.turnkeyGuardians) renderTurnkeySection($("m-rc-turnkey"));
   if (caps.emailSmsRecovery) await renderCandideSection($("m-rc-candide"));
+}
+
+/** Google or Apple login as a guardian: set up on its own page (/guardian),
+ *  which says plainly that recovering with it is not built yet. */
+function renderTurnkeySection(el) {
+  el.innerHTML = `
+    <div class="m-seclabel" style="margin-top:24px">Your Google or Apple login <span class="m-tag soon">Not yet run</span></div>
+    <div class="m-lede" style="font-size:13px">Make your own Google or Apple login a guardian of this account. Built, not yet run on a live deployment. Recovering with it is not built yet, so it cannot recover this account until then.</div>
+    <a class="m-cta" href="/guardian" style="margin-top:12px;display:inline-flex">Set up on the guardian page</a>`;
 }
 
 let zoldScreen = null; // last GET /recovery/zoldenburg

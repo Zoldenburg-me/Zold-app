@@ -106,6 +106,8 @@ export interface User {
       turnkeySubOrgId: string;
       status: "created" | "active";
       createdAt: string;
+      /** When the module was seen listing `address`. */
+      activeAt?: string;
     }[];
     createdAt: string;
     previousAddress?: `0x${string}`;
