@@ -6,6 +6,7 @@
  * Extracted from server.ts so /api/health is not the reason this lives in a
  * 3,800-line file.
  */
+import { TURNKEY } from "./config.js";
 import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
@@ -59,6 +60,9 @@ export function capabilities() {
      *  (a Turnkey wallet)? Off until TURNKEY_GUARDIANS=1, which waits for
      *  the recovery alerts; no screen offers it yet. */
     turnkeyGuardians: turnkeyGuardiansEnabled(),
+    /** The OAuth client ids /guardian logs in with (not secrets: every login
+     *  URL carries them), or null while the switch is off. */
+    turnkeyLogins: turnkeyGuardiansEnabled() ? { google: TURNKEY.googleClientId, apple: TURNKEY.appleClientId } : null,
     /** May a new company login bring in an existing Safe instead of
      *  deploying one (routes/safe-import.ts)? Needs a real chain: under the
      *  local harness both import routes answer NO_CHAIN. Whether one account

@@ -225,14 +225,21 @@ sample documents only.
   only to create sub-orgs and to start logins (`oauth_login`, `init_otp`,
   `verify_otp`, `otp_login`). We do not use Turnkey's Auth Proxy, so the
   invariant below sits in our code where a test can see it.
-- **Built (backend only, offline-tested, never called Turnkey):**
+- **Built (offline-tested, never called Turnkey, Google or Apple):**
   `config/turnkey.ts`, `wallet/turnkey.ts`, `routes/recovery-turnkey.ts`,
-  `turnkey:test`. `TURNKEY_GUARDIANS=1` switches it on and then needs both
-  secrets plus `TURNKEY_OAUTH_CLIENT_IDS` (our Google client id and Apple
-  services id, not secret); `capabilities().turnkeyGuardians` publishes it.
-  Google and Apple logins only; email OTP, the guardian pages, the browser
-  bundle, the passkey op that adds the guardian on chain and the recovery
-  signature route are not built.
+  the `/guardian` page (`public/guardian.html`, `public/guardian/*.js`) and
+  `vendor/turnkey.js`; `turnkey:test` and `turnkey-page:test`.
+  `TURNKEY_GUARDIANS=1` switches it on and then needs both secrets plus
+  `TURNKEY_OAUTH_CLIENT_IDS`: our Google web client id (ends in
+  `.apps.googleusercontent.com`) and Apple services id, not secret, both
+  with `https://<host>/guardian` registered as the redirect URI.
+  `capabilities()` publishes `turnkeyGuardians` and `turnkeyLogins`.
+  Adding works end to end in code: login, sub-org, then the passkey op
+  `addGuardianWithThreshold(address, 1)`; the row turns `active` only when
+  the module lists the address. While any other guardian is on the Safe the
+  add is refused (`OTHER_GUARDIAN`), because threshold 2 with no route that
+  collects two signatures would leave Zoldenburg unable to recover alone.
+  Not built: email OTP, the approval page, signature collection and relay.
 - **Every sub-org is created with exactly one root user, the person, at root
   quorum threshold 1, and no API key of ours.** One builder function makes
   the payload (`ACTIVITY_TYPE_CREATE_SUB_ORGANIZATION_V8`: `rootUsers[]` with
@@ -280,16 +287,21 @@ sample documents only.
   `createMultiConfirmRecoveryMetaTransaction` sorts the pairs that way and
   throws on a duplicate signer, so collected signatures go through it
   unchanged.
-- **Frontend (checked 2026-10-10):** Turnkey publishes no prebuilt browser
-  bundle. Every `@turnkey/*` package ships unbundled CJS and ESM with bare
-  imports. We build one pinned ES module with the esbuild already in the
-  toolchain, from `@turnkey/http` and `@turnkey/indexed-db-stamper` only
-  (`@turnkey/core` pulls in viem, ethers and WalletConnect), to
-  `public/vendor/turnkey.js`. It is imported by the guardian pages, which are
-  ES modules like `device.js` (which imports `vendor/secp256k1.js`), so the
-  classic `app/*.js` scripts never load it. The login keeps an unextractable
-  P-256 session key in IndexedDB (`crypto.subtle.generateKey`). The bundle's
-  SHA-256 and the package versions are recorded here when it is built.
+- **Frontend:** Turnkey publishes no prebuilt browser bundle; every
+  `@turnkey/*` package ships unbundled CJS and ESM with bare imports.
+  `public/vendor/turnkey.js` is `@turnkey/indexed-db-stamper` 1.3.11 alone,
+  bundled as an ES module by esbuild 0.28.1 (`npm run vendor:turnkey`,
+  37,373 bytes, sha256
+  `b90a8c4816add1e5cb4b8b5d343d375f29ae5418e5f8c52ba98aa29a0c6456d6`);
+  `turnkey-page:test` rebuilds it and fails on any difference.
+  `@turnkey/http` is not bundled: it pulls in X.509, ASN.1 and a DI container
+  (636 KB) for one POST, so the page sends its stamped `sign_raw_payload`
+  itself. The key is an unextractable P-256 key in IndexedDB
+  (`crypto.subtle.generateKey`). Only `/guardian` loads it: an ES-module page
+  with its own CSP (no inline script, `GUARDIAN_PAGE_CSP`), so the classic
+  `app/*.js` scripts never do. Logins are full-page redirects that return
+  the ID token in the URL fragment (Google `id_token`, Apple `code id_token`
+  with no scope), with a one-time state in sessionStorage.
 - **Residual risk, stated in the UI copy and here:** while a guardian is
   logged in, our own served JavaScript holds their session key. A compromised
   zoldhq.com could make a logged-in guardian sign. The threshold, the grace

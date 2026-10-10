@@ -77,10 +77,12 @@ Say this plainly rather than letting the surface imply otherwise:
   Safe. `recovery:test` runs the flow under the harness only.
 - **No Candide recovery service has been called** (stub only); no on-chain
   guardian add, execute or finalise, no real OTP.
-- **Turnkey has never been called.** The guardian backend
-  (`routes/recovery-turnkey.ts`) runs only against a stub in `turnkey:test`;
-  no sub-org, login or signature exists, no screen offers it, and
-  `TURNKEY_GUARDIANS` is off. No DPA with Turnkey is signed.
+- **Turnkey has never been called, and no Google or Apple login has come
+  back to `/guardian`.** The guardian routes and page run only against stubs
+  (`turnkey:test`, `turnkey-page:test`); no sub-org, login, guardian add or
+  signature exists. `TURNKEY_GUARDIANS` is off, so neither the page nor the
+  Security → Recovery entry shows. Recovering with such a guardian is not
+  built. No DPA with Turnkey is signed.
 - **No Candide forwarder has forwarded a deposit.** Candide routes nothing on
   testnets, so zoldhq.com's payment pages show the Safe itself; the
   multi-chain token list, minimums and TTL renewal run only against a stub

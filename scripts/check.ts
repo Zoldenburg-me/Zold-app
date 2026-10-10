@@ -25,6 +25,7 @@ const scripts = [
   "recovery:test",
   "recovery:candide:test",
   "turnkey:test",
+  "turnkey-page:test",
   "documents:test",
   "paylinks:test",
   "shopify:test",
