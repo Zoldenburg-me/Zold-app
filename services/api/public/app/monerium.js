@@ -400,6 +400,8 @@ async function refresh() {
   // payments are re-read rather than updated optimistically.
   await phLoadDeposits();
   phRefresh();
+  // At most once a minute: a recovery under way shows on every screen.
+  phRecoveryCheck().catch(() => { /* the next tick asks again */ });
 }
 
 function switchView(view) {

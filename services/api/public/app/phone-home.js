@@ -170,9 +170,48 @@ let phRecDone = false;       // this phone just cancelled it
 const PH_REC_SEEN = "zold-recovery-seen";
 const phRecSig = (r) => (r?.chain ? `chain:${r.chain.executeAfter}` : r?.request ? `req:${r.request.id}` : "");
 
-/* Read both guardians, at most once a minute. Home calls this, and a company
-   login on its way to /business (app/phone.js phCompanyLeave); a recovery
-   found here opens the alert, unless "It was me" hid that same one. */
+/* Has "It was me" hidden this very recovery in this tab? */
+function phRecSeen(r) {
+  let seen = "";
+  try { seen = sessionStorage.getItem(PH_REC_SEEN) || ""; } catch { /* no storage: always show */ }
+  return Boolean(phRecSig(r)) && seen === phRecSig(r);
+}
+
+/* The strip on top of every app screen while a recovery is under way, or
+   while the check failed: the grace period plus the owner's cancel is the
+   only defence, so the warning does not wait for the person to open Home.
+   Not on the alert screen itself, and not for a recovery "It was me" hid. */
+function phRecBar() {
+  if (!phRec || phRoute?.name === "recovery-alert") return "";
+  const go = (label, variant) => `<a class="z-btn z-btn--${variant} z-btn--sm" href="#recovery-alert">${esc(label)}</a>`;
+  if (phRec.failed) {
+    return `<div class="z-banner" role="note">${Z.icon("help")}<span><b>We couldn’t check for a recovery.</b> If someone started one, it would replace your passkey.</span>${go("Check now", "secondary")}</div>`;
+  }
+  if (!(phRec.chain || phRec.request) || phRecSeen(phRec)) return "";
+  const text = phRec.chain
+    ? `<b>Someone is moving your account to a new phone.</b> It completes on ${esc(rcWhenText(new Date(Number(phRec.chain.executeAfter) * 1000)))} unless you cancel.`
+    : "<b>Someone asked to move your account to a new phone.</b> Nothing has been signed yet.";
+  return `<div class="z-banner z-banner--alert" role="note">${Z.icon("gpp_maybe")}<span>${text}</span>${go("Review", "primary")}</div>`;
+}
+
+/* Redraw only the strip, so a check never closes a sheet or eats typing.
+   A newly shown warning is announced once, not on every screen change. */
+function phRecBarSync() {
+  const el = $("ph-recbar");
+  if (!el) return;
+  const html = phRecBar();
+  if (el.dataset.sig === html) return;
+  const was = el.dataset.sig;
+  el.dataset.sig = html;
+  el.innerHTML = html;
+  if (html && !was) Z.announce(el.textContent);
+}
+
+/* Read both guardians, at most once a minute. The account poll calls this
+   (app/monerium.js refresh), as do Home, a tab coming back into view, and a
+   company login on its way to /business (app/phone.js phCompanyLeave). A
+   recovery found here shows the strip on every screen, and opens the alert
+   from Home, unless "It was me" hid that same one. */
 async function phRecoveryCheck({ force = false } = {}) {
   const here = () => phRoute?.name === "recovery-alert";
   // No guardian can run a recovery here: there is nothing to find.
@@ -195,6 +234,7 @@ async function phRecoveryCheck({ force = false } = {}) {
   const unread = c === null || z === null || (z?.active && z.onChainError) || (c?.guardianStatus === "active" && c.onChain?.error);
   if (!chain && !request && unread) {
     phRec = { failed: true };
+    phRecBarSync();
     if (here()) phRender();
     return;
   }
@@ -205,12 +245,16 @@ async function phRecoveryCheck({ force = false } = {}) {
     : reqs.some((r) => r.status === "GRACE_PERIOD") ? "Zoldenburg ID check"
       : c?.guardianStatus === "active" && !z?.active ? codes : null;
   phRec = chain || request ? { chain, request, method } : { none: true };
-  if (phRec.none) return phRoute?.name === "recovery-alert" && phRender();
-  let seen = "";
-  try { seen = sessionStorage.getItem(PH_REC_SEEN) || ""; } catch { /* no storage: always show */ }
-  if (phRoute?.name === "recovery-alert") return phRender();
-  if (phRoute?.name === "home" && seen !== phRecSig(phRec)) phGo("recovery-alert");
+  phRecBarSync();
+  if (phRec.none) return here() && phRender();
+  if (here()) return phRender();
+  if (phRoute?.name === "home" && !phRecSeen(phRec)) phGo("recovery-alert");
 }
+
+/* Back on the tab after a while away: ask now, not at the next minute. */
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && phRoute && !$("phone")?.hidden) phRecoveryCheck({ force: Date.now() - phRecReadAt > 15000 }).catch(() => { /* the poll asks again */ });
+});
 
 PH["recovery-alert"] = {
   title: "Recovery under way",
@@ -276,6 +320,7 @@ PH["recovery-alert"] = {
     };
     const mine = root.querySelector("#ph-rec-mine");
     if (mine) mine.onclick = () => {
+      // Hides the alert and the strip for this recovery, in this tab only.
       try { sessionStorage.setItem(PH_REC_SEEN, phRecSig(phRec)); } catch { /* shows again next time */ }
       phGo("home", null, { replace: true });
     };
