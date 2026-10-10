@@ -189,6 +189,29 @@ await t("five sends an hour at most", async () => {
   assert.equal(r.body.code, "EMAIL_CODE_LIMIT");
 });
 
+await t("the wait and the hourly cap count every account on the address, not each one alone", async () => {
+  const ids = ["v1", "v2", "v3"];
+  mk("v1", "victim@example.test");
+  mk("v2", "Victim@Example.test");
+  mk("v3", " victim@example.test ");
+  const backAll = () => ids.forEach((id) => store.findUser(id)!.emailCode && back(id, 61_000));
+  const before = inbox.length;
+  assert.equal((await post("/users/v1/email/code", "v1")).status, 200);
+  const r2 = await post("/users/v2/email/code", "v2");
+  assert.equal(r2.status, 429, "a second account on the same address waits out the same minute");
+  assert.equal(r2.body.code, "EMAIL_CODE_WAIT");
+  assert.equal((await post("/users/v3/email/code", "v3")).status, 429);
+  assert.equal(inbox.length, before + 1, "one mail to the address in the minute");
+  for (const id of ["v2", "v3", "v1", "v2"]) {
+    backAll();
+    assert.equal((await post(`/users/${id}/email/code`, id)).status, 200, `${id} after the wait`);
+  }
+  backAll();
+  const r6 = await post("/users/v3/email/code", "v3");
+  assert.equal(r6.body.code, "EMAIL_CODE_LIMIT", "five mails an hour to one address, whichever accounts asked");
+  assert.equal(inbox.length, before + 5);
+});
+
 await t("signup: with verification on, only a confirmed email holds the address", () => {
   assert.equal(emailHeldBy([{ passkey: {} }], true), false, "an unconfirmed account cannot lock the owner out");
   assert.equal(emailHeldBy([{ passkey: {}, emailVerifiedAt: "x" }], true), true);
