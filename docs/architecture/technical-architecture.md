@@ -959,7 +959,9 @@ flowchart LR
   from before that rule. A list that has never loaded holds the window;
   nothing is called unlisted because a host was down. A wallet whose
   organisation's books reach `CEILINGS.ledgerRowsPerOrg` pauses with its
-  cursor kept.
+  cursor kept. One person owns at most `CEILINGS.businessOrgsPerUser` (20)
+  business orgs (`POST /orgs` answers 409 `LIMIT_REACHED`), so the per-org
+  ceilings bound the file rather than one org.
 - **Valuation** (`wallet-sync/valuation.ts`): a USD stablecoin recognised by
   contract address (`USD_STABLECOINS`) is 1 USD; anything else is DefiLlama's
   USD price by chain and address at the block time, refused below

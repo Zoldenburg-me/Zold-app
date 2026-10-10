@@ -6,6 +6,9 @@
  * every request for everyone. Reaching one answers 409 LIMIT_REACHED.
  */
 export const CEILINGS = {
+  /** Business orgs one person owns. Every per-org ceiling below bounds one
+   *  org; this keeps one person from multiplying them. */
+  businessOrgsPerUser: 20,
   contactsPerOrg: 5_000,
   openDraftsPerOrg: 500,
   linesPerDraft: 200,
