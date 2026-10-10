@@ -32,7 +32,9 @@ export async function sendVerificationCode(to: string, code: string): Promise<vo
   await smtp().sendMail({
     from: EMAIL_VERIFICATION.smtp.from,
     to,
-    subject: `Your Zold code: ${code}`,
+    // The code stays in the body: a subject shows on lock screens and is
+    // kept in the mail provider's logs.
+    subject: "Your Zold code",
     text:
       `Your code to confirm this email for Zold is ${code}.\n\n` +
       `It works for ${minutes} minutes. Type it into the Zold app.\n\n` +
