@@ -47,6 +47,8 @@ import { createGnosisPayRouter } from "./routes/gnosis-pay.js";
 import { formatReport, reconcile } from "./reconcile.js";
 import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
 import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./routes/recovery-zoldenburg.js";
+import { sweepOwnerAlerts } from "./recovery/owner-alerts.js";
+import { mailAvailable } from "./adapters/mailer.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
 import { createDocumentsRouter } from "./routes/documents.js";
 import { createSafeSignerRouter } from "./routes/safe-signers.js";
@@ -312,6 +314,16 @@ if (candideRecoveryEnabled()) {
   setTimeout(runRecoverySweep, 5_000).unref();
   setInterval(runRecoverySweep, RECOVERY.sweepMs).unref();
   console.log(`RECOVERY: email/SMS guardian via ${urlForLog(RECOVERY.serviceUrl)} (chain ${CANDIDE.chainId}, module ${CANDIDE.recoveryModuleAddress})`);
+}
+// Recovery alerts: email the owner when someone asks to recover the account
+// and when a recovery enters its grace period (recovery/owner-alerts.ts).
+if (mailAvailable()) {
+  const runOwnerAlerts = () =>
+    sweepOwnerAlerts()
+      .then((n) => n && console.log(`recovery alerts: sent ${n}`))
+      .catch((e) => console.error(`recovery alerts failed: ${describeCause(e)}`));
+  setTimeout(runOwnerAlerts, 5_000).unref();
+  setInterval(runOwnerAlerts, RECOVERY.sweepMs).unref();
 }
 // Pay links: expire what is past its date, book our own SEPA payouts that
 // carry a code, retry telling a merchant about a paid checkout.

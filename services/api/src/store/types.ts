@@ -808,6 +808,12 @@ export interface RecoveryRequest {
     manualReview: "pending" | "passed" | "failed";
   };
   /**
+   * The owner's alert emails (recovery/owner-alerts.ts): when each went out,
+   * or was covered by an earlier one, and how many sends failed. Never on a
+   * public projection.
+   */
+  ownerAlerts?: { requested?: string; executed?: string; failures?: number };
+  /**
    * Candide email/SMS recovery, driven by the person who lost their device.
    *
    * `newPasskey` is the credential the recovering browser registered. It is
