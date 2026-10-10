@@ -10,6 +10,15 @@ export function isLogRangeRefusal(e: unknown): boolean {
   return LIMIT_RE.test(String((e as any)?.details ?? (e as any)?.message ?? e));
 }
 
+/** A refusal that names a result COUNT, as opposed to a range, or a rate
+ *  limit or quota ("rate limit exceeded", "request count exceeded"), which
+ *  LIMIT_RE also matches and which is only a reason to wait. */
+const RESULT_CAP_RE = /more than \d+ results|query returned more|too many (results|logs)/i;
+
+export function isLogResultCapRefusal(e: unknown): boolean {
+  return RESULT_CAP_RE.test(String((e as any)?.details ?? (e as any)?.message ?? e));
+}
+
 /** Read the largest window from `fromBlock` (up to `maxSpan` blocks, never
  *  past `head`) the RPC will answer, halving on a range refusal. Any other
  *  error goes up. */

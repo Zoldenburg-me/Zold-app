@@ -511,6 +511,67 @@ await check("at the books' row ceiling a wallet's sync pauses: nothing is booked
   assert.equal(resumed.added, 3);
 });
 
+await check("one block with more of the wallet's logs than the RPC returns is a counted gap, and sync carries on past it", async () => {
+  const w = freshWallet({ sync: { status: "pending", cursor: "40" } });
+  const base = fakeReader({ head: 100n, logs: [49n, 50n, 51n, 60n].map((b, i) => transfer({ blockNumber: b, txHash: H(90 + i), logIndex: 0 })) });
+  const reader: ChainReader = {
+    ...base,
+    async getTransferLogs(q) {
+      if (q.fromBlock <= 50n && q.toBlock >= 50n) throw new Error("query returned more than 10000 results");
+      return base.getTransferLogs(q);
+    },
+  };
+  let skipped = 0;
+  for (let run = 0; run < 5 && store.findImportedWallet(w.id)!.sync.status !== "synced"; run++) {
+    skipped += (await syncWallet(store.findImportedWallet(w.id)!, reader, { value: fixedValue, lists: listedAll, now: () => NOW })).skipped;
+  }
+  const after = store.findImportedWallet(w.id)!;
+  assert.equal(after.sync.status, "synced", JSON.stringify(after.sync));
+  assert.equal(after.sync.cursor, "98");
+  assert.equal(skipped, 1);
+  assert.match(after.sync.lastSkipReason ?? "", /block 50\b/);
+  const booked = new Set(store.ledgerOf(w.orgId).filter((e) => e.source.kind === "wallet" && e.source.walletId === w.id).map((e) => e.txHash));
+  assert.ok(booked.has(H(90)) && booked.has(H(92)) && booked.has(H(93)), "the blocks either side of the stuffed one, and later ones, are booked");
+  assert.ok(!booked.has(H(91)), "a transfer inside the skipped block is not booked");
+  assert.equal(after.sync.skipped, 1);
+  // A gap is counted once, even when a later window of the same run holds.
+  const twice = freshWallet({ sync: { status: "pending", cursor: "40" } });
+  let limited = true;
+  const stalled: ChainReader = {
+    ...base,
+    async getTransferLogs(q) {
+      if (q.fromBlock <= 50n && q.toBlock >= 50n) throw new Error("query returned more than 10000 results");
+      if (limited && q.fromBlock <= 70n && q.toBlock >= 70n) throw new Error("rate limit exceeded");
+      return base.getTransferLogs(q);
+    },
+  };
+  for (let run = 0; run < 5 && store.findImportedWallet(twice.id)!.sync.cursor !== "69"; run++) {
+    await syncWallet(store.findImportedWallet(twice.id)!, stalled, { value: fixedValue, lists: listedAll, now: () => NOW });
+  }
+  assert.equal(store.findImportedWallet(twice.id)!.sync.cursor, "69", "held before the rate-limited block");
+  limited = false;
+  for (let run = 0; run < 5 && store.findImportedWallet(twice.id)!.sync.status !== "synced"; run++) {
+    await syncWallet(store.findImportedWallet(twice.id)!, stalled, { value: fixedValue, lists: listedAll, now: () => NOW });
+  }
+  assert.equal(store.findImportedWallet(twice.id)!.sync.status, "synced");
+  assert.equal(store.findImportedWallet(twice.id)!.sync.skipped, 1, "the stuffed block is counted once");
+  // The shared readLogWindow still refuses at one block, so the crypto-in
+  // poller, which uses it directly, holds rather than passing a block.
+  const { readLogWindow } = await import("../services/api/src/log-range.js");
+  await assert.rejects(
+    readLogWindow(50n, 50n, 100n, async () => { throw new Error("query returned more than 10000 results"); }),
+    /more than 10000 results/,
+  );
+  // A rate limit or quota is a reason to wait, never to pass a block.
+  for (const limited of ["daily request count exceeded, request rate limited", "rate limit exceeded", "Your app has exceeded its compute units per second capacity."]) {
+    const held = freshWallet({ sync: { status: "pending", cursor: "40" } });
+    const r = await syncWallet(held, fakeReader({ head: 100n, logs: [], logsError: new Error(limited) }), { value: fixedValue, lists: listedAll, now: () => NOW });
+    assert.equal(r.skipped, 0, limited);
+    assert.equal(store.findImportedWallet(held.id)!.sync.cursor, "40", limited);
+    assert.equal(store.findImportedWallet(held.id)!.sync.status, "error", limited);
+  }
+});
+
 await check("token lists that never loaded hold the window: nothing is called unlisted by accident", async () => {
   const w = freshWallet({ sync: { status: "pending", cursor: "0" } });
   const reader = fakeReader({ head: 100n, logs: [transfer({ blockNumber: 10n, txHash: H(63), logIndex: 0 })] });
