@@ -297,6 +297,7 @@ export const store = {
     return db.processedMoneriumOrders.includes(orderId);
   },
   markOrderProcessed(orderId: string) {
+    if (db.processedMoneriumOrders.includes(orderId)) return;
     db.processedMoneriumOrders.push(orderId);
     persist();
   },

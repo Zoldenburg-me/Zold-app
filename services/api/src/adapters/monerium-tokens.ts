@@ -25,11 +25,28 @@ export interface MoneriumToken {
 
 let cache: { at: number; tokens: MoneriumToken[] } | null = null;
 
+/**
+ * Monerium could not be asked: a network error, a timeout, a 5xx or a body
+ * that is not JSON. A 4xx is a settled answer and is not this.
+ */
+export class MoneriumTokensUnavailable extends Error {}
+
 async function allTokens(baseUrl: string): Promise<MoneriumToken[]> {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.tokens;
-  const res = await moneriumFetch(`${baseUrl}/tokens`, { signal: AbortSignal.timeout(10_000) });
+  let res: Response;
+  try {
+    res = await moneriumFetch(`${baseUrl}/tokens`, { signal: AbortSignal.timeout(10_000) });
+  } catch (err: any) {
+    throw new MoneriumTokensUnavailable(`GET ${baseUrl}/tokens: ${err?.message ?? err}`);
+  }
+  if (res.status >= 500) throw new MoneriumTokensUnavailable(`GET ${baseUrl}/tokens -> ${res.status}`);
   if (!res.ok) throw new Error(`GET ${baseUrl}/tokens -> ${res.status}`);
-  const raw = (await res.json()) as any[];
+  let raw: any[];
+  try {
+    raw = (await res.json()) as any[];
+  } catch (err: any) {
+    throw new MoneriumTokensUnavailable(`GET ${baseUrl}/tokens: unreadable body: ${err?.message ?? err}`);
+  }
   const tokens = raw
     .filter((t) => t?.kind === "evm" && t?.address && t?.currency === "eur")
     .map((t) => ({
@@ -57,6 +74,24 @@ export async function moneriumEure(
   } catch {
     // Caller decides: the deploy refuses rather than silently falling back to
     // a mock on a chain where the real token exists.
+    return null;
+  }
+}
+
+/**
+ * The same lookup for a caller deciding whether a deposit landed: an outage
+ * throws MoneriumTokensUnavailable instead of reading as "no EURe here", so
+ * the caller can ask to be retried. A 4xx still reads as none.
+ */
+export async function moneriumEureOrUnavailable(
+  baseUrl: string,
+  chainId: number,
+): Promise<MoneriumToken | null> {
+  try {
+    const tokens = await allTokens(baseUrl);
+    return tokens.find((t) => t.chainId === chainId) ?? null;
+  } catch (err) {
+    if (err instanceof MoneriumTokensUnavailable) throw err;
     return null;
   }
 }
