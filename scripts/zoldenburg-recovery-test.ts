@@ -47,6 +47,8 @@ const impostor = privateKeyToAccount(generatePrivateKey());
 const OPERATOR = `op-${randomBytes(16).toString("hex")}`;
 const EMAIL = "zold.recover@example.com";
 const IBAN_KEY = `iban-${randomBytes(24).toString("hex")}`;
+// The same key in this process, so the key id written below is the API's own.
+process.env.RECOVERY_IBAN_HMAC_KEY = IBAN_KEY;
 
 process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = guardian.address;
 process.env.CANDIDE_RECOVERY_MODULE_ADDRESS = MODULE;
@@ -143,6 +145,7 @@ async function makePasskey(label: string) {
 
 const G = await import("../services/api/src/recovery/zoldenburg-guardian.js");
 const { publicRecoveryRequest } = await import("../services/api/src/recovery.js");
+const { ibanKeyId } = await import("../services/api/src/recovery/enrolment-key.js");
 const { SocialRecoveryModule } = await import("abstractionkit");
 
 console.log("1/2 typed data, signatures, calldata");
@@ -329,6 +332,23 @@ async function startApi() {
     await new Promise((r) => setTimeout(r, 300));
   }
 }
+/** Write an enrolment the way recovery/zoldenburg-enrolment.ts records one,
+ *  with the API stopped: the harness has no Monerium to deliver the 1 €.
+ *  zoldenburg-enrolment-test.ts covers how a real one gets there. */
+async function armInDb(userId: string) {
+  await stopApi();
+  const dbPath = process.env.TRANSF_DB_PATH!;
+  const db = JSON.parse(readFileSync(dbPath, "utf8"));
+  db.users.find((x: any) => x.id === userId).zoldenburgEnrolment = {
+    bankAccountHmac: createHash("sha256").update("harness-bank-account").digest("hex"),
+    keyId: ibanKeyId(),
+    bankAccountLast4: "3000",
+    orderId: "harness-order",
+    enrolledAt: new Date().toISOString(),
+  };
+  writeFileSync(dbPath, JSON.stringify(db), { mode: 0o600 });
+  await startApi();
+}
 async function stopApi() {
   if (!api || api.exitCode !== null) return;
   const exited = new Promise((r) => api!.once("exit", r));
@@ -488,28 +508,14 @@ try {
     assert.equal(sr.data.code, "NOT_ARMED");
     const ex = await op(`/api/admin/recoveries/${recoveryId}/execute`, { signature: "0x00", reviewNote: "Video call, matched Monerium profile" });
     assert.equal(ex.data.code, "NOT_ARMED");
+    const sync = await op(`/api/admin/recoveries/${recoveryId}/sync`, { reviewNote: "Video call, matched Monerium profile" });
+    assert.equal(sync.status, 409, JSON.stringify(sync.data));
+    assert.equal(sync.data.code, "NOT_ARMED");
     const row = (await opGet("/api/admin/recoveries")).data.requests.find((x: any) => x.id === recoveryId);
     assert.equal(row.enrolment.armed, false);
   });
 
-  // The harness has no Monerium to deliver the 1 €, so the enrolment is
-  // written the way recovery/zoldenburg-enrolment.ts records one, with the
-  // API stopped. zoldenburg-enrolment-test.ts covers how it gets there.
-  await stopApi();
-  {
-    const dbPath = process.env.TRANSF_DB_PATH!;
-    const db = JSON.parse(readFileSync(dbPath, "utf8"));
-    const u = db.users.find((x: any) => x.id === userId);
-    u.zoldenburgEnrolment = {
-      bankAccountHmac: createHash("sha256").update("harness-bank-account").digest("hex"),
-      keyId: createHash("sha256").update(`zold/recovery-iban-key-id:${IBAN_KEY}`).digest("hex").slice(0, 12),
-      bankAccountLast4: "3000",
-      orderId: "harness-order",
-      enrolledAt: new Date().toISOString(),
-    };
-    writeFileSync(dbPath, JSON.stringify(db), { mode: 0o600 });
-  }
-  await startApi();
+  await armInDb(userId);
 
   await t("enrolled: the operator sees the account armed, with the last 4 of the bank account", async () => {
     const row = (await opGet("/api/admin/recoveries")).data.requests.find((x: any) => x.id === recoveryId);
@@ -620,6 +626,19 @@ try {
     assert.equal(done.data.active, false);
     assert.equal(done.data.choice.choice, "declined");
     assert.equal((await call("/api/recovery/zoldenburg", { email: EMAIL }, undefined, "")).status, 404);
+    assert.equal((await call(`/api/users/${userId}/recovery/zoldenburg`)).data.enrolment.enrolledAt, undefined, "removal drops the enrolment");
+  });
+
+  await t("adding Zoldenburg again needs a new 1 €: an enrolment from before does not arm it", async () => {
+    await armInDb(userId);
+    assert.equal((await call(`/api/users/${userId}/recovery/zoldenburg`)).data.enrolment.armed, false, "no guardian, not armed");
+    const prep = await call(`/api/users/${userId}/recovery/zoldenburg`, { acknowledged: true });
+    assert.equal(prep.status, 201, JSON.stringify(prep.data));
+    const done = await call(prep.data.submitTo, await newPasskey.assert(prep.data.challenge));
+    assert.equal(done.status, 200, JSON.stringify(done.data));
+    assert.equal(done.data.active, true);
+    assert.equal(done.data.enrolment.armed, false);
+    assert.equal(done.data.enrolment.enrolledAt, undefined);
   });
 
   console.log(`\nZOLDENBURG RECOVERY TEST PASSED — ${pass}/${pass}`);

@@ -41,15 +41,18 @@ Planned guardian kinds (Didit + 1 € check, Turnkey, trusted people):
   must match the Monerium profile name, read live (`domain/name-match.ts`),
   and a payment from the Zold IBAN itself is refused. Only an HMAC of the
   payer's IBAN (`RECOVERY_IBAN_HMAC_KEY`), its last 4 characters and the
-  order id are kept. A one-word Monerium name, a joint account ("und", "&")
-  or a company payer never matches. Until then /admin/recoveries refuses
+  order id are kept. Titles and initials are not name parts; a one-word
+  Monerium name, a joint account ("und", "&") or a company payer never
+  matches. Until then /admin/recoveries refuses
   `sign-request`, `execute` and `sync` (409 `NOT_ARMED`) and shows no Safe
   Cover link. A new code needs a passkey step-up every time; a failed
   re-enrolment leaves the old account armed; adding or removing the guardian
-  drops the enrolment, and an account is armed only while the guardian is
-  active; a new HMAC key disarms every account until it pays again. A
-  signature made outside /admin still reaches the chain, and the sweep follows
-  the chain, so the operator rule is never to sign for an unarmed account.
+  drops the enrolment, and an account is armed only while Zoldenburg's
+  current guardian is active on it; a new HMAC key disarms every account
+  until it pays again. **The gate binds the admin console, not the guardian
+  key:** a signature made outside /admin (Safe Cover, by hand) still reaches
+  the chain, and the sweep follows the chain to finalisation, so the
+  operator rule is never to sign for an unarmed account.
 - **A recovery's new credential lives on the RecoveryRequest** until the chain
   confirms the new owner, so whoever holds the OTP channels cannot sign in or
   spend during the grace period.

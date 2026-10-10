@@ -147,7 +147,7 @@ async function renderZoldenburgSection(el) {
    Zoldenburg may not sign a recovery for them (the guardian is on chain but
    not armed). The code is shown once, when issued, and kept only in this
    variable: the API stores its hash. */
-let zoldEnrolIssued = null; // { code, memo, payTo } from the last POST
+let zoldEnrolIssued = null; // { userId, code, memo, payTo, codeIssuedAt } from the last POST
 
 function zoldEnrolHtml(e) {
   if (!e) return "";
@@ -157,7 +157,9 @@ function zoldEnrolHtml(e) {
     return `<div class="m-lede" style="font-size:13px;margin-top:12px">Zoldenburg cannot sign a recovery for this account yet: the last step, 1 € from your own bank, is not open on this server.</div>`;
   }
   const check = e.lastCheck ? `<div class="m-lede" style="font-size:13px;margin-top:8px" role="status">${esc(e.lastCheck.reason)}</div>` : "";
-  const issued = zoldEnrolIssued && e.codeIssuedAt ? zoldEnrolIssued : null;
+  // Only the code this account holds open now: a code issued since on
+  // another device, or one for another sign-in in this tab, is dead.
+  const issued = zoldEnrolIssued && zoldEnrolIssued.userId === user.id && zoldEnrolIssued.codeIssuedAt === e.codeIssuedAt ? zoldEnrolIssued : null;
   const waiting = e.codeIssuedAt ? `
     ${issued ? `<div class="m-rows" style="margin-top:12px">
         ${row("To", issued.payTo.iban || "")}
@@ -190,7 +192,7 @@ function zoldEnrolBind() {
     fresh.disabled = true;
     try {
       const stepUp = await passkeyStepUp("recovery.enrolment");
-      zoldEnrolIssued = await api(`/api/users/${user.id}/recovery/zoldenburg/enrolment`, { stepUp });
+      zoldEnrolIssued = { ...(await api(`/api/users/${user.id}/recovery/zoldenburg/enrolment`, { stepUp })), userId: user.id };
       mobileNav("recovery");
     } catch (e) { showErr("m-rc-err", e); fresh.disabled = false; }
   };

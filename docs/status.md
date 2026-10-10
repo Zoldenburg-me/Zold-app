@@ -76,9 +76,9 @@ Say this plainly rather than letting the surface imply otherwise:
   signature, no finalisation, and Safe Cover has not been used against a Zold
   Safe. `recovery:test` runs the flow under the harness only.
 - **No 1 € enrolment has armed an account.** No Monerium order has been
-  matched to a code (`enrolment:test` runs against stub orders), and
-  `RECOVERY_IBAN_HMAC_KEY` is not set on zoldhq.com, so the operator can
-  sign for nobody there until it is and each user has paid.
+  matched to a code (`enrolment:test` runs against stub orders).
+  `RECOVERY_IBAN_HMAC_KEY` must be set on a deployment before any account
+  there can arm; until then the operator can sign for nobody.
 - **No Candide recovery service has been called** (stub only); no on-chain
   guardian add, execute or finalise, no real OTP.
 - **Turnkey has never been called, and no Google or Apple login has come

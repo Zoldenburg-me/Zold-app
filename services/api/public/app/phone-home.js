@@ -76,7 +76,9 @@ function phChecklist(u) {
 }
 
 const phRecoveryBannerKey = (u) => `zold-hide-recovery-banner:${u.id}`;
-const phEnrolBannerKey = (u) => `zold-hide-enrol-banner:${u.id}`;
+/* Per time the guardian was added: hiding the banner once does not hide it
+   for a later re-add, which needs a new 1 €. */
+const phEnrolBannerKey = (u) => `zold-hide-enrol-banner:${u.id}:${u.passkeySafe?.recovery?.enabledAt || ""}`;
 function phBannerHidden(key) {
   try { return localStorage.getItem(key) === "1"; } catch { return false; }
 }

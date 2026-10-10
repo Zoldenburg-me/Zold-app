@@ -198,13 +198,17 @@ the guardian key.
 
 ### Name match
 
-Monerium gives one `name` string; Didit gives first and last name. Normalise
-both (Unicode NFKD, strip diacritics, ß→ss, lower case, hyphens and
-apostrophes to spaces, collapse spaces), tokenise, and require that every
-Didit last-name token and the first Didit first-name token appear in the
-Monerium tokens. Anything else is a mismatch. The same function serves the
-SEPA payer name. Unit-test it with married names, middle names, and
-transliterations; it errs toward mismatch.
+Built as `domain/name-match.ts`, shared by the SEPA payer check and (next)
+Didit. Monerium gives one `name` string; Didit gives first and last name; a
+bank gives one string or both. Normalise (Unicode NFKD, strip diacritics,
+ß→ss, lower case; an umlaut matches both spellings), split into words whose
+hyphenated parts stay together, and drop titles, suffixes and single
+letters. Monerium's name needs two words left. A one-string payer must hold
+every part of Monerium's first and last word; a split name must have its
+first given name and its whole last name among Monerium's parts. A second
+person ("und", "&"; "or"/"y" between two full names) or a company suffix
+never matches. It errs toward mismatch; the tests cover married names,
+middle names, initials, titles and transliterations.
 
 ### Didit facts this relies on (docs, 2026-10-09)
 
