@@ -118,6 +118,7 @@ export function createPageRouter() {
       "Disallow: /v/",
       "Disallow: /invoice/",
       "Disallow: /guardian",
+      "Disallow: /recovery",
     ];
     if (base) lines.push("", `Sitemap: ${base}/sitemap.xml`);
     res.type("text/plain").send(lines.join("\n") + "\n");
@@ -154,12 +155,18 @@ export function createPageRouter() {
   router.get("/faucet", page("faucet.html"));
   /** Google or Apple login as a recovery guardian: its own ES-module page and
    *  a stricter CSP, never cached (a login comes back to it). */
-  router.get("/guardian.html", (_req, res) => res.redirect(301, "/guardian"));
-  router.get("/guardian", (_req, res) => {
+  /** Choosing a guardian (Zoldenburg, or your own Google/Apple login) and
+   *  getting your account back on a new phone: ES-module pages with a
+   *  stricter CSP, never cached (a login comes back to each). */
+  const ownPage = (file: string): express.RequestHandler => (_req, res) => {
     res.setHeader("content-security-policy", guardianPageCsp(TURNKEY.enabled ? new URL(TURNKEY.baseUrl).origin : undefined));
     res.setHeader("cache-control", "no-store");
-    res.sendFile(path.join(pub, "guardian.html"));
-  });
+    res.sendFile(path.join(pub, file));
+  };
+  router.get("/guardian.html", (_req, res) => res.redirect(301, "/guardian"));
+  router.get(["/guardian", "/guardian/"], ownPage("guardian.html"));
+  router.get("/recovery.html", (_req, res) => res.redirect(301, "/recovery"));
+  router.get(["/recovery", "/recovery/"], ownPage("recovery.html"));
   router.get("/pay/:handle", page("pay.html"));
   router.get("/pay/:handle/:code", tidyRequestCode, page("pay-request.html"));
   /** A shared receipt. */

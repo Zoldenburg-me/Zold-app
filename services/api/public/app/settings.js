@@ -33,8 +33,9 @@ function phRecovery(u) {
   const zold = safe.recovery?.status === "active";
   const cr = safe.candideRecovery;
   const codes = cr?.guardianStatus === "active";
-  const offered = (caps.emailSmsRecovery || caps.zoldenburgRecovery) && recoveryOfferedFor(u);
-  return { zold, cr, codes, on: zold || codes, offered, pending: !zold && cr?.guardianStatus === "pending_setup" };
+  const social = (safe.socialGuardians || []).some((g) => g.status === "active");
+  const offered = (caps.emailSmsRecovery || caps.zoldenburgRecovery || caps.turnkeyGuardians) && recoveryOfferedFor(u);
+  return { zold, cr, codes, social, on: zold || codes || social, offered, pending: !zold && cr?.guardianStatus === "pending_setup" };
 }
 
 /* What Security would flag: an unprotected key, or no way back in. */
@@ -137,7 +138,7 @@ function phSignerRows() {
 
 PH.security = {
   title: "Security",
-  live: () => JSON.stringify([phKey, user?.passkey?.credentialId, user?.authorizerAddress, user?.passkeySafe?.recovery?.status,
+  live: () => JSON.stringify([phKey, user?.passkey?.credentialId, user?.authorizerAddress, user?.passkeySafe?.recovery?.status, user?.passkeySafe?.socialGuardians,
     user?.passkeySafe?.candideRecovery, !!phCache.signers, phCache.signers?.threshold, phCache.signers?.error]),
   html() {
     const u = user || {};
@@ -147,7 +148,7 @@ PH.security = {
       recoveryRows.push(Z.row({
         lead: Z.iconTile({ icon: "settings_backup_restore" }),
         title: "Recovery",
-        sub: r.zold ? "Zoldenburg is your guardian" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
+        sub: r.zold ? "Zoldenburg is your guardian" : r.social ? "Your Google or Apple login is your guardian" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
         right: Z.tag(r.on ? "Active" : r.pending ? "Waiting" : "Off", r.on ? "mint" : undefined),
         chevron: false,
       }));

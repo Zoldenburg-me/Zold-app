@@ -30,9 +30,10 @@ function phBalance(value, label) {
 
 /* The set-up list for a new account. Only what the API confirms is ticked. */
 function phChecklist(u) {
-  const recoveryOffered = (caps.emailSmsRecovery || caps.zoldenburgRecovery) && recoveryOfferedFor(u);
+  const recoveryOffered = (caps.emailSmsRecovery || caps.zoldenburgRecovery || caps.turnkeyGuardians) && recoveryOfferedFor(u);
   const safe = u.passkeySafe || {};
-  const recoveryOn = safe.recovery?.status === "active" || safe.candideRecovery?.guardianStatus === "active";
+  const recoveryOn = safe.recovery?.status === "active" || safe.candideRecovery?.guardianStatus === "active"
+    || (safe.socialGuardians || []).some((g) => g.status === "active");
   const connected = hasConnectedMonerium(u);
   const approved = kycApproved(u);
   const wait = ibanWait(u);

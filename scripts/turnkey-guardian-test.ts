@@ -20,6 +20,10 @@
  *    and submits: refused while a recovery is pending or while any other
  *    guardian is on the Safe (multi-guardian recovery is not built), and
  *    the row turns `active` only when the chain lists the address;
+ *  - removing it is the same passkey-approved op (revokeGuardianWithThreshold),
+ *    and the row goes only when the chain no longer lists the address;
+ *  - Zoldenburg cannot be added while a Google/Apple guardian is on the Safe
+ *    (either alone could then recover it);
  *  - source greps: no delegated access, no API key in a sub-org payload,
  *    only the Turnkey calls and activity types we chose, @turnkey/* imported
  *    by wallet/turnkey.ts alone, and no other network call there.
@@ -36,7 +40,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { privateKeyToAccount } from "viem/accounts";
-import { keccak256, toHex } from "viem";
+import { keccak256, toFunctionSelector, toHex } from "viem";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-turnkey-")), "db.json");
@@ -46,9 +50,12 @@ process.env.TURNKEY_ORGANIZATION_ID = "org-parent-test";
 const testKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey.export({ format: "jwk" }).d!;
 process.env.TURNKEY_API_PRIVATE_KEY = Buffer.from(testKey, "base64url").toString("hex");
 process.env.TURNKEY_OAUTH_CLIENT_IDS = "google-client.apps.googleusercontent.com,com.zoldhq.signin";
+// Zoldenburg offered as a guardian too, to prove the two are never combined.
+process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = "0x8888888888888888888888888888888888888888";
 
 const tk = await import("../services/api/src/wallet/turnkey.js");
 const { createTurnkeyGuardianRouter } = await import("../services/api/src/routes/recovery-turnkey.js");
+const { createZoldenburgRecoveryRouter } = await import("../services/api/src/routes/recovery-zoldenburg.js");
 const { store } = await import("../services/api/src/store.js");
 const { capabilities } = await import("../services/api/src/capabilities.js");
 
@@ -327,6 +334,10 @@ const safeOps: SafeOps = {
     return { moduleAddress: MODULE, moduleEnabled: chain.moduleEnabled, guardians: [...chain.guardians], threshold: chain.guardians.length ? 1 : 0,
       pending: chain.pending ? { newOwners: [addr("e")], newThreshold: 1, executeAfter: 1 } : null };
   },
+  async revokeTx(_plan, state, address) {
+    safeCalls.push({ op: "revokeTx", arg: { address, guardians: state.guardians } });
+    return { to: MODULE, value: 0n, data: `${toFunctionSelector("revokeGuardianWithThreshold(address,address,uint256)")}${"0".repeat(24)}${"1".padStart(40, "0")}${"0".repeat(24)}${address.slice(2)}${"0".repeat(64)}` };
+  },
   async prepare(_plan, txs) {
     safeCalls.push({ op: "prepare", arg: txs });
     return { userOperation: { txs }, challenge: `0x${"ab".repeat(32)}` };
@@ -342,7 +353,12 @@ const safeOps: SafeOps = {
   async submit(_plan, userOperation) {
     safeCalls.push({ op: "submit", arg: userOperation });
     if (chain.revert) return { success: false, txHash: "0xdead" };
+    const REVOKE = toFunctionSelector("revokeGuardianWithThreshold(address,address,uint256)");
     for (const tx of userOperation.txs) {
+      if (tx.data.startsWith(REVOKE)) {
+        chain.guardians = chain.guardians.filter((g) => !tx.data.toLowerCase().includes(g.slice(2).toLowerCase()));
+        continue;
+      }
       const hit = /^0x[0-9a-f]+$/i.test(tx.data) && [addr("1"), addr("2")].find((a) => tx.data.toLowerCase().includes(a.slice(2).toLowerCase()));
       if (hit && chain.listAfterSubmit) chain.guardians.push(hit);
     }
@@ -360,6 +376,7 @@ const requireUserSession = (req: express.Request, res: express.Response, userId:
 const app = express();
 app.use(express.json());
 app.use("/api", createTurnkeyGuardianRouter({ requireUserSession, client: () => stub, enabled: () => switchOn, jwks, safeOps }));
+app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession }));
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   res.status(500).json({ error: String(err?.message ?? err) });
 });
@@ -660,6 +677,53 @@ try {
     } finally {
       switchOn = true;
     }
+  });
+
+  // ---- one guardian at a time, and removing the Google/Apple one ------------
+  await check("Zoldenburg is refused while a Google/Apple guardian is on the account", async () => {
+    store.updateUser("u_ok", { passkeySafe: { ...store.findUser("u_ok")!.passkeySafe!, socialGuardians: [{ ...sub1(), status: "active" }] } });
+    const r = await fetch(`${base.replace("/recovery/turnkey", "")}/users/u_ok/recovery/zoldenburg`, {
+      method: "POST", headers: { "content-type": "application/json", "x-test-user": "u_ok" }, body: JSON.stringify({ acknowledged: true }),
+    });
+    const body: any = await r.json();
+    assert.equal(r.status, 409, JSON.stringify(body));
+    assert.equal(body.code, "OTHER_GUARDIAN");
+  });
+
+  await check("remove: refused while a recovery is pending", async () => {
+    chain.guardians = [addr("1")];
+    chain.moduleEnabled = true;
+    chain.pending = true;
+    try {
+      const r = await call("POST", "/users/u_ok/guardians/sub-1/remove", {}, "u_ok");
+      assert.equal(r.status, 409);
+      assert.equal(r.body.code, "RECOVERY_PENDING");
+    } finally {
+      chain.pending = false;
+    }
+  });
+
+  await check("remove: the passkey approves revokeGuardianWithThreshold, and the row goes once the chain drops it", async () => {
+    safeCalls.length = 0;
+    const prep = await call("POST", "/users/u_ok/guardians/sub-1/remove", {}, "u_ok");
+    assert.equal(prep.status, 201, JSON.stringify(prep.body));
+    assert.deepEqual(safeCalls.find((c) => c.op === "revokeTx")?.arg, { address: addr("1"), guardians: [addr("1")] });
+    assert.ok(sub1(), "nothing changes before the passkey approves");
+    const r = await call("POST", `/users/u_ok/ops/${prep.body.requestId}`, { signature: "good" }, "u_ok");
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.removed, true);
+    assert.equal(store.findUser("u_ok")!.passkeySafe!.socialGuardians!.length, 0);
+    assert.deepEqual(chain.guardians, []);
+  });
+
+  await check("remove: a row the chain never listed goes without an op", async () => {
+    store.updateUser("u_ok", { passkeySafe: { ...store.findUser("u_ok")!.passkeySafe!, socialGuardians: [{ kind: "self-social", address: addr("1"), turnkeySubOrgId: "sub-1", status: "created", createdAt: now }] } });
+    safeCalls.length = 0;
+    const r = await call("POST", "/users/u_ok/guardians/sub-1/remove", {}, "u_ok");
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.removed, true);
+    assert.ok(!safeCalls.some((c) => c.op === "prepare"));
+    assert.equal(store.findUser("u_ok")!.passkeySafe!.socialGuardians!.length, 0);
   });
 
   await check("login: a bad token is refused before Turnkey is called", async () => {

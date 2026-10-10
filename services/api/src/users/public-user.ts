@@ -42,6 +42,9 @@ function publicPasskeySafe(plan: NonNullable<User["passkeySafe"]>) {
       ? { recovery: pick(plan.recovery, ["moduleAddress", "guardianAddress", "threshold", "status", "enabledAt", "opHash"] as const) }
       : {}),
     ...(plan.recoveryChoice ? { recoveryChoice: pick(plan.recoveryChoice, ["choice", "at"] as const) } : {}),
+    ...(plan.socialGuardians?.length
+      ? { socialGuardians: plan.socialGuardians.map((g) => pick(g, ["kind", "address", "status", "activeAt"] as const)) }
+      : {}),
     ...(plan.candideRecovery
       ? {
           candideRecovery: {

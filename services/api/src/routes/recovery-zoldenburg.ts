@@ -300,12 +300,22 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         return res.status(400).json({ error: "confirm that you read how Zoldenburg recovery works", code: "NOT_ACKNOWLEDGED" });
       }
       const plan = activePlan(user);
+      // One guardian at a time: at threshold 1 Zoldenburg and a Google/Apple
+      // login could each recover the account alone, and nothing collects two
+      // signatures yet. Checked on the store first, then on the chain below.
+      const social = user.passkeySafe?.socialGuardians ?? [];
+      if (social.some((g) => g.status === "active")) {
+        throw new ZoldenburgRecoveryError("remove your backup login first — one guardian at a time", 409, "OTHER_GUARDIAN");
+      }
       const moduleAddress = moduleFor(user);
       await assertRecoveryModuleDeployed(moduleAddress);
       // Read THIS module, whatever the stored plan says about Zoldenburg.
       const state = await readRecoveryState(
         { ...plan, recovery: { moduleAddress, guardianAddress: guardian, threshold: 1, status: "planned" } } as PasskeySafeDeploymentPlan,
       );
+      if (state.guardians.some((g) => social.some((s) => s.address.toLowerCase() === g.toLowerCase()))) {
+        throw new ZoldenburgRecoveryError("remove your backup login first — one guardian at a time", 409, "OTHER_GUARDIAN");
+      }
       const now = new Date().toISOString();
       if (!HARNESS.enabled && state.guardians.some((g) => g.toLowerCase() === guardian.toLowerCase())) {
         const updated = store.updateUser(user.id, {

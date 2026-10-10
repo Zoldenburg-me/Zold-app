@@ -52,8 +52,9 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   the Safe a Turnkey guardian is not added, since nothing collects two
   signatures yet. Its login token is accepted only from Google or Apple,
   signed by their published keys, for our client id, bound to the browser's
-  key; /guardian is the only page that loads Turnkey code or may reach
-  Turnkey's API.
+  key; /guardian and /recovery are the only pages that load Turnkey code or
+  may reach Turnkey's API. Zoldenburg and a Google/Apple login are never
+  guardians together: each add route refuses while the other is on the Safe.
 - **A recovery's new credential lives on the RecoveryRequest** until the chain
   confirms the new owner, so whoever holds the OTP channels cannot sign in or
   spend during the grace period.
