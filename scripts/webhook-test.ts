@@ -14,6 +14,7 @@
  *   4. replaying it credits nothing further
  *   5. with MONERIUM_WEBHOOK_SECRET set, Monerium's documented
  *      webhook-id/timestamp/signature scheme is enforced
+ *   6. two deliveries for one order that arrive together credit it once
  *
  * Run: npm run webhook:test
  */
@@ -46,6 +47,13 @@ const orders = new Map<string, any>();
 /** Order ids the stub answers with 503 — Monerium briefly unreachable, as
  *  distinct from a 404 that says the order genuinely does not exist. */
 const unavailable = new Set<string>();
+/**
+ * While set, /tokens answers only once GET /orders/<orderId> has been read
+ * twice. mirrorOrder asks /tokens between its processed check and its mark,
+ * so this holds the first caller inside that window until a second caller has
+ * read the same order: the interleaving that once credited an order twice.
+ */
+let hold: { orderId: string; reads: number; release: () => void; released: Promise<void> } | null = null;
 const stub = createServer((req, res) => {
   const send = (code: number, body: any) => {
     res.writeHead(code, { "content-type": "application/json" });
@@ -60,11 +68,21 @@ const stub = createServer((req, res) => {
   const one = url.match(/^\/orders\/([^?]+)/);
   if (one) {
     const wanted = decodeURIComponent(one[1]);
+    if (hold && wanted === hold.orderId && ++hold.reads >= 2) hold.release();
     if (unavailable.has(wanted)) return send(503, { error: "service unavailable" });
     const o = orders.get(wanted);
     return o ? send(200, o) : send(404, { error: "no such order" });
   }
-  if (url.startsWith("/orders")) return send(200, { orders: [...orders.values()] });
+  if (url.startsWith("/tokens")) {
+    const answer = () => send(404, { error: "no EURe on this chain" });
+    return void (hold ? hold.released.then(answer) : answer());
+  }
+  // The list is the poller's view, and it is kept empty. The poller ticks
+  // once at startup whatever MONERIUM_POLL_MS says, so a listed order could
+  // be recorded by that tick instead of by the delivery under test, and the
+  // delivery would then rightly answer `duplicate`. Every order here reaches
+  // the API by webhook only.
+  if (url.startsWith("/orders")) return send(200, { orders: [] });
   send(404, { error: "unhandled" });
 });
 
@@ -163,7 +181,7 @@ try {
     MONERIUM_CLIENT_SECRET: "stub",
     MONERIUM_BASE_URL: `http://127.0.0.1:${STUB_PORT}`,
     MONERIUM_CHAIN: "sepolia", // the stub issues on sepolia; the chain filter must see the same name
-    MONERIUM_POLL_MS: "3600000", // don't let the poller race the assertions
+    MONERIUM_POLL_MS: "3600000", // no second tick; the startup tick sees an empty list
     MONERIUM_WEBHOOK_SECRET: "",
     MG_ANCHOR_DOMAIN: "",
   });
@@ -335,6 +353,33 @@ try {
     assert.equal(retry.status, 200);
     assert.equal(retry.data.handled, true, "the retry must be accepted, not treated as a duplicate");
     assert.equal(await balance(), 83, "€33 should have been credited on the retry");
+  });
+
+  await t("two concurrent deliveries for one order credit it once", async () => {
+    // Monerium sends one delivery per order event, each with its own id, so
+    // the delivery-id dedupe cannot catch this; only the order-id claim can.
+    orders.set("real-race", {
+      id: "real-race", kind: "issue", state: "processed", meta: { state: "processed" },
+      address: user.address, amount: "7", currency: "eur", chain: "sepolia",
+    });
+    let release = () => {};
+    const released = new Promise<void>((r) => (release = r));
+    hold = { orderId: "real-race", reads: 0, release, released };
+    const fallback = setTimeout(release, 5_000); // never hang the suite
+    const body = { data: { id: "real-race" } };
+    try {
+      const [a, b] = await Promise.all([
+        post("/api/webhooks/monerium", body, signedHeaders("evt-race-a", body)),
+        post("/api/webhooks/monerium", body, signedHeaders("evt-race-b", body)),
+      ]);
+      assert.equal(hold.reads, 2, "both deliveries must have read the order inside the window");
+      assert.deepEqual([a.status, b.status], [200, 200]);
+      assert.deepEqual([a.data.outcome, b.data.outcome].sort(), ["duplicate", "recorded"]);
+    } finally {
+      clearTimeout(fallback);
+      hold = null;
+    }
+    assert.equal(await balance(), 90, "€7 must be credited once, not twice");
   });
 
   await t("a definitively unknown order still consumes its delivery id", async () => {
