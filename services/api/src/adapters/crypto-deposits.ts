@@ -30,6 +30,7 @@ import { describeCause } from "../http/log-cause.js";
 import { addrs, eur, usd, publicClient } from "../chain.js";
 import { balanceAfterWrite } from "../liquidity.js";
 import { safeDebitBlocker } from "../orchestrator.js";
+import { walletBlocker } from "../domain/wallet-tier.js";
 import { midRates, referenceRate } from "../rates.js";
 import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
 import { buildCryptoSettlement, settlementUpdate } from "../domain/invoices.js";
@@ -68,8 +69,9 @@ interface WatchedAddress {
  *   page entry wins: opting it into auto-convert is the owner's instruction.
  * - Direct Safe funding is recorded for all accounts, approved or not. A
  *   pending account's Safe can already receive, and skipping it moves the
- *   cursor past the transfer for good. Page auto-convert stays approved-only
- *   because conversion is a credit decision.
+ *   cursor past the transfer for good. Page auto-convert is watched for any
+ *   account walletBlocker lets through: conversion is a swap the user signs
+ *   from their own Safe, not a fiat rail.
  */
 function watchedAddresses(): WatchedAddress[] {
   const seen = new Set<string>();
@@ -82,7 +84,7 @@ function watchedAddresses(): WatchedAddress[] {
       seen.add(key);
       out.push({ user, address, source });
     };
-    if (user.kycStatus === "approved" && user.paymentPage?.autoConvert && user.paymentPage.depositAddress) {
+    if (!walletBlocker(user) && user.paymentPage?.autoConvert && user.paymentPage.depositAddress) {
       add(user.paymentPage.depositAddress, "payment-page");
     }
     // A payment REQUEST (pay link) is an explicit ask for money at the page
@@ -176,7 +178,8 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
   if (deposit.state === "UNCONFIRMED") {
     return "a conversion of this deposit was sent and may still land — it has to be checked on chain before it can be converted again";
   }
-  if (user.kycStatus !== "approved") return "your account is not approved for settlement yet";
+  const identity = walletBlocker(user);
+  if (identity) return identity;
   const page = user.paymentPage;
   if (!page) return "this account has no payment page";
   if (page.settlementAsset === "USDC") {

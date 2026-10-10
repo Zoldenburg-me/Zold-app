@@ -112,9 +112,16 @@ await check("auto-settlement off COMPLETES as USDC — the forwarder already del
 
 console.log("\nThe blocker names what a user can act on");
 
-await check("an unapproved account is refused for KYC, not for something cryptic", () => {
+await check("a pending account converts: the swap is user-signed from its own Safe, not a fiat rail", () => {
   const u = mkUser({ kycStatus: "pending" });
-  assert.match(depositConversionBlocker(u, mkDeposit(u.id))!, /not approved/i);
+  assert.equal(depositConversionBlocker(u, mkDeposit(u.id)), null);
+});
+
+await check("a rejected or manual-review account is refused, in words it can act on", () => {
+  for (const kycStatus of ["rejected", "manual_review"]) {
+    const u = mkUser({ kycStatus });
+    assert.match(depositConversionBlocker(u, mkDeposit(u.id))!, /verification/i, kycStatus);
+  }
 });
 
 await check("dust below the floor is refused with the floor in it", () => {
@@ -239,6 +246,17 @@ const liq = readFileSync("services/api/src/liquidity.ts", "utf8");
 const dep = readFileSync("services/api/src/adapters/crypto-deposits.ts", "utf8");
 // The deposit routes left server.ts in the modularity pass.
 const srv = readFileSync("services/api/src/routes/crypto-deposits.ts", "utf8");
+
+await check("conversion is gated by walletBlocker, never by KYC approval", () => {
+  const route = srv.slice(srv.indexOf('"/users/:id/auto-convert"'));
+  const body = route.slice(0, route.indexOf("router.", 1));
+  assert.ok(!/requireKycApproved/.test(body), "auto-convert must not require Monerium approval");
+  assert.match(body, /walletBlocker\(user\)/, "auto-convert must refuse a rejected account");
+  const watched = dep.slice(dep.indexOf("function watchedAddresses"));
+  assert.ok(!/kycStatus === "approved"/.test(watched.slice(0, watched.indexOf("return out;"))),
+    "a pending account's page address must be watched when auto-convert is on");
+  assert.match(dep, /walletBlocker\(user\)/, "depositConversionBlocker must use walletBlocker");
+});
 
 await check("nothing sweeps the user's USDC to the orchestrator", () => {
   assert.ok(!/sweepToOrchestrator\s*\(/.test(dep.replace(/\*.*sweepToOrchestrator.*/g, "")),
