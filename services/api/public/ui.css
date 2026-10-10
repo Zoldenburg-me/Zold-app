@@ -792,3 +792,8 @@ html:has(#ob-root [data-screen^="state-"]) #offline-bar { display: none; }
    clock. Where the inset is 0 (a desktop browser) none of this shows. */
 body { padding-top: env(safe-area-inset-top, 0px); }
 body::before { content: ""; position: fixed; inset: 0 0 auto; z-index: 210; height: env(safe-area-inset-top, 0px); background: var(--z-bg); pointer-events: none; }
+
+/* "Continue with Google / Apple": quiet buttons with the provider's mark, one per row. */
+.z-providers { display: grid; gap: var(--z-space-3); margin: 24px 0; }
+.z-provider { width: 100%; gap: 12px; font-weight: 500; background: var(--z-surface); }
+.z-provider__mark { width: 20px; height: 20px; flex: none; }
