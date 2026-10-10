@@ -315,7 +315,7 @@ sample documents only.
   `app/*.js` scripts never do. Logins are full-page redirects that return
   the ID token in the URL fragment (Google `id_token`, Apple `code id_token`
   with no scope), with a one-time state in sessionStorage.
-- **Residual risk, stated in the UI copy and here:** while a guardian is
+- **Residual risk:** while a guardian is
   logged in, our own served JavaScript holds their session key. A compromised
   zoldhq.com could make a logged-in guardian sign. The threshold, the grace
   period and Phase 0 alerts are the defence.

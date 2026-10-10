@@ -181,25 +181,28 @@ function apiWith(token) {
 }
 
 const NOTES = `
-  <p class="g-note">If you lose your passkey: on the new phone choose “Recover your account”, then approve here with this login.</p>
-  <p class="g-note">Use a login whose email is not your Zold account's email: whoever controls that inbox could otherwise start a recovery and delete the alert mail. In your Google or Apple account, add a second way to sign in, so losing one does not lose the guardian.</p>
-  <p class="g-note">While you are logged in to a guardian on this page, the page's own code holds that login. The waiting period and the alerts on your account are the protection if that code were ever changed.</p>`;
+  <h2 class="g-sub">How it works</h2>
+  <ul class="g-steps">
+    <li>New phone? Open Zold, choose “Recover your account” and approve with this login.</li>
+    <li>Your account moves to the new phone after a short waiting period. Your old phone gets a heads-up and can stop it.</li>
+  </ul>
+  <p class="g-note">Tip: pick a login with a different email from your Zold account, and turn on two-step sign-in for it.</p>`;
 
 function render(el, { me, caps, guardians, result }) {
   const shortAddr = (a) => `${a.slice(0, 8)}…${a.slice(-6)}`;
   const rows = guardians.length
-    ? `<ul class="g-list">${guardians.map((g) => `<li><span translate="no">${esc(shortAddr(g.address))}</span> · ${g.status === "active" ? `Added to your account${g.activeAt ? ` on ${esc(new Date(g.activeAt).toLocaleDateString())}` : ""}` : "Not on your account yet"}
+    ? `<ul class="g-list">${guardians.map((g) => `<li><span translate="no">${esc(shortAddr(g.address))}</span> · ${g.status === "active" ? `Your guardian${g.activeAt ? ` since ${esc(new Date(g.activeAt).toLocaleDateString())}` : ""}` : "Almost there"}
         ${g.status === "created" ? `<button type="button" class="z-btn" data-finish="${esc(g.turnkeySubOrgId)}">Finish adding</button>` : ""}</li>`).join("")}</ul>`
-    : `<p>No Google or Apple guardian yet.</p>`;
+    : "";
   const buttons = ["google", "apple"].filter((p) => caps.turnkeyLogins?.[p])
     .map((p) => `<button type="button" class="z-btn z-btn--primary" data-start="${p}">Add with ${PROVIDER_NAMES[p]}</button>`).join("");
   const message = result
-    ? result.step === "done" ? `<p class="g-ok" role="status">Your ${result.provider ? `${esc(PROVIDER_NAMES[result.provider])} ` : ""}login is now a guardian on your account.</p>`
+    ? result.step === "done" ? `<p class="g-ok" role="status">Done. Your ${result.provider ? `${esc(PROVIDER_NAMES[result.provider])} ` : ""}login now protects your account.</p>`
     : `<p class="g-err" role="alert">${esc(result.reason ?? "Something went wrong.")}</p>`
     : "";
   el.innerHTML = `
-    <h1>Your Google or Apple login as a guardian</h1>
-    <p>Signed in as ${esc(me.name || me.email || "you")}. A guardian can approve moving this account to a new passkey if you lose yours. Zold never holds this guardian's key: Turnkey keeps it, and only your login can use it.</p>
+    <h1>Your backup login</h1>
+    <p>Lose your phone, keep your account. Your Google or Apple login can move Zold to a new phone in a few taps. It stays yours alone: Zold never holds its key.</p>
     ${message}
     ${rows}
     ${buttons ? `<div class="g-actions">${buttons}</div>` : "<p>No login provider is set up on this deployment.</p>"}
@@ -234,7 +237,7 @@ async function boot() {
       const p = document.createElement("p");
       p.className = "g-ok";
       p.setAttribute("role", "status");
-      p.textContent = `Approve with your passkey: add ${g.address} as a guardian of your account.`;
+      p.textContent = `Confirm with your passkey to add ${g.address} as your guardian.`;
       el.prepend(p);
     },
   };
@@ -284,9 +287,9 @@ async function bootApprove(el, { caps, recovery, returnedHash }) {
     // Done here; /app finds the request again by the email.
     try { sessionStorage.setItem(RECOVERY_KEY, JSON.stringify({ email: recovery.email })); } catch { /* the email is retyped */ }
     const until = result.request?.turnkey?.finalizeAfter ? new Date(result.request.turnkey.finalizeAfter).toLocaleString() : null;
-    el.innerHTML = `<h1>Recovery approved</h1>
-      <p class="g-ok" role="status">Your guardian login approved moving the account to this phone. The waiting period has started${until ? ` and ends ${esc(until)}` : ""}; your old phone can still cancel it.</p>
-      <p>Go back to Zold to follow it and finish.</p>${back}`;
+    el.innerHTML = `<h1>You’re all set</h1>
+      <p class="g-ok" role="status">Your account is on its way to this phone${until ? `. It arrives ${esc(until)}` : ""}.</p>
+      <p>Head back to Zold to follow along.</p>${back}`;
     return;
   }
   let status = "";
@@ -302,9 +305,9 @@ async function bootApprove(el, { caps, recovery, returnedHash }) {
   }
   const buttons = ["google", "apple"].filter((p) => caps.turnkeyLogins?.[p])
     .map((p) => `<button type="button" class="z-btn z-btn--primary" data-start="${p}">Approve with ${PROVIDER_NAMES[p]}</button>`).join("");
-  el.innerHTML = `<h1>Approve your account’s recovery</h1>
+  el.innerHTML = `<h1>Welcome back</h1>
     ${result?.step === "error" ? `<p class="g-err" role="alert">${esc(result.reason)}</p>` : ""}
-    <p>Log in with the Google or Apple account you added as this account’s guardian. That login approves moving the account to the new passkey on this phone. A waiting period follows, and your old phone can cancel it.</p>
+    <p>Log in with the Google or Apple account you chose as your backup login, and we’ll move your Zold account to this phone.</p>
     ${buttons ? `<div class="g-actions">${buttons}</div>` : "<p>No login provider is set up on this deployment.</p>"}
     ${back}`;
   el.querySelectorAll("[data-start]").forEach((b) => {

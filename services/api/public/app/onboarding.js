@@ -2097,7 +2097,7 @@ OB["recover/wait"] = {
         ${rcTimeline([
           { t: "Face ID or fingerprint set up", d: "On this phone", done: true },
           zold ? { t: "ID check by Zoldenburg", d: "Done", done: true }
-            : rcMode === "turnkey" ? { t: "Approved with your Google or Apple login", d: "Done", done: true }
+            : rcMode === "turnkey" ? { t: "Confirmed with your backup login", d: "Done", done: true }
               : { t: "Codes confirmed", d: esc(rcChannelWords(r)), done: true },
           { t: "Waiting period", d: `${esc(rcGrace(r))}, so you can cancel if it wasn’t you`, done: false },
           { t: "Your account is on this phone", d: "Sign in and pay as usual", done: false },
@@ -2144,23 +2144,23 @@ OB["recover/zoldenburg"] = {
 
 OB["recover/turnkey"] = {
   kind: "recover",
-  title: "Approve with your guardian login",
+  title: "Confirm with your backup login",
   html: () => {
     const r = rcState;
     return `${obBackHead("recover", rcBeta())}
       <main id="main" class="z-screen__main z-screen__main--tight">
-        ${obIntro("Approve with your guardian login", "Log in with the Google or Apple account you added as this account’s guardian. That login approves moving the account to this phone.")}
+        ${obIntro("Confirm with your backup login", "Log in with the Google or Apple account you set as your backup, and your account moves to this phone.")}
         ${rcTimeline([
           { t: "Face ID or fingerprint set up", d: "On this phone", done: true },
-          { t: "Approve with your Google or Apple login", d: "On the next page", done: false },
+          { t: "Confirm with your backup login", d: "On the next page", done: false },
           { t: "Waiting period", d: `${esc(rcGrace(r))}. Your old phone can cancel it`, done: false },
           { t: "Your account is on this phone", d: "Sign in and pay as usual", done: false },
         ])}
-        ${Z.note({ icon: "shield", text: "Your guardian login can only start a move. It can’t send your money, and the waiting period always applies." })}
+        ${Z.note({ icon: "shield", text: "Your backup login can move your account, never your money." })}
         ${obAlert("rc-err")}
       </main>
       <div class="z-screen__foot z-screen__foot--quiet">
-        ${Z.button({ variant: "primary", full: true, label: "Continue to approve", id: "btn-rc-approve" })}
+        ${Z.button({ variant: "primary", full: true, label: "Continue", id: "btn-rc-approve" })}
         <p class="z-screen__fine z-screen__fine--flush">Keep this browser: only it can follow the request.</p>
       </div>`;
   },

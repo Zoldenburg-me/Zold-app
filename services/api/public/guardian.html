@@ -3,7 +3,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="robots" content="noindex" />
-<title>Recovery guardian · Zold</title>
+<title>Backup login · Zold</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="/vendor/fonts/text.css" />
 <link rel="stylesheet" href="/tokens.css" />
@@ -17,6 +17,9 @@
   .g-list li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--z-line); }
   .g-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
   .g-note { font-size: 13px; color: var(--z-dim); }
+  .g-sub { font-size: 17px; margin: 32px 0 8px; }
+  .g-steps { margin: 0 0 16px; padding-left: 20px; }
+  .g-steps li { margin: 6px 0; }
   @media (max-width: 480px) {
     .g-actions { flex-direction: column; }
     .g-actions .z-btn { width: 100%; justify-content: center; }
@@ -25,7 +28,7 @@
   .g-err { color: var(--z-red, #c0392b); }
 </style>
 <main id="g-body" aria-live="polite">
-  <h1>Recovery guardian</h1>
+  <h1>Backup login</h1>
   <p>Loading…</p>
 </main>
 <script type="module" src="/guardian/main.js"></script>
