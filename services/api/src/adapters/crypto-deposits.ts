@@ -30,6 +30,7 @@
  *   transfer belongs with a compliance provider.
  */
 import { randomUUID } from "node:crypto";
+import { decodeEventLog } from "viem";
 import { usdToken } from "../usd-token.js";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
@@ -306,6 +307,37 @@ export function settleOnArrival(deposit: CryptoDeposit): CryptoDeposit {
   if (settled.invoiceId) recordInvoiceSettlement(settled);
   noteDepositSettled(settled);
   return settled;
+}
+
+/**
+ * USDC a swap took from the Safe, read from the swap transaction's own
+ * Transfer logs. That is what left, not what the quote asked for; a balance
+ * delta would also count a payment that arrived in the same block. A transfer
+ * to the paymaster is gas paid in USDC, not swap input. Undefined when there
+ * is no transaction receipt to read.
+ */
+export async function usdcSwappedIn(
+  txHash: string | undefined,
+  safe: string,
+  paymaster: string | null | undefined,
+): Promise<bigint | undefined> {
+  if (!txHash || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) return undefined;
+  const receipt = await publicClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
+  const usdc = addrs().usdc.toLowerCase();
+  let took = 0n;
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== usdc) continue;
+    let ev;
+    try {
+      ev = decodeEventLog({ abi: [TRANSFER_EVENT], data: log.data, topics: log.topics });
+    } catch {
+      continue; // an Approval, not a Transfer
+    }
+    if (ev.args.from.toLowerCase() !== safe.toLowerCase()) continue;
+    if (paymaster && ev.args.to.toLowerCase() === paymaster.toLowerCase()) continue;
+    took += ev.args.value;
+  }
+  return took;
 }
 
 /**
