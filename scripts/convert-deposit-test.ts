@@ -457,7 +457,7 @@ await check("the executed swap is recorded before settling, and a failed settle 
   const marked = body.indexOf('holding: "unconfirmed",\n          reason: "the swap went through');
   const settle = body.indexOf("settleConvertedDeposit(");
   assert.ok(marked > 0 && marked < settle, "unconfirmed is written before settlement runs");
-  assert.match(body.slice(settle - 200), /try \{\s*settled = await settleConvertedDeposit[\s\S]*catch[\s\S]*SAFE_OP_UNCONFIRMED/,
+  assert.match(body.slice(body.indexOf("let settled: CryptoDeposit;")), /^let settled: CryptoDeposit;\s*try \{[\s\S]*?settled = await settleConvertedDeposit[\s\S]*catch[\s\S]*SAFE_OP_UNCONFIRMED/,
     "a settle failure answers SAFE_OP_UNCONFIRMED and leaves the row unconfirmed");
   const fn = dep.slice(dep.indexOf("export async function settleConvertedDeposit"));
   assert.ok(!/assertRateSane\(/.test(fn.slice(0, fn.indexOf("export function recordInvoiceSettlement"))),
