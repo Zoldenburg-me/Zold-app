@@ -16,7 +16,7 @@
 import { IndexedDbStamper } from "../vendor/turnkey.js";
 import { OAUTH_STATE_KEY, readReturn, startLogin } from "./oauth.js";
 import { providerButtons } from "./providers.js";
-import { checkEnrolment, enrolmentHtml, issueEnrolmentCode } from "./enrolment.js";
+import { afterCheck, checkEnrolment, enrolmentHtml, issueEnrolmentCode } from "./enrolment.js";
 
 
 /**
@@ -152,6 +152,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 /** A step-up for one action (routes/auth.ts): a challenge bound to it, approved with the account's passkey. */
 function stepUpWith(api, me) {
   return async (action) => {
+    if (!me.passkey?.credentialId) throw new Error("Add Face ID or fingerprint sign-in in Zold first, then come back.");
     const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up", action });
     const cred = await navigator.credentials.get({
       publicKey: {
@@ -215,7 +216,7 @@ function render(el, { caps, zold, guardians, message, issued = null, ibanReady =
 
   const zoldCard = caps.zoldenburgRecovery ? `
     <section class="g-card">
-      <h2 class="g-sub">Zoldenburg</h2>
+      <h2 class="g-sub" id="g-zold-head" tabindex="-1">Zoldenburg</h2>
       <p>Our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
       ${zoldOn
         ? `${zold.enrolment?.armed ? `<p class="g-ok">Your guardian</p>` : ""}
@@ -233,7 +234,7 @@ function render(el, { caps, zold, guardians, message, issued = null, ibanReady =
         : `<span>Almost there</span><button type="button" class="z-btn" data-finish="${esc(g.turnkeySubOrgId)}">Finish</button>`}</li>`).join("");
   const loginCard = caps.turnkeyGuardians ? `
     <section class="g-card">
-      <h2 class="g-sub">Your Google or Apple login</h2>
+      <h2 class="g-sub" id="g-login-head" tabindex="-1">Your Google or Apple login</h2>
       <p>Approve the move with a login you already have. It stays yours alone: Zold never holds its key.</p>
       ${rows ? `<ul class="g-list">${rows}</ul>` : ""}
       ${social.length ? ""
@@ -305,13 +306,18 @@ async function boot() {
     ]);
     const guardians = social?.guardians ?? [];
     render(el, { caps, zold, guardians, message, issued, ibanReady });
+    // The redraw replaces the clicked button: focus goes to its card's heading,
+    // not to the top of the page, and the outcome is read out.
     const busyThen = (b, fn) => oneAtATime(b, async () => {
+      const head = b.closest?.(".g-card")?.querySelector("h2")?.id;
       try {
         message = await fn();
       } catch (e) {
         message = { ok: false, text: e?.message || "Something went wrong. Try again." };
       }
       await draw().catch(showError);
+      if (message?.text) announce(message.text);
+      if (head) document.getElementById(head)?.focus({ preventScroll: false });
     });
     el.querySelectorAll("[data-start]").forEach((b) => {
       b.addEventListener("click", busyThen(b, async () => {
@@ -342,23 +348,24 @@ async function boot() {
     });
     el.querySelectorAll("[data-enrol]").forEach((b) => {
       if (b.dataset.enrol === "copy") {
+        // The reference as drawn with this button, not whatever `issued` holds later.
+        const memo = issued?.memo;
         b.addEventListener("click", async () => {
-          try { await navigator.clipboard.writeText(issued.memo); b.textContent = "Copied"; }
+          if (!memo) return;
+          try { await navigator.clipboard.writeText(memo); b.textContent = "Copied"; }
           catch { b.textContent = "Copy failed: select it above"; }
+          announce(b.textContent);
         });
         return;
       }
       b.addEventListener("click", busyThen(b, async () => {
         if (b.dataset.enrol === "new") {
           issued = await issueEnrolmentCode({ api, userId: me.id, stepUp });
-          return null;
+          return { ok: true, text: "Your transfer details are below." };
         }
-        const v = await checkEnrolment({ api, userId: me.id });
-        if (v.armed && !v.codeIssuedAt) {
-          issued = null;
-          return { ok: true, text: "Your bank account is confirmed. Zoldenburg is your guardian." };
-        }
-        return null;
+        const next = afterCheck(await checkEnrolment({ api, userId: me.id }), issued);
+        issued = next.issued;
+        return next.message;
       }));
     });
   };

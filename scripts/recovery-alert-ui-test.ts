@@ -404,6 +404,23 @@ await t("Security never says Active for a Zoldenburg guardian whose bank account
   assert.match(run(`phZoldUnarmedText(${unarmedUser()}, { codes: true })`), /^Codes to your email or phone\./);
 });
 
+await t("an unconfirmed Zoldenburg is finished on /guardian, and the recovery screen says the same three cases as Security", () => {
+  run(`caps = { ...caps, zoldenburgEnrolment: true }`);
+  const section = (u: string) => run(`user = ${u}; var __el = { innerHTML: "" }; renderGuardianSection(__el); __el.innerHTML`);
+  const ready = section(unarmedUser());
+  assert.match(ready, /One step left: confirm your bank account/);
+  assert.match(ready, /href="\/guardian"[^>]*>Finish on the guardian page/);
+  const noIban = section(unarmedUser(", iban: null"));
+  assert.match(noIban, /Your Zold IBAN comes first/);
+  assert.doesNotMatch(noIban, /Finish on the guardian page/);
+  run(`caps = { ...caps, zoldenburgEnrolment: false }`);
+  assert.match(section(unarmedUser()), /isn’t open yet/);
+  run(`caps = { ...caps, zoldenburgEnrolment: true }`);
+  // Home's banner and Security's "Finish" link go to /guardian, not to this screen.
+  assert.match(readFileSync(path.join(PUB, "app/phone-home.js"), "utf8"), /One step left for recovery[^`]*href="\/guardian">Confirm/);
+  assert.match(readFileSync(path.join(PUB, "app/settings.js"), "utf8"), /phZoldCanFinish\(u\) \? \{ href: "\/guardian", label: "Finish" \}/);
+});
+
 await t("the skip link moves focus to the content and never changes the hash", async () => {
   const click = (listeners.click || [])[0] as any;
   assert.ok(click, "ui.js listens for clicks");

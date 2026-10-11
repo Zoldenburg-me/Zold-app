@@ -56,3 +56,12 @@ export async function issueEnrolmentCode({ api, userId, stepUp }) {
 export function checkEnrolment({ api, userId }) {
   return api(`/api/users/${encodeURIComponent(userId)}/recovery/zoldenburg/enrolment/check`, {});
 }
+
+/**
+ * What a check's answer does to the page: confirmed with no code waiting, the
+ * code shown here is spent; anything else keeps it.
+ */
+export function afterCheck(v, issued) {
+  if (v?.armed && !v.codeIssuedAt) return { issued: null, message: { ok: true, text: "Your bank account is confirmed. Zoldenburg is your guardian." } };
+  return { issued, message: null };
+}

@@ -457,6 +457,36 @@ await check("bank step: a new code needs a passkey step-up for exactly that acti
   assert.deepEqual(calls, [["/api/users/u%201/recovery/zoldenburg/enrolment", { stepUp: { approved: "recovery.enrolment" } }]]);
 });
 
+await check("bank step: armed, a waiting code, and Monerium's last answer (escaped, only while a code waits)", () => {
+  const armed = enrol.enrolmentHtml({ available: true, armed: true, minimumEur: 1, bankAccountLast4: "1234" });
+  assert.match(armed, /Changed banks\?/);
+  assert.match(armed, /data-enrol="new"/);
+  const armedWaiting = enrol.enrolmentHtml({ available: true, armed: true, minimumEur: 1, bankAccountLast4: "1234", codeIssuedAt: "a", codeExpiresAt: "2026-10-18T10:00:00Z", lastCheck: { reason: "<i>x" } });
+  assert.doesNotMatch(armedWaiting, /Changed banks/);
+  assert.match(armedWaiting, /check now/);
+  assert.match(armedWaiting, /role="status">&lt;i&gt;x/);
+  assert.doesNotMatch(enrol.enrolmentHtml({ available: true, armed: true, minimumEur: 1, bankAccountLast4: "1", lastCheck: { reason: "STALE-ANSWER" } }), /STALE-ANSWER/, "no answer shown with no code waiting");
+});
+
+await check("bank step: a refused step-up issues no code; check asks the check route", async () => {
+  const calls: any[] = [];
+  const api = async (p: string, b: any) => { calls.push([p, b]); return {}; };
+  await assert.rejects(enrol.issueEnrolmentCode({ api, userId: "u1", stepUp: async () => { throw new Error("cancelled"); } }));
+  assert.equal(calls.length, 0);
+  await enrol.checkEnrolment({ api, userId: "u1" });
+  assert.deepEqual(calls, [["/api/users/u1/recovery/zoldenburg/enrolment/check", {}]]);
+});
+
+await check("bank step: a check clears the shown code only once confirmed with none waiting", () => {
+  const issued = { memo: "M" };
+  const done = enrol.afterCheck({ armed: true }, issued);
+  assert.equal(done.issued, null);
+  assert.match(done.message.text, /confirmed/);
+  assert.equal(enrol.afterCheck({ armed: true, codeIssuedAt: "a" }, issued).issued, issued, "re-enrolling: the new code still waits");
+  assert.equal(enrol.afterCheck({ armed: false }, issued).issued, issued);
+  assert.equal(enrol.afterCheck({ armed: false }, issued).message, null);
+});
+
 const fakeButton = (text: string) => ({ textContent: text, attrs: {} as Record<string, string>,
   getAttribute(k: string) { return this.attrs[k] ?? null; }, setAttribute(k: string, v: string) { this.attrs[k] = v; }, removeAttribute(k: string) { delete this.attrs[k]; } });
 
