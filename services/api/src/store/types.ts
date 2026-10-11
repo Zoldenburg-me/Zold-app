@@ -805,8 +805,10 @@ export interface RecoveryRequest {
   userId: string;
   safeAddress: `0x${string}`;
   /** `zoldenburg`: the owner asks Zoldenburg, an operator reviews and signs
-   *  as guardian. `candide`: email/SMS OTPs. `managed` only on legacy rows. */
-  mode?: "managed" | "candide" | "zoldenburg";
+   *  as guardian. `candide`: email/SMS OTPs. `turnkey`: the owner's own
+   *  Google or Apple login signs as guardian on /guardian (REVIEW_PENDING
+   *  there means waiting for that signature). `managed` only on legacy rows. */
+  mode?: "managed" | "candide" | "zoldenburg" | "turnkey";
   status: RecoveryRequestStatus;
   requestedAt: string;
   expiresAt: string;
@@ -942,6 +944,28 @@ export interface RecoveryRequest {
     finalizeAttempts?: number;
     finalizeError?: string;
   };
+  /**
+   * Turnkey-guardian recovery (recovery/turnkey-recovery.ts). Same custody
+   * rule: the new credential waits here until the chain shows it as owner.
+   * `guardianSubOrgId` names the sub-org whose login must sign.
+   */
+  turnkey?: {
+    accessHash?: string;
+    guardianSubOrgId?: string;
+    newPasskey?: NonNullable<RecoveryRequest["zoldenburg"]>["newPasskey"];
+    newOwners?: `0x${string}`[];
+    newThreshold?: number;
+    /** The digest the guardian signed, as the module computed it. */
+    recoveryHash?: `0x${string}`;
+    executeTxHash?: `0x${string}`;
+    executedAt?: string;
+    gracePeriodSeconds?: number;
+    finalizeAfter?: string;
+    finalizeTxHash?: `0x${string}`;
+    verifierDeployTxHash?: string;
+    finalizeAttempts?: number;
+    finalizeError?: string;
+  };
 }
 
 /**
@@ -956,6 +980,41 @@ export interface ServiceCredential {
   tokenHash: string;
   createdAt: string;
   expiresAt?: string;
+}
+
+/** A passkey an operator signs in and approves changes with. Never a user's:
+ *  operator credentials live only here, and user login never searches them. */
+export interface OperatorCredential {
+  credentialId: string;
+  key: { jwk: JsonWebKey; alg: "ES256" | "RS256" };
+  signCount: number;
+  /** The owner's name for it ("YubiKey, desk"); not a secret. */
+  label: string;
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
+/** A named operator of the admin dashboard. Disabling is a read-time filter:
+ *  the record and its audit rows stay. */
+export interface Operator {
+  id: string;
+  name: string;
+  /** Must equal the Cloudflare Access identity on every admin request. */
+  email: string;
+  createdAt: string;
+  disabledAt?: string;
+  credentials: OperatorCredential[];
+}
+
+/** An operator's session: only the token's hash is stored, as for users. */
+export interface OperatorSession {
+  id: string;
+  operatorId: string;
+  tokenHash: string;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+  revokedAt?: string;
 }
 
 export interface Session {

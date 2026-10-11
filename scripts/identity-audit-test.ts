@@ -37,6 +37,7 @@ const { createAuthRouter } = await import("../services/api/src/routes/auth.js");
 const { createMoneriumRouter } = await import("../services/api/src/routes/monerium.js");
 const { createDocumentsRouter } = await import("../services/api/src/routes/documents.js");
 const { createZoldenburgRecoveryRouter } = await import("../services/api/src/routes/recovery-zoldenburg.js");
+const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { publicDocument } = await import("../services/api/src/documents.js");
 
@@ -76,6 +77,7 @@ async function makePasskey(label: string) {
 // ── the app ─────────────────────────────────────────────────────────────────
 const app = express();
 app.use(express.json());
+app.use("/api/admin", createOperatorGate());
 app.use("/api", createAuthRouter({ requireUserSession }));
 app.use("/api", createMoneriumRouter({ requireUserSession }));
 app.use("/api", createDocumentsRouter({ requireUserSession }));
