@@ -53,6 +53,9 @@ const CANDIDE_CHAIN_ID = process.env.CANDIDE_CHAIN_ID ?? process.env.TRANSF_CHAI
  * - `sponsored`: Candide's paymaster pays. Their free Starter plan covers 1,000
  *   sponsored mainnet ops inside a 90-day trial, and the keyless public
  *   endpoint may not sponsor mainnet at all — `npm run preflight` asks it.
+ *   Without a policy id the paymaster checks only public gas policies; a
+ *   private policy on the API key is used only when
+ *   CANDIDE_SPONSORSHIP_POLICY_ID names it.
  * - `native`: the Safe pays in ETH and no paymaster is involved, so nothing
  *   here depends on anyone's quota. The Safe must hold ETH first; for a Safe
  *   that is not deployed yet, send it to the counterfactual address.
@@ -64,7 +67,7 @@ const CANDIDE_CHAIN_ID = process.env.CANDIDE_CHAIN_ID ?? process.env.TRANSF_CHAI
  * Read once at boot; an unknown value refuses to start rather than falling
  * back to a mode the operator did not choose.
  */
-export type GasPayment = { mode: "sponsored" } | { mode: "native" } | { mode: "token"; token: `0x${string}` };
+export type GasPayment = { mode: "sponsored"; sponsorshipPolicyId?: string } | { mode: "native" } | { mode: "token"; token: `0x${string}` };
 
 /** Circle's USDC, the token-paymaster default. Candide's public paymaster
  *  lists it on 8453; on 84532 it lists only its own test token. */
@@ -74,7 +77,12 @@ const DEFAULT_GAS_TOKEN: Record<string, `0x${string}`> = {
 
 export function gasPaymentFromEnv(env: NodeJS.ProcessEnv, chainId: string): GasPayment {
   const mode = (env.SAFE_GAS_PAYMENT ?? "sponsored").trim().toLowerCase();
-  if (mode === "sponsored" || mode === "native") return { mode };
+  const sponsorshipPolicyId = env.CANDIDE_SPONSORSHIP_POLICY_ID?.trim();
+  if (sponsorshipPolicyId && mode !== "sponsored") {
+    throw new Error(`CANDIDE_SPONSORSHIP_POLICY_ID is set but SAFE_GAS_PAYMENT=${mode} never asks for sponsorship`);
+  }
+  if (mode === "sponsored") return sponsorshipPolicyId ? { mode, sponsorshipPolicyId } : { mode };
+  if (mode === "native") return { mode };
   if (mode === "token") {
     const token = (env.SAFE_GAS_TOKEN ?? DEFAULT_GAS_TOKEN[chainId] ?? "").trim();
     if (!/^0x[0-9a-fA-F]{40}$/.test(token)) {
@@ -425,7 +433,12 @@ async function payGas(account: SafeAccount, userOperation: UserOperationV9): Pro
     }
     return userOperation;
   }
-  const context = gas.mode === "token" ? { token: gas.token } : {};
+  const context =
+    gas.mode === "token"
+      ? { token: gas.token }
+      : gas.sponsorshipPolicyId
+        ? { sponsorshipPolicyId: gas.sponsorshipPolicyId }
+        : {};
   let result: Awaited<ReturnType<Erc7677Paymaster["createPaymasterUserOperation"]>>;
   try {
     result = await paymaster().createPaymasterUserOperation(account as any, userOperation as any, bundler(), context);
@@ -450,7 +463,7 @@ function paymasterRefusal(err: unknown, safeAddress: string): SafeGasError | nul
   if (/does not qualify for any publicly available gas policy/i.test(text)) {
     return new SafeGasError(
       `the paymaster will not sponsor this operation on chain ${CANDIDE.chainId} ` +
-        `(no public gas policy covers it) — set SAFE_GAS_PAYMENT=native or =token, or use an API key with a funded policy`,
+        `(no public gas policy covers it) — set SAFE_GAS_PAYMENT=native or =token, or name a funded policy on the API key in CANDIDE_SPONSORSHIP_POLICY_ID`,
     );
   }
   const short = /token balance lower than the required `?(0x[0-9a-f]+)`? allowance/i.exec(text);

@@ -104,6 +104,18 @@ try {
   await check("unset means sponsored — the behaviour before this setting existed", () => {
     assert.deepEqual(gasPaymentFromEnv({}, "8453"), { mode: "sponsored" });
   });
+  await check("sponsored names the Candide gas policy when CANDIDE_SPONSORSHIP_POLICY_ID is set", () => {
+    assert.deepEqual(gasPaymentFromEnv({ CANDIDE_SPONSORSHIP_POLICY_ID: " sp_base_1 " }, "8453"), {
+      mode: "sponsored",
+      sponsorshipPolicyId: "sp_base_1",
+    });
+  });
+  await check("a policy id with another gas mode refuses at boot — it would be silently unused", () => {
+    assert.throws(
+      () => gasPaymentFromEnv({ SAFE_GAS_PAYMENT: "native", CANDIDE_SPONSORSHIP_POLICY_ID: "sp_base_1" }, "8453"),
+      /CANDIDE_SPONSORSHIP_POLICY_ID/,
+    );
+  });
   await check("native needs no token", () => {
     assert.deepEqual(gasPaymentFromEnv({ SAFE_GAS_PAYMENT: "native" }, "8453"), { mode: "native" });
   });
@@ -172,6 +184,13 @@ try {
     const r = await preparePasskeySafeDeployment(plan);
     assert.deepEqual(paymasterCalls[0], {});
     assert.equal((r.userOperation as any).paymasterData, "0x01");
+  });
+  await check("sponsored mode with a policy id passes it to the paymaster", async () => {
+    (CANDIDE as any).gas = { mode: "sponsored", sponsorshipPolicyId: "sp_base_1" };
+    paymasterCalls.length = 0;
+    await preparePasskeySafeDeployment(plan);
+    assert.deepEqual(paymasterCalls[0], { sponsorshipPolicyId: "sp_base_1" });
+    (CANDIDE as any).gas = { mode: "sponsored" };
   });
   // Candide's own wording, as its Base mainnet endpoint answered (Sep 2026).
   const refuse = (message: string) => {
