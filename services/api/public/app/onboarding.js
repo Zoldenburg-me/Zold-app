@@ -2121,6 +2121,36 @@ OB["recover/wait"] = {
   },
 };
 
+/* The 1 € step of a Zoldenburg recovery: from the bank account the owner
+   confirmed at enrolment, to the account's Zold IBAN. Both appear by their
+   last 4 only: whoever holds this browser has no session. */
+function rcBankStep(r) {
+  const b = r.bankCheck || {};
+  const issued = rcBankIssued && rcBankIssued.id === r.id && rcBankIssued.codeIssuedAt === b.codeIssuedAt ? rcBankIssued : null;
+  const details = issued
+    ? `${Z.kv([
+        { key: "From", value: b.fromLast4 ? `Your bank account ending ${b.fromLast4}` : "Your bank account" },
+        { key: "To", value: b.toLast4 ? `Your Zold IBAN ending ${b.toLast4}` : "Your Zold IBAN" },
+        { key: "Amount", value: `At least ${b.minimumEur} €` },
+      ])}
+      <div class="z-card" id="rc-bank-ref" tabindex="-1">${Z.copyRow({ label: "Reference", value: issued.memo, mono: true })}</div>`
+    : b.codeIssuedAt
+      ? `<p class="z-screen__fine">You got a reference on ${esc(rcWhenText(new Date(b.codeIssuedAt)))}. If you sent the 1 € with it, we pick it up on our own. Lost it? Get a new one.</p>`
+      : "";
+  const check = b.codeIssuedAt && b.lastCheck ? Z.note({ icon: "info", text: b.lastCheck.reason, role: "status" }) : "";
+  const actions = b.codeIssuedAt
+    ? `${Z.button({ variant: "primary", full: true, label: "I sent it — check now", id: "btn-rc-bank-check" })}
+       <button type="button" class="z-link-btn" id="btn-rc-bank-code">Get a new reference</button>`
+    : Z.button({ variant: "primary", full: true, label: "Show my transfer details", id: "btn-rc-bank-code" });
+  return `<div class="z-group">
+      <div class="z-group__head"><h2 class="z-eyebrow">Move 1 € to yourself</h2></div>
+      ${Z.note({ icon: "account_balance", text: `Send at least ${b.minimumEur} € from the bank account you used when you set up recovery${b.fromLast4 ? ` (ending ${b.fromLast4})` : ""} to your Zold IBAN. It is your own money and lands in your Zold balance; nothing is charged. Your Zold IBAN is saved as a payee in your bank from that first transfer, and your Monerium account shows it too.` })}
+      ${details}
+      ${check}
+      <div class="z-stack">${actions}</div>
+    </div>`;
+}
+
 OB["recover/zoldenburg"] = {
   kind: "recover",
   title: "We’re checking it’s you",
@@ -2128,23 +2158,34 @@ OB["recover/zoldenburg"] = {
     const r = rcState;
     const ref = r.zoldenburg?.reference || "";
     const checked = RC_ZOLD_SIGNING.includes(r.status);
+    const paid = checked || Boolean(r.bankCheck?.passed);
+    const from = r.bankCheck?.fromLast4;
     const mail = `mailto:support@zoldhq.com?subject=${encodeURIComponent(`Account recovery ${ref}`)}`;
     return `${obBackHead("recover", rcBeta())}
       <main id="main" class="z-screen__main z-screen__main--tight">
-        ${obIntro("We’re checking it’s you", "Zoldenburg compares you with the ID you gave Monerium. A person does this, not a machine.")}
+        ${obIntro("We’re checking it’s you", "Two checks: 1 € from your own bank account, and Zoldenburg compares you with the ID you gave Monerium. A person does that second check, not a machine.")}
         ${ref ? `<div class="z-card">${Z.copyRow({ label: "Your reference", value: ref, mono: true })}</div>` : ""}
+        ${paid ? "" : rcBankStep(r)}
         ${rcTimeline([
           { t: "Face ID or fingerprint set up", d: "On this phone", done: true },
+          { t: "1 € from your bank account", d: paid ? "Done" : esc(from ? `From the account ending ${from}` : "From the account you set up recovery with"), done: paid },
           { t: "ID check by Zoldenburg", d: checked ? "Done" : "Email support@zoldhq.com with your reference", done: checked },
           { t: "Waiting period", d: `${esc(rcGrace(r))}. Your old phone can cancel it`, done: false },
           { t: "Your account is on this phone", d: "Sign in and pay as usual", done: false },
         ])}
         ${Z.note({ icon: "shield", text: "Zoldenburg can only start a move. It can’t send your money, and the waiting period always applies." })}
+        ${obAlert("rc-err")}
       </main>
       <div class="z-screen__foot z-screen__foot--quiet">
-        ${checked ? "" : Z.button({ variant: "primary", full: true, icon: "mail", label: "Email support", href: mail })}
+        ${checked ? "" : Z.button({ variant: paid ? "primary" : "secondary", full: true, icon: "mail", label: "Email support", href: mail })}
         <p class="z-screen__fine z-screen__fine--flush">Write from the email on your account. Keep this browser: only it can follow the request.</p>
       </div>`;
+  },
+  bind: (root) => {
+    const code = root.querySelector("#btn-rc-bank-code");
+    if (code) code.onclick = (e) => recoverBankCode(e.currentTarget);
+    const check = root.querySelector("#btn-rc-bank-check");
+    if (check) check.onclick = (e) => recoverBankCheck(e.currentTarget);
   },
 };
 

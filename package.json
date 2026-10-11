@@ -87,6 +87,7 @@
     "email:test": "tsx scripts/email-verification-test.ts",
     "recovery-alerts:test": "tsx scripts/recovery-owner-alerts-test.ts",
     "enrolment:test": "tsx scripts/zoldenburg-enrolment-test.ts",
+    "recovery-bank:test": "tsx scripts/zoldenburg-bank-check-test.ts",
     "best:test": "tsx scripts/best-execution-test.ts",
     "dex:setup": "tsx scripts/dex-setup.ts",
     "business:test": "tsx scripts/business-test.ts",

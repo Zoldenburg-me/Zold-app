@@ -79,6 +79,10 @@ Say this plainly rather than letting the surface imply otherwise:
   matched to a code (`enrolment:test` runs against stub orders).
   `RECOVERY_IBAN_HMAC_KEY` must be set on a deployment before any account
   there can arm; until then the operator can sign for nobody.
+- **No recovery-time 1 € has passed.** `recovery-bank:test` runs the check
+  against stub orders; the person's screen was looked at with staged state
+  only. No Didit ID check exists yet: today the operator's signature needs
+  the armed account and the recovery 1 €, plus their own check of the person.
 - **No Candide recovery service has been called** (stub only); no on-chain
   guardian add, execute or finalise, no real OTP.
 - **Turnkey has never been called, and no Google or Apple login has come

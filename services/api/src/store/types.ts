@@ -909,6 +909,20 @@ export interface RecoveryRequest {
     };
     newOwners?: `0x${string}`[];
     newThreshold?: number;
+    /**
+     * The second 1 € (recovery/zoldenburg-bank-check.ts): it must come from
+     * the bank account enrolled for this account. `code` is open until it
+     * passes; only its hash is kept. `enrolledAt` names the enrolment it was
+     * matched against, so a later re-enrolment voids the pass. Never in a
+     * public projection as stored.
+     */
+    bankCheck?: {
+      code?: { hash: string; issuedAt: string };
+      passedAt?: string;
+      orderId?: string;
+      enrolledAt?: string;
+      lastCheck?: { at: string; outcome: "waiting" | "mismatch" | "unreadable"; reason: string };
+    };
     /** The EIP-712 digest the guardian signed, as the module computed it. */
     recoveryHash?: `0x${string}`;
     executeTxHash?: `0x${string}`;
