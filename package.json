@@ -44,6 +44,7 @@
     "passkey-prompt:test": "tsx scripts/passkey-prompt-test.ts",
     "offline-bar:test": "tsx scripts/offline-bar-test.ts",
     "iban-moved:ui:test": "tsx scripts/iban-moved-ui-test.ts",
+    "money-in:ui:test": "tsx scripts/money-in-ui-test.ts",
     "execution:test": "tsx scripts/safe-execution-test.ts",
     "gas:test": "tsx scripts/safe-gas-test.ts",
     "faucet:test": "tsx scripts/faucet-test.ts",

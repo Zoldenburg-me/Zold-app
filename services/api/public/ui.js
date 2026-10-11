@@ -24,8 +24,8 @@
      cannot draw PAID in mint or IN FLIGHT as done. */
   const TONES = {
     "in flight": "pink", open: "pink", active: "pink",
-    received: "mint", approved: "mint", on: "mint", done: "mint",
-    "in review": "amber", "waiting for review": "amber", "needs fixing": "amber", overdue: "amber",
+    received: "mint", converted: "mint", approved: "mint", on: "mint", done: "mint",
+    "in review": "amber", checking: "amber", "waiting for review": "amber", "needs fixing": "amber", overdue: "amber",
     failed: "amber", refunded: "amber", soon: "amber", beta: "amber", waiting: "amber",
     paid: "dim", draft: "dim", sent: "dim", void: "dim", off: "dim", illustration: "dim", recommended: "dim",
   };
