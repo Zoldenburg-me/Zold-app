@@ -209,6 +209,8 @@ if (!(process.env.CANDIDE_FORWARDING_RPC_URL ?? process.env.FORWARDING_ADDRESS_R
   warn("CANDIDE_FORWARDING_RPC_URL unset: payment pages show the Safe address, and refuse in production");
 } else if (!process.env.CANDIDE_FORWARDING_ACCOUNT_API_KEY) {
   fail("CANDIDE_FORWARDING_RPC_URL is set without CANDIDE_FORWARDING_ACCOUNT_API_KEY, so activation will fail");
+} else if (!/^0x[0-9a-fA-F]{40}$/.test(process.env.CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER ?? "")) {
+  fail("CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER is not an address, so every payment page refuses to activate");
 } else {
   ok("forwarding is configured (not called: activation is per payment page)");
 }
