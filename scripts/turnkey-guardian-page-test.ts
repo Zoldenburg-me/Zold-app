@@ -93,6 +93,17 @@ await new Promise((r) => server.once("listening", r));
 const base = `http://127.0.0.1:${(server.address() as any).port}`;
 
 try {
+  await check("the app's own code revalidates on every load; pinned vendor files keep their cache", async () => {
+    for (const p of ["/app.css", "/ui.css", "/app/settings.js", "/recovery/main.js", "/guardian/main.js", "/sw.js"]) {
+      const r = await fetch(`${base}${p}`);
+      assert.equal(r.status, 200, p);
+      assert.equal(r.headers.get("cache-control"), "no-cache", p);
+    }
+    const v = await fetch(`${base}/vendor/turnkey.js`);
+    assert.equal(v.status, 200);
+    assert.notEqual(v.headers.get("cache-control"), "no-cache");
+  });
+
   await check("/guardian is served with no inline script allowed, and is never cached", async () => {
     const r = await fetch(`${base}/guardian`);
     assert.equal(r.status, 200);
@@ -424,11 +435,17 @@ const enrol = await import(pathToFileURL(path.join(PUB, "guardian/enrolment.js")
 await check("bank step: no transfer details before the IBAN is active; then they read as the person's own money", () => {
   const e = { available: true, armed: false, minimumEur: 1 };
   const noIban = enrol.enrolmentHtml(e, { ibanReady: false });
-  assert.doesNotMatch(noIban, /Show my transfer details|data-enrol="new"/);
-  assert.match(noIban, /Your Zold IBAN comes first/);
+  assert.doesNotMatch(noIban, /data-enrol="new"/);
+  assert.match(noIban, /href="\/app#monerium-settings">Get my Zold IBAN/, "the next step is the IBAN, as a button");
   const ready = enrol.enrolmentHtml(e, { ibanReady: true });
-  assert.match(ready, /Show my transfer details/);
+  assert.match(ready, /data-enrol="new">Confirm my bank account/);
   assert.match(ready, /nothing is charged/i, "reads as the user's own money, not a fee");
+  // The step leads: its line and its button come before the explanation.
+  for (const html of [noIban, ready]) {
+    assert.ok(html.indexOf("g-step") < html.indexOf("z-btn--primary"), "the step line, then its button");
+    assert.ok(html.indexOf("z-btn--primary") < html.indexOf("Why 1 €?"), "the why folds away below the button");
+    assert.match(html, /<details class="g-why">/);
+  }
   assert.match(enrol.enrolmentHtml({ available: false }), /isn’t open yet/);
   assert.equal(enrol.enrolmentHtml(undefined), "");
 });

@@ -96,7 +96,11 @@ function renderGuardianSection(el) {
   el.innerHTML = `
     <div class="m-seclabel">Your guardian</div>
     <div class="m-lede" style="font-size:13px">${esc(text)}</div>
-    <a class="m-cta" href="/guardian" style="margin-top:12px">${unarmed && canFinish ? "Finish on the guardian page" : who ? "Manage your guardian" : "Choose your guardian"}</a>`;
+    ${unarmed && caps.zoldenburgEnrolment && !canFinish
+      // The IBAN is the next step, not the guardian page.
+      ? `<a class="m-cta" href="#monerium-settings" style="margin-top:12px">Get my Zold IBAN</a>
+         <a class="m-link" href="/guardian" style="margin-top:8px;display:inline-block">Manage your guardian</a>`
+      : `<a class="m-cta" href="/guardian" style="margin-top:12px">${unarmed && canFinish ? "Confirm my bank account" : who ? "Manage your guardian" : "Choose your guardian"}</a>`}`;
 }
 
 async function renderCandideSection(el) {
