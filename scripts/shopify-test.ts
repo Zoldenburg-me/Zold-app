@@ -107,15 +107,29 @@ const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
 
+/** The install cookie each started install set, by its state: the browser
+ *  that started an install sends it back on that install's callback. A test
+ *  that passes its own `cookie` header (even empty) plays another browser. */
+const installCookies = new Map<string, string>();
+const installCookieFor = (p: string, headers: Record<string, string> = {}): Record<string, string> => {
+  if (!p.startsWith("/api/shopify/callback?") || "cookie" in headers) return {};
+  const c = installCookies.get(new URLSearchParams(p.split("?")[1]).get("state") ?? "");
+  return c ? { cookie: c } : {};
+};
+const keepInstallCookie = (res: Response, body: any) => {
+  const m = /zold_shopify_install=([^;]+)/.exec(res.headers.get("set-cookie") ?? "");
+  if (m && typeof body?.authorizeUrl === "string") installCookies.set(new URL(body.authorizeUrl).searchParams.get("state") ?? "", `zold_shopify_install=${m[1]}`);
+};
 const call = async (method: string, p: string, opts: { body?: unknown; raw?: string; headers?: Record<string, string>; user?: string } = {}) => {
   const res = await fetch(`${API}${p}`, {
     method, redirect: "manual",
-    headers: { ...(opts.body || opts.raw ? { "content-type": "application/json" } : {}), ...(opts.user ? { "x-user": opts.user } : {}), ...(opts.headers ?? {}) },
+    headers: { ...(opts.body || opts.raw ? { "content-type": "application/json" } : {}), ...(opts.user ? { "x-user": opts.user } : {}), ...installCookieFor(p, opts.headers), ...(opts.headers ?? {}) },
     ...(opts.raw ? { body: opts.raw } : opts.body ? { body: JSON.stringify(opts.body) } : {}),
   });
   const text = await res.text();
   let body: any = {};
   try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+  keepInstallCookie(res, body);
   return { status: res.status, body, location: decodeURIComponent((res.headers.get("location") ?? "").replace(/\+/g, " ")) };
 };
 const fromShopify = (p: string, payload: unknown, shop = SHOP, secret = "shpss_test_secret") => {
@@ -172,6 +186,31 @@ await check("the callback with a forged hmac stores nothing", async () => {
 await check("a callback for a state we never issued is refused", async () => {
   const r = await call("GET", `/api/shopify/callback?${oauthQuery("not-our-state")}`);
   assert.match(r.location, /not started from Zold/);
+  assert.equal(store.findShopifyConnectionByShop(SHOP), undefined);
+});
+await check("starting an install sets an HttpOnly, SameSite=Lax cookie scoped to the callback", async () => {
+  const res = await fetch(`${API}/api/orgs/${org.id}/shopify/install`, {
+    method: "POST", headers: { "content-type": "application/json", "x-user": merchant.id }, body: JSON.stringify({ shop: SHOP }),
+  });
+  const cookie = res.headers.get("set-cookie") ?? "";
+  assert.equal(res.status, 200);
+  assert.match(cookie, /^zold_shopify_install=[A-Za-z0-9_-]{30,};/);
+  assert.match(cookie, /; Path=\/api\/shopify\/callback;/);
+  assert.match(cookie, /; HttpOnly/);
+  assert.match(cookie, /; SameSite=Lax/);
+});
+await check("the approval link opened in another browser (no install cookie) connects nothing and leaves the install pending", async () => {
+  const state = new URL(authorizeUrl).searchParams.get("state")!;
+  const r = await call("GET", `/api/shopify/callback?${oauthQuery(state)}`, { headers: { cookie: "" } });
+  assert.equal(r.status, 302);
+  assert.match(r.location, /browser where you started it/);
+  assert.match(r.location, /INSTALL_OTHER_BROWSER/);
+  assert.equal(store.findShopifyConnectionByShop(SHOP), undefined);
+});
+await check("a callback carrying another install's cookie is refused the same way", async () => {
+  const state = new URL(authorizeUrl).searchParams.get("state")!;
+  const r = await call("GET", `/api/shopify/callback?${oauthQuery(state)}`, { headers: { cookie: "zold_shopify_install=someone-elses-nonce" } });
+  assert.match(r.location, /INSTALL_OTHER_BROWSER/);
   assert.equal(store.findShopifyConnectionByShop(SHOP), undefined);
 });
 await check("the genuine callback exchanges the code, stores the token ENCRYPTED and configures the app ready", async () => {

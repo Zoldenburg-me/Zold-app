@@ -118,15 +118,29 @@ const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
 
+/** The install cookie each started install set, by its state: the browser
+ *  that started an install sends it back on that install's callback. A test
+ *  that passes its own `cookie` header (even empty) plays another browser. */
+const installCookies = new Map<string, string>();
+const installCookieFor = (p: string, headers: Record<string, string> = {}): Record<string, string> => {
+  if (!p.startsWith("/api/shopify/callback?") || "cookie" in headers) return {};
+  const c = installCookies.get(new URLSearchParams(p.split("?")[1]).get("state") ?? "");
+  return c ? { cookie: c } : {};
+};
+const keepInstallCookie = (res: Response, body: any) => {
+  const m = /zold_shopify_install=([^;]+)/.exec(res.headers.get("set-cookie") ?? "");
+  if (m && typeof body?.authorizeUrl === "string") installCookies.set(new URL(body.authorizeUrl).searchParams.get("state") ?? "", `zold_shopify_install=${m[1]}`);
+};
 const call = async (method: string, p: string, opts: { body?: unknown; raw?: string; headers?: Record<string, string>; user?: string } = {}) => {
   const res = await fetch(`${API}${p}`, {
     method, redirect: "manual",
-    headers: { ...(opts.body !== undefined || opts.raw !== undefined ? { "content-type": "application/json" } : {}), ...(opts.user ? { "x-user": opts.user } : {}), ...(opts.headers ?? {}) },
+    headers: { ...(opts.body !== undefined || opts.raw !== undefined ? { "content-type": "application/json" } : {}), ...(opts.user ? { "x-user": opts.user } : {}), ...installCookieFor(p, opts.headers), ...(opts.headers ?? {}) },
     body: opts.raw ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined),
   });
   const text = await res.text();
   let body: any = {};
   try { body = JSON.parse(text); } catch { body = { text }; }
+  keepInstallCookie(res, body);
   return { status: res.status, body, location: res.headers.get("location") ?? "", headers: res.headers };
 };
 const webhook = (topic: string, payload: unknown, shop = SHOP, secret = "shpss_test_secret", deliveryId: string = randomUUID()) => {
