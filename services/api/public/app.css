@@ -970,6 +970,8 @@
   }
   .m-cta:hover { filter: brightness(1.06); }
   .m-cta:disabled { opacity: .4; cursor: default; }
+  /* Busy but still focusable, so its progress text is read out (recovery.js zoldenburgRun). */
+  .m-cta[aria-disabled="true"], .m-link[aria-disabled="true"] { opacity: .6; cursor: progress; }
   .m-cta.quiet { background: var(--m-raised); color: #e9ebef; margin-top: 16px; min-height: 48px; font-size: 14px; }
   /* Send still runs the existing rail flow; it becomes the whole screen rather
      than a desktop side panel. Its own Noir screens land in the next pass. */

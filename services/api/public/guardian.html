@@ -28,10 +28,12 @@
   }
   .g-ok { color: var(--z-mint, inherit); }
   .g-err { color: var(--z-red, #c0392b); }
+  .g-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>
 <main id="g-body" aria-live="polite">
   <h1>Your guardian</h1>
   <p>Loading…</p>
 </main>
+<p id="g-status" class="g-sr" role="status"></p>
 <script type="module" src="/guardian/main.js"></script>
 </html>

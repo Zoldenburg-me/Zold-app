@@ -16,6 +16,7 @@
 import { IndexedDbStamper } from "../vendor/turnkey.js";
 import { OAUTH_STATE_KEY, readReturn, startLogin } from "./oauth.js";
 import { providerButtons } from "./providers.js";
+import { checkEnrolment, enrolmentHtml, issueEnrolmentCode } from "./enrolment.js";
 
 
 /**
@@ -99,6 +100,47 @@ export async function runPasskeyOp(prepPath, body, { api, passkeyGet }) {
   }
 }
 
+/**
+ * A button's click that runs one at a time. aria-disabled, not disabled: a
+ * disabled button drops focus to the page, and its progress is never read out.
+ */
+export function oneAtATime(b, fn) {
+  return async () => {
+    if (b.getAttribute("aria-disabled") === "true") return;
+    b.setAttribute("aria-disabled", "true");
+    b.setAttribute("aria-busy", "true");
+    try {
+      await fn();
+    } finally {
+      b.removeAttribute("aria-disabled");
+      b.removeAttribute("aria-busy");
+    }
+  };
+}
+
+/**
+ * Add or remove Zoldenburg: one passkey-approved Safe op. Once the passkey is
+ * done the chain still takes up to a minute, so the button says so, and
+ * `announce` reads it out; a button that looks dead invites a second try.
+ */
+export async function zoldenburgOp(add, btn, { api, userId, passkeyGet, announce = () => {} }) {
+  const label = btn.textContent;
+  try {
+    const r = await runPasskeyOp(`/api/users/${userId}/recovery/zoldenburg${add ? "" : "/remove"}`, add ? { acknowledged: true } : {}, {
+      api,
+      passkeyGet: async (prep) => {
+        const assertion = await passkeyGet(prep);
+        btn.textContent = add ? "Adding Zoldenburg to your wallet… up to a minute" : "Removing Zoldenburg from your wallet… up to a minute";
+        announce(btn.textContent);
+        return assertion;
+      },
+    });
+    return r.ok ? { ok: true, text: add ? "Zoldenburg is added." : "Zoldenburg is removed." } : { ok: false, text: r.reason };
+  } finally {
+    btn.textContent = label;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The browser side: everything below needs a DOM.
 
@@ -107,6 +149,28 @@ const bytesToB64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)))
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 /** The account's passkey approves the prepared Safe op. */
+/** A step-up for one action (routes/auth.ts): a challenge bound to it, approved with the account's passkey. */
+function stepUpWith(api, me) {
+  return async (action) => {
+    const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up", action });
+    const cred = await navigator.credentials.get({
+      publicKey: {
+        challenge: b64urlToBytes(challenge),
+        rpId: me.passkey?.rpId || location.hostname,
+        allowCredentials: [{ type: "public-key", id: b64urlToBytes(me.passkey.credentialId) }],
+        userVerification: "required",
+        timeout: 120_000,
+      },
+    });
+    return {
+      credentialId: cred.id,
+      authenticatorData: bytesToB64url(cred.response.authenticatorData),
+      clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+      signature: bytesToB64url(cred.response.signature),
+    };
+  };
+}
+
 async function passkeyGet(prep) {
   const cred = await navigator.credentials.get({
     publicKey: {
@@ -144,7 +208,7 @@ const HOW = `
     <li>Your account moves to the new phone after a short waiting period. Your old phone gets a heads-up and can stop it.</li>
   </ul>`;
 
-function render(el, { caps, zold, guardians, message }) {
+function render(el, { caps, zold, guardians, message, issued = null, ibanReady = false }) {
   const social = guardians.filter((g) => g.status === "active");
   const zoldOn = Boolean(zold?.active);
   const shortAddr = (a) => `${a.slice(0, 8)}…${a.slice(-6)}`;
@@ -154,7 +218,9 @@ function render(el, { caps, zold, guardians, message }) {
       <h2 class="g-sub">Zoldenburg</h2>
       <p>Our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
       ${zoldOn
-        ? `<p class="g-ok">Your guardian</p><div class="g-actions"><button type="button" class="z-btn" data-zold="remove">Remove</button></div>`
+        ? `${zold.enrolment?.armed ? `<p class="g-ok">Your guardian</p>` : ""}
+          ${enrolmentHtml(zold.enrolment, { issued, ibanReady })}
+          <div class="g-actions"><button type="button" class="z-btn" data-zold="remove">Remove</button></div>`
         : social.length
           ? `<p class="g-note">One guardian at a time: remove your backup login to choose Zoldenburg.</p>`
           : `<div class="g-actions"><button type="button" class="z-btn z-btn--primary" data-zold="add">Choose Zoldenburg</button></div>`}
@@ -225,6 +291,12 @@ async function boot() {
     }
   }
 
+  // The last enrolment code issued in this page: shown until it is used or replaced.
+  let issued = null;
+  const ibanReady = me.kycStatus === "approved" && Boolean(me.iban);
+  const stepUp = stepUpWith(api, me);
+  const live = document.getElementById("g-status");
+  const announce = (text) => { if (live) live.textContent = text; };
   const showError = (e) => show(`<h1>Something went wrong</h1><p>${esc(e?.message || "Try again.")}</p><p><a href="/app">Back to Zold</a></p>`);
   const draw = async () => {
     const [zold, social] = await Promise.all([
@@ -232,23 +304,15 @@ async function boot() {
       caps.turnkeyGuardians ? api(`/api/recovery/turnkey/users/${me.id}/guardians`) : { guardians: [] },
     ]);
     const guardians = social?.guardians ?? [];
-    render(el, { caps, zold, guardians, message });
-    const busyThen = (b, fn) => async () => {
-      b.setAttribute("aria-busy", "true");
-      b.disabled = true;
+    render(el, { caps, zold, guardians, message, issued, ibanReady });
+    const busyThen = (b, fn) => oneAtATime(b, async () => {
       try {
         message = await fn();
       } catch (e) {
         message = { ok: false, text: e?.message || "Something went wrong. Try again." };
       }
-      try {
-        await draw();
-      } catch (e) {
-        b.removeAttribute("aria-busy");
-        b.disabled = false;
-        showError(e);
-      }
-    };
+      await draw().catch(showError);
+    });
     el.querySelectorAll("[data-start]").forEach((b) => {
       b.addEventListener("click", busyThen(b, async () => {
         try {
@@ -273,9 +337,28 @@ async function boot() {
     });
     el.querySelectorAll("[data-zold]").forEach((b) => {
       b.addEventListener("click", busyThen(b, async () => {
-        const add = b.dataset.zold === "add";
-        const r = await runPasskeyOp(`/api/users/${me.id}/recovery/zoldenburg${add ? "" : "/remove"}`, add ? { acknowledged: true } : {}, { api, passkeyGet });
-        return r.ok ? { ok: true, text: add ? "Done. Zoldenburg is your guardian." : "Zoldenburg is removed." } : { ok: false, text: r.reason };
+        return zoldenburgOp(b.dataset.zold === "add", b, { api, userId: me.id, passkeyGet, announce });
+      }));
+    });
+    el.querySelectorAll("[data-enrol]").forEach((b) => {
+      if (b.dataset.enrol === "copy") {
+        b.addEventListener("click", async () => {
+          try { await navigator.clipboard.writeText(issued.memo); b.textContent = "Copied"; }
+          catch { b.textContent = "Copy failed: select it above"; }
+        });
+        return;
+      }
+      b.addEventListener("click", busyThen(b, async () => {
+        if (b.dataset.enrol === "new") {
+          issued = await issueEnrolmentCode({ api, userId: me.id, stepUp });
+          return null;
+        }
+        const v = await checkEnrolment({ api, userId: me.id });
+        if (v.armed && !v.codeIssuedAt) {
+          issued = null;
+          return { ok: true, text: "Your bank account is confirmed. Zoldenburg is your guardian." };
+        }
+        return null;
       }));
     });
   };

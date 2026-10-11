@@ -47,6 +47,8 @@ import { createGnosisPayRouter } from "./routes/gnosis-pay.js";
 import { formatReport, reconcile } from "./reconcile.js";
 import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
 import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./routes/recovery-zoldenburg.js";
+import { createZoldenburgEnrolmentRouter } from "./routes/recovery-zoldenburg-enrolment.js";
+import { ENROLMENT, enrolmentAvailable, sweepEnrolments } from "./recovery/zoldenburg-enrolment.js";
 import { createTurnkeyGuardianRouter } from "./routes/recovery-turnkey.js";
 import { createTurnkeyRecoveryRouter } from "./routes/recovery-turnkey-requests.js";
 import { sweepTurnkeyRecoveries } from "./recovery/turnkey-recovery.js";
@@ -226,6 +228,8 @@ app.use("/api", createAdminRouter());
 // Zoldenburg as guardian: the owner opts in, asks after losing the passkey,
 // and an operator signs from a hardware wallet (admin console or Safe Cover).
 app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession }));
+// The 1 € that arms Zoldenburg as guardian (recovery/zoldenburg-enrolment.ts).
+app.use("/api", createZoldenburgEnrolmentRouter({ requireUserSession }));
 // Turnkey guardians: the user's own Google or Apple login as a guardian
 // wallet. 404 on every route until TURNKEY_GUARDIANS=1.
 app.use("/api", createTurnkeyGuardianRouter({ requireUserSession }));
@@ -322,6 +326,14 @@ if (turnkeyGuardiansEnabled()) {
       .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
   setTimeout(runTurnkeySweep, 5_000).unref();
   setInterval(runTurnkeySweep, RECOVERY.sweepMs).unref();
+}
+// Open 1 € enrolment codes: look for their payment at Monerium.
+if (zoldenburgRecoveryEnabled() && enrolmentAvailable()) {
+  const runEnrolments = () =>
+    sweepEnrolments()
+      .then((n) => n && console.log(`enrolment sweep: armed ${n} account${n === 1 ? "" : "s"}`))
+      .catch((e) => console.error(`enrolment sweep failed: ${describeCause(e)}`));
+  setInterval(runEnrolments, ENROLMENT.pollMs).unref();
 }
 // Candide recoveries finalize themselves once the grace period has run, so a
 // user who lost their phone on a Friday is not waiting for a click on Monday.

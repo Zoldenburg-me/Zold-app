@@ -165,6 +165,11 @@ Version 2 (`sealField`/`openField` in `crypto-at-rest.ts`):
   refuses to write if the store changed under it.
 - `blindIndex` is an HMAC-SHA256 under `BLIND_INDEX_KEY`, its own key, so a
   ring rotation never changes an index. It normalises email, phone and IBAN.
+- The bank account a user enrolled for Zoldenburg recovery is an
+  HMAC-SHA256 under `RECOVERY_IBAN_HMAC_KEY` (≥ 32 chars), its own key, not
+  `BLIND_INDEX_KEY`: the value then matches no index elsewhere in the store.
+  Rotating it disarms every enrolled account until it pays 1 € again, so it
+  is not rotated on a schedule (`recovery/enrolment-key.ts`).
 
 Still open:
 - Setting `DATA_ENCRYPTION_KEYS` and `BLIND_INDEX_KEY` on each deployment,
