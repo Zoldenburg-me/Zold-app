@@ -1,47 +1,39 @@
 /**
- * /guardian: make your own Google or Apple login a recovery guardian of your
- * Zold account (docs/recovery-guardians-plan.md, Phase 2).
+ * /guardian: choose who can help you get your account back if you lose your
+ * phone — Zoldenburg (our team checks your ID) or your own Google or Apple
+ * login (a Turnkey wallet only that login can use). One at a time: nothing
+ * collects two approvals yet, and at threshold 1 either alone could move the
+ * account; the API refuses the combination (OTHER_GUARDIAN) as well.
  *
- * 1. "Add with Google/Apple": a fresh P-256 key in IndexedDB (the vendored
- *    Turnkey stamper), its hash as the login's nonce, a one-time state, then
- *    off to the provider.
- * 2. Back here with the ID token in the fragment: strip it from the address
- *    bar, send it with the key it is bound to (the API checks both and makes
- *    the Turnkey wallet), drop the key, then the passkey approves the op that
- *    puts the wallet's address on the Safe's recovery module.
+ * Adding or removing either is a passkey-approved op on the Safe; the page
+ * shows what the API says the chain lists. The Google/Apple login is a
+ * full-page redirect that comes back here with the ID token in the fragment
+ * (guardian/oauth.js); recovering with it happens on /recovery.
  *
- * Recovering WITH this guardian is not built yet, and the page says so. An
- * ES module of its own, under a CSP without inline script (routes/pages.ts),
+ * An ES module of its own under a CSP without inline script (routes/pages.ts),
  * so the Turnkey code never loads into /app.
  */
 import { IndexedDbStamper } from "../vendor/turnkey.js";
-import { OAUTH_STATE_KEY, authorizeUrl, newState, nonceFor, readReturn } from "./oauth.js";
+import { OAUTH_STATE_KEY, readReturn, startLogin } from "./oauth.js";
+import { providerButtons } from "./providers.js";
+import { afterCheck, checkEnrolment, enrolmentHtml, issueEnrolmentCode } from "./enrolment.js";
 
-const PROVIDER_NAMES = { google: "Google", apple: "Apple" };
-
-/** Step 1: leave for the provider. Nothing is sent to Zold yet. */
-export async function startLogin(provider, { stamper, storage, origin, logins, go, now = Date.now }) {
-  const clientId = logins?.[provider];
-  if (!clientId) throw new Error(`${PROVIDER_NAMES[provider] ?? provider} login is not set up on this deployment`);
-  await stamper.init();
-  await stamper.resetKeyPair();
-  const publicKey = stamper.getPublicKey();
-  if (!publicKey) throw new Error("this browser could not make a key; try another browser");
-  const state = newState();
-  storage.setItem(OAUTH_STATE_KEY, JSON.stringify({ state, provider, at: now() }));
-  go(authorizeUrl(provider, { clientId, redirectUri: `${origin}/guardian`, nonce: await nonceFor(publicKey), state }));
-}
 
 /**
- * Step 2, on the way back. Returns {step: "done" | "created" | "error", …}:
- * "created" means the Turnkey wallet exists but the passkey did not approve
- * adding it; "Finish adding" runs `finishAdd` again.
+ * Back from the Google/Apple login. Returns {step: "done" | "created" |
+ * "error", …}: "created" means the Turnkey wallet exists but the passkey did
+ * not approve adding it; "Finish" runs `finishAdd` again.
  */
 export async function finishLogin(env) {
   const { hash, storage, stripHash, stamper, api, userId, now = Date.now } = env;
-  const storedState = storage.getItem(OAUTH_STATE_KEY);
-  storage.removeItem(OAUTH_STATE_KEY);
   stripHash();
+  let storedState = null;
+  try {
+    storedState = storage.getItem(OAUTH_STATE_KEY);
+    storage.removeItem(OAUTH_STATE_KEY);
+  } catch {
+    // Storage blocked: no state to match, so readReturn refuses the login.
+  }
   const back = readReturn(hash, storedState, now());
   if (!back) return null;
   let guardian;
@@ -49,19 +41,21 @@ export async function finishLogin(env) {
     if (!back.ok) return { step: "error", reason: back.reason };
     await stamper.init();
     const publicKey = stamper.getPublicKey();
-    if (!publicKey) return { step: "error", reason: "The key this login was bound to is gone (another tab or a cleared browser). Start again." };
+    if (!publicKey) return { step: "error", reason: "That login timed out in this browser. Try again." };
     ({ guardian } = await api(`/api/recovery/turnkey/users/${userId}/guardians`, { oidcToken: back.idToken, publicKey }));
+    if (!guardian) return { step: "error", reason: "That login didn’t come back as a guardian. Try again." };
   } catch (e) {
     return { step: "error", reason: e.message };
   } finally {
-    // The key only bound this one token; signing a recovery makes a new one.
+    // The key only bound this one token; approving a recovery makes a new one.
     await stamper.clear().catch(() => {});
   }
   return finishAdd(guardian, env);
 }
 
-/** Put a created guardian on chain: prepare, approve with the passkey, submit. */
+/** Put a created Google/Apple guardian on chain: prepare, passkey, submit. */
 export async function finishAdd(guardian, { api, userId, passkeyGet, beforePasskey = () => {} }) {
+  if (!guardian) return { step: "error", reason: "That backup login is no longer on your account. Reload the page." };
   if (guardian.status === "active") return { step: "done", guardian };
   let prep;
   try {
@@ -75,13 +69,79 @@ export async function finishAdd(guardian, { api, userId, passkeyGet, beforePassk
     beforePasskey(guardian);
     assertion = await passkeyGet(prep);
   } catch {
-    return { step: "created", guardian, reason: "The passkey did not approve adding the guardian. Nothing changed on your account." };
+    return { step: "created", guardian, reason: "Face ID or fingerprint was cancelled. Tap Finish to try again." };
   }
   try {
     const done = await api(prep.submitTo, assertion);
     return { step: "done", guardian: done.guardian };
   } catch (e) {
     return { step: "created", guardian, reason: e.message };
+  }
+}
+
+/**
+ * Any other guardian change: ask the API for the op, approve it with the
+ * passkey, submit. An answer without a challenge needed no op (the chain
+ * already says so). Returns {ok: true, result} or {ok: false, reason}.
+ */
+export async function runPasskeyOp(prepPath, body, { api, passkeyGet }) {
+  try {
+    const prep = await api(prepPath, body);
+    if (!prep?.challenge) return { ok: true, result: prep };
+    let assertion;
+    try {
+      assertion = await passkeyGet(prep);
+    } catch {
+      return { ok: false, reason: "Face ID or fingerprint was cancelled. Nothing changed." };
+    }
+    return { ok: true, result: await api(prep.submitTo, assertion) };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
+/**
+ * A button's click that runs one at a time, and only while no other action
+ * sharing `lock` runs: each one redraws the page, so a second would draw over
+ * the first. aria-disabled, not disabled: a disabled button drops focus to the
+ * page, and its progress is never read out.
+ */
+export function oneAtATime(b, fn, lock = { busy: false }) {
+  return async () => {
+    if (lock.busy || b.getAttribute("aria-disabled") === "true") return;
+    lock.busy = true;
+    b.setAttribute("aria-disabled", "true");
+    b.setAttribute("aria-busy", "true");
+    try {
+      await fn();
+    } finally {
+      lock.busy = false;
+      b.removeAttribute("aria-disabled");
+      b.removeAttribute("aria-busy");
+    }
+  };
+}
+
+/**
+ * Add or remove Zoldenburg: one passkey-approved Safe op. Once the passkey is
+ * done the chain still takes up to a minute, so the button says so, and
+ * `announce` reads it out; a button that looks dead invites a second try.
+ */
+export async function zoldenburgOp(add, btn, { api, userId, passkeyGet, announce = () => {} }) {
+  const label = btn.textContent;
+  try {
+    const r = await runPasskeyOp(`/api/users/${userId}/recovery/zoldenburg${add ? "" : "/remove"}`, add ? { acknowledged: true } : {}, {
+      api,
+      passkeyGet: async (prep) => {
+        const assertion = await passkeyGet(prep);
+        btn.textContent = add ? "Adding Zoldenburg to your wallet… up to a minute" : "Removing Zoldenburg from your wallet… up to a minute";
+        announce(btn.textContent);
+        return assertion;
+      },
+    });
+    return r.ok ? { ok: true, text: add ? "Zoldenburg is added." : "Zoldenburg is removed." } : { ok: false, text: r.reason };
+  } finally {
+    btn.textContent = label;
   }
 }
 
@@ -93,6 +153,29 @@ const bytesToB64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)))
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 /** The account's passkey approves the prepared Safe op. */
+/** A step-up for one action (routes/auth.ts): a challenge bound to it, approved with the account's passkey. */
+function stepUpWith(api, me) {
+  return async (action) => {
+    if (!me.passkey?.credentialId) throw new Error("Add Face ID or fingerprint sign-in in Zold first, then come back.");
+    const { challenge } = await api("/api/webauthn/challenge", { purpose: "step_up", action });
+    const cred = await navigator.credentials.get({
+      publicKey: {
+        challenge: b64urlToBytes(challenge),
+        rpId: me.passkey?.rpId || location.hostname,
+        allowCredentials: [{ type: "public-key", id: b64urlToBytes(me.passkey.credentialId) }],
+        userVerification: "required",
+        timeout: 120_000,
+      },
+    });
+    return {
+      credentialId: cred.id,
+      authenticatorData: bytesToB64url(cred.response.authenticatorData),
+      clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+      signature: bytesToB64url(cred.response.signature),
+    };
+  };
+}
+
 async function passkeyGet(prep) {
   const cred = await navigator.credentials.get({
     publicKey: {
@@ -123,30 +206,54 @@ function apiWith(token) {
   };
 }
 
-const NOTES = `
-  <p class="g-note"><b>Built, not yet run on a live deployment.</b> No Google or Apple login has been added as a guardian with this page yet. Recovering your account with such a guardian is not built, so until it is, this guardian cannot recover your account.</p>
-  <p class="g-note">Use a login whose email is not your Zold account's email: whoever controls that inbox could otherwise start a recovery and delete the alert mail. In your Google or Apple account, add a second way to sign in, so losing one does not lose the guardian.</p>
-  <p class="g-note">While you are logged in to a guardian on this page, the page's own code holds that login. The waiting period and the alerts on your account are the protection if that code were ever changed.</p>`;
+const HOW = `
+  <h2 class="g-sub">How it works</h2>
+  <ul class="g-steps">
+    <li>New phone? Go to <a href="/recovery">zoldhq.com/recovery</a> and follow the steps.</li>
+    <li>Your account moves to the new phone after a short waiting period. Your old phone gets a heads-up and can stop it.</li>
+  </ul>`;
 
-function render(el, { me, caps, guardians, result }) {
+function render(el, { caps, zold, guardians, message, issued = null, ibanReady = false }) {
+  const social = guardians.filter((g) => g.status === "active");
+  const zoldOn = Boolean(zold?.active);
   const shortAddr = (a) => `${a.slice(0, 8)}…${a.slice(-6)}`;
-  const rows = guardians.length
-    ? `<ul class="g-list">${guardians.map((g) => `<li><span translate="no">${esc(shortAddr(g.address))}</span> · ${g.status === "active" ? `Added to your account${g.activeAt ? ` on ${esc(new Date(g.activeAt).toLocaleDateString())}` : ""}` : "Not on your account yet"}
-        ${g.status === "created" ? `<button type="button" class="z-btn" data-finish="${esc(g.turnkeySubOrgId)}">Finish adding</button>` : ""}</li>`).join("")}</ul>`
-    : `<p>No Google or Apple guardian yet.</p>`;
-  const buttons = ["google", "apple"].filter((p) => caps.turnkeyLogins?.[p])
-    .map((p) => `<button type="button" class="z-btn z-btn--primary" data-start="${p}">Add with ${PROVIDER_NAMES[p]}</button>`).join(" ");
-  const message = result
-    ? result.step === "done" ? `<p class="g-ok" role="status">Your ${result.provider ? `${esc(PROVIDER_NAMES[result.provider])} ` : ""}login is now a guardian on your account.</p>`
-    : `<p class="g-err" role="alert">${esc(result.reason ?? "Something went wrong.")}</p>`
-    : "";
+
+  const zoldCard = caps.zoldenburgRecovery ? `
+    <section class="g-card">
+      <h2 class="g-sub" id="g-zold-head" tabindex="-1">Zoldenburg</h2>
+      <p>Our team checks it’s you against the ID you gave Monerium, then moves your account to your new phone.</p>
+      ${zoldOn
+        ? `${zold.enrolment?.armed ? `<p class="g-ok">Your guardian</p>` : `<p>Added to your wallet.</p>`}
+          ${enrolmentHtml(zold.enrolment, { issued, ibanReady })}
+          <div class="g-actions"><button type="button" class="z-btn" data-zold="remove">Remove</button></div>`
+        : social.length
+          ? `<p class="g-note">One guardian at a time: remove your backup login to choose Zoldenburg.</p>`
+          : `<div class="g-actions"><button type="button" class="z-btn z-btn--primary" data-zold="add">Choose Zoldenburg</button></div>`}
+    </section>` : "";
+
+  const buttons = providerButtons(caps, "Add");
+  const rows = guardians.map((g) => `<li><span translate="no">${esc(shortAddr(g.address))}</span>
+      ${g.status === "active"
+        ? `<span class="g-ok">Your guardian</span><button type="button" class="z-btn" data-remove="${esc(g.turnkeySubOrgId)}">Remove</button>`
+        : `<span>Almost there</span><button type="button" class="z-btn" data-finish="${esc(g.turnkeySubOrgId)}">Finish</button>`}</li>`).join("");
+  const loginCard = caps.turnkeyGuardians ? `
+    <section class="g-card">
+      <h2 class="g-sub" id="g-login-head" tabindex="-1">Your Google or Apple login</h2>
+      <p>Approve the move with a login you already have. It stays yours alone: Zold never holds its key.</p>
+      ${rows ? `<ul class="g-list">${rows}</ul>` : ""}
+      ${social.length ? ""
+        : zoldOn ? `<p class="g-note">One guardian at a time: remove Zoldenburg to use your Google or Apple login.</p>`
+          : buttons ? `<div class="z-providers">${buttons}</div>` : ""}
+      <p class="g-note">Tip: pick a login with a different email from your Zold account, and turn on two-step sign-in for it.</p>
+    </section>` : "";
+
   el.innerHTML = `
-    <h1>Your Google or Apple login as a guardian</h1>
-    <p>Signed in as ${esc(me.name || me.email || "you")}. A guardian can approve moving this account to a new passkey if you lose yours. Zold never holds this guardian's key: Turnkey keeps it, and only your login can use it.</p>
-    ${message}
-    ${rows}
-    <p>${buttons || "No login provider is set up on this deployment."}</p>
-    ${NOTES}
+    <h1>Your guardian</h1>
+    <p>Lose your phone, keep your account. Pick who can help you move Zold to a new phone.</p>
+    ${message ? `<p class="${message.ok ? "g-ok" : "g-err"}" role="${message.ok ? "status" : "alert"}">${esc(message.text)}</p>` : ""}
+    ${zoldCard}
+    ${loginCard}
+    ${HOW}
     <p><a href="/app">Back to Zold</a></p>`;
 }
 
@@ -161,8 +268,8 @@ async function boot() {
   try { token = localStorage.getItem("zold-session"); } catch { /* storage blocked */ }
   const health = await fetch("/api/health").then((r) => r.json()).catch(() => null);
   const caps = health?.capabilities ?? {};
-  if (!caps.turnkeyGuardians) return show(`<h1>Not available</h1><p>Google and Apple guardians are not switched on for this deployment.</p><p><a href="/app">Back to Zold</a></p>`);
-  if (!token) return show(`<h1>Sign in first</h1><p>Open Zold, sign in with your passkey, then come back to Security → Recovery.</p><p><a href="/app">Open Zold</a></p>`);
+  if (!caps.zoldenburgRecovery && !caps.turnkeyGuardians) return show(`<h1>Your guardian</h1><p>Guardians aren’t available right now.</p><p><a href="/app">Back to Zold</a></p>`);
+  if (!token) return show(`<h1>Sign in first</h1><p>Open Zold and sign in, then come back to Security → Recovery.</p><p><a href="/app">Open Zold</a></p>`);
   const api = apiWith(token);
   let me;
   try { me = await api("/api/session"); } catch { return show(`<h1>Sign in first</h1><p>Your session has ended. Sign in again, then come back here.</p><p><a href="/app">Open Zold</a></p>`); }
@@ -175,38 +282,100 @@ async function boot() {
       const p = document.createElement("p");
       p.className = "g-ok";
       p.setAttribute("role", "status");
-      p.textContent = `Approve with your passkey: add ${g.address} as a guardian of your account.`;
+      p.textContent = `Confirm with Face ID or fingerprint to add ${g.address} as your guardian.`;
       el.prepend(p);
     },
   };
-  const providerOnReturn = (() => { try { return JSON.parse(sessionStorage.getItem(OAUTH_STATE_KEY) || "{}").provider; } catch { return undefined; } })();
-  let result = returnedHash ? await finishLogin(env) : null;
-  if (result) result.provider = providerOnReturn;
+  let message = null;
+  if (returnedHash) {
+    try {
+      const r = await finishLogin(env);
+      if (r) message = r.step === "done" ? { ok: true, text: "Done. Your backup login now protects your account." } : { ok: false, text: r.reason ?? "Something went wrong." };
+    } catch (e) {
+      message = { ok: false, text: e?.message || "Something went wrong. Try again." };
+    }
+  }
 
+  // The last enrolment code issued in this page: shown until it is used or replaced.
+  let issued = null;
+  // One action at a time on the whole page, across redraws.
+  const pageLock = { busy: false };
+  const ibanReady = me.kycStatus === "approved" && Boolean(me.iban);
+  const stepUp = stepUpWith(api, me);
+  const live = document.getElementById("g-status");
+  const announce = (text) => { if (live) live.textContent = text; };
+  const showError = (e) => show(`<h1>Something went wrong</h1><p>${esc(e?.message || "Try again.")}</p><p><a href="/app">Back to Zold</a></p>`);
   const draw = async () => {
-    const { guardians } = await api(`/api/recovery/turnkey/users/${me.id}/guardians`);
-    render(el, { me, caps, guardians, result });
+    const [zold, social] = await Promise.all([
+      caps.zoldenburgRecovery ? api(`/api/users/${me.id}/recovery/zoldenburg`) : null,
+      caps.turnkeyGuardians ? api(`/api/recovery/turnkey/users/${me.id}/guardians`) : { guardians: [] },
+    ]);
+    const guardians = social?.guardians ?? [];
+    render(el, { caps, zold, guardians, message, issued, ibanReady });
+    // The redraw replaces the clicked button: focus goes to its card's heading,
+    // not to the top of the page, and the outcome is read out.
+    const busyThen = (b, fn) => oneAtATime(b, async () => {
+      const head = b.closest?.(".g-card")?.querySelector("h2")?.id;
+      try {
+        message = await fn();
+      } catch (e) {
+        message = { ok: false, text: e?.message || "Something went wrong. Try again." };
+      }
+      await draw().catch(showError);
+      if (message?.text) announce(message.text);
+      if (head) document.getElementById(head)?.focus({ preventScroll: false });
+    }, pageLock);
     el.querySelectorAll("[data-start]").forEach((b) => {
-      b.addEventListener("click", async () => {
-        b.setAttribute("aria-busy", "true");
+      b.addEventListener("click", busyThen(b, async () => {
         try {
           await startLogin(b.dataset.start, { stamper, storage: sessionStorage, origin: location.origin, logins: caps.turnkeyLogins, go: (u) => location.assign(u) });
+          return null;
         } catch (e) {
-          result = { step: "error", reason: e.message };
-          await draw();
+          return { ok: false, text: e.message };
         }
-      });
+      }));
     });
     el.querySelectorAll("[data-finish]").forEach((b) => {
-      b.addEventListener("click", async () => {
-        b.setAttribute("aria-busy", "true");
-        const g = guardians.find((x) => x.turnkeySubOrgId === b.dataset.finish);
-        result = await finishAdd(g, env);
-        await draw();
-      });
+      b.addEventListener("click", busyThen(b, async () => {
+        const r = await finishAdd(guardians.find((x) => x.turnkeySubOrgId === b.dataset.finish), env);
+        return r.step === "done" ? { ok: true, text: "Done. Your backup login now protects your account." } : { ok: false, text: r.reason };
+      }));
+    });
+    el.querySelectorAll("[data-remove]").forEach((b) => {
+      b.addEventListener("click", busyThen(b, async () => {
+        const r = await runPasskeyOp(`/api/recovery/turnkey/users/${me.id}/guardians/${encodeURIComponent(b.dataset.remove)}/remove`, {}, { api, passkeyGet });
+        return r.ok ? { ok: true, text: "Your backup login is removed." } : { ok: false, text: r.reason };
+      }));
+    });
+    el.querySelectorAll("[data-zold]").forEach((b) => {
+      b.addEventListener("click", busyThen(b, async () => {
+        return zoldenburgOp(b.dataset.zold === "add", b, { api, userId: me.id, passkeyGet, announce });
+      }));
+    });
+    el.querySelectorAll("[data-enrol]").forEach((b) => {
+      if (b.dataset.enrol === "copy") {
+        // The reference as drawn with this button, not whatever `issued` holds later.
+        const memo = issued?.memo;
+        b.addEventListener("click", async () => {
+          if (!memo) return;
+          try { await navigator.clipboard.writeText(memo); b.textContent = "Copied"; }
+          catch { b.textContent = "Copy failed: select it above"; }
+          announce(b.textContent);
+        });
+        return;
+      }
+      b.addEventListener("click", busyThen(b, async () => {
+        if (b.dataset.enrol === "new") {
+          issued = await issueEnrolmentCode({ api, userId: me.id, stepUp });
+          return { ok: true, text: "Your transfer details are below." };
+        }
+        const next = afterCheck(await checkEnrolment({ api, userId: me.id }), issued);
+        issued = next.issued;
+        return next.message;
+      }));
     });
   };
-  await draw().catch((e) => show(`<h1>Something went wrong</h1><p>${esc(e.message)}</p><p><a href="/app">Back to Zold</a></p>`));
+  await draw().catch(showError);
 }
 
 if (typeof document !== "undefined") boot();

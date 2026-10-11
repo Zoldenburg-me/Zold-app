@@ -36,7 +36,7 @@ import { createFaucetRouter } from "./routes/faucet.js";
 import { capabilities } from "./capabilities.js";
 import { publicUser } from "./users/public-user.js";
 import { urlForLog } from "./http/log-safe.js";
-import { apiRateLimit, originPolicy, securityHeaders } from "./http/policy.js";
+import { apiRateLimit, adminHostPolicy, originPolicy, securityHeaders } from "./http/policy.js";
 import {
   requireSession,
   requireUserSession,
@@ -51,6 +51,9 @@ import { createZoldenburgEnrolmentRouter } from "./routes/recovery-zoldenburg-en
 import { ENROLMENT, enrolmentAvailable, sweepEnrolments } from "./recovery/zoldenburg-enrolment.js";
 import { sweepRecoveryBankChecks } from "./recovery/zoldenburg-bank-check.js";
 import { createTurnkeyGuardianRouter } from "./routes/recovery-turnkey.js";
+import { createTurnkeyRecoveryRouter } from "./routes/recovery-turnkey-requests.js";
+import { sweepTurnkeyRecoveries } from "./recovery/turnkey-recovery.js";
+import { turnkeyGuardiansEnabled } from "./wallet/turnkey.js";
 import { sweepOwnerAlerts } from "./recovery/owner-alerts.js";
 import { mailAvailable } from "./adapters/mailer.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
@@ -74,6 +77,8 @@ import { routeAsyncRejections } from "./http/async-errors.js";
 import { describeCause, describeError, redactedMessage } from "./http/log-cause.js";
 import { recordServerError } from "./http/error-log.js";
 import { knownError } from "./http/known-errors.js";
+import { createOperatorGate } from "./operators/gate.js";
+import { createOperatorAuthRouter } from "./routes/operator-auth.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -88,6 +93,7 @@ app.use(express.json({
 // outermost thing every request passes through, readable in one place.
 app.use(securityHeaders);
 app.use(originPolicy);
+app.use(adminHostPolicy);
 
 // Where the client address comes from. Default 0 = the socket peer, correct
 // only with nothing in front; behind a proxy that address is the proxy, so every
@@ -98,6 +104,11 @@ app.use("/api", apiRateLimit);
 // Pages and static assets, declared before the API routers so nothing under
 // /api can be shadowed by a file on disk.
 app.use(createPageRouter());
+// Every /api/admin route, in whichever router below declares it, passes the
+// operator gate first: Cloudflare Access, an operator passkey session (or the
+// read-only operator token), and a fresh approval for each change.
+app.use("/api/admin", createOperatorGate());
+app.use("/api", createOperatorAuthRouter());
 
 /**
  * The organisation domain (docs/business-accounts.md).
@@ -231,6 +242,9 @@ app.use("/api", createZoldenburgEnrolmentRouter({ requireUserSession }));
 // Turnkey guardians: the user's own Google or Apple login as a guardian
 // wallet. 404 on every route until TURNKEY_GUARDIANS=1.
 app.use("/api", createTurnkeyGuardianRouter({ requireUserSession }));
+// Recovering with that guardian: the lost device starts a request, the
+// guardian signs on /guardian, the API relays; same 404 while the switch is off.
+app.use("/api", createTurnkeyRecoveryRouter({ requireUserSession }));
 // Sessions and passkeys: the WebAuthn ceremonies, and the passkey Safe whose
 // owner those credentials are.
 app.use("/api", createAuthRouter({ requireUserSession }));
@@ -312,6 +326,15 @@ if (zoldenburgRecoveryEnabled()) {
       .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
   setTimeout(runZoldenburgSweep, 5_000).unref();
   setInterval(runZoldenburgSweep, RECOVERY.sweepMs).unref();
+}
+// Turnkey-guardian recoveries: expire, pick up executions, finalize after the wait.
+if (turnkeyGuardiansEnabled()) {
+  const runTurnkeySweep = () =>
+    sweepTurnkeyRecoveries()
+      .then((n) => n && console.log(`recovery sweep: finalized ${n} Turnkey-guardian recover${n === 1 ? "y" : "ies"}`))
+      .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
+  setTimeout(runTurnkeySweep, 5_000).unref();
+  setInterval(runTurnkeySweep, RECOVERY.sweepMs).unref();
 }
 // Open 1 € codes, at enrolment and at recovery: look for their payment at Monerium.
 if (zoldenburgRecoveryEnabled() && enrolmentAvailable()) {

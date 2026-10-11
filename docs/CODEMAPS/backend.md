@@ -22,9 +22,12 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | /api | routes/recovery-candide.ts | email/SMS guardian channels, recovery flow |
 | /api | routes/recovery-zoldenburg.ts | Zoldenburg guardian + /admin/recoveries; the recovery 1 €: /recovery/zoldenburg/:id/bank-code (+ /bank-check), checked in recovery/zoldenburg-bank-check.ts |
 | /api | routes/recovery-zoldenburg-enrolment.ts | the 1 € that arms Zoldenburg: /users/:id/recovery/zoldenburg/enrolment (+ /check) |
-| /api | routes/recovery-turnkey.ts | Turnkey guardian sub-orgs: /recovery/turnkey/users/:id/guardians (+ /:subOrgId/add, /ops/:requestId: the passkey op that adds it on chain), /recovery/turnkey/login (404 until `TURNKEY_GUARDIANS=1`) |
+| /api | routes/recovery-turnkey.ts | Turnkey guardian sub-orgs: /recovery/turnkey/users/:id/guardians (+ /:subOrgId/add and /remove, /ops/:requestId: the passkey ops that add or remove it on chain), /recovery/turnkey/login (404 until `TURNKEY_GUARDIANS=1`) |
+| /api | routes/recovery-turnkey-requests.ts | recovery with that guardian: /recovery/turnkey/requests (+/:id/passkey, /digest, /signature, /finalize; per-request secret), /users/:id/recovery/turnkey/requests (+/:rid/cancel) |
 | /api | routes/safe-signers.ts, safe-import.ts | owners, threshold, spending limits, import |
 | /api | routes/shopify.ts | install/callback, payments app hooks, order pay pages |
+| /api/admin | operators/gate.ts (middleware) | ahead of every admin route: Cloudflare Access, operator passkey session or read-only token, a fresh approval per change, audit |
+| /api | routes/operator-auth.ts | /admin/auth/*: enrolment, login, step-up challenge, add passkey, logout, me |
 | /api | routes/email-verification.ts, faucet.ts, admin.ts | codes, testnet faucet, operator stats |
 | /api/orgs | routes/orgs.ts (27) | orgs, plans, members, invites, accounts, contacts, wallets and their ownership proof (challenge, prove, re-check) |
 | /api/orgs | routes/business.ts → business/* | drafts (four-eyes runs), invoices, invoicing (§14 UStG; issue-outgoing is the one issue path), income-invoices (payer rules, monthly drafts from wallet receipts, issuing a draft), payment-links, bookkeeping (coa, rules, ledger, holdings, realised gains, revalue), bookkeeping-export (statement, Belege, Lexware, ZIP), integrations (GetMyInvoices) |

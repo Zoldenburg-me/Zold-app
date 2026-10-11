@@ -13,7 +13,7 @@
  *
  * No chain, no Monerium. Run: npm run recovery-bank:test
  */
-import "./_test-env.js";
+import "./_local-chain.js";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
@@ -34,6 +34,10 @@ const E = await import("../services/api/src/recovery/zoldenburg-enrolment.js");
 const B = await import("../services/api/src/recovery/zoldenburg-bank-check.js");
 const { publicRecoveryRequest } = await import("../services/api/src/recovery.js");
 const { createZoldenburgRecoveryRouter } = await import("../services/api/src/routes/recovery-zoldenburg.js");
+const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
+const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
+const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
+const { operatorKit } = await import("./_operator.js");
 type Reads = import("../services/api/src/recovery/zoldenburg-enrolment.js").EnrolmentReads;
 
 let failed = 0;
@@ -254,9 +258,19 @@ await t("a request gets at most maxCodes codes; the count and the read clock sur
 
 const app = express();
 app.use(express.json());
+app.use("/api/admin", createOperatorGate());
+app.use("/api", createOperatorAuthRouter());
 app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession: () => false }));
-const server = app.listen(0);
-const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+const server = app.listen(0, "127.0.0.1");
+await new Promise<void>((r) => server.once("listening", () => r()));
+const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+const base = `${origin}/api`;
+// The operator signs in with a passkey and approves each change (scripts/_operator.ts).
+const kit = await operatorKit({ base: origin, origin: OPERATOR_CONFIG.adminOrigin, rpId: SECURITY.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
+const opCall = async (p: string, body?: unknown) => {
+  const r = await kit.call(body === undefined ? "GET" : "POST", `/api${p}`, body);
+  return { status: r.status, data: r.body, text: JSON.stringify(r.body) };
+};
 const call = async (p: string, body?: unknown, headers: Record<string, string> = {}) => {
   const r = await fetch(`${base}${p}`, {
     method: body === undefined ? "GET" : "POST",
@@ -267,7 +281,6 @@ const call = async (p: string, body?: unknown, headers: Record<string, string> =
   return { status: r.status, text, data: text ? JSON.parse(text) : null };
 };
 const person = { "x-recovery-secret": SECRET };
-const operator = { authorization: `Bearer ${OPERATOR}` };
 
 newRequest("r4");
 
@@ -321,11 +334,11 @@ await t("routes: past maxCodes, 429 TOO_MANY_CODES", async () => {
 
 await t("operator: BANK_CHECK_PENDING on sign-request, execute and sync until the 1 € passed; no Safe Cover link", async () => {
   for (const [p, body] of [["sign-request", {}], ["execute", { signature: "0x00", reviewNote: "Video call, matched Monerium profile" }], ["sync", {}]] as const) {
-    const r = await call(`/admin/recoveries/r4/${p}`, body, operator);
+    const r = await opCall(`/admin/recoveries/r4/${p}`, body);
     assert.equal(r.status, 409, `${p}: ${r.text}`);
     assert.equal(r.data.code, "BANK_CHECK_PENDING", p);
   }
-  const row = (await call("/admin/recoveries", undefined, operator)).data.requests.find((x: any) => x.id === "r4");
+  const row = (await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r4");
   assert.equal(row.bankCheck.passed, false);
   assert.ok(row.bankCheck.codeIssuedAt);
   assert.equal(row.safeCoverLink, null);
@@ -336,9 +349,9 @@ await t("operator: once passed, the gate opens (execute then asks for the review
   open = { code: routeCode, memo: E.memoFor(routeCode) };
   const paid = order({ meta: { state: "processed", processedAt: new Date(Date.now() + 1000).toISOString() } });
   assert.equal(await B.checkRecoveryBankPayment("r4", reads([paid]), new Date()), "passed");
-  const row = (await call("/admin/recoveries", undefined, operator)).data.requests.find((x: any) => x.id === "r4");
+  const row = (await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r4");
   assert.equal(row.bankCheck.passed, true);
-  const ex = await call("/admin/recoveries/r4/execute", { signature: "0x00" }, operator);
+  const ex = await opCall("/admin/recoveries/r4/execute", { signature: "0x00" });
   assert.equal(ex.data.code, "NO_REVIEW_NOTE", ex.text);
   const again = await call("/recovery/zoldenburg/r4/bank-code", {}, person);
   assert.equal(again.data.code, "ALREADY_PASSED");
@@ -348,11 +361,54 @@ await t("operator: an unarmed account is NOT_ARMED, before any bank check", asyn
   newRequest("r5");
   const e = structuredClone(user().zoldenburgEnrolment!);
   store.updateUser("u1", { zoldenburgEnrolment: undefined });
-  assert.equal((await call("/admin/recoveries/r5/sign-request", {}, operator)).data.code, "NOT_ARMED");
+  assert.equal((await opCall("/admin/recoveries/r5/sign-request", {})).data.code, "NOT_ARMED");
   assert.equal((await call("/recovery/zoldenburg/r5/bank-code", {}, person)).data.code, "NOT_ARMED");
   store.updateUser("u1", { zoldenburgEnrolment: e });
 });
 server.close();
+
+// ---- the page's 1 € step (public/recovery/bank-step.js) --------------------
+
+const UI: any = await import(new URL("../services/api/public/recovery/bank-step.js", import.meta.url).href);
+const memStore = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v); } }; };
+const view = (bankCheck: Record<string, unknown>) => ({ id: "rq", bankCheck: { minimumEur: 1, passed: false, canIssueCode: true, ...bankCheck } });
+
+await t("page: no code yet offers the details; no IBAN digits anywhere; the warning is there", () => {
+  const html = UI.bankStepHtml(view({}), null);
+  assert.match(html, /data-bank="new"[^>]*>Show my transfer details/);
+  assert.match(html, /Only send this if you started this recovery yourself/);
+  assert.ok(!/\d{4}/.test(html.replace(/1 €/g, "")), "no 4-digit runs");
+});
+
+await t("page: the reference shows only for the open code of this request, and survives a reload", () => {
+  const storage = memStore();
+  const r = view({ codeIssuedAt: "2026-10-11T10:00:00.000Z" });
+  UI.keepIssued(storage, { id: "rq", memo: "ZOLD AB12-CD34", bankCheck: { codeIssuedAt: "2026-10-11T10:00:00.000Z" } });
+  assert.equal(UI.issuedFor(storage, r)?.memo, "ZOLD AB12-CD34");
+  assert.match(UI.bankStepHtml(r, UI.issuedFor(storage, r)), /ZOLD AB12-CD34/);
+  assert.equal(UI.issuedFor(storage, { ...r, id: "other" }), null, "another request's reference never shows");
+  assert.equal(UI.issuedFor(storage, view({ codeIssuedAt: "2026-10-11T11:00:00.000Z" })), null, "a newer code elsewhere voids it");
+  const lost = UI.bankStepHtml(r, null);
+  assert.ok(!lost.includes("AB12"));
+  assert.match(lost, /earlier reference still counts/);
+  assert.equal(UI.issuedFor({ getItem: () => { throw new Error("blocked"); } } as any, r), null, "blocked storage reads as none");
+});
+
+await t("page: out of codes, no new-reference button and a way out; passed, the step is done", () => {
+  const out = UI.bankStepHtml(view({ codeIssuedAt: "2026-10-11T10:00:00.000Z", canIssueCode: false }), null);
+  assert.ok(!out.includes('data-bank="new"'));
+  assert.match(out, /support@zoldhq.com/);
+  const done = UI.bankStepHtml(view({ passed: true }), null);
+  assert.ok(!done.includes("data-bank"));
+  assert.match(done, /arrived/);
+});
+
+await t("page: the poll redraws only when the step changed", () => {
+  const a = view({ codeIssuedAt: "x", lastCheck: { at: "1" } });
+  assert.equal(UI.bankStepChanged(a, structuredClone(a)), false);
+  assert.ok(UI.bankStepChanged(a, view({ codeIssuedAt: "x", lastCheck: { at: "2" } })));
+  assert.ok(UI.bankStepChanged(a, view({ codeIssuedAt: "x", lastCheck: { at: "1" }, passed: true })));
+});
 
 // ---- source checks ---------------------------------------------------------
 
