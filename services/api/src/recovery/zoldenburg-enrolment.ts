@@ -49,23 +49,28 @@ const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 // ---------------------------------------------------------------------------
 // the code
 
-const hashCode = (canonical: string) => createHash("sha256").update(`zold/enrolment-code:${canonical}`).digest("hex");
+/** What a code is for. The purpose is in the hash, so an enrolment code can
+ *  never pass a recovery check, or the other way round. */
+export type CodePurpose = "enrolment" | "recovery";
+
+const hashCode = (canonical: string, purpose: CodePurpose) =>
+  createHash("sha256").update(`zold/${purpose}-code:${canonical}`).digest("hex");
 
 /** Upper case, the letters Crockford reads as digits mapped, separators out. */
 const canonical = (s: string) => s.toUpperCase().replace(/O/g, "0").replace(/[IL]/g, "1").replace(/[^0-9A-Z]/g, "");
 
-export function newEnrolmentCode(): { code: string; hash: string } {
+export function newEnrolmentCode(purpose: CodePurpose = "enrolment"): { code: string; hash: string } {
   let bits = 0n;
   for (const b of randomBytes(5)) bits = (bits << 8n) | BigInt(b);
   let raw = "";
   for (let i = 7; i >= 0; i--) raw += CROCKFORD[Number((bits >> BigInt(i * 5)) & 31n)];
-  return { code: `${raw.slice(0, 4)}-${raw.slice(4)}`, hash: hashCode(raw) };
+  return { code: `${raw.slice(0, 4)}-${raw.slice(4)}`, hash: hashCode(raw, purpose) };
 }
 
 /** Does this memo carry the code, however the payer spaced or cased it? */
-export function memoCarriesCode(memo: string | undefined, codeHash: string): boolean {
+export function memoCarriesCode(memo: string | undefined, codeHash: string, purpose: CodePurpose = "enrolment"): boolean {
   const s = canonical(memo ?? "");
-  for (let i = 0; i + 8 <= s.length; i++) if (hashCode(s.slice(i, i + 8)) === codeHash) return true;
+  for (let i = 0; i + 8 <= s.length; i++) if (hashCode(s.slice(i, i + 8), purpose) === codeHash) return true;
   return false;
 }
 
@@ -109,7 +114,16 @@ export function judgeEnrolmentOrder(o: MoneriumOrderLike, user: User, profileNam
 /** The orders that could be this code's payment: processed EURe issues to
  *  this account's Safe, after the code was issued, carrying the code. */
 export function candidateOrders(orders: MoneriumOrderLike[], user: User): MoneriumOrderLike[] {
-  const code = user.zoldenburgEnrolment?.code;
+  return ordersCarrying(orders, user, user.zoldenburgEnrolment?.code, "enrolment");
+}
+
+/** The same filter for any open code: a recovery's second 1 € uses it too. */
+export function ordersCarrying(
+  orders: MoneriumOrderLike[],
+  user: User,
+  code: { hash: string; issuedAt: string } | undefined,
+  purpose: CodePurpose,
+): MoneriumOrderLike[] {
   const safe = user.passkeySafe?.address?.toLowerCase();
   if (!code || !safe) return [];
   const since = Date.parse(code.issuedAt);
@@ -120,7 +134,7 @@ export function candidateOrders(orders: MoneriumOrderLike[], user: User): Moneri
       String(o.currency ?? "eur").toLowerCase() === "eur" &&
       String(o.address ?? "").toLowerCase() === safe &&
       Date.parse(o.meta?.processedAt ?? "") >= since &&
-      memoCarriesCode(o.memo, code.hash))
+      memoCarriesCode(o.memo, code.hash, purpose))
     .sort((a, b) => Date.parse(a.meta!.processedAt!) - Date.parse(b.meta!.processedAt!));
 }
 
@@ -159,7 +173,7 @@ export const moneriumReads: EnrolmentReads = moneriumReadsWith(moneriumClientFor
 
 /** A read that does not answer in time fails, so one stuck call cannot hold
  *  an account's checks, or the sweep, forever. */
-function inTime<T>(p: Promise<T>): Promise<T> {
+export function inTime<T>(p: Promise<T>): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const late = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`no answer from Monerium in ${ENROLMENT.readTimeoutMs / 1000}s`)), ENROLMENT.readTimeoutMs);

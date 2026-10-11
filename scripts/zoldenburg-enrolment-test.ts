@@ -414,12 +414,14 @@ await t("the operator cannot sign for an account that is not armed", () => {
   const between = (a: string, b: string) => r.slice(r.indexOf(a), r.indexOf(b));
   for (const [route, next] of [['"/admin/recoveries/:id/sign-request"', '"/admin/recoveries/:id/execute"'], ['"/admin/recoveries/:id/execute"', '"/admin/recoveries/:id/sync"']]) {
     const body = between(route, next);
-    assert.ok(body.includes("if (!armedFor(r)) return res.status(409).json(NOT_ARMED)"), `${route} checks the enrolment`);
-    assert.ok(body.indexOf("armedFor(r)") < body.indexOf("typedDataFor(r)"), `${route} checks before it hands out or relays anything`);
+    assert.ok(body.includes("if (refusal) return res.status(409).json(refusal)"), `${route} checks the enrolment`);
+    assert.ok(body.indexOf("refusalFor(r)") < body.indexOf("typedDataFor(r)"), `${route} checks before it hands out or relays anything`);
   }
-  assert.match(r, /safeCoverLink:\s*\n\s*user && zoldenburgArmed\(user\)/, "no Safe Cover link before arming");
+  const gate = between("const refusalFor = ", "const adminRequest = ");
+  assert.ok(gate.indexOf("zoldenburgArmed(user)") > 0 && gate.indexOf('code: "NOT_ARMED"') > 0, "an unarmed account is refused first");
+  assert.match(r, /safeCoverLink:\s*\n\s*!refusalFor\(r\)/, "no Safe Cover link before arming");
   const sync = between('"/admin/recoveries/:id/sync"', '"/admin/recoveries/:id/finalize"');
-  assert.ok(sync.indexOf("!armedFor(r)") > 0 && sync.indexOf("!armedFor(r)") < sync.indexOf("syncZoldenburgFromChain"), "sync records no review for an unarmed account");
+  assert.ok(sync.indexOf("refusalFor(r)") > 0 && sync.indexOf("refusalFor(r)") < sync.indexOf("syncZoldenburgFromChain"), "sync records no review for an unarmed account");
   assert.equal(r.match(/zoldenburgEnrolment: undefined/g)?.length, 3, "adding or removing the guardian drops the enrolled account");
 });
 

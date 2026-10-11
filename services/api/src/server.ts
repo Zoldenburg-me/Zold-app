@@ -49,6 +49,7 @@ import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/re
 import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./routes/recovery-zoldenburg.js";
 import { createZoldenburgEnrolmentRouter } from "./routes/recovery-zoldenburg-enrolment.js";
 import { ENROLMENT, enrolmentAvailable, sweepEnrolments } from "./recovery/zoldenburg-enrolment.js";
+import { sweepRecoveryBankChecks } from "./recovery/zoldenburg-bank-check.js";
 import { createTurnkeyGuardianRouter } from "./routes/recovery-turnkey.js";
 import { createTurnkeyRecoveryRouter } from "./routes/recovery-turnkey-requests.js";
 import { sweepTurnkeyRecoveries } from "./recovery/turnkey-recovery.js";
@@ -335,12 +336,16 @@ if (turnkeyGuardiansEnabled()) {
   setTimeout(runTurnkeySweep, 5_000).unref();
   setInterval(runTurnkeySweep, RECOVERY.sweepMs).unref();
 }
-// Open 1 € enrolment codes: look for their payment at Monerium.
+// Open 1 € codes, at enrolment and at recovery: look for their payment at Monerium.
 if (zoldenburgRecoveryEnabled() && enrolmentAvailable()) {
   const runEnrolments = () =>
     sweepEnrolments()
       .then((n) => n && console.log(`enrolment sweep: armed ${n} account${n === 1 ? "" : "s"}`))
-      .catch((e) => console.error(`enrolment sweep failed: ${describeCause(e)}`));
+      .catch((e) => console.error(`enrolment sweep failed: ${describeCause(e)}`))
+      // Its own catch: a failed enrolment sweep must not skip the recoveries.
+      .then(() => sweepRecoveryBankChecks())
+      .then((n) => n && console.log(`recovery 1 € sweep: ${n} request${n === 1 ? "" : "s"} passed`))
+      .catch((e) => console.error(`recovery 1 € sweep failed: ${describeCause(e)}`));
   setInterval(runEnrolments, ENROLMENT.pollMs).unref();
 }
 // Candide recoveries finalize themselves once the grace period has run, so a
