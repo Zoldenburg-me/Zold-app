@@ -40,6 +40,10 @@ Say this plainly rather than letting the surface imply otherwise:
   sandbox allows PATCH to a `basesepolia` address is unverified, and so is
   the `profile` field on GET /ibans items that the move and the
   `IBAN_EXISTS_ELSEWHERE` answer rely on (without it both refuse).
+- **Noticing an IBAN moved away** (`verifyIbanBinding`: an active account's
+  IBAN that Monerium now lists on another address or chain is taken off the
+  account, which then offers "Move IBAN back to Zold") has run only against
+  the fake Monerium in `monerium:iban-binding:test` and the apikeys suite.
 - **The Monerium profile-kind check has read one corporate profile, never an
   approved one.** On 2026-10-03 a company signup on zoldhq.com connected by
   its own OAuth to a `corporate` sandbox profile in state `pending`, its

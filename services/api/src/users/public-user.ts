@@ -82,6 +82,9 @@ export const publicUser = (u: User) => ({
     ? { gnosisPay: pick(u.gnosisPay, ["connectedAddress", "userId", "safeAddress", "kycStatus", "accountStatus", "cardCount", "asOf"] as const) }
     : {}),
   ...(u.moneriumRefusal ? { moneriumRefusal: pick(u.moneriumRefusal, ["code", "error", "at"] as const) } : {}),
+  ...(u.moneriumIbanElsewhere
+    ? { moneriumIbanElsewhere: pick(u.moneriumIbanElsewhere, ["iban", "address", "chain", "profileId", "seenAt"] as const) }
+    : {}),
   ...(u.moneriumIbanMoves
     ? {
         moneriumIbanMoves: u.moneriumIbanMoves.map((m) =>

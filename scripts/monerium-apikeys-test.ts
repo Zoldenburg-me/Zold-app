@@ -75,6 +75,10 @@ const seen = {
   orderReadsByProfile: [] as (string | null)[],
   /** Which of the login's two profiles GET /profiles lists. */
   profilesShown: "both" as "both" | "corporate" | "personal",
+  /** GET /ibans answers 500. */
+  ibansFail: false,
+  /** GET /ibans leaves the account's IBAN out. */
+  ibansHidden: false,
 };
 
 /** The account's IBANs as Monerium holds them; PATCH moves one. */
@@ -256,7 +260,8 @@ const stub = createServer((req, res) => {
         seen.ibanRequestAnswered = 201;
         return send(201, { address: body.address });
       }
-      return send(200, { ibans });
+      if (seen.ibansFail) return send(500, { message: "internal error" });
+      return send(200, { ibans: seen.ibansHidden ? ibans.filter((i) => i.iban !== EXISTING_IBAN) : ibans });
     }
     if (url.pathname.startsWith("/ibans/") && req.method === "PATCH") {
       const iban = compact(decodeURIComponent(url.pathname.slice("/ibans/".length)));
@@ -399,6 +404,10 @@ try {
     MONERIUM_REDIRECT_URI: `${API}/api/monerium/oauth/callback`,
     MONERIUM_TOKEN_ENCRYPTION_KEY: ENC_KEY,
     MONERIUM_POLL_MS: "1000",
+    // Throttled re-reads (poller, GET /users/:id) check each user once in this
+    // run; the cases below drive the check through /monerium/accounts, which
+    // compares on every call.
+    MONERIUM_IBAN_CHECK_MS: "3600000",
     CANDIDE_CHAIN_ID: "31337",
     CANDIDE_RPC_URL: RPC_URL,
     // Blank on purpose: a passkey-only Safe links to Monerium with no
@@ -714,6 +723,93 @@ try {
     assert.equal(r.status, 201, `replace with passkey failed: ${r.text}`);
     assert.equal((await withToken(other, () => call(`/api/users/${userId}`))).status, 401, "the other session is revoked");
     assert.equal((await call(`/api/users/${userId}`)).status, 200, "the session that approved it stays");
+  });
+
+  // Someone moves the IBAN away at Monerium (another app, or Monerium's own
+  // site): the stub's record changes under the API, as a PATCH from elsewhere
+  // would change it.
+  const rec = ibans.find((i) => i.iban === EXISTING_IBAN)!;
+  const SOMEONE_ELSE = "0x00000000000000000000000000000000000000cc";
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  await t("a failed read of Monerium's IBANs, or a list without this IBAN, changes nothing", async () => {
+    seen.ibansFail = true;
+    try {
+      const r = await call(`/api/users/${userId}/monerium/accounts`);
+      assert.ok(r.status >= 400, `expected a refusal, got ${r.status}`);
+    } finally {
+      seen.ibansFail = false;
+    }
+    seen.ibansHidden = true;
+    try {
+      const r = await call(`/api/users/${userId}/monerium/accounts`);
+      assert.equal(r.status, 200, r.text);
+    } finally {
+      seen.ibansHidden = false;
+    }
+    const me = await call(`/api/users/${userId}`);
+    assert.equal(me.data.iban, EXISTING_IBAN);
+    assert.equal(me.data.funding.status, "active");
+    assert.equal(me.data.moneriumIbanElsewhere, undefined);
+  });
+
+  await t("an IBAN moved to this address on another chain comes off the account and is not re-attached", async () => {
+    rec.chain = "gnosis";
+    const r = await call(`/api/users/${userId}/monerium/accounts`);
+    assert.equal(r.status, 200, r.text);
+    await sleep(2500); // the poller's refreshPendingIban runs meanwhile
+    const me = await call(`/api/users/${userId}`);
+    assert.equal(me.data.iban, "", "deposits on another chain do not reach this account");
+    assert.equal(me.data.funding.status, "iban_pending");
+    assert.equal(me.data.moneriumIbanElsewhere?.chain, "gnosis");
+    assert.equal(me.data.moneriumIbanElsewhere?.address.toLowerCase(), safeAddress.toLowerCase());
+  });
+
+  await t("moved back at Monerium, the IBAN is attached again and the warning goes", async () => {
+    rec.chain = "sepolia";
+    let me = await call(`/api/users/${userId}`);
+    for (const s = Date.now(); me.data.iban !== EXISTING_IBAN && Date.now() - s < 10_000; ) {
+      await sleep(300);
+      me = await call(`/api/users/${userId}`);
+    }
+    assert.equal(me.data.iban, EXISTING_IBAN);
+    assert.equal(me.data.funding.status, "active");
+    assert.equal(me.data.moneriumIbanElsewhere, undefined);
+  });
+
+  await t("moved to another address, the account says where it went, and move-iban brings it back", async () => {
+    rec.address = SOMEONE_ELSE;
+    const r = await call(`/api/users/${userId}/monerium/accounts`);
+    assert.equal(r.status, 200, r.text);
+    const me = await call(`/api/users/${userId}`);
+    assert.equal(me.data.iban, "");
+    assert.equal(me.data.kycStatus, "approved");
+    assert.equal(me.data.moneriumIbanElsewhere?.address, SOMEONE_ELSE);
+    assert.equal(me.data.moneriumIbanElsewhere?.iban, EXISTING_IBAN);
+    assert.match(me.data.funding.detail ?? "", /no longer pays into this account/);
+    const patches = seen.patches.length;
+    const moved = await call(`/api/users/${userId}/monerium/move-iban`, {
+      iban: me.data.moneriumIbanElsewhere.iban, confirm: "MOVE", ...(await moveCeremony(EXISTING_IBAN)),
+    });
+    assert.equal(moved.status, 200, `move back failed: ${moved.text}`);
+    assert.deepEqual(seen.patches.slice(patches), [{ iban: EXISTING_IBAN, address: safeAddress, chain: "sepolia" }]);
+    assert.equal(moved.data.iban, EXISTING_IBAN);
+    assert.equal(moved.data.funding.status, "active");
+    assert.equal(moved.data.moneriumIbanElsewhere, undefined);
+  });
+
+  await t("reconnecting the keys does not restore an IBAN that pays into another address now", async () => {
+    rec.address = SOMEONE_ELSE; // not re-read yet: the throttled check already ran
+    const r = await call(`/api/users/${userId}/monerium/api-keys`, { ...(await stepUp("monerium.connect")), clientId: USER_CLIENT_ID, clientSecret: USER_SECRET });
+    assert.equal(r.status, 201, `reconnect failed: ${r.text}`);
+    assert.ok(!r.data.iban, `the stale IBAN was kept: ${r.data.iban}`);
+    assert.notEqual(r.data.funding.status, "active");
+    // Back to where it was for the cases below.
+    const moved = await call(`/api/users/${userId}/monerium/move-iban`, {
+      iban: EXISTING_IBAN, confirm: "MOVE", ...(await moveCeremony(EXISTING_IBAN)),
+    });
+    assert.equal(moved.status, 200, `move back failed: ${moved.text}`);
+    assert.equal(moved.data.iban, EXISTING_IBAN);
   });
 
   await t("removing the keys drops them from the store and closes the connection", async () => {

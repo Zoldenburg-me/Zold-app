@@ -37,6 +37,7 @@ function phChecklist(u) {
   const connected = hasConnectedMonerium(u);
   const approved = kycApproved(u);
   const wait = ibanWait(u);
+  const movedAway = ibanMovedAway(u);
   const items = [
     { title: Z.byDevice("Face ID sign-in", "Passkey sign-in"), sub: Z.byDevice("This phone approves payments.", "This device approves payments."), done: !!u.passkey?.credentialId },
     { title: "Account created", sub: safe.status === "active" ? "Your account is live." : "Finish setting up your account.",
@@ -51,12 +52,14 @@ function phChecklist(u) {
       done: approved || connected, action: { id: "ph-ck-verify", label: "Start" } },
     { title: "IBAN active",
       sub: u.iban && approved ? "Ready to receive bank transfers."
+        : movedAway ? `${IBAN_MOVED_AWAY.title} ${IBAN_MOVED_AWAY.sub}`
         : wait ? (wait.support ? "Needs Monerium support. Tap for details." : `Requested. ${wait.idCheck ? "Monerium is checking your ID." : "Monerium is issuing it."} Nothing to do.`)
         : "Follows your verification.",
       done: !!u.iban && approved,
       // While Monerium works there is nothing to press: the row shows Waiting.
       // A support case keeps a button to the screen that explains it.
-      action: connected && !approved && (!wait || wait.support) ? { id: "ph-ck-verify2", label: wait ? "Details" : "Activate" } : null },
+      action: movedAway ? { id: "ph-ck-iban-back", label: "Move back" }
+        : connected && !approved && (!wait || wait.support) ? { id: "ph-ck-verify2", label: wait ? "Details" : "Activate" } : null },
     ] : []),
   ];
   const open = items.some((i) => !i.done);
@@ -111,7 +114,7 @@ function phChecklistCard(title, items) {
 PH.home = {
   title: "Home",
   tab: "home",
-  live: () => JSON.stringify([user?.balanceEur, user?.iban, user?.kycStatus, user?.monerium?.connectedAt, user?.passkeySafe?.status,
+  live: () => JSON.stringify([user?.balanceEur, user?.iban, user?.moneriumIbanElsewhere?.iban, user?.kycStatus, user?.monerium?.connectedAt, user?.passkeySafe?.status,
     user?.passkeySafe?.recovery?.status, user?.passkeySafe?.candideRecovery?.guardianStatus, user?.passkeySafe?.recoveryChoice?.choice, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.emailVerifiedAt, caps.emailVerification, user?.segment?.gate, caps.emailSmsRecovery, caps.zoldenburgRecovery, realMoney, phHistSig()]),
   html() {
     const u = user || {};
@@ -121,7 +124,7 @@ PH.home = {
     const inflight = hist.find(phInFlight);
     const ibanRight = u.iban && kycApproved(u)
       ? `<span class="z-mono z-dim" translate="no">•••• ${esc(String(u.iban).replace(/\s+/g, "").slice(-4))}</span>`
-      : `<span class="z-dim">${bankOffered(u) ? "IBAN after verification" : "Wallet"}</span>`;
+      : `<span class="z-dim">${ibanMovedAway(u) ? "IBAN moved away" : bankOffered(u) ? "IBAN after verification" : "Wallet"}</span>`;
     // A partner refused the bank account; the wallet stays. Said once, plainly.
     const refused = u.kycStatus === "rejected" ? Z.note({ tone: "a", text: kycCopy("rejected", u)[2] }) : "";
     return `<h1 class="z-sr">Home</h1><header class="z-apphead">
@@ -132,6 +135,7 @@ PH.home = {
       ${phMain(`
         ${gate ? Z.note({ tone: "a", html: `<strong>${esc(gate.reason)}</strong> ${esc(gate.needs)} <a href="mailto:support@zoldhq.com">Ask us about it</a>` }) : ""}
         ${refused}
+        ${ibanMovedAway(u) ? ibanMovedAwayHtml("ph-iban-back") : ""}
         ${phBalance(u.balanceEur ?? u.safeBalanceEur ?? 0, "Balance")}
         <a class="z-card z-acctrow" href="#account-details">${Z.icon("account_balance", "z-acctrow__ic")}<span class="z-acctrow__label">Account details</span>${ibanRight}${Z.icon("chevron_right", "z-row__chev")}</a>
         <div class="z-actions">
@@ -162,6 +166,7 @@ PH.home = {
       const b = root.querySelector(`#${id}`);
       if (b) b.onclick = () => enterKycReview(user?.name || "Account");
     }
+    phBindIbanBack(root);
     const emailBtn = root.querySelector("#ph-ck-email");
     if (emailBtn) emailBtn.onclick = () => enterEmailConfirm();
     const recX = root.querySelector("#ph-rec-x");
@@ -448,6 +453,7 @@ function phDetailsBody(u, bic, { loadingBic = false } = {}) {
       ? `<p class="z-sub">Share your wallet address to get paid in ${usdSym()}.</p>
         <div class="z-card">${Z.copyRow({ label: "Your wallet address", value: u.address, mono: true })}</div>${walletWarn}`
       : "";
+    if (ibanMovedAway(u)) return `${ibanMovedAwayHtml("ph-det-iban-back")}${walletOpen}`;
     return `${walletOpen}
       ${bankOffered(u)
         ? `<p class="z-sub">Your IBAN appears here once Monerium has verified you and issued it.</p>
@@ -475,7 +481,25 @@ function phDetailsBody(u, bic, { loadingBic = false } = {}) {
     </div>`;
 }
 
+/* "Move IBAN back to Zold" (ibanMovedAwayHtml), wherever it is drawn. */
+function phBindIbanBack(root) {
+  for (const id of ["ph-iban-back", "ph-det-iban-back", "ph-ck-iban-back", "ph-pay-iban-back"]) {
+    const b = root.querySelector(`#${id}`);
+    if (!b) continue;
+    b.onclick = async () => {
+      const err = root.querySelector(`#${id}-err`);
+      if (err) err.hidden = true;
+      try {
+        await moveIbanBack();
+      } catch (e) {
+        if (err) { err.textContent = e.message; err.hidden = false; } else Z.announce(e.message);
+      }
+    };
+  }
+}
+
 function phBindDetails(root) {
+  phBindIbanBack(root);
   const verify = root.querySelector("#ph-det-verify");
   if (verify) verify.onclick = () => { Z.closeOverlay(); enterKycReview(user?.name || "Account"); };
   const copy = root.querySelector("#ph-det-copy");

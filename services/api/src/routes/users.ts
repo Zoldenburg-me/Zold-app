@@ -23,7 +23,7 @@ import { store, type User } from "../store.js";
 import { requireKycApproved } from "../http/guards.js";
 import { publicUser, withSession } from "../users/public-user.js";
 import { cleanName, nameChange } from "../users/display-name.js";
-import { findIbanBic, refreshPendingIban } from "../adapters/monerium-sandbox.js";
+import { findIbanBic, refreshPendingIban, verifyIbanBinding } from "../adapters/monerium-sandbox.js";
 import { normalizeIban } from "../sepa.js";
 import { emailHeldBy, emailLooksValid } from "../domain/email.js";
 import { describeCause, redactedMessage } from "../http/log-cause.js";
@@ -299,6 +299,9 @@ export function createUserRouter(deps: UserDeps) {
       if (!requireUserSession(req, res, user.id)) return;
       if (user.funding?.status === "iban_pending") {
         user = await refreshPendingIban(user);
+      } else {
+        // Throttled per user; a failed read changes nothing.
+        user = await verifyIbanBinding(user);
       }
       const balances = await accountBalances(user.address);
       res.json({ ...publicUser(user), ...balances });
