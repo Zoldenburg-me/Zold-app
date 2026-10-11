@@ -27,12 +27,12 @@ const relayChain = () => ({
   rpcUrls: { default: { http: [CANDIDE.rpcUrl] } },
 });
 
-/** The deployer key, on the smart-account chain. It pays gas for calls anyone
- *  may make (a verifier deployment, a signed recovery, a finalisation); it
- *  holds no authority over any Safe. */
+/** The relay key (`RELAY_KEY`), on the smart-account chain. It pays gas for
+ *  calls anyone may make (a verifier deployment, a signed recovery, a
+ *  finalisation); it holds no authority over any contract or Safe. */
 export function relayWallet() {
   return createWalletClient({
-    account: privateKeyToAccount(KEYS.deployer),
+    account: privateKeyToAccount(KEYS.relay),
     chain: relayChain(),
     transport: http(CANDIDE.rpcUrl),
   });
@@ -45,7 +45,7 @@ export function relayReader() {
 /**
  * Deploy the new passkey's signer verifier so the recovered Safe's owner is
  * a contract that can validate signatures. Permissionless factory call from
- * the deployer key, on the app chain — skipped (and said so) when the
+ * the relay key, on the app chain — skipped (and said so) when the
  * smart-account chain is not the app chain, which only happens locally.
  */
 export async function deployVerifierForOwner(owner: { x: bigint; y: bigint }): Promise<string | undefined> {

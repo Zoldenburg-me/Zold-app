@@ -118,7 +118,7 @@ try {
     } as any;
     store.addUser(user);
     if (safeEur > 0) {
-      await writeAndWait(deployerWallet, {
+      await writeAndWait(deployerWallet!, {
         address: addrs().eure,
         abi: abis.MockToken,
         functionName: "mint",
@@ -133,7 +133,7 @@ try {
    *  orchestrator. `extraSteps` simulates getting further down the flow. */
   async function seedSafeFundedTransfer(user: any, sendEur: number, extraSteps: string[] = []) {
     // The orchestrator ends up holding what left the Safe.
-    await writeAndWait(deployerWallet, {
+    await writeAndWait(deployerWallet!, {
       address: addrs().eure,
       abi: abis.MockToken,
       functionName: "mint",
@@ -236,7 +236,7 @@ try {
     // Same rounding the orchestrator applies — 40 - 39.01 is not exactly 0.99 in floats.
     const feeEur = Math.round((sendEur - payoutEur) * 100) / 100;
     // Only the fee ever reaches the orchestrator on this rail.
-    await writeAndWait(deployerWallet, {
+    await writeAndWait(deployerWallet!, {
       address: addrs().eure,
       abi: abis.MockToken,
       functionName: "mint",
@@ -319,7 +319,7 @@ try {
   {
     // Spare EURe at the orchestrator, so a second refund would have the
     // inventory to land and the balance check below would see it.
-    await writeAndWait(deployerWallet, {
+    await writeAndWait(deployerWallet!, {
       address: addrs().eure,
       abi: abis.MockToken,
       functionName: "mint",
@@ -646,7 +646,7 @@ try {
     // The refusal classifier reads only the error viem throws, which after a
     // retry is the LAST attempt's: an accepted first attempt would hide behind
     // a refusal on the retry. Write clients therefore never retry.
-    for (const [label, w] of [["orchestrator", orchestratorWallet], ["deployer", deployerWallet]] as const) {
+    for (const [label, w] of [["orchestrator", orchestratorWallet], ["deployer", deployerWallet!]] as const) {
       const retries = (w.transport as any).retryCount;
       check(`the ${label} wallet sends each transaction once (retryCount 0)`, retries === 0, `retryCount ${retries}`);
     }

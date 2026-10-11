@@ -107,7 +107,8 @@ These are **wallet private keys and secrets we create**. This is the part Baer f
 
 | Key | Role | Risk if leaked |
 |---|---|---|
-| `DEPLOY_DEPLOYER_KEY` | Deploys contracts | Cold — only needed at deploy time |
+| `DEPLOY_DEPLOYER_KEY` | Deploys and administers contracts | Cold — only the deploy reads it; production refuses to start with it on the server |
+| `RELAY_KEY` | Pays gas for recovery relays and passkey verifier deployments | **Hot**, but holds no role on any contract or Safe: a leak costs its ETH |
 | `DEPLOY_ORCHESTRATOR_KEY` | Submits transfers, pays gas | **Hot — runs continuously** |
 | `DEPLOY_RAMP_KEY` | Credits deposits | **Hot** |
 | `STELLAR_TREASURY_SECRET` | Holds the payout float | **Hot — holds funds** |
