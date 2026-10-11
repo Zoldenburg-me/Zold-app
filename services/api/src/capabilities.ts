@@ -13,6 +13,7 @@ import { cashRailOpen } from "./orchestrator.js";
 import { usdLabel } from "./usd-token.js";
 import { dripTokens, faucetEnabled } from "./faucet.js";
 import { shopifyAvailable } from "./routes/shopify.js";
+import { merchantLinksAvailable } from "./merchant-links.js";
 import { candideRecoveryEnabled } from "./recovery/candide-guardian.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
 import { enrolmentAvailable } from "./recovery/enrolment-key.js";
@@ -43,6 +44,14 @@ export function capabilities() {
      *  payment method + orders webhook, installable today) or `payments-app`
      *  (a checkout payment method, needs Shopify's program approval). */
     shopifyMode: SHOPIFY.mode,
+    /** May an org link a Shopify store through the checkout service
+     *  (merchant-links.ts)? Needs CHECKOUT_SERVICE_ORIGIN, an issued checkout
+     *  credential and the data encryption key. The dashboard draws the
+     *  connect flow only when this is true. */
+    merchantLinks: (() => {
+      const m = merchantLinksAvailable();
+      return m.available ? { available: true, checkoutOrigin: m.checkoutOrigin } : { available: false };
+    })(),
     /**
      * May a user connect their OWN Monerium app credentials? Needs the
      * encryption key, because the secret is never written in plaintext. The

@@ -29,6 +29,7 @@ import type {
 } from "../domain/types.js";
 import type {
   ConversionSweep,
+  MerchantLink,
   Operator,
   OperatorSession,
   CryptoDeposit,
@@ -66,6 +67,9 @@ export interface Db {
   /** Shopify stores connected to an organisation as a payments app. The access
    *  token is encrypted at rest and never leaves this process. */
   shopifyConnections: ShopifyConnection[];
+  /** An org's consent that the checkout service opens requests for one
+   *  Shopify shop (merchant-links.ts). Revoked, never deleted. */
+  merchantLinks: MerchantLink[];
   /** Monerium issue-order ids already reflected in local receipt state. */
   processedMoneriumOrders: string[];
   /** Monerium webhook delivery ids already accepted. */
@@ -132,6 +136,7 @@ export let db: Db = {
   documents: [],
   paymentRequests: [],
   shopifyConnections: [],
+  merchantLinks: [],
   processedMoneriumOrders: [],
   processedMoneriumWebhooks: [],
   moneriumIssueOrders: [],
@@ -165,6 +170,7 @@ export function initStore() {
     db.documents ??= [];
     db.paymentRequests ??= [];
     db.shopifyConnections ??= [];
+    db.merchantLinks ??= [];
     db.processedMoneriumOrders ??= [];
     db.processedMoneriumWebhooks ??= [];
     db.moneriumIssueOrders ??= [];

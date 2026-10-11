@@ -34,6 +34,7 @@ import { matchesPayoutEvidence } from "./transfers/review-evidence.js";
 import type {
   ConversionSweep,
   CryptoDeposit,
+  MerchantLink,
   MoneriumIssueRecord,
   Operator,
   OperatorCredential,
@@ -77,6 +78,21 @@ function announceStateChange(t: Transfer, from: Transfer["state"]) {
       listener(t, from);
     } catch (err) {
       console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`);
+    }
+  }
+}
+
+type PaymentRequestStateListener = (r: PaymentRequest, from: PaymentRequest["state"]) => void;
+const paymentRequestStateListeners: PaymentRequestStateListener[] = [];
+
+/** As for transfers: logged, never thrown into the write. */
+function announcePaymentRequestState(r: PaymentRequest, from: PaymentRequest["state"]) {
+  if (r.state === from) return;
+  for (const listener of paymentRequestStateListeners) {
+    try {
+      listener(r, from);
+    } catch (err) {
+      console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`);
     }
   }
 }
@@ -576,9 +592,15 @@ export const store = {
   updatePaymentRequest(id: string, patch: Partial<PaymentRequest>) {
     const r = db.paymentRequests.find((x) => x.id === id);
     if (!r) throw new Error(`unknown payment request ${id}`);
+    const from = r.state;
     Object.assign(r, patch, { updatedAt: new Date().toISOString() });
     persist();
+    announcePaymentRequestState(r, from);
     return r;
+  },
+  /** Subscribe to payment request state changes (checkout-webhook.ts). */
+  onPaymentRequestStateChange(listener: PaymentRequestStateListener) {
+    paymentRequestStateListeners.push(listener);
   },
   findPaymentRequest(id: string) {
     return db.paymentRequests.find((r) => r.id === id);
@@ -627,6 +649,37 @@ export const store = {
   },
   shopifyConnectionsForOrg(orgId: string) {
     return db.shopifyConnections.filter((c) => c.orgId === orgId);
+  },
+
+  // ── Merchant links (merchant-links.ts) ────────────────────────────────────
+  //
+  // No delete: revoking is a field. A revoked link still names the org its
+  // requests belong to.
+  addMerchantLink(l: MerchantLink) {
+    db.merchantLinks.push(l);
+    persist();
+    return l;
+  },
+  updateMerchantLink(id: string, patch: Partial<MerchantLink>) {
+    const l = db.merchantLinks.find((x) => x.id === id);
+    if (!l) throw new Error(`unknown merchant link ${id}`);
+    Object.assign(l, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return l;
+  },
+  findMerchantLink(id: string) {
+    return db.merchantLinks.find((l) => l.id === id);
+  },
+  /** The shop's one active link, whichever org holds it. */
+  activeMerchantLinkForShop(shop: string) {
+    const s = shop.trim().toLowerCase();
+    return db.merchantLinks.find((l) => l.shop === s && !l.revokedAt);
+  },
+  merchantLinksForOrg(orgId: string): readonly MerchantLink[] {
+    return db.merchantLinks.filter((l) => l.orgId === orgId);
+  },
+  get merchantLinks(): readonly MerchantLink[] {
+    return db.merchantLinks;
   },
   addReceiptShare(s: ReceiptShare) {
     db.receiptShares.push(s);
