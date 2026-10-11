@@ -140,5 +140,27 @@ check("a transfer keeps its operator-only fields out", () => {
   assert.equal((rows[0] as any).reviewResolution, undefined);
 });
 
+check("a conversion's EURe output is not listed as money in", () => {
+  const usdc = deposit({ id: "usdc", token: "USDC", from: WALLET, txHash: "0xin", amountEur: 0.9, amountUsdc: 1, holding: "converted", creditedEur: 0.89, conversion: { txHash: "0xCONV", at: "2026-10-01T11:00:00.000Z" } } as any);
+  const output = deposit({ id: "out", from: "0x2222222222222222222222222222222222222222", txHash: "0xconv", amountEur: 0.89, creditedEur: 0.89 });
+  const rows = buildActivity({ transfers: [], deposits: [usdc, output], issues: [] });
+  assert.deepEqual(rows.map((r) => r.id), ["usdc"]);
+  const row = rows[0] as any;
+  assert.equal(row.creditedEur, 0.89);
+  assert.equal(row.conversionTxHash, "0xCONV");
+  assert.equal(row.from, WALLET);
+});
+
+check("a partial conversion's output is not listed either", () => {
+  const usdc = deposit({ id: "usdc", token: "USDC", from: WALLET, txHash: "0xin", holding: "held", partials: [{ conversion: { txHash: "0xp1" } }] } as any);
+  const output = deposit({ id: "out", from: WALLET, txHash: "0xp1" });
+  assert.deepEqual(buildActivity({ transfers: [], deposits: [usdc, output], issues: [] }).map((r) => r.id), ["usdc"]);
+});
+
+check("a held USDC deposit carries no conversion figures", () => {
+  const rows = buildActivity({ transfers: [], deposits: [deposit({ id: "usdc", token: "USDC", from: WALLET, holding: "held", creditedEur: 3 })], issues: [] });
+  assert.equal((rows[0] as any).creditedEur, undefined);
+});
+
 if (failed) { console.log(`\n${failed} failed`); process.exit(1); }
 console.log("\nactivity: all ok");

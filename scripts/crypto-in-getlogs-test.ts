@@ -90,5 +90,18 @@ await check("each log is recorded under its own token, with its own amount", () 
   assert.equal(byToken.USDC, "1000000");
 });
 
+await check("a conversion's EURe output is not recorded as a deposit", async () => {
+  const conv = `0x${"cd".repeat(32)}`;
+  const usdcRow = store.cryptoDeposits.find((d: any) => d.userId === userId && d.token === "USDC")!;
+  store.updateCryptoDeposit(usdcRow.id, { holding: "converted", creditedEur: 0.89, conversion: { txHash: conv } } as any);
+  const before = store.cryptoDeposits.filter((d: any) => d.userId === userId).length;
+  client.getBlockNumber = async () => HEAD + 10n;
+  client.getLogs = async (q: any) => (q.fromBlock <= HEAD + 5n && q.toBlock >= HEAD + 5n
+    ? [{ ...transfer(addrs().eure, HEAD + 5n, 89n * 10n ** 16n, 0), transactionHash: conv }]
+    : []);
+  await pollCryptoDepositsOnce();
+  assert.equal(store.cryptoDeposits.filter((d: any) => d.userId === userId).length, before);
+});
+
 console.log(`\n${passed} passed, 0 failed`);
 process.exit(0);

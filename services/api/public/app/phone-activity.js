@@ -157,6 +157,99 @@ PH.tx = {
   },
 };
 
+/* Money in: a bank transfer or a crypto deposit, as the feed has it. The
+   chain explorer link lets the holder check a crypto deposit for themselves. */
+const PH_EXPLORER = { 8453: "https://basescan.org", 84532: "https://sepolia.basescan.org" };
+function phChainTx(chainId, hash) {
+  const base = PH_EXPLORER[chainId];
+  if (!isTxHash(hash)) return null;
+  return base
+    ? { mono: true, valueHtml: `<a href="${base}/tx/${esc(hash)}" target="_blank" rel="noopener">${esc(hash)}${Z.icon("open_in_new")}</a>` }
+    : { value: hash, mono: true };
+}
+const phShortAddr = (a) => (/^0x[0-9a-fA-F]{40}$/.test(String(a || "")) ? `${a.slice(0, 6)}…${a.slice(-4)}` : "");
+
+/* What happened to a crypto deposit after it arrived, in a sentence. */
+function phInStory(t) {
+  const usdc = t.token === "USDC";
+  if (!usdc) return "In your account as euros.";
+  switch (t.holding) {
+    case "converted": return typeof t.creditedEur === "number" ? `Converted to ${phEur(t.creditedEur)}, now in your account as euros.` : "Converted to euros.";
+    case "awaiting_approval": return "Waiting for you to approve the conversion to euros.";
+    case "refused": return "The conversion to euros did not go through. The dollars are still in your account.";
+    case "unconfirmed": return "A conversion to euros was sent and is not confirmed yet. We check it before offering it again.";
+    default: return "Held as digital dollars. You can convert them to euros any time.";
+  }
+}
+
+function phInParts(id) {
+  const t = hist.find((x) => x.id === id && histIsIn(x));
+  if (!t) {
+    return { t: null, foot: "", body: histLoaded || histLoadFailed
+      ? Z.note({ text: "This payment is not on your account." })
+      : Z.skeletonRows(3, "Loading the payment…") };
+  }
+  if (t.kind === "bank_in") {
+    const who = t.counterpartyName || "Bank transfer";
+    return { t, foot: "", body: `
+      <div class="z-txhead">
+        ${Z.avatar({ name: who })}
+        <p class="z-txhead__amt z-fig">+${esc(phEur(t.amountEur || 0))}</p>
+        <p class="z-sub">${t.counterpartyName ? `from ${esc(t.counterpartyName)}` : "by bank transfer"}</p>
+        ${Z.tag("RECEIVED")}
+      </div>
+      ${Z.kv([
+        { key: "Date", value: phFull(t.at) },
+        { key: "Received as", value: "Bank transfer (SEPA)" },
+        ...(t.memo ? [{ key: "Reference", value: t.memo }] : []),
+      ])}
+      <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv([{ key: "Payment ID", value: t.id, mono: true }])}</details>
+    ` };
+  }
+  const usdc = t.token === "USDC";
+  const amount = usdc ? `+${Z.formatMoney(t.amountUsdc || 0, usdSym())}` : `+${phEur(t.amountEur || 0)}`;
+  const converted = usdc && t.holding === "converted";
+  const convertible = usdc && ["held", "awaiting_approval", "refused"].includes(t.holding);
+  const arrived = phChainTx(t.chainId, t.txHash);
+  const conv = converted ? phChainTx(t.chainId, t.conversionTxHash) : null;
+  const rows = [
+    { key: "Date", value: phFull(t.arrivedAt || t.at) },
+    { key: "Received as", value: usdc ? `Digital dollars (${usdSym()})` : "Euros (EURe)" },
+    ...(phShortAddr(t.from) ? [{ key: "From wallet", value: phShortAddr(t.from), mono: true }] : []),
+    ...(usdc && typeof t.amountEur === "number" ? [{ key: "Worth on arrival", value: `about ${phEur(t.amountEur)}`, hint: "At the rate when it arrived" }] : []),
+    ...(converted && typeof t.creditedEur === "number" ? [{ key: "Converted to", valueHtml: `<strong>${esc(phEur(t.creditedEur))}</strong>` }] : []),
+    ...(converted && t.convertedAt ? [{ key: "Converted on", value: phFull(t.convertedAt) }] : []),
+  ];
+  const tech = [
+    { key: "Payment ID", value: t.id, mono: true },
+    ...(t.from ? [{ key: "Sender address", value: t.from, mono: true }] : []),
+    ...(arrived ? [{ key: "Arrival transaction", ...arrived }] : []),
+    ...(conv ? [{ key: "Conversion transaction", ...conv }] : []),
+  ];
+  return { t, body: `
+    <div class="z-txhead">
+      ${Z.iconTile({ icon: usdc ? "currency_exchange" : "euro" })}
+      <p class="z-txhead__amt z-fig">${esc(amount)}</p>
+      <p class="z-sub">from a crypto wallet</p>
+      ${Z.tag(phInWord(t))}
+    </div>
+    ${Z.note({ tone: t.holding === "refused" || t.holding === "unconfirmed" ? "a" : "p", text: phInStory(t) })}
+    ${t.reason && t.holding === "refused" ? Z.note({ tone: "a", text: t.reason }) : ""}
+    ${Z.kv(rows)}
+    <details class="z-disclose"><summary>Technical details${Z.icon("expand_more")}</summary>${Z.kv(tech)}</details>
+  `, foot: convertible ? Z.button({ variant: "primary", full: true, icon: "currency_exchange", label: "Convert to euros", href: phHref("convert", t.id) }) : "" };
+}
+
+PH.in = {
+  title: "Payment",
+  live: (id) => { const t = hist.find((x) => x.id === id); return t ? `${t.holding}|${t.updatedAt}` : `none|${histLoaded}`; },
+  html(id) {
+    const p = phInParts(id);
+    return `${phTop("Payment", "activity")}${phMain(p.body)}${p.foot ? phFoot(p.foot) : ""}`;
+  },
+  bind() {},
+};
+
 /* The older share composer, reached from one payment. */
 PH_LEGACY.share = "share";
 

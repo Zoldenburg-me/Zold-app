@@ -44,6 +44,7 @@ import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment
 import { buildCryptoSettlement, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
 import { readLogWindow } from "../log-range.js";
+import { conversionTxHashes } from "../transfers/activity.js";
 
 /** The ERC-20 event, declared here rather than pulled from the mock's ABI —
  *  the real USDC emits the same signature and this path must not depend on our
@@ -580,6 +581,7 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
     byAddress.set(key, [...(byAddress.get(key) ?? []), item]);
   }
   const fresh: CryptoDeposit[] = [];
+  const conversions = conversionTxHashes(store.cryptoDeposits);
   for (const [i, token] of tokens.entries()) {
     const logs = logsByToken[i];
 
@@ -606,6 +608,9 @@ async function scanCryptoDeposits(): Promise<{ found: number; more: boolean }> {
       const txHash = log.transactionHash!;
       const logIndex = Number(log.logIndex);
       if (store.findCryptoDeposit(txHash, logIndex)) continue;
+      // A conversion's EURe output is the user's money changing form, not
+      // money in (transfers/activity.ts lists the same rule).
+      if (token.token === "EURE" && conversions.has(txHash.toLowerCase())) continue;
 
       const pageMatch = matches.find((m) => m.source === "payment-page" && m.user.paymentPage?.autoConvert);
       const match = token.token === "USDC" && pageMatch ? pageMatch : matches[0];

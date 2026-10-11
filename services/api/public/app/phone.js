@@ -331,6 +331,14 @@ const phInFlight = (t) => !histIsIn(t) && PH_LIVE.includes(t.state) && t.state !
 /* Money that never left (or came back) carries no minus. */
 const phOut = (t) => !["FAILED", "REFUNDED"].includes(t.state) && t.state !== "CREATED";
 
+/* Money in from a crypto wallet: what happened to it, in one word. */
+function phInWord(t) {
+  if (t.holding === "refused") return "IN REVIEW";
+  if (t.holding === "unconfirmed") return "CHECKING";
+  if (t.holding === "converted") return "CONVERTED";
+  return "RECEIVED";
+}
+
 /** One activity row: a transfer out, or money in. */
 function phActivityRow(t) {
   if (t.kind === "bank_in") {
@@ -339,12 +347,13 @@ function phActivityRow(t) {
       title: t.counterpartyName || "Bank transfer",
       sub: [t.counterpartyName ? t.memo || "Bank transfer" : t.memo, phWhen(t.at)].filter(Boolean).join(" · "),
       right: `${Z.amount({ value: t.amountEur || 0, direction: "in" })}${Z.tag("RECEIVED")}`,
+      href: phHref("in", t.id),
       chevron: false,
     });
   }
   if (t.kind === "funding") {
     const usdc = t.token === "USDC";
-    const word = t.holding === "refused" ? "IN REVIEW" : t.holding === "unconfirmed" ? "CHECKING" : "RECEIVED";
+    const word = phInWord(t);
     return Z.row({
       lead: Z.iconTile({ icon: usdc ? "currency_exchange" : "euro" }),
       title: usdc ? `Digital dollars (${usdSym()})` : "Euros received",
@@ -352,7 +361,7 @@ function phActivityRow(t) {
       right: `${usdc
         ? `<span class="z-amount z-amount--in">+${esc(Z.formatMoney(t.amountUsdc || 0, usdSym()))}</span>`
         : Z.amount({ value: t.amountEur || 0, direction: "in" })}${Z.tag(word)}`,
-      href: usdc ? "#add/wallet" : undefined,
+      href: phHref("in", t.id),
       chevron: false,
     });
   }
