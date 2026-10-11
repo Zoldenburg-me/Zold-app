@@ -241,7 +241,7 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
 {
   const inv = await import("../services/api/src/domain/invoices.js");
   const dep: any = {
-    id: "dep-1", token: "USDC", txHash: "0xfeed", amountUsdc: 1000, state: "CONVERTED",
+    id: "dep-1", token: "USDC", txHash: "0xfeed", amountUsdc: 1000, holding: "converted", settledAt: now.toISOString(),
     settlementAsset: "EURE", creditedEur: 872.5, realisedGainEur: -6.31, provider: "lifi",
     rate: 1.1461, midRate: 1.1379, detectedAt: now.toISOString(),
     receipt: { amountEur: 878.81, rate: 1.1379, rateProvider: "open.er-api.com", rateAsOf: "2026-09-10", ratedAt: now.toISOString(), blockTimestamp: now.toISOString() },
@@ -257,9 +257,13 @@ let q25: import("../services/api/src/payment-requests.js").CryptoQuote;
   // credit would have reported, because that also contains market movement.
   check("the spread is measured against the mid and signed as a cost, not inferred from receipt-minus-credit",
     c.conversion.spreadEur === 6.29, `${c.conversion.spreadEur}`);
-  const held = inv.buildCryptoSettlement({ ...dep, state: "CONVERTED", settlementAsset: "USDC", creditedEur: undefined, realisedGainEur: undefined }) as any;
+  check("the invoice is paid at the receipt value, not the conversion proceeds — the gain sits beside it",
+    c.amountEur === 878.81 && c.conversion.creditedEur === 872.5 && c.realisedGainEur === -6.31, JSON.stringify(c));
+  check("with no receipt value, the measured proceeds stand in",
+    (inv.buildCryptoSettlement({ ...dep, receipt: undefined }) as any).amountEur === 872.5);
+  const held = inv.buildCryptoSettlement({ ...dep, holding: "held", settlementAsset: "USDC", creditedEur: undefined, realisedGainEur: undefined }) as any;
   check("an asset still held has a receipt and NO conversion block — that is the true position, not a half-filled row",
-    held.conversion === undefined && held.realisedGainEur === undefined && held.receiptAmountEur === 878.81);
+    held.conversion === undefined && held.realisedGainEur === undefined && held.receiptAmountEur === 878.81 && held.amountEur === 878.81);
 
   const order = { id: "ord-9", kind: "issue", amount: "878.81", memo: "Rechnung RE-2026-0042 danke",
     meta: { state: "processed", processedAt: now.toISOString() },
@@ -389,7 +393,9 @@ try {
   const d1 = store.cryptoDeposits.find((d) => d.paymentRequestId === r1.id);
   check("the deposit is attributed to the request by amount", Boolean(d1), JSON.stringify(store.cryptoDeposits));
   check("the request is PAID with one full crypto payment", r1.state === "PAID" && r1.payments.length === 1 && r1.payments[0].kind === "full" && r1.payments[0].amountUsdc === q25.amountUsdc, JSON.stringify(r1.payments));
-  check("auto-convert is off, so the deposit is complete as USDC and the payment says what is held", d1!.state === "CONVERTED" && d1!.settlementAsset === "USDC" && r1.payments[0].settledAsset === "USDC", `${d1!.state} ${d1!.reason ?? ""}`);
+  check("auto-convert is off, so the deposit settles on arrival and is held as USDC, convertible any time",
+    Boolean(d1!.settledAt) && d1!.holding === "held" && d1!.settlementAsset === "USDC" && d1!.creditedUsdc === q25.amountUsdc && r1.payments[0].settledAsset === "USDC",
+    `${d1!.holding} ${d1!.reason ?? ""}`);
   const pubPaid = await call("GET", `/api/pay/miriam/${code}`);
   check("the public page now reads PAID and lists the payment", pubPaid.body.state === "PAID" && pubPaid.body.payments[0].amountUsdc === q25.amountUsdc);
   check("a paid link cannot be cancelled", (await call("POST", `/api/users/${miriam.id}/payment-requests/${r1.id}/cancel`, {}, miriam.id)).status === 409);
@@ -484,6 +490,33 @@ try {
       st!.receiptRateAsOf === dInv.receipt?.rateAsOf, JSON.stringify(st));
   check("with no conversion block and no realised gain — absent, not zero, because nothing has been disposed of yet",
     st!.conversion === undefined && st!.realisedGainEur === undefined);
+  check("the invoice is PAID on arrival, before any conversion — the client paid when the money landed",
+    store.findInvoice(theirs)!.state === "PAID" && st!.amountEur === dInv.receipt?.amountEur,
+    JSON.stringify({ state: store.findInvoice(theirs)!.state, amountEur: st!.amountEur, receipt: dInv.receipt }));
+
+  // Converting the held USDC later rewrites the same settlement row; it never
+  // settles the invoice a second time. The swap itself needs a bundler, so the
+  // EURe it would deliver is minted into the Safe and the settle step runs on
+  // the measured delta, as crypto:test does.
+  {
+    const { settleConvertedDeposit } = await import("../services/api/src/adapters/crypto-deposits.js");
+    const { accountBalances, eur } = await import("../services/api/src/chain.js");
+    const before = eur.toWei((await accountBalances(owner)).safeBalanceEur);
+    const out = 24.93;
+    await writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [owner, eur.toWei(out)] });
+    const rate = BigInt(Math.round(MID * 1e6));
+    const conv = await settleConvertedDeposit(store.cryptoDeposits.find((d) => d.id === dInv.id)!, miriam,
+      { provider: "dex", rate, minOut: eur.toWei(24) }, before, [{ step: "safe.swap(usdc->eure)", hash: `0x${"ab".repeat(32)}` }]);
+    const after = store.findInvoice(theirs)!;
+    const rows = (after.settlements ?? []).filter((x: any) => x.depositId === dInv.id) as any[];
+    check("converting later leaves ONE settlement row for the deposit, now carrying the conversion",
+      conv.holding === "converted" && rows.length === 1 && rows[0].conversion?.creditedEur === out, JSON.stringify(after.settlements));
+    check("its amount is still the receipt value and the invoice stays PAID once",
+      rows[0].amountEur === dInv.receipt?.amountEur && after.state === "PAID" && rows[0].realisedGainEur === conv.realisedGainEur, JSON.stringify(rows[0]));
+    const payRow = store.findPaymentRequest(forInvoice.body.id)!.payments.filter((p) => p.depositId === dInv.id);
+    check("the pay-link payment row is rewritten in place to the EURe now held",
+      payRow.length === 1 && payRow[0].settledAsset === "EURE" && payRow[0].settledEur === out, JSON.stringify(payRow));
+  }
 
   // A customer who just paid the invoice by bank transfer, quoting its number —
   // the ordinary case, and the one nothing tied to the document before.

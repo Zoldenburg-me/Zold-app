@@ -222,13 +222,19 @@ export function payableEur(invoice: Invoice): number | undefined {
  * Every value comes from the deposit record. Nothing is recomputed from a rate
  * feed at read time: a rate read later is not the one that applied.
  *
+ * Written on arrival, and rewritten under the same ref when the asset is
+ * later converted. `amountEur` is what the payment was worth when it arrived
+ * (the receivable it discharged) and does not change on conversion; the
+ * conversion block and the realised gain are added beside it. Only when the
+ * receipt could not be valued does the measured conversion stand in.
+ *
  * The conversion block appears only once the asset has been converted. Without
  * it the invoice reads as "paid, asset still held", which is a real balance
  * sheet position.
  */
 export function buildCryptoSettlement(deposit: CryptoDeposit): CryptoInvoiceSettlement {
   const received = deposit.token === "USDC" ? deposit.amountUsdc ?? 0 : deposit.amountEur ?? 0;
-  const converted = deposit.state === "CONVERTED" && deposit.settlementAsset === "EURE";
+  const converted = deposit.token === "USDC" && deposit.holding === "converted";
   /**
    * The venue's spread against the independent mid, in euro: the only fee
    * figure we can state. Needs both rates and is absent otherwise. Don't infer
@@ -243,7 +249,7 @@ export function buildCryptoSettlement(deposit: CryptoDeposit): CryptoInvoiceSett
     method: "crypto",
     ref: `deposit:${deposit.id}`,
     depositId: deposit.id,
-    amountEur: deposit.creditedEur ?? deposit.receipt?.amountEur ?? 0,
+    amountEur: deposit.receipt?.amountEur ?? deposit.creditedEur ?? 0,
     receivedAsset: deposit.token,
     receivedAmount: received,
     receiptTxHash: deposit.txHash,

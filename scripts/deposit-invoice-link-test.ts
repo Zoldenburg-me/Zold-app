@@ -54,7 +54,7 @@ const deposit = (userId: string) => {
   const id = `dep_${randomBytes(6).toString("hex")}`;
   store.addCryptoDeposit({
     id, userId, chainId: 31337, token: "EURE", txHash: `0x${randomBytes(32).toString("hex")}`, logIndex: 0,
-    amountUnits: String(100n * 10n ** 18n), amountEur: 100, creditedEur: 100, settlementAsset: "EURE", state: "CONVERTED", txs: [],
+    amountUnits: String(100n * 10n ** 18n), amountEur: 100, creditedEur: 100, settlementAsset: "EURE", holding: "none", settledAt: now, txs: [],
     detectedAt: now, updatedAt: now,
   } as any);
   return id;
