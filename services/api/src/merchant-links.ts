@@ -92,6 +92,16 @@ const pendingLinks = new Map<string, PendingLink>();
 
 const codeHash = (code: string) => createHash("sha256").update(code).digest("hex");
 
+/** Void every code waiting for this org and shop: a revoke must not be
+ *  undone by a consent given before it. */
+export function voidLinkCodes(orgId: string, shop: string): number {
+  let n = 0;
+  for (const [k, v] of pendingLinks) {
+    if (v.orgId === orgId && v.shop === shop) { pendingLinks.delete(k); n++; }
+  }
+  return n;
+}
+
 export function issueLinkCode(p: Omit<PendingLink, "expiresAt">, now = Date.now()): { code: string; expiresAt: number } {
   for (const [k, v] of pendingLinks) if (v.expiresAt <= now) pendingLinks.delete(k);
   const code = `zlc_${randomBytes(32).toString("base64url")}`;
@@ -126,15 +136,19 @@ export function linkSecretOf(l: MerchantLink): string {
  * fresh consent names. The secret is sealed before the row is written; no
  * await between the caller's last check and this write.
  */
-export function establishLink(p: PendingLink): MerchantLink {
+export function establishLink(p: PendingLink): { link: MerchantLink; previousPayeeUserId?: string } {
   const existing = store.activeMerchantLinkForShop(p.shop);
   if (existing && existing.orgId === p.orgId) {
-    return existing.payeeUserId === p.payeeUserId ? existing : store.updateMerchantLink(existing.id, { payeeUserId: p.payeeUserId });
+    if (existing.payeeUserId === p.payeeUserId && existing.createdBy === p.installerId) return { link: existing };
+    const previousPayeeUserId = existing.payeeUserId !== p.payeeUserId ? existing.payeeUserId : undefined;
+    // The fresh consent is the one in force: its member and its payee.
+    const link = store.updateMerchantLink(existing.id, { payeeUserId: p.payeeUserId, createdBy: p.installerId });
+    return { link, ...(previousPayeeUserId ? { previousPayeeUserId } : {}) };
   }
   const id = randomUUID();
   const linkSecretEnc = SECRETS.merchantLinkSecret.seal(id, randomBytes(32).toString("hex"));
   const now = new Date().toISOString();
-  return store.addMerchantLink({
+  const link = store.addMerchantLink({
     id,
     orgId: p.orgId,
     integration: "shopify",
@@ -145,6 +159,27 @@ export function establishLink(p: PendingLink): MerchantLink {
     createdAt: now,
     updatedAt: now,
   });
+  return { link };
+}
+
+/**
+ * Why the link may not open a request for its payee now, or undefined.
+ * The payee was chosen when the store was linked; the org may since have
+ * gained a EUR account backed by someone else, or lost the member whose own
+ * page it was. Either way the money would land somewhere the org did not
+ * choose, so nothing opens until an admin links the store again.
+ */
+export function linkPayeeProblem(l: MerchantLink): string | undefined {
+  const relink = "an organisation admin must link the store again from the dashboard";
+  const eurBacked = store.accountsOf(l.orgId).some((a) => a.currency === "EUR" && a.backingUserId);
+  if (!eurBacked) {
+    const m = store.memberFor(l.orgId, l.createdBy);
+    if (!m || m.status !== "active") return `the member whose payment page this store pays into has left the organisation; ${relink}`;
+  }
+  const payee = payeeFor(l.orgId, l.createdBy);
+  if (!payee.user) return `${payee.reason ?? "no account to receive into"}; ${relink}`;
+  if (payee.user.id !== l.payeeUserId) return `the organisation's receiving account has changed since this store was linked; ${relink}`;
+  return undefined;
 }
 
 /** The Liquid for the store's order-confirmation email: a link to the

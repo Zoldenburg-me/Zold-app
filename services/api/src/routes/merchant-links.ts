@@ -22,7 +22,7 @@ import { requirePermission, resolveOrg, type SessionResolver } from "./org-conte
 import { baseUrlFor } from "./payment-requests.js";
 import { newestShopifyRequests, payeeFor, shopifyRequestRow } from "./shopify.js";
 import { announceMerchantLinkRevoked } from "../checkout-webhook.js";
-import { issueLinkCode, linkRefusal, merchantLinksAvailable, payLinkTemplate, publicLink } from "../merchant-links.js";
+import { issueLinkCode, linkRefusal, merchantLinksAvailable, payLinkTemplate, publicLink, voidLinkCodes } from "../merchant-links.js";
 
 export function createMerchantLinkRouter(requireSession: SessionResolver): express.Router {
   const router = express.Router();
@@ -95,6 +95,8 @@ export function createMerchantLinkRouter(requireSession: SessionResolver): expre
       if (!requirePermission(ctx, res, "org.update")) return;
       const link = store.merchantLinksForOrg(ctx.org.id).find((l) => l.id === req.params.id);
       if (!link) return res.status(404).json({ error: "no such link" });
+      // A code issued before the revoke must not relink the store after it.
+      voidLinkCodes(ctx.org.id, link.shop);
       if (link.revokedAt) return res.json({ link: publicLink(link) });
       const revoked = store.updateMerchantLink(link.id, { revokedAt: new Date().toISOString(), revokedBy: ctx.userId });
       store.audit(auditEntry("merchant_link.revoked", { orgId: ctx.org.id, linkId: link.id, shop: link.shop }, ctx.userId));
