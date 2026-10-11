@@ -24,6 +24,7 @@ import {
   settleConvertedDeposit,
   settlementTarget,
   unconvertedUnits,
+  usdcSwappedIn,
 } from "../adapters/crypto-deposits.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import { custodyBlockerBeforeFunding, requireCapability } from "../http/guards.js";
@@ -377,11 +378,22 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         });
         let settled: CryptoDeposit;
         try {
+          // What the swap took, measured from its own logs. Less than was asked
+          // is a partial fill and the rest stays held. More cannot be this
+          // deposit's (the approval was for its remainder), so it is capped;
+          // no receipt to read means the whole remainder is taken as swapped.
+          const asked = unconvertedUnits(current);
+          const took = await usdcSwappedIn(submitted.txHash, user.address, pending.userOperation.paymaster)
+            .catch((err) => {
+              console.error(`convert: could not read what swap ${submitted.txHash} took:`, describeCause(err));
+              return undefined;
+            });
+          const amountIn = took === undefined || took <= 0n || took > asked ? asked : took;
           settled = await settleConvertedDeposit(
             executed, user,
             { provider: pending.quote.provider, rate: BigInt(pending.quote.rate), minOut: BigInt(pending.quote.minOut) },
             before, txs,
-            await conversionFacts(submitted, unconvertedUnits(current).toString()),
+            await conversionFacts(submitted, amountIn.toString()),
           );
         } catch (err: any) {
           const reason = redactedMessage(err);
