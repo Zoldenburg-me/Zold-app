@@ -83,6 +83,7 @@ const scripts = [
   "deposit-invoice-link:test",
   "security:test",
   "crypto:test",
+  "crypto-in-getlogs:test",
   "org-migration:test",
   "production-branch:test",
   "identity:test",
