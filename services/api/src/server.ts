@@ -104,8 +104,8 @@ app.use("/api", apiRateLimit);
 // /api can be shadowed by a file on disk.
 app.use(createPageRouter());
 // Every /api/admin route, in whichever router below declares it, passes the
-// operator gate first: Cloudflare Access, an operator passkey session (or the
-// read-only operator token), and a fresh approval for each change.
+// operator gate first: Cloudflare Access, an operator passkey session, and a
+// fresh approval for each change.
 app.use("/api/admin", createOperatorGate());
 app.use("/api", createOperatorAuthRouter());
 

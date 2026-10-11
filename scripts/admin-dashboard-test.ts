@@ -22,8 +22,6 @@ import path from "node:path";
 import express from "express";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-admin-")), "db.json");
-const OPERATOR = "operator-token-for-admin-test-0123456789";
-process.env.KYC_OPERATOR_TOKEN = OPERATOR;
 // No real partner credentials in a test, and a key so a token can be stored.
 for (const k of ["MONERIUM_CLIENT_ID", "MONERIUM_CLIENT_SECRET", "MONERIUM_OAUTH_CLIENT_ID"]) process.env[k] = "";
 process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "admin-test-encryption-key-0123456789abcdef";
@@ -97,9 +95,8 @@ app.use("/api", createAdminRouter());
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
-// A live read asks Monerium, so it needs a passkey session; the shared token reads only what is stored.
 const kit = await operatorKit({ base: API, origin: OPERATOR_CONFIG.adminOrigin, rpId: SECURITY.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
-const get = async (p: string, token: string | null = OPERATOR) => {
+const get = async (p: string, token: string | null = kit.sessionToken) => {
   const res = await realFetch(`${API}${p}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
   return { status: res.status, text: await res.text() };
 };
@@ -112,7 +109,7 @@ async function check(name: string, fn: () => Promise<void>) {
 
 const ROUTES = ["/api/admin/overview", "/api/admin/issues", "/api/admin/users", "/api/admin/users/u_live", "/api/admin/users/u_live/monerium", "/api/admin/monerium"];
 
-await check("every dashboard route refuses without the operator token", async () => {
+await check("every dashboard route refuses without an operator session", async () => {
   for (const r of ROUTES) {
     assert.equal((await get(r, null)).status, 401, r);
     assert.equal((await get(r, "wrong-token-of-sufficient-length-000000")).status, 401, r);
@@ -153,7 +150,7 @@ await check("stored Monerium data is returned without asking Monerium", async ()
 
 await check("a live read refuses an account without a stored token and never asks Monerium", async () => {
   moneriumCalls.length = 0;
-  const body = JSON.parse((await get("/api/admin/users/u_hollow/monerium?live=1", kit.sessionToken)).text);
+  const body = JSON.parse((await get("/api/admin/users/u_hollow/monerium?live=1")).text);
   assert.equal(body.live.available, false);
   assert.equal(moneriumCalls.length, 0, "no fallback to the app's credentials");
 });
@@ -161,7 +158,7 @@ await check("a live read refuses an account without a stored token and never ask
 await check("a live read uses the account's own token, stores nothing and is audited", async () => {
   moneriumCalls.length = 0;
   const before = JSON.stringify(store.findUser("u_live"));
-  const body = JSON.parse((await get("/api/admin/users/u_live/monerium?live=1", kit.sessionToken)).text);
+  const body = JSON.parse((await get("/api/admin/users/u_live/monerium?live=1")).text);
   assert.equal(body.live.available, true);
   assert.ok(body.live.profile.ok && body.live.orders.ok && body.live.ibans.ok);
   assert.ok(moneriumCalls.length >= 6);

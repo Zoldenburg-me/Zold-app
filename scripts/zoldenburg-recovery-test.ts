@@ -45,7 +45,8 @@ const MODULE = "0x949d01d424bE050D09C16025dd007CB59b3A8c66"; // Candide's 3-minu
 const guardianKey = generatePrivateKey();
 const guardian = privateKeyToAccount(guardianKey);
 const impostor = privateKeyToAccount(generatePrivateKey());
-const OPERATOR = `op-${randomBytes(16).toString("hex")}`;
+/** Stands for the operator in `call`: the request goes through the kit. */
+const OPERATOR = "operator";
 const EMAIL = "zold.recover@example.com";
 const IBAN_KEY = `iban-${randomBytes(24).toString("hex")}`;
 // The same key in this process, so the key id written below is the API's own.
@@ -281,10 +282,10 @@ for (const [name, url] of [[`api :${API_PORT}`, `${API}/api/health`], [`chain :$
 
 let opKit: OperatorKit | undefined;
 async function call(pathname: string, body?: any, method?: string, bearer = token, extra: Record<string, string> = {}) {
-  // A change made with the operator token goes through an operator passkey
-  // session and a fresh approval; the token itself opens reads only.
-  if (bearer === OPERATOR && (method ?? (body ? "POST" : "GET")) !== "GET") {
-    if (!opKit) throw new Error(`an operator change (${pathname}) before the operator kit is enrolled`);
+  // The operator calls through a passkey session; a change gets a fresh
+  // approval.
+  if (bearer === OPERATOR) {
+    if (!opKit) throw new Error(`an operator call (${pathname}) before the operator kit is enrolled`);
     const r = await opKit.call(method ?? "POST", pathname, body ?? {});
     return { status: r.status, data: r.body, text: JSON.stringify(r.body) };
   }
@@ -330,7 +331,6 @@ async function startApi() {
     RECOVERY_SERVICE_URL: "",
     RECOVERY_SIMULATED_GRACE_SECONDS: "2",
     RECOVERY_SWEEP_MS: "3600000",
-    KYC_OPERATOR_TOKEN: OPERATOR,
     LOCAL_HARNESS: "1",
     KYC_AUTO_APPROVE: "1",
     RECOVERY_IBAN_HMAC_KEY: IBAN_KEY,

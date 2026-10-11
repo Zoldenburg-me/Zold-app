@@ -3,7 +3,7 @@
  * of its credential.
  *
  *   GET  /service/checkout/transfers/:id                 checkout credential
- *   POST /admin/service-credentials/checkout/rotate      operator token,
+ *   POST /admin/service-credentials/checkout/rotate      operator passkey,
  *        body {revokePrevious?: boolean} — true for a leaked credential
  *
  * The read answers only for a checkout transfer (checkout-service.ts), as the

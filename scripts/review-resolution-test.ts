@@ -19,8 +19,8 @@ import path from "node:path";
 import express from "express";
 
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-review-")), "db.json");
-const OPERATOR = "operator-token-for-review-test-0123456789";
-process.env.KYC_OPERATOR_TOKEN = OPERATOR;
+/** Stands for the operator in `post`: the change goes through the kit. */
+const OPERATOR = "operator";
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
@@ -171,7 +171,6 @@ try {
     assert.equal(t.reviewResolution.state, "REFUNDED");
     assert.equal(t.reviewResolution.note, NOTE);
     assert.equal(t.reviewResolution.by, `operator:${kit.operator.id}`);
-    assert.ok(!t.reviewResolution.by.includes(OPERATOR), "the token itself is never recorded");
     assert.equal(t.reviewResolution.previousError, "redeem order outcome unknown: socket hang up");
     assert.ok(Date.parse(t.reviewResolution.at));
     const entry = store.auditFor("u_review").find((e: any) => e.kind === "operator.transfer_review_resolved") as any;
