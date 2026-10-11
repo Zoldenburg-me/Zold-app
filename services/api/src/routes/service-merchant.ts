@@ -31,6 +31,9 @@ import {
   MAX_REQUEST_TTL_MS,
   consumeLinkCode,
   establishLink,
+  markLinkCodePreviewed,
+  peekLinkCode,
+  type PendingLink,
   linkPayeeProblem,
   linkRefusal,
   linkSecretOf,
@@ -132,39 +135,98 @@ function parseCreate(b: any): CreateBody | { error: string } {
 export function createServiceMerchantRouter() {
   const router = express.Router();
 
+  /** The body both code routes take, or undefined once refused. */
+  const codeBody = (req: express.Request, res: express.Response, caller: Caller, kind: AuditKind) => {
+    const shop = normaliseShop(String(req.body?.shop ?? ""));
+    if (typeof req.body?.code !== "string" || !isValidShopDomain(shop)) {
+      audit(kind, caller, "", "invalid");
+      res.status(400).json({ error: "send {code, shop}: code the zlc_ link code, shop the store's myshopify.com domain", code: "INVALID_REQUEST" });
+      return undefined;
+    }
+    return { code: req.body.code as string, shop };
+  };
+  const codeInvalid = (res: express.Response, caller: Caller, kind: AuditKind) => {
+    audit(kind, caller, "", "code_invalid");
+    return res.status(404).json({ error: "this link code is unknown, expired, used, or for another store", code: "LINK_CODE_INVALID" });
+  };
+
+  /**
+   * The checks a code is held to at preview and at exchange. The consent is
+   * up to 15 minutes old: everything is asked again. Answers and returns
+   * true when refused.
+   */
+  const refusePending = (res: express.Response, caller: Caller, kind: AuditKind, pending: PendingLink): boolean => {
+    const where = { orgId: pending.orgId, shop: pending.shop };
+    const refused = linkRefusal(pending.orgId, pending.shop, pending.installerId);
+    if (refused) {
+      audit(kind, caller, "", `refused:${refused.code}`, where);
+      res.status(409).json(refused);
+      return true;
+    }
+    const avail = merchantLinksAvailable();
+    if (!avail.available) {
+      audit(kind, caller, "", "unavailable", where);
+      res.status(503).json({ error: avail.reason, code: "MERCHANT_LINKS_UNAVAILABLE" });
+      return true;
+    }
+    const payee = store.findUser(pending.payeeUserId);
+    if (!payee?.paymentPage?.handle || !payee.paymentPage.depositAddress) {
+      audit(kind, caller, "", "refused:NO_PAYMENT_PAGE", where);
+      res.status(409).json({ code: "NO_PAYMENT_PAGE", error: "the receiving account no longer has a payment page" });
+      return true;
+    }
+    return false;
+  };
+
+  /**
+   * What the shop's admin is shown before confirming: which organisation and
+   * which payment page the store's orders would pay. Does not spend the code;
+   * it marks it previewed, which exchange requires. No ids, no secret.
+   */
+  router.post(
+    "/service/merchant/links/preview",
+    wrap(async (req, res) => {
+      const caller = checkoutCaller(req, res);
+      if (!caller) return;
+      const kind: AuditKind = "service.merchant_link_preview";
+      const body = codeBody(req, res, caller, kind);
+      if (!body) return;
+      const pending = peekLinkCode(body.code, body.shop);
+      if (!pending) return codeInvalid(res, caller, kind);
+      if (refusePending(res, caller, kind, pending)) return;
+      markLinkCodePreviewed(body.code);
+      const page = store.findUser(pending.payeeUserId)!.paymentPage!;
+      audit(kind, caller, "", "previewed", { orgId: pending.orgId, shop: body.shop, payeeUserId: pending.payeeUserId }, pending.installerId);
+      res.json({
+        shop: pending.shop,
+        orgName: store.findOrganisation(pending.orgId)?.name,
+        payeeHandle: page.handle,
+        ...(page.displayName ? { payeeDisplayName: page.displayName } : {}),
+        expiresAt: new Date(pending.expiresAt).toISOString(),
+      });
+    }),
+  );
+
   router.post(
     "/service/merchant/links/exchange",
     wrap(async (req, res) => {
       const caller = checkoutCaller(req, res);
       if (!caller) return;
-      const shop = normaliseShop(String(req.body?.shop ?? ""));
-      if (typeof req.body?.code !== "string" || !isValidShopDomain(shop)) {
-        audit("service.merchant_link_exchange", caller, "", "invalid");
-        return res.status(400).json({ error: "send {code, shop}: code the zlc_ link code, shop the store's myshopify.com domain", code: "INVALID_REQUEST" });
-      }
+      const kind: AuditKind = "service.merchant_link_exchange";
+      const body = codeBody(req, res, caller, kind);
+      if (!body) return;
+      const { shop } = body;
       // Consumed first: whatever happens next, the code is spent.
-      const pending = consumeLinkCode(req.body.code, shop);
-      if (!pending) {
-        audit("service.merchant_link_exchange", caller, "", "code_invalid");
-        return res.status(404).json({ error: "this link code is unknown, expired, used, or for another store", code: "LINK_CODE_INVALID" });
+      const pending = consumeLinkCode(body.code, shop);
+      if (!pending) return codeInvalid(res, caller, kind);
+      // The shop's admin must have been shown whose store this becomes.
+      if (!pending.previewedAt) {
+        audit(kind, caller, "", "refused:LINK_NOT_CONFIRMED", { orgId: pending.orgId, shop });
+        return res.status(409).json({ error: "this link code was never previewed: show the store's admin the organisation and payee, then exchange a fresh code", code: "LINK_NOT_CONFIRMED" });
       }
-      // The consent is up to 15 minutes old: ask everything again, with no
-      // await between these checks and the write.
-      const refused = linkRefusal(pending.orgId, pending.shop, pending.installerId);
-      if (refused) {
-        audit("service.merchant_link_exchange", caller, "", `refused:${refused.code}`, { orgId: pending.orgId, shop });
-        return res.status(409).json(refused);
-      }
-      const avail = merchantLinksAvailable();
-      if (!avail.available) {
-        audit("service.merchant_link_exchange", caller, "", "unavailable", { orgId: pending.orgId, shop });
-        return res.status(503).json({ error: avail.reason, code: "MERCHANT_LINKS_UNAVAILABLE" });
-      }
-      const payee = store.findUser(pending.payeeUserId);
-      if (!payee?.paymentPage?.handle || !payee.paymentPage.depositAddress) {
-        audit("service.merchant_link_exchange", caller, "", "refused:NO_PAYMENT_PAGE", { orgId: pending.orgId, shop });
-        return res.status(409).json({ code: "NO_PAYMENT_PAGE", error: "the receiving account no longer has a payment page" });
-      }
+      // No await between these checks and the write.
+      if (refusePending(res, caller, kind, pending)) return;
+      const payee = store.findUser(pending.payeeUserId)!;
       let established: ReturnType<typeof establishLink>;
       try {
         established = establishLink(pending);
@@ -183,7 +245,7 @@ export function createServiceMerchantRouter() {
         linkId: link.id,
         shop: link.shop,
         orgName: store.findOrganisation(link.orgId)?.name,
-        payeeHandle: payee.paymentPage.handle,
+        payeeHandle: payee.paymentPage!.handle,
         linkSecret: linkSecretOf(link),
       });
     }),
