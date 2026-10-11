@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import express from "express";
+import { HttpRequestError } from "viem";
 import { routeAsyncRejections } from "../services/api/src/http/async-errors.js";
 import { recentServerErrors, recordServerError } from "../services/api/src/http/error-log.js";
 
@@ -41,6 +42,11 @@ app.get("/api/direct", async () => {
 });
 app.get("/api/sync", () => {
   throw new Error("thrown synchronously");
+});
+// A failed RPC call: viem's full message names the URL, and an RPC URL can
+// carry an API key.
+app.get("/api/rpc", async () => {
+  throw new HttpRequestError({ url: "https://rpc.example/v2/DUMMYKEY", status: 429, body: { method: "eth_blockNumber" } });
 });
 app.use(((err, req, res, _next) => {
   const logged = recordServerError(err, req);
@@ -74,6 +80,25 @@ await check("the log keeps the route pattern, never the concrete URL", () => {
   const routes = recentServerErrors().map((e) => e.route);
   assert.ok(routes.includes("/api/orgs/:orgId/boom"), routes.join(", "));
   assert.ok(!routes.some((r) => r.includes("o1")), "a concrete id leaked into the log");
+});
+
+await check("a failed RPC call's URL and request body stay out of the kept stack and the log line", async () => {
+  const logged: string[] = [];
+  const err = console.error;
+  console.error = (...a: unknown[]) => { logged.push(a.map(String).join(" ")); };
+  let res;
+  try { res = await fetch(base + "/api/rpc"); }
+  finally { console.error = err; }
+  assert.equal(res.status, 500);
+  const entry = recentServerErrors().find((e) => e.route === "/api/rpc");
+  assert.ok(entry, "the error was kept");
+  assert.ok(entry.stack.length > 0, "the call frames are kept");
+  assert.ok(!/DUMMYKEY|eth_blockNumber/.test(JSON.stringify(entry)), `nowhere in the kept entry: ${entry.stack.join(" | ")}`);
+  for (const line of entry.stack) {
+    assert.ok(!/DUMMYKEY|https:\/\/|eth_blockNumber/.test(line), `no URL or request body: ${line}`);
+    assert.ok(line.startsWith("at "), `only call frames are kept: ${line}`);
+  }
+  assert.ok(!/DUMMYKEY|eth_blockNumber/.test(logged.join("\n")), "nor in the log line");
 });
 
 await check("server.ts applies it after the last route", () => {
