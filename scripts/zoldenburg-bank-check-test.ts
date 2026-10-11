@@ -165,12 +165,17 @@ await t("no payment yet: waiting; from another account: the reason, and not pass
   assert.equal(B.bankCheckPassed(req(), user()), false);
 });
 
-await t("an account that is not armed fails the check whatever was paid", async () => {
+await t("an account that is not armed never passes, whatever was paid, and the next check looks again", async () => {
   const safe = structuredClone(user().passkeySafe!);
   store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, status: "planned" } } });
-  assert.equal(await B.checkRecoveryBankPayment("r1", reads([order()]), at(23)), "mismatch");
-  assert.match(req().zoldenburg!.bankCheck!.lastCheck!.reason, /never confirmed/);
-  store.updateUser("u1", { passkeySafe: safe });
+  try {
+    assert.equal(await B.checkRecoveryBankPayment("r1", reads([order()]), at(23)), "unreadable");
+    assert.equal(req().zoldenburg!.bankCheck!.lastCheck!.cause, "not_armed");
+    assert.ok(!/armed|enrol|confirm/i.test(req().zoldenburg!.bankCheck!.lastCheck!.reason), "the person's text names no cause");
+    assert.equal(req().zoldenburg!.bankCheck!.passedAt, undefined);
+  } finally {
+    store.updateUser("u1", { passkeySafe: safe });
+  }
 });
 
 await t("the right payment passes: time, order id, the enrolment it matched; no IBAN, no name; the code is spent", async () => {
@@ -212,16 +217,28 @@ await t("only open REVIEW_PENDING requests are checked; the sweep skips the rest
   assert.ok(B.bankCheckPassed(req("r2"), user()));
 });
 
-await t("a newer code issued while a check ran is not overwritten by the older check", async () => {
+await t("a request that moves on while a check ran is left as it is", async () => {
   newRequest("r3");
   open = B.issueRecoveryBankCode(req("r3"), at(50));
   const slow: Reads = {
-    orders: async () => { B.issueRecoveryBankCode(req("r3"), at(51)); return [order(paidAt(52))]; },
+    orders: async () => { store.updateRecoveryRequest("r3", { status: "CANCELED" }); return [order(paidAt(52))]; },
     profileName: async () => "Anna Müller",
   };
   assert.equal(await B.checkRecoveryBankPayment("r3", slow, at(53)), "no_code");
   assert.equal(req("r3").zoldenburg!.bankCheck!.passedAt, undefined);
   assert.ok(req("r3").zoldenburg!.bankCheck!.code);
+  store.updateRecoveryRequest("r3", { status: "REVIEW_PENDING" });
+});
+
+await t("a new code issued while a check ran does not lose a payment made with the earlier one", async () => {
+  newRequest("r3b");
+  open = B.issueRecoveryBankCode(req("r3b"), at(50));
+  const slow: Reads = {
+    orders: async () => { B.issueRecoveryBankCode(req("r3b"), at(51)); return [order(paidAt(52))]; },
+    profileName: async () => "Anna Müller",
+  };
+  assert.equal(await B.checkRecoveryBankPayment("r3b", slow, at(53)), "passed");
+  assert.equal(req("r3b").zoldenburg!.bankCheck!.codesIssued, 2, "the count survives the pass");
 });
 
 await t("the public projection carries none of it; the person's view no IBAN digits at all", () => {
@@ -250,6 +267,79 @@ await t("a request gets at most maxCodes codes; the count and the read clock sur
   }
   assert.equal(B.canIssueRecoveryBankCode(req("r7")), false);
   assert.equal(req("r7").zoldenburg!.bankCheck!.lastReadAt, at(80).toISOString(), "a new code does not reset the read clock");
+});
+
+await t("an order processed before its code was issued never counts", async () => {
+  newRequest("r9");
+  open = B.issueRecoveryBankCode(req("r9"), at(100));
+  assert.equal(await B.checkRecoveryBankPayment("r9", reads([order(paidAt(99))]), at(101)), "waiting");
+  assert.equal(req("r9").zoldenburg!.bankCheck!.passedAt, undefined);
+});
+
+await t("two checks at once read Monerium once; the second says one is running", async () => {
+  let asked = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const slow: Reads = { orders: async () => { asked++; await gate; return []; }, profileName: async () => "Anna Müller" };
+  const first = B.checkRecoveryBankPayment("r9", slow, at(102));
+  assert.equal(await B.checkRecoveryBankPayment("r9", slow, at(102)), "running");
+  release();
+  assert.equal(await first, "waiting");
+  assert.equal(asked, 1);
+});
+
+await t("a check that throws is recorded as unreadable, and never leaves the request stuck", async () => {
+  const realUpdate = store.updateRecoveryRequest.bind(store);
+  let calls = 0;
+  (store as any).updateRecoveryRequest = (id: string, patch: any) => {
+    if (id === "r9" && ++calls === 1) throw new Error("disk full");
+    return realUpdate(id, patch);
+  };
+  try {
+    assert.equal(await B.checkRecoveryBankPayment("r9", reads([]), at(103)), "unreadable");
+  } finally {
+    (store as any).updateRecoveryRequest = realUpdate;
+  }
+  assert.equal(req("r9").zoldenburg!.bankCheck!.lastCheck!.outcome, "unreadable");
+  let asked = 0;
+  assert.equal(await B.checkRecoveryBankPayment("r9", { orders: async () => { asked++; return []; }, profileName: async () => "x" }, at(104)), "waiting");
+  assert.equal(asked, 1, "the next check reads again");
+  // A malformed order throws inside the check: unreadable, not an old answer.
+  const bad: Reads = { orders: async () => [{ get kind(): string { throw new Error("malformed"); } }] as any, profileName: async () => "Anna Müller" };
+  assert.equal(await B.checkRecoveryBankPayment("r9", bad, at(105)), "unreadable");
+  assert.equal(req("r9").zoldenburg!.bankCheck!.lastCheck!.cause, "error");
+  // A programming error is not a failed read: it is thrown, not recorded.
+  const buggy: Reads = { orders: async () => [{ get kind(): string { throw new TypeError("x is undefined"); } }] as any, profileName: async () => "Anna Müller" };
+  await assert.rejects(B.checkRecoveryBankPayment("r9", buggy, at(106)), TypeError);
+  assert.equal(await B.checkRecoveryBankPayment("r9", reads([]), at(107)), "waiting", "and the request is not stuck after it");
+});
+
+await t("an enrolment replaced during the reads by the same account binds the pass to the new one", async () => {
+  newRequest("r15");
+  open = B.issueRecoveryBankCode(req("r15"), at(120));
+  const e = structuredClone(user().zoldenburgEnrolment!);
+  const later = at(121).toISOString();
+  const mid: Reads = { orders: async () => { store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: later } }); return [order(paidAt(122))]; }, profileName: async () => "Anna Müller" };
+  try {
+    assert.equal(await B.checkRecoveryBankPayment("r15", mid, at(123)), "passed");
+    assert.equal(req("r15").zoldenburg!.bankCheck!.enrolledAt, later);
+    assert.ok(B.bankCheckPassed(req("r15"), user()));
+  } finally {
+    store.updateUser("u1", { zoldenburgEnrolment: e });
+  }
+});
+
+await t("an enrolment removed during the reads is not passed against", async () => {
+  newRequest("r10");
+  open = B.issueRecoveryBankCode(req("r10"), at(110));
+  const e = structuredClone(user().zoldenburgEnrolment!);
+  const mid: Reads = { orders: async () => { store.updateUser("u1", { zoldenburgEnrolment: undefined }); return [order(paidAt(111))]; }, profileName: async () => "Anna Müller" };
+  try {
+    assert.equal(await B.checkRecoveryBankPayment("r10", mid, at(112)), "unreadable");
+    assert.equal(req("r10").zoldenburg!.bankCheck!.passedAt, undefined);
+  } finally {
+    store.updateUser("u1", { zoldenburgEnrolment: e });
+  }
 });
 
 // ---- routes ----------------------------------------------------------------
@@ -363,6 +453,102 @@ await t("operator: an unarmed account is NOT_ARMED, before any bank check", asyn
   assert.equal((await call("/recovery/zoldenburg/r5/bank-code", {}, person)).data.code, "NOT_ARMED");
   store.updateUser("u1", { zoldenburgEnrolment: e });
 });
+
+await t("operator: a pass voided by re-enrolment or a new HMAC key locks signing again, and says so", async () => {
+  assert.equal((await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r4").bankCheck.passed, true);
+  const e = structuredClone(user().zoldenburgEnrolment!);
+  store.updateUser("u1", { zoldenburgEnrolment: { ...e, enrolledAt: new Date().toISOString() } });
+  try {
+    for (const [p, body] of [["sign-request", {}], ["execute", { signature: "0x00", reviewNote: "Video call, matched Monerium profile" }], ["sync", {}]] as const) {
+      assert.equal((await opCall(`/admin/recoveries/r4/${p}`, body)).data.code, "BANK_CHECK_PENDING", p);
+    }
+    const row = (await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r4");
+    assert.equal(row.bankCheck.passed, false);
+    assert.equal(row.bankCheck.voided, true);
+    assert.equal(row.safeCoverLink, null);
+    // Voided, the person may ask for a reference again.
+    assert.equal((await call("/recovery/zoldenburg/r4", undefined, person)).data.bankCheck.canIssueCode, true);
+  } finally {
+    store.updateUser("u1", { zoldenburgEnrolment: e });
+  }
+  await withKey("n".repeat(40), async () => {
+    assert.equal((await opCall("/admin/recoveries/r4/sign-request", {})).data.code, "NOT_ARMED");
+    assert.equal((await call("/recovery/zoldenburg/r4/bank-code", {}, person)).data.code, "NOT_ARMED");
+  });
+  assert.equal((await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r4").bankCheck.passed, true, "the right key back, the pass counts");
+});
+
+await t("routes: check-now says what this click did", async () => {
+  newRequest("r11");
+  assert.equal((await call("/recovery/zoldenburg/r11/bank-code", {}, person)).status, 201);
+  const first = await call("/recovery/zoldenburg/r11/bank-check", {}, person);
+  assert.equal(first.data.check.outcome, "unreadable", "no Monerium here: this click's own answer");
+  const again = await call("/recovery/zoldenburg/r11/bank-check", {}, person);
+  assert.equal(again.data.check.outcome, "recent");
+  assert.ok(Date.parse(again.data.check.nextCheckAt) > Date.now());
+});
+
+await t("routes: an expired request answers 410, then 409 as ended, and is never checked", async () => {
+  newRequest("r12");
+  assert.equal((await call("/recovery/zoldenburg/r12/bank-code", {}, person)).status, 201);
+  store.updateRecoveryRequest("r12", { expiresAt: new Date(Date.now() - 1000).toISOString() });
+  const c = await call("/recovery/zoldenburg/r12/bank-check", {}, person);
+  assert.equal(c.status, 410, c.text);
+  assert.equal(c.data.status, "EXPIRED");
+  assert.equal(req("r12").zoldenburg!.bankCheck!.lastReadAt, undefined, "no Monerium read");
+  const code = await call("/recovery/zoldenburg/r12/bank-code", {}, person);
+  assert.equal(code.status, 409, code.text);
+  assert.equal(code.data.status, "EXPIRED", "an ended request gets no new code");
+});
+
+await t("operator: references can be given back; codes stay valid", async () => {
+  assert.equal((await call("/recovery/zoldenburg/r8/bank-code", {}, person)).data.code, "TOO_MANY_CODES");
+  const before = req("r8").zoldenburg!.bankCheck!.code!.hash;
+  const r = await opCall("/admin/recoveries/r8/bank-reset", {});
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.data.bankCheck.codesIssued, 0);
+  assert.equal(req("r8").zoldenburg!.bankCheck!.code!.hash, before, "the open code is kept");
+  assert.equal((await call("/recovery/zoldenburg/r8/bank-code", {}, person)).status, 201);
+  assert.equal((await opCall("/admin/recoveries/r5/bank-reset", {})).data.code, "NOTHING_TO_RESET");
+});
+
+await t("operator: a reset keeps the read clock, refuses a passed check or an ended request, and needs an operator", async () => {
+  const before = req("r8").zoldenburg!.bankCheck!;
+  store.updateRecoveryRequest("r8", { zoldenburg: { ...req("r8").zoldenburg, bankCheck: { ...before, lastReadAt: new Date().toISOString() } } });
+  const clock = req("r8").zoldenburg!.bankCheck!.lastReadAt;
+  assert.equal((await opCall("/admin/recoveries/r8/bank-reset", {})).status, 200);
+  assert.equal(req("r8").zoldenburg!.bankCheck!.lastReadAt, clock, "a reset buys no Monerium read");
+  assert.equal((await opCall("/admin/recoveries/r4/bank-reset", {})).data.code, "ALREADY_PASSED");
+  store.updateRecoveryRequest("r8", { status: "CANCELED" });
+  assert.equal((await opCall("/admin/recoveries/r8/bank-reset", {})).status, 409);
+  store.updateRecoveryRequest("r8", { status: "REVIEW_PENDING" });
+  const anon = await call("/admin/recoveries/r8/bank-reset", {});
+  assert.ok([401, 403].includes(anon.status), `no operator: ${anon.status}`);
+  const row = (await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r8");
+  assert.equal(row.bankCheck.maxCodes, B.RECOVERY_BANK.maxCodes);
+  assert.equal(typeof row.bankCheck.codesIssued, "number");
+});
+
+await t("routes: check-now with no open code says nothing to check; a recorded reason comes with the answer", async () => {
+  newRequest("r13");
+  const none = await call("/recovery/zoldenburg/r13/bank-check", {}, person);
+  assert.equal(none.data.check.outcome, "no_code");
+  assert.equal(none.data.check.reason, undefined);
+  newRequest("r14");
+  assert.equal((await call("/recovery/zoldenburg/r14/bank-code", {}, person)).status, 201);
+  const read = await call("/recovery/zoldenburg/r14/bank-check", {}, person);
+  assert.equal(read.data.check.outcome, "unreadable");
+  assert.ok(read.data.check.reason, "this click recorded a reason and returns it");
+  assert.equal(read.data.bankCheck.lastCheck.cause, undefined, "the cause is for the operator only");
+  const row = (await opCall("/admin/recoveries")).data.requests.find((x: any) => x.id === "r14");
+  assert.equal(row.bankCheck.lastCheck.cause, "monerium_orders");
+});
+
+await t("routes: a corrupt read clock does not 500", async () => {
+  store.updateRecoveryRequest("r14", { zoldenburg: { ...req("r14").zoldenburg, bankCheck: { ...req("r14").zoldenburg!.bankCheck, lastReadAt: "not a date" } } });
+  const r = await call("/recovery/zoldenburg/r14/bank-check", {}, person);
+  assert.equal(r.status, 200, r.text);
+});
 server.close();
 
 // ---- the page's 1 € step (public/recovery/bank-step.js) --------------------
@@ -401,6 +587,19 @@ await t("page: out of codes, no new-reference button and a way out; passed, the 
   assert.match(done, /arrived/);
 });
 
+await t("page: a click's answer is this click's, never an older reason", () => {
+  const base = view({ codeIssuedAt: "x", lastCheck: { at: "1", reason: "old reason" } });
+  assert.equal(UI.checkAnswerText({ ...base, check: { outcome: "recent", nextCheckAt: new Date(10_000 + 12_000).toISOString() } }, 10_000), "We checked a moment ago. Try again in 12 seconds.");
+  assert.match(UI.checkAnswerText({ ...base, check: { outcome: "running" } }), /already running/);
+  assert.match(UI.checkAnswerText({ ...base, check: { outcome: "no_code" } }), /nothing to check/);
+  assert.equal(UI.checkAnswerText({ ...base, check: { outcome: "waiting", reason: "this click's reason" } }), "this click's reason");
+  assert.ok(!UI.checkAnswerText({ ...base, check: { outcome: "waiting" } }).includes("old reason"), "a reason this click did not record is never shown");
+  assert.ok(!UI.checkAnswerText({ ...base, check: { outcome: "unreadable" } }).includes("old reason"));
+  const html = UI.bankStepHtml(base, null, "We checked a moment ago. Try again in 12 seconds.");
+  assert.match(html, /id="r-bank-note"/);
+  assert.ok(!html.includes("old reason"), "the note replaces the recorded reason");
+});
+
 await t("page: the poll redraws only when the step changed", () => {
   const a = view({ codeIssuedAt: "x", lastCheck: { at: "1" } });
   assert.equal(UI.bankStepChanged(a, structuredClone(a)), false);
@@ -414,6 +613,13 @@ const src = (p: string) => readFileSync(new URL(`../services/api/src/${p}`, impo
 
 await t("the person's routes sit on the auth rate bucket", () => {
   assert.ok(src("http/policy.ts").includes('path.startsWith("/recovery")'));
+});
+
+await t("writes after a chain read spread the stored state, not a copy from before the read", () => {
+  const r = src("routes/recovery-zoldenburg.ts");
+  const chain = r.slice(r.indexOf("export async function syncZoldenburgFromChain"), r.indexOf("export async function sweepZoldenburgRecoveries"));
+  assert.ok(!/zoldenburg: \{ \.\.\.z,/.test(chain), "no `...z` spread: a 1 € pass recorded during the read would be put back");
+  assert.equal(chain.match(/\.\.\.zoldenburgNow\(request\.id\)/g)?.length, 3);
 });
 
 await t("the operator routes refuse before they hand out or relay anything", () => {

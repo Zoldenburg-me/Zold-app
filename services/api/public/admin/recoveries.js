@@ -88,6 +88,14 @@ function renderRecoveryList(root) {
       ], 'No account has made a recovery choice yet.')}</section>`;
 }
 
+/* Why a 1 € check could not run. The person sees one text for all of them. */
+const RV_CAUSE = {
+  not_armed: 'the account is not armed: no enrolled bank account under the current key, or Zoldenburg is not its guardian',
+  monerium_orders: 'its Monerium orders could not be read: connection gone, no profile id, or Monerium down',
+  monerium_profile: 'the Monerium profile name could not be read',
+  error: 'an error inside the check; see the server log',
+};
+
 function renderRecoveryDetail(root, id, message) {
   const r = (S.recoveries.requests || []).find((x) => x.id === id);
   if (!r) { root.innerHTML = `<a class="back" href="#/recoveries">← All recoveries</a><div class="note">No Zoldenburg recovery with this id.</div>`; return; }
@@ -137,10 +145,15 @@ function renderRecoveryDetail(root, id, message) {
         ${fact('Bank account enrolled', en.armed ? `yes · ending ${esc(en.bankAccountLast4 || '????')} · ${esc(fmtWhen(en.enrolledAt))}` : '<b>no</b> — this account never sent its enrolment 1 €', true)}
         ${fact('1 € from that account', bank.passed
           ? `passed · ${esc(fmtWhen(bank.passedAt))} · order ${chip(bank.orderId)}`
-          : bank.codeIssuedAt
-            ? `<b>not yet</b> · code issued ${esc(fmtWhen(bank.codeIssuedAt))}${bank.lastCheck ? ` · last check: ${esc(bank.lastCheck.reason)}` : ''}`
-            : '<b>not yet</b> · the person has not asked for transfer details', true)}
+          : bank.voided
+            ? `<b>no longer counts</b> · passed ${esc(fmtWhen(bank.passedAt))}, then the owner confirmed another bank account or the account stopped being armed`
+            : bank.codeIssuedAt
+              ? `<b>not yet</b> · code issued ${esc(fmtWhen(bank.codeIssuedAt))}`
+              : '<b>not yet</b> · the person has not asked for transfer details', true)}
+        ${bank.lastCheck && !bank.passed ? fact('Last check', `${esc(bank.lastCheck.outcome)}${bank.lastCheck.cause ? ` (${esc(RV_CAUSE[bank.lastCheck.cause] || bank.lastCheck.cause)})` : ''} · ${esc(fmtWhen(bank.lastCheck.at))} (${esc(fmtAgo(bank.lastCheck.at))}) · ${esc(bank.lastCheck.reason)}`, true) : ''}
+        ${!bank.passed ? fact('References used', `${esc(bank.codesIssued ?? 0)} of ${esc(bank.maxCodes ?? 5)}${(bank.codesIssued ?? 0) >= (bank.maxCodes ?? 5) ? ' · the person can get no more' : ''}`) : ''}
       </div>
+      ${!bank.passed && bank.codesIssued ? `<div class="actions"><button type="button" class="btn sm" data-rv="bank-reset">Give the person their references back</button></div>` : ''}
       ${checksOk ? '' : `<div class="note bad"><b>Signing is locked.</b> Both checks above must pass first. There is no override.</div>`}
       <div class="note warn">
         <b>Before you sign.</b> Signing starts a takeover of this account: after the waiting period the new passkey owns it. Only the old passkey can stop it.
@@ -286,6 +299,10 @@ async function recoveryClick(ev, root, id) {
       if (!confirm('Reject this recovery request?')) return;
       await recoveryAction(id, 'reject', { reason });
       await afterRecoveryAction(root, id, 'Rejected.');
+    } else if (kind === 'bank-reset') {
+      if (!confirm('Let this person ask for new 1 € references again? Do this only after speaking with them.')) return;
+      await recoveryAction(id, 'bank-reset');
+      await afterRecoveryAction(root, id, 'References reset. The person can ask for a new one.');
     } else if (kind === 'finalize') {
       const updated = await recoveryAction(id, 'finalize');
       await afterRecoveryAction(root, id, updated.status === 'FINALIZED' ? 'Finalized. The new passkey owns the account.' : 'Not finalized yet — see the error above.');
