@@ -380,7 +380,7 @@ RENDER.documents = async () => {
       ${secondary("Proof of ownership", 'data-act="doc-ownership"', "verified_user")}` : ""}
     </div>
     <p class="desc" style="margin-top:12px">${letters
-      ? "The proof of ownership asks for your Face ID or fingerprint: the account itself confirms it, which shows you control it."
+      ? `The proof of ownership asks for your ${Z.passkeyName()}: the account itself confirms it, which shows you control it.`
       : "Balance confirmations and proofs of ownership are issued once Monerium has verified you and your IBAN is active."}</p></section>`;
   const issued = docs.length
     ? table([["Document"], ["Details"], ["Issued"], [""]], docs.map((d) => `<tr>

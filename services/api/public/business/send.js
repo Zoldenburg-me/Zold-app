@@ -21,8 +21,8 @@ const FIND_FROM = 6;
 META.send = () => ({
   title: "New payment",
   sub: reviewOn()
-    ? "It goes to Approvals: someone other than you approves it, then it’s sent with Face ID or fingerprint."
-    : "Save it, then send it from Payments with Face ID or fingerprint.",
+    ? "It goes to Approvals: someone other than you approves it, then it’s sent with the sender’s passkey."
+    : `Save it, then send it from Payments with your ${Z.passkeyName()}.`,
   actions: reviewOn() ? linkBtn("Approvals", "payments", "inbox") : "",
 });
 
@@ -51,13 +51,14 @@ function contactRow(c, checked) {
 function nextSteps(account, approvers) {
   const who = sender(account);
   const signer = who ? `by ${who}, from their own account` : "by you";
+  const sentWith = `It’s sent with ${who ? "their passkey" : `your ${Z.passkeyName()}`} ${signer}.`;
   const names = approvers.map((m) => m.name || m.email).filter(Boolean);
   const approve = names.length
     ? `Someone other than you approves it: ${names.length > 2 ? `${names.slice(0, 2).join(", ")} or another approver` : names.join(" or ")}.`
     : "Someone other than you approves it. Nobody else here can approve yet: an owner can invite an admin in Members.";
   const steps = reviewOn()
-    ? [["edit_note", "You submit it. It waits in Approvals."], ["how_to_reg", approve], ["fingerprint", `It’s sent with Face ID or fingerprint ${signer}.`]]
-    : [["edit_note", "You save it. It waits in Payments."], ["fingerprint", `It’s sent with Face ID or fingerprint ${signer}.`]];
+    ? [["edit_note", "You submit it. It waits in Approvals."], ["how_to_reg", approve], ["fingerprint", sentWith]]
+    : [["edit_note", "You save it. It waits in Payments."], ["fingerprint", sentWith]];
   steps.push(["account_balance", "It leaves as a bank transfer. Its status turns to Paid when the bank confirms."]);
   return `<ol class="zb-next">${steps.map(([icon, text]) => `<li>${Z.icon(icon)}<span>${esc(text)}</span></li>`).join("")}</ol>`;
 }
