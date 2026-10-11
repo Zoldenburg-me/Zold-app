@@ -48,6 +48,7 @@ const scripts = [
   "safe-import:test",
   "safe-import:ui:test",
   "passkey-prompt:test",
+  "offline-bar:test",
   "execution:test",
   "gas:test",
   "faucet:test",
