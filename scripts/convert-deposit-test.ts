@@ -464,6 +464,13 @@ await check("the executed swap is recorded before settling, and a failed settle 
     "no rate check that can throw after the swap executed");
 });
 
+await check("the units swapped are measured from the swap's logs, capped at what was left, never taken from the request", () => {
+  const conv = srv.slice(srv.indexOf('"/users/:id/crypto-deposits/:depositId/convert"'));
+  assert.match(conv, /const took = await usdcSwappedIn\(submitted\.txHash, user\.address, pending\.userOperation\.paymaster\)/);
+  assert.match(conv, /const amountIn = took === undefined \|\| took <= 0n \|\| took > asked \? asked : took;/);
+  assert.match(conv, /conversionFacts\(submitted, amountIn\.toString\(\)\)/);
+});
+
 await check("one conversion per deposit at a time; failure writes never undo a conversion", () => {
   const prep = srv.slice(srv.indexOf('"/users/:id/crypto-deposits/:depositId/convert/prepare"'));
   assert.match(prep.slice(0, 1500), /convertingDeposits\.has\(deposit\.id\)[\s\S]{0,120}already running/);
