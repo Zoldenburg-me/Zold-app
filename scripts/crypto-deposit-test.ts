@@ -158,7 +158,7 @@ try {
    *  Safe. The batch itself cannot run here — it needs Candide's bundler, and
    *  no hardhat node has one. */
   const mintEure = (to: `0x${string}`, amount: number) =>
-    writeAndWait(deployerWallet, {
+    writeAndWait(deployerWallet!, {
       address: addrs().eure,
       abi: abis.MockToken,
       functionName: "mint",
@@ -166,14 +166,14 @@ try {
     });
 
   const sendUsdc = (to: `0x${string}`, amount: number) =>
-    writeAndWait(deployerWallet, {
+    writeAndWait(deployerWallet!, {
       address: addrs().usdc,
       abi: abis.MockToken,
       functionName: "mint",
       args: [to, usd.toUnits(amount)],
     });
   const sendEure = (to: `0x${string}`, amount: number) =>
-    writeAndWait(deployerWallet, {
+    writeAndWait(deployerWallet!, {
       address: addrs().eure,
       abi: abis.MockToken,
       functionName: "mint",

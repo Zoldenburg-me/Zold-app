@@ -104,7 +104,9 @@ function wallet(key: `0x${string}`) {
   });
 }
 
-export const deployerWallet = wallet(KEYS.deployer);
+/** Hardhat's deployer: mints the harness's MockToken. Undefined off the local
+ *  chain, where the server holds no deployer key (config/keys.ts). */
+export const deployerWallet = KEYS.deployer ? wallet(KEYS.deployer) : undefined;
 /** The testnet faucet's own wallet; unset means no faucet (faucet.ts). */
 export const faucetWallet = TESTNET_FAUCET.key ? wallet(TESTNET_FAUCET.key) : undefined;
 export const orchestratorWallet = wallet(KEYS.orchestrator);

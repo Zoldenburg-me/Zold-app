@@ -58,6 +58,11 @@ function checkRuntimeFlags(fail: Fail) {
   for (const dead of ["ALLOW_SIMULATION", "ALLOW_MOCK_FALLBACK", "KYC_PROVIDER", "SUMSUB_APP_TOKEN"]) {
     if (process.env[dead]) fail(`${dead} no longer exists — the mock, simulation and Sumsub paths were removed; unset it`);
   }
+  // The contracts' deployer and admin key belongs to the deploy, run from the
+  // operator's machine; the server pays its gas with RELAY_KEY (config/keys.ts).
+  for (const name of ["DEPLOYER_KEY", "DEPLOY_DEPLOYER_KEY"]) {
+    if (process.env[name]?.trim()) fail(`${name} must not be on the server — it deploys and administers the contracts; gas is RELAY_KEY's. Unset it`);
+  }
   if (process.env.FAUCET_KEY || process.env.TESTNET_FAUCET_EUR || process.env.FAUCET_DRIPS) {
     fail("FAUCET_KEY / TESTNET_FAUCET_EUR / FAUCET_DRIPS are testnet-only and forbidden in production");
   }

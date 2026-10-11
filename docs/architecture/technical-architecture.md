@@ -310,7 +310,7 @@ Safe (`importedAt`) as for a recovered one (`recoveredAt`).
   again, runs the shape and owner checks, then verifies the step-up against
   the Safe as read (401 `STEP_UP_REQUIRED` / `STEP_UP_INVALID`, 403
   `STEP_UP_CREDENTIAL`) before relaying or writing anything. It deploys the
-  verifier from the deployer if it has no code, reads again, refuses 409
+  verifier from the relay key if it has no code, reads again, refuses 409
   `SAFE_CHANGED` if the owners or threshold moved, and binds the account
   (`passkeySafe.status` `active`, `importedAt`). 201 with the user.
 - The Transaction Builder file is built once, in `wallet/safe-tx-builder.ts`;
