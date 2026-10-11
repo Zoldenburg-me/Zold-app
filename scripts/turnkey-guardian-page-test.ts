@@ -514,6 +514,21 @@ await check("adding Zoldenburg: after the passkey the button says it is working 
   assert.equal(btn.getAttribute("aria-disabled"), null);
 });
 
+await check("one action at a time on the page: a second button's click while the first runs does nothing", async () => {
+  const lock = { busy: false };
+  const a = fakeButton("Check"), b = fakeButton("New code");
+  let runs = 0, release: () => void = () => {};
+  const first = page.oneAtATime(a, () => { runs++; return new Promise<void>((r) => { release = r; }); }, lock);
+  const second = page.oneAtATime(b, async () => { runs++; }, lock);
+  const pending = first();
+  await second();
+  assert.equal(runs, 1, "the other button waited");
+  release();
+  await pending;
+  await second();
+  assert.equal(runs, 2, "free again once the first is done");
+});
+
 const approveEnv = (over: Record<string, any> = {}) => {
   const storage = memoryStorage();
   storage.setItem(oauth.OAUTH_STATE_KEY, stored());
