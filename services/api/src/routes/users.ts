@@ -26,6 +26,7 @@ import { cleanName, nameChange } from "../users/display-name.js";
 import { findIbanBic, refreshPendingIban } from "../adapters/monerium-sandbox.js";
 import { normalizeIban } from "../sepa.js";
 import { emailHeldBy, emailLooksValid } from "../domain/email.js";
+import { describeCause, redactedMessage } from "../http/log-cause.js";
 
 /** Consents a signup body may carry; the client sends one or two. */
 const MAX_SIGNUP_CONSENTS = 4;
@@ -173,7 +174,7 @@ export function createUserRouter(deps: UserDeps) {
           ...(softSignals ? { softSignals } : {}),
         });
       } catch (err: any) {
-        return res.status(400).json({ error: String(err?.message ?? err) });
+        return res.status(400).json({ error: redactedMessage(err) });
       }
 
       // A blocked segment is recorded before it is refused: the decision has to
@@ -346,7 +347,7 @@ export function createUserRouter(deps: UserDeps) {
       try {
         bic = await findIbanBic(user);
       } catch (err: any) {
-        console.error(`bic lookup failed for ${user.id}: ${err?.message ?? err}`);
+        console.error(`bic lookup failed for ${user.id}: ${describeCause(err)}`);
         return res.status(502).json({ error: "Monerium did not answer. Try again in a moment." });
       }
       if (!bic) return res.json({ bic: null });

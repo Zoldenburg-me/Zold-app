@@ -26,7 +26,9 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PUBLIC_URL } from "../config.js";
+import { OPERATOR, PUBLIC_URL } from "../config.js";
+import { guardianPageCsp } from "../http/policy.js";
+import { TURNKEY } from "../config/turnkey.js";
 import { displayCode, isRequestCode, normaliseCode } from "../payment-requests.js";
 
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../public");
@@ -115,6 +117,8 @@ export function createPageRouter() {
       "Disallow: /r/",
       "Disallow: /v/",
       "Disallow: /invoice/",
+      "Disallow: /guardian",
+      "Disallow: /recovery",
     ];
     if (base) lines.push("", `Sitemap: ${base}/sitemap.xml`);
     res.type("text/plain").send(lines.join("\n") + "\n");
@@ -133,10 +137,16 @@ export function createPageRouter() {
   router.get("/favicon.ico", (_req, res) => res.redirect(301, "/icons/icon-192.png"));
   router.get(["/app", "/app/"], (_req, res) => res.sendFile(path.join(pub, "index.html")));
   /** The operator dashboard; each section has its own path (the page reads
-   *  it), and its scripts are under /admin/*.js. */
+   *  it), and its scripts are under /admin/*.js. With ADMIN_ORIGIN set it is
+   *  served there only: an operator passkey works on that origin alone. */
   router.get(
-    ["/admin", "/admin/", "/admin/:view(overview|users|monerium|transactions|recoveries|errors)"],
-    (_req, res) => res.sendFile(path.join(pub, "admin.html")),
+    ["/admin", "/admin/", "/admin/:view(overview|users|monerium|transactions|recoveries|errors|operator)"],
+    (req, res) => {
+      if (OPERATOR.adminOriginExplicit && req.get("host") !== new URL(OPERATOR.adminOrigin).host) {
+        return res.redirect(302, `${OPERATOR.adminOrigin}${req.path}`);
+      }
+      res.sendFile(path.join(pub, "admin.html"));
+    },
   );
   /** The org dashboard — business and premium personal accounts. */
   router.get(["/business", "/business/"], (_req, res) =>
@@ -149,6 +159,20 @@ export function createPageRouter() {
   /** A payment page, and a payment request against it. */
   // The testnet faucet page; it draws "no faucet" itself where there is none.
   router.get("/faucet", page("faucet.html"));
+  /** Google or Apple login as a recovery guardian: its own ES-module page and
+   *  a stricter CSP, never cached (a login comes back to it). */
+  /** Choosing a guardian (Zoldenburg, or your own Google/Apple login) and
+   *  getting your account back on a new phone: ES-module pages with a
+   *  stricter CSP, never cached (a login comes back to each). */
+  const ownPage = (file: string): express.RequestHandler => (_req, res) => {
+    res.setHeader("content-security-policy", guardianPageCsp(TURNKEY.enabled ? new URL(TURNKEY.baseUrl).origin : undefined));
+    res.setHeader("cache-control", "no-store");
+    res.sendFile(path.join(pub, file));
+  };
+  router.get("/guardian.html", (_req, res) => res.redirect(301, "/guardian"));
+  router.get(["/guardian", "/guardian/"], ownPage("guardian.html"));
+  router.get("/recovery.html", (_req, res) => res.redirect(301, "/recovery"));
+  router.get(["/recovery", "/recovery/"], ownPage("recovery.html"));
   router.get("/pay/:handle", page("pay.html"));
   router.get("/pay/:handle/:code", tidyRequestCode, page("pay-request.html"));
   /** A shared receipt. */

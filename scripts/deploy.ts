@@ -15,6 +15,7 @@ import { createPublicClient, createWalletClient, http, parseUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { defineChain } from "viem";
 import { base, baseSepolia, hardhat, polygon, polygonAmoy } from "viem/chains";
+import { urlForLog } from "../services/api/src/http/log-safe.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -197,7 +198,7 @@ async function main() {
   if (actual !== CHAIN_ID) {
     throw new Error(`RPC at ${RPC_URL} is chain ${actual}, but TRANSF_CHAIN_ID is ${CHAIN_ID}`);
   }
-  console.log(`deploying to chain ${CHAIN_ID} via ${RPC_URL}`);
+  console.log(`deploying to chain ${CHAIN_ID} via ${urlForLog(RPC_URL)}`);
 
   /**
    * On a chain where Monerium really issues EURe, use THEIR token.

@@ -13,6 +13,7 @@ import {
   sep24GetTransaction,
   sep24InitiateWithdraw,
 } from "../services/api/src/stellar/anchor.js";
+import { urlForLog } from "../services/api/src/http/log-safe.js";
 
 const domain = STELLAR.anchorDomain || "testanchor.stellar.org";
 const asset = STELLAR.anchorAsset || "SRT";
@@ -29,7 +30,7 @@ console.log(`      jwt received (${jwt.slice(0, 24)}…)`);
 console.log("3/4 SEP-24 interactive withdrawal…");
 const wd = await sep24InitiateWithdraw(domain, jwt, asset, treasury.publicKey());
 console.log(`      anchor tx id: ${wd.id}`);
-console.log(`      interactive url: ${wd.url.slice(0, 90)}…`);
+console.log(`      interactive url: ${urlForLog(wd.url)}`);
 
 console.log("4/4 SEP-24 transaction status…");
 const status = await sep24GetTransaction(domain, jwt, wd.id);

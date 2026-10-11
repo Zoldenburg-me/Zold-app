@@ -7,12 +7,14 @@
  * them.
  */
 import type express from "express";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { HARNESS, KYC } from "../config.js";
 import { auditEntry } from "../audit.js";
 import { can, type Segment } from "../domain/segments.js";
 import { dailyCapUsage } from "../orchestrator.js";
 import { store, type User } from "../store.js";
+import { operatorOf } from "../operators/principal.js";
+import { operatorSessionFor } from "../operators/sessions.js";
 import { bearerToken } from "./sessions.js";
 
 export function requireKycApproved(user: User, res: express.Response) {
@@ -115,35 +117,42 @@ export async function assertDailyCap(
   return true;
 }
 
-/** Constant-time operator-token check; false when no token is configured. */
-export function isOperator(req: express.Request): boolean {
+export const LEGACY_PRINCIPAL_ID = "legacy-token";
+
+/** The shared operator token, compared in constant time; false when none is
+ *  set. It opens admin reads only (operators/gate.ts). */
+export function isLegacyOperatorToken(token: string | undefined): boolean {
   const expected = KYC.operatorToken;
-  if (!expected) return false;
+  if (!expected || !token) return false;
   const a = Buffer.from(expected);
-  const b = Buffer.from(bearerToken(req) ?? "");
+  const b = Buffer.from(token);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** The rate-limit key of the operator calling (the shared token or a live
+ *  passkey session), or undefined. The limiter's question only; the gate
+ *  decides what the caller may do. */
+export function operatorBucketId(req: express.Request): string | undefined {
+  const token = bearerToken(req);
+  if (isLegacyOperatorToken(token)) return LEGACY_PRINCIPAL_ID;
+  const found = operatorSessionFor(token);
+  return "refused" in found ? undefined : found.operator.id;
+}
+
 /**
- * Operator authentication, separate from user sessions so a user cannot act
- * as the operator on their own account. With no token configured there is no
- * operator path.
+ * The operator a request was admitted as, by the gate in front of every admin
+ * router (operators/gate.ts). Separate from user sessions, so a user cannot
+ * act as the operator on their own account.
  */
 export function requireOperator(req: express.Request, res: express.Response): boolean {
-  if (!KYC.operatorToken) {
-    res.status(503).json({
-      error: "no KYC operator token configured — set KYC_OPERATOR_TOKEN to enable operator review",
-    });
-    return false;
-  }
-  if (!isOperator(req)) {
-    res.status(401).json({ error: "operator authorization required" });
+  if (!operatorOf(req)) {
+    res.status(401).json({ error: "operator sign-in required", code: "OPERATOR_SIGN_IN" });
     return false;
   }
   return true;
 }
 
+/** Who did it, for a stored row: `operator:<id>`, or `operator:legacy-token`. */
 export function operatorLabel(req: express.Request): string {
-  const token = bearerToken(req) ?? "";
-  return `operator:${createHash("sha256").update(token).digest("hex").slice(0, 12)}`;
+  return `operator:${operatorOf(req)?.id ?? "unknown"}`;
 }

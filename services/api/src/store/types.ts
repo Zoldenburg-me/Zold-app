@@ -46,7 +46,23 @@ export interface User {
    *  empty while the transfer is in flight (the synchronous claim that stops a
    *  second call from paying twice). */
   faucet?: { grantedEur: number; txHash: string; at: string };
-    /**
+  /**
+   * The 1 € check that arms Zoldenburg as guardian
+   * (recovery/zoldenburg-enrolment.ts). `code` is open until a matching
+   * payment arrives; only its hash is kept. The enrolled account is kept as
+   * an HMAC (`keyId` names the key) and its last 4 characters, never the
+   * IBAN or the payer's name. Never in a public projection.
+   */
+  zoldenburgEnrolment?: {
+    code?: { hash: string; issuedAt: string; expiresAt: string };
+    bankAccountHmac?: string;
+    keyId?: string;
+    bankAccountLast4?: string;
+    orderId?: string;
+    enrolledAt?: string;
+    lastCheck?: { at: string; outcome: "waiting" | "mismatch" | "unreadable"; reason: string };
+  };
+  /**
    * Passkey Safe state. The passkey is the only owner (threshold 1).
    */
   passkeySafe?: {
@@ -94,6 +110,21 @@ export interface User {
       guardianOpHash?: string;
       activatedAt?: string;
     };
+    /**
+     * Turnkey guardians (routes/recovery-turnkey.ts): an account in a Turnkey
+     * sub-org whose only root user is the person. `created` means the Turnkey
+     * wallet exists and nothing more; `active` only once the module's
+     * guardian list on chain includes `address`. No ID token, no email.
+     */
+    socialGuardians?: {
+      kind: "self-social";
+      address: `0x${string}`;
+      turnkeySubOrgId: string;
+      status: "created" | "active";
+      createdAt: string;
+      /** When the module was seen listing `address`. */
+      activeAt?: string;
+    }[];
     createdAt: string;
     previousAddress?: `0x${string}`;
     /** Set once a recovery replaced the owner: the Safe keeps its address but
@@ -774,8 +805,10 @@ export interface RecoveryRequest {
   userId: string;
   safeAddress: `0x${string}`;
   /** `zoldenburg`: the owner asks Zoldenburg, an operator reviews and signs
-   *  as guardian. `candide`: email/SMS OTPs. `managed` only on legacy rows. */
-  mode?: "managed" | "candide" | "zoldenburg";
+   *  as guardian. `candide`: email/SMS OTPs. `turnkey`: the owner's own
+   *  Google or Apple login signs as guardian on /guardian (REVIEW_PENDING
+   *  there means waiting for that signature). `managed` only on legacy rows. */
+  mode?: "managed" | "candide" | "zoldenburg" | "turnkey";
   status: RecoveryRequestStatus;
   requestedAt: string;
   expiresAt: string;
@@ -807,6 +840,12 @@ export interface RecoveryRequest {
     liveness: "pending" | "passed" | "failed";
     manualReview: "pending" | "passed" | "failed";
   };
+  /**
+   * The owner's alert emails (recovery/owner-alerts.ts): when each went out,
+   * or was covered by an earlier one, and how many sends failed. Never on a
+   * public projection.
+   */
+  ownerAlerts?: { requested?: string; executed?: string; failures?: number };
   /**
    * Candide email/SMS recovery, driven by the person who lost their device.
    *
@@ -872,7 +911,51 @@ export interface RecoveryRequest {
     };
     newOwners?: `0x${string}`[];
     newThreshold?: number;
+    /**
+     * The second 1 € (recovery/zoldenburg-bank-check.ts): it must come from
+     * the bank account enrolled for this account. `code` is open until it
+     * passes; only its hash is kept. `enrolledAt` names the enrolment it was
+     * matched against, so a later re-enrolment voids the pass. Never in a
+     * public projection as stored.
+     */
+    bankCheck?: {
+      code?: { hash: string; issuedAt: string };
+      /** Codes this request was given before `code`. A transfer already sent
+       *  with one still counts: a new code is for a lost one, not a reset. */
+      earlierCodes?: { hash: string; issuedAt: string }[];
+      /** How many codes this request was given, and when Monerium was last
+       *  read for it. Both survive a new code, so issuing codes cannot reset
+       *  the read throttle or run without limit. */
+      codesIssued?: number;
+      lastReadAt?: string;
+      passedAt?: string;
+      orderId?: string;
+      enrolledAt?: string;
+      lastCheck?: { at: string; outcome: "waiting" | "mismatch" | "unreadable"; reason: string };
+    };
     /** The EIP-712 digest the guardian signed, as the module computed it. */
+    recoveryHash?: `0x${string}`;
+    executeTxHash?: `0x${string}`;
+    executedAt?: string;
+    gracePeriodSeconds?: number;
+    finalizeAfter?: string;
+    finalizeTxHash?: `0x${string}`;
+    verifierDeployTxHash?: string;
+    finalizeAttempts?: number;
+    finalizeError?: string;
+  };
+  /**
+   * Turnkey-guardian recovery (recovery/turnkey-recovery.ts). Same custody
+   * rule: the new credential waits here until the chain shows it as owner.
+   * `guardianSubOrgId` names the sub-org whose login must sign.
+   */
+  turnkey?: {
+    accessHash?: string;
+    guardianSubOrgId?: string;
+    newPasskey?: NonNullable<RecoveryRequest["zoldenburg"]>["newPasskey"];
+    newOwners?: `0x${string}`[];
+    newThreshold?: number;
+    /** The digest the guardian signed, as the module computed it. */
     recoveryHash?: `0x${string}`;
     executeTxHash?: `0x${string}`;
     executedAt?: string;
@@ -897,6 +980,41 @@ export interface ServiceCredential {
   tokenHash: string;
   createdAt: string;
   expiresAt?: string;
+}
+
+/** A passkey an operator signs in and approves changes with. Never a user's:
+ *  operator credentials live only here, and user login never searches them. */
+export interface OperatorCredential {
+  credentialId: string;
+  key: { jwk: JsonWebKey; alg: "ES256" | "RS256" };
+  signCount: number;
+  /** The owner's name for it ("YubiKey, desk"); not a secret. */
+  label: string;
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
+/** A named operator of the admin dashboard. Disabling is a read-time filter:
+ *  the record and its audit rows stay. */
+export interface Operator {
+  id: string;
+  name: string;
+  /** Must equal the Cloudflare Access identity on every admin request. */
+  email: string;
+  createdAt: string;
+  disabledAt?: string;
+  credentials: OperatorCredential[];
+}
+
+/** An operator's session: only the token's hash is stored, as for users. */
+export interface OperatorSession {
+  id: string;
+  operatorId: string;
+  tokenHash: string;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+  revokedAt?: string;
 }
 
 export interface Session {

@@ -75,8 +75,24 @@ Say this plainly rather than letting the surface imply otherwise:
 - **No Zoldenburg recovery has run on chain**: no guardian added, no relayed
   signature, no finalisation, and Safe Cover has not been used against a Zold
   Safe. `recovery:test` runs the flow under the harness only.
+- **No 1 € enrolment has armed an account.** No Monerium order has been
+  matched to a code (`enrolment:test` runs against stub orders).
+  `RECOVERY_IBAN_HMAC_KEY` must be set on a deployment before any account
+  there can arm; until then the operator can sign for nobody.
+- **No recovery-time 1 € has passed.** `recovery-bank:test` runs the check
+  against stub orders; the person's screen was looked at with staged state
+  only. No Didit ID check exists yet: today the operator's signature needs
+  the armed account and the recovery 1 €, plus their own check of the person.
 - **No Candide recovery service has been called** (stub only); no on-chain
   guardian add, execute or finalise, no real OTP.
+- **Turnkey has never been called, and no Google or Apple login has come
+  back to `/guardian` or `/recovery`.** Adding such a guardian and recovering with one run
+  only against stubs (`turnkey:test`, `turnkey-page:test`,
+  `turnkey-recovery:test`); no sub-org, login, guardian add, Turnkey
+  signature or relayed recovery exists. `TURNKEY_GUARDIANS` is off, so
+  neither the Google/Apple option on /guardian nor the recovery fallback on
+  /recovery shows. The /recovery page itself (all guardians) has never
+  driven a real recovery. No DPA with Turnkey is signed.
 - **No Candide forwarder has forwarded a deposit.** Candide routes nothing on
   testnets, so zoldhq.com's payment pages show the Safe itself; the
   multi-chain token list, minimums and TTL renewal run only against a stub
@@ -110,12 +126,18 @@ Say this plainly rather than letting the surface imply otherwise:
   not been touched. Recovery
   has never run on an imported Safe, so the screens do not offer it there;
   the API does not refuse it.
-- **One mail transport exists, and it is off.** `adapters/mailer.ts` sends
-  only email verification codes over SMTP, and only with
-  `EMAIL_VERIFICATION=1` (docs/email-verification.md). It has run only against
-  a fake SMTP server in `email:test`; no real mail has been sent. Invitations,
-  invoice links and recovery emails are still never sent by Zold; routes
-  return the token to the caller and say so. Do not add a "we emailed them"
+- **One mail transport exists, on zoldhq.com only.** `adapters/mailer.ts`
+  sends email verification codes and the owner's recovery alerts
+  (`recovery/owner-alerts.ts`) over SMTP, with `EMAIL_VERIFICATION=1`
+  (docs/email-verification.md). No recovery alert has been sent for real. zoldhq.com sends through Brevo's relay
+  (`smtp-relay.brevo.com:587`) as `no-reply@zoldhq.com`, with Brevo's DKIM on
+  zoldhq.com and Brevo's IP allowlist on. One real code has been delivered and
+  confirmed (2026-10-10, a new test account, to a duck.com forwarding
+  address); the request that first sent it came back as a gateway 502 with no
+  body, and the cause was not found. No processing agreement with Brevo is
+  recorded here yet, and Brevo is not in the privacy notice. Invitations
+  and invoice links are never sent by Zold; routes return the token to the
+  caller and say so. Do not add a "we emailed them"
   string for those without routing them through the mailer.
 - **Imported-wallet sync has run only against local hardhat** (2026-10-03:
   mints in and a send out were booked, unpriced). It has never read mainnet,

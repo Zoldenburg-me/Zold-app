@@ -70,9 +70,10 @@ import {
 } from "../recovery/candide-guardian.js";
 import { b64urlToBuf, bufToB64url, issueChallenge, verifyAssertionForChallenge, verifyRegistration } from "../webauthn.js";
 import { publicRecoveryRequest } from "../recovery.js";
+import { hostedGuardianBlocked, ONE_GUARDIAN_MESSAGE } from "../recovery/one-guardian.js";
 import { bindRecoveredPasskey, deployVerifierForOwner } from "../recovery/recovered-passkey.js";
 import { ADDRESS_RE } from "../domain/contacts.js";
-import { describeCause, describeError, shortErrorForClient } from "../http/log-cause.js";
+import { describeCause, describeError, shortErrorForClient, redactedMessage } from "../http/log-cause.js";
 
 export interface CandideRecoveryDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -261,7 +262,7 @@ async function submitConfirmed(
     if (!(err instanceof SafeOperationUncertainError)) throw err;
     console.error(`recovery: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
     res.status(502).json({
-      error: `${err.message} — nothing is recorded until it is confirmed; check the chain before retrying`,
+      error: `${redactedMessage(err)} — nothing is recorded until it is confirmed; check the chain before retrying`,
       code: "SAFE_OP_UNCONFIRMED",
       opHash: err.userOpHash,
     });
@@ -316,7 +317,7 @@ export async function finalizeCandideRecovery(
     // The service may have finalized on its own sweep, in which case the
     // chain already shows the new owners and the error is moot; anything else
     // is recorded and retried by the next sweep.
-    finalizeError = String(err?.message ?? err).slice(0, 200);
+    finalizeError = redactedMessage(err).slice(0, 200);
   }
 
   let owners: string[];
@@ -327,7 +328,7 @@ export async function finalizeCandideRecovery(
       owners = (await safeOwners(request.safeAddress)).map((a) => a.toLowerCase());
     } catch (err: any) {
       owners = [];
-      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${String(err?.message ?? err).slice(0, 120)}`;
+      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
     }
   }
   const recovered = newOwners.length > 0 && newOwners.every((o) => owners.includes(o));
@@ -413,7 +414,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
             pendingRecovery: state.pending,
           };
         } catch (err: any) {
-          out.onChain = { error: String(err?.message ?? err).slice(0, 160) };
+          out.onChain = { error: redactedMessage(err).slice(0, 160) };
         }
       }
       out.requests = store
@@ -569,6 +570,9 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
         });
         return res.json({ ...deps.publicUser(updated), recovery: publicCandideRecovery(updated), status: "active" });
       }
+      if (hostedGuardianBlocked(user, state.guardians)) {
+        return res.status(409).json({ error: ONE_GUARDIAN_MESSAGE, code: "OTHER_GUARDIAN" });
+      }
       await assertRecoveryModuleDeployed(c.moduleAddress);
       // Threshold 1: Candide alone may recover. A second guardian raising it
       // to 2 needs a signer nobody runs today; recorded as a decision, not an
@@ -614,6 +618,10 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       pendingSafeOperations.delete(req.params.requestId);
       // The passkey must have approved THIS operation's hash.
       await verifyOwnerAssertion(user, req.body, pending.challenge);
+      // Again right before submitting: another guardian may have landed since.
+      if (hostedGuardianBlocked(user, (await readRecoveryState(plan)).guardians)) {
+        return res.status(409).json({ error: ONE_GUARDIAN_MESSAGE, code: "OTHER_GUARDIAN" });
+      }
       const op = await submitConfirmed(plan, pending.userOperation, req.body, res);
       if (!op) return;
       const opHash = op.userOpHash;
@@ -746,8 +754,8 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       const now = new Date().toISOString();
       for (const r of store.recoveryRequestsForUser(user.id)) {
         // The module holds one recovery per Safe, whoever's guardian started
-        // it, so the owner's cancel ends a Zoldenburg one too.
-        if ((r.mode === "candide" || r.mode === "zoldenburg") && ["OTP_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) {
+        // it, so the owner's cancel ends a Zoldenburg or Turnkey one too.
+        if ((r.mode === "candide" || r.mode === "zoldenburg" || r.mode === "turnkey") && ["OTP_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)) {
           store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: now, cancelReason: "cancelled on chain by the account owner" });
         }
       }
@@ -867,7 +875,7 @@ export function createCandideRecoveryRouter(deps: CandideRecoveryDeps) {
       try {
         reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, `recovery:${request.id}`);
       } catch (err: any) {
-        return res.status(400).json({ error: String(err?.message ?? err) });
+        return res.status(400).json({ error: redactedMessage(err) });
       }
       if (reg.credentialId !== credentialId) return res.status(400).json({ error: "credentialId does not match attestation" });
       if (reg.key.alg !== "ES256") return res.status(400).json({ error: "the new passkey must be a P-256 (ES256) credential to own a Safe" });

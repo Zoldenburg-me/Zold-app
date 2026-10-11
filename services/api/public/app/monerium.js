@@ -134,10 +134,14 @@ const usdSym = () => {
   return typeof s === "string" && /^[A-Za-z0-9.]{1,11}$/.test(s) ? s : "USDC";
 };
 
+/* Whether /api/health has answered with capabilities. Until it has, the
+   defaults above say a feature is off when it may be on, so a check that
+   depends on one (the recovery strip) says it could not check. */
+let capsLoaded = false;
 async function loadCapabilities() {
   try {
     const h = await (await fetch("/api/health")).json();
-    if (h?.capabilities) caps = { ...caps, ...h.capabilities };
+    if (h?.capabilities) { caps = { ...caps, ...h.capabilities }; capsLoaded = true; }
     realMoney = h?.realMoney === true;
   } catch {
     /* keep the safe defaults */
@@ -155,8 +159,18 @@ function renderFundCard() {
     : "Your IBAN appears here once your Monerium account is connected and the IBAN is activated.";
 }
 
+/* What the account's segment includes. A pre-segmentation account keeps
+   everything, as on the server (requireCapability's fallback). */
+function segmentHas(u, cap) {
+  const list = u?.segment?.capabilities;
+  return !Array.isArray(list) || list.includes(cap);
+}
+
+/* A segment without "safe" (India's collections path) gets no Safe: the
+   server refuses the deployment with CAPABILITY_UNAVAILABLE, so asking for it
+   only strands the person on a step that cannot finish. */
 function needsPasskeySafeSetup(u = user) {
-  return !!(u?.passkeySafe && u.passkeySafe.status !== "active");
+  return !!(u?.passkeySafe && u.passkeySafe.status !== "active" && segmentHas(u, "safe"));
 }
 
 /* Bringing in a company's existing Safe (onboarding's b-safe-choice). Offered
@@ -400,6 +414,9 @@ async function refresh() {
   // payments are re-read rather than updated optimistically.
   await phLoadDeposits();
   phRefresh();
+  // At most once a minute, one read at a time; it never rejects (a failure
+  // shows as "couldn't check"). A recovery under way shows on every screen.
+  phRecoveryCheck();
 }
 
 function switchView(view) {

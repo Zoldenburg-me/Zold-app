@@ -29,6 +29,8 @@ h1, h2, h3 { color: var(--z-heading); margin: 0; font-weight: 650; }
 }
 .top h1 { font-size: 20px; }
 .top-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* The sign-in controls toggle with `hidden`; .btn's display must not override it. */
+.top-right [hidden] { display: none; }
 .updated { font-size: 12px; color: var(--z-dim); }
 .token input { width: 220px; height: 34px; padding: 0 10px; border-radius: var(--z-radius-sm); border: 1px solid var(--z-line-strong); background: var(--z-field); color: var(--z-text); font-family: var(--z-mono); font-size: 12px; }
 .auth { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 99px; border: 1px solid var(--z-line-strong); color: var(--z-dim); }

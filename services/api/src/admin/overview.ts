@@ -88,12 +88,12 @@ export function issues(now = Date.now()): Issue[] {
   }
 
   for (const r of store.recoveryRequests) {
-    const err = r.zoldenburg?.finalizeError ?? r.candide?.finalizeError;
-    if (!err || r.status === "FINALIZED" || r.status === "CANCELED") continue;
+    const finalizeError = r.zoldenburg?.finalizeError ?? r.candide?.finalizeError;
+    if (!finalizeError || r.status === "FINALIZED" || r.status === "CANCELED") continue;
     out.push({
       id: `recovery:${r.id}`, source: "recovery", severity: "error", at: r.zoldenburg?.finalizeAfter ?? r.requestedAt,
       title: `Recovery would not finalize${r.zoldenburg?.reference ? ` (${r.zoldenburg.reference})` : ""}`,
-      detail: `${err}${r.zoldenburg?.finalizeAttempts ? ` — ${r.zoldenburg.finalizeAttempts} attempts` : ""}`,
+      detail: `${finalizeError}${r.zoldenburg?.finalizeAttempts ? ` — ${r.zoldenburg.finalizeAttempts} attempts` : ""}`,
       userId: r.userId, userName: name(r.userId), target: { kind: "recovery", id: r.id },
     });
   }

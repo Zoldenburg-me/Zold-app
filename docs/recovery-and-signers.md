@@ -2,8 +2,8 @@
 
 The full rules behind the one-line versions in `AGENTS.md` → Invariants →
 Identity and authority. Each of these was a bug once.
-Planned guardian kinds (Didit + 1 € check, Turnkey, trusted people):
-`recovery-guardians-plan.md`.
+Planned guardian kinds (Didit + 1 € check, trusted people), and the Turnkey
+guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
 
 - **The user may add their OWN second owner** (Settings → Who approves
   payments; `routes/safe-signers.ts`). Read from the chain on
@@ -34,6 +34,68 @@ Planned guardian kinds (Didit + 1 € check, Turnkey, trusted people):
   A signature's v of 0/1 is normalised to 27/28 before relaying (the module's
   ECDSA check would revert on 0/1). Admin → Recoveries → "Test guardian
   wallet" proves the Shell → wallet → API path without touching a Safe.
+- **A Google or Apple login is a guardian only through Turnkey, and Zold holds
+  no part of it** (`wallet/turnkey.ts`, `recovery/turnkey-recovery.ts`).
+  Every sub-org we create has exactly one root user, the person, at root
+  quorum 1, with no API key, no authenticator of ours and no delegated
+  access; one builder asserts it and a source grep fails on anything else. A
+  sub-org found by login is checked for the same shape. A signature is
+  relayed only from the guardian recorded on the request when it started,
+  over the digest recomputed from the module (refused unless the module's
+  own `getRecoveryHash` agrees), while the module still lists that guardian
+  at threshold 1 and holds no other recovery, and only once the owner was
+  emailed that someone asked: no operator reviews this path, so the alert
+  and the waiting period are the owner's defence (no mail, no relay).
+  Anyone who knows the email can start one, so its answers name no account,
+  Safe, module or guardian; the sub-org and address to sign with come from
+  the guardian's own login. A request waits an hour for that login. Up to
+  five wait per account: a new start expires the oldest without a new
+  passkey, never one with, and with all five holding a passkey it is refused
+  until one times out. Once one is on chain the others close. While any
+  other guardian is on the Safe a Turnkey guardian is not added, since
+  nothing collects two signatures yet. Its login token is accepted only from Google or Apple,
+  signed by their published keys, for our client id, bound to the browser's
+  key; /guardian and /recovery are the only pages that load Turnkey code or
+  may reach Turnkey's API. A Google/Apple login is never a guardian beside
+  another: the Zoldenburg and email/SMS add routes refuse while one is active
+  or the module lists a guardian they do not know, when the op is prepared
+  and again right before it is submitted (`recovery/one-guardian.ts`).
+- **Zoldenburg signs only for an ARMED account.** Adding the guardian on
+  chain is not enough: the user also sends at least 1 € from a bank account
+  in their own name to their Zold IBAN, with a code from /guardian as the
+  reference (`recovery/zoldenburg-enrolment.ts`). The payer's name
+  must match the Monerium profile name, read live (`domain/name-match.ts`),
+  and a payment from the Zold IBAN itself is refused. Only an HMAC of the
+  payer's IBAN (`RECOVERY_IBAN_HMAC_KEY`), its last 4 characters and the
+  order id are kept. Titles and initials are not name parts; a one-word
+  Monerium name, a joint account ("und", "&") or a company payer never
+  matches. Until then /admin/recoveries refuses
+  `sign-request`, `execute` and `sync` (409 `NOT_ARMED`) and shows no Safe
+  Cover link. A new code needs a passkey step-up every time; a failed
+  re-enrolment leaves the old account armed; adding or removing the guardian
+  drops the enrolment, and an account is armed only while Zoldenburg's
+  current guardian is active on it; a new HMAC key disarms every account
+  until it pays again. **The gate binds the admin console, not the guardian
+  key:** a signature made outside /admin (Safe Cover, by hand) still reaches
+  the chain, and the sweep follows the chain to finalisation, so the
+  operator rule is never to sign while a check is missing.
+- **Each recovery needs a second 1 € from the enrolled account.** The
+  recovery page (`/recovery/zoldenburg/:id/bank-code`, request secret
+  required) issues a recovery code; the person sends at least 1 € with it from
+  the enrolled bank account to the Zold IBAN
+  (`recovery/zoldenburg-bank-check.ts`). It passes only when the payer IBAN's
+  HMAC equals the enrolled one under the key in use and the payer's name
+  matches the Monerium name, read live; an unreadable Monerium leaves it open.
+  A recovery code's purpose is in its hash, so an enrolment code never
+  passes it. A request gets at most 5 codes; a transfer sent with an earlier
+  one still counts, and a new code does not reset the 30 s Monerium read
+  throttle. The pass records the enrolment it matched: a re-enrolment voids
+  it. The person sees no digits of either IBAN, because anyone who knows the
+  account's email can start a request. An owner who closed the enrolled bank
+  account cannot pass this check. Until it passes,
+  `sign-request`, `execute` and `sync` answer 409 `BANK_CHECK_PENDING`, and
+  /admin shows signing as locked. There is no override. The Didit ID check
+  is the next check this gate gets.
 - **A recovery's new credential lives on the RecoveryRequest** until the chain
   confirms the new owner, so whoever holds the OTP channels cannot sign in or
   spend during the grace period.

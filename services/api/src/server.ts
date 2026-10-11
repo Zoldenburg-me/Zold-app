@@ -36,7 +36,7 @@ import { createFaucetRouter } from "./routes/faucet.js";
 import { capabilities } from "./capabilities.js";
 import { publicUser } from "./users/public-user.js";
 import { urlForLog } from "./http/log-safe.js";
-import { apiRateLimit, originPolicy, securityHeaders } from "./http/policy.js";
+import { apiRateLimit, adminHostPolicy, originPolicy, securityHeaders } from "./http/policy.js";
 import {
   requireSession,
   requireUserSession,
@@ -47,6 +47,15 @@ import { createGnosisPayRouter } from "./routes/gnosis-pay.js";
 import { formatReport, reconcile } from "./reconcile.js";
 import { createCandideRecoveryRouter, sweepCandideRecoveries } from "./routes/recovery-candide.js";
 import { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries } from "./routes/recovery-zoldenburg.js";
+import { createZoldenburgEnrolmentRouter } from "./routes/recovery-zoldenburg-enrolment.js";
+import { ENROLMENT, enrolmentAvailable, sweepEnrolments } from "./recovery/zoldenburg-enrolment.js";
+import { sweepRecoveryBankChecks } from "./recovery/zoldenburg-bank-check.js";
+import { createTurnkeyGuardianRouter } from "./routes/recovery-turnkey.js";
+import { createTurnkeyRecoveryRouter } from "./routes/recovery-turnkey-requests.js";
+import { sweepTurnkeyRecoveries } from "./recovery/turnkey-recovery.js";
+import { turnkeyGuardiansEnabled } from "./wallet/turnkey.js";
+import { sweepOwnerAlerts } from "./recovery/owner-alerts.js";
+import { mailAvailable } from "./adapters/mailer.js";
 import { zoldenburgRecoveryEnabled } from "./recovery/zoldenburg-guardian.js";
 import { createDocumentsRouter } from "./routes/documents.js";
 import { createSafeSignerRouter } from "./routes/safe-signers.js";
@@ -65,9 +74,11 @@ import {
   } from "./chain.js";
 import { CANDIDE, SafeGasError, SafeThresholdError } from "./wallet/candide.js";
 import { routeAsyncRejections } from "./http/async-errors.js";
-import { describeCause, describeError } from "./http/log-cause.js";
+import { describeCause, describeError, redactedMessage } from "./http/log-cause.js";
 import { recordServerError } from "./http/error-log.js";
 import { knownError } from "./http/known-errors.js";
+import { createOperatorGate } from "./operators/gate.js";
+import { createOperatorAuthRouter } from "./routes/operator-auth.js";
 const app = express();
 // Keep the raw body around for webhook signature checks — HMAC has to run
 // over the exact bytes sent, not a re-serialised object.
@@ -82,6 +93,7 @@ app.use(express.json({
 // outermost thing every request passes through, readable in one place.
 app.use(securityHeaders);
 app.use(originPolicy);
+app.use(adminHostPolicy);
 
 // Where the client address comes from. Default 0 = the socket peer, correct
 // only with nothing in front; behind a proxy that address is the proxy, so every
@@ -92,6 +104,11 @@ app.use("/api", apiRateLimit);
 // Pages and static assets, declared before the API routers so nothing under
 // /api can be shadowed by a file on disk.
 app.use(createPageRouter());
+// Every /api/admin route, in whichever router below declares it, passes the
+// operator gate first: Cloudflare Access, an operator passkey session (or the
+// read-only operator token), and a fresh approval for each change.
+app.use("/api/admin", createOperatorGate());
+app.use("/api", createOperatorAuthRouter());
 
 /**
  * The organisation domain (docs/business-accounts.md).
@@ -164,7 +181,7 @@ app.get(
       res.json({ eur: r.eur, asOf: r.asOf, provider: r.provider });
     } catch (e: any) {
       // Say so rather than serving a number nobody can stand behind.
-      res.status(503).json({ error: e?.message ?? "rates unavailable" });
+      res.status(503).json({ error: e ? redactedMessage(e) : "rates unavailable" });
     }
   }),
 );
@@ -220,6 +237,14 @@ app.use("/api", createAdminRouter());
 // Zoldenburg as guardian: the owner opts in, asks after losing the passkey,
 // and an operator signs from a hardware wallet (admin console or Safe Cover).
 app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession }));
+// The 1 € that arms Zoldenburg as guardian (recovery/zoldenburg-enrolment.ts).
+app.use("/api", createZoldenburgEnrolmentRouter({ requireUserSession }));
+// Turnkey guardians: the user's own Google or Apple login as a guardian
+// wallet. 404 on every route until TURNKEY_GUARDIANS=1.
+app.use("/api", createTurnkeyGuardianRouter({ requireUserSession }));
+// Recovering with that guardian: the lost device starts a request, the
+// guardian signs on /guardian, the API relays; same 404 while the switch is off.
+app.use("/api", createTurnkeyRecoveryRouter({ requireUserSession }));
 // Sessions and passkeys: the WebAuthn ceremonies, and the passkey Safe whose
 // owner those credentials are.
 app.use("/api", createAuthRouter({ requireUserSession }));
@@ -244,7 +269,7 @@ app.use(((err, req, res, next) => {
   }
   const known = err instanceof SafeGasError || err instanceof SafeThresholdError;
   const logged = known ? undefined : recordServerError(err, req);
-  if (known) console.error(err);
+  if (known) console.error(describeError(err));
   // A handler that already began answering cannot be given a 500 body: setting
   // headers twice throws inside the error handler itself, which express can
   // only answer by destroying the socket — the caller sees a truncated
@@ -259,7 +284,7 @@ app.use(((err, req, res, next) => {
   if (err instanceof SafeThresholdError) {
     return res.status(err.status).json({ error: err.message, code: err.code });
   }
-  const detail = String(err?.shortMessage ?? err?.message ?? err);
+  const detail = redactedMessage(err);
   res.setHeader("x-zold-error-ref", logged!.ref);
   res.status(500).json({
     error: SECURITY.exposeInternalErrors
@@ -278,7 +303,7 @@ initStore();
 // Fail fast on a chain mismatch: signatures built for the wrong chain id are
 // rejected as "bad authorization", which reads like a signing bug.
 assertChainMatches().catch((e) => {
-  console.error(String(e?.message ?? e));
+  console.error(describeCause(e));
   process.exit(1);
 });
 // Same class of problem, quieter symptom: the smart-account chain can differ
@@ -302,6 +327,27 @@ if (zoldenburgRecoveryEnabled()) {
   setTimeout(runZoldenburgSweep, 5_000).unref();
   setInterval(runZoldenburgSweep, RECOVERY.sweepMs).unref();
 }
+// Turnkey-guardian recoveries: expire, pick up executions, finalize after the wait.
+if (turnkeyGuardiansEnabled()) {
+  const runTurnkeySweep = () =>
+    sweepTurnkeyRecoveries()
+      .then((n) => n && console.log(`recovery sweep: finalized ${n} Turnkey-guardian recover${n === 1 ? "y" : "ies"}`))
+      .catch((e) => console.error(`recovery sweep failed: ${describeCause(e)}`));
+  setTimeout(runTurnkeySweep, 5_000).unref();
+  setInterval(runTurnkeySweep, RECOVERY.sweepMs).unref();
+}
+// Open 1 € codes, at enrolment and at recovery: look for their payment at Monerium.
+if (zoldenburgRecoveryEnabled() && enrolmentAvailable()) {
+  const runEnrolments = () =>
+    sweepEnrolments()
+      .then((n) => n && console.log(`enrolment sweep: armed ${n} account${n === 1 ? "" : "s"}`))
+      .catch((e) => console.error(`enrolment sweep failed: ${describeCause(e)}`))
+      // Its own catch: a failed enrolment sweep must not skip the recoveries.
+      .then(() => sweepRecoveryBankChecks())
+      .then((n) => n && console.log(`recovery 1 € sweep: ${n} request${n === 1 ? "" : "s"} passed`))
+      .catch((e) => console.error(`recovery 1 € sweep failed: ${describeCause(e)}`));
+  setInterval(runEnrolments, ENROLMENT.pollMs).unref();
+}
 // Candide recoveries finalize themselves once the grace period has run, so a
 // user who lost their phone on a Friday is not waiting for a click on Monday.
 if (candideRecoveryEnabled()) {
@@ -312,6 +358,16 @@ if (candideRecoveryEnabled()) {
   setTimeout(runRecoverySweep, 5_000).unref();
   setInterval(runRecoverySweep, RECOVERY.sweepMs).unref();
   console.log(`RECOVERY: email/SMS guardian via ${urlForLog(RECOVERY.serviceUrl)} (chain ${CANDIDE.chainId}, module ${CANDIDE.recoveryModuleAddress})`);
+}
+// Recovery alerts: email the owner when someone asks to recover the account
+// and when a recovery enters its grace period (recovery/owner-alerts.ts).
+if (mailAvailable()) {
+  const runOwnerAlerts = () =>
+    sweepOwnerAlerts()
+      .then((n) => n && console.log(`recovery alerts: sent ${n}`))
+      .catch((e) => console.error(`recovery alerts failed: ${describeCause(e)}`));
+  setTimeout(runOwnerAlerts, 5_000).unref();
+  setInterval(runOwnerAlerts, RECOVERY.sweepMs).unref();
 }
 // Pay links: expire what is past its date, book our own SEPA payouts that
 // carry a code, retry telling a merchant about a paid checkout.
@@ -337,10 +393,10 @@ setInterval(
 // the store. Hooked where money changes state, and swept here so a REFUNDED
 // written by compensation, or an event a crash cut short, still gets its line.
 setTimeout(() => {
-  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${e?.message ?? e}`); }
+  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
 }, 3_000).unref();
 setInterval(() => {
-  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${e?.message ?? e}`); }
+  try { writeStatementLines(); } catch (e: any) { console.error(`bookkeeping: ${describeCause(e)}`); }
 }, 60_000).unref();
 
 // Imported wallets: ERC-20 transfers on their own chains, read only.
@@ -370,7 +426,7 @@ if (sandbox) {
       startDepositPoller();
     })
     .catch((err) => {
-      console.error(`monerium sandbox auth FAILED — check .env credentials: ${err.message}`);
+      console.error(`monerium sandbox auth FAILED — check .env credentials: ${describeCause(err)}`);
     });
 } else {
   console.log("monerium: no app credentials (MONERIUM_CLIENT_SECRET unset) — accounts connect by OAuth or their own API keys");

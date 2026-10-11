@@ -21,6 +21,7 @@ import {
 } from "../domain/monerium-profile.js";
 import { MoneriumApiError } from "./monerium-client.js";
 import { hasOwnMoneriumCredentials, moneriumClientFor } from "./monerium-connection.js";
+import { describeCause } from "../http/log-cause.js";
 
 /** The one profile a user's connection stands for. */
 export function backingProfileIdOf(user: User): string | undefined {
@@ -146,7 +147,7 @@ async function ibanIssuedLive(user: User, profileId: string): Promise<boolean> {
   try {
     return ibanIssuedTo(await moneriumClientFor(user).ibans(), profileId, user.address);
   } catch (err) {
-    console.warn(`monerium-profile: GET /ibans failed for ${user.id} (profile ${profileId}); the pending profile stays refused: ${(err as Error)?.message ?? err}`);
+    console.warn(`monerium-profile: GET /ibans failed for ${user.id} (profile ${profileId}); the pending profile stays refused: ${describeCause(err)}`);
     return false;
   }
 }

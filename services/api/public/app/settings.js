@@ -33,8 +33,25 @@ function phRecovery(u) {
   const zold = safe.recovery?.status === "active";
   const cr = safe.candideRecovery;
   const codes = cr?.guardianStatus === "active";
-  const offered = (caps.emailSmsRecovery || caps.zoldenburgRecovery) && recoveryOfferedFor(u);
-  return { zold, cr, codes, on: zold || codes, offered, pending: !zold && cr?.guardianStatus === "pending_setup" };
+  const social = (safe.socialGuardians || []).some((g) => g.status === "active");
+  const offered = (caps.emailSmsRecovery || caps.zoldenburgRecovery || caps.turnkeyGuardians) && recoveryOfferedFor(u);
+  // Zoldenburg added but its 1 € bank check not done: on chain, but no
+  // operator may sign for it yet (guardian/enrolment.js). Where the check
+  // is not open on this server, no operator may sign for anyone.
+  const zoldUnarmed = zold && !u?.zoldenburgArmed;
+  return { zold, zoldUnarmed, cr, codes, social, on: (zold && !zoldUnarmed) || codes || social, offered, pending: !zold && cr?.guardianStatus === "pending_setup" };
+}
+
+/* Zoldenburg added, bank account not confirmed: can the user do that now?
+   The 1 € goes to their Zold IBAN, so not before it is active. */
+const phZoldCanFinish = (u) => Boolean(caps.zoldenburgEnrolment && kycApproved(u) && u?.iban);
+
+function phZoldUnarmedText(u, r) {
+  const what = !caps.zoldenburgEnrolment ? "Zoldenburg added. Not usable on this server yet."
+    : phZoldCanFinish(u) ? "Zoldenburg added. Confirm your bank account to finish."
+    : "Zoldenburg added. Your Zold IBAN comes first, then you confirm your bank account.";
+  // Codes still protect the account: say so first, or "Active" reads as Zoldenburg's.
+  return r.codes ? `Codes to your email or phone. ${what}` : what;
 }
 
 /* What Security would flag: an unprotected key, or no way back in. */
@@ -137,19 +154,22 @@ function phSignerRows() {
 
 PH.security = {
   title: "Security",
-  live: () => JSON.stringify([phKey, user?.passkey?.credentialId, user?.authorizerAddress, user?.passkeySafe?.recovery?.status,
+  live: () => JSON.stringify([phKey, user?.passkey?.credentialId, user?.authorizerAddress, user?.passkeySafe?.recovery?.status, user?.passkeySafe?.socialGuardians, user?.zoldenburgArmed, caps.zoldenburgEnrolment, user?.iban, user?.kycStatus,
     user?.passkeySafe?.candideRecovery, !!phCache.signers, phCache.signers?.threshold, phCache.signers?.error]),
   html() {
     const u = user || {};
     const r = phRecovery(u);
     const recoveryRows = [];
+    // The row goes where the group's action goes: tapping "Not finished"
+    // should finish it, not only the small link beside the heading.
+    const recoveryAction = r.zoldUnarmed && phZoldCanFinish(u) ? { href: "/guardian", label: "Finish" } : { href: "#recovery-settings", label: r.on || r.zold ? "Change" : "Set up" };
     if (r.offered || r.on || r.cr) {
       recoveryRows.push(Z.row({
         lead: Z.iconTile({ icon: "settings_backup_restore" }),
         title: "Recovery",
-        sub: r.zold ? "Zoldenburg is your guardian" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
-        right: Z.tag(r.on ? "Active" : r.pending ? "Waiting" : "Off", r.on ? "mint" : undefined),
-        chevron: false,
+        sub: r.zoldUnarmed ? phZoldUnarmedText(u, r) : r.zold ? "Zoldenburg is your guardian" : r.social ? "Your Google or Apple login is your guardian" : r.codes ? "Codes to your email or phone" : r.pending ? "Set up, not on your account yet" : "Not set up. A lost phone means a lost account.",
+        right: Z.tag(r.on ? "Active" : r.zoldUnarmed ? (phZoldCanFinish(u) ? "1 step left" : "Not finished") : r.pending ? "Waiting" : "Off", r.on ? "mint" : r.zoldUnarmed ? "amber" : undefined),
+        href: recoveryAction.href,
       }));
       for (const c of r.cr?.channels || []) {
         recoveryRows.push(Z.row({
@@ -173,7 +193,7 @@ PH.security = {
       });
     return `${phSecurityTop()}${phMain(`
       ${phKeyUnprotected() ? Z.note({ tone: "a", text: "Your payment key is stored unencrypted in this browser: the passkey here can’t encrypt it. The key signs what a payment is (amount and payee). On its own it moves nothing: every payment also needs your Face ID or fingerprint, which your account checks on the chain. Someone with a copy could still sign payment terms. Don’t use Zold in this browser on a shared computer, and remove extensions you don’t trust." }) : ""}
-      ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: { href: "#recovery-settings", label: r.on ? "Change" : "Set up" }, rows: recoveryRows }) : ""}
+      ${recoveryRows.length ? Z.listGroup({ label: "Recovery", action: recoveryAction, rows: recoveryRows }) : ""}
       ${Z.listGroup({ label: "Sign-in and keys", rows: [
         Z.row({ lead: Z.iconTile({ icon: "fingerprint" }), title: "Face ID or fingerprint", sub: u.passkey?.createdAt ? `Signs you in and approves payments. Added ${phDay(u.passkey.createdAt)} ${new Date(u.passkey.createdAt).getFullYear()}` : "Not set up", right: Z.tag(u.passkey?.credentialId ? "Active" : "Off", u.passkey?.credentialId ? "mint" : undefined), chevron: false }),
         keyRow,

@@ -50,6 +50,7 @@ import {
 } from "../documents.js";
 import { belegPdf, belegStillAgrees, belegFileName } from "../bookkeeping/beleg.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
+import { redactedMessage } from "../http/log-cause.js";
 
 export interface DocumentsDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
@@ -107,7 +108,7 @@ async function moneriumOrdersFor(user: User): Promise<{ orders: any[]; status: "
     const orders = Array.isArray(res) ? res : (res?.orders ?? []);
     return { orders, status: "ok" };
   } catch (err: any) {
-    return { orders: [], status: `Monerium unavailable: ${String(err?.message ?? err).slice(0, 120)}` };
+    return { orders: [], status: `Monerium unavailable: ${redactedMessage(err).slice(0, 120)}` };
   }
 }
 
@@ -136,7 +137,7 @@ export async function buildStatement(user: User, from: Date, to: Date): Promise<
     if (openBlock) opening = { ...openBlock, amountEur: await balanceAtBlock(holder.safeAddress, openBlock.number) };
     else if (closeBlock) opening = { number: 0, at: from.toISOString(), amountEur: 0 };
   } catch (err: any) {
-    chainStatus = `chain unavailable: ${String(err?.message ?? err).slice(0, 120)}`;
+    chainStatus = `chain unavailable: ${redactedMessage(err).slice(0, 120)}`;
   }
   const totals = statementTotals(lines);
   return {
@@ -202,7 +203,7 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
       const ok = Math.abs(live - doc.snapshot.balanceEur) < 0.005;
       checks.push({ name: "Balance re-read from the chain at that block", ok, detail: ok ? `€${live.toFixed(2)} at block ${doc.snapshot.block.number}` : `chain says €${live.toFixed(2)}` });
     } catch (err: any) {
-      checks.push({ name: "Balance re-read from the chain at that block", ok: false, detail: `chain unavailable: ${String(err?.message ?? err).slice(0, 100)}` });
+      checks.push({ name: "Balance re-read from the chain at that block", ok: false, detail: `chain unavailable: ${redactedMessage(err).slice(0, 100)}` });
     }
   }
   if (doc.snapshot.kind === "statement" && doc.snapshot.closing) {
@@ -211,7 +212,7 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
       const ok = Math.abs(live - doc.snapshot.closing.amountEur) < 0.005;
       checks.push({ name: "Closing balance re-read from the chain", ok, detail: `€${live.toFixed(2)} at block ${doc.snapshot.closing.number}` });
     } catch (err: any) {
-      checks.push({ name: "Closing balance re-read from the chain", ok: false, detail: `chain unavailable: ${String(err?.message ?? err).slice(0, 100)}` });
+      checks.push({ name: "Closing balance re-read from the chain", ok: false, detail: `chain unavailable: ${redactedMessage(err).slice(0, 100)}` });
     }
     checks.push({
       name: "Lines reconcile with the balances",
@@ -235,7 +236,7 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
         const rc = await publicClient.getTransactionReceipt({ hash: s.receipt.txHash as `0x${string}` });
         checks.push({ name: "Receipt transaction on chain", ok: rc.status === "success", detail: `block ${rc.blockNumber}` });
       } catch (err: any) {
-        checks.push({ name: "Receipt transaction on chain", ok: false, detail: `could not read: ${String(err?.message ?? err).slice(0, 100)}` });
+        checks.push({ name: "Receipt transaction on chain", ok: false, detail: `could not read: ${redactedMessage(err).slice(0, 100)}` });
       }
     }
   }
@@ -349,7 +350,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
       try {
         snapshot = buildReceipt(user, transfer);
       } catch (err: any) {
-        return res.status(409).json({ error: String(err?.message ?? err) });
+        return res.status(409).json({ error: redactedMessage(err) });
       }
       res.status(201).json(publicDocument(await issue(user, snapshot)));
     }),
@@ -459,7 +460,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
           true,
         ));
       } catch (err: any) {
-        return res.status(401).json({ error: String(err?.message ?? err) });
+        return res.status(401).json({ error: redactedMessage(err) });
       }
       if (!store.recordPasskeyUse(user.id, passkey.credentialId, signCount)) {
         return res.status(401).json({ error: "this passkey is no longer the account's passkey" });

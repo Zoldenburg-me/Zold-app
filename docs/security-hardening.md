@@ -91,15 +91,42 @@ Still open:
 
 ### 1.1 Inventory
 
-Every secret gets a row in `.private/secrets-inventory.md` (encrypted, names
-and metadata only, never values): owner, tier, where it lives, who can read
-it, how to rotate it, and when it was last rotated.
+`.private/secrets-inventory.md` has a row for every secret name the code
+reads (`process.env`, including the names `config/keys.ts` and
+`config/wallet-sync.ts` build), plus the GitHub token and the Akash Console
+key. Each row gives the tier, what reads it, whether it is still read, how to
+rotate it, owner, where it lives and when it was last rotated. It holds names
+and metadata only, never values.
 
 | Tier | What | Examples | Target home |
 |------|------|----------|-------------|
-| 1. Moves money on-chain | private keys | `DEPLOY_*_KEY` / `ORCHESTRATOR_KEY` / `RAMP_KEY`, `FAUCET_KEY`, `CANDIDE_COSIGNER_KEY`, `STELLAR_TREASURY_SECRET`, `CIRCLE_ENTITY_SECRET` | Stored in the self-hosted Bitwarden (1.4). Keys that only an operator uses, such as deployer and contract admin, live on a hardware wallet and are never online. Keys the server signs with automatically (orchestrator, ramp, faucet) still have to be in process memory to sign, so on mainnet they hold small balances and narrow contract roles. A signer that never releases the key (an HSM) is the later step. |
-| 2. Opens a partner or our identity | API secrets, signing secrets | `MONERIUM_CLIENT_SECRET`, `MONERIUM_WEBHOOK_SECRET`, `CHECKOUT_WEBHOOK_SECRET`, `SHOPIFY_API_SECRET`, `DOCUMENT_SIGNING_KEY`, `MG_CLIENT_DOMAIN_SIGNING_SECRET`, `KYC_OPERATOR_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `SMTP_PASS`, `BRIDGE/LIFI/BEBOP/CANDIDE/CIRCLE/GETMYINVOICES` keys | Bitwarden, fetched at start and never written to the host's disk. Rotate every 90 days and on any staff or host change. |
+| 1. Moves money on-chain | private keys | `DEPLOY_*_KEY` / `ORCHESTRATOR_KEY` / `RAMP_KEY`, `FAUCET_KEY`, `STELLAR_TREASURY_SECRET`, `ENS_GATEWAY_KEY` (signs where every handle resolves, so whoever holds it redirects payments to handles), `ENS_DEPLOYER_KEY` (script only) | Stored in the self-hosted Bitwarden (1.4). Keys that only an operator uses, such as deployer and contract admin, live on a hardware wallet and are never online. Keys the server signs with automatically (orchestrator, ramp, faucet) still have to be in process memory to sign, so on mainnet they hold small balances and narrow contract roles. A signer that never releases the key (an HSM) is the later step. |
+| 2. Opens a partner or our identity | API secrets, signing secrets | `MONERIUM_CLIENT_SECRET`, `MONERIUM_WEBHOOK_SECRET`, `CHECKOUT_WEBHOOK_SECRET`, `SHOPIFY_API_SECRET`, `DOCUMENT_SIGNING_KEY`, `MG_CLIENT_DOMAIN_SIGNING_SECRET`, `KYC_OPERATOR_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `SMTP_PASS`, `BRIDGE/LIFI/BEBOP/CANDIDE/GETMYINVOICES` keys, RPC and bundler URLs that carry a key in the path | Bitwarden, fetched at start and never written to the host's disk. Rotate every 90 days and on any staff or host change. |
 | 3. Decrypts stored data | data-encryption roots, blind index key | `DATA_ENCRYPTION_KEYS`, `BLIND_INDEX_KEY`, `MONERIUM_TOKEN_ENCRYPTION_KEY` (v1) | Bitwarden; the roots derive the per-purpose data keys (1.2). |
+
+A configured URL is printed through `urlForLog` (origin only). An error's
+text leaves the process only through `http/log-cause.ts`: `describeCause`
+for a log line, `redactedMessage` for a stored row or a response (URLs,
+network targets and IPs replaced), and `errorText` for matching a pattern,
+never for output. `npm run security:test` reads the source and fails on any
+other read of an error's text, a thrown error naming a raw URL, or a script
+printing one.
+
+Still open:
+- `CANDIDE_COSIGNER_KEY` and `CIRCLE_ENTITY_SECRET` are read by nothing (the
+  server only warns that the first is set); unset them wherever they are set.
+  `GETMYINVOICES_API_KEY` is read only by `scripts/getmyinvoices-smoke.ts`.
+- `DEPLOYER_KEY` is both the contracts' deployer and admin, and the server's
+  hot gas key: `relayWallet()` (`recovery/recovered-passkey.ts`) pays for
+  recovery relays, finalisations and verifier deployments with it. Before
+  mainnet it splits into a gas-only relay key and an admin key on a hardware
+  wallet.
+- A typed error (`MoneriumApiError`, `GmiApiError` and the like) passes its
+  own message on unchecked; it is safe only because each is built from
+  redacted text, and the guard does not see a new one built from raw text.
+- Rows written before the redaction keep their raw error text.
+- Most rows have no last-rotated date.
+- Whether the leases hold names the code does not read is unchecked.
 
 ### 1.2 Encryption at rest, version 2
 
@@ -138,6 +165,11 @@ Version 2 (`sealField`/`openField` in `crypto-at-rest.ts`):
   refuses to write if the store changed under it.
 - `blindIndex` is an HMAC-SHA256 under `BLIND_INDEX_KEY`, its own key, so a
   ring rotation never changes an index. It normalises email, phone and IBAN.
+- The bank account a user enrolled for Zoldenburg recovery is an
+  HMAC-SHA256 under `RECOVERY_IBAN_HMAC_KEY` (≥ 32 chars), its own key, not
+  `BLIND_INDEX_KEY`: the value then matches no index elsewhere in the store.
+  Rotating it disarms every enrolled account until it pays 1 € again, so it
+  is not rotated on a schedule (`recovery/enrolment-key.ts`).
 
 Still open:
 - Setting `DATA_ENCRYPTION_KEYS` and `BLIND_INDEX_KEY` on each deployment,
@@ -253,11 +285,79 @@ location.
 
 ### 1.5 The operator
 
-- Replace the static `KYC_OPERATOR_TOKEN` bearer with an operator passkey
-  (WebAuthn, a named operator, each action audited). Put `/api/admin/*` and
-  `/admin` behind Cloudflare Access as a second gate.
-- Operator actions are written to the append-only audit log with the
-  operator's identity.
+One named operator (the owner) runs the admin dashboard, with two passkeys,
+a primary and a backup. Every `/api/admin` route, in whichever router
+declares it, passes one gate (`operators/gate.ts`) that server.ts mounts
+ahead of them all.
+
+- **Operators** are their own records (id, name, email, passkeys,
+  `disabledAt`); disabling is a read-time filter. `npm run operator:enrol`,
+  run on the host, writes a single-use enrolment next to the store (the
+  token's hash, 15 minutes) and prints a link whose token rides in the URL
+  fragment. Redeeming it needs the Access identity to match the enrolled
+  email; the file is deleted on success. The same script is the way back in
+  when every passkey is lost. Adding a second passkey needs a fresh approval
+  from the first.
+- **Its own origin.** With `ADMIN_ORIGIN` set, `/admin` is served there only,
+  that host serves nothing of the user app (`adminHostPolicy`, which also
+  refuses any path that could change under decoding, and sends a CSP with no
+  inline script), the origin
+  is allowed only on `/api/admin`, and every operator ceremony verifies
+  against it alone, so a script on the user app can neither reach the
+  operator's session nor ask for the operator's passkey. Operator
+  credentials sit in a store user login never searches.
+- **Its own ceremonies** under `/api/admin/auth/*`, with purposes
+  `operator_login`, `operator_step_up` and `operator_enrol` and bindings
+  prefixed `op:`; user verification is required.
+- **Its own session**: a `zop_` bearer in its own store (hash only), 8 hours,
+  30 minutes idle. A user session on `/api/admin/*` is refused, and an
+  operator session on a user route.
+- **A fresh passkey for every change.** The gate decides by HTTP method: each
+  non-GET needs an approval bound to the operator, method, path (case
+  included, a trailing slash not) and a hash of the body, and carries no
+  query string, so an approval for one action cannot be replayed with other
+  values. Executing a Zoldenburg recovery needs it besides the guardian's
+  hardware-wallet signature. Each refused approval writes
+  `operator.step_up_refused`; the tenth in 15 minutes ends that session, not
+  the operator's others.
+- **An audit row per action**: every change and every live partner read
+  (`?live=1`), and each other read of a path once per operator in ten
+  minutes (the dashboard refreshes itself), as
+  `operator.request` with the operator's id and name; reads of an account
+  are filed under that account. Stored `reviewedBy` and `resolution.by`
+  hold `operator:<id>`; rows written before hold the old token hash.
+- **Cloudflare Access as a second gate**, checked by the server on every
+  admin request from `Cf-Access-Jwt-Assertion`: RS256, issuer = the team
+  domain, audience = the application tag (`CF_ACCESS_TEAM_DOMAIN`,
+  `CF_ACCESS_AUD`), expiry, and an email, which for a passkey session must
+  equal the operator's. A service
+  token without an email is refused, the email header alone is never
+  trusted, and unknown key ids refetch the keys at most once a minute.
+  Every deployment but the local hardhat stack (zoldhq.com included) answers
+  503 on every admin route until `ADMIN_ORIGIN` (https, not one of
+  `WEBAUTHN_ORIGINS`) and both Access values are set.
+- **Rate limits** per operator; failed sign-ins lock an address for 15
+  minutes after ten.
+- `KYC_OPERATOR_TOKEN` opens reads only, behind Access, never a live partner
+  read (`?live=1`), and its reads are audited as `operator:legacy-token`.
+
+`npm run operator:test` covers each refusal with a software passkey and a
+local Access key server; nothing here has run against Cloudflare Access.
+
+Still open:
+- The owner sets up the Access application (identity provider with a
+  hardware key, a policy naming the owner's email), the `admin.zoldhq.com`
+  tunnel route, and `ADMIN_ORIGIN`, `CF_ACCESS_TEAM_DOMAIN` and
+  `CF_ACCESS_AUD` on the lease. Until then zoldhq.com answers 503 on admin
+  routes.
+- PR B: production refuses to start with `KYC_OPERATOR_TOKEN` set, and the
+  token code goes.
+- The audit log is the plain JSON store: append-only by code, not tamper
+  evident (Phase 2), with no retention period. `operator.request` rows name
+  the user an operator read; how long they are kept is a question for
+  counsel, and the GDPR data map has no entry yet for operator access
+  control (the operator's name, email and passkeys, Cloudflare Access and
+  its identity provider).
 
 ## Phase 2: a real database
 
@@ -344,8 +444,12 @@ user without breaking WebAuthn.
 
 ## Phase 3: mail
 
-Today, nodemailer sends verification codes over SMTP with a password from
-`.env`.
+Today, nodemailer sends verification codes and recovery alerts through
+Brevo's SMTP relay with an SMTP key from `.env.age`, from
+`no-reply@zoldhq.com` (the apex, not a subdomain), with Brevo's IP allowlist
+on. The code is in the body only, and a
+failed send logs the error and SMTP codes, never the server's reply (it can
+quote the address).
 
 - **Provider**: a transactional provider with an **API key scoped to sending
   only**, from one verified sender, IP-restricted where offered. It replaces

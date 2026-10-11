@@ -23,6 +23,7 @@
 // Must be first: pins the chain and the db path before config.js reads them.
 import "./_local-chain.js";
 import assert from "node:assert/strict";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
@@ -67,6 +68,10 @@ const express = (await import("express")).default;
 const { initStore, store } = await import("../services/api/src/store.js");
 const { apiRateLimit } = await import("../services/api/src/http/policy.js");
 const { createCheckoutServiceRouter } = await import("../services/api/src/routes/service-checkout.js");
+const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
+const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
+const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
+const { operatorKit } = await import("./_operator.js");
 const { checkoutCredentialFor, isCheckoutTransfer } = await import("../services/api/src/checkout-service.js");
 const { startCheckoutWebhook } = await import("../services/api/src/checkout-webhook.js");
 const { verifyStandardWebhook } = await import("../services/api/src/http/standard-webhooks.js");
@@ -83,10 +88,13 @@ async function check(name: string, fn: () => void | Promise<void>) {
 const app = express();
 app.use(express.json());
 app.use("/api", apiRateLimit);
+app.use("/api/admin", createOperatorGate());
+app.use("/api", createOperatorAuthRouter());
 app.use("/api", createCheckoutServiceRouter());
 const server = app.listen(0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+const kit = await operatorKit({ base: base.replace(/\/api$/, ""), origin: OPERATOR_CONFIG.adminOrigin, rpId: SECURITY.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
 
 async function get(id: string, bearer?: string) {
   const res = await fetch(`${base}/service/checkout/transfers/${encodeURIComponent(id)}`, {
@@ -96,6 +104,8 @@ async function get(id: string, bearer?: string) {
 }
 
 async function rotate(bearer?: string, body?: Record<string, unknown>) {
+  // The operator rotates through a passkey session and a fresh approval.
+  if (bearer === OPERATOR) return kit.call("POST", "/api/admin/service-credentials/checkout/rotate", body);
   const res = await fetch(`${base}/admin/service-credentials/checkout/rotate`, {
     method: "POST",
     headers: { ...(bearer ? { authorization: `Bearer ${bearer}` } : {}), ...(body ? { "content-type": "application/json" } : {}) },
@@ -249,7 +259,7 @@ await check("revokePrevious must be a boolean", async () => {
 await check("a revoke sent as a form is refused, not read as a plain rotation", async () => {
   const res = await fetch(`${base}/admin/service-credentials/checkout/rotate`, {
     method: "POST",
-    headers: { authorization: `Bearer ${OPERATOR}`, "content-type": "application/x-www-form-urlencoded" },
+    headers: kit.headers({ ...(await kit.stepUp("POST", "/api/admin/service-credentials/checkout/rotate")), "content-type": "application/x-www-form-urlencoded" }),
     body: "revokePrevious=true",
   });
   assert.equal(res.status, 415);
@@ -257,7 +267,7 @@ await check("a revoke sent as a form is refused, not read as a plain rotation", 
 await check("the rotation audit row records a revoke", () => {
   const row = store.auditFor(undefined, 1000).find((a) => a.kind === "service.credential_rotated" && a.data.credentialId === fourth.body.id);
   assert.equal(row?.data.revokedPrevious, true);
-  assert.match(String(row?.data.operator), /^operator:[0-9a-f]{12}$/);
+  assert.equal(row?.data.operator, `operator:${kit.operator.id}`);
 });
 const token4: string = fourth.body.token;
 
